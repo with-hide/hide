@@ -31,6 +31,7 @@ reasons for them.
 """
 import argparse
 from fnmatch import fnmatchcase
+import importlib.util
 import json
 import os
 from pathlib import Path, PurePosixPath
@@ -41,11 +42,20 @@ import tempfile
 
 ROOT = Path(__file__).resolve().parent.parent
 
+# The tests a pull request adds or changes, which the `repeat` lane runs many
+# times (scripts/ci-repeat.py owns what counts as one).
+_REPEAT = importlib.util.spec_from_file_location("ci_repeat", Path(__file__).resolve().parent / "ci-repeat.py")
+ci_repeat = importlib.util.module_from_spec(_REPEAT)
+_REPEAT.loader.exec_module(ci_repeat)
+NO_REPEAT = {"web": [], "units": [], "rust": [], "rust_sources": []}
+
 # The order is the order the summary prints.
 LANES = (
     "policy",
     "rust",
     "checks",
+    "android",
+    "docs",
     "relay-protocol",
     "os-contract",
     "os-contract-macos",
@@ -61,9 +71,25 @@ LANES = (
     "windows-wsl",
     "web-e2e",
     "remote-mailbox",
+    "remote-mailbox-arm",
+    "repeat",
     "desktop-e2e",
     "package",
+    "merge-rust",
+    "merge-web",
 )
+# A merge queue group runs these and `policy` and nothing else, and no other run
+# plans them. A group commit is main with the pull requests queued ahead of it and
+# this one merged in, each of which passed `verify` on its own; what two changes
+# that each passed break together without a conflict is mostly a compile, type or
+# baseline failure (on 2026-10-05 one pull request removed an export another one
+# imported, and both had passed), which these find in minutes. A behavior only
+# the two changes together break is left to main's push run, which plans every
+# lane (CONTRIBUTING.md, Merging into main).
+MERGE_GROUP_ONLY_LANES = ("merge-rust", "merge-web")
+MERGE_GROUP_LANES = ("policy",) + MERGE_GROUP_ONLY_LANES
+# What a path can plan: every lane but the merge group's own.
+PATH_LANES = tuple(lane for lane in LANES if lane not in MERGE_GROUP_ONLY_LANES)
 # What a full plan runs. `package` builds host packages and device kits from cold
 # on their runners, so it runs for a change to what goes into one (PACKAGE_PATHS) and
 # nothing else: main's push runs leave it out, the nightly calls
@@ -75,17 +101,18 @@ LANES = (
 # every CLI too. `holder-restart` installs every pinned CLI too and runs each
 # in a pane holder across a node restart on all three systems, for a change to
 # the holder, the node's holder code, the pins or the lane's own scripts; the
-# nightly runs it on its own.
-FULL_LANES = tuple(lane for lane in LANES if lane not in ("package", "agent-clis", "holder-restart"))
+# nightly runs it on its own. `repeat` runs the tests a pull request adds or
+# changes, which a push to main or the nightly has no diff to name (a pull
+# request that edits a CI definition does plan it, with the tests it changes).
+FULL_LANES = tuple(lane for lane in PATH_LANES if lane not in ("package", "agent-clis", "holder-restart", "repeat"))
 
 # Crates whose change reaches what differs by operating system: the platform
-# layer, the Herdr client's IPC, the install kit and hooks, and the daemon and
+# layer, the install kit and hooks, and the daemon and
 # core that `windows check` and the OS contract run on each system.
 OS_CRATES = {
-    "herdr-core",
+    "hide-core",
     "hided",
     "hide-agent-hooks",
-    "hide-herdr-client",
     "hide-host",
     "hide-kit",
     "hide-platform",
@@ -100,20 +127,54 @@ OS_LANES = ("os-contract", "windows-check", "windows-e2e", "windows-desktop")
 # The remote mailbox lane builds `hided`, `hide`, the host helper and the hook
 # binary, and runs `hided`'s `remote_delivery`, `node_contract`,
 # `device_bootstrap` and `system_ssh` tests against them over the system's
-# ssh and sshd, its `held_letter_notice` test against the pinned Herdr, and
+# ssh and sshd, its `old_state_folder` test against a real daemon, and
 # `hide-host`'s check of another account's open on a device's bridge; a
 # change to any crate they link (the device link's `hide-node` and
 # `hide-node-link` reach it through `hided`), or to the tests, can change its
 # result, and nothing else can. Web code and web specs do not reach it.
-MAILBOX_CRATES = {"herdr-core", "hided", "hide-agent-hooks", "hide-host"}
+MAILBOX_CRATES = {"hide-core", "hided", "hide-agent-hooks", "hide-host"}
+# The same lane on a Linux arm64 runner (with-hide/hide-private#501): an
+# arm64 Linux machine is a device whose kit a core of another platform takes
+# from its release, and here the core's own build connects to one. It is planned
+# for the device link's own crates, its device test and the device kit
+# contract (`DEVICE_KIT_CONTRACT`); a change elsewhere in what the lane builds
+# is the x86_64 lane's to catch, with main's push run and the nightly running
+# both.
+ARM_DEVICE_CRATES = {"hide-node", "hide-node-link"}
+ARM_DEVICE_FILES = ("hided/tests/it/device_own_engine.rs",)
+# The platforms a device kit is made for: `hide-node` includes it in its
+# source (`include_str!`), so a change to it is a change to that crate, and
+# the packaging scripts read it too (READERS, MACOS_LANE_INPUTS).
+DEVICE_KIT_CONTRACT = "contracts/device-kits.json"
+# What two machines say to each other: `hide-peer-protocol` includes it in its
+# source (`include_str!`) and a build that is not a release sends its hash in
+# its hello, so a change to it is a change to that crate.
+PEER_LINK_CONTRACT = "contracts/peer-link.json"
+# What `cargo deny` reads (`scripts/verify-cargo.sh deny`): a pull request
+# that changes one has every crate's license and the advisory database
+# checked in its Rust lane. The nightly checks too, and finds an advisory
+# published against a crate main already has; main's push run does not, so a
+# new advisory never stops merges (CONTRIBUTING.md, CI gates).
+DENY_PATHS = ("Cargo.lock", "deny.toml", "scripts/install-cargo-deny.sh")
 # The WSL device lane (`wsl-device.yml`) connects a real WSL 2 distribution
-# through `wsl.exe`: the crates the link crosses (the platform layer's WSL
-# listing, the connector and its pipe, the link's protocol, the helper's
-# serve) and the node command the helper runs as. The core's decisions about
-# a WSL device have their own unit tests, so a change to a crate that only
+# through `wsl.exe`, and the runner's own OpenSSH Server and an sshd in that
+# distribution over Windows' own `ssh.exe`: the crates the links cross (the
+# platform layer's WSL listing, the connector and its pipe, the system ssh,
+# the link's protocol, the helper's serve) and the node command the helper
+# runs as, and the two kit files the redirection guard walk proves: the
+# Windows command's shim (`cli_windows.rs`) and the helper root's `current`
+# folder (`current.rs`); the rest of hide-kit does not reach the link
+# (with-hide/hide-private#596). The core's decisions about a
+# WSL device have their own unit tests, so a change to a crate that only
 # consumes these does not plan it.
 WSL_CRATES = {"hide-host", "hide-node", "hide-node-link", "hide-platform"}
-WSL_CRATE_FILES = ("hided/src/node_cli.rs", "hided/tests/it/wsl_device.rs")
+WSL_CRATE_FILES = (
+    "hide-kit/src/cli_windows.rs",
+    "hide-kit/src/current.rs",
+    "hided/src/node_cli.rs",
+    "hided/tests/it/wsl_device.rs",
+    "hided/tests/it/windows_ssh_device.rs",
+)
 # The vt lane builds the terminal parser, whose Zig build differs by system,
 # and runs the pane holder's tests, since the holder links the parser and its
 # tests start it on all three systems (docs/TESTING.md, The pane holder); the
@@ -169,13 +230,13 @@ SHARED_WEB_LANES = ("windows-e2e", "windows-desktop")
 # is a folder. Keep this beside the test that reads the file. A path no other
 # rule claims plans its readers here and nothing else.
 READERS = (
-    # herdr-core/src/runtime/tests/snapshot_delta.rs asserts the agent notes.
-    ("AGENTS.md", {"rust"}, {"herdr-core"}),
-    ("CLAUDE.md", {"rust"}, {"herdr-core"}),
-    # herdr-core's structure tests scan the shell (runtime/tests.rs, sidebar.rs)
+    # hide-core/src/runtime/tests/snapshot_delta.rs asserts the agent notes.
+    ("AGENTS.md", {"rust"}, {"hide-core"}),
+    ("CLAUDE.md", {"rust"}, {"hide-core"}),
+    # hide-core's structure tests scan the shell (runtime/tests.rs, sidebar.rs)
     # and the daemon (runtime/tests/snapshot_delta.rs).
-    ("web/src/", {"rust"}, {"herdr-core"}),
-    ("hided/src/", {"rust"}, {"herdr-core"}),
+    ("web/src/", {"rust"}, {"hide-core"}),
+    ("hided/src/", {"rust"}, {"hide-core"}),
     # web/e2e/s2, s3 and s7 import the wire path conversion.
     ("desktop/src/main/wirePath.ts", {"checks", "web-e2e", "windows-e2e"}, set()),
     # web/e2e/markdown-html.spec.ts opens the repository README with its logo
@@ -183,7 +244,7 @@ READERS = (
     # changing the hero with no web-e2e run).
     ("README.md", {"web-e2e"}, set()),
     ("design/brand/hide-icon-blinking.svg", {"web-e2e"}, set()),
-    ("site/assets/video/kick-conductor.gif", {"web-e2e"}, set()),
+    ("site/public/assets/video/kick-conductor.gif", {"web-e2e"}, set()),
     # web/src/settings.test.ts, theme.test.ts and web/e2e/theme.spec.ts read the tokens.
     ("design/tokens.json", {"checks", "web-e2e"}, set()),
     # web/src/shortcutsDoc.test.ts checks the guide's chord table.
@@ -193,21 +254,30 @@ READERS = (
     ("docs/AI_PROVIDERS.md", {"rust"}, {"hide-agent-adapter"}),
     ("web/src/assets/agents/manifest.json", {"rust"}, {"hide-agent-adapter"}),
     # The contracts a test holds the code to; the code does not read them.
-    # herdr-core's memory_hook test reads the WebSocket schema. The web shell's types are generated from it
+    # hide-core's memory_hook test reads the WebSocket schema. The web shell's types are generated from it
     # by hand (`gen:types`) and committed, so no web lane reads it.
-    ("contracts/hided-ws.schema.json", {"rust"}, {"herdr-core"}),
-    # herdr-core's `model::wire_enum_tests`, and web/src/userTurn.test.ts,
+    ("contracts/hided-ws.schema.json", {"rust"}, {"hide-core"}),
+    # hide-core's `model::wire_enum_tests`, and web/src/userTurn.test.ts,
     # prMark.test.ts.
-    ("contracts/snapshot-wire-enums.json", {"rust", "checks"}, {"herdr-core"}),
+    ("contracts/snapshot-wire-enums.json", {"rust", "checks"}, {"hide-core"}),
     # hide-agent-adapter's contract test; web/src/agentAdapters.ts imports it
     # into the shell, which plans what a web shell file plans.
     ("contracts/agent-adapters.json", {"rust", "checks", "web-e2e"}, {"hide-agent-adapter"}),
-    # hided's `cli_contract` test.
-    ("contracts/hide-cli.json", {"rust"}, {"hided"}),
+    # hided's `cli_contract` test, and the user docs' CLI reference, which reads the
+    # commands it describes (`scripts/docs/cli-reference.mjs`).
+    ("contracts/hide-cli.json", {"rust", "docs"}, {"hided"}),
     # policy's test_agent_journey_cells shares the hook's prompt identity examples.
     ("hide-agent-hooks/tests/fixtures/bell-prompt-identity.json", {"policy"}, set()),
     # hide-agent-adapter's contract test.
     ("contracts/usage-coverage.json", {"rust"}, {"hide-agent-adapter"}),
+    # desktop/scripts/device-helpers.mjs reads the device kit contract, and
+    # its tests run in the desktop unit suite; `classify` plans hide-node's
+    # lanes for it.
+    (DEVICE_KIT_CONTRACT, {"checks", "windows-check"}, set()),
+    # hide-node's kit contract test holds the Windows kit's runtime to the
+    # pinned ConPTY files, so a pin that changes them fails in the pull
+    # request, not in a release's kit.
+    ("contracts/conpty.json", {"rust"}, {"hide-node"}),
 )
 
 
@@ -237,16 +307,15 @@ MACOS_LANE_INPUTS = {
         # Desktop fixtures import the other web/e2e helpers and C shims.
         "exclude": ("web/public/m/*", "web/e2e/*.spec.ts", "web/e2e/*.md", "desktop/e2e/*.md"),
     },
-    "os-contract-macos": {"paths": ("hide-platform/*", "hide-herdr-client/*")},
+    "os-contract-macos": {"paths": ("hide-platform/*",)},
     "omp-contract": {"paths": ("hide-ai/*", "hide-platform/*")},
     "package": {
         # compile (macos) and package (macos) are one dependency chain. Keep
         # both for the package's scripts, resources, kit, hooks and updater.
         "paths": (
             "desktop/scripts/*", "desktop/package.json", "desktop/resources/*", "desktop/native/*",
-            "contracts/herdr-bundle.json", "scripts/fetch-herdr-runtime.*",
-            "contracts/conpty.json", "scripts/fetch-conpty.py",
-            "scripts/verify-cargo.sh", "scripts/verify-web.sh", "scripts/toolchain-env.sh",
+            "contracts/conpty.json", "contracts/device-kits.json", "scripts/fetch-conpty.py",
+            "scripts/verify-cargo.sh", "scripts/verify-web.sh", "scripts/toolchain-env.sh", "scripts/package-e2e.sh", "scripts/package-e2e-report.py",
             "hided/build.rs", "hided/src/cli.rs", "hide-kit/*", "hide-agent-hooks/*",
             "desktop/src/main/updater*", "scripts/check-release-assets.mjs", "desktop/e2e/packaged-*",
         ),
@@ -312,8 +381,6 @@ MACOS_PATHS = (
     # hide-vt's Zig build: the macOS target it maps and the macOS Zig and
     # inputs it downloads, which `vt (macos)` builds.
     "hide-vt/build.rs", "hide-vt/build-inputs.json",
-    # The Herdr pin names the macOS asset, which only macOS jobs run.
-    "contracts/herdr-bundle.json",
 )
 # Folders whose macOS form sits in shared files: a file there counts when it
 # holds macOS-only code. `hide-platform` is where each system's form is
@@ -368,7 +435,7 @@ def pull_request_macos(result, entries, root=ROOT):
 # Paths no `pr.yml` lane reads: `policy` alone. Its script suite and the
 # repository invariants are what reads them.
 POLICY_ONLY = (
-    "agents/*", "site/*", "spikes/*",
+    "agents/*",
     ".gitignore", "web/.gitignore", "desktop/.gitignore",
     # hide's own license and copyright notice; no build or package reads them.
     "LICENSE", "NOTICE",
@@ -378,13 +445,15 @@ POLICY_ONLY = (
     "scripts/tests/*",
     # Scripts only `policy`, another workflow or nobody runs.
     "scripts/check-capability-readers-off-lock.sh",
-    "scripts/check-harness-ignore-anchor.sh", "scripts/check-herdr-pin-single-source.sh",
-    "scripts/check-core-touches-no-machine.py", "scripts/check-engine-boundary.py", "scripts/rust_scan.py",
+    "scripts/check-harness-ignore-anchor.sh",
+    "scripts/check-core-touches-no-machine.py",
+    "scripts/check-iroh-stays-behind-the-seam.py",
+    "scripts/check-timed-waits.py", "scripts/timed-waits-baseline.json",
     "scripts/check-ai-prompt-language.py", "scripts/check-pr-screenshots.py",
-    "scripts/check-agent-screen-rules.py",
+    "scripts/check-agent-screen-rules.py", "scripts/check-device-kits-single-source.py",
+    "scripts/check-agent-folders.sh",
     "scripts/check-no-workstation-identity.*", "scripts/check-worktree-removal-boundary.sh",
-    "scripts/check-typed-live-remote.sh",
-    "scripts/check-release-assets.mjs", "scripts/release-draft.mjs", "scripts/premerge-check.py",
+    "scripts/check-release-assets.mjs", "scripts/release-draft.mjs",
     "scripts/merge-order.py", "scripts/pull_requests.py",
     "scripts/web-shell-measure/*",
     # The pane holder's measurement, run by hand on macOS (docs/PERFORMANCE_TESTING.md).
@@ -409,7 +478,8 @@ DESKTOP_E2E_LANES = {"checks", "windows-desktop", "windows-check"}
 # An unregistered convention keeps its folder's existing plan.
 UNIT_TEST_PATHS = (
     "desktop/src/*.test.ts", "desktop/scripts/*.test.mjs",
-    "desktop/e2e/fixture-cleanup.unit.ts", "desktop/e2e/windows-processes.unit.ts",
+    "desktop/e2e/fixture-cleanup.unit.ts", "desktop/e2e/native-teardown.unit.ts",
+    "desktop/e2e/windows-processes.unit.ts",
 )
 
 
@@ -451,23 +521,46 @@ def is_journey_product(path):
             and path.stem != "tests" and not path.stem.endswith("_tests"))
 
 
-# The live check's code, which the journey runs and `agent-live-check.spec.ts`
-# drives in the web e2e; its unit tests are `policy`'s.
-LIVE_CHECK_LANES = {"web-e2e"} | JOURNEY_LANES
+# The live check's code, which the journey runs; its unit tests are `policy`'s.
+LIVE_CHECK_LANES = JOURNEY_LANES
 # Script tests that also run on another system than `policy`'s Linux, in
 # these lanes: `agent-journey.yml` runs the live check's Windows forms on Windows.
 SYSTEM_TESTS = (
     ("scripts/tests/test_agent_live_windows.py", JOURNEY_LANES),
 )
+# The user docs lane: `scripts/docs/check-all.mjs` over `site/`, the live parts it
+# frames and the `hide` this checkout builds (docs/TESTING.md, The user docs).
+DOCS_LANES = {"docs"}
+# The files that own the text `hide --help` prints (`help_text` in hided/src/cli.rs): its own
+# inline lines and the links, memory, file, diff, browser and view usages, and the `USAGE`
+# of each command module it joins. The docs lane reads the commands from that text, so a command
+# added in any of them needs its note in the same pull request. The test
+# `help_text_owners_are_the_modules_cli_rs_joins` keeps this list equal to what `help_text` names.
+HELP_SOURCES = (
+    "hided/src/cli.rs",
+    "hided/src/delivery_cli.rs",
+    "hided/src/agent_cli.rs",
+    "hided/src/ps_cli.rs",
+    "hided/src/device_cli.rs",
+    "hided/src/access_cli.rs",
+    "hided/src/mission_cli.rs",
+    "hided/src/plan_cli.rs",
+    "hided/src/automation_cli.rs",
+    "hided/src/pane_cli.rs",
+    "hided/src/session_cli.rs",
+)
 NAMED_LANES = (
     ("web/e2e/worker-owned.ts", WEB_E2E_LANES | {"relay-protocol"}),
     ("scripts/build-relay-wasm.sh", {"relay-protocol"}),
     ("scripts/check-relay-protocol.sh", {"relay-protocol"}),
+    # The repeat lane's selection and budget, which the plan job also imports,
+    # and the Rust module scanner it reads a crate's test modules with.
+    ("scripts/ci-repeat.py", {"repeat"}),
+    ("scripts/rust_scan.py", {"repeat"}),
     # The vt lane's own scripts; `prepare-vt-inputs.py`, which every Rust lane
     # runs through `verify-cargo.sh`, plans every lane.
     ("scripts/check-vt-build-refusals.sh", {"vt"}),
     ("scripts/agent_live_check/*", LIVE_CHECK_LANES | HOLDER_RESTART_LANES),
-    ("scripts/agent-live-check.py", LIVE_CHECK_LANES),
     ("web/e2e/shims/claude-shim.c", WEB_E2E_LANES | JOURNEY_LANES),
     ("web/e2e/shims/live-check.h", WEB_E2E_LANES | JOURNEY_LANES),
     # The journey's controller builds the desktop e2e's spawn provider.
@@ -497,6 +590,11 @@ NAMED_LANES = (
     ("contracts/agent-journey.json", JOURNEY_LANES | AGENT_CLI_LANES | HOLDER_RESTART_LANES),
     ("web/e2e/*", WEB_E2E_LANES),
     ("desktop/e2e/*", DESKTOP_E2E_LANES),
+    # The user docs' scripts and the build of the live parts they frame; the parts
+    # import the web shell's own components, which is why a `web/src` change plans `docs` too.
+    ("scripts/docs/*", DOCS_LANES),
+    ("web/docs-embed.html", DOCS_LANES),
+    ("web/docs-embed.config.ts", DOCS_LANES),
     ("web/playwright.config.ts", {"checks", "web-e2e", "windows-e2e"}),
     ("desktop/playwright.config.ts", DESKTOP_E2E_LANES),
     ("desktop/vitest.config.ts", DESKTOP_E2E_LANES),
@@ -551,7 +649,12 @@ def named_lanes(path):
 
 
 def cargo_crates(root=ROOT):
-    """Each workspace crate's directory, mapped to the crates that consume it."""
+    """Each workspace crate's directory, mapped to the crates that consume it.
+
+    `targets` carries the crate's `lib`, `main` and `bin` source targets, the
+    way `cargo metadata` names them, which `scripts/ci-repeat.py` reads to
+    select the tests a changed `src` file declares.
+    """
     raw = subprocess.check_output(
         ["bash", "scripts/verify-cargo.sh", "metadata", "--format-version", "1", "--no-deps"],
         cwd=root,
@@ -560,9 +663,15 @@ def cargo_crates(root=ROOT):
     metadata = json.loads(raw)
     workspace = PurePosixPath(Path(metadata["workspace_root"]).as_posix())
     directory = {}
+    targets = {}
     for package in metadata["packages"]:
         manifest = PurePosixPath(Path(package["manifest_path"]).as_posix())
         directory[package["name"]] = manifest.parent.relative_to(workspace).as_posix()
+        targets[package["name"]] = [
+            ("lib" if "lib" in target["kind"] else "bin", target["src_path"])
+            for target in package["targets"]
+            if "lib" in target["kind"] or "bin" in target["kind"]
+        ]
     consumers = {name: set() for name in directory}
     for package in metadata["packages"]:
         for dependency in package["dependencies"]:
@@ -570,7 +679,8 @@ def cargo_crates(root=ROOT):
             # against the changed crate too.
             if dependency.get("path") and dependency["name"] in directory:
                 consumers[dependency["name"]].add(package["name"])
-    return {directory[name]: {"name": name, "consumers": consumers[name]} for name in directory}
+    return {directory[name]: {"name": name, "consumers": consumers[name], "targets": targets[name]}
+            for name in directory}
 
 
 def reverse_closure(crates, start):
@@ -609,12 +719,19 @@ def classify(path, status, crates, root):
     if parts[0] == "design":
         # design-contract.yml checks the library; no pr.yml lane reads it.
         return set(), f"design library: {path}", set()
+    if parts[0] == "site":
+        # One Astro project: the landing page in `public/` and the user docs, built by `docs`.
+        return set(DOCS_LANES), f"site: {path}", set()
     if is_unit_test(path.as_posix()):
         return {"checks", "windows-check"}, f"registered desktop unit test: {path}", set()
     crate = crates.get(parts[0])
     if parts[:2] == ("vendor", "portable-pty"):
         # The root manifest patches it in for the holder, its one user.
         crate = crates.get("hide-holder")
+    if path.as_posix() == DEVICE_KIT_CONTRACT:
+        crate = crates.get("hide-node")
+    if path.as_posix() == PEER_LINK_CONTRACT:
+        crate = crates.get("hide-peer-protocol")
     if crate is not None:
         packages = reverse_closure(crates, crate["name"])
         # Every crate compiles into the Windows workspace `windows check` builds.
@@ -627,8 +744,13 @@ def classify(path, status, crates, root):
             lanes.add("web-e2e")
         if packages & MAILBOX_CRATES:
             lanes.add("remote-mailbox")
+        if crate["name"] in ARM_DEVICE_CRATES or path.as_posix() in ARM_DEVICE_FILES:
+            lanes.add("remote-mailbox-arm")
         if crate["name"] in WSL_CRATES or path.as_posix() in WSL_CRATE_FILES:
             lanes.add("windows-wsl")
+        # `hide --help` lists the commands the CLI reference holds a note for.
+        if path.as_posix() in HELP_SOURCES:
+            lanes.update(DOCS_LANES)
         if crate["name"] in OS_CRATES:
             lanes.update(OS_LANES)
         if crate["name"] in AGY_CRATES:
@@ -639,7 +761,10 @@ def classify(path, status, crates, root):
             lanes.add("relay-protocol")
         if any(fnmatchcase(path.as_posix(), pattern) for pattern in HOLDER_NODE_FILES):
             lanes.add("holder-restart")
-        if path.as_posix() in JOURNEY_CRATE_FILES or is_journey_product(path):
+        # The device kit contract is compiled into hide-node's code, and the
+        # peer link contract into hide-peer-protocol's.
+        if (path.as_posix() in JOURNEY_CRATE_FILES or is_journey_product(path)
+                or path.as_posix() in (DEVICE_KIT_CONTRACT, PEER_LINK_CONTRACT)):
             lanes.update(JOURNEY_LANES)
         return lanes, f"crate {crate['name']}: {path}", packages
     if parts[0] == "web" and len(parts) > 1:
@@ -656,10 +781,19 @@ def classify(path, status, crates, root):
             return {"checks", "web-e2e"}, f"phone page: {path}", set()
         if parts[1] in ("src", "public") or path.as_posix() == "web/index.html":
             lanes = {"checks", "web-e2e"}
+            # The user docs build their live parts from the shell's own components; a unit
+            # test is not among them.
+            if not re.search(r"\.test\.tsx?$", path.name):
+                lanes.add("docs")
             if path.as_posix() in SHARED_WEB:
                 lanes.update(SHARED_WEB_LANES)
                 return lanes, f"web shared with the desktop host: {path}", set()
             return lanes, f"web shell: {path}", set()
+    if parts[:2] == ("mobile", "android") and len(parts) > 2:
+        # The Android app host's Gradle project: its JVM tests and debug build, and
+        # `checks`, whose mobile unit test reads its plugin and library lists
+        # (`mobile/scripts/check-versions.mjs`). The rest of `mobile/` plans every lane.
+        return {"android", "checks"}, f"Android app host: {path}", set()
     if parts[0] == "desktop" and len(parts) > 1:
         if parts[1] == "e2e" and len(parts) == 3 and path.name.endswith(".spec.ts"):
             lanes = {"checks"}
@@ -681,7 +815,7 @@ def classify(path, status, crates, root):
     if reader_entries(path.as_posix()):
         # `select` adds the readers' lanes and crates.
         return set(), f"read by a known set of readers: {path}", set()
-    # `pr.yml`, the scripts the lanes call, the Herdr pin and schema, lockfiles,
+    # `pr.yml`, the scripts the lanes call, the contracts, lockfiles,
     # toolchain and package configuration, and any path no rule above, in
     # `named_lanes` or in READERS names: every lane. `Cargo.lock` is among
     # them: every member but two depends on `workspace-hack`, which holds
@@ -694,6 +828,9 @@ def select(entries, crates, root=ROOT, full_reason=None):
     reasons = {lane: [] for lane in LANES}
     packages = set()
     full = []
+    crate_dirs = {directory: crate["name"] for directory, crate in crates.items()}
+    targets = {directory: crate["targets"] for directory, crate in crates.items() if crate.get("targets")}
+    repeat = ci_repeat.select(entries, crate_dirs, targets)
     all_lanes = any(fnmatchcase(name, pattern) for _, name in entries for pattern in ALL_LANE_PATHS)
     if full_reason:
         full.append(full_reason)
@@ -718,17 +855,31 @@ def select(entries, crates, root=ROOT, full_reason=None):
         reasons["policy"].append(reason)
         for lane in lanes:
             reasons[lane].append(reason)
+        if any(ci_repeat.select([(status, name)], crate_dirs, targets).values()):
+            reasons["repeat"].append(f"changed test: {name}")
     if full:
         # Preserve main/nightly defaults; a PR editing CI exercises everything.
-        for lane in LANES if all_lanes else FULL_LANES:
+        for lane in PATH_LANES if all_lanes else FULL_LANES:
             reasons[lane] = list(full)
         packages = {crate["name"] for crate in crates.values()}
+        if full_reason or not entries:
+            # A push to main, the nightly and a comparison that could not be
+            # listed (each a `full_reason`) have no diff of a pull request's
+            # own to name the tests it changed, so `repeat` is not one of
+            # their lanes. A pull request
+            # whose diff plans every lane still names its changed tests, and
+            # they are repeated as on any other pull request.
+            reasons["repeat"] = []
     planned = [lane for lane in LANES if reasons[lane]]
     return {
         "full": bool(full),
         "lanes": planned,
         "rust_packages": sorted(packages) if reasons["rust"] else [],
         "reasons": {lane: reasons[lane] for lane in planned},
+        # What the `repeat` lane runs; a plan of that lane for a CI definition
+        # or the script itself, with no changed test, runs nothing.
+        "repeat": repeat,
+        "deny": any(name in DENY_PATHS for _, name in entries),
     }
 
 
@@ -887,6 +1038,11 @@ def plan(event, base, head, root=ROOT, crates=None, draft=False, last_green=None
         for lane in owned:
             result["reasons"].pop(lane, None)
         return result
+    if event == "merge_group":
+        why = "merge group: the checks two changes that each passed can fail together"
+        result = {"full": False, "lanes": list(MERGE_GROUP_LANES), "rust_packages": [],
+                  "reasons": {lane: [why] for lane in MERGE_GROUP_LANES}}
+        return with_macos(result, False, ["merge group: no macOS job"])
     if draft:
         # A draft is not a merge candidate: no lane runs, `aggregate` fails
         # `verify` for it, and marking the pull request ready for review
@@ -902,8 +1058,9 @@ def plan(event, base, head, root=ROOT, crates=None, draft=False, last_green=None
             reason = f"crate graph unavailable: {error}"
             return with_macos(select([], {}, root, reason), True, [reason])
     if event != "pull_request":
-        return with_macos(select([], crates, root, f"{event}: every lane runs on main"), True,
-                          [f"{event}: every macOS job runs"])
+        result = select([], crates, root, f"{event}: every lane runs on main")
+        result["deny"] = event != "push"
+        return with_macos(result, True, [f"{event}: every macOS job runs"])
     try:
         # A pull request's checkout is the merge commit GitHub made; anything
         # else would compare against a parent that is not the base.
@@ -932,13 +1089,15 @@ def plan(event, base, head, root=ROOT, crates=None, draft=False, last_green=None
     # Never call select with an empty delta: an empty comparison deliberately
     # plans every lane. Preserve the original green anchor even after these
     # checks succeed, so a later run compares with the app code actually tested.
-    rerun = select(delta, crates, root) if delta else {"lanes": ["policy"], "rust_packages": [], "reasons": {"policy": []}}
+    rerun = select(delta, crates, root) if delta else {"lanes": ["policy"], "rust_packages": [], "reasons": {"policy": []}, "repeat": NO_REPEAT}
     rerun["reasons"]["policy"].append(f"reuses run {verified['run']}: {why}")
     return pull_request_macos({
         "full": False,
         "lanes": rerun["lanes"],
         "rust_packages": rerun["rust_packages"],
         "reasons": rerun["reasons"],
+        "repeat": rerun["repeat"],
+        "deny": rerun.get("deny", False),
         "commits": result["commits"],
         "reuse": {"run": verified["run"], "why": why},
         "verified": verified,
@@ -1069,7 +1228,15 @@ def main():
                 output.write(f"full={str(result['full']).lower()}\n")
                 output.write(f"draft={str(result.get('draft', False)).lower()}\n")
                 output.write(f"macos={str(result['macos']['runs']).lower()}\n")
+                output.write(f"deny={str(result.get('deny', False)).lower()}\n")
                 output.write(f"rust-packages={json.dumps(result['rust_packages'])}\n")
+                repeat = result.get("repeat", NO_REPEAT)
+                output.write(f"repeat-web={json.dumps(repeat['web'], separators=(',', ':'))}\n")
+                output.write(f"repeat-units={json.dumps(repeat['units'], separators=(',', ':'))}\n")
+                # The Rust leg runs the `tests/it` modules and the `src` test
+                # modules in one nextest call, so the plan carries both as the
+                # `{package, test, module}` entries nextest selects by.
+                output.write(f"repeat-rust={json.dumps(repeat['rust'] + repeat['rust_sources'], separators=(',', ':'))}\n")
         if os.environ.get("GITHUB_STEP_SUMMARY"):
             with open(os.environ["GITHUB_STEP_SUMMARY"], "a", encoding="utf-8") as output:
                 server = os.environ.get("GITHUB_SERVER_URL", "https://github.com")

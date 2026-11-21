@@ -1,27 +1,29 @@
-import { skipOwnWindowsAgentStart } from "./own-windows-agent-start";
 import { expect, test, type Locator, type Page } from "@playwright/test";
 import fs from "node:fs";
 import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { startFixture } from "./engine-fixture";
 import { setAgentState } from "./fixture-agents";
-import { claudeProjects, continueFixtureTranscript, labelMarker, type FixtureLabel } from "./herdr-fixture";
+import { claudeProjects, continueFixtureTranscript, labelMarker, type FixtureLabel } from "./pane-fixture";
 import { startHided, type Daemon } from "./hided-fixture";
 import { FIRST_GOAL, MISSED, NEXT_GOAL, nextWork, reseedWork, seedFirstWork, startWork, workFixture, workRepositoryReady } from "./session-work-fixture";
-import { enterWorkspace, showProjectRow, taskRow } from "./wire";
+import { closeFrontCard, enterWorkspace, projectOpener, showProjectRow, taskRow } from "./wire";
 import { chord } from "./chords";
 import { openOverview } from "./overview-entry";
 
 test.describe.configure({ timeout: 180_000 });
 
-/** A session's record in the lane's 보기 slot (PRD sidebar-task-lens B15). */
-const RECORD = 'aside[data-lane="detail"][data-detail="record"] [data-session-record]';
+/** A session's record, a tab on a desk (PRD sidebar-task-lens B15; lane-desk-pair-view D-13). */
+const RECORD = '[data-card="record"] [data-session-record]';
 
 async function connectRepository(page: import("@playwright/test").Page, repository: string) {
   // The project's gear is on its row in the sidebar's 프로젝트 tree.
   await page.locator('[data-sidebar-lens-option="projects"]').click();
-  const gear = page.locator('[data-project]', { hasText: "fixture" }).locator('[data-row-settings]').first();
-  await (await showProjectRow(page, gear)).click();
+  // It is not drawn until the pointer is on the row.
+  const project = page.locator('[data-project]', { hasText: "fixture" });
+  await projectOpener(project).hover({ position: { x: 12, y: 8 } });
+  const gear = project.locator('[data-row-settings]').first();
+  await (await showProjectRow(page, gear)).click({ position: { x: 12, y: 8 } });
   const sheet = page.locator('[data-project-settings]');
   await sheet.getByRole("combobox", { name: "GitHub repository", exact: true }).click();
   await page.getByRole("option", { name: "Choose repository", exact: true }).click();
@@ -44,18 +46,17 @@ async function closeOverview(page: import("@playwright/test").Page) {
 }
 
 test("@platform a native session's record groups its requests by goal flow and keeps its PRs, children and asks through search and summaries off", async ({ page }) => {
-  skipOwnWindowsAgentStart();
-  const herdr = await startFixture({ family: true });
+  const engine = await startFixture({ family: true });
   let daemon: Daemon | undefined;
   try {
-    const github = workFixture(herdr);
-    daemon = await startHided(herdr, "session-work-ledger", undefined, github.env);
+    const github = workFixture(engine);
+    daemon = await startHided(engine, "session-work-ledger", undefined, github.env);
     await page.goto(`${daemon.origin}/#token=${daemon.token}`);
     await workRepositoryReady(daemon.stateDir);
     await enterWorkspace(page, "fixture");
     const first = Date.now();
     github.clock(first, first);
-    const { session, child, pane } = await seedFirstWork(herdr, daemon, first);
+    const { session, child, pane } = await seedFirstWork(engine, daemon, first);
     const root = await taskRow(page, pane, FIRST_GOAL);
     // The pane head carries no task chip (PRD session-record-goal-flow B1).
     await expect(page.locator(`[data-pane-view="${pane}"]`)).toBeVisible();
@@ -68,11 +69,12 @@ test("@platform a native session's record groups its requests by goal flow and k
     await expect(flows).toHaveCount(1, { timeout: 45_000 });
     await expect(flows.first().locator("[data-record-flow-name]")).toHaveText(FIRST_GOAL);
     await expect(record.locator("[data-record-request]").first()).toContainText("기록 화면 구현 요청", { timeout: 45_000 });
-    await expect(record.locator("[data-record-artifact]")).toHaveText(["세션 기록 화면 시안"]);
     // The record reads the session's one list, the one its row's mark draws (status-model, One list per session):
     // this session's PR, #32 its pane holds on the checkout's branch (the fixture opens every PR on main), and its
     // child's in its own group; the two merged ones fold (B18, B19).
     await expect(record.locator('[data-record-prs="3"]')).toBeVisible({ timeout: 45_000 });
+    // The issue the turn printed is a 결과물 row, from the same GitHub read as the PRs rather than Hide AI's words (D-40).
+    await expect(record.locator('[data-record-issue="41"]')).toBeVisible();
     await expect(root.locator("[data-agent-pr]")).toHaveAttribute("aria-label", /^PR 3 · /);
     await record.locator('[data-record-settled="2"]').click();
     await expect(record.locator('[data-record-pr-group="own"] [data-record-pr-row="31"]')).toBeVisible();
@@ -82,7 +84,7 @@ test("@platform a native session's record groups its requests by goal flow and k
     await page.keyboard.press("Enter");
     const second = Date.now();
     github.clock(first, second);
-    continueFixtureTranscript(herdr, session, nextWork(second));
+    continueFixtureTranscript(engine, session, nextWork(second));
     await setAgentState(daemon, pane, "working");
     await expect(root).toContainText(NEXT_GOAL, { timeout: 45_000 });
     await setAgentState(daemon, pane, "idle");
@@ -112,10 +114,10 @@ test("@platform a native session's record groups its requests by goal flow and k
     const detail = record.locator(`[data-record-child-detail="${child}"]`);
     await expect(flows).toHaveCount(2);
     await expect(detail.locator("[data-record-flow-name]")).toHaveText([/자식 세션 결과물 연결 검증/]);
-    // Explicit Open record navigates, and the slot's back action returns.
+    // Explicit Open record opens the child's record as a tab, and closing it returns to the parent's.
     await detail.getByRole("button", { name: "Open record", exact: false }).click();
     await expect(record.locator("[data-record-flow-name]")).toHaveText([/자식 세션 결과물 연결 검증/]);
-    await page.locator("[data-detail-back]").click();
+    await closeFrontCard(page);
     await expect(flows).toHaveCount(2);
     // Problems and follow-ups leave the record for the Overview backlog, which
     // never counts an ask, and 무시 there closes the line (D-13, B31).
@@ -138,10 +140,10 @@ test("@platform a native session's record groups its requests by goal flow and k
     await page.locator('[data-settings-tab="hideAi"]').click();
     await page.locator('[data-ai-agent-summary="true"]').click();
     await page.keyboard.press("Escape");
-    // Summaries off: every request as sent in time order, no flow, ask or artifact (B28).
+    // Summaries off: every request as sent in time order, no flow or ask; the issue, GitHub's fact, stays (B28).
     await expect(record.locator("[data-record-flow]")).toHaveCount(0);
     await expect(record.locator("[data-record-asks]")).toHaveCount(0);
-    await expect(record.locator("[data-record-artifacts]")).toHaveCount(0);
+    await expect(record.locator('[data-record-issue="41"]')).toBeVisible();
     await expect(record.locator("[data-record-raw-requests] [data-record-request]")).toHaveCount(2);
     await expect(record.locator('[data-record-prs="3"]')).toBeVisible();
     await expect(record.getByRole("heading", { level: 2 })).toContainText("Claude");
@@ -152,7 +154,7 @@ test("@platform a native session's record groups its requests by goal flow and k
     await openOverview(page, "backlog");
     await expect(page.locator("[data-backlog-section]").first()).toBeVisible();
     await expect(page.locator("[data-open-missed]")).toHaveCount(0);
-  } finally { daemon?.stop(); herdr.stop(); }
+  } finally { daemon?.stop(); engine.stop(); }
 });
 
 /**
@@ -176,19 +178,19 @@ async function openRecord(page: Page, row: Locator, pane: string, settled: strin
  * waits in 나를 기다리는 것 (PRD session-record-goal-flow D-18, B11, B24).
  */
 test("a report letter is a dim line in the record and the question it wakes waits for the operator", async ({ page }) => {
-  const herdr = await startFixture({ family: true });
+  const engine = await startFixture({ family: true });
   let daemon: Daemon | undefined;
   try {
-    const github = workFixture(herdr);
-    daemon = await startHided(herdr, "session-work-letter", undefined, github.env);
+    const github = workFixture(engine);
+    daemon = await startHided(engine, "session-work-letter", undefined, github.env);
     await page.goto(`${daemon.origin}/#token=${daemon.token}`);
     await workRepositoryReady(daemon.stateDir);
     await enterWorkspace(page, "fixture");
     const at = Date.now();
     github.clock(at, at);
     const goal = "사이드바 두 화면 개선 작업";
-    const cwd = path.join(herdr.root, "fixture");
-    const started = await startWork(herdr, daemon,
+    const cwd = path.join(engine.root, "fixture");
+    const started = await startWork(engine, daemon,
       { task: goal, at, cwd, end: "waiting", request: "사이드바 두 화면 개선" },
       { task: "자식 세션 결과물 연결 검증", at: at + 200, cwd, end: "waiting", toolOutputs: ["https://github.com/acme/repo/pull/34"] });
     const { session, pane } = started;
@@ -199,8 +201,8 @@ test("a report letter is a dim line in the record and the question it wakes wait
     // The child's report wakes the parent, which ends asking; the envelope
     // names the child by its agent name, as delivery writes it.
     const question = "앱을 다시 설치할지 정하세요";
-    const letter: FixtureLabel = { task: goal, at: at + 5_000, end: "question", reply: question, work: { missed: [{ kind: "ask", text: question }], resolved: [], artifacts: [] } };
-    fs.appendFileSync(path.join(claudeProjects(herdr), "e2e", `${session}.jsonl`), [
+    const letter: FixtureLabel = { task: goal, at: at + 5_000, end: "question", reply: question, work: { missed: [{ kind: "ask", text: question }], resolved: [] } };
+    fs.appendFileSync(path.join(claudeProjects(engine), "e2e", `${session}.jsonl`), [
       { type: "user", sessionId: session, timestamp: new Date(at + 5_000).toISOString(), origin: { kind: "human" }, message: { role: "user", content: `Hide letter letter-1 from two (claude) [report]\n끝났어요\n${labelMarker(letter)}` } },
       { type: "assistant", sessionId: session, timestamp: new Date(at + 6_000).toISOString(), message: { role: "assistant", content: [{ type: "text", text: labelMarker(letter) }] } },
     ].map((line) => `${JSON.stringify(line)}\n`).join(""));
@@ -211,22 +213,21 @@ test("a report letter is a dim line in the record and the question it wakes wait
     await expect(record.locator("[data-record-request]")).toHaveCount(2);
     // The operator's request keeps its summary; the letter is not counted as one.
     await expect(record.locator("[data-record-request]:not([data-record-letter])")).toContainText(["사이드바 두 화면 개선"]);
-  } finally { daemon?.stop(); herdr.stop(); }
+  } finally { daemon?.stop(); engine.stop(); }
 });
 
 test("@platform 백로그로 saves a local memo without publishing and 되돌리기 restores the missed work", async ({ page }) => {
-  skipOwnWindowsAgentStart();
-  const herdr = await startFixture({ agents: false });
+  const engine = await startFixture({ agents: false });
   let daemon: Daemon | undefined;
   try {
-    const github = workFixture(herdr);
-    daemon = await startHided(herdr, "session-backlog-local", undefined, github.env);
+    const github = workFixture(engine);
+    daemon = await startHided(engine, "session-backlog-local", undefined, github.env);
     await page.goto(`${daemon.origin}/#token=${daemon.token}`);
     await workRepositoryReady(daemon.stateDir);
     await enterWorkspace(page, "fixture");
     const first = Date.now();
     github.clock(first, first);
-    const { pane } = await seedFirstWork(herdr, daemon, first);
+    const { pane } = await seedFirstWork(engine, daemon, first);
     const missed = await openMissed(page, pane, FIRST_GOAL);
     // B16: one press retains the missed text in Hide. A private record is
     // never automatically published to its session's GitHub repository.
@@ -253,20 +254,19 @@ test("@platform 백로그로 saves a local memo without publishing and 되돌리
     // The missed line comes back to the backlog's missed group.
     await expect(missed).toBeVisible({ timeout: 30_000 });
     expect(createdIn(github.contexts)).toEqual([]);
-  } finally { daemon?.stop(); herdr.stop(); }
+  } finally { daemon?.stop(); engine.stop(); }
 });
 
 test("@platform ⌘⇧M adds a backlog issue from the terminal and hands the keyboard back", async ({ page }) => {
-  skipOwnWindowsAgentStart();
-  const herdr = await startFixture();
+  const engine = await startFixture();
   let daemon: Daemon | undefined;
   try {
-    const github = workFixture(herdr, true);
-    daemon = await startHided(herdr, "quick-add", undefined, github.env);
+    const github = workFixture(engine, true);
+    daemon = await startHided(engine, "quick-add", undefined, github.env);
     await page.goto(`${daemon.origin}/#token=${daemon.token}`);
     await workRepositoryReady(daemon.stateDir);
     await enterWorkspace(page, "fixture");
-    const [shell] = herdr.panes;
+    const [shell] = engine.panes;
     const terminal = page.locator(`[data-pane-view="${shell}"] .xterm-helper-textarea`);
     await terminal.focus();
     // B37-B39: the input opens over the Workspace on the front checkout's
@@ -301,7 +301,7 @@ test("@platform ⌘⇧M adds a backlog issue from the terminal and hands the key
     const creates = fs.readFileSync(github.calls, "utf8").trim().split("\n").map((line) => JSON.parse(line) as string[]).filter((args) => args[0] === "issue" && args[1] === "create");
     expect(creates).toHaveLength(1);
     expect(creates[0]![creates[0]!.indexOf("--title") + 1]).toBe("빠른 추가 두 번째 줄");
-  } finally { daemon?.stop(); herdr.stop(); }
+  } finally { daemon?.stop(); engine.stop(); }
 });
 
 /** What the fixture `gh` was asked to create, by the repository each create named. */
@@ -337,16 +337,15 @@ async function openMissed(page: import("@playwright/test").Page, pane: string, g
 }
 
 test("@platform local missed-work adds survive a repository edit and keep the session origin", async ({ page }) => {
-  skipOwnWindowsAgentStart();
-  const herdr = await startFixture({ agents: false });
+  const engine = await startFixture({ agents: false });
   let daemon: Daemon | undefined;
   try {
-    const github = workFixture(herdr);
-    daemon = await startHided(herdr, "backlog-repository-edit", undefined, github.env);
+    const github = workFixture(engine);
+    daemon = await startHided(engine, "backlog-repository-edit", undefined, github.env);
     await page.goto(`${daemon.origin}/#token=${daemon.token}`);
     await workRepositoryReady(daemon.stateDir);
     await enterWorkspace(page, "fixture");
-    const { session: original, pane } = await seedFirstWork(herdr, daemon, Date.now());
+    const { session: original, pane } = await seedFirstWork(engine, daemon, Date.now());
     await openMissed(page, pane, FIRST_GOAL);
     await expect.poll(() => originalRepository(daemon!.stateDir, original), { timeout: 30_000 }).toBe("acme/repo");
     await closeOverview(page);
@@ -360,27 +359,26 @@ test("@platform local missed-work adds survive a repository edit and keep the se
     expect(originalRepository(daemon.stateDir, original)).toBe("acme/repo");
     // A session that starts after the edit belongs to acme/override.
     await closeOverview(page);
-    const fresh = await reseedWork(herdr, daemon, pane, Date.now(), NEXT_GOAL);
+    const fresh = await reseedWork(engine, daemon, pane, Date.now(), NEXT_GOAL);
     await expect.poll(() => originalRepository(daemon!.stateDir, fresh), { timeout: 45_000 }).toBe("acme/override");
     missed = await openMissed(page, pane, NEXT_GOAL);
     await missed.locator("[data-missed-backlog-add]").click();
     await expect(missed).toHaveCount(0, { timeout: 30_000 });
     expect(createdIn(github.contexts)).toEqual([]);
     expect(originalRepository(daemon.stateDir, original)).toBe("acme/repo");
-  } finally { daemon?.stop(); herdr.stop(); }
+  } finally { daemon?.stop(); engine.stop(); }
 });
 
 test("@platform a local missed-work add finishes while GitHub is unavailable and survives A-to-B-to-A edits", async ({ page }) => {
-  skipOwnWindowsAgentStart();
-  const herdr = await startFixture({ agents: false });
+  const engine = await startFixture({ agents: false });
   let daemon: Daemon | undefined;
   try {
-    const github = workFixture(herdr);
-    daemon = await startHided(herdr, "backlog-local-offline", undefined, github.env);
+    const github = workFixture(engine);
+    daemon = await startHided(engine, "backlog-local-offline", undefined, github.env);
     await page.goto(`${daemon.origin}/#token=${daemon.token}`);
     await workRepositoryReady(daemon.stateDir);
     await enterWorkspace(page, "fixture");
-    const { pane } = await seedFirstWork(herdr, daemon, Date.now());
+    const { pane } = await seedFirstWork(engine, daemon, Date.now());
     const missed = await openMissed(page, pane, FIRST_GOAL);
     fs.writeFileSync(github.repositoryUnavailable, "GitHub is unavailable");
     await missed.locator("[data-missed-backlog-add]").click();
@@ -393,20 +391,19 @@ test("@platform a local missed-work add finishes while GitHub is unavailable and
     await openOverview(page, "backlog");
     await expect(page.locator('[data-backlog-row^="local:"]', { hasText: MISSED })).toBeVisible({ timeout: 30_000 });
     expect(createdIn(github.contexts)).toEqual([]);
-  } finally { daemon?.stop(); herdr.stop(); }
+  } finally { daemon?.stop(); engine.stop(); }
 });
 
 test("@platform a migrated session with an unknown original repository can retain its missed work locally", async ({ page }) => {
-  skipOwnWindowsAgentStart();
-  const herdr = await startFixture({ agents: false });
+  const engine = await startFixture({ agents: false });
   let daemon: Daemon | undefined;
   try {
-    const github = workFixture(herdr);
-    daemon = await startHided(herdr, "backlog-repository-legacy", undefined, github.env);
+    const github = workFixture(engine);
+    daemon = await startHided(engine, "backlog-repository-legacy", undefined, github.env);
     await page.goto(`${daemon.origin}/#token=${daemon.token}`);
     await workRepositoryReady(daemon.stateDir);
     await enterWorkspace(page, "fixture");
-    const { session: identity, pane } = await seedFirstWork(herdr, daemon, Date.now());
+    const { session: identity, pane } = await seedFirstWork(engine, daemon, Date.now());
     await openMissed(page, pane, FIRST_GOAL);
     // This migration starts from completed, durable native work. Windows
     // fixture shutdown is forced; a rendered goal is not a saved label.
@@ -451,7 +448,6 @@ test("@platform a migrated session with an unknown original repository can retai
           DROP TABLE ledger_project_connections;
           DROP TABLE ledger_backlog;
           DROP TABLE retention_aliases;
-          DROP TABLE direct_observations;
           ALTER TABLE ledger_missed DROP COLUMN backlog_key;
           ALTER TABLE ledger_titles DROP COLUMN goal;
           ALTER TABLE ledger_titles DROP COLUMN summary;
@@ -473,5 +469,5 @@ test("@platform a migrated session with an unknown original repository can retai
     await expect(missed).toHaveCount(0, { timeout: 30_000 });
     expect(originalRepository(daemon.stateDir, identity)).toBeNull();
     expect(createdIn(github.contexts)).toEqual([]);
-  } finally { daemon?.stop(); herdr.stop(); }
+  } finally { daemon?.stop(); engine.stop(); }
 });

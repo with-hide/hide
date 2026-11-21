@@ -1,14 +1,14 @@
-import { skipOwnWindowsAgentStart } from "./own-windows-agent-start";
 import { test, expect, type Page } from "@playwright/test";
 import fs from "node:fs";
 import path from "node:path";
 import { toPage } from "../../desktop/src/main/wirePath";
-import crypto from "node:crypto";
-import { agentIn, areaShowing, checkoutAt, closePane, tabPanes, withControl } from "./daemon-actions";
+import { agentIn, areaShowing, closePane, startAgentInCheckout, tabOfPane, withControl } from "./daemon-actions";
 import { startFixture, type AgentFixture } from "./engine-fixture";
+import { dumpOnFailure } from "./failure-dump";
 import { setAgentSession } from "./fixture-agents";
+import type { HidedControl } from "./hided-control.mjs";
 import { startHided } from "./hided-fixture";
-import { chooseTheme, countSent, enterWorkspace, rest, screenshot, sendEvent } from "./wire";
+import { chooseTheme, enterWorkspace, rest, screenshot, sendEvent } from "./wire";
 
 const tabButton = (page: Page, tab: string) => page.locator(`[data-project-list] [data-sidebar-tab="${tab}"]`);
 const guide = (page: Page, tab: string) => page.locator(`[data-project-list] [data-sidebar-tab-guide="${tab}"]`);
@@ -24,106 +24,101 @@ async function renameTab(page: Page, tab: string, name: string) {
 }
 
 /** The checkout's folder, in the spelling the core gives its panes. */
-const folderOf = (herdr: AgentFixture) => toPage(fs.realpathSync(path.join(herdr.root, "fixture")));
+const folderOf = (engine: AgentFixture) => toPage(fs.realpathSync(path.join(engine.root, "fixture")));
+
+/** The core's task slot, its last refusal and its newest diagnostics, as a start leaves them. */
+function coreStart(control: HidedControl) {
+  return control.until((snapshot) => {
+    const status = snapshot.status as { last_error?: unknown; diagnostics?: { kind: string; message: string }[] } | undefined;
+    return { task: snapshot.task_operation ?? null, refused: status?.last_error ?? null, diagnostics: (status?.diagnostics ?? []).slice(-12).map((entry) => `${entry.kind}: ${entry.message}`) };
+  }, "the core's start state", 3_000);
+}
 
 /**
  * Starts a Claude agent as the start panel does: in a tab of its own, or,
  * given `beside`, in a new pane beside the agents of that tab. Returns where
  * it runs once the daemon lists it.
  */
-async function startAgent(herdr: AgentFixture, daemon: Awaited<ReturnType<typeof startHided>>, beside?: string): Promise<{ tab: string; pane: string }> {
-  const folder = folderOf(herdr);
+async function startAgent(engine: AgentFixture, daemon: Awaited<ReturnType<typeof startHided>>, beside?: string): Promise<{ tab: string; pane: string }> {
+  const folder = folderOf(engine);
   const started = await withControl(daemon, async (control) => {
-    const before = await control.until((rest) => checkoutAt(rest, folder)?.tabs, "the checkout's tabs");
-    const panesBefore = beside ? await control.until((rest) => tabPanes(rest, beside), `the panes of ${beside}`) : [];
     const area = beside ? await control.until((rest) => areaShowing(rest, beside), `the area showing ${beside}`) : undefined;
-    control.send("agent_start_in_checkout", {
-      checkout_path: folder, provider: "claude", request_id: `e2e-${crypto.randomUUID()}`,
-      ...(beside ? { target: { ...area, tab_id: beside, add_pane: true } } : {}),
-    });
+    const what = beside ? `a new agent beside ${beside}` : "a new agent in a tab of its own";
+    // The test's own timeout is 30 s, so the start gives up before it and a
+    // failed one says what the core held (with-hide/hide-private#518).
+    const pane = await dumpOnFailure(`start of ${what}`, () => coreStart(control), () => startAgentInCheckout(control, folder, beside ? { target: { ...area, tab_id: beside, add_pane: true } } : {}, what, 15_000));
     return control.until((rest) => {
-      const tab = beside ?? checkoutAt(rest, folder)?.tabs.find((id) => !before.includes(id));
-      const pane = tab ? tabPanes(rest, tab).find((id) => !panesBefore.includes(id)) : undefined;
-      return tab && pane && agentIn(rest, pane) ? { tab, pane } : undefined;
-    }, beside ? `a new agent beside ${beside}` : "a new agent in a tab of its own", 30_000);
+      const tab = tabOfPane(rest, pane);
+      return tab && agentIn(rest, pane) ? { tab, pane } : undefined;
+    }, what, 30_000);
   });
-  // The stand-in reports its session, as Claude Code does, so its row leaves Starting.
-  await setAgentSession(herdr, daemon, started.pane, `sidebar-${started.pane.replaceAll(":", "-")}`);
+  // The stand-in reports its session, as Claude Code does, and its start settles, so its row leaves Starting.
+  await setAgentSession(engine, daemon, started.pane, `sidebar-${started.pane.replaceAll(":", "-")}`);
   return started;
 }
 
 const position = async (row: ReturnType<Page["locator"]>) => (await row.boundingBox())!;
 
-test("a tab with two agents opens with a line that opens it, takes its name once renamed, and keeps it at one agent while named", { tag: "@platform" }, async ({ page }) => {
-  skipOwnWindowsAgentStart();
+test("the only tab of a checkout draws its segment with no guide and no line, named or not, and a second agent joins the segment", { tag: "@platform" }, async ({ page }) => {
   // The platform's engine owns pane/process existence.
-  const herdr = await startFixture();
-  const daemon = await startHided(herdr, "sidebar-tab-segments");
-  const sent = countSent(page);
+  const engine = await startFixture();
+  const daemon = await startHided(engine, "sidebar-tab-segments");
   try {
     await page.goto(`${daemon.origin}/?probe=1#token=${daemon.token}`);
     await enterWorkspace(page, "fixture");
-    // The core numbers a tab by the order it was made in; which number the fixture's tab holds is the fixture's setup.
-    await expect(tabButton(page, herdr.tab)).toHaveAccessibleName(/^Tab \d+, 2 agents$/);
-    await expect(segment(page, herdr.tab).locator("[data-agent-open]")).toHaveCount(2);
-    // Unnamed: the line reads the core's stable number.
-    await expect(page.locator("[data-sidebar-tab-name]")).toHaveText(/^Tab \d+$/);
+    const agents = segment(page, engine.tab).locator("[data-agent-open]");
+    const noLine = async () => {
+      await expect(page.locator("[data-project-list] [data-sidebar-tab-line]")).toHaveCount(0);
+      await expect(tabButton(page, engine.tab)).toHaveCount(0);
+      await expect(page.locator("[data-sidebar-tab-name]")).toHaveCount(0);
+    };
+    await expect(guide(page, engine.tab)).toHaveCount(0);
+    await expect(agents).toHaveCount(2);
+    await noLine();
     await screenshot(page, "sidebar-tab-unnamed");
 
-    const tabs = page.locator(`[data-tab="${herdr.tab}"]`).first();
-    await renameTab(page, herdr.tab, "아주 긴 한국어 탭 이름과 작업 묶음의 경계 확인");
-    await expect(tabButton(page, herdr.tab)).toHaveAccessibleName("아주 긴 한국어 탭 이름과 작업 묶음의 경계 확인, 2 agents");
-    await expect(page.locator("[data-sidebar-tab-name]")).toHaveText("아주 긴 한국어 탭 이름과 작업 묶음의 경계 확인");
+    // A name the operator gives it is told by the tab strip; the sidebar still draws no line for a tab with agents.
+    await renameTab(page, engine.tab, "아주 긴 한국어 탭 이름과 작업 묶음의 경계 확인");
+    await expect(page.locator(`[data-agent-tab-bar] [data-tab="${engine.tab}"]`)).toContainText("아주 긴 한국어 탭 이름과 작업 묶음의 경계 확인");
+    await expect(agents).toHaveCount(2);
+    await noLine();
     await screenshot(page, "sidebar-tab-named");
 
-    // The line opens the real tab; it folds nothing and persists nothing.
-    const before = sent.get("focus_pane") ?? 0;
-    await tabButton(page, herdr.tab).click();
-    await expect(tabs).toHaveAttribute("aria-selected", "true");
-    expect(sent.get("focus_pane") ?? 0).toBe(before);
-    await expect(segment(page, herdr.tab).locator("[data-agent-open]")).toHaveCount(2);
+    await withControl(daemon, (control) => closePane(control, engine.panes[1]));
+    await expect(agents).toHaveCount(1);
+    await expect(guide(page, engine.tab)).toHaveCount(0);
+    await noLine();
 
-    // One agent left: the named tab keeps its guide and line, now counting one agent.
-    await withControl(daemon, (control) => closePane(control, herdr.panes[1]));
-    await expect(segment(page, herdr.tab).locator("[data-agent-open]")).toHaveCount(1);
-    await expect(tabButton(page, herdr.tab)).toHaveAccessibleName("아주 긴 한국어 탭 이름과 작업 묶음의 경계 확인, 1 agent");
-    await expect(page.locator("[data-sidebar-tab-name]")).toHaveText("아주 긴 한국어 탭 이름과 작업 묶음의 경계 확인");
-    await expect(guide(page, herdr.tab)).toHaveCount(1);
-    await screenshot(page, "sidebar-tab-named-single");
-
-    // A second agent joins the same line under the retained name.
-    await startAgent(herdr, daemon, herdr.tab);
-    await expect(tabButton(page, herdr.tab)).toHaveAccessibleName("아주 긴 한국어 탭 이름과 작업 묶음의 경계 확인, 2 agents");
-    expect(sent.get("sidebar_tab_expanded") ?? 0).toBe(0);
-  } finally { daemon.stop(); herdr.stop(); }
+    // A second agent joins the same segment, still with no guide: one tab has no other segment to tell it from.
+    await startAgent(engine, daemon, engine.tab);
+    await expect(agents).toHaveCount(2);
+    await expect(guide(page, engine.tab)).toHaveCount(0);
+    await noLine();
+  } finally { daemon.stop(); engine.stop(); }
 });
 
-test("2-1-2 tab segments align every tab's guide and line, and an unnamed single agent's tab keeps its guide alone", async ({ page }) => {
-  const herdr = await startFixture();
+test("2-1-2 tab segments align every tab's guide with its rows, and no tab with agents draws a line", async ({ page }) => {
+  const engine = await startFixture();
   let daemon: Awaited<ReturnType<typeof startHided>> | undefined;
   try {
-    daemon = await startHided(herdr, "sidebar-tab-boundary");
-    // An unnamed single-agent tab draws its guide like any other tab, but no tab line: `Tab N` says nothing its one row does not.
-    const alone = await startAgent(herdr, daemon);
-    const pair = await startAgent(herdr, daemon);
-    await startAgent(herdr, daemon, pair.tab);
-    const single = { tab: { tab_id: alone.tab } };
-    const paired = { tab: { tab_id: pair.tab } };
+    daemon = await startHided(engine, "sidebar-tab-boundary");
+    const alone = await startAgent(engine, daemon);
+    const pair = await startAgent(engine, daemon);
+    await startAgent(engine, daemon, pair.tab);
     await page.goto(`${daemon.origin}/?probe=1#token=${daemon.token}`);
     await enterWorkspace(page, "fixture");
-    await renameTab(page, herdr.tab, "작업 묶음 A");
-    await renameTab(page, paired.tab.tab_id, "작업 묶음 B");
-    await expect(tabButton(page, herdr.tab)).toBeVisible();
-    await expect(tabButton(page, single.tab.tab_id)).toHaveCount(0);
-    const singleAgent = segment(page, single.tab.tab_id).locator("[data-agent-open]");
-    await expect(singleAgent).toHaveCount(1);
+    const tabs = [engine.tab, alone.tab, pair.tab];
+    for (const tab of tabs) await expect(guide(page, tab)).toHaveCount(1);
+    await expect(page.locator("[data-project-list] [data-sidebar-tab-line]")).toHaveCount(0);
+    const singleAgent = segment(page, alone.tab).locator("[data-agent-open]");
     await expect(singleAgent).toBeVisible();
-    await expect(tabButton(page, paired.tab.tab_id)).toHaveAccessibleName("작업 묶음 B, 2 agents");
+    await expect(segment(page, engine.tab).locator("[data-agent-open]")).toHaveCount(2);
+    await expect(segment(page, pair.tab).locator("[data-agent-open]")).toHaveCount(2);
     await page.evaluate(() => document.fonts.ready);
 
     // This checkout holds no named group, so it draws no collection header at
     // all (group-tabs D-14): its tabs and agents stand on the checkout's own
-    // columns, and each titled tab's guide hangs under the checkout's own glyph. The
+    // columns, and each tab's guide hangs under the checkout's own glyph. The
     // fixture's checkout is a plain folder, so its row is the project's.
     const owner = page.locator("[data-project-list] [data-project-menu]").first();
     const ownerRow = await position(page.locator("[data-project-list] [data-project-menu] > div").first());
@@ -138,90 +133,71 @@ test("2-1-2 tab segments align every tab's guide and line, and an unnamed single
     const titles = await Promise.all((await page.locator("[data-project-list] li[data-pane][data-depth='0'] [data-agent-title]").all()).map(position));
     expect(titles.map((title) => title.x - marks[0]!.x)).toEqual(titles.map(() => 16));
 
-    // Every tab draws a 1px guide under the checkout's own kind glyph, the unnamed single agent's too.
+    // Every tab draws a 1px guide under the checkout's own kind glyph, which bends into its last row toward the marks.
     const center = kind.x + kind.width / 2;
-    for (const tab of [herdr.tab, single.tab.tab_id, paired.tab.tab_id]) {
+    for (const tab of tabs) {
       const line = await position(guide(page, tab));
-      expect(line.width).toBe(1);
-      expect(Math.abs(line.x + line.width / 2 - center)).toBeLessThanOrEqual(0.5);
+      expect(Math.abs(line.x + 0.5 - center)).toBeLessThanOrEqual(0.5);
+      expect(line.x + line.width).toBeLessThanOrEqual(marks[0]!.x);
     }
-    // A tab line stands inside its guide like a row: the guide starts beside it, its glyph is centered on the status-mark column and its
-    // name starts on the title column, so nothing of the tab stands on the checkout glyph's column.
-    const mark = marks[0]!;
-    for (const tab of [herdr.tab, paired.tab.tab_id]) {
-      const head = await position(segment(page, tab).locator("[data-sidebar-tab-line] svg"));
-      expect(Math.abs(head.x + head.width / 2 - (mark.x + mark.width / 2))).toBeLessThanOrEqual(0.5);
-      expect((await position(segment(page, tab).locator("[data-sidebar-tab-name]"))).x).toBe(titles[0]!.x);
-      const line = await position(segment(page, tab).locator("[data-sidebar-tab-line]"));
-      expect((await position(guide(page, tab))).y).toBeLessThan(line.y + line.height / 2);
-    }
-    const first = await position(segment(page, herdr.tab));
-    const middle = await position(segment(page, single.tab.tab_id));
-    const last = await position(segment(page, paired.tab.tab_id));
+    const first = await position(segment(page, engine.tab));
+    const middle = await position(segment(page, alone.tab));
+    const last = await position(segment(page, pair.tab));
     // The first segment hangs 2px under its checkout, and segments are
-    // contiguous: the single agent's segment is its row alone, beside its guide.
+    // contiguous: a tab's segment is its rows alone, beside its guide.
     expect(first.y - ownerRow.y - ownerRow.height).toBe(2);
     expect(middle.y - first.y - first.height).toBe(0);
     expect(last.y - middle.y - middle.height).toBe(0);
-    expect((await position(segment(page, single.tab.tab_id).locator("li[data-pane]"))).height).toBe(30);
+    expect((await position(segment(page, alone.tab).locator("li[data-pane]"))).height).toBe(30);
     expect(middle.height).toBe(30);
     await rest(page);
     await screenshot(page, "sidebar-tab-segments");
 
-    // Arrow keys visit every tab line and row; the single agent's tab has no line to stop on.
-    // Home and End reach the ends.
-    await tabButton(page, herdr.tab).focus();
-    await tabButton(page, herdr.tab).press("ArrowDown");
-    await expect(segment(page, herdr.tab).locator("[data-agent-open]").first()).toBeFocused();
+    // Arrow keys visit every agent row across the tabs; Home and End reach the ends.
+    const rowsOf = (tab: string) => segment(page, tab).locator("[data-agent-open]");
+    await rowsOf(engine.tab).first().focus();
     await page.keyboard.press("ArrowDown");
-    await expect(segment(page, herdr.tab).locator("[data-agent-open]").nth(1)).toBeFocused();
+    await expect(rowsOf(engine.tab).nth(1)).toBeFocused();
     await page.keyboard.press("ArrowDown");
     await expect(singleAgent).toBeFocused();
     await page.keyboard.press("ArrowDown");
-    await expect(tabButton(page, paired.tab.tab_id)).toBeFocused();
+    await expect(rowsOf(pair.tab).first()).toBeFocused();
     await page.keyboard.press("Home");
-    await expect(tabButton(page, herdr.tab)).toBeFocused();
+    await expect(rowsOf(engine.tab).first()).toBeFocused();
     await page.keyboard.press("End");
-    await expect(segment(page, paired.tab.tab_id).locator("[data-agent-open]").last()).toBeFocused();
+    await expect(rowsOf(pair.tab).last()).toBeFocused();
     await singleAgent.click();
-    await expect(page.locator(`[data-tab="${single.tab.tab_id}"]`).first()).toHaveAttribute("aria-selected", "true");
-    await tabButton(page, paired.tab.tab_id).focus();
-    await tabButton(page, paired.tab.tab_id).press("Enter");
-    await expect(page.locator(`[data-tab="${paired.tab.tab_id}"]`).first()).toHaveAttribute("aria-selected", "true");
-    await tabButton(page, herdr.tab).focus();
-    await tabButton(page, herdr.tab).press("Space");
-    await expect(page.locator(`[data-tab="${herdr.tab}"]`).first()).toHaveAttribute("aria-selected", "true");
-
-    // Focus brings the line's hint, the name and the agent count.
-    await tabButton(page, herdr.tab).focus();
-    await expect(page.getByRole("tooltip")).toHaveText("작업 묶음 A, 2 agents");
-  } finally { daemon?.stop(); herdr.stop(); }
+    await expect(page.locator(`[data-tab="${alone.tab}"]`).first()).toHaveAttribute("aria-selected", "true");
+  } finally { daemon?.stop(); engine.stop(); }
 });
 
-test("long manual tab names keep their hint and line inside the sidebar at 240 and 292 in both themes", async ({ page }) => {
-  const herdr = await startFixture();
-  const daemon = await startHided(herdr, "sidebar-tab-narrow");
+test("a named tab with no agent keeps its line and hint inside the sidebar at 240 and 292 in both themes", async ({ page }) => {
+  const engine = await startFixture();
+  const daemon = await startHided(engine, "sidebar-tab-narrow");
   const name = "아주 긴 한국어 탭 이름과 작업 묶음의 경계 확인 · Sidebar tab segments and long names";
   try {
     await page.goto(`${daemon.origin}/?probe=1#token=${daemon.token}`);
     await enterWorkspace(page, "fixture");
-    await renameTab(page, herdr.tab, name);
+    await renameTab(page, engine.tab, name);
+    // Closing its agents leaves a shell in the named tab, the one tab that still says its name here.
+    for (const pane of engine.panes) await withControl(daemon, (control) => closePane(control, pane));
+    await expect(tabButton(page, engine.tab)).toHaveAccessibleName(name);
+    await expect(segment(page, engine.tab).locator("[data-agent-open]")).toHaveCount(0);
     for (const theme of ["light", "dark"] as const) {
       await chooseTheme(page, theme);
       for (const width of [240, 292]) {
         await sendEvent(page, daemon, "ui_state_update", { sidebar_width: width, expanded_paths: [], selected_path: null });
         await expect.poll(async () => Math.round((await page.locator("nav[data-sidebar]").boundingBox())!.width)).toBe(width + 48);
-        await expect(tabButton(page, herdr.tab)).toHaveAccessibleName(`${name}, 2 agents`);
-        expect(await segment(page, herdr.tab).evaluate((node) => node.scrollWidth <= node.clientWidth)).toBe(true);
+        expect(await segment(page, engine.tab).evaluate((node) => node.scrollWidth <= node.clientWidth)).toBe(true);
         const label = page.locator("[data-sidebar-tab-name] > span");
         await page.evaluate(() => document.fonts.ready);
         expect(await label.evaluate((node) => node.scrollWidth > node.clientWidth)).toBe(true);
-        await tabButton(page, herdr.tab).hover();
-        await expect(page.getByRole("tooltip")).toHaveText(`${name}, 2 agents`);
+        await tabButton(page, engine.tab).hover();
+        await expect(page.getByRole("tooltip")).toHaveText(name);
         await screenshot(page, `sidebar-tab-tooltip-${theme}-${width}`);
         await rest(page);
         await screenshot(page, `sidebar-tab-${theme}-${width}`);
       }
     }
-  } finally { daemon.stop(); herdr.stop(); }
+  } finally { daemon.stop(); engine.stop(); }
 });

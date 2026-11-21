@@ -1,0 +1,10 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- Capacitor's activity sets this theme by name; the app's definition replaces the library's. Android 12 and later
+         draw their launch screen from it too: the icon on the window background. -->
+    <style name="AppTheme.NoActionBar" parent="Theme.AppCompat.DayNight.NoActionBar">
+        <item name="windowActionBar">false</item>
+        <item name="windowNoTitle">true</item>
+        <item name="android:windowBackground">@color/launch_background</item>
+    </style>
+</resources>

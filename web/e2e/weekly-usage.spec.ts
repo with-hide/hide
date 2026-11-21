@@ -1,9 +1,10 @@
-// The weekly usage chips and popover on an isolated pinned Herdr and hided
+// The weekly usage chips and popover on an isolated engine and hided
 // (#153). The daemon's PATH carries a `claude` that answers `/usage` with a
 // fixed reading once the test releases it, so its row is first loading and
-// then available with a Fable bucket; this HOME has no Codex login, so that
-// row is unavailable. Along the way the page tells the core when the popover
-// opens and closes and when the page is hidden.
+// then available with a Fable bucket; the same PATH carries a `codex` and
+// this HOME has no Codex CLI login, so that row is unavailable as signed out.
+// Along the way the page tells the core when the popover opens and closes and
+// when the page is hidden.
 
 import { expect, test, type Page } from "@playwright/test";
 import { startFixture } from "./engine-fixture";
@@ -37,11 +38,11 @@ function sentHints(page: Page): Hints[] {
 test("weekly usage: a loading, an available and an unavailable row, and the hints the page sends", { tag: "@platform" }, async ({ page }) => {
   await page.setViewportSize({ width: 1440, height: 900 });
   // This fixture's claude answers /usage only; no terminal agent is needed.
-  const herdr = await startFixture({ agents: false });
+  const engine = await startFixture({ agents: false });
   const usage = usageShim();
   let daemon: Daemon | null = null;
   try {
-    daemon = await startHided(herdr, "usage", undefined, { PATH: usage.path, CODEX_HOME: undefined });
+    daemon = await startHided(engine, "usage", undefined, { PATH: usage.path, CODEX_HOME: undefined });
     const hints = sentHints(page);
     await page.goto(`${daemon.origin}/#token=${daemon.token}`);
 
@@ -71,14 +72,15 @@ test("weekly usage: a loading, an available and an unavailable row, and the hint
     await expect.poll(() => hints.at(-1)).toEqual({ usage_popover_open: true });
     await screenshot(page, "usage-loading-unavailable");
 
-    // Claude answers: the open popover fills in the row, its reset, and the Fable bucket under it.
+    // Claude answers: the open popover fills in the row, its reset, and the Fable bucket under it,
+    // which repeats no reset the week above it already says.
     usage.release();
     const week = claudeRow.locator('[data-usage-window-row="weekly"]:not([data-usage-bucket])');
     await expect(week.locator("[data-usage-value]")).toHaveText("62%", { timeout: 20_000 });
     await expect(week.locator("[data-usage-reset]")).toHaveText("· in 5d 4h");
     const fable = claudeRow.locator('[data-usage-bucket="Fable"]');
     await expect(fable.locator("[data-usage-value]")).toHaveText("6%");
-    await expect(fable.locator("[data-usage-reset]")).toHaveText("· in 5d 4h");
+    await expect(fable.locator("[data-usage-reset]")).toHaveCount(0);
     await screenshot(page, "usage-popover-available");
     await page.clock.setSystemTime(Date.now());
 
@@ -111,7 +113,7 @@ test("weekly usage: a loading, an available and an unavailable row, and the hint
     await expect.poll(() => hints.at(-1)).toEqual({ usage_window_visible: false });
   } finally {
     daemon?.stop();
-    herdr.stop();
+    engine.stop();
     usage.cleanup();
   }
 });

@@ -6,11 +6,16 @@
 //! conversation or its terminal, ask for older messages or more rows, close
 //! it, send that pane a reply or one key, open the start sheet and start an
 //! agent from it, wake a sleeping agent in its pane, wake or inspect a listed
-//! sleeping conversation, register or report its push subscription, and ask
-//! whether hided still answers (`ping`). Anything else is refused and recorded.
-//! It never receives a file, a path, a setting or the core's snapshot; the one
-//! exception is the interface language, which rides each `agents` frame so the
-//! phone speaks the language the operator chose.
+//! sleeping conversation, answer the decision a listed mission waits on
+//! (`answer_mission`), read, merge or hand to an agent a listed pull request
+//! (`read_pr`, `merge_pr`, `read_pr_feedback`, `delegate_pr`), register or
+//! report its push subscription, ask whether hided still answers (`ping`),
+//! and look at one View an agent of its open detail opened (`look_open`,
+//! `look_ack`, `look_seen`). Anything else is refused and recorded. It never
+//! receives a path, a setting or the core's snapshot, and a file only as the
+//! content of a View that is open now, asked for by its id (`looks.rs`); the
+//! one setting is the interface language, which rides each `agents` frame so
+//! the phone speaks the language the operator chose.
 //!
 //! Every frame to the phone goes through `encode`, the one place a relay
 //! transport would wrap in end-to-end encryption (PRD D-01).
@@ -20,14 +25,17 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use axum::extract::ws::{CloseFrame, Message, WebSocket};
-use herdr_core::agent_state::phone::{DormantPhase, SleepId};
+use hide_core::agent_state::phone::{DormantPhase, FRAME_LIMIT, SleepId, wire_len};
+use hide_holder_protocol::{MAX_COLS, MAX_READ_BYTES, styled};
 use serde_json::{Value, json};
 use tokio::sync::mpsc;
 
 use super::conversation::{self, Tail, Transcript};
+use super::looks;
 use super::pane::{self, Input, PaneError};
-use super::projection::{AgentKey, Projection};
-use super::store::{Notifications, PushSubscription};
+use super::projection::{AgentKey, PhoneAutomations, PhoneMissions, PhonePrs, Projection};
+use super::prs;
+use super::store::{ApnsRegistration, FcmRegistration, Notifications, PushSubscription};
 use super::{InputState, Mobile, PhoneMeta, Reservation};
 
 /// How often an open detail reads its pane again.
@@ -46,6 +54,9 @@ const SILENT_LIMIT: Duration = Duration::from_secs(45);
 /// whose buffer is full would otherwise block the loop, and with it the
 /// ping, the silent limit and a close for eviction or revoke.
 const SEND_LIMIT: Duration = Duration::from_secs(10);
+// The list frames' budget is the relay's message limit (hide-core names it
+// without linking the relay crate).
+const _: () = assert!(FRAME_LIMIT == hide_relay_protocol::noise::MAX_MESSAGE);
 
 /// Sends one message; false when the socket failed or stalled past
 /// `SEND_LIMIT`, and the connection should end.
@@ -53,13 +64,13 @@ async fn send(socket: &mut Socket, message: Message, phone_id: &str) -> bool {
     match tokio::time::timeout(SEND_LIMIT, socket.send(message)).await {
         Ok(Ok(())) => true,
         Ok(Err(())) => {
-            herdr_core::diagnostic!(
+            hide_core::diagnostic!(
                 json!({"component":"mobile_phone", "kind":"phone.send_failed", "phone_id":phone_id})
             );
             false
         }
         Err(_) => {
-            herdr_core::diagnostic!(json!({
+            hide_core::diagnostic!(json!({
                 "component": "mobile_phone", "kind": "phone.stalled", "phone_id": phone_id,
             }));
             false
@@ -70,10 +81,9 @@ async fn send(socket: &mut Socket, message: Message, phone_id: &str) -> bool {
 /// The one function every application frame to a phone passes through.
 /// Relay messages leave this boundary only as authenticated ciphertext.
 fn encode(
-    frame: &Value,
+    text: String,
     session: Option<&mut hide_relay_protocol::noise::Session>,
 ) -> Result<Vec<Message>, hide_relay_protocol::Error> {
-    let text = frame.to_string();
     match session {
         Some(session) => Ok(session
             .send_message(text.as_bytes())?
@@ -84,15 +94,57 @@ fn encode(
     }
 }
 
+/// Sends one frame; false when the connection should end. A frame past
+/// [`FRAME_LIMIT`] is never handed to the relay, which would close the
+/// session over it and the phone would reconnect into the same frame: it is
+/// logged and the connection stays, and when its kind has a failure the
+/// phone already reads ([`over_limit_answer`]) that is sent in its place, so
+/// the request it answers is not left waiting.
 async fn send_frame(socket: &mut Socket, frame: &Value, phone_id: &str) -> bool {
+    let text = frame.to_string();
+    if text.len() <= FRAME_LIMIT {
+        return send_text(socket, text, phone_id).await;
+    }
+    let answer = over_limit_answer(frame);
+    hide_core::diagnostic!(json!({
+        "component": "mobile_phone", "kind": "phone.frame_too_large", "phone_id": phone_id,
+        "frame": frame.get("type"), "bytes": text.len(), "limit": FRAME_LIMIT,
+        "answered": answer.as_ref().and_then(|answer| answer.get("type")),
+    }));
+    match answer {
+        Some(answer) => send_text(socket, answer.to_string(), phone_id).await,
+        None => true,
+    }
+}
+
+/// The failure a phone already reads for the request a frame past the limit
+/// answers, or none when that kind has none to give: `rows` (an open or a
+/// `more`) reads `unavailable`, `look_changes` (a `look_open`) reads the
+/// View as `too_large`. Every other frame is bounded where it is built, or
+/// its kind has no failure the phone knows, and is only logged.
+fn over_limit_answer(frame: &Value) -> Option<Value> {
+    match frame.get("type").and_then(Value::as_str)? {
+        "rows" => Some(json!({
+            "type": "rows", "device_id": frame.get("device_id"), "pane_id": frame.get("pane_id"),
+            "state": PaneError::Unavailable(String::new()).reason(),
+        })),
+        "look_changes" => Some(json!({
+            "type": "look_result", "request_id": frame.get("request_id"),
+            "view_id": frame.get("view_id"), "state": "too_large",
+        })),
+        _ => None,
+    }
+}
+
+async fn send_text(socket: &mut Socket, text: String, phone_id: &str) -> bool {
     let session = match socket {
         Socket::Direct(_) => None,
         Socket::Relay(relay) => Some(&mut relay.session),
     };
-    let messages = match encode(frame, session) {
+    let messages = match encode(text, session) {
         Ok(messages) => messages,
         Err(reason) => {
-            herdr_core::diagnostic!(
+            hide_core::diagnostic!(
                 json!({"component":"mobile_phone", "kind":"phone.encode_failed", "phone_id":phone_id, "reason":reason.to_string()})
             );
             return false;
@@ -177,7 +229,7 @@ impl Socket {
                     }
                     Ok(None) => {}
                     Err(reason) => {
-                        herdr_core::diagnostic!(
+                        hide_core::diagnostic!(
                             json!({"component":"mobile_relay", "kind":"phone.cipher_refused",
                             "connection":relay.connection, "reason":reason.to_string()})
                         );
@@ -190,7 +242,7 @@ impl Socket {
 }
 
 fn refusal_logged(kind: &str, phone_id: Option<&str>, reason: &str) {
-    herdr_core::diagnostic!(json!({
+    hide_core::diagnostic!(json!({
         "component": "mobile_phone", "kind": kind, "phone_id": phone_id, "reason": reason,
     }));
 }
@@ -214,14 +266,63 @@ pub fn is_phone(first: &Value) -> bool {
     first.get("client_kind").and_then(Value::as_str) == Some("phone")
 }
 
-fn agents_frame(projection: &Projection) -> Value {
-    json!({
+/// The list frame and how many agents it left out to fit one relay message
+/// (`Projection::wire`), which the phone shows as a line under the list.
+fn agents_frame(projection: &Projection) -> (Value, usize) {
+    let wire = projection.wire();
+    let frame = json!({
         "type": "agents",
-        "groups": projection.groups,
+        "groups": wire.groups,
+        "omitted": wire.omitted,
+        // The Mac and the devices it reaches, for the header and the device sheet.
+        "devices": projection.devices,
         // The core's language as stored, or null to follow the phone's own.
         "interface_language": projection.interface_language,
         // The operator's palette; the phone keeps its own light or dark.
         "color_theme": projection.color_theme,
+    });
+    (frame, wire.omitted)
+}
+
+/// Records when a connection's list first leaves agents out, not on every
+/// change while it stays over (the count is in the frame).
+fn note_agents_omitted(phone_id: &str, before: &mut usize, omitted: usize) {
+    if omitted > 0 && *before == 0 {
+        hide_core::diagnostic!(json!({
+            "component": "mobile_phone", "kind": "agents.capped", "phone_id": phone_id,
+            "omitted": omitted, "budget": hide_core::agent_state::phone::LIST_BUDGET,
+        }));
+    }
+    *before = omitted;
+}
+
+/// The missions the phone lists (PRD mobile-companion-ui B28, B31-B36): the
+/// record's trimmed projection, republished when it changes.
+fn missions_frame(missions: &PhoneMissions) -> Value {
+    json!({
+        "type": "missions", "items": missions.items, "failed": missions.failed,
+        "omitted": missions.omitted,
+    })
+}
+
+/// The pull requests the phone lists (PRD mobile-companion-ui B37-B45): the
+/// projection's trimmed list with the cards the core holds, republished when
+/// it changes.
+fn prs_frame(prs: &PhonePrs) -> Value {
+    json!({
+        "type": "prs", "projects": prs.projects, "items": prs.items,
+        "feedback": prs.feedback, "omitted": prs.omitted,
+    })
+}
+
+/// The automations the phone lists (PRD automations B34, B35): the core's
+/// section trimmed to the list and each one's records, republished when it
+/// changes.
+fn automations_frame(automations: &PhoneAutomations) -> Value {
+    json!({
+        "type": "automations", "items": automations.items, "omitted": automations.omitted,
+        "zone": automations.zone, "asks": automations.asks,
+        "unreadable": automations.unreadable,
     })
 }
 
@@ -275,6 +376,10 @@ struct Open {
     /// reason as a start: the write may already be on its way and its request
     /// id must be settled. The pane call's own limits bound it.
     input: Option<tokio::task::JoinHandle<()>>,
+    /// The content of the one View the phone is looking at, sent a window of
+    /// chunks at a time. It ends with the detail or with the next request:
+    /// it only reads, so nothing is owed to a request id.
+    look: Option<looks::Transfer>,
 }
 
 /// Runs one slow piece of a phone's work beside the socket loop, so the loop
@@ -325,9 +430,12 @@ fn spawn_detail(
         let mut transcript: Option<Transcript> = None;
         // Whether the phone was last told the pane has a conversation.
         let mut told: Option<bool> = None;
+        // The Views the phone was last told the agent has open.
+        let mut told_looks: Option<hide_core::LookViews> = None;
         loop {
             let ask = *asks.borrow_and_update();
             let mut outgoing = Vec::new();
+            outgoing.extend(looks_step(&mobile, &key, &mut told_looks).await);
             if ask.view == View::Conversation {
                 let (next, frame) = conversation_step(&mobile, &key, transcript.take()).await;
                 transcript = next;
@@ -369,15 +477,52 @@ fn spawn_detail(
     })
 }
 
+/// The Views the agent in `pane_id` has open, asked of the core on a blocking
+/// thread: its owner thread answers, and no worker of the runtime waits for it.
+async fn agent_looks(mobile: &Arc<Mobile>, pane_id: &str) -> Result<hide_core::LookViews, String> {
+    let (core, pane_id) = (Arc::clone(mobile.core()), pane_id.to_owned());
+    tokio::task::spawn_blocking(move || core.agent_looks(&pane_id))
+        .await
+        .map_err(|error| error.to_string())?
+}
+
+/// The list of Views the agent has open, when it differs from the last one
+/// sent: a View opened, closed or looked at moves it.
+async fn looks_step(
+    mobile: &Arc<Mobile>,
+    key: &AgentKey,
+    told: &mut Option<hide_core::LookViews>,
+) -> Option<Value> {
+    let looks = match agent_looks(mobile, &key.pane_id).await {
+        Ok(looks) => looks,
+        Err(message) => {
+            looks_failed(&message);
+            return None;
+        }
+    };
+    if told.as_ref() == Some(&looks) {
+        return None;
+    }
+    let frame = looks::list_frame(key, &looks);
+    *told = Some(looks);
+    Some(frame)
+}
+
+fn looks_failed(message: &str) {
+    hide_core::diagnostic!(json!({
+        "component": "mobile_phone", "kind": "looks.read_failed", "message": message,
+    }));
+}
+
 fn conversation_failed(message: &str) {
-    herdr_core::diagnostic!(json!({
+    hide_core::diagnostic!(json!({
         "component": "mobile_phone", "kind": "conversation.read_failed", "message": message,
     }));
 }
 
 /// One pass over the pane's conversation: open its transcript and send the
 /// newest page, or send what the agent appended. The transcript comes back
-/// `None` when the pane has no conversation to show. A failed Herdr read
+/// `None` when the pane has no conversation to show. A failed pane read
 /// keeps an open transcript, so a slow answer does not flip the phone to
 /// the terminal.
 async fn conversation_step(
@@ -390,7 +535,7 @@ async fn conversation_step(
         return (None, None);
     }
     let reader = Arc::clone(mobile);
-    let pane_id = key.herdr_pane_id().to_owned();
+    let pane_id = key.engine_pane_id().to_owned();
     let (transcript, page) = tokio::task::spawn_blocking(move || {
         let source = reader
             .engine(reader.node().as_str())
@@ -415,7 +560,12 @@ async fn conversation_step(
                 Err(error) => conversation_failed(&error.to_string()),
             }
         }
-        match Transcript::open(reader.home(), &pane_id, source) {
+        // The core says which account the pane's agent runs in; until a row
+        // shows the agent, there is nothing to open yet.
+        let Some(account) = reader.core().pane_account(&pane_id) else {
+            return (None, None);
+        };
+        match Transcript::open(&reader.session_accounts(), &account, &pane_id, source) {
             Ok((open, page)) => (Some(open), Some((page.messages, page.before, "reset"))),
             // Reported, and nothing written yet.
             Err(hide_session::SessionError::SessionFileMissing) => (None, None),
@@ -443,18 +593,18 @@ async fn conversation_step(
     (transcript, frame)
 }
 
-/// Reads the open pane's rows and answers only when their text or the asked
-/// line count changed. Herdr's read `revision` counts pane state, not output,
+/// Reads the open pane's rows and answers only when the rows or the asked
+/// line count changed. The engine's read `revision` counts pane state, not output,
 /// so it cannot say that new rows arrived.
 #[derive(Default)]
 struct RowsReader {
-    last: Option<(String, u32)>,
+    last: Option<(pane::Rows, u32)>,
     last_error: Option<&'static str>,
 }
 
 impl RowsReader {
     async fn read(&mut self, mobile: &Arc<Mobile>, key: &AgentKey, asked: u32) -> Option<Value> {
-        let pane_id = key.herdr_pane_id().to_owned();
+        let pane_id = key.engine_pane_id().to_owned();
         let device_id = key.device_id.clone();
         let reader = Arc::clone(mobile);
         // Resolving a device's connection waits on the core owner thread,
@@ -472,17 +622,18 @@ impl RowsReader {
                 if self
                     .last
                     .as_ref()
-                    .is_some_and(|(text, lines)| *lines == asked && *text == rows.text)
+                    .is_some_and(|(previous, lines)| *lines == asked && *previous == rows)
                 {
                     return None;
                 }
-                let frame = json!({
-                    "type": "rows", "device_id": key.device_id, "pane_id": key.pane_id,
-                    "state": "ok", "text": rows.text, "lines": asked,
-                    // Herdr says whether it cut older rows off this read.
-                    "more": asked < pane::MAX_LINES && rows.truncated,
-                });
-                self.last = Some((rows.text, asked));
+                let frame = rows_frame(
+                    key,
+                    &rows.text,
+                    rows.truncated,
+                    asked,
+                    rows.alternate_screen,
+                );
+                self.last = Some((rows, asked));
                 Some(frame)
             }
             Err(error) => {
@@ -492,7 +643,7 @@ impl RowsReader {
                 }
                 self.last_error = Some(error.reason());
                 if let PaneError::Unavailable(message) = &error {
-                    herdr_core::diagnostic!(json!({
+                    hide_core::diagnostic!(json!({
                         "component": "mobile_phone", "kind": "pane.read_failed", "message": message,
                     }));
                 }
@@ -504,6 +655,55 @@ impl RowsReader {
         }
     }
 }
+
+/// The `rows` frame of a read, within [`FRAME_LIMIT`]: what the text takes
+/// as JSON (an escape byte takes six) is measured against what the frame's
+/// other fields leave, and whole lines are kept newest first
+/// ([`styled::newest_lines`]); only a line that alone takes more than all of
+/// it keeps its newest part. `more` offers older rows only when the engine
+/// cut some (`truncated`), the cap is not reached and nothing was left out
+/// here, so a phone at the budget or the cap asks for nothing more
+/// (engineering #15). A holder that cut its read to its own byte bound
+/// answers more than this frame holds (`HOLDER_CUT_KEEPS`), so that read is
+/// always cut here too and offers nothing more.
+fn rows_frame(
+    key: &AgentKey,
+    text: &str,
+    truncated: bool,
+    asked: u32,
+    alternate_screen: bool,
+) -> Value {
+    // Measured with `false`, the longer of the two values `more` takes.
+    let mut frame = json!({
+        "type": "rows", "device_id": key.device_id, "pane_id": key.pane_id,
+        "state": "ok", "text": "", "lines": asked, "more": false,
+    });
+    if alternate_screen {
+        frame["alternate_screen"] = Value::Bool(true);
+    }
+    let room = FRAME_LIMIT.saturating_sub(wire_len(&frame));
+    // A string's JSON is its escaped bytes between two quotes; escaping is
+    // per character, so the pieces' lengths add up.
+    let (kept, cut) = styled::newest_lines(text, room, &|piece| wire_len(piece) - 2);
+    frame["text"] = Value::String(kept);
+    frame["more"] = Value::Bool(!cut && truncated && asked < pane::MAX_LINES);
+    frame
+}
+
+/// The fewest bytes a holder's read of the last rows keeps when it cut them
+/// to its bound: this build's holder keeps the newest bytes, less than
+/// `CUT_SLACK` short of the bound; a holder built before it cut at a row's
+/// start, giving up at most one row, 1024 columns of a 65-code-point cell
+/// (260 bytes) in its longest style (`STYLE_MAX`) and the row's end.
+const HOLDER_CUT_KEEPS: usize = {
+    let older =
+        MAX_READ_BYTES - (MAX_COLS as usize * (260 + styled::STYLE_MAX) + styled::STYLE_MAX + 2);
+    let current = MAX_READ_BYTES - styled::CUT_SLACK;
+    if older < current { older } else { current }
+};
+// JSON takes at least the text's bytes, so a holder's cut read never fits a
+// phone frame.
+const _: () = assert!(HOLDER_CUT_KEEPS > FRAME_LIMIT);
 
 fn key_of(message: &Value) -> Option<AgentKey> {
     let device_id = message.get("device_id").and_then(Value::as_str)?;
@@ -616,6 +816,9 @@ async fn run(
     close: Arc<tokio::sync::Notify>,
 ) {
     let mut projection = mobile.subscribe_projection();
+    let mut missions = mobile.subscribe_missions();
+    let mut prs = mobile.subscribe_prs();
+    let mut automations = mobile.subscribe_automations();
     let mut meta = mobile.subscribe_meta();
     let (frames_tx, mut frames) = mpsc::channel::<Value>(8);
     let mut open = Open::default();
@@ -630,16 +833,22 @@ async fn run(
         "phone_id": phone_id,
         "name": record.as_ref().map(|phone| phone.name.clone()),
         "vapid_public_key": mobile.vapid_public_key(),
-        "notifications": match record.as_ref().map(|phone| (phone.notifications, phone.push.is_some())) {
+        "notifications": match record.as_ref().map(|phone| (phone.notifications, phone.reachable())) {
             Some((_, true)) => "on",
             Some((Notifications::Off, false)) => "off",
             _ => "unasked",
         },
     });
+    let mut agents_omitted = 0;
+    let (agents, omitted) = agents_frame(&projection.borrow_and_update());
+    note_agents_omitted(phone_id, &mut agents_omitted, omitted);
     let first = [
         hello,
         meta_frame(&meta.borrow_and_update()),
-        agents_frame(&projection.borrow_and_update()),
+        agents,
+        missions_frame(&missions.borrow_and_update()),
+        prs_frame(&prs.borrow_and_update()),
+        automations_frame(&automations.borrow_and_update()),
     ];
     for frame in &first {
         if !send_frame(socket, frame, phone_id).await {
@@ -655,7 +864,23 @@ async fn run(
             }
             changed = projection.changed() => {
                 if changed.is_err() { return; }
-                let frame = agents_frame(&projection.borrow_and_update());
+                let (frame, omitted) = agents_frame(&projection.borrow_and_update());
+                note_agents_omitted(phone_id, &mut agents_omitted, omitted);
+                if !send_frame(socket, &frame, phone_id).await { return; }
+            }
+            changed = missions.changed() => {
+                if changed.is_err() { return; }
+                let frame = missions_frame(&missions.borrow_and_update());
+                if !send_frame(socket, &frame, phone_id).await { return; }
+            }
+            changed = prs.changed() => {
+                if changed.is_err() { return; }
+                let frame = prs_frame(&prs.borrow_and_update());
+                if !send_frame(socket, &frame, phone_id).await { return; }
+            }
+            changed = automations.changed() => {
+                if changed.is_err() { return; }
+                let frame = automations_frame(&automations.borrow_and_update());
                 if !send_frame(socket, &frame, phone_id).await { return; }
             }
             changed = meta.changed() => {
@@ -673,7 +898,7 @@ async fn run(
             }
             _ = ping.tick() => {
                 if heard.elapsed() >= SILENT_LIMIT {
-                    herdr_core::diagnostic!(json!({
+                    hide_core::diagnostic!(json!({
                         "component": "mobile_phone", "kind": "phone.silent", "phone_id": phone_id,
                     }));
                     return;
@@ -723,6 +948,12 @@ async fn handle(
     projection: &Arc<Projection>,
 ) -> Option<Value> {
     let kind = message.get("type").and_then(Value::as_str).unwrap_or("");
+    if operator_action(kind) {
+        mobile
+            .config
+            .core
+            .note_operator_active(hide_core::product_analytics::ActiveSurface::Phone);
+    }
     match kind {
         "open" => {
             let Some(key) = key_of(message).filter(|key| projection.find(key).is_some()) else {
@@ -740,7 +971,10 @@ async fn handle(
                 lines: pane::FIRST_LINES,
             });
             let (older, older_asks) = mpsc::channel(1);
+            // Opening it is a look: the core reads it as the desktop's focus
+            // would while it stays open, and wakes nothing.
             mobile.set_viewing(connection, Some(key.clone()));
+            open.look = None;
             let task = spawn_detail(Arc::clone(mobile), key, frames.clone(), asks, older_asks);
             open.detail = Some(Detail { ask, older, task });
             None
@@ -784,10 +1018,45 @@ async fn handle(
         }
         "close" => {
             open.detail = None;
+            open.look = None;
             mobile.set_viewing(connection, None);
             None
         }
+        "look_open" => look_open(mobile, phone_id, message, open, frames, projection).await,
+        "look_ack" => {
+            match (
+                open.look.as_ref(),
+                message.get("request_id").and_then(Value::as_str),
+                message.get("seq").and_then(Value::as_u64),
+            ) {
+                (Some(transfer), Some(request_id), Some(seq)) => transfer.ack(request_id, seq),
+                (_, Some(_), Some(_)) => {}
+                _ => refusal_logged("scope.refused", Some(phone_id), "look_ack"),
+            }
+            None
+        }
+        "look_seen" => {
+            look_seen(mobile, phone_id, message, projection).await;
+            None
+        }
         "wake_agent" => Some(wake_agent(mobile, phone_id, message, projection).await),
+        "human_turn_done" => Some(human_turn_done(mobile, phone_id, message, projection).await),
+        "answer_mission" => Some(answer_mission(mobile, phone_id, message).await),
+        "ask_mission_material" => Some(ask_mission_material(mobile, phone_id, message).await),
+        "reopen_mission_view" => Some(reopen_mission_view(mobile, phone_id, message).await),
+        "read_pr" | "merge_pr" | "read_pr_feedback" => {
+            Some(pr_request(mobile, phone_id, kind, message).await)
+        }
+        "automation" => Some(automation_request(mobile, phone_id, message).await),
+        "delegate_pr" => {
+            let busy = json!({"type": "start_result", "request_id": message.get("request_id"), "ok": false, "reason": "in_flight"});
+            // Answered once the core says how the start went, like a start from the sheet.
+            let (mobile, phone_id, message) =
+                (Arc::clone(mobile), phone_id.to_owned(), message.clone());
+            spawn_beside_loop(&mut open.start, frames, busy, async move {
+                mobile.delegate_pr(&phone_id, &message).await
+            })
+        }
         "input" => {
             let busy = json!({
                 "type": "input_result", "request_id": message.get("request_id"), "ok": false, "reason": "in_flight",
@@ -840,9 +1109,53 @@ async fn handle(
                 auth: field("/keys/auth"),
             };
             let stored = mobile.set_subscription(phone_id, push);
-            Some(
-                json!({"type": "push_state", "notifications": if stored { "on" } else { "refused" }}),
-            )
+            Some(push_state(stored))
+        }
+        // The iOS app's notifications: Apple's device token and the key this
+        // computer encrypts each notice with, given only inside this
+        // encrypted session (`docs/RELAY_PROTOCOL.md`, The notification body).
+        "apns_registration" => {
+            let AppRegistration {
+                token,
+                p256dh,
+                auth,
+            } = AppRegistration::of(message);
+            let environment = message
+                .get("environment")
+                .and_then(|value| serde_json::from_value(value.clone()).ok());
+            let stored = environment.is_some_and(|environment| {
+                mobile.set_apns(
+                    phone_id,
+                    ApnsRegistration {
+                        token,
+                        environment,
+                        p256dh,
+                        auth,
+                    },
+                )
+            });
+            Some(push_state(stored))
+        }
+        // The Android app's notifications: Google's registration token and the
+        // key this computer encrypts each notice with, in the same shape as the
+        // iOS app's and given only inside this encrypted session. FCM has one
+        // host, so there is no environment. A released hided answers this
+        // message `refused_request` and keeps the session.
+        "fcm_registration" => {
+            let AppRegistration {
+                token,
+                p256dh,
+                auth,
+            } = AppRegistration::of(message);
+            let stored = mobile.set_fcm(
+                phone_id,
+                FcmRegistration {
+                    token,
+                    p256dh,
+                    auth,
+                },
+            );
+            Some(push_state(stored))
         }
         "push_permission" => {
             let notifications = match message.get("state").and_then(Value::as_str) {
@@ -871,10 +1184,181 @@ async fn handle(
     }
 }
 
+/// What an app's notification registration (`apns_registration`,
+/// `fcm_registration`) carries beside its service's own fields: the device's
+/// token and the key this computer encrypts each notice with. A missing field
+/// reads as empty, which the registration's own check refuses.
+struct AppRegistration {
+    token: String,
+    p256dh: String,
+    auth: String,
+}
+
+impl AppRegistration {
+    fn of(message: &Value) -> Self {
+        let field = |name: &str| {
+            message
+                .pointer(name)
+                .and_then(Value::as_str)
+                .unwrap_or("")
+                .to_owned()
+        };
+        Self {
+            token: field("/token"),
+            p256dh: field("/key/p256dh"),
+            auth: field("/key/auth"),
+        }
+    }
+}
+
+/// The answer to a notification registration: whether this phone's record now
+/// keeps it.
+fn push_state(stored: bool) -> Value {
+    json!({"type": "push_state", "notifications": if stored { "on" } else { "refused" }})
+}
+
+/// A message the operator sends by acting on the phone: a reply or a key, an
+/// answer, a wake, a merge, a start. Opening, reading, scrolling, a ping and
+/// a notification registration are not: the app sends those on its own when
+/// it opens or reconnects.
+fn operator_action(kind: &str) -> bool {
+    matches!(
+        kind,
+        "input"
+            | "wake_agent"
+            | "human_turn_done"
+            | "answer_mission"
+            | "ask_mission_material"
+            | "reopen_mission_view"
+            | "merge_pr"
+            | "automation"
+            | "delegate_pr"
+            | "wake_sleeping_session"
+            | "start_agent"
+    )
+}
+
+/// The answer to a `look_*` request that cannot go on: its state says why.
+fn look_refused(message: &Value, state: &str) -> Value {
+    json!({
+        "type": "look_result", "request_id": message.get("request_id"),
+        "view_id": message.get("view_id"), "state": state,
+    })
+}
+
+/// Why a `look_*` request was turned away: the `state` its answer carries and
+/// the `reason` `scope.refused` records.
+#[derive(Debug, Eq, PartialEq)]
+struct LookRefusal {
+    state: &'static str,
+    reason: String,
+}
+
+/// The first checks of a `look_open` or `look_seen`, which need nothing from
+/// the core (PRD mobile-companion-ui D-16): the request carries no field
+/// beyond the ids, and the agent is one the phone's list holds.
+fn look_scope<'a>(
+    message: &'a Value,
+    projection: &Projection,
+) -> Result<(AgentKey, looks::Request<'a>), LookRefusal> {
+    let request = looks::request(message).map_err(|error| match error {
+        looks::Malformed::Beyond(field) => LookRefusal {
+            state: "refused",
+            reason: format!("look_field:{field}"),
+        },
+        looks::Malformed::Invalid => LookRefusal {
+            state: "refused",
+            reason: "look_request".to_owned(),
+        },
+    })?;
+    let key = key_of(message)
+        .filter(|key| projection.find(key).is_some())
+        .ok_or_else(|| LookRefusal {
+            state: "gone",
+            reason: "not_an_agent".to_owned(),
+        })?;
+    Ok((key, request))
+}
+
+/// The View a `look_open` or `look_seen` names, checked in the order that
+/// keeps the phone to the Views of an agent it can see: `look_scope`, the
+/// phone still let in, and the View among the Views the core lists that agent
+/// has open now. Every refusal is recorded as `scope.refused`; `Err` is the
+/// answer to send.
+async fn look_target(
+    mobile: &Arc<Mobile>,
+    phone_id: &str,
+    message: &Value,
+    projection: &Projection,
+) -> Result<(String, hide_core::LookView), Value> {
+    let (key, request) = match look_scope(message, projection) {
+        Ok(scope) => scope,
+        Err(refusal) => {
+            refusal_logged("scope.refused", Some(phone_id), &refusal.reason);
+            return Err(look_refused(message, refusal.state));
+        }
+    };
+    if mobile.still_admitted(phone_id).is_err() {
+        return Err(look_refused(message, "refused"));
+    }
+    let looks = match agent_looks(mobile, &key.pane_id).await {
+        Ok(looks) => looks,
+        Err(failure) => {
+            looks_failed(&failure);
+            return Err(look_refused(message, "unavailable"));
+        }
+    };
+    match looks::find(&looks, request.view_id) {
+        Some(view) => Ok((request.request_id.to_owned(), view)),
+        None => {
+            // Closed since the list was drawn, or never this agent's.
+            refusal_logged("scope.refused", Some(phone_id), "view_not_open");
+            Err(look_refused(message, "closed"))
+        }
+    }
+}
+
+/// `look_open`: starts sending the View's content; the next one replaces it.
+async fn look_open(
+    mobile: &Arc<Mobile>,
+    phone_id: &str,
+    message: &Value,
+    open: &mut Open,
+    frames: &mpsc::Sender<Value>,
+    projection: &Arc<Projection>,
+) -> Option<Value> {
+    let (request_id, view) = match look_target(mobile, phone_id, message, projection).await {
+        Ok(target) => target,
+        Err(answer) => return Some(answer),
+    };
+    if request_id.is_empty() {
+        refusal_logged("scope.refused", Some(phone_id), "look_request");
+        return Some(look_refused(message, "refused"));
+    }
+    open.look = Some(looks::open(mobile, &request_id, view, frames.clone()));
+    None
+}
+
+/// `look_seen`: the phone showed the View, so it is seen, on the phone and on
+/// the desktop (B24). Repeating it changes nothing.
+/// The dispatch waits on the core's owner thread, so it runs on a blocking
+/// thread like every other dispatch here.
+async fn look_seen(mobile: &Arc<Mobile>, phone_id: &str, message: &Value, projection: &Projection) {
+    if let Ok((_, view)) = look_target(mobile, phone_id, message, projection).await {
+        let mobile = Arc::clone(mobile);
+        if let Err(error) = tokio::task::spawn_blocking(move || mobile.mark_seen(&view)).await {
+            hide_core::diagnostic!(json!({
+                "component": "mobile_phone", "kind": "look.seen_unrecorded",
+                "message": error.to_string(),
+            }));
+        }
+    }
+}
+
 /// The answer to a phone's `ping`: its own number back, so the phone knows
 /// hided is there. The page cannot see the protocol-level ping hided sends, so
 /// this is how a phone learns that a Mac gone to sleep stopped answering. It
-/// reads one in-memory record and nothing else: no core lock, no Herdr call.
+/// reads one in-memory record and nothing else: no core lock, no engine call.
 /// A phone no longer let in is told why instead, as it is when its socket is
 /// closed, and a ping without a number is refused and recorded.
 fn liveness(message: &Value, admitted: Result<(), &'static str>, phone_id: &str) -> Option<Value> {
@@ -912,9 +1396,22 @@ async fn sleeping_session(
     if mobile.still_admitted(phone_id).is_err() {
         return answer(false, Some("unavailable"));
     }
-    let bytes = json!({"schema_version": herdr_core::SCHEMA_VERSION, "kind": event, "payload": {"sleep_id": id}})
+    let bytes = json!({"schema_version": hide_core::SCHEMA_VERSION, "kind": event, "payload": {"sleep_id": id}})
         .to_string()
         .into_bytes();
+    if message["type"] == "wake_sleeping_session" {
+        return match dispatch_action(
+            mobile,
+            phone_id,
+            request_id_of(message).expect("validated above"),
+            bytes,
+        )
+        .await
+        {
+            Ok(()) => answer(true, None),
+            Err(reason) => answer(false, Some(reason)),
+        };
+    }
     let (mobile, phone_id) = (Arc::clone(mobile), phone_id.to_owned());
     let dispatched = tokio::task::spawn_blocking(move || {
         mobile.still_admitted(&phone_id).map_err(str::to_owned)?;
@@ -924,6 +1421,390 @@ async fn sleeping_session(
     match dispatched {
         Ok(Ok(())) => answer(true, None),
         _ => answer(false, Some("unavailable")),
+    }
+}
+
+/// What a phone's `answer_mission` asks, once it names a listed mission and a
+/// well-formed answer: the one `mission_answer` event the desktop's decision
+/// banner sends (`Event::MissionAnswer`), nothing else.
+fn mission_answer_event(
+    message: &Value,
+    missions: &PhoneMissions,
+) -> Result<Vec<u8>, &'static str> {
+    let id = message.get("mission").and_then(Value::as_str);
+    let Some(mission) = id.and_then(|id| missions.find(id)) else {
+        return Err("gone");
+    };
+    let Some(key) = message.get("key").and_then(Value::as_u64) else {
+        return Err("invalid_request");
+    };
+    let resend = match message.get("resend") {
+        None => false,
+        Some(Value::Bool(resend)) => *resend,
+        Some(_) => return Err("invalid_request"),
+    };
+    let option = match message.get("option") {
+        None | Some(Value::Null) => None,
+        Some(value) => Some(
+            value
+                .as_u64()
+                .and_then(|option| u8::try_from(option).ok())
+                .filter(|option| *option >= 1)
+                .ok_or("invalid_request")?,
+        ),
+    };
+    let text = match message.get("text") {
+        None | Some(Value::Null) => None,
+        Some(Value::String(text)) => Some(text.as_str()),
+        Some(_) => return Err("invalid_request"),
+    };
+    // Sending again names no answer; a first answer names exactly one.
+    match (resend, option, text) {
+        (true, None, None) => {}
+        (false, Some(_), None) => {}
+        (false, None, Some(text)) if hide_core::missions::answer_text(text).is_some() => {}
+        _ => return Err("invalid_request"),
+    }
+    Ok(json!({
+        "schema_version": hide_core::SCHEMA_VERSION, "kind": "mission_answer",
+        "payload": {"mission": mission.id, "key": key, "option": option, "text": text, "resend": resend},
+    })
+    .to_string()
+    .into_bytes())
+}
+
+/// `event`, a `mission_answer`, marked as sent from a phone.
+fn from_phone(event: Vec<u8>) -> Result<Vec<u8>, &'static str> {
+    let mut event: Value = serde_json::from_slice(&event).map_err(|_| "invalid_request")?;
+    event["payload"]["phone"] = Value::Bool(true);
+    Ok(event.to_string().into_bytes())
+}
+
+/// The operator's answer to the decision a mission waits on, from a phone.
+/// One claim per request id, taken and settled on one blocking thread, so a
+/// repeat of the same press, on this socket or another, reaches the Conductor
+/// once; the core then keeps the first answer to the question's key. A
+/// refusal the operator can act on (a changed question, no Conductor, a
+/// device that stopped answering) comes back on the mission itself, in the
+/// desktop's words, as it does for the banner.
+async fn answer_mission(mobile: &Arc<Mobile>, phone_id: &str, message: &Value) -> Value {
+    let Some(request_id) = request_id_of(message) else {
+        return json!({"type": "mission_result", "ok": false, "reason": "invalid_request"});
+    };
+    let answer = |ok: bool, reason: Option<&str>| {
+        json!({
+            "type": "mission_result", "request_id": request_id,
+            "mission": message.get("mission").and_then(Value::as_str), "ok": ok, "reason": reason,
+        })
+    };
+    // The core keeps where a gate's answer came from (PRD mission-human-gate
+    // D-21): this event is the banner's, sent from a phone.
+    let bytes = match mission_answer_event(message, &mobile.missions()).and_then(from_phone) {
+        Ok(bytes) => bytes,
+        Err(reason) => {
+            refusal_logged(
+                "scope.refused",
+                Some(phone_id),
+                &format!("mission_answer:{reason}"),
+            );
+            return answer(false, Some(reason));
+        }
+    };
+    match dispatch_action(mobile, phone_id, request_id, bytes).await {
+        Ok(()) => answer(true, None),
+        Err(reason) => answer(false, Some(reason)),
+    }
+}
+
+/// What a phone's `ask_mission_material` asks, once it names a listed
+/// mission: the one `mission_material` event the desktop's `자료 요청` sends
+/// (`Event::MissionMaterial`), for the question its key names.
+fn mission_material_event(
+    message: &Value,
+    missions: &PhoneMissions,
+) -> Result<Vec<u8>, &'static str> {
+    let id = message.get("mission").and_then(Value::as_str);
+    let Some(mission) = id.and_then(|id| missions.find(id)) else {
+        return Err("gone");
+    };
+    let Some(key) = message.get("key").and_then(Value::as_u64) else {
+        return Err("invalid_request");
+    };
+    Ok(json!({
+        "schema_version": hide_core::SCHEMA_VERSION, "kind": "mission_material",
+        "payload": {"mission": mission.id, "key": key},
+    })
+    .to_string()
+    .into_bytes())
+}
+
+/// The operator's `자료 요청` on a mission's decision, from a phone: claimed
+/// and dispatched as an answer is, and the core asks the Conductor once per
+/// question however many presses arrive; that it did comes back on the
+/// mission as the question's `material_asked`.
+async fn ask_mission_material(mobile: &Arc<Mobile>, phone_id: &str, message: &Value) -> Value {
+    let Some(request_id) = request_id_of(message) else {
+        return json!({"type": "mission_result", "ok": false, "reason": "invalid_request"});
+    };
+    let answer = |ok: bool, reason: Option<&str>| {
+        json!({
+            "type": "mission_result", "request_id": request_id,
+            "mission": message.get("mission").and_then(Value::as_str), "ok": ok, "reason": reason,
+        })
+    };
+    let bytes = match mission_material_event(message, &mobile.missions()) {
+        Ok(bytes) => bytes,
+        Err(reason) => {
+            refusal_logged(
+                "scope.refused",
+                Some(phone_id),
+                &format!("mission_material:{reason}"),
+            );
+            return answer(false, Some(reason));
+        }
+    };
+    match dispatch_action(mobile, phone_id, request_id, bytes).await {
+        Ok(()) => answer(true, None),
+        Err(reason) => answer(false, Some(reason)),
+    }
+}
+
+/// What a phone's `reopen_mission_view` asks, once it names a row its list
+/// holds: the desktop row's own `mission_view_reopen` event, under the
+/// press's request id, whose outcome comes back on that row
+/// (`PhoneDecisionView::reopen`).
+fn mission_view_reopen_event(
+    message: &Value,
+    missions: &PhoneMissions,
+    request_id: &str,
+) -> Result<Vec<u8>, &'static str> {
+    let id = message.get("mission").and_then(Value::as_str);
+    let Some(mission) = id.and_then(|id| missions.find(id)) else {
+        return Err("gone");
+    };
+    let (Some(key), Some(view)) = (
+        message.get("key").and_then(Value::as_u64),
+        message
+            .get("view")
+            .and_then(Value::as_str)
+            .filter(|view| !view.is_empty()),
+    ) else {
+        return Err("invalid_request");
+    };
+    if !mission.decision_views.iter().any(|row| row.view == view) {
+        return Err("gone");
+    }
+    Ok(json!({
+        "schema_version": hide_core::SCHEMA_VERSION, "kind": "mission_view_reopen",
+        "payload": {"mission": mission.id, "key": key, "view": view, "request_id": request_id},
+    })
+    .to_string()
+    .into_bytes())
+}
+
+/// A phone's press on a closed View of a mission's decision: claimed and
+/// dispatched as an answer is, so a repeat of the same press opens it once;
+/// what the core then did, opened or refused, comes back on the row.
+async fn reopen_mission_view(mobile: &Arc<Mobile>, phone_id: &str, message: &Value) -> Value {
+    let Some(request_id) = request_id_of(message) else {
+        return json!({"type": "mission_result", "ok": false, "reason": "invalid_request"});
+    };
+    let answer = |ok: bool, reason: Option<&str>| {
+        json!({
+            "type": "mission_result", "request_id": request_id,
+            "mission": message.get("mission").and_then(Value::as_str), "ok": ok, "reason": reason,
+        })
+    };
+    let bytes = match mission_view_reopen_event(message, &mobile.missions(), request_id) {
+        Ok(bytes) => bytes,
+        Err(reason) => {
+            refusal_logged(
+                "scope.refused",
+                Some(phone_id),
+                &format!("mission_view_reopen:{reason}"),
+            );
+            return answer(false, Some(reason));
+        }
+    };
+    match dispatch_action(mobile, phone_id, request_id, bytes).await {
+        Ok(()) => answer(true, None),
+        Err(reason) => answer(false, Some(reason)),
+    }
+}
+
+/// One action a phone's press asks for, admitted for dispatch once per request
+/// id on one blocking thread: a repeat of the same press, on this socket or
+/// another, answers from the claim, one still being sent answers
+/// `in_flight`, and a dispatch that failed releases the claim so the phone
+/// may send the id again. Admission counts as phone use even when the core
+/// later refuses the action's meaning; it does not acknowledge that effect.
+async fn dispatch_action(
+    mobile: &Arc<Mobile>,
+    phone_id: &str,
+    request_id: &str,
+    bytes: Vec<u8>,
+) -> Result<(), &'static str> {
+    let (mobile, phone_id, request) = (
+        Arc::clone(mobile),
+        phone_id.to_owned(),
+        request_id.to_owned(),
+    );
+    let dispatched = tokio::task::spawn_blocking(move || {
+        mobile.still_admitted(&phone_id)?;
+        match mobile.reserve_input(&phone_id, &request) {
+            Reservation::Write => {}
+            Reservation::Seen(InputState::Written) => return Ok(()),
+            Reservation::Seen(_) => return Err("in_flight"),
+        }
+        match mobile.config.core.dispatch(bytes) {
+            Ok(()) => {
+                mobile.settle_input(&phone_id, &request, Some(InputState::Written));
+                Ok(())
+            }
+            Err(_) => {
+                // Nothing reached the core, so the phone may send this id again.
+                mobile.settle_input(&phone_id, &request, None);
+                Err("unavailable")
+            }
+        }
+    })
+    .await;
+    match dispatched {
+        Ok(result) => result,
+        Err(_) => Err("unavailable"),
+    }
+}
+
+/// What a phone's `automation` press asks, once it names a listed
+/// automation: the one `automation_run`, `automation_pause` or
+/// `automation_resume` event the desktop's buttons send (PRD automations
+/// B34). A run while one goes is refused here as the desktop's button is off
+/// (B19); the core refuses it too.
+fn automation_event(message: &Value, listed: &PhoneAutomations) -> Result<Vec<u8>, &'static str> {
+    let action = match message.get("action").and_then(Value::as_str) {
+        Some(action @ ("run" | "pause" | "resume")) => action,
+        _ => return Err("invalid_request"),
+    };
+    let id = message.get("id").and_then(Value::as_str);
+    let Some(automation) = id.and_then(|id| listed.find(id)) else {
+        return Err("gone");
+    };
+    if action == "run" && automation.running {
+        return Err("running");
+    }
+    Ok(json!({
+        "schema_version": hide_core::SCHEMA_VERSION, "kind": format!("automation_{action}"),
+        "payload": {"id": automation.id},
+    })
+    .to_string()
+    .into_bytes())
+}
+
+/// A phone's [지금 실행], [멈춤] or [다시 켜기]: claimed by its request id
+/// and dispatched as a mission answer is, so a repeat of the same press, on
+/// this socket or another, reaches the core once (B36). What the core then
+/// did comes back on the automation in the `automations` frame; this answers
+/// only whether hided sent it.
+async fn automation_request(mobile: &Arc<Mobile>, phone_id: &str, message: &Value) -> Value {
+    let action = message.get("action").and_then(Value::as_str);
+    let id = message.get("id").and_then(Value::as_str);
+    let Some(request_id) = request_id_of(message) else {
+        return json!({"type": "automation_result", "action": action, "id": id, "ok": false, "reason": "invalid_request"});
+    };
+    let answer = |ok: bool, reason: Option<&str>| {
+        json!({
+            "type": "automation_result", "request_id": request_id, "action": action,
+            "id": id, "ok": ok, "reason": reason,
+        })
+    };
+    // An id this phone already sent is answered from its claim before the
+    // automation is judged again, so the repeat of a run that started is `ok`
+    // and never `running`.
+    if let Some(state) = mobile.claimed_input(phone_id, request_id) {
+        return claim_answer(&answer, state);
+    }
+    let bytes = match automation_event(message, &mobile.automations()) {
+        Ok(bytes) => bytes,
+        Err(reason) => {
+            refusal_logged(
+                "scope.refused",
+                Some(phone_id),
+                &format!("automation:{reason}"),
+            );
+            return answer(false, Some(reason));
+        }
+    };
+    match dispatch_action(mobile, phone_id, request_id, bytes).await {
+        Ok(()) => answer(true, None),
+        Err(reason) => answer(false, Some(reason)),
+    }
+}
+
+/// A phone's read, merge or feedback request for a listed pull request: the
+/// one core event the desktop's card sends, claimed by its request id on one
+/// blocking thread, so a repeat of the same press (on this socket or another)
+/// reaches GitHub once. What GitHub then did comes back on the card, in the
+/// `prs` frame; this answers only whether hided sent the request.
+async fn pr_request(mobile: &Arc<Mobile>, phone_id: &str, kind: &str, message: &Value) -> Value {
+    let Some(request_id) = request_id_of(message) else {
+        return json!({"type": "pr_result", "action": kind, "ok": false, "reason": "invalid_request"});
+    };
+    let answer = |ok: bool, reason: Option<&str>| {
+        json!({
+            "type": "pr_result", "request_id": request_id, "action": kind,
+            "pr": message.get("pr").and_then(Value::as_str), "ok": ok, "reason": reason,
+        })
+    };
+    let listed = mobile.prs();
+    let built = match kind {
+        "read_pr" => prs::card_read(message, &listed),
+        "merge_pr" => prs::merge(message, &listed),
+        _ => prs::feedback(message, &listed, request_id),
+    };
+    let bytes = match built {
+        Ok(bytes) => bytes,
+        Err(reason) => {
+            refusal_logged("scope.refused", Some(phone_id), &format!("{kind}:{reason}"));
+            return answer(false, Some(reason));
+        }
+    };
+    // Only a merge is an effect to claim: a read sent twice reads twice.
+    let claims = kind == "merge_pr";
+    let (mobile, phone_id, request) = (
+        Arc::clone(mobile),
+        phone_id.to_owned(),
+        request_id.to_owned(),
+    );
+    let dispatched = tokio::task::spawn_blocking(move || {
+        mobile.still_admitted(&phone_id)?;
+        if claims {
+            match mobile.reserve_input(&phone_id, &request) {
+                Reservation::Write => {}
+                Reservation::Seen(InputState::Written) => return Ok(()),
+                Reservation::Seen(_) => return Err("in_flight"),
+            }
+        }
+        match mobile.config.core.dispatch(bytes) {
+            Ok(()) => {
+                if claims {
+                    mobile.settle_input(&phone_id, &request, Some(InputState::Written));
+                }
+                Ok(())
+            }
+            Err(_) => {
+                // Nothing reached the core, so the phone may send this id again.
+                if claims {
+                    mobile.settle_input(&phone_id, &request, None);
+                }
+                Err("unavailable")
+            }
+        }
+    })
+    .await;
+    match dispatched {
+        Ok(Ok(())) => answer(true, None),
+        Ok(Err(reason)) => answer(false, Some(reason)),
+        Err(_) => answer(false, Some("unavailable")),
     }
 }
 
@@ -958,16 +1839,76 @@ async fn wake_agent(
     if mobile.still_admitted(phone_id).is_err() {
         return answer(false, Some("unavailable"));
     }
-    let (mobile, phone_id) = (Arc::clone(mobile), phone_id.to_owned());
-    let dispatched = tokio::task::spawn_blocking(move || {
-        mobile.still_admitted(&phone_id).map_err(str::to_owned)?;
-        mobile.config.core.dispatch(bytes)
-    })
-    .await;
-    match dispatched {
-        Ok(Ok(())) => answer(true, None),
-        _ => answer(false, Some("unavailable")),
+    match dispatch_action(
+        mobile,
+        phone_id,
+        request_id_of(message).expect("validated above"),
+        bytes,
+    )
+    .await
+    {
+        Ok(()) => answer(true, None),
+        Err(reason) => answer(false, Some(reason)),
     }
+}
+
+/// The phone's Done on a person's turn (PRD ask-human B19): admitted only
+/// for the declaration the phone lists on that row, then the same core event
+/// the desktop sends, which settles it once however often it is pressed.
+async fn human_turn_done(
+    mobile: &Arc<Mobile>,
+    phone_id: &str,
+    message: &Value,
+    projection: &Projection,
+) -> Value {
+    let answer = |ok: bool, reason: Option<&str>| {
+        json!({
+            "type": "human_turn_result", "request_id": message.get("request_id"),
+            "ok": ok, "reason": reason,
+        })
+    };
+    let Some(bytes) = human_turn_action(message, projection) else {
+        refusal_logged("scope.refused", Some(phone_id), "human_turn_done");
+        return answer(false, Some("unavailable"));
+    };
+    if mobile.still_admitted(phone_id).is_err() {
+        return answer(false, Some("unavailable"));
+    }
+    match dispatch_action(
+        mobile,
+        phone_id,
+        request_id_of(message).expect("validated above"),
+        bytes,
+    )
+    .await
+    {
+        Ok(()) => answer(true, None),
+        Err(reason) => answer(false, Some(reason)),
+    }
+}
+
+/// The `human_turn_done` event for the declaration the listed row leads with,
+/// or none for anything the phone does not list.
+fn human_turn_action(message: &Value, projection: &Projection) -> Option<Vec<u8>> {
+    if !message.as_object()?.keys().all(|name| {
+        matches!(
+            name.as_str(),
+            "type" | "request_id" | "device_id" | "pane_id" | "declaration"
+        )
+    }) {
+        return None;
+    }
+    request_id_of(message)?;
+    let declaration = message.get("declaration")?.as_str()?;
+    let listed = projection.find(&key_of(message)?)?.human_turn.as_ref()?;
+    if listed.get("id").and_then(Value::as_str) != Some(declaration) {
+        return None;
+    }
+    let event = json!({
+        "schema_version": hide_core::SCHEMA_VERSION, "kind": "human_turn_done",
+        "payload": {"declaration": declaration},
+    });
+    Some(event.to_string().into_bytes())
 }
 
 #[derive(Debug, Eq, PartialEq)]
@@ -996,7 +1937,7 @@ fn wake_action(message: &Value, projection: &Projection, key: &AgentKey) -> Opti
         return Some(Wake::Running);
     }
     let event = json!({
-        "schema_version": herdr_core::SCHEMA_VERSION, "kind": "agent_wake",
+        "schema_version": hide_core::SCHEMA_VERSION, "kind": "agent_wake",
         "payload": {"pane_id": key.pane_id, "fresh": fresh},
     });
     Some(Wake::Dispatch(event.to_string().into_bytes()))
@@ -1035,6 +1976,15 @@ fn sleep_action<'a>(
     }
 }
 
+/// What a request id's claim answers: written is `ok`, the others say the write may still land or may have.
+fn claim_answer(answer: &impl Fn(bool, Option<&str>) -> Value, state: InputState) -> Value {
+    match state {
+        InputState::Written => answer(true, None),
+        InputState::InFlight => answer(false, Some("in_flight")),
+        InputState::Uncertain => answer(false, Some("uncertain")),
+    }
+}
+
 async fn input(
     mobile: &Arc<Mobile>,
     phone_id: &str,
@@ -1045,35 +1995,56 @@ async fn input(
         return json!({"type": "input_result", "ok": false, "reason": "invalid_request"});
     };
     let answer = |ok: bool, reason: Option<&str>| json!({"type": "input_result", "request_id": request_id, "ok": ok, "reason": reason});
-    let Some(key) = key_of(message).filter(|key| projection.find(key).is_some()) else {
+    // One decision per request id: an id this phone already sent is answered from its claim before the agent, the
+    // ask or the text are judged again (B27), so a written reply's repeat is `ok` and never `stale` or `gone`.
+    if let Some(state) = mobile.claimed_input(phone_id, request_id) {
+        return claim_answer(&answer, state);
+    }
+    let Some((key, agent)) =
+        key_of(message).and_then(|key| projection.find(&key).map(|agent| (key, agent)))
+    else {
         refusal_logged("scope.refused", Some(phone_id), "input_not_an_agent");
         return answer(false, Some("gone"));
     };
+    // An input that was written for one ask (a notification's Reply) lands only while the agent is still in that
+    // ask: `turn` is the `ask.turn` of the notice, the agent's last change of state. Without it the input is the
+    // phone screen's own, made while looking at the agent.
+    match message.get("turn") {
+        None => {}
+        Some(Value::String(turn)) => {
+            let asking = matches!(agent.demand.as_str(), "question" | "approval");
+            if !asking
+                || agent.changed_at_unix_ms.map(|at| at.to_string()).as_deref()
+                    != Some(turn.as_str())
+            {
+                return answer(false, Some("stale"));
+            }
+        }
+        Some(_) => return answer(false, Some("invalid_request")),
+    }
     let text = message.get("text").and_then(Value::as_str);
-    let herdr_key = message.get("key").and_then(Value::as_str);
-    let problem = match (text, herdr_key) {
+    let engine_key = message.get("key").and_then(Value::as_str);
+    let problem = match (text, engine_key) {
         (Some(text), None) => pane::reply_problem(text),
-        (None, Some(key)) => pane::herdr_key(key).is_none().then_some("unknown_key"),
+        (None, Some(key)) => pane::engine_key(key).is_none().then_some("unknown_key"),
         _ => Some("invalid_request"),
     };
     if let Some(problem) = problem {
         return answer(false, Some(problem));
     }
     // One claim per request id, taken before writing: a repeat that arrives
-    // while the first is still being written, or after Herdr's answer was
+    // while the first is still being written, or after the engine's answer was
     // lost, is answered from the claim and never written again (B27).
     match mobile.reserve_input(phone_id, request_id) {
         Reservation::Write => {}
-        Reservation::Seen(InputState::Written) => return answer(true, None),
-        Reservation::Seen(InputState::InFlight) => return answer(false, Some("in_flight")),
-        Reservation::Seen(InputState::Uncertain) => return answer(false, Some("uncertain")),
+        Reservation::Seen(state) => return claim_answer(&answer, state),
     }
-    let pane_id = key.herdr_pane_id().to_owned();
+    let pane_id = key.engine_pane_id().to_owned();
     let core_pane_id = key.pane_id.clone();
     let device_id = key.device_id.clone();
     let writer = Arc::clone(mobile);
     let text = text.map(str::to_owned);
-    let herdr_key = herdr_key.and_then(pane::herdr_key);
+    let engine_key = engine_key.and_then(pane::engine_key);
     // The blocking write owns settlement even if its async caller is cancelled.
     // A panic or a queued closure dropped at shutdown conservatively settles Uncertain.
     struct Settlement {
@@ -1096,7 +2067,7 @@ async fn input(
     };
     let (certain, result) = tokio::task::spawn_blocking(move || {
         let (attempted, result) = (|| {
-            let input = match (&text, herdr_key) {
+            let input = match (&text, engine_key) {
                 (Some(text), _) => Input::Reply(text),
                 (None, Some(key)) => Input::Key(key),
                 (None, None) => unreachable!("validated above"),
@@ -1148,14 +2119,14 @@ async fn input(
     .unwrap_or_else(|error| (false, Err(PaneError::Unavailable(error.to_string()))));
     match result {
         Ok(()) => {
-            herdr_core::diagnostic!(json!({
+            hide_core::diagnostic!(json!({
                 "component": "mobile_phone", "kind": "input.sent", "phone_id": phone_id,
                 "device_id": key.device_id, "kind_of_input": if message.get("key").is_some() { "key" } else { "reply" },
             }));
             answer(true, None)
         }
         Err(error) => {
-            herdr_core::diagnostic!(json!({
+            hide_core::diagnostic!(json!({
                 "component": "mobile_phone", "kind": "input.failed", "phone_id": phone_id,
                 "reason": error.reason(),
                 "message": match &error { PaneError::Unavailable(message) => Some(message.clone()), _ => None },
@@ -1169,6 +2140,47 @@ async fn input(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use hide_core::missions::ANSWER_LIMIT;
+
+    #[test]
+    fn a_look_request_names_an_agent_and_a_view_id_and_nothing_a_path_could_ride_in() {
+        let projection = sleeping_projection(None);
+        let ask = |field: Option<&str>, pane: &str| {
+            let mut message = json!({
+                "type": "look_open", "request_id": "r-1", "device_id": "test-node",
+                "pane_id": pane, "view_id": "view-1",
+            });
+            if let Some(field) = field {
+                message[field] = json!("/etc/passwd");
+            }
+            message
+        };
+        let refused = |message: &Value| look_scope(message, &projection).err();
+        assert!(look_scope(&ask(None, "w1:p1"), &projection).is_ok());
+        for field in ["path", "root", "checkout", "file"] {
+            assert_eq!(
+                refused(&ask(Some(field), "w1:p1")),
+                Some(LookRefusal {
+                    state: "refused",
+                    reason: format!("look_field:{field}")
+                })
+            );
+        }
+        // An agent the list does not hold is gone, whatever View it names.
+        assert_eq!(
+            refused(&ask(None, "w9:p9")),
+            Some(LookRefusal {
+                state: "gone",
+                reason: "not_an_agent".to_owned()
+            })
+        );
+        let mut no_view = ask(None, "w1:p1");
+        no_view.as_object_mut().unwrap().remove("view_id");
+        assert_eq!(
+            refused(&no_view).map(|refusal| refusal.reason),
+            Some("look_request".to_owned())
+        );
+    }
 
     #[test]
     fn a_phone_can_act_only_on_a_current_local_sleep_intent() {
@@ -1214,6 +2226,114 @@ mod tests {
         super::super::projection::project(&json!({"navigator": {"agents": [agent]}}), "test-node")
     }
 
+    fn asking_projection(demand: &str, changed_at: u64) -> Projection {
+        let agent = json!({
+            "pane_id": "w1:p1", "group": "needs_you", "mark": "turn", "identity_label": "Review parser",
+            "agent_kind": "claude", "status_code": demand, "demand": demand, "changed_at_unix_ms": changed_at,
+        });
+        super::super::projection::project(&json!({"navigator": {"agents": [agent]}}), "test-node")
+    }
+
+    /// A reply written for one ask never lands in another: a notice's Reply, answered after the agent has asked
+    /// something else or moved on, is refused as stale and writes nothing.
+    #[tokio::test]
+    async fn an_input_written_for_an_ask_is_refused_once_the_agent_is_in_another() {
+        let directory = tempfile::tempdir().unwrap();
+        let gate = Arc::new(hide_core::input_gate::PaneInputGate::default());
+        let mobile = mobile_with(directory.path(), &gate);
+        let ask = |request: &str, turn: Value| {
+            input_message(request, json!({"text": "yes", "turn": turn}))
+        };
+        let waiting = asking_projection("question", 5);
+        for (request, turn, listed) in [
+            ("older", json!("4"), &waiting),
+            ("later", json!("5"), &asking_projection("approval", 6)),
+            ("moved-on", json!("5"), &sleeping_projection(None)),
+        ] {
+            let answer = input(&mobile, "phone-a", &ask(request, turn), listed).await;
+            assert_eq!(
+                (answer["ok"].as_bool(), reason(&answer)),
+                (Some(false), Some("stale")),
+                "{request}"
+            );
+        }
+        let wrong_type = input(&mobile, "phone-a", &ask("number", json!(5)), &waiting).await;
+        assert_eq!(reason(&wrong_type), Some("invalid_request"));
+        // The matching turn passes the check and goes on to the write, which these tests do not wire.
+        let matching = input(&mobile, "phone-a", &ask("same", json!("5")), &waiting).await;
+        assert_ne!(reason(&matching), Some("stale"));
+        // The phone screen's own input carries no turn and is not held to one.
+        let own = input(
+            &mobile,
+            "phone-a",
+            &input_message("own", json!({"text": "yes"})),
+            &waiting,
+        )
+        .await;
+        assert_ne!(reason(&own), Some("stale"));
+    }
+
+    /// A notice's Reply that was written and is sent again with the same request id (a retry after a lost answer or a
+    /// crash) is answered `ok` and written nothing, even though the agent has left the ask the reply was made for.
+    #[tokio::test]
+    async fn a_written_replys_repeat_is_ok_after_the_agent_moved_on() {
+        let directory = tempfile::tempdir().unwrap();
+        let gate = Arc::new(hide_core::input_gate::PaneInputGate::default());
+        let mobile = mobile_with(directory.path(), &gate);
+        let ask = |request: &str| input_message(request, json!({"text": "yes", "turn": "5"}));
+        // The first send was written while the ask matched (the write itself is not wired in these tests).
+        assert_eq!(mobile.reserve_input("phone-a", "sent"), Reservation::Write);
+        mobile.settle_input("phone-a", "sent", Some(InputState::Written));
+        // Afterwards the agent is in another ask, asleep, or its pane is gone: the repeat is still `ok`.
+        for listed in [
+            asking_projection("approval", 6),
+            sleeping_projection(None),
+            asking_projection("none", 7),
+        ] {
+            let again = input(&mobile, "phone-a", &ask("sent"), &listed).await;
+            assert_eq!((again["ok"].as_bool(), reason(&again)), (Some(true), None));
+        }
+        let gone = input(
+            &mobile,
+            "phone-a",
+            &ask("sent"),
+            &super::super::projection::project(&json!({"navigator": {"agents": []}}), "test-node"),
+        )
+        .await;
+        assert_eq!(
+            gone["ok"], true,
+            "a closed pane does not undo a written reply"
+        );
+        // A claim does not turn a new id into `ok`: the same ask moved on is still `stale`.
+        let other = input(
+            &mobile,
+            "phone-a",
+            &ask("new"),
+            &asking_projection("approval", 6),
+        )
+        .await;
+        assert_eq!(reason(&other), Some("stale"));
+        // The states a claim answers with, by the one mapping.
+        for (id, state, expected) in [
+            ("flying", InputState::InFlight, Some("in_flight")),
+            ("unsure", InputState::Uncertain, Some("uncertain")),
+        ] {
+            assert_eq!(mobile.reserve_input("phone-a", id), Reservation::Write);
+            mobile.settle_input("phone-a", id, Some(state));
+            let answer = input(
+                &mobile,
+                "phone-a",
+                &ask(id),
+                &asking_projection("approval", 6),
+            )
+            .await;
+            assert_eq!(
+                (answer["ok"].as_bool(), reason(&answer)),
+                (Some(false), expected)
+            );
+        }
+    }
+
     fn pane() -> AgentKey {
         AgentKey {
             device_id: "test-node".to_owned(),
@@ -1221,29 +2341,7 @@ mod tests {
         }
     }
 
-    fn mobile_with(
-        directory: &std::path::Path,
-        gate: &Arc<herdr_core::input_gate::PaneInputGate>,
-    ) -> Arc<Mobile> {
-        Mobile::start(super::super::Config {
-            state_dir: directory.join("state"),
-            home: directory.to_path_buf(),
-            port: 0,
-            relay_url: crate::env::RELAY_URL.to_owned(),
-            cli: super::super::tailscale::CliSource {
-                pinned: None,
-                search_path: None,
-            },
-            host_name: None,
-            core: Arc::new(crate::core::CoreHandle::bare(directory)),
-            input_gate: Arc::clone(gate),
-            renderers: Arc::default(),
-            start_demand: Arc::default(),
-            // These tests drive the phone boundary directly, never a network supervisor.
-            open: tokio::sync::watch::channel(false).1,
-            desktop: Arc::default(),
-        })
-    }
+    use super::super::test_mobile as mobile_with;
 
     fn input_message(request_id: &str, body: Value) -> Value {
         let mut message = json!({
@@ -1323,7 +2421,7 @@ mod tests {
             }
         }
         let directory = tempfile::tempdir().unwrap();
-        let gate = Arc::new(herdr_core::input_gate::PaneInputGate::default());
+        let gate = Arc::new(hide_core::input_gate::PaneInputGate::default());
         let mobile = mobile_with(directory.path(), &gate);
         let (asked, mut pending) = tokio::sync::mpsc::unbounded_channel();
         mobile
@@ -1389,10 +2487,231 @@ mod tests {
         mobile.shutdown().await;
     }
 
+    fn terminal_key() -> AgentKey {
+        AgentKey {
+            device_id: "test-node".into(),
+            pane_id: "w1:p1".into(),
+        }
+    }
+
+    /// Colorful rows: every line carries escape sequences, which JSON writes
+    /// as six bytes each, so the frame outgrows the text's own length.
+    fn colored_lines(count: usize) -> String {
+        (0..count)
+            .map(|line| {
+                format!(
+                    "\x1b[38;5;{}m{line:04} {}\x1b[0m\r\n",
+                    line % 200,
+                    "\x1b[1m█\x1b[0m".repeat(15)
+                )
+            })
+            .collect()
+    }
+
+    #[test]
+    fn a_rows_frame_past_the_relay_message_keeps_the_newest_lines_and_offers_no_more() {
+        let text = colored_lines(1000);
+        assert!(text.len() < FRAME_LIMIT, "the raw text alone fits");
+        assert!(
+            serde_json::to_string(&text).unwrap().len() > FRAME_LIMIT,
+            "its JSON does not"
+        );
+        let frame = rows_frame(&terminal_key(), &text, true, 600, false);
+        let bytes = frame.to_string().len();
+        assert!(
+            bytes <= hide_relay_protocol::noise::MAX_MESSAGE,
+            "{bytes} bytes"
+        );
+        let sent = frame["text"].as_str().unwrap();
+        assert!(sent.contains("0999 "), "the newest line was dropped");
+        assert!(!sent.contains("0000 "), "the oldest line was kept");
+        assert!(
+            text.ends_with(sent),
+            "the lines kept are not the newest, whole"
+        );
+        assert!(sent.is_empty() || text[..text.len() - sent.len()].ends_with('\n'));
+        assert_eq!(
+            frame["more"], false,
+            "a phone told there is more asks into the same budget"
+        );
+        assert_eq!(frame["lines"], 600);
+        // Within the budget nothing is cut, and older rows stay offered
+        // until the cap.
+        let small = colored_lines(100);
+        let frame = rows_frame(&terminal_key(), &small, true, 200, false);
+        assert!(frame.get("alternate_screen").is_none());
+        assert_eq!(
+            rows_frame(&terminal_key(), &small, false, 200, true)["alternate_screen"],
+            true
+        );
+        assert_eq!(
+            (frame["text"].as_str().unwrap(), &frame["more"]),
+            (small.as_str(), &json!(true))
+        );
+        assert_eq!(
+            rows_frame(&terminal_key(), &small, true, pane::MAX_LINES, false)["more"],
+            false
+        );
+        assert_eq!(
+            rows_frame(&terminal_key(), &small, false, 200, false)["more"],
+            false
+        );
+    }
+
+    #[test]
+    fn a_newest_line_longer_than_the_frame_keeps_its_newest_part_in_its_color() {
+        // A minified file is one line once soft wraps are joined.
+        let line = format!("{}END", "\x1b[0m\x1b[32mx".repeat(40_000));
+        let frame = rows_frame(
+            &terminal_key(),
+            &format!("older\r\n{line}"),
+            true,
+            200,
+            false,
+        );
+        assert!(frame.to_string().len() <= FRAME_LIMIT);
+        let sent = frame["text"].as_str().unwrap();
+        assert!(sent.ends_with("xEND"), "the newest characters were dropped");
+        assert!(!sent.contains("older"));
+        assert!(sent.len() > FRAME_LIMIT / 8, "{} bytes kept", sent.len());
+        // It starts with a whole sequence, the green the first `x` was drawn
+        // in, never with what is left of one.
+        assert!(
+            sent.starts_with("\x1b[32mx") || sent.starts_with("\x1b[0m\x1b[32mx"),
+            "{:?}",
+            &sent[..12]
+        );
+        assert_eq!(frame["more"], false);
+    }
+
+    /// A line that would fit the whole frame is never cut to fill what the
+    /// newer lines left: it goes whole.
+    #[test]
+    fn an_older_line_that_does_not_fit_what_is_left_goes_whole() {
+        let newer = "n".repeat(FRAME_LIMIT / 2);
+        let older = format!("OLD{}", "o".repeat(FRAME_LIMIT / 2));
+        let frame = rows_frame(
+            &terminal_key(),
+            &format!("{older}\r\n{newer}"),
+            false,
+            200,
+            false,
+        );
+        assert_eq!(frame["text"], newer);
+        assert_eq!(frame["more"], false);
+    }
+
+    /// A holder that cut its read to its bound (a line longer than a MiB
+    /// above a short newest one) answers what its cut keeps; the phone is
+    /// told there is nothing more above, however many rows it asked for,
+    /// and the newest line is there.
+    #[test]
+    fn a_read_the_holder_cut_offers_no_more_rows() {
+        let old = "\x1b[0m\x1b[38;2;255;0;0mx\x1b[0m\x1b[38;2;0;0;255my".repeat(40_000);
+        let read = format!("{old}\r\n\x1b[0mEND");
+        assert!(read.len() > MAX_READ_BYTES);
+        let (held, cut) = styled::newest_bytes(&read, MAX_READ_BYTES, &str::len);
+        assert!(cut && held.len() >= HOLDER_CUT_KEEPS);
+        for asked in [200, 400, 600] {
+            let frame = rows_frame(&terminal_key(), &held, true, asked, false);
+            let sent = frame["text"].as_str().unwrap();
+            assert!(sent.ends_with("\r\n\x1b[0mEND"), "{asked}");
+            assert_eq!(
+                frame["more"], false,
+                "{asked}: the phone would ask again for the same rows"
+            );
+        }
+        // A read the holder did not cut, with rows above it, still offers
+        // them.
+        let frame = rows_frame(&terminal_key(), "\x1b[0mEND", true, 200, false);
+        assert_eq!(frame["more"], true);
+    }
+
+    /// A frame past the relay's message is never handed to the relay, which
+    /// would close the session; the request it answers gets the failure its
+    /// kind has, and the connection carries the next frame.
+    #[tokio::test]
+    async fn a_frame_past_the_limit_is_answered_by_its_failure_and_the_connection_stays() {
+        use hide_relay_protocol::noise::{NoiseKeypair, Session};
+        let key = NoiseKeypair::generate().unwrap();
+        let mut responder = Session::responder(&key, 1).unwrap();
+        let mut phone = Session::initiator(&key.public_key(), 1).unwrap();
+        responder
+            .read_handshake(&phone.write_handshake().unwrap())
+            .unwrap();
+        phone
+            .read_handshake(&responder.write_handshake().unwrap())
+            .unwrap();
+        let (_incoming, rx) = mpsc::channel(8);
+        let (tx, mut outgoing) = mpsc::channel(32);
+        let mut socket = Socket::relay(responder, rx, tx, 1);
+        let mut received = async || loop {
+            let Some(super::super::relay::Output::Frame { bytes, .. }) = outgoing.recv().await
+            else {
+                panic!("the relay connection closed");
+            };
+            if let Some(plain) = phone.recv_message(&bytes, 0).unwrap() {
+                break serde_json::from_slice::<Value>(&plain).unwrap();
+            }
+        };
+        let huge = "x".repeat(FRAME_LIMIT);
+        let changes = json!({
+            "type": "look_changes", "request_id": "r-1", "view_id": "v-1",
+            "files": [{"path": huge}], "count": 1, "added": 0, "removed": 0,
+        });
+        assert!(send_frame(&mut socket, &changes, "phone-a").await);
+        assert_eq!(
+            received().await,
+            json!({"type": "look_result", "request_id": "r-1", "view_id": "v-1", "state": "too_large"})
+        );
+        let rows = json!({"type": "rows", "device_id": "test-node", "pane_id": "w1:p1", "state": "ok", "text": huge});
+        assert!(send_frame(&mut socket, &rows, "phone-a").await);
+        assert_eq!(
+            received().await,
+            json!({"type": "rows", "device_id": "test-node", "pane_id": "w1:p1", "state": "unavailable"})
+        );
+        // A kind with no failure to give is only logged.
+        let catalog = json!({"type": "start_catalog", "targets": [huge]});
+        assert!(send_frame(&mut socket, &catalog, "phone-a").await);
+        assert!(send_frame(&mut socket, &json!({"type": "pong", "id": 7}), "phone-a").await);
+        assert_eq!(received().await, json!({"type": "pong", "id": 7}));
+    }
+
+    /// B21: a page whose screen cannot be taken (no desktop window here, no
+    /// such checkout) is a refusal with its reason, which `take` logs, and
+    /// never a picture or a hang; the phone is answered with the address.
+    #[tokio::test]
+    async fn a_page_with_no_desktop_window_cannot_be_shot() {
+        let directory = tempfile::tempdir().unwrap();
+        let gate = Arc::new(hide_core::input_gate::PaneInputGate::default());
+        let mobile = mobile_with(directory.path(), &gate);
+        let view = hide_core::LookView {
+            device_id: "test-node".to_owned(),
+            checkout_path: "/repo".to_owned(),
+            display_id: "browser-1".to_owned(),
+            kind: hide_core::DisplayKind::Browser,
+            label: "landing".to_owned(),
+            path: String::new(),
+            url: Some("http://localhost:5173/".to_owned()),
+            committed: None,
+            output: None,
+            unseen: true,
+            at_unix_ms: 1,
+        };
+        let reason = super::super::page_shot::take(&mobile, &view, super::super::looks::IMAGE_CAP)
+            .await
+            .err()
+            .expect("no window, no picture");
+        assert!(
+            !reason.is_empty(),
+            "the refusal names its reason for the log"
+        );
+    }
+
     #[tokio::test]
     async fn refused_permissions_allow_retry_and_waiting_permissions_do_not_block_sleep() {
         let directory = tempfile::tempdir().unwrap();
-        let gate = Arc::new(herdr_core::input_gate::PaneInputGate::default());
+        let gate = Arc::new(hide_core::input_gate::PaneInputGate::default());
         let mobile = mobile_with(directory.path(), &gate);
         let (asked, mut pending) = tokio::sync::mpsc::unbounded_channel();
         mobile
@@ -1422,7 +2741,7 @@ mod tests {
                 gate.close("remote:mini:pane:w1:p1");
                 assert_eq!(
                     gate.wait_drained("remote:mini:pane:w1:p1", Duration::ZERO),
-                    herdr_core::input_gate::Drain::Drained
+                    hide_core::input_gate::Drain::Drained
                 );
                 permission(Ok(()));
             } else {
@@ -1443,12 +2762,12 @@ mod tests {
     /// A reply meant for the agent must never reach the shell under it. The
     /// refusal is the core's gate at the write, not the phone's list, which
     /// is a moment behind: every projection here still says the agent is
-    /// awake. This Mac has no Herdr socket here, so an input that gets as far
-    /// as writing answers `unavailable`; `asleep` is the refusal before that.
+    /// awake. The engine here holds no pane, so an input that gets as far as
+    /// writing answers `gone`; `asleep` is the refusal before that.
     #[tokio::test]
     async fn input_to_a_pane_whose_agent_is_ending_asleep_or_waking_is_refused_at_the_write() {
         let directory = tempfile::tempdir().unwrap();
-        let gate = Arc::new(herdr_core::input_gate::PaneInputGate::default());
+        let gate = Arc::new(hide_core::input_gate::PaneInputGate::default());
         let mobile = mobile_with(directory.path(), &gate);
         let listed_awake = sleeping_projection(None);
 
@@ -1460,7 +2779,7 @@ mod tests {
             &listed_awake,
         )
         .await;
-        assert_eq!(reason(&answer), Some("unavailable"));
+        assert_eq!(reason(&answer), Some("gone"));
 
         // Its pane closes (the end begins) after the phone listed it awake.
         gate.close("w1:p1");
@@ -1486,7 +2805,7 @@ mod tests {
             &listed_awake,
         )
         .await;
-        assert_eq!(reason(&answer), Some("unavailable"));
+        assert_eq!(reason(&answer), Some("gone"));
     }
 
     /// A reply that landed before the agent slept is answered from its claim
@@ -1496,7 +2815,7 @@ mod tests {
     #[tokio::test]
     async fn a_repeated_request_keeps_its_recorded_answer_across_a_sleep() {
         let directory = tempfile::tempdir().unwrap();
-        let gate = Arc::new(herdr_core::input_gate::PaneInputGate::default());
+        let gate = Arc::new(hide_core::input_gate::PaneInputGate::default());
         let mobile = mobile_with(directory.path(), &gate);
         let listed = sleeping_projection(None);
         for (id, state) in [
@@ -1666,13 +2985,753 @@ mod tests {
         let mut projection = Projection::default();
         assert_eq!(
             agents_frame(&projection),
-            json!({"type": "agents", "groups": [], "interface_language": null, "color_theme": null})
+            (
+                json!({"type": "agents", "groups": [], "omitted": 0, "devices": [], "interface_language": null, "color_theme": null}),
+                0
+            )
         );
         projection.interface_language = Some("ko".to_owned());
-        let frame = agents_frame(&projection);
+        let (frame, _) = agents_frame(&projection);
         assert_eq!(frame["interface_language"], "ko");
         assert_eq!(frame["type"], "agents");
         projection.color_theme = Some("neutral".to_owned());
-        assert_eq!(agents_frame(&projection)["color_theme"], "neutral");
+        assert_eq!(agents_frame(&projection).0["color_theme"], "neutral");
+    }
+
+    /// The list frame is the tree the core decided: a group's rows are tagged
+    /// by kind, a parent carries its children, and the devices ride beside.
+    #[test]
+    fn the_agents_frame_carries_the_tree_and_the_devices() {
+        let agent = |pane: &str, extra: Value| {
+            let mut row = json!({
+                "pane_id": pane, "group": "working", "mark": "going", "identity_label": pane,
+                "agent_kind": "claude", "status_code": "idle", "demand": "none",
+                "last_activity": "1790000000000", "state": {"tree_rank": 2},
+            });
+            for (key, value) in extra.as_object().unwrap() {
+                row[key] = value.clone();
+            }
+            row
+        };
+        let projection = super::super::projection::project(
+            &json!({"navigator": {"agents": [
+                agent("p", json!({"lineage_child_pane_ids": ["c"]})),
+                agent("c", json!({"delegated": true, "lineage_parent_pane_id": "p"})),
+            ]}}),
+            "test-node",
+        );
+        let (frame, _) = agents_frame(&projection);
+        let row = &frame["groups"][0]["rows"][0];
+        assert_eq!(
+            (row["kind"].as_str(), row["pane_id"].as_str()),
+            (Some("agent"), Some("p"))
+        );
+        assert_eq!(row["children"][0]["pane_id"], "c");
+        assert_eq!(frame["groups"][0]["count"], 1);
+        assert_eq!(
+            frame["devices"],
+            json!([{"device_id": "test-node", "label": null, "local": true, "connected": true, "needs_you": 0, "working": 1}])
+        );
+    }
+
+    /// One mission waiting on a decision, as the projection lists it.
+    fn deciding() -> PhoneMissions {
+        let rest = json!({
+            "navigator": {"agents": []},
+            "missions": {"items": [{
+                "id": "mission-1", "title": "Ship it", "device_id": "test-node", "status": "running",
+                "decision": "Merge now?",
+                "question": {"key": 4, "options": ["merge", "wait"], "recommend": 1, "asked_at_unix_ms": 1},
+                "conductor": {"pane_id": "w1:p1", "name": "Conductor", "agent_kind": "claude", "present": true, "takes_answers": true},
+                "nodes": [], "created_at_unix_ms": 1,
+            }]},
+        });
+        PhoneMissions::project(
+            &rest,
+            "test-node",
+            &super::super::projection::project(&rest, "test-node"),
+        )
+    }
+
+    fn mission_message(request_id: &str, body: Value) -> Value {
+        let mut message = json!({
+            "type": "answer_mission", "request_id": request_id, "mission": "mission-1", "key": 4,
+        });
+        message
+            .as_object_mut()
+            .unwrap()
+            .extend(body.as_object().unwrap().clone());
+        message
+    }
+
+    #[test]
+    fn a_phone_answer_is_the_one_event_the_desktop_banner_sends() {
+        let missions = deciding();
+        let event = |body: Value| {
+            mission_answer_event(&mission_message("r", body), &missions)
+                .map(|bytes| serde_json::from_slice::<Value>(&bytes).unwrap())
+        };
+        let option = event(json!({"option": 2})).unwrap();
+        assert_eq!(option["kind"], "mission_answer");
+        assert_eq!(
+            option["payload"],
+            json!({"mission": "mission-1", "key": 4, "option": 2, "text": null, "resend": false})
+        );
+        let text = event(json!({"text": "  merge after lunch "})).unwrap();
+        assert_eq!(text["payload"]["text"], "  merge after lunch ");
+        assert_eq!(text["payload"]["option"], Value::Null);
+        let resend = event(json!({"resend": true})).unwrap();
+        assert_eq!(
+            resend["payload"],
+            json!({"mission": "mission-1", "key": 4, "option": null, "text": null, "resend": true})
+        );
+    }
+
+    #[test]
+    fn a_phone_answer_naming_no_listed_mission_or_no_single_answer_is_refused() {
+        let missions = deciding();
+        let refused = |message: Value| mission_answer_event(&message, &missions).unwrap_err();
+        let mut other = mission_message("r", json!({"option": 1}));
+        other["mission"] = json!("mission-9");
+        assert_eq!(refused(other), "gone");
+        let mut no_key = mission_message("r", json!({"option": 1}));
+        no_key.as_object_mut().unwrap().remove("key");
+        assert_eq!(refused(no_key), "invalid_request");
+        for body in [
+            json!({}),
+            json!({"option": 0}),
+            json!({"option": 300}),
+            json!({"option": "1"}),
+            json!({"option": 1, "text": "both"}),
+            json!({"option": 1, "resend": true}),
+            json!({"text": "   "}),
+            json!({"text": "two\nlines"}),
+            json!({"text": "x".repeat(ANSWER_LIMIT + 1)}),
+            json!({"text": 7}),
+            json!({"resend": "yes"}),
+            json!({"resend": true, "text": "again"}),
+        ] {
+            assert_eq!(
+                refused(mission_message("r", body.clone())),
+                "invalid_request",
+                "{body}"
+            );
+        }
+        // The limit counts characters, so a full line of Korean is taken,
+        // and as the core counts them, after the spaces around the line go
+        // (`missions::answer_text`): the core takes this one too.
+        let full = "가".repeat(ANSWER_LIMIT);
+        assert!(
+            mission_answer_event(&mission_message("r", json!({"text": full})), &missions).is_ok()
+        );
+        let padded = format!("  {full} \n");
+        assert!(
+            mission_answer_event(&mission_message("r", json!({"text": padded})), &missions).is_ok()
+        );
+    }
+
+    /// A phone the Mac let in, so a request reaches its claim.
+    fn paired(mobile: &Arc<Mobile>) -> String {
+        let code = {
+            let mut inner = mobile.lock();
+            inner.settings.enabled = true;
+            inner.exposure = super::super::Exposure::Relay;
+            inner.phones.new_code(super::super::now_ms());
+            inner.phones.code().unwrap().0.to_owned()
+        };
+        mobile.pair(&code, "Phone").unwrap().0.id
+    }
+
+    #[tokio::test]
+    async fn a_stale_phone_answer_counts_once_even_when_the_core_refuses_its_old_question() {
+        let directory = tempfile::tempdir().unwrap();
+        // The phone still displays question 4, while the real core restored
+        // question 5. The answer is a human action but cannot answer key 5.
+        let mission: hide_core::missions::Mission = serde_json::from_value(json!({
+            "id":"mission-1", "title":"Ship it", "project":"/fixture", "device_id":"test-node",
+            "conductor":{"actor":{"pane_id":"w1:p1","name":"Conductor","kind":"claude","device_id":"test-node","session":null}},
+            "status":"running", "scope":"pr", "cap":4,
+            "decision":"Merge now?", "question":{"key":5,"options":["merge","wait"],"recommend":1,"asked_at_unix_ms":1},
+            "question_seq":5, "created_at_unix_ms":1, "updated_at_unix_ms":1
+        })).unwrap();
+        std::fs::write(
+            hide_kit::layout::missions(directory.path()),
+            serde_json::to_vec(&json!({
+                "schema_version":4,"missions":[mission],"next":2
+            }))
+            .unwrap(),
+        )
+        .unwrap();
+        let gate = Arc::new(hide_core::input_gate::PaneInputGate::default());
+        let mobile = mobile_with(directory.path(), &gate);
+        mobile.missions.send_replace(Arc::new(deciding()));
+        let current = mobile.config.core.snapshot(0).unwrap().current_rest;
+        assert_eq!(current.missions.items[0].question.as_ref().unwrap().key, 5);
+        let phone = paired(&mobile);
+        mobile.config.desktop.set_waiting(1, true);
+        mobile.config.desktop.activity_at(
+            1,
+            true,
+            std::time::Instant::now() - std::time::Duration::from_secs(2),
+        );
+        assert!(mobile.config.desktop.rests_phone());
+
+        let first = answer_mission(
+            &mobile,
+            &phone,
+            &mission_message("press-1", json!({"option": 1})),
+        )
+        .await;
+        assert_eq!(first["type"], "mission_result");
+        assert_eq!(first["request_id"], "press-1");
+        assert_eq!(first["mission"], "mission-1");
+        assert_eq!(first["ok"], true, "{first}");
+        // Snapshot follows dispatch on the owner thread: the stale answer
+        // left the actual current question unanswered.
+        let current = mobile.config.core.snapshot(0).unwrap().current_rest;
+        assert_eq!(current.missions.items[0].question.as_ref().unwrap().key, 5);
+        assert!(current.missions.items[0].answer.is_none());
+        assert!(
+            !mobile.config.desktop.rests_phone(),
+            "a new admitted phone action takes over even if the core refuses it"
+        );
+        assert!(
+            matches!(
+                mobile.reserve_input(&phone, "press-1"),
+                Reservation::Seen(InputState::Written)
+            ),
+            "the press is recorded as written, so a repeat is not typed again"
+        );
+        mobile.config.desktop.activity(1, true);
+        let again = answer_mission(
+            &mobile,
+            &phone,
+            &mission_message("press-1", json!({"option": 1})),
+        )
+        .await;
+        assert_eq!(again["ok"], true, "{again}");
+        assert!(
+            mobile.config.desktop.rests_phone(),
+            "a duplicate answer cannot take over again"
+        );
+
+        // A press still being sent is told so, never sent a second time.
+        assert!(matches!(
+            mobile.reserve_input(&phone, "press-2"),
+            Reservation::Write
+        ));
+        let racing = answer_mission(
+            &mobile,
+            &phone,
+            &mission_message("press-2", json!({"option": 1})),
+        )
+        .await;
+        assert_eq!(
+            (racing["ok"].as_bool(), reason(&racing)),
+            (Some(false), Some("in_flight"))
+        );
+    }
+
+    #[tokio::test]
+    async fn a_refused_answer_claims_nothing_and_a_request_without_an_id_is_invalid() {
+        let directory = tempfile::tempdir().unwrap();
+        let gate = Arc::new(hide_core::input_gate::PaneInputGate::default());
+        let mobile = mobile_with(directory.path(), &gate);
+        mobile.missions.send_replace(Arc::new(deciding()));
+        let phone = paired(&mobile);
+
+        let refused = answer_mission(
+            &mobile,
+            &phone,
+            &mission_message("bad", json!({"text": "   "})),
+        )
+        .await;
+        assert_eq!(reason(&refused), Some("invalid_request"));
+        assert!(
+            matches!(mobile.reserve_input(&phone, "bad"), Reservation::Write),
+            "a refused answer may be sent again once it is fixed"
+        );
+        let mut anonymous = mission_message("x", json!({"option": 1}));
+        anonymous.as_object_mut().unwrap().remove("request_id");
+        let answer = answer_mission(&mobile, &phone, &anonymous).await;
+        assert_eq!(
+            (answer["ok"].as_bool(), reason(&answer)),
+            (Some(false), Some("invalid_request"))
+        );
+    }
+
+    /// A phone's `자료 요청` is the desktop's own `mission_material` event for
+    /// the question its key names, claimed once per press like an answer, and
+    /// a mission the phone's list does not hold is refused before anything
+    /// is claimed.
+    #[tokio::test]
+    async fn a_phone_material_request_is_the_desktop_event_claimed_once_per_press() {
+        let missions = deciding();
+        let material = |body: Value| {
+            let mut message = mission_message("m", body);
+            message["type"] = json!("ask_mission_material");
+            message
+        };
+        let event: Value = serde_json::from_slice(
+            &mission_material_event(&material(json!({})), &missions).unwrap(),
+        )
+        .unwrap();
+        assert_eq!(event["kind"], "mission_material");
+        assert_eq!(event["payload"], json!({"mission": "mission-1", "key": 4}));
+        assert_eq!(
+            mission_material_event(&material(json!({"mission": "mission-9"})), &missions),
+            Err("gone")
+        );
+        assert_eq!(
+            mission_material_event(&material(json!({"key": "4"})), &missions),
+            Err("invalid_request")
+        );
+
+        let directory = tempfile::tempdir().unwrap();
+        let gate = Arc::new(hide_core::input_gate::PaneInputGate::default());
+        let mobile = mobile_with(directory.path(), &gate);
+        mobile.missions.send_replace(Arc::new(missions));
+        let phone = paired(&mobile);
+        let first = ask_mission_material(&mobile, &phone, &material(json!({}))).await;
+        assert_eq!(
+            (
+                first["type"].as_str(),
+                first["request_id"].as_str(),
+                first["ok"].as_bool()
+            ),
+            (Some("mission_result"), Some("m"), Some(true)),
+            "{first}"
+        );
+        assert!(matches!(
+            mobile.reserve_input(&phone, "m"),
+            Reservation::Seen(InputState::Written)
+        ));
+        let again = ask_mission_material(&mobile, &phone, &material(json!({}))).await;
+        assert_eq!(again["ok"], true, "{again}");
+        let mut gone = material(json!({"mission": "mission-9"}));
+        gone["request_id"] = json!("g");
+        let refused = ask_mission_material(&mobile, &phone, &gone).await;
+        assert_eq!(reason(&refused), Some("gone"));
+        assert!(matches!(
+            mobile.reserve_input(&phone, "g"),
+            Reservation::Write
+        ));
+    }
+
+    fn listed_automations(running: bool) -> PhoneAutomations {
+        PhoneAutomations {
+            asks: Vec::new(),
+            unreadable: false,
+            items: vec![hide_core::agent_state::phone::PhoneAutomation {
+                id: "auto-1".into(),
+                name: "Morning issues".into(),
+                schedule: serde_json::from_value(json!({"kind": "daily", "time": "09:00"}))
+                    .unwrap(),
+                next_run_at_unix_ms: Some(1),
+                paused: None,
+                running,
+                unseen: 0,
+                recent_spend: None,
+                records: Vec::new(),
+                records_omitted: 0,
+            }],
+            omitted: 0,
+            zone: None,
+        }
+    }
+
+    /// A phone's [지금 실행], [멈춤] and [다시 켜기] are the desktop's own
+    /// `automation_*` events, claimed once per press, and an automation the
+    /// phone's list does not hold, a run while one goes, or an action the
+    /// phone has no button for is refused before anything is claimed.
+    #[tokio::test]
+    async fn a_phone_automation_press_is_the_desktop_event_claimed_once_per_press() {
+        let press = |action: &str, id: &str, request: &str| json!({"type": "automation", "request_id": request, "action": action, "id": id});
+        let listed = listed_automations(false);
+        for action in ["run", "pause", "resume"] {
+            let event: Value = serde_json::from_slice(
+                &automation_event(&press(action, "auto-1", "r"), &listed).unwrap(),
+            )
+            .unwrap();
+            assert_eq!(event["kind"], format!("automation_{action}"));
+            assert_eq!(event["payload"], json!({"id": "auto-1"}));
+        }
+        assert_eq!(
+            automation_event(&press("remove", "auto-1", "r"), &listed),
+            Err("invalid_request")
+        );
+        assert_eq!(
+            automation_event(&press("run", "auto-9", "r"), &listed),
+            Err("gone")
+        );
+        assert_eq!(
+            automation_event(&press("run", "auto-1", "r"), &listed_automations(true)),
+            Err("running")
+        );
+        assert!(
+            automation_event(&press("pause", "auto-1", "r"), &listed_automations(true)).is_ok()
+        );
+
+        let directory = tempfile::tempdir().unwrap();
+        let gate = Arc::new(hide_core::input_gate::PaneInputGate::default());
+        let mobile = mobile_with(directory.path(), &gate);
+        mobile.automations.send_replace(Arc::new(listed));
+        let phone = paired(&mobile);
+        let first = automation_request(&mobile, &phone, &press("run", "auto-1", "a")).await;
+        assert_eq!(
+            (
+                first["type"].as_str(),
+                first["request_id"].as_str(),
+                first["action"].as_str(),
+                first["ok"].as_bool()
+            ),
+            (
+                Some("automation_result"),
+                Some("a"),
+                Some("run"),
+                Some(true)
+            ),
+            "{first}"
+        );
+        assert!(matches!(
+            mobile.reserve_input(&phone, "a"),
+            Reservation::Seen(InputState::Written)
+        ));
+        // The run started: a repeat of the same press is answered from its
+        // claim before the list, which now says it is running, is read.
+        mobile
+            .automations
+            .send_replace(Arc::new(listed_automations(true)));
+        let again = automation_request(&mobile, &phone, &press("run", "auto-1", "a")).await;
+        assert_eq!(again["ok"], true, "{again}");
+        let new_press = automation_request(&mobile, &phone, &press("run", "auto-1", "b")).await;
+        assert_eq!(reason(&new_press), Some("running"));
+        let refused = automation_request(&mobile, &phone, &press("run", "auto-9", "g")).await;
+        assert_eq!(reason(&refused), Some("gone"));
+        assert!(matches!(
+            mobile.reserve_input(&phone, "g"),
+            Reservation::Write
+        ));
+    }
+
+    /// A phone's press on a closed decision View is the desktop row's own
+    /// `mission_view_reopen` event under the press's request id, claimed
+    /// once per press, and a row the phone's list does not hold is refused
+    /// before anything is claimed.
+    #[tokio::test]
+    async fn a_phone_reopen_is_the_desktop_rows_event_claimed_once_per_press() {
+        let rest = json!({
+            "navigator": {"agents": []},
+            "missions": {"items": [{
+                "id": "mission-1", "title": "Ship it", "device_id": "test-node", "status": "running",
+                "decision": "Merge now?",
+                "question": {"key": 4, "options": ["merge", "wait"], "recommend": 1, "asked_at_unix_ms": 1},
+                "decision_views": [{"device_id": "test-node", "checkout_path": "/repo", "display_id": "d3",
+                                    "view": "0a1b2c3d4e5f6071", "kind": "file", "label": "notes.md",
+                                    "closed": true, "by": "conductor"}],
+                "conductor": {"pane_id": "w1:p1", "name": "Conductor", "agent_kind": "claude", "present": true, "takes_answers": true},
+                "nodes": [], "created_at_unix_ms": 1,
+            }]},
+        });
+        let missions = PhoneMissions::project(
+            &rest,
+            "test-node",
+            &super::super::projection::project(&rest, "test-node"),
+        );
+        let reopen = |request: &str, body: Value| {
+            let mut message = mission_message(request, body);
+            message["type"] = json!("reopen_mission_view");
+            message
+        };
+        let row = json!({"view": "0a1b2c3d4e5f6071"});
+        let event: Value = serde_json::from_slice(
+            &mission_view_reopen_event(&reopen("p", row.clone()), &missions, "p").unwrap(),
+        )
+        .unwrap();
+        assert_eq!(event["kind"], "mission_view_reopen");
+        assert_eq!(
+            event["payload"],
+            json!({"mission": "mission-1", "key": 4, "view": "0a1b2c3d4e5f6071", "request_id": "p"})
+        );
+        assert_eq!(
+            mission_view_reopen_event(&reopen("p", json!({"view": "ffff"})), &missions, "p"),
+            Err("gone")
+        );
+        assert_eq!(
+            mission_view_reopen_event(&reopen("p", json!({})), &missions, "p"),
+            Err("invalid_request")
+        );
+
+        let directory = tempfile::tempdir().unwrap();
+        let gate = Arc::new(hide_core::input_gate::PaneInputGate::default());
+        let mobile = mobile_with(directory.path(), &gate);
+        mobile.missions.send_replace(Arc::new(missions));
+        let phone = paired(&mobile);
+        let first = reopen_mission_view(&mobile, &phone, &reopen("p", row.clone())).await;
+        assert_eq!(
+            (first["request_id"].as_str(), first["ok"].as_bool()),
+            (Some("p"), Some(true)),
+            "{first}"
+        );
+        assert!(matches!(
+            mobile.reserve_input(&phone, "p"),
+            Reservation::Seen(InputState::Written)
+        ));
+        let refused =
+            reopen_mission_view(&mobile, &phone, &reopen("q", json!({"view": "ffff"}))).await;
+        assert_eq!(reason(&refused), Some("gone"));
+        assert!(matches!(
+            mobile.reserve_input(&phone, "q"),
+            Reservation::Write
+        ));
+    }
+
+    /// A phone with the one pull request list the PR requests are checked against.
+    fn listing(mobile: &Arc<Mobile>, card_head: &str) {
+        use super::super::prs::fixture::{card, prs};
+        mobile
+            .prs
+            .send_replace(Arc::new(prs(card(card_head, false, &["squash"]))));
+    }
+
+    fn pr_message(kind: &str, request_id: &str, body: Value) -> Value {
+        let mut message = json!({"type": kind, "request_id": request_id, "pr": "w1#1"});
+        message
+            .as_object_mut()
+            .unwrap()
+            .extend(body.as_object().unwrap().clone());
+        message
+    }
+
+    #[tokio::test]
+    async fn the_same_merge_request_is_answered_from_its_claim_and_reaches_the_core_once() {
+        use super::super::prs::fixture::HEAD;
+        let directory = tempfile::tempdir().unwrap();
+        let gate = Arc::new(hide_core::input_gate::PaneInputGate::default());
+        let mobile = mobile_with(directory.path(), &gate);
+        listing(&mobile, HEAD);
+        let phone = paired(&mobile);
+        let ask = pr_message(
+            "merge_pr",
+            "merge-1",
+            json!({"head": HEAD, "method": "squash"}),
+        );
+
+        let first = pr_request(&mobile, &phone, "merge_pr", &ask).await;
+        assert_eq!(first["type"], "pr_result");
+        assert_eq!(
+            (first["request_id"].as_str(), first["pr"].as_str()),
+            (Some("merge-1"), Some("w1#1"))
+        );
+        assert_eq!(first["ok"], true, "{first}");
+        assert!(
+            matches!(
+                mobile.reserve_input(&phone, "merge-1"),
+                Reservation::Seen(InputState::Written)
+            ),
+            "the press is recorded as written, so a repeat is not sent to GitHub again"
+        );
+        let again = pr_request(&mobile, &phone, "merge_pr", &ask).await;
+        assert_eq!(again["ok"], true, "{again}");
+
+        // A press still being sent is told so, never sent a second time.
+        assert!(matches!(
+            mobile.reserve_input(&phone, "merge-2"),
+            Reservation::Write
+        ));
+        let racing = pr_request(
+            &mobile,
+            &phone,
+            "merge_pr",
+            &pr_message(
+                "merge_pr",
+                "merge-2",
+                json!({"head": HEAD, "method": "squash"}),
+            ),
+        )
+        .await;
+        assert_eq!(
+            (racing["ok"].as_bool(), reason(&racing)),
+            (Some(false), Some("in_flight"))
+        );
+    }
+
+    #[tokio::test]
+    async fn a_merge_for_a_moved_head_or_an_unlisted_pull_request_claims_nothing() {
+        use super::super::prs::fixture::HEAD;
+        let directory = tempfile::tempdir().unwrap();
+        let gate = Arc::new(hide_core::input_gate::PaneInputGate::default());
+        let mobile = mobile_with(directory.path(), &gate);
+        listing(&mobile, HEAD);
+        let phone = paired(&mobile);
+
+        let moved = pr_request(
+            &mobile,
+            &phone,
+            "merge_pr",
+            &pr_message(
+                "merge_pr",
+                "m-moved",
+                json!({"head": "f".repeat(40), "method": "squash"}),
+            ),
+        )
+        .await;
+        assert_eq!(
+            (moved["ok"].as_bool(), reason(&moved)),
+            (Some(false), Some("head_moved"))
+        );
+        assert!(
+            matches!(mobile.reserve_input(&phone, "m-moved"), Reservation::Write),
+            "a refused merge may be sent again once the card is read"
+        );
+        let mut gone = pr_message(
+            "merge_pr",
+            "m-gone",
+            json!({"head": HEAD, "method": "squash"}),
+        );
+        gone["pr"] = json!("w9#4");
+        let gone = pr_request(&mobile, &phone, "merge_pr", &gone).await;
+        assert_eq!(reason(&gone), Some("gone"));
+        let mut anonymous = pr_message("merge_pr", "x", json!({"head": HEAD}));
+        anonymous.as_object_mut().unwrap().remove("request_id");
+        let invalid = pr_request(&mobile, &phone, "merge_pr", &anonymous).await;
+        assert_eq!(reason(&invalid), Some("invalid_request"));
+    }
+
+    #[tokio::test]
+    async fn reading_a_card_or_its_feedback_is_not_claimed_and_a_hand_over_is_answered_by_its_start()
+     {
+        use super::super::prs::fixture::HEAD;
+        use super::super::start::Answer;
+        let directory = tempfile::tempdir().unwrap();
+        let gate = Arc::new(hide_core::input_gate::PaneInputGate::default());
+        let mobile = mobile_with(directory.path(), &gate);
+        listing(&mobile, HEAD);
+        let phone = paired(&mobile);
+
+        for (kind, id) in [("read_pr", "read-1"), ("read_pr_feedback", "feedback-1")] {
+            let sent = pr_request(&mobile, &phone, kind, &pr_message(kind, id, json!({}))).await;
+            assert_eq!(sent["ok"], true, "{sent}");
+            assert!(
+                matches!(mobile.reserve_input(&phone, id), Reservation::Write),
+                "a read sent twice reads twice, so it claims nothing"
+            );
+        }
+
+        // The core's start answer for the hand-over's request id comes back as the start's own result.
+        mobile.answers.send_replace(Arc::new(vec![(
+            "hand-1".to_owned(),
+            Answer::Started {
+                device_id: "test-node".into(),
+                pane_id: "w1:p9".into(),
+            },
+        )]));
+        let started = mobile
+            .delegate_pr(
+                &phone,
+                &pr_message(
+                    "delegate_pr",
+                    "hand-1",
+                    json!({"kind": "claude", "prompt": "Fix PR #1"}),
+                ),
+            )
+            .await;
+        assert_eq!(started["type"], "start_result");
+        assert_eq!(
+            (started["ok"].as_bool(), started["pane_id"].as_str()),
+            (Some(true), Some("w1:p9"))
+        );
+        let refused = mobile
+            .delegate_pr(
+                &phone,
+                &pr_message(
+                    "delegate_pr",
+                    "hand-2",
+                    json!({"kind": "terminal", "prompt": "go"}),
+                ),
+            )
+            .await;
+        assert_eq!(
+            (refused["ok"].as_bool(), reason(&refused)),
+            (Some(false), Some("unknown_kind"))
+        );
+    }
+
+    /// Opening an agent's detail tells the core the phone looks at it, so it
+    /// is read on both surfaces as the desktop's focus reads it; it stays
+    /// looked at while any phone has it open, and a phone that closes the
+    /// detail or goes away stops looking (`docs/status-model.md`).
+    #[tokio::test]
+    async fn an_agent_a_phone_opens_is_looked_at_until_every_phone_lets_it_go() {
+        let directory = tempfile::tempdir().unwrap();
+        let gate = Arc::new(hide_core::input_gate::PaneInputGate::default());
+        let mobile = mobile_with(directory.path(), &gate);
+        let (frames, _received) = mpsc::channel::<Value>(64);
+        let projection = Arc::new(sleeping_projection(None));
+        let (mut first, mut second) = (Open::default(), Open::default());
+        let send = async |connection: u64, open: &mut Open, message: Value| {
+            handle(
+                &mobile,
+                connection,
+                "phone",
+                &message,
+                open,
+                &frames,
+                &projection,
+            )
+            .await
+        };
+        let _ = mobile.register(1, "phone-1");
+        let _ = mobile.register(2, "phone-2");
+        let open = json!({"type": "open", "device_id": "test-node", "pane_id": "w1:p1", "view": "conversation"});
+        let looked_at = std::collections::BTreeSet::from(["w1:p1".to_owned()]);
+
+        let gone = json!({"type": "open", "device_id": "test-node", "pane_id": "w1:p9", "view": "conversation"});
+        send(1, &mut first, gone).await;
+        assert!(mobile.viewing_announced().is_empty(), "no agent, no look");
+
+        send(1, &mut first, open.clone()).await;
+        assert_eq!(mobile.viewing_announced(), looked_at);
+        send(2, &mut second, open).await;
+        send(1, &mut first, json!({"type": "close"})).await;
+        assert_eq!(
+            mobile.viewing_announced(),
+            looked_at,
+            "the other phone still has it open"
+        );
+        mobile.unregister(2);
+        assert!(mobile.viewing_announced().is_empty());
+        mobile.shutdown().await;
+    }
+
+    /// A newer bundle under the same phone protocol may send a request this
+    /// Hide predates (`docs/ARCHITECTURE.md`, the phone app): it is answered
+    /// with a refusal that names it, never dropped or taken for another.
+    #[tokio::test]
+    async fn a_request_this_hide_predates_is_refused_by_name() {
+        let directory = tempfile::tempdir().unwrap();
+        let gate = Arc::new(hide_core::input_gate::PaneInputGate::default());
+        let mobile = mobile_with(directory.path(), &gate);
+        let (frames, _received) = mpsc::channel::<Value>(8);
+        let mut open = Open::default();
+        let projection = Arc::new(sleeping_projection(None));
+        let later = json!({"type": "later_screen", "request_id": "r-1"});
+        let refused = handle(
+            &mobile,
+            1,
+            "phone-1",
+            &later,
+            &mut open,
+            &frames,
+            &projection,
+        )
+        .await;
+        assert_eq!(
+            refused,
+            Some(
+                json!({"type": "refused_request", "request": "later_screen", "reason": "not_allowed"})
+            )
+        );
+        mobile.shutdown().await;
     }
 }

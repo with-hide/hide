@@ -282,7 +282,7 @@ def open_pulls():
 
 
 def read_verify(pulls):
-    """Each pull request's latest `verify` run on its pushed head, which `premerge-check.py` reads too."""
+    """Each pull request's latest `verify` run on its pushed head, which the merge queue requires to have passed."""
     with ThreadPoolExecutor(LOOKUPS_AT_ONCE) as pool:
         latest = list(pool.map(lambda pull: latest_verify(verify_runs(pull.head)), pulls))
     for pull, run in zip(pulls, latest):
@@ -297,8 +297,12 @@ def read_verify(pulls):
 
 
 def fetch(pulls, branch=None):
-    """Fetch main and every open head in one fetch; raise when a head moved while it was read."""
-    refs = [BASE] + [f"pull/{pull.number}/head" for pull in pulls] + ([branch] if branch else [])
+    """Fetch main and every open head in one fetch; raise when a head moved while it was read.
+
+    A head is fetched by the commit the listing read, not by `pull/<n>/head`: GitHub has dropped
+    that ref for an open pull request while its commit stayed fetchable, and one missing ref
+    failed the whole fetch for every caller."""
+    refs = [BASE] + [pull.head for pull in pulls] + ([branch] if branch else [])
     git("fetch", "--quiet", "--no-tags", "origin", *refs)
     for pull in pulls:
         if git("cat-file", "-e", f"{pull.head}^{{commit}}", check=False).returncode != 0:

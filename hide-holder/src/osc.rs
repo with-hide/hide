@@ -223,7 +223,7 @@ impl OscState {
         self.prompts
     }
 
-    /// Drops the title and progress the screen rules read, as Herdr does
+    /// Drops the title and progress the screen rules read, as is done
     /// when a pane's agent changes; a sequence in flight still finishes and
     /// counts for the new one.
     pub fn clear_retained(&mut self) {

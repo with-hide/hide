@@ -1,6 +1,5 @@
 //! Single registry for every environment key this crate reads.
 
-use std::ffi::{OsStr, OsString};
 use std::net::SocketAddr;
 use std::path::{Path, PathBuf};
 
@@ -14,10 +13,7 @@ pub struct EnvKey {
     pub absent_behavior: &'static str,
 }
 
-pub const HERDR_SOCKET_PATH: &str = "HERDR_SOCKET_PATH";
-pub const HERDR_BIN_PATH: &str = "HERDR_BIN_PATH";
 pub const PATH: &str = "PATH";
-pub const SHELL: &str = "SHELL";
 pub const XDG_STATE_HOME: &str = "XDG_STATE_HOME";
 pub const XDG_CONFIG_HOME: &str = "XDG_CONFIG_HOME";
 pub const APPDATA: &str = "APPDATA";
@@ -34,16 +30,27 @@ pub const HOME: &str = host::HOME_VARIABLE;
 pub const HIDE_OPEN_COMMAND: &str = "HIDE_OPEN_COMMAND";
 pub const HIDE_HOST_HELPER_ROOT: &str = "HIDE_HOST_HELPER_ROOT";
 pub const HIDE_HOST_CLI_DIR: &str = "HIDE_HOST_CLI_DIR";
-/// The pane a process runs in: a pane on the core's own engine names itself
-/// `HIDE_PANE_ID`, a Herdr pane `HERDR_PANE_ID`, read in that order
+/// The pane a process runs in, which the engine sets in every pane it runs
 /// (`hide_agent_hooks::pane`).
 pub const HIDE_PANE_ID: &str = hide_agent_hooks::pane::HIDE_PANE_ID;
-pub const HERDR_PANE_ID: &str = hide_agent_hooks::pane::HERDR_PANE_ID;
+/// The Hide installation that started the pane, and that installation's own
+/// `hide` command (`hide_agent_hooks::route`).
+pub const HIDE_INSTALL: &str = hide_agent_hooks::route::INSTALL_VARIABLE;
+pub const HIDE_INSTALL_CLI: &str = hide_agent_hooks::route::CLI_VARIABLE;
 pub const HIDE_CAP_REF: &str = "HIDE_CAP_REF";
+/// Which of an external tool's connections a `hide` command runs as, when
+/// its home keeps several (`access_cli`).
+pub const HIDE_ACCESS: &str = "HIDE_ACCESS";
 pub const HIDE_TAILSCALE_BIN: &str = "HIDE_TAILSCALE_BIN";
 pub const HIDE_RELAY_URL: &str = "HIDE_RELAY_URL";
 pub const RELAY_URL: &str = "wss://relay.withhide.dev/ws";
 pub const HIDE_MACHINE_ID: &str = host::MACHINE_ID_VARIABLE;
+/// Development and tests: the one address this machine's endpoint for other
+/// Hides binds, with no relay and no local network search (`peer_host`).
+pub const HIDE_PEER_DIRECT: &str = "HIDE_PEER_DIRECT";
+/// Whether this build offers connections between two Hides
+/// ([`Env::device_connect`]); off in every build until that feature ships.
+pub const HIDE_DEVICE_CONNECT: &str = "HIDE_DEVICE_CONNECT";
 /// Test-only: how a core move starts the core on the machine taking it.
 pub const HIDE_CORE_STARTER: &str = "HIDE_CORE_STARTER";
 /// Test-only: `hang` makes the core role's stop never return, so a journey
@@ -65,11 +72,13 @@ pub const HIDE_BUILD_ORDER_OVERRIDE: &str = "HIDE_BUILD_ORDER_OVERRIDE";
 /// The file that declares a HOME a test fixture's, beside every test-only
 /// key's other conditions ([`fixture_home`]).
 pub const FIXTURE_HOME_MARKER: &str = hide_kit::layout::FIXTURE_HOME_MARKER;
-/// Development only: whether this daemon's node runs pane holders
-/// ([`hide_node::terminal::holder::SWITCH`] owns the contract). Deleted in
-/// bundle 4, the switch release, once the new engine is the default
-/// (docs/ARCHITECTURE.md, The pane holder).
-pub const HIDE_DEV_PANE_HOLDER: &str = hide_node::terminal::holder::SWITCH;
+/// Development only: the home every SSH device's node runs with in place of
+/// its account's, so a candidate on a shared device keeps its state, sessions
+/// and pane holders apart from the account's own Hide there.
+pub const HIDE_DEV_DEVICE_HOME: &str = hide_node::ssh::DEVICE_HOME_VARIABLE;
+/// Test-only: a file holding the memory pressure this machine's node
+/// answers in place of the system's (`hide_host::memory`).
+pub const HIDE_TEST_MEMORY_PRESSURE_FILE: &str = hide_host::memory::TEST_PRESSURE_FILE;
 
 pub const REGISTRY: &[EnvKey] = &[
     EnvKey {
@@ -79,28 +88,10 @@ pub const REGISTRY: &[EnvKey] = &[
         absent_behavior: "No external product analytics transport",
     },
     EnvKey {
-        key: HERDR_SOCKET_PATH,
-        required: false,
-        format: "absolute local socket path (a named pipe's name on Windows)",
-        absent_behavior: "The socket Herdr's default session uses (see XDG_CONFIG_HOME) when it exists; otherwise core starts without a Herdr socket and the sidebar shows that state. Ignored, with the default, while HIDE_DEV_PANE_HOLDER is `1`",
-    },
-    EnvKey {
-        key: HERDR_BIN_PATH,
-        required: false,
-        format: "absolute path of an executable herdr binary; Herdr sets it in every pane it manages, and a daemon refuses to start on a path that no longer exists",
-        absent_behavior: "The pinned Herdr beside the helper build this program runs from (a device's helper, or a core a move put there), else the `herdr` the account's own terminal finds (the login shell's PATH, then PATH, then the usual install folders); with none, no pane terminal can attach and the daemon logs it. Ignored, with every fallback, while HIDE_DEV_PANE_HOLDER is `1`",
-    },
-    EnvKey {
         key: PATH,
         required: false,
         format: "the system's executable search path (colon-separated, semicolons on Windows)",
         absent_behavior: "Programs are found on the login shell's PATH and the usual install folders alone",
-    },
-    EnvKey {
-        key: SHELL,
-        required: false,
-        format: "macOS and Linux: absolute path of the account's login shell, which launchd and sshd set; not read on Windows",
-        absent_behavior: "No login shell is asked, so herdr is found on PATH and the usual install folders alone, which miss a folder only the account's startup files put on its PATH",
     },
     EnvKey {
         key: PATHEXT,
@@ -118,13 +109,13 @@ pub const REGISTRY: &[EnvKey] = &[
         key: XDG_CONFIG_HOME,
         required: false,
         format: "absolute directory path",
-        absent_behavior: "Herdr's default socket is under ~/.config/herdr (%APPDATA%\\herdr on Windows), as Herdr itself resolves it",
+        absent_behavior: "The Herdr session a move into Hide's engine reads is under ~/.config/herdr (%APPDATA%\\herdr on Windows), as Herdr itself resolves it",
     },
     EnvKey {
         key: APPDATA,
         required: false,
         format: "Windows only: absolute directory path",
-        absent_behavior: "Herdr's default socket on Windows is under %USERPROFILE%\\AppData\\Roaming\\herdr",
+        absent_behavior: "The Herdr session a move into Hide's engine reads on Windows is under %USERPROFILE%\\AppData\\Roaming\\herdr",
     },
     EnvKey {
         key: HIDE_STATE_DIR,
@@ -177,20 +168,32 @@ pub const REGISTRY: &[EnvKey] = &[
     EnvKey {
         key: HIDE_PANE_ID,
         required: false,
-        format: "the pane id; the core's own engine sets it in every pane it runs (development switch HIDE_DEV_PANE_HOLDER)",
-        absent_behavior: "HERDR_PANE_ID names the pane instead; with neither, pane-scoped Workspace commands refuse because the caller cannot identify a pane",
+        format: "the pane id; the engine sets it in every pane it runs",
+        absent_behavior: "Pane-scoped Workspace commands refuse because the caller cannot identify a pane",
     },
     EnvKey {
-        key: HERDR_PANE_ID,
+        key: HIDE_INSTALL,
         required: false,
-        format: "the Herdr pane id; Herdr sets it in every pane it manages",
-        absent_behavior: "Pane-scoped Workspace commands refuse because the caller cannot identify a connected Herdr pane",
+        format: "`app` or `root:<helper root>`; a pane holder's pane names the Hide installation that started it",
+        absent_behavior: "The pane is any installation's: a `hide` command asks this account's daemon first and its device bridges after",
+    },
+    EnvKey {
+        key: HIDE_INSTALL_CLI,
+        required: false,
+        format: "absolute path of the `hide` command of the installation that started the pane",
+        absent_behavior: "The `hide` command found first on PATH answers the call itself",
     },
     EnvKey {
         key: HIDE_CAP_REF,
         required: false,
         format: "absolute path to a regular, owner-only pane credential reference",
-        absent_behavior: "Direct Herdr pane callers try kernel peer bootstrap; detached agent tools require a session-scoped reference",
+        absent_behavior: "Pane callers try kernel peer bootstrap; detached agent tools require a session-scoped reference",
+    },
+    EnvKey {
+        key: HIDE_ACCESS,
+        required: false,
+        format: "the --name an external tool connected with: letters, digits, '.', '_' or '-', starting with a letter or digit, at most 64",
+        absent_behavior: "A command outside Hide's panes runs as the one tool whose key is in $HOME/.hide/access, and is refused with access_ambiguous when there are several; with no key it runs as the folder it was started in",
     },
     EnvKey {
         key: HIDE_TAILSCALE_BIN,
@@ -205,6 +208,18 @@ pub const REGISTRY: &[EnvKey] = &[
         absent_behavior: "Mobile connects to wss://relay.withhide.dev/ws",
     },
     EnvKey {
+        key: HIDE_PEER_DIRECT,
+        required: false,
+        format: "an IP address and UDP port such as 127.0.0.1:0, for development or tests: the endpoint other Hides connect to binds that one address and uses no relay and no local network search",
+        absent_behavior: "The endpoint binds every interface, attaches to the device relay and finds machines on the local network; it is opened only on a machine that is paired, or is sharing itself or adding a machine",
+    },
+    EnvKey {
+        key: HIDE_DEVICE_CONNECT,
+        required: false,
+        format: "1 or 0, for development and tests until connections between two Hides ship",
+        absent_behavior: "This build offers no connection to another Hide: no pairing in Settings > Devices or `hide device`, no endpoint and no login item for it, even where a development build left pairing records; SSH and WSL devices work as before",
+    },
+    EnvKey {
         key: HIDE_MACHINE_ID,
         required: false,
         format: "a node id: lowercase letters, digits and '-'; only a test fixture sets it, so one host runs a node and the core it dials as two machines",
@@ -213,38 +228,44 @@ pub const REGISTRY: &[EnvKey] = &[
     EnvKey {
         key: HIDE_BUILD_VERSION_OVERRIDE,
         required: false,
-        format: "a version such as 0.4.2; read only when HOME is a fixture HOME (under /tmp, carrying .hide-e2e-device-home, and not the account's own)",
+        format: "a version such as 0.4.2; read only when HOME is a fixture HOME (in the temporary folder, carrying .hide-e2e-device-home, and not the account's own)",
         absent_behavior: "A link's hello carries the version this build was packaged with (HIDE_VERSION at build time)",
     },
     EnvKey {
         key: HIDE_BUILD_ORDER_OVERRIDE,
         required: false,
-        format: "a commit count; read only when HOME is a fixture HOME (under /tmp, carrying .hide-e2e-device-home, and not the account's own)",
+        format: "a commit count; read only when HOME is a fixture HOME (in the temporary folder, carrying .hide-e2e-device-home, and not the account's own)",
         absent_behavior: "A link's hello carries the build order this build was packaged with (HIDE_BUILD_ORDER at build time, 0 when no package numbered it)",
     },
     EnvKey {
         key: HIDE_CORE_STARTER,
         required: false,
-        format: "`fixture`; read only when HOME is a fixture HOME (under /tmp, carrying .hide-e2e-device-home, and not the account's own)",
+        format: "`fixture`; read only when HOME is a fixture HOME (in the temporary folder, carrying .hide-e2e-device-home, and not the account's own)",
         absent_behavior: "A core move starts the core on the machine taking it through the account's login item (launchd); a fixture HOME with `fixture` starts it as a detached process instead, and a fixture HOME without it is refused, so no test reaches launchd",
     },
     EnvKey {
         key: HIDE_FIXTURE_CORE_STOP,
         required: false,
-        format: "`hang`; read only when HOME is a fixture HOME (under /tmp, carrying .hide-e2e-device-home, and not the account's own)",
+        format: "`hang`; read only when HOME is a fixture HOME (in the temporary folder, carrying .hide-e2e-device-home, and not the account's own)",
         absent_behavior: "The core role stops when asked; a fixture HOME with `hang` makes that stop never return, so the process ends itself past its bound",
     },
     EnvKey {
         key: HIDE_PREFLIGHT_PROGRAMS,
         required: false,
-        format: "absolute path of a folder holding stand-in `gh`, `launchctl` and `pmset`; read only when HOME is a fixture HOME (under /tmp, carrying .hide-e2e-device-home, and not the account's own)",
+        format: "absolute path of a folder holding stand-in `gh`, `launchctl` and `pmset`; read only when HOME is a fixture HOME (in the temporary folder, carrying .hide-e2e-device-home, and not the account's own)",
         absent_behavior: "A core move's checks on the machine taking the core run the account's `gh`, /bin/launchctl and /usr/bin/pmset; a fixture HOME names stand-ins, so a test passes or fails each check without the machine's own GitHub login, session and power settings, and a fixture HOME without it is refused rather than reaching the account's launchd",
     },
     EnvKey {
-        key: HIDE_DEV_PANE_HOLDER,
+        key: HIDE_DEV_DEVICE_HOME,
         required: false,
-        format: "`1` (the daemon runs the core's own engine: each pane in a pane holder its node starts, with no Herdr server, socket or binary) or `0`; any other value fails the daemon's check with the values it takes",
-        absent_behavior: "Off: the core runs on Herdr, every pane opens through Herdr's terminal sessions and no pane holder is started, adopted or read; a device's node logs a diagnostic and stays on Herdr even when it is `1`",
+        format: "`~/` and a path below the device account's home, or an absolute path on the device (`C:/...` on Windows), with no empty, `.` or `..` name; development only",
+        absent_behavior: "Each SSH device's node runs with its account's own home (HOME, or USERPROFILE on Windows); isolated verification sets it, beside HIDE_HOST_HELPER_ROOT, so a candidate's state, sessions and pane holders on a shared device never meet the account's own Hide there",
+    },
+    EnvKey {
+        key: HIDE_TEST_MEMORY_PRESSURE_FILE,
+        required: false,
+        format: "absolute path of a file holding `normal`, `warning` or `critical`, read at each answer; test-only, set by a runtime test or an isolated candidate",
+        absent_behavior: "This machine's node answers the memory pressure its operating system reports (`hide_platform::memory::pressure`), which agent sleep reads to put the longest-idle agent to sleep under pressure",
     },
     EnvKey {
         key: HOME,
@@ -259,17 +280,6 @@ pub struct Env {
     /// The filesystem boundary root for the web shell's listing and
     /// registration events (`boundary.rs`); read once, never configured.
     pub home: PathBuf,
-    pub herdr_socket_path: Option<String>,
-    /// `HERDR_BIN_PATH` as given; [`Env::herdr_program`] is the herdr a
-    /// daemon runs.
-    pub herdr_bin_path: Option<PathBuf>,
-    /// [`HIDE_DEV_PANE_HOLDER`] is on: the core runs its own engine over the
-    /// node's pane holders, and neither Herdr field is read (PRD
-    /// engine-bundle-3-core-owns D-5).
-    pub own_engine: bool,
-    /// The account's login shell (`SHELL`), asked for the `PATH` a program
-    /// is found on; `None` on Windows, which has none to ask.
-    pub login_shell: Option<PathBuf>,
     pub state_dir: PathBuf,
     /// The folder builds before `~/.hide` kept state in, when `state_dir` is
     /// the default one: `hide connect` moves it there once (PRD
@@ -303,41 +313,26 @@ pub struct Env {
     /// The pane a Workspace CLI command runs in; the daemon verifies its
     /// live membership and never trusts a caller-supplied Workspace.
     pub pane_id: Option<String>,
+    /// The Hide installation that started that pane (`HIDE_INSTALL`).
+    pub install: Option<String>,
+    /// The external tool connection a command runs as (`HIDE_ACCESS`).
+    pub access: Option<String>,
     /// The only tailscale CLI Mobile runs, when set (`HIDE_TAILSCALE_BIN`).
     pub tailscale_bin: Option<PathBuf>,
     pub relay_url: String,
+    /// The one address the endpoint for other Hides binds, with no relay
+    /// (`HIDE_PEER_DIRECT`); `None` is the product's endpoint.
+    pub peer_direct: Option<SocketAddr>,
+    /// Whether this build offers connections between two Hides
+    /// (`HIDE_DEVICE_CONNECT=1`): pairing, its `hide device` verbs and
+    /// Settings rows, the endpoint and the login item that keeps a paired
+    /// core on. Off by default in every build, release or not, until that
+    /// feature ships (mission-75 release A), which removes the switch. The
+    /// one place it is read; every caller is handed this value, and the
+    /// window reads it from the daemon's hello (`device_connect`).
+    pub device_connect: bool,
     /// PATH as the daemon received it, searched for `tailscale` at each check.
     pub search_path: Option<String>,
-}
-
-impl Env {
-    /// The herdr this machine's daemon runs: `HERDR_BIN_PATH` when it is
-    /// set, else the pinned copy this account's helper holds
-    /// (`hide_kit::device_herdr::pinned_for_account`: on a device, and on a
-    /// machine a move put the core on, the Herdr the helper ran, whichever
-    /// build of `hided` asks), else the `herdr` the account's own terminal
-    /// finds (`hide_platform::programs`). An SSH exec and a login item start
-    /// this program with the system's folders alone on `PATH`, which reach
-    /// none of these. Asked where a daemon is about to rely on it, never on
-    /// every command, since the account's search can start its login shell.
-    pub fn herdr_program(&self) -> Option<PathBuf> {
-        static NEVER: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
-        if self.own_engine {
-            return None;
-        }
-        self.herdr_bin_path
-            .clone()
-            .or_else(|| hide_kit::device_herdr::pinned_for_account(&self.home))
-            .or_else(|| {
-                hide_platform::programs::find_cli_with(
-                    &self.home,
-                    self.login_shell.as_deref(),
-                    &NEVER,
-                    "herdr",
-                )
-                .map(hide_platform::programs::Program::into_path)
-            })
-    }
 }
 
 #[derive(Debug)]
@@ -393,6 +388,14 @@ pub fn load_for_from(
     }
 }
 
+/// [`Env::device_connect`] of this process's environment, for what a
+/// command prints before it loads its environment (`hide --help`). An
+/// invalid value counts as off here; a command that loads its environment
+/// refuses it.
+pub fn device_connect_here() -> bool {
+    load_for(&[HIDE_DEVICE_CONNECT]).is_ok_and(|env| env.device_connect)
+}
+
 pub fn load_from(read: impl FnMut(&str) -> Option<String>) -> Result<Env, Vec<EnvError>> {
     let (env, errors) = resolve(read);
     if errors.is_empty() {
@@ -416,75 +419,6 @@ fn resolve(mut read: impl FnMut(&str) -> Option<String>) -> (Env, Vec<EnvError>)
             PathBuf::new()
         }
     };
-    // What `hide_platform::host` resolves the default socket from, read
-    // through this registry like every other key.
-    let host_values: Vec<(&str, Option<OsString>)> = [HOME, XDG_CONFIG_HOME, APPDATA]
-        .into_iter()
-        .map(|key| (key, read(key).map(OsString::from)))
-        .collect();
-    let host_variables = |key: &str| {
-        host_values
-            .iter()
-            .find(|(known, _)| *known == key)
-            .and_then(|(_, value)| value.clone())
-    };
-    let own_engine = match read(HIDE_DEV_PANE_HOLDER) {
-        None => false,
-        Some(value) => match hide_node::terminal::holder::Switch::parse(Some(OsStr::new(&value))) {
-            Ok(switch) => switch == hide_node::terminal::holder::Switch::On,
-            Err(_) => {
-                errors.push(EnvError {
-                    key: HIDE_DEV_PANE_HOLDER,
-                    kind: "invalid",
-                });
-                false
-            }
-        },
-    };
-    // The core's own engine runs no Herdr: neither the socket a caller
-    // names nor the default one is read.
-    let herdr_socket_path = match read(HERDR_SOCKET_PATH) {
-        _ if own_engine => None,
-        Some(value) if value.is_empty() => {
-            errors.push(EnvError {
-                key: HERDR_SOCKET_PATH,
-                kind: "empty",
-            });
-            None
-        }
-        // Pane credentials are proven against this socket, which has to name
-        // one file wherever the daemon runs from.
-        Some(value) if !Path::new(&value).is_absolute() => {
-            errors.push(EnvError {
-                key: HERDR_SOCKET_PATH,
-                kind: "invalid",
-            });
-            None
-        }
-        Some(value) => Some(value),
-        None => host::herdr_socket_default_from(&host_variables)
-            .ok()
-            .filter(|default| default.exists())
-            .map(|default| default.display().to_string()),
-    };
-    let herdr_bin_path = match read(HERDR_BIN_PATH).filter(|_| !own_engine) {
-        Some(value) if value.is_empty() => {
-            errors.push(EnvError {
-                key: HERDR_BIN_PATH,
-                kind: "empty",
-            });
-            None
-        }
-        Some(value) => Some(PathBuf::from(value)),
-        None => None,
-    };
-    // Windows has no login shell to ask; its processes get the account's
-    // own `Path`. A shell named by a relative path names none, as
-    // `host::default_shell` reads it.
-    let login_shell = read(SHELL)
-        .filter(|_| cfg!(unix))
-        .map(PathBuf::from)
-        .filter(|shell| shell.is_absolute());
     let hide_state_dir = read(HIDE_STATE_DIR);
     if hide_state_dir.as_deref() == Some("") {
         errors.push(EnvError {
@@ -580,6 +514,20 @@ fn resolve(mut read: impl FnMut(&str) -> Option<String>) -> (Env, Vec<EnvError>)
         }
         other => other,
     };
+    if read(HIDE_DEV_DEVICE_HOME)
+        .is_some_and(|value| hide_node::ssh::parse_device_home(&value).is_err())
+    {
+        errors.push(EnvError {
+            key: HIDE_DEV_DEVICE_HOME,
+            kind: "invalid",
+        });
+    }
+    if read(HIDE_TEST_MEMORY_PRESSURE_FILE).is_some_and(|value| !Path::new(&value).is_absolute()) {
+        errors.push(EnvError {
+            key: HIDE_TEST_MEMORY_PRESSURE_FILE,
+            kind: "invalid",
+        });
+    }
     let host_cli_dir = match read(HIDE_HOST_CLI_DIR) {
         Some(value) if !valid_helper_root(&value) => {
             errors.push(EnvError {
@@ -590,18 +538,27 @@ fn resolve(mut read: impl FnMut(&str) -> Option<String>) -> (Env, Vec<EnvError>)
         }
         other => other,
     };
-    // A pane names itself by one variable, `HIDE_PANE_ID` first; a name set
-    // empty is an error of its own key, never read as the other's.
-    let mut pane_id = None;
-    for key in [HIDE_PANE_ID, HERDR_PANE_ID] {
-        match read(key) {
-            Some(value) if value.is_empty() => errors.push(EnvError { key, kind: "empty" }),
-            Some(value) => {
-                pane_id.get_or_insert(value);
-            }
-            None => {}
+    let pane_id = match read(HIDE_PANE_ID) {
+        Some(value) if value.is_empty() => {
+            errors.push(EnvError {
+                key: HIDE_PANE_ID,
+                kind: "empty",
+            });
+            None
         }
-    }
+        other => other,
+    };
+    let install = read(HIDE_INSTALL).filter(|value| !value.is_empty());
+    let access = match read(HIDE_ACCESS) {
+        Some(value) if !hide_core::access::valid_name(&value) => {
+            errors.push(EnvError {
+                key: HIDE_ACCESS,
+                kind: "invalid",
+            });
+            None
+        }
+        other => other,
+    };
     let tailscale_bin = match read(HIDE_TAILSCALE_BIN) {
         Some(value)
             if !Path::new(&value).is_absolute() || value.bytes().any(|b| b.is_ascii_control()) =>
@@ -626,13 +583,33 @@ fn resolve(mut read: impl FnMut(&str) -> Option<String>) -> (Env, Vec<EnvError>)
         }
         None => RELAY_URL.to_owned(),
     };
+    let peer_direct = match read(HIDE_PEER_DIRECT) {
+        None => None,
+        Some(value) => match value.parse::<SocketAddr>() {
+            Ok(address) => Some(address),
+            Err(_) => {
+                errors.push(EnvError {
+                    key: HIDE_PEER_DIRECT,
+                    kind: "invalid",
+                });
+                None
+            }
+        },
+    };
+    let device_connect = match read(HIDE_DEVICE_CONNECT).as_deref() {
+        None | Some("0") => false,
+        Some("1") => true,
+        Some(_) => {
+            errors.push(EnvError {
+                key: HIDE_DEVICE_CONNECT,
+                kind: "invalid",
+            });
+            false
+        }
+    };
     let search_path = read(PATH).filter(|value| !value.is_empty());
     let env = Env {
         home,
-        herdr_socket_path,
-        herdr_bin_path,
-        own_engine,
-        login_shell,
         state_dir,
         legacy_state_dir,
         account_state_folder,
@@ -646,8 +623,12 @@ fn resolve(mut read: impl FnMut(&str) -> Option<String>) -> (Env, Vec<EnvError>)
         host_helper_root,
         host_cli_dir,
         pane_id,
+        install,
+        access,
         tailscale_bin,
         relay_url,
+        peer_direct,
+        device_connect,
         search_path,
     };
     (env, errors)
@@ -716,23 +697,6 @@ fn valid_program_path(path: &Path) -> bool {
     true
 }
 
-/// Why the herdr binary the environment resolved cannot be run, or `None`
-/// when there is none or it runs. Herdr hands every pane the path its server
-/// started from, and that path dies when the app bundle is replaced under a
-/// running server, so a daemon started inside a pane would inherit a name
-/// with nothing behind it and every pane attach would fail one by one. The
-/// check runs where a daemon is about to rely on the binary, not on every
-/// CLI call: a Workspace command never runs herdr.
-pub fn herdr_bin_error(env: &Env) -> Option<String> {
-    let path = env.herdr_bin_path.as_ref()?;
-    (!valid_program_path(path)).then(|| {
-        format!(
-            "{HERDR_BIN_PATH}: {} is not an executable file; the Herdr that set it has moved, so unset it or name the herdr this app ships",
-            path.display()
-        )
-    })
-}
-
 /// Whether `home` is a test fixture's HOME, where a test-only key is read:
 /// under the system's temporary folder, carrying [`FIXTURE_HOME_MARKER`],
 /// and not this account's own home by the account database (`HOME` is the
@@ -788,10 +752,19 @@ pub fn fixture_core_stop_hangs() -> bool {
         && hide_platform::host::home_dir().is_ok_and(|home| fixture_home(&home))
 }
 
-/// Whether this daemon's node runs pane holders ([`HIDE_DEV_PANE_HOLDER`]);
-/// a value it does not take is an error naming the values it does.
-pub(crate) fn pane_holder_switch() -> Result<hide_node::terminal::holder::Switch, String> {
-    hide_node::terminal::holder::Switch::parse(std::env::var_os(HIDE_DEV_PANE_HOLDER).as_deref())
+/// The home every SSH device's node runs with ([`HIDE_DEV_DEVICE_HOME`]),
+/// `None` when it is not set; a value it does not take is an error saying
+/// what it takes.
+pub(crate) fn device_home() -> Result<Option<String>, String> {
+    match std::env::var_os(HIDE_DEV_DEVICE_HOME) {
+        None => Ok(None),
+        Some(value) => {
+            let value = value
+                .into_string()
+                .map_err(|_| format!("{HIDE_DEV_DEVICE_HOME} is not Unicode"))?;
+            hide_node::ssh::parse_device_home(&value).map(Some)
+        }
+    }
 }
 
 /// Public ingestion token embedded by build.rs; runtime cannot replace it.
@@ -831,47 +804,11 @@ mod tests {
         (HIDE_OPEN_COMMAND, "relative-opener"),
         (HIDE_KEEP_ALIVE, "maybe"),
         (HIDE_VITE_ORIGIN, "http://example.com:1"),
-        (HERDR_SOCKET_PATH, ""),
-        (HERDR_PANE_ID, ""),
         (HIDE_PANE_ID, ""),
         (HIDE_HOST_HELPER_ROOT, "relative"),
         (HIDE_TAILSCALE_BIN, "relative"),
-        (HIDE_DEV_PANE_HOLDER, "yes"),
+        (HIDE_DEV_DEVICE_HOME, "relative/home"),
     ];
-
-    #[test]
-    fn the_switch_alone_chooses_the_core_s_own_engine_and_then_no_herdr_is_read() {
-        let herdr = [
-            (HOME, "/Users/example"),
-            (HERDR_SOCKET_PATH, "/tmp/herdr.sock"),
-            (HERDR_BIN_PATH, "/opt/herdr"),
-        ];
-        for off in [None, Some("0")] {
-            let mut pairs = herdr.to_vec();
-            pairs.extend(off.map(|value| (HIDE_DEV_PANE_HOLDER, value)));
-            let env = from_map(&pairs).unwrap();
-            assert!(!env.own_engine);
-            assert_eq!(env.herdr_socket_path.as_deref(), Some("/tmp/herdr.sock"));
-            assert_eq!(env.herdr_program(), Some(PathBuf::from("/opt/herdr")));
-        }
-        let mut pairs = herdr.to_vec();
-        pairs.push((HIDE_DEV_PANE_HOLDER, "1"));
-        let env = from_map(&pairs).unwrap();
-        assert!(env.own_engine);
-        assert_eq!(env.herdr_socket_path, None);
-        assert_eq!(env.herdr_bin_path, None);
-        assert_eq!(env.herdr_program(), None);
-    }
-
-    #[test]
-    fn a_relative_herdr_socket_is_refused_by_name() {
-        let err =
-            from_map(&[(HOME, "/Users/example"), (HERDR_SOCKET_PATH, "herdr.sock")]).unwrap_err();
-        assert_eq!(
-            err.iter().map(ToString::to_string).collect::<Vec<_>>(),
-            [format!("{HERDR_SOCKET_PATH}: invalid")]
-        );
-    }
 
     #[test]
     fn the_state_folder_is_all_stop_and_status_json_ask_for() {
@@ -1013,124 +950,6 @@ mod tests {
         );
         assert_eq!(env.idle_secs, 600);
         assert!(!env.keep_alive);
-        assert!(env.herdr_socket_path.is_none());
-        assert!(env.herdr_bin_path.is_none());
-    }
-
-    #[cfg(unix)]
-    fn program(path: &Path, script: &str) -> PathBuf {
-        use std::os::unix::fs::PermissionsExt;
-        std::fs::create_dir_all(path.parent().unwrap()).unwrap();
-        std::fs::write(path, format!("#!/bin/sh\n{script}\n")).unwrap();
-        std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o755)).unwrap();
-        path.to_path_buf()
-    }
-
-    /// A daemon an SSH exec or a login item started has the system's folders
-    /// alone on its `PATH`; the herdr its account installed is found where
-    /// the account's own terminal finds it, its login shell's `PATH`.
-    #[cfg(unix)]
-    #[test]
-    fn a_herdr_only_the_login_shell_finds_is_the_daemons_herdr() {
-        let dir = tempfile::tempdir().unwrap();
-        let home = dir.path().join("home");
-        let installed = program(&home.join("installed/bin/herdr"), "exit 0");
-        let shell = program(
-            &dir.path().join("login-shell"),
-            "[ \"$1\" = -ilc ] || exit 64\nPATH=\"$HOME/installed/bin:$PATH\"\nexport PATH\neval \"$2\"",
-        );
-        let env = from_map(&[
-            (HOME, &home.display().to_string()),
-            (SHELL, &shell.display().to_string()),
-            (PATH, "/usr/bin:/bin:/usr/sbin:/sbin"),
-        ])
-        .unwrap();
-        assert_eq!(env.herdr_bin_path, None, "nothing named one");
-        assert_eq!(env.herdr_program(), Some(installed));
-    }
-
-    /// The order a daemon takes its herdr in: the one it was handed, then
-    /// the pinned copy the account's helper holds, then the account's own.
-    /// The pinned copy is found by the account's layout, so a `herdr` that
-    /// comes first on the login shell's `PATH` does not stand in for it.
-    #[cfg(unix)]
-    #[test]
-    fn herdr_bin_path_wins_then_the_pinned_copy_then_the_accounts_own() {
-        let dir = tempfile::tempdir().unwrap();
-        let home = dir.path().join("home");
-        let own = program(&home.join("installed/bin/herdr"), "exit 0");
-        let shell = program(
-            &dir.path().join("login-shell"),
-            "[ \"$1\" = -ilc ] || exit 64\nPATH=\"$HOME/installed/bin:$PATH\"\nexport PATH\neval \"$2\"",
-        );
-        let (home_text, shell) = (home.display().to_string(), shell.display().to_string());
-        let env = from_map(&[(HOME, &home_text), (SHELL, &shell)]).unwrap();
-        assert_eq!(env.herdr_program(), Some(own), "no copy arrived yet");
-
-        let pinned = program(
-            &hide_kit::device_herdr::pinned_herdr(&hide_kit::layout::helper_root(&home)),
-            "exit 0",
-        );
-        assert_eq!(env.herdr_program(), Some(pinned));
-        let env = from_map(&[
-            (HOME, &home_text),
-            (SHELL, &shell),
-            (HERDR_BIN_PATH, "/opt/herdr/bin/herdr"),
-        ])
-        .unwrap();
-        assert_eq!(
-            env.herdr_program(),
-            Some(PathBuf::from("/opt/herdr/bin/herdr"))
-        );
-        let err = from_map(&[(HOME, "/Users/example"), (HERDR_BIN_PATH, "")]).unwrap_err();
-        assert_eq!(err[0].key, HERDR_BIN_PATH);
-    }
-
-    /// Windows has no login shell; a relative one names no shell.
-    #[test]
-    fn only_an_absolute_shell_on_unix_is_asked() {
-        let env = from_map(&[(HOME, "/Users/example"), (SHELL, "/bin/zsh")]).unwrap();
-        assert_eq!(
-            env.login_shell,
-            cfg!(unix).then(|| PathBuf::from("/bin/zsh"))
-        );
-        let env = from_map(&[(HOME, "/Users/example"), (SHELL, "zsh")]).unwrap();
-        assert_eq!(env.login_shell, None);
-    }
-
-    #[test]
-    fn stale_herdr_bin_path_is_named_and_a_runnable_one_passes() {
-        let dir = tempfile::tempdir().unwrap();
-        let gone = dir.path().join("herdr-runtime/herdr");
-        let env = from_map(&[
-            (HOME, "/Users/example"),
-            ("HERDR_BIN_PATH", &gone.display().to_string()),
-        ])
-        .unwrap();
-        let error = herdr_bin_error(&env).expect("a path with nothing behind it is an error");
-        assert!(error.starts_with("HERDR_BIN_PATH: "), "{error}");
-        assert!(error.contains(&gone.display().to_string()), "{error}");
-
-        let runnable = dir.path().join("herdr");
-        std::fs::write(&runnable, b"#!/bin/sh\n").unwrap();
-        #[cfg(unix)]
-        {
-            use std::os::unix::fs::PermissionsExt;
-            std::fs::set_permissions(&runnable, std::fs::Permissions::from_mode(0o755)).unwrap();
-        }
-        let env = from_map(&[
-            (HOME, "/Users/example"),
-            ("HERDR_BIN_PATH", &runnable.display().to_string()),
-        ])
-        .unwrap();
-        assert_eq!(herdr_bin_error(&env), None);
-
-        let env = from_map(&[(HOME, "/Users/example"), ("PATH", "/nonexistent")]).unwrap();
-        assert_eq!(
-            herdr_bin_error(&env),
-            None,
-            "no binary at all is the logged degraded state, not a refusal"
-        );
     }
 
     #[test]
@@ -1173,6 +992,47 @@ mod tests {
                 .host_helper_root,
             None
         );
+    }
+
+    #[test]
+    fn the_peer_endpoint_override_is_one_address_and_port() {
+        assert_eq!(
+            from_map(&[(HOME, "/Users/example")]).unwrap().peer_direct,
+            None
+        );
+        assert_eq!(
+            from_map(&[(HOME, "/Users/example"), (HIDE_PEER_DIRECT, "127.0.0.1:0")])
+                .unwrap()
+                .peer_direct,
+            Some(SocketAddr::from(([127, 0, 0, 1], 0)))
+        );
+        for value in ["", "127.0.0.1", "localhost:7842", "1"] {
+            assert_eq!(
+                from_map(&[(HOME, "/Users/example"), (HIDE_PEER_DIRECT, value)]).unwrap_err()[0]
+                    .key,
+                HIDE_PEER_DIRECT,
+                "{value:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn connections_between_hides_are_off_unless_the_switch_says_1() {
+        let device_connect = |pairs: &[(&str, &str)]| {
+            let mut all = vec![(HOME, "/Users/example")];
+            all.extend_from_slice(pairs);
+            from_map(&all).map(|env| env.device_connect)
+        };
+        assert!(!device_connect(&[]).unwrap());
+        assert!(!device_connect(&[(HIDE_DEVICE_CONNECT, "0")]).unwrap());
+        assert!(device_connect(&[(HIDE_DEVICE_CONNECT, "1")]).unwrap());
+        for value in ["", "true", "yes", "2"] {
+            assert_eq!(
+                device_connect(&[(HIDE_DEVICE_CONNECT, value)]).unwrap_err()[0].key,
+                HIDE_DEVICE_CONNECT,
+                "{value:?}"
+            );
+        }
     }
 
     #[test]

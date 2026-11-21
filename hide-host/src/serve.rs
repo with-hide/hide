@@ -25,7 +25,7 @@ use hide_node_link::process::{GroupEnd, LeftRunning, LineInput, ProcessStart};
 pub const CONCURRENCY: usize = 4;
 
 /// Link control requests (`Call::is_control`: a greeting, a pane's proof
-/// answer or stream, a Herdr stream) the helper works on at once, on
+/// answer or stream, a link stream) the helper works on at once, on
 /// workers of their own, so they never wait behind machine calls; the core
 /// admits as many.
 pub const CONTROL_CONCURRENCY: usize = 4;
@@ -59,13 +59,10 @@ const MAX_REQUEST_BYTES: usize = 40 * 1024 * 1024;
 /// [`Terminals::line`] as they are read, never behind a request, and the
 /// service's own lines go out between the answers.
 pub trait Terminals: Send + Sync {
-    /// Starts the service for the Herdr at `herdr_socket`; starting it again
-    /// while it runs changes nothing.
-    fn start(&self, herdr_socket: &str) -> Result<(), String>;
-    /// Starts the service over the node's own pane holders, with no Herdr,
+    /// Starts the service over the node's own pane holders,
     /// and answers those holders for the core's own engine (PRD
     /// engine-bundle-3-core-owns D-22); asked again, it answers the same
-    /// holders. A service already running on a Herdr refuses it.
+    /// holders.
     fn start_holders(&self) -> Result<Arc<dyn hide_node_link::holders::PaneHolders>, String> {
         Err("This node's terminals cannot run pane holders".to_owned())
     }
@@ -83,35 +80,28 @@ pub fn serve(input: impl BufRead, output: impl Write + Send) -> io::Result<()> {
     serve_in(input, output, Env::of_process(), Services::none())
 }
 
-/// [`serve`] with the node's terminal service. `own_herdr` is the socket
-/// of the account's Herdr this node bridges to its core over its link
-/// streams, for a helper whose core reaches no socket on this machine (a
-/// WSL distribution's, PRD wsl-device D-07); an SSH device's helper bridges
-/// none, since its core reaches the socket over SSH.
+/// [`serve`] with the node's terminal service.
 pub fn serve_with_terminals(
     input: impl BufRead,
     output: impl Write + Send,
     terminals: &dyn Terminals,
-    own_herdr: Option<PathBuf>,
 ) -> io::Result<()> {
     serve_with(
         input,
         output,
         Services {
             terminals: Some(terminals),
-            herdr_socket: own_herdr,
             heartbeat: false,
             checkout_callers: false,
             opened_roots: None,
             browser: None,
             // A device's helper serves its core for the helper's whole life,
             // and keeps its worktree facts across its restarts.
-            worktree_facts: std::env::var_os("HOME").map(|home| {
-                hide_kit::layout::worktree_facts(&hide_kit::layout::state_dir_from_process(
-                    Path::new(&home),
-                ))
+            worktree_facts: hide_platform::host::home_dir().ok().map(|home| {
+                hide_kit::layout::worktree_facts(&hide_kit::layout::state_dir_from_process(&home))
             }),
             kit: KitPlace::Installed,
+            panes: None,
         },
     )
 }
@@ -120,11 +110,6 @@ pub fn serve_with_terminals(
 pub struct Services<'a> {
     /// The node's terminal service.
     pub terminals: Option<&'a dyn Terminals>,
-    /// The node's own Herdr socket, which its core reaches only through the
-    /// link: a node that dialed its core (PRD core-host-node-remote-core
-    /// D-18), and a WSL distribution's helper (PRD wsl-device D-07). An SSH
-    /// device has none, and refuses Herdr streams.
-    pub herdr_socket: Option<PathBuf>,
     /// Whether the node says it is alive every
     /// [`hide_node_link::panes::HEARTBEAT`]: a node that dialed its core,
     /// whose attach role ends a link that falls silent.
@@ -152,6 +137,12 @@ pub struct Services<'a> {
     /// is installed under its helper root, and a node that dialed its core
     /// runs from the program its machine has (`KitPlace::of_program`).
     pub kit: KitPlace,
+    /// The pane holders of a node that outlives its links, already owned
+    /// (a guest's node, PRD device-connect-iroh D-77 (5)): this link asks
+    /// them and leaves their ownership as it found it when it ends. `None`
+    /// for a node whose link starts its holders and whose ownership ends
+    /// with that link.
+    pub panes: Option<crate::pane_holders::PaneSlot>,
 }
 
 /// The checkout roots a node's core opened on it over one link, which are
@@ -212,13 +203,13 @@ impl Services<'_> {
     pub fn none() -> Self {
         Self {
             terminals: None,
-            herdr_socket: None,
             heartbeat: false,
             checkout_callers: false,
             opened_roots: None,
             browser: None,
             worktree_facts: None,
             kit: KitPlace::Installed,
+            panes: None,
         }
     }
 }
@@ -246,7 +237,6 @@ fn serve_in(
     let env = Env {
         kit: services.kit,
         stop: Arc::default(),
-        bridged_herdr: services.herdr_socket.clone(),
         ai: Arc::default(),
         ..env
     };
@@ -257,19 +247,26 @@ fn serve_in(
         },
         None => env,
     };
+    let resident_panes = services.panes.is_some();
+    let env = match services.panes {
+        Some(panes) => Env { panes, ..env },
+        None => env,
+    };
     let terminals = services.terminals;
     let heartbeat = services.heartbeat;
     let opened_roots = services.opened_roots;
     // Ends the heartbeat when the input does.
     let input_ended = (Mutex::new(false), std::sync::Condvar::new());
-    let link = crate::link_bridge::LinkBridge::new(services.herdr_socket, services.browser);
+    let link = crate::link_bridge::LinkBridge::new(services.browser);
     let staging = crate::attachments::Staging::new(env.state.as_deref(), env.home.as_deref());
     let output = Mutex::new(output);
     // The calls handed to a worker and not yet answered, each with whether
     // it was asked to stop; the reader enters one before handing it over, so
     // a cancel that arrives first still reaches it.
     let running: Mutex<HashMap<u64, bool>> = Mutex::new(HashMap::new());
-    let panes = crate::panes::Panes::new().with_checkout_callers(services.checkout_callers);
+    let panes = crate::panes::Panes::new()
+        .with_checkout_callers(services.checkout_callers)
+        .with_install(crate::kit::running_install().map(|install| install.id));
     // Where a pane's `hide` on this machine finds the node's bootstrap
     // socket; read once, so every start of the service agrees.
     let bridges = hide_platform::host::home_dir().map(|home| {
@@ -329,30 +326,17 @@ fn serve_in(
                             ErrorCode::Unsupported,
                             "A device does not answer this request; the core's own node does",
                         )),
-                        Call::PanesStart { herdr_socket } => match bridges {
-                            Ok(bridges) => panes
-                                .start(scope, output, bridges, &herdr_socket)
-                                .and_then(to_value),
-                            Err(error) => Err(HostError::new(ErrorCode::Io, error.to_string())),
-                        },
-                        // One node runs one engine's panes: its holders,
-                        // started once, take the place of its Herdr's
-                        // terminals, and its pane requests reach them.
-                        // A pane's `hide` is proved by the holders' records
-                        // from then on, answered with the bootstrap socket it
-                        // asks on, as `PanesStart` answers it for a Herdr.
+                        // The node's holders, started once, run its panes,
+                        // and its pane requests reach them. A pane's `hide`
+                        // is proved by the holders' records from then on,
+                        // answered with the bootstrap socket it asks on.
                         Call::HoldersStart => match (terminals, bridges) {
                             (Some(terminals), Ok(bridges)) => terminals
                                 .start_holders()
                                 .map_err(|message| HostError::new(ErrorCode::Io, message))
                                 .and_then(|holders| {
                                     env.panes.fill(holders);
-                                    panes.start_for(
-                                        scope,
-                                        output,
-                                        bridges,
-                                        crate::panes::PaneSource::Holders(env.panes.clone()),
-                                    )
+                                    panes.start(scope, output, bridges, env.panes.clone())
                                 })
                                 .and_then(to_value),
                             (None, _) => Err(HostError::new(
@@ -362,16 +346,6 @@ fn serve_in(
                             (_, Err(error)) => {
                                 Err(HostError::new(ErrorCode::Io, error.to_string()))
                             }
-                        },
-                        Call::TerminalsStart { herdr_socket } => match terminals {
-                            Some(terminals) => terminals
-                                .start(&herdr_socket)
-                                .map(|()| Value::Null)
-                                .map_err(|message| HostError::new(ErrorCode::Io, message)),
-                            None => Err(HostError::new(
-                                ErrorCode::Unsupported,
-                                "This node runs no terminal service",
-                            )),
                         },
                         Call::PaneProofAnswer { request, answer } => {
                             panes.answer_proof(request, answer)
@@ -407,56 +381,6 @@ fn serve_in(
                                 hide_node_link::protocol::LinkEnd::BrowserRelay,
                             )),
                         },
-                        // A core that names no server labels the one this
-                        // link's pane service serves.
-                        Call::LabelLock {
-                            herdr_socket,
-                            generator,
-                        } => label_socket(link.herdr_socket(), herdr_socket, panes).and_then(
-                            |herdr_socket| {
-                                handle_in(
-                                    Call::LabelLock {
-                                        herdr_socket,
-                                        generator,
-                                    },
-                                    env,
-                                )
-                            },
-                        ),
-                        Call::LabelUnlock {
-                            herdr_socket,
-                            generator,
-                        } => label_socket(link.herdr_socket(), herdr_socket, panes).and_then(
-                            |herdr_socket| {
-                                handle_in(
-                                    Call::LabelUnlock {
-                                        herdr_socket,
-                                        generator,
-                                    },
-                                    env,
-                                )
-                            },
-                        ),
-                        Call::Kit {
-                            action,
-                            cli_dir,
-                            herdr_socket,
-                            retirement_projects,
-                            preserve_herdr_server,
-                        } => handle_in(
-                            Call::Kit {
-                                action,
-                                cli_dir,
-                                herdr_socket: if preserve_herdr_server {
-                                    herdr_socket
-                                } else {
-                                    kit_herdr_socket(herdr_socket, link.herdr_socket())
-                                },
-                                retirement_projects,
-                                preserve_herdr_server,
-                            },
-                            env,
-                        ),
                         Call::RootOpen { root } => {
                             let opened = handle_in(Call::RootOpen { root: root.clone() }, env);
                             if opened.is_ok()
@@ -541,7 +465,11 @@ fn serve_in(
         // rather than keep the helper alive after it, and the pane service
         // ends its listener and streams so the scope can close.
         env.stop.store(true, std::sync::atomic::Ordering::Relaxed);
-        env.panes.close();
+        // A resident node's ownership of its panes is the node's, not this
+        // link's.
+        if !resident_panes {
+            env.panes.close();
+        }
         panes.stop();
         result
     });
@@ -549,18 +477,12 @@ fn serve_in(
     result
 }
 
-/// The Herdr server a kit call installs against: the one the core named,
-/// else the one this link bridges. A node that dialed its core knows its own
-/// Herdr, which the core does not, so the core names none.
-fn kit_herdr_socket(named: Option<String>, bridged: Option<&Path>) -> Option<String> {
-    named.or_else(|| bridged.map(|own| own.to_string_lossy().into_owned()))
-}
-
-/// Where this machine shows the Windows PC's drives, for `Hello`: none on a
-/// machine that is not a WSL distribution, and none, logged, on one whose
-/// `/etc/wsl.conf` cannot be read or names no usable root, so a pasted
-/// Windows path stays as typed rather than becoming a guess.
-fn windows_drives() -> Option<String> {
+/// Where this machine shows the Windows PC's drives, for `Hello` and for a
+/// core's own device row: none on a machine that is not a WSL distribution,
+/// and none, logged, on one whose `/etc/wsl.conf` cannot be read or names
+/// no usable root, so a pasted Windows path stays as typed rather than
+/// becoming a guess.
+pub fn windows_drives() -> Option<String> {
     match hide_platform::host::windows_drives() {
         Ok(root) => Some(root),
         Err(error)
@@ -582,37 +504,6 @@ fn windows_drives() -> Option<String> {
             );
             None
         }
-    }
-}
-
-/// Why a node asked for the label lock of no named server refuses: its
-/// pane service has not started, so it serves no Herdr server yet.
-fn no_labeled_server() -> HostError {
-    HostError::new(
-        ErrorCode::Unsupported,
-        "This node serves no Herdr server whose labels it could lock",
-    )
-}
-
-/// The Herdr server whose label lock a core asks for. A node that dialed
-/// its core (it bridges its own Herdr) locks only that server's, so a core
-/// cannot have it create a lock file anywhere else; a device locks the
-/// server its core names, or the one its pane service serves.
-fn label_socket(
-    bridged: Option<&Path>,
-    named: Option<String>,
-    panes: &crate::panes::Panes,
-) -> HostResult<Option<String>> {
-    let Some(bridged) = bridged else {
-        return Ok(named.or_else(|| panes.herdr_socket()));
-    };
-    let own = bridged.to_string_lossy().into_owned();
-    match named {
-        Some(named) if named != own => Err(HostError::new(
-            ErrorCode::InvalidRequest,
-            "A node that dialed its core locks only its own Herdr server's labels",
-        )),
-        _ => Ok(Some(own)),
     }
 }
 
@@ -768,14 +659,8 @@ fn to_value(value: impl serde::Serialize) -> HostResult<Value> {
 /// A repository path from the core. Only an absolute path names a folder on
 /// this machine; anything else is refused before Git sees it.
 fn absolute(path: &str) -> HostResult<std::path::PathBuf> {
-    let path = Path::new(path);
-    if !path.is_absolute() {
-        return Err(HostError::new(
-            ErrorCode::InvalidPath,
-            "A repository path must be absolute",
-        ));
-    }
-    Ok(path.to_path_buf())
+    crate::root::native_absolute(path)
+        .ok_or_else(|| HostError::new(ErrorCode::InvalidPath, "A repository path must be absolute"))
 }
 
 /// The agents whose session files the core reads by path.
@@ -786,22 +671,30 @@ static SESSION_FILE_AGENTS: std::sync::LazyLock<Vec<hide_session::Agent>> =
             .collect()
     });
 
+/// The accounts this node reads sessions in: each agent's default account
+/// under its home and each profile's (`crate::profiles::session_accounts`).
+/// A session is read in no other place (PRD agent-profiles D-36).
+fn accounts(env: &Env, missing: &str) -> HostResult<std::sync::Arc<hide_session::Accounts>> {
+    let home = env.home(missing)?;
+    Ok(crate::profiles::session_accounts(
+        env.state.as_deref(),
+        &home,
+    ))
+}
+
 /// A session file the core names, refused unless it lies in one of `agents`'
-/// session folders in this machine's home, answered with every link resolved.
+/// session folders in an account this machine registered, answered with
+/// every link resolved.
 fn session_file(env: &Env, agents: &[hide_session::Agent], path: &str) -> HostResult<PathBuf> {
     let path = absolute(path)?;
-    let home = env.home("sessions_home_unavailable")?;
-    hide_session::inside_session_root(Path::new(&home), agents, &path).map_err(|refusal| {
-        match refusal {
-            hide_session::RootRefusal::Unsupported | hide_session::RootRefusal::Outside => {
-                HostError::new(ErrorCode::OutsideRoot, "session_outside_roots")
-            }
-            hide_session::RootRefusal::Missing => {
-                HostError::new(ErrorCode::Io, "session_file_missing")
-            }
-            hide_session::RootRefusal::Unreadable => {
-                HostError::new(ErrorCode::Io, "session_unreadable")
-            }
+    let accounts = accounts(env, "sessions_home_unavailable")?;
+    hide_session::inside_session_root(&accounts, agents, &path).map_err(|refusal| match refusal {
+        hide_session::RootRefusal::Unsupported | hide_session::RootRefusal::Outside => {
+            HostError::new(ErrorCode::OutsideRoot, "session_outside_roots")
+        }
+        hide_session::RootRefusal::Missing => HostError::new(ErrorCode::Io, "session_file_missing"),
+        hide_session::RootRefusal::Unreadable => {
+            HostError::new(ErrorCode::Io, "session_unreadable")
         }
     })
 }
@@ -813,9 +706,8 @@ fn session_read<T: serde::Serialize>(
     read: impl FnOnce(&Path) -> Result<T, String>,
 ) -> HostResult<serde_json::Value> {
     let path = session_file(env, &SESSION_FILE_AGENTS, path)?;
-    let home = env.home("sessions_home_unavailable")?;
-    let home = Path::new(&home);
-    let agent = session_file_agent(home, &path)?;
+    let accounts = accounts(env, "sessions_home_unavailable")?;
+    let agent = session_file_agent(&accounts, &path)?;
     if !agent.is_jsonl() {
         return Err(HostError::new(
             ErrorCode::Unsupported,
@@ -823,17 +715,15 @@ fn session_read<T: serde::Serialize>(
         ));
     }
     to_value(
-        hide_session::read_session_file(home, agent, &path, scope, || read(&path))
+        hide_session::read_session_file(&accounts, agent, &path, scope, || read(&path))
             .map_err(|reason| HostError::new(ErrorCode::Io, reason))?,
     )
 }
 
 /// A folder the core names for agy on this machine: its wire spelling, or
-/// the native one a checkout path Herdr reported keeps.
+/// the native one a checkout path the engine reported keeps.
 fn antigravity_folder(path: &str) -> Option<PathBuf> {
-    hide_platform::path::from_wire(path)
-        .ok()
-        .or_else(|| Some(PathBuf::from(path)).filter(|path| path.is_absolute()))
+    crate::root::native_absolute(path)
 }
 
 /// The checkout an agy fork is looked for in, as agy's index names it.
@@ -843,43 +733,53 @@ fn antigravity_fork_cwd(cwd: &str) -> HostResult<PathBuf> {
         .ok_or_else(|| HostError::new(ErrorCode::InvalidPath, "session_route_cwd_unconfirmed"))
 }
 
-fn session_file_agent(home: &Path, path: &Path) -> HostResult<hide_session::Agent> {
+fn session_file_agent(
+    accounts: &hide_session::Accounts,
+    path: &Path,
+) -> HostResult<hide_session::Agent> {
     SESSION_FILE_AGENTS
         .iter()
         .copied()
-        .find(|agent| hide_session::inside_session_root(home, &[*agent], path).is_ok())
+        .find(|agent| hide_session::inside_session_root(accounts, &[*agent], path).is_ok())
         .ok_or_else(|| HostError::new(ErrorCode::OutsideRoot, "session_outside_roots"))
 }
 
 fn project_facts(path: &str) -> HostResult<hide_project::ProjectFacts> {
-    let path = Path::new(path);
-    if !path.is_absolute() {
-        return Err(HostError::new(
+    let path = crate::root::native_absolute(path)
+        .ok_or_else(|| HostError::new(ErrorCode::InvalidPath, "A project path must be absolute"))?;
+    hide_project::facts(&path)
+        .map(crate::catalog::wire_facts)
+        .map_err(|error| match error {
+            hide_project::ResolveError::MissingPath(_) => {
+                HostError::new(ErrorCode::NotFound, error.to_string())
+            }
+            other => HostError::new(ErrorCode::Io, other.to_string()),
+        })
+}
+
+/// The checkout root the core names, opened as this machine spells it.
+fn root_path(path: &str) -> HostResult<PathBuf> {
+    crate::root::native_absolute(path).ok_or_else(|| {
+        HostError::new(
             ErrorCode::InvalidPath,
-            "A project path must be absolute",
-        ));
-    }
-    hide_project::facts(path).map_err(|error| match error {
-        hide_project::ResolveError::MissingPath(_) => {
-            HostError::new(ErrorCode::NotFound, error.to_string())
-        }
-        other => HostError::new(ErrorCode::Io, other.to_string()),
+            "A checkout root must be an absolute path",
+        )
     })
 }
 
 fn open_root(root: &RootRef) -> HostResult<Root> {
-    Root::open_pinned(Path::new(&root.path), root.identity)
+    Root::open_pinned(&root_path(&root.path)?, root.identity)
 }
 
-/// The `label_transcript` answer for the transcripts under `home`; the
-/// message of a refusal is the stable reason code, never a path or
-/// transcript text.
+/// The `label_transcript` answer for the transcripts of `accounts`, read in
+/// the account the request names; the message of a refusal is the stable
+/// reason code, never a path or transcript text.
 pub fn label_transcript(
-    home: &Path,
+    accounts: &hide_session::Accounts,
     request: &hide_session::label_transcript::LabelTranscriptRequest,
 ) -> HostResult<Value> {
     let transcript =
-        hide_session::label_transcript::read(home, request).map_err(session_refusal)?;
+        hide_session::label_transcript::read(accounts, request).map_err(session_refusal)?;
     to_value(transcript)
 }
 
@@ -891,6 +791,7 @@ fn session_refusal(refusal: hide_session::ReadRefusal) -> HostError {
         hide_session::ReadRefusal::InMotion(_) => ErrorCode::Busy,
         hide_session::ReadRefusal::Refused(reason) => match reason.as_str() {
             "session_file_missing" => ErrorCode::NotFound,
+            hide_session::account::ACCOUNT_UNREGISTERED => ErrorCode::OutsideRoot,
             "session_kind_unsupported"
             | "thread_unsupported"
             | "opencode_db_schema_unknown"
@@ -915,19 +816,21 @@ fn antigravity_fork_refusal(refusal: hide_session::ReadRefusal) -> HostError {
 /// One page of a pane's thread, read where its session is: ACP updates and
 /// cursors, never a path.
 pub fn session_thread(
-    home: &Path,
+    accounts: &hide_session::Accounts,
     request: &hide_session::thread::ThreadRequest,
 ) -> HostResult<Value> {
-    let page = hide_session::thread::read_pane_thread(home, request).map_err(session_refusal)?;
+    let page =
+        hide_session::thread::read_pane_thread(accounts, request).map_err(session_refusal)?;
     to_value(page)
 }
 
 /// Local and remote activity share this path-free, metadata-only answer.
 pub fn session_activity(
-    home: &Path,
+    accounts: &hide_session::Accounts,
     request: &hide_session::session_activity::SessionActivityRequest,
 ) -> HostResult<Value> {
-    let activity = hide_session::session_activity::read(home, request).map_err(session_refusal)?;
+    let activity =
+        hide_session::session_activity::read(accounts, request).map_err(session_refusal)?;
     to_value(activity)
 }
 
@@ -958,12 +861,18 @@ pub struct Env {
     /// The account's state folder, where View feedback screenshots are
     /// staged and letter attachments placed (`crate::feedback`).
     pub state: Option<PathBuf>,
-    /// The socket of the Herdr this node's link bridges, which its Hello
-    /// names; none for a node that bridges none.
-    pub bridged_herdr: Option<PathBuf>,
     /// The node's pane holders, once it runs them for the core's own engine
     /// (`Call::Pane`, `Call::PaneWatch`).
     pub panes: crate::pane_holders::PaneSlot,
+}
+
+/// How this node runs a Hide AI backend's profile: as a start of it runs
+/// here (`profiles::ai_run`), the built-in default as the agent always has.
+fn ai_run(env: &Env, spec: &hide_node_link::ai::BackendSpec) -> HostResult<hide_ai::ItemRun> {
+    match &spec.profile {
+        None => Ok(hide_ai::ItemRun::default()),
+        Some(profile) => crate::profiles::ai_run(env, spec.provider.agent(), profile),
+    }
 }
 
 /// The AI backends a node answering for this process keeps, shared by every
@@ -989,6 +898,13 @@ pub enum KitPlace {
     /// removes no build, since the core update keeps the one it may go back
     /// to (`kit::adopt_build`).
     Build { root: PathBuf, version: String },
+    /// A guest's node, run from that guest's install root on another
+    /// machine's account (PRD device-connect-iroh D-77 (2), (4)): the kit
+    /// installs the hook entries and the agents' pieces from
+    /// `<root>/current`, which it points at this build, and nothing else of
+    /// the account (`hide_kit::guest_target`). The host's Hide places and
+    /// removes the builds.
+    Guest { root: PathBuf, version: String },
     /// The resources folder of the desktop package the node runs from
     /// (`hide_kit::bundled_kit_dir`).
     Bundled(PathBuf),
@@ -1016,20 +932,81 @@ impl KitPlace {
     }
 }
 
+/// Every variable that moves a folder Hide keeps below the home, or one an
+/// agent keeps there by the home alone, somewhere else: Hide's state, the
+/// XDG base folders (the agents' config, OpenCode's database, the state Hide
+/// falls back to), Claude Code's and Cursor's folders, and zsh's start files
+/// and history. A helper started with a home of the node's own
+/// (`HIDE_DEV_DEVICE_HOME`) starts with none of them and with each agent's
+/// own home variable set inside that home ([`agent_home_variables`]), so
+/// whatever the account's environment names, every folder follows that
+/// home: hide-node's start scripts apply exactly these, and on Windows also
+/// move the per-user folders the system derives from the home.
+pub const HOME_FOLDER_VARIABLES: &[&str] = &[
+    "HIDE_STATE_DIR",
+    "XDG_CONFIG_HOME",
+    "XDG_DATA_HOME",
+    "XDG_STATE_HOME",
+    "XDG_CACHE_HOME",
+    "CLAUDE_CONFIG_DIR",
+    "CURSOR_CONFIG_DIR",
+    "ZDOTDIR",
+];
+
+/// Each agent account variable an agent definition marks `isolated_home`,
+/// with its default folder below the home, its parts joined by `/`
+/// (`CODEX_HOME`, `.codex`). Under a home of the node's own it is set to that
+/// folder, made private, rather than cleared: an agent need not take its home
+/// from the variables the start step replaces (Codex 0.166 on Windows reads
+/// the profile folder Windows keeps for the account, and wrote its trust
+/// table into the account's own `config.toml`, 2026-11-04).
+pub fn agent_home_variables() -> Vec<(&'static str, String)> {
+    hide_agent_adapter::ADAPTERS
+        .iter()
+        .filter_map(|agent| agent.account_rule())
+        .flat_map(|rule| &rule.vars)
+        .filter(|var| var.isolated_home)
+        .map(|var| {
+            let default = var
+                .default
+                .as_ref()
+                .expect("the definition reader gives an isolated variable a default");
+            (var.name.as_str(), default.parts.join("/"))
+        })
+        .collect()
+}
+
 impl Env {
     pub fn of_process() -> Self {
+        Self::of_variables(&|name| std::env::var_os(name))
+    }
+
+    /// [`Env::of_process`] from the caller's variables. The home, and the
+    /// kit and state under it, is the one the platform names
+    /// ([`hide_platform::host::home_dir_from`]: `HOME` on Unix, `USERPROFILE`
+    /// on Windows), which a device's start step replaces with a home of the
+    /// node's own, never another variable that still names the account's
+    /// (Windows OpenSSH sets `HOME` beside `USERPROFILE`); the state folder
+    /// is the one those variables choose below it.
+    pub(crate) fn of_variables(variables: hide_platform::host::Variables) -> Self {
         hide_session::environment::initialize();
+        let home = hide_platform::host::home_dir_from(variables).ok();
+        let text = |name: &str| variables(name).and_then(|value| value.into_string().ok());
         Self {
-            home: std::env::var_os("HOME").map(PathBuf::from),
+            state: home.as_deref().map(|home| {
+                hide_kit::layout::state_dir(
+                    home,
+                    text("HIDE_STATE_DIR").as_deref(),
+                    text("XDG_STATE_HOME").as_deref(),
+                )
+            }),
+            home,
             kit: KitPlace::Installed,
             shell: crate::shell_integration::UserShell::of_process(),
             stop: Arc::default(),
             ai: process_ai(),
             label_locks: Arc::default(),
             worktrees: Arc::default(),
-            state: std::env::var_os("HOME")
-                .map(|home| hide_kit::layout::state_dir_from_process(Path::new(&home))),
-            bridged_herdr: None,
             panes: Default::default(),
         }
     }
@@ -1047,7 +1024,6 @@ impl Env {
             label_locks: Arc::default(),
             worktrees: Arc::default(),
             state: None,
-            bridged_herdr: None,
             panes: Default::default(),
         }
     }
@@ -1087,10 +1063,15 @@ pub fn handle_with_progress(
             version: env!("CARGO_PKG_VERSION").to_owned(),
             os: std::env::consts::OS.to_owned(),
             arch: std::env::consts::ARCH.to_owned(),
-            home: env
+            // On the wire, so a core on another system joins the engine's
+            // worktree folders under it by names (`hide_kit::layout`).
+            home: env.home.as_deref().map(crate::root::wire),
+            home_real: env
                 .home
-                .as_ref()
-                .map(|home| home.to_string_lossy().into_owned()),
+                .as_deref()
+                .and_then(|home| hide_platform::fs::identity::canonical(home).ok())
+                .as_deref()
+                .map(crate::root::wire),
             machine_identity: match hide_platform::host::machine_id() {
                 Ok(id) => MachineIdentity::Available { id },
                 Err(error) => MachineIdentity::Unavailable {
@@ -1098,32 +1079,19 @@ pub fn handle_with_progress(
                 },
             },
             reader_features: Some(hide_node_link::sessions::ReaderFeatures::implemented()),
-            herdr_socket: env
-                .bridged_herdr
-                .as_ref()
-                .map(|socket| socket.to_string_lossy().into_owned()),
             windows_drives: windows_drives(),
         }),
-        Call::LabelLock {
-            herdr_socket,
-            generator,
-        } => {
-            let socket = herdr_socket.ok_or_else(no_labeled_server)?;
-            env.label_locks
-                .take(Path::new(&socket), generator)
-                .map_err(|error| HostError::new(ErrorCode::Io, error.to_string()))
-                .and_then(to_value)
-        }
-        Call::LabelUnlock {
-            herdr_socket,
-            generator,
-        } => {
-            let socket = herdr_socket.ok_or_else(no_labeled_server)?;
-            env.label_locks.release(Path::new(&socket), generator);
+        Call::LabelLock { scope, generator } => env
+            .label_locks
+            .take(Path::new(&scope), generator)
+            .map_err(|error| HostError::new(ErrorCode::Io, error.to_string()))
+            .and_then(to_value),
+        Call::LabelUnlock { scope, generator } => {
+            env.label_locks.release(Path::new(&scope), generator);
             to_value(())
         }
         Call::RootOpen { root } => {
-            let opened = Root::open(Path::new(&root))?;
+            let opened = Root::open(&root_path(&root)?)?;
             to_value(RootOpened {
                 identity: opened.identity(),
             })
@@ -1132,7 +1100,12 @@ pub fn handle_with_progress(
             let root = open_root(&root)?;
             let relative = relative_path(&path)?;
             list::require_directory(root.dir(), &relative)?;
-            to_value(list::list(root.dir(), &relative, root.real_path())?)
+            to_value(list::list(
+                root.dir(),
+                &relative,
+                root.real_path(),
+                env.home.as_deref(),
+            )?)
         }
         Call::Stamps { root, folders } => {
             let root = open_root(&root)?;
@@ -1152,9 +1125,18 @@ pub fn handle_with_progress(
                 length,
             )?)
         }
-        Call::Index { root } => {
+        Call::Index { root, others } => {
             let root = open_root(&root)?;
-            to_value(index::walk(root.dir(), root.real_path()))
+            let others: Vec<PathBuf> = others
+                .iter()
+                .filter_map(|other| crate::root::native_absolute(other))
+                .collect();
+            to_value(index::walk(
+                root.dir(),
+                root.real_path(),
+                env.home.as_deref(),
+                &others,
+            ))
         }
         Call::OpenDocument { root, path } => {
             let root = open_root(&root)?;
@@ -1206,30 +1188,31 @@ pub fn handle_with_progress(
                 Path::new(&home),
             )?)
         }
-        Call::HomeSync { projects } => {
-            let home = env.home("HOME is not set, so Hide's Home folder has no place to live")?;
+        Call::HomeRetire { keep_empty, settle } => {
+            let home =
+                env.home("HOME is not set, so the old Home folder has no place to be found")?;
             if !Path::new(&home).is_absolute() {
                 return Err(HostError::new(
                     ErrorCode::Unsupported,
-                    "HOME is not an absolute path, so Hide's Home folder has no place to live",
+                    "HOME is not an absolute path, so the old Home folder has no place to be found",
                 ));
             }
-            to_value(crate::home::sync(Path::new(&home), &projects)?)
+            to_value(crate::home::retire(Path::new(&home), keep_empty, settle)?)
         }
         Call::Kit {
             action,
             cli_dir,
-            herdr_socket,
             retirement_projects,
-            preserve_herdr_server,
-        } => crate::kit::handle(
-            action,
-            &cli_dir,
-            herdr_socket.as_deref(),
-            &retirement_projects,
-            preserve_herdr_server,
-            env,
-        ),
+        } => crate::kit::handle(action, &cli_dir, &retirement_projects, env),
+        Call::ProfileList { values } => to_value(crate::profiles::list(env, values)?),
+        Call::ProfileApply {
+            change,
+            expected_version,
+        } => to_value(crate::profiles::apply(env, change, expected_version)?),
+        Call::ProfileInstall { profile } => to_value(crate::profiles::install(env, profile)?),
+        Call::ProfileLaunch { kind, profile } => {
+            to_value(crate::profiles::launch(env, &kind, &profile)?)
+        }
         Call::WorktreesRegistered { root } => to_value(
             worktrees::registered(&absolute(&root)?)
                 .map_err(|reason| HostError::new(ErrorCode::Io, reason))?,
@@ -1238,15 +1221,60 @@ pub fn handle_with_progress(
             worktrees::ignored_repository(&absolute(&worktree)?)
                 .map_err(|reason| HostError::new(ErrorCode::Io, reason))?,
         ),
+        Call::HomeList { path } => {
+            let home = env.home("HOME is not set, so no folder under it can be listed")?;
+            to_value(crate::browse::home_list(&path, &home)?)
+        }
+        Call::ImportableProjects { exclude } => {
+            let home = env.home("HOME is not set, so no project under it can be found")?;
+            if exclude.len() > crate::importable::EXCLUDE_CAP {
+                return Err(HostError::new(
+                    ErrorCode::InvalidPath,
+                    format!(
+                        "{} registered projects were named, more than the {} an answer leaves out",
+                        exclude.len(),
+                        crate::importable::EXCLUDE_CAP
+                    ),
+                ));
+            }
+            let now = std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map_or(0, |since| {
+                    u64::try_from(since.as_millis()).unwrap_or(u64::MAX)
+                });
+            let variables = |name: &str| match name {
+                "HOME" => Some(home.as_os_str().to_owned()),
+                _ => std::env::var_os(name),
+            };
+            let deadline = std::time::Instant::now() + crate::importable::IMPORTABLE_SEARCH_BUDGET;
+            let accounts = crate::profiles::session_accounts(env.state.as_deref(), &home);
+            to_value(crate::importable::find(
+                &home, &accounts, &variables, now, &exclude, deadline,
+            ))
+        }
+        Call::NewFolderTarget { parent, name, kind } => {
+            let home = env.home("HOME is not set, so no folder can be judged against it")?;
+            to_value(crate::browse::new_folder_target(
+                &parent, &name, kind, &home,
+            )?)
+        }
+        Call::AutomationFolder { name } => {
+            let home = env.home("HOME is not set, so no automation folder can be made under it")?;
+            to_value(crate::project::automation_folder(&home, &name)?)
+        }
         Call::ProjectCreate {
             path,
             new_folder,
             initialize_git,
-        } => to_value(crate::project::create(
-            &absolute(&path)?,
-            new_folder,
-            initialize_git,
-        )?),
+        } => {
+            let home = env.home("HOME is not set, so no new project can be made under it")?;
+            to_value(crate::project::create(
+                &absolute(&path)?,
+                new_folder,
+                initialize_git,
+                &home,
+            )?)
+        }
         Call::PathFacts { paths } => to_value(crate::catalog::path_facts(&paths)?),
         Call::RealPaths { paths } => to_value(crate::cleanup::real_paths(&paths)),
         Call::Repository { path } => to_value(crate::cleanup::repository(&absolute(&path)?)),
@@ -1289,9 +1317,11 @@ pub fn handle_with_progress(
         )),
         Call::RepositoryClone { source, parent } => {
             let parent = absolute(&parent)?;
+            let home = env.home("HOME is not set, so no clone can be made under it")?;
             to_value(crate::clone::clone_reporting(
                 &source,
                 &parent,
+                &home,
                 &mut |report| serde_json::to_value(report).map_or(true, &mut *progress),
             ))
         }
@@ -1364,33 +1394,52 @@ pub fn handle_with_progress(
             &base,
             &path,
         )?),
-        Call::BranchCatchUp { root, head } => {
-            to_value(crate::branch_merge::catch_up(&absolute(&root)?, &head)?)
-        }
+        Call::BranchCatchUp { root, head, branch } => to_value(crate::branch_merge::catch_up(
+            &absolute(&root)?,
+            &head,
+            branch.as_deref(),
+        )?),
         Call::BranchDiscard { root, branch, tip } => to_value(crate::branch_merge::discard(
             &absolute(&root)?,
             &branch,
             tip.as_deref(),
         )?),
-        Call::AiAvailability { backend } => to_value(env.ai.availability(&backend)?),
-        Call::AiModels { backend } => to_value(env.ai.models(&backend)?),
+        Call::AiAvailability { backend } => {
+            to_value(env.ai.availability(&backend, &|spec| ai_run(env, spec))?)
+        }
+        Call::AiModels { backend } => to_value(env.ai.models(&backend, &|spec| ai_run(env, spec))?),
         Call::AiExecute { backend, request } => to_value(env.ai.execute(
             &backend,
+            &|spec| ai_run(env, spec),
             request,
             &mut || progress(Value::Null),
         )?),
-        Call::AiMeasurement { backend } => to_value(env.ai.measurement(&backend)?),
-        Call::AiRestart { backend } => to_value(env.ai.restart(&backend)?),
+        Call::AiMeasurement { backend } => {
+            to_value(env.ai.measurement(&backend, &|spec| ai_run(env, spec))?)
+        }
+        Call::AiRestart { backend } => {
+            to_value(env.ai.restart(&backend, &|spec| ai_run(env, spec))?)
+        }
         Call::AiRelease { instance } => {
             env.ai.release(instance);
             to_value(())
         }
         Call::UsagePriceFetch => to_value(crate::usage::fetch_prices()),
-        Call::UsageLimitFetch { source, root } => {
+        Call::UsageLimitFetch {
+            source,
+            root,
+            profile,
+        } => {
             let root = absolute(&root)?;
-            to_value(crate::usage::fetch(source, &root, &mut || {
-                progress(Value::Null)
-            }))
+            let account = profile
+                .map(|profile| crate::profiles::usage_account(env, source, &profile))
+                .transpose()?;
+            to_value(crate::usage::fetch(
+                source,
+                &root,
+                account.as_ref(),
+                &mut || progress(Value::Null),
+            ))
         }
         Call::ReadAttachments { paths } => to_value(
             crate::attachments::read_sources(&paths, &mut |index| progress(Value::from(index)))
@@ -1409,7 +1458,7 @@ pub fn handle_with_progress(
             let home = env.home("antigravity_fork_home_unavailable")?;
             let cwd = antigravity_fork_cwd(&cwd)?;
             // A pane agy resumes in a folder it does not trust opens on its
-            // trust question, which Herdr reads as idle; `/fork` and Enter
+            // trust question, which the screen rules read as idle; `/fork` and Enter
             // would answer it.
             if !hide_ai::antigravity_trusts(Path::new(&home), &cwd) {
                 return Err(HostError::new(ErrorCode::Io, "antigravity_fork_untrusted"));
@@ -1433,22 +1482,29 @@ pub fn handle_with_progress(
                     .map_err(antigravity_fork_refusal)?,
             )
         }
-        Call::OpenCodeFork { source, cwd } => {
-            let home = env.home("opencode_fork_home_unavailable")?;
+        Call::OpenCodeFork {
+            source,
+            cwd,
+            profile,
+        } => {
+            let accounts = accounts(env, "opencode_fork_home_unavailable")?;
             to_value(crate::opencode_fork::fork(
-                Path::new(&home),
+                &accounts,
                 &source,
                 &absolute(&cwd)?,
+                profile.as_ref(),
                 &env.stop,
             )?)
         }
         Call::AgentTrust {
-            agent,
+            agent: kind,
             path,
             trusted,
+            profile,
         } => {
+            use hide_agent_hooks::account::AccountAt;
             use hide_agent_hooks::folder_trust::{self, Agent, Tools};
-            let agent = hide_agent_adapter::adapter(&agent)
+            let agent = hide_agent_adapter::adapter(&kind)
                 .and_then(|adapter| adapter.start)
                 .and_then(Agent::of)
                 .ok_or_else(|| {
@@ -1456,6 +1512,14 @@ pub fn handle_with_progress(
                 })?;
             let home = env.home("agent_trust_home_unavailable")?;
             let home = Path::new(&home);
+            let account = match &profile {
+                Some(id) => crate::profiles::trust_account(env, &kind, id)?,
+                None => None,
+            };
+            let at = match &account {
+                Some(account) => AccountAt::Account { home, account },
+                None => AccountAt::Home(home),
+            };
             let folder = antigravity_folder(&path).ok_or_else(|| {
                 HostError::new(ErrorCode::InvalidPath, "agent_trust_path_invalid")
             })?;
@@ -1468,7 +1532,7 @@ pub fn handle_with_progress(
                 stop: &env.stop,
             };
             if trusted {
-                folder_trust::trust_worktree(agent, home, folder, tools)
+                folder_trust::trust_worktree(agent, at, folder, tools)
             } else {
                 folder_trust::forget(agent, home, folder, tools).map(drop)
             }
@@ -1577,6 +1641,7 @@ pub fn handle_with_progress(
             to_value(crate::gh::run(cwd.as_deref(), repository.as_deref(), &args))
         }
         Call::ListeningPorts => to_value(crate::ports::read()),
+        Call::MemoryPressure => to_value(crate::memory::pressure()?),
         Call::VolumeFree { path } => to_value(crate::disk::volume_free_bytes(&absolute(&path)?)),
         Call::HookDiagnosis => {
             let home = env.home("HOME is not set, so the agent hooks have no account to read")?;
@@ -1586,7 +1651,56 @@ pub fn handle_with_progress(
                     "this account's program search could not be read, so the agents' versions are unknown",
                 )
             })?;
-            to_value(hide_agent_hooks::Diagnosis::read(&home, &search))
+            // The records the hooks of this node's daemon wrote: the account's
+            // own folder or the one its state folder keeps them in, composed
+            // with the installation whose panes this node starts by the rule
+            // those panes' hooks apply (the pane id is this node's core's).
+            // The answer is the receiving node's own, so it names the state
+            // folder it serves and never this process's environment; a folder
+            // or a record that does not read is `records_error` on the
+            // diagnosis, not a refusal that hides every other row.
+            let install = crate::kit::running_install().map(|install| install.id);
+            let records = hide_agent_hooks::route::records_of_state(
+                &home,
+                env.state.as_deref(),
+                install.as_deref(),
+            );
+            to_value(hide_agent_hooks::Diagnosis::read_at(
+                &home, &search, records,
+            ))
+        }
+        Call::OwedConfirmations { pane } => {
+            let home = env.home("HOME is not set, so the agent hooks keep no records")?;
+            // The hooks keep their records in the folder of the installation
+            // that started their pane, which is this node's own, and that
+            // folder is the one this node's daemon reads. It is resolved from
+            // the state folder this node serves, never from this process's
+            // environment, and the installation is applied once, by the route.
+            let install = crate::kit::running_install().map(|install| install.id);
+            let records = hide_agent_hooks::route::records_of_state(
+                &home,
+                env.state.as_deref(),
+                install.as_deref(),
+            )
+            .map_err(|error| {
+                HostError::new(
+                    ErrorCode::Io,
+                    format!("the hooks' records folder could not be read: {error}"),
+                )
+            })?;
+            let folder = hide_kit::layout::owed_confirmations_in(&records);
+            let now = std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map_or(0, |since| {
+                    u64::try_from(since.as_millis()).unwrap_or(u64::MAX)
+                });
+            to_value(hide_agent_hooks::owed::take(&folder, &pane, now))
+        }
+        Call::HerdrSave => {
+            let home = env.home("HOME is not set, so this account has no Herdr save")?;
+            let found = crate::herdr_save::found(&home)
+                .map_err(|reason| HostError::new(ErrorCode::Io, reason))?;
+            to_value(found)
         }
         Call::GuardrailPolicy { policy, sequence } => {
             // The last sequence written under each home, held across the
@@ -1606,40 +1720,45 @@ pub fn handle_with_progress(
             Ok(Value::Null)
         }
         Call::LabelTranscript { request } => {
-            let home = env.home("label_session_home_unavailable")?;
-            label_transcript(Path::new(&home), &request)
+            let accounts = accounts(env, "label_session_home_unavailable")?;
+            label_transcript(&accounts, &request)
         }
         Call::SessionWorkTurn { request } => {
-            let home = env.home("session_work_home_unavailable")?;
+            let accounts = accounts(env, "session_work_home_unavailable")?;
             to_value(
-                hide_session::label_transcript::read_work_turn(Path::new(&home), &request)
+                hide_session::label_transcript::read_work_turn(&accounts, &request)
                     .map_err(|reason| HostError::new(ErrorCode::Io, reason))?,
             )
         }
         Call::SessionActivity { request } => {
-            let home = env.home("session_activity_home_unavailable")?;
-            session_activity(Path::new(&home), &request)
+            let accounts = accounts(env, "session_activity_home_unavailable")?;
+            session_activity(&accounts, &request)
+        }
+        Call::SessionAccount { request } => {
+            let accounts = accounts(env, "session_account_home_unavailable")?;
+            let account = hide_session::session_account::read(&accounts, &request)
+                .map_err(session_refusal)?;
+            to_value(account)
         }
         Call::SessionThread { request } => {
-            let home = env.home("session_thread_home_unavailable")?;
-            session_thread(Path::new(&home), &request)
+            let accounts = accounts(env, "session_thread_home_unavailable")?;
+            session_thread(&accounts, &request)
         }
         Call::LinkFiles {
             since_unix_ms,
             until_unix_ms,
         } => {
-            let home = env.home("links_home_unavailable")?;
-            let listed =
-                hide_session::links::candidates(Path::new(&home), since_unix_ms, until_unix_ms)
-                    .map_err(|code| HostError::new(ErrorCode::Io, code))?;
+            let accounts = accounts(env, "links_home_unavailable")?;
+            let listed = hide_session::links::candidates(&accounts, since_unix_ms, until_unix_ms)
+                .map_err(|code| HostError::new(ErrorCode::Io, code))?;
             to_value(listed)
         }
         Call::UsageFiles {
             agent,
             since_unix_ms,
         } => {
-            let home = env.home("usage_home_unavailable")?;
-            let candidates = hide_session::usage::list(Path::new(&home), agent, since_unix_ms)
+            let accounts = accounts(env, "usage_home_unavailable")?;
+            let candidates = hide_session::usage::list(&accounts, agent, since_unix_ms)
                 .map_err(|reason| HostError::new(ErrorCode::Io, reason.to_string()))?;
             to_value(candidates)
         }
@@ -1648,19 +1767,18 @@ pub fn handle_with_progress(
             path,
             checkpoint,
         } => {
-            let home = env.home("usage_home_unavailable")?;
+            let accounts = accounts(env, "usage_home_unavailable")?;
             let path = hide_platform::path::from_wire(&path)
                 .map_err(|_| HostError::new(ErrorCode::InvalidPath, "usage_path_invalid"))?;
-            let step = hide_session::usage::read(Path::new(&home), agent, &path, checkpoint)
+            let step = hide_session::usage::read(&accounts, agent, &path, checkpoint)
                 .map_err(|reason| HostError::new(ErrorCode::Io, reason.to_string()))?;
             to_value(step)
         }
         Call::ProjectSessions { project } => {
-            let home = env.home("sessions_home_unavailable")?;
-            let read =
-                hide_session::SessionCatalog::new(Path::new(&home), project.device_id.clone())
-                    .project_sessions(&project)
-                    .map_err(|error| HostError::new(ErrorCode::Io, error.to_string()))?;
+            let accounts = accounts(env, "sessions_home_unavailable")?;
+            let read = hide_session::SessionCatalog::new(&accounts, project.device_id.clone())
+                .project_sessions(&project)
+                .map_err(|error| HostError::new(ErrorCode::Io, error.to_string()))?;
             // A store that listed nothing rides the answer as a row of its
             // own, so the core logs why its sessions are absent.
             let mut rows = Vec::with_capacity(read.sessions.len() + read.refusals.len());
@@ -1678,9 +1796,7 @@ pub fn handle_with_progress(
         // The core's own node is given its holders when it is made; a
         // device's node starts them in its serve loop, answering the pane
         // socket its panes' `hide` asks on.
-        Call::PanesStart { .. }
-        | Call::HoldersStart
-        | Call::TerminalsStart { .. }
+        Call::HoldersStart
         | Call::PaneProofAnswer { .. }
         | Call::PaneInspect { .. }
         | Call::StreamWrite { .. }
@@ -1713,31 +1829,25 @@ pub fn handle_with_progress(
             // OpenCode keeps no session file: its database is read by the id
             // the scope names, proven inside the read, and `path` names nothing.
             if agent == hide_session::Agent::OpenCode {
-                let home = env.home("sessions_home_unavailable")?;
-                let page =
-                    hide_session::opencode::read_conversation(Path::new(&home), &scope, checkpoint)
-                        .map_err(session_refusal)?;
+                let accounts = accounts(env, "sessions_home_unavailable")?;
+                let page = hide_session::opencode::read_conversation(&accounts, &scope, checkpoint)
+                    .map_err(session_refusal)?;
                 return to_value(page);
             }
             let path = session_file(env, &[agent], &path)?;
-            let home = env.home("sessions_home_unavailable")?;
-            let page = hide_session::read_session_file(
-                Path::new(&home),
-                agent,
-                &path,
-                Some(&scope),
-                || {
+            let accounts = accounts(env, "sessions_home_unavailable")?;
+            let page =
+                hide_session::read_session_file(&accounts, agent, &path, Some(&scope), || {
                     hide_session::read_conversation(
-                        Path::new(&home),
+                        accounts.home(),
                         agent,
                         &path,
                         &scope,
                         checkpoint,
                     )
                     .map_err(|_| "session_conversation_read_failed".to_owned())
-                },
-            )
-            .map_err(|reason| HostError::new(ErrorCode::Io, reason))?;
+                })
+                .map_err(|reason| HostError::new(ErrorCode::Io, reason))?;
             to_value(page)
         }
         Call::LinkRead { requests } => {
@@ -1747,8 +1857,8 @@ pub fn handle_with_progress(
                     "links_read_limit",
                 ));
             }
-            let home = env.home("links_home_unavailable")?;
-            let mut answers = hide_session::links::read(Path::new(&home), &requests);
+            let accounts = accounts(env, "links_home_unavailable")?;
+            let mut answers = hide_session::links::read(&accounts, &requests);
             // Agent records carry this node's native cwd. Catalog paths use
             // wire spelling; only the owning node may convert between them.
             for answer in &mut answers {
@@ -1896,15 +2006,35 @@ pub fn handle_with_progress(
     }
 }
 
-/// How the node starts the agent program `name` (`Call::AgentInstalled`):
-/// the program its `PATH` search finds, run through `cmd.exe` when that is a
-/// batch file on Windows, or `None` when nothing is found.
+/// How the node starts the agent program `name` (`Call::AgentInstalled`),
+/// read afresh at each ask: the program its `PATH` search finds, named by
+/// its file and npm's launcher read as the program it runs where the shell
+/// would find another file by the name (Windows), a batch file Windows runs
+/// through `cmd.exe` when that launcher cannot be read, or `None` when
+/// nothing is found.
 fn agent_start_form(name: &Path) -> Option<crate::protocol::StartForm> {
-    hide_ai::resolve_binary(name).map(|program| {
-        if hide_platform::programs::runs_through_cmd(&program) {
-            crate::protocol::StartForm::Batch
-        } else {
-            crate::protocol::StartForm::Program
+    use crate::protocol::StartForm;
+    use hide_platform::programs::{START_NAMES_FILE, Start};
+    hide_ai::resolve_start(name).map(|start| match start {
+        Start::Batch => StartForm::Batch,
+        Start::Direct { .. } if !START_NAMES_FILE => StartForm::Program,
+        Start::Direct { program, leading } => {
+            // The wire carries text; a path that is not text cannot be named
+            // to the shell, so the start goes by the name as a batch file's.
+            let words = std::iter::once(program.into_os_string())
+                .chain(leading)
+                .map(std::ffi::OsString::into_string)
+                .collect::<Result<Vec<_>, _>>();
+            match words {
+                Ok(mut words) => StartForm::Direct {
+                    program: words.remove(0),
+                    leading: words,
+                },
+                Err(_) => {
+                    eprintln!("agent.start_form_not_text");
+                    StartForm::Batch
+                }
+            }
         }
     })
 }
@@ -1930,6 +2060,7 @@ mod tests {
             ))
             .unwrap();
         let request = hide_session::session_activity::SessionActivityRequest {
+            account: Default::default(),
             agent: hide_session::Agent::OpenCode,
             reference_kind: "id".to_owned(),
             reference_value: "ses_0a1b2c3d4e5f60718293a4b5c6".to_owned(),
@@ -1939,13 +2070,85 @@ mod tests {
         };
         let writer = rusqlite::Connection::open(&database).unwrap();
         writer.execute_batch("BEGIN EXCLUSIVE").unwrap();
-        let error = session_activity(home.path(), &request).unwrap_err();
+        let error =
+            session_activity(&hide_session::Accounts::new(home.path()), &request).unwrap_err();
         assert_eq!(
             (error.code, error.message.as_str()),
             (ErrorCode::Busy, "opencode_db_busy")
         );
         drop(writer);
-        assert!(session_activity(home.path(), &request).unwrap()["bytes"].as_u64() > Some(0));
+        assert!(
+            session_activity(&hide_session::Accounts::new(home.path()), &request).unwrap()["bytes"]
+                .as_u64()
+                > Some(0)
+        );
+    }
+
+    /// A node hands over, once, what its pane's hooks could not confirm,
+    /// from the records of the account it runs as, on every system and on
+    /// a device alike. The record is written where the route resolves this
+    /// node's daemon's records, which is the folder the answer reads, so the
+    /// writer and the reader agree on one folder (engineering rule 5).
+    #[test]
+    fn owed_confirmations_are_handed_over_once_from_the_accounts_hook_records() {
+        let home = tempfile::tempdir().unwrap();
+        let env = Env::standalone(Some(home.path().to_path_buf()));
+        let now = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_millis() as u64;
+        let records = hide_agent_hooks::route::records_of_state(home.path(), None, None).unwrap();
+        let folder = hide_kit::layout::owed_confirmations_in(&records);
+        hide_agent_hooks::owed::owe_in(&folder, "h2:p2", "s1", &["letter-12".to_owned()], now)
+            .unwrap();
+        let ask = || {
+            handle_in(
+                Call::OwedConfirmations {
+                    pane: "h2:p2".to_owned(),
+                },
+                &env,
+            )
+            .unwrap()
+        };
+        let owed: Option<hide_agent_hooks::owed::Owed> = serde_json::from_value(ask()).unwrap();
+        assert_eq!(
+            owed,
+            Some(hide_agent_hooks::owed::Owed {
+                session: "s1".to_owned(),
+                ids: vec!["letter-12".to_owned()],
+            })
+        );
+        assert!(ask().is_null(), "handed over once");
+    }
+
+    /// A helper answers the hook diagnosis the same way on every system:
+    /// one row per hook runtime, read from the account it runs as, with the
+    /// version of the program that account's search finds. The core reads it
+    /// from each device for the versions its panes run
+    /// (`hide_core::kit::DeviceDiagnosisReader`), and nothing in the answer
+    /// is the core's own machine's.
+    #[test]
+    fn a_hook_diagnosis_answers_for_the_account_the_helper_runs_as() {
+        let home = tempfile::tempdir().unwrap();
+        let env = Env::standalone(Some(home.path().to_path_buf()));
+        let answer = handle_in(Call::HookDiagnosis, &env).unwrap();
+        let diagnosis: hide_agent_hooks::Diagnosis = serde_json::from_value(answer).unwrap();
+        assert_eq!(
+            diagnosis
+                .runtimes
+                .iter()
+                .map(|row| row.runtime)
+                .collect::<Vec<_>>(),
+            hide_agent_hooks::AgentRuntime::ALL
+        );
+        for row in &diagnosis.runtimes {
+            assert!(
+                Path::new(&row.path).starts_with(home.path()),
+                "{} is read from the account's own home, not {}",
+                row.label,
+                row.path
+            );
+        }
     }
 
     #[test]
@@ -1958,6 +2161,7 @@ mod tests {
             "{\"type\":\"session_meta\",\"payload\":{\"id\":\"native-a\"}}\nsecret conversation\n";
         std::fs::write(&path, contents).unwrap();
         let mut request = hide_session::session_activity::SessionActivityRequest {
+            account: Default::default(),
             agent: hide_session::Agent::Codex,
             reference_kind: "path".to_owned(),
             reference_value: path.to_string_lossy().into_owned(),
@@ -1965,7 +2169,7 @@ mod tests {
             exact_route: false,
             expected_id: None,
         };
-        let answer = session_activity(home.path(), &request).unwrap();
+        let answer = session_activity(&hide_session::Accounts::new(home.path()), &request).unwrap();
         assert_eq!(answer.as_object().unwrap().len(), 2);
         assert_eq!(answer["bytes"], contents.len() as u64);
         assert!(answer["modified_at_unix_ms"].as_u64().unwrap() > 0);
@@ -1981,7 +2185,8 @@ mod tests {
             call
         );
         request.reference_kind = "opaque".to_owned();
-        let error = session_activity(home.path(), &request).unwrap_err();
+        let error =
+            session_activity(&hide_session::Accounts::new(home.path()), &request).unwrap_err();
         assert_eq!(error.code, ErrorCode::Unsupported);
         assert_eq!(error.message, "session_kind_unsupported");
     }
@@ -2447,23 +2652,6 @@ mod tests {
         assert!(result.is_ok(), "{result:?}");
     }
 
-    /// A kit call installs against the Herdr server the core named, else
-    /// the one the link bridges: a core never knows the Herdr of a node
-    /// that dialed it.
-    #[test]
-    fn a_kit_call_that_names_no_herdr_uses_the_link_s() {
-        let bridged = Path::new("/srv/node/herdr.sock");
-        assert_eq!(
-            kit_herdr_socket(None, Some(bridged)),
-            Some("/srv/node/herdr.sock".to_owned())
-        );
-        assert_eq!(
-            kit_herdr_socket(Some("~/named.sock".to_owned()), Some(bridged)),
-            Some("~/named.sock".to_owned())
-        );
-        assert_eq!(kit_herdr_socket(None, None), None);
-    }
-
     /// A request whose id is still running is refused, and the running one
     /// keeps its own cancel.
     #[cfg(unix)]
@@ -2524,7 +2712,7 @@ mod tests {
     fn a_device_refuses_the_core_machine_s_requests_unrun() {
         let requests = [
             r#"{"id":1,"op":"gh","cwd":null,"args":["auth","status"]}"#,
-            r#"{"id":2,"op":"usage_limit_fetch","source":"claude_usage_text","root":"/"}"#,
+            r#"{"id":2,"op":"usage_limit_fetch","source":"claude_usage","root":"/"}"#,
             r#"{"id":3,"op":"usage_limit_fetch","source":"codex_usage","root":"/"}"#,
             r#"{"id":4,"op":"hello"}"#,
         ];

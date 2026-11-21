@@ -10,6 +10,7 @@ import { allAgents, agentsByPane } from "../paneAgents";
 import { sessionOfAgent } from "../sessionWork";
 import type { Mission, MissionChecker } from "../snapshot";
 import { useShellStore } from "../store";
+import { PILL_TONE } from "./mission-tone";
 import { Button } from "./ui/button";
 import { Popover, PopoverContent, PopoverTrigger } from "./ui/popover";
 import { Hint } from "./ui/tooltip";
@@ -53,13 +54,13 @@ export function VerdictReason({ summary, evidence, className }: { summary?: stri
   );
 }
 
-/** The checker's live row and its session: the terminal follows the one, the record the other. */
+/** The checker's live row and its session, which the record follows. */
 function useCheckerWays(checker: MissionChecker) {
   const row = useShellStore((s) => (checker.pane_id ? agentsByPane(allAgents(s.agents, s.rest?.status?.remote)).get(checker.pane_id) ?? null : null));
   // Derived outside the selector: it builds a new session each call, which a selector must not return.
   const rest = useShellStore((s) => s.rest);
   const session = useMemo(() => (row ? sessionOfAgent(row) : null), [row, rest]);
-  return { row, session };
+  return { session };
 }
 
 /**
@@ -72,9 +73,9 @@ export function CheckerPopover({ mission, kind, checker, actions, hint, onNode, 
   const [open, setOpen] = useState(false);
   const state = checkerState(checker);
   const status = useCheckerStatus(kind, checker);
-  const run = useRunWords(mission, checker.pane_id, checker.machine, checker.worker);
+  const run = useRunWords(mission, checker.pane_id, checker.machine, checker.worker, checker.worker.agent);
   const device = useMissionDeviceName(checker.machine);
-  const { row, session } = useCheckerWays(checker);
+  const { session } = useCheckerWays(checker);
   const name = agentMarkOf(checker.worker.agent)?.label ?? checker.worker.agent;
   const go = (action: () => void) => () => {
     setOpen(false);
@@ -87,7 +88,7 @@ export function CheckerPopover({ mission, kind, checker, actions, hint, onNode, 
       </Hint>
       <PopoverContent align="start" className="flex flex-col gap-sm text-caption" data-checker-popover={checker.worker.agent}>
         <div className="flex min-w-0 items-center gap-xs text-body">
-          <AgentMark kind={checker.worker.agent} />
+          <AgentMark kind={checker.worker.agent} profile={run?.profile} />
           <span className="shrink-0 font-semibold">{name}</span>
           {run ? <RunText run={run} className="min-w-0 flex-1 text-caption text-muted-foreground" /> : <span className="flex-1" />}
         </div>
@@ -97,7 +98,7 @@ export function CheckerPopover({ mission, kind, checker, actions, hint, onNode, 
         </span>
         <VerdictReason summary={checker.summary} evidence={checker.evidence} />
         <div className="flex flex-wrap gap-xs">
-          <Button size="sm" variant="secondary" disabled={!checker.pane_id || !row} onClick={go(() => checker.pane_id && actions.openAgent(checker.pane_id))} data-checker-terminal="true">{t("mission.toTerminal")}</Button>
+          <Button size="sm" variant="secondary" disabled={!checker.pane_id} onClick={go(() => checker.pane_id && actions.openAgent(checker.pane_id))} data-checker-terminal="true">{t("mission.toTerminal")}</Button>
           <Button size="sm" variant="secondary" disabled={!session} onClick={go(() => session && actions.openChildRecord(session))} data-checker-record="true">{t("mission.record")}</Button>
           {onNode ? <Button size="sm" variant="text" onClick={go(onNode)} data-checker-node="true">{t("mission.checker.node")}</Button> : null}
         </div>
@@ -108,8 +109,8 @@ export function CheckerPopover({ mission, kind, checker, actions, hint, onNode, 
 
 /** A verdict's chip: rejected in the failed colour, passed green, at work in the review colour, not started muted. */
 export const VERDICT_TONE: Record<ReturnType<typeof checkerState>, string> = {
-  fail: "bg-mission-failed/15 text-mission-failed",
-  pass: "bg-mission-done/15 text-mission-done",
-  running: "bg-mission-review/15 text-mission-review",
-  waiting: "bg-muted text-muted-foreground",
+  fail: PILL_TONE.failed,
+  pass: PILL_TONE.done,
+  running: PILL_TONE.review,
+  waiting: PILL_TONE.quiet,
 };

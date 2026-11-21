@@ -247,7 +247,7 @@ impl CommentSessions {
             };
             let outcome = run(&context, request, own, pins_rx, off_rx, &frames).await;
             if let Err(failure) = &outcome {
-                herdr_core::diagnostic!(json!({
+                hide_core::diagnostic!(json!({
                     "component": "browser_comment",
                     "kind": "session.ended",
                     "display_id": display_id,
@@ -295,7 +295,7 @@ fn take_pick(
         .filter(|session| session.connection == connection && session.off.is_some())
         .and_then(|session| session.pick.take_if(|held| held.id == pick));
     let Some(Pick { anchor, png, .. }) = taken else {
-        herdr_core::diagnostic!(json!({
+        hide_core::diagnostic!(json!({
             "component": "browser_comment",
             "kind": "pick.gone",
             "display_id": key.2,
@@ -576,7 +576,7 @@ async fn shot(page: &mut Page, rect: &Value) -> Option<Vec<u8>> {
     let data = match answer {
         Ok(answer) => answer["data"].as_str().map(str::to_owned)?,
         Err(failure) => {
-            herdr_core::diagnostic!(json!({
+            hide_core::diagnostic!(json!({
                 "component": "browser_comment",
                 "kind": "shot.capture_failed",
                 "reason": failure.reason,

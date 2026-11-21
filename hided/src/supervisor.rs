@@ -9,7 +9,7 @@ use std::path::Path;
 use std::sync::Arc;
 use std::time::Duration;
 
-use herdr_core::node_migration::{self, copy};
+use hide_core::node_migration::{self, copy};
 use hide_node_link::device::SshProblem;
 use serde_json::json;
 
@@ -75,17 +75,17 @@ impl From<String> for Halt {
 
 pub async fn run(env: Env) -> Result<(), String> {
     let state_dir = env.state_dir.clone();
-    if let Some(error) = crate::env::herdr_bin_error(&env) {
-        return Err(error);
-    }
     let lock = state_file::acquire_lock(&env.state_dir).map_err(|error| error.to_string())?;
     // The process's records go beside its state from its start, so a move
     // resumed before any role runs is logged where its roles log.
-    if let Err(error) = herdr_core::diagnostics::install(&env.state_dir.join("core-state.json")) {
+    if let Err(error) = hide_core::diagnostics::install(&env.state_dir.join("core-state.json")) {
         eprintln!(
             "{}",
             json!({"kind": "diagnostics.open_failed", "message": error.to_string()})
         );
+    }
+    if let Some(record) = hide_node::diagnostics::raise_open_files() {
+        hide_core::diagnostic!(record);
     }
     // Listened for before anything else waits, so a stop at any moment of
     // the process's life is kept.
@@ -98,7 +98,7 @@ pub async fn run(env: Env) -> Result<(), String> {
     // Recorded once for the process, so a window finds it whichever role
     // runs, the move screen included; a request before the first role
     // waits for it (`seat`).
-    crate::record_daemon(&state_dir, &seat.parts(), env.herdr_socket_path.clone())?;
+    crate::record_daemon(&state_dir, &seat.parts())?;
     seat.parts().starting("resume");
     // Whatever role runs, the moves given up here are ended on their
     // machines.
@@ -143,11 +143,14 @@ async fn core_turn(
         Request(MoveRequest),
         Release(Release),
         LeaseEnded,
+        ImportRestart,
     }
     let gate = Arc::clone(&running.move_gate);
+    let import_restart = Arc::clone(&running.import_restart);
     let event = tokio::select! {
         () = running.shutdown.ended() => Event::Stop,
         () = seat.stop.ended() => Event::Stop,
+        () = import_restart.notified() => Event::ImportRestart,
         Some(asked) = requests.recv() => match asked {
             Asked::Window(request) => Event::Request(request),
             Asked::Release(release) => Event::Release(release),
@@ -180,6 +183,16 @@ async fn core_turn(
         Event::Stop => {
             stop_core(&env.state_dir, running).await;
             Ok(None)
+        }
+        // A Herdr save's import was asked for: the core role starts again
+        // and imports it before its engine opens; the pane holders run on
+        // (PRD engine-bundle-4-herdr-removal D-7).
+        Event::ImportRestart => {
+            log("herdr_import.restart", json!({}));
+            stop_core(&env.state_dir, running).await;
+            Ok(Some(Role::Core(
+                crate::start_core_role(env.clone(), seat.parts()).await?,
+            )))
         }
         Event::Request(MoveRequest::Check { device }) => {
             let Some(prepared) =
@@ -315,7 +328,7 @@ fn give_back_pending(
         copy::unplace(
             state_dir,
             &crate::core_move::target::incoming(state_dir, intent),
-            &herdr_core::hide_ai_settings_path(home),
+            &hide_core::hide_ai_settings_path(home),
         )
         .map_err(|refusal| refusal.to_string())?;
         held.remove()?;
@@ -364,9 +377,9 @@ async fn stop_core(state_dir: &Path, running: RunningDaemon) {
     }
     // The records queued before it first, then this one at once, which a
     // drain that timed out leaves written too.
-    herdr_core::diagnostics::drain();
-    if let Err(error) = herdr_core::diagnostics::record_now(
-        &state_dir.join(herdr_core::node_migration::CORE_STATE),
+    hide_core::diagnostics::drain();
+    if let Err(error) = hide_core::diagnostics::record_now(
+        &state_dir.join(hide_core::node_migration::CORE_STATE),
         record,
     ) {
         eprintln!("the unconfirmed stop could not be logged: {error}");
@@ -384,7 +397,7 @@ fn log(kind: &str, fields: serde_json::Value) {
     if let (Some(record), Some(fields)) = (record.as_object_mut(), fields.as_object()) {
         record.extend(fields.clone());
     }
-    herdr_core::diagnostic!(record);
+    hide_core::diagnostic!(record);
 }
 
 /// What a wait on the peer does with a failure asking again cannot change.
@@ -614,7 +627,7 @@ async fn resume_forward(env: &Env, seat: &seat::Seat) -> Result<Role, Halt> {
             }
         };
     }
-    let node = herdr_core::node::NodeId::of_this_machine()?;
+    let node = hide_core::node::NodeId::of_this_machine()?;
     if placement::read(&env.state_dir, node.as_str())?.is_some() {
         return Ok(Role::Node(
             crate::start_node_role(env.clone(), seat.parts()).await?,
@@ -659,7 +672,7 @@ pub(super) fn stopped_on_ssh(moves: &MoveControl, ssh: Option<SshProblem>, alias
     moves.update(|view| {
         view.alias = ssh.map(|_| alias.to_owned());
         view.ssh_problem =
-            ssh.map(|problem| herdr_core::DeviceProblem::of(problem).code().to_owned());
+            ssh.map(|problem| hide_core::DeviceProblem::of(problem).code().to_owned());
     });
 }
 
@@ -710,16 +723,16 @@ async fn prepare(
             detail: source.other_linked_nodes.join(", "),
         });
     }
-    let own_socket = env.herdr_socket_path.clone();
-    if own_socket.is_none() {
+    let own_socket = crate::core_move::preflight::movable_scope();
+    if let Err(detail) = crate::core_move::preflight::engine_moves() {
         failed.push(FailedCheck {
-            check: CheckId::Herdr,
-            detail: "this machine has no Herdr server".to_owned(),
+            check: CheckId::Engine,
+            detail,
         });
     }
     // This machine's own setting, which moves with the core: not a login
     // of the machine taking it.
-    let asks = match herdr_core::hide_ai_asks(&env.home) {
+    let asks = match hide_core::hide_ai_asks(&env.home) {
         Ok(asks) => asks,
         Err(detail) => {
             failed.push(FailedCheck {
@@ -846,10 +859,7 @@ async fn prepare(
         });
     }
     // Hide AI settings move with the core and are never merged.
-    match (
-        &inspected.ai,
-        herdr_core::stored_hide_ai_settings(&env.home),
-    ) {
+    match (&inspected.ai, hide_core::stored_hide_ai_settings(&env.home)) {
         (Ok(None), _) => {}
         (Ok(Some(theirs)), Ok(Some(ours))) if *theirs == ours => {}
         (Ok(Some(_)), _) => held.push("Hide AI settings unlike this machine's".to_owned()),
@@ -861,15 +871,16 @@ async fn prepare(
             detail: format!("{}: {}", inspected.state_dir, held.join(", ")),
         });
     }
-    let Some(target_socket) = inspected.herdr_socket.clone() else {
+    let Some(target_socket) = inspected.engine_scope.clone() else {
         if !inspected
             .failed
             .iter()
-            .any(|check| check.check == CheckId::Herdr)
+            .any(|check| check.check == CheckId::Engine)
+            && !failed.iter().any(|check| check.check == CheckId::Engine)
         {
             failed.push(FailedCheck {
-                check: CheckId::Herdr,
-                detail: "the device has no Herdr server".to_owned(),
+                check: CheckId::Engine,
+                detail: "the device names no scope a move can rewrite".to_owned(),
             });
         }
         return Err(failed);
@@ -962,7 +973,7 @@ async fn forward(
     let steps = {
         let (state_dir, settings, remote, moves) = (
             env.state_dir.clone(),
-            herdr_core::hide_ai_settings_path(&env.home),
+            hide_core::hide_ai_settings_path(&env.home),
             Arc::clone(&remote),
             Arc::clone(&moves),
         );
@@ -1427,7 +1438,7 @@ fn end_on_peer(env: &Env, kept: &Abandoned) -> Result<&'static str, MoveFailure>
     let remote = |program: &str| {
         Remote::new(&env.home, &peer.alias, program, &build).with_state_dir(&peer.state_dir)
     };
-    let packages = crate::core_move::starter::this_program()
+    let packages = crate::core_install::starter::this_program()
         .ok()
         .and_then(|program| program.parent().map(Path::to_path_buf))
         .ok_or_else(|| MoveFailure::Local {
@@ -1479,7 +1490,7 @@ async fn commit(env: &Env, moves: &MoveControl, mut journal: Journal, remote: &A
     let finished = {
         let (state_dir, settings, remote, journal) = (
             env.state_dir.clone(),
-            herdr_core::hide_ai_settings_path(&env.home),
+            hide_core::hide_ai_settings_path(&env.home),
             Arc::clone(remote),
             journal.clone(),
         );
@@ -1491,7 +1502,7 @@ async fn commit(env: &Env, moves: &MoveControl, mut journal: Journal, remote: &A
                 std::fs::remove_dir_all(&staging).map_err(|error| error.to_string())?;
             }
             driver::finish_target(&remote, &journal).map_err(|failure| format!("{failure:?}"))?;
-            let node = herdr_core::node::NodeId::of_this_machine()?;
+            let node = hide_core::node::NodeId::of_this_machine()?;
             placement::update(&state_dir, node.as_str(), |placement| {
                 placement.move_intent = None;
             })?;
@@ -1722,6 +1733,7 @@ mod tests {
                     environment: &[],
                     log: &home.path().join("core.log"),
                 },
+                &hide_kit::layout::keep_alive(&state),
                 home.path(),
                 &AtomicBool::new(false),
             )

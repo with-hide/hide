@@ -3,12 +3,12 @@
 // parent's responsibility; children unfold under their root only when the
 // operator opens it, and the pane header's tree button opens the same tree.
 import { expect, test } from "@playwright/test";
-import { closePane, withControl } from "./daemon-actions";
+import { agentIn, closePane, focusPane, focusTab, withControl } from "./daemon-actions";
 import { startFixture } from "./engine-fixture";
 import { elsewhereTab, finishUnseenTurn, setAgentAsking, setAgentState } from "./fixture-agents";
-import { continueFixtureTranscript } from "./herdr-fixture";
+import { continueFixtureTranscript } from "./pane-fixture";
 import { startHided, type Daemon } from "./hided-fixture";
-import { countSent, screenshot, sidebarOverflow } from "./wire";
+import { closeFrontCard, countSent, screenshot, sidebarOverflow } from "./wire";
 
 test.describe.configure({ timeout: 150_000 });
 const LONG_TITLE = "행 높이 WIDE TITLE MUST CUT HERE";
@@ -26,9 +26,18 @@ test("roots stay in one sidebar, open their children in place, and the header's 
     // A relationship holds only on the session it was spawned on, so each agent is labelled by a turn appended to its own session.
     const childSession = "fixture-two";
     continueFixtureTranscript(fixture, "fixture-one", { task: "Agent one", progress: WAIT_SENTENCE });
-    await finishUnseenTurn(fixture, daemon, parent, await elsewhereTab(fixture, daemon));
+    const elsewhere = await elsewhereTab(fixture, daemon);
+    // The child works first: typing its screen shows its own tab, which would read the parent's turn.
     continueFixtureTranscript(fixture, childSession, { task: LONG_TITLE, progress: "계보 투영 구현 중" });
     await setAgentState(daemon, child, "working");
+    await finishUnseenTurn(fixture, daemon, parent, elsewhere);
+    // A finished turn not read yet is not hidden by the working child: the root is Done, counting the child on its line; once read, it waits on the child again (status-model.md, A quiet row that waits).
+    await withControl(daemon, async (control) => {
+      await control.until((rest) => { const row = agentIn(rest, parent); return (row?.group === "done" && row.children_left === 1) || undefined; }, `${parent} done past its working child`, 20_000);
+      await focusPane(control, parent);
+      await control.until((rest) => agentIn(rest, parent)?.wait === "children" || undefined, `${parent} waiting on its child once read`, 20_000);
+      await focusTab(control, fixture, elsewhere);
+    });
     const last = new Map<string, Record<string, unknown>>();
     const sent = countSent(page, last);
     await page.goto(`${daemon.origin}/#token=${daemon.token}`);
@@ -40,11 +49,9 @@ test("roots stay in one sidebar, open their children in place, and the header's 
     // Folded, a root whose descendants only work wears no mark: its waiting ring says it (B10, B17).
     await expect(childRow).toHaveCount(0);
     await expect(parentRow.locator('[data-descendant-mark]')).toHaveCount(0);
-    // A waiting ring's tree line leads with what it waits for, and at the narrowest sidebar only its sentence is cut (status-marks B29, needs-you-cleanup B17).
-    const waitLine = parentRow.locator('[data-agent-line="waiting"]');
-    await expect(waitLine).toHaveText(`Waiting on children · ${WAIT_SENTENCE}`, { timeout: 20_000 });
+    // A waiting ring's tree row keeps to one line, so what it waits for is said in its hint, and at the narrowest sidebar nothing overflows (status-marks B29, needs-you-cleanup B17).
+    await expect(parentRow.locator("[data-agent-line]")).toHaveCount(0);
     expect(await sidebarOverflow(page, "calc(var(--size-sidebar-min) + var(--size-rail))")).toEqual([]);
-    expect(await waitLine.locator('[data-line-part="text"]').evaluate((node) => node.scrollWidth > node.clientWidth)).toBe(true);
     await sidebarOverflow(page, "");
     continueFixtureTranscript(fixture, childSession, { task: LONG_TITLE, reply: QUESTION, question: true });
     await setAgentAsking(daemon, child);
@@ -93,7 +100,7 @@ test("roots stay in one sidebar, open their children in place, and the header's 
     await expect(treeButton).toBeFocused();
     await treeButton.click();
     await screenshot(page, "sessions-pane-child-popover");
-    // The tree's task button reveals the parent's row in the sidebar's 태스크 list in one event, its record in the lane's 보기 slot when it has a session, and no Overview opens (PRD sidebar-task-lens B40).
+    // The tree's task button reveals the parent's row in the sidebar's 태스크 list in one event, its record as a desk tab when it has a session, and no Overview opens (PRD sidebar-task-lens B40).
     const reveals = sent.get("task_reveal") ?? 0;
     await tree.locator("[data-agent-tree-task]").click();
     await expect.poll(() => sent.get("task_reveal") ?? 0).toBe(reveals + 1);
@@ -105,7 +112,7 @@ test("roots stay in one sidebar, open their children in place, and the header's 
     await page.locator(`nav[data-sidebar] [data-pane="${parent}"] [data-agent-open="${parent}"]`).first().click();
     // The record the reveal opened stays up over the panes' right edge, where
     // the children button sits, until the operator closes it.
-    await page.locator("[data-detail-close]").click();
+    await closeFrontCard(page);
     await treeButton.click();
     await withControl(daemon, (control) => closePane(control, child));
     await expect(tree).toHaveCount(0, { timeout: 20_000 });

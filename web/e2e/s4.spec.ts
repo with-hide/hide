@@ -1,5 +1,5 @@
-// S4's checkout-scoped History and read-only diff through an isolated pinned
-// Herdr, hided and browser. The fixture is disposable and never uses an
+// S4's checkout-scoped History and read-only diff through an isolated
+// engine, hided and browser. The fixture is disposable and never uses an
 // operator checkout, socket or app.
 
 import { expect, test } from "@playwright/test";
@@ -9,7 +9,7 @@ import path from "node:path";
 import { openProject, withControl } from "./daemon-actions";
 import { startEngine, startFixture } from "./engine-fixture";
 import { startHided } from "./hided-fixture";
-import { countSent, registerFolder, screenshot, showExplorer, showProjectRow, showTool } from "./wire";
+import { countSent, projectOpener, registerFolder, screenshot, showExplorer, showProjectRow, showTool } from "./wire";
 import { chord } from "./chords";
 import { toPage } from "../../desktop/src/main/wirePath";
 import { onDisk } from "./wait";
@@ -17,10 +17,10 @@ import { onDisk } from "./wait";
 test.describe.configure({ timeout: 90_000 });
 
 test("History opens a scoped patch, then updates after editing the original file", async ({ page }) => {
-  const herdr = await startFixture({ agents: false });
+  const engine = await startFixture({ agents: false });
   let daemon: Awaited<ReturnType<typeof startHided>> | null = null;
   try {
-    const repoDir = path.join(herdr.root, "history-repo");
+    const repoDir = path.join(engine.root, "history-repo");
     fs.mkdirSync(repoDir);
     const repo = fs.realpathSync(repoDir);
     const file = path.join(repo, "한글 notes.txt");
@@ -38,12 +38,12 @@ test("History opens a scoped patch, then updates after editing the original file
     execFileSync("git", ["-c", "user.email=e2e@example.com", "-c", "user.name=e2e", "-c", "commit.gpgsign=false", "commit", "-qm", "branch"], { cwd: repo });
     fs.writeFileSync(file, "first\nsecond <script>window.__executed = true</script>\n");
 
-    daemon = await startHided(herdr, "s4");
+    daemon = await startHided(engine, "s4");
     await withControl(daemon, (control) => openProject(control, repo, "history-repo"));
     const lastSent = new Map<string, Record<string, unknown>>();
     const sent = countSent(page, lastSent);
     await page.goto(`${daemon.origin}/#token=${daemon.token}`);
-    await (await showProjectRow(page, page.locator("[data-project]", { hasText: "history-repo" }).locator("[data-checkout]").first())).click();
+    await (await showProjectRow(page, projectOpener(page.locator("[data-project]", { hasText: "history-repo" })))).click({ position: { x: 12, y: 8 } });
     // The tool column holds one tool; Changes swaps the Explorer out (PRD
     // lane-two-columns B14).
     await showExplorer(page);
@@ -107,17 +107,17 @@ test("History opens a scoped patch, then updates after editing the original file
     await screenshot(page, "s4-updated-diff");
   } finally {
     daemon?.stop();
-    herdr.stop();
+    engine.stop();
   }
 });
 
 test("registered subfolder History opens inside patches and hides sibling changes", async ({ page }) => {
   // An empty engine: the repository is no project of its own, only the folder registered inside it is.
-  const herdr = await startEngine();
+  const engine = await startEngine();
   let daemon: Awaited<ReturnType<typeof startHided>> | null = null;
   try {
     const sent = countSent(page);
-    const repo = path.join(fs.realpathSync(herdr.root), "fixture");
+    const repo = path.join(fs.realpathSync(engine.root), "fixture");
     const registered = path.join(repo, "registered");
     fs.mkdirSync(registered, { recursive: true });
     execFileSync("git", ["init", "-q", "-b", "main"], { cwd: repo });
@@ -134,13 +134,13 @@ test("registered subfolder History opens inside patches and hides sibling change
     execFileSync("git", ["-c", "user.email=e2e@example.com", "-c", "user.name=e2e", "-c", "commit.gpgsign=false", "commit", "-qm", "feature"], { cwd: repo });
     fs.writeFileSync(path.join(registered, "inside.txt"), "inside base\ninside working\n");
     fs.writeFileSync(path.join(repo, "outside.txt"), "outside base\noutside working\n");
-    daemon = await startHided(herdr, "s4-nested", herdr.root);
+    daemon = await startHided(engine, "s4-nested", engine.root);
 
     await page.goto(`${daemon.origin}/#token=${daemon.token}`);
     await registerFolder(page, daemon, registered);
     await expect.poll(() => sent.get("create_workspace") ?? 0).toBe(1);
-    const project = await showProjectRow(page, page.locator("[data-project]", { hasText: "registered" }));
-    await project.locator("[data-checkout]").first().click();
+    const project = page.locator("[data-project]", { hasText: "registered" });
+    await (await showProjectRow(page, projectOpener(project))).click({ position: { x: 12, y: 8 } });
     await showTool(page, "changes");
     const history = page.locator('[data-history-root]');
     await expect(history).toHaveAttribute("data-history-root", toPage(registered));
@@ -167,6 +167,6 @@ test("registered subfolder History opens inside patches and hides sibling change
     await expect(page.locator('[data-patch-view] .cm-content')).toContainText("+inside working");
   } finally {
     daemon?.stop();
-    herdr.stop();
+    engine.stop();
   }
 });

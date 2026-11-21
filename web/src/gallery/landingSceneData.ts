@@ -286,7 +286,7 @@ export function landingDevices(nowMs: number, width: number): { rest: SnapshotRe
     remote("macbook", "MacBook", "macos-arm64", { ssh_alias: null, dials_in: true }),
     remote("workbox", "workbox", "linux-x86_64", {}),
   ];
-  const connected = (target: string) => ({ target_id: target, state: "connected", message: null, herdr_version: "0.9.3", session: null });
+  const connected = (target: string) => ({ target_id: target, state: "connected", message: null, session: null });
   const rest = {
     ...scene.rest,
     navigator: { ...navigator, devices },
@@ -378,7 +378,7 @@ export function landingWorkspace(nowMs: number, width: number, expanded: string[
     pane_layouts: [{ workspace_id: project.id, tab_id: tab.id!, focused_pane_id: HERO_PANES[1], zoomed: false, root: { type: "split", direction: "right", ratio: 0.5, first: { type: "pane", pane_id: HERO_PANES[0] }, second: { type: "pane", pane_id: HERO_PANES[1] } } }],
     workspace_view: {
       agent_layout: { root: { area: { id: "g1", active: tab.id, displays: [{ id: tab.id! }] } }, active_area: "g1", canvases: {}, limits: { areas: 4, depth: 3, displays: 64 }, display_count: 1 },
-      device_id: "local", path: main.path, open: true, documents: false, tool: "project", pinned: true, document_width: HERO_LANE_WIDTH, detail_width: null, explorer_width: null, panel_width: HERO_LANE_WIDTH, lane_called: 0, lane_calls: 0, lane_called_side: "view",
+      device_id: "local", path: main.path, open: true, tray: { tab_id: "t1", shown: false, count: 0 }, tool: "project", document_width: HERO_LANE_WIDTH, explorer_width: null, panel_width: HERO_LANE_WIDTH, lane_called: 0, lane_calls: 0, lane_called_side: "view",
       layout: { root: { area: { id: "v1", active: null, displays: [] } }, active_area: "v1", limits: { areas: 4, depth: 3, displays: 32 }, display_count: 0 },
     },
     terminal: { headers: { a1: { working: true, notice: null, band: null } } },
@@ -455,7 +455,7 @@ export function landingBrowser(nowMs: number, width: number, step: BrowserStep):
     pane_layouts: [{ workspace_id: project.id, tab_id: tab.id!, focused_pane_id: BROWSER_PANE, zoomed: false, root: { type: "pane", pane_id: BROWSER_PANE } }],
     workspace_view: {
       ...scene.rest.workspace_view!,
-      documents: true, tool: null, pinned: true, document_width: 820,
+      tray: { tab_id: "t1", shown: true, count: 0 }, tool: null, document_width: 820,
       layout: { root: { area: { id: "v1", active: step === 1 ? SPEC_DISPLAY : BROWSER_DISPLAY, displays } }, active_area: "v1", limits: { areas: 4, depth: 3, displays: 32 }, display_count: displays.length },
     },
     terminal: { headers: { [BROWSER_PANE]: { working: step < 3, notice: null, band: null } } },

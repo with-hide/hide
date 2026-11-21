@@ -116,7 +116,6 @@ const TWO_DEVICES = {
               inactive_checkouts: { expanded: false, checkout_ids: [] },
               checkouts: [{ agent_scope: emptyScope(), id: "remote:mini:checkout:web", workspace_id: "remote:mini:workspace:web", label: "main", path: "/srv/web", tabs: [{ id: "remote:mini:tab:1", panes: [{ id: "remote:mini:pane:1" }] }] }],
             },
-            { agent_scope: emptyScope(), id: "remote:mini:workspace:home", label: "hide", path: "/Users/example/hide", device_id: "mini", is_home: true, inactive_checkouts: { expanded: false, checkout_ids: [] }, checkouts: [] },
           ],
         },
       },
@@ -154,7 +153,7 @@ describe("search entries across devices (PRD home-device-rail B40)", () => {
 });
 
 describe("an agent by its pane's Herdr id", () => {
-  // Ids as `herdr pane list` prints them; mini's pane is that device's own, scoped by the core.
+  // Ids as the engine names panes (`w9J:p52`); mini's pane is that device's own, scoped by the core.
   const withIds = (local: string[], mini: string) => {
     const rest = structuredClone(TWO_DEVICES);
     rest.navigator!.agents = local.map((pane, index) => (legacyAgentRow({ ...REST.navigator!.agents![0]!, id: `a${index}`, pane_id: pane, device_pane_id: pane, identity_label: `Agent ${index}` })));
@@ -187,11 +186,11 @@ describe("an agent by its pane's Herdr id", () => {
 });
 
 describe("an agent by its Herdr name", () => {
-  // Names as `hide agent spawn --name` and `herdr agent rename` give them; mini's agent is that device's own.
+  // Names as `hide agent spawn --name` gives them; mini's agent is that device's own.
   const named = (local: string | undefined, mini: string | undefined) => {
     const rest = structuredClone(TWO_DEVICES);
-    rest.navigator!.agents = [{ ...REST.navigator!.agents![0]!, herdr_name: local }, REST.navigator!.agents![1]!];
-    rest.status!.remote![0]!.session!.agents![0]!.herdr_name = mini;
+    rest.navigator!.agents = [{ ...REST.navigator!.agents![0]!, given_name: local }, REST.navigator!.agents![1]!];
+    rest.status!.remote![0]!.session!.agents![0]!.given_name = mini;
     return searchEntries(rest, t);
   };
   const agentIds = (entries: SearchEntry[], query: string) => filterEntries(entries, query).flatMap((entry) => (entry.kind === "agent" ? [entry.id] : []));

@@ -391,7 +391,7 @@ fn kit_protocol_carries_device_checkout_paths_and_accepts_older_requests() {
     )
     .unwrap();
     assert!(matches!(old, Call::Kit { retirement_projects, .. } if retirement_projects.is_empty()));
-    let current: Call = serde_json::from_value(json!({"op":"kit", "action":{"kind":"apply"}, "cli_dir":"~/bin", "herdr_socket":null, "retirement_projects":["/checkout/on-this-device"]})).unwrap();
+    let current: Call = serde_json::from_value(json!({"op":"kit", "action":{"kind":"apply"}, "cli_dir":"~/bin", "retirement_projects":["/checkout/on-this-device"]})).unwrap();
     assert!(
         matches!(current, Call::Kit { retirement_projects, .. } if retirement_projects == ["/checkout/on-this-device"])
     );

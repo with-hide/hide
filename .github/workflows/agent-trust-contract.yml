@@ -6,9 +6,10 @@
 # runner, then runs the two real-binary checks in a throwaway home: Codex's
 # app-server loads a worktree's own settings once Hide trusted it and stops
 # once Hide took the trust out (`hide-agent-hooks/tests/it/codex_binary.rs`),
-# and Claude Code in a pane of the pinned Herdr starts at its prompt in the
-# worktree Hide trusted and asks its question in another
-# (`herdr-core/src/agent_start/real_agent_trust_tests.rs`). The format,
+# and Claude Code in a pane of the core's own engine starts at its prompt in
+# the worktree Hide trusted and asks its question in another
+# (`hide-core/src/agent_start/real_agent_trust_tests.rs`), in a pane holder
+# started from the `hide-holder` built here. The format,
 # preservation and removal tests run on every pull request in `rust` and
 # `windows check`; this registry install runs only in `nightly.yml`, so a
 # network failure that is not Hide's never holds a pull request.
@@ -48,27 +49,36 @@ jobs:
     env:
       # One package and target list for every step, so cargo resolves features
       # once and builds the test binaries once.
-      TEST_TARGETS: -p hide-agent-hooks -p herdr-core --lib --test it
+      TEST_TARGETS: -p hide-agent-hooks -p hide-core --lib --test it
     steps:
       - name: Keep line endings as committed
         run: git config --global core.autocrlf false
       - uses: actions/checkout@v7
+      # hide-vt's prepared inputs and Zig's caches, saved on main by the vt lane,
+      # so this job reaches no package host (#2631).
+      - uses: ./.github/actions/vt-cache
+        timeout-minutes: 5
+        with:
+          save: false
       # Reads the workspace set another lane saves (docs/BUILD.md, "CI's Rust caches").
       - uses: ./.github/actions/rust-cache
         with:
           set: workspace
           save: false
-      - name: Install zsh on Linux
-        # The Herdr fetch script is zsh; the Linux image has none.
-        if: ${{ matrix.system == 'linux' }}
-        timeout-minutes: 3
-        run: sudo apt-get install -y --no-install-recommends zsh
       - name: Install cargo-nextest
         timeout-minutes: 3
         run: bash scripts/install-nextest.sh
       - name: Build the test binaries
         timeout-minutes: 25
         run: bash scripts/verify-cargo.sh nextest --profile ci $TEST_TARGETS --no-run
+      - name: Build the pane holder the own engine starts
+        timeout-minutes: 15
+        run: bash scripts/verify-cargo.sh build -p hide-holder --bin hide-holder
+      - name: Fetch the pane holder's pinned ConPTY runtime
+        # A Windows holder runs its pane on the pinned OpenConsole.
+        if: ${{ matrix.system == 'windows' }}
+        timeout-minutes: 5
+        run: python scripts/fetch-conpty.py --out "$RUNNER_TEMP/holder-conpty"
       - name: Install Claude Code and Codex
         # At the versions contracts/agent-clis.json pins; the outputs are each
         # program's path (Codex's `.cmd` shim on Windows, Claude Code's native
@@ -76,28 +86,17 @@ jobs:
         id: agents
         timeout-minutes: 5
         run: python3 scripts/install-agent-clis.py claude codex
-      - name: Fetch the pinned Herdr runtime
-        id: herdr
-        timeout-minutes: 5
-        # Assigned first, so a failed fetch fails this step rather than
-        # handing the next one an empty path.
-        run: |
-          case "$RUNNER_OS" in
-            Windows) bin=$(pwsh -NoProfile -File scripts/fetch-herdr-runtime.ps1 | tr -d '\r') ;;
-            Linux) bin=$(zsh scripts/fetch-herdr-runtime.sh --platform linux-x86_64) ;;
-            *) bin=$(zsh scripts/fetch-herdr-runtime.sh --platform macos-aarch64) ;;
-          esac
-          echo "bin=$bin" >> "$GITHUB_OUTPUT"
       - name: The real Codex and Claude Code read the trust Hide records
         timeout-minutes: 10
         env:
           HIDE_CODEX_BINARY: ${{ steps.agents.outputs.codex }}
           HIDE_TEST_CLAUDE_BIN: ${{ steps.agents.outputs.claude }}
-          HIDE_E2E_HERDR_BIN: ${{ steps.herdr.outputs.bin }}
-        run: bash scripts/verify-cargo.sh nextest --profile ci $TEST_TARGETS -E 'test(/^codex_binary::/) | test(/^agent_start::real_agent_trust_tests::/)' --run-ignored only --no-capture
+          HIDE_TEST_HOLDER_BIN: ${{ github.workspace }}/target/debug/hide-holder${{ matrix.system == 'windows' && '.exe' || '' }}
+          HIDE_HOLDER_CONPTY: ${{ matrix.system == 'windows' && format('{0}/holder-conpty', runner.temp) || '' }}
+        run: bash scripts/verify-cargo.sh nextest --profile ci $TEST_TARGETS -E 'test(/^codex_binary::/) | test(/^agent_start::real_agent_trust_tests::/)' --run-ignored only --no-capture --no-fail-fast
       - name: Mint the development issues token
-        # Development issues live in with-hide/hide-private (docs/TESTING.md,
-        # Flaky tests); one App token reads this run here and files there. A run
+        # Development issues live in this repository (docs/TESTING.md,
+        # Flaky tests); the App's token reads this run and files them. A run
         # without the App's key, such as a fork's, files nothing and stays green.
         id: issues-token
         if: ${{ !cancelled() }}
@@ -108,7 +107,7 @@ jobs:
           client-id: ${{ vars.HIDE_ISSUES_APP_CLIENT_ID }}
           private-key: ${{ secrets.HIDE_ISSUES_APP_KEY }}
           owner: with-hide
-          repositories: hide,hide-private
+          repositories: hide
       - name: Report flaky and failed tests
         if: ${{ !cancelled() }}
         continue-on-error: true

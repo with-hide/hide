@@ -1,6 +1,7 @@
-import { CheckIcon } from "lucide-react";
+import { CheckIcon, PauseIcon, WaypointsIcon } from "lucide-react";
 import type { ReactNode } from "react";
-import type { CellTone, HeadCell } from "../missions";
+import type { CellTone, HeadCell, StepTone } from "../missions";
+import type { MissionStatus } from "../snapshot";
 import { cn } from "../lib/utils";
 
 // One colour per node state (PRD mission-plan-visibility D-11, B35): a chip's
@@ -14,6 +15,7 @@ export const TONE_FILL: Record<CellTone, string> = {
   done: "bg-mission-done",
   review: "bg-mission-review",
   working: "bg-mission-working",
+  stopped: "bg-mission-stopped",
   hold: "bg-mission-hold",
   waiting: "bg-muted",
   cancelled: "bg-mission-cancelled",
@@ -24,9 +26,18 @@ export const HEAD_FILL: Record<HeadCell, string> = {
   waiting: "bg-muted",
   external: "bg-muted",
   working: "bg-mission-working",
+  stopped: "bg-mission-stopped",
   attention: "bg-mission-hold",
   done: "bg-mission-done",
   cancelled: "bg-mission-cancelled",
+};
+
+/** A node step's cell on its card: finished, being worked, stopped at, or a dashed outline for a step only planned. */
+export const STEP_FILL: Record<StepTone, string> = {
+  done: "bg-mission-done",
+  working: "bg-mission-working",
+  stopped: "bg-mission-stopped",
+  plan: "border border-dashed border-border",
 };
 
 /** A word in a state's colour: a chip or a result. */
@@ -34,9 +45,35 @@ export const TONE_TEXT: Record<CellTone, string> = {
   done: "text-mission-done",
   review: "text-mission-review",
   working: "text-mission-working",
+  stopped: "text-mission-stopped",
   hold: "text-mission-hold",
   waiting: "text-muted-foreground",
   cancelled: "text-mission-cancelled",
+};
+
+/**
+ * A state pill's colours, the one table every pill reads: work going on, a
+ * turn that waits on the operator (a merge, a decision, a plan's review), a
+ * check at work, a pass, a rejection, a state that asks nothing (planning,
+ * finished), and a cancelled one.
+ */
+export const PILL_TONE = {
+  working: "bg-mission-working/15 text-mission-working",
+  hold: "bg-mission-hold/15 text-mission-hold",
+  review: "bg-mission-review/15 text-mission-review",
+  done: "bg-mission-done/15 text-mission-done",
+  failed: "bg-mission-failed/15 text-mission-failed",
+  quiet: "bg-muted text-muted-foreground",
+  cancelled: "bg-muted text-mission-cancelled",
+} as const;
+
+/** A mission state's pill colours, the same on the map's head and in both lists. */
+export const STATE_PILL_TONE: Record<MissionStatus, string> = {
+  planning: PILL_TONE.quiet,
+  running: PILL_TONE.working,
+  merge_wait: PILL_TONE.hold,
+  done: PILL_TONE.quiet,
+  cancelled: PILL_TONE.cancelled,
 };
 
 /** Past this many, a bar draws each run of one state as one stretch instead of a cell per item. */
@@ -45,10 +82,12 @@ export const CELL_LIMIT = 20;
 /**
  * One cell per step or node (B1, B8, B13), in order and in its state's
  * colour; a long list draws each run of one state as one stretch, so the bar
- * keeps its width and its proportions. The words beside it carry the
+ * keeps its width and its proportions. `edge` lays it along the bottom edge
+ * of a chip that is `relative` and clips it, so it takes no width and stays
+ * when a narrow pane hides the chip's words. The words beside it carry the
  * numbers, so the bar itself is hidden from a screen reader.
  */
-export function ProgressCells<T extends string = CellTone>({ tones, fill, size, className }: { tones: readonly T[]; fill?: Record<T, string>; size: "chip" | "head"; className?: string }) {
+export function ProgressCells<T extends string = CellTone>({ tones, fill, size, className }: { tones: readonly T[]; fill?: Record<T, string>; size: "chip" | "head" | "edge"; className?: string }) {
   const fills = fill ?? (TONE_FILL as Record<string, string>);
   const runs: { tone: T; count: number }[] = [];
   if (tones.length > CELL_LIMIT) {
@@ -65,12 +104,12 @@ export function ProgressCells<T extends string = CellTone>({ tones, fill, size, 
       data-progress-cells={tones.join(" ")}
       className={cn(
         "flex shrink-0 items-stretch",
-        size === "chip" ? "h-(--size-mission-step-h) w-(--size-chip-bar) gap-px" : "h-(--size-flow-bar) min-w-0 flex-1 gap-xxs",
+        size === "chip" ? "h-(--size-mission-step-h) w-(--size-chip-bar) gap-px" : size === "edge" ? "pointer-events-none absolute inset-x-0 bottom-0 h-(--size-chip-edge-bar) gap-px" : "h-(--size-flow-bar) min-w-0 flex-1 gap-xxs",
         className,
       )}
     >
       {cells.map((cell, index) => (
-        <span key={index} className={cn("rounded-full", fills[cell.tone])} style={{ flexGrow: cell.count, flexBasis: 0 }} />
+        <span key={index} className={cn(size !== "edge" && "rounded-full", fills[cell.tone])} style={{ flexGrow: cell.count, flexBasis: 0 }} />
       ))}
     </span>
   );
@@ -87,5 +126,18 @@ export function WorkPill({ tone, done, children, ...rest }: { tone: string; done
       {done ? <CheckIcon aria-hidden="true" className="size-(--size-icon-sm)" /> : null}
       {children}
     </span>
+  );
+}
+
+/** What a mission chip shows, wherever it stands: `!` for the operator's turn, a pause while a delay holds it, its mark, and `k/n`. */
+export function MissionChipFace({ turn, delay, status, counts, icon = "size-(--size-icon-sm)" }: { turn: boolean; delay: boolean; status?: string; counts: string | null; icon?: string }) {
+  const Mark = status === "done" ? CheckIcon : WaypointsIcon;
+  return (
+    <>
+      {turn ? <span aria-hidden="true" className="font-semibold">!</span> : null}
+      {delay ? <PauseIcon aria-hidden="true" className={cn(icon, "shrink-0 text-muted-foreground")} /> : null}
+      <Mark aria-hidden="true" className={cn(icon, "shrink-0")} />
+      {counts ? <span className="font-mono tabular-nums">{counts}</span> : null}
+    </>
   );
 }

@@ -17,14 +17,11 @@ use std::ffi::OsString;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::sync::Mutex;
-use std::time::Duration;
+use std::time::Instant;
 
-use hide_node_link::device::{Refusal, SshFailure, SshProblem};
-use hide_platform::process::{RunFailure, run_to_end};
+use hide_node_link::device::{Cancel, Refusal, SshFailure, SshProblem};
+use hide_platform::process::{FOREIGN_PANE_IDENTITY, RunFailure, run_to_end};
 
-/// How long `ssh -G` and `ssh -V` may take; `-G` runs the configuration's
-/// `Match exec` commands, the operator's own.
-const QUERY_DEADLINE: Duration = Duration::from_secs(10);
 /// What Hide sets when the configuration leaves it at OpenSSH's default
 /// (B28): a dial that gets no answer gives up, and a link whose network went
 /// away ends within a minute instead of hanging until TCP gives up.
@@ -34,6 +31,14 @@ const ALIVE_COUNT: u32 = 3;
 /// The most of `ssh -G`'s answer read; a configuration's answer is a few
 /// kilobytes.
 const QUERY_OUTPUT_LIMIT: usize = 256 * 1024;
+
+/// Whether a variable of the parent process is kept from `ssh`: the operator's
+/// Herdr pane identity and Hide's own. The match is case-sensitive, as it was
+/// before the shared rule, so a lowercase `herdr_*` variable a proxy command
+/// reads still reaches it.
+fn withheld_from_ssh(name: &str) -> bool {
+    name.starts_with(FOREIGN_PANE_IDENTITY) || name.starts_with("HIDE_")
+}
 
 /// The `ssh` this computer has, and the configuration it reads.
 #[derive(Clone, Debug)]
@@ -256,13 +261,13 @@ impl SshProgram {
     }
 
     /// `ssh` with the account's configuration: `-F` and `HOME` for a private
-    /// home, and an environment without the Herdr pane identity this
+    /// home, and an environment without the foreign pane identity this
     /// process may carry, so the alias's proxy command sees the account's own.
     pub fn command(&self) -> Command {
         let mut command = Command::new(&self.path);
         for (key, _) in std::env::vars_os() {
             let name = key.to_string_lossy();
-            if name.starts_with("HERDR_") || name.starts_with("HIDE_") {
+            if withheld_from_ssh(&name) {
                 command.env_remove(&key);
             }
         }
@@ -275,21 +280,26 @@ impl SshProgram {
         command
     }
 
-    /// What `ssh -V` reports, read once per program.
-    pub fn version(&self) -> Result<Version, SshFailure> {
+    /// What `ssh -V` reports, read once per program. Like every question
+    /// an attempt asks ssh, it waits for an answer until the attempt's
+    /// `until` (the time ssh has to connect) or its cancel, never a clock of
+    /// its own: the first start of a program on a busy or newly booted
+    /// machine can take seconds, and that is the connection still
+    /// connecting, not ssh failing (with-hide/hide-private#584).
+    pub fn version(&self, until: Instant, cancel: &Cancel) -> Result<Version, SshFailure> {
         if let Some((_, version)) = lock(&VERSIONS).iter().find(|(path, _)| path == &self.path) {
             return Ok(*version);
         }
         let mut command = Command::new(&self.path);
         command.arg("-V");
-        let finished = self.query(&mut command, "ssh -V")?;
+        let finished = self.query(&mut command, "ssh -V", until, cancel)?;
         // `-V` prints on standard error.
         let said = format!("{}{}", finished.stderr, finished.stdout);
         let version = said
             .lines()
             .find_map(Version::read)
             .ok_or_else(|| SshFailure {
-                problem: SshProblem::Unclassified,
+                problem: SshProblem::CheckFailed,
                 detail: format!(
                     "ssh -V did not name an OpenSSH release: {}",
                     last_line(said.lines())
@@ -302,19 +312,26 @@ impl SshProgram {
         Ok(version)
     }
 
-    /// What `ssh -G` resolves `alias` to.
-    pub fn resolve(&self, alias: &str) -> Result<Resolved, SshFailure> {
+    /// What `ssh -G` resolves `alias` to, waited for as [`Self::version`]
+    /// is; it runs the configuration's `Match exec` commands, which the dial
+    /// runs again under the same clock.
+    pub fn resolve(
+        &self,
+        alias: &str,
+        until: Instant,
+        cancel: &Cancel,
+    ) -> Result<Resolved, SshFailure> {
         let mut command = self.command();
         command.args(["-G", "--"]).arg(alias);
-        let finished = self.query(&mut command, "ssh -G")?;
+        let finished = self.query(&mut command, "ssh -G", until, cancel)?;
         if !finished.succeeded() {
             return Err(SshFailure {
-                problem: SshProblem::Unclassified,
+                problem: SshProblem::ConfigUnreadable,
                 detail: last_line(finished.stderr.lines()),
             });
         }
         Resolved::read(&finished.stdout).ok_or_else(|| SshFailure {
-            problem: SshProblem::Unclassified,
+            problem: SshProblem::ConfigUnreadable,
             detail: format!("ssh -G did not say where {alias} signs in"),
         })
     }
@@ -338,32 +355,44 @@ impl SshProgram {
         args
     }
 
+    /// Runs one question to its end, until `until` or the attempt's cancel,
+    /// which ends the child at once.
     fn query(
         &self,
         command: &mut Command,
         what: &str,
+        until: Instant,
+        cancel: &Cancel,
     ) -> Result<hide_platform::process::Finished, SshFailure> {
-        let stop = std::sync::atomic::AtomicBool::new(false);
-        match run_to_end(command, QUERY_DEADLINE, &stop) {
+        match run_to_end(
+            command,
+            until.saturating_duration_since(Instant::now()),
+            cancel.flag(),
+        ) {
             Ok(finished) if finished.stdout.len() + finished.stderr.len() <= QUERY_OUTPUT_LIMIT => {
                 Ok(finished)
             }
             Ok(_) => Err(SshFailure {
-                problem: SshProblem::Unclassified,
+                problem: SshProblem::CheckFailed,
                 detail: format!("{what} answered more than Hide reads"),
             }),
             Err(RunFailure::Start(error)) if error.kind() == std::io::ErrorKind::NotFound => {
                 Err(missing(&self.path))
             }
+            // The attempt's one clock ran out, not a clock of this question's.
             Err(RunFailure::TimedOut) => Err(SshFailure {
-                problem: SshProblem::Unclassified,
+                problem: SshProblem::CheckFailed,
                 detail: format!(
-                    "{what} did not answer within {} s",
-                    QUERY_DEADLINE.as_secs()
+                    "{what} did not answer within the {} s ssh has to connect",
+                    super::session::SIGN_IN_TIMEOUT.as_secs()
                 ),
             }),
+            Err(RunFailure::Stopped) => Err(SshFailure {
+                problem: SshProblem::CheckFailed,
+                detail: format!("{what} was stopped: the attempt was cancelled"),
+            }),
             Err(error) => Err(SshFailure {
-                problem: SshProblem::Unclassified,
+                problem: SshProblem::CheckFailed,
                 detail: format!("{what} could not run: {error:?}"),
             }),
         }
@@ -470,6 +499,23 @@ pub struct Ending<'a> {
     pub asking: Asking,
     /// A browser check was shown and not finished.
     pub browser_waited: bool,
+    /// How the attempt stopped, which names an ending ssh printed nothing
+    /// about.
+    pub stopped: Stopped<'a>,
+}
+
+/// How an attempt that ended before the device answered stopped.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum Stopped<'a> {
+    /// ssh still ran, and the device had not answered, when the time ssh
+    /// has to connect ran out.
+    Quiet,
+    /// ssh's output closed, as it does when ssh exits, for the reason Hide
+    /// saw.
+    Closed(&'a str),
+    /// Hide ended the attempt while ssh still ran, for the reason it gives
+    /// (the device wrote a line too long to read, for one).
+    Ended(&'a str),
 }
 
 /// Who could have heard a question an attempt met.
@@ -584,12 +630,36 @@ pub fn classify(ending: &Ending<'_>) -> SshFailure {
             return failure(SshProblem::Unreachable, &last());
         }
     }
+    if ending.stderr.iter().all(|line| line.trim().is_empty()) {
+        return match ending.stopped {
+            Stopped::Quiet => failure(
+                SshProblem::SilentTimeout,
+                &format!(
+                    "ssh did not sign in within {} s",
+                    super::session::SIGN_IN_TIMEOUT.as_secs()
+                ),
+            ),
+            Stopped::Closed(reason) => failure(SshProblem::SilentEnd, reason),
+            Stopped::Ended(reason) => failure(SshProblem::Unclassified, reason),
+        };
+    }
     failure(SshProblem::Unclassified, &last())
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::time::Duration;
+
+    #[test]
+    fn ssh_keeps_a_lowercase_herdr_variable_and_withholds_the_pane_identity() {
+        assert!(withheld_from_ssh("HERDR_PANE_ID"));
+        assert!(withheld_from_ssh("HERDR_SOCKET_PATH"));
+        assert!(withheld_from_ssh("HIDE_PANE_ID"));
+        assert!(!withheld_from_ssh("herdr_proxy_endpoint"));
+        assert!(!withheld_from_ssh("Herdr_Proxy"));
+        assert!(!withheld_from_ssh("PATH"));
+    }
 
     fn resolved(extra: &str) -> Resolved {
         Resolved::read(&format!(
@@ -795,6 +865,8 @@ mod tests {
         );
     }
 
+    const OUTPUT_CLOSED: &str = "the helper's output closed";
+
     fn ending(stderr: &[&str]) -> SshFailure {
         let lines: Vec<String> = stderr.iter().map(|line| (*line).to_owned()).collect();
         classify(&Ending {
@@ -803,6 +875,7 @@ mod tests {
             proxied: false,
             asking: Asking::Desk,
             browser_waited: false,
+            stopped: Stopped::Closed(OUTPUT_CLOSED),
         })
     }
 
@@ -857,6 +930,39 @@ mod tests {
         );
     }
 
+    /// An ending ssh printed nothing about is named by how it stopped, so
+    /// a connection that ended at once and one that never answered are
+    /// counted apart from a line Hide does not know.
+    #[test]
+    fn an_ending_ssh_printed_nothing_about_is_named_by_how_it_stopped() {
+        fn silent(stderr: &[String], stopped: Stopped<'_>) -> SshFailure {
+            classify(&Ending {
+                stderr,
+                refusal: None,
+                proxied: false,
+                asking: Asking::Desk,
+                browser_waited: false,
+                stopped,
+            })
+        }
+        let ended = silent(&[], Stopped::Closed(OUTPUT_CLOSED));
+        assert_eq!(ended.problem, SshProblem::SilentEnd);
+        assert_eq!(ended.detail, OUTPUT_CLOSED);
+        let blank = silent(&["  ".to_owned()], Stopped::Closed(OUTPUT_CLOSED));
+        assert_eq!(blank.problem, SshProblem::SilentEnd);
+        let quiet = silent(&[], Stopped::Quiet);
+        assert_eq!(quiet.problem, SshProblem::SilentTimeout);
+        assert_eq!(quiet.detail, "ssh did not sign in within 90 s");
+        // ssh still ran: the end is Hide's, not a silent ssh.
+        let overlong = "the device wrote a line longer than 64 KiB before its helper started";
+        let cut = silent(&[], Stopped::Ended(overlong));
+        assert_eq!(cut.problem, SshProblem::Unclassified);
+        assert_eq!(cut.detail, overlong);
+        let said = silent(&["something new went wrong".to_owned()], Stopped::Quiet);
+        assert_eq!(said.problem, SshProblem::Unclassified);
+        assert_eq!(said.detail, "something new went wrong");
+    }
+
     #[test]
     fn a_proxy_that_ended_is_the_proxys_failure_only_for_a_proxied_alias() {
         let lines = vec![
@@ -869,6 +975,7 @@ mod tests {
             proxied: true,
             asking: Asking::Desk,
             browser_waited: false,
+            stopped: Stopped::Closed(OUTPUT_CLOSED),
         });
         assert_eq!(proxied.problem, SshProblem::ProxyFailed);
         let direct = classify(&Ending {
@@ -877,6 +984,7 @@ mod tests {
             proxied: false,
             asking: Asking::Desk,
             browser_waited: false,
+            stopped: Stopped::Closed(OUTPUT_CLOSED),
         });
         assert_eq!(direct.problem, SshProblem::Unreachable);
     }
@@ -891,6 +999,7 @@ mod tests {
                 proxied: false,
                 asking: Asking::Desk,
                 browser_waited: false,
+                stopped: Stopped::Closed(OUTPUT_CLOSED),
             });
             assert_eq!(failure.problem, SshProblem::SignInNeeded, "{refusal:?}");
         }
@@ -900,6 +1009,7 @@ mod tests {
             proxied: false,
             asking: Asking::Desk,
             browser_waited: true,
+            stopped: Stopped::Closed(OUTPUT_CLOSED),
         });
         assert_eq!(browser.problem, SshProblem::BrowserTimeout);
         let old = classify(&Ending {
@@ -908,8 +1018,52 @@ mod tests {
             proxied: false,
             asking: Asking::OldSsh,
             browser_waited: false,
+            stopped: Stopped::Closed(OUTPUT_CLOSED),
         });
         assert_eq!(old.problem, SshProblem::OpenSshOld);
+    }
+
+    /// An ssh that has not answered its first question yet is the attempt
+    /// still connecting (with-hide/hide-private#584): the question waits on
+    /// the attempt's own clock, here far away, and the attempt's cancel is
+    /// what ends it, with the child it started.
+    #[cfg(unix)]
+    #[test]
+    fn a_question_ssh_has_not_answered_waits_for_the_attempt_and_ends_with_its_cancel() {
+        use std::os::unix::fs::PermissionsExt;
+        let dir = tempfile::tempdir().unwrap();
+        let started = dir.path().join("started");
+        let ssh = dir.path().join("ssh");
+        // The late answer is the subject: a first start that takes its time.
+        std::fs::write(
+            &ssh,
+            format!("#!/bin/sh\n: > '{}'\nexec sleep 600\n", started.display()),
+        )
+        .unwrap();
+        std::fs::set_permissions(&ssh, std::fs::Permissions::from_mode(0o755)).unwrap();
+        let program = SshProgram::new(ssh, dir.path());
+        let cancel = Cancel::default();
+        let asked = std::thread::spawn({
+            let cancel = cancel.clone();
+            move || program.version(Instant::now() + Duration::from_secs(60), &cancel)
+        });
+        let hang_guard = Instant::now() + Duration::from_secs(60);
+        while !started.exists() {
+            assert!(
+                Instant::now() < hang_guard,
+                "the stand-in ssh never started"
+            );
+            #[allow(clippy::disallowed_methods)] // a bounded poll for the stand-in's start
+            std::thread::sleep(Duration::from_millis(20));
+        }
+        assert!(
+            !asked.is_finished(),
+            "the question gave up before the attempt did"
+        );
+        cancel.cancel();
+        let failure = asked.join().unwrap().unwrap_err();
+        assert_eq!(failure.problem, SshProblem::CheckFailed);
+        assert!(failure.detail.contains("cancelled"), "{}", failure.detail);
     }
 
     /// With no desk, ssh runs with BatchMode and asks nothing: a new server
@@ -925,6 +1079,7 @@ mod tests {
                 proxied: false,
                 asking: Asking::Nobody,
                 browser_waited: false,
+                stopped: Stopped::Closed(OUTPUT_CLOSED),
             })
             .problem
         };

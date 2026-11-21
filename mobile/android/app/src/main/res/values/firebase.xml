@@ -1,0 +1,12 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- The app's Firebase values, what the google-services Gradle plugin would write from google-services.json, which the app
+     does not apply: Firebase reads them when the app starts (FirebaseOptions.fromResource). They name the Firebase project
+     and the app and ship inside every APK, so they are public by design; the API key is restricted in Google Cloud to this
+     package and its signing certificates and to the Firebase Installations and FCM registration APIs (docs/BUILD.md, The
+     Android app's notifications). -->
+<resources>
+    <string name="google_app_id" translatable="false">1:725543332512:android:c39591d45990fd1143b7c5</string>
+    <string name="gcm_defaultSenderId" translatable="false">725543332512</string>
+    <string name="google_api_key" translatable="false">AIzaSyBYS73JRRUadfcPhYPdc9kCvyXwqSFY0z4</string>
+    <string name="project_id" translatable="false">dependable-data-513506-p7</string>
+</resources>

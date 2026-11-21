@@ -2,7 +2,7 @@
 // WebGL with the addon the shell bundles: the installed package rewritten by
 // the same function the build applies (src/webglAtlasSlots.ts).
 //
-// This spec starts no Herdr or hided: the fault is inside the renderer, between
+// This spec starts no engine or hided: the fault is inside the renderer, between
 // the atlas and the GPU, and terminal bytes take the same path whether a PTY or
 // `term.write` produced them. What it checks is what the GPU draws from: at
 // every glyph draw, the canvas last uploaded to each texture slot must be the atlas
@@ -13,9 +13,10 @@ import { expect, test } from "@playwright/test";
 import fs from "node:fs";
 import { createRequire } from "node:module";
 import { fixWebglAtlasSlots } from "../src/webglAtlasSlots";
+import { testBrowserArgs } from "./browser-launch.cjs";
 
 // WebGL is the subject; the suite's --disable-webgl would test the DOM renderer.
-test.use({ launchOptions: { args: ["--use-gl=angle", "--use-angle=swiftshader", "--enable-unsafe-swiftshader"] } });
+test.use({ launchOptions: { args: testBrowserArgs(["--use-gl=angle", "--use-angle=swiftshader", "--enable-unsafe-swiftshader"]) } });
 
 const resolve = createRequire(import.meta.url).resolve;
 const ORIGIN = "http://atlas.test";

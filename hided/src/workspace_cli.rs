@@ -8,7 +8,7 @@ use std::pin::Pin;
 use std::time::{Duration, Instant};
 
 use futures_util::{SinkExt, StreamExt};
-use herdr_core::workspace_control::Action;
+use hide_core::workspace_control::Action;
 use serde_json::{Value, json};
 use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt};
 use tokio_tungstenite::tungstenite::Message;
@@ -21,20 +21,19 @@ use hide_platform::ipc::LocalStream;
 use crate::env::Env;
 use crate::pane_auth::{Reference, Route};
 use crate::state_file::SCHEMA_VERSION;
+use hide_agent_hooks::hook_request::install::{self, AccessAsk, Ask, PaneRequest};
+use hide_agent_hooks::hook_request::node_socket;
 
 const TIMEOUT: Duration = Duration::from_secs(10);
 /// Longer than the daemon's own Factory answer limit, so the daemon's reason
 /// arrives rather than a local timeout.
 const REMOTE_BOOTSTRAP_TIMEOUT: Duration = Duration::from_secs(25);
-/// A spawn on this machine: a Codex start with its brief commonly takes
-/// 10 to 15 seconds, past the 10 every other command gets.
-const SPAWN_TIMEOUT: Duration = Duration::from_secs(30);
-/// A spawn on another device: its checks, worktree, tab and agent start are
-/// each a round trip over SSH.
-const REMOTE_SPAWN_TIMEOUT: Duration = Duration::from_secs(60);
 /// The catalog's own wait for a model-list read is 10 seconds; the exchange
 /// outlives it.
 const CATALOG_TIMEOUT: Duration = Duration::from_secs(20);
+/// A profile change reads the list, then installs or takes out Hide's
+/// pieces in its account (`hide_core::agent_profiles`, its node's wait).
+const PROFILE_TIMEOUT: Duration = Duration::from_secs(150);
 
 /// An auto-bootstrapped direct CLI owns its reference even if transport fails.
 struct OneShotReference(PathBuf);
@@ -66,8 +65,29 @@ impl<'a> Credential<'a> {
         match std::env::var(crate::env::HIDE_CAP_REF) {
             Ok(value) if !value.is_empty() => Ok(Self::named(env, PathBuf::from(value))),
             Ok(_) => Err("invalid_reference".to_owned()),
-            Err(_) => Self::one_shot(env),
+            // Outside Hide's panes, a connected external tool runs as its
+            // connection (B18); any other caller as before. A process the
+            // daemon finds under a pane's program is never the tool, whatever
+            // key its home holds: it runs as its folder, as it did (B37).
+            Err(_) => match crate::access_cli::tool_key(env)? {
+                Some(key) => match Self::tool(env, key) {
+                    Err(code) if code == "access_from_pane" => Self::one_shot(env),
+                    credential => credential,
+                },
+                None => Self::one_shot(env),
+            },
         }
+    }
+
+    /// A one-shot credential for the external tool whose key is `key`.
+    fn tool(env: &'a Env, key: String) -> Result<Self, String> {
+        let path = bootstrap_tool(&crate::access_cli::state_dir(env), key)?;
+        Ok(Self {
+            env,
+            path: path.clone(),
+            named: false,
+            _one_shot: Some(OneShotReference(path)),
+        })
     }
 
     /// The credential a `HIDE_CAP_REF` naming `path` gives.
@@ -158,16 +178,71 @@ fn reported(reason: String) -> String {
 }
 
 pub fn bootstrap(env: &Env, one_shot: bool) -> Result<PathBuf, String> {
+    bootstrap_pane(env, one_shot).map_err(|reason| {
+        // In a pane of a guest's node whose core is away nothing answers
+        // for the pane, and the node says why (PRD device-connect-iroh
+        // B12): the caller hears that, not that Hide is gone.
+        let unanswered = matches!(
+            reason.as_str(),
+            "hide_unavailable" | "bridge_unavailable" | NOT_LINKED
+        );
+        if unanswered
+            && crate::guest_node::away::ask(&env.state_dir, env.pane_id.as_deref(), None).is_some()
+        {
+            crate::guest_node::away::OWNER_OFFLINE.to_owned()
+        } else {
+            reason
+        }
+    })
+}
+
+fn bootstrap_pane(env: &Env, one_shot: bool) -> Result<PathBuf, String> {
     // A caller with no pane id (a daemon first started from a plain terminal)
     // still bootstraps: hided binds it to the registered checkout holding
     // its cwd, or refuses with the reason the caller can act on.
     let pane_id = env.pane_id.as_deref().unwrap_or("");
     let mut nonce = [0u8; 16];
     getrandom::getrandom(&mut nonce).map_err(|_| "reference_unavailable".to_owned())?;
-    let request = json!({"pane_id":pane_id,"nonce":hex::encode(nonce),"one_shot":one_shot});
-    match bootstrap_local(env, &request) {
+    // The pane's installation goes with it, so a daemon of another one
+    // refuses it rather than bind it by its folder (`pane_auth`).
+    let request = PaneRequest {
+        pane_id: pane_id.to_owned(),
+        nonce: hex::encode(nonce),
+        one_shot,
+        hook: None,
+        install: env.install.clone(),
+        access: None,
+        device: None,
+    };
+    let request = serde_json::to_value(&request).map_err(|_| "reference_unavailable".to_owned())?;
+    let install = env.install.as_deref();
+    in_pane_order(
+        install::order(install),
+        || bootstrap_local(env, &request, install),
+        || bootstrap_remote(env, &request, install),
+    )
+}
+
+/// Asks this account's daemon (`local`) and the device bridges (`remote`) for
+/// the pane in the order its installation calls for ([`install::order`]).
+/// A pane that asks the daemon first, and hears both refuse, reports the
+/// bridge's reason: a daemon in the node role opens no bootstrap socket, so
+/// its node is the one that can say why.
+fn in_pane_order(
+    order: [Ask; 2],
+    local: impl FnOnce() -> Result<PathBuf, String>,
+    remote: impl FnOnce() -> Result<Option<PathBuf>, String>,
+) -> Result<PathBuf, String> {
+    if order[0] == Ask::Bridges {
+        return match remote() {
+            Ok(Some(path)) => Ok(path),
+            Ok(None) => local(),
+            Err(remote_reason) => local().map_err(|_| remote_reason),
+        };
+    }
+    match local() {
         Ok(path) => Ok(path),
-        Err(local_reason) => match bootstrap_remote(env, &request) {
+        Err(local_reason) => match remote() {
             Ok(Some(path)) => Ok(path),
             Ok(None) => Err(local_reason),
             Err(remote_reason) => Err(remote_reason),
@@ -175,15 +250,130 @@ pub fn bootstrap(env: &Env, one_shot: bool) -> Result<PathBuf, String> {
     }
 }
 
-fn bootstrap_local(env: &Env, request: &Value) -> Result<PathBuf, String> {
+/// An external tool's one-shot credential, proved by its key on the
+/// bootstrap socket of the daemon in `state_dir` (PRD hide-external-control
+/// B18): never a device bridge, since a tool runs on the core's machine.
+fn bootstrap_tool(state_dir: &Path, key: String) -> Result<PathBuf, String> {
+    // The folder this command runs in, `--repo`'s once it moved there: the
+    // tool names it, since Windows tells the daemon no other process's.
+    let folder = std::env::current_dir()
+        .ok()
+        .and_then(|folder| hide_platform::path::to_wire(&folder).ok());
+    let request = access_request(AccessAsk::Use { key, folder }, true)?;
+    let mut stream = connect_bootstrap(state_dir)?;
+    writeln!(stream, "{request}").map_err(|_| "hide_unavailable".to_owned())?;
+    read_bootstrap_answer(&mut stream, None)
+}
+
+/// `hide access request|status|leave`: one ask on the bootstrap socket of the
+/// daemon in `state_dir`, answered with the core's `access` value, or a
+/// refusal's code and the daemon's next action when it gave one.
+pub fn access_bootstrap(
+    state_dir: &Path,
+    ask: AccessAsk,
+) -> Result<Value, (String, Option<String>)> {
+    let unavailable = |code: String| (code, None);
+    let request = access_request(ask, false).map_err(unavailable)?;
+    let mut stream = connect_bootstrap(state_dir).map_err(unavailable)?;
+    writeln!(stream, "{request}").map_err(|_| unavailable("hide_unavailable".to_owned()))?;
+    let mut line = String::new();
+    BufReader::new(&mut stream)
+        .take(4096)
+        .read_line(&mut line)
+        .map_err(|_| unavailable("hide_unavailable".to_owned()))?;
+    let answer: Value =
+        serde_json::from_str(&line).map_err(|_| unavailable("hide_unavailable".to_owned()))?;
+    if answer["ok"] == true {
+        return Ok(answer["access"].clone());
+    }
+    Err((
+        answer["reason"]
+            .as_str()
+            .unwrap_or("bootstrap_refused")
+            .to_owned(),
+        answer["next_action"].as_str().map(str::to_owned),
+    ))
+}
+
+/// How long `hide device` waits for one answer about pairing: past opening
+/// the endpoint and a share's wait for the relay to name this machine.
+const PAIRING_TIMEOUT: Duration = Duration::from_secs(30);
+
+/// The most a pairing answer holds: every paired machine and the pairings
+/// under way.
+const PAIRING_ANSWER_LIMIT: u64 = 256 * 1024;
+
+/// One ask about pairing this machine with another Hide (`crate::pairing`),
+/// answered by this machine's own daemon in one exchange on the bootstrap
+/// socket. The answer is the daemon's line, a refusal included; an `Err` is
+/// the reason none arrived.
+pub fn pairing_ask(env: &Env, ask: Value) -> Result<Value, String> {
+    pairing_ask_within(env, ask, PAIRING_TIMEOUT)
+}
+
+/// [`pairing_ask`] for an ask whose answer is the end of work the daemon
+/// does first, which `within` bounds.
+pub fn pairing_ask_within(env: &Env, ask: Value, within: Duration) -> Result<Value, String> {
+    let mut nonce = [0u8; 16];
+    getrandom::getrandom(&mut nonce).map_err(|_| "reference_unavailable".to_owned())?;
+    let request = serde_json::to_value(PaneRequest {
+        // The pane this command says it runs in, which lets the daemon
+        // refuse what is the operator's without walking the process tree.
+        pane_id: env.pane_id.clone().unwrap_or_default(),
+        nonce: hex::encode(nonce),
+        one_shot: false,
+        hook: None,
+        install: None,
+        access: None,
+        device: Some(ask),
+    })
+    .map_err(|_| "reference_unavailable".to_owned())?;
+    let mut stream = connect_bootstrap(&env.state_dir)?;
+    stream
+        .set_read_timeout(Some(within))
+        .map_err(|_| "hide_unavailable".to_owned())?;
+    writeln!(stream, "{request}").map_err(|_| "hide_unavailable".to_owned())?;
+    let mut line = String::new();
+    BufReader::new(&mut stream)
+        .take(PAIRING_ANSWER_LIMIT)
+        .read_line(&mut line)
+        .map_err(|_| "request_timeout".to_owned())?;
+    serde_json::from_str(&line).map_err(|_| "hide_unavailable".to_owned())
+}
+
+fn access_request(ask: AccessAsk, one_shot: bool) -> Result<Value, String> {
+    let mut nonce = [0u8; 16];
+    getrandom::getrandom(&mut nonce).map_err(|_| "reference_unavailable".to_owned())?;
+    serde_json::to_value(PaneRequest {
+        pane_id: String::new(),
+        nonce: hex::encode(nonce),
+        one_shot,
+        hook: None,
+        install: None,
+        access: Some(ask),
+        device: None,
+    })
+    .map_err(|_| "reference_unavailable".to_owned())
+}
+
+fn connect_bootstrap(state_dir: &Path) -> Result<LocalStream, String> {
+    let socket = crate::pane_auth::bootstrap_socket_path(state_dir)?;
+    LocalStream::connect_until(&socket, Instant::now() + TIMEOUT)
+        .map_err(|_| "hide_unavailable".to_owned())
+}
+
+fn bootstrap_local(env: &Env, request: &Value, install: Option<&str>) -> Result<PathBuf, String> {
     let socket = crate::pane_auth::bootstrap_socket_path(&env.state_dir)?;
     let mut stream = LocalStream::connect_until(&socket, Instant::now() + TIMEOUT)
         .map_err(|_| "hide_unavailable".to_owned())?;
     writeln!(stream, "{request}").map_err(|_| "hide_unavailable".to_owned())?;
-    read_bootstrap_answer(&mut stream)
+    read_bootstrap_answer(&mut stream, install)
 }
 
-fn read_bootstrap_answer(stream: &mut impl Read) -> Result<PathBuf, String> {
+/// Reads one bootstrap answer. For a request that named an installation
+/// (`install`), a reference counts only when the answer names that same
+/// installation ([`install::confirm`]).
+fn read_bootstrap_answer(stream: &mut impl Read, install: Option<&str>) -> Result<PathBuf, String> {
     let mut line = String::new();
     BufReader::new(stream)
         .take(4096)
@@ -196,6 +386,7 @@ fn read_bootstrap_answer(stream: &mut impl Read) -> Result<PathBuf, String> {
             .unwrap_or("bootstrap_refused")
             .to_owned());
     }
+    install::confirm(&answer, install).map_err(str::to_owned)?;
     answer["reference"]
         .as_str()
         .and_then(|wire| hide_platform::path::from_wire(wire).ok())
@@ -204,136 +395,60 @@ fn read_bootstrap_answer(stream: &mut impl Read) -> Result<PathBuf, String> {
 
 /// Asks each node pane service on this device (`hide_host::panes`), one per
 /// daemon that has this device open, for this pane's reference.
-fn bootstrap_remote(env: &Env, request: &Value) -> Result<Option<PathBuf>, String> {
+fn bootstrap_remote(
+    env: &Env,
+    request: &Value,
+    install: Option<&str>,
+) -> Result<Option<PathBuf>, String> {
     bootstrap_bridges(
         &hide_kit::layout::workspace_bridges(&env.state_dir),
         request,
+        install,
     )
 }
 
-/// Connects to each node pane service that lives in `bridge_dir`, each
-/// connect waiting no later than `deadline`, which then bounds the stream.
-fn live_bridges(bridge_dir: &Path, deadline: Instant) -> Result<Vec<LocalStream>, String> {
-    let bridge_dir = bridge_dir.to_path_buf();
-    let metadata = match fs::symlink_metadata(&bridge_dir) {
-        Ok(metadata) => metadata,
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(Vec::new()),
-        Err(_) => return Err("bridge_unavailable".to_owned()),
-    };
-    if !metadata.is_dir()
-        || metadata.file_type().is_symlink()
-        || !private::owned_by_current_user(&bridge_dir).unwrap_or(false)
-        || !private::is_private(&bridge_dir).unwrap_or(false)
-    {
-        return Err("bridge_unavailable".to_owned());
-    }
-    let entries = match fs::read_dir(&bridge_dir) {
-        Ok(entries) => entries,
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(Vec::new()),
-        Err(_) => return Err("bridge_unavailable".to_owned()),
-    };
-    let mut streams = Vec::new();
-    for entry in entries {
-        let entry = entry.map_err(|_| "bridge_unavailable".to_owned())?;
-        if !entry.file_name().to_string_lossy().starts_with("bridge-") {
-            continue;
-        }
-        // A socket on Unix, the listener's marker file on Windows; the
-        // connect tells a live listener from what a dead one left.
-        let socket = entry.path().join("bootstrap.sock");
-        let Ok(metadata) = fs::symlink_metadata(&socket) else {
-            continue;
-        };
-        if metadata.is_dir()
-            || metadata.file_type().is_symlink()
-            || !private::owned_by_current_user(&socket).unwrap_or(false)
-        {
-            continue;
-        }
-        let Ok(stream) = LocalStream::connect_until(&socket, deadline) else {
-            continue;
-        };
-        streams.push(stream);
-        let seen = streams.len();
-        if seen > 16 {
-            return Err("bridge_limit".to_owned());
-        }
-    }
-    Ok(streams)
+/// [`hide_agent_hooks::hook_request::live_bridges`] that may answer for a
+/// pane naming `install`, its reason owned.
+fn live_bridges(
+    bridge_dir: &Path,
+    deadline: Instant,
+    install: Option<&str>,
+) -> Result<Vec<LocalStream>, String> {
+    hide_agent_hooks::hook_request::live_bridges(bridge_dir, deadline, install)
+        .map(|bridges| bridges.streams)
+        .map_err(str::to_owned)
 }
 
-fn bootstrap_bridges(bridge_dir: &Path, request: &Value) -> Result<Option<PathBuf>, String> {
-    let mut success = None;
-    let mut reason = None;
-    for mut stream in live_bridges(bridge_dir, Instant::now() + REMOTE_BOOTSTRAP_TIMEOUT)? {
+/// Asks each bridge that may answer for a pane naming `install` in turn
+/// ([`install::settle_bridges`]): one whose answer does not confirm
+/// `install` is not this pane's node, so it neither succeeds nor makes the
+/// pane ambiguous.
+fn bootstrap_bridges(
+    bridge_dir: &Path,
+    request: &Value,
+    install: Option<&str>,
+) -> Result<Option<PathBuf>, String> {
+    let answers = live_bridges(
+        bridge_dir,
+        Instant::now() + REMOTE_BOOTSTRAP_TIMEOUT,
+        install,
+    )?
+    .into_iter()
+    .map(|mut stream| {
         // Each bridge has the whole time: one answers after the one before.
         stream.set_deadline(Instant::now() + REMOTE_BOOTSTRAP_TIMEOUT);
-        if writeln!(stream, "{request}").is_err() {
-            reason = Some("bridge_unavailable".to_owned());
-            continue;
+        writeln!(stream, "{request}").map_err(|_| "bridge_unavailable".to_owned())?;
+        match read_bootstrap_answer(&mut stream, install)? {
+            path if path.starts_with(bridge_dir) => Ok(path),
+            _ => Err("invalid_reference".to_owned()),
         }
-        match read_bootstrap_answer(&mut stream) {
-            Ok(path) if path.starts_with(bridge_dir) => {
-                if success.is_some() {
-                    // A bridge may return a persistent reference already held
-                    // by a live pane. Ambiguity cannot revoke either holder.
-                    return Err("ambiguous_pane".to_owned());
-                }
-                success = Some(path);
-            }
-            Ok(_) => reason = Some("invalid_reference".to_owned()),
-            Err(error) => reason = Some(error),
-        }
-    }
-    if success.is_some() {
-        Ok(success)
-    } else if let Some(reason) = reason {
-        Err(reason)
-    } else {
-        Ok(None)
-    }
+    });
+    install::settle_bridges(answers)
 }
 
+/// [`hide_agent_hooks::hook_request::read_reference`], its reason owned.
 fn read_reference(path: &Path) -> Result<Reference, String> {
-    if !path.is_absolute() {
-        return Err("invalid_reference".to_owned());
-    }
-    // The opened file is this account's own regular file and never what a
-    // link at the path leads to, so replacing the path with a link between a
-    // check and the read cannot make this helper read an unrelated file.
-    let file = private::open_own_file(path, false).map_err(|_| "credential_expired".to_owned())?;
-    let metadata = file
-        .metadata()
-        .map_err(|_| "credential_expired".to_owned())?;
-    if !private::is_private(path).unwrap_or(false) || metadata.len() > 4096 {
-        return Err("invalid_reference".to_owned());
-    }
-    let mut bytes = Vec::with_capacity(metadata.len() as usize);
-    file.take(4097)
-        .read_to_end(&mut bytes)
-        .map_err(|_| "credential_expired".to_owned())?;
-    if bytes.len() > 4096 {
-        return Err("invalid_reference".to_owned());
-    }
-    // References are written without a flush, so a power loss can leave one
-    // empty: it holds no credential, and reads as gone so a named reference
-    // renews rather than failing every command.
-    if bytes.is_empty() {
-        return Err("credential_expired".to_owned());
-    }
-    let reference: Reference =
-        serde_json::from_slice(&bytes).map_err(|_| "invalid_reference".to_owned())?;
-    if reference.token.len() != 64 || !reference.token.bytes().all(|b| b.is_ascii_hexdigit()) {
-        return Err("invalid_reference".to_owned());
-    }
-    let valid = match &reference.route {
-        Route::Daemon { port, origin_port } => *port != 0 && *origin_port != 0,
-        Route::Node { socket } => node_socket(socket).is_some(),
-    };
-    if !valid {
-        return Err("invalid_reference".to_owned());
-    }
-    Ok(reference)
+    hide_agent_hooks::hook_request::read_reference(path).map_err(str::to_owned)
 }
 
 pub fn request(credential: &mut Credential, query: &str) -> Result<Value, String> {
@@ -368,7 +483,7 @@ fn request_query(
 /// `hide links`: a read, answered without a shell.
 pub fn request_links(
     credential: &mut Credential,
-    query: &herdr_core::links::query::LinksQuery,
+    query: &hide_core::links::query::LinksQuery,
 ) -> Result<Value, String> {
     credential.run(|path, after| {
         let reference = read_reference(path)?;
@@ -389,11 +504,11 @@ pub fn request_links(
 /// it, and the exchange waits a little past that for the refusal.
 pub fn request_session(
     credential: &mut Credential,
-    command: &herdr_core::links::session_command::SessionCommand,
+    command: &hide_core::links::session_command::SessionCommand,
 ) -> Result<Value, String> {
     let timeout = match command {
-        herdr_core::links::session_command::SessionCommand::Read { .. } => {
-            herdr_core::links::session_command::READ_TIMEOUT + Duration::from_secs(15)
+        hide_core::links::session_command::SessionCommand::Read { .. } => {
+            hide_core::links::session_command::READ_TIMEOUT + Duration::from_secs(15)
         }
         _ => Duration::from_secs(30),
     };
@@ -417,24 +532,24 @@ pub fn request_session(
 /// and running it again adds nothing twice.
 pub fn request_memory(
     credential: &mut Credential,
-    command: &herdr_core::memory_command::MemoryCommand,
+    command: &hide_core::memory_command::MemoryCommand,
 ) -> Result<Value, String> {
     let (action, timeout) = match command {
-        herdr_core::memory_command::MemoryCommand::Add { .. } => {
-            (true, herdr_core::memory_command::ADD_TIMEOUT)
+        hide_core::memory_command::MemoryCommand::Add { .. } => {
+            (true, hide_core::memory_command::ADD_TIMEOUT)
         }
-        herdr_core::memory_command::MemoryCommand::Show { .. }
-        | herdr_core::memory_command::MemoryCommand::Forget { .. }
-        | herdr_core::memory_command::MemoryCommand::Undo { .. }
-        | herdr_core::memory_command::MemoryCommand::Placed { .. }
-        | herdr_core::memory_command::MemoryCommand::Building { .. }
-        | herdr_core::memory_command::MemoryCommand::Unbuilt { .. }
-        | herdr_core::memory_command::MemoryCommand::Outdated { .. }
-        | herdr_core::memory_command::MemoryCommand::Skipped { .. }
-        | herdr_core::memory_command::MemoryCommand::Stale { .. }
-        | herdr_core::memory_command::MemoryCommand::Release { .. }
-        | herdr_core::memory_command::MemoryCommand::Recheck { .. } => (true, TIMEOUT),
-        herdr_core::memory_command::MemoryCommand::Search { .. } => (false, TIMEOUT),
+        hide_core::memory_command::MemoryCommand::Show { .. }
+        | hide_core::memory_command::MemoryCommand::Forget { .. }
+        | hide_core::memory_command::MemoryCommand::Undo { .. }
+        | hide_core::memory_command::MemoryCommand::Placed { .. }
+        | hide_core::memory_command::MemoryCommand::Building { .. }
+        | hide_core::memory_command::MemoryCommand::Unbuilt { .. }
+        | hide_core::memory_command::MemoryCommand::Outdated { .. }
+        | hide_core::memory_command::MemoryCommand::Skipped { .. }
+        | hide_core::memory_command::MemoryCommand::Stale { .. }
+        | hide_core::memory_command::MemoryCommand::Release { .. }
+        | hide_core::memory_command::MemoryCommand::Recheck { .. } => (true, TIMEOUT),
+        hide_core::memory_command::MemoryCommand::Search { .. } => (false, TIMEOUT),
     };
     credential.run(|path, after| {
         let reference = read_reference(path)?;
@@ -456,7 +571,7 @@ pub fn request_memory(
 /// change repeated changes nothing more.
 pub fn request_mission(
     credential: &mut Credential,
-    command: &herdr_core::missions::MissionCommand,
+    command: &hide_core::missions::MissionCommand,
 ) -> Result<Value, String> {
     credential.run(|path, after| {
         let reference = read_reference(path)?;
@@ -472,12 +587,12 @@ pub fn request_mission(
     })
 }
 
-/// `hide plan`: a command over the caller's session's own plan, answered by
+/// `hide task`: a command over the caller's session's own plan, answered by
 /// the core without a shell. Running it again converges: a repeated change
 /// changes nothing more.
 pub fn request_plan(
     credential: &mut Credential,
-    command: &herdr_core::plans::PlanCommand,
+    command: &hide_core::plans::PlanCommand,
 ) -> Result<Value, String> {
     credential.run(|path, after| {
         let reference = read_reference(path)?;
@@ -488,6 +603,51 @@ pub fn request_plan(
             json!({"type":"plan","request_id":request_id,"command":command}),
             &request_id,
             true,
+            after,
+        )
+    })
+}
+
+/// `hide automation`: a call on the operator's automations, answered by the
+/// core. A change is never sent again on its own: a lost answer is read
+/// back with `list`.
+pub fn request_automation(
+    credential: &mut Credential,
+    call: &Value,
+    action: bool,
+) -> Result<Value, String> {
+    credential.run(|path, after| {
+        let reference = read_reference(path)?;
+        let request_id = fresh_request_id()?;
+        run_exchange(
+            path,
+            &reference,
+            json!({"type":"automation","request_id":request_id,"call":call}),
+            &request_id,
+            action,
+            after,
+        )
+    })
+}
+
+/// `hide session fold-ask`: folds one of the caller's session's open questions
+/// with its reason. Running it again converges: a folded question answers
+/// that it is already closed.
+pub fn request_fold_ask(
+    credential: &mut Credential,
+    id: &str,
+    reason: &str,
+) -> Result<Value, String> {
+    credential.run(|path, after| {
+        let reference = read_reference(path)?;
+        let request_id = fresh_request_id()?;
+        run_exchange_within(
+            path,
+            &reference,
+            json!({"type":"fold_ask","request_id":request_id,"id":id,"reason":reason}),
+            &request_id,
+            true,
+            Duration::from_secs(30),
             after,
         )
     })
@@ -515,14 +675,65 @@ pub fn request_agent_catalog(
     })
 }
 
+/// `hide agent profile`: a change of a machine's agent profiles, which
+/// installs or takes out Hide's pieces in the account it touches. Never sent
+/// again on its own: a lost answer is read back with `list`.
+pub fn request_agent_profile(
+    credential: &mut Credential,
+    command: &hide_core::agent_profiles::ProfileCommand,
+) -> Result<Value, String> {
+    credential.run(|path, after| {
+        let reference = read_reference(path)?;
+        let request_id = fresh_request_id()?;
+        run_exchange_within(
+            path,
+            &reference,
+            json!({"type":"agent_profile","request_id":request_id,"command":command}),
+            &request_id,
+            true,
+            PROFILE_TIMEOUT,
+            after,
+        )
+    })
+}
+
+/// `hide skill` / `hide mcp`: a read answers at once; a change waits for
+/// its pass, and an install or an update for the operator's confirm too,
+/// which can take a while: `timeout` is the core's own wait and a little
+/// more.
+pub fn request_store(
+    credential: &mut Credential,
+    command: &hide_core::store_command::StoreCommand,
+    timeout: Duration,
+) -> Result<Value, String> {
+    let action = !matches!(
+        command,
+        hide_core::store_command::StoreCommand::List { .. }
+            | hide_core::store_command::StoreCommand::Show { .. }
+    );
+    credential.run(|path, after| {
+        let reference = read_reference(path)?;
+        let request_id = fresh_request_id()?;
+        run_exchange_within(
+            path,
+            &reference,
+            json!({"type":"store","request_id":request_id,"command":command}),
+            &request_id,
+            action,
+            timeout,
+            after,
+        )
+    })
+}
+
 /// `hide device`: the core's own device registrations. A `list` is a read;
 /// an `add` or `remove` run again after a lost answer is refused as a
 /// duplicate or an unknown device, never applied twice.
 pub fn request_device(
     credential: &mut Credential,
-    command: &herdr_core::device_command::DeviceCommand,
+    command: &hide_core::device_command::DeviceCommand,
 ) -> Result<Value, String> {
-    let action = !matches!(command, herdr_core::device_command::DeviceCommand::List);
+    let action = !matches!(command, hide_core::device_command::DeviceCommand::List);
     credential.run(|path, after| {
         let reference = read_reference(path)?;
         let request_id = fresh_request_id()?;
@@ -574,7 +785,8 @@ pub fn request_project_open_on_bridge(env: &Env, path: &str) -> Result<Value, St
 }
 
 fn project_open_on_bridge(bridge_dir: &Path, path: &str) -> Result<Value, String> {
-    let mut bridges = live_bridges(bridge_dir, Instant::now() + TIMEOUT)?;
+    // A plain shell names no installation, so every live node may be meant.
+    let mut bridges = live_bridges(bridge_dir, Instant::now() + TIMEOUT, None)?;
     let mut stream = match bridges.len() {
         0 => return Err(NOT_LINKED.to_owned()),
         1 => bridges.remove(0),
@@ -614,6 +826,60 @@ pub fn request_project_open_with_token(
     token: &str,
     path: &str,
 ) -> Result<Value, String> {
+    let request_id = fresh_request_id()?;
+    request_with_token(
+        port,
+        token,
+        json!({"type":"project_open","request_id":request_id,"path":path}),
+        &request_id,
+        PROJECT_OPEN_TIMEOUT,
+    )
+}
+
+/// Registers this machine's folder `path` as a project of its own Hide and
+/// brings nothing forward, with the daemon's token from the state file this
+/// account owns (`project_open::run_add`), waiting `within` for its answer
+/// and never longer than an open waits.
+pub fn request_project_add_with_token(
+    port: u16,
+    token: &str,
+    path: &str,
+    within: Duration,
+) -> Result<Value, String> {
+    let request_id = fresh_request_id()?;
+    request_with_token(
+        port,
+        token,
+        json!({"type":"project_add","request_id":request_id,"path":path}),
+        &request_id,
+        within.min(PROJECT_OPEN_TIMEOUT),
+    )
+}
+
+/// `hide import herdr` on the core's own machine, with the daemon's token,
+/// as `hide <path>` asks (PRD engine-bundle-4-herdr-removal B17): what this
+/// machine's Herdr save offers, and with `yes` the move itself.
+pub fn request_herdr_import_with_token(port: u16, token: &str, yes: bool) -> Result<Value, String> {
+    let request_id = fresh_request_id()?;
+    request_with_token(
+        port,
+        token,
+        json!({"type":"herdr_import","request_id":request_id,"yes":yes}),
+        &request_id,
+        TIMEOUT,
+    )
+}
+
+/// One `request` named `request_id` and its answer over one `/ws`
+/// connection whose handshake names `client_kind: "cli"`, with the daemon's
+/// token from the state file this account owns.
+fn request_with_token(
+    port: u16,
+    token: &str,
+    request: Value,
+    request_id: &str,
+    within: Duration,
+) -> Result<Value, String> {
     let reference = Reference {
         token: token.to_owned(),
         route: Route::Daemon {
@@ -621,13 +887,12 @@ pub fn request_project_open_with_token(
             origin_port: port,
         },
     };
-    let request_id = fresh_request_id()?;
     let runtime = tokio::runtime::Builder::new_current_thread()
         .enable_all()
         .build()
         .map_err(|_| "request_unavailable".to_owned())?;
     runtime.block_on(async {
-        tokio::time::timeout(PROJECT_OPEN_TIMEOUT, async {
+        tokio::time::timeout(within, async {
             let mut socket = connect(&reference).await.map_err(reported)?;
             socket
                 .send(Message::Text(
@@ -638,11 +903,7 @@ pub fn request_project_open_with_token(
                 .await
                 .map_err(|_| "hide_unavailable".to_owned())?;
             socket
-                .send(Message::Text(
-                    json!({"type":"project_open","request_id":request_id,"path":path})
-                        .to_string()
-                        .into(),
-                ))
+                .send(Message::Text(request.to_string().into()))
                 .await
                 .map_err(|_| "hide_unavailable".to_owned())?;
             match socket.next().await {
@@ -661,6 +922,22 @@ pub fn request_project_open_with_token(
         })
         .await
         .map_err(|_| "request_timeout".to_owned())?
+    })
+}
+
+/// `hide access list`: read by a connected tool from what the core holds.
+pub fn request_access_list(credential: &mut Credential) -> Result<Value, String> {
+    credential.run(|path, after| {
+        let reference = read_reference(path)?;
+        let request_id = fresh_request_id()?;
+        run_exchange(
+            path,
+            &reference,
+            json!({"type":"access_list","request_id":request_id}),
+            &request_id,
+            false,
+            after,
+        )
     })
 }
 
@@ -685,7 +962,7 @@ pub fn request_ps(credential: &mut Credential, all: bool) -> Result<Value, Strin
 /// no shell needed.
 pub fn request_pane(
     credential: &mut Credential,
-    command: &herdr_core::pane_command::PaneCommand,
+    command: &hide_core::pane_command::PaneCommand,
 ) -> Result<Value, String> {
     credential.run(|path, after| {
         let reference = read_reference(path)?;
@@ -706,7 +983,7 @@ pub fn request_pane(
 /// long as the host's recheck and removal; the daemon's own wait ends first.
 pub fn request_worktree_remove(
     credential: &mut Credential,
-    command: &herdr_core::worktree_command::WorktreeRemove,
+    command: &hide_core::worktree_command::WorktreeRemove,
 ) -> Result<Value, String> {
     credential.run(|path, after| {
         let reference = read_reference(path)?;
@@ -717,7 +994,7 @@ pub fn request_worktree_remove(
             json!({"type":"worktree_remove","request_id":request_id,"command":command}),
             &request_id,
             true,
-            herdr_core::worktree_command::REMOVE_WAIT + Duration::from_secs(20),
+            hide_core::worktree_command::REMOVE_WAIT + Duration::from_secs(20),
             after,
         )
     })
@@ -748,23 +1025,33 @@ pub fn request_agent_action(
 /// Losing the final capability claim cannot turn durable success into retry.
 pub fn request_delivery(
     credential: &mut Credential,
-    command: herdr_core::delivery::Command,
+    command: hide_core::delivery::Command,
     hint: Option<&str>,
 ) -> Result<Value, String> {
     // A spawn creates a worktree, starts an agent and hands it its brief,
     // which takes longer than a local command, and one on another device
     // makes several calls over SSH besides; running it again after a timeout
     // returns the same agent either way.
+    // The spawn answers within its own answer wait, which starts after the
+    // wait for a kit pass on the child's machine and ends its new shell's
+    // wait too, so the CLI waits both and an ordinary command's wait for the
+    // answer to come back.
     let timeout = match &command {
-        herdr_core::delivery::Command::Agents {
-            command: herdr_core::coordination::Command::Spawn { machine, .. },
+        hide_core::delivery::Command::Agents {
+            command: hide_core::coordination::Command::Spawn { machine, .. },
         } => {
-            if machine.is_some() {
-                REMOTE_SPAWN_TIMEOUT
-            } else {
-                SPAWN_TIMEOUT
-            }
+            TIMEOUT
+                + if machine.is_some() {
+                    hide_core::coordination::DEVICE_SPAWN_ANSWER_WAIT
+                } else {
+                    hide_core::coordination::SPAWN_ANSWER_WAIT
+                }
+                + hide_core::coordination::HOOK_PASS_WAIT
         }
+        // An end closes its agent's pane after its record ended.
+        hide_core::delivery::Command::Agents {
+            command: hide_core::coordination::Command::End { .. },
+        } => TIMEOUT + hide_core::coordination::END_ANSWER_WAIT,
         _ => TIMEOUT,
     };
     credential.run(|path, after| {
@@ -784,16 +1071,16 @@ pub fn request_delivery(
     })
 }
 
-/// How long `hide workspace memory` waits for the core's answer: the hook
-/// that runs it waits 1,250 ms in all, process start included.
+/// How long `hide workspace memory` waits for the core's answer, inside the
+/// 1,250 ms a hook gives Memory (`hide_agent_hooks::memory::MEMORY_BUDGET`).
 const MEMORY_WITHIN: Duration = Duration::from_millis(1_200);
 /// The prompt a hook piped in: at most
-/// `herdr_core::memory_hook::PROMPT_LIMIT_BYTES`, its valid UTF-8 start.
+/// `hide_core::memory_hook::PROMPT_LIMIT_BYTES`, its valid UTF-8 start.
 pub fn read_memory_prompt(input: impl std::io::Read) -> Result<String, String> {
     use std::io::Read as _;
     let mut bytes = Vec::new();
     input
-        .take(herdr_core::memory_hook::PROMPT_LIMIT_BYTES as u64)
+        .take(hide_core::memory_hook::PROMPT_LIMIT_BYTES as u64)
         .read_to_end(&mut bytes)
         .map_err(|_| "prompt_unreadable".to_owned())?;
     Ok(match String::from_utf8(bytes) {
@@ -816,29 +1103,16 @@ pub fn request_memory_hook(env: &Env, mut ask: Value) -> Result<Value, String> {
     request_hook(env, command)
 }
 
-/// Hook reads always use the bootstrap service. Choosing a route happens
-/// before sending; neither a refusal nor a lost answer retries the command.
-///
-/// Each step that can fail has a reason of its own, which a hook records
-/// (`docs/agent-hooks.md`, What a hook records when it fails): no daemon
-/// published its socket (`hide_unavailable`), the record naming it is not
-/// trusted (`invalid_bootstrap_socket_record`), nothing took the connection
-/// there (`hide_unreachable`), the request was not written whole, so nothing
-/// ran (`request_unsent`), no answer came before the deadline and the command
-/// may have run (`request_timeout`), and the answer was not one bounded JSON
-/// line for this request (`invalid_response`).
+/// A hook's read through the bootstrap service
+/// (`hide_agent_hooks::hook_request::send`, which the hook itself also
+/// speaks), with the request's deadline. A step that failed is written to the
+/// diagnostic log as `hook.request_failed` with the system's error kind.
 pub fn request_hook(
     env: &Env,
     command: hide_node_link::panes::HookCommand,
 ) -> Result<Value, String> {
     let within = if matches!(command, hide_node_link::panes::HookCommand::Memory { .. }) {
         MEMORY_WITHIN
-    } else if matches!(
-        command,
-        hide_node_link::panes::HookCommand::Observation { .. }
-            | hide_node_link::panes::HookCommand::StartObservation { .. }
-    ) {
-        hide_node_link::panes::OBSERVATION_SEND_BUDGET
     } else {
         TIMEOUT
     };
@@ -850,165 +1124,66 @@ pub fn request_hook(
     )
 }
 
+/// How long `hide agent exec` waits for its node to answer a report: the
+/// agent waits on it, and a `Ready` that is not answered starts nothing.
+const AGENT_EXEC_WITHIN: Duration = Duration::from_secs(10);
+
+/// `hide agent exec`'s report of the profile's start `attempt` the pane's
+/// shell ran (`HookCommand::AgentExec`), within [`AGENT_EXEC_WITHIN`].
+pub fn report_agent_exec(
+    env: &Env,
+    attempt: &str,
+    event: hide_node_link::panes::AgentExecEvent,
+) -> Result<Value, String> {
+    hook_request(
+        env,
+        std::env::var(crate::env::HIDE_CAP_REF).ok(),
+        hide_node_link::panes::HookCommand::AgentExec {
+            attempt: attempt.to_owned(),
+            event,
+        },
+        Instant::now() + AGENT_EXEC_WITHIN,
+    )
+}
+
 /// [`request_hook`] with the reference `HIDE_CAP_REF` names, if any, and the
 /// request's deadline.
 fn hook_request(
     env: &Env,
     named: Option<String>,
-    mut command: hide_node_link::panes::HookCommand,
+    command: hide_node_link::panes::HookCommand,
     deadline: Instant,
 ) -> Result<Value, String> {
-    use hide_node_link::panes::{HOOK_REQUEST_LIMIT, HookCommand, HookRequest};
+    use hide_agent_hooks::hook_request::{Caller, send};
     let request_id = fresh_request_id()?;
-    let failed = |reason: &'static str, error: Option<&std::io::Error>| {
-        herdr_core::diagnostic!(json!({
+    let caller = Caller {
+        state_dir: &env.state_dir,
+        pane_id: env.pane_id.as_deref(),
+        install: env.install.as_deref(),
+        named: named.as_deref().map(Path::new),
+    };
+    let sent = send(&caller, &request_id, command, deadline);
+    if sent.reference_missing {
+        hide_core::diagnostic!(json!({
             "component": "workspace_cli",
-            "kind": "hook.request_failed",
+            "kind": "hook.reference_missing",
             "request_id": request_id,
             "pane_id": env.pane_id,
-            "reason": reason,
-            "io_kind": error.map(|error| format!("{:?}", error.kind())),
         }));
-        reason.to_owned()
-    };
-    let named = match named {
-        Some(path) if path.is_empty() => return Err("invalid_reference".to_owned()),
-        Some(path) => match read_reference(Path::new(&path)) {
-            Ok(reference) => Some((PathBuf::from(path), reference)),
-            Err(reason) if reason == "credential_expired" => {
-                herdr_core::diagnostic!(json!({
-                    "component": "workspace_cli",
-                    "kind": "hook.reference_missing",
-                    "request_id": request_id,
-                    "pane_id": env.pane_id,
-                }));
-                None
-            }
-            Err(reason) => return Err(reason),
-        },
-        None => None,
-    };
-    let connect = |socket: &Path| {
-        LocalStream::connect_until(socket, deadline).map_err(|error| (UNREACHABLE, Some(error)))
-    };
-    let selected = match &named {
-        Some((
-            _,
-            Reference {
-                route: Route::Node { socket },
-                ..
-            },
-        )) => connect(&node_socket(socket).ok_or("invalid_reference")?),
-        _ => {
-            let state = named
-                .as_ref()
-                .and_then(|(path, _)| path.parent().and_then(Path::parent))
-                .unwrap_or(&env.state_dir);
-            hide_node::pane_proof::recorded_socket_path(&crate::pane_auth::bootstrap_socket_record(
-                state,
-            ))
-            .map_err(|refusal| (refusal.code(), None))
-            .and_then(|socket| connect(&socket))
-        }
-    };
-    let mut stream = match selected {
-        Ok(stream) => stream,
-        // A device's node answers for a pane whose daemon is on another
-        // machine; without one, the route's own failure stands.
-        Err((reason, error)) => {
-            let mut bridges = live_bridges(
-                &hide_kit::layout::workspace_bridges(&env.state_dir),
-                deadline,
-            )?;
-            if bridges.len() > 1 {
-                return Err("ambiguous_pane".to_owned());
-            }
-            bridges
-                .pop()
-                .ok_or_else(|| failed(reason, error.as_ref()))?
-        }
-    };
-    let mut nonce = [0u8; 16];
-    getrandom::getrandom(&mut nonce).map_err(|_| "reference_unavailable".to_owned())?;
-    let token = named.map(|(_, reference)| reference.token);
-    let line = loop {
-        let hook = HookRequest {
-            request_id: request_id.clone(),
-            command: command.clone(),
-            token: token.clone(),
-        };
-        let request = json!({"pane_id":env.pane_id.as_deref().unwrap_or(""),"nonce":hex::encode(nonce),"one_shot":command.one_shot(),"hook":hook});
-        let line = request.to_string();
-        if line.len() < HOOK_REQUEST_LIMIT {
-            break line;
-        }
-        let HookCommand::Memory { prompt, .. } = &mut command else {
-            return Err("invalid_request".to_owned());
-        };
-        if prompt.is_empty() {
-            return Err("memory_request_too_large".to_owned());
-        }
-        *prompt = herdr_core::memory_hook::prefix(prompt, prompt.len() / 2).to_owned();
-    };
-    stream
-        .write_all(format!("{line}\n").as_bytes())
-        .map_err(|error| failed("request_unsent", Some(&error)))?;
-    let line = read_hook_line(
-        |bytes| stream.read(bytes),
-        || deadline.checked_duration_since(Instant::now()),
-    )
-    .map_err(|(reason, error)| failed(reason, error.as_ref()))?;
-    let answer: Value =
-        serde_json::from_str(&line).map_err(|_| failed("invalid_response", None))?;
-    if answer["ok"] == true && answer["request_id"] != request_id {
-        return Err(failed("invalid_response", None));
     }
-    Ok(answer)
-}
-
-/// Reads the answer's one line. The stream's deadline bounds each read, and
-/// the time left is checked again after each, so a peer that trickles bytes
-/// cannot keep the request past its deadline; the clock is supplied so that
-/// is tested without sleeping or a scheduler speed assertion. A read that
-/// fails says why with the system's answer.
-fn read_hook_line(
-    mut read: impl FnMut(&mut [u8]) -> std::io::Result<usize>,
-    mut remaining: impl FnMut() -> Option<Duration>,
-) -> Result<String, (&'static str, Option<std::io::Error>)> {
-    use hide_node_link::panes::HOOK_RESPONSE_LIMIT;
-    let timed_out = || ("request_timeout", None);
-    let mut answer = Vec::new();
-    let mut chunk = [0; 4096];
-    loop {
-        remaining()
-            .filter(|left| !left.is_zero())
-            .ok_or_else(timed_out)?;
-        let read = read(&mut chunk).map_err(|error| {
-            let reason = if error.kind() == std::io::ErrorKind::TimedOut {
-                "request_timeout"
-            } else {
-                "invalid_response"
-            };
-            (reason, Some(error))
-        })?;
-        remaining()
-            .filter(|left| !left.is_zero())
-            .ok_or_else(timed_out)?;
-        if read == 0 {
-            return Err(("invalid_response", None));
+    sent.answer.map_err(|failure| {
+        if failure.step {
+            hide_core::diagnostic!(json!({
+                "component": "workspace_cli",
+                "kind": "hook.request_failed",
+                "request_id": request_id,
+                "pane_id": env.pane_id,
+                "reason": failure.reason,
+                "io_kind": failure.error.as_ref().map(|error| format!("{:?}", error.kind())),
+            }));
         }
-        let end = chunk[..read]
-            .iter()
-            .position(|byte| *byte == b'\n')
-            .map(|at| at + 1);
-        answer.extend_from_slice(&chunk[..end.unwrap_or(read)]);
-        if answer.len() > HOOK_RESPONSE_LIMIT {
-            return Err(("invalid_response", None));
-        }
-        if end.is_some() {
-            return String::from_utf8(answer).map_err(|_| ("invalid_response", None));
-        }
-    }
+        failure.reason.to_owned()
+    })
 }
 
 /// The relay socket for one `hide browser` page command: the same scoped
@@ -1179,13 +1354,7 @@ pub fn valid_request_id(id: &str) -> bool {
 }
 
 pub fn fresh_request_id() -> Result<String, String> {
-    let mut id = [0u8; 16];
-    getrandom::getrandom(&mut id).map_err(|_| "request_unavailable".to_owned())?;
-    let now = std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .map_err(|_| "request_unavailable".to_owned())?
-        .as_millis();
-    Ok(format!("{now}-{}", hex::encode(id)))
+    hide_agent_hooks::hook_request::fresh_request_id().map_err(str::to_owned)
 }
 
 fn run_exchange(
@@ -1291,14 +1460,6 @@ async fn connect_with_limit(
         .await
         .map_err(|_| UNREACHABLE.to_owned())?;
     Ok(socket)
-}
-
-/// The node socket a device reference names: an absolute path on this
-/// machine, or nothing.
-fn node_socket(wire: &str) -> Option<PathBuf> {
-    hide_platform::path::from_wire(wire)
-        .ok()
-        .filter(|path| path.is_absolute())
 }
 
 /// Opens a stream through this device's node to the daemon behind it, as an
@@ -1450,57 +1611,8 @@ async fn claim(socket: &mut WorkspaceSocket, path: &Path) -> Result<(), String> 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use hide_agent_hooks::hook_request::install::{INSTALL_UNCONFIRMED, OTHER_INSTALL};
     use std::sync::{Arc, mpsc};
-
-    #[test]
-    fn a_trickling_hook_response_cannot_renew_the_request_deadline() {
-        use std::cell::Cell;
-        let elapsed = Cell::new(Duration::ZERO);
-        let reads = Cell::new(0);
-        let answer = read_hook_line(
-            |bytes| {
-                reads.set(reads.get() + 1);
-                elapsed.set(elapsed.get() + Duration::from_secs(4));
-                bytes[0] = b' ';
-                Ok(1)
-            },
-            || Duration::from_secs(10).checked_sub(elapsed.get()),
-        );
-        assert_eq!(answer.map_err(|(reason, _)| reason), Err("request_timeout"));
-        // At 4 s, 8 s and 12 s: the third byte came past the 10 s deadline.
-        assert_eq!(reads.get(), 3);
-    }
-
-    #[test]
-    fn a_hook_response_requires_a_bounded_complete_line() {
-        for (bytes, expected) in [
-            (b"{}\n".to_vec(), Ok("{}\n".to_owned())),
-            (b"{}".to_vec(), Err("invalid_response")),
-            (
-                vec![b' '; hide_node_link::panes::HOOK_RESPONSE_LIMIT + 1],
-                Err("invalid_response"),
-            ),
-        ] {
-            let mut peer = std::io::Cursor::new(bytes);
-            let answer = read_hook_line(
-                |chunk| std::io::Read::read(&mut peer, chunk),
-                || Some(Duration::from_secs(10)),
-            );
-            assert_eq!(answer.map_err(|(reason, _)| reason), expected);
-        }
-        // A read the deadline ended is a timeout; one the stream ended is no
-        // answer, and each keeps what the system said.
-        for (kind, expected) in [
-            (std::io::ErrorKind::TimedOut, "request_timeout"),
-            (std::io::ErrorKind::ConnectionReset, "invalid_response"),
-        ] {
-            let answer = read_hook_line(|_| Err(kind.into()), || Some(Duration::from_secs(10)));
-            assert_eq!(
-                answer.map_err(|(reason, error)| (reason, error.map(|error| error.kind()))),
-                Err((expected, Some(kind)))
-            );
-        }
-    }
 
     /// A bootstrap listener recorded in `state` as a running daemon records
     /// it. Its one connection reads a request line, hands it to the test and
@@ -1625,6 +1737,261 @@ mod tests {
         served.join().unwrap();
     }
 
+    /// A daemon or node a hook may ask: it answers every request it is
+    /// handed with `answer` until it is closed, and says which requests it
+    /// was handed. A connection that sends nothing, as a bridge's does when
+    /// the hook connects to it and asks another, is not a request.
+    struct Asked {
+        closer: hide_platform::ipc::ListenerCloser,
+        served: std::thread::JoinHandle<Vec<Value>>,
+    }
+
+    impl Asked {
+        fn serve<L>(listener: L, answer: impl Fn(&Value) -> Value + Send + 'static) -> Self
+        where
+            L: std::ops::Deref<Target = hide_platform::ipc::LocalListener> + Send + 'static,
+        {
+            let closer = listener.closer();
+            let served = std::thread::spawn(move || {
+                let mut asked = Vec::new();
+                while let Ok(mut stream) = listener.accept() {
+                    let mut line = String::new();
+                    let _ = BufReader::new(&mut stream).read_line(&mut line);
+                    let Ok(request) = serde_json::from_str::<Value>(&line) else {
+                        continue;
+                    };
+                    let _ = writeln!(stream, "{}", answer(&request));
+                    asked.push(request);
+                }
+                asked
+            });
+            Self { closer, served }
+        }
+
+        /// This state folder's daemon.
+        fn daemon(state: &Path, answer: impl Fn(&Value) -> Value + Send + 'static) -> Self {
+            private::create_dir_all(&state.join("pane-capabilities")).unwrap();
+            let (listener, _) = crate::pane_auth::bind(state).unwrap();
+            Self::serve(listener, answer)
+        }
+
+        /// A node pane service in this state folder's bridges.
+        fn bridge(state: &Path, answer: impl Fn(&Value) -> Value + Send + 'static) -> Self {
+            let bridges = hide_kit::layout::workspace_bridges(state);
+            private::create_dir_all(&bridges).unwrap();
+            let folder = bridges.join("bridge-node");
+            private::create_dir(&folder).unwrap();
+            let listener =
+                hide_platform::ipc::LocalListener::bind(&folder.join("bootstrap.sock")).unwrap();
+            Self::serve(Box::new(listener), answer)
+        }
+
+        /// Stops answering and returns what it was asked.
+        fn close(self) -> Vec<Value> {
+            self.closer.close();
+            self.served.join().unwrap()
+        }
+    }
+
+    /// The answer of a daemon or node that ran the hook's request, naming
+    /// `install`, or no installation at all as an earlier build does.
+    fn ran(install: Option<&str>) -> impl Fn(&Value) -> Value + Send + 'static {
+        let install = install.map(str::to_owned);
+        move |request| {
+            let mut answer =
+                json!({"ok": true, "request_id": request["hook"]["request_id"], "result": {}});
+            if let Some(install) = &install {
+                answer["install"] = json!(install);
+            }
+            answer
+        }
+    }
+
+    /// A daemon or node of another installation than the pane's.
+    fn refuses_other_install(_: &Value) -> Value {
+        json!({"ok": false, "reason": OTHER_INSTALL})
+    }
+
+    /// A hook's request from `env`, and the cause a hook records for its
+    /// failure.
+    fn ask_hook(env: &Env) -> Result<Value, (String, &'static str)> {
+        let command = hide_node_link::panes::HookCommand::WorkspaceInfo {};
+        hook_request(env, None, command, Instant::now() + Duration::from_secs(10)).map_err(
+            |reason| {
+                let cause = hide_agent_hooks::delivery::refusal_cause(Some(&reason));
+                (reason, cause)
+            },
+        )
+    }
+
+    /// A hook's request names its pane's installation and takes an answer
+    /// only when the daemon names the same one (with-hide/hide-private#575).
+    /// An earlier build's daemon names none and binds the pane by its folder,
+    /// having already run the command, so its answer is refused and the
+    /// command is not sent again to the node beside it; neither is one
+    /// naming another installation. A pane that names none takes the answer
+    /// as before.
+    #[test]
+    fn a_hook_takes_an_answer_only_from_its_panes_installation() {
+        let app = hide_agent_hooks::route::APP_INSTALL;
+        let ask = |pane: Option<&str>, answering: Option<&str>| {
+            let state = short_dir();
+            let daemon = Asked::daemon(state.path(), ran(answering));
+            let node = Asked::bridge(state.path(), ran(pane));
+            let mut env = env_at(state.path());
+            env.install = pane.map(str::to_owned);
+            let answer = ask_hook(&env);
+            let asked = daemon.close();
+            assert_eq!(asked.len(), 1);
+            assert_eq!(asked[0]["install"], json!(pane));
+            assert_eq!(node.close(), Vec::<Value>::new(), "asked once only");
+            answer.map(|answer| answer["ok"] == true)
+        };
+        let unconfirmed = Err((INSTALL_UNCONFIRMED.to_owned(), "unconfirmed"));
+        assert_eq!(ask(Some(app), None), unconfirmed);
+        assert_eq!(ask(Some(app), Some("root:/helper")), unconfirmed);
+        assert_eq!(ask(Some(app), Some(app)), Ok(true));
+        assert_eq!(ask(None, None), Ok(true));
+    }
+
+    /// A node pane service in this state folder's bridges, in its own folder
+    /// `name`, that declares `declared` as a current node does, or nothing
+    /// as an earlier one.
+    fn declared_bridge(
+        state: &Path,
+        name: &str,
+        declared: Option<Option<&str>>,
+        answer: impl Fn(&Value) -> Value + Send + 'static,
+    ) -> (PathBuf, Asked) {
+        let bridges = hide_kit::layout::workspace_bridges(state);
+        private::create_dir_all(&bridges).unwrap();
+        let folder = bridges.join(name);
+        private::create_dir(&folder).unwrap();
+        if let Some(install) = declared {
+            install::declare_bridge(&folder, install).unwrap();
+        }
+        let listener =
+            hide_platform::ipc::LocalListener::bind(&folder.join("bootstrap.sock")).unwrap();
+        (folder, Asked::serve(Box::new(listener), answer))
+    }
+
+    /// Two nodes in one device's bridges folder, the pane's own and another
+    /// installation's: the pane's hook and its `hide` both take the own
+    /// node's answer, and neither ever asks the other node
+    /// (with-hide/hide-private#622, group C).
+    #[test]
+    fn a_hook_and_hide_answer_alike_beside_another_installations_node() {
+        let state = short_dir();
+        let pane = hide_agent_hooks::route::install_of_root(&state.path().join("helper"));
+        let bridges = hide_kit::layout::workspace_bridges(state.path());
+        let reference = bridges.join("bridge-own").join("ref.json");
+        let wire = hide_platform::path::to_wire(&reference).unwrap();
+        let run = ran(Some(&pane));
+        let own_install = pane.clone();
+        let (_, own) = declared_bridge(
+            state.path(),
+            "bridge-own",
+            Some(Some(&pane)),
+            move |request| {
+                if request["hook"].is_object() {
+                    run(request)
+                } else {
+                    json!({"ok": true, "reference": wire, "install": own_install})
+                }
+            },
+        );
+        let (_, other) = declared_bridge(
+            state.path(),
+            "bridge-other",
+            Some(Some(hide_agent_hooks::route::APP_INSTALL)),
+            refuses_other_install,
+        );
+        let mut env = env_at(state.path());
+        env.install = Some(pane.clone());
+        assert_eq!(ask_hook(&env).map(|answer| answer["ok"] == true), Ok(true));
+        assert_eq!(bootstrap(&env, true), Ok(reference));
+        let asked = own.close();
+        assert_eq!(asked.len(), 2, "the own node is asked by each: {asked:?}");
+        assert!(
+            asked
+                .iter()
+                .all(|request| request["install"] == json!(pane))
+        );
+        assert_eq!(
+            other.close(),
+            Vec::<Value>::new(),
+            "another installation's node is never asked"
+        );
+    }
+
+    /// A hook's command lands on at most one node: with two that may each be
+    /// the pane's, the pane's own by its declaration and one from before
+    /// nodes declared theirs, the hook asks neither and says why.
+    #[test]
+    fn a_hooks_command_reaches_at_most_one_node() {
+        let state = short_dir();
+        let pane = hide_agent_hooks::route::install_of_root(&state.path().join("helper"));
+        let (_, own) = declared_bridge(
+            state.path(),
+            "bridge-own",
+            Some(Some(&pane)),
+            ran(Some(&pane)),
+        );
+        let (_, earlier) = declared_bridge(state.path(), "bridge-earlier", None, ran(Some(&pane)));
+        let daemon = Asked::daemon(state.path(), refuses_other_install);
+        let mut env = env_at(state.path());
+        env.install = Some(pane);
+        assert_eq!(
+            ask_hook(&env),
+            Err((install::AMBIGUOUS_PANE.to_owned(), "refused"))
+        );
+        assert_eq!(own.close(), Vec::<Value>::new());
+        assert_eq!(earlier.close(), Vec::<Value>::new());
+        assert_eq!(daemon.close(), Vec::<Value>::new());
+    }
+
+    /// A device helper's pane is its node's, so its hook asks the node
+    /// before this account's daemon, which would only refuse it as another
+    /// installation's. A route moves on only past a refusal of another
+    /// installation, which ran nothing, and when only such refusals answer,
+    /// that is the hook's reason.
+    #[test]
+    fn a_hook_asks_its_panes_own_installation_first() {
+        // The device pane's own node answers, and the daemon is never asked.
+        let state = short_dir();
+        let pane = hide_agent_hooks::route::install_of_root(&state.path().join("helper"));
+        let daemon = Asked::daemon(state.path(), refuses_other_install);
+        let node = Asked::bridge(state.path(), ran(Some(&pane)));
+        let mut env = env_at(state.path());
+        env.install = Some(pane.clone());
+        assert_eq!(ask_hook(&env).map(|answer| answer["ok"] == true), Ok(true));
+        assert_eq!(node.close().len(), 1);
+        assert_eq!(daemon.close(), Vec::<Value>::new());
+
+        // With no node of its own, only the daemon's refusal answers.
+        let state = short_dir();
+        let daemon = Asked::daemon(state.path(), refuses_other_install);
+        let mut env = env_at(state.path());
+        env.install = Some(pane.clone());
+        assert_eq!(
+            ask_hook(&env),
+            Err((OTHER_INSTALL.to_owned(), "other_install"))
+        );
+        assert_eq!(daemon.close().len(), 1);
+
+        // An app pane whose state folder's daemon is another installation's
+        // goes on to the node, which is the pane's own.
+        let state = short_dir();
+        let app = hide_agent_hooks::route::APP_INSTALL;
+        let daemon = Asked::daemon(state.path(), refuses_other_install);
+        let node = Asked::bridge(state.path(), ran(Some(app)));
+        let mut env = env_at(state.path());
+        env.install = Some(app.to_owned());
+        assert_eq!(ask_hook(&env).map(|answer| answer["ok"] == true), Ok(true));
+        assert_eq!(daemon.close().len(), 1);
+        assert_eq!(node.close().len(), 1);
+    }
+
     // Mode bits widen the file for the refusal.
     #[cfg(unix)]
     #[test]
@@ -1698,38 +2065,256 @@ mod tests {
     }
 
     /// A device's node and a pane's `hide` meet over the system's local
-    /// stream: the node sees the caller's pid and asks the pane's Herdr about
+    /// stream: the node sees the caller's pid and asks the pane's holder about
     /// it, and stopping the node removes it from this device.
     #[test]
     fn a_device_node_answers_this_device_until_it_stops() {
         let directory = short_dir();
         let bridges = directory.path().join("bridges");
-        let herdr = directory.path().join("no-herdr.sock");
         let (sent, _lines) = mpsc::channel();
         let output = std::sync::Mutex::new(Lines(Vec::new(), sent));
         let panes = hide_host::panes::Panes::new();
         let request = json!({"pane_id": "w1:p1", "nonce": "0".repeat(32)});
-        std::thread::scope(|scope| {
+        // The node is stopped before anything is asserted, so a failed
+        // assertion cannot leave the scope waiting on its thread.
+        let (socket, answer) = std::thread::scope(|scope| {
             let started = panes
-                .start(scope, &output, &bridges, herdr.to_str().unwrap())
+                .start(
+                    scope,
+                    &output,
+                    &bridges,
+                    hide_host::pane_holders::PaneSlot::default(),
+                )
                 .unwrap();
-            // Both ends read and write the wire spelling, which on Windows is
-            // the only one `from_wire` reads.
-            assert!(
-                node_socket(&started.socket).unwrap().starts_with(&bridges),
-                "{}",
-                started.socket
-            );
-            // No Herdr answers at the socket the node was given, so it cannot
-            // read the pane; it got that far only by seeing who called.
-            assert_eq!(
-                bootstrap_bridges(&bridges, &request),
-                Err("pane_unavailable".to_owned())
-            );
+            let answer = bootstrap_bridges(&bridges, &request, None);
             panes.stop();
+            (started.socket, answer)
         });
+        // Both ends read and write the wire spelling, which on Windows is the
+        // only one `from_wire` reads.
+        assert!(
+            node_socket(&socket).unwrap().starts_with(&bridges),
+            "{socket}"
+        );
+        // The node was given no pane holders, so it cannot read the pane; it
+        // got that far only by seeing who called.
+        assert_eq!(answer, Err("bridge_unavailable".to_owned()));
         panes.remove_folder();
-        assert_eq!(bootstrap_bridges(&bridges, &request), Ok(None));
+        assert_eq!(bootstrap_bridges(&bridges, &request, None), Ok(None));
+    }
+
+    /// A device helper's pane whose own node does not answer is asked of
+    /// this account's daemon. A daemon from before answers named their
+    /// installation ignores the request's `install` and binds the pane by its
+    /// folder, so its reference is refused (with-hide/hide-private#497), as is
+    /// one naming another installation; an answer naming the pane's own is
+    /// taken.
+    #[test]
+    fn a_pane_takes_a_reference_only_from_its_own_installation() {
+        // `answering` names the answer's installation from the pane's.
+        let ask = |answering: fn(&str) -> Option<String>| {
+            let state = short_dir();
+            let reference = state.path().join("pane-capabilities").join("ref.json");
+            let pane = hide_agent_hooks::route::install_of_root(&state.path().join("helper"));
+            let mut answer = json!({
+                "ok": true,
+                "reference": hide_platform::path::to_wire(&reference).unwrap(),
+            });
+            if let Some(install) = answering(&pane) {
+                answer["install"] = json!(install);
+            }
+            let (hears, served) = hook_listener(state.path(), move |_, stream| {
+                writeln!(stream, "{answer}").unwrap();
+            });
+            let mut env = env_at(state.path());
+            env.install = Some(pane.clone());
+            let outcome = bootstrap(&env, true);
+            let request = hears.recv_timeout(Duration::from_secs(10)).unwrap();
+            served.join().unwrap();
+            assert_eq!(request["install"], pane.as_str());
+            outcome.map(|taken| assert_eq!(taken, reference))
+        };
+        let unconfirmed = Err(INSTALL_UNCONFIRMED.to_owned());
+        assert_eq!(ask(|_| None), unconfirmed);
+        assert_eq!(
+            ask(|_| Some(hide_agent_hooks::route::APP_INSTALL.to_owned())),
+            unconfirmed
+        );
+        assert_eq!(ask(|pane| Some(pane.to_owned())), Ok(()));
+    }
+
+    /// A request that names no installation, from a pane no installation
+    /// started, takes the answer as before, naming one or not.
+    #[test]
+    fn an_answer_is_checked_only_for_the_installation_the_request_named() {
+        let read = |answer: Value, install: Option<&str>| {
+            read_bootstrap_answer(&mut format!("{answer}\n").as_bytes(), install)
+        };
+        let state = short_dir();
+        let reference = state.path().join("pane-capabilities").join("ref.json");
+        let wire = hide_platform::path::to_wire(&reference).unwrap();
+        assert_eq!(
+            read(json!({"ok": true, "reference": wire}), None),
+            Ok(reference.clone())
+        );
+        assert_eq!(
+            read(
+                json!({"ok": true, "reference": wire, "install": "app"}),
+                None
+            ),
+            Ok(reference.clone())
+        );
+        assert_eq!(
+            read(
+                json!({"ok": true, "reference": wire, "install": null}),
+                Some("app")
+            ),
+            Err(INSTALL_UNCONFIRMED.to_owned())
+        );
+        // A refusal keeps its own reason whatever installation it names.
+        assert_eq!(
+            read(json!({"ok": false, "reason": "other_install"}), Some("app")),
+            Err("other_install".to_owned())
+        );
+    }
+
+    /// Two nodes in one bridges folder, one of them another installation's
+    /// that proves a caller by its folder: only the node that names the
+    /// pane's installation answers for it, and the other neither succeeds
+    /// nor makes the pane ambiguous.
+    #[test]
+    fn a_bridge_of_another_installation_does_not_answer_for_the_pane() {
+        let directory = short_dir();
+        let bridges = directory.path().join("bridges");
+        private::create_dir_all(&bridges).unwrap();
+        let pane = "root:/helper";
+        let node = |name: &str, install: Option<&str>| {
+            let folder = bridges.join(name);
+            private::create_dir(&folder).unwrap();
+            let reference = folder.join("ref.json");
+            let mut answer = json!({
+                "ok": true,
+                "reference": hide_platform::path::to_wire(&reference).unwrap(),
+            });
+            if let Some(install) = install {
+                answer["install"] = json!(install);
+            }
+            let listener =
+                hide_platform::ipc::LocalListener::bind(&folder.join("bootstrap.sock")).unwrap();
+            let served = std::thread::spawn(move || {
+                let mut stream = listener.accept().unwrap();
+                let mut line = String::new();
+                BufReader::new(&mut stream).read_line(&mut line).unwrap();
+                writeln!(stream, "{answer}").unwrap();
+            });
+            (reference, served)
+        };
+        let (own, own_served) = node("bridge-own", Some(pane));
+        let (_, app_served) = node("bridge-app", Some(hide_agent_hooks::route::APP_INSTALL));
+        let request = json!({"pane_id": "w1:p1", "nonce": "0".repeat(32), "install": pane});
+        let answer = bootstrap_bridges(&bridges, &request, Some(pane));
+        own_served.join().unwrap();
+        app_served.join().unwrap();
+        assert_eq!(answer, Ok(Some(own)));
+
+        // With only the other installation's node, the pane has no answer.
+        let (_, app_served) = node("bridge-older", None);
+        fs::remove_dir_all(bridges.join("bridge-own")).unwrap();
+        fs::remove_dir_all(bridges.join("bridge-app")).unwrap();
+        let answer = bootstrap_bridges(&bridges, &request, Some(pane));
+        app_served.join().unwrap();
+        assert_eq!(answer, Err(INSTALL_UNCONFIRMED.to_owned()));
+    }
+
+    /// During the update gap the desktop app's pane runs a newer `hide` than
+    /// this account's daemon, which answers without naming its installation,
+    /// and a current device node in the same bridges folder refuses the pane
+    /// as another installation's. The pane hears its own daemon's reason, with
+    /// its advice to reopen Hide, not the other node's.
+    #[test]
+    fn an_older_daemons_reason_outlasts_another_installations_refusal() {
+        let state = short_dir();
+        let reference = state.path().join("pane-capabilities").join("ref.json");
+        let answer = json!({
+            "ok": true,
+            "reference": hide_platform::path::to_wire(&reference).unwrap(),
+        });
+        let (_, served) = hook_listener(state.path(), move |_, stream| {
+            writeln!(stream, "{answer}").unwrap();
+        });
+        let bridges = hide_kit::layout::workspace_bridges(state.path());
+        private::create_dir_all(&bridges).unwrap();
+        let node = bridges.join("bridge-device");
+        private::create_dir(&node).unwrap();
+        let listener =
+            hide_platform::ipc::LocalListener::bind(&node.join("bootstrap.sock")).unwrap();
+        let refused = std::thread::spawn(move || {
+            let mut stream = listener.accept().unwrap();
+            let mut line = String::new();
+            BufReader::new(&mut stream).read_line(&mut line).unwrap();
+            let answer = json!({"ok": false, "reason": OTHER_INSTALL});
+            writeln!(stream, "{answer}").unwrap();
+        });
+        let mut env = env_at(state.path());
+        env.install = Some(hide_agent_hooks::route::APP_INSTALL.to_owned());
+        let outcome = bootstrap(&env, true);
+        served.join().unwrap();
+        refused.join().unwrap();
+        assert_eq!(outcome, Err(INSTALL_UNCONFIRMED.to_owned()));
+    }
+
+    /// The desktop app's daemon in the node role, attached to another
+    /// machine's core, opens no bootstrap socket, so its app pane's `hide`
+    /// finds no daemon and asks the node, whose refusal is the one the
+    /// caller can act on, not the missing daemon's `hide_unavailable`.
+    #[test]
+    fn an_app_pane_without_a_daemon_hears_its_nodes_refusal() {
+        let state = short_dir();
+        let bridges = hide_kit::layout::workspace_bridges(state.path());
+        private::create_dir_all(&bridges).unwrap();
+        let node = bridges.join("bridge-node");
+        private::create_dir(&node).unwrap();
+        let listener =
+            hide_platform::ipc::LocalListener::bind(&node.join("bootstrap.sock")).unwrap();
+        let refused = std::thread::spawn(move || {
+            let mut stream = listener.accept().unwrap();
+            let mut line = String::new();
+            BufReader::new(&mut stream).read_line(&mut line).unwrap();
+            let answer = json!({"ok": false, "reason": "checkout_not_registered"});
+            writeln!(stream, "{answer}").unwrap();
+        });
+        let mut env = env_at(state.path());
+        env.install = Some(hide_agent_hooks::route::APP_INSTALL.to_owned());
+        let outcome = bootstrap(&env, true);
+        refused.join().unwrap();
+        assert_eq!(outcome, Err("checkout_not_registered".to_owned()));
+    }
+
+    /// A device helper's pane reaches its own node through the bridges even
+    /// while this account's daemon would answer for it; the desktop app's
+    /// pane, and a pane that names no installation, reach the daemon first.
+    #[test]
+    fn a_panes_hide_reaches_the_installation_that_started_it() {
+        let daemon = || Ok(PathBuf::from("daemon"));
+        let bridge = || Ok(Some(PathBuf::from("bridge")));
+        let device = install::order(Some("root:/helper"));
+        let app = install::order(Some(hide_agent_hooks::route::APP_INSTALL));
+        assert_eq!(in_pane_order(device, daemon, bridge), Ok("bridge".into()));
+        assert_eq!(in_pane_order(app, daemon, bridge), Ok("daemon".into()));
+        // A node that does not hold the pane leaves it to the daemon.
+        assert_eq!(
+            in_pane_order(device, daemon, || Ok(None)),
+            Ok("daemon".into())
+        );
+        // Refused by both, a device pane says why its node refused.
+        assert_eq!(
+            in_pane_order(
+                device,
+                || Err("hide_unavailable".to_owned()),
+                || Err("pane_unavailable".to_owned())
+            ),
+            Err("pane_unavailable".to_owned())
+        );
     }
 
     /// A plain shell's `hide <path>` on a device asks the one node of its
@@ -1740,7 +2325,6 @@ mod tests {
         use hide_node_link::panes::ProofAnswer;
         let directory = short_dir();
         let bridges = directory.path().join("bridges");
-        let herdr = directory.path().join("no-herdr.sock");
         let (sent, lines) = mpsc::channel();
         let output = std::sync::Mutex::new(Lines(Vec::new(), sent));
         let panes = hide_host::panes::Panes::new();
@@ -1748,7 +2332,12 @@ mod tests {
         let answer = json!({"type":"workspace_result","ok":true,"result":{"label":"app","path":"/home/me/app","added":true,"window":true}});
         std::thread::scope(|scope| {
             panes
-                .start(scope, &output, &bridges, herdr.to_str().unwrap())
+                .start(
+                    scope,
+                    &output,
+                    &bridges,
+                    hide_host::pane_holders::PaneSlot::default(),
+                )
                 .unwrap();
             let panes = &panes;
             let answered = answer.clone();
@@ -1770,7 +2359,12 @@ mod tests {
             );
             core.join().unwrap();
             other
-                .start(scope, &output, &bridges, herdr.to_str().unwrap())
+                .start(
+                    scope,
+                    &output,
+                    &bridges,
+                    hide_host::pane_holders::PaneSlot::default(),
+                )
                 .unwrap();
             assert_eq!(
                 project_open_on_bridge(&bridges, "/home/me/app"),
@@ -1803,7 +2397,6 @@ mod tests {
         let encode = |bytes: &[u8]| base64::engine::general_purpose::STANDARD.encode(bytes);
         let directory = short_dir();
         let bridges = directory.path().join("bridges");
-        let herdr = directory.path().join("no-herdr.sock");
         let (sent, lines) = mpsc::channel();
         let output = std::sync::Mutex::new(Lines(Vec::new(), sent));
         let panes = hide_host::panes::Panes::new();
@@ -1813,7 +2406,12 @@ mod tests {
             .unwrap();
         std::thread::scope(|scope| {
             let started = panes
-                .start(scope, &output, &bridges, herdr.to_str().unwrap())
+                .start(
+                    scope,
+                    &output,
+                    &bridges,
+                    hide_host::pane_holders::PaneSlot::default(),
+                )
                 .unwrap();
             let socket = node_socket(&started.socket).unwrap();
             runtime.block_on(async {
@@ -1849,10 +2447,6 @@ mod tests {
     fn env_at(directory: &Path) -> Env {
         Env {
             home: directory.to_path_buf(),
-            herdr_socket_path: None,
-            herdr_bin_path: None,
-            own_engine: false,
-            login_shell: None,
             state_dir: directory.to_path_buf(),
             legacy_state_dir: None,
             account_state_folder: false,
@@ -1866,8 +2460,12 @@ mod tests {
             host_helper_root: None,
             host_cli_dir: None,
             pane_id: None,
+            install: None,
+            access: None,
             tailscale_bin: Some(directory.join("no-tailscale")),
             relay_url: "ws://127.0.0.1:9/ws".to_owned(),
+            peer_direct: None,
+            device_connect: false,
             search_path: None,
         }
     }
@@ -1885,11 +2483,14 @@ mod tests {
         true
     }
 
-    /// A one-shot command against a running daemon sends no claim and
-    /// writes no claimed marker, and the daemon revokes its token once the
-    /// connection ends; a named reference's command still claims. This
-    /// process stands in for the pane's shell, so every credential stays
-    /// alive until the daemon or the command ends it.
+    /// A one-shot command against a running daemon writes no claimed
+    /// marker, and the daemon revokes its token once the connection ends; a
+    /// command for a pane the engine cannot prove is refused and its
+    /// credential revoked before any claim. This process stands in for the
+    /// pane's shell, so every credential stays alive until the daemon or the
+    /// command ends it. A named reference's claim needs a pane the engine
+    /// runs, and the device contract proves it
+    /// (`workspace_guidance_gets_one_reusable_reference_and_rejects_writes`).
     #[test]
     fn a_one_shot_command_is_not_claimed_and_its_token_ends_with_its_connection() {
         let directory = tempfile::tempdir().unwrap();
@@ -1906,7 +2507,7 @@ mod tests {
         let shell = i32::try_from(std::process::id()).unwrap();
         let attestation = crate::pane_auth::Attestation::pane(
             "w1:p1",
-            herdr_core::workspace_control::Context {
+            hide_core::workspace_control::Context {
                 device_id: "local".to_owned(),
                 workspace_id: "workspace".to_owned(),
                 checkout_id: "checkout".to_owned(),
@@ -1933,8 +2534,8 @@ mod tests {
             named: false,
             _one_shot: Some(OneShotReference(path.to_path_buf())),
         };
-        // This daemon has no Herdr to read the pane from, so each command is
-        // answered with that refusal; what follows an answer is the same.
+        // The daemon's engine runs no pane `w1:p1`, so each command is
+        // refused with that and its credential revoked.
         let answered = |credential: &mut Credential| {
             let answer = request(credential, "info").unwrap();
             assert_eq!(answer["reason"], "pane_unavailable", "{answer}");
@@ -1952,21 +2553,14 @@ mod tests {
         drop(credential);
         assert!(!path.exists());
 
-        // The same command on a token the daemon would keep: it sends no
-        // claim, so neither side records one.
+        // The same command on a token the daemon would keep: the refusal
+        // revokes the credential, so neither side records a claim.
         let (path, token) = issue('2', None);
         let mut credential = one_shot(&path);
         answered(&mut credential);
         assert!(!path.with_extension("claimed").exists());
-        assert_eq!(registry.claimed(&token), Some(false));
+        assert_eq!(registry.claimed(&token), None);
         drop(credential);
-
-        // A named reference is persistent, and its command claims it.
-        let (path, token) = issue('3', None);
-        let mut credential = Credential::named(&env, path.clone());
-        answered(&mut credential);
-        assert!(path.with_extension("claimed").is_file());
-        assert_eq!(registry.claimed(&token), Some(true));
 
         running.stop();
         drop(running);

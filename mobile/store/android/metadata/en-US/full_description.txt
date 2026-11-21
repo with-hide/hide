@@ -1,0 +1,30 @@
+The mobile companion to Hide, the desktop app for running coding agents.
+Install Hide on your computer (free at withhide.dev), connect this app to it, and see and answer your computer's coding agents from your phone.
+
+Getting started
+1. Install Hide on your computer (Mac, Windows or Linux).
+2. In Hide on your computer, open Settings > Mobile.
+3. Scan its QR code with this app.
+No Hide on a computer yet? Tap "Try the demo" on the first screen to look around with sample data first.
+
+Your coding agents keep working on your own computer. Hide on your phone shows which one needs you, lets you read the conversation and reply, and tells you the moment a question comes in.
+
+What you can do
+- See every agent in one list: Needs You, Working, Unread and Seen.
+- Read an agent's conversation and reply from wherever you are.
+- Get a notification when an agent asks you something. Notifications are encrypted end to end and opened on your phone, so neither the relay nor the push service can read them. Tapping one opens that conversation.
+- Follow a mission: its steps, its pull requests and the one decision that waits on you.
+- Check a pull request's status and reviews, then merge it, or hand it to an agent.
+- Open the pages and images your agent made, right in the app.
+- Start a new agent on your computer.
+
+Connection and privacy
+The connection goes through a relay and is end-to-end encrypted, so the relay cannot read it. There is no account to make, and the app has no ads. Your agents, code and files stay on your computer, and commands run there, not on your phone. The phone shows agents, conversations and results in its own screens.
+
+No computer nearby?
+Tap "Try the demo" on the first screen to look around every screen with sample data. Nothing goes to a computer and nothing from the demo is kept.
+
+Works with the agents you already use
+Hide runs the coding agents installed on your computer, such as Claude Code, Codex and OpenCode, and this app shows them. Hide is an independent project and is not affiliated with, endorsed by or sponsored by the makers of these agents.
+
+Hide for Android is free. Get Hide for your computer at withhide.dev. Questions? withhide.dev/support

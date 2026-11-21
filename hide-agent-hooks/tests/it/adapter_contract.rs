@@ -1,6 +1,6 @@
-use hide_agent_adapter::{ADAPTERS, HookInstall, ObservationSupport, PluginDialect};
+use hide_agent_adapter::{ADAPTERS, HookInstall, PluginDialect};
 use hide_agent_hooks::{AgentRuntime, guidance::GuidanceAgent};
-use serde_json::{Value, json};
+use serde_json::Value;
 
 fn native_document(
     row: &hide_agent_adapter::AgentAdapter,
@@ -23,15 +23,11 @@ fn native_document(
             path
         }
         _ => panic!(
-            "{} declares native observation without a native installer",
+            "{} declares a native context route without a native installer",
             row.id
         ),
     };
     serde_json::from_slice(&std::fs::read(path).unwrap()).unwrap()
-}
-
-fn native_fixtures() -> Value {
-    serde_json::from_str(include_str!("../fixtures/observation-native.json")).unwrap()
 }
 
 /// Native hosts' installed start/prompt commands must retain the context
@@ -91,156 +87,6 @@ fn declared_native_context_has_installed_start_and_prompt_commands() {
     }
 }
 
-fn event_command<'a>(document: &'a Value, event: &str, tool: &str) -> &'a str {
-    let events = document
-        .get("hooks")
-        .or_else(|| document.get("hide"))
-        .unwrap();
-    let groups = events[event]
-        .as_array()
-        .expect("declared observation needs its installed Post event");
-    let group = groups
-        .iter()
-        // A group with no matcher admits every tool.
-        .find(|group| {
-            group.get("matcher").is_none()
-                || group["matcher"]
-                    .as_str()
-                    .is_some_and(|matcher| matcher.split('|').any(|name| name == tool))
-        })
-        .expect("installed Post matcher must admit the native fixture tool");
-    group["hooks"][0]["command"]
-        .as_str()
-        .expect("Post needs an executable hook")
-}
-
-fn assert_fact(mut actual: Value, runtime: &str, expected: &Value) {
-    let time = actual
-        .as_object_mut()
-        .unwrap()
-        .remove("observed_at_unix_ms")
-        .unwrap();
-    assert!(time.as_u64().is_some());
-    let mut expected = expected.clone();
-    expected["runtime_id"] = json!(runtime);
-    assert_eq!(actual, expected, "{runtime}");
-}
-
-#[test]
-fn every_native_observation_has_installed_events_and_expected_metadata() {
-    let fixtures = native_fixtures();
-    for row in ADAPTERS.iter().chain(std::iter::once(
-        hide_agent_adapter::AgentId::Cursor.adapter(),
-    )) {
-        match row.observation {
-            ObservationSupport::Unsupported { reason } => {
-                assert!(!reason.trim().is_empty(), "{}", row.id)
-            }
-            ObservationSupport::Plugin(dialect) => {
-                assert_eq!(row.hook, HookInstall::Plugin(dialect))
-            }
-            ObservationSupport::Native(dialect) => {
-                assert_eq!(dialect.adapter().id, row.id);
-                let fixture = &fixtures[row.id];
-                let home = tempfile::tempdir().unwrap();
-                let helper = home.path().join("hide-agent-hooks");
-                let document = native_document(row, home.path(), &helper);
-                for event in fixture["events"]
-                    .as_array()
-                    .expect("native support requires a native fixture")
-                {
-                    let event = event.as_str().unwrap();
-                    event_command(&document, event, fixture["tool"].as_str().unwrap());
-                    let fact = hide_agent_hooks::observation::native(
-                        row.id,
-                        fixture["payload"].to_string().as_bytes(),
-                        false,
-                        event == "PostToolUseFailure",
-                        42,
-                        &|_| None,
-                    )
-                    .unwrap();
-                    let expected = if event == "PostToolUseFailure" {
-                        &fixture["failure"]
-                    } else {
-                        &fixture["expected"]
-                    };
-                    assert_eq!(fact.prompts.len(), 1, "{}", row.id);
-                    assert_fact(
-                        serde_json::to_value(&fact.prompts[0]).unwrap(),
-                        row.id,
-                        expected,
-                    );
-                }
-            }
-        }
-    }
-}
-
-/// Execute the installed command, so a declaration and parser alone cannot
-/// hide a missing binary dispatch route. The stand-in records only metadata.
-#[cfg(unix)]
-#[test]
-fn every_supported_observation_reaches_admission() {
-    let fixtures = native_fixtures();
-    for row in ADAPTERS {
-        let machine = crate::opencode_helper::Machine::new();
-        match row.observation {
-            ObservationSupport::Native(_) => {
-                let fixture = &fixtures[row.id];
-                let document = native_document(row, &machine.home, &machine.helper);
-                for event in fixture["events"].as_array().unwrap() {
-                    let event = event.as_str().unwrap();
-                    let command =
-                        event_command(&document, event, fixture["tool"].as_str().unwrap());
-                    machine.run_installed(command, &fixture["payload"]);
-                    let expected = if event == "PostToolUseFailure" {
-                        &fixture["failure"]
-                    } else {
-                        &fixture["expected"]
-                    };
-                    assert_fact(machine.take_observation(), row.id, expected);
-                }
-            }
-            ObservationSupport::Plugin(_) => {
-                let fixture = &fixtures["claude-code"];
-                let started = std::time::Instant::now();
-                let answer = machine.run_as(
-                    row.id,
-                    "observation",
-                    &json!({
-                        "version": hide_agent_hooks::pi_extension::VERSION,
-                        "session_id": "native-session", "observation": {
-                            "command": fixture["payload"]["tool_input"]["command"],
-                            "call_id": "native-call", "result": fixture["payload"]["tool_response"]
-                        }
-                    }),
-                    true,
-                );
-                // The helper's send budget is the product's, and under load
-                // it has answered not observed here (with-hide/hide-private#334):
-                // the failure names how long the run took, the cause the
-                // helper recorded and what the stand-in `hide` was asked.
-                let read = |name: &str| {
-                    std::fs::read_to_string(machine.home.join(name))
-                        .unwrap_or_else(|error| format!("<{error}>"))
-                };
-                assert_eq!(
-                    answer["observed"],
-                    true,
-                    "{}: after {:?}; recorded {}; hide was asked {}",
-                    row.id,
-                    started.elapsed(),
-                    read(".hide/agent-hooks/delivery-diagnostics.json"),
-                    read("../hide-calls"),
-                );
-                assert_fact(machine.take_observation(), row.id, &fixture["expected"]);
-            }
-            ObservationSupport::Unsupported { .. } => {}
-        }
-    }
-}
-
 /// Every agent Hide supports runs Hide AI too, offered in the order Settings
 /// lists the agents, so an agent cannot ship without its backend: each row
 /// declares a provider (`ai`), and hide-ai's registry binds every declared
@@ -293,7 +139,7 @@ fn every_installed_hook_dialect_resolves_through_the_shared_adapter() {
                     } else {
                         assert_eq!(printed, None, "{}", row.id);
                     }
-                    assert_eq!(guidance.dialect(), row.spawn_guard);
+                    assert_eq!(guidance.dialect(), row.guard);
                     // The count is declared on its own: Cursor's hooks never
                     // fire for a Task subagent, so it declares none.
                     if row.subagent_counts.is_some() {

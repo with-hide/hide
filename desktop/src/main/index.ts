@@ -39,9 +39,11 @@ if (!app.requestSingleInstanceLock()) {
 
   app.on("second-instance", () => host.reopen("second-instance"));
   app.on("activate", () => host.reopen("activate"));
-  // B7: closing the last window leaves the app running, as macOS apps do.
+  // B7: closing the last window leaves the app running, as macOS apps do,
+  // unless an update is ready: quitting then installs it, and the core and
+  // its agents keep running.
   app.on("window-all-closed", () => {
-    if (process.platform !== "darwin") app.quit();
+    if (process.platform !== "darwin" || host.installOnWindowClose()) app.quit();
   });
   app.on("before-quit", () => host.quit());
 

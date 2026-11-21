@@ -11,10 +11,22 @@ use std::time::{Duration, Instant};
 use hide_platform::ipc::{LocalListener, LocalStream, is_endpoint, remove_leftover};
 use tempfile::TempDir;
 
-/// A folder and an endpoint path inside it. Kept short: a Unix socket path
-/// is limited to about a hundred bytes.
+/// A folder the test owns, short whatever `TMPDIR` is: a Unix socket path is
+/// limited to about a hundred bytes, and macOS's own `TMPDIR` takes half of
+/// them. Windows names a pipe and has no such limit.
+fn short_folder() -> TempDir {
+    let mut folder = tempfile::Builder::new();
+    folder.prefix("hp");
+    #[cfg(unix)]
+    let folder = folder.tempdir_in("/tmp");
+    #[cfg(not(unix))]
+    let folder = folder.tempdir();
+    folder.unwrap()
+}
+
+/// A folder and an endpoint path inside it.
 fn endpoint() -> (TempDir, PathBuf) {
-    let folder = tempfile::Builder::new().prefix("hp").tempdir().unwrap();
+    let folder = short_folder();
     let path = folder.path().join("s.sock");
     (folder, path)
 }
@@ -57,6 +69,50 @@ fn endpoint_kind_refuses_a_link_to_an_actual_socket_without_following_it() {
     assert!(!is_endpoint(&alias).unwrap());
     assert_eq!(std::fs::read_link(&alias).unwrap(), path);
     assert!(is_endpoint(&path).unwrap());
+}
+
+/// The bytes a Unix socket address holds for its path, with the NUL that ends
+/// it: the operating system's own figure, not the implementation's.
+#[cfg(unix)]
+const SUN_PATH: usize = if cfg!(any(target_os = "linux", target_os = "android")) {
+    108
+} else {
+    104
+};
+
+/// A socket path of exactly `length` bytes in a short folder the test owns.
+#[cfg(unix)]
+fn path_of_length(length: usize) -> (TempDir, PathBuf) {
+    let folder = short_folder();
+    let base = folder.path().as_os_str().len() + 1;
+    let path = folder.path().join("s".repeat(length - base));
+    assert_eq!(path.as_os_str().len(), length);
+    (folder, path)
+}
+
+/// Windows names a pipe, which has no such limit, so this contract is Unix's.
+#[cfg(unix)]
+#[test]
+fn a_path_one_byte_under_the_address_limit_binds_and_a_path_at_it_names_itself() {
+    let (_folder, fits) = path_of_length(SUN_PATH - 1);
+    let listener = LocalListener::bind(&fits).unwrap();
+    drop(listener);
+
+    let (folder, too_long) = path_of_length(SUN_PATH);
+    let error = LocalListener::bind(&too_long).err().unwrap();
+    assert_eq!(error.kind(), std::io::ErrorKind::InvalidInput);
+    let reason = error.to_string();
+    assert!(reason.contains(&too_long.display().to_string()), "{reason}");
+    assert!(reason.contains(&SUN_PATH.to_string()), "{reason}");
+    // It failed before it made anything: no folder, lock or socket.
+    assert_eq!(std::fs::read_dir(folder.path()).unwrap().count(), 0);
+    // And no connect can reach what no listener could bind.
+    let error = LocalStream::connect(&too_long).err().unwrap();
+    assert!(error.to_string().contains(&too_long.display().to_string()));
+    let error = LocalStream::connect_until(&too_long, Instant::now() + Duration::from_secs(1))
+        .err()
+        .unwrap();
+    assert!(error.to_string().contains(&too_long.display().to_string()));
 }
 
 fn read_line(stream: &mut LocalStream) -> String {
@@ -705,6 +761,33 @@ fn an_answer_written_just_before_the_end_is_dropped_arrives_whole() {
     answering.join().unwrap();
 }
 
+/// A listener may answer a connection for one exchange and close it before
+/// the connecting side is back from its connect, as a pane holder past its
+/// opening bound does: the connect still hands back the stream, which reads
+/// the answer and then the end. macOS refuses every socket option once the
+/// peer has closed, so a connect that set one after the system's connect
+/// answered `EINVAL` (with-hide/hide-private#616). When the close lands is
+/// the system's, so each round is one chance at that moment.
+#[test]
+fn a_connect_the_listener_answers_and_closes_at_once_reads_the_answer_and_the_end() {
+    const ROUNDS: usize = 300;
+    let (_folder, path) = endpoint();
+    let listener = LocalListener::bind(&path).unwrap();
+    let answering = thread::spawn(move || {
+        for _ in 0..ROUNDS {
+            listener.accept().unwrap().write_all(b"full\n").unwrap();
+        }
+    });
+    for round in 0..ROUNDS {
+        let mut client =
+            LocalStream::connect_until(&path, Instant::now() + Duration::from_secs(10))
+                .unwrap_or_else(|error| panic!("round {round}: {error:?}"));
+        assert_eq!(read_line(&mut client), "full\n", "round {round}");
+        assert_eq!(client.read(&mut [0_u8; 1]).unwrap(), 0, "round {round}");
+    }
+    answering.join().unwrap();
+}
+
 /// The answer is the same when the close lands before the accept blocks, so
 /// a slow thread can make this pass without blocking but never fail.
 #[test]
@@ -1346,4 +1429,267 @@ fn the_endpoint_is_private_to_the_account() {
     for everyone in [";WD)", ";BU)", ";AU)", ";IU)", ";AN)", ";S-1-1-0)"] {
         assert!(!sddl.contains(everyone), "others can connect: {sddl}");
     }
+}
+
+/// Prints each step of the elevated test as it begins, with the time since
+/// the test started, so a run nextest ends for its period says which step
+/// and which side of the pipe stopped. It timed out twice on the Windows
+/// runner with nothing printed (with-hide/hide-private#2569) and did not
+/// again in 40 repeats there. The line is printed before the step runs,
+/// never collected for the end: a killed test prints nothing afterwards.
+#[cfg(windows)]
+fn step(begun: std::time::Instant, what: &str) {
+    eprintln!("[elevated ipc] {what} at {:?}", begun.elapsed());
+}
+
+/// A program Git Bash starts runs with the same elevated token as a
+/// PowerShell beside it, except that its default owner is the user rather
+/// than the Administrators group. What the elevated side made (a private
+/// folder, a pipe) stays the account's own to that program. The test sets
+/// each side's default owner itself, since a runner's own default varies.
+#[cfg(windows)]
+#[test]
+fn an_elevated_account_whose_default_owner_is_the_user_reaches_what_it_made() {
+    use hide_platform::fs::private;
+
+    let begun = std::time::Instant::now();
+    let folder = tempfile::Builder::new().prefix("hp").tempdir().unwrap();
+    let made = folder.path().join("bridge");
+    let path = made.join("s.sock");
+    step(begun, "the Administrators act begins");
+    let acting = ActingOwner::act(Owner::Administrators);
+    step(begun, "the folder and the pipe are made");
+    let bound = private::create_dir(&made)
+        .map_err(|error| error.to_string())
+        .and_then(|()| LocalListener::bind(&path).map_err(|error| error.to_string()));
+    drop(acting);
+    let listener = bound.unwrap();
+    let accepted = thread::spawn(move || listener.accept().map(|_| ()));
+
+    step(begun, "the user's act begins");
+    let acting = ActingOwner::act(Owner::User);
+    step(begun, "the folder's owner is read and the client connects");
+    let owned = private::owned_by_current_user(&made);
+    let connected = LocalStream::connect(&path).map(|_| ());
+    drop(acting);
+
+    assert!(owned.unwrap(), "the folder an elevated process made");
+    connected.unwrap();
+    step(begun, "the server is to accept");
+    accepted.join().unwrap().unwrap();
+    step(begun, "the server accepted");
+}
+
+/// Whom the acting thread's new objects belong to by default.
+#[cfg(windows)]
+#[derive(Clone, Copy)]
+enum Owner {
+    /// The user, as Git Bash's runtime sets it.
+    User,
+    /// The Administrators group, an elevated token's usual default.
+    Administrators,
+}
+
+/// The calling thread acting with the process's own token, its default
+/// owner set to `Owner`. The test runs elevated (the Windows runner and a
+/// device's ssh session both do), where the token may name either as its
+/// owner. Dropping it ends the act on every exit; it never leaves its
+/// thread.
+#[cfg(windows)]
+struct ActingOwner(std::marker::PhantomData<*const ()>);
+
+#[cfg(windows)]
+impl ActingOwner {
+    fn act(owner: Owner) -> Self {
+        use windows_sys::Win32::Foundation::{CloseHandle, HANDLE};
+        use windows_sys::Win32::Security::{
+            CreateWellKnownSid, DuplicateTokenEx, GetTokenInformation, SecurityImpersonation,
+            SetTokenInformation, TOKEN_ADJUST_DEFAULT, TOKEN_DUPLICATE, TOKEN_IMPERSONATE,
+            TOKEN_OWNER, TOKEN_QUERY, TOKEN_USER, TokenImpersonation, TokenOwner, TokenUser,
+            WinBuiltinAdministratorsSid,
+        };
+        use windows_sys::Win32::System::Threading::{
+            GetCurrentProcess, OpenProcessToken, SetThreadToken,
+        };
+
+        fn information(token: HANDLE, class: i32) -> Vec<u64> {
+            let mut size = 0u32;
+            // SAFETY: a size query with no buffer.
+            unsafe { GetTokenInformation(token, class, std::ptr::null_mut(), 0, &mut size) };
+            let mut buffer = vec![0u64; (size as usize).div_ceil(8)];
+            // SAFETY: `buffer` holds at least `size` writable bytes.
+            let read = unsafe {
+                GetTokenInformation(token, class, buffer.as_mut_ptr().cast(), size, &mut size)
+            };
+            assert_ne!(read, 0, "{}", std::io::Error::last_os_error());
+            buffer
+        }
+
+        let mut process = std::ptr::null_mut();
+        // SAFETY: the current-process pseudo handle is always valid.
+        let opened = unsafe {
+            OpenProcessToken(
+                GetCurrentProcess(),
+                TOKEN_DUPLICATE | TOKEN_QUERY,
+                &mut process,
+            )
+        };
+        assert_ne!(opened, 0, "{}", std::io::Error::last_os_error());
+        let mut acting = std::ptr::null_mut();
+        // SAFETY: `process` is open with TOKEN_DUPLICATE.
+        let duplicated = unsafe {
+            DuplicateTokenEx(
+                process,
+                TOKEN_ADJUST_DEFAULT | TOKEN_IMPERSONATE | TOKEN_QUERY,
+                std::ptr::null(),
+                SecurityImpersonation,
+                TokenImpersonation,
+                &mut acting,
+            )
+        };
+        let duplicated_error = std::io::Error::last_os_error();
+        // SAFETY: the handle is open and owned here.
+        unsafe { CloseHandle(process) };
+        assert_ne!(duplicated, 0, "{duplicated_error}");
+
+        let user = information(acting, TokenUser);
+        // A SID's largest size (SECURITY_MAX_SID_SIZE) is 68 bytes.
+        let mut administrators = [0u64; 9];
+        let sid = match owner {
+            // SAFETY: the buffer holds what GetTokenInformation wrote for
+            // TokenUser, and the SID it points at lies inside it.
+            Owner::User => unsafe { (*user.as_ptr().cast::<TOKEN_USER>()).User.Sid },
+            Owner::Administrators => {
+                let mut size = size_of_val(&administrators) as u32;
+                // SAFETY: `administrators` holds `size` writable bytes.
+                let made = unsafe {
+                    CreateWellKnownSid(
+                        WinBuiltinAdministratorsSid,
+                        std::ptr::null_mut(),
+                        administrators.as_mut_ptr().cast(),
+                        &mut size,
+                    )
+                };
+                assert_ne!(made, 0, "{}", std::io::Error::last_os_error());
+                administrators.as_mut_ptr().cast()
+            }
+        };
+        let set_owner = TOKEN_OWNER { Owner: sid };
+        // SAFETY: `acting` is open with TOKEN_ADJUST_DEFAULT and `set_owner`
+        // names a SID whose buffer outlives the call. An elevated token
+        // holds both as owners it may name.
+        let set = unsafe {
+            SetTokenInformation(
+                acting,
+                TokenOwner,
+                std::ptr::addr_of!(set_owner).cast(),
+                size_of::<TOKEN_OWNER>() as u32,
+            )
+        };
+        let set_error = std::io::Error::last_os_error();
+        // SAFETY: a null thread is the calling thread; it keeps its own
+        // reference to `acting`, so this one is closed either way.
+        let applied = if set != 0 {
+            unsafe { SetThreadToken(std::ptr::null(), acting) }
+        } else {
+            0
+        };
+        let applied_error = std::io::Error::last_os_error();
+        unsafe { CloseHandle(acting) };
+        assert_ne!(set, 0, "the test has to run elevated: {set_error}");
+        assert_ne!(applied, 0, "{applied_error}");
+        Self(std::marker::PhantomData)
+    }
+}
+
+#[cfg(windows)]
+impl Drop for ActingOwner {
+    fn drop(&mut self) {
+        use windows_sys::Win32::Security::RevertToSelf;
+        // SAFETY: ends this thread's impersonation, which `act` began.
+        if unsafe { RevertToSelf() } == 0 && !thread::panicking() {
+            panic!("{}", std::io::Error::last_os_error());
+        }
+    }
+}
+
+/// The backlog of the Unix listener that takes no connection.
+#[cfg(unix)]
+const BACKLOG: libc::c_int = 1;
+
+/// The connections the listener that takes no connection holds: a Unix
+/// queue holds its backlog and one more (Linux), or about half again
+/// (macOS); a Windows listener its queue and instances.
+#[cfg(unix)]
+const HELD: usize = BACKLOG as usize + 1;
+#[cfg(windows)]
+const HELD: usize = hide_platform::ipc::HELD_UNACCEPTED;
+
+/// A listener that takes no connection: on Unix a socket with a backlog of
+/// [`BACKLOG`], on Windows a bound listener that never accepts, whose pipe
+/// instances run out.
+#[cfg(unix)]
+fn listener_taking_none(path: &Path) -> std::os::fd::OwnedFd {
+    use std::os::fd::FromRawFd;
+    use std::os::unix::ffi::OsStrExt;
+
+    // SAFETY: plain socket calls on a descriptor this function owns from the
+    // moment it exists; the address is zeroed and filled within its size.
+    unsafe {
+        let fd = libc::socket(libc::AF_UNIX, libc::SOCK_STREAM, 0);
+        assert!(fd >= 0, "{}", std::io::Error::last_os_error());
+        let owned = std::os::fd::OwnedFd::from_raw_fd(fd);
+        let mut address: libc::sockaddr_un = std::mem::zeroed();
+        address.sun_family = libc::AF_UNIX as libc::sa_family_t;
+        let bytes = path.as_os_str().as_bytes();
+        assert!(bytes.len() < address.sun_path.len());
+        for (slot, byte) in address.sun_path.iter_mut().zip(bytes) {
+            *slot = *byte as libc::c_char;
+        }
+        let length = std::mem::size_of::<libc::sockaddr_un>() as libc::socklen_t;
+        let bound = libc::bind(fd, (&raw const address).cast(), length);
+        assert_eq!(bound, 0, "{}", std::io::Error::last_os_error());
+        // Not zero: macOS reads a backlog of zero as its default.
+        assert_eq!(
+            libc::listen(fd, BACKLOG),
+            0,
+            "{}",
+            std::io::Error::last_os_error()
+        );
+        owned
+    }
+}
+
+#[cfg(windows)]
+fn listener_taking_none(path: &Path) -> LocalListener {
+    LocalListener::bind(path).unwrap()
+}
+
+/// A connect for one exchange never outlasts its deadline, however busy the
+/// listener is: once the listener has taken all it will hold, the next
+/// connect answers `TimedOut` (or, on macOS, `ConnectionRefused` at once)
+/// rather than waiting for it to accept, which on Linux it never does.
+#[test]
+fn a_connect_to_a_listener_that_takes_nothing_more_ends_by_its_deadline() {
+    let (_folder, path) = endpoint();
+    let _listener = listener_taking_none(&path);
+    let mut held = Vec::new();
+    // Twice what the listener holds is past it on every system.
+    let refused = (0..2 * HELD).find_map(|_| {
+        match LocalStream::connect_until(&path, Instant::now() + Duration::from_millis(200)) {
+            Ok(stream) => {
+                held.push(stream);
+                None
+            }
+            Err(error) => Some(error.kind()),
+        }
+    });
+    assert!(
+        matches!(
+            refused,
+            Some(std::io::ErrorKind::TimedOut | std::io::ErrorKind::ConnectionRefused)
+        ),
+        "{refused:?} after {} connects",
+        held.len()
+    );
 }

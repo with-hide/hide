@@ -1,0 +1,34 @@
+[package]
+name = "hide-peer"
+version = "0.1.0"
+edition = "2024"
+publish = false
+
+# The connection between two Hide machines, above whatever carries it
+# (PRD device-connect-iroh D-52, D-62, D-63, D-66, D-79): the machine key,
+# the grants a host gives and the hosts a guest knows, each direction's
+# generation, the rule for which of two connections stays, the inbox record,
+# the loopback transport the tests run on, and the multiplexer for a carrier
+# that is one byte stream.
+#
+# It knows no transport: `PeerTransport` is the seam and `hide-peer-iroh`
+# is the one crate behind it that links iroh. It does not link `hide-core`
+# either; what it reports goes through `log`, and an event is applied
+# through a trait `hided` implements.
+
+[dependencies]
+hide-kit = { path = "../hide-kit" }
+hide-peer-protocol = { path = "../hide-peer-protocol" }
+hide-platform = { path = "../hide-platform" }
+blake3 = "=1.8.7"
+ed25519-dalek = "=3.0.0"
+getrandom = "=0.3.4"
+serde = { version = "=1.0.229", features = ["derive"] }
+serde_json = "=1.0.151"
+tokio = { version = "=1.53.2", features = ["io-util", "macros", "rt", "sync", "time"] }
+zeroize = "=1.9.2"
+workspace-hack = { version = "0.1", path = "../workspace-hack" }
+
+[dev-dependencies]
+tempfile = "=3.27.0"
+tokio = { version = "=1.53.2", features = ["rt-multi-thread", "test-util"] }

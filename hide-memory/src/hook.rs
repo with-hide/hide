@@ -119,6 +119,16 @@ pub struct HookContext {
     /// whether or not Memory answered.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub global: Option<String>,
+    /// The session's open questions a prompt gives its agent, in their own
+    /// slot outside Memory's quota and whether or not Memory answered
+    /// (hide-core `links::agent_asks`).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub asks: Option<String>,
+    /// The Project's other sessions a session start gives its agent, in
+    /// their own slot outside Memory's quota and whether or not Memory
+    /// answered (hide-core `links::session_brief`).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub sessions: Option<String>,
 }
 
 impl HookContext {
@@ -127,6 +137,8 @@ impl HookContext {
             context: None,
             outcome,
             global: None,
+            asks: None,
+            sessions: None,
         }
     }
 }
@@ -321,6 +333,8 @@ fn render(
         context: Some(context),
         outcome,
         global: None,
+        asks: None,
+        sessions: None,
     }
 }
 

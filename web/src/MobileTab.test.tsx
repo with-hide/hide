@@ -111,7 +111,7 @@ it("keeps Tailscale under Advanced after relay becomes the default (B6)", async 
 });
 
 it("leaves the push mode to Settings > Notifications (PRD settings-left-nav B7)", async () => {
-  const { q, unmount } = await mount(frame({ push_mode: "off" }));
+  const { q, unmount } = await mount(frame({ push_mode: "app_closed" }));
   expect(q("[data-push-select]")).toBeNull();
   await unmount();
 });

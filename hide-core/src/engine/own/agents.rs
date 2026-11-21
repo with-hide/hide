@@ -1,0 +1,1667 @@
+//! The agents the core's own engine runs (PRD engine-bundle-3-core-owns
+//! D-16, D-17, D-18): which agent a pane runs, under what name and session,
+//! and the state its screen shows.
+//!
+//! A pane runs an agent the engine started in it (a spawn, a wake, a fork, a
+//! resume), or one the operator typed into its shell, which the engine knows
+//! by the program in the pane's foreground matched against the agent
+//! definitions' `executables`. The pane's holder says what runs there and
+//! what the screen rules read, whenever it changes ([`PaneFacts`]); the
+//! engine never reads a screen on a timer. The agent ends when its program
+//! leaves the foreground.
+//!
+//! The state is what the screen rules read: working, waiting on the operator
+//! (blocked), or at rest, and at rest after working is a finished turn
+//! (`done`, with the sequence it finished at). A screen no rule matches is
+//! at rest. The core lays the agent's
+//! hook and session file over this ([`crate::agent_state`]), so the screen
+//! fills only what they do not report (D-18). An agent whose screen cannot be
+//! read, with no rules or a holder that cannot run them, is `unknown`.
+
+use std::sync::{Arc, Mutex, PoisonError};
+use std::time::Instant;
+
+use hide_agent_adapter::definition::{Catalog, Definition, Source};
+use hide_agent_hooks::hook_request::ExecProcess;
+use hide_node_link::holders::{
+    ForegroundProgram, PaneFacts, RuleSet, ScreenRead, ScreenRules, ScreenState,
+};
+
+use super::shell_line::stripped_title;
+use crate::engine::answers::{PaneSessionKind, Readiness};
+use crate::session_sync::NotResumed;
+
+/// How long a start the engine typed may take to show its program in the
+/// pane's foreground before it is taken as a start that did not happen, and
+/// to settle before it ends unsettled: the deadline of a start,
+/// counted from the start ([`Live::started`]) and moved by nothing.
+pub(super) const START_DEADLINE: std::time::Duration = crate::agent_start::AGENT_START_DEADLINE;
+
+/// How long after its start an agent the engine started is first taken as
+/// taking input: Herdr's `AGENT_START_SETTLE_DELAY`. A program in the
+/// foreground has not drawn its screen yet, and a screen no rule matches
+/// reads at rest, so a start read sooner would be typed into a program that
+/// has not asked for input. The time alone does not say the program reads
+/// keys yet: a start whose program still leaves the terminal editing lines
+/// is pending until its deadline ([`Live::line_editing`]). Counted from
+/// [`Live::settles_from`], which the start's program taking the keys and an
+/// answered question restart; the deadline is a clock of its own.
+pub(super) const START_SETTLE: std::time::Duration = std::time::Duration::from_secs(3);
+
+/// The agent definitions the engine starts and recognizes agents by: the
+/// built-in ones until the core hands in a read of the operator's folder
+/// (`Engine::set_agent_definitions`).
+pub(super) struct Definitions(Mutex<Arc<Catalog>>);
+
+impl Definitions {
+    pub(super) fn new(catalog: Arc<Catalog>) -> Self {
+        Self(Mutex::new(catalog))
+    }
+
+    pub(super) fn get(&self) -> Arc<Catalog> {
+        Arc::clone(&self.0.lock().unwrap_or_else(PoisonError::into_inner))
+    }
+
+    pub(super) fn set(&self, catalog: Arc<Catalog>) {
+        *self.0.lock().unwrap_or_else(PoisonError::into_inner) = catalog;
+    }
+}
+
+/// The definition a caller's kind names: its id or one of its other
+/// spellings (`claude`).
+pub(super) fn definition<'c>(catalog: &'c Catalog, kind: &str) -> Option<&'c Definition> {
+    hide_agent_adapter::definition::find(&catalog.definitions, kind)
+}
+
+/// Native and runtime script names take precedence over the optional
+/// package identity. Both identities come from the agent definition;
+/// neither installation routes nor an unscoped guess participate.
+fn recognized<'c>(catalog: &'c Catalog, program: &ForegroundProgram) -> Option<&'c Definition> {
+    catalog
+        .definitions
+        .iter()
+        .find(|definition| {
+            definition
+                .executables
+                .iter()
+                .any(|executable| executable.eq_ignore_ascii_case(&program.name))
+        })
+        .or_else(|| {
+            let package = program.package.as_deref()?;
+            catalog.definitions.iter().find(|definition| {
+                definition
+                    .packages
+                    .iter()
+                    .any(|declared| declared.eq_ignore_ascii_case(package))
+            })
+        })
+}
+
+/// The name the core knows an agent kind by: the adapter's engine kind for
+/// an agent with Hide's own features (`claude`), the definition's id for any
+/// other.
+pub(super) fn kind_name(definition: &Definition) -> String {
+    std::iter::once(&definition.id)
+        .chain(&definition.aliases)
+        .find_map(|name| hide_agent_adapter::adapter(name))
+        .map_or_else(
+            || definition.id.clone(),
+            |adapter| adapter.engine_kind.to_owned(),
+        )
+}
+
+/// The rule sets for `definition`'s screen, the operator's first and then
+/// the built-in one it replaced (D-20), each as its holder reads it; `None`
+/// for an agent with no screen rules.
+pub(super) fn screen_rules(definition: &Definition) -> Option<ScreenRules> {
+    let mut sets = Vec::new();
+    let mut push = |rules: &hide_screen_rules::Rules, source: &Source| {
+        let source = match source {
+            Source::Builtin => "built-in".to_owned(),
+            Source::User(file) => file.clone(),
+        };
+        match serde_json::to_string(rules.manifest()) {
+            Ok(manifest) => sets.push(RuleSet {
+                source,
+                version: rules.version().to_string(),
+                min_engine_version: rules.min_engine_version(),
+                manifest,
+            }),
+            // A manifest serializes to what it read; a set that does not is
+            // left out, and the holder reads with the next one.
+            Err(error) => crate::diagnostic!(serde_json::json!({
+                "component": "own_engine",
+                "kind": "agent.rules_not_serialized",
+                "agent": definition.id,
+                "source": source,
+                "error": error.to_string(),
+            })),
+        }
+    };
+    if let Some(screen) = &definition.screen {
+        push(&screen.rules, &screen.source);
+    }
+    // The built-in rules stand behind the operator's, for a holder whose
+    // evaluator is too old for theirs.
+    if definition
+        .screen
+        .as_ref()
+        .is_some_and(|screen| screen.source != Source::Builtin)
+    {
+        let base = definition.based_on.as_deref().unwrap_or(&definition.id);
+        if let Some(builtin) = hide_agent_adapter::definition::builtin(base)
+            && let Some(screen) = &builtin.screen
+        {
+            push(&screen.rules, &screen.source);
+        }
+    }
+    (!sets.is_empty()).then(|| ScreenRules {
+        agent: definition.id.clone(),
+        sets,
+    })
+}
+
+/// The words a start of `definition` types: its program, its `[start]`
+/// arguments, then the caller's, the program named as [`named_by_file`]
+/// says.
+pub(super) fn start_argv(
+    definition: &Definition,
+    file: Option<&crate::engine::StartProgram>,
+    args: Vec<String>,
+) -> Result<Vec<String>, String> {
+    let program = definition
+        .executables
+        .first()
+        .ok_or_else(|| format!("the {} definition names no program", definition.id))?;
+    Ok(named_by_file(
+        std::iter::once(program.clone())
+            .chain(definition.start_args.iter().cloned())
+            .chain(args)
+            .collect(),
+        file,
+    ))
+}
+
+/// `argv` with its program, its first word, replaced by the file `file`
+/// names and the words before its arguments, when the node read that file
+/// for this program's name (`AgentLaunch::program`,
+/// `start_prompt::start_program`); else `argv` as it is, the program named
+/// by its name. On Windows PowerShell finds npm's `.ps1` by the name, and
+/// Windows PowerShell 5.1 drops the quotes inside an argument it hands on.
+pub(super) fn named_by_file(
+    argv: Vec<String>,
+    file: Option<&crate::engine::StartProgram>,
+) -> Vec<String> {
+    match (argv.split_first(), file) {
+        (Some((program, args)), Some(file)) if file.name.eq_ignore_ascii_case(program) => {
+            std::iter::once(file.program.clone())
+                .chain(file.leading.iter().cloned())
+                .chain(args.iter().cloned())
+                .collect()
+        }
+        _ => argv,
+    }
+}
+
+/// The words a resume of `definition` types: its `[resume] session` with
+/// `session` in place, or its `[resume] last` when the session is not
+/// known; `None` when it resumes neither way.
+pub(super) fn resume_argv(definition: &Definition, session: Option<&str>) -> Option<Vec<String>> {
+    let args = match (session, &definition.resume_session, &definition.resume_last) {
+        (Some(session), Some(template), _) => template
+            .iter()
+            .map(|word| word.replace("{session}", session))
+            .collect(),
+        (_, _, Some(last)) => last.clone(),
+        _ => return None,
+    };
+    start_argv(definition, None, args).ok()
+}
+
+/// The session a program's arguments resume, by `definition`'s `[resume]
+/// session` selector, before any `--`.
+/// The session a start the engine types runs, before its agent says: the
+/// one its resume names, so a woken agent names the conversation it resumed
+/// at once. Not when an agent whose integration reports its session as a
+/// file's path (Pi, omp) resumes by id: an id recorded for a woken omp read
+/// as another conversation than the path its registration held, so the
+/// registration was refused (`identity_changed`, journey 871294628), and
+/// such a session waits for the agent's own report. Resumed by that file's
+/// path (Pi's `--session <path>`), the path is the session it reports.
+/// Nor for a wake of OpenCode, which takes keys only once it has loaded the
+/// session its plugin then reports (`AgentLaunch::wakes`); a spawn that
+/// resumes OpenCode is known by its resume at once.
+pub(super) fn started_session(
+    definition: &Definition,
+    argv: &[String],
+    wakes: bool,
+) -> Option<String> {
+    let session = resumed_in(definition, argv)?;
+    let format = hide_agent_adapter::adapter(&definition.id).and_then(|adapter| adapter.session);
+    if wakes && format.is_some_and(hide_agent_adapter::SessionFormat::reports_session_once_loaded) {
+        return None;
+    }
+    let reports_path = format.is_some_and(hide_agent_adapter::SessionFormat::reports_session_path);
+    // A Windows device's path comes in its own spelling.
+    let names_path = hide_platform::path::is_wire_absolute(&session.replace('\\', "/"));
+    (!reports_path || names_path).then_some(session)
+}
+
+pub(super) fn resumed_in(definition: &Definition, argv: &[String]) -> Option<String> {
+    let template = definition.resume_session.as_ref()?;
+    let at = template.iter().position(|word| word == "{session}")?;
+    let selector = &template[..at];
+    let args: Vec<&String> = argv
+        .iter()
+        .skip(1)
+        .take_while(|arg| arg.as_str() != "--")
+        .collect();
+    // A fork's selector names its source, not the running conversation.
+    if args
+        .iter()
+        .any(|arg| matches!(arg.as_str(), "--fork" | "--fork-session" | "fork"))
+    {
+        return None;
+    }
+    args.windows(selector.len() + 1)
+        .find(|window| {
+            window[..selector.len()]
+                .iter()
+                .zip(selector)
+                .all(|(arg, word)| *arg == word)
+        })
+        .map(|window| window[selector.len()].clone())
+        .filter(|session| {
+            !session.is_empty()
+                && session.len() <= 4096
+                && !session.starts_with('-')
+                && !session.chars().any(char::is_control)
+        })
+}
+
+/// How a session reference is named: an id Hide's readers take, or else the
+/// path of its file.
+pub(super) fn session_kind(session: &str) -> PaneSessionKind {
+    if hide_session::valid_native_id(session) {
+        PaneSessionKind::Id
+    } else {
+        PaneSessionKind::Path
+    }
+}
+
+/// The agent a pane runs, or ran when its session was saved.
+#[derive(Clone, Debug, Default)]
+pub(super) struct PaneAgent {
+    /// The definition's id.
+    pub(super) kind: String,
+    /// The name it was started under, when the engine started it.
+    pub(super) name: Option<String>,
+    /// Its session, an id or a session file's path, once known.
+    pub(super) session: Option<String>,
+    /// What it does now; kept in memory only.
+    pub(super) live: Live,
+}
+
+/// What an agent does now.
+#[derive(Clone, Debug, Default)]
+pub(super) struct Live {
+    /// When the engine typed its start, until the start settled
+    /// ([`PaneAgent::launch_pending`]): the start's deadline runs from here
+    /// and nothing moves it, so a program that keeps restarting its settle
+    /// still ends its start at [`START_DEADLINE`]: the deadline is kept apart from
+    /// the settle, so a restarting settle cannot hold a start open.
+    pub(super) started: Option<Instant>,
+    /// When the start's settle began ([`START_SETTLE`]): at the start, and
+    /// again when its program takes the terminal's keys or its screen's
+    /// question is answered, since the program draws its next screen after
+    /// either. Kept past the deadline, so a program that took the keys a
+    /// moment before it still has its settle before it takes input
+    /// ([`PaneAgent::takes_input`]); cleared with [`Self::started`].
+    pub(super) settles_from: Option<Instant>,
+    /// The start whose not-yet-delivered metadata can still be withdrawn.
+    /// Foreground or session evidence invalidates it, even at the same value.
+    pub(super) start_claim: Option<Arc<()>>,
+    /// A listed name the same attempt can still restore on non-delivery.
+    pub(super) start_previous_name: Option<String>,
+    /// The start is a restore's resume of an agent that ended with its
+    /// holder. A resume the program does not take (its session is gone, it
+    /// exits) leaves the pane a shell like one never typed, so it is named
+    /// the same way once its start ends without the agent running
+    /// ([`PaneAgent::resume_missed`]).
+    pub(super) resumed: bool,
+    /// Its program is in the pane's foreground.
+    pub(super) shown: bool,
+    /// The terminal edits lines, as its holder last read it: the program has
+    /// not turned that off to read keys, so what is typed waits in the
+    /// terminal's line and the Enter that submits it reaches the program as
+    /// a line break. Pi 1.0.4 started on a CI runner took more than
+    /// [`START_SETTLE`] after its start line to do so, and a brief typed at
+    /// that mark sat in its editor, never submitted (nightly 41789009557).
+    /// A Windows holder reads it from the pane's console through a helper
+    /// (`hide-holder/src/console_input.rs`). `None` where the holder cannot
+    /// say (a holder or node built before it could, or a console its helper
+    /// could not read), which leaves a start to the settle alone and is
+    /// recorded when it settles ([`Applied::settled_unread`]); never read as
+    /// reading keys.
+    pub(super) line_editing: Option<bool>,
+    /// The holder could not say what holds the terminal, so who the agent
+    /// is stays as it was and it takes no input until it can: read as the
+    /// shell holding it, it would have ended the agent and its session.
+    pub(super) foreground_unread: bool,
+    /// Its definition declares no screen rules (omp), so its screen never
+    /// reads at rest and a start cannot wait for that: it settles on what
+    /// the holder can say, its program shown and reading keys, and the
+    /// settle. Waiting for a rest that never comes held every omp start
+    /// pending to its 120 s deadline (journey 871294628).
+    pub(super) rest_unread: bool,
+    /// Whether this start's program has shown the screen its definition
+    /// names ready for a first input (`Definition::start_ready`). OpenCode
+    /// 2.0.29 reads keys and draws its composer before its model loads, and
+    /// refuses the Enter that submits a line until then, which its model
+    /// line under the composer shows: a brief typed at the settle on Windows
+    /// was refused (journey-win).
+    pub(super) ready: StartReady,
+    pub(super) status: Status,
+    /// One more each time its status changed, from the engine's own count.
+    pub(super) seq: u64,
+    /// The sequence its current stop finished work at, while it rests after
+    /// working.
+    pub(super) completion: Option<u64>,
+    /// The processes from the sender of the last hook report of its session
+    /// up to the pane's shell, as the kernel named them; none until a report
+    /// came with them. What a report of another session is judged by
+    /// ([`runs_inside`]).
+    pub(super) reporter: Option<Vec<ExecProcess>>,
+}
+
+impl PaneAgent {
+    /// An agent the engine starts now.
+    pub(super) fn started(kind: &str, name: Option<&str>, session: Option<String>) -> Self {
+        Self {
+            kind: kind.to_owned(),
+            name: name.map(str::to_owned),
+            session,
+            live: {
+                let now = Instant::now();
+                Live {
+                    started: Some(now),
+                    settles_from: Some(now),
+                    ..Live::default()
+                }
+            },
+        }
+    }
+
+    /// An agent of `kind` the pane shows running: a program a definition
+    /// names in its foreground, or one whose own integration reported its
+    /// session from the pane ([`program_may_run`]).
+    pub(super) fn shown(kind: &str) -> Self {
+        Self {
+            kind: kind.to_owned(),
+            live: Live {
+                shown: true,
+                ..Live::default()
+            },
+            ..Self::default()
+        }
+    }
+
+    /// An agent a restore resumes now: a start like [`Self::started`], whose
+    /// failure to take is named ([`Self::resume_missed`]).
+    pub(super) fn resumed(kind: &str, name: Option<&str>, session: Option<String>) -> Self {
+        let mut agent = Self::started(kind, name, session);
+        agent.live.resumed = true;
+        agent
+    }
+
+    /// Whether the agent a restore resumed has had its start end without it
+    /// running: its deadline passed with no program shown, or its program
+    /// left the foreground before the start settled (`ended`, the pane's
+    /// facts just ended the agent, which ends a start at once whatever the
+    /// clock says). One that ran past its settle and then ended is an
+    /// ordinary agent ending in its pane, whose own hooks end its
+    /// registration. The start's deadline and settle ([`Self::starting`],
+    /// [`Live::started`]) decide this, as they decide every start.
+    pub(super) fn resume_missed(&self, now: Instant, ended: bool) -> bool {
+        self.live.resumed && self.live.started.is_some() && (ended || !self.listed(now))
+    }
+
+    /// This agent, which a restore resumed and whose resume was missed
+    /// ([`Self::resume_missed`]), as the agent `pane` did not resume.
+    pub(super) fn not_resumed(&self, pane: &str) -> NotResumed {
+        NotResumed {
+            pane_id: pane.to_owned(),
+            agent: self.kind.clone(),
+            session: self.session.clone(),
+            why: if self.live.shown {
+                "its program ended before the resume's start settled".to_owned()
+            } else {
+                "no program showed within the start's deadline after its resume was typed"
+                    .to_owned()
+            },
+        }
+    }
+
+    /// Marks the agent's program shown; whether that changed anything.
+    fn show(&mut self) -> bool {
+        let changed = !self.live.shown;
+        self.live.shown = true;
+        self.live.start_claim = None;
+        self.live.start_previous_name = None;
+        changed
+    }
+
+    /// Whether the agent runs or is starting: an agent the save names that
+    /// no program has shown for since the daemon started is not listed.
+    pub(super) fn listed(&self, now: Instant) -> bool {
+        self.live.shown || self.starting(now)
+    }
+
+    /// Whether the engine typed its start and its program has not shown yet,
+    /// within the start's deadline.
+    pub(super) fn starting(&self, now: Instant) -> bool {
+        !self.live.shown
+            && self
+                .live
+                .started
+                .is_some_and(|started| now.duration_since(started) < START_DEADLINE)
+    }
+
+    /// Whether the start the engine typed is still pending
+    /// (`launch_pending`): until its settle passed and the agent's program
+    /// shows and its screen is at rest ([`Self::settled`]). A screen that asks a question (Claude Code's
+    /// folder trust) keeps the start pending past its deadline, since what
+    /// is typed there answers the question; anything else ends it at the
+    /// deadline, however its settle was restarted.
+    pub(super) fn launch_pending(&self, now: Instant) -> bool {
+        let Some(started) = self.live.started else {
+            return false;
+        };
+        !self.settled(now)
+            && ((self.live.shown && self.live.status == Status::Blocked)
+                || now.duration_since(started) < START_DEADLINE)
+    }
+
+    /// The next moment this agent's pending start can end with nothing the
+    /// holder reports changing: its settle, then its deadline. `None` once it
+    /// is not pending. Past the settle a start still pending waits on what
+    /// the holder reports next (its program reading keys, its screen
+    /// resting), which is a change of its own.
+    pub(super) fn start_changes_at(&self, now: Instant) -> Option<Instant> {
+        let started = self.live.started?;
+        if !self.launch_pending(now) {
+            return None;
+        }
+        let deadline = started + START_DEADLINE;
+        self.live
+            .settles_from
+            .map(|from| (from + START_SETTLE).min(deadline))
+            .into_iter()
+            .chain([deadline])
+            .find(|at| *at > now)
+    }
+
+    /// Whether the agent's program reads what is typed to it: it shows, the
+    /// holder can say what holds the terminal, and the program does not
+    /// leave it editing lines. This is not whether its start is pending: a
+    /// start ends at its deadline, while a program that never turns line
+    /// editing off reads no keys however long ago it started.
+    pub(super) fn interactive(&self) -> bool {
+        self.live.shown && !self.live.foreground_unread && self.live.line_editing != Some(true)
+    }
+
+    /// Whether what is typed to the agent at `now` reaches it: the one
+    /// answer every caller asks before it types (a letter, a prompt, a
+    /// fork's `/fork`, through [`Self::readiness`]). Its program reads keys
+    /// ([`Self::interactive`]), the start the engine typed, if any, is no
+    /// longer pending, and the settle since its program last took the keys
+    /// or its question was answered has passed, which outlasts the start's
+    /// deadline: a retried letter is never typed into a line it still edits,
+    /// nor into a screen it is still drawing.
+    pub(super) fn takes_input(&self, now: Instant) -> bool {
+        self.interactive() && self.settle_passed(now) && !self.launch_pending(now)
+    }
+
+    /// What a letter reads of whether the agent takes input at `now`
+    /// ([`Self::takes_input`]): launching while its start is pending, ready
+    /// when it takes input, and not ready otherwise.
+    pub(super) fn readiness(&self, now: Instant) -> Readiness {
+        if self.launch_pending(now) {
+            Readiness::Launching
+        } else if self.takes_input(now) {
+            Readiness::Ready
+        } else {
+            Readiness::NotReady
+        }
+    }
+
+    /// Whether the settle the start began, or last began again, has passed
+    /// by `now`; true for an agent with no start of the engine's.
+    fn settle_passed(&self, now: Instant) -> bool {
+        self.live
+            .settles_from
+            .is_none_or(|from| now.duration_since(from) >= START_SETTLE)
+    }
+
+    /// Whether the agent's start has settled by `now`: its program reads
+    /// keys ([`Self::interactive`]), has shown the screen its definition
+    /// names ready, if it names one ([`Live::ready`]), its screen rests, or
+    /// cannot be read at rest ([`Live::rest_unread`]), and its settle has
+    /// passed ([`Live::settles_from`]).
+    fn settled(&self, now: Instant) -> bool {
+        self.interactive()
+            && self.live.ready != StartReady::Waiting
+            && (matches!(self.live.status, Status::Idle | Status::Done) || self.live.rest_unread)
+            && self.settle_passed(now)
+    }
+}
+
+/// Whether a start's program has shown its ready screen ([`Live::ready`]).
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub(super) enum StartReady {
+    /// Its definition names no ready screen.
+    #[default]
+    Unnamed,
+    /// Not shown, or shown only before the screen read anything else.
+    Waiting,
+    /// The screen reads ready, but has read nothing else since the program
+    /// showed, so it may still be the last run's screen (a woken agent's
+    /// pane shows it until the program draws): taken as ready while it
+    /// reads so, and waited for again once it reads anything else.
+    Showing,
+    /// Shown after the screen read something else since the program
+    /// showed; it stays shown however the screen reads next.
+    Shown,
+}
+
+/// An agent's state, as `agent_status` names it.
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub(super) enum Status {
+    #[default]
+    Unknown,
+    Idle,
+    Working,
+    Blocked,
+    Done,
+}
+
+impl Status {
+    pub(super) fn as_str(self) -> &'static str {
+        match self {
+            Self::Unknown => "unknown",
+            Self::Idle => "idle",
+            Self::Working => "working",
+            Self::Blocked => "blocked",
+            Self::Done => "done",
+        }
+    }
+}
+
+/// What a pane's holder last said of it, kept in memory only.
+#[derive(Clone, Debug, Default)]
+pub(super) struct PaneLive {
+    pub(super) facts: PaneFacts,
+    /// The holder has said something since the pane was started or found.
+    pub(super) heard: bool,
+    /// The last requested decision: outer None is undecided, Some(None)
+    /// explicitly removes rules. A new engine must send its first decision
+    /// even for a shell whose holder kept the previous agent's rules.
+    pub(super) rules_sent: Option<Option<String>>,
+    /// The start with a profile typed here, until its waiter ends it
+    /// (`super::attempt`): kept apart from the pane's agent, so recognizing
+    /// that agent never ends it.
+    pub(super) attempt: Option<super::attempt::Attempt>,
+}
+
+impl PaneLive {
+    /// The agent whose rules the holder should have, when that is not the
+    /// one it was given; recorded as given.
+    pub(super) fn rules_due(&mut self, agent: Option<&PaneAgent>) -> Option<Option<String>> {
+        let due = agent.map(|agent| agent.kind.clone());
+        (self.rules_sent.as_ref() != Some(&due)).then(|| {
+            self.rules_sent = Some(due.clone());
+            due
+        })
+    }
+}
+
+/// What applying a pane's facts changed.
+#[derive(Debug, Default)]
+pub(super) struct Applied {
+    /// The session as a snapshot projects it moved.
+    pub(super) changed: bool,
+    /// The pane's holder is due another agent's rules (or none).
+    pub(super) rules_for: Option<Option<String>>,
+    /// A start of this agent kind settled while the holder could not say
+    /// whether its program reads keys, so on the settle's time alone: a
+    /// holder or node built before it could, or a Windows console its
+    /// helper could not read (`hide-holder/src/console_input.rs`).
+    pub(super) settled_unread: Option<String>,
+    /// The agent a restore resumed, which these facts ended before its start
+    /// settled ([`PaneAgent::resume_missed`]); the pane is a shell now.
+    pub(super) resume_missed: Option<PaneAgent>,
+    /// A hook report named another session from inside the pane's agent
+    /// ([`runs_inside`]), which the agent keeps its own session past.
+    pub(super) ran_inside: bool,
+}
+
+/// Whether a hook report whose sender has `lineage` comes from a program the
+/// agent ran whose own hook's sender had `owner`, each the processes from a
+/// sender up to the pane's shell. The deepest process the two share is the
+/// agent itself while it runs: its own hooks, whichever session they name
+/// (a `/clear`, a resume, a new session of the same process), sit as deep
+/// below it as the earlier one did, and an agent it ran (`claude -p` from
+/// its tool's shell) sits deeper, below that program. Once the agent has
+/// ended the shared process is above where it ran, and an agent started in
+/// its place sits as deep as it did.
+pub(super) fn runs_inside(owner: &[ExecProcess], lineage: &[ExecProcess]) -> bool {
+    owner
+        .iter()
+        .enumerate()
+        .find_map(|(depth, process)| {
+            lineage
+                .iter()
+                .position(|other| other == process)
+                .map(|at| at > depth)
+        })
+        .unwrap_or(false)
+}
+
+/// Whether `facts` leave room for an agent the pane's foreground does not
+/// name: a program other than the pane's own holds its terminal, or the
+/// system could not say what does. An agent's own integration reporting its
+/// session from the pane then speaks for that program, as the start of an
+/// agent the engine typed does (with-hide/hide-private#696): an agent typed
+/// into the shell is otherwise known only by its program's name, which a
+/// wrapper, an unreadable argument list (a native Claude Code's process is
+/// named by its version) or an unread terminal leaves unknown. While the
+/// shell holds the terminal no program of its runs there yet.
+pub(super) fn program_may_run(facts: &PaneFacts) -> bool {
+    facts.foreground.is_some() || facts.foreground_unread
+}
+
+/// Lays `facts` on a pane whose folder is `cwd` and whose agent is `agent`:
+/// the folder it reports, the agent its foreground runs, and the state its
+/// screen shows, as of `now`. `seq` is the engine's count of state changes.
+pub(super) fn apply(
+    catalog: &Catalog,
+    cwd: &mut String,
+    agent: &mut Option<PaneAgent>,
+    live: &mut PaneLive,
+    facts: &PaneFacts,
+    seq: &mut u64,
+    now: Instant,
+) -> Applied {
+    let mut applied = Applied::default();
+    let before = live.facts.clone();
+    // Whether the agent's program showed before these facts: only then
+    // were the last ones read of it.
+    let shown_before = agent.as_ref().is_some_and(|current| current.live.shown);
+    live.heard = true;
+    live.facts = facts.clone();
+    if let Some(reported) = facts.cwd.as_ref().filter(|reported| *reported != cwd) {
+        cwd.clone_from(reported);
+        applied.changed = true;
+    }
+    // The title is compared, and projected, without the activity glyph an
+    // agent turns in front of it every frame (Claude Code's spinner): a turning glyph alone is no change of the
+    // session.
+    if stripped(&before) != stripped(facts) {
+        applied.changed = true;
+    }
+    let program = facts.foreground.as_ref();
+    let foreground = program.and_then(|program| recognized(catalog, program));
+    let attempting = live
+        .attempt
+        .as_ref()
+        .is_some_and(super::attempt::Attempt::pending);
+    match (agent.as_mut(), program, foreground) {
+        // The system could not say what holds the terminal: the agent stays
+        // who it is until the holder reads its terminal again.
+        _ if facts.foreground_unread => {}
+        // The program of the agent the pane runs is in the foreground, or a
+        // program no definition names where that agent was started or ran:
+        // the agent itself, run by a wrapper or a runtime under another
+        // name (`node …/cli.js`).
+        (Some(current), _, Some(definition)) if definition.id == current.kind => {
+            applied.changed |= current.show();
+        }
+        // While a start with a profile is undecided, the program a
+        // definition does not name may be its executor (`hide agent exec`)
+        // alone: it shows once the attempt has ended
+        // (`OwnEngine::finish_attempt` lays the pane's facts again).
+        (Some(_), Some(_), None) if attempting => {}
+        (Some(current), Some(_), None) => {
+            applied.changed |= current.show();
+        }
+        // Another agent's program: the operator typed it, or the start that
+        // was typed ran something else.
+        (_, _, Some(definition)) => {
+            *agent = Some(PaneAgent::shown(&definition.id));
+            applied.changed = true;
+        }
+        // Nothing is in the foreground but the shell: an agent that showed
+        // has ended, and one still starting waits until its deadline.
+        (Some(current), None, None) => {
+            if current.live.shown || !current.starting(now) {
+                applied.resume_missed = current.resume_missed(now, true).then(|| current.clone());
+                *agent = None;
+                applied.changed = true;
+            }
+        }
+        (None, _, None) => {}
+    }
+    if let Some(current) = agent.as_mut()
+        && current.live.foreground_unread != facts.foreground_unread
+    {
+        current.live.foreground_unread = facts.foreground_unread;
+        applied.changed = true;
+    }
+    applied.rules_for = live.rules_due(agent.as_ref());
+    if let Some(current) = agent.as_mut().filter(|current| current.live.shown) {
+        let known = definition(catalog, &current.kind);
+        current.live.rest_unread = known.is_none_or(|definition| definition.screen.is_none());
+        let ready = match known.and_then(|definition| definition.start_ready.as_deref()) {
+            None => StartReady::Unnamed,
+            Some(ready) => {
+                let reads = matches!(&facts.screen, ScreenRead::Read {
+                    rule: Some(rule), ..
+                } if rule == ready);
+                match (current.live.ready, reads) {
+                    (StartReady::Shown, _) => StartReady::Shown,
+                    (StartReady::Waiting, true) => StartReady::Shown,
+                    (StartReady::Unnamed | StartReady::Showing, true) => StartReady::Showing,
+                    (_, false) => StartReady::Waiting,
+                }
+            }
+        };
+        if ready != current.live.ready {
+            current.live.ready = ready;
+            applied.changed |= current.live.started.is_some();
+        }
+        // A start that settled on what the screen read last stays settled
+        // whatever this screen reads. Facts
+        // that first show the program are its first read: judged on the
+        // read before them, an agent with no screen rules (omp) that showed
+        // past its settle settled at once, its terminal still editing lines
+        // read as not known (journey 42061570326).
+        if shown_before && current.live.started.is_some() && current.settled(now) {
+            current.live.started = None;
+            current.live.settles_from = None;
+            if current.live.line_editing.is_none() {
+                applied.settled_unread = Some(current.kind.clone());
+            }
+        }
+        if facts.line_editing != current.live.line_editing {
+            // The program taking the terminal's keys restarts its start's
+            // settle, as an answered question does: it draws its input screen
+            // after, and OpenCode 2.0.29 dropped what was typed up to a
+            // second after it took the keys. Never the deadline: a program
+            // that took and gave back the keys every second held its start
+            // pending for good.
+            if current.live.line_editing == Some(true)
+                && facts.line_editing == Some(false)
+                && current.live.started.is_some()
+            {
+                current.live.settles_from = Some(now);
+            }
+            current.live.line_editing = facts.line_editing;
+            applied.changed |= current.live.started.is_some();
+        }
+        let mut status = status_of(&facts.screen, current.live.status);
+        // A screen no rules read never says the agent rests, so once its
+        // program takes input it reads idle, and its integration's turns say
+        // when it works (they outrank this, `agent_state::axes`). Read unknown,
+        // a woken or
+        // forked omp stayed a starting row with no state change to publish
+        // its settle (journey 41850644522).
+        if current.live.rest_unread && status == Status::Unknown && current.interactive() {
+            status = Status::Idle;
+        }
+        // An answered question restarts its start's settle, not its
+        // deadline: the agent draws its next screen after it, and input
+        // typed while it does is lost (Claude Code 2.1.318 on Windows after
+        // its folder trust).
+        if current.live.status == Status::Blocked
+            && status != Status::Blocked
+            && current.live.started.is_some()
+        {
+            current.live.settles_from = Some(now);
+        }
+        if status != current.live.status {
+            *seq += 1;
+            current.live.completion = match status {
+                Status::Done => Some(current.live.completion.unwrap_or(*seq)),
+                _ => None,
+            };
+            current.live.status = status;
+            current.live.seq = *seq;
+            applied.changed = true;
+        }
+    }
+    applied
+}
+
+/// The title `facts` carry as a session shows it ([`stripped_title`]).
+pub(super) fn stripped(facts: &PaneFacts) -> Option<String> {
+    facts.title.as_deref().and_then(stripped_title)
+}
+
+/// The state `screen` reads for an agent that was `before`: at rest after
+/// working is a finished turn, which stays one until the agent works again.
+fn status_of(screen: &ScreenRead, before: Status) -> Status {
+    let read = match screen {
+        ScreenRead::Read {
+            state: ScreenState::Working,
+            ..
+        } => Status::Working,
+        ScreenRead::Read {
+            state: ScreenState::Blocked,
+            ..
+        } => Status::Blocked,
+        // No rule matched: at rest, for an agent whose rules the engine has.
+        ScreenRead::Read {
+            state: ScreenState::Idle,
+            ..
+        }
+        | ScreenRead::Read {
+            state: ScreenState::Unknown,
+            rule: None,
+        } => Status::Idle,
+        ScreenRead::Read {
+            state: ScreenState::Unknown,
+            rule: Some(_),
+        }
+        | ScreenRead::NoRules
+        | ScreenRead::Unknown { .. } => Status::Unknown,
+    };
+    match (before, read) {
+        (Status::Working | Status::Done, Status::Idle) => Status::Done,
+        (_, read) => read,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn catalog() -> Catalog {
+        Catalog::read(Vec::new())
+    }
+
+    fn program(name: &str) -> Option<ForegroundProgram> {
+        Some(ForegroundProgram {
+            pid: 7,
+            name: name.to_owned(),
+            package: None,
+            argv: vec![name.to_owned()],
+        })
+    }
+
+    fn read(state: ScreenState) -> ScreenRead {
+        ScreenRead::Read {
+            state,
+            rule: Some("rule".to_owned()),
+        }
+    }
+
+    #[test]
+    fn installed_packages_identify_agents_without_guessing_from_cli_js() {
+        let catalog = catalog();
+        for (package, kind) in [
+            ("@anthropic-ai/claude-code", "claude"),
+            ("@openai/codex", "codex"),
+            ("@xai-official/grok", "grok"),
+            ("opencode-ai", "opencode"),
+            ("@earendil-works/pi-coding-agent", "pi"),
+            ("@oh-my-pi/pi-coding-agent", "omp"),
+            ("@moonshot-ai/kimi-code", "kimi"),
+            ("@qwen-code/qwen-code", "qwen"),
+            ("@letta-ai/letta-code", "letta"),
+        ] {
+            let mut program = program("cli").unwrap();
+            program.package = Some(package.to_owned());
+            assert_eq!(
+                recognized(&catalog, &program).map(kind_name).as_deref(),
+                Some(kind)
+            );
+        }
+        for unknown in [
+            "helper",
+            "@unknown/pi-coding-agent",
+            "@unknown/kimi-code",
+            "@unknown/qwen-code",
+        ] {
+            let mut program = program("cli").unwrap();
+            program.package = Some(unknown.to_owned());
+            assert!(recognized(&catalog, &program).is_none());
+        }
+    }
+
+    #[test]
+    fn a_package_keeps_the_script_name_and_can_name_a_generic_script() {
+        let catalog = catalog();
+        for (name, package) in [
+            ("gemini", "@oh-my-pi/pi-coding-agent"),
+            ("letta", "@letta-ai/letta-code"),
+            ("codex", "@earendil-works/pi-coding-agent"),
+        ] {
+            let mut program = program(name).unwrap();
+            assert_eq!(
+                recognized(&catalog, &program).map(kind_name).as_deref(),
+                Some(name)
+            );
+            program.package = Some(package.to_owned());
+            assert_eq!(
+                recognized(&catalog, &program).map(kind_name).as_deref(),
+                Some(name)
+            );
+        }
+        let mut program = program("main").unwrap();
+        program.package = Some("@moonshot-ai/kimi-code".to_owned());
+        assert_eq!(
+            recognized(&catalog, &program).map(kind_name).as_deref(),
+            Some("kimi")
+        );
+    }
+
+    impl PaneAgent {
+        /// Moves both of the start's clocks to `at`, as if it had been typed
+        /// then.
+        fn typed_at(&mut self, at: Instant) {
+            self.live.started = Some(at);
+            self.live.settles_from = Some(at);
+        }
+    }
+
+    struct Pane {
+        cwd: String,
+        agent: Option<PaneAgent>,
+        live: PaneLive,
+        seq: u64,
+    }
+
+    impl Pane {
+        fn new() -> Self {
+            Self {
+                cwd: "/work".to_owned(),
+                agent: None,
+                live: PaneLive::default(),
+                seq: 0,
+            }
+        }
+
+        fn facts(&mut self, facts: PaneFacts) -> Applied {
+            self.facts_at(Instant::now(), facts)
+        }
+
+        fn facts_at(&mut self, now: Instant, facts: PaneFacts) -> Applied {
+            apply(
+                &catalog(),
+                &mut self.cwd,
+                &mut self.agent,
+                &mut self.live,
+                &facts,
+                &mut self.seq,
+                now,
+            )
+        }
+
+        fn status(&self) -> Option<&'static str> {
+            self.agent.as_ref().map(|agent| agent.live.status.as_str())
+        }
+    }
+
+    /// Claude Code turns a spinner glyph in front of its title every frame:
+    /// the title's text alone is the session's.
+    #[test]
+    fn a_title_whose_spinner_alone_turns_changes_nothing_and_new_text_does() {
+        let mut pane = Pane::new();
+        let titled = |title: &str| PaneFacts {
+            title: Some(title.to_owned()),
+            ..PaneFacts::default()
+        };
+        assert!(pane.facts(titled("⠋ Fix the tests")).changed);
+        for turned in ["⠙ Fix the tests", "◐ Fix the tests", "✳ Fix the tests"] {
+            assert!(!pane.facts(titled(turned)).changed, "{turned}");
+        }
+        assert!(pane.facts(titled("✳ Fix the build")).changed);
+    }
+
+    #[test]
+    fn a_program_typed_into_the_shell_is_the_agent_its_definition_names() {
+        let mut pane = Pane::new();
+        let applied = pane.facts(PaneFacts {
+            foreground: program("gemini"),
+            screen: read(ScreenState::Working),
+            ..PaneFacts::default()
+        });
+        assert!(applied.changed);
+        assert_eq!(applied.rules_for, Some(Some("gemini".to_owned())));
+        assert_eq!(pane.agent.as_ref().unwrap().kind, "gemini");
+        assert_eq!(pane.status(), Some("working"));
+        // Its program leaving the foreground ends it.
+        let applied = pane.facts(PaneFacts::default());
+        assert_eq!(applied.rules_for, Some(None));
+        assert!(pane.agent.is_none());
+    }
+
+    /// An agent run by a runtime under another name: pi's npm build runs as
+    /// `node …/dist/bundle/cli.js`, which the holder names `cli`.
+    #[test]
+    fn a_started_agent_is_whatever_its_start_runs() {
+        let mut pane = Pane::new();
+        pane.agent = Some(PaneAgent::started("pi", Some("worker"), None));
+        pane.facts(PaneFacts {
+            foreground: program("cli"),
+            screen: read(ScreenState::Working),
+            ..PaneFacts::default()
+        });
+        let agent = pane.agent.as_ref().unwrap();
+        assert_eq!((agent.kind.as_str(), agent.live.shown), ("pi", true));
+        assert_eq!(pane.status(), Some("working"));
+        pane.facts(PaneFacts::default());
+        assert!(pane.agent.is_none(), "the shell holds the terminal again");
+
+        pane.facts(PaneFacts {
+            foreground: program("cli"),
+            ..PaneFacts::default()
+        });
+        assert!(
+            pane.agent.is_none(),
+            "an unnamed program is no agent of its own"
+        );
+    }
+
+    #[test]
+    fn a_stop_after_work_is_a_finished_turn_until_the_agent_works_again() {
+        let mut pane = Pane::new();
+        let mut at = |state| {
+            pane.facts(PaneFacts {
+                foreground: program("claude"),
+                screen: read(state),
+                ..PaneFacts::default()
+            });
+            let agent = pane.agent.as_ref().unwrap();
+            (agent.live.status, agent.live.completion, agent.live.seq)
+        };
+        assert_eq!(at(ScreenState::Idle), (Status::Idle, None, 1));
+        assert_eq!(at(ScreenState::Working), (Status::Working, None, 2));
+        assert_eq!(at(ScreenState::Idle), (Status::Done, Some(3), 3));
+        // The same reading again moves nothing.
+        assert_eq!(at(ScreenState::Idle), (Status::Done, Some(3), 3));
+        assert_eq!(at(ScreenState::Blocked), (Status::Blocked, None, 4));
+    }
+
+    #[test]
+    fn a_start_waits_for_its_program_and_a_screen_without_rules_reads_idle_once_shown() {
+        let mut pane = Pane::new();
+        pane.agent = Some(PaneAgent::started("omp", Some("worker"), None));
+        // The shell holds the terminal while the start is typed.
+        pane.facts(PaneFacts::default());
+        assert!(pane.agent.as_ref().unwrap().starting(Instant::now()));
+        pane.facts(PaneFacts {
+            foreground: program("omp"),
+            ..PaneFacts::default()
+        });
+        let agent = pane.agent.as_ref().unwrap();
+        assert!(agent.live.shown);
+        assert_eq!(agent.name.as_deref(), Some("worker"));
+        // Where the holder cannot say whether it reads keys, the settle
+        // alone decides its input; its turns come from its integration.
+        assert_eq!(agent.live.status, Status::Idle);
+    }
+
+    /// An agent whose definition has no screen rules (omp) never reads at
+    /// rest, so its start settles once its program reads keys and the settle
+    /// passed, not at its 120 s deadline; one with rules still waits for its
+    /// screen to rest.
+    #[test]
+    fn a_start_without_screen_rules_settles_once_its_program_reads_keys() {
+        let at = |name: &str, line_editing| PaneFacts {
+            foreground: program(name),
+            line_editing,
+            ..PaneFacts::default()
+        };
+        let mut pane = Pane::new();
+        pane.agent = Some(PaneAgent::started("omp", Some("worker"), None));
+        pane.facts(at("omp", Some(true)));
+        let started = Instant::now() - START_SETTLE;
+        pane.agent.as_mut().unwrap().typed_at(started);
+        assert!(
+            pane.agent.as_ref().unwrap().launch_pending(Instant::now()),
+            "its terminal still edits lines"
+        );
+        assert_eq!(pane.status(), Some("unknown"), "it takes no input yet");
+        pane.facts(at("omp", Some(false)));
+        let agent = pane.agent.as_mut().unwrap();
+        // Read at rest once it takes input, a state change the core hears.
+        assert_eq!(agent.live.status, Status::Idle);
+        assert_eq!(agent.live.seq, 1);
+        assert!(agent.launch_pending(Instant::now()), "a settle of its own");
+        agent.typed_at(Instant::now() - START_SETTLE);
+        assert!(!agent.launch_pending(Instant::now()));
+
+        let mut pane = Pane::new();
+        pane.agent = Some(PaneAgent::started("claude-code", Some("worker"), None));
+        pane.facts(PaneFacts {
+            screen: read(ScreenState::Working),
+            ..at("claude", Some(false))
+        });
+        pane.agent.as_mut().unwrap().typed_at(started);
+        assert!(
+            pane.agent.as_ref().unwrap().launch_pending(Instant::now()),
+            "a screen with rules that does not rest keeps its start pending"
+        );
+    }
+
+    /// `launch_pending` for a start of its own: the agent takes
+    /// input once its screen rests after the settle delay, and a question on
+    /// its screen (Claude Code's folder trust, whose default answer exits)
+    /// keeps the start pending past its deadline. Typing into it there on
+    /// Windows answered the question and ended the agent.
+    #[test]
+    fn a_start_takes_input_only_once_its_screen_rests_after_the_settle() {
+        let mut pane = Pane::new();
+        pane.agent = Some(PaneAgent::started("claude-code", Some("worker"), None));
+        let at = |state| PaneFacts {
+            foreground: program("claude"),
+            screen: read(state),
+            ..PaneFacts::default()
+        };
+        pane.facts(at(ScreenState::Idle));
+        let agent = pane.agent.as_ref().unwrap();
+        assert!(agent.live.shown);
+        assert!(
+            agent.launch_pending(Instant::now()),
+            "drawn within the settle"
+        );
+
+        pane.facts(at(ScreenState::Blocked));
+        let started = Instant::now() - START_SETTLE;
+        pane.agent.as_mut().unwrap().typed_at(started);
+        let agent = pane.agent.as_ref().unwrap();
+        assert!(agent.launch_pending(Instant::now()));
+        assert!(
+            agent.launch_pending(started + START_DEADLINE * 2),
+            "a question waits for its answer"
+        );
+
+        pane.facts(at(ScreenState::Idle));
+        let agent = pane.agent.as_mut().unwrap();
+        assert!(
+            agent.launch_pending(Instant::now()),
+            "the screen after an answer is drawn within a settle of its own"
+        );
+        let answered = agent.live.settles_from.unwrap();
+        assert!(answered > started);
+        assert_eq!(
+            agent.live.started,
+            Some(started),
+            "an answer restarts the settle, never the deadline"
+        );
+        agent.live.settles_from = Some(answered - START_SETTLE);
+        assert!(!agent.launch_pending(Instant::now()));
+        pane.facts(at(ScreenState::Working));
+        let agent = pane.agent.as_ref().unwrap();
+        assert!(
+            !agent.launch_pending(Instant::now()),
+            "a settled start stays settled"
+        );
+        assert_eq!(agent.live.started, None);
+    }
+
+    /// A program in the foreground whose screen rests can still leave the
+    /// terminal editing lines: Pi 1.0.4 on a CI runner had not turned it off
+    /// [`START_SETTLE`] after its start, and a brief typed then sat in its
+    /// editor with its Enter read as a line break. Its start settles a
+    /// settle after the program reads keys; a holder that cannot say keeps
+    /// the settle alone.
+    #[test]
+    fn a_start_takes_input_only_once_its_program_reads_keys() {
+        let mut pane = Pane::new();
+        pane.agent = Some(PaneAgent::started("pi", Some("worker"), None));
+        let at = |line_editing| PaneFacts {
+            foreground: program("pi"),
+            screen: read(ScreenState::Idle),
+            line_editing,
+            ..PaneFacts::default()
+        };
+        pane.facts(at(Some(true)));
+        let started = Instant::now() - START_SETTLE;
+        pane.agent.as_mut().unwrap().typed_at(started);
+        let agent = pane.agent.as_ref().unwrap();
+        assert!(
+            agent.launch_pending(Instant::now()),
+            "its screen rests past the settle, but the terminal edits lines"
+        );
+        assert!(!agent.interactive());
+        let deadline = started + START_DEADLINE;
+        assert!(
+            !agent.launch_pending(deadline),
+            "the start ends at its deadline"
+        );
+        assert!(
+            !agent.interactive(),
+            "yet a program that leaves the terminal editing lines takes no input"
+        );
+        let applied = pane.facts(at(Some(false)));
+        assert!(applied.changed, "the start's readiness moved");
+        let agent = pane.agent.as_mut().unwrap();
+        assert!(
+            agent.launch_pending(Instant::now()),
+            "the screen it draws once it reads keys is drawn within a settle of its own"
+        );
+        let took_keys = agent.live.settles_from.unwrap();
+        assert!(took_keys > started);
+        assert_eq!(
+            agent.live.started,
+            Some(started),
+            "taking the keys restarts the settle, never the deadline"
+        );
+        assert!(agent.interactive());
+        assert!(!agent.takes_input(Instant::now()), "within its settle");
+        agent.live.settles_from = Some(took_keys - START_SETTLE);
+        assert!(!agent.launch_pending(Instant::now()));
+
+        let mut pane = Pane::new();
+        pane.agent = Some(PaneAgent::started("pi", Some("worker"), None));
+        pane.facts(at(None));
+        pane.agent.as_mut().unwrap().typed_at(started);
+        assert!(
+            !pane.agent.as_ref().unwrap().launch_pending(Instant::now()),
+            "a holder that cannot say leaves the start to the settle"
+        );
+        let applied = pane.facts(at(None));
+        assert_eq!(
+            applied.settled_unread.as_deref(),
+            Some("pi"),
+            "a start settled on the time alone is recorded"
+        );
+        assert_eq!(pane.facts(at(None)).settled_unread, None, "once");
+    }
+
+    /// A program that turns the terminal's line editing off and on again
+    /// every second never gives its start a settle's rest, so the start ends
+    /// at its 120 s deadline: taking the keys restarts the settle, never
+    /// the deadline.
+    #[test]
+    fn a_program_toggling_line_editing_every_second_finishes_starting_at_its_deadline() {
+        let mut pane = Pane::new();
+        pane.agent = Some(PaneAgent::started("pi", Some("worker"), None));
+        let start = pane.agent.as_ref().unwrap().live.started.unwrap();
+        let at = |line_editing| PaneFacts {
+            foreground: program("pi"),
+            screen: read(ScreenState::Idle),
+            line_editing: Some(line_editing),
+            ..PaneFacts::default()
+        };
+        let second = std::time::Duration::from_secs(1);
+        let deadline = start + START_DEADLINE;
+        let mut now = start;
+        let mut edits_lines = true;
+        while now < deadline {
+            pane.facts_at(now, at(edits_lines));
+            assert!(
+                pane.agent.as_ref().unwrap().launch_pending(now),
+                "starting {:?} after its start",
+                now - start
+            );
+            now += second;
+            edits_lines = !edits_lines;
+        }
+        pane.facts_at(deadline, at(edits_lines));
+        let agent = pane.agent.as_ref().unwrap();
+        assert!(
+            !agent.launch_pending(deadline),
+            "the start ends at its deadline"
+        );
+        assert_eq!(
+            agent.readiness(deadline),
+            Readiness::NotReady,
+            "its terminal edits lines at the deadline"
+        );
+        // It takes the keys a second past the deadline: the start stays
+        // ended, and its settle runs again before anything is typed.
+        let took_keys = deadline + second;
+        pane.facts_at(took_keys, at(false));
+        let agent = pane.agent.as_ref().unwrap();
+        assert!(!agent.launch_pending(took_keys));
+        assert!(agent.interactive());
+        assert_eq!(agent.readiness(took_keys), Readiness::NotReady);
+        assert!(!agent.takes_input(took_keys + START_SETTLE - second));
+        assert!(agent.takes_input(took_keys + START_SETTLE));
+        assert_eq!(agent.readiness(took_keys + START_SETTLE), Readiness::Ready);
+    }
+
+    /// A question answered past the start's deadline ends the start at once,
+    /// and the screen the agent draws after it still gets its settle before
+    /// anything is typed into it.
+    #[test]
+    fn a_question_answered_past_the_deadline_settles_before_input() {
+        let mut pane = Pane::new();
+        pane.agent = Some(PaneAgent::started("claude-code", Some("worker"), None));
+        let start = pane.agent.as_ref().unwrap().live.started.unwrap();
+        let at = |state| PaneFacts {
+            foreground: program("claude"),
+            screen: read(state),
+            line_editing: Some(false),
+            ..PaneFacts::default()
+        };
+        pane.facts_at(start, at(ScreenState::Blocked));
+        let answered = start + START_DEADLINE * 2;
+        assert_eq!(
+            pane.agent.as_ref().unwrap().readiness(answered),
+            Readiness::Launching,
+            "a question waits for its answer past the deadline"
+        );
+        pane.facts_at(answered, at(ScreenState::Idle));
+        let agent = pane.agent.as_ref().unwrap();
+        assert_eq!(agent.readiness(answered), Readiness::NotReady);
+        assert_eq!(agent.start_changes_at(answered), None);
+        let settled = answered + START_SETTLE;
+        assert!(agent.takes_input(settled));
+        pane.facts_at(settled, at(ScreenState::Idle));
+        let agent = pane.agent.as_ref().unwrap();
+        assert_eq!((agent.live.started, agent.live.settles_from), (None, None));
+        assert!(agent.takes_input(settled));
+    }
+
+    /// A program that shows past its start's settle is judged on what its
+    /// own first facts say: an agent with no screen rules (omp) settled at
+    /// once on the facts before them, which said nothing of its terminal,
+    /// and a start was typed into a line it still edited.
+    #[test]
+    fn a_program_that_shows_past_its_settle_is_judged_on_its_own_first_facts() {
+        let mut pane = Pane::new();
+        pane.agent = Some(PaneAgent::started("omp", Some("worker"), None));
+        pane.agent
+            .as_mut()
+            .unwrap()
+            .typed_at(Instant::now() - START_SETTLE);
+        let applied = pane.facts(PaneFacts {
+            foreground: program("omp"),
+            line_editing: Some(true),
+            ..PaneFacts::default()
+        });
+        assert_eq!(applied.settled_unread, None);
+        let agent = pane.agent.as_ref().unwrap();
+        assert!(
+            agent.launch_pending(Instant::now()),
+            "its terminal still edits lines"
+        );
+    }
+
+    /// OpenCode 2.0.29 reads keys and draws its composer before its model
+    /// loads, and refuses the Enter of a line typed before its model line
+    /// shows under the composer: its start waits for the screen rule its
+    /// definition names ready as well, once shown whatever the screen reads
+    /// next.
+    #[test]
+    fn a_start_whose_definition_names_a_ready_screen_waits_for_it() {
+        let ready = catalog()
+            .definitions
+            .iter()
+            .find(|definition| definition.id == "opencode")
+            .and_then(|definition| definition.start_ready.clone())
+            .expect("OpenCode names its ready screen");
+        let at = |rule: Option<&str>| PaneFacts {
+            foreground: program("opencode"),
+            screen: ScreenRead::Read {
+                state: if rule.is_some() {
+                    ScreenState::Idle
+                } else {
+                    ScreenState::Unknown
+                },
+                rule: rule.map(str::to_owned),
+            },
+            line_editing: Some(false),
+            ..PaneFacts::default()
+        };
+        let mut pane = Pane::new();
+        pane.agent = Some(PaneAgent::started("opencode", Some("worker"), None));
+        pane.facts(at(None));
+        pane.agent
+            .as_mut()
+            .unwrap()
+            .typed_at(Instant::now() - START_SETTLE);
+        assert_eq!(pane.status(), Some("idle"));
+        let agent = pane.agent.as_ref().unwrap();
+        assert!(agent.interactive());
+        assert!(
+            agent.launch_pending(Instant::now()),
+            "it reads keys and rests past the settle, but its model has not loaded"
+        );
+        let applied = pane.facts(at(Some(&ready)));
+        assert!(applied.changed, "the start's readiness moved");
+        let agent = pane.agent.as_ref().unwrap();
+        assert!(!agent.launch_pending(Instant::now()));
+        assert_eq!(agent.live.started, None);
+
+        pane.facts(at(None));
+        pane.agent
+            .as_mut()
+            .unwrap()
+            .typed_at(Instant::now() - START_SETTLE);
+        assert!(
+            !pane.agent.as_ref().unwrap().launch_pending(Instant::now()),
+            "a ready screen once shown stays shown"
+        );
+
+        // A woken OpenCode's pane still shows the last run's model line
+        // when its program shows: taken as ready only until the program
+        // draws something else, then waited for again.
+        let mut pane = Pane::new();
+        pane.agent = Some(PaneAgent::started("opencode", Some("worker"), None));
+        pane.facts(at(Some(&ready)));
+        let agent = pane.agent.as_mut().unwrap();
+        assert!(agent.launch_pending(Instant::now()), "within its settle");
+        agent.typed_at(Instant::now() - START_SETTLE);
+        assert!(
+            !agent.launch_pending(Instant::now()),
+            "a screen that read ready from the first reads ready"
+        );
+        let mut pane = Pane::new();
+        pane.agent = Some(PaneAgent::started("opencode", Some("worker"), None));
+        pane.facts(at(Some(&ready)));
+        pane.facts(at(None));
+        pane.agent
+            .as_mut()
+            .unwrap()
+            .typed_at(Instant::now() - START_SETTLE);
+        assert!(
+            pane.agent.as_ref().unwrap().launch_pending(Instant::now()),
+            "the program drew its loading screen over the last run's"
+        );
+        pane.facts(at(Some(&ready)));
+        assert!(!pane.agent.as_ref().unwrap().launch_pending(Instant::now()));
+    }
+
+    /// A terminal whose foreground the system could not say keeps the
+    /// agent it runs, its name and session, and takes no input; only a
+    /// terminal read as the shell's again ends it.
+    #[test]
+    fn an_unread_foreground_keeps_the_agent_and_takes_no_input() {
+        let mut pane = Pane::new();
+        pane.agent = Some(PaneAgent::started(
+            "pi",
+            Some("worker"),
+            Some("/s/pi.jsonl".to_owned()),
+        ));
+        pane.facts(PaneFacts {
+            foreground: program("pi"),
+            screen: read(ScreenState::Idle),
+            ..PaneFacts::default()
+        });
+        assert!(pane.agent.as_ref().unwrap().interactive());
+        let applied = pane.facts(PaneFacts {
+            foreground_unread: true,
+            screen: read(ScreenState::Idle),
+            ..PaneFacts::default()
+        });
+        assert!(applied.changed);
+        let agent = pane.agent.as_ref().expect("the agent stays");
+        assert_eq!(agent.name.as_deref(), Some("worker"));
+        assert_eq!(agent.session.as_deref(), Some("/s/pi.jsonl"));
+        assert!(!agent.interactive(), "it takes no input meanwhile");
+
+        pane.facts(PaneFacts {
+            foreground: program("pi"),
+            screen: read(ScreenState::Idle),
+            ..PaneFacts::default()
+        });
+        assert!(pane.agent.as_ref().unwrap().interactive());
+        pane.facts(PaneFacts {
+            screen: read(ScreenState::Idle),
+            ..PaneFacts::default()
+        });
+        assert!(pane.agent.is_none(), "the shell holds the terminal again");
+    }
+
+    #[test]
+    fn a_start_with_no_screen_at_rest_ends_at_its_deadline() {
+        let mut pane = Pane::new();
+        pane.agent = Some(PaneAgent::started("claude-code", Some("worker"), None));
+        pane.facts(PaneFacts {
+            foreground: program("claude"),
+            screen: read(ScreenState::Working),
+            ..PaneFacts::default()
+        });
+        let agent = pane.agent.as_ref().unwrap();
+        let started = agent.live.started.unwrap();
+        assert!(agent.launch_pending(started + START_SETTLE));
+        assert!(!agent.launch_pending(started + START_DEADLINE));
+    }
+
+    #[test]
+    fn a_reported_folder_becomes_the_panes_folder() {
+        let mut pane = Pane::new();
+        let applied = pane.facts(PaneFacts {
+            cwd: Some("/work/sub".to_owned()),
+            ..PaneFacts::default()
+        });
+        assert!(applied.changed);
+        assert_eq!(pane.cwd, "/work/sub");
+        assert!(
+            !pane
+                .facts(PaneFacts {
+                    cwd: Some("/work/sub".to_owned()),
+                    ..PaneFacts::default()
+                })
+                .changed
+        );
+    }
+
+    #[test]
+    fn a_line_names_the_file_its_node_read_for_that_program_and_else_the_name() {
+        let words = |words: &[&str]| -> Vec<String> {
+            words.iter().map(|word| (*word).to_owned()).collect()
+        };
+        let file = crate::engine::StartProgram {
+            name: "claude".into(),
+            program: "C:\\npm\\node.exe".into(),
+            leading: words(&["C:\\npm\\node_modules\\claude\\cli.js"]),
+        };
+        let resume = words(&["Claude", "--settings", "{\"a\": \"b c\"}"]);
+        assert_eq!(
+            named_by_file(resume.clone(), Some(&file)),
+            words(&[
+                "C:\\npm\\node.exe",
+                "C:\\npm\\node_modules\\claude\\cli.js",
+                "--settings",
+                "{\"a\": \"b c\"}",
+            ])
+        );
+        // An answer for another program, or none (macOS, Linux, a launcher
+        // that is not npm's), leaves the program named by its name.
+        let codex = crate::engine::StartProgram {
+            name: "codex".into(),
+            ..file
+        };
+        assert_eq!(named_by_file(resume.clone(), Some(&codex)), resume);
+        assert_eq!(named_by_file(resume.clone(), None), resume);
+        assert!(named_by_file(Vec::new(), Some(&codex)).is_empty());
+    }
+
+    #[test]
+    fn a_resume_types_the_session_or_the_last_conversation() {
+        let catalog = catalog();
+        let claude = definition(&catalog, "claude").unwrap();
+        assert_eq!(claude.id, "claude-code");
+        assert_eq!(kind_name(claude), "claude");
+        assert_eq!(
+            resume_argv(claude, Some("abc")).unwrap(),
+            ["claude", "--resume", "abc"]
+        );
+        assert_eq!(resume_argv(claude, None), None);
+        let gemini = definition(&catalog, "gemini").unwrap();
+        assert_eq!(kind_name(gemini), "gemini");
+        assert_eq!(
+            resume_argv(gemini, None).unwrap(),
+            ["gemini", "--resume", "latest"]
+        );
+        let codex = definition(&catalog, "codex").unwrap();
+        let argv: Vec<String> = [
+            "codex", "--model", "x", "resume", "s-1", "--", "resume", "s-2",
+        ]
+        .iter()
+        .map(|word| (*word).to_owned())
+        .collect();
+        assert_eq!(resumed_in(codex, &argv).as_deref(), Some("s-1"));
+        assert_eq!(resumed_in(codex, &argv[..3]), None);
+    }
+
+    /// A start records the session its resume names, except for an agent
+    /// that reports its session as a file's path and resumes by id: omp's id
+    /// would read as another conversation and a woken omp's registration
+    /// would be refused. Pi resumed by its file's path records the path;
+    /// Claude reports the id it resumes.
+    #[test]
+    fn a_start_records_its_resumed_session_unless_its_agent_reports_a_path() {
+        let catalog = catalog();
+        let words = |words: &[&str]| -> Vec<String> {
+            words.iter().map(|word| (*word).to_owned()).collect()
+        };
+        let omp = definition(&catalog, "omp").unwrap();
+        let argv = words(&["omp", "--resume", "01a1a635-dc01-749e-b762-b4aa840d457c"]);
+        assert!(resumed_in(omp, &argv).is_some());
+        assert_eq!(started_session(omp, &argv, false), None);
+        let pi = definition(&catalog, "pi").unwrap();
+        for path in ["/home/me/.pi/s.jsonl", "C:\\Users\\me\\.pi\\s.jsonl"] {
+            let argv = words(&["pi", "--session", path]);
+            assert_eq!(started_session(pi, &argv, false).as_deref(), Some(path));
+        }
+        let agy = definition(&catalog, "agy").unwrap();
+        let argv = words(&["agy", "--conversation", "c-1"]);
+        assert_eq!(resumed_in(agy, &argv).as_deref(), Some("c-1"));
+        assert_eq!(started_session(agy, &argv, false).as_deref(), Some("c-1"));
+        // A woken OpenCode takes keys only once it has loaded the session
+        // its plugin then reports; a spawn that resumes it is known at once.
+        let opencode = definition(&catalog, "opencode").unwrap();
+        let argv = words(&["opencode", "-s", "ses_e584ebfb9ffeITTA6qYHnKhdkZ"]);
+        assert_eq!(started_session(opencode, &argv, true), None);
+        assert_eq!(
+            started_session(opencode, &argv, false).as_deref(),
+            Some("ses_e584ebfb9ffeITTA6qYHnKhdkZ")
+        );
+        let claude = definition(&catalog, "claude").unwrap();
+        let argv = words(&["claude", "--resume", "0b8f1f3e-5c2a-4a8e-9a54-2d4c1f6b7e90"]);
+        assert_eq!(
+            started_session(claude, &argv, false).as_deref(),
+            Some("0b8f1f3e-5c2a-4a8e-9a54-2d4c1f6b7e90")
+        );
+    }
+
+    #[test]
+    fn an_agent_with_screen_rules_hands_its_holder_the_built_in_set() {
+        let catalog = catalog();
+        let rules = screen_rules(definition(&catalog, "claude").unwrap()).unwrap();
+        assert_eq!(rules.agent, "claude-code");
+        assert_eq!(rules.sets.len(), 1);
+        assert_eq!(rules.sets[0].source, "built-in");
+        let manifest: hide_screen_rules::Manifest =
+            serde_json::from_str(&rules.sets[0].manifest).unwrap();
+        assert!(manifest.compile().is_ok());
+        assert!(screen_rules(definition(&catalog, "omp").unwrap()).is_none());
+    }
+}

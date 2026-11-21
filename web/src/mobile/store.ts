@@ -4,11 +4,16 @@
 // agent it opened by id, never by name (D-17).
 
 import { create } from "zustand";
-import type { AgentGroup, AgentKey, Conversation, DetailView, Notice, Notifications, PairPayload, PushMode, Refusal, RowsState, ServerFrame, StartCatalog } from "./protocol";
-import { mergeConversation, sameKey } from "./protocol";
+import type { PressedAnswer } from "../missionAnswer";
+import type { AgentGroup, AgentKey, AutomationAction, Conversation, DetailTab, DetailView, LookRow, Notice, Notifications, PairPayload, PhoneAgent, PhoneDevice, PhoneAutomation, PhoneMission, PhonePr, PhonePrFeedback, PhonePrProject, Refusal, RowsState, ServerFrame, StartCatalog } from "./protocol";
+import { keyTag, listedAgents, mergeConversation, missionsOnWire, sameKey } from "./protocol";
+import { resultContent, type LookContent } from "./lookContent";
+import { holds, prOf, type MergeConfirm } from "./prModel";
 import { NO_CHOICE, type StartChoice } from "./start";
 
 export type Screen =
+  /** The native app is still reading its saved connection, so no destination is known yet. */
+  | "starting"
   /** No code and no credential on this phone (B13). */
   | "version"
   | "unpaired"
@@ -19,21 +24,71 @@ export type Screen =
   /** hided refused this phone for good: an expired code, the phone limit, a revoke. */
   | "refused";
 
-export type Rows = { state: RowsState; text: string; lines: number; more: boolean };
+/** The bottom bar's places (PRD mobile-companion-ui B28). */
+export type PhoneTab = "agents" | "missions" | "automations" | "prs" | "settings";
+
+/** The open pull requests as the last `prs` frame carried them; kept across a lost connection, dimmed under the unreachable line (B45). */
+export type PrsState = { projects: PhonePrProject[]; items: PhonePr[]; feedback: PhonePrFeedback | null; omitted: number };
+
+/**
+ * The hand-over sheet of one pull request (B44): the prompt and the agent choice stay until a start succeeds, so a refusal or a
+ * lost connection never costs what the operator edited. `feedbackId` names the feedback read the prompt is filled from.
+ */
+export type PrDelegateSheet = {
+  key: string;
+  prompt: string;
+  /** The operator typed in the prompt: a read arriving later no longer replaces it. */
+  edited: boolean;
+  choice: StartChoice;
+  feedbackId: string | null;
+  /** The request id waiting for hided's answer. */
+  pending: string | null;
+  error: Notice | null;
+};
+
+/** An answer sent from a mission's page that the core has not yet kept or refused; the page draws it as the desktop's banner does. */
+export type MissionAnswerSent = { requestId: string; mission: string; pressed: PressedAnswer };
+/** A press that asked the Mac to open a decision's closed View again (`reopen_mission_view`), by its row's `view`. */
+export type MissionReopenSent = { requestId: string; mission: string; key: number; view: string };
+
+/**
+ * The answer this mission's page waits on, if any. One rule for "a press of this mission is still out":
+ * the guard in `answerMission` and the page's buttons read it, so an answer left over from another
+ * mission's page never stops this one.
+ */
+export function answerSentFor(sent: MissionAnswerSent | null, mission: string): MissionAnswerSent | null {
+  return sent?.mission === mission ? sent : null;
+}
+
+export type Rows = { state: RowsState; text: string; lines: number; more: boolean; alternateScreen?: boolean };
+
+/** The agent's open Views, as the last `looks` frame carried them; `omitted` are the ones past hided's cap. */
+export type Looks = { rows: LookRow[]; omitted: number };
+
+/**
+ * One View opened full screen (B13). `requestId` names the read in flight, so a late frame of an earlier read, or of one the
+ * phone retried, is ignored; `shown` is set once the phone told hided it saw the content (D-15).
+ */
+export type Viewing = { row: LookRow; requestId: string; content: LookContent; shown: boolean; refreshing: boolean };
 
 /**
  * `moreAskedAt` is the line count when older rows were last asked for, and
  * `olderAskedAt` the cursor older messages were last asked before, so one
  * pull asks once. `conversation` is null until hided says whether the pane
- * has one; `none` leaves the terminal alone on screen.
+ * has one; `none` leaves the terminal alone on screen. `view` is the half
+ * hided reads; `tab` is what is on screen, which is 볼 것 without hided
+ * knowing. `looks` is null until hided lists the Views.
  */
 export type Detail = {
   key: AgentKey;
   view: DetailView;
+  tab: DetailTab;
   rows: Rows | null;
   moreAskedAt: number | null;
   conversation: Conversation | "none" | null;
   olderAskedAt: number | null;
+  looks: Looks | null;
+  look: Viewing | null;
 };
 
 /**
@@ -54,6 +109,8 @@ export const CLOSED_SHEET: StartSheet = { open: false, text: "", choice: NO_CHOI
 export type PendingInput = { requestId: string; kind: "text" | "key" };
 
 type PhoneState = {
+  /** The sample host is open (demoSocket.ts): every host name is marked as sample data and nothing is stored. */
+  demo: boolean;
   screen: Screen;
   relayError: "storage" | "busy" | "qrError" | "loadError" | null;
   deviceProtocol: number | null;
@@ -70,16 +127,74 @@ type PhoneState = {
   interfaceLanguage: string | null;
   /** The operator's color theme as the last `agents` frame carried it; null before the first frame (drawn as Hide). */
   colorTheme: string | null;
-  pushMode: PushMode;
   notifications: Notifications;
   vapidKey: string | null;
   /** Null until the first list arrives; kept across a lost connection. */
   groups: AgentGroup[] | null;
+  /** The paired Mac and the devices it reaches, as the last list carried them. */
+  devices: PhoneDevice[];
+  /** The agents the last list left out to fit one relay message, shown as a line under the list. */
+  agentsOmitted: number;
+  /**
+   * What this phone's operator chose on the list, which the desktop's sidebar never sees (PRD mobile-companion-ui D-03): a parent's
+   * children opened or closed against what the core opened by default, keyed by `device|pane`; and the folds that were opened, keyed
+   * `group:<id>` or `children:<device|pane>`. Both keep only rows and groups the list still has.
+   */
+  childrenOpen: Record<string, boolean>;
+  foldsOpen: Record<string, true>;
   detail: Detail | null;
+  /** The bottom bar's place while no detail is open, and the mission whose page is open on the missions tab; an agent opened from a step returns to it. */
+  tab: PhoneTab;
+  missionOpen: string | null;
+  /** Null until the first missions frame; kept across a lost connection, dimmed under the unreachable line (B45). */
+  missions: PhoneMission[] | null;
+  /** The record could not be read on the Mac. */
+  missionsFailed: boolean;
+  /** The missions the last frame left out (its caps), shown as a line under the list. */
+  missionsOmitted: number;
+  /** The folds this phone opened on the missions tab: `closed` for 끝남's `모두`, `decided:<mission>` for its skipped lines; only missions the record still has. */
+  missionFolds: Record<string, true>;
+  /** What was typed for each mission's decision, kept until its answer is accepted (B35). */
+  missionDrafts: Record<string, string>;
+  missionAnswer: MissionAnswerSent | null;
+  missionAnswerError: { mission: string; notice: Notice } | null;
+  /** The press on a closed decision View the page waits on: open again, the agent's 볼 것 opens; refused, its notice shows. */
+  missionReopen: MissionReopenSent | null;
+  /** Null until the first `automations` frame; kept across a lost connection, dimmed under the unreachable line (PRD automations B35). */
+  automations: PhoneAutomation[] | null;
+  /** The automations the last frame left out (its caps), shown as a line under the list. */
+  automationsOmitted: number;
+  /** The zone the computer reads schedules in, so a time reads as the schedule does; undefined reads in the phone's own. */
+  automationsZone: string | undefined;
+  /** The automations paused for a person to fix, oldest pause first: each is a line of 내 차례 on the agents tab (PRD automations D-12, B23). */
+  automationAsks: string[];
+  /** The computer could not read its automation list and set it aside: one line above the list. */
+  automationsUnreadable: boolean;
+  /** The automation whose page is open on the automations tab. */
+  automationOpen: string | null;
+  /** A press sent from the tab that hided has not answered yet; its buttons wait. */
+  automationPending: { requestId: string; id: string; action: AutomationAction } | null;
+  /** The line under an automation's buttons for a press hided refused or the connection lost. */
+  automationNotice: { id: string; notice: Notice } | null;
+  /** Null until the first `prs` frame; kept across a lost connection, dimmed under the unreachable line (B45). */
+  prs: PrsState | null;
+  /** The pull request whose page is open on the PR tab, by `PhonePr.key`. */
+  prOpen: string | null;
+  /** The merge confirmation, open on a page; it closes without sending when the page no longer shows what it named. */
+  prConfirm: MergeConfirm | null;
+  /** A merge sent from a page that hided has not answered yet. */
+  prPending: { requestId: string; key: string } | null;
+  /** The line under a page's buttons for a read or merge hided refused or the connection lost. */
+  prNotice: { key: string; notice: Notice } | null;
+  prDelegate: PrDelegateSheet | null;
+  /** The pull request just handed to an agent, whose page says so until it is left. */
+  prDelegated: string | null;
   /** The deep link waiting for the first list (B32). */
   pendingOpen: AgentKey | null;
   pendingInput: PendingInput | null;
   inputError: Notice | null;
+  /** Done on a person's turn hided has not answered, or refused (PRD ask-human B19); one at a time, keyed by its declaration. */
+  humanTurn: { declaration: string; requestId: string | null; failed: boolean } | null;
   /** One request or failure at a time, keyed by the stable conversation intent. */
   sleepAction: { sleepId: string; requestId: string | null; error: boolean } | null;
   /** Shown once after pairing: Share › Add to Home Screen (B11). */
@@ -92,6 +207,7 @@ type PhoneState = {
 };
 
 const initial: PhoneState = {
+  demo: false,
   screen: "unpaired",
   relayError: null,
   deviceProtocol: null,
@@ -103,14 +219,43 @@ const initial: PhoneState = {
   otherPhones: 0,
   interfaceLanguage: null,
   colorTheme: null,
-  pushMode: "off",
   notifications: "unasked",
   vapidKey: null,
   groups: null,
+  devices: [],
+  agentsOmitted: 0,
+  childrenOpen: {},
+  foldsOpen: {},
   detail: null,
+  tab: "agents",
+  missionOpen: null,
+  missions: null,
+  missionsFailed: false,
+  missionsOmitted: 0,
+  missionFolds: {},
+  missionDrafts: {},
+  missionAnswer: null,
+  missionAnswerError: null,
+  missionReopen: null,
+  automations: null,
+  automationsOmitted: 0,
+  automationsZone: undefined,
+  automationAsks: [],
+  automationsUnreadable: false,
+  automationOpen: null,
+  automationPending: null,
+  automationNotice: null,
+  prs: null,
+  prOpen: null,
+  prConfirm: null,
+  prPending: null,
+  prNotice: null,
+  prDelegate: null,
+  prDelegated: null,
   pendingOpen: null,
   pendingInput: null,
   inputError: null,
+  humanTurn: null,
   sleepAction: null,
   installHint: false,
   startCatalog: null,
@@ -143,11 +288,59 @@ export function applyFrame(frame: ServerFrame): void {
       });
       return;
     case "meta":
-      patch({ pushMode: frame.push_mode, otherPhones: frame.other_phones });
+      patch({ otherPhones: frame.other_phones });
       return;
     case "agents":
-      patch({ groups: frame.groups, interfaceLanguage: frame.interface_language, colorTheme: frame.color_theme });
+      patch({
+        groups: frame.groups,
+        devices: frame.devices,
+        agentsOmitted: frame.omitted ?? 0,
+        ...keptChoices(state, frame.groups),
+        interfaceLanguage: frame.interface_language,
+        colorTheme: frame.color_theme,
+      });
       return;
+    case "missions": {
+      const listed = new Set(frame.items.map((mission) => mission.id));
+      patch({
+        missions: missionsOnWire(frame.items),
+        missionsFailed: frame.failed,
+        missionsOmitted: frame.omitted ?? 0,
+        // A mission that left the record takes its page and its draft with it.
+        missionOpen: state.missionOpen && listed.has(state.missionOpen) ? state.missionOpen : null,
+        missionDrafts: Object.fromEntries(Object.entries(state.missionDrafts).filter(([id]) => listed.has(id))),
+        missionFolds: Object.fromEntries(Object.entries(state.missionFolds).filter(([key]) => !key.startsWith("decided:") || listed.has(key.slice("decided:".length)))),
+      });
+      return;
+    }
+    case "automations": {
+      const listed = new Set(frame.items.map((automation) => automation.id));
+      patch({
+        automations: frame.items,
+        automationsOmitted: frame.omitted ?? 0,
+        automationsZone: frame.zone ?? undefined,
+        automationAsks: frame.asks ?? [],
+        automationsUnreadable: frame.unreadable === true,
+        // An automation that left the list takes its page and its line with it.
+        automationOpen: state.automationOpen && listed.has(state.automationOpen) ? state.automationOpen : null,
+        automationNotice: state.automationNotice && listed.has(state.automationNotice.id) ? state.automationNotice : null,
+      });
+      return;
+    }
+    case "prs": {
+      const items = frame.items;
+      const listed = new Set(items.map((pr) => pr.key));
+      patch({
+        prs: { projects: frame.projects, items, feedback: frame.feedback, omitted: frame.omitted ?? 0 },
+        // A pull request that left the list takes its page, its confirmation and its sheet with it.
+        prOpen: state.prOpen && listed.has(state.prOpen) ? state.prOpen : null,
+        prConfirm: state.prConfirm && holds(state.prConfirm, prOf(items, state.prConfirm.key)) ? state.prConfirm : null,
+        prDelegate: state.prDelegate && listed.has(state.prDelegate.key) ? state.prDelegate : null,
+        prNotice: state.prNotice && listed.has(state.prNotice.key) ? state.prNotice : null,
+        prDelegated: state.prDelegated && listed.has(state.prDelegated) ? state.prDelegated : null,
+      });
+      return;
+    }
     case "sleep_result":
       if (state.sleepAction?.requestId === frame.request_id && state.sleepAction?.sleepId === frame.sleep_id) {
         patch({ sleepAction: { sleepId: frame.sleep_id, requestId: null, error: !frame.ok } });
@@ -158,7 +351,7 @@ export function applyFrame(frame: ServerFrame): void {
       if (!detail || !sameKey(detail.key, frame)) return;
       const rows: Rows =
         frame.state === "ok"
-          ? { state: "ok", text: frame.text ?? "", lines: frame.lines ?? 0, more: frame.more ?? false }
+          ? { state: "ok", text: frame.text ?? "", lines: frame.lines ?? 0, more: frame.more ?? false, alternateScreen: frame.alternate_screen ?? false }
           : { state: frame.state, text: detail.rows?.text ?? "", lines: detail.rows?.lines ?? 0, more: false };
       patch({ detail: { ...detail, rows } });
       return;
@@ -171,6 +364,18 @@ export function applyFrame(frame: ServerFrame): void {
       patch({ detail: { ...detail, conversation } });
       return;
     }
+    case "looks": {
+      const detail = state.detail;
+      if (!detail || !sameKey(detail.key, frame)) return;
+      patch({ detail: { ...detail, looks: { rows: frame.views, omitted: frame.omitted } } });
+      return;
+    }
+    case "look_result":
+      showLook(frame.request_id, resultContent(frame.state, frame.url));
+      return;
+    case "look_changes":
+      showLook(frame.request_id, { state: "changes", files: frame.files, count: frame.count, added: frame.added, removed: frame.removed });
+      return;
     case "start_catalog":
       patch({ startCatalog: { targets: frame.targets, core_platform: frame.core_platform, kinds: frame.kinds, remembered: frame.remembered } });
       return;
@@ -182,12 +387,96 @@ export function applyFrame(frame: ServerFrame): void {
   }
 }
 
+/** Puts `content` on the View the phone is looking at, when it is the answer to the read in flight. */
+export function showLook(requestId: string, content: LookContent): void {
+  const detail = usePhone.getState().detail;
+  if (!detail?.look || detail.look.requestId !== requestId) return;
+  patch({ detail: { ...detail, look: { ...detail.look, content, refreshing: false } } });
+}
+
+/** The choices this phone made that still name a row or group of the new list, so a long session keeps no stale ones. */
+function keptChoices(state: PhoneState, groups: AgentGroup[]): Pick<PhoneState, "childrenOpen" | "foldsOpen"> {
+  const rows = new Set(listedAgents(groups).map((agent) => keyTag(agent)));
+  const folds = new Set([...groups.map((group) => foldKey.group(group.group)), ...[...rows].map(foldKey.children)]);
+  return {
+    childrenOpen: Object.fromEntries(Object.entries(state.childrenOpen).filter(([tag]) => rows.has(tag))),
+    foldsOpen: Object.fromEntries(Object.entries(state.foldsOpen).filter(([key]) => folds.has(key))),
+  };
+}
+
+export const foldKey = {
+  group: (id: string) => `group:${id}`,
+  children: (tag: string) => `children:${tag}`,
+};
+
+/** Opens or closes a parent's children on this phone only. */
+export function setChildrenOpen(agent: PhoneAgent, open: boolean): void {
+  usePhone.setState((state) => ({ childrenOpen: { ...state.childrenOpen, [keyTag(agent)]: open } }));
+}
+
+/** Opens a fold in place: a group's or a parent's "더 보기". */
+export function openFold(key: string): void {
+  usePhone.setState((state) => ({ foldsOpen: { ...state.foldsOpen, [key]: true } }));
+}
+
+export function setTab(tab: PhoneTab): void {
+  usePhone.setState({ tab, missionOpen: null, prOpen: null, automationOpen: null, automationNotice: null });
+}
+
+/** Opens a mission's page on the missions tab. */
+export function openMission(id: string): void {
+  usePhone.setState({ tab: "missions", missionOpen: id, missionAnswerError: null });
+}
+
+export function closeMission(): void {
+  usePhone.setState({ missionOpen: null, missionAnswerError: null });
+}
+
+/** Opens or closes a fold on the missions tab, on this phone only. */
+export function setMissionFold(key: string, open: boolean): void {
+  usePhone.setState((state) => {
+    const folds = { ...state.missionFolds };
+    if (open) folds[key] = true;
+    else delete folds[key];
+    return { missionFolds: folds };
+  });
+}
+
+export function setMissionDraft(id: string, text: string): void {
+  usePhone.setState((state) => ({ missionDrafts: { ...state.missionDrafts, [id]: text }, missionAnswerError: null }));
+}
+
+/** Opens an automation's page on the automations tab. */
+export function openAutomation(id: string): void {
+  // A refusal of a press on this automation's row stays under the page's buttons.
+  usePhone.setState((state) => ({ tab: "automations", automationOpen: id, automationNotice: state.automationNotice?.id === id ? state.automationNotice : null }));
+}
+
+export function closeAutomation(): void {
+  usePhone.setState({ automationOpen: null, automationNotice: null });
+}
+
+/** The automation a page shows, from the current list; null once it left. */
+export function automationOf(automations: readonly PhoneAutomation[] | null, id: string | null): PhoneAutomation | null {
+  return automations?.find((automation) => automation.id === id) ?? null;
+}
+
+/** Opens a pull request's page on the PR tab. */
+export function openPr(key: string): void {
+  usePhone.setState({ tab: "prs", prOpen: key, prConfirm: null, prNotice: null, prDelegated: null });
+}
+
+export function closePr(): void {
+  usePhone.setState({ prOpen: null, prConfirm: null, prNotice: null, prDelegated: null });
+}
+
+/** The mission a page shows, from the current record; null once it left the list. */
+export function missionOf(missions: readonly PhoneMission[] | null, id: string | null): PhoneMission | null {
+  return missions?.find((mission) => mission.id === id) ?? null;
+}
+
 /** The agent a detail shows, from the current list; null once it left the list. */
-export function agentOf(groups: AgentGroup[] | null, key: AgentKey | null) {
+export function agentOf(groups: AgentGroup[] | null, key: AgentKey | null): PhoneAgent | null {
   if (!groups || !key) return null;
-  for (const group of groups) {
-    const agent = group.agents.find((candidate) => sameKey(candidate, key));
-    if (agent) return agent;
-  }
-  return null;
+  return listedAgents(groups).find((candidate) => sameKey(candidate, key)) ?? null;
 }

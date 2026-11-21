@@ -4,7 +4,7 @@
 //! B33): one owned `ssh` signed in once, whose start script installs a
 //! build, runs the move's steps and copies its files, and then runs the
 //! core machine's attach role in its own place, whose input and output
-//! carry the node's link and its screens' streams (`hided`'s `link_mux`).
+//! carry the node's link and its screens' streams (`hide_peer::mux`).
 //!
 //! The screen machine needs no SSH server of its own, only the alias, which
 //! OpenSSH reads exactly as a terminal does, its known hosts included.
@@ -166,9 +166,14 @@ impl Upstream {
             Some(press) => (press, Wake::Allowed),
             None => (Arc::new(NoSignIn), Wake::NotAllowed),
         };
-        let resolved = self.target.resolve().map_err(SessionError::Ssh)?;
+        // One clock for ssh's questions and its sign-in (with-hide/hide-private#584).
+        let until = Instant::now() + super::session::SIGN_IN_TIMEOUT;
+        let resolved = self
+            .target
+            .resolve(until, &self.cancel)
+            .map_err(SessionError::Ssh)?;
         *lock_recover(&self.resolved) = Some(resolved.clone());
-        Session::open(&self.target, &resolved, &self.cancel, asks, wake)
+        Session::open(&self.target, &resolved, until, &self.cancel, asks, wake)
     }
 
     /// Runs `program attach [--state-dir <dir>]` on the machine in place of
@@ -183,6 +188,22 @@ impl Upstream {
             None => self.open()?,
         };
         session.attach(program, state_dir)
+    }
+
+    /// The machine's system (`macos`, `linux` or `windows`), read at the
+    /// sign-in of the session the last step left or of a new one.
+    pub fn system(&self) -> Result<String, SessionError> {
+        self.with_session(|session| Ok(session.system().to_owned()))
+    }
+
+    /// Where the alias resolved at the last dial: the host name `ssh`
+    /// signs in at, and none when the alias goes through a proxy command
+    /// or a jump host, whose server this machine does not reach itself.
+    pub fn direct_host(&self) -> Option<String> {
+        lock_recover(&self.resolved)
+            .as_ref()
+            .filter(|resolved| !resolved.proxied())
+            .map(|resolved| resolved.hostname.clone())
     }
 
     /// Runs `argv` on the machine with no input; see [`Session::run`].

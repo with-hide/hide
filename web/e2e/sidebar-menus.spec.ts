@@ -1,8 +1,7 @@
 // The sidebar's row menus (PRD sidebar-context-menus D-11) on an isolated
 // engine and hided: a Git project with an agent in its main checkout and one
 // in a linked worktree. The
-// project row's menu lists the board's items and Pin pins it (on Herdr, a
-// project Herdr shows without a registration is registered by it too); New tab in main opens a terminal in the default checkout and brings
+// project row's menu lists the board's items and Pin pins it; New tab in main opens a terminal in the default checkout and brings
 // it to the front, where an explicit start creates its terminal; Set as default
 // checkout moves the home glyph and the first place to the worktree; the agent row's Copy session id puts the
 // session id on the clipboard, and its Close tab… closes that agent's tab.
@@ -11,18 +10,17 @@
 
 import { expect, test, type Locator, type Page } from "@playwright/test";
 import { execFileSync } from "node:child_process";
-import crypto from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
-import { agentIn, checkoutAt, closePane, openProject, tabPanes, tabsOf, withControl } from "./daemon-actions";
+import { agentIn, checkoutAt, closePane, openProject, startAgentInCheckout, tabOfPane, tabsOf, withControl } from "./daemon-actions";
 import { startEngine, type EngineServer } from "./engine-fixture";
 import { setAgentSession } from "./fixture-agents";
 import type { HidedControl } from "./hided-control.mjs";
-import { claudeProjects, startHerdr, writeFixtureTranscript } from "./herdr-fixture";
+import { claudeProjects, writeFixtureTranscript } from "./pane-fixture";
 import { waitForTerminal } from "./group-start-helper";
 import { startHided, type Daemon } from "./hided-fixture";
 import { toPage } from "../../desktop/src/main/wirePath";
-import { enterWorkspace, rest, screenshot, showProjectRow } from "./wire";
+import { openOtherCheckouts, rest, screenshot } from "./wire";
 import { chord, commandLabel } from "./chords";
 
 test.describe.configure({ timeout: 180_000 });
@@ -41,12 +39,10 @@ function git(cwd: string, args: string[]): void {
  */
 async function startAgentAt(server: EngineServer, daemon: Daemon, control: HidedControl, folder: string, session: string, task: string): Promise<{ tab: string; pane: string }> {
   writeFixtureTranscript(claudeProjects(server), session, { task });
-  const known = await control.until((rest) => checkoutAt(rest, folder)?.tabs ?? [], "the snapshot");
-  control.send("agent_start_in_checkout", { checkout_path: folder, provider: "claude", resume_session_id: session, request_id: `e2e-${crypto.randomUUID()}` });
+  const pane = await startAgentInCheckout(control, folder, { resume_session_id: session }, `an agent in ${folder}`);
   const started = await control.until((rest) => {
-    const tab = checkoutAt(rest, folder)?.tabs.find((id) => !known.includes(id));
-    const pane = tab ? tabPanes(rest, tab)[0] : undefined;
-    return tab && pane && agentIn(rest, pane) ? { tab, pane } : undefined;
+    const tab = tabOfPane(rest, pane);
+    return tab && agentIn(rest, pane) ? { tab, pane } : undefined;
   }, `an agent in a new tab of ${folder}`, 30_000);
   await setAgentSession(server, daemon, started.pane, session);
   return started;
@@ -85,28 +81,28 @@ async function chooseTheme(page: Page, theme: "light" | "dark"): Promise<void> {
 // from its row, the agent's from the Agents list.
 async function startMenus(page: Page, options: { pinned?: boolean } = {}) {
   await page.setViewportSize({ width: 1400, height: 900 });
-  const herdr = await startEngine();
+  const engine = await startEngine();
   try {
-    const repo = path.join(herdr.root, "repo");
+    const repo = path.join(engine.root, "repo");
     fs.mkdirSync(repo);
     git(repo, ["init"]);
     fs.writeFileSync(path.join(repo, "README.md"), "# repo\n");
     git(repo, ["add", "README.md"]);
     git(repo, ["commit", "-m", "initial"]);
-    const worktree = path.join(herdr.root, "repo-menus");
+    const worktree = path.join(engine.root, "repo-menus");
     git(repo, ["worktree", "add", "-b", BRANCH, worktree]);
 
     // The fixture's folders are in the daemon's home, as an operator's projects
     // are, so a pin registers them and a project outliving its last pane stays
     // listed without asking about a folder outside home (PRD wsl-device B15).
-    const daemon = await startHided(herdr, "sidebar-menus", herdr.root);
+    const daemon = await startHided(engine, "sidebar-menus", engine.root);
     await page.context().grantPermissions(["clipboard-read", "clipboard-write"], { origin: daemon.origin });
     await page.goto(`${daemon.origin}/#token=${daemon.token}`);
     await expect(page.locator("[data-main-screen]")).toBeVisible({ timeout: 20_000 });
     // An agent in the main checkout, then one in the linked worktree, which the core lists once a client shows its repository.
     const opened = await withControl(daemon, async (control) => {
       const project = await openProject(control, repo, "repo");
-      await startAgentAt(herdr, daemon, control, project.folder, "menus-main", "메인 체크아웃 정리");
+      await startAgentAt(engine, daemon, control, project.folder, "menus-main", "메인 체크아웃 정리");
       // The shell Add project opened is not the main agent's: its tab goes.
       await closePane(control, project.pane);
       return project;
@@ -114,13 +110,15 @@ async function startMenus(page: Page, options: { pinned?: boolean } = {}) {
     const worktreePane = await withControl(daemon, async (control) => {
       await control.until((rest) => checkoutAt(rest, toPage(fs.realpathSync(worktree))), "the linked worktree listed", 30_000);
       // The session the menu copies carries the row's title too.
-      return (await startAgentAt(herdr, daemon, control, toPage(fs.realpathSync(worktree)), SESSION, "사이드바 메뉴 구현")).pane;
+      return (await startAgentAt(engine, daemon, control, toPage(fs.realpathSync(worktree)), SESSION, "사이드바 메뉴 구현")).pane;
     });
 
     const project = page.locator("[data-project]").filter({ has: page.locator("[data-project-row]", { hasText: /^repo/ }) });
     const projectRow = project.locator("[data-project-menu]").first();
     const main = project.locator("[data-checkout-row]").filter({ has: page.locator('[data-checkout][aria-label^="main"]') });
     const feature = project.locator("[data-checkout-row]").filter({ has: page.locator(`[data-checkout][aria-label^="${BRANCH}"]`) });
+    // The linked worktree is not the project's main checkout, so its row waits in the project's Checkouts fold.
+    await openOtherCheckouts(project);
     await expect(feature).toBeVisible({ timeout: 30_000 });
     const agentRow = page.locator(`nav[data-sidebar] li[data-pane="${worktreePane}"]`);
     if (options.pinned) {
@@ -128,19 +126,19 @@ async function startMenus(page: Page, options: { pinned?: boolean } = {}) {
       // the registered project's, so these contracts start from it.
       const menu = await openMenu(page, projectRow, "repo actions");
       await menu.locator('[data-menu-item="pin"]').click();
-      await expect(page.locator('[data-section="pinned"]')).toHaveText(/Pinned · 1/);
+      await expect(project).toHaveAttribute("data-project-pinned", "true");
     }
-    return { herdr, daemon, opened, worktreePane, project, projectRow, main, feature, agentRow, stop: () => { daemon.stop(); herdr.stop(); } };
+    return { engine, daemon, opened, worktreePane, project, projectRow, main, feature, agentRow, stop: () => { daemon.stop(); engine.stop(); } };
   } catch (error) {
-    herdr.stop();
+    engine.stop();
     throw error;
   }
 }
 
 test("the project row's menu lists the board's items, and Pin pins it", async ({ page }) => {
-  const { projectRow, stop } = await startMenus(page);
+  const { project, projectRow, stop } = await startMenus(page);
   try {
-    await expect(page.locator('[data-section="pinned"]')).toHaveCount(0);
+    await expect(project).not.toHaveAttribute("data-project-pinned", "true");
     // B1, B3: in the board's order. A browser tab has no OS file manager, so
     // its reveal is absent; the row offers both Pin and removal. Project Settings B4 adds the settings
     // entry to this same project menu without removing its existing actions,
@@ -150,48 +148,13 @@ test("the project row's menu lists the board's items, and Pin pins it", async ({
     await screenshot(page, "sidebar-menus-project-dark");
     await menu.locator('[data-menu-item="pin"]').click();
     await expect(menu).toHaveCount(0);
-    // Pin pinned the row: it now stands under Pinned, once.
-    await expect(page.locator('[data-section="pinned"]')).toHaveText(/Pinned · 1/);
+    // Pin pinned the row: it now wears the pin mark in place of its folder icon, once.
+    await expect(project).toHaveAttribute("data-project-pinned", "true");
     await expect(page.locator("[data-project-row]", { hasText: /^repo/ })).toHaveCount(1);
     menu = await openMenu(page, projectRow, "repo actions");
     await expect(menu.locator('[data-menu-item="unpin"]')).toHaveText(/Unpin/);
     await page.keyboard.press("Escape");
   } finally { stop(); }
-});
-
-// Herdr only: Hide lists a Git project that only Herdr has (a workspace made in Herdr outside Hide) without a registration, and Pin registers it.
-test("Pin registers and pins a project Herdr shows without a registration @herdr", async ({ page }) => {
-  await page.setViewportSize({ width: 1400, height: 900 });
-  const herdr = await startHerdr({ agents: false });
-  let daemon: Daemon | null = null;
-  try {
-    const repo = path.join(herdr.root, "repo");
-    fs.mkdirSync(repo);
-    git(repo, ["init"]);
-    fs.writeFileSync(path.join(repo, "README.md"), "# repo\n");
-    git(repo, ["add", "README.md"]);
-    git(repo, ["commit", "-m", "initial"]);
-    herdr.run(["workspace", "create", "--cwd", repo, "--label", "repo", "--env", `PATH=${herdr.fixturePath}`, "--no-focus"]);
-    daemon = await startHided(herdr, "sidebar-menus-unregistered", herdr.root);
-    await page.goto(`${daemon.origin}/#token=${daemon.token}`);
-    await expect(page.locator("[data-main-screen]")).toBeVisible({ timeout: 20_000 });
-    const row = page.locator("[data-project]").filter({ has: page.locator("[data-project-row]", { hasText: /^repo/ }) }).locator("[data-project-menu]").first();
-    await expect(page.locator('[data-section="pinned"]')).toHaveCount(0);
-    // Startup can select either project. Make the other one current so this
-    // unregistered shell project is folded, then reach Pin through that fold.
-    await enterWorkspace(page, "fixture");
-    const fold = page.locator("[data-no-agent-projects]");
-    await expect(fold).toBeVisible();
-    if (await fold.getAttribute("aria-expanded") === "true") await fold.click();
-    await expect(row).toHaveCount(0);
-    const menu = await openMenu(page, await showProjectRow(page, row), "repo actions");
-    await menu.locator('[data-menu-item="pin"]').click();
-    await expect(page.locator('[data-section="pinned"]')).toHaveText(/Pinned · 1/);
-    await expect(page.locator("[data-project-row]", { hasText: /^repo/ })).toHaveCount(1);
-  } finally {
-    daemon?.stop();
-    herdr.stop();
-  }
 });
 
 // B7, D-04: the project's issue source is a submenu of the row's menu; the
@@ -255,16 +218,16 @@ test("the project row's Issue source submenu shows the stored choice and changes
 // choice too, so a choice made there is still checked when the menu reopens.
 test("a plain folder's row shows the stored Issue source, not Automatic", async ({ page }) => {
   await page.setViewportSize({ width: 1400, height: 900 });
-  const herdr = await startEngine();
+  const engine = await startEngine();
   let daemon: Awaited<ReturnType<typeof startHided>> | null = null;
   try {
-    const folder = path.join(herdr.root, "notes");
+    const folder = path.join(engine.root, "notes");
     fs.mkdirSync(folder);
     fs.writeFileSync(path.join(folder, "todo.txt"), "write\n");
-    daemon = await startHided(herdr, "sidebar-menus-folder");
+    daemon = await startHided(engine, "sidebar-menus-folder");
     await withControl(daemon, async (control) => {
       const project = await openProject(control, folder, "notes");
-      await startAgentAt(herdr, daemon!, control, project.folder, "menus-notes", "메모 정리");
+      await startAgentAt(engine, daemon!, control, project.folder, "menus-notes", "메모 정리");
       await closePane(control, project.pane);
     });
     await page.goto(`${daemon.origin}/#token=${daemon.token}`);
@@ -285,7 +248,7 @@ test("a plain folder's row shows the stored Issue source, not Automatic", async 
     await page.keyboard.press("Escape");
   } finally {
     daemon?.stop();
-    herdr.stop();
+    engine.stop();
   }
 });
 
@@ -320,7 +283,7 @@ test("New tab in main opens a terminal in the default checkout", async ({ page }
   try {
     const before = await withControl(daemon, (control) => control.until((rest) => tabsOf(rest, opened.workspace), "the project's tabs"));
     // Drafts share the Agent tab kind; native IDs distinguish the live tabs.
-    const liveTabs = page.locator('[data-tab-bar] [data-tab-kind="herdr"]:not([data-tab^="draft:"])');
+    const liveTabs = page.locator('[data-tab-bar] [data-tab-kind="engine"]:not([data-tab^="draft:"])');
     const menu = await openMenu(page, projectRow, "repo actions");
     await menu.locator('[data-menu-item="new_tab_primary"]').click();
     await expect(page.locator("[data-workspace-screen]")).toBeVisible({ timeout: 20_000 });
@@ -357,7 +320,7 @@ test("the agent row's menu copies the session id and the agent's reference with 
     await screenshot(page, "sidebar-menus-agent-dark");
     await page.locator('[data-menu-item="copy_session_id"]').click();
     await expect.poll(() => page.evaluate(() => navigator.clipboard.readText())).toBe(SESSION);
-    // The id `herdr pane list` names this pane by, the one ⌘K finds it by, inside the reference an agent reads.
+    // The pane id, as `$HERDR_PANE_ID` gives it, the one ⌘K finds it by, inside the reference an agent reads.
     menu = await openMenu(page, agentRow, "사이드바 메뉴 구현 actions");
     await page.locator('[data-menu-item="copy_reference"]').click();
     await expect.poll(() => page.evaluate(() => navigator.clipboard.readText())).toMatch(new RegExp(`^@.+ \\(pane ${worktreePane} · 사이드바 메뉴 구현\\)$`));
@@ -370,7 +333,7 @@ test("the agent row's Close tab… closes that agent's tab without asking when i
     // B8: through the tab close flow, in a checkout that is not the one in
     // front. An idle agent's tab closes without asking (close.ts asks only
     // for working or attention panes), and the row leaves with its pane.
-    const mainTabs = page.locator(`[data-tab-bar] [data-tab-kind="herdr"]`);
+    const mainTabs = page.locator(`[data-tab-bar] [data-tab-kind="engine"]`);
     await expect(agentRow).toBeVisible();
     const menu = await openMenu(page, agentRow, "사이드바 메뉴 구현 actions");
     await menu.locator('[data-menu-item="close_tab"]').click();

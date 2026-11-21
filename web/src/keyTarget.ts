@@ -1,7 +1,7 @@
 // Where a key goes right after the operator asked for a new tab or a split
 // (PRD instant-pane-topology D-11). From the request until the new pane holds
 // the keyboard, keys belong to that pane, which does not exist yet: they are
-// sent against the request, and the core delivers them to the pane Herdr's
+// sent against the request, and the core delivers them to the pane the engine's
 // answer names, or drops them when the creation fails. The pane that had the
 // keyboard never receives them.
 //

@@ -1,6 +1,6 @@
 //! What the machine taking the core says about itself before a move (PRD
 //! core-host-node-move B3, D-04, D-25, D-26), answered by `hided core-move
-//! inspect` there: its Herdr server runs, the account's GUI session runs
+//! inspect` there: its engine can take the core, the account's GUI session runs
 //! (the only one its login item runs in), the machine does not sleep by
 //! itself on power, `gh` is signed in and every agent Hide AI asks answers.
 //! A failing check says what it found; hide changes none of it.
@@ -11,92 +11,33 @@
 //! in the login keychain can answer otherwise to the SSH session `inspect`
 //! runs in. The others read no login and run in `inspect` itself.
 
-use std::path::{Path, PathBuf};
+use std::path::Path;
 use std::process::Command;
 use std::sync::atomic::AtomicBool;
 use std::time::Duration;
 
-use hide_platform::user_agents::{Login, UserAgents};
-
 use super::control::{CheckId, FailedCheck};
+pub use crate::core_install::checks::Programs;
+use crate::core_install::checks::{Logins, gh_signed_in, gui_session, sleep_off};
 
-/// How long one check's program may take.
-const PROGRAM_WITHIN: Duration = Duration::from_secs(5);
 /// How long the job of the logins' checks may take to answer: `gh` and
 /// each agent's login probe.
 const LOGINS_ANSWER_WITHIN: Duration = Duration::from_secs(30);
 
-/// What the `gh`, session and power checks ask: the system's programs and
-/// login agents, or a fixture's stand-ins (`env::HIDE_PREFLIGHT_PROGRAMS`).
-pub struct Programs {
-    /// `None` finds `gh` on this account's PATH.
-    gh: Option<PathBuf>,
-    /// The login agents the core's login item would be one of, which also
-    /// answer whether the machine sleeps on its own.
-    agents: UserAgents,
-    logins: Logins,
+/// Whether the core's engine can move between machines. A move hands each
+/// machine's panes over and renames the scope that names it in the
+/// delivery ledger; it did both through Herdr, and the core's own engine
+/// does neither yet, so every move is refused here with this reason until
+/// it does (with-hide/hide-private#491).
+pub fn engine_moves() -> Result<(), String> {
+    Err("this version of Hide cannot move its core between machines yet".to_owned())
 }
 
-/// Where the logins' checks run.
-enum Logins {
-    /// A one-shot job where the core's login item runs.
-    InTheCoreSession,
-    /// A child of `inspect`: a fixture's, or a system with no login agents,
-    /// whose GUI session check fails anyway.
-    Here,
-}
-
-impl Programs {
-    pub fn for_this_machine() -> Result<Self, String> {
-        let home = hide_platform::host::home_dir()
-            .map_err(|error| format!("this account has no home folder: {error}"))?;
-        Self::chosen(
-            &home,
-            std::env::var_os(crate::env::HIDE_PREFLIGHT_PROGRAMS).as_deref(),
-        )
-    }
-
-    /// A fixture HOME's checks run its stand-ins in `stand_ins` and are
-    /// refused without them, since the system's would reach the account's
-    /// real launchd domain whatever HOME is; any other HOME runs the
-    /// system's and ignores the key.
-    fn chosen(home: &Path, stand_ins: Option<&std::ffi::OsStr>) -> Result<Self, String> {
-        if crate::env::fixture_home(home) {
-            let folder = stand_ins
-                .map(PathBuf::from)
-                .filter(|folder| folder.is_absolute())
-                .ok_or_else(|| {
-                    format!(
-                        "{} is a fixture HOME without an absolute {}: a move's checks never reach the account's own launchd",
-                        home.display(),
-                        crate::env::HIDE_PREFLIGHT_PROGRAMS
-                    )
-                })?;
-            return Ok(Self {
-                gh: Some(folder.join("gh")),
-                agents: UserAgents::fixture(&folder),
-                logins: Logins::Here,
-            });
-        }
-        let agents = UserAgents::current();
-        let logins = if agents.supported().is_ok() {
-            Logins::InTheCoreSession
-        } else {
-            Logins::Here
-        };
-        Ok(Self {
-            gh: None,
-            agents,
-            logins,
-        })
-    }
-}
-
-/// Where this machine's Herdr is, as its daemon resolves it
-/// (`Env::herdr_program`).
-pub struct Herdr<'a> {
-    pub bin: Option<&'a Path>,
-    pub socket: Option<&'a str>,
+/// The scope that names this machine in the delivery ledger's host scopes,
+/// which a move rewrites: a Herdr socket before. The core's own engine names
+/// none a move can rewrite yet (`engine_moves`).
+pub fn movable_scope() -> Option<String> {
+    None
 }
 
 /// Every check that fails on this machine, in the dialog's order; `ai` is
@@ -104,13 +45,12 @@ pub struct Herdr<'a> {
 pub fn failing(
     home: &Path,
     state_dir: &Path,
-    herdr: &Herdr<'_>,
     ai: Option<&str>,
     programs: &Programs,
 ) -> Vec<FailedCheck> {
     let stop = AtomicBool::new(false);
     let mut failed: Vec<FailedCheck> = [
-        (CheckId::Herdr, herdr_running(home, herdr, &stop)),
+        (CheckId::Engine, engine_moves()),
         (CheckId::GuiSession, gui_session(home, programs, &stop)),
         (CheckId::Sleep, sleep_off(home, programs, &stop)),
     ]
@@ -148,7 +88,7 @@ pub fn logins_failing(home: &Path, ai: Option<&str>, programs: &Programs) -> Vec
     let asks = ai.map(serde_json::from_str::<Vec<(String, String)>>);
     let ready = match asks {
         None => Ok(()),
-        Some(Ok(asks)) => herdr_core::hide_ai_ready_here(&asks),
+        Some(Ok(asks)) => hide_core::hide_ai_ready_here(&asks),
         Some(Err(error)) => Err(format!("--ai is not a list of agents: {error}")),
     };
     if let Err(detail) = ready {
@@ -297,233 +237,4 @@ fn wait_for_answer(answer: &Path, exited: &dyn Fn() -> Option<String>) -> Result
         std::thread::sleep(Duration::from_millis(100));
     }
     Ok(())
-}
-
-fn run(
-    mut command: Command,
-    stop: &AtomicBool,
-) -> Result<hide_platform::process::Finished, String> {
-    let program = command.get_program().to_string_lossy().into_owned();
-    hide_platform::process::run_to_end(&mut command, PROGRAM_WITHIN, stop)
-        .map_err(|failure| format!("{program} did not answer: {failure:?}"))
-}
-
-/// `herdr status server --json` for the server this machine's core would
-/// own says it runs.
-fn herdr_running(home: &Path, herdr: &Herdr<'_>, stop: &AtomicBool) -> Result<(), String> {
-    let bin = herdr
-        .bin
-        .ok_or("no herdr on this machine: HERDR_BIN_PATH names none, this account's helper holds no pinned copy, and the account's search finds none")?;
-    let mut command = Command::new(bin);
-    command
-        .args(["status", "server", "--json"])
-        .env(hide_platform::host::HOME_VARIABLE, home);
-    if let Some(socket) = herdr.socket {
-        command.env(crate::env::HERDR_SOCKET_PATH, socket);
-    }
-    let finished = run(command, stop)?;
-    if finished.code != Some(0) {
-        return Err(format!(
-            "herdr status server exited {:?}: {}",
-            finished.code,
-            finished.last_error_line()
-        ));
-    }
-    let status: ServerStatus = serde_json::from_str(finished.stdout.trim())
-        .map_err(|error| format!("herdr status server was not readable: {error}"))?;
-    if !status.running {
-        return Err(format!("no Herdr server answers at {}", status.socket));
-    }
-    Ok(())
-}
-
-/// The fields of `herdr status server --json` the preflight reads. The CLI
-/// is the boundary here, not the socket schema: the socket cannot be reached
-/// before this answer says where it is.
-#[derive(serde::Deserialize)]
-struct ServerStatus {
-    running: bool,
-    socket: String,
-}
-
-/// `gh auth status` exits 0: the core reads GitHub with this machine's
-/// login once it runs here (PRD core-host-node-remote-core D-16).
-fn gh_signed_in(home: &Path, programs: &Programs, stop: &AtomicBool) -> Result<(), String> {
-    // `gh` is found and run the way the core will run it, on the account's
-    // search with the login shell asked, which its git and credential
-    // helpers need too; a stand-in is run as it is.
-    let mut command = match &programs.gh {
-        Some(gh) => Command::new(gh),
-        None => {
-            let path = hide_platform::programs::account_path()
-                .ok_or("this account's PATH could not be read")?;
-            hide_platform::programs::command_on(Some(&path), "gh")
-        }
-    };
-    command
-        .args(["auth", "status"])
-        .env(hide_platform::host::HOME_VARIABLE, home);
-    let finished = match hide_platform::process::run_to_end(&mut command, PROGRAM_WITHIN, stop) {
-        Err(hide_platform::process::RunFailure::Start(error))
-            if error.kind() == std::io::ErrorKind::NotFound =>
-        {
-            return Err("gh is not installed on this machine".to_owned());
-        }
-        other => other.map_err(|failure| format!("gh did not answer: {failure:?}"))?,
-    };
-    if finished.code != Some(0) {
-        return Err("gh is not signed in".to_owned());
-    }
-    Ok(())
-}
-
-/// Someone is logged in where the core's login item runs, when it runs only
-/// then: the account's GUI session.
-fn gui_session(home: &Path, programs: &Programs, stop: &AtomicBool) -> Result<(), String> {
-    match programs.agents.login(home, stop) {
-        Ok(Login::NotNeeded | Login::LoggedIn) => Ok(()),
-        Ok(Login::LoggedOut) => Err("no one is logged in to this machine's desktop".to_owned()),
-        Err(error) if error.kind() == std::io::ErrorKind::Unsupported => {
-            Err("this system has no login session for the core to run in".to_owned())
-        }
-        Err(error) => Err(error.to_string()),
-    }
-}
-
-/// The machine never sleeps on its own on power.
-fn sleep_off(home: &Path, programs: &Programs, stop: &AtomicBool) -> Result<(), String> {
-    match programs.agents.sleeps_on_power(home, stop) {
-        Ok(None) => Ok(()),
-        Ok(Some(after)) => Err(format!(
-            "sleeps on power after {} min",
-            after.as_secs() / 60
-        )),
-        Err(error) if error.kind() == std::io::ErrorKind::Unsupported => {
-            Err("this system has no power settings hide can read".to_owned())
-        }
-        Err(error) => Err(error.to_string()),
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    /// A fixture HOME never runs the system's programs, which would reach
-    /// the account's real launchd domain: without its stand-ins, or with a
-    /// relative folder, its checks are refused.
-    #[cfg(unix)]
-    #[test]
-    fn a_fixture_home_without_its_stand_ins_is_refused() {
-        let home = tempfile::tempdir_in("/tmp").unwrap();
-        std::fs::write(home.path().join(crate::env::FIXTURE_HOME_MARKER), "").unwrap();
-        assert!(Programs::chosen(home.path(), None).is_err());
-        assert!(Programs::chosen(home.path(), Some("stand-ins".as_ref())).is_err());
-        let stand_ins = Programs::chosen(home.path(), Some(home.path().as_os_str())).unwrap();
-        assert!(matches!(stand_ins.logins, Logins::Here));
-        assert_eq!(stand_ins.gh, Some(home.path().join("gh")));
-    }
-
-    #[cfg(unix)]
-    fn stand_in(dir: &Path, name: &str, script: &str) -> PathBuf {
-        use std::os::unix::fs::PermissionsExt;
-        let path = dir.join(name);
-        std::fs::write(&path, format!("#!/bin/sh\n{script}\n")).unwrap();
-        std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o755)).unwrap();
-        path
-    }
-
-    /// Each program's answer is read as the check it is, and one that does
-    /// not answer is a failing check rather than a pass.
-    #[cfg(unix)]
-    #[test]
-    fn herdr_and_power_checks_fail_on_what_their_programs_answer() {
-        let dir = tempfile::tempdir().unwrap();
-        let stop = AtomicBool::new(false);
-        let running = stand_in(
-            dir.path(),
-            "herdr-running",
-            r#"echo '{"running":true,"socket":"/tmp/h.sock"}'"#,
-        );
-        let stopped = stand_in(
-            dir.path(),
-            "herdr-stopped",
-            r#"echo '{"running":false,"socket":"/tmp/h.sock"}'"#,
-        );
-        let herdr = |bin: &Path| {
-            herdr_running(
-                dir.path(),
-                &Herdr {
-                    bin: Some(bin),
-                    socket: None,
-                },
-                &stop,
-            )
-        };
-        assert_eq!(herdr(&running), Ok(()));
-        assert_eq!(
-            herdr(&stopped),
-            Err("no Herdr server answers at /tmp/h.sock".to_owned())
-        );
-        assert!(
-            herdr_running(
-                dir.path(),
-                &Herdr {
-                    bin: None,
-                    socket: None
-                },
-                &stop
-            )
-            .is_err()
-        );
-
-        let programs = |pmset: &str| {
-            stand_in(dir.path(), "pmset", &format!("printf '{pmset}'"));
-            Programs {
-                gh: None,
-                agents: UserAgents::fixture(dir.path()),
-                logins: Logins::Here,
-            }
-        };
-        assert_eq!(
-            sleep_off(dir.path(), &programs("AC Power:\\n sleep 0\\n"), &stop),
-            Ok(())
-        );
-        assert_eq!(
-            sleep_off(dir.path(), &programs("AC Power:\\n sleep 1\\n"), &stop),
-            Err("sleeps on power after 1 min".to_owned())
-        );
-        let none = Programs {
-            gh: None,
-            agents: UserAgents::none(),
-            logins: Logins::Here,
-        };
-        assert_eq!(
-            sleep_off(dir.path(), &none, &stop),
-            Err("this system has no power settings hide can read".to_owned())
-        );
-        assert_eq!(
-            gui_session(dir.path(), &none, &stop),
-            Err("this system has no login session for the core to run in".to_owned())
-        );
-
-        let gh = |script: &str| {
-            stand_in(dir.path(), "launchctl", script);
-            Programs {
-                gh: Some(stand_in(dir.path(), "gh", script)),
-                agents: UserAgents::fixture(dir.path()),
-                logins: Logins::Here,
-            }
-        };
-        assert_eq!(gh_signed_in(dir.path(), &gh("exit 0"), &stop), Ok(()));
-        assert_eq!(gui_session(dir.path(), &gh("exit 0"), &stop), Ok(()));
-        assert_eq!(
-            gh_signed_in(dir.path(), &gh("exit 1"), &stop),
-            Err("gh is not signed in".to_owned())
-        );
-        assert_eq!(
-            gui_session(dir.path(), &gh("exit 113"), &stop),
-            Err("no one is logged in to this machine's desktop".to_owned())
-        );
-    }
 }

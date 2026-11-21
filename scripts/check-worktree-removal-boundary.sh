@@ -12,7 +12,7 @@ cd "$root"
 # branch is unmerged and ticked it, or explicitly discarded their task.
 # Completed tasks keep their branch. The Overview cleanup never forces.
 executor=hide-host/src/worktrees.rs
-cleanup=herdr-core/src/worktree_cleanup.rs
+cleanup=hide-core/src/worktree_cleanup.rs
 fail() {
     echo "$1" >&2
     exit 1
@@ -52,7 +52,7 @@ if git grep -nE -- 'remove_worktree\(' "$cleanup" | grep -vqF -- ', false)'; the
 fi
 
 # An agent-facing procedure removes a checkout Hide shows through `hide
-# workspace remove`, which closes its Herdr panes before Git removes the
+# workspace remove`, which closes its panes before Git removes the
 # folder; a raw `git worktree remove` leaves them open on a folder that is
 # gone. A procedure that shows the raw command to run (a line of a fenced
 # block, or the `git worktree remove <path>` form) fails here. Prose may still

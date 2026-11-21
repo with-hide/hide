@@ -1,7 +1,7 @@
 import { expect, it } from "vitest";
 import { mapFit, mapLayout, stepMapZoom } from "./missionMapZoom";
 
-// docs/UI_BEHAVIOR.md, A mission's map: 맞춤 shows the whole map in its box,
+// with-hide/hide-private docs/tasks-and-pr-list.md, A mission's map: 맞춤 shows the whole map in its box,
 // never larger than its own size and never below 40%; − and + move in
 // Chrome's steps between 40% and 200%.
 

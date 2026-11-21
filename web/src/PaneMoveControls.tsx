@@ -62,7 +62,6 @@ export function PaneMoveProvider({ checkout, layout, deviceId, actions, children
   const [reason, setReason] = useState<MoveReason | null>(null);
   const [preview, setPreview] = useState<Preview | null>(null);
   const [request, setRequest] = useState<PaneMoveIntent | null>(null);
-  const [unconfirmed, setUnconfirmed] = useState(false);
   const [dismissed, setDismissed] = useState<string | null>(null);
   const gesture = useRef<Gesture | null>(null);
   // The chip under the pointer moves by its style, so a pointer move renders nothing.
@@ -79,11 +78,20 @@ export function PaneMoveProvider({ checkout, layout, deviceId, actions, children
   // Published reservations survive a scope change or renderer reconnect.
   const operation = !request || trackedOperation?.phase === "completed" || trackedOperation?.phase === "failed" && unresolvedOperation?.phase === "unknown" ? unresolvedOperation : trackedOperation;
   const held = request !== null && (!trackedOperation || (trackedOperation.phase !== "completed" && trackedOperation.phase !== "failed"));
+  // A move whose answer this page does not have is settled by the core, never by the operator: the core reads where the pane is and ends it as completed or failed, and only a failure is drawn.
+  const checker = useRef(actions);
+  checker.current = actions;
+  const [asked, setAsked] = useState(0);
+  const answered = trackedOperation !== undefined;
   useEffect(() => {
-    if (!request || trackedOperation) { setUnconfirmed(false); return; }
-    const timer = setTimeout(() => setUnconfirmed(true), 15_000);
+    if (!request || answered || connection !== "live") return;
+    const timer = setTimeout(() => { checker.current.checkPaneMove(request.request_id, request); setAsked(count => count + 1); }, 15_000);
     return () => clearTimeout(timer);
-  }, [request, trackedOperation]);
+  }, [request, answered, connection, asked]);
+  const unknownId = operation?.phase === "unknown" ? operation.id : null;
+  useEffect(() => {
+    if (unknownId && connection === "live") checker.current.checkPaneMove(unknownId);
+  }, [unknownId, connection]);
   const selectedOperation = operation?.id === dismissed ? undefined : operation;
   const clearHover = () => { if (hover.current) clearTimeout(hover.current.timer); hover.current = null; };
   const stamp = (tabId: string) => {
@@ -113,7 +121,7 @@ export function PaneMoveProvider({ checkout, layout, deviceId, actions, children
     if (refused) { setReason(refused); return; }
     if (destination.type !== "new_tab" && destination.pane_id === source.pane_id) return;
     const intent: PaneMoveIntent = { request_id: crypto.randomUUID(), workspace: { device_id: latest.current.deviceId, checkout_path: latest.current.checkout.path }, group_id: latest.current.layout.group_id ?? null, source, destination };
-    setRequest(intent); setUnconfirmed(false); setDismissed(null); setReason(null);
+    setRequest(intent); setAsked(0); setDismissed(null); setReason(null);
     actions.movePane(intent);
   };
   const resolve = (x: number, y: number): Target | null => {
@@ -232,7 +240,7 @@ export function PaneMoveProvider({ checkout, layout, deviceId, actions, children
       children: [entry({ type: "new_tab", area_id: area.id }, t("menus.paneMove.newTab")), ...[...area.displays, ...(layout.canvases[area.id] && !area.displays.some(item => item.id === layout.canvases[area.id]) ? [{ id: layout.canvases[area.id]! }] : [])].flatMap(item => {
         const tab = checkout.tabs.find(tab => tab.id === item.id);
         if (!tab) return [];
-        return [{ id: `pane_move_tab:${item.id}`, label: agentEntries(checkout).find(entry => entry.source_id === item.id)?.label ?? tab.label ?? item.id, unavailable: movingTab(operations, item.id) ? t("menus.paneMove.busy") : null, children: tab.panes.filter(pane => pane.id !== paneId).map(pane => ({ id: `pane_move_pane:${pane.id}`, label: pane.identity_label ?? pane.terminal_title ?? pane.herdr_label ?? pane.id, unavailable: reasonText(movePaneReason(pane, item.id, useShellStore.getState().rest?.terminal?.panes ?? [], operations)), children: MOVE_EDGES.map(edge => entry({ type: "pane", tab_id: item.id, pane_id: pane.id, area_id: area.id, edge }, t(`menus.${edge}`))) })) }];
+        return [{ id: `pane_move_tab:${item.id}`, label: agentEntries(checkout).find(entry => entry.source_id === item.id)?.label ?? tab.label ?? item.id, unavailable: movingTab(operations, item.id) ? t("menus.paneMove.busy") : null, children: tab.panes.filter(pane => pane.id !== paneId).map(pane => ({ id: `pane_move_pane:${pane.id}`, label: pane.identity_label ?? pane.terminal_title ?? pane.engine_label ?? pane.id, unavailable: reasonText(movePaneReason(pane, item.id, useShellStore.getState().rest?.terminal?.panes ?? [], operations)), children: MOVE_EDGES.map(edge => entry({ type: "pane", tab_id: item.id, pane_id: pane.id, area_id: area.id, edge }, t(`menus.${edge}`))) })) }];
       })],
     })) }];
   };
@@ -264,15 +272,14 @@ export function PaneMoveProvider({ checkout, layout, deviceId, actions, children
     return style;
   })() : null;
   return <Context.Provider value={context}><div ref={root} className="relative flex min-h-0 min-w-0 flex-1 flex-col" data-pane-move-active={active ? "true" : undefined}>
-    {reason && !active ? <div className="absolute inset-x-0 top-0 z-40 flex items-center gap-sm bg-card px-sm py-xxs text-caption text-muted-foreground shadow-sm" role="status"><span className="min-w-0 flex-1 truncate">{t(`menus.paneMove.${reason === "pending" ? "busy" : reason}`)}</span><Button size="sm" variant="ghost" onClick={() => setReason(null)}>{t("workspace.dismiss")}</Button></div> : null}
-    {(held || selectedOperation && selectedOperation.phase !== "completed") ? <div className="absolute inset-x-0 top-0 z-40 flex items-center gap-sm bg-card px-sm py-xxs text-caption text-muted-foreground shadow-sm" role="status" data-pane-move-status={operation?.phase ?? "pending"}>
-      <span className="min-w-0 flex-1 truncate">{operation?.phase === "failed" ? (operation.message ?? t("menus.paneMove.failed")) : operation?.phase === "unknown" || unconfirmed ? t("menus.paneMove.unknown") : t("menus.paneMove.pending")}</span>
-      {operation?.phase === "unknown" || unconfirmed || held && connection !== "live" ? <Button size="sm" variant="ghost" disabled={connection !== "live"} onClick={() => actions.checkPaneMove(operation?.id ?? request!.request_id)}>{t("workspace.checkStatus")}</Button> : null}
+    {reason && !active ? <div className="absolute inset-x-0 top-0 z-40 flex items-center gap-sm bg-card px-sm py-xxs text-caption text-muted-foreground shadow-raised" role="status"><span className="min-w-0 flex-1 truncate">{t(`menus.paneMove.${reason === "pending" ? "busy" : reason}`)}</span><Button size="sm" variant="ghost" onClick={() => setReason(null)}>{t("workspace.dismiss")}</Button></div> : null}
+    {(held || selectedOperation && selectedOperation.phase !== "completed") ? <div className="absolute inset-x-0 top-0 z-40 flex items-center gap-sm bg-card px-sm py-xxs text-caption text-muted-foreground shadow-raised" role="status" data-pane-move-status={operation?.phase ?? "pending"}>
+      <span className="min-w-0 flex-1 truncate">{operation?.phase === "failed" ? (operation.message ?? t("menus.paneMove.failed")) : t("menus.paneMove.pending")}</span>
       {operation?.phase === "failed" && operation.retryable && request ? <Button size="sm" variant="ghost" onClick={() => run(request.source, request.destination)}>{t("common.retry")}</Button> : null}
       {operation?.phase === "failed" ? <Button size="sm" variant="ghost" onClick={() => setDismissed(operation.id)}>{t("workspace.dismiss")}</Button> : null}
     </div> : null}
     {children}
-    {active ? createPortal(<div className="pointer-events-none fixed inset-0 z-50" aria-hidden="true">{overlayStyle ? <div className="absolute flex items-center justify-center overflow-hidden border-2 border-primary bg-primary/20 px-sm text-center text-caption text-foreground" style={overlayStyle} data-pane-move-target={target!.destination.type}>{target!.destination.type === "new_tab" ? t("menus.paneMove.newTab") : t(`menus.${target!.destination.type === "pane" ? target!.destination.edge : "right"}`)}</div> : null}<div ref={chip} className="absolute left-0 top-0" style={{ transform: `translate(${pointer.current.x}px, ${pointer.current.y}px)` }} data-pane-move-chip="true"><div className={`ml-sm mt-sm ${DRAG_CHIP_CLASS}`}>{gesture.current?.label}</div></div>{reason ? <div className="absolute bottom-lg left-1/2 max-w-full -translate-x-1/2 rounded-sm bg-popover px-sm py-xs text-caption text-popover-foreground shadow-sm">{t(`menus.paneMove.${reason === "pending" ? "busy" : reason}`)}</div> : null}</div>, document.body) : null}
+    {active ? createPortal(<div className="pointer-events-none fixed inset-0 z-50" aria-hidden="true">{overlayStyle ? <div className="absolute flex items-center justify-center overflow-hidden border-2 border-primary bg-primary/20 px-sm text-center text-caption text-foreground" style={overlayStyle} data-pane-move-target={target!.destination.type}>{target!.destination.type === "new_tab" ? t("menus.paneMove.newTab") : t(`menus.${target!.destination.type === "pane" ? target!.destination.edge : "right"}`)}</div> : null}<div ref={chip} className="absolute left-0 top-0" style={{ transform: `translate(${pointer.current.x}px, ${pointer.current.y}px)` }} data-pane-move-chip="true"><div className={`ml-sm mt-sm ${DRAG_CHIP_CLASS}`}>{gesture.current?.label}</div></div>{reason ? <div className="absolute bottom-lg left-1/2 max-w-full -translate-x-1/2 rounded-sm bg-popover px-sm py-xs text-caption text-popover-foreground shadow-raised">{t(`menus.paneMove.${reason === "pending" ? "busy" : reason}`)}</div> : null}</div>, document.body) : null}
   </div></Context.Provider>;
 }
 
@@ -290,7 +297,7 @@ function PreviewTerminal({ pane }: { pane: PaneRow }) {
     return () => { node.replaceChildren(); };
   }, [pane.id]);
   return <section className="relative flex h-full min-h-0 min-w-0 flex-col overflow-hidden bg-background" data-pane-move-preview-pane={pane.id}>
-    <div className="flex h-(--size-pane-header) shrink-0 items-center truncate bg-card px-sm text-caption text-muted-foreground">{pane.identity_label ?? pane.terminal_title ?? pane.herdr_label}</div>
+    <div className="flex h-(--size-pane-header) shrink-0 items-center truncate bg-card px-sm text-caption text-muted-foreground">{pane.identity_label ?? pane.terminal_title ?? pane.engine_label}</div>
     <div ref={host} className="pointer-events-none relative min-h-0 flex-1 overflow-hidden" aria-hidden="true" />
     {!available ? text !== undefined ? <pre className="pointer-events-none absolute inset-x-0 bottom-0 top-(--size-pane-header) overflow-hidden whitespace-pre px-xs py-xs font-mono text-terminal text-foreground" aria-hidden="true">{text}</pre> : <div className="pointer-events-none absolute inset-0 flex items-center justify-center px-sm text-caption text-muted-foreground">{t("menus.paneMove.previewUnavailable")}</div> : null}
   </section>;

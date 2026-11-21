@@ -27,8 +27,11 @@ import { useSessionResume } from "./useSessionResume";
 import { recordDate } from "./sessionRecordTime";
 import { machineName } from "./screenMachine";
 import { localDeviceId } from "./snapshot";
-import type { AgentRow, Checkout, FlowResult, MissedWork, PlanView, PrSettlement, SessionPull, SessionRecord as RecordValue, WorkEnd, WorkRequest, WorkSession } from "./snapshot";
+import type { AgentRow, Checkout, FlowResult, MissedWork, PlanView, PrSettlement, SessionPull, SessionRecord as RecordValue, SessionRecordSection, WorkEnd, WorkRequest, WorkSession } from "./snapshot";
+import { isDeskFront, KeptDrawings } from "./deskFront";
 import { PlanChecklist } from "./components/plan-checklist";
+import { OpenAskList } from "./components/open-asks";
+import { FoldedAskList } from "./components/folded-asks";
 import { planCount, planOfSession, planWorkLine } from "./plans";
 import { statusText } from "./agentStatus";
 import { askSubjectText } from "./askSubject";
@@ -53,13 +56,13 @@ const GOAL_MARK = "/goal";
 
 /**
  * Where a record is drawn (PRD overview-device-tasks D-07, B17-B21): the
- * lane's 보기 slot, under the slot's head, or the Overview's panel, whose head the
+ * card tab on a desk, under its path line, or the Overview's panel, whose head the
  * panel gives (✕ and the ways to the work). Both draw the same record in the
  * same order and the same loading, failed and disconnected states.
  */
 export type RecordFrame = {
   kind: "lane" | "overview";
-  /** The Overview panel's head; the 보기 slot draws its own. */
+  /** The Overview panel's head; a card tab has its path line instead. */
   head?: ReactNode;
   /** A line above the record (the dashed card's B14 note). */
   note?: string | null;
@@ -75,9 +78,9 @@ export type RecordFrame = {
 };
 
 /**
- * The 보기 slot's record (PRD sidebar-task-lens D-44, B16): the slot's head
- * is the panel's, a child opens as the slot's next item so ← comes back to
- * its parent, and the core reads what the slot shows.
+ * A record's card tab (PRD sidebar-task-lens D-44, B16; lane-desk-pair-view
+ * D-13): a child opens as another tab of the same desk, the parent's tab
+ * staying beside it, and the core reads the desk's front card.
  */
 export function SlotSessionRecord({ actions, target }: { actions: Actions; target: WorkSession }) {
   const frame = useMemo<RecordFrame>(() => ({
@@ -88,11 +91,20 @@ export function SlotSessionRecord({ actions, target }: { actions: Actions; targe
       if (child) actions.openChildRecord(child);
     },
     onRead: () => actions.openChildRecord(target),
-    // The core starts and stops the slot's read with the slot itself.
+    // The core starts and stops the card's read as it comes in front and leaves.
     onLeave: () => undefined,
   }), [actions, target]);
   return <SessionRecord actions={actions} target={target} frame={frame} />;
 }
+
+/**
+ * The records card tabs drew last, newest last, so a record card that is not
+ * its desk's front tab, such as the front of an area that does not hold the
+ * keyboard, keeps what it showed: the core reads only the desk's front card
+ * (PRD lane-desk-pair-view D-13). Kept for this page's life and capped; the
+ * card reads again when it comes in front.
+ */
+const keptRecords = new KeptDrawings<SessionRecordSection>(8);
 
 export function SessionRecord({ actions, target, frame }: { actions: Actions; target: WorkSession; frame: RecordFrame }) {
   const { t } = useInterfaceTranslation();
@@ -100,7 +112,17 @@ export function SessionRecord({ actions, target, frame }: { actions: Actions; ta
   const rest = useShellStore((state) => state.rest);
   const summaries = summariesEnabled(rest?.status?.background_ai);
   const connected = deviceConnected(rest, target.device_id);
-  const own = section?.session && workKey(section.session) === workKey(target) ? section : null;
+  const read = section?.session && workKey(section.session) === workKey(target) ? section : null;
+  // Whether this record is the card the core reads (`deskFront.ts`); a folded desk's is not (B14).
+  const front = useShellStore((state) => isDeskFront(state.rest, { kind: "record", session: target }));
+  const settled = read && !read.loading && !read.failure ? read : null;
+  useEffect(() => {
+    if (settled && frame.kind === "lane") keptRecords.keep(workKey(target), settled);
+  }, [settled, frame.kind, target]);
+  // A card tab out of front draws what it drew last rather than a read in flight for another.
+  const own = read ?? (frame.kind === "lane" && !front ? keptRecords.get(workKey(target)) : null);
+  // One out of front with nothing drawn yet (after a relaunch, or past the cap) waits quietly for its turn.
+  const waiting = frame.kind === "lane" && !front && !own;
   const records = useMemo(() => own?.record ? recordTree(own.record) : [], [own?.record]);
   // The drilled child, when it is still in the tree; a vanished one leaves its parent shown.
   const shown = useMemo(() => {
@@ -118,18 +140,19 @@ export function SessionRecord({ actions, target, frame }: { actions: Actions; ta
   const leave = useRef(frame.onLeave);
   leave.current = frame.onLeave;
   useEffect(() => () => leave.current(), []);
-  // Read again on a reconnect, and once per connection when the slot draws a
-  // record with no read behind it: one restored after a relaunch, or kept
+  // Read again on a reconnect, and once per connection when the desk's front
+  // card draws a record with no read behind it: one restored after a relaunch, or kept
   // across a core that moved, was opened by no event. The Overview's panel
   // starts its own read when it opens.
   useEffect(() => {
-    const unread = frame.kind === "lane" && !own && askedIn.current !== generation;
-    if (connected && (!wasConnected.current || unread)) {
+    // Only the desk's front card asks: one out of front would take the read from it.
+    const unread = frame.kind === "lane" && front && !own && askedIn.current !== generation;
+    if (connected && (frame.kind !== "lane" || front) && (!wasConnected.current || unread)) {
       askedIn.current = generation;
       frame.onRead();
     }
     wasConnected.current = connected;
-  }, [frame, connected, own, generation]);
+  }, [frame, connected, own, generation, front]);
   const up = () => frame.onTrail(frame.trail.slice(0, -1));
   const open = (child: RecordValue) => frame.onTrail([...frame.trail, child.session]);
   return <div className="flex min-h-0 min-w-0 flex-1 flex-col" data-session-record={frame.kind}>
@@ -138,7 +161,7 @@ export function SessionRecord({ actions, target, frame }: { actions: Actions; ta
       {parent ? <Button size="sm" variant="ghost" className="min-w-0 self-start px-md" onClick={up} data-record-up="true"><ArrowLeftIcon /><span className="truncate">{t("record.backTo", { parent: recordTitle(parent, summaries) })}</span></Button> : null}
     </>}
     {frame.note ? <p className="px-md pb-xs text-caption text-muted-foreground" data-record-note="true">{frame.note}</p> : null}
-    {!own || own.loading ? <div className="space-y-md px-md py-sm" aria-busy="true" data-record-loading="true">{[0, 1, 2].map((key) => <div key={key} className="h-(--size-control-lg) rounded-sm bg-muted" />)}</div> : own.failure ? <div role="status" className="px-md py-sm text-caption"><p>{t("sessionWork.failed")}</p><Button size="sm" variant="ghost" onClick={frame.onRead}>{t("common.retry")}</Button></div> : shown ? <div className={cn("min-h-0 flex-1 overflow-y-auto px-lg pb-lg text-caption [word-break:keep-all]", !connected && "opacity-(--opacity-disabled)")} data-record-content="true">
+    {waiting ? <p className="px-md py-sm text-caption text-muted-foreground" data-record-waiting="true">{t("detail.readInFront")}</p> : !own || own.loading ? <div className="space-y-md px-md py-sm" aria-busy="true" data-record-loading="true">{[0, 1, 2].map((key) => <div key={key} className="h-(--size-control-lg) rounded-sm bg-muted" />)}</div> : own.failure ? <div role="status" className="px-md py-sm text-caption"><p>{t("sessionWork.failed")}</p><Button size="sm" variant="ghost" onClick={frame.onRead}>{t("common.retry")}</Button></div> : shown ? <div className={cn("min-h-0 flex-1 overflow-y-auto px-lg pb-lg text-caption [word-break:keep-all]", !connected && "opacity-(--opacity-disabled)")} data-record-content="true">
       <h2 className="flex min-w-0 items-center gap-xs py-sm text-subhead font-semibold"><AgentMark kind={shown.session.agent} /><span className="min-w-0 whitespace-normal [overflow-wrap:anywhere]" title={recordTitle(shown, summaries)}>{recordTitle(shown, summaries)}</span></h2>
       <RecordPlace key={workKey(shown.session)} record={shown} actions={actions} />
       <Work key={`work:${workKey(shown.session)}`} record={shown} summaries={summaries} onOpen={open} actions={actions} locator={workKey(shown.session) === workKey(target) ? frame.locator : undefined} />
@@ -264,7 +287,7 @@ function liveTurn(agent: AgentRow): "working" | "question" | null {
   return agent.status_code === "working" ? "working" : agent.status_code === "question" || agent.status_code === "approval" ? "question" : null;
 }
 
-/** A running plan, which the 지금 block draws in place of the 계획 section. */
+/** A running plan, which the 지금 block draws in place of the 작업 단계 section. */
 function runningPlan(plan: PlanView | null): PlanView | null {
   return plan && !plan.progress.finished ? plan : null;
 }
@@ -398,11 +421,12 @@ function Work({ record, summaries, onOpen, actions, locator }: { record: RecordV
   // A running plan of a pane at work is the 지금 block's; the section keeps every other plan.
   const planAbove = agent && liveTurn(agent) ? runningPlan(livePlan) : null;
   const section = useShellStore((state) => state.sessionRecord);
-  const tiles = useMemo(() => galleryTiles(section?.views ?? [], recordTree(record).map((one) => one.session), summaries ? record.artifacts : []), [section?.views, record, summaries]);
+  const tiles = useMemo(() => galleryTiles(section?.views ?? [], recordTree(record).map((one) => one.session), record.outputs), [section?.views, record]);
   // The core counts the Views past its cap for the whole tree it was asked for.
   const omitted = workKey(record.session) === (section?.session ? workKey(section.session) : null) ? section?.views_omitted ?? 0 : 0;
   return <>
     {summaries ? <Asks record={record} actions={actions} /> : null}
+    {summaries ? <FoldedAskList asks={record.folded_asks} onReopen={(id) => actions.setMissedStatus(record.session, id, "open")} /> : null}
     {summaries ? <Flows record={record} locator={locator} /> : <RawRequests record={record} locator={locator} />}
     {record.plan && !planAbove ? <RecordPlan plan={record.plan} /> : null}
     <Prs record={record} actions={actions} />
@@ -422,43 +446,17 @@ function RequestTime({ at, full = false }: { at: number; full?: boolean }) {
   return <time className="shrink-0 font-mono text-micro text-muted-foreground" dateTime={new Date(at).toISOString()}>{full ? `${recordDate(at)} ` : null}{formatDateTime(requireInterfaceLanguage(i18n.language), at, { hour: "2-digit", minute: "2-digit", hour12: false })}</time>;
 }
 
-/**
- * 나를 기다리는 것 (D-12, B11, B12): the agent's open questions and decisions,
- * each with 넘기기; a line put away keeps its place with 되돌리기 while this
- * record stays open, and leaves that state when the core lists it as open
- * again after it was gone. No line at all when nothing waits.
- */
+/** 나를 기다리는 것 (D-12, B11, B12): the agent's open questions and decisions, the list the turn card draws too. No line at all when nothing waits. */
 function Asks({ record, actions }: { record: RecordValue; actions: Actions }) {
   const { t } = useInterfaceTranslation();
-  // `gone` is set once the core no longer lists the line; listed again after that, it is open again.
-  const [away, setAway] = useState<readonly { ask: MissedWork; gone: boolean }[]>([]);
-  useEffect(() => {
-    const open = new Set(record.asks.map((ask) => ask.id));
-    setAway((held) => {
-      const next = held.filter((one) => !(one.gone && open.has(one.ask.id))).map((one) => (one.gone || open.has(one.ask.id) ? one : { ...one, gone: true }));
-      return next.length === held.length && next.every((one, index) => one === held[index]) ? held : next;
-    });
-  }, [record.asks]);
-  const lines = [...record.asks, ...away.map((one) => one.ask).filter((ask) => !record.asks.some((open) => open.id === ask.id))].sort((a, b) => a.at_unix_ms - b.at_unix_ms);
-  if (!lines.length) return null;
-  const small = "h-auto shrink-0 px-xs py-0 text-micro";
-  return <section className="mt-lg min-w-0" aria-label={t("record.waiting")} data-record-asks={record.asks.length}>
-    <SectionHead label={t("record.waiting")} count={record.asks.length} />
-    <ul className="min-w-0">
-      {lines.map((ask) => {
-        const dismissed = away.some((one) => one.ask.id === ask.id);
-        return <li key={ask.id} className="flex min-w-0 items-start gap-xs border-b border-border py-xs last:border-b-0" data-record-ask={ask.id} data-dismissed={dismissed ? "true" : undefined}>
-          <CircleHelpIcon aria-hidden="true" className={cn("mt-xxs size-(--size-icon-sm) shrink-0", dismissed ? "text-muted-foreground" : "text-warning")} />
-          <span className={cn("min-w-0 flex-1 whitespace-normal [overflow-wrap:anywhere]", dismissed ? "text-muted-foreground line-through" : "text-foreground")} title={ask.text}>{ask.text}</span>
-          {dismissed ? (
-            <Button size="sm" variant="ghost" className={small} onClick={() => { actions.setMissedStatus(record.session, ask.id, "open"); setAway((held) => held.filter((one) => one.ask.id !== ask.id)); }} data-record-ask-undo={ask.id}>{t("backlog.panel.undo")}</Button>
-          ) : (
-            <Button size="sm" variant="ghost" className={small} onClick={() => { actions.setMissedStatus(record.session, ask.id, "dismissed"); setAway((held) => [...held, { ask, gone: false }]); }} data-record-ask-dismiss={ask.id}>{t("sessionWork.dismiss")}</Button>
-          )}
-        </li>;
-      })}
-    </ul>
-  </section>;
+  return <OpenAskList
+    asks={record.asks}
+    onSet={(id, status) => actions.setMissedStatus(record.session, id, status)}
+    frame={(list, open) => <section className="mt-lg min-w-0" aria-label={t("record.waiting")} data-record-asks={open}>
+      <SectionHead label={t("record.waiting")} count={open} />
+      {list}
+    </section>}
+  />;
 }
 
 /** A recorded turn's end word; a usage limit takes the block's look. */
@@ -637,7 +635,8 @@ function Prs({ record, actions }: { record: RecordValue; actions: Actions }) {
   const all = record.pr_groups.flatMap((group) => group.pulls);
   const settled = all.filter(settledOutput);
   const allMerged = all.length > 0 && all.every((pull) => pull.state === "merged");
-  const open = (pull: SessionPull) => actions.openSessionPullRequest({ workspace_id: null, url: pull.url, number: pull.number });
+  // Pressed inside the card, it stacks in the same slot for ← to come back from (operator decision 2026-11-09).
+  const open = (pull: SessionPull) => actions.openSessionPullRequest({ workspace_id: null, url: pull.url, number: pull.number }, "here");
   const rows = (items: readonly SessionPull[]) => items.map((pull) => {
     const word = t(PR_LOOK[pull.state].word);
     const stale = pull.stale ? pull.last_read_at_unix_ms ? new Date(pull.last_read_at_unix_ms).toLocaleString() : t("common.unavailable") : null;
@@ -717,7 +716,9 @@ function ChildRows({ parent, summaries, onOpen, actions }: { parent: RecordValue
 
 /**
  * An open problem or follow-up (PRD overview-device-tasks B43-B46; PRD
- * session-record-goal-flow D-13): one warning line with `백로그로 · 무시` at its
+ * session-record-goal-flow D-13): one line led by its kind in the missed-work
+ * colour (`--missed`), never the warning colour a Needs You ask wears, with
+ * `백로그로 · 무시` (a missed question `무시` alone) at its
  * end. `백로그로` makes the item at once in the project the session works in
  * and shows `만드는 중` meanwhile; the line then leaves, as one dismissed does.
  * A failure keeps the line with its reason and a retry that converges on one
@@ -742,8 +743,8 @@ function MissedLine({ missed, session, cwd, actions, className }: { missed: Miss
   };
   const small = "h-auto shrink-0 px-xs py-0 text-micro";
   return <div className={cn("flex min-w-0 flex-wrap items-center gap-x-xs gap-y-xs border-b border-border py-sm last:border-b-0", className)} data-missed-work={missed.id}>
-    <span className={cn("inline-flex shrink-0 items-center gap-xxs text-micro", missed.kind === "problem" ? "text-warning" : "text-muted-foreground")}>
-      {missed.kind === "problem" ? <TriangleAlertIcon aria-hidden="true" className="size-(--size-icon-sm)" /> : <LightbulbIcon aria-hidden="true" className="size-(--size-icon-sm)" />}
+    <span className="inline-flex shrink-0 items-center gap-xxs text-micro text-missed" data-missed-kind={missed.kind}>
+      {missed.kind === "problem" ? <TriangleAlertIcon aria-hidden="true" className="size-(--size-icon-sm)" /> : missed.kind === "ask" ? <CircleHelpIcon aria-hidden="true" className="size-(--size-icon-sm)" /> : <LightbulbIcon aria-hidden="true" className="size-(--size-icon-sm)" />}
       {t(`sessionWork.kind.${missed.kind}`)}
     </span>
     <span className="min-w-0 flex-1 basis-1/2 whitespace-normal text-foreground [overflow-wrap:anywhere]" title={missed.text}>{missed.text}</span>
@@ -753,7 +754,8 @@ function MissedLine({ missed, session, cwd, actions, className }: { missed: Miss
         : project ? <Button size="sm" variant="ghost" className={small} disabled={!connected} onClick={toBacklog} data-missed-backlog-add={missed.id}>{t("missed.toBacklog")}</Button> : null}
       <Button size="sm" variant="ghost" className={small} onClick={() => actions.dismissBacklog(failed.intent)} data-missed-failed-dismiss={missed.id}>{t("sessionWork.dismiss")}</Button>
     </span> : <span className="flex shrink-0 items-center gap-xxs">
-      {project ? <Hint label={!connected ? t("devices.rail.notConnected") : t(`quickAdd.dest.${destination}`)}><span><Button size="sm" variant="outline" className={small} disabled={!connected} data-missed-backlog-add={missed.id} onClick={toBacklog}>
+      {/* A missed question is answered nowhere here: it only leaves, with 무시하기. */}
+      {project && missed.kind !== "ask" ? <Hint label={!connected ? t("devices.rail.notConnected") : t(`quickAdd.dest.${destination}`)}><span><Button size="sm" variant="outline" className={small} disabled={!connected} data-missed-backlog-add={missed.id} onClick={toBacklog}>
         {t("missed.toBacklog")}
         {destination === "public" ? <span className="text-micro text-warning" data-missed-public="true">{t("missed.public")}</span> : destination === "unknown" ? <span className="text-micro text-warning" data-missed-public="unknown">{t("missed.maybePublic")}</span> : null}
       </Button></span></Hint> : null}

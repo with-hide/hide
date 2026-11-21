@@ -9,15 +9,14 @@
 //! plugin that does nothing, and the `hide-opencode` folder beside it: one
 //! shared server runs every session of the machine, so its half
 //! (`server.js`) asks the terminal showing the session (`tui.js`), which runs
-//! in that session's Herdr pane, to run the helper for it.
+//! in that session's pane, to run the helper for it.
 
 use crate::plugin::{Plugin, PluginFile};
 
-/// OpenCode's global configuration folder as Herdr's integration finds it,
-/// `~/.config/opencode` on every system, so Hide's plugin sits beside Herdr's:
-/// the folder OpenCode's declaration names (`hide_agent_adapter`).
+/// OpenCode's global configuration folder, `~/.config/opencode` on every
+/// system: the folder OpenCode's declaration names (`hide_agent_adapter`).
 /// OpenCode itself reads `$XDG_CONFIG_HOME/opencode` when that is set; such a
-/// machine loads neither plugin from here (known limitation, shared with Herdr).
+/// machine loads no plugin from here (known limitation).
 const CONFIG: hide_agent_adapter::AgentId = hide_agent_adapter::AgentId::OpenCode;
 
 /// The folder OpenCode 2 loads as one plugin, its halves by their names.
@@ -27,9 +26,8 @@ pub const V1: PluginFile = PluginFile {
     agent: "OpenCode",
     noun: "plugin",
     source_name: "hide-opencode-plugin",
-    version: 12,
+    version: 15,
     config: CONFIG,
-    folder: "plugins",
     own_folder: None,
     file_name: "hide.js",
     template: include_str!("opencode/plugin.js"),
@@ -40,9 +38,8 @@ pub const SERVER: PluginFile = PluginFile {
     agent: "OpenCode",
     noun: "plugin",
     source_name: "hide-opencode-server",
-    version: 6,
+    version: 7,
     config: CONFIG,
-    folder: "plugins",
     own_folder: Some(FOLDER),
     file_name: "server.js",
     template: include_str!("opencode/server.js"),
@@ -54,9 +51,8 @@ pub const TUI: PluginFile = PluginFile {
     agent: "OpenCode",
     noun: "plugin",
     source_name: "hide-opencode-tui",
-    version: 3,
+    version: 6,
     config: CONFIG,
-    folder: "plugins",
     own_folder: Some(FOLDER),
     file_name: "tui.js",
     template: include_str!("opencode/tui.js"),

@@ -21,6 +21,7 @@ import {
   serializeStoredChord,
   systemRegistry,
   matchHost,
+  pageKeepsKeyboard,
   numberedCommand,
   sheetRows,
   parseChord,
@@ -31,6 +32,25 @@ import {
 } from "./shortcuts";
 
 describe("shortcut registry", () => {
+  it("moves between split terminals on each system and round-trips arrow bindings", () => {
+    for (const direction of ["left", "right", "up", "down"] as const) {
+      const id = `focus_pane_${direction}` as const;
+      const code = `Arrow${direction[0]!.toUpperCase()}${direction.slice(1)}`;
+      for (const host of ["browser", "electron"] as const) {
+        expect(matchHost(press(code, { meta: true, alt: true }), REGISTRY, host)?.id).toBe(id);
+        expect(matchHost(press(code, { ctrl: true, shift: true }), systemRegistry("pc"), host)?.id).toBe(id);
+        const stored = serializeStoredChord({ code, meta: true, alt: true }, host, "mac");
+        expect(parseStoredChord(stored!, host, "mac")).toEqual({ code, meta: true, alt: true });
+      }
+    }
+  });
+
+  it("leaves native browser pages holding the keyboard for terminal-only direction commands", () => {
+    for (const id of ["focus_pane_left", "focus_pane_right", "focus_pane_up", "focus_pane_down"] as const) {
+      expect(pageKeepsKeyboard(id)).toBe(true);
+    }
+  });
+
   it("claims no chord Chrome keeps for itself", () => {
     for (const command of REGISTRY) {
       expect(command.browser && isChromeReserved(command.browser, "mac"), command.id).toBeFalsy();
@@ -98,13 +118,13 @@ describe("shortcut registry", () => {
       // ⌘E shows the Explorer in both hosts (issue 170); the macOS set keeps
       // it on the sidebar switch, which has no chord here until one is bound.
       overview: "⇧⌘O",
+      open_missions: "",
       add_backlog: "⇧⌘M",
       sidebar_projects: "⇧⌘P",
       toggle_device_rail: "",
       toggle_lane: "⌘E",
       toggle_lane_project: "",
       toggle_lane_memory: "",
-      toggle_lane_mission: "",
       toggle_lane_explorer: "⇧⌘E",
       toggle_lane_changes: "⇧⌘G",
       toggle_lane_documents: "",
@@ -116,7 +136,12 @@ describe("shortcut registry", () => {
       keep_open: "⇧⌘K",
       split_right: "⌘D",
       split_down: "⇧⌘D",
+      focus_pane_left: "⌥⌘←",
+      focus_pane_right: "⌥⌘→",
+      focus_pane_up: "⌥⌘↑",
+      focus_pane_down: "⌥⌘↓",
       toggle_zoom: "⇧⌘↩",
+      pair_view: "⌘.",
       toggle_plan: "⇧⌘U",
       close_pane: "⇧⌘W",
       text_larger: "⌘=",
@@ -314,8 +339,9 @@ describe("browser pane chord overrides (S5 B9, B10)", () => {
     expect([...EDITABLE_PANE_COMMANDS].sort()).toEqual(
       [
         "recent_area_tab", "previous_recent_area_tab", "next_tab", "previous_tab", "recent_panel", "previous_recent_panel",
-        "close_pane", "split_down", "split_right", "text_larger", "text_reset", "text_smaller", "toggle_device_rail", "overview", "sidebar_projects", "toggle_zoom", "toggle_plan",
-        "toggle_sidebar_lens", "toggle_lane_project", "toggle_lane_memory", "toggle_lane_mission", "toggle_lane_explorer", "toggle_lane_changes", "open_project_memory", "open_sidebar_prs", "desk_terminal",
+        "focus_pane_left", "focus_pane_right", "focus_pane_up", "focus_pane_down",
+        "close_pane", "split_down", "split_right", "text_larger", "text_reset", "text_smaller", "toggle_device_rail", "overview", "open_missions", "sidebar_projects", "toggle_zoom", "pair_view", "toggle_plan",
+        "toggle_sidebar_lens", "toggle_lane_project", "toggle_lane_memory", "toggle_lane_explorer", "toggle_lane_changes", "open_project_memory", "open_sidebar_prs", "desk_terminal",
         "focus_next_agent_area", "focus_previous_agent_area", "grow_agent_area", "shrink_agent_area",
         "focus_next_view_area", "focus_previous_view_area", "grow_view_area", "shrink_view_area",
         "copy_path", "copy_relative_path",
@@ -377,7 +403,7 @@ describe("the desktop app's macOS pane chords (user decision 2026-09-26)", () =>
     expect(parseMacosChord("control+tab")).toEqual({ code: "Tab", ctrl: true });
     expect(bindingProblem("recent_area_tab", { code: "Tab", meta: true }, REGISTRY, "electron", "mac")).toMatchObject({ code: "mac_reserved" });
     expect(serializeMacosChord({ code: "Enter", meta: true, shift: true, alt: true, ctrl: true })).toBe("command+control+option+shift+return");
-    expect(serializeMacosChord({ code: "ArrowUp", meta: true })).toBeNull();
+    expect(serializeMacosChord({ code: "ArrowUp", meta: true })).toBe("command+up");
     expect(storedKey("text_larger", "electron")).toBe("increase_text_size");
     expect(storedKey("text_larger", "browser")).toBe("text_larger");
   });
@@ -407,7 +433,7 @@ describe("the desktop app's macOS pane chords (user decision 2026-09-26)", () =>
   it("refuses a chord without ⌘ or a reserved one, and falls back to the defaults as a whole", () => {
     expect(bindingProblem("split_right", { code: "KeyR", alt: true }, REGISTRY, "electron", "mac")).toEqual({ code: "modifier", modifier: "desktop_mac" });
     expect(bindingProblem("split_right", { code: "KeyQ", meta: true }, REGISTRY, "electron", "mac")).toMatchObject({ code: "mac_reserved" });
-    expect(bindingProblem("split_right", { code: "ArrowUp", meta: true }, REGISTRY, "electron", "mac")).toEqual({ code: "native_key" });
+    expect(bindingProblem("split_right", { code: "ArrowUp", meta: true }, REGISTRY, "electron", "mac")).toBeNull();
     expect(bindingProblem("split_right", { code: "KeyT", meta: true }, REGISTRY, "electron", "mac")).toMatchObject({ code: "conflict", commandId: "new_tab" });
     // A chord Chrome keeps is the desktop app's to use.
     expect(bindingProblem("close_pane", { code: "KeyW", meta: true, shift: true }, REGISTRY, "electron", "mac")).toBeNull();
@@ -450,13 +476,13 @@ describe("Windows and Linux (operator decision 2026-10-03)", () => {
       toggle_left_sidebar: "Ctrl+Shift+B",
       toggle_sidebar_lens: "Alt+Shift+B",
       overview: "Alt+Shift+O",
+      open_missions: "",
       add_backlog: "Alt+Shift+M",
       sidebar_projects: "Alt+Shift+P",
       toggle_device_rail: "",
       toggle_lane: "Ctrl+Shift+E",
       toggle_lane_project: "",
       toggle_lane_memory: "",
-      toggle_lane_mission: "",
       toggle_lane_explorer: "Alt+Shift+E",
       toggle_lane_changes: "Alt+Shift+G",
       toggle_lane_documents: "",
@@ -468,7 +494,12 @@ describe("Windows and Linux (operator decision 2026-10-03)", () => {
       keep_open: "Alt+Shift+K",
       split_right: "Ctrl+Shift+D",
       split_down: "Alt+Shift+D",
+      focus_pane_left: "Ctrl+Shift+Left",
+      focus_pane_right: "Ctrl+Shift+Right",
+      focus_pane_up: "Ctrl+Shift+Up",
+      focus_pane_down: "Ctrl+Shift+Down",
       toggle_zoom: "Alt+Shift+Enter",
+      pair_view: "Ctrl+Shift+.",
       toggle_plan: "Alt+Shift+U",
       close_pane: "Alt+Shift+W",
       text_larger: "Ctrl+=",
@@ -598,6 +629,15 @@ describe("Windows and Linux (operator decision 2026-10-03)", () => {
     expect(browser.registry.find((command) => command.id === "open_sidebar_prs")?.browser).toEqual({ code: "Digit7", alt: true, shift: true });
     const both = effectiveRegistry({ toggle_lane_prs: "command+option+j", open_sidebar_prs: "command+option+u" }, "electron", "mac");
     expect(displayCommand("open_sidebar_prs", "electron", both.registry, "mac")).toBe("⌥⌘U");
+  });
+
+  it("runs a chord bound to the retired Mission tool as Open missions, the new name winning (PRD mission-screen D-12, B21)", () => {
+    const electron = effectiveRegistry({ toggle_lane_mission: "command+option+m" }, "electron", "mac");
+    expect(electron.diagnostic).toBeNull();
+    expect(displayCommand("open_missions", "electron", electron.registry, "mac")).toBe("⌥⌘M");
+    const both = effectiveRegistry({ toggle_lane_mission: "command+option+j", open_missions: "command+option+u" }, "electron", "mac");
+    expect(displayCommand("open_missions", "electron", both.registry, "mac")).toBe("⌥⌘U");
+    expect(displayCommand("open_missions", "electron", effectiveRegistry(null, "electron", "mac").registry, "mac")).toBe("");
   });
 
   it("drops only a stored chord that a fixed number now holds, keeping the rest of the set (⌥⌘n went to the devices)", () => {

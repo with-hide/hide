@@ -1,11 +1,12 @@
 import { useCallback, useEffect, useLayoutEffect, useRef, useState, type RefObject } from "react";
-import type { OverviewGraphModel } from "./overviewGraphModel";
+import { useReducedMotion } from "./lib/useReducedMotion";
+import { ADD_PROJECT, type OverviewGraphModel } from "./overviewGraphModel";
 import { ForceMap, type MapPoint, type Point } from "./overviewMapLayout";
 import { useShellStore } from "./store";
 
 /** A box with its orb at the top center: `orb` is the orb's diameter. */
 export type GraphBox = { width: number; height: number; orb: number };
-type Dimensions = { root: GraphBox; child: GraphBox; operator: number; label: { width: number; height: number }; gap: number };
+export type Dimensions = { root: GraphBox; child: GraphBox; operator: number; label: { width: number; height: number }; gap: number };
 export type GraphLayout = {
   phase: "loading" | "ready" | "failed";
   size: Dimensions | null;
@@ -55,6 +56,18 @@ function dimensions(element: HTMLElement, scale: number): Dimensions {
 /** The room a session's circle and words need around its orb center, for the physics to keep apart. */
 const room = (box: GraphBox, gap: number) => Math.max(box.width / 2, box.height - box.orb / 2) * 0.85 + gap / 2;
 
+/**
+ * The room a start circle needs so no session's box covers it (issue 2514):
+ * sessions pack with their words a little inside each other's room, which a
+ * circle the operator presses cannot afford, so it keeps its own circle and
+ * a gap past the farthest corner of a root's or a child's box.
+ */
+export function startRoom(size: Pick<Dimensions, "root" | "child" | "gap">): number {
+  const reach = (box: GraphBox) => Math.hypot(box.width / 2, box.height - box.orb / 2);
+  const circle = room({ width: size.root.orb, height: size.root.orb, orb: size.root.orb }, size.gap);
+  return Math.max(circle, ...[size.root, size.child].map((box) => reach(box) + size.root.orb / 2 + size.gap - room(box, size.gap)));
+}
+
 /** Appearance writes the interface scale on the root; release its observer with the graph. */
 function useGraphScale(): number {
   const read = () => Math.max(1, Number.parseFloat(getComputedStyle(document.documentElement).getPropertyValue("--interface-scale")) || 1);
@@ -68,20 +81,6 @@ function useGraphScale(): number {
   return scale;
 }
 
-/** The operator's reduced-motion setting, followed while the graph is open. */
-function useReducedMotion(): boolean {
-  const query = "(prefers-reduced-motion: reduce)";
-  const [reduced, setReduced] = useState(() => window.matchMedia?.(query).matches ?? false);
-  useEffect(() => {
-    const media = window.matchMedia?.(query);
-    if (!media) return;
-    const change = () => setReduced(media.matches);
-    media.addEventListener("change", change);
-    return () => media.removeEventListener("change", change);
-  }, []);
-  return reduced;
-}
-
 /**
  * Topology and text geometry own placement. Status, filters, hiding, folding and
  * correspondence only redraw existing places. A changed set of sessions keeps
@@ -89,9 +88,12 @@ function useReducedMotion(): boolean {
  * interface scale, Retry and Reset layout place everything afresh. What the
  * map does not hold yet starts where the operator last dropped it.
  */
-export function useOverviewGraphLayout(model: OverviewGraphModel, host: RefObject<HTMLDivElement | null>, retry: number, remembered: RememberedPlaces = NOTHING_REMEMBERED): GraphLayout {
+/** `starts`: the map draws its start circles and its Add project place, which a tool's map does not (PRD hide-external-control B40). */
+export function useOverviewGraphLayout(model: OverviewGraphModel, host: RefObject<HTMLDivElement | null>, retry: number, remembered: RememberedPlaces = NOTHING_REMEMBERED, starts = true): GraphLayout {
   const latest = useRef(model);
   latest.current = model;
+  const latestStarts = useRef(starts);
+  latestStarts.current = starts;
   const latestPlaces = useRef(remembered);
   latestPlaces.current = remembered;
   // Reset layout asks the core to forget this scope's places; until the
@@ -100,7 +102,7 @@ export function useOverviewGraphLayout(model: OverviewGraphModel, host: RefObjec
   useLayoutEffect(() => { if (isEmpty(remembered)) forgetting.current = false; }, [remembered]);
   const scale = useGraphScale();
   const reduced = useReducedMotion();
-  const key = `${model.structure}:${scale}`;
+  const key = `${model.structure}:${scale}:${starts}`;
   const [state, setState] = useState<{ key: string; phase: GraphLayout["phase"]; size: Dimensions | null; map: ForceMap | null; points: ReadonlyMap<string, MapPoint> }>({ key: "", phase: "loading", size: null, map: null, points: new Map() });
   // Each animated step only asks for a redraw; the view reads the live map itself.
   const [, setSteps] = useState(0);
@@ -118,13 +120,22 @@ export function useOverviewGraphLayout(model: OverviewGraphModel, host: RefObjec
       const input = latest.current;
       const keep = current.current && current.current.scale === scale && placedResets.current === resets ? current.current.map : undefined;
       placedResets.current = resets;
+      // Each project's start circle stands where its next session would, and the map's Add project
+      // place is a project of its own, so the physics keeps both clear of every session (issue 2514).
+      const adding = latestStarts.current && input.projects.length > 0;
       const map = new ForceMap({
-        projects: input.projects.map((group) => group.id),
-        sessions: input.projects.flatMap((group) => [
-          ...group.shown.map((row) => { const parent = input.layoutParents.get(row.id) ?? null; return { id: row.id, projectId: group.id, parent, radius: room(parent === null ? size.root : size.child, size.gap) }; }),
-          ...(group.revealSlot ? [{ id: group.revealSlot, projectId: group.id, parent: null, radius: room(size.root, size.gap) }] : []),
-        ]),
+        projects: [...input.projects.map((group) => group.id), ...(adding ? [ADD_PROJECT.project] : [])],
+        sessions: [
+          ...input.projects.flatMap((group) => [
+            ...group.shown.map((row) => { const parent = input.layoutParents.get(row.id) ?? null; return { id: row.id, projectId: group.id, parent, radius: room(parent === null ? size.root : size.child, size.gap) }; }),
+            ...(group.revealSlot ? [{ id: group.revealSlot, projectId: group.id, parent: null, radius: room(size.root, size.gap) }] : []),
+            // A start circle carries no words, but it stays clear of every session's words.
+            ...(latestStarts.current ? [{ id: group.startSlot, projectId: group.id, parent: null, radius: startRoom(size), quiet: true }] : []),
+          ]),
+          ...(adding ? [{ id: ADD_PROJECT.slot, projectId: ADD_PROJECT.project, parent: null, radius: room(size.root, size.gap), quiet: true }] : []),
+        ],
         operator: size.operator + size.gap * 2,
+        ...(adding ? { free: ADD_PROJECT.project } : {}),
         remembered: forgetting.current ? undefined : { anchors: scaled(latestPlaces.current.anchors, scale), pins: scaled(latestPlaces.current.pins, scale) },
       }, keep);
       current.current?.map.stop();

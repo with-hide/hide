@@ -1,12 +1,13 @@
-//! Candidate CLI + pinned Herdr lane. It crosses actual pane ancestry, SSH,
-//! helper attestation over the node link and the durable mailbox.
+//! Candidate CLI lane on the core's own engine. It crosses actual pane
+//! ancestry, SSH, helper attestation over the node link and the durable
+//! mailbox.
 #![cfg(unix)]
 
 use crate::support::remote_delivery as fixture;
 
 use anyhow::{Context, Result, ensure};
-use fixture::{Fixture, quote, wait_for};
-use herdr_core::delivery::ledger::State;
+use fixture::{Fixture, hook_diagnostics, quote, wait_for};
+use hide_core::delivery::ledger::State;
 use serde_json::Value;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Duration;
@@ -23,19 +24,6 @@ fn context(stdout: &str) -> Result<String> {
         .to_owned())
 }
 
-/// The `value` of a `hide agent` answer, which does not use the envelope of
-/// the mailbox commands.
-fn agent_value(output: fixture::PaneOutput) -> Result<Value> {
-    ensure!(
-        output.status == 0,
-        "agent command failed: {}",
-        output.stderr
-    );
-    let answer: Value = serde_json::from_str(&output.stdout).context("agent command JSON")?;
-    ensure!(answer["ok"] == true, "agent command refused: {answer}");
-    answer.get("value").cloned().context("agent command value")
-}
-
 /// The prompt hook of a turn whose submitted prompt is `prompt`: only the
 /// turn the line Hide's doorbell typed opened receives the letter bodies
 /// (`Fixture::rung`), any other prompt receives a count.
@@ -49,7 +37,7 @@ fn hook(binary: &std::path::Path, session: &str, prompt: &str) -> String {
 
 /// The Stop hook that ends a Claude Code turn. The core's turn for the pane
 /// follows the hook (`docs/status-model.md`), so a turn a prompt hook opened
-/// works until this runs, whatever Herdr reads on the screen.
+/// works until this runs, whatever the screen reads.
 fn stop(binary: &std::path::Path, session: &str) -> String {
     format!(
         "printf '%s' {} | {} hook --runtime claude-code --event Stop",
@@ -68,20 +56,29 @@ fn stop(binary: &std::path::Path, session: &str) -> String {
 /// A prompt the operator typed.
 const OPERATOR_PROMPT: &str = "please run the tests";
 
+/// A hook's confirmation of the letter `argv[2]`, sent as the hook sends it
+/// (`hide_agent_hooks::hook_request`) to the daemon whose socket record is
+/// `argv[1]`, from the pane it runs in; prints the daemon's answer line.
+const CONFIRM_FROM_PANE: &str = r#"
+import json, os, secrets, socket, sys
+path = open(sys.argv[1]).read().strip()
+stream = socket.socket(socket.AF_UNIX)
+stream.connect(path)
+request = {"pane_id": os.environ.get("HIDE_PANE_ID", ""), "nonce": secrets.token_hex(16),
+    "one_shot": True, "install": os.environ.get("HIDE_INSTALL") or None,
+    "hook": {"request_id": "confirm-1", "token": None,
+        "command": {"kind": "letter_confirm", "ids": [sys.argv[2]]}}}
+stream.sendall((json.dumps(request) + "\n").encode())
+print(stream.makefile().readline().strip())
+"#;
+
 #[test]
-#[ignore = "external lane requires this worktree's CLI binaries and HIDE_E2E_HERDR_BIN"]
+#[ignore = "external lane requires this worktree's CLI binaries (scripts/verify-cargo.sh cli)"]
 fn connected_remote_panes_receive_once_and_disconnect_keeps_the_same_letter_pending() -> Result<()>
 {
     Fixture::journey(|fixture| {
-        let remote_hide = fixture.remote.environment.home.join("bin/hide");
-        let remote_hooks = std::fs::canonicalize(&remote_hide)?
-            .parent()
-            .context("installed private CLI directory")?
-            .join("hide-agent-hooks");
-        ensure!(
-            remote_hooks.is_file(),
-            "private remote kit lacks its hook sibling"
-        );
+        let remote_hide = fixture.remote.hide.clone();
+        let remote_hooks = fixture.remote.hooks.clone();
         // A named reference can disappear while the pane stays alive. The
         // actual remote CLI must still send a new kernel proof and get guidance.
         let missing = fixture.remote.environment.home.join("gone-reference.json");
@@ -128,6 +125,35 @@ fn connected_remote_panes_receive_once_and_disconnect_keeps_the_same_letter_pend
                 .any(|letter| letter.id == first_id && letter.state == State::Pending),
             "manual remote inbox changed delivery state"
         );
+        // A letter's confirmation is a hook request on the daemon's own
+        // socket, which the core takes only from the letter's recipient
+        // (with-hide/hide-private#663): the sender's pane, proved by that
+        // socket, is refused, and the letter stays pending.
+        let record = hide_agent_hooks::hook_request::bootstrap_socket_record(&fixture.state);
+        let refused = fixture.local.run_in_pane(&format!(
+            "python3 -c {} {} {}",
+            quote(CONFIRM_FROM_PANE),
+            quote(&record),
+            quote(&first_id)
+        ))?;
+        let refused: Value = serde_json::from_str(refused.stdout.trim()).with_context(|| {
+            format!(
+                "the sender's confirmation: {} {}",
+                refused.stdout, refused.stderr
+            )
+        })?;
+        ensure!(
+            refused["ok"] == false && refused["reason"] == "recipient_required",
+            "the sender's pane confirmed the letter it sent: {refused}"
+        );
+        ensure!(
+            fixture
+                .ledger()?
+                .letters
+                .iter()
+                .any(|letter| letter.id == first_id && letter.state == State::Pending),
+            "a refused confirmation changed delivery state"
+        );
         let bell = fixture.rung(&first_id)?;
         let delivered =
             fixture
@@ -140,7 +166,10 @@ fn connected_remote_panes_receive_once_and_disconnect_keeps_the_same_letter_pend
         let intake = context(&delivered.stdout)?;
         ensure!(
             intake.contains(&first_id) && intake.contains("DELIVERY_REMOTE_ONCE"),
-            "remote hook did not receive the real letter"
+            "remote hook did not receive the real letter: after {:?}, stderr {:?}, recorded {}",
+            delivered.elapsed,
+            delivered.stderr,
+            hook_diagnostics(&fixture.remote.environment)
         );
         wait_for("durable remote delivery confirmation", || {
             Ok(fixture
@@ -326,16 +355,91 @@ fn connected_remote_panes_receive_once_and_disconnect_keeps_the_same_letter_pend
             once.status == 0 && context(&once.stdout)?.is_empty(),
             "reconnect caused duplicate prompt intake"
         );
+        let remote_state = fixture.remote.environment.home.join(".hide/state");
         ensure!(
-            !fixture
-                .remote
-                .environment
-                .home
-                .join(".hide/state/delivery-ledger.json")
-                .exists(),
+            !hide_kit::layout::delivery_store(&remote_state).exists()
+                && !hide_kit::layout::delivery_ledger(&remote_state).exists(),
             "remote account gained a mailbox spool"
         );
         Ok(())
+    })
+}
+
+/// with-hide/hide-private#654: a request for an agent on a device is belled
+/// with no `--force` once its composer reads empty, though input reached its
+/// pane after its report. The core held such a letter for its 60 minutes: a
+/// key hide routed to the pane with no submission after it holds a letter on
+/// a possible draft, only a composer read of a known agent version releases
+/// it, and the core knew no version of an agent on a device. The device's
+/// helper now says which Claude Code is installed there
+/// (`Call::HookDiagnosis`), the core's composer checks hold that version as
+/// passed (the fixture's seed), and the screen the stand-in draws reads empty.
+#[test]
+#[ignore = "external lane requires this worktree's CLI binaries (scripts/verify-cargo.sh cli)"]
+fn a_request_for_a_device_agent_that_reported_is_belled_without_force_once_its_composer_reads_empty()
+-> Result<()> {
+    Fixture::journey_installed(|fixture| {
+        let remote_hide = fixture.remote.hide.clone();
+        let remote_hooks = fixture.remote.hooks.clone();
+
+        // The device's agent reports to the agent that started it.
+        let report = fixture
+            .remote
+            .run_in_pane(&format!(
+                "{} request send local-parent --intent bridge-report --kind report --body {}",
+                quote(&remote_hide),
+                quote("DEVICE_REPORT")
+            ))?
+            .json()?;
+        ensure!(
+            report["id"].as_str().is_some(),
+            "the device agent's report was not recorded: {report}"
+        );
+        // Then input reaches its pane that no submission follows, as an
+        // operator's key does: a Backspace the stand-in ignores, so its
+        // composer stays empty on the screen.
+        let key = fixture.local.run_in_pane(&format!(
+            "{} pane send {} --key backspace",
+            quote(&fixture.hide),
+            quote(&fixture.remote.pane)
+        ))?;
+        ensure!(key.status == 0, "the key was not sent: {}", key.stderr);
+
+        let request = fixture
+            .local
+            .run_in_pane(&format!(
+                "{} request send remote-child --intent bridge-after-report --body {}",
+                quote(&fixture.hide),
+                quote("DELIVERY_AFTER_REPORT")
+            ))?
+            .json()?;
+        let id = request["id"]
+            .as_str()
+            .context("the request's letter ID")?
+            .to_owned();
+        // The letter waits out the quiet period and the core's read of the
+        // device's agent, then its composer; before this change it waited
+        // for its deadline instead.
+        let bell = fixture.rung_within(&id, Duration::from_secs(150))?;
+        let delivered =
+            fixture
+                .remote
+                .run_in_pane(&hook(&remote_hooks, "fixture-remote-session", &bell))?;
+        let intake = context(&delivered.stdout)?;
+        ensure!(
+            delivered.status == 0
+                && intake.contains(&id)
+                && intake.contains("DELIVERY_AFTER_REPORT"),
+            "the device agent's prompt hook did not receive the request: {intake}"
+        );
+        wait_for("durable delivery of the request", || {
+            Ok(fixture
+                .ledger()?
+                .letters
+                .iter()
+                .any(|letter| letter.id == id && letter.state == State::Delivered && !letter.forced)
+                .then_some(()))
+        })
     })
 }
 
@@ -344,19 +448,12 @@ fn connected_remote_panes_receive_once_and_disconnect_keeps_the_same_letter_pend
 /// reads that and the reason from `hide request show`; the log records it
 /// without the body.
 #[test]
-#[ignore = "external lane requires this worktree's CLI binaries and HIDE_E2E_HERDR_BIN"]
+#[ignore = "external lane requires this worktree's CLI binaries (scripts/verify-cargo.sh cli)"]
 fn ending_the_recipients_registration_ends_the_senders_answer_wait_and_says_why() -> Result<()> {
     Fixture::journey(|fixture| {
-        let remote_hide = fixture.remote.environment.home.join("bin/hide");
+        let remote_hide = fixture.remote.hide.clone();
         let hide = quote(&fixture.hide);
-        let recipient = agent_value(fixture.local.run_in_pane(&format!(
-                "{hide} agent register --host-scope \"$HERDR_SOCKET_PATH\" \
-                 --session fixture-local-session --instance {pane} --name local-parent --pane {pane}",
-                pane = fixture.local.pane
-            ))?)?["id"]
-            .as_str()
-            .context("the recipient's registration ID")?
-            .to_owned();
+        let recipient = fixture.local.registration.clone();
         let sent = fixture
             .remote
             .run_in_pane(&format!(
@@ -397,11 +494,12 @@ fn ending_the_recipients_registration_ends_the_senders_answer_wait_and_says_why(
             "an awaited request already reports an end: {waiting}"
         );
 
-        agent_value(
-            fixture
-                .local
-                .run_in_pane(&format!("{hide} agent end {recipient}"))?,
-        )?;
+        // The recipient ends its own registration from its own pane, which
+        // stays open to answer the command.
+        fixture
+            .local
+            .run_in_pane(&format!("{hide} agent end {recipient} --keep-pane"))?
+            .value()?;
 
         let shown = fixture.remote.run_in_pane(&show)?.json()?;
         ensure!(
@@ -437,25 +535,6 @@ fn ending_the_recipients_registration_ends_the_senders_answer_wait_and_says_why(
     })
 }
 
-/// The pane of the named agent in a Herdr answer, wherever the answer nests it.
-fn agent_pane(value: &Value, name: &str) -> Option<(String, bool)> {
-    match value {
-        Value::Object(map) => {
-            if map.get("name").and_then(Value::as_str) == Some(name)
-                && let Some(pane) = map.get("pane_id").and_then(Value::as_str)
-            {
-                let reported = map
-                    .get("agent_session")
-                    .is_some_and(|session| !session.is_null());
-                return Some((pane.to_owned(), reported));
-            }
-            map.values().find_map(|value| agent_pane(value, name))
-        }
-        Value::Array(rows) => rows.iter().find_map(|value| agent_pane(value, name)),
-        _ => None,
-    }
-}
-
 /// The agent row of a pane in a snapshot, wherever the snapshot nests it.
 fn row_of_pane<'a>(value: &'a Value, pane: &str) -> Option<&'a Value> {
     match value {
@@ -472,51 +551,39 @@ fn row_of_pane<'a>(value: &'a Value, pane: &str) -> Option<&'a Value> {
     }
 }
 
-/// Every string stored under `key`, wherever the answer nests it.
-fn strings_under(value: &Value, key: &str, found: &mut Vec<String>) {
-    match value {
-        Value::Object(map) => {
-            for (name, value) in map {
-                match value.as_str() {
-                    Some(text) if name == key => found.push(text.to_owned()),
-                    _ => strings_under(value, key, found),
-                }
-            }
-        }
-        Value::Array(rows) => rows.iter().for_each(|row| strings_under(row, key, found)),
-        _ => {}
-    }
-}
-
 #[test]
-#[ignore = "external lane requires this worktree's CLI binaries and HIDE_E2E_HERDR_BIN"]
+#[ignore = "external lane requires this worktree's CLI binaries (scripts/verify-cargo.sh cli)"]
 fn a_spawn_with_machine_starts_the_agent_on_the_device_under_its_caller() -> Result<()> {
     Fixture::journey(|fixture| {
         let project = fixture.commit_remote_project()?;
-        let remote_hide = fixture.remote.environment.home.join("bin/hide");
+        fixture.agent_ready_on_device("claude-code", ".claude")?;
         let spawn = format!(
             "{} agent spawn --parent here --machine remote --name remote-worker --intent spawn-remote-1 --kind claude --repo {} --branch remote-worker",
             quote(&fixture.hide),
             quote(&project)
         );
         // The fixture provider reports no native session of its own, which a
-        // real provider's hook does as soon as it starts. Report it for the
-        // pane Hide starts so the spawn can finish.
+        // real provider's hook does as soon as it starts. Report it from the
+        // pane Hide starts on the device so the spawn can finish.
+        let before = fixture::ready_panes(&fixture.remote.environment.home)?;
         let finished = AtomicBool::new(false);
-        let (local, remote) = (&mut fixture.local, &fixture.remote);
-        let first = std::thread::scope(|scope| {
-            let reporter = scope.spawn(|| -> Result<()> {
+        let (local, remote) = (&mut fixture.local, &mut fixture.remote);
+        let (first, spawned) = std::thread::scope(|scope| {
+            let reporter = scope.spawn(|| -> Result<Option<String>> {
                 let pane = wait_for("the spawned agent's pane on the device", || {
                     if finished.load(Ordering::Relaxed) {
                         return Ok(Some(None));
                     }
-                    let agents = remote.run(&["agent", "list"])?;
-                    Ok(agent_pane(&agents, "remote-worker").map(|(pane, _)| Some(pane)))
+                    let ready = fixture::ready_panes(&remote.environment.home)?;
+                    Ok(ready
+                        .into_iter()
+                        .find(|pane| !before.contains(pane))
+                        .map(Some))
                 })?;
-                if let Some(pane) = pane {
-                    remote.report_session(&pane, "fixture-spawned-session")?;
+                if let Some(pane) = &pane {
+                    remote.report_session(&remote.core_pane(pane), "fixture-spawned-session")?;
                 }
-                Ok(())
+                Ok(pane)
             });
             let output = local.run_in_pane(&spawn);
             finished.store(true, Ordering::Relaxed);
@@ -524,8 +591,7 @@ fn a_spawn_with_machine_starts_the_agent_on_the_device_under_its_caller() -> Res
                 .join()
                 .map_err(|_| anyhow::anyhow!("reporter panicked"))?;
             let output = output?;
-            reported?;
-            Ok::<_, anyhow::Error>(output)
+            Ok::<_, anyhow::Error>((output, reported?))
         })?;
         ensure!(
             first.status == 0,
@@ -533,6 +599,8 @@ fn a_spawn_with_machine_starts_the_agent_on_the_device_under_its_caller() -> Res
             first.stdout,
             first.stderr
         );
+        let spawned = spawned.context("the spawned agent's pane on the device")?;
+        let screen_pane = fixture.remote.core_pane(&spawned);
 
         let ledger = fixture.ledger()?;
         let spawn_record = ledger
@@ -562,38 +630,18 @@ fn a_spawn_with_machine_starts_the_agent_on_the_device_under_its_caller() -> Res
             child.machine == "remote" && child.parent.as_deref() == Some(parent.id.as_str()),
             "child is not the device's agent under the caller: {child:?}"
         );
-        let device_agents = fixture.remote.run(&["agent", "list"])?;
         ensure!(
-            agent_pane(&device_agents, "remote-worker").is_some_and(|(pane, _)| pane == child.pane),
-            "the child's pane is not the device Herdr's agent pane"
+            child.pane == spawned || child.pane == screen_pane,
+            "the child's pane is not the device pane its agent runs in: {} vs {spawned}",
+            child.pane
         );
         ensure!(
-            agent_pane(&fixture.local.run(&["agent", "list"])?, "remote-worker").is_none(),
-            "the agent was also started on the caller's own Herdr"
+            fixture::ready_panes(&fixture.local.environment.home)? == [fixture.local.pane.clone()],
+            "the agent was also started on the caller's own machine"
         );
-        // B8/B11: the real device server's workspace and tab leave their
-        // recovery markers only after placement has reached the receipt.
+        // B8/B11: the spawn's workspace and tab names reach the receipt only
+        // after placement has.
         wait_for("receipt-proven names on the device", || {
-            let state = fixture.remote.run(&["api", "snapshot"])?;
-            let state = &state["result"]["snapshot"];
-            let pane = state["panes"]
-                .as_array()
-                .context("device panes")?
-                .iter()
-                .find(|pane| pane["pane_id"] == child.pane)
-                .context("child pane")?;
-            let workspace = state["workspaces"]
-                .as_array()
-                .context("device workspaces")?
-                .iter()
-                .find(|workspace| workspace["workspace_id"] == pane["workspace_id"])
-                .context("child workspace")?;
-            let tab = state["tabs"]
-                .as_array()
-                .context("device tabs")?
-                .iter()
-                .find(|tab| tab["tab_id"] == pane["tab_id"])
-                .context("child tab")?;
             let saved = fixture.ledger()?;
             let record = saved
                 .spawns
@@ -601,11 +649,10 @@ fn a_spawn_with_machine_starts_the_agent_on_the_device_under_its_caller() -> Res
                 .find(|record| record.id == spawn_record.id)
                 .context("naming receipt")?;
             let names = serde_json::to_value(record)?;
-            Ok((workspace["label"] == "remote-worker"
-                && tab["label"] == "remote-worker"
-                && names["names"]["workspace"] == "applied"
-                && names["names"]["tab"] == "applied")
-                .then_some(()))
+            Ok(
+                (names["names"]["workspace"] == "applied" && names["names"]["tab"] == "applied")
+                    .then_some(()),
+            )
         })?;
         ensure!(
             ledger
@@ -615,17 +662,6 @@ fn a_spawn_with_machine_starts_the_agent_on_the_device_under_its_caller() -> Res
                     && watch.target.name == "remote-worker"
                     && Some(&watch.parent.name) == parent.name.as_ref()),
             "the caller has no watch on the device's agent"
-        );
-
-        // The device's Herdr holds the lineage: the child is its own pane there
-        // and its token names this machine as the parent's.
-        let snapshot = fixture.remote.run(&["api", "snapshot"])?;
-        let mut machines = Vec::new();
-        strings_under(&snapshot, "parent_machine", &mut machines);
-        ensure!(
-            machines.contains(&parent.native_machine),
-            "device lineage token does not name the caller's machine: {machines:?} vs {}",
-            parent.native_machine
         );
 
         // The same command returns the same agent and makes nothing twice.
@@ -656,9 +692,6 @@ fn a_spawn_with_machine_starts_the_agent_on_the_device_under_its_caller() -> Res
         );
 
         // This machine's screen places the device's agent under the lead.
-        let (pane, _) = agent_pane(&fixture.remote.run(&["agent", "list"])?, "remote-worker")
-            .context("spawned agent pane")?;
-        let screen_pane = format!("remote:remote:pane:{pane}");
         let lead_pane = fixture.local.pane.clone();
         wait_for(
             "the device agent under its lead on the caller's screen",
@@ -673,10 +706,7 @@ fn a_spawn_with_machine_starts_the_agent_on_the_device_under_its_caller() -> Res
         )?;
 
         // The lead's letter reaches the device agent through its own hook.
-        let remote_hooks = std::fs::canonicalize(&remote_hide)?
-            .parent()
-            .context("installed private CLI directory")?
-            .join("hide-agent-hooks");
+        let remote_hooks = fixture.remote.hooks.clone();
         let letter = fixture
             .local
             .run_in_pane(&format!(
@@ -686,11 +716,9 @@ fn a_spawn_with_machine_starts_the_agent_on_the_device_under_its_caller() -> Res
             ))?
             .json()?;
         let letter_id = letter["id"].as_str().context("lead letter ID")?.to_owned();
-        let (pane, _) = agent_pane(&fixture.remote.run(&["agent", "list"])?, "remote-worker")
-            .context("spawned agent pane")?;
         let bell = fixture.rung(&letter_id)?;
         let delivered = fixture.remote.run_in(
-            &pane,
+            &screen_pane,
             &hook(&remote_hooks, "fixture-spawned-session", &bell),
         )?;
         let intake = context(&delivered.stdout)?;
@@ -700,12 +728,11 @@ fn a_spawn_with_machine_starts_the_agent_on_the_device_under_its_caller() -> Res
         );
 
         // The child's report reaches its caller over the device's bridge.
-        let (pane, _) = agent_pane(&fixture.remote.run(&["agent", "list"])?, "remote-worker")
-            .context("spawned agent pane")?;
+        let remote_hide = fixture.remote.hide.clone();
         let report = fixture
             .remote
             .run_in(
-                &pane,
+                &screen_pane,
                 &format!(
                     "{} request send local-parent --intent spawn-report --kind report --body {}",
                     quote(&remote_hide),
@@ -736,10 +763,10 @@ fn a_spawn_with_machine_starts_the_agent_on_the_device_under_its_caller() -> Res
 /// the same command again only brings the project forward. A folder outside
 /// the device's home is refused, since only Add a project asks about one.
 #[test]
-#[ignore = "external lane requires this worktree's CLI binaries and HIDE_E2E_HERDR_BIN"]
+#[ignore = "external lane requires this worktree's CLI binaries (scripts/verify-cargo.sh cli)"]
 fn a_plain_shell_on_the_device_opens_its_folder_as_a_project() -> Result<()> {
     Fixture::journey(|fixture| {
-        let remote_hide = fixture.remote.environment.home.join("bin/hide");
+        let remote_hide = fixture.remote.hide.clone();
         let folder = fixture.remote.environment.home.join("plain-open");
         std::fs::create_dir_all(folder.join("src"))?;
         // The run directory lives inside this checkout, whose repository
@@ -807,5 +834,281 @@ fn a_plain_shell_on_the_device_opens_its_folder_as_a_project() -> Result<()> {
             text(&refused.stderr)
         );
         Ok(())
+    })
+}
+
+/// `hide device switch` for the fixture's device, named by its id or the
+/// alias it was added by, at a terminal of the core's machine: whether it
+/// succeeded, and the line it answered.
+fn switch_device(fixture: &Fixture, device: &str, words: &[&str]) -> Result<(bool, Value)> {
+    let mut command = fixture.local.environment.command(&fixture.hide);
+    command
+        .args(["device", "switch", device, "--json"])
+        .args(words);
+    let ran = fixture::capture(command)?;
+    let text = String::from_utf8_lossy(&ran.stdout).into_owned();
+    let answer =
+        serde_json::from_str(text.lines().last().unwrap_or_default()).with_context(|| {
+            format!(
+                "the switch answered no JSON line: {text} {}",
+                String::from_utf8_lossy(&ran.stderr)
+            )
+        })?;
+    Ok((ran.status.success(), answer))
+}
+
+/// The fixture's device as the core's snapshot lists it.
+fn device_row(snapshot: &Value) -> Result<Value> {
+    snapshot
+        .pointer("/navigator/devices")
+        .and_then(Value::as_array)
+        .and_then(|rows| rows.iter().find(|row| row["id"] == fixture::DEVICE))
+        .cloned()
+        .context("the device left the core's list")
+}
+
+/// The switch of an SSH device to the connection of the Hide on its machine
+/// (PRD device-connect-iroh D-45, D-49, B36, B41), over the system's ssh:
+/// the account runs no Hide of its own, so the switch asks first, and once
+/// allowed starts one there from the helper's build and pairs with it.
+#[test]
+#[ignore = "external lane requires this worktree's CLI binaries (scripts/verify-cargo.sh cli)"]
+fn an_ssh_device_is_switched_to_its_machines_own_hide_and_its_terminal_carries_on() -> Result<()> {
+    Fixture::journey(|fixture| {
+        // The stand-in agent in the device's pane, by the process its
+        // scripts are children of: the same one for as long as the
+        // terminal runs.
+        let stand_in = |fixture: &mut Fixture| -> Result<String> {
+            let ran = fixture.remote.run_in_pane("echo $PPID")?;
+            ensure!(ran.status == 0, "the pane's command failed: {}", ran.stderr);
+            Ok(ran.stdout.trim().to_owned())
+        };
+        let before = stand_in(fixture)?;
+        let session_pane = |fixture: &Fixture| -> Result<Option<String>> {
+            Ok(fixture::pane_on_session(
+                &fixture.snapshot()?,
+                "fixture-remote-session",
+            ))
+        };
+        ensure!(
+            session_pane(fixture)?.as_deref() == Some(fixture.remote.pane.as_str()),
+            "the device's agent is not in its pane before the switch"
+        );
+        let account = fixture.remote.environment.clone();
+        let state = std::path::PathBuf::from(
+            account
+                .var("HIDE_STATE_DIR")
+                .context("the device account's state folder")?,
+        );
+
+        // The account runs no Hide of its own: the switch asks first,
+        // starts nothing there, and the device stays the helper's (B41).
+        // Named by the alias it was added by, as a terminal knows it.
+        let (ok, answer) = switch_device(fixture, "delivery-fixture", &[])?;
+        ensure!(
+            ok && answer["value"]["switch"] == "install_needed"
+                && answer["value"]["device_id"] == fixture::DEVICE,
+            "a device with no Hide of its own: {answer}"
+        );
+        let row = device_row(&fixture.snapshot()?)?;
+        ensure!(
+            row["peer_key"].is_null() && row["switch"].is_null(),
+            "a switch that asked first changed the device: {row}"
+        );
+        ensure!(
+            !state.join("hided.json").exists(),
+            "a Hide was started on the account before the operator allowed it"
+        );
+
+        // The build this core's node runs from on that machine, placed in
+        // the helper root as that machine's Hide would place it: a
+        // development build is larger than a build may be, so it would
+        // refuse to (`shipped::place_guest_build`).
+        let programs = fixture.hide.parent().context("the staged build")?;
+        crate::support::shipped::place_guest_build(programs, &account.home.join("helper"));
+        // A letter waits for the device's agent when the switch starts: no
+        // prompt of the agent's has taken it yet.
+        let send = format!(
+            "{} request send remote-child --intent switch-1 --body {}",
+            quote(&fixture.hide),
+            quote("SWITCH_PENDING_ONCE")
+        );
+        let letter = fixture.local.run_in_pane(&send)?.json()?;
+        let letter = letter["id"].as_str().context("sent letter ID")?.to_owned();
+        let waits = |fixture: &Fixture, state: State| -> Result<bool> {
+            Ok(fixture
+                .ledger()?
+                .letters
+                .iter()
+                .any(|sent| sent.id == letter && sent.state == state))
+        };
+        ensure!(
+            waits(fixture, State::Pending)?,
+            "the letter does not wait for the device's agent before the switch"
+        );
+        let remote_hooks = fixture.remote.hooks.clone();
+        let journey = (|| -> Result<()> {
+            // Allowed: a Hide of the account's own is started over the
+            // same SSH login, from the helper's build, and paired with.
+            let (ok, answer) = switch_device(fixture, fixture::DEVICE, &["--install"])?;
+            ensure!(
+                ok && answer["value"]["switch"] == "done" && answer["value"]["folder"] == "taken",
+                "the switch: {answer}"
+            );
+            ensure!(
+                state.join("hided.json").exists(),
+                "no Hide of the account's own runs after the switch"
+            );
+            // The same device under the same name, now its machine's: the
+            // core reads it over the two Hides' connection.
+            wait_for("the device on its machine's connection", || {
+                let snapshot = fixture.snapshot()?;
+                let row = device_row(&snapshot)?;
+                let connected = snapshot
+                    .pointer("/status/remote")
+                    .and_then(Value::as_array)
+                    .is_some_and(|rows| {
+                        rows.iter().any(|row| {
+                            row["target_id"] == fixture::DEVICE && row["state"] == "connected"
+                        })
+                    });
+                Ok(
+                    (row["peer_key"].is_string() && row["switch"].is_null() && connected)
+                        .then_some(()),
+                )
+            })?;
+            let snapshot = fixture.snapshot()?;
+            let row = device_row(&snapshot)?;
+            ensure!(row["label"] == "Remote fixture", "the device's name: {row}");
+            let peers = snapshot
+                .pointer("/navigator/peers")
+                .and_then(Value::as_array)
+                .cloned()
+                .unwrap_or_default();
+            ensure!(
+                matches!(peers.as_slice(), [peer] if peer["key"] == row["peer_key"]
+                    && peer["opens"] == "active"),
+                "the paired machine: {peers:?}"
+            );
+            // The helper's folder is that machine's guest folder now, under
+            // the helper root the device was allowed.
+            let node = hide_kit::layout::device_node_state(&account.home);
+            let claim = hide_kit::layout::HelperGuest::read(&node)
+                .context("the helper folder names no guest")?;
+            ensure!(
+                claim.root == account.home.join("helper"),
+                "the helper folder's guest: {claim:?}"
+            );
+
+            // The project this machine registered on the device is a
+            // project of that machine's own Hide too (D-48).
+            let own: Value = serde_json::from_slice(&std::fs::read(state.join("hided.json"))?)?;
+            let own = fixture::Daemon {
+                port: own["port"]
+                    .as_u64()
+                    .and_then(|port| u16::try_from(port).ok())
+                    .context("the account's Hide names no port")?,
+                token: own["token"]
+                    .as_str()
+                    .context("the account's Hide names no token")?
+                    .to_owned(),
+            };
+            let project = account.home.join("project");
+            wait_for("the device's project in its machine's own Hide", || {
+                let listed = |row: &Value| row["path"] == project.to_string_lossy().as_ref();
+                Ok(own
+                    .snapshot()?
+                    .pointer("/navigator/workspaces")
+                    .and_then(Value::as_array)
+                    .is_some_and(|rows| {
+                        rows.iter().any(|row| {
+                            listed(row)
+                                || row["checkouts"]
+                                    .as_array()
+                                    .is_some_and(|checkouts| checkouts.iter().any(listed))
+                        })
+                    })
+                    .then_some(()))
+            })?;
+
+            // The terminal carried on: the agent is in the pane it was in,
+            // and the program in it is the one that ran before.
+            wait_for("the device's agent in its pane again", || {
+                Ok(
+                    (session_pane(fixture)?.as_deref() == Some(fixture.remote.pane.as_str()))
+                        .then_some(()),
+                )
+            })?;
+            let after = stand_in(fixture)?;
+            ensure!(
+                before == after,
+                "the pane's program was started again: {before} then {after}"
+            );
+            // Its first open on the new connection closed nothing: every
+            // terminal was taken up, so the row counts none it could not.
+            let row = fixture
+                .snapshot()
+                .and_then(|snapshot| device_row(&snapshot))?;
+            ensure!(
+                row["not_carried"].is_null(),
+                "the switch says it could not take a terminal up: {row}"
+            );
+
+            // The letter that waited through the switch was neither lost
+            // nor taken by it, and reaches the agent once: by its pane's
+            // own prompt hook, which finds this core through the node that
+            // took the helper's folder.
+            ensure!(
+                waits(fixture, State::Pending)?,
+                "the switch changed a letter that waited for the device's agent"
+            );
+            let bell = fixture.rung(&letter)?;
+            let prompt = hook(&remote_hooks, "fixture-remote-session", &bell);
+            let delivered = fixture.remote.run_in_pane(&prompt)?;
+            let intake = context(&delivered.stdout)?;
+            ensure!(
+                delivered.status == 0
+                    && intake.contains(&letter)
+                    && intake.contains("SWITCH_PENDING_ONCE"),
+                "the agent's prompt after the switch did not take the letter: {:?}, stderr {:?}, recorded {}",
+                delivered.stdout,
+                delivered.stderr,
+                hook_diagnostics(&fixture.remote.environment)
+            );
+            wait_for("the letter confirmed as delivered", || {
+                Ok(waits(fixture, State::Delivered)?.then_some(()))
+            })?;
+            let again = fixture.remote.run_in_pane(&prompt)?;
+            ensure!(
+                again.status == 0 && context(&again.stdout)?.is_empty(),
+                "the letter reached the agent a second time: {:?}",
+                again.stdout
+            );
+            ensure!(
+                fixture
+                    .remote
+                    .run_in_pane(&stop(&remote_hooks, "fixture-remote-session"))?
+                    .status
+                    == 0,
+                "the device agent's stop hook failed after the switch"
+            );
+            Ok(())
+        })();
+        // The Hide the switch started on the account is this journey's to
+        // end: the fixture owns only what it started itself.
+        let mut stop = account.command(&fixture.remote.hide);
+        stop.arg("stop");
+        let stopped = fixture::capture(stop)?;
+        // So is the terminal that Hide opened for the project it was handed,
+        // as it does for every project added to it: a holder outlives the
+        // Hide that started it.
+        let ended = fixture::end_holders(&state);
+        journey?;
+        ensure!(
+            stopped.status.success(),
+            "the account's own Hide did not stop: {}",
+            String::from_utf8_lossy(&stopped.stderr)
+        );
+        ended
     })
 }

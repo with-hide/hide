@@ -1,0 +1,40 @@
+
+  >_ OpenAI Codex (v0.167.0)
+     ~/projects/demo
+
+
+› 1. alpha
+  2. beta
+
+
+• OK
+
+  Worked for <1s • 9:36 AM
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+› Ask Codex to do anything
+
+  journey-model default · ~/projects/demo
+  ← for agents · ? for shortcuts                                                               ⚠ 1 warning · f2 to view

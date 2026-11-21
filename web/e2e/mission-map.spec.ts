@@ -1,18 +1,28 @@
 // A Conductor's mission as the operator meets it, on either engine and an
 // isolated hided (PRD software-factory-conductor B14, B15, B19, B21, B48):
 // the real `hide mission` commands from the pane's own shell change the
-// core's record, the first plan opens nothing in the lane and, with the
-// operator looking at the Conductor pane, pins that pane's popover once
-// (PRD mission-pane-chip B11, B12), the map follows each change of the
-// record, a card opens its node's panel and Escape lets it go without
-// closing the lane (PRD mission-map-git-criteria B25, B28, B30, B31), and
-// Settings › Mission keeps the cap the next `hide mission settings` reads.
+// core's record, the first plan opens nothing and, with the operator looking
+// at the Conductor pane, pins that pane's popover once (PRD mission-pane-chip
+// B11, B12); the pane's chip opens its mission's map as a card in the lane's
+// desk beside the pane as a card tab (operator decision 2026-11-09, replacing PRD
+// mission-screen D-09, B12, B14), whose map follows each change of the
+// record, a card opens its node's panel with the events the core sends for
+// the card in front, and Escape lets the pick go and leaves the lane open
+// (PRD mission-map-git-criteria B25, B28, B30, B31); the sidebar's `미션` row
+// and the card's `모든 미션` open the screen's table (B1, B2), whose rows open
+// the screen's own detail, and Settings › Mission keeps the cap the next
+// `hide mission settings` reads.
 
-import { expect, test, type Page } from "@playwright/test";
+import fs from "node:fs";
+import path from "node:path";
+import { expect, test, type Locator, type Page } from "@playwright/test";
 import type { HideAnswer } from "./agent-pane";
 import { startFixture, type AgentFixture } from "./engine-fixture";
 import { startHided, type Daemon } from "./hided-fixture";
-import { enterWorkspace, placedBoxes, screenshot } from "./wire";
+import { chord } from "./chords";
+import { closeFrontCard, enterWorkspace, placedBoxes, screenshot } from "./wire";
+import { git } from "./work-prs-fixture";
+import { closePane, withControl } from "./daemon-actions";
 
 test.describe.configure({ timeout: 120_000 });
 
@@ -66,7 +76,7 @@ async function createMission(conductor: Hide) {
   await expect.poll(async () => (await conductor(["mission", "create", "--title", "이슈 정리"])).out, { timeout: 20_000 }).toContain('"ok":true');
 }
 
-test("the Conductor's first plan shows on its pane, the map follows the record, and the Conductor settings keep the cap", async ({ page }) => {
+test("the Conductor's first plan shows on its pane, and the mission's card beside it follows the record", async ({ page }) => {
   await page.setViewportSize({ width: 1600, height: 1000 });
   const fixture = await startFixture({ family: true });
   let daemon: Daemon | null = null;
@@ -74,7 +84,7 @@ test("the Conductor's first plan shows on its pane, the map follows the record, 
     const opened = await conductorRepo(page, fixture, "mission-map");
     daemon = opened.daemon;
     const { conductor, worker } = opened;
-    const map = page.locator('aside[data-detail="mission"]');
+    const map = page.locator('[data-card="mission"]');
     await createMission(conductor);
     // A mission without a plan opens nothing; its pane's chip says it is being planned.
     await expect(page.locator("[data-workspace-screen]")).toBeVisible();
@@ -95,11 +105,15 @@ test("the Conductor's first plan shows on its pane, the map follows the record, 
     await expect(small.locator("[data-mission-mini-tally]")).toHaveAttribute("data-mission-mini-tally", "0 3");
     await expect(map).toHaveCount(0);
     await screenshot(page, "mission-pane-first-plan");
-    // A press on the chip opens the big map in the 보기 slot and closes the popover.
+    // A press on the chip opens the map as a card tab on the desk, the pane staying beside it, and closes the popover.
     await paneChip.click();
     await expect(small).toHaveCount(0);
     await expect(map).toBeVisible();
-    await expect(map.locator("[data-detail-title]")).toHaveAttribute("data-detail-title", /이슈 정리/);
+    await expect(page.locator("[data-workspace-screen]")).toBeVisible();
+    await expect(page.locator(`[data-pane-view="${opened.pane}"]`)).toBeVisible();
+    await expect(page.locator("[data-mission-screen]")).toHaveCount(0);
+    // The card's tab carries the mission's name.
+    await expect(page.locator('[role="tab"][data-tab-kind="card"][aria-selected="true"]')).toHaveAttribute("aria-label", /이슈 정리/);
     await expect(map.locator("[data-mission-status]")).toHaveAttribute("data-mission-status", "planning");
     await expect(map.locator("[data-mission-node]")).toHaveCount(3);
     // The node that waits on another is drawn below it (down flow).
@@ -116,10 +130,20 @@ test("the Conductor's first plan shows on its pane, the map follows the record, 
     await expect(node).toHaveAttribute("data-node-status", "working");
     // Where a moving node is now is the summary's, beside the map, not the card's (PRD mission-tool B16, B19).
     await expect(map.locator('[data-mission-summary-line="api"]')).toHaveText("엔드포인트 작성 중");
-    await mission(conductor, ["mission", "decide", "--line", "화면 PR 방식 선택"]);
+    await mission(conductor, ["mission", "decide", "--line", "화면 PR 방식 선택", "--option", "API PR 위에 쌓기", "--option", "API PR 머지 뒤 main에서 시작하기", "--recommend", "1"]);
     // The decision is the operator's turn, above the map.
-    await expect(map.locator('[data-mission-turn] [data-mission-banner="decision"]')).toContainText("화면 PR 방식 선택");
-    // A card opens its node's panel in the app too: its worker's planned model, since the pane is not one Hide launched with a choice, and the core's events for it (B31).
+    const decision = map.locator('[data-mission-turn] [data-mission-banner="decision"]');
+    await expect(decision).toContainText("화면 PR 방식 선택");
+    // Its choices are radio rows: the recommended one is tagged, a press only marks a row, and 답하기 sends (PRD mission-human-gate B19).
+    await expect(decision.locator("[data-mission-option]")).toHaveCount(2);
+    await expect(decision.locator('[data-mission-option="1"]')).toHaveAttribute("data-mission-recommended", "true");
+    await expect(decision.locator("[data-mission-answer-send]")).toBeDisabled();
+    await decision.locator('[data-mission-option="2"]').click();
+    await expect(decision.locator('[data-mission-option="2"]')).toHaveAttribute("aria-checked", "true");
+    await expect(decision.locator("[data-mission-answer-send]")).toBeEnabled();
+    await expect(decision).toHaveAttribute("data-mission-answer", "open");
+    // A card opens its node's panel in the app too: its worker's planned model, since the pane is not one Hide launched with a choice,
+    // and the core's events for it, which the core sends for the mission card in front of the desk (B31).
     await node.click();
     const panel = map.locator('[data-mission-panel="api"] [data-mission-detail="api"]');
     await expect(panel).toBeVisible();
@@ -134,29 +158,76 @@ test("the Conductor's first plan shows on its pane, the map follows the record, 
     await expect(map).toBeVisible();
     await screenshot(page, "mission-map-running");
 
-    // Closed by the operator, a later plan does not open it again.
-    await map.locator("[data-detail-close]").click();
+    // The card belongs to the Agent tab it opened in: another tab in front shows none, and back in that tab it is as it was (operator decision 2026-11-09).
+    const home = (await page.locator("[data-tab][aria-selected=true]").getAttribute("data-tab"))!;
+    // The keyboard back in the Conductor's pane, ⌘T opens an Agent tab; in the card on the desk it would open a View tab there.
+    await page.locator(`[data-pane-view="${opened.pane}"] .xterm-helper-textarea`).focus();
+    await page.keyboard.press(chord("new_tab"));
+    await expect(page.locator("[data-tab][aria-selected=true]")).not.toHaveAttribute("data-tab", home);
     await expect(map).toHaveCount(0);
+    await screenshot(page, "mission-card-other-tab");
+    await page.locator(`[data-tab="${home}"]`).click();
+    await expect(map).toBeVisible();
+    await expect(map.locator('[data-mission-node="api"]')).toHaveAttribute("data-node-status", "working");
+    await screenshot(page, "mission-card-back");
+  } finally {
+    daemon?.stop();
+    fixture.stop();
+  }
+});
+
+test("the mission's card closes and opens again from the sidebar, the screen keeps the table, and its gear keeps the cap the Conductor reads", async ({ page }) => {
+  await page.setViewportSize({ width: 1600, height: 1000 });
+  const fixture = await startFixture({ family: true });
+  let daemon: Daemon | null = null;
+  try {
+    const opened = await conductorRepo(page, fixture, "mission-screen");
+    daemon = opened.daemon;
+    const { conductor } = opened;
+    const card = page.locator('[data-card="mission"]');
+    const map = page.locator("[data-mission-screen-detail]");
+    const small = page.locator("[data-pane-mission]");
+    await createMission(conductor);
+    await mission(conductor, ["mission", "plan", "--json", JSON.stringify(PLAN)]);
+    await mission(conductor, ["mission", "start"]);
+    await mission(conductor, ["mission", "decide", "--line", "화면 PR 방식 선택"]);
+    await page.locator("[data-pane-mission-chip]").click();
+    await expect(card).toBeVisible();
+
+    // Closed by the operator, a later plan does not open it again, nor the pane's popover (B12).
+    await closeFrontCard(page);
+    await expect(card).toHaveCount(0);
     await mission(conductor, ["mission", "plan", "--json", JSON.stringify({ ...PLAN, nodes: [...PLAN.nodes, { key: "together", title: "함께 확인", kind: "verify", criteria: ["두 변경이 함께 동작한다"], depends_on: ["screen"] }] })]);
-    const shown = await mission(conductor, ["mission", "show"]);
+    const shown = await mission(conductor, ["mission", "show", "--json"]);
     expect(JSON.stringify(shown.result)).toContain("together");
-    await expect(map).toHaveCount(0);
-    // Nor does a replan open the pane's popover again (B12).
+    await expect(card).toHaveCount(0);
     await expect(small).toHaveCount(0);
-    // The Conductor's row carries the mission mark, and pressing it opens the map again (B14).
+    // The sidebar's 미션 row opens the table, the mission in its group, never the last mission shown (B1, B2; D-04).
+    await page.locator("[data-sidebar-missions]").click();
+    await expect(page.locator('[data-mission-screen-view="table"]')).toBeVisible();
+    await expect(page.locator("[data-sidebar-missions]")).toHaveAttribute("aria-current", "page");
+    await expect(page.locator('[data-mission-row-group="turn"]')).toHaveCount(1);
+    await expect(map).toHaveCount(0);
+    // The Conductor's row carries the mission mark, and pressing it leaves the screen for the card beside the pane.
     // Its open decision also lifts the row into the tree's 내 차례, so the row stands there and in its
     // project, each chip keeping its progress with the decision's `!` (needs-you-cleanup B1, B5).
-    const chip = page.locator('nav[data-sidebar] [data-mission-chip][data-mission-chip-decision="true"]').first();
+    const chip = page.locator('nav[data-sidebar] [data-mission-chip][data-mission-chip-turn="decision"]').first();
     await expect(chip).toHaveAttribute("data-mission-chip-status", "running");
     await expect(chip).toContainText("0/4");
     await chip.click();
+    await expect(page.locator("[data-workspace-screen]")).toBeVisible();
+    await expect(card).toBeVisible();
+    await expect(card.locator("[data-mission-node]")).toHaveCount(4);
+    // The card's `모든 미션` opens the screen's table; a row there opens the screen's own detail.
+    await card.locator("[data-detail-all-missions]").click();
+    await expect(page.locator('[data-mission-screen-view="table"]')).toBeVisible();
+    await page.locator('[data-mission-row-group="turn"] [data-slot="row-overlay-button"]').first().click();
     await expect(map).toBeVisible();
     await expect(map.locator("[data-mission-node]")).toHaveCount(4);
 
-    // The map head's gear opens the rail's Mission tool on its defaults, Settings › Mission's own
-    // controls, which write the cap the Conductor reads (PRD mission-tool B9).
-    await map.locator("[data-detail-conductor-settings]").click();
-    const sheet = page.locator('[data-mission-tool-page="settings"]');
+    // The detail's gear opens Settings › Mission, whose controls write the cap the Conductor reads (PRD mission-screen B10).
+    await map.locator("[data-mission-screen-settings]").click();
+    const sheet = page.getByRole("dialog").filter({ has: page.locator("[data-conductor-cap]") });
     await expect(sheet).toBeVisible();
     await sheet.locator("[data-conductor-cap]").click();
     await page.getByRole("option", { name: "6", exact: true }).click();
@@ -168,7 +239,51 @@ test("the Conductor's first plan shows on its pane, the map follows the record, 
   }
 });
 
-test("a narrow window keeps every card's words inside it, a long title ending in an ellipsis (PRD mission-node-simple B30)", async ({ page }) => {
+test("the screen's 터미널로 이동 brings a node's worker forward, and once that terminal closed says so on the screen instead of doing nothing (with-hide/hide#2505)", async ({ page }) => {
+  await page.setViewportSize({ width: 1600, height: 1000 });
+  const fixture = await startFixture({ family: true });
+  let daemon: Daemon | null = null;
+  try {
+    const opened = await conductorRepo(page, fixture, "mission-terminal");
+    daemon = opened.daemon;
+    const { conductor, worker } = opened;
+    await createMission(conductor);
+    await mission(conductor, ["mission", "plan", "--json", JSON.stringify(PLAN)]);
+    await mission(conductor, ["mission", "start"]);
+    const listed = (await mission(conductor, ["agent", "list"])).value as { items: { id: string; pane: string }[] };
+    const workerId = listed.items.find((agent) => agent.pane === worker)!.id;
+    await mission(conductor, ["mission", "node", "api", "--status", "working", "--agent-id", workerId, "--line", "엔드포인트 작성 중"]);
+    const screen = page.locator("[data-mission-screen]");
+    const openNode = async () => {
+      await page.locator("[data-sidebar-missions]").click();
+      await screen.locator('[data-slot="row-overlay-button"]').first().click();
+      await screen.locator('[data-mission-screen-detail] [data-mission-node="api"]').click();
+      return screen.locator('[data-mission-panel="api"] [data-node-terminal]');
+    };
+
+    // The worker's pane is not the one in front, so the press moves the Workspace to it.
+    await (await openNode()).click();
+    await expect(page.locator("[data-workspace-screen]")).toBeVisible();
+    await expect(page.locator(`[data-pane-view="${worker}"]`)).toHaveAttribute("data-focused", "true");
+
+    // Its terminal closed, the node still names it: the press stays on the screen and says why there.
+    await withControl(daemon, (control) => closePane(control, worker));
+    const terminal = await openNode();
+    await expect(terminal).toBeEnabled();
+    await terminal.click();
+    const refusal = page.locator('[data-opening="failed"]');
+    await expect(refusal).toContainText("That terminal is no longer open.");
+    await expect(screen).toBeVisible();
+    await screenshot(page, "mission-terminal-gone");
+    await refusal.locator("[data-opening-dismiss]").click();
+    await expect(refusal).toHaveCount(0);
+  } finally {
+    daemon?.stop();
+    fixture.stop();
+  }
+});
+
+test("a narrow window keeps every card's words inside it, a long title ending in an ellipsis, and each planned card's five rows: its plan to the branch the mission goes to, the operator's merge before it, or its kind (PRD mission-node-simple B30; PRD mission-destination B48, B53, B54, B55, B57, B58)", async ({ page }) => {
   await page.setViewportSize({ width: 900, height: 1000 });
   const fixture = await startFixture({ family: true });
   let daemon: Daemon | null = null;
@@ -178,23 +293,259 @@ test("a narrow window keeps every card's words inside it, a long title ending in
     await createMission(opened.conductor);
     await mission(opened.conductor, ["mission", "plan", "--json", JSON.stringify(PLAN)]);
     await page.locator("[data-pane-mission-chip]").click();
-    const map = page.locator('aside[data-detail="mission"]');
+    const map = page.locator('[data-card="mission"]');
     await expect(map).toBeVisible();
     await expect(map.locator("[data-mission-node]")).toHaveCount(3);
+    // Nothing of a card, its title, its worker or its bottom line, reaches past its right edge.
     const spills = await map.locator("[data-mission-node]").evaluateAll((cards) =>
       cards.flatMap((card) => {
-        const box = card.getBoundingClientRect();
-        const title = card.querySelector<HTMLElement>("[title]");
-        const out = card.scrollWidth > card.clientWidth + 1 || (title !== null && title.getBoundingClientRect().right > box.right + 1);
+        const right = card.getBoundingClientRect().right + 1;
+        const parts = [...card.querySelectorAll<HTMLElement>("[data-node-title], [data-node-run], [data-node-line], [data-node-line] > *, [data-line-to]")];
+        const out = card.scrollWidth > card.clientWidth + 1 || parts.some((part) => part.getBoundingClientRect().right > right);
         return out ? [card.getAttribute("data-mission-node")] : [];
       }),
     );
     expect(spills).toEqual([]);
     // The long title is cut, not wrapped or spilled: its whole is on hover and in the card's name.
-    expect(await map.locator('[data-mission-node="cause"] [title]').evaluate((title) => title.scrollWidth > title.clientWidth)).toBe(true);
+    const cause = map.locator('[data-mission-node="cause"]');
+    await expect.poll(() => cause.locator("[data-node-title]").evaluate((title) => title.scrollWidth > title.clientWidth)).toBe(true);
+    expect(await cause.getAttribute("aria-label")).toContain(PLAN.nodes[0]!.title);
+    // Research changes no code: it ends in its kind until it is done. Each change says its plan, a pull request to the branch its checkout was on.
+    await expect(cause.locator("[data-node-foot] [data-node-line]")).toHaveAttribute("data-node-line", "result");
+    await expect(cause.locator("[data-node-line]")).toHaveAttribute("data-line-shows", "kind");
+    for (const key of ["api", "screen"]) {
+      const card = map.locator(`[data-mission-node="${key}"]`);
+      const line = card.locator("[data-node-foot] [data-node-line]");
+      // The scope `pr` mission leaves the merge to the operator: a faint person before the destination, never the operator's turn yet.
+      await expect(line).toHaveAttribute("data-line-mark", "plan_pr");
+      await expect(line).toHaveAttribute("data-line-person", "ahead");
+      await expect(line.locator("[data-line-to]")).toHaveText("→main");
+      await expect(card.locator("[data-node-merge-turn], [data-node-turn]")).toHaveCount(0);
+      await expect(card).toHaveAttribute("aria-label", /(Where it goes|어디로 들어가나): PR → main · (You merge it|머지는 내가)/);
+      // A planned card: dashed, its worker marked planned on its own row, and no time.
+      await expect(card).toHaveAttribute("data-node-look", "waiting");
+      await expect(card.locator("[data-node-took]")).toHaveCount(0);
+    }
+    await expect(map.locator('[data-mission-node="api"] [data-node-run] [data-node-model]')).toHaveText("opus");
+    // The head names the branch and, merge first, what the mission applies; the scope `pr` mission leaves the merges to the operator.
+    await expect(map.locator("[data-mission-destination]")).toHaveAttribute("data-mission-destination", "main");
+    await expect(map.locator('[data-mission-options] [data-mission-head-option="merge"]')).toHaveText(/PR까지 · 머지는 전부 내가|Up to PRs · you merge them all/);
     await screenshot(page, "mission-map-narrow");
   } finally {
     daemon?.stop();
     fixture.stop();
+  }
+});
+
+/** A release branch longer than a card's bottom line has room for at the largest text, which the mission's pull requests go to. */
+const LONG_DESTINATION = "release/2026-11-weekly-hotfix-train-for-the-store-builds";
+
+/** Working changes: one into the destination and one stacked on it, each on a branch too long for its card, a short one stacked too, a long one before its pull request, a direct one, and one with two pull requests and two marks. */
+const LINES = {
+  scope: "pr",
+  check: "true",
+  nodes: [
+    { key: "api", title: "환불 상태 API", kind: "change", delivery: "pr", criteria: ["엔드포인트가 응답한다"] },
+    { key: "screen", title: "환불 화면", kind: "change", delivery: "pr", criteria: ["화면이 API 값을 보인다"] },
+    { key: "short", title: "오타", kind: "change", delivery: "pr", criteria: ["오타가 없다"] },
+    { key: "draft", title: "환불 알림", kind: "change", delivery: "pr", criteria: ["알림이 간다"] },
+    { key: "hotfix", title: "환불 반올림", kind: "change", delivery: "direct", criteria: ["금액이 맞다"] },
+    { key: "marked", title: "환불 재시도", kind: "change", delivery: "pr", criteria: ["재시도가 된다"] },
+    { key: "tiny", title: "환불 문구", kind: "change", delivery: "direct", criteria: ["문구가 맞다"] },
+    { key: "lone", title: "환불 버튼", kind: "change", delivery: "direct", criteria: ["버튼이 보인다"] },
+  ],
+};
+
+test("at the largest Interface text a working change's branch line stays inside its card: a long one leaves its number alone on the first row and puts `branch → destination` on a second row from the card's left edge, sharing it when both are long, a short one keeps one row a step further from its number, and one without a number never wraps, a direct one keeping `PR 없이` after its destination, and one with `+N` and two marks keeping its number and the marks on its first row (PRD mission-destination D-51, D-56, B55)", async ({ page }) => {
+  await page.setViewportSize({ width: 1600, height: 1000 });
+  const fixture = await startFixture({ family: true });
+  let daemon: Daemon | null = null;
+  try {
+    // The checkout is on the long release branch before the daemon makes it a repository, so the mission's destination is that branch.
+    const repo = path.join(fixture.root, "fixture");
+    fs.mkdirSync(repo, { recursive: true });
+    git(repo, ["init", "-q", "-b", LONG_DESTINATION]);
+    const opened = await conductorRepo(page, fixture, "mission-map-line");
+    daemon = opened.daemon;
+    const { conductor } = opened;
+    await createMission(conductor);
+    await mission(conductor, ["mission", "plan", "--json", JSON.stringify(LINES)]);
+    await mission(conductor, ["mission", "start"]);
+    await mission(conductor, ["mission", "node", "api", "--status", "working", "--pr", "3114", "--branch", "feat/refund-db-state-columns-and-index"]);
+    await mission(conductor, ["mission", "node", "screen", "--status", "working", "--pr", "3115", "--base-pr", "3114", "--branch", "feat/refund-screen-that-reads-the-api"]);
+    await mission(conductor, ["mission", "node", "short", "--status", "working", "--pr", "7", "--base-pr", "3114", "--branch", "fix/typo"]);
+    await mission(conductor, ["mission", "node", "draft", "--status", "working", "--branch", "feat/refund-notice-mail-for-the-store-builds"]);
+    await mission(conductor, ["mission", "node", "hotfix", "--status", "working", "--branch", "fix/refund-rounding-in-the-store-builds"]);
+    await mission(conductor, ["mission", "node", "marked", "--status", "working", "--pr", "3110", "--branch", "feat/refund-retry-queue-for-the-store-builds"]);
+    await mission(conductor, ["mission", "node", "marked", "--pr", "3116"]);
+    await mission(conductor, ["mission", "node", "tiny", "--status", "working", "--branch", "fix/copy"]);
+    await mission(conductor, ["mission", "node", "lone", "--status", "working", "--branch", "fix/button"]);
+    // Two marks at the line's right end, as the core keeps them: a review failed at its limit (⚠) and a reason raised to the operator (내 차례), with the operator's merge before the destination.
+    daemon = await daemon!.restart((state) => {
+      const file = fs.readdirSync(path.join(state, "missions")).filter((name) => name.endsWith(".json")).map((name) => path.join(state, "missions", name)).find((one) => fs.readFileSync(one, "utf8").includes('"marked"'))!;
+      const book = JSON.parse(fs.readFileSync(file, "utf8"));
+      const find = (key: string) => book.missions[0].nodes.find((one: { key: string }) => one.key === key);
+      const node = find("marked");
+      const now = Date.now();
+      // Lines without a number with marks: 내 차례 alone on a long branch before its pull request and on a short direct one,
+      // a review failed at its third round, the limit (⚠), alone on a short direct one, and both on a long direct one.
+      const turn = { reason: "conductor_failed", key: 1, since_unix_ms: now };
+      const reviewFails = (one: { criteria: unknown[]; warnings?: unknown[] }) => {
+        one.criteria.push({ key: "review", kind: "review", text: "독립 검토", state: "fail", required: true, rounds: 3 });
+        one.warnings = [{ kind: "review_fails", from_unix_ms: now - 7_200_000, since_unix_ms: now, told_unix_ms: now }];
+      };
+      for (const key of ["draft", "tiny", "hotfix"]) find(key).attention = turn;
+      for (const key of ["lone", "hotfix", "marked"]) reviewFails(find(key));
+      Object.assign(node, {
+        worked_at_unix_ms: now - 7_200_000,
+        attention: { reason: "conductor_failed", key: 1, since_unix_ms: now },
+        operator_merge: "전체 이름 확인",
+      });
+      fs.writeFileSync(file, JSON.stringify(book));
+    });
+    await page.goto("about:blank");
+    await page.goto(`${daemon.origin}/#token=${daemon.token}`);
+    await enterWorkspace(page, "fixture");
+    const chip = page.locator("[data-pane-mission-chip]");
+    await chip.click();
+    const map = page.locator('[data-card="mission"]');
+    await expect(map.locator("[data-mission-destination]")).toHaveAttribute("data-mission-destination", LONG_DESTINATION);
+    await expect(map.locator('[data-mission-node="lone"] [data-node-warning]')).toHaveCount(1);
+    const measure = () => measureLines(map);
+    const footSize = () => map.locator("[data-node-foot]").first().evaluate((foot) => getComputedStyle(foot).fontSize);
+    // The map fits its zoom to the cards after a text change; a measurement counts once two frames apart agree.
+    const settled = async () => {
+      const first = JSON.stringify(await measure());
+      await page.evaluate(() => new Promise((done) => requestAnimationFrame(() => requestAnimationFrame(done))));
+      return JSON.stringify(await measure()) === first;
+    };
+    // At the base Interface text (13 px) every line stays inside its card and no mark meets its line.
+    await expect.poll(settled).toBe(true);
+    const base = await measure();
+    const baseSize = await footSize();
+    expect(Object.entries(base).filter(([, one]) => !one.inside || one.marks?.clear === false).map(([key]) => key)).toEqual([]);
+    // The largest Interface text (17 px), as Settings sets it.
+    await page.keyboard.press(chord("settings"));
+    await page.locator('[data-settings-tab="general"]').click();
+    const fontSize = page.locator('[data-font-size="true"] [role="slider"]');
+    await fontSize.focus();
+    await page.keyboard.press("End");
+    await expect(fontSize).toHaveAttribute("aria-valuenow", "17");
+    await page.keyboard.press("Escape");
+    if (!(await map.isVisible())) await chip.click();
+    await expect.poll(footSize).not.toBe(baseSize);
+    await expect.poll(settled).toBe(true);
+    await expect(map.locator('[data-mission-node="api"] [data-line-pr]')).toHaveText("#3114");
+    await expect(map.locator('[data-mission-node="screen"] [data-line-pr]')).toHaveText("#3115");
+    // Each part of the line ends inside the card's padding. A numbered line too long for one row leaves the number alone on
+    // the first row and starts `branch → destination` on the second at the card's left edge, where the title row starts too;
+    // a destination shorter than half the row stays whole (the stacked `3114` beside its pull request's mark), and two long names share the row, each cut at its own
+    // end with its whole name on hover. A line that fits keeps one row, its number a step further from the branch than the
+    // icon from the number; a line without a number stays on one row however long, a direct one's `PR 없이` after its destination.
+    // A numbered line with marks keeps `#n +N` whole and the marks on its first row, inside the card, and the path on the second.
+    // A line without a number with marks follows the same rule with its icon in the number's place: when its path does not fit
+    // beside them, the icon and the marks (⚠ giving way first, 내 차례 whole at the right end) hold the first row and the path
+    // takes the second from the card's left edge, so no part of the line meets a mark.
+    const lines = await measure();
+    expect(lines).toEqual({
+      api: { inside: true, wrapped: true, edge: true, oneRow: true, direct: null, marks: null, wider: null, half: true, numberCut: false, branch: "feat/refund-db-state-columns-and-index", branchCut: true, to: LONG_DESTINATION, toCut: true },
+      screen: { inside: true, wrapped: true, edge: true, oneRow: true, direct: null, marks: null, wider: null, half: true, numberCut: false, branch: "feat/refund-screen-that-reads-the-api", branchCut: true, to: "PR 3114", toCut: false },
+      short: { inside: true, wrapped: false, edge: true, oneRow: true, direct: null, marks: null, wider: true, half: false, numberCut: false, branch: "fix/typo", branchCut: false, to: "PR 3114", toCut: false },
+      draft: { inside: true, wrapped: true, edge: true, oneRow: true, direct: null, marks: { firstRow: true, inside: true, clear: true, edge: true, whole: true, number: null, warning: false, turn: "Needs you" }, wider: null, half: true, numberCut: null, branch: "feat/refund-notice-mail-for-the-store-builds", branchCut: true, to: LONG_DESTINATION, toCut: true },
+      marked: { inside: true, wrapped: true, edge: true, oneRow: true, direct: null, marks: { firstRow: true, inside: true, clear: true, edge: true, whole: true, number: "#3116 +1", warning: true, turn: "Needs you" }, wider: null, half: true, numberCut: false, branch: "feat/refund-retry-queue-for-the-store-builds", branchCut: true, to: LONG_DESTINATION, toCut: true },
+      hotfix: { inside: true, wrapped: true, edge: true, oneRow: true, direct: "· No PR", marks: { firstRow: true, inside: true, clear: true, edge: true, whole: true, number: null, warning: true, turn: "Needs you" }, wider: null, half: true, numberCut: null, branch: "fix/refund-rounding-in-the-store-builds", branchCut: true, to: LONG_DESTINATION, toCut: true },
+      tiny: { inside: true, wrapped: true, edge: true, oneRow: true, direct: "· No PR", marks: { firstRow: true, inside: true, clear: true, edge: true, whole: true, number: null, warning: false, turn: "Needs you" }, wider: null, half: false, numberCut: null, branch: "fix/copy", branchCut: false, to: LONG_DESTINATION, toCut: true },
+      lone: { inside: true, wrapped: true, edge: true, oneRow: true, direct: "· No PR", marks: { firstRow: true, inside: true, clear: true, edge: true, whole: true, number: null, warning: true, turn: null }, wider: null, half: false, numberCut: null, branch: "fix/button", branchCut: false, to: LONG_DESTINATION, toCut: true },
+    });
+    // The taller cards still stand apart on the map.
+    const boxes = await placedBoxes(map, ...["api", "screen", "short", "draft", "hotfix", "marked", "tiny", "lone"].map((key) => `[data-mission-node="${key}"]`));
+    const apart = (a: (typeof boxes)[number], b: (typeof boxes)[number]) => a.x + a.width <= b.x || b.x + b.width <= a.x || a.y + a.height <= b.y || b.y + b.height <= a.y;
+    expect(boxes.flatMap((a, i) => boxes.slice(i + 1).map((b) => apart(a, b)))).toEqual(Array(28).fill(true));
+    // The whole destination stays in the card's name, as in its hover.
+    await expect(map.locator('[data-mission-node="api"]')).toHaveAttribute("aria-label", new RegExp(`→ ${LONG_DESTINATION}`));
+    await screenshot(page, "mission-map-line-largest");
+  } finally {
+    daemon?.stop();
+    fixture.stop();
+  }
+});
+
+/** Each branch line's geometry on the map as drawn: where its parts and right-end marks stand against its card's bottom row. */
+function measureLines(map: Locator) {
+  return map.locator("[data-mission-node]").evaluateAll((cards) =>
+    Object.fromEntries(
+      cards.filter((card) => card.querySelector("[data-node-line='branch']")).map((card) => {
+        // The bottom line spans the card's content box, so its edges are the padding's, at whatever zoom the map draws.
+        const foot = card.querySelector("[data-node-foot]")!.getBoundingClientRect();
+        const part = (selector: string) => card.querySelector<HTMLElement>(`[data-node-line='branch'] ${selector}`);
+        const box = (selector: string) => part(selector)?.getBoundingClientRect() ?? null;
+        const cut = (element: HTMLElement) => element.scrollWidth > element.clientWidth;
+        const [icon, number, head, path, branch, to, name, direct, end] = [box("[data-line-icon]")!, box("[data-line-pr]"), box("[data-line-head]")!, box("[data-line-path]")!, box("[data-line-branch]")!, box("[data-line-to]")!, part("[data-line-to] [title]")!, box("[data-line-direct]"), card.querySelector("[data-node-foot] [data-node-foot-end]")?.getBoundingClientRect() ?? null];
+        const at = (x: number) => Math.abs(x - foot.left) < 1;
+        const wrapped = branch.top >= head.bottom - 1;
+        return [
+          card.getAttribute("data-mission-node"),
+          {
+            inside: [head, branch, to, direct ?? head].every((one) => one.right <= foot.right + 0.5),
+            wrapped,
+            edge: at(card.querySelector("[data-node-head]")!.getBoundingClientRect().left) && at(head.left) && (!wrapped || at(branch.left)),
+            oneRow: [to, direct ?? to].every((one) => Math.abs(branch.top + branch.height / 2 - (one.top + one.height / 2)) < 1),
+            direct: part("[data-line-to] [data-line-direct]")?.textContent ?? null,
+            marks: end ? { firstRow: Math.abs(end.top + end.height / 2 - (head.top + head.height / 2)) < 1, inside: end.right <= foot.right + 0.5 && end.left >= head.right, clear: [number, branch, to, direct, name.getBoundingClientRect()].every((one) => !one || !(one.left < end.right - 0.5 && end.left < one.right - 0.5 && one.top < end.bottom - 0.5 && end.top < one.bottom - 0.5)), edge: Math.abs(end.right - foot.right) < 1, whole: [...card.querySelectorAll<HTMLElement>("[data-node-foot] [data-node-attention-tag] > *")].every((word) => { const at = word.getBoundingClientRect(); return word.scrollWidth <= word.clientWidth && at.left >= end.left - 0.5 && at.right <= end.right + 0.5; }), number: part("[data-line-pr]")?.textContent ?? null, warning: card.querySelector("[data-node-foot] [data-node-warning]") !== null, turn: card.querySelector("[data-node-foot] [data-node-attention-tag]")?.textContent ?? null } : null,
+            wider: wrapped || !number ? null : branch.left - number.right > number.left - icon.right + 0.5,
+            half: branch.width >= path.width * 0.4 && to.width >= path.width * 0.4,
+            numberCut: part("[data-line-pr]") ? cut(part("[data-line-pr]")!) : null,
+            branch: part("[data-line-branch]")!.title,
+            branchCut: cut(part("[data-line-branch]")!),
+            to: name.title,
+            toCut: cut(name),
+          },
+        ];
+      }),
+    ),
+  );
+}
+
+// One restart gives the real CLI an older shelved id and an open caller's
+// node. Both positional forms must survive parser -> owner thread -> core.
+test("positional show reads a shelved mission and keeps node-key precedence", async ({ page }) => {
+  const fixture = await startFixture({ family: true });
+  let daemon: Daemon | null = null;
+  try {
+    const opened = await conductorRepo(page, fixture, "mission-show-shelf");
+    daemon = opened.daemon;
+    const { conductor } = opened;
+    await createMission(conductor);
+    await mission(conductor, ["mission", "plan", "--json", JSON.stringify(PLAN)]);
+    daemon = await daemon.restart((state) => {
+      // Extend a file actually written by this candidate, retaining identities
+      // and schema fields instead of hand-writing a partial mission shape.
+      const saved = JSON.parse(fs.readFileSync(path.join(state, "missions", "mission-1.json"), "utf8"));
+      const missions = Array.from({ length: 130 }, (_, at) => {
+        const record = structuredClone(saved.missions[0]);
+        record.id = `mission-${at + 1}`;
+        record.title = at === 0 ? "Shelved original" : `Work ${at + 1}`;
+        if (at < 129) {
+          record.status = "done";
+          record.closed_at_unix_ms = at + 1;
+          for (const node of record.nodes) node.status = "done";
+        }
+        return record;
+      });
+      fs.writeFileSync(path.join(state, "missions.json"), JSON.stringify({ schema_version: 4, next: 130, missions }));
+      fs.rmSync(path.join(state, "missions"), { recursive: true });
+    });
+    await page.goto("about:blank");
+    await page.goto(`${daemon.origin}/#token=${daemon.token}`);
+    await enterWorkspace(page, "fixture");
+    const shown = await mission(conductor, ["mission", "show", "mission-1", "--json"]);
+    expect(shown.result?.mission).toMatchObject({ id: "mission-1", title: "Shelved original" });
+    await mission(conductor, ["mission", "plan", "--json", JSON.stringify({ nodes: [
+      { key: "mission-1", title: "A node named like a mission", kind: "research", criteria: ["Read this node"] },
+    ] })]);
+    const node = await mission(conductor, ["mission", "show", "mission-1", "--json"]);
+    expect(node.result).toMatchObject({ mission_id: "mission-130", node: { key: "mission-1" } });
+  } finally {
+    try { daemon?.stop(); } finally { fixture.stop(); }
   }
 });

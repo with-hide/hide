@@ -1,7 +1,7 @@
 //! `hide ps`: the live panes and agents as one tree, project > checkout >
 //! tab > pane, with each delegated agent under the agent that delegated it.
 //!
-//! The core answers flat rows (`herdr_core::delivery::answer::Ps`); the tree
+//! The core answers flat rows (`hide_core::delivery::answer::Ps`); the tree
 //! is drawn here. Every pane is printed exactly once: a delegated agent's
 //! pane is printed under its parent, with where it lives when that is not
 //! the parent's tab, and not again in its own tab.
@@ -122,6 +122,9 @@ struct Agent {
     parent_machine: Option<String>,
     parent_pane: Option<String>,
     watched_by: Option<String>,
+    /// The external tool that started it, when one did.
+    #[serde(default)]
+    origin_tool: Option<String>,
     mission: Option<Mission>,
     project: Option<String>,
 }
@@ -279,6 +282,9 @@ fn agent_text(agent: &Agent) -> String {
     }
     if let Some(observer) = &agent.watched_by {
         text.push_str(&format!("  (watched by {observer})"));
+    }
+    if let Some(tool) = &agent.origin_tool {
+        text.push_str(&format!("  (started by tool {tool})"));
     }
     text
 }

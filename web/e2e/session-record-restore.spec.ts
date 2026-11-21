@@ -1,11 +1,14 @@
 // The record restores the exact retained native conversation after its pane closes.
+// The slot goes with its pane (operator decision 2026-11-09), so the record
+// shown for the pane closes with it and is found again by its session in ⌘K.
 import { expect, test } from "@playwright/test";
-import { CLAUDE_FULL_ACCESS_LINE } from "./herdr-fixture";
+import { CLAUDE_FULL_ACCESS_LINE } from "./pane-fixture";
 import { agentIn, closePane, tabOfPane, withControl } from "./daemon-actions";
 import { startFixture } from "./engine-fixture";
 import { labelAgentPane } from "./fixture-agents";
 import { startHided, type Daemon } from "./hided-fixture";
-import { countSent, enterWorkspace } from "./wire";
+import { chord } from "./chords";
+import { closeFrontCard, countSent, enterWorkspace } from "./wire";
 
 test.describe.configure({ timeout: 120_000 });
 
@@ -28,6 +31,21 @@ test("a closed pane's record restores the same native session in a fresh pane", 
     const sourceRow = page.locator(`nav[data-sidebar] [data-pane="${source}"] [data-agent-title]`);
     await expect(sourceRow).toHaveText("Restore this conversation", { timeout: 30_000 });
     await withControl(daemon, (control) => closePane(control, source));
+    // The record is a tab on the Agent tab's desk, which outlives the pane
+    // (PRD lane-desk-pair-view D-12, B35); its tab's ✕ closes it.
+    await expect(page.locator(`[data-pane-view="${source}"]`)).toHaveCount(0);
+    await expect(record).toContainText("Restore this conversation 진행해줘");
+    await closeFrontCard(page);
+    await expect(record).toHaveCount(0, { timeout: 30_000 });
+    // ⌘K finds the session by its title, and its record opens again as a tab on the desk in front.
+    await page.keyboard.press(chord("search"));
+    const search = page.locator('[data-palette="Search"]');
+    await expect(search.locator("[data-palette-input]")).toBeFocused();
+    await search.locator("[data-palette-input]").fill("Restore this conversation");
+    const found = search.locator(`[data-palette-row^="session:"][data-palette-row$="${session}"]`);
+    await expect(found).toHaveCount(1, { timeout: 30_000 });
+    await found.click();
+    await expect(record).toContainText("Restore this conversation 진행해줘", { timeout: 30_000 });
     const restore = record.getByRole("button", { name: "Restore session", exact: true });
     await expect(restore).toBeEnabled({ timeout: 30_000 });
     await restore.click();
@@ -46,14 +64,10 @@ test("a closed pane's record restores the same native session in a fresh pane", 
     // hook identity. This is a locator test, not a real-agent observation.
     const row = page.locator(`nav[data-sidebar] [data-checkout-agents-open] [data-pane="${pane}"]`);
     await expect(row.locator("[data-agent-title]")).toHaveText("Restore this conversation", { timeout: 30_000 });
-    if (fixture.engine === "herdr") {
-      // Herdr is told no session by the stand-in, so the record stays unconfirmed. The own engine takes the session
-      // from the start's --resume, so its row is confirmed: it names the record's session and carries no pending mark.
-      await expect(row.locator('[data-record-connection="unconfirmed"]')).toBeVisible();
-    } else {
-      await expect(row.locator("[data-record-connection]")).toHaveCount(0);
-      await withControl(daemon, (control) => control.until((rest) => agentIn(rest, pane)?.session_id === session || undefined, `${pane} on session ${session}`, 20_000));
-    }
+    // The engine takes the session from the start's --resume, so the row is confirmed: it names the
+    // record's session and carries no pending mark.
+    await expect(row.locator("[data-record-connection]")).toHaveCount(0);
+    await withControl(daemon, (control) => control.until((rest) => agentIn(rest, pane)?.session_id === session || undefined, `${pane} on session ${session}`, 20_000));
     await expect(row.locator('[data-agent-status-mark="turn"]')).toHaveCount(0);
   } finally {
     await page.goto("about:blank");

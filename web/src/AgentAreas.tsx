@@ -7,6 +7,9 @@ import { createAreaTree, type AreaAdapter } from "./AreaTree";
 import { AGENT_WORDS, agentMenu, remoteGroupReason, type AgentCommand, type AgentItem, type AgentLayout } from "./agentLayout";
 import { noteAreaFrame } from "./areaFrames";
 import { Button } from "./components/ui/button";
+import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuShortcut, DropdownMenuTrigger } from "./components/ui/dropdown-menu";
+import { Hint } from "./components/ui/tooltip";
+import { BotIcon, ChevronDownIcon, SquareTerminalIcon } from "lucide-react";
 import { FindBar } from "./Overlays";
 import { PaneCanvas } from "./PaneGrid";
 import { RelationStatus } from "./PaneRelations";
@@ -28,7 +31,7 @@ import { useUiStore } from "./ui";
 import { useInterfaceTranslation } from "./i18n/client";
 
 const SharedAgentTree = createAreaTree<AgentItem>("agent");
-/** `remoteBody` draws a device tab's panes: the tab an area shows, or `null` for the one its Herdr has in front. */
+/** `remoteBody` draws a device tab's panes: the tab an area shows, or `null` for the one its engine has in front. */
 export function AgentAreas({ checkout, actions, deviceId, remoteBody }: { checkout: Checkout; actions: Actions; deviceId?: string; remoteBody?: (tabId: string | null) => React.ReactNode }) {
   const { t } = useInterfaceTranslation();
   const [renaming, setRenaming] = useState<string | null>(null);
@@ -48,7 +51,7 @@ export function AgentAreas({ checkout, actions, deviceId, remoteBody }: { checko
     root: { area: { id: "a1", active: checkout.active_tab_id, displays: agentEntries(checkout).map((entry) => ({ id: entry.source_id })) } },
     active_area: "a1", canvases: {}, limits: { areas: 1, depth: 0, displays: 64 }, display_count: agentEntries(checkout).length,
   }), [checkout]);
-  // A device this core dials shows the one tab its Herdr has in front; a
+  // A device this core dials shows the one tab its engine has in front; a
   // node that dialed in arranges its tabs as this machine does, and the core
   // publishes its Agent areas only then.
   const single = remote && !saved;
@@ -136,10 +139,43 @@ export function AgentAreas({ checkout, actions, deviceId, remoteBody }: { checko
     resize: (id, ratio) => actions.agentLayout({ action: "resize", split_id: id, ratio }),
     newTab: (areaId) => actions.createTab(areaId),
     newTabContent: <PaneMovePlus />,
+    newTabMenu: (areaId) => <NewTabMenu onTerminal={() => actions.createTab(areaId)} onAgent={() => actions.openStartPanel()} />,
     newTabLabel: layout.groups ? t("groups.newTab") : t("panes.agent.newTabNamed", { label: checkout.next_tab_label }),
     tabListLabel: t("panes.agent.tabList"), actionsLabel: t("panes.agent.tabActions"),
     newTabShortcut: commandLabel("new_tab"),
     onDraw: (frame) => noteAreaFrame("agent", frame ? { ...frame, layout, workspace, remote: single } : null),
   };
   return <PaneMoveProvider key={`${device}\0${checkout.path}\0${layout.group_id ?? ""}`} checkout={checkout} layout={layout} deviceId={device} actions={actions}><SharedAgentTree layout={layout} adapter={adapter} /></PaneMoveProvider>;
+}
+
+/**
+ * The ▾ beside an Agent area's New tab: New tab itself opens a terminal at
+ * once, and this names that and the agent start (⌘N), so starting an agent
+ * can be found from the tab bar too.
+ */
+function NewTabMenu({ onTerminal, onAgent }: { onTerminal: () => void; onAgent: () => void }) {
+  const { t } = useInterfaceTranslation();
+  return (
+    <DropdownMenu>
+      <Hint label={t("startPanel.newMenu")}>
+        <DropdownMenuTrigger asChild>
+          <Button variant="ghost" size="icon-xs" className="h-full shrink-0 rounded-none text-subtle-foreground" aria-label={t("startPanel.newMenu")} data-new-tab-menu="true">
+            <ChevronDownIcon />
+          </Button>
+        </DropdownMenuTrigger>
+      </Hint>
+      <DropdownMenuContent align="start">
+        <DropdownMenuItem onSelect={onTerminal} data-new-tab-menu-item="terminal">
+          <SquareTerminalIcon />
+          {t("startPanel.terminal")}
+          <DropdownMenuShortcut>{commandLabel("new_tab")}</DropdownMenuShortcut>
+        </DropdownMenuItem>
+        <DropdownMenuItem onSelect={onAgent} data-new-tab-menu-item="agent">
+          <BotIcon />
+          {t("startPanel.startAgent")}
+          <DropdownMenuShortcut>{commandLabel("start_agent")}</DropdownMenuShortcut>
+        </DropdownMenuItem>
+      </DropdownMenuContent>
+    </DropdownMenu>
+  );
 }

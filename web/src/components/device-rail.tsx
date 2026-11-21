@@ -1,4 +1,4 @@
-import { CrownIcon, LaptopIcon, PlusIcon, XIcon } from "lucide-react";
+import { LaptopIcon, PlusIcon, XIcon } from "lucide-react";
 import { memo, useMemo } from "react";
 import { useShallow } from "zustand/react/shallow";
 import type { Actions } from "../actions";
@@ -6,10 +6,13 @@ import { useInterfaceTranslation } from "../i18n/client";
 import { badgeText, deviceConnected, frontDeviceId, railDeviceIds, tileCounts, tileHint, tileMonogram, tileName, type TileCounts } from "../devices";
 import { cn } from "../lib/utils";
 import { numberOf, numberedDevices } from "../numbering";
+import { openedMachines } from "../pairing";
 import { coreShared, isCoreMachine, machineName, windowDeviceId, wslPlace } from "../screenMachine";
 import { useShellStore } from "../store";
+import { toolCells, useFrontTool } from "../toolCells";
 import { useUiStore } from "../ui";
 import { EntryContextMenu } from "./entry-menu";
+import { Button } from "./ui/button";
 import { Keycap } from "./ui/keycap";
 import { Hint } from "./ui/tooltip";
 import { SidebarMenus } from "./sidebar-menus";
@@ -17,6 +20,9 @@ import { SidebarMenus } from "./sidebar-menus";
 /** `core` marks the machine the core runs on, set only while the core works with another machine (Q11). */
 /** `place` is where a WSL distribution's device is, which its hint says after the name (PRD wsl-device B5). */
 export type Tile = { id: string; label: string; icon: "local" | "remote"; core: boolean; place?: string | null };
+
+/** A paired machine's tile counts nothing until its screen is shown here. */
+const NO_COUNTS: TileCounts = { needs_you: 0, done: 0 };
 
 /** The rounded square every tile is, the add tile included; a tile's marks hang off its corners, and the focus outline stands outside the selected ring. */
 const TILE = "relative flex size-(--size-icon-button-standard) shrink-0 items-center justify-center rounded-md outline-none focus-visible:outline-solid focus-visible:outline-2 focus-visible:outline-offset-4 focus-visible:outline-ring";
@@ -40,6 +46,9 @@ export function DeviceRail({ actions }: { actions: Actions }) {
   const { t } = useInterfaceTranslation();
   const devices = useShellStore((s) => s.rest?.navigator?.devices);
   const front = useShellStore((s) => frontDeviceId(s.rest));
+  const tools = useShellStore((s) => toolCells(s.rest));
+  // A tool's cell in front, read from what the center shows, is the one tile selected in place of a device's (PRD hide-external-control B40).
+  const toolFront = useFrontTool()?.connection ?? null;
   const tiles = useMemo<Tile[]>(() => {
     const own = windowDeviceId(devices);
     const shared = coreShared(devices);
@@ -54,6 +63,9 @@ export function DeviceRail({ actions }: { actions: Actions }) {
   // A ⌘ hold numbers the tiles ⌘n selects (`numbering.ts`).
   const numbered = useUiStore((s) => s.hint === "devices");
   const numbers = useMemo(() => (numbered ? numberedDevices(devices) : null), [numbered, devices]);
+  // The Hides this computer opens that are not yet its devices (PRD
+  // device-connect-iroh B3), after its devices.
+  const peers = useShellStore(useShallow((s) => openedMachines(s.rest)));
   return (
     <EntryContextMenu
       asChild
@@ -66,7 +78,18 @@ export function DeviceRail({ actions }: { actions: Actions }) {
         <ul className="flex flex-col items-center gap-md">
           {tiles.map((tile) => (
             <li key={tile.id} className="flex">
-              <RailTile tile={tile} selected={tile.id === front} number={numbers ? numberOf(numbers, tile.id) : null} actions={actions} />
+              <RailTile tile={tile} selected={toolFront === null && tile.id === front} number={numbers ? numberOf(numbers, tile.id) : null} actions={actions} />
+            </li>
+          ))}
+          {peers.map((peer) => (
+            <li key={peer.key} className="flex">
+              <RailTileView
+                tile={{ id: peer.device_id, label: peer.name, icon: "remote", core: false }}
+                selected={false}
+                counts={NO_COUNTS}
+                connected={peer.connected && peer.opens === "active"}
+                onSelect={() => actions.openSettings("devices")}
+              />
             </li>
           ))}
           <li className="flex">
@@ -81,6 +104,13 @@ export function DeviceRail({ actions }: { actions: Actions }) {
               </button>
             </Hint>
           </li>
+          {/* The tools connected at Act, under a short line, after the devices and Add device (PRD hide-external-control D-50). */}
+          {tools.length > 0 ? <li role="separator" aria-hidden="true" data-rail-tools-separator="true" className="h-(--size-hairline) w-(--size-icon) bg-border" /> : null}
+          {tools.map((cell) => (
+            <li key={cell.connection} className="flex">
+              <ToolTileView name={cell.name} turn={cell.turn} connection={cell.connection} selected={cell.connection === toolFront} onSelect={() => actions.focusTool(cell.connection)} />
+            </li>
+          ))}
         </ul>
         {/* View, Help and Settings stand at the rail's foot, as a chat app's rail keeps its own. */}
         <div className="mt-auto flex flex-col items-center gap-xs pt-md" data-rail-menus="true">
@@ -105,10 +135,10 @@ const RailTile = memo(function RailTile({ tile, selected, number, actions }: { t
  * while it has unseen Done; Working has no mark, and the hint carries every
  * count. A device that is not connected dims its glyph and wears a cross at
  * the bottom-right instead, with no mark, since what it last reported is not
- * current (B3, B8, B41). The core's machine wears a crown notched into the
- * bottom-left corner, the one corner the other marks leave free (PRD
- * core-host-node-move N1). While a ⌘ hold reveals the numbers, the tile's
- * keycap floats at its top left, the corner the marks leave free.
+ * current (B3, B8, B41). No tile wears a crown: every computer runs a core
+ * of its own, so "where the core is" marks nothing (PRD device-connect-iroh
+ * D-80). While a ⌘ hold reveals the numbers, the tile's keycap floats at its
+ * top left, the corner the marks leave free.
  */
 export function RailTileView({ tile, selected, counts, connected, number = null, onSelect }: { tile: Tile; selected: boolean; counts: TileCounts; connected: boolean; number?: number | null; onSelect: () => void }) {
   const { t } = useInterfaceTranslation();
@@ -148,11 +178,6 @@ export function RailTileView({ tile, selected, counts, connected, number = null,
         ) : counts.done > 0 ? (
           <span aria-hidden="true" data-rail-badge="done" className={cn("absolute -top-xxs -right-xxs size-(--size-rail-mark) rounded-full bg-success", CUTOUT)} />
         ) : null}
-        {tile.core ? (
-          <span aria-hidden="true" data-rail-crown="true" className={cn("absolute -bottom-xs -left-xs flex size-(--size-rail-badge) items-center justify-center rounded-full bg-card text-subtle-foreground", CUTOUT)}>
-            <CrownIcon className="size-(--size-rail-crown)" />
-          </span>
-        ) : null}
         {number !== null ? <Keycap number={number} className="right-auto left-xxs" /> : null}
         {connected ? null : (
           <span aria-hidden="true" data-rail-off="true" className={cn("absolute -right-xs -bottom-xs flex size-(--size-rail-badge) items-center justify-center rounded-full bg-card text-muted-foreground", CUTOUT)}>
@@ -160,6 +185,50 @@ export function RailTileView({ tile, selected, counts, connected, number = null,
           </span>
         )}
       </button>
+    </Hint>
+  );
+}
+
+/**
+ * A tool's tile (PRD hide-external-control D-50, B39, B41): the size of a
+ * device's, a ring rather than a filled square so it never reads as a
+ * machine, holding the name's letters. Its one mark is the grey number of
+ * what waits on the tool's answer (`9+` from ten), which no Needs You, badge
+ * or notice of the operator's counts; the hint names it an external tool.
+ */
+export function ToolTileView({ name, turn, connection, selected, onSelect }: { name: string; turn: number; connection: string; selected: boolean; onSelect: () => void }) {
+  const { t } = useInterfaceTranslation();
+  const facts = [name, t("devices.rail.tool"), ...(turn > 0 ? [t("devices.rail.toolTurn", { count: turn })] : [])];
+  return (
+    <Hint label={facts.join(" · ")} side="right">
+      <Button
+        variant="outline"
+        size="icon"
+        aria-label={facts.join(", ")}
+        aria-pressed={selected}
+        data-rail-tool={connection}
+        className={cn(
+          TILE,
+          "rounded-full bg-transparent text-caption font-semibold hover:bg-transparent hover:text-foreground focus-visible:ring-0",
+          selected ? "text-foreground ring-2 ring-foreground ring-offset-2 ring-offset-sidebar" : "text-subtle-foreground",
+        )}
+        onClick={onSelect}
+      >
+        <span aria-hidden="true" data-rail-glyph="true">{tileMonogram(name)}</span>
+        {turn > 0 ? (
+          <span
+            aria-hidden="true"
+            data-rail-badge="tool_turn"
+            data-rail-badge-count={turn}
+            className={cn(
+              "absolute -top-xs -right-xs flex h-(--size-rail-badge) min-w-(--size-rail-badge) items-center justify-center rounded-full bg-muted-foreground px-xxs text-(length:--size-rail-badge-text) leading-none font-semibold text-background tabular-nums",
+              CUTOUT,
+            )}
+          >
+            {badgeText(turn)}
+          </span>
+        ) : null}
+      </Button>
     </Hint>
   );
 }

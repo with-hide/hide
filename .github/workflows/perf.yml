@@ -5,9 +5,9 @@
 # fixture contract and what a red run means.
 #
 # `scripts/web-shell-measure/run.sh --isolated-headless` with
-# `MEASURE_SCENARIO=topology MEASURE_SCALE=operator` fills a private pinned
-# Herdr to the operator's scale (scale.sh: 43 workspaces, 62 tabs, 66 panes,
-# 30 agents, 5 printing), opens the release `hided` built here in the hosted
+# `MEASURE_SCENARIO=topology MEASURE_SCALE=operator` fills the core's own
+# engine to the operator's scale through the daemon (fixture.mjs: 43 workspaces, 62 tabs, 66 panes,
+# 5 printing), opens the release `hided` built here in the hosted
 # image's Google Chrome, headless, and records idle resources, one key echo
 # distribution while an agent changes state every two seconds, and 20 rounds
 # of split, zoom, close, new tab and tab switch latencies. run.sh starts Chrome
@@ -39,7 +39,7 @@ permissions:
 
 jobs:
   measure:
-    name: topology operator
+    name: topology operator own engine
     runs-on: macos-15
     timeout-minutes: 45
     steps:
@@ -55,6 +55,12 @@ jobs:
           node-version: 22
           cache: pnpm
           cache-dependency-path: pnpm-lock.yaml
+      # hide-vt's prepared inputs and Zig's caches, saved on main by the vt lane,
+      # so this job reaches no package host (#2631).
+      - uses: ./.github/actions/vt-cache
+        timeout-minutes: 5
+        with:
+          save: false
       # The release set `package.yml`'s macOS compile saves, so a nightly
       # compiles only the workspace's own crates.
       - uses: ./.github/actions/rust-cache
@@ -67,7 +73,13 @@ jobs:
         run: |
           day=$(date -u +%F)
           echo "date=$day" >> "$GITHUB_OUTPUT"
-          echo "dir=$GITHUB_WORKSPACE/agents/runs/perf-nightly/$day-$GITHUB_RUN_ID-$GITHUB_RUN_ATTEMPT" >> "$GITHUB_OUTPUT"
+          echo "dir=$GITHUB_WORKSPACE/agents/runs/perf-nightly/$day-own-$GITHUB_RUN_ID-$GITHUB_RUN_ATTEMPT" >> "$GITHUB_OUTPUT"
+          # The own engine's artifacts keep the `-own` names its series began with.
+          echo "suffix=-own" >> "$GITHUB_OUTPUT"
+      # The relay WebAssembly's binding tool, restored never saved here (`.github/actions/relay-tools`).
+      - uses: ./.github/actions/relay-tools
+        with:
+          save: false
       - name: Install web dependencies
         timeout-minutes: 5
         run: bash scripts/verify-web.sh install
@@ -80,18 +92,13 @@ jobs:
         # fixed `target/release/hided` run.sh reads (docs/BUILD.md).
         timeout-minutes: 30
         run: bash scripts/verify-cargo.sh build --release -p hided --bin hided
-      - name: Fetch the pinned Herdr runtime
-        id: herdr
-        timeout-minutes: 5
-        # Assigned first, so a failed fetch fails this step rather than
-        # handing the next one an empty path.
-        run: |
-          bin=$(zsh scripts/fetch-herdr-runtime.sh --platform macos-aarch64)
-          echo "bin=$bin" >> "$GITHUB_OUTPUT"
+      - name: Build the release pane holder
+        # The node starts each pane's holder from the one beside hided.
+        timeout-minutes: 15
+        run: bash scripts/verify-cargo.sh build --release -p hide-holder --bin hide-holder
       - name: Measure the topology at operator scale
         timeout-minutes: 15
         env:
-          HERDR_BIN_PATH: ${{ steps.herdr.outputs.bin }}
           HIDE_MEASURE_RUN_DIR: ${{ steps.run.outputs.dir }}
           MEASURE_SCENARIO: topology
           MEASURE_SCALE: operator
@@ -121,7 +128,7 @@ jobs:
         uses: actions/upload-artifact@v7
         timeout-minutes: 5
         with:
-          name: perf-run-${{ steps.run.outputs.date }}-${{ github.run_id }}-${{ github.run_attempt }}
+          name: perf-run${{ steps.run.outputs.suffix }}-${{ steps.run.outputs.date }}-${{ github.run_id }}-${{ github.run_attempt }}
           path: |
             ${{ steps.run.outputs.dir }}
             !${{ steps.run.outputs.dir }}/chrome-profile
@@ -134,7 +141,7 @@ jobs:
         uses: actions/upload-artifact@v7
         timeout-minutes: 5
         with:
-          name: perf-record-${{ steps.run.outputs.date }}
+          name: perf-record${{ steps.run.outputs.suffix }}-${{ steps.run.outputs.date }}
           path: ${{ steps.run.outputs.dir }}/nightly-summary.json
           if-no-files-found: ignore
           overwrite: true

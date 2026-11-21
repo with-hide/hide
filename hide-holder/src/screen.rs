@@ -6,7 +6,7 @@
 // Version 2.0; see NOTICE at the repository root.
 // Changed by Hide: captures into the holder's own rows from a render state's
 // dirty rows, sharing a row that did not change, instead of filling a ratatui
-// buffer, and bounds a cell's text and link.
+// buffer, bounds a cell's text and link, and reads which rows soft-wrap.
 
 //! The screen as cells: what the parser shows, captured for a fragment.
 //!
@@ -176,7 +176,50 @@ pub struct Frame {
     pub cols: u16,
     pub rows: u16,
     pub lines: Vec<Arc<Row>>,
+    /// Whether each row soft-wraps onto the next one, the program's text
+    /// having run past its last column, as against ending with a line break;
+    /// None when the parser cannot know (see [`Capture::without_wraps`]).
+    /// Read for every row on every capture, since the parser can set a row's
+    /// wrap when the row after it is written; shared with the capture's last
+    /// frame, and with the frame before while no row's wrap moved.
+    pub wrapped: Option<Arc<[bool]>>,
+    /// Whether each row's last cell carries a hyperlink that the next row
+    /// does not carry on (see [`link_ends`]): the program marked a link that
+    /// ends at the row's edge. Known on every system, since it is read from
+    /// the cells; shared with the frame before while no row's answer moved.
+    pub link_ends: Arc<[bool]>,
     pub cursor: Cursor,
+    pub view: View,
+}
+
+/// Where the screen stands in its history and what the program asked of the
+/// pointer, which a receiver needs to select past the screen's edge and to
+/// route a drag (`encode::VIEW_OSC`).
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct View {
+    /// The history row the screen's top row is, counted from the oldest
+    /// row kept.
+    pub top: u64,
+    /// The most `top` can be: the screen at the bottom of its history.
+    pub bottom: u64,
+    /// Whether the program takes pointer events in a form the holder can
+    /// encode (`Pane::mouse`), so a drag is the program's.
+    pub mouse: bool,
+    /// Whether the alternate screen shows, which keeps no history.
+    pub alternate: bool,
+}
+
+impl View {
+    /// The parser's view now.
+    pub fn of(terminal: &Terminal) -> Result<Self, hide_vt::Error> {
+        let bar = terminal.scrollbar()?;
+        Ok(Self {
+            top: bar.offset as u64,
+            bottom: bar.total.saturating_sub(bar.len) as u64,
+            mouse: terminal.mouse_tracking_enabled()?,
+            alternate: terminal.active_screen()? == hide_vt::ActiveScreen::Alternate,
+        })
+    }
 }
 
 /// What decides how the pane's default colors go out: the theme's colors,
@@ -208,6 +251,13 @@ pub struct Capture {
     text: String,
     palette: Option<Palette>,
     frame: Option<Frame>,
+    /// Whether the parser's row wraps are the program's own.
+    wraps: bool,
+    /// The rows' wraps as this capture reads them, before they are compared
+    /// with the last frame's.
+    wrap_bits: Vec<bool>,
+    /// The rows' link ends, the same way.
+    link_bits: Vec<bool>,
 }
 
 impl Capture {
@@ -220,7 +270,19 @@ impl Capture {
             text: String::new(),
             palette: None,
             frame: None,
+            wraps: true,
+            wrap_bits: Vec::new(),
+            link_bits: Vec::new(),
         })
+    }
+
+    /// Captures no wraps: the parser reads output a pseudoconsole drew
+    /// again, which places the rows of a wrapped line itself and does not
+    /// reliably leave a soft wrap, so a wrapped row could read as ending
+    /// with a line break.
+    #[cfg_attr(not(windows), allow(dead_code))] // only a Windows holder drops them
+    pub fn without_wraps(&mut self) {
+        self.wraps = false;
     }
 
     /// The parser's colors before anything changed them.
@@ -263,6 +325,7 @@ impl Capture {
         let default_fg = palette.default_fg.unwrap_or(Color::Default);
         let default_bg = palette.default_bg.unwrap_or(Color::Default);
         let mut lines = Vec::with_capacity(usize::from(rows));
+        self.wrap_bits.clear();
         {
             let mut iterator = self.render.populate_row_iterator(&mut self.rows)?;
             let mut y = 0u16;
@@ -288,12 +351,18 @@ impl Capture {
                         )?)
                     }
                 };
+                if self.wraps {
+                    self.wrap_bits.push(iterator.soft_wrapped()?);
+                }
                 iterator.set_dirty(false)?;
                 lines.push(line);
                 y += 1;
             }
             while y < rows {
                 lines.push(Arc::new(Row::blank(cols, default_fg, default_bg)));
+                if self.wraps {
+                    self.wrap_bits.push(false);
+                }
                 y += 1;
             }
         }
@@ -318,14 +387,59 @@ impl Capture {
                 shape: 0,
             },
         };
+        // Unchanged wraps keep the last frame's: no allocation.
+        let wrapped =
+            self.wraps.then(
+                || match previous.as_ref().and_then(|frame| frame.wrapped.as_ref()) {
+                    Some(last) if **last == *self.wrap_bits => Arc::clone(last),
+                    _ => Arc::from(self.wrap_bits.as_slice()),
+                },
+            );
+        link_ends(&lines, &mut self.link_bits);
+        let link_ends = match previous.as_ref().map(|frame| &frame.link_ends) {
+            Some(last) if **last == *self.link_bits => Arc::clone(last),
+            _ => Arc::from(self.link_bits.as_slice()),
+        };
         let frame = Frame {
             cols,
             rows,
             lines,
+            wrapped,
+            link_ends,
             cursor,
+            view: View::of(terminal)?,
         };
         self.frame = Some(frame.clone());
         Ok(frame)
+    }
+}
+
+/// Fills `into` with whether each of `lines` ends with a link the next one
+/// does not carry on: its last written cell (the trailing half of a wide
+/// character skipped) is not blank and carries a hyperlink, and the next
+/// row's first cell that is not blank carries another or none, or there is
+/// no next row. An agent's TUI breaks its long lines itself, so a link it
+/// broke across rows carries the same address on both, while a link that
+/// fills its row exactly does not reach the next row's first word; a soft
+/// wrap cannot tell those apart in such a pane. One cell per row, and the
+/// next row's leading blanks only behind a row that ends with a link.
+fn link_ends(lines: &[Arc<Row>], into: &mut Vec<bool>) {
+    into.clear();
+    for (index, row) in lines.iter().enumerate() {
+        let last = row.cells().iter().rev().find(|cell| cell.width > 0);
+        let link = last
+            .filter(|cell| !row.text(cell).trim().is_empty())
+            .and_then(|cell| row.link(cell));
+        let ends = link.is_some_and(|link| {
+            lines.get(index + 1).is_none_or(|next| {
+                let first = next
+                    .cells()
+                    .iter()
+                    .find(|cell| cell.width > 0 && !next.text(cell).trim().is_empty());
+                first.and_then(|cell| next.link(cell)) != Some(link)
+            })
+        });
+        into.push(ends);
     }
 }
 

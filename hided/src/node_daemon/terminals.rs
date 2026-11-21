@@ -32,6 +32,10 @@ impl OutputSink for OwnPanes {
     fn forget(&self, pane: &str) {
         self.hub.forget(&scoped_pane_id(&self.node, pane));
     }
+
+    fn clipboard(&self, pane: &str, text: &[u8]) {
+        self.hub.clipboard(&scoped_pane_id(&self.node, pane), text);
+    }
 }
 
 /// Where a screen's keys and redraws go: this machine's panes to
@@ -192,7 +196,7 @@ impl HeldLine {
     fn drop_for(self, cause: Unsent, unsent: &UnsentNotices) {
         match self.teller() {
             Some(connection) => not_sent(connection, cause, unsent),
-            None => herdr_core::diagnostic!(json!({
+            None => hide_core::diagnostic!(json!({
                 "component": "node_daemon",
                 "kind": "terminals.redraw_dropped",
                 "connection": self.connection,
@@ -257,7 +261,7 @@ impl Drop for InFlight<'_> {
 }
 
 fn not_sent(connection: u64, cause: Unsent, unsent: &UnsentNotices) {
-    herdr_core::diagnostic!(json!({
+    hide_core::diagnostic!(json!({
         "component": "node_daemon",
         "kind": match cause {
             Unsent::CutOff => "terminals.held_unsent",
@@ -294,7 +298,7 @@ impl ScreenTerminals {
         let mut held = lock(&self.held);
         if !held.lines.is_empty() && held.bytes + text.len() > HELD_BYTES {
             drop(held);
-            herdr_core::diagnostic!(json!({
+            hide_core::diagnostic!(json!({
                 "component": "node_daemon",
                 "kind": "terminals.held_full",
                 "connection": connection,
@@ -442,7 +446,7 @@ pub(super) async fn keep_terminals_relay(
             continue;
         };
         let ended = terminals_relay(&link, &mut live, &hub, &terminals).await;
-        herdr_core::diagnostic!(json!({
+        hide_core::diagnostic!(json!({
             "component": "node_daemon",
             "kind": "terminals.relay_ended",
             "generation": link.generation,
@@ -544,6 +548,25 @@ fn ingest(hub: &TerminalHub, own_node: &str, text: &str) {
             }) => {
                 if !is_pane_of(&pane, own_node) {
                     hub.forget(&pane);
+                }
+                continue;
+            }
+            // A program of a core's pane wrote to the clipboard, for this
+            // machine's window in front.
+            Ok(TerminalLine {
+                terminal: TerminalUp::Clipboard(clipboard),
+            }) => {
+                if is_pane_of(&clipboard.pane, own_node) || clipboard.pane.len() > MAX_PANE_ID_BYTES
+                {
+                    continue;
+                }
+                match clipboard.text() {
+                    Ok(text) => hub.clipboard(&clipboard.pane, &text),
+                    Err(message) => hide_core::diagnostic!(json!({
+                        "component": "node_daemon",
+                        "kind": "terminals.clipboard_unreadable",
+                        "message": message,
+                    })),
                 }
                 continue;
             }

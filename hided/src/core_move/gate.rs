@@ -134,7 +134,7 @@ impl MoveGate {
             Ok(Activation::Activated | Activation::AlreadyActive) => {
                 *stand = Stand::Open;
                 drop(stand);
-                herdr_core::diagnostic!(json!({
+                hide_core::diagnostic!(json!({
                     "component": "core_move",
                     "kind": "move.committed",
                     "intent": intent,
@@ -145,7 +145,7 @@ impl MoveGate {
             }
             Ok(Activation::NotThisMove) => Err("move_unknown"),
             Err(message) => {
-                herdr_core::diagnostic!(json!({
+                hide_core::diagnostic!(json!({
                     "component": "core_move",
                     "kind": "move.activation_failed",
                     "intent": intent,

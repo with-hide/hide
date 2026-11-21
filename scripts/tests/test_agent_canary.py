@@ -8,6 +8,7 @@ import json
 from pathlib import Path
 import subprocess
 import sys
+import tempfile
 import unittest
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -15,6 +16,7 @@ sys.path.insert(0, str(ROOT / "scripts"))
 from agent_journey import clis, latest  # noqa: E402
 from agent_journey.cells import CELLS  # noqa: E402
 from agent_journey.contract import active_rows, load_contract  # noqa: E402
+from agent_journey.scene import lane_status  # noqa: E402
 
 spec = importlib.util.spec_from_file_location("agent_canary_record", ROOT / "scripts/agent-canary-record.py")
 record = importlib.util.module_from_spec(spec)
@@ -22,7 +24,7 @@ spec.loader.exec_module(record)
 
 CONTRACT = load_contract(ROOT)
 AGENTS = [row["id"] for row in active_rows(CONTRACT)]
-KINDS = {row["id"]: row["herdr_kind"] for row in active_rows(CONTRACT)}
+KINDS = {row["id"]: row["agent_cli"] for row in active_rows(CONTRACT)}
 
 
 def agy_manifest(system, version="1.4.9"):
@@ -34,22 +36,42 @@ def sources(url):
         latest.GROK_CHANNEL: "1.0.70\n",
         latest.OMP_LATEST: json.dumps({"tag_name": "v18.13.1"}),
         **{manifest: agy_manifest(system) for system, manifest in latest.AGY_MANIFESTS.items()},
-        latest.HERDR_LATEST: json.dumps({"tag_name": "v0.9.6"}),
     }[url]
 
 
 def report(failing=None, agents=AGENTS, cell="composer", reason="erase: not_empty"):
     """A fake lane report of `agents` in which every declared cell came out
-    as declared, but `failing` agent's `cell`."""
+    as the lane requires it (`scene.lane_status`: a scene cell no survey has
+    closed reads `not measured`), but `failing` agent's `cell`."""
     table = {}
     for row in active_rows(CONTRACT):
         if row["id"] in agents:
-            table[row["id"]] = {name: {"status": "pass" if row["cells"][name] else "N/A", "reason": ""}
-                                for name in CELLS}
+            table[row["id"]] = {name: {"status": lane_status(row, name), "reason": ""} for name in CELLS}
     if failing:
         table[failing][cell] = {"status": "fail", "reason": reason}
     return {"selected": list(agents), "table": table,
             "agents": [{"id": agent, "pin": {"version": "1", "matches": True}} for agent in agents]}
+
+
+class Verdict(unittest.TestCase):
+    def test_a_normal_report_has_no_miss_and_the_lane_and_the_canary_agree(self):
+        # Scene cells whose findings are unknown read `not measured` in a
+        # healthy run; the canary asks the same owner as the lane.
+        lane_spec = importlib.util.spec_from_file_location("lane_for_canary", ROOT / "scripts/agent-journey-lane.py")
+        lane = importlib.util.module_from_spec(lane_spec)
+        lane_spec.loader.exec_module(lane)
+        healthy = {**report(), "fake_model": True, "fixture": False, "cleanup": {"confirmed": True},
+                   "failures": []}
+        self.assertEqual(lane.judge(healthy, "fake"), (True, []))
+        for row in active_rows(CONTRACT):
+            self.assertEqual(record.misses(row, healthy, "linux"), [], row["id"])
+
+    def test_a_scene_cell_that_fails_or_passes_unproven_is_still_a_miss(self):
+        row = next(row for row in active_rows(CONTRACT) if row["id"] == "claude-code")
+        for status in ("fail", "pass"):
+            value = report()
+            value["table"]["claude-code"]["scene_popup"] = {"status": status, "reason": "x"}
+            self.assertEqual([name for name, _, _ in record.misses(row, value, "linux")], ["scene_popup"])
 
 
 class Latest(unittest.TestCase):
@@ -64,7 +86,6 @@ class Latest(unittest.TestCase):
                                                     for system in clis.AGY_SYSTEMS})
         self.assertEqual(versions["claude"]["version"], "9.9.9")
         self.assertEqual(versions["claude"]["package"], clis.table()["claude"]["package"])
-        self.assertEqual(latest.herdr_latest(read=sources), "0.9.6")
 
     def test_a_source_that_answers_no_version_fails_rather_than_leaving_the_pin(self):
         with self.assertRaises(latest.SourceError):
@@ -90,8 +111,26 @@ class Latest(unittest.TestCase):
 
 class Record(unittest.TestCase):
     # Every latest release moved off its pin: `1.0.0` is pinned, `2.0.0` the latest.
-    versions = {**{kind: "2.0.0" for kind in KINDS.values()}, "herdr": "0.9.5"}
+    versions = {kind: "2.0.0" for kind in KINDS.values()}
     pins = {kind: "1.0.0" for kind in KINDS.values()}
+
+    def test_each_system_has_one_report_and_a_missing_one_is_not_a_pass(self):
+        with tempfile.TemporaryDirectory() as folder:
+            root = Path(folder)
+            for system in record.SYSTEMS:
+                path = root / f"{record.LATEST}-{system}" / "report.json"
+                path.parent.mkdir()
+                path.write_text(json.dumps(report(failing="codex") if system == "linux" else report()))
+            reports = record.load_reports(root)
+            self.assertEqual(record.reruns(CONTRACT, self.versions, self.pins, reports), (["codex"], ["linux"]))
+            pinned = {"linux": report()}
+            self.assertEqual(record.verdicts(CONTRACT, self.versions, self.pins, reports, pinned)["codex"][0], "fail")
+            pinned = {"linux": report(failing="codex")}
+            self.assertEqual(record.verdicts(CONTRACT, self.versions, self.pins, reports, pinned)["codex"][0], "hide")
+            (root / f"{record.LATEST}-linux/report.json").unlink()
+            incomplete = record.load_reports(root)
+            self.assertNotIn("linux", incomplete)
+            self.assertEqual(record.verdicts(CONTRACT, self.versions, self.pins, incomplete, pinned)["codex"][0], "unknown")
 
     def run_once(self, state, reports, pinned=None, versions=None):
         versions = versions or self.versions
@@ -100,8 +139,8 @@ class Record(unittest.TestCase):
         calls = []
 
         def gh(argv, **_):
-            # Every issue lives in the private development repository.
-            self.assertEqual(argv[-2:], ["--repo", "with-hide/hide-private"])
+            # Every issue lives in the public repository with the other development issues.
+            self.assertEqual(argv[-2:], ["--repo", "with-hide/hide"])
             calls.append(argv[1:-2])
             return subprocess.CompletedProcess(argv, 0, "https://github.com/o/r/issues/77\n", "")
         record.apply(after, state, "https://run", "abc123", self.pins, run=gh)
@@ -117,12 +156,12 @@ class Record(unittest.TestCase):
         before = {"agents": {"codex": {"kind": "codex", "checked": "1.0.0", "last_pass": "1.0.0",
                                        "last_pass_date": "2026-10-26", "status": "pass"}}}
         reports = {system: report() for system in record.SYSTEMS}
-        reports["windows"] = report(failing="codex")
-        pinned = {"windows": report(agents=["codex"])}
+        reports["macos"] = report(failing="codex")
+        pinned = {"macos": report(agents=["codex"])}
         after, calls = self.run_once(before, reports, pinned)
         row = after["agents"]["codex"]
         self.assertEqual((row["status"], row["last_pass"], row["issue"]), ("fail", "1.0.0", 77))
-        self.assertEqual(row["failures"], ["windows: composer is fail (erase: not_empty)"])
+        self.assertEqual(row["failures"], ["macos: composer is fail (erase: not_empty)"])
         self.assertEqual([call[:2] for call in calls], [["issue", "create"]])
         body = calls[0][calls[0].index("--body") + 1]
         self.assertIn("the pinned 1.0.0 does not fail these on the same commit abc123", body)
@@ -154,7 +193,7 @@ class Record(unittest.TestCase):
         self.assertIn("abc123", body)
         self.assertEqual(after["hide"]["issue"], 77)
         self.assertTrue(record.changed(self.versions, after), "a Hide failure is measured again the next day")
-        body = record.render(after, {}, {}, "0.9.5", "https://run")
+        body = record.render(after, {}, {}, "https://run")
         self.assertIn("| codex | 2.0.0 (2026-10-27) | ⚠️ Hide |", body)
         self.assertIn("#77", body)
 
@@ -193,17 +232,17 @@ class Record(unittest.TestCase):
 
     def test_the_reruns_are_the_failing_releases_on_the_systems_they_failed(self):
         reports = {system: report() for system in record.SYSTEMS}
-        reports["windows"] = report(failing="codex")
+        reports["macos"] = report(failing="codex")
         reports["linux"] = report(failing="claude-code", cell="letter")
         self.assertEqual(record.reruns(CONTRACT, self.versions, self.pins, reports),
-                         (["claude-code", "codex"], ["linux", "windows"]))
+                         (["claude-code", "codex"], ["linux", "macos"]))
         self.assertEqual(record.reruns(CONTRACT, self.versions, self.pins,
                                        {system: report() for system in record.SYSTEMS}), ([], []))
         # A missing system's report judges no agent, so nothing is rerun.
         self.assertEqual(record.reruns(CONTRACT, self.versions, self.pins, {"linux": reports["linux"]}), ([], []))
 
     def test_a_system_without_a_report_judges_no_agent(self):
-        reports = {system: report() for system in ("linux", "macos")}
+        reports = {"linux": report()}
         after, calls = self.run_once({"agents": {}}, reports)
         self.assertEqual({row["status"] for row in after["agents"].values()}, {"unknown"})
         self.assertEqual(calls, [])
@@ -218,7 +257,7 @@ class Record(unittest.TestCase):
 
     def test_the_body_carries_the_table_and_the_state_the_next_run_reads(self):
         after, _ = self.run_once({"agents": {}}, {system: report() for system in record.SYSTEMS})
-        body = record.render(after, {"codex": "0.163.0"}, {"codex": "0.155.1"}, "0.9.5", "https://run")
+        body = record.render(after, {"codex": "0.163.0"}, {"codex": "0.155.1"}, "https://run")
         self.assertIn("| Agent | Latest checked | Status | Minimum | Last passed | Pinned | Issue |", body)
         self.assertIn("| codex | 2.0.0 (2026-10-27) | ✅ | 0.155.1 | 2.0.0 (2026-10-27) | 0.163.0 |  |", body)
         self.assertEqual(record.read_state(body), after)

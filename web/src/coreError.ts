@@ -1,5 +1,5 @@
 // The one wording of a failure the core published as `last_error`. The core
-// names what went wrong by `kind`; its `message` is diagnostic detail (Herdr's
+// names what went wrong by `kind`; its `message` is diagnostic detail (the engine's
 // protocol answer, a path, an io error) that the store's diagnostics and the
 // core's `error.reported` log keep, and the screen never draws it (design
 // principle 13). A kind worded here gets its catalog sentence; any other kind,
@@ -22,20 +22,20 @@ const KEYS = new Map<string, MessageKey>([
   ["workspace.create_refused.outside_root", "coreError.project.outsideRoot"],
   ["workspace.create_refused.project_holds_home", "addProject.refusal.projectHoldsHome"],
   ["workspace.pin_refused.needs_confirmation", "coreError.project.pinNeedsConfirmation"],
-  ["workspace.create_local_only", "coreError.project.localOnly"],
   ["workspace.create_unconfirmed", "coreError.project.addUnconfirmed"],
   ["workspace.create_unavailable", "coreError.deviceNotConnected"],
   ["workspace.create_in_flight", "coreError.project.addInFlight"],
   ["workspace.remove_in_flight", "coreError.project.removeInFlight"],
   ["workspace.remove_failed", "coreError.project.removeFailed"],
   ["workspace.remove_cancelled", "coreError.project.removeCancelled"],
-  ["workspace.control_unavailable", "coreError.herdrNotConnected"],
+  ["workspace.control_unavailable", "coreError.engineNotConnected"],
 
   ["memory.recheck_ai_off", "memory.recheckNeedsAi"],
 
   ["agent_permission.invalid_options", "agents.permission.invalidOptions"],
 
   ["repository.clone_busy", "coreError.clone.busy"],
+  ["repository.clone_unavailable", "coreError.clone.unavailable"],
   ["repository.clone_invalid", "coreError.clone.invalid"],
 
   ["task_operation.busy", "coreError.start.busy"],
@@ -51,7 +51,6 @@ const KEYS = new Map<string, MessageKey>([
   ["checkout_purpose.token_failed", "taskReason.purpose.tokenFailed"],
   ["checkout_purpose.unknown_checkout", "taskReason.purpose.unknownCheckout"],
   ["checkout_purpose.invalid", "taskReason.purpose.invalid"],
-  ["checkout_purpose.remote_unsupported", "taskReason.purpose.remoteUnsupported"],
   ["checkout_purpose.no_target", "taskReason.purpose.noTarget"],
   ["agent_start.unknown_model", "coreError.start.unknownModel"],
   ["agent_start.invalid_prompt", "coreError.start.invalidPrompt"],
@@ -62,11 +61,11 @@ const KEYS = new Map<string, MessageKey>([
   ["agent_start.not_installed", "coreError.agent.notInstalled"],
   ["agent_start.install_check_failed", "coreError.agent.installUnchecked"],
   ["agent_start.shell_starting", "coreError.agent.shellStarting"],
-  ["agent_start.shell_not_reading", "coreError.agent.shellNotReading"],
-  ["agent_start.shell_no_prompt", "coreError.agent.shellNoPrompt"],
   ["agent_start.shell_unreadable", "coreError.agent.shellUnreadable"],
   ["agent_start.line_unchecked", "coreError.agent.lineUnchecked"],
-  ["agent_start.refused_by_herdr", "coreError.agent.refusedByHerdr"],
+  ["agent_start.refused_by_engine", "coreError.agent.refusedByEngine"],
+  // Kept for a launch an earlier build stored before the engine name (core-state.json, `Resume::Failed.reason`).
+  ["agent_start.refused_by_herdr", "coreError.agent.refusedByEngine"],
   ["agent_start.unconfirmed", "coreError.agent.unconfirmed"],
   ["agent_start.prompt_not_typed", "coreError.agent.promptNotTyped"],
   ["agent_start.not_saved", "coreError.agent.notSaved"],
@@ -94,8 +93,6 @@ const KEYS = new Map<string, MessageKey>([
   ["worktree.remove_ignored_changed", "coreError.worktree.ignoredChanged"],
   ["worktree.remove_discard_unconfirmed", "coreError.worktree.discardUnconfirmed"],
   ["worktree.remove_blocked", "coreError.worktree.blocked"],
-  ["home.conflict", "coreError.home.conflict"],
-  ["home.unavailable", "coreError.home.unavailable"],
 
   ["pr_link.busy", "coreError.prLink.busy"],
 
@@ -119,6 +116,9 @@ const KEYS = new Map<string, MessageKey>([
 
   ["agent_group.refused", "coreError.group.changed"],
   ["pane.move_pending", "coreError.group.movePending"],
+  // A pane asked for by an open (a row, 터미널로 이동) that closed or never was.
+  ["pane.focus_target_unavailable", "coreError.pane.gone"],
+  ["pane.control_unavailable", "coreError.engineNotConnected"],
   ["agent_group.start_pending", "coreError.group.startPending"],
   ["agent_group.checkout_missing", "coreError.group.checkoutGone"],
   ["agent_group.workspace_unavailable", "coreError.group.checkoutGone"],
@@ -153,21 +153,23 @@ export function coreErrorKey(kind: string): MessageKey | null {
 }
 
 /** `error` as the screen says it: its kind's sentence, else `fallback`, the surface's general sentence. */
-export function coreErrorText(error: { kind: string }, t: TFunction<"translation">, fallback: MessageKey = "coreError.other"): string {
+export function coreErrorText(error: { kind: string; home?: boolean }, t: TFunction<"translation">, fallback: MessageKey = "coreError.other"): string {
+  // The home folder is asked about in its own words, a pin of it included (PRD home-folder-project B6).
+  if (error.home === true && error.kind === "workspace.pin_refused.needs_confirmation") return t("coreError.project.pinHome");
   return t(coreErrorKey(error.kind) ?? fallback);
 }
 
-const HERDR_STATES = new Map<string, MessageKey>([
-  ["socket_missing", "coreError.herdr.socket_missing"],
-  ["unreachable", "coreError.herdr.unreachable"],
-  ["stale", "coreError.herdr.stale"],
-  ["malformed", "coreError.herdr.malformed"],
-  ["unconfigured", "coreError.herdr.unconfigured"],
+const ENGINE_STATES = new Map<string, MessageKey>([
+  ["socket_missing", "coreError.engine.socket_missing"],
+  ["unreachable", "coreError.engine.unreachable"],
+  ["stale", "coreError.engine.stale"],
+  ["malformed", "coreError.engine.malformed"],
+  ["unconfigured", "coreError.engine.unconfigured"],
 ]);
 
-/** Why this machine's Herdr does not answer, from `status.herdr.state`; its `message` is the About tab's and the log's. */
-export function herdrStateText(state: string, t: TFunction<"translation">): string {
-  return t(HERDR_STATES.get(state) ?? "coreError.herdr.other");
+/** Why this machine's engine does not answer, from `status.engine.state`; its `message` is the About tab's and the log's. */
+export function engineStateText(state: string, t: TFunction<"translation">): string {
+  return t(ENGINE_STATES.get(state) ?? "coreError.engine.other");
 }
 
 const REMOTE_STATES = new Map<string, MessageKey>([
@@ -190,6 +192,7 @@ const CLONE_FAILURES = new Map<string, MessageKey>([
   ["unreachable_host", "coreError.clone.failure.unreachable_host"],
   ["stalled", "coreError.clone.failure.stalled"],
   ["target_exists", "coreError.clone.failure.target_exists"],
+  ["moved", "coreError.clone.failure.moved"],
   ["io", "coreError.clone.failure.io"],
 ]);
 

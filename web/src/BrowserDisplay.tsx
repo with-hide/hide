@@ -1,8 +1,8 @@
-import { ArrowLeftIcon, ArrowRightIcon, MinusIcon, MonitorIcon, MonitorSmartphoneIcon, PlusIcon, RotateCwIcon, ScanIcon, SmartphoneIcon, TabletIcon, XIcon, type LucideIcon } from "lucide-react";
+import { ArrowLeftIcon, ArrowRightIcon, ExternalLinkIcon, MinusIcon, MonitorIcon, MonitorSmartphoneIcon, PlusIcon, RotateCwIcon, ScanIcon, SmartphoneIcon, TabletIcon, XIcon, type LucideIcon } from "lucide-react";
 import { Fragment, useEffect, useLayoutEffect, useRef, useState, type ReactNode } from "react";
 import type { Actions } from "./actions";
 import { AreaEmpty } from "./AreaEmpty";
-import { addressShown, addressUrl, clearBrowserAttachments, focusBrowserDisplay, hostKey, mountBrowserAttachments, noteBrowserAttachment, notePageState, parseWorkspaceKey, registerBrowserSlot, syncBrowserFront, useBrowserStore } from "./browserViews";
+import { addressShown, addressUrl, clearBrowserAttachments, defaultBrowserAddress, focusBrowserDisplay, hostKey, mountBrowserAttachments, noteBrowserAttachment, notePageState, parseWorkspaceKey, registerBrowserSlot, syncBrowserFront, useBrowserStore } from "./browserViews";
 import { NewTabBody } from "./components/new-tab-body";
 import { changedFiles } from "./newTab";
 import { useUiStore } from "./ui";
@@ -162,12 +162,13 @@ function HostedPage({ display, workspace, actions, external = false }: { display
             />
             <DeviceButton device={device} drawn={drawn} onChoose={(next) => useUiStore.getState().setBrowserDevice(key, next)} />
             <BrowserCommentButton display={display} workspace={workspace} areaId={areaId} address={address} actions={actions} />
+            <OpenDefaultBrowserButton address={address} pageDevice={view?.device_id ?? ""} actions={actions} />
             {display.opener ? <OpenerMark opener={display.opener} actions={actions} /> : null}
           </>
         )}
       </div>
       <DeviceFrame width={size?.width ?? null}>
-        <div ref={slot} className={cn("relative min-h-0 min-w-0", size ? "h-full max-w-full shadow-lg ring-1 ring-border" : "flex-1")} style={size ? { width: size.width } : undefined} data-browser-slot={display.id} data-browser-device={device}>
+        <div ref={slot} className={cn("relative min-h-0 min-w-0", size ? "h-full max-w-full shadow-overlay ring-1 ring-border" : "flex-1")} style={size ? { width: size.width } : undefined} data-browser-slot={display.id} data-browser-device={device}>
           {page?.failure ? (
             <AreaEmpty state="browser-failed" text={t("documents.browserFailed", { address: external ? display.label : address, reason: page.failure })}>
               <Button variant="secondary" onClick={() => command("reload")} data-browser-retry={display.id}>
@@ -402,7 +403,7 @@ export function BrowserHost({ actions }: { actions: Actions }) {
   useEffect(() => {
     // The grants the core's tabs stand on are named only once this window
     // has the core's tabs, so a reload lets go of none (PRD outside-path-in-hide B15).
-    syncBrowserFront(front ? parseWorkspaceKey(front) : null, layout, inventory ?? [], scopes ?? [], syncedGrants(haveRest ? (grants ?? []) : null));
+    syncBrowserFront(front ? parseWorkspaceKey(front) : null, layout, inventory ?? [], scopes ?? [], syncedGrants(haveRest ? (grants ?? []) : null), haveRest);
     // A display the core no longer keeps takes its device size with it.
     if (inventory) useUiStore.getState().keepBrowserDevices(new Set(inventory.map((row) => hostKey(workspaceKey(row), row.view_id))));
   }, [front, layout, inventory, scopes, haveRest, grants, pending]);
@@ -578,6 +579,29 @@ function BrowserCommentButton({ display, workspace, areaId, address, actions }: 
       >
         <MessageSquarePlusIcon />
         {t("feedback.comment")}
+      </Button>
+    </Hint>
+  );
+}
+
+/**
+ * Open in default browser (issue 2293): the page's address in the operating
+ * system's default browser, the way out for a sign-in the page cannot finish
+ * here (SSO, a passkey). It goes the one way a terminal link's does
+ * (`openLink`), which the desktop host hands to the system for a web address
+ * alone, and it shows only while the address is one the default browser
+ * would open as the same page (`defaultBrowserAddress`).
+ */
+function OpenDefaultBrowserButton({ address, pageDevice, actions }: { address: string; pageDevice: string; actions: Actions }) {
+  const { t } = useInterfaceTranslation();
+  const own = useShellStore((s) => windowDeviceId(s.rest?.navigator?.devices));
+  const target = defaultBrowserAddress(address, pageDevice, own);
+  if (!target) return null;
+  const label = t("panes.menu.openDefaultBrowser");
+  return (
+    <Hint label={label}>
+      <Button variant="ghost" size="icon-sm" className="text-muted-foreground" aria-label={label} onClick={() => actions.openLink(target, true)} data-browser-open-default="true">
+        <ExternalLinkIcon />
       </Button>
     </Hint>
   );

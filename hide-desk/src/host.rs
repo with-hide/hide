@@ -22,7 +22,7 @@ use std::process::{Command, Stdio};
 use std::sync::{Arc, Mutex, PoisonError};
 use std::thread::JoinHandle;
 
-use hide_platform::process::{self, OwnedChild, TreeMeasure};
+use hide_platform::process::{self, OwnedChild, TreeMeasure, is_foreign_pane_identity};
 
 use crate::adapter::Launch;
 use crate::rpc::{Connection, Sink};
@@ -58,8 +58,9 @@ const KEPT_VARIABLES: &[&str] = &[
 ];
 
 /// Name prefixes no variable a Desk process gets carries, whether hided or
-/// the account's environment has it: a pane's identity and Hide's own.
-const NEVER_PREFIXES: &[&str] = &["HERDR_", "HIDE_"];
+/// the account's environment has it: Hide's own. A pane's identity is
+/// the foreign pane identity, checked by `is_foreign_pane_identity`.
+const NEVER_PREFIXES: &[&str] = &["HIDE_"];
 
 /// Whether two variable names name one variable: case decides on macOS and
 /// Linux, and not on Windows.
@@ -74,10 +75,11 @@ pub fn same_name(one: &OsStr, other: &OsStr) -> bool {
 
 fn never(name: &OsStr) -> bool {
     let name = name.to_string_lossy();
-    NEVER_PREFIXES.iter().any(|prefix| {
-        name.get(..prefix.len())
-            .is_some_and(|start| start.eq_ignore_ascii_case(prefix))
-    })
+    is_foreign_pane_identity(&name)
+        || NEVER_PREFIXES.iter().any(|prefix| {
+            name.get(..prefix.len())
+                .is_some_and(|start| start.eq_ignore_ascii_case(prefix))
+        })
 }
 
 fn kept(name: &OsStr) -> bool {

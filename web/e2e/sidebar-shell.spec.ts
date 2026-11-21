@@ -1,4 +1,4 @@
-// The sidebar's shell and the window's top row on an isolated pinned Herdr and
+// The sidebar's shell and the window's top row on an isolated engine and
 // hided (PRD sidebar-shell B3-B5, sidebar-titlebar-refresh B11-B14, B17-B21,
 // D-07): the top row names the device over the rail and the sidebar and
 // carries a Workspace's path and icons; under it the Search row opens the ⌘K
@@ -23,23 +23,23 @@ test.describe.configure({ timeout: 120_000 });
 async function withShell(
   page: Page,
   label: string,
-  check: (stack: { herdr: EngineServer; daemon: Daemon }) => Promise<void>,
-  prepare?: (herdr: EngineServer, daemon: Daemon) => Promise<void>,
+  check: (stack: { engine: EngineServer; daemon: Daemon }) => Promise<void>,
+  prepare?: (engine: EngineServer, daemon: Daemon) => Promise<void>,
   { firstRun = false }: { firstRun?: boolean } = {},
 ): Promise<void> {
   await page.setViewportSize({ width: 1280, height: 800 });
-  const herdr = firstRun ? await startEngine() : await startFixture();
+  const engine = firstRun ? await startEngine() : await startFixture();
   let daemon: Daemon | null = null;
   try {
-    daemon = await startHided(herdr, label);
-    await prepare?.(herdr, daemon);
+    daemon = await startHided(engine, label);
+    await prepare?.(engine, daemon);
     await page.goto(`${daemon.origin}/#token=${daemon.token}`);
     await expect(page.locator("nav[data-sidebar]")).toHaveAttribute("data-sidebar", "projects", { timeout: 20_000 });
     if (!firstRun) await expect(page.locator("[data-project-list] [data-checkout]").first()).toBeVisible({ timeout: 20_000 });
-    await check({ herdr, daemon });
+    await check({ engine, daemon });
   } finally {
     daemon?.stop();
-    herdr.stop();
+    engine.stop();
   }
 }
 
@@ -94,9 +94,10 @@ test("the Search row and the Overview row under the device, with no Home row, an
     await expect(page.locator("[data-workspace-screen]")).toBeVisible();
 
     // B5: a browser tab has no folder picker and no chord for Add project (Chrome keeps ⇧⌘N), so the row
-    // under Overview carries no keycap and the desktop chord opens nothing; the row opens the dialog with
-    // this machine's `~/` path field in place of Browse folder, and a typed `~/` folder, read against
-    // the daemon's home, registers the project (the desktop app's picker: desktop/e2e/add-project.spec.ts).
+    // under Overview carries no keycap and the desktop chord opens nothing; Browse folder opens the
+    // dialog's own folder list of this machine (PRD device-add-project D-02), read by the daemon's node
+    // from its home, and a typed `~/` folder registers the project (the desktop app's picker:
+    // desktop/e2e/add-project.spec.ts).
     const addProject = page.locator("[data-sidebar-new-workspace]");
     await expect(addProject).toBeVisible();
     await expect(addProject.locator("kbd")).toHaveCount(0);
@@ -106,20 +107,20 @@ test("the Search row and the Overview row under the device, with no Home row, an
     await addProject.click();
     const dialog = page.locator("[data-add-project]");
     await expect(dialog).toBeVisible();
-    await expect(dialog.locator("[data-add-project-browse]")).toHaveCount(0);
-    const field = dialog.locator("[data-add-project-path]");
+    await expect(dialog.locator("[data-add-project-browse]")).toHaveAttribute("data-add-project-browse", "list");
+    await dialog.locator("[data-add-project-browse]").click();
+    const field = dialog.locator("[data-folder-browser-field]");
     await expect(field).toBeFocused();
+    await expect(dialog.locator('[data-folder-row="projects"]')).toBeVisible();
     await screenshot(page, "sidebar-shell-add-project-browser");
     await field.fill("~/projects/typed-project");
+    await expect(dialog.locator("[data-folder-browser-target]")).toHaveAttribute("data-folder-browser-target", path.join(daemon.home, "projects", "typed-project"));
     await field.press("Enter");
     await expect(page.locator("[data-project]", { hasText: "typed-project" })).toBeVisible({ timeout: 20_000 });
-    // The same folder typed again is answered by the core as already a project; the shell cannot match
-    // `~/` against the stored absolute path itself.
+    // Opening again starts where the list last was, and the folder now reads as already a project.
     await addProject.click();
-    await field.fill("~/projects/typed-project/");
-    await field.press("Enter");
-    await expect(dialog.locator('[data-registration-reason="already_registered"]')).toBeVisible();
-    await expect(dialog.locator("[data-registration-pending]")).toHaveCount(0);
+    await dialog.locator("[data-add-project-browse]").click();
+    await expect(dialog.locator('[data-folder-row="typed-project"]')).toHaveAttribute("data-folder-row-added", "true");
     await page.keyboard.press("Escape");
     await expect(dialog).toHaveCount(0);
 
@@ -135,7 +136,7 @@ test("the Search row and the Overview row under the device, with no Home row, an
 });
 
 test("the window's top row names the device over the rail and the sidebar, and carries the Workspace's path and icons", async ({ page }) => {
-  await withShell(page, "sidebar-title-row", async ({ herdr, daemon }) => {
+  await withShell(page, "sidebar-title-row", async ({ engine, daemon }) => {
     const row = page.locator("[data-title-row]");
     const sidebar = page.locator("nav[data-sidebar]");
     const center = page.locator("[data-title-center]");
@@ -154,7 +155,7 @@ test("the window's top row names the device over the rail and the sidebar, and c
     await expect(center.locator("*")).toHaveCount(0);
 
     // B17, B18: a Workspace puts its project / checkout path and its icons in the row, and no toolbar under it.
-    await withControl(daemon, (control) => openProject(control, path.join(herdr.root, "fixture"), "fixture"));
+    await withControl(daemon, (control) => openProject(control, path.join(engine.root, "fixture"), "fixture"));
     await enterWorkspace(page, "fixture");
     const project = center.locator("[data-workspace-project]");
     await expect(project).toHaveText("fixture");
@@ -235,11 +236,11 @@ test("at the smallest window and the largest Interface text, long names shorten 
       const box = (await toggle.boundingBox())!;
       expect(box.x + box.width).toBeLessThanOrEqual(rowBox.x + rowBox.width + 0.5);
     }
-    // The sidebar's long Korean name, the No agents fold, Search and the footer overlap nothing.
+    // The sidebar's long Korean name, the project rows, Search and the footer overlap nothing.
     expect(await sidebarRowsFit(page)).toEqual([]);
     await screenshot(page, "title-row-smallest-largest-text");
-  }, async (herdr, daemon) => {
-    const folder = path.join(herdr.root, LONG_NAME);
+  }, async (engine, daemon) => {
+    const folder = path.join(engine.root, LONG_NAME);
     fs.mkdirSync(folder);
     await withControl(daemon, (control) => openProject(control, folder, LONG_NAME));
   });

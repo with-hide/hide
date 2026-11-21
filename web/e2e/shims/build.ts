@@ -17,10 +17,10 @@ const windows = process.platform === "win32";
 const ext = windows ? ".exe" : "";
 
 /** A program the fixtures copy, by the name of its source in `web/e2e/shims`. */
-export type FixtureShim = "claude-shim" | "spawn-provider" | "noop" | "launcher" | "hide-children" | "hide-processes";
+export type FixtureShim = "claude-shim" | "spawn-provider" | "noop" | "launcher" | "hide-children" | "hide-processes" | "ssh-shim";
 
 /** The programs this system builds: the launcher and the two process programs only exist for Windows. */
-const BUILT: FixtureShim[] = windows ? ["claude-shim", "spawn-provider", "noop", "launcher", "hide-children", "hide-processes"] : ["claude-shim", "spawn-provider", "noop"];
+const BUILT: FixtureShim[] = windows ? ["claude-shim", "spawn-provider", "noop", "launcher", "hide-children", "hide-processes", "ssh-shim"] : ["claude-shim", "spawn-provider", "noop", "ssh-shim"];
 
 // The programs a run built, by name, handed to the tests through the environment:
 // Playwright starts its workers after `globalSetup`, so they inherit it.

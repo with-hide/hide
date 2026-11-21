@@ -1,9 +1,9 @@
 //! An agent's conversation on the phone: the 대화 half of its detail.
 //!
-//! Claude Code and Codex draw in the terminal's alternate screen, so Herdr
-//! keeps no scrollback for their panes and `pane.read` holds only the screen.
+//! Claude Code and Codex draw in the terminal's alternate screen, so the terminal
+//! keeps no scrollback for their panes and a read of the pane holds only the screen.
 //! The whole conversation is in the agent's own transcript, found from the
-//! session Herdr reports for the pane and read through `hide-session`, on
+//! session the engine reports for the pane and read through `hide-session`, on
 //! this Mac only: an SSH device's transcript is on that device, so its detail
 //! shows the terminal alone. A pane with no reported session shows the
 //! terminal too, because the newest transcript in its folder may be a
@@ -24,7 +24,10 @@ mod opencode;
 
 use std::path::{Path, PathBuf};
 
-use herdr_core::engine::{EngineHandle, PaneSessionKind};
+use hide_agent_adapter::AccountKey;
+use hide_session::Accounts;
+
+use hide_core::engine::{EngineHandle, PaneSessionKind};
 use hide_session::{
     Agent, EventKind, SessionError, SessionIdentity, SessionLocator, parse_events_at,
     read_page_before,
@@ -99,7 +102,7 @@ pub struct Page {
     pub before: Option<u64>,
 }
 
-/// Which transcript a pane's agent writes, as Herdr reports it.
+/// Which transcript a pane's agent writes, as the engine reports it.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct Source {
     agent: Agent,
@@ -170,7 +173,8 @@ struct FileTranscript {
 /// poll (including idle) and cloned pager proves that same source again.
 #[derive(Clone, Debug)]
 struct NativeProof {
-    home: PathBuf,
+    /// The one account the session lies in.
+    accounts: Accounts,
     source: Source,
     confirmed: hide_session::ConfirmedLabelSession,
     stamp: String,
@@ -178,7 +182,7 @@ struct NativeProof {
 
 impl NativeProof {
     fn confirm(
-        home: &Path,
+        accounts: &Accounts,
         source: &Source,
         path: &Path,
     ) -> Result<hide_session::ConfirmedLabelSession, SessionError> {
@@ -187,7 +191,7 @@ impl NativeProof {
             SessionIdentity::Path(_) => None,
         };
         hide_session::confirm_session_file(
-            home,
+            accounts,
             source.agent,
             path,
             reported_id,
@@ -196,14 +200,18 @@ impl NativeProof {
         .map_err(|error| SessionError::Checkpoint(error.to_string()))
     }
 
-    fn new(home: &Path, source: &Source, path: &Path) -> Result<Option<Self>, SessionError> {
+    fn new(
+        accounts: &Accounts,
+        source: &Source,
+        path: &Path,
+    ) -> Result<Option<Self>, SessionError> {
         if !source.agent.requires_native_file_proof() {
             return Ok(None);
         }
-        let confirmed = Self::confirm(home, source, path)?;
+        let confirmed = Self::confirm(accounts, source, path)?;
         let stamp = hide_session::stamp::stamp_at(path).ok_or(SessionError::SessionFileMissing)?;
         Ok(Some(Self {
-            home: home.to_path_buf(),
+            accounts: accounts.clone(),
             source: source.clone(),
             confirmed,
             stamp,
@@ -211,7 +219,7 @@ impl NativeProof {
     }
 
     fn current(&self, path: &Path) -> Result<Self, SessionError> {
-        let confirmed = Self::confirm(&self.home, &self.source, path)?;
+        let confirmed = Self::confirm(&self.accounts, &self.source, path)?;
         if confirmed.owner != self.confirmed.owner {
             return Err(SessionError::Checkpoint(
                 "label_session_read_changed".to_owned(),
@@ -251,16 +259,42 @@ pub enum Tail {
 impl Transcript {
     /// Finds the conversation and reads its newest page. `SessionFileMissing`
     /// means the session is reported but has written nothing yet.
-    pub fn open(home: &Path, pane_id: &str, source: Source) -> Result<(Self, Page), SessionError> {
+    ///
+    /// The conversation is read in `account` alone, the one the core says
+    /// the pane's agent runs in (`hide_core::Core::pane_account`, PRD
+    /// agent-profiles D-03, D-36, B19), among those the node registered
+    /// (`accounts`): an account it did not register is refused. The
+    /// account stays with the open transcript.
+    pub fn open(
+        accounts: &Accounts,
+        account: &AccountKey,
+        pane_id: &str,
+        source: Source,
+    ) -> Result<(Self, Page), SessionError> {
+        let accounts = accounts
+            .reading(source.agent, account)
+            .map_err(|refusal| SessionError::Checkpoint(refusal.reason().to_owned()))?;
+        Self::open_in(&accounts, account.clone(), pane_id, source)
+    }
+
+    /// Opens the conversation in the account `key`, which `accounts` reads
+    /// alone.
+    fn open_in(
+        accounts: &Accounts,
+        key: AccountKey,
+        pane_id: &str,
+        source: Source,
+    ) -> Result<(Self, Page), SessionError> {
         if source.agent == Agent::OpenCode {
             // OpenCode reports its session by id; a path names nothing here.
             let SessionIdentity::Id(id) = &source.identity else {
                 return Err(SessionError::UnsupportedSessionKind);
             };
-            let (open, page) = opencode::Transcript::open(home, id, source.cwd.as_deref())?;
+            let (open, page) =
+                opencode::Transcript::open(accounts, key, id, source.cwd.as_deref())?;
             return Ok((Self(Open::OpenCode(source, open)), page));
         }
-        let (open, page) = FileTranscript::open(home, pane_id, source)?;
+        let (open, page) = FileTranscript::open(accounts, pane_id, source)?;
         Ok((Self(Open::File(open)), page))
     }
 
@@ -290,14 +324,18 @@ impl Transcript {
 }
 
 impl FileTranscript {
-    fn open(home: &Path, pane_id: &str, source: Source) -> Result<(Self, Page), SessionError> {
-        let path = SessionLocator::new(home).locate(
+    fn open(
+        accounts: &Accounts,
+        pane_id: &str,
+        source: Source,
+    ) -> Result<(Self, Page), SessionError> {
+        let path = SessionLocator::new(accounts).locate(
             pane_id,
             source.agent,
             Some(&source.identity),
             source.cwd.as_deref(),
         )?;
-        let proof = NativeProof::new(home, &source, &path)?;
+        let proof = NativeProof::new(accounts, &source, &path)?;
         let length = file_length(&path)?;
         let (page, end, cursor) = if source.agent == Agent::Cursor {
             let native = cursor_page(
@@ -431,7 +469,7 @@ impl FileTranscript {
         let mut messages = Vec::new();
         for _ in 0..hide_session::cursor::ARCHIVE_PAGE_LIMIT {
             let read = match hide_session::cursor::read(
-                &proof.home,
+                proof.accounts.home(),
                 &self.path,
                 native_id,
                 cwd,
@@ -537,7 +575,7 @@ fn cursor_page(
         .as_deref()
         .ok_or(SessionError::SessionFileMissing)?;
     hide_session::cursor::page_before(
-        &proof.home,
+        proof.accounts.home(),
         path,
         native_id,
         cwd,
@@ -720,7 +758,13 @@ mod tests {
                 .collect::<std::collections::BTreeMap<_, _>>()
         };
         let before = files();
-        let (mut transcript, page) = Transcript::open(home.path(), "fixture", source).unwrap();
+        let (mut transcript, page) = Transcript::open(
+            &hide_session::Accounts::new(home.path()),
+            &AccountKey::Default,
+            "fixture",
+            source,
+        )
+        .unwrap();
         assert_eq!(
             texts(&page.messages),
             ["Read this conversation", "Native answer"]
@@ -745,8 +789,13 @@ mod tests {
         assert_eq!(appended[0].id, 3);
         cursor_root(&path, &graph, "rewrite");
         assert_eq!(transcript.poll().unwrap(), Tail::Reset);
-        let (mut restored, _) =
-            Transcript::open(home.path(), "fixture", transcript.source().clone()).unwrap();
+        let (mut restored, _) = Transcript::open(
+            &hide_session::Accounts::new(home.path()),
+            &AccountKey::Default,
+            "fixture",
+            transcript.source().clone(),
+        )
+        .unwrap();
         std::fs::remove_file(path.with_file_name("meta.json")).unwrap();
         assert!(restored.poll().is_err());
     }
@@ -1030,7 +1079,13 @@ mod tests {
             records.push(("agent", turns[index].as_str(), "이어서"));
         }
         let (home, path, source) = grok_transcript(&records);
-        let (mut transcript, page) = Transcript::open(home.path(), "pane", source).unwrap();
+        let (mut transcript, page) = Transcript::open(
+            &hide_session::Accounts::new(home.path()),
+            &AccountKey::Default,
+            "pane",
+            source,
+        )
+        .unwrap();
         assert_eq!(page.messages.len(), PAGE_MESSAGES);
         assert_eq!(texts(&page.messages).last(), Some(&"답변 39\n\n이어서"));
         assert_eq!(texts(&page.messages)[page.messages.len() - 2], "요청");
@@ -1054,7 +1109,13 @@ mod tests {
             Tail::Reset,
             "the held answer grew, so the phone takes the page anew"
         );
-        let (_, page) = Transcript::open(home.path(), "pane", transcript.source().clone()).unwrap();
+        let (_, page) = Transcript::open(
+            &hide_session::Accounts::new(home.path()),
+            &AccountKey::Default,
+            "pane",
+            transcript.source().clone(),
+        )
+        .unwrap();
         assert_eq!(texts(&page.messages).last(), Some(&"새 답\n\n마저"));
     }
 
@@ -1067,7 +1128,13 @@ mod tests {
 
     fn native_phone_pages(agent: Agent) {
         let (home, path, source) = native_transcript(agent);
-        let (mut transcript, page) = Transcript::open(home.path(), "pane", source).unwrap();
+        let (mut transcript, page) = Transcript::open(
+            &hide_session::Accounts::new(home.path()),
+            &AccountKey::Default,
+            "pane",
+            source,
+        )
+        .unwrap();
         assert_eq!(texts(&page.messages).first(), Some(&"답변 40"));
         assert_eq!(texts(&page.messages).last(), Some(&"답변 69"));
         let older = transcript.pager().before(page.before.unwrap()).unwrap();
@@ -1097,7 +1164,13 @@ mod tests {
 
     fn native_rebound_phone(agent: Agent) {
         let (home, path, source) = native_transcript(agent);
-        let (mut transcript, page) = Transcript::open(home.path(), "pane", source).unwrap();
+        let (mut transcript, page) = Transcript::open(
+            &hide_session::Accounts::new(home.path()),
+            &AccountKey::Default,
+            "pane",
+            source,
+        )
+        .unwrap();
         let pager = transcript.pager();
         let original = std::fs::read_to_string(&path).unwrap();
         let changed = original.replace("native-phone", "other-ownerx");
@@ -1119,7 +1192,13 @@ mod tests {
 
     fn native_rewritten_phone(agent: Agent) {
         let (home, path, source) = native_transcript(agent);
-        let (mut transcript, page) = Transcript::open(home.path(), "pane", source).unwrap();
+        let (mut transcript, page) = Transcript::open(
+            &hide_session::Accounts::new(home.path()),
+            &AccountKey::Default,
+            "pane",
+            source,
+        )
+        .unwrap();
         let pager = transcript.pager();
         let original = std::fs::read_to_string(&path).unwrap();
         std::fs::write(&path, original.replace("답변 69", "수정 69")).unwrap();

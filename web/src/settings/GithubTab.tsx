@@ -18,7 +18,7 @@ export function GithubTab({ actions }: { actions: Actions }) {
   const devices = useShellStore((s) => s.rest?.navigator?.devices);
   // The projects whose issues and pull requests are read with the core's `gh`:
   // its own Git projects and a node's that dials it, never a dialed device's.
-  const projects = catalogOf(workspaces, remote).filter((workspace) => !workspace.is_home && workspace.is_git && readsHere(workspace, devices));
+  const projects = catalogOf(workspaces, remote).filter((workspace) => workspace.is_git && readsHere(workspace, devices));
   const access = githubAccess(projects, devices);
   const coreMachine = coreMachineAway(devices, t);
   const line = access ? githubAccessLine(access, t, coreMachine) : null;

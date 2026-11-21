@@ -1,6 +1,6 @@
 //! The contract of the commands other tools call (`hide agent`, `ps`,
-//! `request`, `inbox`, `watch`, `mission`, `device`, `pane`, `workspace
-//! purpose`, `workspace remove`): each command's words, arguments and options, where its
+//! `request`, `inbox`, `watch`, `mission`, `task`, `automation`, `device`, `pane`,
+//! `access`, `skill`, `mcp`, `workspace purpose`, `workspace remove`, `session fold-ask`): each command's words, arguments and options, where its
 //! answer sits in the line it prints, and the JSON Schema of that answer.
 //!
 //! The table below is what the CLI admits: a verb or a flag of these topics
@@ -8,19 +8,55 @@
 //! (`admit`), so a command or option cannot reach a caller without reaching
 //! the contract, and the tests below hold each parser to what the table says
 //! it takes. The answer schemas come from the core's answer types
-//! (`herdr_core::delivery::answer`). `hide contract --json` prints the
+//! (`hide_core::delivery::answer`). `hide contract --json` prints the
 //! document and `hide version --json` its digest, and `contracts/hide-cli.json`
 //! is the committed copy a review sees change.
 
-use herdr_core::delivery::{BODY_LIMIT, BUNDLE_LETTERS};
+use hide_core::delivery::{BODY_LIMIT, BUNDLE_LETTERS};
 use serde_json::{Map, Value, json};
 
 /// The document's own format; a caller that reads another refuses it.
 pub const FORMAT: u32 = 1;
 
+/// The `hide device` verbs that only pair two Hides. The table keeps them,
+/// so a build that offers connections between two Hides takes them
+/// (`env::Env::device_connect`), and the document marks them `hidden` until
+/// that feature ships: `hide --help` lists them only with the switch on,
+/// and a build without it refuses each with `device_connect_unavailable`
+/// (`device_cli`).
+pub const PAIRING_ONLY: &[&str] = &[
+    "share",
+    "allow",
+    "pause",
+    "resume",
+    "request",
+    "address",
+    "switch",
+    "look-ssh",
+    "accept-ssh",
+    "projects-ssh",
+];
+
+/// Whether the document marks `spec` hidden: [`PAIRING_ONLY`].
+fn hidden(spec: &Spec) -> bool {
+    matches!(spec.words, ["device", verb] if PAIRING_ONLY.contains(verb))
+}
+
 /// The topics whose every command is in the table.
 const TOPICS: &[&str] = &[
-    "agent", "ps", "request", "inbox", "watch", "mission", "plan", "device", "pane",
+    "agent",
+    "ps",
+    "request",
+    "inbox",
+    "watch",
+    "mission",
+    "task",
+    "automation",
+    "device",
+    "pane",
+    "access",
+    "skill",
+    "mcp",
 ];
 
 /// What a value must be for the command's parser to take it.
@@ -32,7 +68,7 @@ pub enum Input {
     /// characters, not starting with `-`.
     Key,
     /// A native session id or session file path: non-empty, at most
-    /// `herdr_core::delivery::SESSION_LIMIT` bytes, without control
+    /// `hide_core::delivery::SESSION_LIMIT` bytes, without control
     /// characters, not starting with `-`.
     Session,
     /// A letter body: not blank, at most `BODY_LIMIT` bytes.
@@ -43,6 +79,8 @@ pub enum Input {
     Commit,
     /// Two decimal integers as `<passed>/<total>`.
     Ratio,
+    /// A span of whole minutes or hours, `30m` or `2h`.
+    Span,
     /// A watch approval: not blank, at most 256 bytes, without control
     /// characters.
     Approval,
@@ -53,6 +91,11 @@ pub enum Input {
     /// Text that may also carry line breaks (LF, CR) and tabs, and no other
     /// control character: what `hide pane send --paste` admits.
     PasteText,
+    /// A pairing link another Hide shares (`hide://pair#...`, at most
+    /// `hide_peer::limits::MAX_LINK_BYTES` bytes), or a key.
+    LinkOrKey,
+    /// A socket address, `ip:port`.
+    Address,
     OneOf(&'static [&'static str]),
 }
 
@@ -66,10 +109,13 @@ impl Input {
             Sha256 => "sha256",
             Commit => "commit",
             Ratio => "ratio",
+            Span => "span",
             Approval => "approval",
             Unsigned => "unsigned",
             Json => "json",
             PasteText => "paste_text",
+            LinkOrKey => "link_or_key",
+            Address => "address",
             OneOf(_) => "one_of",
         }
     }
@@ -141,6 +187,18 @@ const fn optional(name: &'static str, value: Input) -> Opt {
     }
 }
 
+/// A switch that cannot be combined with `conflicts`.
+const fn exclusive(name: &'static str, conflicts: &'static [&'static str]) -> Opt {
+    Opt {
+        name,
+        value: None,
+        required: false,
+        requires: &[],
+        conflicts,
+        repeats: None,
+    }
+}
+
 const fn switch(name: &'static str) -> Opt {
     Opt {
         name,
@@ -188,6 +246,70 @@ const fn clearing(name: &'static str, conflicts: &'static [&'static str]) -> Opt
     }
 }
 
+/// An automation named by its id or its exact name.
+const AUTOMATION_ID: &[Arg] = &[Arg {
+    name: "automation",
+    value: Key,
+    required: true,
+    value_with: None,
+}];
+
+/// Why a schedule is refused: `schedule_unreadable` is the CLI's own, for
+/// words that are none of the forms; the rest are the core's check.
+const AUTOMATION_SCHEDULE_REFUSALS: &[&str] = &[
+    "schedule_unreadable",
+    "schedule_too_often",
+    "schedule_minutes_out_of_range",
+    "schedule_cron_invalid",
+    "schedule_never",
+    "schedule_time_invalid",
+    "schedule_days_missing",
+    "schedule_hours_out_of_range",
+];
+
+/// Why an automation as written is refused (B7, B10).
+pub(crate) const AUTOMATION_DRAFT_REFUSALS: &[&str] = &[
+    "schedule_unreadable",
+    "schedule_too_often",
+    "schedule_minutes_out_of_range",
+    "schedule_cron_invalid",
+    "schedule_never",
+    "schedule_time_invalid",
+    "schedule_days_missing",
+    "schedule_hours_out_of_range",
+    "automation_unknown",
+    "automation_name_missing",
+    "automation_name_invalid",
+    "automation_name_taken",
+    "automation_task_missing",
+    "automation_task_too_long",
+    "automation_agent_unknown",
+    "automation_folder_unknown",
+    "automation_folder_on_device",
+    "automation_worktree_needs_git",
+    "automation_home_unknown",
+    "automation_cap",
+    "automation_running",
+    "automation_changed_unread",
+];
+
+/// A command on one automation and nothing else.
+const fn automation_by_id(
+    words: &'static [&'static str],
+    answers: &'static [&'static str],
+) -> Spec {
+    Spec {
+        words,
+        arguments: AUTOMATION_ID,
+        repeats: None,
+        needs_one_of: &[],
+        options: &[],
+        rest: None,
+        answers,
+        refusals: &["automation_unknown"],
+    }
+}
+
 const fn spec(
     words: &'static [&'static str],
     arguments: &'static [Arg],
@@ -207,7 +329,8 @@ const fn spec(
 }
 
 use Input::{
-    Approval, Body, Commit, Json, Key, OneOf, PasteText, Ratio, Session, Sha256, Text, Unsigned,
+    Address, Approval, Body, Commit, Json, Key, LinkOrKey, OneOf, PasteText, Ratio, Session,
+    Sha256, Span, Text, Unsigned,
 };
 
 const ID: &[Arg] = &[Arg {
@@ -229,7 +352,326 @@ const AGENT_ID: &[Arg] = &[Arg {
     value_with: None,
 }];
 
+/// An agent profile's agent and name (PRD agent-profiles D-33).
+const PROFILE: &[Arg] = &[
+    Arg {
+        name: "kind",
+        value: Text,
+        required: true,
+        value_with: None,
+    },
+    Arg {
+        name: "name",
+        value: Text,
+        required: true,
+        value_with: None,
+    },
+];
+
+/// The refusals every `hide agent profile` change can answer.
+const PROFILE_REFUSALS: &[&str] = &[
+    hide_core::agent_profiles::REFUSED,
+    hide_core::agent_profiles::IN_USE,
+    hide_core::agent_profiles::GONE,
+    hide_core::agent_profiles::BUILT_IN,
+    hide_core::agent_profiles::UNSUPPORTED,
+    hide_core::agent_profiles::UNREAD,
+    hide_core::agent_profiles::UNANSWERED,
+    hide_core::agent_profiles::INVALID,
+    hide_core::agent_profiles::BUSY,
+    "machine_unknown",
+    "machine_unavailable",
+];
+
+const fn profile_spec(
+    words: &'static [&'static str],
+    arguments: &'static [Arg],
+    options: &'static [Opt],
+    answers: &'static [&'static str],
+) -> Spec {
+    Spec {
+        words,
+        arguments,
+        repeats: None,
+        needs_one_of: &[],
+        options,
+        rest: None,
+        answers,
+        refusals: PROFILE_REFUSALS,
+    }
+}
+
+/// A store item's name: `hide skill <verb> <name>`, `hide mcp <verb> <name>`.
+const ITEM: &[Arg] = &[Arg {
+    name: "name",
+    value: Text,
+    required: true,
+    value_with: None,
+}];
+
+/// What every `hide skill` and `hide mcp` command can answer: the machine
+/// it names, and the store's own refusals (`hide_core::store_command`).
+const STORE_REFUSALS: &[&str] = &[
+    "machine_unknown",
+    hide_core::store_command::NOT_FOUND,
+    hide_core::store_command::INVALID,
+    hide_core::store_command::BUSY,
+    hide_core::store_command::UNAVAILABLE,
+    hide_core::store_command::REFUSED,
+];
+
+/// The refusals of a command that waits on the operator's confirm.
+const CONFIRM_REFUSALS: &[&str] = &[
+    "machine_unknown",
+    hide_core::store_command::NOT_FOUND,
+    hide_core::store_command::INVALID,
+    hide_core::store_command::BUSY,
+    hide_core::store_command::UNAVAILABLE,
+    hide_core::store_command::REFUSED,
+    hide_core::store_command::DECLINED,
+    hide_core::store_command::UNANSWERED,
+];
+
+/// The options every store command takes.
+const STORE_OPTIONS: &[Opt] = &[optional("--machine", Text), switch("--json")];
+
+/// A switch of one item, for every agent or one (`--agent`).
+const STORE_SWITCH: &[Opt] = &[
+    optional("--agent", Text),
+    optional("--machine", Text),
+    switch("--json"),
+];
+
+/// How an MCP server is reached: a command after `--` with the names of its
+/// variables, or an address with the names of its headers. A key's value is
+/// never an option; the operator types it on the confirm (B33).
+const MCP_REACH: &[Opt] = &[
+    Opt {
+        name: "--url",
+        value: Some(Text),
+        required: false,
+        requires: &[],
+        conflicts: &["--env", REST],
+        repeats: None,
+    },
+    Opt {
+        name: "--sse",
+        value: None,
+        required: false,
+        requires: &["--url"],
+        conflicts: &["--env", REST],
+        repeats: None,
+    },
+    Opt {
+        name: "--header",
+        value: Some(Text),
+        required: false,
+        requires: &["--url"],
+        conflicts: &["--env", REST],
+        repeats: Some(hide_agent_hooks::mcp::MAX_KEY_NAMES),
+    },
+    Opt {
+        name: "--env",
+        value: Some(Text),
+        required: false,
+        requires: &[],
+        conflicts: &["--url", "--sse", "--header"],
+        repeats: Some(hide_agent_hooks::mcp::MAX_KEY_NAMES),
+    },
+    optional("--machine", Text),
+    switch("--json"),
+];
+
+/// What a `conflicts` entry names when an option cannot come with the words
+/// after `--`.
+pub const REST: &str = "--";
+
+const fn store_spec(
+    words: &'static [&'static str],
+    arguments: &'static [Arg],
+    options: &'static [Opt],
+    answers: &'static [&'static str],
+    refusals: &'static [&'static str],
+) -> Spec {
+    Spec {
+        words,
+        arguments,
+        repeats: None,
+        needs_one_of: &[],
+        options,
+        rest: None,
+        answers,
+        refusals,
+    }
+}
+
+const fn mcp_reach_spec(words: &'static [&'static str]) -> Spec {
+    Spec {
+        words,
+        arguments: ITEM,
+        repeats: None,
+        needs_one_of: &[],
+        options: MCP_REACH,
+        rest: Some("a local server's command and its arguments, which --url replaces"),
+        answers: &["store_changed"],
+        refusals: CONFIRM_REFUSALS,
+    }
+}
+
 pub const COMMANDS: &[Spec] = &[
+    // `hide skill` and `hide mcp`: a machine's store, as Settings › Skills
+    // and MCP changes it (PRD skill-mcp-manager B31-B33). `add` and
+    // `update` wait on the operator's confirm; nothing skips it.
+    store_spec(
+        &["skill", "list"],
+        &[],
+        STORE_OPTIONS,
+        &["store_list"],
+        STORE_REFUSALS,
+    ),
+    store_spec(
+        &["skill", "show"],
+        ITEM,
+        STORE_OPTIONS,
+        &["store_item"],
+        STORE_REFUSALS,
+    ),
+    store_spec(
+        &["skill", "add"],
+        &[Arg {
+            name: "source",
+            value: Text,
+            required: true,
+            value_with: None,
+        }],
+        &[
+            repeated("--name", Text, hide_core::store_command::NAMES_LIMIT),
+            optional("--machine", Text),
+            switch("--json"),
+        ],
+        &["store_changed"],
+        CONFIRM_REFUSALS,
+    ),
+    store_spec(
+        &["skill", "update"],
+        ITEM,
+        STORE_OPTIONS,
+        &["store_changed"],
+        CONFIRM_REFUSALS,
+    ),
+    store_spec(
+        &["skill", "on"],
+        ITEM,
+        STORE_SWITCH,
+        &["store_changed"],
+        STORE_REFUSALS,
+    ),
+    store_spec(
+        &["skill", "off"],
+        ITEM,
+        STORE_SWITCH,
+        &["store_changed"],
+        STORE_REFUSALS,
+    ),
+    store_spec(
+        &["skill", "remove"],
+        ITEM,
+        STORE_OPTIONS,
+        &["store_changed"],
+        STORE_REFUSALS,
+    ),
+    store_spec(
+        &["mcp", "list"],
+        &[],
+        STORE_OPTIONS,
+        &["store_list"],
+        STORE_REFUSALS,
+    ),
+    store_spec(
+        &["mcp", "show"],
+        ITEM,
+        STORE_OPTIONS,
+        &["store_item"],
+        STORE_REFUSALS,
+    ),
+    mcp_reach_spec(&["mcp", "add"]),
+    mcp_reach_spec(&["mcp", "update"]),
+    store_spec(
+        &["mcp", "on"],
+        ITEM,
+        STORE_SWITCH,
+        &["store_changed"],
+        STORE_REFUSALS,
+    ),
+    store_spec(
+        &["mcp", "off"],
+        ITEM,
+        STORE_SWITCH,
+        &["store_changed"],
+        STORE_REFUSALS,
+    ),
+    store_spec(
+        &["mcp", "remove"],
+        ITEM,
+        STORE_OPTIONS,
+        &["store_changed"],
+        STORE_REFUSALS,
+    ),
+    profile_spec(
+        &["agent", "profile", "list"],
+        &[],
+        &[
+            optional("--kind", Text),
+            optional("--machine", Text),
+            switch("--json"),
+        ],
+        &["agent_profiles"],
+    ),
+    profile_spec(
+        &["agent", "profile", "add"],
+        PROFILE,
+        &[
+            optional("--account", Text),
+            optional("--program", Text),
+            repeated("--env", Text, 64),
+            switch("--default"),
+            optional("--machine", Text),
+            switch("--json"),
+        ],
+        &["agent_profile"],
+    ),
+    profile_spec(
+        &["agent", "profile", "edit"],
+        PROFILE,
+        &[
+            optional("--rename", Text),
+            cleared("--program", Text, &["--no-program"]),
+            clearing("--no-program", &["--program"]),
+            repeated("--env", Text, 64),
+            repeated("--unset-env", Text, 64),
+            optional("--machine", Text),
+            switch("--json"),
+        ],
+        &["agent_profile"],
+    ),
+    profile_spec(
+        &["agent", "profile", "default"],
+        PROFILE,
+        &[optional("--machine", Text), switch("--json")],
+        &["agent_profile"],
+    ),
+    profile_spec(
+        &["agent", "profile", "remove"],
+        PROFILE,
+        &[optional("--machine", Text), switch("--json")],
+        &["agent_profile_removed"],
+    ),
+    profile_spec(
+        &["agent", "profile", "reinstall"],
+        PROFILE,
+        &[optional("--machine", Text), switch("--json")],
+        &["agent_profile"],
+    ),
     spec(
         &["agent", "register"],
         &[],
@@ -247,15 +689,18 @@ pub const COMMANDS: &[Spec] = &[
         ],
         &["agent", "agent_register_check"],
     ),
+    // Every registration, or with `--live` only those not ended (running
+    // or asleep).
     spec(
         &["agent", "list"],
         &[],
-        &[switch("--json")],
+        &[switch("--live"), switch("--json")],
         &["agent_list"],
     ),
     // A registration by its id with its agent's state, or a spawn by its id
     // or the caller's intent: its child's registration once it has one, the
-    // spawn and its pane's state until then. It reads only.
+    // spawn and its pane's state until then; else a registration by its name
+    // or pane, the live one, else the last that ended there. It reads only.
     Spec {
         words: &["agent", "show"],
         arguments: AGENT_ID,
@@ -264,7 +709,7 @@ pub const COMMANDS: &[Spec] = &[
         options: &[switch("--json")],
         rest: None,
         answers: &["agent_show", "spawn_show"],
-        refusals: &["agent_unavailable"],
+        refusals: &["agent_unavailable", "target_ambiguous"],
     },
     // The caller's own registration, by its attested pane, device and
     // session; only a pane-bound credential can ask.
@@ -280,17 +725,120 @@ pub const COMMANDS: &[Spec] = &[
             "agent_pane_required",
             "caller_identity_conflict",
             "participant_unavailable",
+            "participant_registering",
             "participant_ended",
             "participant_session_changed",
             "ambiguous_participant",
         ],
     },
-    spec(
-        &["agent", "end"],
-        AGENT_ID,
-        &[optional("--actor", Text), switch("--json")],
-        &["agent"],
-    ),
+    // The caller declares that its next step is one only a person can take
+    // (PRD ask-human): its lineage root stands in the operator's Needs You
+    // until the operator presses Done, which sends the caller a letter. The
+    // kind is `auth` or `permission`; the core, not the parser, refuses any
+    // other with `human_kind_unknown` and the next action (a letter to the
+    // parent), so the parser takes it as text.
+    Spec {
+        words: &["agent", "ask-human"],
+        arguments: &[
+            Arg {
+                name: "kind",
+                value: Text,
+                required: true,
+                value_with: None,
+            },
+            Arg {
+                name: "where",
+                value: Text,
+                required: true,
+                value_with: None,
+            },
+        ],
+        repeats: None,
+        needs_one_of: &[],
+        options: &[switch("--json")],
+        rest: None,
+        answers: &["ask_human"],
+        refusals: &[
+            "human_kind_unknown",
+            "human_place_required",
+            "human_place_too_long",
+            "agent_pane_required",
+            "participant_unavailable",
+            "participant_registering",
+            "participant_ended",
+            "participant_session_changed",
+            "ambiguous_participant",
+        ],
+    },
+    // Takes the caller's declaration down; `nothing_to_clear` when there
+    // is none, which is no failure.
+    Spec {
+        words: &["agent", "ask-human", "--clear"],
+        arguments: &[],
+        repeats: None,
+        needs_one_of: &[],
+        options: &[switch("--json")],
+        rest: None,
+        answers: &["ask_human"],
+        refusals: &[
+            "agent_pane_required",
+            "participant_unavailable",
+            "participant_registering",
+            "participant_ended",
+            "participant_session_changed",
+            "ambiguous_participant",
+        ],
+    },
+    // Folds one of the caller's own session's open questions with the line
+    // saying what settled it, as Hide AI folds one; `already_closed` for a
+    // question no longer open, which is no failure.
+    Spec {
+        words: &["session", "fold-ask"],
+        arguments: &[Arg {
+            name: "id",
+            value: Key,
+            required: true,
+            value_with: None,
+        }],
+        repeats: None,
+        needs_one_of: &[],
+        options: &[required("--reason", Text), switch("--json")],
+        rest: None,
+        answers: &["fold_ask"],
+        refusals: &[
+            "ask_unknown",
+            "ask_reopened",
+            "ask_reason_invalid",
+            "ask_session_unknown",
+            "ask_unavailable",
+            "agent_pane_required",
+            "caller_context_changed",
+        ],
+    },
+    // The answer is the registration as it ended with what became of its
+    // pane (`closed`, `kept`, `gone`, `other_agent`, `left`) and of its
+    // conversation (`archived`, `archive_full`, `none`); `--keep-pane` ends
+    // only the registration, as every end did before.
+    Spec {
+        words: &["agent", "end"],
+        arguments: AGENT_ID,
+        repeats: None,
+        needs_one_of: &[],
+        options: &[
+            optional("--actor", Text),
+            switch("--keep-pane"),
+            switch("--json"),
+        ],
+        rest: None,
+        answers: &["agent_end"],
+        refusals: &[
+            "agent_unavailable",
+            "parent_authority_required",
+            "actor_identity_conflict",
+            "machine_unavailable",
+            "pane_close_failed",
+        ],
+    },
     // The answer is `{id, state}`, state `ending` or `asleep`; asking again
     // answers the same (PRD mission-worker-sleep D-20).
     Spec {
@@ -308,7 +856,6 @@ pub const COMMANDS: &[Spec] = &[
             "parent_authority_required",
             "actor_identity_conflict",
             "agent_sleep_unsupported",
-            "agent_sleep_device",
             "agent_sleep_core_machine_only",
             "agent_sleep_working",
             "agent_sleep_waiting_for_you",
@@ -366,9 +913,18 @@ pub const COMMANDS: &[Spec] = &[
             cleared("--intent", Text, &["--plan-node"]),
             cleared("--plan-node", Key, &["--intent"]),
             required("--kind", Text),
-            required("--repo", Text),
-            required("--branch", Text),
-            optional("--path", Text),
+            // A plain folder's agent works in the folder itself, so both may
+            // be left out; a Git project refuses that (`spawn_repo_required`).
+            optional("--repo", Text),
+            Opt {
+                requires: &["--repo"],
+                ..optional("--branch", Text)
+            },
+            Opt {
+                requires: &["--branch"],
+                ..optional("--path", Text)
+            },
+            optional("--profile", Text),
             optional("--model", Text),
             optional("--effort", Text),
             cleared("--brief", Text, &["--brief-file"]),
@@ -380,14 +936,25 @@ pub const COMMANDS: &[Spec] = &[
         answers: &["agent"],
         refusals: &[
             "spawn_busy",
+            "workspace_closing",
             "machine_unknown",
             "machine_not_permitted",
             "machine_unavailable",
             "repository_unavailable",
+            "spawn_repo_required",
+            "spawn_project_loading",
+            "spawn_folder_unreadable",
             "agent_not_installed",
+            "agent_hook_off",
+            "agent_not_set_up",
+            "agent_hook_untrusted",
+            "agent_hook_missing",
+            "agent_hook_unconfirmed",
+            "agent_hook_unchecked",
             "intent_conflict",
             "invalid_launch_choice",
             "shell_starting",
+            "holder_cap",
             "pane_busy",
             "agent_not_started",
             "worktree_unconfirmed",
@@ -396,15 +963,20 @@ pub const COMMANDS: &[Spec] = &[
             "session_too_long",
             "codex_capability_unknown",
             "invalid_brief",
+            "invalid_agent_name",
             "brief_not_submitted",
             "mission_brief_missing",
+            "mission_node_held",
+            "mission_gate_before_start",
             "mission_machine_node_refused",
+            "mission_other_repository",
             "mission_machine_unavailable",
             "mission_projects_loading",
             "mission_machine_no_repository",
             "beside_other_checkout",
             "beside_other_machine",
             "beside_needs_agent_pane",
+            "beside_with_parent",
             "beside_pane_unavailable",
             "plan_missing",
             "plan_node_unknown",
@@ -417,6 +989,12 @@ pub const COMMANDS: &[Spec] = &[
             "plan_delegate_not_permitted",
             "plan_unavailable",
             "plan_session_unknown",
+            "profile_gone",
+            "profiles_unsupported",
+            "profile_refused",
+            "profile_unanswered",
+            "profile_unconfirmed",
+            "launch_records_full",
         ],
     },
     // Without --json it prints the same answer as a tree for a person.
@@ -430,10 +1008,85 @@ pub const COMMANDS: &[Spec] = &[
         answers: &["ps"],
         refusals: &["here_unavailable", "ps_answer_unreadable"],
     },
-    // Only the core's own machine may run these. Add registers the device
-    // without Hide's helper, which the operator allows on its row. A device
-    // answers its state, what it waits on from the operator, its failure by
-    // the row's action and the next step, never ssh's words.
+    // An external tool's own connection (PRD hide-external-control D-25),
+    // run outside Hide's panes on the core's machine. Approving, refusing,
+    // the level and disconnecting are the operator's, in Settings ›
+    // External tools; no command does them (B8).
+    Spec {
+        words: &["access", "request"],
+        arguments: &[],
+        repeats: None,
+        needs_one_of: &[],
+        options: &[
+            required("--name", Key),
+            switch("--no-wait"),
+            switch("--json"),
+        ],
+        rest: None,
+        answers: &["access_standing"],
+        refusals: &[
+            "access_from_pane",
+            "access_refused",
+            "access_request_expired",
+            "access_revoked",
+            "access_limit",
+            "access_name_taken",
+            "access_key_unreadable",
+        ],
+    },
+    Spec {
+        words: &["access", "status"],
+        arguments: &[],
+        repeats: None,
+        needs_one_of: &[],
+        options: &[switch("--json")],
+        rest: None,
+        answers: &["access_standing"],
+        refusals: &[
+            "access_from_pane",
+            "access_ambiguous",
+            "access_refused",
+            "access_request_expired",
+            "access_revoked",
+            "access_key_unreadable",
+        ],
+    },
+    Spec {
+        words: &["access", "leave"],
+        arguments: &[],
+        repeats: None,
+        needs_one_of: &[],
+        options: &[switch("--json")],
+        rest: None,
+        answers: &["access_left"],
+        refusals: &[
+            "access_from_pane",
+            "access_ambiguous",
+            "access_not_connected",
+            "access_key_unreadable",
+        ],
+    },
+    Spec {
+        words: &["access", "list"],
+        arguments: &[],
+        repeats: None,
+        needs_one_of: &[],
+        options: &[switch("--json")],
+        rest: None,
+        answers: &["access_list"],
+        refusals: &[
+            "access_not_connected",
+            "access_ambiguous",
+            "access_revoked",
+            "access_key_unreadable",
+        ],
+    },
+    // The machines this one is connected to: the Hides it is paired with
+    // (PRD device-connect-iroh) and its SSH devices. Only the core's own
+    // machine may run these. Sharing this machine, adding a link, allowing a
+    // request, resuming, asking back and naming an address are the
+    // operator's, at a terminal outside Hide's panes: a pane or an external
+    // tool is refused `device_from_pane` (B52).
     Spec {
         words: &["device", "list"],
         arguments: &[],
@@ -444,10 +1097,83 @@ pub const COMMANDS: &[Spec] = &[
         answers: &["device_list"],
         refusals: &["machine_not_permitted"],
     },
+    // Prints a link that works once, asks about the machine that pastes it
+    // at this terminal, and waits until that machine is let in or the link
+    // ends; the link ends with the command. With --json the link is the
+    // answer line, printed before the wait.
+    Spec {
+        words: &["device", "share"],
+        arguments: &[],
+        repeats: None,
+        needs_one_of: &[],
+        options: &[switch("--json")],
+        rest: None,
+        answers: &["device_shared"],
+        refusals: &["device_from_pane", "peer_unavailable", "pairing_ended"],
+    },
+    // A link pairs with the Hide that shared it: the command shows the four
+    // words and takes the operator's yes or no at the terminal. An SSH alias
+    // whose machine already runs its own Hide is paired over SSH and nothing
+    // is installed there; any other alias registers the core's SSH device.
     Spec {
         words: &["device", "add"],
         arguments: &[Arg {
-            name: "ssh_alias",
+            name: "link_or_ssh_alias",
+            value: LinkOrKey,
+            required: true,
+            value_with: None,
+        }],
+        repeats: None,
+        needs_one_of: &[],
+        options: &[optional("--name", Text), switch("--json")],
+        rest: None,
+        answers: &["device_added", "device_joined", "device_paired"],
+        refusals: &[
+            "machine_not_permitted",
+            "device_invalid",
+            "device_duplicate",
+            "device_from_pane",
+            "link_invalid",
+            "link_newer",
+            "link_own",
+            "device_already_connected",
+            "pairing_no_offer",
+            "pairing_declined",
+            "pairing_host_full",
+            "pairing_full",
+            "pairing_unanswered",
+            "pairing_unreachable",
+            "pairing_update_needed",
+            "pairing_ended",
+            "ssh_hide_absent",
+            "ssh_update_there",
+            "ssh_hide_not_running",
+            "ssh_not_reached",
+            "ssh_busy",
+            "device_own",
+            "device_limit",
+            "peer_unavailable",
+        ],
+    },
+    // Answers, at this terminal, the machines that wait for this machine's
+    // operator: on a machine with no window to answer in.
+    Spec {
+        words: &["device", "allow"],
+        arguments: &[],
+        repeats: None,
+        needs_one_of: &[],
+        options: &[switch("--json")],
+        rest: None,
+        answers: &["device_allowed"],
+        refusals: &["device_from_pane"],
+    },
+    // A machine paired both ways has two directions, stopped and removed
+    // apart: --outgoing is this machine opening the other, --incoming the
+    // other opening this one.
+    Spec {
+        words: &["device", "pause"],
+        arguments: &[Arg {
+            name: "device",
             value: Key,
             required: true,
             value_with: None,
@@ -455,22 +1181,78 @@ pub const COMMANDS: &[Spec] = &[
         repeats: None,
         needs_one_of: &[],
         options: &[
-            optional("--name", Text),
-            optional("--socket", Text),
+            exclusive("--outgoing", &["--incoming", "--both"]),
+            exclusive("--incoming", &["--outgoing", "--both"]),
+            exclusive("--both", &["--outgoing", "--incoming"]),
             switch("--json"),
         ],
         rest: None,
-        answers: &["device_added"],
+        answers: &["device_changed"],
         refusals: &[
-            "machine_not_permitted",
-            "device_invalid",
-            "device_duplicate",
+            "device_unknown",
+            "device_ambiguous",
+            "device_direction_needed",
         ],
     },
     Spec {
+        words: &["device", "resume"],
+        arguments: &[Arg {
+            name: "device",
+            value: Key,
+            required: true,
+            value_with: None,
+        }],
+        repeats: None,
+        needs_one_of: &[],
+        options: &[
+            exclusive("--outgoing", &["--incoming", "--both"]),
+            exclusive("--incoming", &["--outgoing", "--both"]),
+            exclusive("--both", &["--outgoing", "--incoming"]),
+            switch("--json"),
+        ],
+        rest: None,
+        answers: &["device_changed"],
+        refusals: &[
+            "device_from_pane",
+            "device_unknown",
+            "device_ambiguous",
+            "device_direction_needed",
+        ],
+    },
+    // A paired machine's direction, or an SSH device by its id or alias.
+    Spec {
         words: &["device", "remove"],
         arguments: &[Arg {
-            name: "device_id",
+            name: "device",
+            value: Key,
+            required: true,
+            value_with: None,
+        }],
+        repeats: None,
+        needs_one_of: &[],
+        options: &[
+            exclusive("--outgoing", &["--incoming", "--both"]),
+            exclusive("--incoming", &["--outgoing", "--both"]),
+            exclusive("--both", &["--outgoing", "--incoming"]),
+            switch("--json"),
+        ],
+        rest: None,
+        answers: &["device_changed", "device_removed"],
+        refusals: &[
+            "machine_not_permitted",
+            "device_unknown",
+            "device_ambiguous",
+            "device_direction_needed",
+            "device_local_remove_denied",
+            "device_files_open",
+        ],
+    },
+    // Asks a machine this one is a guest of to let this machine open it
+    // too; its operator answers there.
+    Spec {
+        words: &["device", "request"],
+        arguments: &[Arg {
+            name: "device",
             value: Key,
             required: true,
             value_with: None,
@@ -479,21 +1261,48 @@ pub const COMMANDS: &[Spec] = &[
         needs_one_of: &[],
         options: &[switch("--json")],
         rest: None,
-        answers: &["device_removed"],
+        answers: &["device_changed"],
         refusals: &[
-            "machine_not_permitted",
+            "device_from_pane",
             "device_unknown",
-            "device_local_remove_denied",
-            "device_files_open",
+            "device_ambiguous",
+            "device_not_a_guest",
+            "device_already_connected",
+            "request_waiting",
         ],
     },
-    // Starts the row's Retry, an attempt that may ask the operator; with
-    // --wait it answers the attempt's outcome. Nothing answers what the
-    // attempt asks: that is the operator's, on the row.
+    // Names an address a paired machine is tried at first.
+    Spec {
+        words: &["device", "address"],
+        arguments: &[
+            Arg {
+                name: "device",
+                value: Key,
+                required: true,
+                value_with: None,
+            },
+            Arg {
+                name: "address",
+                value: Address,
+                required: true,
+                value_with: None,
+            },
+        ],
+        repeats: None,
+        needs_one_of: &[],
+        options: &[switch("--json")],
+        rest: None,
+        answers: &["device_changed"],
+        refusals: &["device_from_pane", "device_unknown", "device_ambiguous"],
+    },
+    // A paired machine is dialed again now. An SSH device starts its row's
+    // Retry, an attempt that may ask the operator; with --wait it answers
+    // the attempt's outcome. Nothing answers what the attempt asks: that is
+    // the operator's, on the row.
     Spec {
         words: &["device", "retry"],
         arguments: &[Arg {
-            name: "device_id",
+            name: "device",
             value: Key,
             required: true,
             value_with: None,
@@ -502,13 +1311,109 @@ pub const COMMANDS: &[Spec] = &[
         needs_one_of: &[],
         options: &[switch("--wait"), switch("--json")],
         rest: None,
-        answers: &["device_retried"],
+        answers: &["device_changed", "device_retried"],
         refusals: &[
             "machine_not_permitted",
             "device_unknown",
+            "device_ambiguous",
             "device_dials_in",
             "device_wait_timeout",
         ],
+    },
+    // Switches an SSH device to the connection of the Hide on its machine:
+    // the two are paired over the device's SSH login, and the device keeps
+    // its id, its name and its running terminals. `held` names the machine
+    // that switched it first; `--own-folder` goes on without its terminals.
+    // `install_needed` is a machine that runs no Hide of its own, where
+    // `--install` starts one from this machine's helper build.
+    Spec {
+        words: &["device", "switch"],
+        arguments: &[Arg {
+            name: "device",
+            value: Key,
+            required: true,
+            value_with: None,
+        }],
+        repeats: None,
+        needs_one_of: &[],
+        options: &[
+            switch("--install"),
+            switch("--own-folder"),
+            switch("--json"),
+        ],
+        rest: None,
+        answers: &["device_switched"],
+        refusals: &[
+            "device_from_pane",
+            "device_unknown",
+            "switch_unsupported",
+            "switch_running",
+            "switch_not_connected",
+            "ssh_core_not_started",
+            "ssh_not_reached",
+            "ssh_busy",
+            "ssh_mac_from_mac_only",
+            "ssh_mac_signed_out",
+            "ssh_update_there",
+            "ssh_hide_not_running",
+            "device_already_connected",
+        ],
+    },
+    // What a machine about to pair over SSH runs on its target first: it
+    // changes nothing there and answers whether a Hide of that account's
+    // own runs. A refusal carries the same `look`, with `core` false on an
+    // account that never ran one.
+    Spec {
+        words: &["device", "look-ssh"],
+        arguments: &[],
+        repeats: None,
+        needs_one_of: &[],
+        options: &[],
+        rest: None,
+        answers: &["device_looked"],
+        refusals: &["hide_unavailable", "request_timeout"],
+    },
+    // What a machine pairing over SSH or wsl.exe runs on its target, with
+    // the request it made: the target saves a grant that opens nothing
+    // until that machine confirms it over the connection, and answers its
+    // own ids and addresses. Run again with the same request, it answers
+    // the same.
+    Spec {
+        words: &["device", "accept-ssh"],
+        arguments: &[],
+        repeats: None,
+        needs_one_of: &[],
+        options: &[
+            required("--request", Key),
+            required("--key", Key),
+            required("--device", Key),
+            required("--name", Text),
+            switch("--wsl"),
+            optional("--helper", Text),
+        ],
+        rest: None,
+        answers: &["device_accepted"],
+        refusals: &[
+            "device_from_pane",
+            "invalid_request",
+            "device_already_connected",
+            "device_limit",
+        ],
+    },
+    // What a machine that switched its device here runs once this machine
+    // admitted it: each `--project` is a folder of the account that machine
+    // had registered on its device, which this machine's own Hide then
+    // lists as a project too. It answers how many it lists; a folder that
+    // is gone, outside the account's home or refused is left out.
+    Spec {
+        words: &["device", "projects-ssh"],
+        arguments: &[],
+        repeats: None,
+        needs_one_of: &["--project"],
+        options: &[repeated("--project", Text, hide_core::SWITCHED_PROJECTS)],
+        rest: None,
+        answers: &["device_projects_listed"],
+        refusals: &[],
     },
     // An agent's reads of and input to the panes of its machine, and its
     // checkout's purpose, instead of Herdr's own commands (PRD
@@ -524,10 +1429,31 @@ pub const COMMANDS: &[Spec] = &[
         }],
         repeats: None,
         needs_one_of: &[],
-        options: &[optional("--lines", Unsigned), switch("--json")],
+        options: &[
+            Opt {
+                conflicts: &["--source", "--format"],
+                ..optional("--lines", Unsigned)
+            },
+            Opt {
+                requires: &["--format"],
+                conflicts: &["--lines"],
+                ..optional("--source", OneOf(&["visible"]))
+            },
+            Opt {
+                requires: &["--source"],
+                conflicts: &["--lines"],
+                ..optional("--format", OneOf(&["ansi"]))
+            },
+            switch("--json"),
+        ],
         rest: None,
         answers: &["pane_read"],
-        refusals: &["pane_required", "lines_out_of_range", "pane_unavailable"],
+        refusals: &[
+            "pane_required",
+            "lines_out_of_range",
+            "pane_unavailable",
+            "guest_pane_read",
+        ],
     },
     Spec {
         words: &["pane", "send"],
@@ -554,8 +1480,8 @@ pub const COMMANDS: &[Spec] = &[
         options: &[
             repeated(
                 "--key",
-                OneOf(&herdr_core::engine::keys::PaneKey::NAMES),
-                herdr_core::pane_command::KEYS_LIMIT,
+                OneOf(&hide_core::engine::keys::PaneKey::NAMES),
+                hide_core::pane_command::KEYS_LIMIT,
             ),
             switch("--enter"),
             switch("--paste"),
@@ -576,6 +1502,7 @@ pub const COMMANDS: &[Spec] = &[
             "keys_not_sent",
             "send_unconfirmed",
             "operator_typing",
+            "guest_pane_keys",
         ],
     },
     Spec {
@@ -645,6 +1572,7 @@ pub const COMMANDS: &[Spec] = &[
             "purpose_invalid",
             "purpose_too_long",
             "purpose_no_workspace",
+            "purpose_checkout_unlisted",
         ],
     },
     // The delete dialog's removal: --force accepts every loss the deletion
@@ -684,7 +1612,10 @@ pub const COMMANDS: &[Spec] = &[
     },
     // --force types the letter into the recipient's input now, even while
     // it works, and is refused, with nothing recorded or typed, while
-    // someone's text shows there (PRD engine-bundle-1 D-14).
+    // someone's text shows there (PRD engine-bundle-1 D-14). The target
+    // `parent` is refused `no_parent` for a sender no agent answers for, and
+    // `participant_registering` for the seconds the spawn that started the
+    // sender takes to register it.
     Spec {
         words: &["request", "send"],
         arguments: TARGET,
@@ -698,11 +1629,15 @@ pub const COMMANDS: &[Spec] = &[
             clearing("--force", &["--now"]),
         ],
         rest: None,
-        answers: &["letter"],
+        answers: &["letter", "queued"],
         refusals: &[
             "composer_not_empty",
             "composer_unconfirmed",
             "force_target_asleep",
+            "no_parent",
+            "outbox_full",
+            "outbox_unavailable",
+            "participant_registering",
         ],
     },
     spec(
@@ -839,11 +1774,22 @@ pub const COMMANDS: &[Spec] = &[
             "mission_node_in_progress",
             "mission_dependency_unknown",
             "mission_dependency_cycle",
+            "mission_dependency_line_unknown",
+            "mission_dependency_stack_split",
+            "mission_merge_order_stack",
             "mission_criteria_missing",
             "mission_criteria_too_many",
+            "mission_steps_invalid",
             "mission_checkers_invalid",
             "mission_external_invalid",
+            "mission_destination_invalid",
+            "mission_needs_git",
+            "mission_operator_merge_invalid",
+            "mission_preset_invalid",
+            "mission_gate_node_started",
             "mission_machine_node_refused",
+            "mission_profile_unknown",
+            "mission_candidate_refused",
         ],
     },
     Spec {
@@ -882,12 +1828,33 @@ pub const COMMANDS: &[Spec] = &[
             clearing("--no-checks", &["--checks"]),
             optional("--reviewer", Key),
             optional("--verifier", Key),
+            Opt {
+                name: "--hold",
+                value: Some(Text),
+                required: false,
+                requires: &["--for"],
+                conflicts: &["--no-hold"],
+                repeats: None,
+            },
+            Opt {
+                name: "--for",
+                value: Some(Span),
+                required: false,
+                requires: &["--hold"],
+                conflicts: &["--no-hold"],
+                repeats: None,
+            },
+            clearing("--no-hold", &["--hold", "--for"]),
         ],
         rest: None,
         answers: &["mission"],
         refusals: &[
+            "mission_node_held",
+            "mission_node_started",
+            "mission_gate_before_start",
             "mission_node_unknown",
             "mission_not_conductor",
+            "mission_ambiguous",
             "mission_closed",
             "mission_criteria_unmet",
             "mission_checker_is_worker",
@@ -946,6 +1913,11 @@ pub const COMMANDS: &[Spec] = &[
             "mission_node_unknown",
             "mission_criterion_unknown",
             "mission_criterion_not_yours",
+            "participant_session_changed",
+            "participant_registering",
+            "participant_unavailable",
+            "ledger_unavailable",
+            "mission_ambiguous",
             "mission_commit_required",
             "mission_rerun_spent",
             "mission_evidence_missing",
@@ -983,6 +1955,7 @@ pub const COMMANDS: &[Spec] = &[
             "mission_not_conductor",
             "mission_node_unknown",
             "mission_criterion_unknown",
+            "mission_ambiguous",
             "mission_skip_reason_missing",
             "mission_criteria_protected",
         ],
@@ -1011,6 +1984,59 @@ pub const COMMANDS: &[Spec] = &[
             "mission_defects_too_many",
         ],
     },
+    Spec {
+        words: &["mission", "gate"],
+        arguments: &[Arg {
+            name: "node",
+            value: Key,
+            required: true,
+            value_with: None,
+        }],
+        repeats: None,
+        // Relay the operator's answer, or show them the gate's screens.
+        needs_one_of: &["--pass", "--fix", "--show"],
+        options: &[
+            optional("--mission", Key),
+            Opt {
+                name: "--pass",
+                value: None,
+                required: false,
+                requires: &["--said"],
+                conflicts: &["--fix", "--show"],
+                repeats: None,
+            },
+            Opt {
+                name: "--fix",
+                value: None,
+                required: false,
+                requires: &["--said"],
+                conflicts: &["--pass", "--show"],
+                repeats: None,
+            },
+            cleared("--said", Text, &["--show"]),
+            // A View id or a path the CLI opens as one, up to the core's
+            // `missions::VIEW_LINK_LIMIT`.
+            Opt {
+                name: "--show",
+                value: Some(Text),
+                required: false,
+                requires: &[],
+                conflicts: &["--pass", "--fix", "--said"],
+                repeats: Some(16),
+            },
+        ],
+        rest: None,
+        answers: &["mission"],
+        refusals: &[
+            "mission_not_conductor",
+            "mission_node_unknown",
+            "mission_gate_none",
+            "mission_gate_not_open",
+            "mission_gate_passed",
+            "mission_gate_words_missing",
+            "mission_closed",
+        ],
+    },
     spec(
         &["mission", "start"],
         &[],
@@ -1023,11 +2049,16 @@ pub const COMMANDS: &[Spec] = &[
         &[
             optional("--mission", Key),
             cleared("--line", Text, &["--clear"]),
-            clearing("--clear", &["--line"]),
+            clearing("--clear", &["--line", "--show"]),
             optional("--why", Text),
             optional("--option", Text),
             optional("--recommend", Unsigned),
+            // Given more than once like `--option`: the first names the node
+            // the decision stopped, the rest the other nodes it is about.
             optional("--node", Key),
+            // A View id or a path the CLI opens as one; given more than once
+            // like `--option`, up to the core's `missions::VIEW_LINK_LIMIT`.
+            optional("--show", Text),
         ],
         &["mission"],
     ),
@@ -1037,7 +2068,8 @@ pub const COMMANDS: &[Spec] = &[
         &[
             optional("--mission", Key),
             cleared("--line", Text, &["--clear"]),
-            clearing("--clear", &["--line"]),
+            cleared("--for", Span, &["--clear"]),
+            clearing("--clear", &["--line", "--for"]),
         ],
         &["mission"],
     ),
@@ -1081,16 +2113,157 @@ pub const COMMANDS: &[Spec] = &[
             "mission_other_project",
         ],
     },
-    spec(
-        &["mission", "show"],
-        &[],
-        &[optional("--mission", Key)],
-        &["mission"],
-    ),
+    // The mission as text, or one node of it with its worker's newest
+    // letters; --json prints the answer line (with-hide/hide-private#552).
+    Spec {
+        words: &["mission", "show"],
+        arguments: &[Arg {
+            name: "node",
+            value: Key,
+            required: false,
+            value_with: None,
+        }],
+        repeats: None,
+        needs_one_of: &[],
+        options: &[optional("--mission", Key), switch("--json")],
+        rest: None,
+        answers: &["mission", "mission_node"],
+        refusals: &["mission_node_unknown", "mission_ambiguous"],
+    },
     spec(&["mission", "list"], &[], &[], &["mission_list"]),
     spec(&["mission", "settings"], &[], &[], &["mission_settings"]),
     Spec {
-        words: &["plan", "set"],
+        words: &["automation", "add"],
+        arguments: &[],
+        repeats: None,
+        needs_one_of: &[],
+        options: &[
+            required("--name", Text),
+            required("--task", Body),
+            required("--schedule", Text),
+            required("--kind", Text),
+            Opt {
+                name: "--profile",
+                value: Some(Text),
+                required: false,
+                requires: &["--kind"],
+                conflicts: &[],
+                repeats: None,
+            },
+            Opt {
+                name: "--model",
+                value: Some(Text),
+                required: false,
+                requires: &["--kind"],
+                conflicts: &[],
+                repeats: None,
+            },
+            Opt {
+                name: "--effort",
+                value: Some(Text),
+                required: false,
+                requires: &["--kind"],
+                conflicts: &[],
+                repeats: None,
+            },
+            optional("--folder", Text),
+            Opt {
+                name: "--worktree",
+                value: None,
+                required: false,
+                requires: &["--folder"],
+                conflicts: &[],
+                repeats: None,
+            },
+            switch("--run-now"),
+        ],
+        rest: None,
+        answers: &["automation"],
+        refusals: AUTOMATION_DRAFT_REFUSALS,
+    },
+    spec(&["automation", "list"], &[], &[], &["automation_list"]),
+    automation_by_id(&["automation", "show"], &["automation"]),
+    Spec {
+        refusals: &[
+            "automation_unknown",
+            "automation_running",
+            "automation_changed_unread",
+        ],
+        ..automation_by_id(&["automation", "run"], &["automation"])
+    },
+    Spec {
+        refusals: &["automation_unknown", "automation_changed_unread"],
+        ..automation_by_id(&["automation", "pause"], &["automation"])
+    },
+    Spec {
+        refusals: &["automation_unknown", "automation_changed_unread"],
+        ..automation_by_id(&["automation", "resume"], &["automation"])
+    },
+    Spec {
+        words: &["automation", "edit"],
+        arguments: AUTOMATION_ID,
+        repeats: None,
+        needs_one_of: &[
+            "--name",
+            "--task",
+            "--schedule",
+            "--kind",
+            "--folder",
+            "--own-folder",
+            "--worktree",
+            "--no-worktree",
+        ],
+        options: &[
+            optional("--name", Text),
+            optional("--task", Body),
+            optional("--schedule", Text),
+            optional("--kind", Text),
+            Opt {
+                name: "--profile",
+                value: Some(Text),
+                required: false,
+                requires: &["--kind"],
+                conflicts: &[],
+                repeats: None,
+            },
+            Opt {
+                name: "--model",
+                value: Some(Text),
+                required: false,
+                requires: &["--kind"],
+                conflicts: &[],
+                repeats: None,
+            },
+            Opt {
+                name: "--effort",
+                value: Some(Text),
+                required: false,
+                requires: &["--kind"],
+                conflicts: &[],
+                repeats: None,
+            },
+            cleared("--folder", Text, &["--own-folder"]),
+            clearing("--own-folder", &["--folder"]),
+            clearing("--worktree", &["--no-worktree"]),
+            clearing("--no-worktree", &["--worktree"]),
+        ],
+        rest: None,
+        answers: &["automation"],
+        refusals: AUTOMATION_DRAFT_REFUSALS,
+    },
+    automation_by_id(&["automation", "remove"], &["automation_removed"]),
+    Spec {
+        words: &["automation", "preview"],
+        arguments: &[],
+        repeats: None,
+        needs_one_of: &[],
+        options: &[required("--schedule", Text)],
+        rest: None,
+        answers: &["automation_preview"],
+        refusals: AUTOMATION_SCHEDULE_REFUSALS,
+    },
+    Spec {
+        words: &["task", "set"],
         arguments: &[],
         repeats: None,
         needs_one_of: &[],
@@ -1134,7 +2307,7 @@ pub const COMMANDS: &[Spec] = &[
         ],
     },
     Spec {
-        words: &["plan", "node"],
+        words: &["task", "node"],
         arguments: &[Arg {
             name: "key",
             value: Key,
@@ -1170,7 +2343,7 @@ pub const COMMANDS: &[Spec] = &[
         ],
     },
     Spec {
-        words: &["plan", "approve"],
+        words: &["task", "approve"],
         arguments: &[],
         repeats: None,
         needs_one_of: &[],
@@ -1180,7 +2353,7 @@ pub const COMMANDS: &[Spec] = &[
         refusals: &["plan_missing", "plan_not_yours", "plan_agent_unknown"],
     },
     Spec {
-        words: &["plan", "drop"],
+        words: &["task", "drop"],
         arguments: &[],
         repeats: None,
         needs_one_of: &[],
@@ -1190,7 +2363,7 @@ pub const COMMANDS: &[Spec] = &[
         refusals: &["plan_not_yours", "plan_agent_unknown"],
     },
     Spec {
-        words: &["plan", "show"],
+        words: &["task", "show"],
         arguments: &[],
         repeats: None,
         needs_one_of: &[],
@@ -1312,23 +2485,33 @@ fn command_json(spec: &Spec) -> Value {
 fn body() -> Value {
     json!({
         "format": FORMAT,
-        "commands": COMMANDS.iter().map(command_json).collect::<Vec<_>>(),
+        "commands": COMMANDS
+            .iter()
+            .map(|spec| {
+                let mut command = command_json(spec);
+                if hidden(spec) {
+                    command["hidden"] = json!(true);
+                }
+                command
+            })
+            .collect::<Vec<_>>(),
         "value_types": {
             "text": "non-empty, no control characters, does not start with --",
             "key": "non-empty, at most 256 bytes, no control characters, does not start with -",
             "session": format!(
                 "non-empty, at most {} bytes, no control characters, does not start with -",
-                herdr_core::delivery::SESSION_LIMIT
+                hide_core::delivery::SESSION_LIMIT
             ),
             "body": format!("not blank, at most {BODY_LIMIT} bytes"),
             "approval": "not blank, at most 256 bytes, no control characters",
             "commit": "7 to 64 hexadecimal digits",
             "ratio": "two decimal integers as <passed>/<total>, such as 6/6",
+            "span": "whole minutes or hours, such as 30m or 2h",
             "unsigned": "a decimal integer from 0 to 18446744073709551615",
-            "json": "a JSON document of the shape hide mission help or hide plan help shows",
+            "json": "a JSON document of the shape hide mission help or hide task help shows",
             "paste_text": format!(
                 "non-empty, at most {} bytes, no control characters but line breaks (LF, CR) and tabs",
-                herdr_core::pane_command::TEXT_LIMIT
+                hide_core::pane_command::TEXT_LIMIT
             ),
             "one_of": "one of the listed values",
         },
@@ -1342,9 +2525,40 @@ fn body() -> Value {
             "watch": {"ok": "ok", "answer": "result", "code": "reason"},
             "mission": {"ok": "ok", "answer": "result", "code": "reason"},
             "plan": {"ok": "ok", "answer": "result", "code": "reason"},
+            "automation": {"ok": "ok", "answer": "value", "code": "error.code"},
             "device": {"ok": "ok", "answer": "value", "code": "error.code"},
             "pane": {"ok": "ok", "answer": "value", "code": "error.code"},
             "workspace": {"ok": "ok", "answer": "value", "code": "error.code"},
+            "access": {"ok": "ok", "answer": "value", "code": "error.code"},
+            "skill": {"ok": "ok", "answer": "value", "code": "error.code"},
+            "mcp": {"ok": "ok", "answer": "value", "code": "error.code"},
+        },
+        // An external tool runs the commands above as its connection, at
+        // the level the operator chose; any of them may answer one of
+        // these, with its next_action (PRD hide-external-control B20-B23).
+        "access": {
+            "choose": crate::env::HIDE_ACCESS,
+            "levels": ["view", "act"],
+            "refusals": crate::access::REFUSALS
+                .iter()
+                .map(|code| (
+                    (*code).to_owned(),
+                    json!(crate::access::next_action(code).unwrap_or_default()),
+                ))
+                .collect::<Map<String, Value>>(),
+        },
+        // A pane of another Hide's work on this machine, while that Hide
+        // is not connected: a letter is kept and answered `queued`, and any
+        // other command above answers `owner_offline` (PRD
+        // device-connect-iroh B12, B13).
+        "away": {
+            "refusals": crate::guest_node::away::REFUSALS
+                .iter()
+                .map(|code| (
+                    (*code).to_owned(),
+                    json!(crate::guest_node::away::next_action(code).unwrap_or_default()),
+                ))
+                .collect::<Map<String, Value>>(),
         },
         "answers": answers(),
     })
@@ -1354,7 +2568,7 @@ fn body() -> Value {
 /// commands' envelopes, whose mission object is documented by `hide
 /// mission help` and the snapshot it is drawn from.
 fn answers() -> Value {
-    let mut answers = herdr_core::delivery::answer::answer_schemas();
+    let mut answers = hide_core::delivery::answer::answer_schemas();
     let object = json!({"type": "object"});
     let shape = |fields: &[&str]| {
         let properties: Map<String, Value> = fields
@@ -1364,30 +2578,124 @@ fn answers() -> Value {
         json!({"type": "object", "properties": properties, "required": fields})
     };
     let map = answers.as_object_mut().expect("the answers are an object");
+    // A letter its sender's node keeps until the Hide it belongs to is
+    // back (`away`).
+    map.insert(
+        "queued".into(),
+        json!({
+            "type": "object",
+            "properties": {
+                "queued": {"const": true},
+                "intent": {"type": "string"},
+            },
+            "required": ["queued", "intent"],
+        }),
+    );
     map.insert("mission".into(), shape(&["mission"]));
     map.insert("mission_created".into(), shape(&["mission", "settings"]));
     map.insert("mission_planned".into(), shape(&["mission", "overlaps"]));
     map.insert("mission_list".into(), shape(&["items"]));
     map.insert("mission_settings".into(), shape(&["settings"]));
+    // One node of the mission and its worker's newest letters, null while
+    // the ledger cannot be read.
+    map.insert(
+        "mission_node".into(),
+        json!({
+            "type": "object",
+            "properties": {
+                "mission_id": {"type": "string"},
+                "node": object,
+                "letters": {"type": ["array", "null"]},
+            },
+            "required": ["mission_id", "node", "letters"],
+        }),
+    );
     // The plan's own record and, for the caller's own plan, the summary its
     // hook keeps (`contracts/delivery-envelope.json`, `plan_context`).
     map.insert("plan".into(), shape(&["session", "plan"]));
+    // An automation as the core's `automations` section has it, worded for
+    // an agent: what its schedule reads as, its next time on the machine's
+    // wall clock and, stopped for a person, what to fix (`hide automation
+    // help`).
+    map.insert("automation".into(), shape(&["automation"]));
+    map.insert("automation_list".into(), shape(&["items"]));
+    map.insert("automation_removed".into(), shape(&["removed"]));
+    map.insert(
+        "automation_preview".into(),
+        json!({
+            "type": "object",
+            "properties": {
+                "reads_as": object,
+                "reads_as_text": {"type": ["string", "null"]},
+                "next_run_at_unix_ms": {"type": ["integer", "null"]},
+                "next_run_at": {"type": ["string", "null"]},
+                "zone": {"type": ["string", "null"]},
+            },
+            "required": ["reads_as", "next_run_at_unix_ms", "next_run_at", "zone"],
+        }),
+    );
     map.insert(
         "agent_catalog".into(),
         shape(&["machine", "installed_known", "items"]),
     );
     map.insert("agent_archived".into(), shape(&["archived", "pane_id"]));
-    map.insert("device_list".into(), shape(&["devices"]));
+    map.insert(
+        "fold_ask".into(),
+        json!({
+            "type": "object",
+            "properties": {
+                "id": {"type": "string"},
+                "state": {"enum": ["folded", "already_closed"]},
+            },
+            "required": ["id", "state"],
+        }),
+    );
+    map.insert("agent_profiles".into(), shape(&["machine", "profiles"]));
+    map.insert("agent_profile".into(), shape(&["machine", "profile"]));
+    map.insert(
+        "agent_profile_removed".into(),
+        shape(&["machine", "removed", "projects_back_to_default"]),
+    );
+    // Where a tool stands: not_connected, pending (with next_action) or
+    // connected (with level); its leave; and the tools and requests.
+    map.insert("access_standing".into(), shape(&["state"]));
+    map.insert("access_left".into(), shape(&["state", "name"]));
+    map.insert(
+        "access_list".into(),
+        shape(&["machine", "limit", "pending", "connections"]),
+    );
+    // The SSH devices; under `peers`, the Hides this machine is paired
+    // with: who opens whom, and whether the two are connected; and under
+    // `guest_panes`, the panes other machines' work runs in on this one.
+    map.insert(
+        "device_list".into(),
+        shape(&["devices", "peers", "guest_panes"]),
+    );
     map.insert("device_added".into(), shape(&["device", "next_action"]));
     map.insert("device_removed".into(), shape(&["device_id"]));
+    map.insert("device_shared".into(), shape(&["link", "expires_unix_ms"]));
+    map.insert("device_joined".into(), shape(&["host", "name", "phase"]));
+    map.insert("device_allowed".into(), shape(&["answered"]));
+    map.insert("device_changed".into(), shape(&["device_id"]));
+    map.insert("device_switched".into(), shape(&["device_id", "switch"]));
+    map.insert("device_accepted".into(), shape(&["accepted"]));
+    map.insert("device_looked".into(), shape(&["look"]));
+    map.insert("device_projects_listed".into(), shape(&["projects"]));
+    map.insert(
+        "device_paired".into(),
+        shape(&["device_id", "name", "paired"]),
+    );
     map.insert(
         "device_retried".into(),
-        herdr_core::device_command::retried_schema(),
+        hide_core::device_command::retried_schema(),
     );
-    for (name, schema) in herdr_core::pane_command::answer_schemas() {
+    for (name, schema) in hide_core::pane_command::answer_schemas() {
         map.insert(name.into(), schema);
     }
-    for (name, schema) in herdr_core::worktree_command::answer_schemas() {
+    for (name, schema) in hide_core::worktree_command::answer_schemas() {
+        map.insert(name.into(), schema);
+    }
+    for (name, schema) in hide_core::store_command::answer_schemas() {
         map.insert(name.into(), schema);
     }
     answers
@@ -1454,10 +2762,13 @@ mod tests {
             ),
             Commit => ("abc1234", "xyz"),
             Ratio => ("3/4", "x/4"),
+            Span => ("30m", "30"),
             Approval => ("approved by the lead", " "),
             Unsigned => ("1", "-1"),
             Json => ("{\"nodes\": []}", "{nodes"),
             PasteText => ("line one\nline two\tend", "\u{1b}[201~"),
+            LinkOrKey => ("k1", "-x"),
+            Address => ("192.0.2.7:7842", "nowhere"),
             OneOf(values) => (values[0], "other"),
         };
         (taken.to_owned(), refused.to_owned())
@@ -1507,7 +2818,13 @@ mod tests {
                 });
             }
         }
-        if spec.rest.is_some() {
+        // The words after `--` come unless an option chosen rules them out.
+        let rest_ruled_out = selected.iter().any(|name| {
+            spec.options
+                .iter()
+                .any(|option| option.name == *name && option.conflicts.contains(&REST))
+        });
+        if spec.rest.is_some() && !leave_out.contains(&REST) && !rest_ruled_out {
             argv.extend(["--".to_owned(), "--model".to_owned()]);
         }
         argv
@@ -1525,12 +2842,17 @@ mod tests {
                 | CommandKind::AgentSpawnBriefFile { .. }
                 | CommandKind::Mission(_)
                 | CommandKind::Plan(_)
+                | CommandKind::Automation(_)
                 | CommandKind::AgentCatalog { .. }
+                | CommandKind::AgentProfile(_)
                 | CommandKind::Ps(_)
                 | CommandKind::AgentSleep { .. }
                 | CommandKind::AgentArchive { .. }
+                | CommandKind::FoldAsk { .. }
                 | CommandKind::Device(_)
+                | CommandKind::Access(_)
                 | CommandKind::Pane(_)
+                | CommandKind::Store(_)
                 | CommandKind::WorkspaceRemove(_))
         )
     }
@@ -1569,6 +2891,16 @@ mod tests {
                     parse_args(&allowed)
                 );
                 for conflict in option.conflicts {
+                    if *conflict == REST {
+                        let mut both = allowed.clone();
+                        both.extend(["--".to_owned(), "--model".to_owned()]);
+                        assert!(
+                            !takes(&both),
+                            "hide {command} {} with words after --",
+                            option.name
+                        );
+                        continue;
+                    }
                     let other = spec
                         .options
                         .iter()
@@ -1643,7 +2975,7 @@ mod tests {
 
     /// The forms the exported grammar declares are the ones the CLI takes:
     /// each of a command's `needs_one_of` alone with its required
-    /// arguments, and none of them refused; an argument marked not required
+    /// arguments and the options it requires, and none of them refused; an argument marked not required
     /// left out; a repeated option up to its `repeats_at_most`, and not once
     /// more; an argument's `value_with` value taken with its option and
     /// refused without it.
@@ -1677,6 +3009,13 @@ mod tests {
             {
                 base.push(exported_sample(&argument["value"]));
             }
+            // Every form comes with the options the command requires.
+            for option in options.iter().filter(|option| option["required"] == true) {
+                base.push(option["name"].as_str().unwrap().to_owned());
+                if !option["value"].is_null() {
+                    base.push(exported_sample(&option["value"]));
+                }
+            }
             let with = |argv: &[String], form: &str| {
                 let mut argv = argv.to_vec();
                 if let Some(option) = options.iter().find(|option| option["name"] == form) {
@@ -1697,19 +3036,43 @@ mod tests {
                 assert!(!takes(&base), "hide {name} with none of {forms:?}");
             }
             for form in &forms {
-                let argv = with(&base, form.as_str().unwrap());
+                let mut argv = with(&base, form.as_str().unwrap());
+                // A form's own `requires` come with it (`gate --pass --said`).
+                let needs = options
+                    .iter()
+                    .find(|option| option["name"] == *form)
+                    .and_then(|option| option["requires"].as_array());
+                for need in needs.into_iter().flatten() {
+                    argv = with(&argv, need.as_str().unwrap());
+                }
                 assert!(takes(&argv), "hide {name} {form}: {:?}", parse_args(&argv));
             }
             for option in repeated {
                 let flag = option["name"].as_str().unwrap();
                 let most = option["repeats_at_most"].as_u64().unwrap() as usize;
-                let mut argv = base.clone();
-                for _ in 0..most {
-                    argv = with(&argv, flag);
-                }
-                assert!(takes(&argv), "hide {name} {flag} x{most}");
+                // The option comes with the ones it requires, and with the
+                // words after `--` unless it rules them out (`hide mcp add`'s
+                // `--env` with its command, `--header` with `--url`).
+                let rest = !command["rest"].is_null()
+                    && !option["conflicts"]
+                        .as_array()
+                        .is_some_and(|conflicts| conflicts.iter().any(|name| name == REST));
+                let repeat = |times: usize| {
+                    let mut argv = base.clone();
+                    for need in option["requires"].as_array().into_iter().flatten() {
+                        argv = with(&argv, need.as_str().unwrap());
+                    }
+                    for _ in 0..times {
+                        argv = with(&argv, flag);
+                    }
+                    if rest {
+                        argv.extend(["--".to_owned(), "--model".to_owned()]);
+                    }
+                    argv
+                };
+                assert!(takes(&repeat(most)), "hide {name} {flag} x{most}");
                 assert!(
-                    !takes(&with(&argv, flag)),
+                    !takes(&repeat(most + 1)),
                     "hide {name} {flag} x{}",
                     most + 1
                 );
@@ -1833,6 +3196,68 @@ mod tests {
         assert!(shown > 50, "the documents show {shown} mission flags");
     }
 
+    /// The flags `hide automation`'s parser reads for each verb are the
+    /// ones the contract names for it, and every verb the contract names is
+    /// one the parser reads: a flag added to one and not the other is
+    /// refused before the parser sees it.
+    #[test]
+    fn each_automation_flag_the_parser_reads_is_one_the_contract_names() {
+        let automations: Vec<&Spec> = COMMANDS
+            .iter()
+            .filter(|spec| spec.words.first() == Some(&"automation"))
+            .collect();
+        for (verb, valued, switches) in crate::automation_cli::FLAGS {
+            let spec = automations
+                .iter()
+                .find(|spec| spec.words.get(1) == Some(verb))
+                .unwrap_or_else(|| panic!("hide automation {verb} has no spec"));
+            let read: std::collections::BTreeSet<(&str, bool)> = valued
+                .iter()
+                .map(|flag| (*flag, true))
+                .chain(switches.iter().map(|flag| (*flag, false)))
+                .collect();
+            let named: std::collections::BTreeSet<(&str, bool)> = spec
+                .options
+                .iter()
+                .map(|option| (option.name, option.value.is_some()))
+                .collect();
+            assert_eq!(read, named, "hide automation {verb}");
+        }
+        assert_eq!(automations.len(), crate::automation_cli::FLAGS.len());
+        // The usage and the guide show only flags the contract takes.
+        let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"));
+        let help = std::fs::read_to_string(root.join("assets/automation/help.md")).unwrap();
+        for (name, text) in [
+            ("usage", crate::automation_cli::USAGE),
+            ("help", help.as_str()),
+        ] {
+            for line in text.lines() {
+                // Each command runs to the next one on its line.
+                for command in line.split("hide automation ").skip(1) {
+                    let command = command.split('`').next().unwrap_or_default();
+                    let Some(verb) = command.split_whitespace().next() else {
+                        continue;
+                    };
+                    if verb == "help" {
+                        continue;
+                    }
+                    let spec = automations
+                        .iter()
+                        .find(|spec| spec.words.get(1) == Some(&verb))
+                        .unwrap_or_else(|| panic!("{name} shows hide automation {verb}: {line}"));
+                    for word in command.split(|c: char| !(c.is_ascii_lowercase() || c == '-')) {
+                        if word.starts_with("--") && word.len() > 2 {
+                            assert!(
+                                spec.options.iter().any(|option| option.name == word),
+                                "{name} shows hide automation {verb} {word}: {line}"
+                            );
+                        }
+                    }
+                }
+            }
+        }
+    }
+
     /// The commands the mission guide teaches pass the flag check and the
     /// parser together, as `hide` runs them.
     #[test]
@@ -1859,6 +3284,10 @@ mod tests {
                 "1",
                 "--node",
                 "fix",
+                "--show",
+                "view-1",
+                "--show",
+                "report.html",
             ][..],
             &["mission", "decide", "--clear"],
             &[
@@ -1934,6 +3363,43 @@ mod tests {
         );
         assert!(admit(&args(&["inbox", "--hook", "--bell"])).is_err());
         assert!(admit(&args(&["inbox", "--prompt-digest", "d"])).is_err());
+    }
+
+    /// The verbs that only pair two Hides are marked hidden in the document
+    /// until that feature ships, and the CLI still admits them, so a build
+    /// that offers it takes them and one that does not refuses them with
+    /// their reason rather than as unknown words.
+    #[test]
+    fn the_document_marks_the_verbs_that_only_pair_hidden() {
+        let args = |line: &[&str]| {
+            line.iter()
+                .map(|word| (*word).to_owned())
+                .collect::<Vec<_>>()
+        };
+        let document = document();
+        let device: Vec<(&str, bool)> = document["commands"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .filter_map(|command| {
+                let name = command["command"].as_str().unwrap();
+                let verb = name.strip_prefix("device ")?;
+                Some((verb, command["hidden"] == true))
+            })
+            .collect();
+        for verb in PAIRING_ONLY {
+            assert!(
+                device.contains(&(*verb, true)),
+                "device {verb} is not marked hidden"
+            );
+            assert!(admit(&args(&["device", verb])).is_ok(), "device {verb}");
+        }
+        for kept in ["list", "add", "remove", "retry"] {
+            assert!(
+                device.contains(&(kept, false)),
+                "device {kept} is not listed"
+            );
+        }
     }
 
     /// The committed copy is the contract this build exports, so a change to

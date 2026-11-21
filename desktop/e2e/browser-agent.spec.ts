@@ -1,21 +1,22 @@
 // `hide browser` page commands against a real candidate display: the CLI runs
-// in a pane of a private Herdr, reaches hided's relay with the pane's
+// in a pane of the private engine, reaches hided's relay with the pane's
 // Workspace credential, and drives the display through the desktop's scoped
-// gateway. The operator's app, Herdr server and browser are never used.
+// gateway. The operator's app, engine and browser are never used.
 import { expect, type Dialog, type ElectronApplication, type Page } from "@playwright/test";
-import { spawnSync } from "node:child_process";
 import fs from "node:fs";
 import { createServer, type Server } from "node:http";
 import type { AddressInfo } from "node:net";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
 import { WebSocket } from "ws";
-import { startHerdr, type HerdrFixture } from "../../web/e2e/herdr-fixture";
-import { enterWorkspace, showProjectRow } from "../../web/e2e/wire";
-import { fitWindow, HIDE_CLI, isolate, launch, test, type Isolated } from "./fixture";
+import { focusTab, openProject, sendKeys, withControl } from "../../web/e2e/daemon-actions";
+import type { AgentFixture } from "../../web/e2e/engine-fixture";
+import { enterWorkspaceWithLane, showProjectRow } from "../../web/e2e/wire";
+import { fitWindow, HIDE_CLI, launchShell, startStack, test, type Isolated, type Stack } from "./fixture";
 
 test.describe.configure({ timeout: 180_000 });
-let herdr: HerdrFixture;
+let stack: Stack;
+let fixture: AgentFixture;
 let run: Isolated;
 let app: ElectronApplication | null = null;
 let shell: Page | null = null;
@@ -66,12 +67,11 @@ button.addEventListener("click", () => note("click"));
 
 function quote(value: string): string { return `'${value.replaceAll("'", "'\\''")}'`; }
 /** Runs `hide ...` in the isolated pane and returns its exit status and output. */
-async function hideCli(args: string[], pane = herdr.panes[0]): Promise<{ status: number; out: string }> {
-  const stem = path.join(herdr.root, `browser-agent-${++sequence}`);
+async function hideCli(args: string[], pane = fixture.panes[0]): Promise<{ status: number; out: string }> {
+  const stem = path.join(fixture.root, `browser-agent-${++sequence}`);
   const output = `${stem}.out`, status = `${stem}.status`;
-  const command = `HIDE_STATE_DIR=${quote(run.env.HIDE_STATE_DIR!)} ${[HIDE_CLI, ...args].map(quote).join(" ")} > ${quote(output)}; printf '%s' "$?" > ${quote(status)}\n`;
-  const sent = spawnSync(herdr.bin, ["pane", "send-text", pane, command], { env: herdr.env, encoding: "utf8", timeout: 10_000 });
-  expect(sent.status).toBe(0);
+  const command = `HIDE_STATE_DIR=${quote(run.env.HIDE_STATE_DIR!)} ${[HIDE_CLI, ...args].map(quote).join(" ")} > ${quote(output)}; printf '%s' "$?" > ${quote(status)}\r`;
+  await withControl(stack.daemon, async (control) => sendKeys(control, pane, command));
   await expect.poll(() => fs.existsSync(status), { timeout: 60_000 }).toBe(true);
   return { status: Number(fs.readFileSync(status, "utf8")), out: fs.readFileSync(output, "utf8") };
 }
@@ -102,9 +102,9 @@ function ref(text: string, line: RegExp): string {
   return found!.trim().split(" ")[0]!;
 }
 async function openDisplay(url: string): Promise<string> {
-  const stem = path.join(herdr.root, `browser-open-${++sequence}`);
-  const command = `HIDE_STATE_DIR=${quote(run.env.HIDE_STATE_DIR!)} ${[HIDE_CLI, "browser", "open", url, "--wait"].map(quote).join(" ")} > ${quote(`${stem}.json`)}; printf '%s' "$?" > ${quote(`${stem}.status`)}\n`;
-  expect(spawnSync(herdr.bin, ["pane", "send-text", herdr.panes[0]!, command], { env: herdr.env, encoding: "utf8", timeout: 10_000 }).status).toBe(0);
+  const stem = path.join(fixture.root, `browser-open-${++sequence}`);
+  const command = `HIDE_STATE_DIR=${quote(run.env.HIDE_STATE_DIR!)} ${[HIDE_CLI, "browser", "open", url, "--wait"].map(quote).join(" ")} > ${quote(`${stem}.json`)}; printf '%s' "$?" > ${quote(`${stem}.status`)}\r`;
+  await withControl(stack.daemon, async (control) => sendKeys(control, fixture.panes[0], command));
   await expect.poll(() => fs.existsSync(`${stem}.status`), { timeout: 30_000 }).toBe(true);
   const answer = JSON.parse(fs.readFileSync(`${stem}.json`, "utf8").trim().split("\n").at(-1)!) as { ok?: boolean; reason?: string; page?: unknown; result?: { view_id: string } };
   // The reason and page state only: a successful answer carries the display's control URLs.
@@ -125,15 +125,15 @@ async function inDisplay<T>(url: string, expression: string): Promise<T> {
   }, { url, expression });
 }
 async function start(): Promise<void> {
-  const launched = await launch(run.env);
+  const launched = await launchShell(run.env);
   app = launched.app;
   shell = launched.page;
   await fitWindow(app, { width: 1200, height: 800 });
-  await enterWorkspace(launched.page, "fixture");
+  // The lane is up, so the page an open puts on the desk is drawn (PRD lane-desk-pair-view B2).
+  await enterWorkspaceWithLane(launched.page, "fixture");
 }
 
 test.beforeAll(async () => {
-  herdr = await startHerdr({ agents: false });
   server = createServer((request, response) => {
     if (request.url === "/hung-now") { hung = true; response.writeHead(204).end(); return; }
     response.writeHead(200, { "content-type": "text/html; charset=utf-8" });
@@ -149,14 +149,17 @@ test.beforeAll(async () => {
   child = `${origin.replace("127.0.0.1", "localhost")}/child`;
 });
 test.afterAll(async () => {
-  herdr?.stop();
   await new Promise<void>((resolve) => server?.close(() => resolve()));
 });
-test.beforeEach(() => { run = isolate(herdr, "browser-agent"); });
+test.beforeEach(async () => {
+  stack = await startStack("browser-agent", { agents: false });
+  fixture = stack.fixture;
+  run = stack.run;
+});
 test.afterEach(async () => {
   await app?.close().catch(() => undefined);
   app = null;
-  run.cleanup();
+  stack.stop();
 });
 
 test("hide browser: an agent reads and drives a page and its cross-site frame while the operator sees each action", async () => {
@@ -211,7 +214,7 @@ test("hide browser: an agent reads and drives a page and its cross-site frame wh
   const network = await browserCli(["network", display]);
   expect(network.out).toContain("headers and bodies are not available");
   expect(await json(["eval", display, "document.title"])).toMatchObject({ ok: true, value: "Agent fixture" });
-  const shot = path.join(herdr.root, "agent.png");
+  const shot = path.join(fixture.root, "agent.png");
   const captured = await json(["screenshot", display, shot]);
   expect(fs.readFileSync(shot).subarray(1, 4).toString()).toBe("PNG");
   expect((captured.image as { width: number }).width).toBeGreaterThan(0);
@@ -269,9 +272,13 @@ test("hide browser: a cross-origin frame that never answers is noted and the res
 });
 
 test("hide browser: a selected View of a Workspace behind another answers input and pixels at once, and nothing arrives when it comes forward", async () => {
-  const other = path.join(herdr.root, "second-checkout");
+  const other = path.join(fixture.root, "second-checkout");
   fs.mkdirSync(other, { recursive: true });
-  herdr.run(["workspace", "create", "--cwd", other, "--label", "second", "--no-focus"]);
+  // The second project is made without being shown, as the fixture's stays in front.
+  await withControl(stack.daemon, async (control) => {
+    await openProject(control, other, "second-checkout");
+    await focusTab(control, fixture, fixture.tab);
+  });
   await start();
   const url = `${origin}/agent`;
   const display = await openDisplay(url);
@@ -285,7 +292,7 @@ test("hide browser: a selected View of a Workspace behind another answers input 
   // selected View, and the host hides it behind the front one once the core's
   // snapshot names that Workspace, which is after the click returns.
   const checkoutRow = (name: string) => shell!.locator("[data-project]", { hasText: name }).locator("[data-checkout]").first();
-  await (await showProjectRow(shell!, checkoutRow("second-checkout"))).click();
+  await (await showProjectRow(shell!, checkoutRow("second-checkout"))).click({ position: { x: 12, y: 8 } });
   const viewVisible = () => app!.evaluate(({ BrowserWindow }, address) => BrowserWindow.getAllWindows()[0]!.contentView.children.flatMap((view) => {
     const contents = (view as { webContents?: Electron.WebContents }).webContents;
     return contents && !contents.isDestroyed() && contents.getURL() === address ? [(view as Electron.View).getVisible()] : [];
@@ -298,14 +305,14 @@ test("hide browser: a selected View of a Workspace behind another answers input 
   expect(await inDisplay<string>(url, "document.visibilityState")).toBe("visible");
   expect(await json(["fill", display, name, "from behind"])).toMatchObject({ ok: true });
   expect(await json(["click", display, apply, "--no-verify"])).toMatchObject({ ok: true });
-  const shot = path.join(herdr.root, "behind.png");
+  const shot = path.join(fixture.root, "behind.png");
   expect(await json(["screenshot", display, shot])).toMatchObject({ ok: true });
   expect(fs.readFileSync(shot).subarray(1, 4).toString()).toBe("PNG");
   const behind = await received();
   expect(JSON.parse(behind)).toEqual([{ clicks: 1, inputs: 1 }, "applied: from behind"]);
 
   // No agent can bring it forward; the operator coming back does.
-  await (await showProjectRow(shell!, checkoutRow("fixture"))).click();
+  await (await showProjectRow(shell!, checkoutRow("fixture"))).click({ position: { x: 12, y: 8 } });
   await expect.poll(viewVisible).toEqual([true]);
   await snapshot(display);
   await inDisplay(url, "new Promise((done) => requestAnimationFrame(() => requestAnimationFrame(done)))");
@@ -359,9 +366,9 @@ test("hide browser: a busy, hidden, file or missing display and a stale ref are 
   const hidden = await json(["click", display, apply]);
   expect(hidden).toMatchObject({ ok: false, reason: "display_hidden" });
   expect(hidden.next_action).toContain("ask the operator to show it");
-  expect((await json(["screenshot", display, path.join(herdr.root, "hidden.png")])).reason).toBe("display_hidden");
+  expect((await json(["screenshot", display, path.join(fixture.root, "hidden.png")])).reason).toBe("display_hidden");
   expect(await snapshot(display)).toContain('button "Apply"');
-  const file = path.join(herdr.root, "fixture", "agent-file.html");
+  const file = path.join(fixture.root, "fixture", "agent-file.html");
   fs.writeFileSync(file, "<title>Local file</title><h1>Local file</h1>");
   const fileDisplay = await openDisplay(pathToFileURL(file).href);
   expect(await json(["snapshot", fileDisplay])).toMatchObject({ ok: false, reason: "display_unsupported" });

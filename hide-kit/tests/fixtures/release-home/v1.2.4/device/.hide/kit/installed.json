@@ -1,0 +1,21 @@
+{
+  "format": 1,
+  "installed": [],
+  "agents": {
+    "antigravity": false,
+    "claude-code": true,
+    "codex": false
+  },
+  "installs": {
+    "root:/home/remote/.hide/host-helper": {
+      "installed": [
+        "claude_code_hook",
+        "cli",
+        "coordination_retirement",
+        "skill:claude"
+      ],
+      "cli_destination": "/home/remote/.hide/host-helper/current/hide",
+      "state_route": "/home/remote/.hide/state"
+    }
+  }
+}

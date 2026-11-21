@@ -1,0 +1,562 @@
+{
+  "alpn": "hide/peer/1",
+  "close_codes": [
+    {
+      "name": "shutdown",
+      "number": 0
+    },
+    {
+      "name": "replaced",
+      "number": 1
+    },
+    {
+      "name": "duplicate",
+      "number": 2
+    },
+    {
+      "name": "no_grant",
+      "number": 3
+    },
+    {
+      "name": "update_needed",
+      "number": 4
+    },
+    {
+      "name": "protocol",
+      "number": 5
+    },
+    {
+      "name": "no_relay_path",
+      "number": 6
+    },
+    {
+      "name": "lost",
+      "number": 7
+    },
+    {
+      "name": "busy",
+      "number": 8
+    }
+  ],
+  "event": {
+    "box": {
+      "acked_fields": [
+        "outbox",
+        "seq",
+        "v"
+      ],
+      "acked_file": "acked",
+      "file": "box.jsonl",
+      "max_bytes": 8388608,
+      "max_events": 4096
+    },
+    "fields": [
+      "at_unix_ms",
+      "body",
+      "key",
+      "kind",
+      "outbox",
+      "seq",
+      "v"
+    ],
+    "kinds": [
+      "letter",
+      "completion",
+      "pane_ended"
+    ],
+    "version": 1
+  },
+  "file": {
+    "build": {
+      "id_chars": 16,
+      "max_bytes": 268435456,
+      "max_files": 64,
+      "max_path_bytes": 255
+    },
+    "build_file_fields": [
+      "executable",
+      "path",
+      "sha256",
+      "size"
+    ],
+    "messages": {
+      "build": {
+        "fields": [
+          "files",
+          "id"
+        ],
+        "since": 1
+      },
+      "build_placed": {
+        "fields": [
+          "id"
+        ],
+        "since": 1
+      },
+      "refused": {
+        "fields": [
+          "reason"
+        ],
+        "since": 1
+      }
+    }
+  },
+  "guest": {
+    "folder": {
+      "builds_kept": 2,
+      "guests": "g",
+      "host_side": "h",
+      "install_side": "i",
+      "key_file": "key",
+      "node_side": "n",
+      "panes": "panes.json"
+    },
+    "handed_to": {
+      "fields": [
+        "handed_to"
+      ],
+      "installation_fields": [
+        "install"
+      ]
+    },
+    "install": {
+      "build_chars": 16,
+      "hooks_name_prefix": "guest-root:",
+      "name_prefix": "guest:"
+    },
+    "launch": {
+      "arguments": [
+        "node",
+        "serve",
+        "--guest"
+      ],
+      "box_full_fields": [
+        "pane"
+      ],
+      "capabilities": [
+        "events"
+      ],
+      "end_modes": [
+        "now",
+        "after_last_pane"
+      ],
+      "exit_codes": {
+        "ended": 0,
+        "folder_held": 75,
+        "folder_refused": 73,
+        "host_unreachable": 70,
+        "restart": 71,
+        "unknown_word": 64
+      },
+      "from_node": [
+        "box_full",
+        "event",
+        "idle"
+      ],
+      "limits": {
+        "crash_window_secs": 600,
+        "crashes": 5,
+        "end_now_waits_secs": 5,
+        "folder_held_retries": 10,
+        "folder_held_retry_secs": 1,
+        "guest_nodes": 4,
+        "holder_lost_restart_secs": 600,
+        "idle_end_secs": 60
+      },
+      "max_line_bytes": 1049600,
+      "position_fields": [
+        "outbox",
+        "seq"
+      ],
+      "ready": {
+        "fields": [
+          "build",
+          "build_id",
+          "capabilities",
+          "guest_node",
+          "link",
+          "pid",
+          "tap",
+          "tap_versions"
+        ],
+        "version": 1,
+        "within_secs": 10
+      },
+      "to_node": [
+        "ack",
+        "away",
+        "end",
+        "resume"
+      ]
+    },
+    "sockets": {
+      "link": "link.sock",
+      "longest_tail_bytes": 68,
+      "node_tail_bytes": 47,
+      "tap": "tap.sock"
+    }
+  },
+  "hello": {
+    "capabilities": [],
+    "fields": [
+      "build",
+      "capabilities",
+      "contract",
+      "device",
+      "framing",
+      "link"
+    ],
+    "frames": {
+      "grant": {
+        "fields": [
+          "generation",
+          "state"
+        ],
+        "since": 1
+      },
+      "update": {
+        "fields": [],
+        "since": 1
+      },
+      "update_answer": {
+        "fields": [
+          "reason",
+          "started"
+        ],
+        "since": 1
+      }
+    },
+    "framing": 1,
+    "grant_states": [
+      "none",
+      "pending",
+      "active",
+      "paused",
+      "revoked"
+    ],
+    "link": {
+      "newest": 1,
+      "oldest": 1
+    },
+    "link_fields": [
+      "newest",
+      "oldest"
+    ],
+    "magic": "HIDEPEER",
+    "max_bytes": 16384
+  },
+  "key": {
+    "bytes": 32,
+    "short_chars": 16,
+    "spelling": "lower hex"
+  },
+  "management": {
+    "messages": {
+      "event": {
+        "fields": [
+          "at_unix_ms",
+          "body",
+          "key",
+          "kind",
+          "outbox",
+          "seq",
+          "v"
+        ],
+        "since": 1
+      },
+      "event_ack": {
+        "fields": [
+          "outbox",
+          "seq"
+        ],
+        "since": 1
+      },
+      "node_end": {
+        "fields": [
+          "mode"
+        ],
+        "since": 1
+      },
+      "node_preparing": {
+        "fields": [
+          "arch",
+          "os"
+        ],
+        "since": 1
+      },
+      "node_ready": {
+        "fields": [
+          "build"
+        ],
+        "since": 1
+      },
+      "node_retry": {
+        "fields": [],
+        "since": 1
+      },
+      "node_start": {
+        "fields": [
+          "build",
+          "build_id",
+          "release"
+        ],
+        "since": 1
+      },
+      "node_stopped": {
+        "fields": [
+          "detail",
+          "reason",
+          "retry"
+        ],
+        "since": 1
+      },
+      "resume": {
+        "fields": [
+          "outbox",
+          "seq"
+        ],
+        "since": 1
+      }
+    },
+    "node_stops": [
+      "ended",
+      "build_missing",
+      "update_needed",
+      "folder_refused",
+      "crashed",
+      "host_full",
+      "other"
+    ],
+    "release_fields": [
+      "commit",
+      "order"
+    ]
+  },
+  "pairing": {
+    "confirm_states": [
+      "active",
+      "paused",
+      "unknown"
+    ],
+    "messages": {
+      "asking": {
+        "fields": [
+          "device",
+          "name",
+          "nonce",
+          "words"
+        ],
+        "since": 1
+      },
+      "confirm": {
+        "fields": [
+          "grant"
+        ],
+        "since": 1
+      },
+      "confirmed": {
+        "fields": [
+          "grant",
+          "state"
+        ],
+        "since": 1
+      },
+      "granted": {
+        "fields": [
+          "device",
+          "grant",
+          "name"
+        ],
+        "since": 1
+      },
+      "pair": {
+        "fields": [
+          "commit",
+          "device",
+          "name",
+          "secret"
+        ],
+        "since": 1
+      },
+      "refused": {
+        "fields": [
+          "reason"
+        ],
+        "since": 1
+      },
+      "request": {
+        "fields": [
+          "device",
+          "name"
+        ],
+        "since": 1
+      },
+      "reveal": {
+        "fields": [
+          "nonce"
+        ],
+        "since": 1
+      }
+    },
+    "refusals": [
+      "no_offer",
+      "declined",
+      "full",
+      "unanswered",
+      "other"
+    ]
+  },
+  "panes": {
+    "fields": [
+      "panes",
+      "version"
+    ],
+    "pane_fields": [
+      "cols",
+      "pane",
+      "rows",
+      "since_unix_ms"
+    ],
+    "version": 1
+  },
+  "revoke": {
+    "messages": {
+      "revoke": {
+        "fields": [
+          "grant"
+        ],
+        "since": 1
+      },
+      "revoked": {
+        "fields": [
+          "grant"
+        ],
+        "since": 1
+      }
+    }
+  },
+  "streams": {
+    "answer_bytes": 9,
+    "header_bytes": 9,
+    "kinds": [
+      {
+        "name": "hello",
+        "needs_grant": false,
+        "priority": 75,
+        "since": 1,
+        "tag": 1
+      },
+      {
+        "name": "pairing",
+        "needs_grant": false,
+        "priority": 75,
+        "since": 1,
+        "tag": 2
+      },
+      {
+        "name": "revoke",
+        "needs_grant": false,
+        "priority": 75,
+        "since": 1,
+        "tag": 3
+      },
+      {
+        "name": "management",
+        "needs_grant": true,
+        "priority": 75,
+        "since": 1,
+        "tag": 4
+      },
+      {
+        "name": "node_link",
+        "needs_grant": true,
+        "priority": 50,
+        "since": 1,
+        "tag": 5
+      },
+      {
+        "name": "keys",
+        "needs_grant": true,
+        "priority": 100,
+        "since": 1,
+        "tag": 6
+      },
+      {
+        "name": "terminal",
+        "needs_grant": true,
+        "priority": 0,
+        "since": 1,
+        "tag": 7
+      },
+      {
+        "name": "file",
+        "needs_grant": true,
+        "priority": -100,
+        "since": 1,
+        "tag": 8
+      },
+      {
+        "name": "page",
+        "needs_grant": true,
+        "priority": -100,
+        "since": 1,
+        "tag": 9
+      },
+      {
+        "name": "screen",
+        "needs_grant": true,
+        "priority": 0,
+        "since": 1,
+        "tag": 10
+      }
+    ],
+    "message": {
+      "length_bytes": 4,
+      "max_bytes": 1048576
+    },
+    "statuses": [
+      {
+        "name": "accepted",
+        "tag": 0
+      },
+      {
+        "name": "no_grant",
+        "tag": 1
+      },
+      {
+        "name": "stale",
+        "tag": 2
+      },
+      {
+        "name": "limit",
+        "tag": 3
+      },
+      {
+        "name": "unknown_kind",
+        "tag": 4
+      }
+    ]
+  },
+  "tap": {
+    "cap_bytes": 4194304,
+    "magic": "HIDETAP1",
+    "max_frame_bytes": 4195328,
+    "to_host": {
+      "gone": "0x92",
+      "output": "0x90",
+      "pane": "0x91",
+      "welcome": "0x81"
+    },
+    "to_node": {
+      "hello": "0x01",
+      "input": "0x02",
+      "redraw": "0x10",
+      "resize": "0x03",
+      "terminate": "0x05"
+    },
+    "versions": [
+      1,
+      1
+    ]
+  }
+}

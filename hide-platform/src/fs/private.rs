@@ -737,6 +737,9 @@ mod sys {
 }
 
 #[cfg(windows)]
+pub(crate) use sys::{current_user_profile, current_user_sid};
+
+#[cfg(windows)]
 mod sys {
     use std::ffi::c_void;
     use std::fs;
@@ -888,11 +891,66 @@ mod sys {
         }
     }
 
-    /// The account this thread acts as, and the owner a file it creates gets
-    /// (the Administrators group for an elevated process).
+    /// The account this thread acts as, the owner a file it creates gets
+    /// (the Administrators group for an elevated process), and the groups
+    /// its token may name as an owner instead.
     struct Account {
         user: Sid,
         owner: Sid,
+        /// Groups the token holds with `SE_GROUP_OWNER` that are not only
+        /// for denying: an elevated token's Administrators group. A process
+        /// of the same elevated account whose default owner was set back to
+        /// the user (Git Bash's runtime does that for every program it
+        /// starts) still made, or could have made, what such a group owns.
+        owner_groups: Vec<Sid>,
+    }
+
+    /// The groups `token` may make an object's owner.
+    fn owner_groups(token: HANDLE) -> io::Result<Vec<Sid>> {
+        use windows_sys::Win32::Security::{SID_AND_ATTRIBUTES, TOKEN_GROUPS, TokenGroups};
+        use windows_sys::Win32::System::SystemServices::{
+            SE_GROUP_OWNER, SE_GROUP_USE_FOR_DENY_ONLY,
+        };
+        let mut size = 0u32;
+        // SAFETY: a size query with no buffer; the call fails and sets `size`.
+        unsafe { GetTokenInformation(token, TokenGroups, null_mut(), 0, &mut size) };
+        let mut buffer = vec![0u64; (size as usize).div_ceil(8).max(1)];
+        // SAFETY: `buffer` holds at least `size` writable bytes.
+        if unsafe {
+            GetTokenInformation(
+                token,
+                TokenGroups,
+                buffer.as_mut_ptr().cast(),
+                size,
+                &mut size,
+            )
+        } == 0
+        {
+            return Err(io::Error::last_os_error());
+        }
+        // SAFETY: the call filled a TOKEN_GROUPS whose `GroupCount` entries,
+        // and the SIDs they point at, lie inside `buffer`.
+        let groups = unsafe {
+            let header = buffer.as_ptr().cast::<TOKEN_GROUPS>();
+            std::slice::from_raw_parts(
+                std::ptr::addr_of!((*header).Groups).cast::<SID_AND_ATTRIBUTES>(),
+                (*header).GroupCount as usize,
+            )
+        };
+        Ok(groups
+            .iter()
+            .filter(|group| {
+                group.Attributes & SE_GROUP_OWNER as u32 != 0
+                    && group.Attributes & SE_GROUP_USE_FOR_DENY_ONLY as u32 == 0
+            })
+            .map(|group| {
+                // SAFETY: each SID is valid inside `buffer`; its length is
+                // read from its own header and copied out.
+                let length =
+                    unsafe { windows_sys::Win32::Security::GetLengthSid(group.Sid) } as usize;
+                Sid(unsafe { std::slice::from_raw_parts(group.Sid.cast::<u8>(), length) }.to_vec())
+            })
+            .collect())
     }
 
     fn token_sid(token: HANDLE, class: i32) -> io::Result<Sid> {
@@ -945,11 +1003,44 @@ mod sys {
         Ok(Closing(token))
     }
 
+    /// The account this process acts as, as its SID string (`S-1-5-...`).
+    /// The profile folder of the account this process acts as, from the
+    /// system's record of it, whatever `USERPROFILE` says.
+    pub(crate) fn current_user_profile() -> io::Result<std::path::PathBuf> {
+        use std::os::windows::ffi::OsStringExt;
+        use windows_sys::Win32::UI::Shell::GetUserProfileDirectoryW;
+        let token = acting_token(TOKEN_QUERY)?;
+        let mut units = 0_u32;
+        // SAFETY: a null buffer asks for the length, written to `units`.
+        unsafe { GetUserProfileDirectoryW(token.0, null_mut(), &mut units) };
+        if units == 0 {
+            return Err(io::Error::last_os_error());
+        }
+        let mut buffer = vec![0_u16; units as usize];
+        // SAFETY: `buffer` holds `units` UTF-16 units, the length asked for.
+        if unsafe { GetUserProfileDirectoryW(token.0, buffer.as_mut_ptr(), &mut units) } == 0 {
+            return Err(io::Error::last_os_error());
+        }
+        let length = buffer
+            .iter()
+            .position(|unit| *unit == 0)
+            .unwrap_or(buffer.len());
+        Ok(std::path::PathBuf::from(std::ffi::OsString::from_wide(
+            &buffer[..length],
+        )))
+    }
+
+    pub(crate) fn current_user_sid() -> io::Result<String> {
+        let token = acting_token(TOKEN_QUERY)?;
+        token_sid(token.0, TokenUser)?.text()
+    }
+
     fn account() -> io::Result<Account> {
         let token = acting_token(TOKEN_QUERY)?;
         Ok(Account {
             user: token_sid(token.0, TokenUser)?,
             owner: token_sid(token.0, TokenOwner)?,
+            owner_groups: owner_groups(token.0)?,
         })
     }
 
@@ -1339,7 +1430,12 @@ mod sys {
 
     fn owned(security: &Security) -> io::Result<bool> {
         let account = account()?;
-        Ok(account.user.same_as(security.owner) || account.owner.same_as(security.owner))
+        Ok(account.user.same_as(security.owner)
+            || account.owner.same_as(security.owner)
+            || account
+                .owner_groups
+                .iter()
+                .any(|group| group.same_as(security.owner)))
     }
 
     pub(super) fn owned_by_current_user(path: &Path) -> io::Result<bool> {
@@ -1423,6 +1519,9 @@ mod sys {
             Sid::well_known(WinLocalSystemSid)?,
             Sid::well_known(WinBuiltinAdministratorsSid)?,
         ];
+        let owner_rights = Sid::parse("S-1-3-4")?;
+        let owner_trusted =
+            trusted.iter().any(|known| known.same_as(security.owner)) || owned(security)?;
         if security.acl.is_null() {
             // No access list at all means everybody has every access.
             return Ok(true);
@@ -1471,6 +1570,12 @@ mod sys {
             let allowed = unsafe { &*entry.cast::<ACCESS_ALLOWED_ACE>() };
             let sid: PSID = (&allowed.SidStart as *const u32).cast_mut().cast();
             if trusted.iter().any(|known| known.same_as(sid)) {
+                continue;
+            }
+            // OWNER RIGHTS grants whoever owns the entry, as Python's private
+            // `mkdir(mode=0o700)` does; it is the owner's own access when the
+            // owner is trusted, and a stranger's when the owner is not.
+            if owner_rights.same_as(sid) && owner_trusted {
                 continue;
             }
             if allowed.Mask & watched != 0 {

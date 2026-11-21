@@ -24,7 +24,7 @@ the run failed, and `--measurement` writes each as an error annotation titled
     ci-flaky-report.py --measurement nightly-summary.json
 
 A run with a flaky test also sets the step output `flaky=true`, so the lane
-keeps the same logs it keeps for a failure: the first attempt's daemon, Herdr
+keeps the same logs it keeps for a failure: the first attempt's daemon, holder
 and input logs are the evidence its issue needs. The reusable web/desktop
 lanes also keep immutable, attempt-named Playwright reports with the actual
 checkout SHA (`--history-record`). The existing verify job's `--retry-history`
@@ -43,18 +43,17 @@ failures", owns the policy.
     ci-flaky-report.py --nightly --lane-input all
     ci-flaky-report.py --nightly --runs-repo OWNER/REPO --run RUN_ID --dry-run
 
-The issues live in the private development repository (`ISSUE_REPOSITORY`), so
-the public repository's issues hold only user bug reports; the runs, jobs,
-logs, artifacts and pull requests read stay those of GITHUB_REPOSITORY. It
-talks to GitHub through `gh` (GH_TOKEN and the run's GITHUB_* variables come
-from Actions); GH_TOKEN is the issues GitHub App's token, minted for both
-repositories, which writes issues there and reads Actions, checks and pull
-requests here. A lane's step must not fail the lane: the flaky run already
-passed, and the report is a notice, so a GitHub error costs one missed issue
-the next flaky run files. The nightly report reads job logs, which needs gh
-2.97 or newer, and refuses an older gh before the first log read. The report
-job fails when GitHub does, so a failure it could not file is a red job rather
-than a silence.
+The issues live in the public repository with its user bug reports
+(`ISSUE_REPOSITORY`), told apart by their labels; the runs, jobs, logs,
+artifacts and pull requests read are those of GITHUB_REPOSITORY. It talks to
+GitHub through `gh` (GH_TOKEN and the run's GITHUB_* variables come from
+Actions); GH_TOKEN is the issues GitHub App's token, which writes the issues
+and reads Actions, checks and pull requests. A lane's step must not fail the
+lane: the flaky run already passed, and the report is a notice, so a GitHub
+error costs one missed issue the next flaky run files. The nightly report
+reads job logs, which needs gh 2.97 or newer, and refuses an older gh before
+the first log read. The report job fails when GitHub does, so a failure it
+could not file is a red job rather than a silence.
 """
 import argparse
 from datetime import date, datetime, timedelta
@@ -71,9 +70,9 @@ import threading
 import xml.etree.ElementTree as ET
 import zipfile
 
-# Where every issue this script files lives: development issues stay out of the
-# public repository, whose issues are user bug reports.
-ISSUE_REPOSITORY = "with-hide/hide-private"
+# Where every issue this script files lives: the public repository, beside the
+# user bug reports, which the labels below tell them apart from.
+ISSUE_REPOSITORY = "with-hide/hide"
 LABEL = "quarantine"
 EXPIRY_DAYS = 7
 # A run with more flaky tests than this is a broken environment, not flakiness;
@@ -91,7 +90,8 @@ CONTROL = re.compile(
     r"(?:\x1b\[|\x9b)[0-?]*[ -/]*[@-~]|\x1b(?:[\]PX^_][^\x07\x1b\n]*(?:\x07|\x1b\\)?|[ -/]*[0-~])?"
     r"|[\x00-\x08\x0b-\x1f\x7f-\x9f]"
 )
-# Hand-written issues quote a title cut short ("Agent tabs shrink in stages...").
+# Hand-written issues quote a title cut short ("Agent tabs shrink in stages...");
+# only they match by this much of the name (`tracks`).
 MATCH_PREFIX = 20
 # A home folder in a quoted path names the account that ran it; an excerpt
 # goes to a public page. (The literals are split so the workstation-identity
@@ -144,7 +144,7 @@ SHARD = re.compile(r" \d+/\d+$")
 # Steps that prepare the runner rather than check the code: a failure there is
 # the runner's or a download's. Anything else, a build included, is not.
 INFRA_STEP = re.compile(
-    r"Set up job|Keep line endings as committed|Install .+|Fetch the pinned Herdr runtime|\(runner\)"
+    r"Set up job|Keep line endings as committed|Install .+|\(runner\)"
     r"|Run (actions/checkout|actions/setup-node|actions/download-artifact|pnpm/action-setup|Swatinem/rust-cache)@.+"
 )
 # A failed job with no failed step lost its runner.
@@ -255,9 +255,24 @@ def annotate(failed, write=print, title=FAILED_TITLE):
         write(f"::error title={escape_property(UNANNOTATED_TITLE)}::{len(failed) - ANNOTATED_TESTS}")
 
 
+# The `- Test:` line `new_issue` writes (`label_of`'s two forms). An issue
+# carrying it was filed by this script and names its test whole.
+FILED_TEST = re.compile(r'^- Test: `([^`\n]+)`(?: "(.*)")?$', re.M)
+
+
 def tracks(issue, test):
-    """Whether an open issue is about this test: its file and the start of its name appear in the body."""
+    """Whether an open issue is about this test.
+
+    An issue this script filed names its test whole, so only that exact file
+    and name match: a renamed test, or a sibling that starts the same way,
+    opens an issue of its own. A hand-written issue quotes a title cut short
+    ("Agent tabs shrink in stages..."), so it matches by the file and the
+    start of the name.
+    """
     body = issue.get("body") or ""
+    filed = FILED_TEST.search(body)
+    if filed:
+        return filed.groups() == ((test["file"], test["name"]) if test["file"] else (test["name"], None))
     if test["file"] and test["file"] not in body:
         return False
     name = test["name"] if not test["file"] else test["name"].split(" > ")[-1][:MATCH_PREFIX]

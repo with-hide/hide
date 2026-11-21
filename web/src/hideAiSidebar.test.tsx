@@ -42,7 +42,7 @@ function agent(id: string, label: string, over: Partial<AgentRow> = {}): AgentRo
 
 function setup(listed: HideAiCheckout[], focused: string | null) {
   const workspace = { agent_scope: emptyScope(), id: "workspace:w1", label: "herdr-ide", path: "/repo", device_id: "local", is_git: true, registered: true,
-    temporary: false, pinned: false, remote_target_id: null, inactive_checkouts: { expanded: false, checkout_ids: [] },
+    temporary: false, pinned: false, remote_target_id: null, inactive_checkouts: { expanded: true, checkout_ids: [] },
     checkouts: [
       checkout("checkout:main", "main", "/repo"),
       checkout("checkout:m43", "hide-memory-m43-mv4n0561", "/repo.worktrees/hide-memory-m43-mv4n0561"),
@@ -53,7 +53,7 @@ function setup(listed: HideAiCheckout[], focused: string | null) {
   } as unknown as Workspace;
   // An operator's agent works in the first Hide AI checkout; the core leaves a Hide AI agent's own row out of every tree.
   const rows = [agent("main", "사이드바 가독성 개선"), agent("checkout:m43", "m43 문서 직접 수정")];
-  const rest = { navigator: { devices: [LOCAL], workspaces: [workspace], agents: rows, hide_ai_checkouts: listed, focused_device_id: "local", focused_checkout_id: focused } } as unknown as SnapshotRest;
+  const rest = { navigator: { siblings_shown: 5, devices: [LOCAL], workspaces: [workspace], agents: rows, hide_ai_checkouts: listed, focused_device_id: "local", focused_checkout_id: focused } } as unknown as SnapshotRest;
   return { rest, rows };
 }
 
@@ -112,6 +112,23 @@ it("draws a checkout Hide AI made only while an operator's agent works in it or 
   }
 });
 
+it("draws a checkout an external tool made by the same rule, and never names it Hide AI's (together check, issue 2)", async () => {
+  const TOOL_MADE: HideAiCheckout[] = [{ device_id: "local", path: "/repo.worktrees/hide-memory-m72-mv4msuko", tool: "nightly" }];
+  const { container, cleanup } = await render(TOOL_MADE);
+  try {
+    const rows = [...container.querySelectorAll("[data-checkout-row]")].map((row) => row.getAttribute("data-checkout-row"));
+    expect(rows).toEqual(["checkout:main", "checkout:m43", "checkout:own"]);
+  } finally {
+    await cleanup();
+  }
+  const front = await render(TOOL_MADE, "checkout:m72");
+  try {
+    expect(front.container.querySelector('[data-checkout-row="checkout:m72"] [data-purpose]')?.textContent).toBe("PR 없이 끝남");
+  } finally {
+    await front.cleanup();
+  }
+});
+
 it("draws every checkout while none is Hide AI's, even when a branch is named like one (B5, B13)", async () => {
   const { container, cleanup } = await render([]);
   try {
@@ -130,7 +147,7 @@ function Row({ row, place, tree }: { row: AgentRow; place: string | null; tree?:
       <ul>
         <SidebarAgentRow
           agent={row} device={null} place={place} depth={0} selected={false} onOpen={() => {}} onOpenPullRequest={() => {}} inset="0"
-          tree={tree ? { place: { depth: 0, chain: [], last: true } as never, open: null, onToggle: () => {}, popover: null } : null}
+          tree={tree ? { place: { depth: 0, chain: [], last: true } as never, fold: "0", open: null, onToggle: () => {}, popover: null } : null}
           menu={MENU}
         />
       </ul>

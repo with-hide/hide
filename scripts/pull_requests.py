@@ -1,9 +1,8 @@
-"""What git and GitHub say about a pull request, for the merge scripts.
+"""What git and GitHub say about a pull request, for `merge-order.py`.
 
-`premerge-check.py` decides whether one pull request may merge now and
-`merge-order.py` which one merges first and where new work starts. Both read
-a pull request's `verify` verdict and its merge with main from here, so a pull
-request one of them calls green the other does not refuse as red.
+`merge-order.py` says which green pull request goes into the merge queue first
+and where new work starts; it reads a pull request's `verify` verdict and its
+merge with main from here.
 """
 import json
 import os
@@ -16,10 +15,10 @@ BASE = "main"
 # A merge commit made only so a merge result can be checked out or merged
 # again; it is never pushed, and a reserved domain keeps it from naming anyone.
 MERGE_IDENTITY = {
-    "GIT_AUTHOR_NAME": "premerge check",
-    "GIT_AUTHOR_EMAIL": "premerge-check@example.invalid",
-    "GIT_COMMITTER_NAME": "premerge check",
-    "GIT_COMMITTER_EMAIL": "premerge-check@example.invalid",
+    "GIT_AUTHOR_NAME": "merge order",
+    "GIT_AUTHOR_EMAIL": "merge-order@example.invalid",
+    "GIT_COMMITTER_NAME": "merge order",
+    "GIT_COMMITTER_EMAIL": "merge-order@example.invalid",
 }
 
 

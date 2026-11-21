@@ -4,13 +4,14 @@
 // `agent_notice` frame while it asks for them; this window words each one in
 // the interface language and hands it to the desktop host, which drops it
 // while a Hide window has the keyboard. A click opens that agent's pane, and
-// an agent the operator has seen takes its notification back. The app icon
+// the newest View it has to look at, as pressing its row does; an agent the
+// operator has seen takes its notification back. The app icon
 // counts root agents in each notification group whose switch is on.
 
 import { useEffect } from "react";
 import type { Actions } from "./actions";
 import { statusText } from "./agentStatus";
-import { askSubjectLead, askSubjectText } from "./askSubject";
+import { askSubjectLead, askSubjectNotice } from "./askSubject";
 import { AGENT_NOTICE_PREFIX } from "./firstRun";
 import type { AgentNotice } from "./generated/hided-ws";
 import { hostBridge } from "./host";
@@ -70,14 +71,18 @@ export function useAgentNotifications(actions: Actions) {
   // Null until the page is live: the first count is also the host's sign that a click can be opened here.
   const badge = useShellStore((s) => (s.connection !== "live" ? null : notificationBadgeCount(s.rest)));
   useEffect(() => {
+    if (!live) return;
+    return bridge?.onComputerUse?.((inUse) => actions.reportComputerUse(inUse));
+  }, [bridge, live, actions]);
+  useEffect(() => {
     if (bridge && badge !== null) bridge.reportBadge(badge);
   }, [bridge, badge]);
   // A reconnect is a new connection whose demand starts empty, so it is said again each time the page is live.
   useEffect(() => {
     if (!wanted) return;
-    actions.wantAgentNotices(true);
+    actions.wantAgentNotices(true, needsYouEnabled);
     return () => actions.wantAgentNotices(false);
-  }, [actions, wanted]);
+  }, [actions, wanted, needsYouEnabled]);
   useEffect(() => {
     if (!bridge || !wanted) return;
     const listener: Listener = ({ notices, clear }) => {
@@ -85,8 +90,10 @@ export function useAgentNotifications(actions: Actions) {
       for (const notice of notices) {
         if (!(notice.state === "needs_you" ? needsYouEnabled : doneEnabled)) continue;
         // The row's own word leads, as on its line (status-marks B23); the section name only when the core sent none.
-        const word = askSubjectLead(t, notice.subject) ?? (notice.status_code ? statusText(t, notice.status_code) : t(notice.state === "needs_you" ? "firstRun.notice.needsYou" : "firstRun.notice.done"));
-        const detail = notice.subject ? askSubjectText(t, notice.subject) : notice.detail;
+        // A View to look at says the eye's word with the View as its sentence (status-model.md, A View to look at).
+        const code = notice.status_code;
+        const word = askSubjectLead(t, notice.subject) ?? (code === "look" ? t("agents.mark.look") : code ? statusText(t, code) : t(notice.state === "needs_you" ? "firstRun.notice.needsYou" : "firstRun.notice.done"));
+        const detail = notice.subject ? askSubjectNotice(t, notice.subject) : notice.detail;
         const state = detail ? `${word} · ${detail}` : word;
         const body = notice.place ? t("firstRun.notice.body", { state, project: notice.place }) : state;
         bridge.notify(`${AGENT_NOTICE_PREFIX}${notice.tag}`, cut(notice.title, TITLE_LIMIT), cut(body, BODY_LIMIT), { unlessFocused: true });

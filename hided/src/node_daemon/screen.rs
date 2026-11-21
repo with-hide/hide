@@ -75,7 +75,7 @@ pub(super) async fn screen(
     if desktop {
         state.desktop_screens.fetch_sub(1, Ordering::SeqCst);
     }
-    herdr_core::diagnostic!(json!({
+    hide_core::diagnostic!(json!({
         "component": "node_daemon",
         "kind": "screen.ended",
         "connection": connection,
@@ -228,7 +228,7 @@ async fn control_link(
         if let Some(answer) = answer {
             let _ = (state.answer_sign_in)(connection, answer.question, answer.reply);
         } else {
-            herdr_core::diagnostic!(json!({
+            hide_core::diagnostic!(json!({
                 "component": "node_daemon",
                 "kind": "core_link.sign_in_malformed",
             }));
@@ -248,7 +248,7 @@ async fn control_link(
         }
         None => Err("a core_link event names disconnect, reconnect or retry".to_owned()),
     };
-    herdr_core::diagnostic!(json!({
+    hide_core::diagnostic!(json!({
         "component": "node_daemon",
         "kind": "core_link.control",
         "action": action.map(|action| format!("{action:?}").to_lowercase()),
@@ -292,7 +292,7 @@ async fn attached(
     let relay = match relay {
         Ok(relay) => relay,
         Err(message) => {
-            herdr_core::diagnostic!(json!({
+            hide_core::diagnostic!(json!({
                 "component": "node_daemon",
                 "kind": "screen.relay_failed",
                 "connection": connection,
@@ -302,6 +302,7 @@ async fn attached(
         }
     };
     let mut live = state.live.clone();
+    let renderer = matches!(handshake.client_kind.as_deref(), Some("web" | "desktop"));
     let mut terminals: Option<HubClient> = None;
     let mut told = InputNotices::default();
     let unsent = state.terminals.unsent.watch(connection);
@@ -354,6 +355,12 @@ async fn attached(
                     && socket.send(Message::Text(frame.text.into())).await.is_err()
                 {
                     return ScreenEnd::Left;
+                }
+                // Only a window writes a program's copy to its clipboard.
+                for copied in client.take_clipboard().iter().filter(|_| renderer) {
+                    if socket.send(Message::Text(copied.as_ref().into())).await.is_err() {
+                        return ScreenEnd::Left;
+                    }
                 }
             }
             () = unsent.ready() => {
@@ -557,7 +564,7 @@ struct RelayShared {
 /// One screen's relay to its core. Its task reads the core whatever the
 /// screen takes: the connection to the core closes a stream whose reader
 /// falls behind rather than stall every other screen, the panes and the
-/// link (`link_mux`), so a relay left unread would lose its screen.
+/// link (`hide_peer::mux`), so a relay left unread would lose its screen.
 struct ScreenRelay {
     shared: Arc<RelayShared>,
     to_core: mpsc::Sender<tungstenite::Message>,
@@ -587,7 +594,7 @@ impl ScreenRelay {
                             )) => {
                                 if !lock(&shared.backlog).push(frame) {
                                     // Logged now: the screen may not read for a while.
-                                    herdr_core::diagnostic!(json!({
+                                    hide_core::diagnostic!(json!({
                                         "component": "node_daemon",
                                         "kind": "screen.fell_behind",
                                         "connection": connection,

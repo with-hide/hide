@@ -1,0 +1,30 @@
+{
+  "plain": {
+    "version": 1,
+    "device_id": "14ad0319-60d7-5a7c-ae5a-f71550dc8a60",
+    "root": "/Users/me/blog",
+    "name": "blog",
+    "repository": {"mode": "repository", "repository": "me/blog"},
+    "issue_source": "local",
+    "new_work": "worktree",
+    "base_branch": {"mode": "branch", "branch": "main"},
+    "auto_fetch": false
+  },
+  "guarded": {
+    "version": 2,
+    "device_id": "14ad0319-60d7-5a7c-ae5a-f71550dc8a60",
+    "root": "/Users/me/app",
+    "repository": null,
+    "issue_source": null,
+    "new_work": null,
+    "base_branch": null,
+    "guardrails": {
+      "worktree_folder": true,
+      "base_branch": false,
+      "agent_merge": false,
+      "git_commands": true,
+      "files": true,
+      "paths": [".env", "*.pem"]
+    }
+  }
+}

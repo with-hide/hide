@@ -2,7 +2,7 @@
 // state per screen the PRD names (hide-ai-suggestions B3, B10-B19, and
 // memory-self-improve B5-B11 for the Hide global instruction), for
 // review captures. Which rows exist, their groups and counts are the core's
-// and are tested in herdr-core.
+// and are tested in hide-core.
 import { useEffect, useLayoutEffect, useMemo } from "react";
 import { createActions } from "../actions";
 import { InterfaceLanguageBoundary } from "../i18n/client";
@@ -261,15 +261,16 @@ export function hideAiSceneProject(state: HideAiSceneState, workspaceId = "herdr
   }
 }
 
-/** The lane pinned on the Hide AI tool (lane id `memory`), the scene's width wide. */
-const VIEW: WorkspaceView = { device_id: "local", path: "/projects/herdr-ide", open: true, documents: false, tool: "memory", pinned: true, document_width: null, detail_width: null, explorer_width: null, panel_width: null, lane_called: 0, lane_calls: 0, lane_called_side: "view" };
-const FRAME: LaneFrame = { mode: "docked", agents: 0, width: 0, view: null, tool: { field: "panel_width", width: 0, min: 360 }, stacked: false, narrowPin: false };
+/** The lane open on the Hide AI tool (lane id `memory`), the scene's width wide. */
+const VIEW: WorkspaceView = { device_id: "local", path: "/projects/herdr-ide", open: true, tray: { tab_id: "t1", shown: false, count: 0 }, tool: "memory", document_width: null, explorer_width: null, panel_width: null, lane_called: 0, lane_calls: 0, lane_called_side: "view" };
+const FRAME: LaneFrame = { mode: "overlay", agents: 0, width: 0, view: null, tool: { field: "panel_width", width: 0, min: 360 }, stacked: false };
 const SIZES: LaneSizes = { agentMin: 480, viewMin: 360, viewIdeal: 520, lanePage: 900, explorerMin: 180, explorerIdeal: 240, panelMin: 360, panelIdeal: 400, divider: 8 };
 
 export function HideAiScene({ theme, state, width, language }: HideAiSceneParams) {
   const actions = useMemo(() => createActions(() => true), []);
   const rest = useMemo(() => ({
     navigator: {
+      siblings_shown: 5,
       focused_device_id: "local", focused_checkout_id: "main", focused_workspace_id: "herdr-ide",
       devices: [{ id: "local", label: "This Mac", kind: "local", state: "local" }],
       workspaces: [{ id: "herdr-ide", label: "herdr-ide", device_id: "local", path: "/projects/herdr-ide", checkouts: [{ id: "main", workspace_id: "herdr-ide", path: "/projects/herdr-ide", label: "main", tabs: [], active_tab_id: null, strip: [] }] }],

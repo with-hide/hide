@@ -141,9 +141,24 @@ pub fn facts_and_repository(
 }
 
 /// The durable id of the project at `root` on `device_id`: the same root on
-/// two devices is two projects (PRD S5.5 B2).
+/// two devices is two projects (PRD S5.5 B2). The root is hashed in its wire
+/// spelling (`hide_platform::path`), so the device that owns it and a core on
+/// another system, which reads the root only as the device sent it, derive
+/// one id; on macOS and Linux that is the path's own text.
 pub fn project_id(device_id: &str, root: &Path) -> String {
-    let material = format!("{}\0{}", device_id, root.to_string_lossy());
+    let material = format!(
+        "{}\0{}",
+        device_id,
+        hide_platform::path::to_wire_lossy(root)
+    );
+    format!("project:{:x}", Sha256::digest(material.as_bytes()))
+}
+
+/// The id builds before [`project_id`] hashed the wire spelling derived
+/// from `root` as written. The same id on macOS and Linux; on Windows it
+/// is what a store keyed by an earlier id is moved from.
+pub fn project_id_as_written(device_id: &str, root: &str) -> String {
+    let material = format!("{device_id}\0{root}");
     format!("project:{:x}", Sha256::digest(material.as_bytes()))
 }
 
@@ -1107,6 +1122,30 @@ pub mod git {
 mod tests {
     use super::*;
     use std::process::Command;
+
+    /// A core on another system reads a device's root only as the device
+    /// sent it, on the wire; the id it derives is the one the device derives
+    /// from its own spelling, and a macOS or Linux root keeps its id.
+    #[test]
+    fn a_root_has_one_id_in_its_wire_and_its_native_spelling() {
+        assert_eq!(
+            project_id("mini", Path::new("/Users/me/repo")),
+            project_id_as_written("mini", "/Users/me/repo")
+        );
+        let wire = project_id("pc", Path::new("C:/Users/me/repo"));
+        assert_eq!(wire, project_id_as_written("pc", "C:/Users/me/repo"));
+        assert_ne!(wire, project_id("pc", Path::new("C:/Users/me/Repo")));
+        assert_ne!(wire, project_id("mini", Path::new("C:/Users/me/repo")));
+        if cfg!(windows) {
+            for native in [
+                r"C:\Users\me\repo",
+                r"\\?\C:\Users\me\repo",
+                r"c:\Users\me\repo",
+            ] {
+                assert_eq!(project_id("pc", Path::new(native)), wire, "{native}");
+            }
+        }
+    }
 
     #[test]
     fn linked_worktrees_share_one_project_identity() {

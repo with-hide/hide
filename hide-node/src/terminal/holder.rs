@@ -1,31 +1,24 @@
 //! A node's panes held by pane holders (PRD engine-bundle-2-pane-holder
 //! D-10, D-11, D-15, D-17): starting and ending them, attaching their screens
-//! through the terminal service beside the node's Herdr sessions, and, when
-//! the node starts, finding again the holders that ran on while it was gone.
+//! through the terminal service, and, when the node starts, finding again
+//! the holders that ran on while it was gone.
 //!
-//! Nothing here runs unless the development switch [`SWITCH`] is on: with it
-//! off a node opens Herdr sessions only, as it always has, and starts,
-//! adopts and reads no holder (B1). With it on, [`Holders`] owns the state
-//! folder's pane records (`hide_kit::panes`) and [`PaneAttacher`] opens a
-//! pane it knows by them over its holder's socket and every other pane over
-//! Herdr. A holder pane's screen reaches the [`super::OutputSink`] as the
-//! fragments the holder draws, each delivered as the frame a Herdr session
-//! delivers, and its input goes out as the bytes, resizes and wheels a Herdr
-//! session takes; a holder encodes those for its program's own settings.
+//! [`Holders`] owns the state folder's pane records (`hide_kit::panes`) and
+//! [`PaneAttacher`] opens a pane it knows by them over its holder's socket. A holder pane's screen reaches the [`super::OutputSink`] as the
+//! fragments the holder draws, each delivered as a frame, and its input goes
+//! out as bytes, resizes and wheels; a holder encodes those for its
+//! program's own settings.
 //!
 //! The holder's connection is the one that holds its screen and input; a
 //! second node that says hello takes it over, and this node's session ends
 //! `taken_over`, which is never tried again on its own (B9). A holder that
 //! speaks a version older than [`OLDEST_HOLDER_VERSION`] is reported
 //! `unsupported_holder_version` and left running (B10). A device's node
-//! runs holders only when the core that dialed it asks
-//! (`Call::HoldersStart`, PRD engine-bundle-3-core-owns D-22), never by its
-//! own environment's switch ([`device_switch`]); a Windows device runs none,
-//! since its node runs under a job its `OwnedChild` start made, which a
-//! holder cannot break away from.
+//! runs holders when its core asks (`Call::HoldersStart`, PRD
+//! engine-bundle-3-core-owns D-22); a Windows device's node runs inside the
+//! job its SSH session made, which a holder leaves through `start_resident`.
 
 use std::collections::BTreeMap;
-use std::ffi::OsStr;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Condvar, Mutex, PoisonError};
@@ -33,7 +26,7 @@ use std::sync::{Arc, Condvar, Mutex, PoisonError};
 use std::thread;
 use std::time::{Duration, Instant};
 
-use hide_holder_protocol::record::{EndReason, PaneRecord};
+use hide_holder_protocol::record::{EndReason, PaneRecord, Phase};
 use hide_holder_protocol::{
     Answer, Ask, Capability, ClientMessage, CloseReason, Closed, HolderMessage, Key, MAX_INPUT,
     MAX_KEYS, MAX_PASTE, Modifiers, OLDEST_HOLDER_VERSION, OpenError, PROTOCOL_VERSION, Scroll,
@@ -53,73 +46,15 @@ use hide_platform::ipc::LocalStream;
 use serde_json::json;
 
 use super::Service;
-use super::protocol::{Mode, SessionEvent};
-use super::session::{
-    Attacher, Cleanup, OpenFailure, SessionEvents, SessionParts, SessionWriter, Transport,
-};
+use super::protocol::SessionEvent;
+use super::session::{Attacher, Cleanup, OpenFailure, SessionEvents, SessionWriter, Transport};
 
+mod turns;
 mod watch;
 
+use turns::{TurnRefused, Turns};
 use watch::Watches;
 pub(super) use watch::too_old;
-
-/// The development switch that lets a node run pane holders.
-///
-/// - Requirement: optional; it is read once, when a node's terminal service
-///   starts.
-/// - Shape: unset, `0` (off) or `1` (on). Any other value fails the node's
-///   start with the values it takes, rather than being read as off.
-/// - Fallback: off.
-/// - When it is missing: the node opens every pane through its Herdr's
-///   terminal sessions and starts, adopts and reads no pane holder; the app
-///   and the daemon behave as they always have. Nobody but a developer of
-///   the next engine sets it: the app shows no holder pane in this bundle.
-/// - Removal: deleted in bundle 4, the switch release, once the new engine
-///   is the default (docs/ARCHITECTURE.md, The pane holder).
-pub const SWITCH: &str = "HIDE_DEV_PANE_HOLDER";
-
-/// Whether [`SWITCH`] is on.
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub enum Switch {
-    Off,
-    On,
-}
-
-impl Switch {
-    /// The switch as this process's environment sets it.
-    pub fn from_env() -> Result<Self, String> {
-        Self::parse(std::env::var_os(SWITCH).as_deref())
-    }
-
-    /// The switch a value of [`SWITCH`] sets.
-    pub fn parse(value: Option<&OsStr>) -> Result<Self, String> {
-        match value.map(|value| value.to_str()) {
-            None => Ok(Self::Off),
-            Some(Some("0")) => Ok(Self::Off),
-            Some(Some("1")) => Ok(Self::On),
-            Some(value) => Err(format!(
-                "{SWITCH} is {}; it takes 1 (run pane holders) or 0 (do not), or is left unset",
-                value.map_or_else(|| "not text".to_owned(), |value| format!("{value:?}"))
-            )),
-        }
-    }
-}
-
-/// A device's node whose core runs its panes on Herdr opens them through
-/// Herdr whatever its own environment's switch says: the core that dialed
-/// it chooses its engine (`Call::HoldersStart`), so with the switch on here
-/// it says so in the diagnostic log. A value the switch does not take fails
-/// the device's terminal start, as it fails the local daemon's.
-pub fn device_switch() -> Result<(), String> {
-    if Switch::from_env()? == Switch::On {
-        crate::diagnostic!(json!({
-            "component": "pane_holder",
-            "kind": "pane_holder.device_node_unsupported",
-            "message": "a device's node runs pane holders only when its core asks; its panes open through Herdr",
-        }));
-    }
-    Ok(())
-}
 
 /// How long opening a holder's connection may take: its connect and its
 /// hello's answer, a screen's or a watch's (`watch.rs`).
@@ -133,7 +68,7 @@ const ASK_LIMIT: Duration = Duration::from_secs(5);
 /// bounds a start's reconcile to about nine minutes however many panes it
 /// finds; one reconcile takes up every pane of a state folder unless their
 /// holders are slow to end.
-const RECONCILE_ROUNDS: usize = 8;
+pub const RECONCILE_ROUNDS: usize = 8;
 
 /// The panes this node opens through their holders, by pane id: those it
 /// started or adopted and has not ended, and those whose holder it is
@@ -148,7 +83,12 @@ struct Known {
     owns_every_pane: AtomicBool,
     /// Told whenever a start under way ends, either way.
     settled: Condvar,
+    /// Told when an open cannot reach a holder ([`Holders::on_holder_lost`]).
+    unreachable: Mutex<Option<Unreachable>>,
 }
+
+/// What is done with the pane of a holder an open could not reach.
+type Unreachable = Arc<dyn Fn(&str) + Send + Sync>;
 
 /// A pane's holder as the node knows it.
 enum Holder {
@@ -161,11 +101,10 @@ impl Known {
     /// The socket of `pane`'s holder, waiting until `deadline` for a start
     /// under way: a pane is drawn, and its view attaches, while its holder
     /// starts (the core's own engine answers a new tab or split first), and
-    /// that attach is the holder's to answer, not Herdr's. `None` for a
-    /// pane no holder runs or starts on a node that also runs Herdr.
-    /// A node of the core's own engine waits for even an unseen pane: the
-    /// layout may be drawn before its start is registered. A deadline is
-    /// a holder failure, never a reason to open that pane through Herdr.
+    /// that attach is the holder's to answer. `None` for a pane no holder
+    /// runs or starts before the core's own engine owns every pane; once it
+    /// does, the node waits for even an unseen pane, since the layout may be
+    /// drawn before its start is registered. A deadline is a holder failure.
     fn socket_once_started(
         &self,
         pane: &str,
@@ -194,7 +133,13 @@ impl Known {
 
     /// Whether `pane` is a holder pane: one that runs, or one being started.
     fn contains(&self, pane: &str) -> bool {
-        self.owns_every_pane.load(Ordering::Acquire) || self.lock().contains_key(pane)
+        self.owns_every_pane.load(Ordering::Acquire) || self.holds(pane)
+    }
+
+    /// Whether a holder of `pane` is registered here: one that runs, or one
+    /// being started, whether or not the holders own every pane.
+    fn holds(&self, pane: &str) -> bool {
+        self.lock().contains_key(pane)
     }
 
     /// A start of `pane`'s holder begins; a pane that already runs keeps
@@ -229,6 +174,25 @@ impl Known {
     fn lock(&self) -> std::sync::MutexGuard<'_, BTreeMap<String, Holder>> {
         self.panes.lock().unwrap_or_else(PoisonError::into_inner)
     }
+
+    fn set_unreachable(&self, tell: Unreachable) {
+        *self
+            .unreachable
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner) = Some(tell);
+    }
+
+    /// Tells whoever asked that an open of `pane` could not reach its holder.
+    fn tell_unreachable(&self, pane: &str) {
+        let tell = self
+            .unreachable
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .clone();
+        if let Some(tell) = tell {
+            tell(pane);
+        }
+    }
 }
 
 /// Who is told when a holder pane's program exits on its own.
@@ -249,28 +213,16 @@ impl Ends {
 }
 
 /// Opens a pane its node knows by its holder's record over the holder's
-/// socket, and every other pane through `herdr`.
+/// socket; a pane no holder runs has no session to open.
 pub struct PaneAttacher {
-    herdr: Box<dyn Attacher>,
     known: Arc<Known>,
     ends: Arc<Ends>,
 }
 
 impl Attacher for PaneAttacher {
-    fn open(
-        &self,
-        pane_id: &str,
-        mode: Mode,
-        rows: u16,
-        cols: u16,
-    ) -> Result<SessionParts, String> {
-        self.herdr.open(pane_id, mode, rows, cols)
-    }
-
     fn open_transport(
         &self,
         pane_id: &str,
-        mode: Mode,
         size: Option<GridSize>,
     ) -> Result<Transport, OpenFailure> {
         let deadline = Instant::now() + hide_kit::panes::START_LIMIT;
@@ -279,13 +231,24 @@ impl Attacher for PaneAttacher {
             .socket_once_started(pane_id, deadline)
             .map_err(OpenFailure::retried)?
         {
-            Some(socket) => open_watched(pane_id, &socket, size, Some(Arc::clone(&self.ends))),
-            None => self.herdr.open_transport(pane_id, mode, size),
+            Some(socket) => open_watched(pane_id, &socket, size, Some(Arc::clone(&self.ends)))
+                .inspect_err(|failure| {
+                    if failure.category == "holder_unreachable" {
+                        self.known.tell_unreachable(pane_id);
+                    }
+                }),
+            None => Err(OpenFailure::retried(format!(
+                "Pane {pane_id} has no holder on this node"
+            ))),
         }
     }
 
     fn keeps_own_size(&self, pane_id: &str) -> bool {
-        self.known.contains(pane_id) || self.herdr.keeps_own_size(pane_id)
+        self.known.contains(pane_id)
+    }
+
+    fn holds(&self, pane_id: &str) -> bool {
+        self.known.holds(pane_id)
     }
 }
 
@@ -310,11 +273,23 @@ fn open_watched(
 ) -> Result<Transport, OpenFailure> {
     let (stream, welcome) = hide_holder_protocol::open(
         socket,
-        vec![Capability::Screen, Capability::Notices, Capability::Keys],
+        vec![
+            Capability::Screen,
+            Capability::Notices,
+            Capability::Keys,
+            Capability::Submit,
+            Capability::Clipboard,
+            Capability::MouseOutside,
+        ],
         Instant::now() + OPEN_LIMIT,
     )
     .map_err(open_failure)?;
     let reads_keys = welcome.sends.contains(&Capability::Keys);
+    let submissions = if welcome.sends.contains(&Capability::Submit) {
+        super::session::Submissions::Whole
+    } else {
+        super::session::Submissions::Refused
+    };
     let found = GridSize {
         rows: welcome.size.rows,
         cols: welcome.size.cols,
@@ -322,6 +297,7 @@ fn open_watched(
     let mut writer = HolderWriter {
         stream: stream.duplicate(),
         size: found,
+        reads_outside: welcome.sends.contains(&Capability::MouseOutside),
     };
     if let Some(size) = size {
         writer.resize(size).map_err(|error| {
@@ -336,9 +312,9 @@ fn open_watched(
             screen: None,
             ends,
         }),
-        writer: Some(Box::new(writer)),
+        writer: Box::new(writer),
         reads_keys,
-        kept: None,
+        submissions,
         // After the release has been written (or a second passed), a
         // reader still waiting on a holder that never answered it is let go.
         cleanup: Cleanup::Other(Box::new(move || shutdown.shutdown())),
@@ -436,6 +412,7 @@ impl HolderEvents {
                 }));
                 return None;
             }
+            Ok(HolderMessage::Clipboard(text)) => SessionEvent::Clipboard { text },
             Ok(HolderMessage::Fragment(fragment)) => {
                 // A full fragment opens an epoch at 0; every other one is the
                 // next of its epoch. One out of order means the screen this
@@ -497,9 +474,17 @@ struct HolderWriter {
     /// The size the holder has: a resize to it is not sent, since the holder
     /// resizes its PTY, and signals its program, on every one it is sent.
     size: GridSize,
+    /// The holder reads a pointer past the grid's edge
+    /// ([`Capability::MouseOutside`]); an older one is told the grid's
+    /// nearest cell alone.
+    reads_outside: bool,
 }
 
 impl SessionWriter for HolderWriter {
+    fn submit(&mut self, submit: &hide_holder_protocol::Submit) -> std::io::Result<()> {
+        write_client(&mut self.stream, &ClientMessage::Submit(submit.clone()))
+    }
+
     fn input(&mut self, bytes: &[u8]) -> std::io::Result<()> {
         for chunk in bytes.chunks(MAX_INPUT) {
             write_client(&mut self.stream, &ClientMessage::Input(chunk.to_vec()))?;
@@ -562,6 +547,14 @@ impl SessionWriter for HolderWriter {
         )
     }
 
+    fn mouse(&mut self, mouse: &hide_holder_protocol::Mouse) -> std::io::Result<()> {
+        let mouse = hide_holder_protocol::Mouse {
+            outside: mouse.outside.filter(|_| self.reads_outside),
+            ..*mouse
+        };
+        write_client(&mut self.stream, &ClientMessage::Mouse(mouse))
+    }
+
     fn release(&mut self) -> std::io::Result<()> {
         write_client(&mut self.stream, &ClientMessage::Release)
     }
@@ -593,7 +586,59 @@ pub struct Recovered {
     pub complete: bool,
 }
 
-/// A state folder's holder panes, as a node with [`SWITCH`] on runs them.
+/// What renewing a pane's holder did ([`Holders::renew`]), one value the
+/// core reads whole: whether this build's holder runs the pane, the earlier
+/// one still does untouched, or none of this renewal is known to.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub enum Renewal {
+    /// The pane's record names a running holder from this build's version
+    /// folder.
+    Current,
+    /// The pane runs from `to` now, in place of its holder from `from`.
+    Renewed { from: String, to: String },
+    /// The pane's record names a running holder from another build, which
+    /// was left untouched: ending it could have ended something, the pane's
+    /// input could not be settled, or nothing could replace it; why.
+    Kept { code: &'static str, message: String },
+    /// The pane's record is closed or gone: nothing runs it to wake in.
+    Closed(String),
+    /// Another change of the pane's holder kept its turn past the wait.
+    Busy(String),
+    /// The earlier holder ended and the new one did not start: no holder
+    /// runs the pane.
+    Lost(String),
+    /// The earlier holder was asked to end and whether it did is not known,
+    /// or a new holder's start may have left something running: the record
+    /// stays for the next reconcile to settle, and the pane is not used
+    /// until then.
+    Unsettled(String),
+}
+
+/// How long a renewal waits for the pane's turn: one earlier change's
+/// bound and a little more. A renewal keeps the turn for its writes
+/// ([`WRITES_LIMIT`]), the earlier holder's close
+/// ([`hide_kit::panes::CLOSE_LIMIT`]) and the next one's start
+/// ([`hide_kit::panes::START_LIMIT`]): 35 s.
+const RENEW_TURN_WAIT: Duration = Duration::from_secs(45);
+
+/// How long a close waits for the pane's turn: longer than a renewal can
+/// keep it, so a close fails only behind a renewal that is stuck.
+const CLOSE_TURN_WAIT: Duration = Duration::from_secs(60);
+
+/// How long the writes handed to a pane's holder before a renewal may take
+/// to be written ([`Service::writes_settled`]).
+const WRITES_LIMIT: Duration = Duration::from_secs(5);
+
+/// What [`Holders::renew`] found may be ended: the earlier holder's
+/// record, the start that replaces it, and this build's version folder,
+/// held as used until the new holder runs from it.
+struct Ending {
+    record: PaneRecord,
+    request: StartRequest,
+    folder: hide_kit::holders::Reservation,
+}
+
+/// A state folder's holder panes, as a node runs them.
 pub struct Holders {
     panes: Panes,
     source: Source,
@@ -603,22 +648,23 @@ pub struct Holders {
     ends: Arc<Ends>,
     /// Each holder pane's facts, on a watch of its own (`watch`).
     watches: Arc<Watches>,
+    /// One renewal or close of a pane's holder at a time (`turns`).
+    turns: Turns,
     reports: Arc<dyn ReportSink>,
     /// What the last [`Holders::recover`] found, for the core's restore to
     /// wait on ([`Holders::recovered`]).
     recovery: (Mutex<Option<HolderRecovery>>, Condvar),
 }
 
-/// What [`Holders::start_local`] starts: the node's terminal service, and its
-/// holder panes when the switch is on.
+/// What [`Holders::start_local`] starts: the node's terminal service and its
+/// holder panes.
 pub struct LocalTerminals {
     pub service: Arc<Service>,
-    pub holders: Option<Arc<Holders>>,
+    pub holders: Arc<Holders>,
 }
 
 /// Where a node's holder panes live: the home whose version folders the
 /// holders are copied into, and the state folder that keeps their records.
-/// Only a node with the switch on has them.
 #[derive(Clone, Copy, Debug)]
 pub struct HolderFolders<'a> {
     pub home: &'a Path,
@@ -654,6 +700,7 @@ impl Holders {
             known: Arc::default(),
             ends: Arc::default(),
             watches: Arc::default(),
+            turns: Turns::default(),
             reports,
             recovery: (Mutex::new(None), Condvar::new()),
         })
@@ -662,8 +709,7 @@ impl Holders {
     /// The local node's holder program: the one beside this program, and on
     /// Windows the pinned ConPTY runtime in the folder beside it the app
     /// package puts it in ([`hide_kit::holders::CONPTY_SOURCE`],
-    /// `scripts/fetch-conpty.py`). No Herdr is asked for either, so a node
-    /// runs its holders where no Herdr is.
+    /// `scripts/fetch-conpty.py`).
     pub fn local_source() -> Result<Source, String> {
         let program = std::env::current_exe()
             .map_err(|error| format!("this program could not be found: {error}"))?;
@@ -676,59 +722,46 @@ impl Holders {
         })
     }
 
-    /// The local node's terminal service as a daemon starts it: given
-    /// `holders` (the switch on), their state folder's holder panes beside
-    /// `herdr`'s sessions, the holder from [`Holders::local_source`], and
-    /// the holders that ran on while no node was there found again, and the
-    /// version folders nothing runs from removed when its connection has
-    /// acquired pane ownership; given none (the switch off),
-    /// `herdr`'s sessions alone and nothing of holders opened, read or
-    /// removed. hided and the tools that measure a node
-    /// (`hide-node/examples/holder_node.rs`) start it here, so what they
-    /// measure is how the daemon is built.
+    /// The local node's terminal service as a daemon starts it: the state
+    /// folder's holder panes, the holder from
+    /// [`Holders::local_source`], and the holders that ran on while no node
+    /// was there found again, and the version folders nothing runs from
+    /// removed when its connection has acquired pane ownership. hided and
+    /// the tools that measure a node (`hide-node/examples/holder_node.rs`)
+    /// start it here, so what they measure is how the daemon is built.
     pub fn start_local(
-        holders: Option<HolderFolders<'_>>,
-        herdr: Box<dyn Attacher>,
+        folders: HolderFolders<'_>,
         outputs: Arc<dyn super::OutputSink>,
         reports: Arc<dyn ReportSink>,
     ) -> Result<LocalTerminals, String> {
-        let holders = match holders {
-            None => None,
-            Some(folders) => Some((folders, Self::local_source()?)),
-        };
-        Self::start_from(holders, herdr, outputs, reports)
+        Self::start_from(folders, Self::local_source()?, outputs, reports)
     }
 
     /// [`Holders::start_local`] with the holder program `source` names, for
     /// a test that starts a node as the daemon does with the holder it built.
     pub fn start_from(
-        holders: Option<(HolderFolders<'_>, Source)>,
-        herdr: Box<dyn Attacher>,
+        folders: HolderFolders<'_>,
+        source: Source,
         outputs: Arc<dyn super::OutputSink>,
         reports: Arc<dyn ReportSink>,
     ) -> Result<LocalTerminals, String> {
-        let holders = match holders {
-            None => None,
-            Some((folders, source)) => {
-                Some(Arc::new(Self::open(folders, source, Arc::clone(&reports))?))
-            }
-        };
-        let attacher = match &holders {
-            Some(holders) => holders.attacher(herdr),
-            None => herdr,
-        };
+        let holders = Arc::new(Self::open(folders, source, Arc::clone(&reports))?);
         let service = Arc::new(
-            Service::start(attacher, outputs, reports, super::RetryPolicy::Automatic)
-                .map_err(|error| format!("terminal service failed to start: {error}"))?,
+            Service::start(
+                holders.attacher(),
+                outputs,
+                reports,
+                super::RetryPolicy::Automatic,
+            )
+            .map_err(|error| format!("terminal service failed to start: {error}"))?,
         );
         Ok(LocalTerminals { service, holders })
     }
 
-    /// The attacher the node's terminal service opens panes with: holder
-    /// panes over their sockets, the rest through `herdr`.
-    pub fn attacher(&self, herdr: Box<dyn Attacher>) -> Box<dyn Attacher> {
+    /// The attacher the node's terminal service opens panes with: each
+    /// pane over its holder's socket.
+    pub fn attacher(&self) -> Box<dyn Attacher> {
         Box::new(PaneAttacher {
-            herdr,
             known: Arc::clone(&self.known),
             ends: Arc::clone(&self.ends),
         })
@@ -842,6 +875,291 @@ impl Holders {
         Ok(())
     }
 
+    /// Brings `intent`'s pane to this build's holder (with-hide/hide-private#646):
+    /// a pane whose agent is asleep, whose holder runs from another build's
+    /// version folder, and whose terminal session runs nothing but its shell,
+    /// is ended and started again under its own id from `request`, the
+    /// replacement naming the earlier start's incarnation, and its screen
+    /// attached again where it was.
+    ///
+    /// It takes the pane's turn first ([`turns`]) and keeps it to its last
+    /// effect, so a close of the pane asked meanwhile ends the holder it
+    /// leaves, and a second renewal judges the pane as this one left it. Only
+    /// a pane whose agent is asleep is renewed: the node then takes no input
+    /// into it but the sleep's own (`Service::type_input`), and the writes
+    /// handed to its holder before that are waited for first. Every refusal
+    /// before the close ends nothing.
+    pub fn renew(
+        &self,
+        guard: &hide_kit::panes::Request<'_>,
+        service: &Service,
+        intent: &HolderIntent,
+        request: impl FnOnce() -> Result<StartRequest, String>,
+    ) -> Renewal {
+        let pane = intent.pane.as_str();
+        let turn = self.turns.take(pane, RENEW_TURN_WAIT);
+        let renewal = match &turn {
+            Ok(_) => self.renew_in_turn(guard, service, intent, request),
+            Err(TurnRefused::Full) => {
+                Renewal::Busy(format!("pane {pane}'s holder has too many changes waiting"))
+            }
+            Err(TurnRefused::Expired) => Renewal::Busy(format!(
+                "pane {pane}'s holder was being changed past {RENEW_TURN_WAIT:?}"
+            )),
+        };
+        match &renewal {
+            // Its screen attaches again to the holder that runs it now.
+            Renewal::Renewed { .. } => service.holder_replaced(pane),
+            Renewal::Lost(_) => service.holder_gone(pane),
+            _ => {}
+        }
+        crate::diagnostic!(match &renewal {
+            Renewal::Current => json!({
+                "component": "pane_holder",
+                "kind": "pane_holder.renewal_current",
+                "pane_id": pane,
+            }),
+            Renewal::Renewed { from, to } => json!({
+                "component": "pane_holder",
+                "kind": "pane_holder.renewed",
+                "pane_id": pane,
+                "from": from,
+                "to": to,
+            }),
+            Renewal::Kept { code, message } => json!({
+                "component": "pane_holder",
+                "kind": "pane_holder.renewal_kept",
+                "pane_id": pane,
+                "code": code,
+                "message": message,
+            }),
+            Renewal::Closed(why)
+            | Renewal::Busy(why)
+            | Renewal::Lost(why)
+            | Renewal::Unsettled(why) => {
+                json!({
+                    "component": "pane_holder",
+                    "kind": "pane_holder.renewal_refused",
+                    "pane_id": pane,
+                    "outcome": match &renewal {
+                        Renewal::Closed(_) => "closed",
+                        Renewal::Busy(_) => "busy",
+                        Renewal::Lost(_) => "lost",
+                        _ => "unsettled",
+                    },
+                    "message": why,
+                })
+            }
+        });
+        drop(turn);
+        renewal
+    }
+
+    /// Whether `pane`'s holder may be ended for a renewal now, judged once
+    /// with the pane's turn held: its record names a running holder and its
+    /// shell, from another build's version folder; the pane is asleep; the
+    /// writes handed to its holder were written; and ending the holder ends
+    /// nothing but the shell ([`hide_platform::process::runs_alone`], the set
+    /// its end ends). [`Renewal::Kept`] leaves a holder the record names
+    /// running untouched; a pane whose record does not name one is
+    /// [`Renewal::Closed`] or [`Renewal::Unsettled`].
+    fn endable(
+        &self,
+        service: &Service,
+        pane: &str,
+        request: impl FnOnce() -> Result<StartRequest, String>,
+    ) -> Result<Ending, Renewal> {
+        let kept = |code: &'static str, message: String| Renewal::Kept { code, message };
+        let holder = holder_pane(pane);
+        let record = match self.panes.record(&holder) {
+            Ok(Some(record)) => record,
+            Ok(None) => return Err(Renewal::Closed(format!("pane {pane} has no record"))),
+            Err(why) => return Err(Renewal::Unsettled(format!("pane {pane}'s record: {why}"))),
+        };
+        if !running(&record) {
+            let why = format!(
+                "pane {pane}'s holder is {:?}, {:?}",
+                record.phase, record.end
+            );
+            return Err(match record.phase {
+                Phase::Ended | Phase::Closing => Renewal::Closed(why),
+                _ => Renewal::Unsettled(why),
+            });
+        }
+        let (Some(holding), Some(shell)) = (record.holder, record.program) else {
+            return Err(kept(
+                "shell_unknown",
+                format!("pane {pane}'s record names no shell"),
+            ));
+        };
+        let to = self
+            .panes
+            .folder_of(&self.source)
+            .map_err(|why| kept("holder_folder_unread", why))?;
+        if record.version_folder == to {
+            return Err(Renewal::Current);
+        }
+        if !service.asleep(pane) {
+            return Err(kept(
+                "pane_awake",
+                format!("pane {pane}'s agent is not asleep, so its input is not held"),
+            ));
+        }
+        let folder = self
+            .panes
+            .prepare_folder(&self.source)
+            .map_err(|why| kept("holder_folder_unprepared", why))?;
+        service
+            .writes_settled(pane, WRITES_LIMIT)
+            .map_err(|why| kept("pane_input_unsettled", why))?;
+        let recorded =
+            |identity: hide_holder_protocol::record::Identity| hide_platform::process::Recorded {
+                pid: identity.pid,
+                started: identity.started,
+            };
+        match hide_platform::process::runs_alone(recorded(holding), recorded(shell)) {
+            Ok(true) => {}
+            Ok(false) => {
+                return Err(kept(
+                    "pane_busy",
+                    format!("pane {pane}'s shell runs a program, in its terminal or behind it"),
+                ));
+            }
+            Err(error) => {
+                return Err(kept(
+                    "pane_busy",
+                    format!("what pane {pane}'s holder would end could not be read: {error}"),
+                ));
+            }
+        }
+        let request = request().map_err(|why| kept("start_unprepared", why))?;
+        Ok(Ending {
+            record,
+            request: StartRequest {
+                pane: holder,
+                ..request
+            },
+            folder,
+        })
+    }
+
+    /// [`Holders::renew`] with the pane's turn held, up to its answer: acts
+    /// on [`Holders::endable`]. Once the earlier holder was asked to end, its
+    /// record says what the close did: one that still names the same running
+    /// holder was not taken and is [`Renewal::Kept`]; one that ended is
+    /// replaced; anything else is [`Renewal::Unsettled`].
+    fn renew_in_turn(
+        &self,
+        guard: &hide_kit::panes::Request<'_>,
+        service: &Service,
+        intent: &HolderIntent,
+        request: impl FnOnce() -> Result<StartRequest, String>,
+    ) -> Renewal {
+        let pane = intent.pane.as_str();
+        let holder = holder_pane(pane);
+        let Ending {
+            record,
+            request,
+            folder: _folder,
+        } = match self.endable(service, pane, request) {
+            Ok(ending) => ending,
+            Err(renewal) => return renewal,
+        };
+        let socket = hide_kit::layout::holder_socket(&self.state_dir, &holder);
+        // An earlier build's holder's close is one Hide asked for, so its
+        // screen draws no failure; it is open again once the renewal answers.
+        service.control(TerminalControl::Closing {
+            pane: pane.to_owned(),
+            closing: true,
+        });
+        let renewal = self.replace(guard, intent, &record, request, socket);
+        service.control(TerminalControl::Closing {
+            pane: pane.to_owned(),
+            closing: false,
+        });
+        renewal
+    }
+
+    /// Ends `record`'s holder and starts `request` in its place.
+    fn replace(
+        &self,
+        guard: &hide_kit::panes::Request<'_>,
+        intent: &HolderIntent,
+        record: &PaneRecord,
+        request: StartRequest,
+        socket: PathBuf,
+    ) -> Renewal {
+        let pane = intent.pane.as_str();
+        let holder = holder_pane(pane);
+        // The earlier holder's watch ends here, so its end changes nothing
+        // of the pane, whose rules the next watch takes up.
+        self.watches.retire(pane);
+        let ended = match self.panes.close(guard.owner(), &holder) {
+            Ok(ended) => ended,
+            Err(error) => {
+                let now = self.panes.record(&holder);
+                if let Ok(Some(now)) = &now
+                    && now.incarnation == record.incarnation
+                    && running(now)
+                {
+                    self.watches.watch(pane, socket);
+                    return Renewal::Kept {
+                        code: "holder_not_ended",
+                        message: format!("pane {pane}'s holder was not asked to end: {error}"),
+                    };
+                }
+                self.known.remove(pane);
+                self.watches.forget(pane);
+                return Renewal::Unsettled(format!(
+                    "pane {pane}'s earlier holder was asked to end and its close did not finish: {error}"
+                ));
+            }
+        };
+        // Until the new holder runs, an open of the pane waits for it.
+        self.known.remove(pane);
+        self.known.starting(pane);
+        let started = self
+            .reserve(guard, intent, Some(ended.incarnation))
+            .and_then(|reserved| {
+                self.panes.start_reserved(
+                    guard,
+                    &holder,
+                    reserved.incarnation,
+                    &intent.digest,
+                    &self.source,
+                    || Ok(request),
+                )
+            });
+        let renewed = match started {
+            Ok(Started::Started(record) | Started::Existing(record)) if record.end.is_none() => {
+                record
+            }
+            failed => {
+                self.known.not_started(pane);
+                self.watches.forget(pane);
+                return match failed {
+                    Err(StartRefusal::Uncertain(why)) => Renewal::Unsettled(why),
+                    Ok(Started::Started(record) | Started::Existing(record)) => {
+                        Renewal::Lost(format!("the new holder ended: {:?}", record.end))
+                    }
+                    Err(refusal) => Renewal::Lost(refusal.to_string()),
+                };
+            }
+        };
+        self.known.insert(pane, socket.clone());
+        self.watches.watch(pane, socket);
+        Renewal::Renewed {
+            from: ended.version_folder,
+            to: renewed.version_folder,
+        }
+    }
+
+    /// Whether a renewal or a close of `pane`'s holder has the pane's turn
+    /// or waits for it.
+    pub fn changing(&self, pane: &str) -> bool {
+        self.turns.taken(pane)
+    }
+
     fn forget_screen(&self, service: &Service, pane: &str) {
         service.control(TerminalControl::Closing {
             pane: pane.to_owned(),
@@ -890,19 +1208,29 @@ impl Holders {
     /// Ends the pane: its program and everything it started, then its
     /// holder, within `hide_kit::panes::CLOSE_LIMIT`, and answers its record.
     /// The service's session of it ends as a close it asked for; the node
-    /// forgets the pane once it ended.
+    /// forgets the pane once it ended. It waits for the pane's turn, behind a
+    /// renewal under way, and so ends the holder that renewal leaves.
     pub fn terminate(
         &self,
         owner: &hide_kit::panes::Owner,
         service: &Service,
         pane: &str,
     ) -> Result<PaneRecord, CloseError> {
+        // Behind a renewal of the pane, whose holder this ends once it is
+        // done; a close is never dropped for one, only refused behind one
+        // that is stuck.
+        let _turn = self.turns.take(pane, CLOSE_TURN_WAIT).map_err(|refused| {
+            CloseError::Failed(format!(
+                "pane {pane}'s holder is being changed ({refused:?}); it was not asked to end"
+            ))
+        })?;
         service.control(TerminalControl::Closing {
             pane: pane.to_owned(),
             closing: true,
         });
         let closed = self.panes.close(owner, &holder_pane(pane));
         if closed.is_ok() || matches!(closed, Err(CloseError::NoRecord)) {
+            service.holder_gone(pane);
             self.forget_screen(service, pane);
         } else {
             service.control(TerminalControl::Closing {
@@ -957,9 +1285,44 @@ impl Holders {
     }
 
     /// The pane's shell and the processes in its terminal's foreground, as
-    /// [`Holders::read`] asks.
-    pub fn processes(&self, pane: &str) -> Result<Answer, OpenError> {
-        self.ask(pane, Ask::Processes)
+    /// [`Holders::read`] asks, by `within` when that is sooner than an ask's
+    /// own bound.
+    pub fn processes(&self, pane: &str, within: Duration) -> Result<Answer, OpenError> {
+        self.ask_by(pane, Ask::Processes, Instant::now() + within.min(ASK_LIMIT))
+    }
+
+    /// Waits until a start of `pane`'s holder under way here has settled,
+    /// either way, or `deadline` passed; it returns at once for a pane with
+    /// no start under way. The holder writes its program and `running` into
+    /// the record before the start settles, so a record read after this
+    /// names the program of a start that succeeded.
+    pub fn wait_settled(&self, pane: &str, deadline: Instant) {
+        // A pane past the deadline is the caller's to answer from its
+        // record; why the wait ended says nothing more.
+        let _ = self.known.socket_once_started(pane, deadline);
+    }
+
+    /// Calls `tell` with the pane when an open cannot reach its holder and
+    /// the pane's record names a holder that no longer runs (`Panes::holder_gone`):
+    /// the holder died without saying why. A holder that is only slow or busy
+    /// is never reported, and the open fails and is tried again as it did.
+    /// Nothing is ended here: what a daemon does about it is the caller's.
+    pub fn on_holder_lost(self: &Arc<Self>, tell: Arc<dyn Fn(&str) + Send + Sync>) {
+        let holders = Arc::downgrade(self);
+        self.known.set_unreachable(Arc::new(move |pane| {
+            let Some(holders) = holders.upgrade() else {
+                return;
+            };
+            if !holders.panes.holder_gone(&holder_pane(pane)) {
+                return;
+            }
+            crate::diagnostic!(json!({
+                "component": "pane_holder",
+                "kind": "pane_holder.holder_lost",
+                "pane_id": pane,
+            }));
+            tell(pane);
+        }));
     }
 
     /// The pane's record, read under no lock: a reader sees one whole
@@ -973,6 +1336,11 @@ impl Holders {
     /// Asks in the version the pane's record says its holder speaks, so a
     /// newer node still reads an older holder.
     fn ask(&self, pane: &str, ask: Ask) -> Result<Answer, OpenError> {
+        self.ask_by(pane, ask, Instant::now() + ASK_LIMIT)
+    }
+
+    /// [`Self::ask`], answered by `deadline`.
+    fn ask_by(&self, pane: &str, ask: Ask, deadline: Instant) -> Result<Answer, OpenError> {
         let holder = holder_pane(pane);
         let record = self
             .panes
@@ -988,7 +1356,7 @@ impl Holders {
             &hide_kit::layout::holder_socket(&self.state_dir, &holder),
             ask,
             record.protocol,
-            Instant::now() + ASK_LIMIT,
+            deadline,
         )
     }
 
@@ -1009,18 +1377,9 @@ impl Holders {
             let reconciled = self.panes.reconcile(owner, RECONCILE_BUDGET);
             let pending = reconciled.pending();
             recovered.complete = reconciled.is_complete();
-            for (pane, judgment) in reconciled.panes {
-                let waits = matches!(judgment, Judgment::Pending(_) | Judgment::Starting(_));
-                // A pane a round took up keeps what it was found; one left
-                // pending takes what a later round finds.
-                let settled = judged.get(&pane).is_some_and(|earlier| {
-                    !matches!(earlier, Judgment::Pending(_) | Judgment::Starting(_))
-                });
-                if !settled && !(waits && judged.contains_key(&pane)) {
-                    judged.insert(pane, judgment);
-                }
-            }
+            let unsettled = take_round(&mut judged, reconciled.panes);
             failed = reconciled.failed;
+            recovered.complete = recovered.complete && unsettled == 0;
             if recovered.complete {
                 break;
             }
@@ -1029,6 +1388,7 @@ impl Holders {
                 "kind": "pane_holder.reconcile_pending",
                 "round": round,
                 "pending": pending,
+                "unsettled": unsettled,
             }));
         }
         let mut alive = Vec::new();
@@ -1080,6 +1440,18 @@ impl Holders {
         }
         if let Some(failed) = failed {
             recovered.unjudged.push((String::new(), failed));
+        }
+        if !recovered.unjudged.is_empty() {
+            crate::diagnostic!(json!({
+                "component": "pane_holder",
+                "kind": "pane_holder.recovery_unjudged",
+                "rounds": RECONCILE_ROUNDS,
+                "panes": recovered
+                    .unjudged
+                    .iter()
+                    .map(|(pane, why)| json!({ "pane": pane, "reason": why }))
+                    .collect::<Vec<_>>(),
+            }));
         }
         let present = alive
             .iter()
@@ -1191,6 +1563,13 @@ impl Holders {
         self.panes.live()
     }
 
+    /// The panes [`Self::live_panes`] counts, each by the id its core names
+    /// it by: a record is named by its holder id.
+    pub fn live_pane_ids(&self) -> Result<Vec<String>, String> {
+        let holders = self.panes.live_ids()?;
+        Ok(holders.iter().map(|holder| core_pane(holder)).collect())
+    }
+
     /// Removes the version folders under the home that are not this
     /// build's and that nothing runs from (D-16, B20): a folder a holder or
     /// an OpenConsole still runs from stays, one a start has reserved is
@@ -1271,7 +1650,6 @@ impl Holders {
             pane: pane.to_owned(),
             state: PaneTerminalState {
                 state: state.to_owned(),
-                mode: None,
                 generation: 0,
                 attempt: 0,
                 message: Some(message),
@@ -1295,50 +1673,58 @@ fn finished(reason: Option<EndReason>) -> bool {
     )
 }
 
+/// Whether `record` names a holder that runs its pane now: the state a
+/// renewal ends a holder from, and the one a close that never took the pane
+/// leaves.
+fn running(record: &PaneRecord) -> bool {
+    record.phase == Phase::Running
+        && record.end.is_none()
+        && record.holder.is_some_and(|holder| holder.runs())
+}
+
+/// Takes one reconcile round's judgments into `judged` and answers how many
+/// panes are left whose records could not be written. A pane a round took
+/// up keeps what it was found; one left pending, one whose start is under
+/// way, and one whose record could not be written (its lock held past its
+/// wait, as a machine under load holds it) take what a later round finds,
+/// except that a later round's pending or starting never replaces an
+/// earlier answer. Left unwritten, a pane would count as running and its
+/// shell would never start again.
+fn take_round(judged: &mut BTreeMap<String, Judgment>, round: BTreeMap<String, Judgment>) -> usize {
+    for (pane, judgment) in round {
+        let waits = matches!(judgment, Judgment::Pending(_) | Judgment::Starting(_));
+        let settled = judged.get(&pane).is_some_and(|earlier| {
+            !matches!(
+                earlier,
+                Judgment::Pending(_) | Judgment::Starting(_) | Judgment::Unsettled(_)
+            )
+        });
+        if !settled && !(waits && judged.contains_key(&pane)) {
+            judged.insert(pane, judgment);
+        }
+    }
+    judged
+        .values()
+        .filter(|judgment| matches!(judgment, Judgment::Unsettled(_)))
+        .count()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
 
-    /// A Herdr attacher that counts its opens and refuses them all, as a
-    /// daemon with no Herdr server does.
-    #[derive(Default)]
-    struct NoHerdr(std::sync::atomic::AtomicUsize);
-
-    impl Attacher for NoHerdr {
-        fn open(&self, _: &str, _: Mode, _: u16, _: u16) -> Result<SessionParts, String> {
-            self.0.fetch_add(1, std::sync::atomic::Ordering::AcqRel);
-            Err("This daemon runs without a Herdr server".to_owned())
-        }
-    }
-
     /// The core's own engine draws a new tab or split before its holder
     /// starts, and the view attaches at once: that attach waits for the
-    /// start and opens the holder, never Herdr, whose refusal used to reach
-    /// the pane's screen and the core's error. A pane whose start fails, or
-    /// that no holder runs, goes to Herdr as before.
+    /// start and opens the holder. A pane whose start fails, or that no
+    /// holder runs, is refused at once.
     #[test]
-    fn an_attach_to_a_pane_whose_holder_is_starting_waits_for_it_and_never_asks_herdr() {
-        let herdr = Arc::new(NoHerdr::default());
-        struct Shared(Arc<NoHerdr>);
-        impl Attacher for Shared {
-            fn open(
-                &self,
-                pane: &str,
-                mode: Mode,
-                rows: u16,
-                cols: u16,
-            ) -> Result<SessionParts, String> {
-                self.0.open(pane, mode, rows, cols)
-            }
-        }
+    fn an_attach_to_a_pane_whose_holder_is_starting_waits_for_it() {
         let known = Arc::new(Known::default());
         let attacher = PaneAttacher {
-            herdr: Box::new(Shared(Arc::clone(&herdr))),
             known: Arc::clone(&known),
             ends: Arc::default(),
         };
         let size = Some(GridSize { rows: 24, cols: 80 });
-        let asked = || herdr.0.load(std::sync::atomic::Ordering::Acquire);
         let missing = tempfile::tempdir().unwrap();
 
         known.starting("w1:p2");
@@ -1346,8 +1732,7 @@ mod tests {
             attacher.keeps_own_size("w1:p2"),
             "a starting pane is a holder pane"
         );
-        // While the start runs the open waits, out to its deadline, rather
-        // than answer the pane through Herdr.
+        // While the start runs the open waits, out to its deadline.
         let began = Instant::now();
         let wait = Duration::from_millis(30);
         assert!(known.socket_once_started("w1:p2", began + wait).is_err());
@@ -1365,32 +1750,53 @@ mod tests {
             assert_eq!(waiting.join().unwrap().unwrap(), Some(socket.clone()));
         });
         // No holder listens there, so the open itself fails, at the holder.
-        assert!(
-            attacher
-                .open_transport("w1:p2", Mode::Control, size)
-                .is_err()
-        );
-        assert_eq!(asked(), 0, "the starting pane's attach never reached Herdr");
+        assert!(attacher.open_transport("w1:p2", size).is_err());
 
         known.starting("w1:p3");
         thread::scope(|scope| {
-            let open = scope.spawn(|| attacher.open_transport("w1:p3", Mode::Control, size));
+            let open = scope.spawn(|| attacher.open_transport("w1:p3", size));
             known.not_started("w1:p3");
             assert!(open.join().unwrap().is_err());
         });
         assert!(!attacher.keeps_own_size("w1:p3"));
-        assert_eq!(asked(), 1, "a start that left nothing goes to Herdr");
 
-        assert!(
-            attacher
-                .open_transport("w1:p9", Mode::Control, size)
-                .is_err()
-        );
-        assert_eq!(asked(), 2, "a pane no holder starts goes to Herdr at once");
+        let refused = attacher
+            .open_transport("w1:p9", size)
+            .err()
+            .expect("a pane no holder runs is refused");
+        assert!(refused.retried, "{}", refused.message);
+    }
+
+    /// An open that cannot reach a holder tells whoever asked, and fails as it
+    /// did. Whether the record names a holder that is gone is `holder_gone`'s,
+    /// tested with real holders in `hide-holder`.
+    #[test]
+    fn an_attach_that_cannot_reach_a_holder_tells_who_asked() {
+        let known = Arc::new(Known::default());
+        let attacher = PaneAttacher {
+            known: Arc::clone(&known),
+            ends: Arc::default(),
+        };
+        let size = Some(GridSize { rows: 24, cols: 80 });
+        let folder = tempfile::tempdir().unwrap();
+        known.insert("w1:p2", folder.path().join("w1_p2.sock"));
+
+        let unreachable = attacher.open_transport("w1:p2", size).err().unwrap();
+        assert_eq!(unreachable.category, "holder_unreachable");
+
+        let told = Arc::new(Mutex::new(Vec::new()));
+        let record = Arc::clone(&told);
+        known.set_unreachable(Arc::new(move |pane| {
+            record.lock().unwrap().push(pane.to_owned());
+        }));
+        let again = attacher.open_transport("w1:p2", size).err().unwrap();
+        assert_eq!(again.category, "holder_unreachable");
+        assert!(again.retried, "{}", again.message);
+        assert_eq!(*told.lock().unwrap(), ["w1:p2"]);
     }
 
     #[test]
-    fn an_unregistered_pane_of_the_only_engine_has_no_herdr_fallback_at_its_deadline() {
+    fn an_unregistered_pane_of_the_only_engine_fails_at_its_deadline() {
         let known = Known::default();
         assert_eq!(
             known.socket_once_started("w1:p1", Instant::now()).unwrap(),
@@ -1423,18 +1829,61 @@ mod tests {
         }
     }
 
+    /// After a reboot a loaded machine held the records' lock past its wait
+    /// and nine panes stayed unwritten: counted as running, their shells
+    /// never started. A record that could not be written is judged again by
+    /// the next round, and its answer is kept.
     #[test]
-    fn the_switch_is_off_unless_set_to_one_and_refuses_other_values_naming_what_it_takes() {
-        assert_eq!(Switch::parse(None), Ok(Switch::Off));
-        assert_eq!(Switch::parse(Some(OsStr::new("0"))), Ok(Switch::Off));
-        assert_eq!(Switch::parse(Some(OsStr::new("1"))), Ok(Switch::On));
-        for value in ["", "true", "yes", " 1", "2"] {
-            let refused = Switch::parse(Some(OsStr::new(value))).unwrap_err();
-            assert!(
-                refused.contains(SWITCH) && refused.contains("1 (run pane holders) or 0"),
-                "{refused}"
-            );
-        }
+    fn a_record_that_could_not_be_written_is_judged_again_by_the_next_round() {
+        use hide_holder_protocol::record::{self, End, Phase};
+        let ended = |pane: &str| {
+            Judgment::Ended(PaneRecord {
+                format: record::LEGACY_RECORD_FORMAT,
+                pane: pane.to_owned(),
+                owner: "1:2".to_owned(),
+                incarnation: 1,
+                phase: Phase::Ended,
+                protocol: hide_holder_protocol::PROTOCOL_VERSION,
+                version_folder: String::new(),
+                spec: String::new(),
+                reservation: None,
+                reserved_at_unix_ms: 0,
+                boot: None,
+                holder: None,
+                program: None,
+                end: Some(End::new(EndReason::MachineRestarted, "earlier boot")),
+            })
+        };
+        let unsettled = || Judgment::Unsettled("the records' lock was held for 5 s".into());
+        let mut judged = BTreeMap::new();
+        let first = BTreeMap::from([
+            ("p1".to_owned(), unsettled()),
+            ("p2".to_owned(), ended("p2")),
+        ]);
+        assert_eq!(
+            take_round(&mut judged, first),
+            1,
+            "the unwritten pane is left"
+        );
+
+        let second = BTreeMap::from([
+            ("p1".to_owned(), ended("p1")),
+            ("p2".to_owned(), unsettled()),
+        ]);
+        assert_eq!(
+            take_round(&mut judged, second),
+            0,
+            "the next round wrote it"
+        );
+        assert!(
+            matches!(judged["p1"], Judgment::Ended(_)),
+            "{:?}",
+            judged["p1"]
+        );
+        assert!(
+            matches!(judged["p2"], Judgment::Ended(_)),
+            "a pane already settled keeps what it was found"
+        );
     }
 
     #[test]

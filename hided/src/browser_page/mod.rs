@@ -534,6 +534,21 @@ fn printable(text: &str) -> String {
         .collect()
 }
 
+/// A picture of what `display` shows now, taken over a gateway socket the
+/// caller already opened (`mobile/page_shot.rs`). `selected` is whether a
+/// page command may act on the display (`server::takes_input`); one that may
+/// not is `display_hidden`.
+pub(crate) async fn still(
+    socket: crate::workspace_cli::WorkspaceSocket,
+    display: &str,
+    selected: bool,
+) -> Result<Vec<u8>, Failure> {
+    let mut page = page::Page::attach(cdp::Cdp::new(socket), display, selected).await?;
+    let outcome = actions::still(&mut page).await;
+    page.close().await;
+    outcome
+}
+
 pub fn run(env: &Env, command: Command) -> Result<(), String> {
     let runtime = tokio::runtime::Builder::new_current_thread()
         .enable_all()
@@ -640,6 +655,15 @@ mod tests {
     fn parsed(words: &[&str]) -> Result<Command, String> {
         let words: Vec<String> = words.iter().map(|word| (*word).to_owned()).collect();
         parse(&words[0], words[1..].iter())
+    }
+
+    #[test]
+    fn workspace_info_names_every_page_command() {
+        let named: Vec<String> = VERBS.iter().map(|verb| format!("browser.{verb}")).collect();
+        assert_eq!(
+            named,
+            hide_core::workspace_control::BROWSER_PAGE_CAPABILITIES
+        );
     }
 
     #[test]

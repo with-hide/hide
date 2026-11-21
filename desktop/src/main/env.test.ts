@@ -28,7 +28,7 @@ describe("the environment registry", () => {
       "desktop environment is not usable: HIDE_CLI_PATH: not an absolute path; HIDE_DESKTOP_USER_DATA_DIR: not an absolute path",
     );
     // A rooted path without a drive names a different file per current drive on Windows, and is relative elsewhere.
-    expect(() => loadEnv({ HERDR_BIN_PATH: "\\herdr" })).toThrow("HERDR_BIN_PATH: not an absolute path");
+    expect(() => loadEnv({ HIDE_CLI_PATH: "\\hide" })).toThrow("HIDE_CLI_PATH: not an absolute path");
   });
 
   it("takes an update feed only as an http or https URL", () => {
@@ -42,9 +42,6 @@ describe("the environment registry", () => {
     expect(loadEnv(source)).toEqual({
       cliPath: null,
       userDataDir: null,
-      herdrBinPath: null,
-      herdrPaneId: null,
-      ownEngine: false,
       systemLanguage: null,
       updateFeedUrl: null,
       shell: "/bin/sh",
@@ -56,11 +53,7 @@ describe("the environment registry", () => {
       path: "/bin",
       inherited: source,
     });
-    expect(loadEnv({ ...source, HERDR_BIN_PATH: "/opt/herdr" }).herdrBinPath).toBe("/opt/herdr");
-    expect(loadEnv({ ...source, HERDR_PANE_ID: "w1:p1" }).herdrPaneId).toBe("w1:p1");
-    expect(loadEnv({ ...source, HIDE_DEV_PANE_HOLDER: "1" }).ownEngine).toBe(true);
-    expect(loadEnv({ ...source, HIDE_DEV_PANE_HOLDER: "0" }).ownEngine).toBe(false);
-    expect(() => loadEnv({ ...source, HERDR_BIN_PATH: "herdr" })).toThrow("HERDR_BIN_PATH: not an absolute path");
+    expect(() => loadEnv({ ...source, HIDE_CLI_PATH: "hide" })).toThrow("HIDE_CLI_PATH: not an absolute path");
   });
 
   it.runIf(process.platform === "win32")("reads the Windows keys, and no login shell", () => {
@@ -77,9 +70,6 @@ describe("the environment registry", () => {
     expect(loadEnv(source)).toEqual({
       cliPath: null,
       userDataDir: null,
-      herdrBinPath: null,
-      herdrPaneId: null,
-      ownEngine: false,
       systemLanguage: null,
       updateFeedUrl: null,
       shell: null,

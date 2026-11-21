@@ -9,7 +9,7 @@
 //! A pane runs more than one session's hooks when the operator's own hook
 //! starts `claude -p` in the pane's environment; that session gets a record
 //! of its own, so it never resets the pane's. Which record is the pane's
-//! agent is the core's to say, from the session Herdr reports for the pane.
+//! agent is the core's to say, from the session recorded for the pane.
 
 use std::collections::HashSet;
 use std::fs;
@@ -19,7 +19,9 @@ use std::time::Duration;
 
 use serde::{Deserialize, Serialize};
 
-use crate::report::HookTurn;
+use crate::report::{
+    HookSubagent, HookTurn, SUBAGENT_KIND_LIMIT, SUBAGENT_TASK_LIMIT, subagent_words,
+};
 use crate::runtime::{AgentRuntime, HOOK_VERSION, HookEvent};
 
 /// The most subagents one session may have running at once, and the most
@@ -28,9 +30,13 @@ use crate::runtime::{AgentRuntime, HOOK_VERSION, HookEvent};
 /// event the pane's last report failure shows, not a larger record.
 const RUNNING_LIMIT: usize = 256;
 const FINISHED_LIMIT: usize = 256;
+/// The subagents a session's main agent asked for that have not started yet
+/// ([`Told::asked`]); past it the oldest ask is dropped, since a start that
+/// never came leaves its ask behind until the turn ends.
+const ASKED_LIMIT: usize = 16;
 /// The sessions one pane's file keeps; the one heard from least recently
 /// goes first. The core's facts keep the same sessions by this constant
-/// (`herdr-core`'s `agent_hooks::facts`).
+/// (`hide-core`'s `agent_hooks::facts`).
 pub const SESSIONS_PER_PANE: usize = 8;
 
 /// What one pane's session has spawned.
@@ -54,9 +60,12 @@ pub struct PaneCounters {
 /// of the session, when the hook's input named it.
 ///
 /// `running` and `finished` are the subagents an agent names by id: a start
-/// puts an id in `running`, its stop moves it to `finished` once, and a
-/// repeated stop or the stop of an id that never started changes nothing.
-/// `working` counts the subagents of an agent whose events carry no id.
+/// puts an id in `running`, with what the event said of it and when, its stop
+/// moves it to `finished` once, and a repeated stop or the stop of an id that
+/// never started changes nothing. `working` counts the subagents of an agent
+/// whose events carry no id. `asked` are the subagents the main agent asked
+/// for that have not started yet, which a start of the same kind takes its
+/// task from ([`Told::asked`]).
 #[derive(Clone, Debug, Default, Eq, PartialEq, Serialize, Deserialize)]
 struct Record {
     #[serde(default)]
@@ -69,10 +78,16 @@ struct Record {
     agent: Option<String>,
     #[serde(default)]
     session: Option<String>,
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    running: Vec<String>,
+    #[serde(
+        default,
+        skip_serializing_if = "Vec::is_empty",
+        deserialize_with = "running_entries"
+    )]
+    running: Vec<HookSubagent>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     finished: Vec<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    asked: Vec<Asked>,
     /// The turn the last report said, so a tool event reports only a move.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     turn: Option<HookTurn>,
@@ -83,6 +98,61 @@ struct Record {
     /// close a background subagent's dialog.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     waiting: Vec<String>,
+}
+
+/// A subagent the main agent asked for that has not started yet: the kind it
+/// asked for, when it named one, and the task it gave.
+#[derive(Clone, Debug, Default, Eq, PartialEq, Serialize, Deserialize)]
+struct Asked {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    kind: Option<String>,
+    task: String,
+}
+
+/// A record's running subagents, each as the id alone a helper before
+/// [`HookSubagent`] wrote or as the whole entry.
+fn running_entries<'de, D>(deserializer: D) -> Result<Vec<HookSubagent>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    #[derive(Deserialize)]
+    #[serde(untagged)]
+    enum Entry {
+        Id(String),
+        Whole(HookSubagent),
+    }
+    Ok(Vec::<Entry>::deserialize(deserializer)?
+        .into_iter()
+        .map(|entry| match entry {
+            Entry::Id(id) => HookSubagent {
+                id,
+                ..HookSubagent::default()
+            },
+            Entry::Whole(subagent) => subagent,
+        })
+        .collect())
+}
+
+/// What an event said of its subagents beyond which one started or stopped:
+/// what the one it starts is, a subagent the main agent asks for, and the
+/// tasks it names for running ones by id. All of it is the agent's own words,
+/// made one short line before it is kept ([`subagent_words`]).
+#[derive(Clone, Copy, Debug, Default)]
+pub struct Told<'a> {
+    /// The kind of the subagent the event starts (Claude Code's
+    /// `agent_type`).
+    pub kind: Option<&'a str>,
+    /// The task of the subagent the event starts, when the event says it
+    /// (Antigravity's first message).
+    pub task: Option<&'a str>,
+    /// A subagent the main agent asks for and that has not started yet, its
+    /// kind and its task (Claude Code's `Agent` call, whose `description` no
+    /// `SubagentStart` carries): the next start of that kind takes the task.
+    pub asked: Option<(Option<&'a str>, &'a str)>,
+    /// Tasks the event names for subagents by id (Claude Code's
+    /// `background_tasks`, Codex's agent paths), for running ones that have
+    /// none yet.
+    pub tasks: &'a [(String, String)],
 }
 
 impl Record {
@@ -137,25 +207,29 @@ pub struct Reporter<'a> {
     pub session: Option<&'a str>,
 }
 
-/// Where the counts live. Under Hide's own directory, never the runtime's.
-pub fn state_directory(home: &Path) -> PathBuf {
-    home.join(".hide").join("agent-hooks").join("panes")
+/// Where the counts live, under the pane records of this process's
+/// installation ([`crate::route::pane_records`]): Hide's own directory, never
+/// the runtime's, and never another installation's part of it.
+///
+/// A state route this process cannot read is its own error rather than the
+/// account's folder, so a hook writes nowhere rather than into another
+/// daemon's records (engineering rule 4).
+pub fn state_directory(home: &Path) -> io::Result<PathBuf> {
+    Ok(state_directory_in(&crate::route::pane_records(home)?))
 }
 
-/// A pane id is Herdr's (`w7B:pM`), so it is folded into a file name rather
-/// than used as one.
-fn record_path(home: &Path, pane_id: &str) -> PathBuf {
-    let safe: String = pane_id
-        .chars()
-        .map(|character| {
-            if character.is_ascii_alphanumeric() || character == '-' || character == '_' {
-                character
-            } else {
-                '_'
-            }
-        })
-        .collect();
-    state_directory(home).join(format!("{safe}.json"))
+/// [`state_directory`] under the pane records folder named directly: one
+/// installation's, as a node, a first run of its core or a test names it.
+pub fn state_directory_in(pane_records: &Path) -> PathBuf {
+    pane_records.join("panes")
+}
+
+fn record_path(home: &Path, pane_id: &str) -> io::Result<PathBuf> {
+    Ok(record_path_in(&crate::route::pane_records(home)?, pane_id))
+}
+
+fn record_path_in(pane_records: &Path, pane_id: &str) -> PathBuf {
+    crate::route::pane_file(&state_directory_in(pane_records), pane_id)
 }
 
 /// How long one event waits for another event of the same pane to finish its
@@ -170,11 +244,22 @@ pub enum Change<'a> {
     /// names it (a resume or a compaction of the same session keeps its
     /// subagents); an event that names none starts the record over.
     SessionStarted,
+    /// A new Codex process took the session over: a `SessionStart` from
+    /// `startup` or `resume`. The old process's subagents ended with it
+    /// without a `SubagentStop`, so none is working any more and none is
+    /// counted done; otherwise it is [`Change::SessionStarted`].
+    Reopened,
     /// One subagent started: by id when the agent names it, and a subagent that
     /// stopped and is running again is not counted done any more.
     Started(Option<&'a str>),
     /// One subagent stopped: a known id moves from working to done once.
     Stopped(Option<&'a str>),
+    /// A subagent's own tool call, or agy's own model call: it works, as
+    /// [`Change::Started`] says, and the event reports only when that moved a
+    /// count. A Codex follow-up task to a finished subagent sends no
+    /// `SubagentStart`, and its tool calls come before its `SubagentStop`;
+    /// an agy subagent is known only from its second model call.
+    Working(&'a str),
     /// The turn ended with this many subagents still running, for an agent
     /// that names none by id: none for an agent whose subagents end with its
     /// turn, and the background ones Grok lists for a turn that leaves them
@@ -185,6 +270,12 @@ pub enum Change<'a> {
     /// is no longer working; it is not counted done, since nothing said it
     /// finished.
     Listed { running: &'a [String] },
+    /// The main turn ended and Codex's session file says the main agent
+    /// stopped these subagents during it
+    /// ([`hide_session::calls::codex_subagents_stopped_in_turn`]), which sends
+    /// no `SubagentStop`: they are no longer working, and are not counted
+    /// done, since they did not finish.
+    Ended { ids: &'a [String] },
     /// The event changes no count; the pane's counts are only republished.
     None,
 }
@@ -193,31 +284,64 @@ impl<'a> Change<'a> {
     /// The change one event of a six-event runtime makes, from what its input
     /// said.
     ///
-    /// Claude Code names each subagent and lists the ones still running when
-    /// a turn ends, so its `Stop` never sweeps: a background subagent outlives
-    /// its parent's turn (measured: the turn's `Stop` fires before the
-    /// subagent's `SubagentStop`). A `Stop` without that list changes nothing
-    /// rather than guessing. A runtime that lists nothing keeps the older
-    /// rule, that the turn is over and so are the subagents it started.
-    pub fn of(runtime: Option<AgentRuntime>, event: HookEvent, input: &'a SubagentInput) -> Self {
+    /// Both runtimes name each subagent, and in both a background subagent
+    /// outlives its parent's turn (measured: the turn's `Stop` fires before
+    /// the subagent's `SubagentStop`), so no `Stop` sweeps. Claude Code lists
+    /// the ones still running when a turn ends; a `Stop` without that list
+    /// changes nothing rather than guessing. Codex lists none, and a
+    /// subagent its main agent stops sends no `SubagentStop`, so its main
+    /// turn's end, a `Stop` or an `Interrupt`, ends the subagents the session
+    /// file says the turn stopped (`stopped`, [`Change::Ended`]); a file that
+    /// could not be read changes nothing. A follow-up task to a finished Codex
+    /// subagent sends no `SubagentStart`: the older tools open each of its
+    /// turns with a `UserPromptSubmit` that names it, and its tool calls name
+    /// it with either. A `SessionStart` from `startup` or `resume` is a new
+    /// Codex process, which runs none of the old one's subagents.
+    pub fn of(
+        runtime: Option<AgentRuntime>,
+        event: HookEvent,
+        input: &'a SubagentInput,
+        stopped: Option<&'a [String]>,
+    ) -> Self {
         match event {
+            HookEvent::SessionStart
+                if runtime == Some(AgentRuntime::Codex)
+                    && matches!(input.source.as_deref(), Some("startup" | "resume")) =>
+            {
+                Self::Reopened
+            }
             HookEvent::SessionStart => Self::SessionStarted,
+            HookEvent::UserPromptSubmit if input.subagent.is_some() => {
+                Self::Started(input.subagent.as_deref())
+            }
+            HookEvent::Stop | HookEvent::Interrupt
+                if runtime == Some(AgentRuntime::Codex) && input.subagent.is_none() =>
+            {
+                stopped.map_or(Self::None, |ids| Self::Ended { ids })
+            }
+            HookEvent::PreToolUse if runtime == Some(AgentRuntime::Codex) => {
+                input.subagent.as_deref().map_or(Self::None, Self::Working)
+            }
             HookEvent::UserPromptSubmit
             | HookEvent::PreToolUse
             | HookEvent::PostToolUse
             | HookEvent::PostToolUseFailure
             | HookEvent::PermissionRequest
             | HookEvent::Notification
-            | HookEvent::Interrupt => Self::None,
+            | HookEvent::Interrupt
+            // A refused turn lists no subagents; their counts stand until the
+            // session's next `Stop`.
+            | HookEvent::StopFailure => Self::None,
             HookEvent::SubagentStart => Self::Started(input.subagent.as_deref()),
             HookEvent::SubagentStop => Self::Stopped(input.subagent.as_deref()),
             // A subagent's own turn end is not the session's.
             HookEvent::Stop if input.subagent.is_some() => Self::None,
-            HookEvent::Stop if runtime == Some(AgentRuntime::ClaudeCode) => match &input.running {
-                Some(running) => Self::Listed { running },
-                None => Self::None,
+            HookEvent::Stop => match &input.running {
+                Some(running) if runtime == Some(AgentRuntime::ClaudeCode) => {
+                    Self::Listed { running }
+                }
+                _ => Self::None,
             },
-            HookEvent::Stop => Self::Settled { running: 0 },
         }
     }
 }
@@ -232,6 +356,59 @@ pub struct SubagentInput {
     /// The ids Claude Code's `background_tasks` lists as running subagents,
     /// when the input has that list.
     pub running: Option<Vec<String>>,
+    /// The task `background_tasks` gives each running subagent it lists
+    /// (`description`), by id.
+    pub tasks: Vec<(String, String)>,
+    /// The kind of subagent the event is about (`agent_type`).
+    pub kind: Option<String>,
+    /// The turn the event is about (Codex's `turn_id`).
+    pub turn: Option<String>,
+    /// What started the session, for a `SessionStart` (`startup`, `resume`,
+    /// `clear`, `compact`, ...).
+    pub source: Option<String>,
+    /// The session file the agent keeps (`transcript_path`): the main
+    /// agent's, in a subagent's event too, except a Codex subagent's start
+    /// and its own tool calls, which name the subagent's own (Codex 0.169.0).
+    pub transcript: Option<PathBuf>,
+}
+
+impl SubagentInput {
+    /// The subagents Codex's session file says the main agent stopped during
+    /// the main turn this event ends: read for a Codex `Stop` or `Interrupt`
+    /// of the main agent only, and `None` for any other event. An input cut
+    /// off before it named the file and the turn, or a file that could not be
+    /// read, is the error, which the caller records as the pane's report
+    /// failure while the counts stay as the hooks left them.
+    pub fn stopped(
+        &self,
+        runtime: Option<AgentRuntime>,
+        event: HookEvent,
+    ) -> Option<Result<Vec<String>, String>> {
+        let ends_main_turn = runtime == Some(AgentRuntime::Codex)
+            && matches!(event, HookEvent::Stop | HookEvent::Interrupt)
+            && self.subagent.is_none();
+        if !ends_main_turn {
+            return None;
+        }
+        let (Some(transcript), Some(turn)) = (self.transcript.as_deref(), self.turn.as_deref())
+        else {
+            return Some(Err(
+                "the turn end's input named no session file or turn, so the subagents its \
+                 main agent stopped were not read"
+                    .to_owned(),
+            ));
+        };
+        Some(
+            hide_session::calls::codex_subagents_stopped_in_turn(transcript, turn).map_err(
+                |error| {
+                    format!(
+                        "the main session file could not be read at the turn's end, so the \
+                         subagents its main agent stopped were not read: {error}"
+                    )
+                },
+            ),
+        )
+    }
 }
 
 impl SubagentInput {
@@ -244,12 +421,17 @@ impl SubagentInput {
             #[serde(rename = "type")]
             kind: Option<String>,
             status: Option<String>,
+            description: Option<String>,
         }
         #[derive(Deserialize)]
         struct Input {
             session_id: Option<String>,
             agent_id: Option<String>,
+            agent_type: Option<String>,
             background_tasks: Option<Vec<Task>>,
+            turn_id: Option<String>,
+            transcript_path: Option<PathBuf>,
+            source: Option<String>,
         }
         let Some(input) = (!truncated)
             .then(|| serde_json::from_slice::<Input>(payload).ok())
@@ -257,22 +439,31 @@ impl SubagentInput {
         else {
             return Self::default();
         };
+        let running: Option<Vec<Task>> = input.background_tasks.map(|tasks| {
+            tasks
+                .into_iter()
+                .filter(|task| {
+                    task.kind.as_deref() == Some("subagent")
+                        && task.status.as_deref() == Some("running")
+                        && task.id.as_deref().is_some_and(valid_subagent)
+                })
+                .collect()
+        });
         Self {
             session: input
                 .session_id
                 .filter(|id| crate::delivery::valid_session(id)),
             subagent: input.agent_id.filter(|id| valid_subagent(id)),
-            running: input.background_tasks.map(|tasks| {
-                tasks
-                    .into_iter()
-                    .filter(|task| {
-                        task.kind.as_deref() == Some("subagent")
-                            && task.status.as_deref() == Some("running")
-                    })
-                    .filter_map(|task| task.id)
-                    .filter(|id| valid_subagent(id))
-                    .collect()
-            }),
+            tasks: running
+                .iter()
+                .flatten()
+                .filter_map(|task| Some((task.id.clone()?, task.description.clone()?)))
+                .collect(),
+            running: running.map(|tasks| tasks.into_iter().filter_map(|task| task.id).collect()),
+            kind: input.agent_type,
+            turn: input.turn_id,
+            source: input.source,
+            transcript: input.transcript_path,
         }
     }
 }
@@ -297,6 +488,8 @@ fn valid_subagent(id: &str) -> bool {
 pub struct Applied {
     /// The session's counts after the change.
     pub counters: PaneCounters,
+    /// Whether the change moved the session's counts.
+    pub counted: bool,
     /// The turn the session's last report said, before this change.
     pub previous_turn: Option<HookTurn>,
     /// Whether the turn or the open approvals moved.
@@ -305,6 +498,8 @@ pub struct Applied {
     pub turn: Option<HookTurn>,
     /// The session's open approvals after the change.
     pub waiting: Vec<String>,
+    /// The subagents the session runs by id after the change, oldest first.
+    pub subagents: Vec<HookSubagent>,
 }
 
 /// What one hook event says of its session's turn and the operator's open
@@ -390,16 +585,62 @@ pub struct SessionRecord {
     pub version: u32,
     pub session: Option<String>,
     pub counters: PaneCounters,
+    /// The turn its last report said: a turn that stands at `Working` or
+    /// `Waiting` in a pane whose agent no longer runs was cut off (PRD
+    /// engine-bundle-4-herdr-removal D-22).
+    pub turn: Option<HookTurn>,
+    /// The subagents it runs by id, oldest first, as a report lists them.
+    pub subagents: Vec<HookSubagent>,
 }
 
-/// Every pane's records, oldest first, by the Herdr pane id its file is named
-/// for (`w7B_pM.json` for `w7B:pM`), at most `limit` panes. A core that has no
+impl SessionRecord {
+    fn of(record: &Record) -> Option<Self> {
+        Some(Self {
+            agent: record.agent.clone()?,
+            version: record.version?,
+            session: record.session.clone(),
+            counters: record.counters(),
+            turn: record.turn,
+            subagents: crate::report::reported_subagents(&record.running),
+        })
+    }
+}
+
+/// The records of `pane_id`'s file of this process's installation, oldest
+/// first; none for a pane no hook wrote, for a file that cannot be read, and
+/// for a records folder whose route does not resolve.
+pub fn records(home: &Path, pane_id: &str) -> Vec<SessionRecord> {
+    crate::route::pane_records(home)
+        .map_or_else(|_| Vec::new(), |records| records_in(&records, pane_id))
+}
+
+/// [`records`] in a records folder named directly, as a first run of the
+/// core or the engine that reads them as `hook_records` resolves it.
+pub fn records_in(records: &Path, pane_id: &str) -> Vec<SessionRecord> {
+    read_file_in(records, pane_id).map_or_else(
+        |_| Vec::new(),
+        |file| file.sessions.iter().filter_map(SessionRecord::of).collect(),
+    )
+}
+
+/// Every pane's records, oldest first, by the pane id its file is named for
+/// (`w7B_pM.json` for `w7B:pM`), at most `limit` panes. A core that has no
 /// facts of its own yet reads them once, so a pane whose agent last reported
-/// to Herdr keeps its connection after the hooks start reporting to the core.
-/// A file whose name no pane id makes, or that holds no record of an agent
-/// and its version, is passed over.
+/// before the hooks reported to the core keeps its connection.
+/// A pane of a workspace moved from Herdr (`w`) and one the core's own engine made
+/// (`h`, PRD engine-bundle-4-herdr-removal D-26) are both read: the hook
+/// reads only the shape of the file's name and never the engine's ids, since
+/// a pane is named by its record, not by its id. A file whose name no pane id
+/// makes, or that holds no record of an agent and its version, is passed
+/// over.
 pub fn every_pane(home: &Path, limit: usize) -> Vec<(String, Vec<SessionRecord>)> {
-    let Ok(entries) = fs::read_dir(state_directory(home)) else {
+    crate::route::pane_records(home)
+        .map_or_else(|_| Vec::new(), |records| every_pane_in(&records, limit))
+}
+
+/// [`every_pane`] in a records folder named directly.
+pub fn every_pane_in(records: &Path, limit: usize) -> Vec<(String, Vec<SessionRecord>)> {
+    let Ok(entries) = fs::read_dir(state_directory_in(records)) else {
         return Vec::new();
     };
     let mut panes = Vec::new();
@@ -412,28 +653,20 @@ pub fn every_pane(home: &Path, limit: usize) -> Vec<(String, Vec<SessionRecord>)
             .and_then(|name| name.to_str())
             .and_then(|name| name.strip_suffix(".json"))
             .and_then(|stem| stem.split_once('_'))
-            .filter(|(tab, pane)| {
-                tab.starts_with('w') && pane.starts_with('p') && !pane.contains('_')
+            .filter(|(workspace, pane)| {
+                (workspace.starts_with('w') || workspace.starts_with('h'))
+                    && pane.starts_with('p')
+                    && !pane.contains('_')
             })
-            .map(|(tab, pane)| format!("{tab}:{pane}"))
+            .map(|(workspace, pane)| format!("{workspace}:{pane}"))
         else {
             continue;
         };
-        let Ok(file) = read_file(home, &pane_id) else {
+        let Ok(file) = read_file_in(records, &pane_id) else {
             continue;
         };
-        let records: Vec<SessionRecord> = file
-            .sessions
-            .iter()
-            .filter_map(|record| {
-                Some(SessionRecord {
-                    agent: record.agent.clone()?,
-                    version: record.version?,
-                    session: record.session.clone(),
-                    counters: record.counters(),
-                })
-            })
-            .collect();
+        let records: Vec<SessionRecord> =
+            file.sessions.iter().filter_map(SessionRecord::of).collect();
         if !records.is_empty() {
             panes.push((pane_id, records));
         }
@@ -474,6 +707,10 @@ pub struct ToolCall {
     input: Option<String>,
     /// The session file the agent keeps, which records a refused call.
     pub transcript: Option<PathBuf>,
+    /// The subagent the main agent asks for with this call, its kind and
+    /// its task: Claude Code's `Agent` call (`Task` before 2.1),
+    /// `subagent_type` and `description`.
+    pub asks: Option<(Option<String>, String)>,
 }
 
 impl ToolCall {
@@ -486,11 +723,24 @@ impl ToolCall {
             transcript_path: Option<PathBuf>,
         }
         if !truncated && let Ok(input) = serde_json::from_slice::<Input>(payload) {
+            let subagent = input.agent_id.is_some_and(|id| !id.is_empty());
+            let asks = (!subagent && matches!(input.tool_name.as_deref(), Some("Agent" | "Task")))
+                .then_some(input.tool_input.as_ref())
+                .flatten()
+                .and_then(|tool| {
+                    let task = tool.get("description")?.as_str()?.to_owned();
+                    let kind = tool
+                        .get("subagent_type")
+                        .and_then(serde_json::Value::as_str)
+                        .map(str::to_owned);
+                    Some((kind, task))
+                });
             return Self {
-                subagent: input.agent_id.is_some_and(|id| !id.is_empty()),
+                subagent,
                 name: input.tool_name,
                 input: input.tool_input.as_ref().map(hide_session::calls::digest),
                 transcript: input.transcript_path,
+                asks,
             };
         }
         Self {
@@ -498,6 +748,7 @@ impl ToolCall {
             name: prefix_string(payload, "tool_name").map(str::to_owned),
             input: None,
             transcript: prefix_string(payload, "transcript_path").map(PathBuf::from),
+            asks: None,
         }
     }
 
@@ -544,8 +795,12 @@ fn prefix_string<'a>(payload: &'a [u8], key: &str) -> Option<&'a str> {
 }
 
 fn read_file(home: &Path, pane_id: &str) -> io::Result<PaneFile> {
-    let _held = hold(home, hide_platform::fs::lock::Mode::Shared)?;
-    let raw = fs::read(record_path(home, pane_id))?;
+    read_file_in(&crate::route::pane_records(home)?, pane_id)
+}
+
+fn read_file_in(records: &Path, pane_id: &str) -> io::Result<PaneFile> {
+    let _held = hold_in(records, hide_platform::fs::lock::Mode::Shared)?;
+    let raw = fs::read(record_path_in(records, pane_id))?;
     PaneFile::decode(&raw).map_err(io::Error::from)
 }
 
@@ -565,13 +820,23 @@ pub fn change(
     change: Change<'_>,
     who: Reporter<'_>,
 ) -> io::Result<PaneCounters> {
-    apply(home, pane_id, change, who, Said::Nothing, None).map(|applied| applied.counters)
+    apply(
+        home,
+        pane_id,
+        change,
+        who,
+        Said::Nothing,
+        None,
+        Told::default(),
+    )
+    .map(|applied| applied.counters)
 }
 
 /// Applies one [`Change`] to `who`'s record, and notes `turn` as the one its
 /// next report says, with the call (`ToolCall::key`) a waiting turn waits
 /// on. A later wait that names none, such as Claude Code's notification of
-/// the same request, keeps the call the request named.
+/// the same request, keeps the call the request named. What the event
+/// `told` of its subagents is kept on them ([`Told`]).
 ///
 /// The record is read, changed and written while the lock is held, so two
 /// events of one pane never both start from the same count. The write is not
@@ -585,12 +850,35 @@ pub fn apply(
     who: Reporter<'_>,
     said: Said<'_>,
     transcript: Option<&Path>,
+    told: Told<'_>,
 ) -> io::Result<Applied> {
-    let path = record_path(home, pane_id);
+    apply_in(
+        &crate::route::pane_records(home)?,
+        pane_id,
+        change,
+        who,
+        said,
+        transcript,
+        told,
+    )
+}
+
+/// [`apply`] in a records folder named directly, as a first run of the core,
+/// the engine's own restore or a test names the daemon it stands for.
+pub fn apply_in(
+    records: &Path,
+    pane_id: &str,
+    change: Change<'_>,
+    who: Reporter<'_>,
+    said: Said<'_>,
+    transcript: Option<&Path>,
+    told: Told<'_>,
+) -> io::Result<Applied> {
+    let path = record_path_in(records, pane_id);
     if let Some(parent) = path.parent() {
         hide_platform::fs::private::create_dir_all(parent)?;
     }
-    let held = hold(home, hide_platform::fs::lock::Mode::Exclusive)?;
+    let held = hold_in(records, hide_platform::fs::lock::Mode::Exclusive)?;
     let mut file = read_lenient(&path);
     let before = file.clone();
     let mut record = match file.sessions.iter().rposition(|record| record.is(who)) {
@@ -599,37 +887,26 @@ pub fn apply(
     };
     let previous_turn = record.turn;
     let previous_waiting = record.waiting.clone();
+    let previous_counters = record.counters();
     match change {
         // A session that names itself has its own record already, or is the
         // record's own (a resume or a compaction keeps its subagents); one
         // that names none cannot say which, and starts over.
-        Change::SessionStarted => {
+        Change::SessionStarted | Change::Reopened => {
             if who.session.is_none() {
                 record = Record::default();
             }
+            if change == Change::Reopened {
+                record.running.clear();
+            }
+            record.asked.clear();
             record.turn = None;
             record.waiting.clear();
         }
-        Change::Started(Some(subagent)) => {
-            if let Some(at) = record.finished.iter().position(|id| id == subagent) {
-                record.finished.remove(at);
-                record.done = record.done.saturating_sub(1);
-            }
-            if !record.running.iter().any(|id| id == subagent) {
-                if record.running.len() >= RUNNING_LIMIT {
-                    return Err(too_many());
-                }
-                record.running.push(subagent.to_owned());
-            }
-        }
+        Change::Started(Some(subagent)) => record.start(subagent, told, now_unix_ms())?,
+        Change::Working(subagent) => record.start(subagent, told, now_unix_ms())?,
         Change::Started(None) => record.working = record.working.saturating_add(1),
-        Change::Stopped(Some(subagent)) => {
-            if let Some(at) = record.running.iter().position(|id| id == subagent) {
-                record.running.remove(at);
-                remember_finished(&mut record, subagent);
-                record.done = record.done.saturating_add(1);
-            }
-        }
+        Change::Stopped(Some(subagent)) => record.stop(subagent),
         Change::Stopped(None) => {
             record.working = record.working.saturating_sub(1);
             record.done = record.done.saturating_add(1);
@@ -651,10 +928,27 @@ pub fn apply(
                     record.done = record.done.saturating_sub(1);
                 }
             }
-            record.running = listed;
+            // A subagent listed again keeps what was heard of it; one heard of
+            // first here started before the hook knew it, at a time unknown.
+            let mut kept = std::mem::take(&mut record.running);
+            record.running = listed
+                .into_iter()
+                .map(|id| match kept.iter().position(|known| known.id == id) {
+                    Some(at) => kept.swap_remove(at),
+                    None => HookSubagent {
+                        id,
+                        ..HookSubagent::default()
+                    },
+                })
+                .collect();
+            // The turn ended: an ask no start took is not waiting any more.
+            record.asked.clear();
         }
+        Change::Ended { ids } => record.running.retain(|running| !ids.contains(&running.id)),
         Change::None => {}
     }
+    record.ask(told.asked);
+    record.name_tasks(told.tasks);
     fold_said(&mut record, said)?;
     // A refusal in the dialog sends no event: whatever event comes next
     // with the session file's path finds the refused call's result there.
@@ -667,12 +961,14 @@ pub fn apply(
     }
     let moved = record.turn != previous_turn || record.waiting != previous_waiting;
     let (turn, waiting) = (record.turn, record.waiting.clone());
+    let subagents = record.running.clone();
     record.version = Some(HOOK_VERSION);
     record.agent = who.agent.map(str::to_owned);
     if who.session.is_some() {
         record.session = who.session.map(str::to_owned);
     }
     let counters = record.counters();
+    let counted = counters != previous_counters;
     file.sessions.push(record);
     if file.sessions.len() > SESSIONS_PER_PANE {
         file.sessions.remove(0);
@@ -684,11 +980,23 @@ pub fn apply(
     drop(held);
     Ok(Applied {
         counters,
+        counted,
         previous_turn,
         moved,
         turn,
         waiting,
+        subagents,
     })
+}
+
+/// Now, in milliseconds since the Unix epoch: when a subagent the hook hears
+/// of first started, as near as the hook can tell.
+fn now_unix_ms() -> u64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map_or(0, |since| {
+            u64::try_from(since.as_millis()).unwrap_or(u64::MAX)
+        })
 }
 
 fn too_many() -> io::Error {
@@ -698,26 +1006,125 @@ fn too_many() -> io::Error {
     )
 }
 
-/// Remembers that `subagent` finished, so that one that starts again is not
-/// counted done twice. The oldest ids go first.
-fn remember_finished(record: &mut Record, subagent: &str) {
-    if record.finished.len() >= FINISHED_LIMIT {
-        record.finished.remove(0);
+impl Record {
+    /// `subagent` runs: a subagent that finished and runs again is not
+    /// counted done any more. One heard of first now starts now, with the
+    /// kind and task the event `told`, or else the task of the oldest ask of
+    /// its kind; one already running keeps its start and fills in only what
+    /// it lacked.
+    fn start(&mut self, subagent: &str, told: Told<'_>, now: u64) -> io::Result<()> {
+        if let Some(at) = self.finished.iter().position(|id| id == subagent) {
+            self.finished.remove(at);
+            self.done = self.done.saturating_sub(1);
+        }
+        let at = match self.running.iter().position(|known| known.id == subagent) {
+            Some(at) => at,
+            None => {
+                if self.running.len() >= RUNNING_LIMIT {
+                    return Err(too_many());
+                }
+                self.running.push(HookSubagent {
+                    id: subagent.to_owned(),
+                    started_unix_ms: Some(now),
+                    ..HookSubagent::default()
+                });
+                self.running.len() - 1
+            }
+        };
+        let kind = told
+            .kind
+            .and_then(|kind| subagent_words(kind, SUBAGENT_KIND_LIMIT));
+        let task = told
+            .task
+            .and_then(|task| subagent_words(task, SUBAGENT_TASK_LIMIT))
+            .or_else(|| {
+                let fresh = self.running[at].task.is_none();
+                fresh.then(|| self.take_ask(kind.as_deref())).flatten()
+            });
+        let entry = &mut self.running[at];
+        if entry.kind.is_none() {
+            entry.kind = kind;
+        }
+        if entry.task.is_none() {
+            entry.task = task;
+        }
+        Ok(())
     }
-    record.finished.push(subagent.to_owned());
+
+    /// Keeps a subagent the main agent asked for, until a start takes it or
+    /// the turn ends; past [`ASKED_LIMIT`] the oldest ask goes.
+    fn ask(&mut self, asked: Option<(Option<&str>, &str)>) {
+        let Some((kind, task)) = asked else { return };
+        let Some(task) = subagent_words(task, SUBAGENT_TASK_LIMIT) else {
+            return;
+        };
+        if self.asked.len() >= ASKED_LIMIT {
+            self.asked.remove(0);
+        }
+        self.asked.push(Asked {
+            kind: kind.and_then(|kind| subagent_words(kind, SUBAGENT_KIND_LIMIT)),
+            task,
+        });
+    }
+
+    /// The task of the oldest ask of `kind`, or of the oldest ask that named
+    /// no kind, taken off the asks; asks start in the order they were made.
+    fn take_ask(&mut self, kind: Option<&str>) -> Option<String> {
+        let at = self
+            .asked
+            .iter()
+            .position(|asked| asked.kind.is_some() && asked.kind.as_deref() == kind)
+            .or_else(|| self.asked.iter().position(|asked| asked.kind.is_none()))?;
+        Some(self.asked.remove(at).task)
+    }
+
+    /// Gives the running subagents `tasks` names the task it gives them,
+    /// where they have none yet.
+    fn name_tasks(&mut self, tasks: &[(String, String)]) {
+        for (id, task) in tasks {
+            if let Some(entry) = self
+                .running
+                .iter_mut()
+                .find(|entry| &entry.id == id && entry.task.is_none())
+            {
+                entry.task = subagent_words(task, SUBAGENT_TASK_LIMIT);
+            }
+        }
+    }
+
+    /// `subagent` finished: a running one moves to done once, and a repeated
+    /// stop or one of a subagent that never started changes nothing.
+    fn stop(&mut self, subagent: &str) {
+        if let Some(at) = self.running.iter().position(|known| known.id == subagent) {
+            self.running.remove(at);
+            self.remember_finished(subagent);
+            self.done = self.done.saturating_add(1);
+        }
+    }
+
+    /// Remembers that `subagent` finished, so that one that starts again is
+    /// not counted done twice. The oldest ids go first.
+    fn remember_finished(&mut self, subagent: &str) {
+        if self.finished.len() >= FINISHED_LIMIT {
+            self.finished.remove(0);
+        }
+        self.finished.push(subagent.to_owned());
+    }
 }
 
 /// Replaces `who`'s counts with ones its agent keeps itself: OpenCode's
-/// plugin follows its child sessions and sends the totals, not events. It
-/// holds the same lock as [`change`], so a total and an event never
-/// interleave.
+/// plugin follows its child sessions and sends the totals, not events, with
+/// the running subagents it names, which are part of `working`. It holds the
+/// same lock as [`change`], so a total and an event never interleave. The
+/// subagents kept, each made one short line, are returned for the report.
 pub fn store(
     home: &Path,
     pane_id: &str,
     counters: PaneCounters,
+    named: &[HookSubagent],
     who: Reporter<'_>,
-) -> io::Result<()> {
-    let path = record_path(home, pane_id);
+) -> io::Result<Vec<HookSubagent>> {
+    let path = record_path(home, pane_id)?;
     if let Some(parent) = path.parent() {
         hide_platform::fs::private::create_dir_all(parent)?;
     }
@@ -728,13 +1135,39 @@ pub fn store(
         .iter()
         .rposition(|record| record.is(who))
         .and_then(|at| file.sessions.remove(at).turn);
+    let mut running: Vec<HookSubagent> = Vec::new();
+    for subagent in named.iter().filter(|subagent| valid_subagent(&subagent.id)) {
+        if running.len() >= RUNNING_LIMIT {
+            return Err(too_many());
+        }
+        if !running.iter().any(|known| known.id == subagent.id) {
+            running.push(HookSubagent {
+                id: subagent.id.clone(),
+                kind: subagent
+                    .kind
+                    .as_deref()
+                    .and_then(|kind| subagent_words(kind, SUBAGENT_KIND_LIMIT)),
+                task: subagent
+                    .task
+                    .as_deref()
+                    .and_then(|task| subagent_words(task, SUBAGENT_TASK_LIMIT)),
+                started_unix_ms: subagent.started_unix_ms,
+            });
+        }
+    }
+    // `working` counts every running subagent; the record counts the named
+    // ones by their entries.
+    let anonymous = counters
+        .working
+        .saturating_sub(u32::try_from(running.len()).unwrap_or(u32::MAX));
     file.sessions.push(Record {
-        working: counters.working,
+        working: anonymous,
         done: counters.done,
         version: Some(HOOK_VERSION),
         agent: who.agent.map(str::to_owned),
         session: who.session.map(str::to_owned),
         turn,
+        running: running.clone(),
         ..Record::default()
     });
     if file.sessions.len() > SESSIONS_PER_PANE {
@@ -742,7 +1175,7 @@ pub fn store(
     }
     write_file(&path, &file)?;
     drop(held);
-    Ok(())
+    Ok(running)
 }
 
 /// The file as it is, or an empty one when it is missing or cannot be read:
@@ -769,7 +1202,14 @@ fn hold(
     home: &Path,
     mode: hide_platform::fs::lock::Mode,
 ) -> io::Result<hide_platform::fs::lock::Lock> {
-    let lock = hide_platform::fs::private::open_or_create_file(&lock_path(home))?;
+    hold_in(&crate::route::pane_records(home)?, mode)
+}
+
+fn hold_in(
+    records: &Path,
+    mode: hide_platform::fs::lock::Mode,
+) -> io::Result<hide_platform::fs::lock::Lock> {
+    let lock = hide_platform::fs::private::open_or_create_file(&lock_path_in(records))?;
     match hide_platform::fs::lock::lock_file(lock, mode, LOCK_WAIT, &|| false)? {
         hide_platform::fs::lock::Waited::Locked(held) => Ok(held),
         _ => Err(io::Error::new(
@@ -781,13 +1221,13 @@ fn hold(
 
 /// The lock every count update holds. It sits beside the records' folder,
 /// so the sweep in [`retain`] never takes it for a record.
-fn lock_path(home: &Path) -> PathBuf {
-    home.join(".hide").join("agent-hooks").join("panes.lock")
+fn lock_path_in(records: &Path) -> PathBuf {
+    records.join("panes.lock")
 }
 
 /// Drops a pane's record. Used by the diagnosis when a pane is gone.
 pub fn forget(home: &Path, pane_id: &str) -> io::Result<()> {
-    match fs::remove_file(record_path(home, pane_id)) {
+    match fs::remove_file(record_path(home, pane_id)?) {
         Ok(()) => Ok(()),
         Err(error) if error.kind() == io::ErrorKind::NotFound => Ok(()),
         Err(error) => Err(error),
@@ -796,7 +1236,7 @@ pub fn forget(home: &Path, pane_id: &str) -> io::Result<()> {
 
 /// Drops every record whose pane no longer exists, and reports how many went.
 ///
-/// A pane that Herdr has stopped listing cannot be running a session, so its
+/// A pane that the engine has stopped listing cannot be running a session, so its
 /// counts belong to one that is over and nothing can ask for them again (PRD
 /// B31, D-53). Panes are the key rather than agents because the record is
 /// written by `SessionStart`, which can run before the agent is listed;
@@ -811,8 +1251,8 @@ pub fn retain<'a>(
     let keep: HashSet<PathBuf> = live_pane_ids
         .into_iter()
         .map(|pane_id| record_path(home, pane_id))
-        .collect();
-    let directory = state_directory(home);
+        .collect::<io::Result<HashSet<PathBuf>>>()?;
+    let directory = state_directory(home)?;
     let entries = match fs::read_dir(&directory) {
         Ok(entries) => entries,
         Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(0),
@@ -861,11 +1301,21 @@ mod tests {
             name: Some(name.to_owned()),
             input: Some(input.to_owned()),
             transcript: None,
+            asks: None,
         }
     }
 
     fn said(root: &Path, said: Said<'_>) -> Applied {
-        apply(root, "w1:p1", Change::None, WHO, said, None).unwrap()
+        apply(
+            root,
+            "w1:p1",
+            Change::None,
+            WHO,
+            said,
+            None,
+            Told::default(),
+        )
+        .unwrap()
     }
 
     /// A request opens its call's approval and a call's end closes it,
@@ -950,7 +1400,8 @@ mod tests {
                 Change::None,
                 WHO,
                 Said::Asks("Bash:ffff"),
-                None
+                None,
+                Told::default()
             )
             .is_err()
         );
@@ -990,6 +1441,7 @@ mod tests {
                 call: &next,
             },
             next.transcript.as_deref(),
+            Told::default(),
         )
         .unwrap();
         assert!(applied.moved);
@@ -1084,7 +1536,7 @@ mod tests {
         change(&root, "w1:pB", Change::Started(None), WHO).unwrap();
         change(&root, "w2:pC", Change::Started(None), WHO).unwrap();
         // A file the sweep did not write is not its business.
-        fs::write(state_directory(&root).join("notes.txt"), b"kept").unwrap();
+        fs::write(state_directory(&root).unwrap().join("notes.txt"), b"kept").unwrap();
 
         assert_eq!(retain(&root, ["w1:pA", "w2:pC"]).unwrap(), 1);
         assert_eq!(read(&root, "w1:pA").working, 1);
@@ -1094,7 +1546,7 @@ mod tests {
             PaneCounters::default(),
             "a dead session's count is gone rather than waiting to be redrawn"
         );
-        assert!(state_directory(&root).join("notes.txt").exists());
+        assert!(state_directory(&root).unwrap().join("notes.txt").exists());
 
         // Idempotent: the same live set sweeps nothing the second time.
         assert_eq!(retain(&root, ["w1:pA", "w2:pC"]).unwrap(), 0);
@@ -1273,7 +1725,7 @@ mod tests {
         }
         let own = change(&root, pane, Change::None, WHO).unwrap();
         assert_eq!((own.working, own.done), (1, 1));
-        let file = PaneFile::decode(&fs::read(record_path(&root, pane)).unwrap()).unwrap();
+        let file = PaneFile::decode(&fs::read(record_path(&root, pane).unwrap()).unwrap()).unwrap();
         assert_eq!(file.sessions.len(), 2);
         fs::remove_dir_all(&root).unwrap();
     }
@@ -1290,7 +1742,7 @@ mod tests {
             };
             change(&root, pane, Change::Started(None), who).unwrap();
         }
-        let file = PaneFile::decode(&fs::read(record_path(&root, pane)).unwrap()).unwrap();
+        let file = PaneFile::decode(&fs::read(record_path(&root, pane).unwrap()).unwrap()).unwrap();
         assert_eq!(file.sessions.len(), SESSIONS_PER_PANE);
         assert_eq!(file.sessions[0].session.as_deref(), Some("s-1"));
         fs::remove_dir_all(&root).unwrap();
@@ -1300,9 +1752,9 @@ mod tests {
     fn a_file_an_older_helper_wrote_is_read_as_its_one_session() {
         let root = home("older");
         let pane = "w7B:pM";
-        fs::create_dir_all(state_directory(&root)).unwrap();
+        fs::create_dir_all(state_directory(&root).unwrap()).unwrap();
         fs::write(
-            record_path(&root, pane),
+            record_path(&root, pane).unwrap(),
             br#"{"working":2,"done":4,"version":8,"agent":"claude-code","session":"session-a"}"#,
         )
         .unwrap();
@@ -1322,6 +1774,7 @@ mod tests {
             WHO,
             Said::Turn(HookTurn::Working),
             None,
+            Told::default(),
         )
         .unwrap();
         assert_eq!(first.previous_turn, None);
@@ -1332,6 +1785,7 @@ mod tests {
             WHO,
             Said::Turn(HookTurn::Done),
             None,
+            Told::default(),
         )
         .unwrap();
         assert_eq!(again.previous_turn, Some(HookTurn::Working));
@@ -1342,9 +1796,19 @@ mod tests {
             WHO,
             Said::Nothing,
             None,
+            Told::default(),
         )
         .unwrap();
-        let after = apply(&root, pane, Change::None, WHO, Said::Nothing, None).unwrap();
+        let after = apply(
+            &root,
+            pane,
+            Change::None,
+            WHO,
+            Said::Nothing,
+            None,
+            Told::default(),
+        )
+        .unwrap();
         assert_eq!(after.previous_turn, None);
         fs::remove_dir_all(&root).unwrap();
     }
@@ -1399,7 +1863,7 @@ mod tests {
             change(&root, pane, Change::Stopped(Some(&id)), WHO).unwrap();
         }
         assert_eq!(counts(&root, pane), (0, (FINISHED_LIMIT + 5) as u32));
-        let file = PaneFile::decode(&fs::read(record_path(&root, pane)).unwrap()).unwrap();
+        let file = PaneFile::decode(&fs::read(record_path(&root, pane).unwrap()).unwrap()).unwrap();
         assert_eq!(file.sessions[0].finished.len(), FINISHED_LIMIT);
         fs::remove_dir_all(&root).unwrap();
     }
@@ -1448,7 +1912,7 @@ mod tests {
         let sub = SubagentInput::read(CLAUDE_SUBAGENT_STOP, false);
         let blank = SubagentInput::default();
         let claude = Some(AgentRuntime::ClaudeCode);
-        let of = |runtime, event, input| Change::of(runtime, event, input);
+        let of = |runtime, event, input| Change::of(runtime, event, input, None);
         assert_eq!(
             of(claude, HookEvent::Stop, &stop),
             Change::Listed {
@@ -1459,9 +1923,33 @@ mod tests {
         // a subagent's own end is not the session's.
         assert_eq!(of(claude, HookEvent::Stop, &blank), Change::None);
         assert_eq!(of(claude, HookEvent::Stop, &sub), Change::None);
+        // Codex's turn end never sweeps: without what its session file said
+        // it changes nothing, and with it, it applies that.
+        let codex = Some(AgentRuntime::Codex);
+        assert_eq!(of(codex, HookEvent::Stop, &blank), Change::None);
+        assert_eq!(of(codex, HookEvent::Interrupt, &blank), Change::None);
+        let stopped = ids(&["d"]);
+        for event in [HookEvent::Stop, HookEvent::Interrupt] {
+            assert_eq!(
+                Change::of(codex, event, &blank, Some(&stopped)),
+                Change::Ended { ids: &stopped }
+            );
+        }
+        // A file is no word on Claude Code's turn, nor a subagent's tool call.
         assert_eq!(
-            of(Some(AgentRuntime::Codex), HookEvent::Stop, &blank),
-            Change::Settled { running: 0 }
+            Change::of(claude, HookEvent::Stop, &blank, Some(&stopped)),
+            Change::None
+        );
+        assert_eq!(of(claude, HookEvent::PreToolUse, &sub), Change::None);
+        assert_eq!(
+            of(codex, HookEvent::PreToolUse, &sub),
+            Change::Working("a4d1fa")
+        );
+        assert_eq!(of(codex, HookEvent::PreToolUse, &blank), Change::None);
+        // A prompt that names a subagent is that subagent's turn starting.
+        assert_eq!(
+            of(codex, HookEvent::UserPromptSubmit, &sub),
+            Change::Started(Some("a4d1fa"))
         );
         assert_eq!(
             of(claude, HookEvent::SubagentStart, &sub),
@@ -1479,6 +1967,217 @@ mod tests {
             of(claude, HookEvent::UserPromptSubmit, &blank),
             Change::None
         );
+    }
+
+    // B44: a core that starts with no facts file of its own takes the
+    // records of a pane moved from Herdr and of a pane its own engine made alike.
+    #[test]
+    fn every_pane_reads_the_records_of_herdr_and_engine_panes_alike() {
+        let root = home("both-engines");
+        change(&root, "w1:p1", Change::Started(None), WHO).unwrap();
+        change(&root, "h1:p2", Change::Started(None), WHO).unwrap();
+        change(&root, "h1:p2", Change::Started(None), WHO).unwrap();
+        fs::write(state_directory(&root).unwrap().join("x1_p3.json"), "{}").unwrap();
+        let mut found: Vec<(String, u32)> = every_pane(&root, 16)
+            .into_iter()
+            .map(|(pane, records)| (pane, records[0].counters.working))
+            .collect();
+        found.sort();
+        assert_eq!(found, [("h1:p2".to_owned(), 2), ("w1:p1".to_owned(), 1)]);
+        fs::remove_dir_all(&root).unwrap();
+    }
+
+    fn told<'a>(kind: Option<&'a str>, tasks: &'a [(String, String)]) -> Told<'a> {
+        Told {
+            kind,
+            tasks,
+            ..Told::default()
+        }
+    }
+
+    fn subagent(
+        id: &str,
+        kind: Option<&str>,
+        task: Option<&str>,
+    ) -> (String, Option<String>, Option<String>) {
+        (
+            id.to_owned(),
+            kind.map(str::to_owned),
+            task.map(str::to_owned),
+        )
+    }
+
+    fn named(subagents: &[HookSubagent]) -> Vec<(String, Option<String>, Option<String>)> {
+        subagents
+            .iter()
+            .map(|entry| (entry.id.clone(), entry.kind.clone(), entry.task.clone()))
+            .collect()
+    }
+
+    /// Claude Code's `SubagentStart` names a kind and no task: a start takes
+    /// the task of the oldest ask of its kind that its main agent's `Agent`
+    /// call made, a start no ask fits waits for `background_tasks` to name
+    /// one, and a turn's list keeps what was heard of each.
+    #[test]
+    fn a_subagent_keeps_its_kind_and_the_task_its_ask_or_its_list_names() {
+        let root = home("told");
+        let pane = "w7B:pM";
+        let apply_told = |change: Change<'_>, told: Told<'_>| {
+            apply(&root, pane, change, WHO, Said::Nothing, None, told).unwrap()
+        };
+        for (kind, task) in [
+            ("Explore", "find the login code\nand more"),
+            ("Plan", "plan the fix"),
+        ] {
+            apply_told(
+                Change::None,
+                Told {
+                    asked: Some((Some(kind), task)),
+                    ..Told::default()
+                },
+            );
+        }
+        let planned = apply_told(Change::Started(Some("a1")), told(Some("Plan"), &[]));
+        assert_eq!(
+            named(&planned.subagents),
+            [subagent("a1", Some("Plan"), Some("plan the fix"))]
+        );
+        assert!(planned.subagents[0].started_unix_ms.is_some());
+        let explored = apply_told(Change::Started(Some("a2")), told(Some("Explore"), &[]));
+        assert_eq!(
+            named(&explored.subagents)[1],
+            subagent("a2", Some("Explore"), Some("find the login code")),
+            "the first line of the task, and the asks are taken in order"
+        );
+        let unasked = apply_told(Change::Started(Some("a3")), told(Some("Explore"), &[]));
+        assert_eq!(
+            named(&unasked.subagents)[2],
+            subagent("a3", Some("Explore"), None)
+        );
+        let tasks = vec![
+            ("a3".to_owned(), "collect the logs".to_owned()),
+            ("a1".to_owned(), "a task it already has".to_owned()),
+        ];
+        let running = ids(&["a1", "a3"]);
+        let listed = apply_told(Change::Listed { running: &running }, told(None, &tasks));
+        assert_eq!(
+            named(&listed.subagents),
+            [
+                subagent("a1", Some("Plan"), Some("plan the fix")),
+                subagent("a3", Some("Explore"), Some("collect the logs")),
+            ]
+        );
+        assert_eq!(
+            listed.subagents[0].started_unix_ms,
+            planned.subagents[0].started_unix_ms
+        );
+        assert_eq!(
+            records(&root, pane)[0].subagents,
+            listed.subagents,
+            "a reader outside the hook sees the same subagents"
+        );
+        fs::remove_dir_all(&root).unwrap();
+    }
+
+    /// A record a helper before the subagent entries wrote lists bare ids,
+    /// which still read as running subagents.
+    #[test]
+    fn a_record_of_bare_running_ids_still_reads() {
+        let root = home("bare-ids");
+        let path = record_path(&root, "w7B:pM").unwrap();
+        fs::create_dir_all(path.parent().unwrap()).unwrap();
+        fs::write(
+            &path,
+            format!(
+                r#"{{"sessions":[{{"working":1,"done":2,"version":{HOOK_VERSION},"agent":"claude-code","session":"session-a","running":["a1","a2"]}}]}}"#
+            ),
+        )
+        .unwrap();
+        let record = &records(&root, "w7B:pM")[0];
+        assert_eq!(
+            record.counters,
+            PaneCounters {
+                working: 3,
+                done: 2
+            }
+        );
+        assert_eq!(
+            named(&record.subagents),
+            [subagent("a1", None, None), subagent("a2", None, None)]
+        );
+        fs::remove_dir_all(&root).unwrap();
+    }
+
+    /// An agent that keeps its own totals names some of its running
+    /// subagents: those are kept as entries, in one short line each, and the
+    /// rest stay a count.
+    #[test]
+    fn stored_totals_keep_the_named_subagents_and_count_the_rest() {
+        let root = home("store-named");
+        let pane = "w7B:pM";
+        let opencode = Reporter {
+            agent: Some("opencode"),
+            session: Some("ses_a"),
+        };
+        let given = [
+            HookSubagent {
+                id: "ses_b".to_owned(),
+                kind: Some("explore".to_owned()),
+                task: Some("read the router\nsecond line".to_owned()),
+                started_unix_ms: Some(7),
+            },
+            HookSubagent::default(),
+        ];
+        let kept = store(
+            &root,
+            pane,
+            PaneCounters {
+                working: 3,
+                done: 1,
+            },
+            &given,
+            opencode,
+        )
+        .unwrap();
+        assert_eq!(
+            named(&kept),
+            [subagent("ses_b", Some("explore"), Some("read the router"))]
+        );
+        assert_eq!(kept[0].started_unix_ms, Some(7));
+        let record = &records(&root, pane)[0];
+        assert_eq!(
+            record.counters,
+            PaneCounters {
+                working: 3,
+                done: 1
+            }
+        );
+        assert_eq!(record.subagents, kept);
+        fs::remove_dir_all(&root).unwrap();
+    }
+
+    /// The main agent's `Agent` call asks for a subagent, and a turn's end
+    /// names each running one's task; a subagent's own `Agent` call asks for
+    /// none of the main agent's.
+    #[test]
+    fn the_input_names_the_asked_subagent_and_the_running_ones_tasks() {
+        let call = ToolCall::read(
+            br#"{"session_id":"s1","tool_name":"Agent","tool_input":{"description":"Find the login code","subagent_type":"Explore","prompt":"..."}}"#,
+            false,
+        );
+        assert_eq!(
+            call.asks,
+            Some((Some("Explore".to_owned()), "Find the login code".to_owned()))
+        );
+        let nested = ToolCall::read(
+            br#"{"session_id":"s1","agent_id":"a1","tool_name":"Agent","tool_input":{"description":"x"}}"#,
+            false,
+        );
+        assert_eq!(nested.asks, None);
+        let stop = SubagentInput::read(CLAUDE_STOP, false);
+        assert_eq!(stop.tasks, [("a4d1fa".to_owned(), "A".to_owned())]);
+        let sub = SubagentInput::read(CLAUDE_SUBAGENT_STOP, false);
+        assert_eq!(sub.kind.as_deref(), Some("general-purpose"));
     }
 
     #[test]

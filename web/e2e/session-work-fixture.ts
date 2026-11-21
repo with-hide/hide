@@ -4,10 +4,10 @@ import fs from "node:fs";
 import path from "node:path";
 import { execFileSync } from "node:child_process";
 import { toPage } from "../../desktop/src/main/wirePath";
-import { claudeProjects, declareParent, labelAgent, writeFixtureTranscript, type FixtureLabel, type HerdrFixture } from "./herdr-fixture";
-import { closePane, showTabOf, withControl } from "./daemon-actions";
+import { claudeProjects, continueFixtureTranscript, writeFixtureTranscript, type FixtureLabel } from "./pane-fixture";
+import { agentIn, closePane, showTabOf, withControl } from "./daemon-actions";
 import type { AgentFixture, EngineServer } from "./engine-fixture";
-import { agentReading, labelAgentPane, spawnChild, startAgentInProject } from "./fixture-agents";
+import { agentReading, labelAgentPane, setAgentState, spawnChild, startAgentInProject } from "./fixture-agents";
 import type { Daemon } from "./hided-fixture";
 import { fixtureProgram } from "./platform-fixture";
 import { expect } from "@playwright/test";
@@ -40,8 +40,8 @@ export const NEXT_GOAL = "놓친 일 이슈 생성과 검색 검증";
 export const CHILD_GOAL = "자식 세션 결과물 연결 검증";
 export const MISSED = "좁은 열에서 긴 한국어 요청의 줄바꿈을 확인해야 합니다";
 
-export function workFixture(herdr: Pick<EngineServer, "root" | "fixturePath">, uncertainCreate = false) {
-  const cwd = path.join(herdr.root, "fixture");
+export function workFixture(engine: Pick<EngineServer, "root" | "fixturePath">, uncertainCreate = false) {
+  const cwd = path.join(engine.root, "fixture");
   const git = (args: string[]) => execFileSync("git", ["-c", "user.name=e2e", "-c", "user.email=e2e@example.invalid", "-c", "commit.gpgsign=false", ...args], { cwd });
   // Match the GitHub fixture's head branch on every system, regardless of
   // the account's init.defaultBranch; its open PR keeps the session active.
@@ -50,13 +50,13 @@ export function workFixture(herdr: Pick<EngineServer, "root" | "fixturePath">, u
   git(["add", "README.md"]);
   git(["commit", "-m", "initial"]);
   git(["remote", "add", "origin", "https://github.com/acme/repo.git"]);
-  const bin = path.join(herdr.root, "gh-bin");
-  const calls = path.join(herdr.root, "gh-calls.jsonl");
-  const contexts = path.join(herdr.root, "gh-contexts.jsonl");
-  const issue = path.join(herdr.root, "created-issue.json");
-  const repositoryUnavailable = path.join(herdr.root, "repository-unavailable");
-  const repositoryGate = path.join(herdr.root, "repository-gate");
-  const clock = path.join(herdr.root, "work-clock.json");
+  const bin = path.join(engine.root, "gh-bin");
+  const calls = path.join(engine.root, "gh-calls.jsonl");
+  const contexts = path.join(engine.root, "gh-contexts.jsonl");
+  const issue = path.join(engine.root, "created-issue.json");
+  const repositoryUnavailable = path.join(engine.root, "repository-unavailable");
+  const repositoryGate = path.join(engine.root, "repository-gate");
+  const clock = path.join(engine.root, "work-clock.json");
   fs.writeFileSync(clock, JSON.stringify({ first: Date.now(), next: Date.now() }));
   fixtureProgram(bin, "gh", `
 const fs = require("node:fs");
@@ -76,6 +76,7 @@ const [a,b] = args;
 if(a==="auth"&&b==="status") process.exit(0);
 if(a==="api"&&b==="user") {process.stdout.write("example-user\\n");process.exit(0);}
 if (process.argv.slice(2).join(" ").includes("review-requested:@me")) { process.stdout.write("[]\\n"); process.exit(0); }
+if (process.argv.slice(2).join(" ").includes("HideHeadRuns")) { const repository = {}; for (let i = 0; i < process.argv.slice(2).join(" ").split("object(oid:").length - 1; i++) repository["c" + i] = { checkSuites: { totalCount: 0, nodes: [] } }; console.log(JSON.stringify({ data: { repository } })); process.exit(0); }
 if (process.argv.slice(2).join(" ").includes("HidePrFacts")) { process.stdout.write('{"data":{"repository":{"pullRequests":{"nodes":[]}}}}\\n'); process.exit(0); }
 if(a==="repo"&&b==="view") {
  const deadline=Date.now()+15000;
@@ -111,22 +112,22 @@ if(a==="api"&&b==="graphql") {
 if(a==="search") {out([]);process.exit(0);}
 process.stderr.write("unsupported fixture gh arguments\\n");process.exit(1);
 `);
-  const env = { PATH: `${bin}${path.delimiter}${herdr.fixturePath}` };
+  const env = { PATH: `${bin}${path.delimiter}${engine.fixturePath}` };
   const setClock = (first: number, next: number) => fs.writeFileSync(clock, JSON.stringify({ first, next }));
   return { env, calls, contexts, issue, repositoryUnavailable, repositoryGate, clock: setClock };
 }
 
-/** What the first turn of the fixture's work is labelled: the goal, a request, its pull request and issue, one missed line and one artifact. */
+/** What the first turn of the fixture's work is labelled: the goal, a request, its pull request and issue, and one missed line. */
 function firstWork(fixture: Pick<EngineServer, "root">, at: number, goal: string): FixtureLabel {
   return {
     task: goal, at, cwd: path.join(fixture.root, "fixture"), end: "done", toolOutputs: ["https://github.com/acme/repo/pull/31", "https://github.com/acme/repo/issues/41"],
-    request: "기록 화면 구현 요청", work: { missed: [{ kind: "follow_up", text: MISSED }], resolved: [], artifacts: ["세션 기록 화면 시안"] },
+    request: "기록 화면 구현 요청", work: { missed: [{ kind: "follow_up", text: MISSED }], resolved: [] },
   };
 }
 
 /** What the first work's delegated child is labelled: its own goal and the pull request it printed. */
 function childWork(fixture: Pick<EngineServer, "root">, at: number): FixtureLabel {
-  return { task: CHILD_GOAL, at: at + 200, cwd: path.join(fixture.root, "fixture"), end: "done", toolOutputs: ["https://github.com/acme/repo/pull/34"], work: { missed: [], resolved: [], artifacts: [] } };
+  return { task: CHILD_GOAL, at: at + 200, cwd: path.join(fixture.root, "fixture"), end: "done", toolOutputs: ["https://github.com/acme/repo/pull/34"], work: { missed: [], resolved: [] } };
 }
 
 /**
@@ -158,22 +159,26 @@ export async function startWork(
   return { pane: started.pane, session: started.session, child: { pane: await spawnChild(fixture, daemon, started.pane, { name: "child", repo: dir, session }), session } };
 }
 
+/**
+ * Has the stopped agent in `pane`, whose session `session` the core has labelled, ask for a
+ * permission: its next turn, which `label` names and whose line says what it asks, ends at
+ * a permission prompt. A stopped agent that stops again at a prompt ran in between, so the
+ * core ends the line of the turn it had read (the label worker, docs/ARCHITECTURE.md,
+ * Status), and a turn the core already analysed is not analysed again. The request is
+ * therefore a turn of its own, written once the first turn's label has landed, so the
+ * state change that blocks the agent clears nothing the new turn's analysis has not yet
+ * written (with-hide/hide-private#515). Resolves once the core's row of `pane` is blocked.
+ */
+export async function askPermission(fixture: AgentFixture, daemon: Pick<Daemon, "origin" | "token">, pane: string, session: string, label: FixtureLabel): Promise<void> {
+  await withControl(daemon, (control) => control.until((rest) => agentIn(rest, pane)?.identity_label === label.task || undefined, `${pane}'s first turn labelled ${label.task}`, 30_000));
+  continueFixtureTranscript(fixture, session, label);
+  await setAgentState(daemon, pane, "blocked");
+}
+
 /** The first work of a session spec: a root labelled `goal`, with its delegated child when the fixture is a family. */
 export async function seedFirstWork(fixture: AgentFixture, daemon: Pick<Daemon, "origin" | "token">, at: number, goal = FIRST_GOAL) {
   const started = await startWork(fixture, daemon, firstWork(fixture, at, goal), fixture.family ? childWork(fixture, at) : undefined);
   return { session: started.session, child: started.child?.session ?? null, pane: started.pane };
-}
-
-/**
- * The same first work on a Herdr fixture's two agents, labelled in place,
- * the second declared the first's child, for the desktop suite, which runs
- * on Herdr alone.
- */
-export function seedFirstWorkOnHerdr(herdr: HerdrFixture, at: number, goal = FIRST_GOAL) {
-  const session = labelAgent(herdr, herdr.panes[0], firstWork(herdr, at, goal));
-  const child = labelAgent(herdr, herdr.panes[1], childWork(herdr, at));
-  declareParent(herdr, herdr.panes[1], herdr.panes[0]);
-  return { session, child };
 }
 
 /** New work in the pane `seedFirstWork` started: a new session labelled the same, as an agent that began again would run; returns the session. */
@@ -183,5 +188,5 @@ export async function reseedWork(fixture: AgentFixture, daemon: Pick<Daemon, "or
 
 export function nextWork(at: number): FixtureLabel {
   return { task: NEXT_GOAL, at, end: "unfinished", request: "이슈와 검색 검증 요청", toolOutputs: ["https://github.com/acme/repo/pull/32"],
-    work: { missed: [{ kind: "problem", text: "다른 저장소의 이슈 템플릿이 비어 있어 따로 고쳐야 합니다" }, { kind: "ask", text: "좁은 열 줄바꿈 기준을 정해 주세요" }], resolved: [], artifacts: [] } };
+    work: { missed: [{ kind: "problem", text: "다른 저장소의 이슈 템플릿이 비어 있어 따로 고쳐야 합니다" }, { kind: "ask", text: "좁은 열 줄바꿈 기준을 정해 주세요" }], resolved: [] } };
 }

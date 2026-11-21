@@ -10,7 +10,7 @@
 //!
 //! Three things a row can turn on for an agent the operator switched on:
 //!
-//! - Hide's skill stubs ([`SKILLS`]: `hide`, `hide-mission` and `hide-plan`;
+//! - Hide's skill stubs ([`SKILLS`]: `hide`, `hide-mission` and `hide-issue`;
 //!   [`RETIRED_SKILLS`] are taken out), in the folder the agent reads
 //!   ([`SkillDir`]); the folder is shared by every agent that reads it, so
 //!   the stubs stay while any of them is on;
@@ -25,13 +25,14 @@ use std::ffi::OsString;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::AtomicBool;
 
+use hide_agent_adapter::AccountPath;
 use hide_agent_hooks::guidance::GuidanceAgent;
 use hide_platform::programs::Program;
 use serde::{Deserialize, Serialize};
 
 use crate::{ComponentId, ComponentState, KitTarget, PartCause, Reason};
 
-pub use hide_agent_adapter::{Feature, HerdrIntegration};
+pub use hide_agent_adapter::Feature;
 
 /// A folder an agent reads skills from, under the account's home.
 #[derive(Clone, Copy, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
@@ -59,24 +60,30 @@ impl SkillDir {
     }
 
     /// The folder the skill folder sits in: the shared `~/.agents`, which no
-    /// one agent owns, or the agent's own folder in the install scope
-    /// (`hide_agent_adapter::HomeScope::Install`), the one its hooks and
-    /// Herdr's integration go into.
+    /// one agent owns, or the agent's own folder in its default account
+    /// (`AccountPath::State`), the one its hooks go into.
     fn folder(self, home: &Path) -> PathBuf {
-        match self {
-            Self::Shared => home.join(".agents"),
-            Self::Claude => hide_agent_adapter::AgentId::ClaudeCode
-                .adapter()
-                .install_home(home),
-            Self::Antigravity => hide_agent_adapter::AgentId::Antigravity
-                .adapter()
-                .install_home(home),
+        match self.agent() {
+            None => home.join(".agents"),
+            Some(agent) => agent.adapter().place_in(home, AccountPath::State),
         }
     }
 
-    /// `<folder>/skills`.
+    /// The skill folder: `<folder>/skills`, the agent's own from its default
+    /// account (`AccountPath::Skills`).
     pub fn path(self, home: &Path) -> PathBuf {
-        self.folder(home).join("skills")
+        match self.agent() {
+            None => self.folder(home).join("skills"),
+            Some(agent) => agent.adapter().place_in(home, AccountPath::Skills),
+        }
+    }
+
+    fn agent(self) -> Option<hide_agent_adapter::AgentId> {
+        match self {
+            Self::Shared => None,
+            Self::Claude => Some(hide_agent_adapter::AgentId::ClaudeCode),
+            Self::Antigravity => Some(hide_agent_adapter::AgentId::Antigravity),
+        }
     }
 
     /// Whether the folder can be written without creating the agent's own
@@ -96,7 +103,7 @@ pub enum HookSupport {
     /// Claude Code and Codex: the six-event hook that is also one kit part.
     Part(ComponentId),
     /// Hide's hook for an agent of the basic tier with documented command
-    /// hooks: the spawn guard, the subagent count and the session
+    /// hooks: the opener guard, the subagent count and the session
     /// guidance (`hide_agent_hooks::guidance`).
     Guidance(GuidanceAgent),
     /// A script file of Hide's own in the agent's plugin or extension folder
@@ -127,10 +134,8 @@ pub struct AgentAdapter {
     /// The folder the agent reads skills from.
     pub skill_dir: SkillDir,
     pub hook: HookSupport,
-    /// Herdr's integration for the agent. Every supported agent has one: an
-    /// agent the pinned Herdr ships no integration for is not supported
-    /// (`docs/agent-hooks.md`, Which agents Hide supports).
-    pub herdr: HerdrIntegration,
+    /// The agent kind the engine reports the agent's panes as.
+    pub engine_kind: &'static str,
     /// Whether the agent is on without the operator choosing, as Claude Code
     /// and Codex have been since their hooks became part of the kit.
     pub default_on: bool,
@@ -186,7 +191,7 @@ const fn project(declaration: &'static hide_agent_adapter::AgentAdapter) -> Agen
             HookInstall::Plugin(dialect) => HookSupport::Plugin(dialect),
             HookInstall::None => HookSupport::None,
         },
-        herdr: declaration.herdr,
+        engine_kind: declaration.engine_kind,
         default_on: declaration.default_on,
         doc_url: declaration.doc_url,
         declaration,
@@ -222,43 +227,56 @@ pub struct Skill {
 /// routes browser and mission work to their own guides.
 pub const GUIDE_SKILL: Skill = Skill {
     name: "hide",
-    description: "Only for a session in a pane Hide manages, never an ordinary terminal. Work inside Hide, the operator's workspace for coding agents: send and answer letters to other agents, start agents and follow them, run a mission of agents as its Conductor, read and drive a browser display, show the operator a file or a diff, and read or add Project Memory. Use when a task involves another agent, a mission, a page in Hide's browser, the operator's screen in Hide, or Project Memory, or when you need to know what Hide offers here.",
+    description: "Only for a session in a pane Hide manages, never an ordinary terminal. Work inside Hide, the operator's workspace for coding agents: send and answer letters to other agents, start agents and follow them, run a mission of agents as its Conductor, read and drive a browser display, show the operator a file or a diff, read or add Project Memory, and keep an agent's accounts apart as profiles. Use when a task involves another agent, a mission, a page in Hide's browser, the operator's screen in Hide, Project Memory, or another account of an agent (a shell alias that starts one, or a new account to connect), or when you need to know what Hide offers here.",
     // The intent table is the session-start note's own (PRD
     // agent-beside-and-session-guide D-14); version 1 had none, and version
     // 2 opened files and pages with the --beside open no longer takes (PRD
     // unseen-agent-views D-24); version 4 drops the Herdr commands the
     // table named for Hide's own (PRD engine-bundle-1 D-6), and version 5
     // adds the row for splitting the work across agents (PRD
-    // hide-plan-delegate D-11).
+    // hide-plan-delegate D-11), version 6 names `hide task` for it, and
+    // version 7 sends an alias or a new account to the guide's profiles
+    // (PRD agent-profiles D-33, D-34). Version 8 routes complex work,
+    // planning and review requests to missions (PRD hide-task-skill-merge B7, B8).
+    // Version 9 proposes a mission before starting complex work.
+    // Version 10 adds the row that sends a bug in Hide itself to `hide-issue`.
+    // Version 11 adds the row that makes an unattended repeat at set times
+    // an automation (PRD automations B9).
+    // Version 12 opens a shown file beside the terminal of a watched pane
+    // and otherwise leaves it in that pane's Views list (lane desk).
     body: concat!(
-        "First check that this session runs in a pane Hide manages: Hide's session guidance names this checkout, or `hide workspace info` answers `\"ok\":true`. If neither, stop here; this skill does not apply. Inside Hide, run `hide guide` and follow what it prints. It explains what Hide keeps, how to send and answer letters, how to start and follow agents here or on a connected device, how to show the operator a file or a diff and how to use Project Memory, and it sends a browser display to `hide browser help` and a mission of agents to `hide mission help`.\n\n",
+        "First check that this session runs in a pane Hide manages: Hide's session guidance names this checkout, or `hide workspace info` answers `\"ok\":true`. If neither, stop here; this skill does not apply. Inside Hide, run `hide guide` and follow what it prints. It explains what Hide keeps, how to send and answer letters, how to start and follow agents here or on a connected device, how to show the operator a file or a diff, how to use Project Memory and how to move a shell alias for another account, or connect a new account, as an agent profile, and it sends a browser display to `hide browser help` and a mission of agents to `hide mission help`.\n\n",
         hide_agent_hooks::intent_table!()
     ),
-    version: 5,
+    version: 12,
 };
 
-/// The Conductor's stub: a mission of agents, which `hide mission help`
-/// owns, named after that command. Builds up to 1.1 wrote it as
-/// `hide-conductor` (versions 1 to 3), which [`RETIRED_SKILLS`] takes out.
+/// Routes work that needs a Conductor to `hide mission help`, leaving
+/// small work with the current agent. Version 2 folds in the retired `hide-task`
+/// stub; earlier builds also wrote `hide-conductor` (versions 1 to 3),
+/// which [`RETIRED_SKILLS`] takes out. Version 3 asks before using a mission
+/// for complex work unless the operator already requested one.
 pub const MISSION_SKILL: Skill = Skill {
     name: "hide-mission",
-    description: "Conduct a mission of agents in Hide: plan it with the operator, start the workers, replan, report. Use when the operator asks for a mission or for several PRs carried as a group.",
-    body: "First check that this session runs in a pane Hide manages: Hide's session guidance names this checkout, or `hide workspace info` answers `\"ok\":true`. If neither, stop here; this skill does not apply. Inside Hide, run `hide mission help` and follow what it prints: it is the Conductor's contract, with the commands, how to cut the mission into nodes and brief each worker, the cap and the candidates, replanning on the operator's words, asking the operator a decision with choices they can answer from the map, whose answer arrives in your conversation as their own message, recording a direct change's commit and a verify node's verdict, merging, the report and taking a mission over.",
-    version: 1,
+    description: "Conduct a mission of agents in Hide. Use when a task in a Hide pane takes more than a few steps, the operator asks you to plan first or have the work reviewed, or asks for a mission or several PRs carried as a group.",
+    body: "First check that this session runs in a pane Hide manages: Hide's session guidance names this checkout, or `hide workspace info` answers `\"ok\":true`. If neither, stop here; this skill does not apply. Inside Hide, a mission is work where a Conductor directs other agents, even one worker. If the operator explicitly asks for a mission or invokes `/hide-mission`, do not ask which way to work again. Run `hide mission help` and follow its contract for planning, approval, starting workers, replanning and reporting. Otherwise, look for these signals:\n\n- The operator asks for planning first or review.\n- The work needs two or more PRs or work in parallel.\n- Another agent needs to review or check the work.\n- The work is long enough to fill the conversation context, or the operator wants to keep talking with this session while it is carried out.\n\nIf any signal applies, first ask the operator in one line: Shall I run this as a mission, or do it directly? Wait for their answer and follow it: if they choose a mission, run `hide mission help` and follow it; if they choose direct work, do it directly. If none applies, do the work directly without asking.",
+    version: 3,
 };
 
-/// An agent's own plan (PRD hide-plan D-16), which `hide plan help` owns.
-pub const PLAN_SKILL: Skill = Skill {
-    name: "hide-plan",
-    description: "Keep your own plan of the task in Hide: its steps, what each waits on, which one you are on, and the operator's review when they ask for one. Use when a task in a Hide pane takes more than a few steps, or the operator asks you to plan first or have the plan reviewed.",
-    body: "First check that this session runs in a pane Hide manages: Hide's session guidance names this checkout, or `hide workspace info` answers `\"ok\":true`. If neither, stop here; this skill does not apply. Inside Hide, run `hide plan help` and follow what it prints: it is the plan's contract, with the commands, the steps' shape, when to put the plan up for review with `--ask`, how to approve or drop it on the operator's words, and how to keep its steps current.",
+/// Routes a bug in Hide itself to `hide issue help`, which owns the procedure
+/// and the bug form's template, so a change to either reaches every install
+/// with the binary and not with the next kit pass.
+pub const ISSUE_SKILL: Skill = Skill {
+    name: "hide-issue",
+    description: "Report a bug in Hide itself to Hide's GitHub issues, with the exact error, versions, steps and log lines. Use when a hide command, pane, tab or screen fails in a way you or the operator saw and the cause is Hide, not the project's own code.",
+    body: "First check that this session runs in a pane Hide manages: Hide's session guidance names this checkout, or `hide workspace info` answers `\"ok\":true`. If neither, stop here; this skill does not apply. Inside Hide, run `hide issue help` and follow what it prints: when a bug is worth reporting, what to collect, the bug form's template, what to remove before it leaves the machine, and the operator's yes before it is filed.",
     version: 1,
 };
 
 /// Every stub Hide writes; each skill folder holds all of them. A new stub
 /// is one more entry here and nothing else: the observe, write and remove
 /// passes read the array.
-pub const SKILLS: [Skill; 3] = [GUIDE_SKILL, MISSION_SKILL, PLAN_SKILL];
+pub const SKILLS: [Skill; 3] = [GUIDE_SKILL, MISSION_SKILL, ISSUE_SKILL];
 
 /// A stub an earlier build wrote and this one takes out, by its exact text:
 /// a file that differs in any byte was edited by the operator and stays.
@@ -283,12 +301,16 @@ macro_rules! conductor_head {
     };
 }
 
-/// `hide-browser` version 1, whose guide `hide guide` now routes to, and
-/// `hide-conductor` versions 1 to 3, renamed `hide-mission` (2026-11-02).
+/// `hide-browser` version 1, whose guide `hide guide` now routes to,
+/// `hide-conductor` versions 1 to 3, renamed `hide-mission` (2026-11-02),
+/// `hide-plan` version 1, renamed `hide-task` (2026-11-04), and
+/// `hide-task` version 1, folded into `hide-mission` (2026-11-09).
 /// The `hide-conductor` entries can go once no supported install can still
 /// hold one: when the oldest build that may update in place writes
-/// `hide-mission`.
-pub const RETIRED_SKILLS: [RetiredSkill; 2] = [
+/// `hide-mission`; the `hide-plan` entry likewise once the oldest such build
+/// writes `hide-task`, whose entry must stay until the oldest such build
+/// writes only `hide` and `hide-mission`.
+pub const RETIRED_SKILLS: [RetiredSkill; 4] = [
     RetiredSkill {
         name: "hide-browser",
         texts: &[concat!(
@@ -324,6 +346,28 @@ pub const RETIRED_SKILLS: [RetiredSkill; 2] = [
             ),
         ],
     },
+    RetiredSkill {
+        name: "hide-plan",
+        texts: &[concat!(
+            "---\nname: hide-plan\n",
+            "description: \"Keep your own plan of the task in Hide: its steps, what each waits on, which one you are on, and the operator's review when they ask for one. Use when a task in a Hide pane takes more than a few steps, or the operator asks you to plan first or have the plan reviewed.\"\n",
+            "---\n\n<!-- hide-skill@1: written by Hide; remove it from Settings, Agents -->\n\n",
+            "First check that this session runs in a pane Hide manages: Hide's session guidance names this checkout, or `hide workspace info` answers `\"ok\":true`. If neither, stop here; this skill does not apply. Inside Hide, run `hide task help` and follow what it prints: it is the plan's contract, with the commands, the steps' shape, when to put the plan up for review with `--ask`, how to approve or drop it on the operator's words, and how to keep its steps current.\n",
+        )],
+    },
+    RetiredSkill {
+        name: "hide-task",
+        texts: &[concat!(
+            "---\n",
+            "name: hide-task\n",
+            "description: \"Carry a task yourself in Hide and keep its steps: what each delivers, what it waits on, which one you are on, and the operator's review when they ask for one. Use when a task in a Hide pane takes more than a few steps, or the operator asks you to plan first or have the steps reviewed. To conduct several agents carrying PRs as a group, use hide-mission instead.\"\n",
+            "---\n",
+            "\n",
+            "<!-- hide-skill@1: written by Hide; remove it from Settings, Agents -->\n",
+            "\n",
+            "First check that this session runs in a pane Hide manages: Hide's session guidance names this checkout, or `hide workspace info` answers `\"ok\":true`. If neither, stop here; this skill does not apply. Inside Hide, run `hide task help` and follow what it prints: it is the task's contract, with the commands, the steps' shape, when to put the steps up for review with `--ask`, how to approve or drop them on the operator's words, and how to keep them current.\n",
+        )],
+    },
 ];
 
 /// The marker line of a stub, which proves Hide wrote it and says which
@@ -348,14 +392,6 @@ pub(crate) fn adapter_of_part(part: ComponentId) -> Option<&'static AgentAdapter
 }
 
 impl AgentAdapter {
-    /// Whether the hook entries Herdr's integration writes for this agent are
-    /// covered by Hide's trust for it: only Codex asks the operator to review
-    /// a hook before it runs, and Hide records that trust for it
-    /// (`hide_agent_hooks::codex_trust`, PRD codex-herdr-hook-trust).
-    pub(crate) fn trusts_herdr_hook(&self) -> bool {
-        self.hook == HookSupport::Part(ComponentId::CodexHook)
-    }
-
     /// Capabilities come from the shared declaration, independently.
     pub fn supports(&self, feature: Feature) -> bool {
         self.declaration.supports(feature)
@@ -366,17 +402,29 @@ impl AgentAdapter {
         self.declaration.basic()
     }
 
+    /// Whether the agent reads the skill folder `dir` besides its own
+    /// (`hide_agent_adapter::AgentAdapter::skill_also_reads`).
+    pub fn also_reads(&self, dir: SkillDir) -> bool {
+        use hide_agent_adapter::SkillLocation;
+        self.declaration.skill_also_reads.iter().any(|location| {
+            dir == match location {
+                SkillLocation::Shared => SkillDir::Shared,
+                SkillLocation::Claude => SkillDir::Claude,
+                SkillLocation::Antigravity => SkillDir::Antigravity,
+            }
+        })
+    }
+
+    /// The agent's declaration, which resolves a profile's account
+    /// (`hide_agent_adapter::AgentAdapter::resolve`).
+    pub(crate) fn declaration(&self) -> &'static hide_agent_adapter::AgentAdapter {
+        self.declaration
+    }
+
     /// The documented ways of installing the CLI Hide can tell apart, each
     /// with its update command.
     pub(crate) fn updates(&self) -> &'static [hide_agent_adapter::UpdateRoute] {
         self.declaration.updates
-    }
-
-    /// The agent's own folder under `home` where Hide and Herdr install,
-    /// from the one resolver of agent folders
-    /// (`hide_agent_adapter::HomeScope::Install`).
-    pub(crate) fn install_home(&self, home: &std::path::Path) -> std::path::PathBuf {
-        self.declaration.install_home(home)
     }
 }
 
@@ -385,6 +433,8 @@ impl AgentAdapter {
 /// this instead of searching again.
 pub(crate) struct Detection {
     rows: Vec<(&'static str, Option<Program>)>,
+    /// The search the agents were looked for on, the account's own.
+    search: OsString,
 }
 
 impl Detection {
@@ -400,7 +450,13 @@ impl Detection {
                 (adapter.id, program)
             })
             .collect();
-        Self { rows }
+        Self { rows, search: path }
+    }
+
+    /// Whether the program `name` is found on the search the agents were
+    /// looked for on.
+    pub(crate) fn finds(&self, name: &str) -> bool {
+        Program::find(&self.search, name).is_some()
     }
 
     /// Whether the agent is installed here: one of its programs is found.
@@ -691,7 +747,12 @@ fn combine(each: [SkillObserved; SKILLS.len()]) -> SkillObserved {
 /// ones Hide wrote; an edited stub only when the operator asked for it again
 /// (`reinstall`), and an operator's file never.
 pub(crate) fn install_skill(dir: SkillDir, home: &Path, reinstall: bool) -> Result<(), String> {
-    let root = dir.path(home);
+    install_skill_in(&dir.path(home), reinstall)
+}
+
+/// [`install_skill`] for any skills folder: a profile account's own.
+pub(crate) fn install_skill_in(root: &Path, reinstall: bool) -> Result<(), String> {
+    let root = root.to_path_buf();
     for skill in SKILLS {
         let write = match skill.observe_in(&root) {
             SkillObserved::Missing | SkillObserved::Stale => true,
@@ -738,6 +799,16 @@ pub(crate) fn remove_skill_in(root: &Path) -> Result<bool, String> {
         }
     }
     Ok(retire_in(root)? || removed)
+}
+
+/// Every file [`install_skill_in`] and [`remove_skill_in`] write or take out
+/// in the skills folder `root`: each stub, and each retired one.
+pub(crate) fn skill_files_in(root: &Path) -> Vec<PathBuf> {
+    SKILLS
+        .iter()
+        .map(|skill| skill.file_in(root))
+        .chain(RETIRED_SKILLS.iter().map(|skill| skill.file_in(root)))
+        .collect()
 }
 
 /// The skills folder the stubs are in.
@@ -807,11 +878,6 @@ pub struct AgentReport {
     pub skill: PieceReport,
     /// `None` for an agent with no hook (skill only).
     pub hook: Option<PieceReport>,
-    /// Herdr's integration for the agent. This build fills it for every
-    /// agent; `None` only in a report from a device helper whose build
-    /// predates the field.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub herdr: Option<PieceReport>,
     /// The found copy is older than the agent's minimum and Hide puts in, or
     /// would put in were the agent on, none of its hook, plugin or
     /// extension until it is updated: present for an agent that is off, and
@@ -836,7 +902,7 @@ impl AgentReport {
     /// copy is too old is not one ([`repairable`]).
     pub fn reinstall_repairs(&self) -> bool {
         self.enabled
-            && [Some(&self.skill), self.hook.as_ref(), self.herdr.as_ref()]
+            && [Some(&self.skill), self.hook.as_ref()]
                 .into_iter()
                 .flatten()
                 .any(|piece| repairable(piece.state, piece.why.as_ref()))
@@ -850,10 +916,6 @@ impl AgentReport {
                 || self
                     .hook
                     .as_ref()
-                    .is_some_and(|hook| hook.state.needs_attention())
-                || self
-                    .herdr
-                    .as_ref()
-                    .is_some_and(|herdr| herdr.state.needs_attention()))
+                    .is_some_and(|hook| hook.state.needs_attention()))
     }
 }

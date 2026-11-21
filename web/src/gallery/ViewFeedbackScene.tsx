@@ -128,7 +128,7 @@ export function ViewFeedbackScene({ theme, scale, content, state }: SceneParams 
     const display = (id: string, extra: Partial<ViewDisplaySnapshot> & Pick<ViewDisplaySnapshot, "kind" | "label" | "path">): ViewDisplaySnapshot => ({ id, tab_id: null, committed: null, preview: false, state: "open", reason: null, ...(count(id) ? { comments: count(id) } : {}), ...extra });
     const displays = [
       display("d1", { kind: "browser", label: "localhost:5173/login", path: "", url: "http://localhost:5173/login", title: "Owl Notes", load: 1, opener: main }),
-      display("d2", { kind: "diff", label: "LoginForm.tsx", path: tabs[0]!.path, tab_id: "t2", committed: false, opener: main }),
+      display("d2", { kind: "diff", label: "LoginForm.tsx", path: tabs[0]!.path, tab_id: "t2", committed: false, opener: main, unseen: true }),
       display("d3", { kind: "file", label: "onboarding.pdf", path: tabs[1]!.path, tab_id: "t3", opener: other }),
       display("d4", { kind: "file", label: "README.md", path: tabs[2]!.path, tab_id: "t4" }),
     ];
@@ -138,7 +138,7 @@ export function ViewFeedbackScene({ theme, scale, content, state }: SceneParams 
       groups: sent ? [] : [group("local/a1", main, ["d1", "d2"]), group("local/a2", other, ["d3"])],
       opened: [
         { pane_id: "a1", view_id: "d1", kind: "browser", label: "localhost:5173/login", path: "", url: "http://localhost:5173/login", comments: count("d1") },
-        { pane_id: "a1", view_id: "d2", kind: "diff", label: "LoginForm.tsx", path: tabs[0]!.path, comments: count("d2") },
+        { pane_id: "a1", view_id: "d2", kind: "diff", label: "LoginForm.tsx", path: tabs[0]!.path, comments: count("d2"), unseen: true },
         { pane_id: "a2", view_id: "d3", kind: "file", label: "onboarding.pdf", path: tabs[1]!.path, comments: count("d3") },
       ],
       ...(sent ? { send: { request_id: "r1", state: "sent" as const, count: 3, to: main.name, pane_id: "a1", at_unix_ms: Date.now() + 3_600_000 } } : {}),
@@ -151,7 +151,7 @@ export function ViewFeedbackScene({ theme, scale, content, state }: SceneParams 
     scene.rest.pane_layouts = [{ workspace_id: workspace.id, tab_id: agentTab.id!, focused_pane_id: "a1", zoomed: false, root: { type: "split", direction: "down", ratio: 0.5, first: { type: "pane", pane_id: "a1" }, second: { type: "pane", pane_id: "a2" } } }];
     scene.rest.workspace_view = {
       agent_layout: { root: { area: { id: "g1", active: agentTab.id, displays: [{ id: agentTab.id! }] } }, active_area: "g1", canvases: {}, limits: { areas: 4, depth: 3, displays: 64 }, display_count: 1 },
-      device_id: "local", path: root, open: true, documents: true, tool: null, pinned: true, document_width: 580, detail_width: null, explorer_width: null, panel_width: null, lane_called: 0, lane_calls: 0, lane_called_side: "view",
+      device_id: "local", path: root, open: true, tray: { tab_id: "t1", shown: true, count: 0 }, tool: null, document_width: 580, explorer_width: null, panel_width: null, lane_called: 0, lane_calls: 0, lane_called_side: "view",
       layout: { root: { area: { id: "a1", active: FRONT[state], displays } }, active_area: "a1", limits: { areas: 4, depth: 3, displays: 32 }, display_count: displays.length },
       feedback,
     };

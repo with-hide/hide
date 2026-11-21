@@ -15,10 +15,6 @@ fn test_env(keep_alive: bool) -> (tempfile::TempDir, Env) {
     let dir = tempfile::tempdir().unwrap();
     let env = Env {
         home: dir.path().to_path_buf(),
-        herdr_socket_path: None,
-        herdr_bin_path: None,
-        own_engine: false,
-        login_shell: None,
         state_dir: dir.path().to_path_buf(),
         legacy_state_dir: None,
         account_state_folder: false,
@@ -32,9 +28,13 @@ fn test_env(keep_alive: bool) -> (tempfile::TempDir, Env) {
         host_helper_root: None,
         host_cli_dir: None,
         pane_id: None,
+        install: None,
+        access: None,
         // A missing path: no test here reaches a real Tailscale.
         tailscale_bin: Some(dir.path().join("no-tailscale")),
         relay_url: "ws://127.0.0.1:9/ws".to_owned(),
+        peer_direct: None,
+        device_connect: false,
         search_path: None,
     };
     (dir, env)
@@ -124,6 +124,123 @@ async fn the_pane_bootstrap_answers_a_caller_on_the_local_stream() {
     drop(dir);
 }
 
+/// A pane another Hide installation on this account started, such as a
+/// device helper's, belongs to that installation: when its own bridge does
+/// not answer, this account's daemon refuses it before it would bind the
+/// caller by its folder, so the call never runs against the other Hide.
+#[tokio::test]
+async fn a_pane_of_another_installation_is_refused_by_this_accounts_daemon() {
+    let (dir, mut env) = test_env(true);
+    let running = hided::start_daemon(env.clone())
+        .await
+        .expect("start daemon");
+    env.pane_id = None;
+    env.install = Some(hide_agent_hooks::route::install_of_root(
+        &dir.path().join("elsewhere"),
+    ));
+    let answer = tokio::task::spawn_blocking(move || hided::workspace_cli::bootstrap(&env, true))
+        .await
+        .unwrap();
+    assert_eq!(answer.unwrap_err(), "other_install");
+    running.stop();
+    drop(dir);
+}
+
+/// A hook in a pane of another installation is refused the same way, before
+/// its command runs (with-hide/hide-private#575): its request names the
+/// pane's installation as `hide`'s does.
+#[tokio::test]
+async fn a_hook_of_another_installations_pane_is_refused_by_this_accounts_daemon() {
+    let (dir, mut env) = test_env(true);
+    let running = hided::start_daemon(env.clone())
+        .await
+        .expect("start daemon");
+    env.pane_id = None;
+    env.install = Some(hide_agent_hooks::route::install_of_root(
+        &dir.path().join("elsewhere"),
+    ));
+    let answer = tokio::task::spawn_blocking(move || {
+        hided::workspace_cli::request_hook(
+            &env,
+            hide_node_link::panes::HookCommand::WorkspaceInfo {},
+        )
+    })
+    .await
+    .unwrap();
+    assert_eq!(answer.unwrap_err(), "other_install");
+    running.stop();
+    drop(dir);
+}
+
+/// The `hide` CLI an agent runs reaches the daemon's pane bootstrap from
+/// every shell an agent runs it in on Windows: Claude Code runs commands in
+/// Git Bash and Codex in PowerShell. Git Bash starts a program with the
+/// same elevated token as PowerShell but its default owner set to the user,
+/// while the daemon's listener is owned by the Administrators group; the
+/// answer has to be the daemon's own refusal, never `hide_unavailable`.
+#[cfg(windows)]
+#[tokio::test]
+async fn the_cli_reaches_the_pane_bootstrap_from_powershell_and_git_bash() {
+    use std::process::{Command, Stdio};
+    let (dir, env) = test_env(true);
+    let running = hided::start_daemon(env.clone())
+        .await
+        .expect("start daemon");
+    let git_bash = std::path::PathBuf::from(std::env::var_os("ProgramFiles").unwrap())
+        .join(r"Git\bin\bash.exe");
+    assert!(
+        git_bash.is_file(),
+        "Git for Windows is not at {}",
+        git_bash.display()
+    );
+    let shells: [(&str, std::path::PathBuf, &[&str]); 2] = [
+        (
+            "PowerShell",
+            "powershell.exe".into(),
+            &[
+                "-NoProfile",
+                "-Command",
+                "& $env:HIDE_TEST_CLI workspace info --hook",
+            ],
+        ),
+        (
+            "Git Bash",
+            git_bash,
+            &["-c", "\"$HIDE_TEST_CLI\" workspace info --hook"],
+        ),
+    ];
+    let state = dir.path().to_path_buf();
+    let answers = tokio::task::spawn_blocking(move || {
+        shells.map(|(name, shell, args)| {
+            let output = Command::new(shell)
+                .args(args)
+                .env("HIDE_TEST_CLI", env!("CARGO_BIN_EXE_hide"))
+                .env_remove(hided::env::HIDE_CAP_REF)
+                .env(hided::env::HIDE_STATE_DIR, &state)
+                .stdin(Stdio::null())
+                .output()
+                .expect("the shell starts");
+            let stdout = String::from_utf8_lossy(&output.stdout).into_owned();
+            let answer: Value = serde_json::from_str(stdout.lines().next().unwrap_or_default())
+                .unwrap_or_else(|_| {
+                    panic!(
+                        "{name} printed {stdout:?} and {:?}, {}",
+                        String::from_utf8_lossy(&output.stderr),
+                        output.status
+                    )
+                });
+            (name, answer)
+        })
+    })
+    .await
+    .unwrap();
+    for (name, answer) in answers {
+        assert_eq!(answer["reason"], "caller_unavailable", "{name}: {answer}");
+    }
+    running.stop();
+    drop(dir);
+}
+
 /// An agent hook's status report with no daemon to take it answers its
 /// refusal as JSON on standard output, the one channel the hook reads, so
 /// the hook records the daemon as unavailable rather than its answer as
@@ -136,10 +253,8 @@ fn a_hook_status_report_with_no_daemon_answers_unavailable_as_json() {
     let mut child = Command::new(env!("CARGO_BIN_EXE_hide"))
         .args(["workspace", "status", "--hook"])
         .env_remove(hided::env::HIDE_CAP_REF)
-        .env_remove(hided::env::HERDR_SOCKET_PATH)
-        .env_remove(hided::env::HERDR_BIN_PATH)
         .env(hided::env::HIDE_STATE_DIR, state.path())
-        .env(hided::env::HERDR_PANE_ID, "w1:p1")
+        .env(hided::env::HIDE_PANE_ID, "w1:p1")
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
         .stderr(Stdio::null())
@@ -437,7 +552,7 @@ fn rest_fields(rest: &Value) -> std::collections::BTreeMap<String, Value> {
 }
 
 /// Settings reads the daemon from this frame: what it is, where its state
-/// lives and which Herdr it attaches with. The token never travels back.
+/// lives and which core state it opens. The token never travels back.
 #[tokio::test]
 async fn the_daemon_describes_itself_before_the_first_snapshot() {
     let (dir, running) = start().await;
@@ -808,7 +923,10 @@ async fn registration_refusals_are_answered_by_hided() {
         // confirmation before anything there is read (PRD wsl-device B15).
         (wire(outside.path()), "needs_confirmation"),
         (wire(&outside.path().join("nope")), "needs_confirmation"),
-        (wire(&home), "home_root"),
+        // Home itself is asked about too, in its own words (PRD
+        // home-folder-project D-02); a folder holding home never registers.
+        (wire(&home), "needs_confirmation"),
+        (wire(home.parent().unwrap()), "home_root"),
         ("relative/path".to_owned(), "invalid_path"),
     ];
     for (path, reason) in cases {
@@ -821,6 +939,12 @@ async fn registration_refusals_are_answered_by_hided() {
         assert_eq!(refused["type"], "path_refused", "{path}");
         assert_eq!(refused["payload"]["reason"], reason, "{path}");
         assert_eq!(refused["payload"]["kind"], "create_workspace");
+        // Only home itself is flagged as home.
+        assert_eq!(
+            refused["payload"].get("home") == Some(&json!(true)),
+            path == wire(&home),
+            "{path}"
+        );
     }
     // A confirmation names one path: another path's is no confirmation, and
     // a confirmed path is then answered by what is there (B18). A confirmed
@@ -964,7 +1088,7 @@ fn never(_: &Value) -> bool {
 
 /// Writes the core's own state file with one registration, which is what makes
 /// a directory a checkout and so what gives hided a root to check against. The
-/// file is the shape herdr-core persists: flat, schema 1, no nesting.
+/// file is the shape hide-core persists: flat, schema 1, no nesting.
 fn seed_registration(state_dir: &std::path::Path, id: &str, path: &std::path::Path) {
     std::fs::write(
         state_dir.join("core-state.json"),
@@ -1830,94 +1954,6 @@ async fn a_drop_names_only_uploads_hided_staged_and_shapes_it_can_forward() {
     running.stop();
 }
 
-/// A Herdr server that answers every request on `socket`, refusing all but
-/// `ping`; the daemon's session sync gets nothing it can use and keeps
-/// retrying, which is all this needs. It answers until dropped.
-struct AnsweringHerdr {
-    closer: hide_platform::ipc::ListenerCloser,
-}
-
-impl Drop for AnsweringHerdr {
-    fn drop(&mut self) {
-        self.closer.close();
-    }
-}
-
-fn answering_herdr(socket: &std::path::Path) -> AnsweringHerdr {
-    use std::io::{BufRead, Write};
-    let listener = hide_platform::ipc::LocalListener::bind(socket).unwrap();
-    let closer = listener.closer();
-    std::thread::spawn(move || {
-        while let Ok(mut stream) = listener.accept() {
-            std::thread::spawn(move || {
-                let mut line = String::new();
-                if std::io::BufReader::new(&mut stream)
-                    .read_line(&mut line)
-                    .is_err()
-                {
-                    return;
-                }
-                let Ok(request) = serde_json::from_str::<Value>(&line) else {
-                    return;
-                };
-                let response = if request["method"] == "ping" {
-                    json!({"id": request["id"], "result": {"type": "pong"}})
-                } else {
-                    json!({"id": request["id"], "error": {"code": "unavailable", "message": "fake"}})
-                };
-                let _ = writeln!(stream, "{response}");
-            });
-        }
-    });
-    AnsweringHerdr { closer }
-}
-
-#[tokio::test]
-async fn the_daemon_outlives_the_idle_window_while_its_herdr_answers() {
-    let (dir, mut env) = test_env(false);
-    env.idle_secs = 1;
-    // A Unix socket path has a hard length limit; a tempdir may be too deep.
-    let base = if cfg!(unix) {
-        std::path::PathBuf::from("/tmp")
-    } else {
-        std::env::temp_dir()
-    };
-    let herdr_dir = base.join(format!("hided-idle-{}", std::process::id()));
-    std::fs::create_dir_all(&herdr_dir).unwrap();
-    let socket = herdr_dir.join("herdr.sock");
-    let herdr = answering_herdr(&socket);
-    env.herdr_socket_path = Some(socket.display().to_string());
-    let running = std::sync::Arc::new(hided::start_daemon(env).await.expect("start daemon"));
-    let announced = tokio::spawn({
-        let running = std::sync::Arc::clone(&running);
-        async move { hided::wait_shutdown(&running).await }
-    });
-    // No client ever connects; three idle windows pass.
-    tokio::time::sleep(Duration::from_secs(3)).await;
-    assert!(
-        !announced.is_finished(),
-        "a daemon whose Herdr answers keeps making labels with no window open"
-    );
-    assert!(state_file::state_path(dir.path()).exists());
-    drop(herdr);
-    let _ = std::fs::remove_dir_all(&herdr_dir);
-    announced.abort();
-}
-
-#[tokio::test]
-async fn the_daemon_exits_after_the_idle_window_when_its_herdr_is_gone() {
-    let (dir, mut env) = test_env(false);
-    env.idle_secs = 1;
-    env.herdr_socket_path = Some(dir.path().join("gone.sock").display().to_string());
-    let running = std::sync::Arc::new(hided::start_daemon(env).await.expect("start daemon"));
-    let stopped =
-        tokio::time::timeout(Duration::from_secs(5), hided::wait_shutdown(&running)).await;
-    assert!(
-        stopped.is_ok(),
-        "with no client and no Herdr the daemon ends after the idle window"
-    );
-}
-
 #[tokio::test]
 async fn a_window_cannot_say_whether_windows_are_attached() {
     let (_dir, running) = start().await;
@@ -2019,11 +2055,13 @@ async fn hide_path_opens_a_registered_folder_and_answers_why_another_was_not_add
     for (path, reason) in [
         (wire(&home.join("projects").join("gone")), "not_found"),
         (wire(outside.path()), "needs_confirmation"),
-        (wire(&home), "home_root"),
-        // The dialog's own registration, refused by the core: no Herdr runs.
+        // An agent's `hide <home>` is never the operator's answer.
+        (wire(&home), "needs_confirmation"),
+        // The dialog's own registration, refused by the core: no pane
+        // holder can start for its first pane here.
         (
             wire(&home.join("projects").join("beta")),
-            "workspace_control_unavailable",
+            "workspace_create_failed",
         ),
     ] {
         let answer = open(path.clone()).await.unwrap().unwrap();
@@ -2043,6 +2081,95 @@ async fn hide_path_opens_a_registered_folder_and_answers_why_another_was_not_add
         health["clients"], 1,
         "each command's connection left; the window stays"
     );
+    running.stop();
+}
+
+/// PRD home-folder-project B5: once the operator registered the home folder,
+/// `hide ~` (or its path) only brings that project forward, never adds one.
+#[tokio::test]
+async fn hide_path_brings_a_registered_home_folder_forward() {
+    let (dir, env) = test_env(true);
+    let home = hide_platform::fs::identity::canonical(dir.path()).unwrap();
+    std::fs::create_dir_all(home.join("projects/alpha")).unwrap();
+    seed_registration(&env.state_dir, "w-home", &home);
+    let running = hided::start_daemon(env).await.expect("start daemon");
+    let open = |path: String| {
+        let (port, token) = (running.port, running.token.clone());
+        tokio::task::spawn_blocking(move || {
+            hided::workspace_cli::request_project_open_with_token(port, &token, &path)
+        })
+    };
+    let answer = open(wire(&home)).await.unwrap().unwrap();
+    assert_eq!(answer["ok"], true, "{answer}");
+    assert_eq!(answer["result"]["path"], json!(wire(&home)), "{answer}");
+    assert_eq!(answer["result"]["added"], false);
+    running.stop();
+}
+
+/// A registered home folder is a root like any other (PRD home-folder-project
+/// B18): a file under it streams its bytes, a file is created in it, and a path
+/// beside it, outside the folder, is still refused.
+#[tokio::test]
+async fn files_under_a_registered_home_folder_are_read_and_created_like_any_project() {
+    let (dir, env) = test_env(true);
+    let home = hide_platform::fs::identity::canonical(dir.path()).unwrap();
+    std::fs::create_dir_all(home.join("Documents")).unwrap();
+    std::fs::write(home.join("Documents/note.md"), b"hello").unwrap();
+    let outside = tempfile::tempdir().unwrap();
+    std::fs::write(outside.path().join("secret.txt"), b"x").unwrap();
+    seed_registration(&env.state_dir, "w-home", &home);
+    let running = hided::start_daemon(env).await.expect("start daemon");
+    let mut socket = live_socket(&running).await;
+
+    let path = wire(&home.join("Documents/note.md"));
+    socket
+        .send(Message::Text(
+            json!({
+                "schema_version": 2,
+                "kind": "file_bytes",
+                "payload": {"request_id": "r1", "path": path, "offset": 0, "length": Value::Null},
+            })
+            .to_string()
+            .into(),
+        ))
+        .await
+        .unwrap();
+    let (header, payload) = recv_binary(&mut socket).await;
+    assert_eq!(
+        (header["type"].as_str(), header["total"].as_u64()),
+        (Some("file_bytes"), Some(5))
+    );
+    assert_eq!(payload, b"hello");
+
+    let root = wire(&home);
+    socket
+        .send(Message::Text(
+            json!({
+                "schema_version": 2,
+                "kind": "file_create",
+                "payload": {"root": root, "parent": root, "name": "written.txt"}
+            })
+            .to_string()
+            .into(),
+        ))
+        .await
+        .unwrap();
+    tokio::time::timeout(Duration::from_secs(10), async {
+        while !home.join("written.txt").is_file() {
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+    })
+    .await
+    .expect("the file created in the home folder");
+
+    let refused = send_event_expecting(
+        &mut socket,
+        "file_list",
+        json!({"root": root, "path": wire(outside.path())}),
+        never,
+    )
+    .await;
+    assert_eq!(refused["type"], "path_refused");
     running.stop();
 }
 

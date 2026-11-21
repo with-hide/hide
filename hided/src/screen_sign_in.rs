@@ -145,7 +145,7 @@ impl ScreenSignIn {
         if let Some(answer) = held.answer {
             let _ = answer.send(Err(refusal));
         }
-        herdr_core::diagnostic!(json!({
+        hide_core::diagnostic!(json!({
             "component": "screen_sign_in",
             "kind": "sign_in.ended",
             "target": self.target,
@@ -231,7 +231,7 @@ impl ScreenSignIn {
             .shown
             .as_ref()
             .is_some_and(|shown| Some(shown.question) == question);
-        herdr_core::diagnostic!(json!({
+        hide_core::diagnostic!(json!({
             "component": "screen_sign_in",
             "kind": if shown || (cancel && question.is_none()) { "sign_in.answered" } else { "sign_in.answer_stale" },
             "target": self.target,
@@ -282,7 +282,7 @@ impl SignIn for Lease {
             held.deadline = None;
             screen.set(&mut slot, Some(wait))
         };
-        herdr_core::diagnostic!(json!({
+        hide_core::diagnostic!(json!({
             "component": "screen_sign_in",
             "kind": "sign_in.asked",
             "target": screen.target,

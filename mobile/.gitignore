@@ -1,0 +1,4 @@
+# The assembled web folder Capacitor serves: `pnpm --dir mobile bundles` rebuilds it.
+www/
+# SwiftPM build folders of the local packages (a package test run by hand).
+ios/App/*/.build/

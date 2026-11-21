@@ -36,6 +36,12 @@ export default tseslint.config(
     ignores: ["dist/**", "src/generated/**"],
   },
   {
+    // Shared with Electron's Node preload, before TypeScript can run.
+    files: ["e2e/**/*.cjs"],
+    languageOptions: { sourceType: "commonjs", globals: { require: "readonly", module: "readonly", process: "readonly" } },
+    rules: { "@typescript-eslint/no-require-imports": "off" },
+  },
+  {
     files: ["src/**/*.{ts,tsx}"],
     ignores: ["src/**/*.test.{ts,tsx}", "src/i18n/**", "src/gallery/**"],
     plugins: { i18next },

@@ -6,6 +6,13 @@ use std::path::PathBuf;
 
 use serde::{Deserialize, Serialize};
 
+/// The `unavailable_code` of the account's home folder, which is never
+/// measured: it holds the whole account, other projects and app data
+/// included, so its sum is neither a project's size nor worth the walk (PRD
+/// home-folder-project D-06). The row has no total and no reason, so the
+/// Projects tab draws no size and no warning for it.
+pub const HOME_FOLDER_CODE: &str = "home_folder";
+
 /// A layer Hide will empty.
 #[derive(Clone, Copy, Debug, Eq, Hash, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]

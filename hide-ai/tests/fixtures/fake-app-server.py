@@ -12,7 +12,11 @@ so a killed owner leaves no survivors. FAKE_ARGS_FILE records the argument
 vector when set, FAKE_INSTRUCTIONS_FILE the base instructions of the last
 thread/start, FAKE_TURN_FILE the parameters of the last turn/start, and
 FAKE_STARTED_FILE is created once a slow turn has
-started and is waiting.
+started and is waiting. FAKE_ENV_FILE records, at `model/list` and at
+`turn/start`, the app-server's pid, the `CODEX_HOME` it runs under, the file
+its `auth.json` link points at, and the variables a profile or a wrapper set
+(`ENV_SEEN`); a wrapper that
+sets FAKE_GATEWAY_MODEL makes `model/list` answer that model alone.
 interrupted_after_usage, stream_disconnected and stream_disconnected_500 end
 an already-started turn after it reported tokens without a usable answer.
 generic_failure and unknown_failure do the same with missing or unfamiliar
@@ -21,6 +25,23 @@ api_error fails the turn as `other` with FAKE_API_MESSAGE as its message.
 In every mode an `outputSchema` that uses a keyword the Responses API's strict
 mode refuses fails the turn the way codex-cli 0.163.0 was measured to: an
 `other` error whose message is the API's own 400 body.
+
+The account's own folder (with-hide/hide#2531) is modelled the way codex-cli
+0.155.1 and 0.167.2 were measured to behave. FAKE_MCP_FILE (a JSON list) is
+the MCP servers the user's configuration declares, read afresh at every
+request as Codex rereads `config.toml`: `config/read` answers them as its
+`mcp_servers` table, in reverse order on every second read since Codex keeps
+no fixed order, or fails with FAKE_CONFIG_READ_FAIL, and
+FAKE_MCP_AFTER_CONFIG_READ, when set, replaces that file's list once the
+first `config/read` is answered, as an edit landing right after it would.
+`thread/start` merges its `config.mcp_servers` into the file's servers name by
+name: a name the file does not hold refuses the thread (`invalid transport`),
+and every server the merge leaves enabled is started, one line per server in
+FAKE_MCP_STARTED_FILE. FAKE_THREAD_START_REFUSED refuses every thread for
+another reason. FAKE_THREADS_FILE gets one line per `thread/start`: its
+parameters, and FAKE_STARTS_FILE one per app-server start: its argument vector.
+`model/list` gives each model FAKE_DEFAULT_EFFORT as its
+`defaultReasoningEffort` when set.
 """
 import atexit
 import json
@@ -29,11 +50,40 @@ import subprocess
 import sys
 import time
 
+
+def declared():
+    """The servers the configuration declares now; none without FAKE_MCP_FILE."""
+    if not (path := os.environ.get("FAKE_MCP_FILE")):
+        return []
+    with open(path, encoding="utf-8") as f:
+        return json.load(f)
+
+
+if path := os.environ.get("FAKE_STARTS_FILE"):
+    with open(path, "a", encoding="utf-8") as f:
+        f.write(json.dumps(sys.argv[1:]) + "\n")
+
 MODE = os.environ.get("FAKE_MODE", "ok")
 REPLY = os.environ.get("FAKE_REPLY", '{"summary":"fixture","attention":"none"}')
 if path := os.environ.get("FAKE_ARGS_FILE"):
     with open(path, "w", encoding="utf-8") as f:
         json.dump(sys.argv[1:], f)
+
+# The variables a profile or its wrapper set, recorded at `model/list`.
+ENV_SEEN = ["OPENAI_BASE_URL", "FAKE_WRAPPED"]
+
+def record_env():
+    if path := os.environ.get("FAKE_ENV_FILE"):
+        home = os.environ.get("CODEX_HOME")
+        auth = os.path.join(home, "auth.json") if home else None
+        with open(path, "w", encoding="utf-8") as f:
+            json.dump({
+                "pid": os.getpid(),
+                "CODEX_HOME": home,
+                "auth_link": os.readlink(auth) if auth and os.path.islink(auth) else None,
+                **{name: os.environ.get(name) for name in ENV_SEEN},
+            }, f)
+
 
 # Children started per thread, ended when this process does (atexit) or when
 # stdin reaches EOF - the same ownership the real app-server has over its tree.
@@ -91,6 +141,7 @@ def strict_refusal(schema):
 
 
 active_turn = None
+config_reads = 0
 for raw in sys.stdin:
     raw = raw.strip()
     if not raw:
@@ -107,14 +158,49 @@ for raw in sys.stdin:
         account = None if MODE == "no_account" else {"type": "chatgpt", "planType": "pro"}
         result(rid, {"account": account, "requiresOpenaiAuth": True})
     elif method == "model/list":
-        models = [] if MODE == "no_model" else [{"id": "gpt-5.6-luna", "model": "gpt-5.6-luna"}]
+        record_env()
+        gateway = os.environ.get("FAKE_GATEWAY_MODEL")
+        models = ([] if MODE == "no_model"
+                  else [{"id": gateway, "model": gateway}] if gateway
+                  else [{"id": "gpt-5.6-luna", "model": "gpt-5.6-luna"}])
+        if effort := os.environ.get("FAKE_DEFAULT_EFFORT"):
+            models = [{**model, "defaultReasoningEffort": effort} for model in models]
         result(rid, {"data": models, "nextCursor": None})
     elif method == "account/rateLimits/read":
         result(rid, {"rateLimits": {"primary": {"usedPercent": 100, "resetsAt": int(time.time()) + 120}}})
+    elif method == "config/read":
+        if os.environ.get("FAKE_CONFIG_READ_FAIL"):
+            send({"jsonrpc": "2.0", "id": rid, "error": {"code": -32600, "message": "failed to load configuration"}})
+            continue
+        config_reads += 1
+        names = declared() if config_reads % 2 else list(reversed(declared()))
+        servers = {name: {"enabled": True, "command": "server"} for name in names}
+        result(rid, {"config": {"mcp_servers": servers}, "origins": {}})
+        edited = os.environ.get("FAKE_MCP_FILE", "") + ".edited"
+        if (after := os.environ.get("FAKE_MCP_AFTER_CONFIG_READ")) and not os.path.exists(edited):
+            with open(os.environ["FAKE_MCP_FILE"], "w", encoding="utf-8") as f:
+                f.write(after)
+            # Once only: later reads see the edited file.
+            open(edited, "w").close()
     elif method == "thread/start":
         if MODE == "exit_at_thread_start":
             sys.exit(2)
         assert params.get("ephemeral") is True and params.get("baseInstructions")
+        overrides = (params.get("config") or {}).get("mcp_servers") or {}
+        if path := os.environ.get("FAKE_THREADS_FILE"):
+            with open(path, "a", encoding="utf-8") as f:
+                f.write(json.dumps(params) + "\n")
+        held = declared()
+        missing = [name for name in overrides if name not in held]
+        if missing or os.environ.get("FAKE_THREAD_START_REFUSED"):
+            reason = f"invalid transport\nin `mcp_servers.{missing[0]}`" if missing else "refused"
+            send({"jsonrpc": "2.0", "id": rid, "error": {"code": -32600, "message": f"failed to load configuration: {reason}"}})
+            continue
+        if path := os.environ.get("FAKE_MCP_STARTED_FILE"):
+            with open(path, "a", encoding="utf-8") as f:
+                for name in held:
+                    if (overrides.get(name) or {}).get("enabled") is not False:
+                        f.write(name + "\n")
         if path := os.environ.get("FAKE_INSTRUCTIONS_FILE"):
             with open(path, "w", encoding="utf-8") as f:
                 f.write(params["baseInstructions"])
@@ -128,6 +214,7 @@ for raw in sys.stdin:
         if path := os.environ.get("FAKE_TURN_FILE"):
             with open(path, "w", encoding="utf-8") as f:
                 json.dump(params, f)
+        record_env()
         active_turn = "turn-1"
         result(rid, {"turn": {"id": active_turn, "status": "inProgress", "items": []}})
         notify("turn/started", {"threadId": "thread-1", "turn": {"id": active_turn, "status": "inProgress", "items": []}})

@@ -12,11 +12,6 @@ use serde::{Deserialize, Serialize};
 pub const HOST_KEY_CHANGED: &str = "host key changed";
 pub const HOST_KEY_UNKNOWN: &str = "host key unknown";
 
-/// Herdr's named-session grammar, before a route is stored or dispatched.
-pub fn valid_herdr_session(session: &str) -> bool {
-    hide_platform::host::valid_herdr_session(session)
-}
-
 /// Whether `alias` is one SSH config token Hide may hand to `ssh`: never
 /// empty, an option, a path or more than one word.
 pub fn ssh_alias_is_one_token(alias: &str) -> bool {
@@ -33,7 +28,6 @@ pub enum RemoteStage {
     Alias,
     Ssh,
     Auth,
-    Herdr,
     Protocol,
     Pty,
     Git,
@@ -48,7 +42,6 @@ impl fmt::Display for RemoteStage {
             Self::Alias => "alias",
             Self::Ssh => "ssh",
             Self::Auth => "auth",
-            Self::Herdr => "herdr",
             Self::Protocol => "protocol",
             Self::Pty => "pty",
             Self::Git => "git",
@@ -202,15 +195,14 @@ pub struct CapabilityReport {
 
 impl CapabilityReport {
     /// A report with a device test's stages pending, in the order the row
-    /// lists them: the connection, the sign-in, the helper's protocol, Herdr,
-    /// the terminals and Git (PRD system-ssh-device-link B25). Each is read
+    /// lists them: the connection, the sign-in, the helper's protocol, the
+    /// terminals and Git (PRD system-ssh-device-link B25). Each is read
     /// off the connection the device already has; the test dials nothing.
     pub fn new(operation_id: impl Into<String>, host: RemoteHostIdentity) -> Self {
         let stages = [
             RemoteStage::Ssh,
             RemoteStage::Auth,
             RemoteStage::Protocol,
-            RemoteStage::Herdr,
             RemoteStage::Pty,
             RemoteStage::Git,
         ]
@@ -289,11 +281,6 @@ impl CapabilityReport {
             .iter()
             .all(|result| matches!(result.state, CapabilityState::Passed))
     }
-}
-
-/// A socket path a device registration may name: absolute, one line.
-pub fn valid_remote_socket_path(path: &str) -> bool {
-    path.starts_with('/') && path.len() > 1 && !path.bytes().any(|byte| byte.is_ascii_control())
 }
 
 /// What the operator allowed on a device: install and update Hide's node
@@ -678,7 +665,23 @@ pub enum SshProblem {
     /// so it cannot start `ssh`: only Hide opened again, which runs the new
     /// build, can.
     HideUpdated,
-    /// None of the above; the row shows ssh's last line.
+    /// ssh's output closed before the device answered, as it does when ssh
+    /// exits, and ssh printed no error line about it.
+    SilentEnd,
+    /// ssh printed nothing, and the device did not answer within the time
+    /// ssh has to connect.
+    SilentTimeout,
+    /// `ssh -G` could not read the alias's settings.
+    ConfigUnreadable,
+    /// Asking ssh itself (`ssh -V`, `ssh -G`) failed: no answer in time, an
+    /// answer too long to read, a program that is not OpenSSH, or one that
+    /// could not run.
+    CheckFailed,
+    /// Other devices kept every place to dial for the whole wait for a turn.
+    Busy,
+    /// Anything else: ssh printed an error line none of the above names,
+    /// which the row shows, or Hide ended the attempt for a reason of its
+    /// own while ssh still ran.
     Unclassified,
 }
 
@@ -697,6 +700,11 @@ impl SshProblem {
             Self::SshMissing => "ssh_missing",
             Self::OpenSshOld => "openssh_old",
             Self::HideUpdated => "hide_updated",
+            Self::SilentEnd => "silent_end",
+            Self::SilentTimeout => "silent_timeout",
+            Self::ConfigUnreadable => "config_unreadable",
+            Self::CheckFailed => "check_failed",
+            Self::Busy => "busy",
             Self::Unclassified => "unclassified",
         }
     }
@@ -708,7 +716,15 @@ impl SshProblem {
     pub fn retried(self) -> bool {
         matches!(
             self,
-            Self::NameNotFound | Self::Unreachable | Self::ProxyFailed | Self::Unclassified
+            Self::NameNotFound
+                | Self::Unreachable
+                | Self::ProxyFailed
+                | Self::SilentEnd
+                | Self::SilentTimeout
+                | Self::ConfigUnreadable
+                | Self::CheckFailed
+                | Self::Busy
+                | Self::Unclassified
         )
     }
 
@@ -729,6 +745,11 @@ impl SshProblem {
             | Self::Unsupported
             | Self::SshMissing
             | Self::OpenSshOld
+            | Self::SilentEnd
+            | Self::SilentTimeout
+            | Self::ConfigUnreadable
+            | Self::CheckFailed
+            | Self::Busy
             | Self::Unclassified => FailureAction::Retry,
         }
     }
@@ -764,6 +785,31 @@ pub struct SshFailure {
     pub detail: String,
 }
 
+/// Where an install of the build on a device stopped.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum InstallStop {
+    /// The device answered that it could not take a step: its install
+    /// folder, a file, or an answer the install does not know.
+    Refused,
+    /// The connection ended, or stopped taking bytes, part way.
+    Ended,
+    /// The device answered nothing within the install's time.
+    Quiet,
+    /// This machine could not make what it sends: a file of its build, or
+    /// the install folder or device home it names.
+    Local,
+}
+
+impl EstablishError {
+    /// An install that stopped at `stop`, for `reason`.
+    pub fn install(stop: InstallStop, reason: impl Into<String>) -> Self {
+        Self::Install {
+            stop,
+            reason: reason.into(),
+        }
+    }
+}
+
 #[derive(Debug)]
 pub enum EstablishError {
     Connect(RemoteError),
@@ -786,8 +832,17 @@ pub enum EstablishError {
         arch: String,
         reason: String,
     },
-    Install(String),
+    /// The build could not be put on the device; `stop` is where it
+    /// stopped, the closed class analytics counts.
+    Install {
+        stop: InstallStop,
+        reason: String,
+    },
     Helper(String),
+    /// The machine the device's node reports is not the one its
+    /// registration names, or cannot name it (`DeviceNaming`): nothing was
+    /// opened on the link, and retrying reaches the same machine.
+    MachineName(String),
 }
 
 impl fmt::Display for EstablishError {
@@ -803,8 +858,9 @@ impl fmt::Display for EstablishError {
             ),
             Self::Stopped(reason)
             | Self::Unsupported(reason)
-            | Self::Install(reason)
-            | Self::Helper(reason) => formatter.write_str(reason),
+            | Self::Install { reason, .. }
+            | Self::Helper(reason)
+            | Self::MachineName(reason) => formatter.write_str(reason),
             Self::Download { reason, .. } => formatter.write_str(reason),
         }
     }
@@ -816,7 +872,7 @@ pub struct NodeReady {
     pub hello: crate::protocol::Hello,
     /// The device's terminals inside this link, when its node started its
     /// terminal service, or why it has none (its node speaks an older
-    /// protocol, or its Herdr could not be found).
+    /// protocol, or its pane holders could not start).
     pub terminals: Result<std::sync::Arc<dyn crate::terminal::TerminalNode>, String>,
 }
 
@@ -830,9 +886,8 @@ pub struct Established {
     pub helper_path: String,
     /// How the build's files reached the device on this connection.
     pub upload: Upload,
-    /// The automatic kit pass completed before starting Herdr-dependent
-    /// services when Herdr was unreadable. A normal connection leaves it
-    /// to the core after helper readiness.
+    /// The kit pass a connection ran itself, if it did. A normal connection
+    /// leaves it to the core after helper readiness.
     pub kit: Option<Result<Box<hide_kit::KitReport>, String>>,
 }
 
@@ -920,6 +975,14 @@ impl Cancel {
 
     pub fn is_cancelled(&self) -> bool {
         self.0.cancelled.load(std::sync::atomic::Ordering::SeqCst)
+    }
+
+    /// The flag a cancel raises, for a bounded run that polls a stop flag
+    /// of its own (`hide_platform::process::run_to_end`): it stops when the
+    /// attempt is cancelled without arming the kill, which stays the
+    /// attempt's process's.
+    pub fn flag(&self) -> &std::sync::atomic::AtomicBool {
+        &self.0.cancelled
     }
 
     /// Arms what ends the attempt's process at once on a cancel, and runs it
@@ -1028,6 +1091,12 @@ pub struct Upload {
     pub sent: usize,
     pub reused: usize,
     pub missing: Vec<String>,
+    /// The sent files' own size, and what crossed the link for them: less
+    /// when the device unpacks what the node packed.
+    pub bytes: u64,
+    pub wire: u64,
+    /// The time the node spent packing them.
+    pub pack_ms: u64,
 }
 
 /// Where an alias leads, as `ssh -G` resolved it.
@@ -1104,24 +1173,6 @@ pub struct SshHostListing {
     pub unreadable: bool,
 }
 
-/// Saved client configuration, never evidence of a reachable server.
-#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
-pub struct HerdrProfile {
-    pub id: String,
-    pub label: String,
-    pub target: String,
-    pub session: String,
-    pub enabled: bool,
-}
-
-#[derive(Debug, Default)]
-pub struct HerdrProfileListing {
-    pub profiles: Vec<HerdrProfile>,
-    /// Config-only resolution for profile and already registered targets.
-    pub endpoints: std::collections::BTreeMap<String, Result<String, String>>,
-    pub truncated: bool,
-}
-
 /// One WSL distribution of this PC, as Add device lists it: read from the
 /// account's registry, so listing never starts WSL (PRD wsl-device D-13).
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -1152,36 +1203,7 @@ pub trait DeviceConnector: Send + Sync {
         home: &std::path::Path,
         node: &str,
         alias: &str,
-        herdr_socket: Option<String>,
     ) -> Result<std::sync::Arc<dyn DialedTransport>, String>;
-
-    /// An explicit session must never silently use the default server.
-    fn transport_session(
-        &self,
-        home: &std::path::Path,
-        node: &str,
-        target: &str,
-        herdr_socket: Option<String>,
-        session: Option<String>,
-    ) -> Result<std::sync::Arc<dyn DialedTransport>, String> {
-        if session.is_some() {
-            return Err("This connector cannot select a saved Herdr session".to_owned());
-        }
-        self.transport(home, node, target, herdr_socket)
-    }
-
-    /// Reads local client profiles only, without connecting to any target.
-    fn herdr_profiles(
-        &self,
-        _home: &std::path::Path,
-        _registered: &[String],
-        _stop: &std::sync::atomic::AtomicBool,
-    ) -> Result<HerdrProfileListing, String> {
-        Err(
-            "Saved Herdr machines are unavailable on this node. Retry after reconnecting"
-                .to_owned(),
-        )
-    }
 
     /// The concrete Host aliases of the SSH configuration of the account at
     /// `home` and where each leads, with the address of each of
@@ -1204,6 +1226,17 @@ pub trait DeviceConnector: Send + Sync {
         Err("WSL distributions can be connected only from the Windows app".to_owned())
     }
 
+    /// The transport for the device `node`, another machine that runs Hide
+    /// and is paired with this one under the connection key `key` (PRD
+    /// device-connect-iroh D-61); nothing connects until it is used.
+    fn peer_transport(
+        &self,
+        _node: &str,
+        _key: &str,
+    ) -> Result<std::sync::Arc<dyn DialedTransport>, String> {
+        Err("This Hide connects no paired machine".to_owned())
+    }
+
     /// This PC's WSL distributions, for Add device. Blocking and bounded;
     /// it starts no `wsl.exe`.
     fn wsl_distributions(&self) -> WslListing {
@@ -1211,33 +1244,17 @@ pub trait DeviceConnector: Send + Sync {
     }
 }
 
-/// Decodes the Herdr snapshot a connection test fetched, given the device's
-/// host id and the socket it answered on, and answers the protocol revision
-/// it reports. The decode is the core's, because the snapshot's shape is its
-/// Herdr contract; the fetch is the transport's.
-pub type SnapshotCheck<'a> =
-    &'a (dyn Fn(&serde_json::Value, &str, &str) -> RemoteResult<u32> + Sync);
-
-/// One registered device as the core reaches it, whichever way its link
-/// opened: its Herdr API over that link.
-pub trait DeviceTransport: Send + Sync {
-    /// The device's Herdr API, over this transport.
-    fn herdr_api_connector(&self) -> std::sync::Arc<dyn hide_herdr_client::ApiConnector>;
-    /// The Herdr version the device reported last, if it has.
-    fn cached_herdr_version(&self) -> Option<String>;
-    /// The exact socket already resolved for this transport, without I/O.
-    fn cached_herdr_socket(&self) -> Option<String> {
-        None
-    }
-}
+/// One registered device as the core holds it, whichever way its link
+/// opened: the core keeps it while the device is registered, and dropping
+/// the last handle lets that link go.
+pub trait DeviceTransport: Send + Sync {}
 
 /// A device the core dials over SSH: it tests the connection, and installs
 /// and starts the device's node. What the core then does on the device goes
 /// through that node's link.
 pub trait DialedTransport: DeviceTransport {
-    /// Probes each stage of a connection for the operator's test; `check`
-    /// decodes the Herdr stage's snapshot.
-    fn capability_test(&self, operation_id: &str, check: SnapshotCheck<'_>) -> CapabilityReport;
+    /// Probes each stage of a connection for the operator's test.
+    fn capability_test(&self, operation_id: &str) -> CapabilityReport;
     /// Connects, checks `consent` against the device that answered, installs
     /// this build's node when the device lacks it, and starts it. Blocking;
     /// run it off the runtime lock.
@@ -1252,6 +1269,23 @@ pub trait DialedTransport: DeviceTransport {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The classes that name what `Unclassified` once held keep its
+    /// handling: Hide tries each again by itself, and the row offers Retry.
+    #[test]
+    fn every_unexplained_ssh_ending_is_retried_like_an_unclassified_one() {
+        for problem in [
+            SshProblem::SilentEnd,
+            SshProblem::SilentTimeout,
+            SshProblem::ConfigUnreadable,
+            SshProblem::CheckFailed,
+            SshProblem::Busy,
+            SshProblem::Unclassified,
+        ] {
+            assert!(problem.retried(), "{problem:?}");
+            assert_eq!(problem.action(), FailureAction::Retry, "{problem:?}");
+        }
+    }
 
     /// A DNS name in two cases is one server; an IPv6 zone names an
     /// interface and keeps its case.
@@ -1463,7 +1497,6 @@ mod tests {
             RemoteStage::Ssh,
             RemoteStage::Auth,
             RemoteStage::Protocol,
-            RemoteStage::Herdr,
             RemoteStage::Pty,
         ] {
             report.pass(stage, "ok");

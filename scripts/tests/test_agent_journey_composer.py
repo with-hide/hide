@@ -50,8 +50,8 @@ def journey_over(pane, agent="codex"):
     settled = []
     journey = SimpleNamespace(
         id=agent, table=table, record={}, pane="w1:p1", run=Path("run"),
-        runtime=SimpleNamespace(owner=SimpleNamespace(cancelled=threading.Event()),
-                                command=lambda *_args, **_kw: (0, "screen", "")),
+        runtime=SimpleNamespace(owner=SimpleNamespace(cancelled=threading.Event())),
+        controller=SimpleNamespace(read_pane=lambda *_args, **_kw: "screen"),
         daemon=SimpleNamespace(dispatch=pane.key),
         conversation=lambda: {"events": [{"role": "user"}] * (1 + pane.prompts)},
         take_keys=lambda record: record.setdefault("terminal", ["controlling"]) and True,

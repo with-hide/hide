@@ -3,7 +3,8 @@ import { activeTab, afterKeep, backFromThread, closeLane, namesView, closeTab, D
 import type { DeskKeptTab, DeskOutput } from "./snapshot";
 
 // Expected answers are PRD session-docs-and-assistant B28-B35 and the
-// project lane's rules UI_BEHAVIOR.md (The right lane) gives Desk's lane.
+// project lane's rules UI_BEHAVIOR.md (The right lane) and with-hide/hide-private
+// docs/desk.md (Desk's lane) give Desk's lane.
 
 const output = (id: string): DeskOutput => ({ id, kind: "image", label: `${id}.png`, thumb: null, seen: false, pr_state: null, device_id: "local", checkout: "/repo", path: `/repo/${id}.png`, url: null });
 const NONE: DeskKeptTab[] = [];

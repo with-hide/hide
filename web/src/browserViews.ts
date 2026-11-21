@@ -22,6 +22,7 @@ import { windowDeviceId } from "./screenMachine";
 import { type SnapshotRest, type ViewLayoutSnapshot } from "./snapshot";
 import { useShellStore } from "./store";
 import { areasOf, workspaceKey, type ViewWorkspace } from "./viewLayout";
+import { isLoopbackHost } from "./loopbackHost";
 
 // --- pure rules ---------------------------------------------------------------
 
@@ -52,6 +53,26 @@ export function parseWorkspaceKey(key: string): ViewWorkspace | null {
 }
 
 const LOOPBACK = /^(localhost|127(?:\.\d{1,3}){3}|0\.0\.0\.0|\[::1\])(?::\d+)?(?:[/?#]|$)/i;
+
+/**
+ * The address a page's Open in default browser hands to the operating
+ * system's default browser (issue 2293), or null when it offers none: only a
+ * web address, never a `file:` page or another scheme, and not a loopback
+ * page of a checkout on another machine than this window's (`isLoopbackHost`,
+ * the host's own rule), whose `localhost` would be this machine's in the
+ * default browser.
+ */
+export function defaultBrowserAddress(address: string, pageDevice: string, windowDevice: string): string | null {
+  let url: URL;
+  try {
+    url = new URL(address);
+  } catch {
+    return null;
+  }
+  if (url.protocol !== "http:" && url.protocol !== "https:") return null;
+  if (pageDevice !== windowDevice && isLoopbackHost(url.hostname)) return null;
+  return url.href;
+}
 
 /**
  * A local file's absolute path as a `file:` URL, escaped the way Chromium
@@ -190,6 +211,8 @@ class BrowserSyncLoop {
   private authorizedScopes: NonNullable<BrowserSync["authorized_scopes"]> = [];
   /** The outside-file grants tabs stand on; null until the shell has the core's tabs. */
   private externalGrants: string[] | null = null;
+  /** Whether `retained` is the core's inventory, which it is not before the first snapshot. */
+  private inventoried = false;
   private retainedKeys = new Set<string>();
   /** Each display's slot, the element its page is laid over, with the device size the slot draws it at. */
   private readonly slots = new Map<string, { element: HTMLElement; device: BrowserDevicePlacement | null }>();
@@ -297,8 +320,9 @@ class BrowserSyncLoop {
     return this.visible;
   }
 
-  setFront(front: Front | null, retained: BrowserSync["retained"], authorizedScopes: NonNullable<BrowserSync["authorized_scopes"]>, externalGrants: string[] | null = null): void {
+  setFront(front: Front | null, retained: BrowserSync["retained"], authorizedScopes: NonNullable<BrowserSync["authorized_scopes"]>, externalGrants: string[] | null, inventoried: boolean): void {
     this.externalGrants = externalGrants;
+    this.inventoried = inventoried;
     const frontIds = new Set(front?.rows.map((row) => row.id));
     this.retainedKeys = new Set(retained
       .filter((row) => row.workspace !== front?.workspace || frontIds.has(row.id))
@@ -418,6 +442,7 @@ class BrowserSyncLoop {
       ...(this.attachmentEpoch === undefined ? {} : { attachment_epoch: this.attachmentEpoch }),
       ...nodeField(windowDeviceId(useShellStore.getState().rest?.navigator?.devices)),
       ...(this.externalGrants === null ? {} : { external_grants: this.externalGrants }),
+      ...(this.inventoried ? { inventoried: true as const } : {}),
     };
     this.visible = sync.displays.flatMap((row) => (row.visible && row.rect ? [row.rect] : []));
     const text = JSON.stringify(sync);
@@ -550,12 +575,28 @@ function syncLoop(): BrowserSyncLoop | null {
   return loop;
 }
 
+/**
+ * One retained display as the host needs it: a web page carries its address
+ * and the load the core asked of it, so the host loads it while no desk on
+ * screen shows it (PRD lane-desk-pair-view B32); an outside HTML file carries
+ * neither, since its path stays in the host.
+ */
+export function retainedRow(row: NonNullable<SnapshotRest["browser_views"]>[number]): BrowserSync["retained"][number] {
+  const base = { workspace: workspaceKey(row), id: row.view_id, area_id: row.area_id };
+  return row.url ? { ...base, url: row.url, load: row.load ?? 0 } : base;
+}
+
 /** The core's browser displays and positive area authority, whenever the snapshot changes them. */
-export function syncBrowserFront(workspace: ViewWorkspace | null, layout: ViewLayoutSnapshot | null | undefined, inventory: { device_id: string; path: string; view_id: string; area_id: string }[], scopes: NonNullable<SnapshotRest["browser_scopes"]> = [], externalGrants: string[] | null = null): void {
+/**
+ * Sends the host the front Workspace's pages and the core's inventory.
+ * `inventoried` says the inventory is the core's, which it is not before the
+ * shell's first snapshot.
+ */
+export function syncBrowserFront(workspace: ViewWorkspace | null, layout: ViewLayoutSnapshot | null | undefined, inventory: NonNullable<SnapshotRest["browser_views"]>, scopes: NonNullable<SnapshotRest["browser_scopes"]> = [], externalGrants: string[] | null = null, inventoried = true): void {
   syncLoop()?.setFront(workspace ? { workspace: workspaceKey(workspace), rows: browserDisplays(layout) } : null,
-    inventory.map((row) => ({ workspace: workspaceKey(row), id: row.view_id, area_id: row.area_id })),
+    inventory.map(retainedRow),
     scopes.map((row) => ({ workspace: workspaceKey(row), area_id: row.area_id, incarnation: row.incarnation })),
-    externalGrants);
+    externalGrants, inventoried);
 }
 
 /** One controller mount and connection observer; its owner releases both on unmount. */

@@ -13,7 +13,7 @@ use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use axum::http::Uri;
-use herdr_core::workspace_control::QueryResult;
+use hide_core::workspace_control::QueryResult;
 use hide_node::pane_proof::process_start;
 use hide_node::ssh::RemoteHost;
 use hide_node_link::protocol::Call;
@@ -268,7 +268,7 @@ impl BrowserControl {
         let mut hosts = self.hosts.lock().map_err(|_| unavailable())?;
         live(&mut hosts);
         let host = hosts.get(&pid).ok_or_else(unavailable)?;
-        Ok(herdr_core::workspace_control::gateway_caller_id(
+        Ok(hide_core::workspace_control::gateway_caller_id(
             &host.caller_key,
             checkout_path,
         ))
@@ -367,7 +367,7 @@ impl BrowserControl {
             .find(|(name, _)| *name == node)
             .and_then(|(_, windows)| windows.owners.iter().find(|(owner, _)| *owner == pid))
             .ok_or_else(unavailable)?;
-        Ok(herdr_core::workspace_control::gateway_caller_id(
+        Ok(hide_core::workspace_control::gateway_caller_id(
             key,
             checkout_path,
         ))
@@ -489,7 +489,7 @@ impl BrowserControl {
                             Err(error) => failure = error.to_string(),
                         }
                     }
-                    herdr_core::diagnostic!(json!({
+                    hide_core::diagnostic!(json!({
                         "component": "browser_control",
                         "kind": "revoke.failed",
                         "owner_pid": pid,
@@ -650,7 +650,7 @@ fn ask_link(link: &RemoteHost, scope: &Value, relay: bool) -> Result<Value, Fail
             NODE_TIMEOUT,
         )
         .map_err(|error| {
-            herdr_core::diagnostic!(json!({
+            hide_core::diagnostic!(json!({
                 "component": "browser_control",
                 "kind": "node_gateway.refused",
                 "node": link.target(),
@@ -798,8 +798,8 @@ impl BrowserAction {
     pub fn command(
         &self,
         source: &QueryResult,
-    ) -> Result<herdr_core::workspace_control::Action, Failure> {
-        use herdr_core::workspace_control::Action;
+    ) -> Result<hide_core::workspace_control::Action, Failure> {
+        use hide_core::workspace_control::Action;
         if source.context.device_id != self.device_id
             || source.context.checkout_path != self.checkout_path
         {
@@ -878,14 +878,14 @@ mod tests {
 
     fn source() -> QueryResult {
         QueryResult {
-            context: herdr_core::workspace_control::Context {
+            context: hide_core::workspace_control::Context {
                 device_id: "local".into(),
                 workspace_id: "workspace".into(),
                 checkout_id: "checkout".into(),
                 checkout_path: "/checkout".into(),
             },
             capabilities: vec![],
-            views: Some(vec![herdr_core::workspace_control::View {
+            views: Some(vec![hide_core::workspace_control::View {
                 area_id: "area-a".into(),
                 view_id: "browser-a".into(),
                 kind: "browser",
@@ -931,7 +931,7 @@ mod tests {
         };
         assert!(action.command(&source).is_ok());
         assert!(
-            matches!(action.command(&source).unwrap(), herdr_core::workspace_control::Action::Close { expected_browser_area: Some(area), .. } if area == "area-a")
+            matches!(action.command(&source).unwrap(), hide_core::workspace_control::Action::Close { expected_browser_area: Some(area), .. } if area == "area-a")
         );
         assert!(action.validate_scope(&source).is_ok());
         action.checkout_path = "/foreign".into();

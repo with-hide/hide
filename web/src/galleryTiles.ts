@@ -1,13 +1,13 @@
-import type { RecordView, WorkSession } from "./snapshot";
+import type { RecordView, WorkOutput, WorkSession } from "./snapshot";
 import { workKey } from "./sessionWork";
 
 /**
  * The session record's 결과물 (PRD session-docs-and-assistant D-40): the
- * Views the session and its descendants opened, then the outputs its turns
- * named. Only an item with a real picture is a thumbnail; every other one is
- * a compact row.
+ * Views the session and its descendants opened, then the GitHub issues they
+ * made. Only an item with a real picture is a thumbnail; every other one is
+ * a compact row, and every one opens what it names.
  */
-export type GalleryTile = { kind: "view"; view: RecordView } | { kind: "artifact"; name: string };
+export type GalleryTile = { kind: "view"; view: RecordView } | { kind: "issue"; issue: WorkOutput };
 
 /** A thumbnail's picture: an image itself, or a page's capture this window already holds. */
 export type Picture = { kind: "image" } | { kind: "still"; src: string };
@@ -27,14 +27,15 @@ export function isImageView(view: RecordView): boolean {
 /**
  * The tiles of the record whose tree `sessions` holds, a drilled child's
  * record keeping only its own subtree's Views. The core sends the Views in
- * the order they were last looked at; the outputs follow, as the record
- * lists them.
+ * the order they were last looked at; the issues among the record's
+ * `outputs` follow as it lists them, its own newest first and then each
+ * child's. Pull requests stay in the record's `PR` section.
  */
-export function galleryTiles(views: readonly RecordView[], sessions: readonly WorkSession[], artifacts: readonly string[]): GalleryTile[] {
+export function galleryTiles(views: readonly RecordView[], sessions: readonly WorkSession[], outputs: readonly WorkOutput[]): GalleryTile[] {
   const keys = new Set(sessions.map(workKey));
   return [
     ...views.filter((view) => keys.has(workKey(view.session))).map((view): GalleryTile => ({ kind: "view", view })),
-    ...artifacts.map((name): GalleryTile => ({ kind: "artifact", name })),
+    ...outputs.filter((output) => output.kind === "issue").map((issue): GalleryTile => ({ kind: "issue", issue })),
   ];
 }
 
@@ -48,11 +49,11 @@ export function pictureOf(tile: GalleryTile, stillOf: (view: RecordView) => stri
 
 /**
  * A row's one short detail: an open document's first heading (else its first
- * line), a page's address, and for any other file where it sits in its
- * checkout; a named output has none.
+ * line), a page's address, for any other file where it sits in its checkout,
+ * and an issue's number.
  */
 export function rowDetail(tile: GalleryTile): string | null {
-  if (tile.kind !== "view") return null;
+  if (tile.kind === "issue") return `#${tile.issue.number}`;
   const { view } = tile;
   if (view.kind === "browser") return view.url ? view.url.replace(/^https?:\/\//i, "") : null;
   const lines = view.lines ?? [];

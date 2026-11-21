@@ -3,19 +3,18 @@ import fs from "node:fs";
 import path from "node:path";
 import { startFixture } from "./engine-fixture";
 import { startHided, type Daemon } from "./hided-fixture";
-import { enterWorkspace, setLanePinned, showExplorer } from "./wire";
+import { enterWorkspace, showExplorer } from "./wire";
 import { chord } from "./chords";
 
 test("View toolbar shortcuts keep New tab, Close, recent tabs and Find in the View", async ({ page }) => {
-  const herdr = await startFixture({ agents: false });
+  const engine = await startFixture({ agents: false });
   let daemon: Daemon | null = null;
   try {
-    for (const name of ["a.txt", "b.txt"]) fs.writeFileSync(path.join(herdr.root, "fixture", name), "sample text\n");
-    daemon = await startHided(herdr, "view-toolbar-shortcuts");
+    for (const name of ["a.txt", "b.txt"]) fs.writeFileSync(path.join(engine.root, "fixture", name), "sample text\n");
+    daemon = await startHided(engine, "view-toolbar-shortcuts");
     await page.goto(`${daemon.origin}/#token=${daemon.token}`);
     await enterWorkspace(page, "fixture");
     await showExplorer(page);
-    await setLanePinned(page, true);
     for (const name of ["a.txt", "b.txt"]) await page.locator(`[data-explorer-row$="/${name}"]`).dblclick();
     await page.locator(".cm-content").click();
     const views = page.locator('[data-view-tab-bar] [role="tab"]');
@@ -43,6 +42,6 @@ test("View toolbar shortcuts keep New tab, Close, recent tabs and Find in the Vi
     await expect(page.locator("[data-find-bar]")).toHaveCount(0);
   } finally {
     daemon?.stop();
-    herdr.stop();
+    engine.stop();
   }
 });

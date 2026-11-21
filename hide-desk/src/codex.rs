@@ -6,7 +6,7 @@
 //! Codex's read-only sandbox blocks loopback, so a `hide` command run inside
 //! it never reaches hided. Codex reads its rules once per session, so a rule
 //! that let a command out of the sandbox without asking would keep the
-//! Settings › Desk › 권한 table of the session's start and skip Hide's
+//! Settings › Labs › Desk › 권한 table of the session's start and skip Hide's
 //! decision. The rules therefore allow nothing: a command that needs more
 //! than the sandbox, a `hide` command included, asks to run outside it, and
 //! that request reaches Hide, which answers it from the table as it is then
@@ -28,7 +28,7 @@
 use std::ffi::OsString;
 use std::path::{Path, PathBuf};
 
-use hide_agent_adapter::{AgentId, HomeScope};
+use hide_agent_adapter::{AccountPath, AgentId, NodeEnv, Profile};
 
 /// Desk's Codex configuration. Commands run with Desk's own `PATH`, not the
 /// login shell's or a snapshot of it, so the `hide` Desk put first is the
@@ -53,7 +53,7 @@ enabled = false
 const RULES: &str = "\
 # Written by Hide for Desk's Codex before every start; edits are replaced.
 # No command runs outside the sandbox without asking: Hide answers each
-# request from Settings > Desk > Permissions.
+# request from Settings > Labs > Desk > Permissions.
 ";
 
 /// The files Desk writes into `home` before Codex starts: path, body and
@@ -75,18 +75,25 @@ pub fn home_variable(home: &Path) -> (OsString, OsString) {
 }
 
 /// The operator's own Codex sign-in: `auth.json` in the folder their Codex
-/// uses, `codex_home` (the account's `CODEX_HOME` as captured) or else
-/// `~/.codex` under `home`, as the one resolver of agent folders reads it.
+/// uses, as the account's variables (`variable`, the process's as captured)
+/// move Codex's default account under `home` (`hide_agent_adapter::resolve`).
 /// Refused with the reason for a `CODEX_HOME` Hide cannot place.
 pub fn operator_sign_in(
     home: &Path,
-    codex_home: Option<&std::ffi::OsStr>,
+    variable: impl Fn(&str) -> Option<OsString>,
 ) -> Result<PathBuf, String> {
-    AgentId::Codex
-        .adapter()
-        .home(Some(home), codex_home, HomeScope::Read)
-        .map(|folder| folder.join("auth.json"))
-        .map_err(|unresolved| unresolved.to_string())
+    let codex = AgentId::Codex.adapter();
+    let node = NodeEnv::new(Some(home.to_path_buf()))
+        .with_account_variables(codex.account_rule(), variable);
+    codex
+        .resolve(&Profile::builtin_default(codex.id), &node)
+        .map(|account| {
+            account
+                .path(AccountPath::Login)
+                .expect("Codex declares its sign-in")
+                .to_path_buf()
+        })
+        .map_err(|refusal| refusal.to_string())
 }
 
 /// The link Desk makes before Codex starts, `(target, link)`: Desk's home's
@@ -119,19 +126,19 @@ mod tests {
         let home = Path::new("/home/me");
         let elsewhere = std::env::temp_dir().join("elsewhere-codex");
         assert_eq!(
-            operator_sign_in(home, None),
+            operator_sign_in(home, |_| None),
             Ok(home.join(".codex").join("auth.json"))
         );
         assert_eq!(
-            operator_sign_in(home, Some(elsewhere.as_os_str())),
+            operator_sign_in(home, |_| Some(elsewhere.clone().into_os_string())),
             Ok(elsewhere.join("auth.json"))
         );
         assert_eq!(
-            operator_sign_in(home, Some(std::ffi::OsStr::new(""))),
+            operator_sign_in(home, |_| Some(OsString::new())),
             Ok(home.join(".codex").join("auth.json"))
         );
         assert_eq!(
-            operator_sign_in(home, Some(std::ffi::OsStr::new("relative-codex"))),
+            operator_sign_in(home, |_| Some("relative-codex".into())),
             Err("CODEX_HOME is not an absolute path".to_owned())
         );
     }

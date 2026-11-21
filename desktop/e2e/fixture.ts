@@ -1,19 +1,22 @@
-// The desktop app against a private Herdr server and a private hided state
-// directory. Nothing here can reach the operator's daemon: the app is
-// refused a launch unless HIDE_STATE_DIR, HOME, HERDR_SOCKET_PATH and its
-// own userData all sit under this run's temporary directory.
+// The desktop app against a private hided state directory, whose daemon runs
+// the core's own engine over the bundle's `hide-holder`. Nothing here can
+// reach the operator's daemon: the app is refused a launch unless
+// HIDE_STATE_DIR, HOME and its own userData all sit under this run's
+// temporary directory.
 
 import { _electron as electron, test as base, expect, type ElectronApplication, type Page } from "@playwright/test";
 import { spawn, spawnSync, type ChildProcess } from "node:child_process";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { linkFixtureTranscripts, type HerdrFixture } from "../../web/e2e/herdr-fixture";
+import { linkFixtureTranscripts } from "../../web/e2e/pane-fixture";
 import { bundledExecutable, linkBundle } from "../../web/e2e/bundled-app";
 import { dumpOnFailure, pageSide } from "../../web/e2e/failure-dump";
-import { aiSettingsFile } from "../../web/e2e/hided-fixture";
-import { ownUntilWorkerExit } from "../../web/e2e/worker-owned";
-import { endWindowsProcesses, fixtureExecutable, fixtureHomeEnv, fixtureLoginShellPath, fixtureOpenCommand, fixtureToolPath, inheritedFixtureEnv } from "../../web/e2e/platform-fixture";
+import { startFixture, type AgentFixture } from "../../web/e2e/engine-fixture";
+import { aiSettingsFile, type Daemon } from "../../web/e2e/hided-fixture";
+import { endPaneHolders } from "../../web/e2e/pane-holders.mjs";
+import { afterCleanup, ownUntilWorkerExit } from "../../web/e2e/worker-owned";
+import { endWindowsProcesses, fixtureExecutable, fixtureHomeEnv, fixtureLoginShellPath, fixtureOpenCommand, fixtureToolPath, inheritedFixtureEnv, windowsProcessTree } from "../../web/e2e/platform-fixture";
 import { SHOW_INACTIVE_SWITCH } from "../src/main/launchSwitches";
 import { FUSED_ELECTRON_ENV } from "./fused-env";
 
@@ -36,26 +39,41 @@ export type Isolated = {
 };
 
 /**
+ * What an isolated home's daemon is given: the engine fixture's run root,
+ * whose transcripts and stand-ins it lends, and `daemonEnv` (the pane shell
+ * and its prompt, `web/e2e/engine-fixture.ts`).
+ */
+export type IsolatedEngine = { root?: string; daemonEnv?: NodeJS.ProcessEnv };
+
+/**
  * The app's `hide` is the worker's app bundle of the debug build
  * (`web/e2e/bundled-app.ts`), so the daemon it starts runs the install kit
  * into the private HOME as a packaged one does. The HOME carries an empty kit
  * record (`seedKitRecord`), as a Mac the kit has run on.
  *
- * A Herdr fixture with its `root` also lends the daemon its `claude`, which
+ * A fixture with its `root` also lends the daemon its `claude`, which
  * is the label provider the fixture's transcripts are answered by, and those
  * transcripts; without one the daemon finds whatever `claude` PATH has, on a
  * HOME where it is not logged in. It also saves `claude` as the agent Hide AI runs on.
+ *
+ * The daemon's panes are its node's children, so they start in this HOME,
+ * whose `.zshrc` gives them the fixture's prompt, and the holders they run in
+ * are ended with the home.
  */
-export function isolate(herdr: Pick<HerdrFixture, "socket" | "bin"> & Partial<Pick<HerdrFixture, "root" | "afterStop">>, label: string): Isolated {
+export function isolate(engine: IsolatedEngine, label: string): Isolated {
   if (isolations.size >= MAX_ISOLATIONS) throw new Error(`desktop fixture has ${MAX_ISOLATIONS} unclosed homes; clean an owned fixture before creating another`);
-  const root = fs.realpathSync.native(fs.mkdtempSync(path.join(os.tmpdir(), `hide-desktop-${label}-`)));
+  // macOS's temporary base already uses most of a Unix socket's path bound.
+  // Keep the state's holder socket short regardless of the test's label.
+  const root = fs.realpathSync.native(fs.mkdtempSync(path.join(process.platform === "win32" ? os.tmpdir() : "/tmp", "hdd-")));
   const home = path.join(root, "home");
   let env: Record<string, string>;
   try {
     fs.mkdirSync(path.join(home, "projects"), { recursive: true });
     seedKitRecord(home);
-    if (herdr.root) {
-      linkFixtureTranscripts({ root: herdr.root }, home);
+    // The prompt the fixture's waits read.
+    fs.writeFileSync(path.join(home, ".zshrc"), "PS1='fixture %# '\n");
+    if (engine.root) {
+      linkFixtureTranscripts({ root: engine.root }, home);
       // Hide AI asks no model until an agent is chosen (PRD settings-cleanup B47), and this app has
       // no signed-in agent for the first-run rule to pick, so the operator here has already chosen
       // the `claude` fixture shim, as a saved choice that is kept (B48).
@@ -72,11 +90,10 @@ export function isolate(herdr: Pick<HerdrFixture, "socket" | "bin"> & Partial<Pi
       HIDE_DESKTOP_SYSTEM_LANGUAGE: "en-US",
       HIDE_CLI_PATH: bundledExecutable("hide"),
       HIDED_UI_DIR: path.join(REPO, "web", "dist"),
-      HERDR_SOCKET_PATH: herdr.socket,
-      HERDR_BIN_PATH: herdr.bin,
-      PATH: fixtureToolPath(path.join(herdr.root ?? root, "bin")),
+      PATH: fixtureToolPath(path.join(engine.root ?? root, "bin")),
       // `open_external` must not launch a GUI application during a test.
       HIDE_OPEN_COMMAND: fixtureOpenCommand(undefined, root),
+      ...definedEnv(engine.daemonEnv),
     };
   } catch (error) {
     fs.rmSync(root, { recursive: true, force: true });
@@ -101,32 +118,40 @@ export function isolate(herdr: Pick<HerdrFixture, "socket" | "bin"> & Partial<Pi
     const live = [...owner.candidates].filter((child) => child.exitCode === null && child.signalCode === null);
     if (live.length || owner.launching) {
       const pids = live.map((child) => child.pid ?? "unavailable").join(", ");
-      throw new Error(`fixture cleanup incomplete; preserve ${root}: candidate exit unconfirmed (PIDs: ${pids || "none"}, pending launches: ${owner.launching}); close only the recorded owned candidates, confirm their exit, then call cleanup() again`);
+      throw new Error(`fixture cleanup incomplete (${label}); preserve ${root}: candidate exit unconfirmed (PIDs: ${pids || "none"}, pending launches: ${owner.launching}); close only the recorded owned candidates, confirm their exit, then call cleanup() again`);
     }
     // Read before the root goes: an exception nothing in the host caught fails
     // the test with its stack, instead of passing unseen (issue 675).
-    const uncaught = hostLog(cleanupEnv).filter((line) => line.event === "host.uncaught"
-      && !allowed.some((part) => String(line.message).includes(part)));
     const errors: unknown[] = [];
+    let uncaught: ReturnType<typeof hostLog> = [];
+    try {
+      uncaught = hostLog(cleanupEnv).filter((line) => line.event === "host.uncaught"
+        && !allowed.some((part) => String(line.message).includes(part)));
+    } catch (error) { errors.push(error); }
+    const stoppedStates: string[] = [];
     for (const state of states()) {
       if (!fs.existsSync(state)) continue;
       const stopped = spawnSync(HIDE_CLI, ["stop"], { env: { ...cleanupEnv, HIDE_STATE_DIR: state }, encoding: "utf8", timeout: 20_000 });
       if (stopped.error || stopped.status !== 0) errors.push(new Error(`private hided stop failed for ${state}: ${stopped.error?.message ?? (stopped.stderr || stopped.stdout || stopped.status)}`));
+      else stoppedStates.push(state);
     }
     // A spec cleans up in its own hooks, before the test's outcome is final,
     // so the logs are read here and the test fixture decides whether to keep them.
     if (daemonLogs) {
       try { daemonLogs.push(...daemonLogTails(states(), root, home)); } catch (error) { errors.push(error); }
     }
+    // The holders outlive their daemon by design; the home that started them ends them.
+    // A log read failure must not strand holders after their daemon stopped.
+    for (const state of stoppedStates) {
+      if (!fs.existsSync(path.join(state, "holders"))) continue;
+      try {
+        endPaneHolders(state, process.platform === "win32" ? { endTree: (pid: number) => endWindowsProcesses(windowsProcessTree(pid)) } : {});
+      } catch (error) { errors.push(error); }
+    }
     if (errors.length) throw new AggregateError(errors, `fixture cleanup incomplete; preserve ${root} and resolve the reported stop/unload failure`);
     // Windows keeps a running executable and a process's folder locked: end what still runs from the root first.
     if (process.platform === "win32") endWindowsProcesses([], root);
-    const remove = () => fs.rmSync(root, { recursive: true, force: true });
-    // A project the app registered is a workspace in this Herdr, whose panes
-    // keep its folder (inside this root) locked on Windows until the server's
-    // processes are gone, so the root is removed by the Herdr fixture's stop.
-    if (process.platform === "win32" && herdr.afterStop) herdr.afterStop(remove);
-    else remove();
+    fs.rmSync(root, { recursive: true, force: true });
     cleaned = true;
     isolations.delete(home);
     owned.disown();
@@ -140,6 +165,70 @@ export function isolate(herdr: Pick<HerdrFixture, "socket" | "bin"> & Partial<Pi
   owner.cleanup = cleanup;
   isolations.set(home, owner);
   return { root, env, hide, daemonPid, allowHostUncaught: (part) => { allowed.push(part); }, cleanup };
+}
+
+/** `env` without its unset values, as a child's environment takes it. */
+function definedEnv(env: NodeJS.ProcessEnv | undefined): Record<string, string> {
+  return Object.fromEntries(Object.entries(env ?? {}).filter((entry): entry is [string, string] => entry[1] !== undefined));
+}
+
+/** A test's engine, its isolated home, and the daemon that holds the fixture's checkout and panes. */
+export type Stack = {
+  fixture: AgentFixture;
+  run: Isolated;
+  /** The home's daemon, which the app attaches to; it is stopped with the home. */
+  daemon: Pick<Daemon, "origin" | "token" | "stateDir" | "home">;
+  /** Ends the home (its app, daemon and holders) and then the engine. */
+  stop: () => void;
+};
+
+/**
+ * The default stack of a desktop spec (`web/e2e/engine-fixture.ts`,
+ * `startFixture`): one checkout, the folder
+ * `fixture` under the engine's root, whose one tab holds two panes, each the
+ * `claude` stand-in (`agents: false` leaves two shells; `family` makes the
+ * second the first one's delegated child). Its home's daemon is started as
+ * the app's own `hide connect` starts it, and the fixture is made through
+ * that daemon with the web shell's events before the app opens; the app
+ * then attaches to that daemon
+ * (`launch`). `prepare` runs between the isolated home and its daemon, for
+ * what must exist before the daemon registers the checkout or reads its
+ * environment (a repository, a program on PATH, a variable): the home's
+ * daemon starts only once.
+ */
+export async function startStack(
+  label: string,
+  options: { agents?: boolean; family?: boolean; prepare?: (fixture: AgentFixture, run: Isolated) => void } = {},
+): Promise<Stack> {
+  const { prepare, ...kind } = options;
+  const fixture = await startFixture(kind);
+  let run: Isolated | null = null;
+  const stop = () => {
+    try { run?.cleanup(); } finally { fixture.stop(); }
+  };
+  try {
+    run = isolate(fixture, label);
+    prepare?.(fixture, run);
+    const daemon = await connectHome(run);
+    await fixture.opened!(daemon);
+    return { fixture, run, daemon, stop };
+  } catch (error) {
+    throw afterCleanup(error, stop);
+  }
+}
+
+/**
+ * Starts the home's daemon with the bundle's `hide connect`, as the app
+ * does, and returns once it answers; a launch then attaches to it.
+ */
+export async function connectHome(run: Isolated): Promise<Pick<Daemon, "origin" | "token" | "stateDir" | "home">> {
+  linkBundle();
+  fixtureLoginShellPath(run.env.HOME!, run.env.PATH!);
+  const connected = spawnSync(bundledExecutable("hide"), ["connect"], { env: run.env, encoding: "utf8", timeout: 30_000 });
+  if (connected.error || connected.status !== 0) throw new Error(`hide connect failed for ${run.root}: ${connected.error?.message ?? (connected.stdout || connected.stderr || `exit ${connected.status}`)}`);
+  const stateDir = run.env.HIDE_STATE_DIR!;
+  const { port, token } = JSON.parse(fs.readFileSync(path.join(stateDir, "hided.json"), "utf8")) as { port: number; token: string };
+  return { origin: `http://127.0.0.1:${port}`, token, stateDir, home: run.env.HOME! };
 }
 
 /**
@@ -187,10 +276,10 @@ async function exitOf(child: ChildProcess, ms: number, before: string): Promise<
 }
 
 export function assertIsolated(env: Record<string, string>): void {
-  // The Herdr fixture keeps its socket directly under /tmp for the path length limit.
+  // The fixture keeps its state directly under /tmp for the socket path length limit.
   const roots = [fs.realpathSync.native(os.tmpdir()), ...(process.platform === "win32" ? [] : [fs.realpathSync.native("/tmp")])];
   const nativeHomeKeys = process.platform === "win32" ? ["USERPROFILE", "APPDATA", "LOCALAPPDATA"] : [];
-  for (const key of ["HOME", "HIDE_STATE_DIR", "HIDE_DESKTOP_USER_DATA_DIR", "HERDR_SOCKET_PATH", ...nativeHomeKeys]) {
+  for (const key of ["HOME", "HIDE_STATE_DIR", "HIDE_DESKTOP_USER_DATA_DIR", ...nativeHomeKeys]) {
     const value = env[key];
     const parent = value ? fs.realpathSync.native(path.dirname(value)) : null;
     if (!parent || !roots.some((root) => {
@@ -544,6 +633,14 @@ async function shellWaitSides(app: ElectronApplication): Promise<unknown> {
  * operator's click would. Throws when the page does not take it. The caller
  * waits for the host to show the page first: a page focused while its view
  * is hidden does not keep the keyboard once shown.
+ *
+ * A focus the page gets while its document is loading is not an operator's:
+ * the host reads it as the navigation taking the keyboard and gives it back
+ * (docs/BROWSER_DISPLAYS.md, Keyboard), so the shell would never hear the
+ * page take it. The page's title can be known before its load stops, and a
+ * page that refreshes itself loads again every second, so this waits for the
+ * load to stop and focuses in the same turn of the host's loop, where no new
+ * load can have begun.
  */
 export async function focusPage(app: ElectronApplication, page: { url: string } | { title: string }): Promise<void> {
   await app.evaluate(async ({ app: electron, BrowserWindow }, page) => {
@@ -565,6 +662,15 @@ export async function focusPage(app: ElectronApplication, page: { url: string } 
     });
     if (!view) throw new Error(`no page ${JSON.stringify(page)} in the window`);
     const contents = (view as unknown as { webContents: Electron.WebContents }).webContents;
+    if (contents.isLoading()) {
+      await new Promise<void>((resolve, reject) => {
+        const deadline = setTimeout(() => reject(new Error(`page ${JSON.stringify(page)} never stopped loading`)), 10_000);
+        contents.once("did-stop-loading", () => {
+          clearTimeout(deadline);
+          resolve();
+        });
+      });
+    }
     window.webContents.focus();
     contents.focus();
     if (!contents.isFocused()) throw new Error(`page ${JSON.stringify(page)} did not take the keyboard in the key window`);
@@ -630,6 +736,36 @@ export function hostLog(env: Record<string, string>): { event: string; [key: str
     .split("\n")
     .filter(Boolean)
     .map((line) => JSON.parse(line) as { event: string });
+}
+
+/**
+ * What the host was doing around an exception nothing caught (issue 2561).
+ *
+ * `timer._onTimeout is not a function` names Node's own dispatch, not the timer
+ * that caused it. Node selects a timer, checks that it still has a callback,
+ * and calls it later; anything that clears that callback in between makes the
+ * call throw, and the stack then names only `listOnTimeout`. A run that only
+ * keeps the stack cannot say which timer was armed or what else the main
+ * process held, so both sides are written: the host's own log around the throw
+ * and what Node still lists as active work.
+ *
+ * `process._getActiveHandles()` does not list timeouts (they are not handles),
+ * so the timer side comes from `getActiveResourcesInfo()`, which names every
+ * pending resource kind. That names no individual timer; when a later failure
+ * needs one, the host has to record its own timers.
+ */
+export async function hostTimerDump(app: ElectronApplication, env: Record<string, string>): Promise<unknown> {
+  const log = hostLog(env);
+  let resources: unknown;
+  try {
+    resources = await app.evaluate(() => {
+      const read = (process as unknown as { getActiveResourcesInfo?: () => string[] }).getActiveResourcesInfo;
+      return typeof read === "function" ? read() : "unavailable in this Node";
+    });
+  } catch (error) {
+    resources = { unavailable: String(error) };
+  }
+  return { uncaught: log.filter((line) => line.event === "host.uncaught"), resources, log: log.slice(-60) };
 }
 
 /**

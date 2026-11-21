@@ -6,12 +6,11 @@ journey).
 
 The Windows forms follow what the repository already does there: the e2e
 fixtures' home and tool PATH (`web/e2e/platform-fixture.ts`) and their pane
-shell, cmd.exe named as Herdr's default shell with its prompt from PROMPT,
-and its commands (`web/e2e/herdr-fixture.ts`). The panes Hide makes for an
-agent run the shell its own integration names, whatever Herdr's default.
+shell, cmd.exe named as the engine's default shell with its prompt from PROMPT,
+and its commands (`web/e2e/engine-fixture.ts`). The panes Hide makes for an
+agent run the shell its own integration names, whatever the engine's default.
 """
 
-import json
 import os
 from pathlib import Path
 import shlex
@@ -89,15 +88,51 @@ def cmd_quote(value):
     return f'"{value}"'
 
 
+def ps_quote(value):
+    """`value` as one single-quoted PowerShell word, which expands nothing."""
+    return "'" + str(value).replace("'", "''") + "'"
+
+
+def ps_mark(path):
+    """The PowerShell statement that writes `ready` to `path`. .NET's
+    WriteAllText lets the controller read the file while it is written, where
+    Set-Content's open refuses that read with a sharing violation; a read that
+    finds it still empty waits on."""
+    return f"[IO.File]::WriteAllText({ps_quote(path)}, 'ready')"
+
+
 class PaneShell:
     """What an owned pane's shell is told: zsh on Unix, from SHELL with a
-    private ZDOTDIR; cmd.exe on Windows, where Herdr ignores SHELL and starts
-    the shell its configuration names."""
+    private ZDOTDIR; PowerShell on Windows, the shell the pane holder starts
+    there, whose prompt `setup` sets."""
 
     def environment(self, home):
         if WINDOWS:
-            return {"PROMPT": READY.removesuffix(">") + "$G "}
+            return {}
         return {"SHELL": "/bin/zsh", "ZDOTDIR": str(home), "skip_global_compinit": "1"}
+
+    def setup(self, path, environment, ready):
+        """Writes the file `path` that sets `environment` in the shell, gives
+        it the READY prompt on Windows and creates `ready` last, and returns
+        the line that reads it. The PTY can accept input before the shell
+        reads lines whole, and its line limit can cut a long PATH along with
+        the final Enter, so only this short line crosses the PTY."""
+        from .protection import write_private
+        if not WINDOWS:
+            write_private(path, ("\n".join(f"export {name}={shlex.quote(value)}" for name, value in environment.items())
+                                 + f"\nprintf ready > {shlex.quote(str(ready))}\n").encode())
+            return f". {shlex.quote(str(path))}"
+        lines = [f"$env:{name} = {ps_quote(value)}" for name, value in environment.items()]
+        lines += [f"function global:prompt {{ {ps_quote(READY + ' ')} }}", ps_mark(ready)]
+        write_private(path, ("\r\n".join(lines) + "\r\n").encode())
+        # A script block, not the file itself, so no execution policy applies.
+        return f". ([scriptblock]::Create((Get-Content -Raw -LiteralPath {ps_quote(path)})))"
+
+    def run(self, argv):
+        """The line that starts `argv` in the shell."""
+        if not WINDOWS:
+            return " ".join(shlex.quote(str(value)) for value in argv)
+        return "& " + " ".join(ps_quote(value) for value in argv)
 
     def files(self):
         """(name, bytes) the private home holds for the shell."""
@@ -112,25 +147,23 @@ class PaneShell:
                             "unset journey_pane_path\n"
                             f"skip_global_compinit=1\nPS1='{READY} '\n").encode())]
 
-    def herdr_config(self):
-        """The lines of Herdr's configuration that name the pane shell."""
-        if not WINDOWS:
-            return ""
-        shell = os.environ.get("ComSpec", "")
-        if not Path(shell).is_absolute() or not Path(shell).is_file():
-            raise FileNotFoundError("Windows needs an absolute ComSpec for the pane shell")
-        return f"[terminal]\ndefault_shell = {json.dumps(shell)}\n"
-
     def program(self, argv, output, error, status):
         """Runs `argv` with separate output streams and writes its exit status last."""
         if not WINDOWS:
             command = " ".join(shlex.quote(str(value)) for value in argv)
             return (f"{command} > {shlex.quote(str(output))} 2> {shlex.quote(str(error))}; "
                     f"printf '%s' \"$?\" > {shlex.quote(str(status))}")
-        # `call echo %^errorlevel%` reads the status when it runs, not when
+        # Windows PowerShell rewrites a redirected native program's output as
+        # UTF-16, so the redirection is cmd.exe's, from a file beside the
+        # status that PowerShell runs. In a batch file `%%` is one `%`, so
+        # `call echo %%errorlevel%%` reads the status when it runs, not when
         # the line is parsed.
+        from .protection import write_private
         command = " ".join(cmd_quote(value) for value in argv)
-        return f"{command} > {cmd_quote(output)} 2> {cmd_quote(error)} & >{cmd_quote(status)} call echo %^errorlevel%"
+        script = status.with_name(status.name + ".cmd")
+        write_private(script, (f"@{command} > {cmd_quote(output)} 2> {cmd_quote(error)} & "
+                               f">{cmd_quote(status)} call echo %%errorlevel%%\r\n").encode())
+        return f"& {ps_quote(script)}"
 
     def read_variable(self, name, source, ready):
         """Sets `name` in the shell, for what it starts later, from the first
@@ -138,7 +171,7 @@ class PaneShell:
         if not WINDOWS:
             return (f"IFS= read -r {name} < {shlex.quote(str(source))}; export {name}; "
                     f"printf 'ready' > {shlex.quote(str(ready))}")
-        return f"set /p {name}=<{cmd_quote(source)} & >{cmd_quote(ready)} echo ready"
+        return f"$env:{name} = (Get-Content -Raw -LiteralPath {ps_quote(source)}).Trim(); {ps_mark(ready)}"
 
 
 def remove_pane_files(*paths):
@@ -171,24 +204,40 @@ def remove_pane_files(*paths):
         raise failures[0]
 
 
-def launcher(path, argv, *, environment=(), unset=()):
+def launcher(path, argv, *, environment=(), unset=(), keep=(), within=None):
     """Writes the program `path` names, which runs `argv` with the caller's
     arguments after it in `environment` and without the variables `unset`:
-    a `/bin/sh` script on Unix, a `.cmd` file beside it on Windows. Returns
-    the program's path."""
+    a `/bin/sh` script on Unix, a `.cmd` file beside it on Windows. A
+    variable of `keep` its caller set to a path in the folder `within` is
+    kept as set, whatever `environment` and `unset` say: a start with a
+    profile names the account it runs in so. Returns the program's path."""
     from .protection import write_private
     environment = dict(environment)
+    keep = list(keep) if within is not None else []
     if not WINDOWS:
-        lines = ["#!/bin/sh", *("unset " + name for name in unset)]
+        prefix = shlex.quote(str(within).rstrip("/") + "/") if keep else ""
+        lines = ["#!/bin/sh", *(f'hide_kept_{name}="${{{name}-}}"' for name in keep),
+                 *("unset " + name for name in unset)]
         if environment:
             lines.append("export " + " ".join(f"{key}={shlex.quote(value)}" for key, value in environment.items()))
+        lines.extend(f'case "$hide_kept_{name}" in {prefix}*) {name}="$hide_kept_{name}"; export {name};; esac'
+                     for name in keep)
         lines.append("exec " + " ".join(shlex.quote(str(value)) for value in argv) + ' "$@"')
         write_private(path, ("\n".join(lines) + "\n").encode())
         path.chmod(0o700)
         return path
     target = path.with_name(path.name + ".cmd")
-    lines = ["@echo off", *(f"set {cmd_quote(name + '=')}" for name in unset),
+    prefix = str(within).rstrip("\\") + "\\" if keep else ""
+    lines = ["@echo off", *(f'set "hide_kept_{name}=%{name}%"' for name in keep),
+             *(f"set {cmd_quote(name + '=')}" for name in unset),
              *(f"set {cmd_quote(f'{key}={value}')}" for key, value in environment.items()),
+             # cmd expands a line as it reads it, and a substring of a
+             # variable that is not set leaves its `%`s behind and breaks the
+             # line; the jump leaves the line unread then.
+             *(line for name in keep for line in (
+                 f"if not defined hide_kept_{name} goto hide_kept_{name}_done",
+                 f'if /i "%hide_kept_{name}:~0,{len(prefix)}%"=={cmd_quote(prefix)} set "{name}=%hide_kept_{name}%"',
+                 f":hide_kept_{name}_done")),
              # The last line: its exit status is the file's, and a program
              # that is itself a .cmd (an npm install's) takes over the run.
              " ".join(cmd_quote(value) for value in argv) + " %*"]
@@ -197,7 +246,7 @@ def launcher(path, argv, *, environment=(), unset=()):
 
 
 def same_path(spelled, path):
-    """Whether `spelled`, a path as Hide or Herdr answers it (`/` between
+    """Whether `spelled`, a path as Hide or the engine answers it (`/` between
     names on every system), names `path`: on Windows either slash and either
     case name the same folder, so a string comparison with `str(path)` never
     matches there."""

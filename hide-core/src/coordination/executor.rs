@@ -1,0 +1,3835 @@
+use super::{AgentRecord, Command, Mutation, Picked, SpawnRecord, resolve_actor, view};
+use crate::agent_start::ShellStart;
+use crate::delivery::ladder::{Delivered, InputTarget};
+use crate::delivery::typed::SendRoute;
+use crate::delivery::{
+    Actor,
+    worker::{Authority, Client, Effect},
+};
+use crate::engine::{Engine, EngineError, Wait};
+use crate::runtime::delivery::CoordinationContext;
+use crate::session_sync::ProjectedAgent;
+use hide_node_link::protocol::StartForm;
+use serde_json::{Value, json};
+use std::sync::{Arc, Mutex};
+use std::time::{Duration, Instant};
+
+const STORE_TIMEOUT: Duration = Duration::from_secs(5);
+/// The engine runs `git worktree add` inside `worktree.create`, which on a large
+/// repository under load takes longer than the 5 s every other call gets.
+const WORKTREE_CREATE_TIMEOUT: Duration = Duration::from_secs(30);
+/// The refusal for a `worktree.create` whose answer never came: the engine may
+/// still finish the worktree, and asking the same intent again continues it.
+pub(crate) const WORKTREE_UNCONFIRMED: &str = "worktree_unconfirmed";
+
+/// What a failed `worktree.create` is refused as. The engine's own refusal keeps
+/// its words; a reply that never arrived leaves the worktree unknown, which
+/// the same intent resolves, so it gets its own code instead of the
+/// transport's sentence.
+fn worktree_create_refusal(error: EngineError) -> String {
+    if error.reply_unknown() {
+        WORKTREE_UNCONFIRMED.to_owned()
+    } else {
+        error.to_string()
+    }
+}
+// Creating something is single-flight: finite side effects serialize without
+// occupying the durable store or Runtime, and a concurrent spawn is refused
+// instead of accumulating blocked workers. The device checks before it only
+// read, so they are not: each is bounded by `TARGET_CHECK_TIMEOUT` and runs
+// beside another spawn's.
+pub(crate) static SPAWN: Mutex<()> = Mutex::new(());
+
+/// The refusal for a spawn whose machine already runs the most pane holders
+/// it keeps: the machine and the node's own count and cap, so the caller
+/// knows where to end finished agents.
+fn holder_cap(machine: &str, why: &str) -> String {
+    crate::diagnostic!(json!({
+        "component": "spawn", "kind": "spawn.holder_cap", "machine": machine, "detail": why,
+    }));
+    super::refusal(
+        hide_node_link::holders::HOLDER_CAP_REFUSAL,
+        &format!("{machine}: {why}"),
+    )
+}
+
+/// What is left of a spawn's answer time for its agent to take input, at
+/// most [`super::BRIEF_READY_WAIT`].
+fn brief_wait(answer_by: Instant) -> Duration {
+    super::BRIEF_READY_WAIT.min(answer_by.saturating_duration_since(Instant::now()))
+}
+
+/// What is left of a spawn's answer time at `now`: the share its new shell
+/// gets to finish starting, which is nothing once the steps before the start
+/// (the checks, the worktree, the tab) have used all of it.
+fn left_of(answer_by: Instant, now: Instant) -> Duration {
+    answer_by.saturating_duration_since(now)
+}
+
+/// The wait a spawn's new shell gets to finish starting.
+fn shell_wait(answer_by: Instant) -> Duration {
+    #[cfg(test)]
+    if let Some(wait) = TEST_SHELL_WAIT.with(std::cell::Cell::get) {
+        return wait;
+    }
+    left_of(answer_by, Instant::now())
+}
+
+/// How long a spawn has to answer its caller: [`super::SPAWN_ANSWER_WAIT`],
+/// or [`super::DEVICE_SPAWN_ANSWER_WAIT`] on a device.
+fn answer_wait(on_device: bool) -> Duration {
+    #[cfg(test)]
+    if let Some(wait) = TEST_ANSWER_WAIT.with(std::cell::Cell::get) {
+        return wait;
+    }
+    if on_device {
+        super::DEVICE_SPAWN_ANSWER_WAIT
+    } else {
+        super::SPAWN_ANSWER_WAIT
+    }
+}
+
+#[cfg(test)]
+thread_local! {
+    /// A spawn's answer wait on this test thread, so a test of a shell that
+    /// never finishes starting does not wait out the real one.
+    pub(crate) static TEST_ANSWER_WAIT: std::cell::Cell<Option<Duration>> =
+        const { std::cell::Cell::new(None) };
+}
+#[cfg(test)]
+thread_local! {
+    /// The wait a spawn's new shell gets on this test thread, fixed rather
+    /// than what a clock leaves of the answer time: how much of that the
+    /// steps before the start use depends on the machine (a Windows runner
+    /// can use all of 300 ms), so a test that reads the wait back cannot
+    /// take it from the clock. [`left_of`] is proved on its own.
+    pub(crate) static TEST_SHELL_WAIT: std::cell::Cell<Option<Duration>> =
+        const { std::cell::Cell::new(None) };
+}
+/// Tests share `SPAWN` through the process, so those that spawn take turns
+/// when a runner puts them on threads of one process.
+#[cfg(test)]
+pub(crate) static SPAWN_TURN: Mutex<()> = Mutex::new(());
+fn state(client: &Client) -> Result<Arc<crate::delivery::ledger::Ledger>, String> {
+    client
+        .runtime
+        .upgrade()
+        .ok_or("delivery_unavailable")?
+        .lock()
+        .map_err(|_| "delivery_unavailable")?
+        .delivery_state()
+}
+/// The ledger with the registrations Hide holds asleep, read under one
+/// hold of the runtime's lock so the two agree.
+pub(super) fn registrations(
+    client: &Client,
+) -> Result<
+    (
+        Arc<crate::delivery::ledger::Ledger>,
+        super::RegistrationFacts,
+    ),
+    String,
+> {
+    let runtime = client.runtime.upgrade().ok_or("delivery_unavailable")?;
+    let runtime = runtime.lock().map_err(|_| "delivery_unavailable")?;
+    let ledger = runtime.delivery_state()?;
+    let sleeping = runtime.registration_facts(&ledger.agents);
+    Ok((ledger, sleeping))
+}
+/// `hide agent show <key>`, read only: a registration by its id (or the
+/// caller's own, `here`) with its state, or a spawn by its id or the caller's
+/// intent, answered by its child's registration once it has one and by the
+/// spawn and its pane's state until then. Nothing is written or asked of an
+/// engine; the facts are copied under the runtime's lock and joined after.
+fn show(client: &Client, actor: &Actor, key: &str) -> Result<Value, String> {
+    let runtime = client.runtime.upgrade().ok_or("delivery_unavailable")?;
+    let runtime = runtime.lock().map_err(|_| "delivery_unavailable")?;
+    let shown = Shown::read(&runtime, actor, key)?;
+    drop(runtime);
+    Ok(shown.answer(&actor.device_id))
+}
+
+/// What `hide agent show` found, with the facts it copied under the
+/// runtime's lock.
+pub(crate) struct Shown {
+    ledger: Arc<crate::delivery::ledger::Ledger>,
+    sleeping: super::RegistrationFacts,
+    found: Found,
+}
+
+enum Found {
+    Agent(Box<AgentRecord>, crate::runtime::agent_show::StateFacts),
+    Spawn(
+        Box<super::SpawnRecord>,
+        crate::runtime::agent_show::StateFacts,
+    ),
+}
+
+impl Shown {
+    /// Finds `key` for `actor` under the runtime's lock, reading only.
+    pub(crate) fn read(
+        runtime: &crate::runtime::Runtime,
+        actor: &Actor,
+        key: &str,
+    ) -> Result<Self, String> {
+        use crate::runtime::agent_show::spawns_of;
+        let ledger = runtime.delivery_state()?;
+        let sleeping = runtime.registration_facts(&ledger.agents);
+        let registered = |record: &AgentRecord| {
+            let facts =
+                runtime.agent_state_facts(&record.actor, &spawns_of(&ledger, Some(&record.id)));
+            Found::Agent(Box::new(record.clone()), facts)
+        };
+        let caller = super::live_self(&ledger, actor)
+            .next()
+            .map(|record| record.id.clone());
+        let spawn = || {
+            ledger
+                .spawns
+                .iter()
+                .find(|spawn| spawn.id == key)
+                .or_else(|| {
+                    let caller = caller.as_deref()?;
+                    ledger
+                        .spawns
+                        .iter()
+                        .find(|spawn| spawn.parent == caller && spawn.intent == key)
+                })
+        };
+        let found = if key == super::HERE {
+            registered(super::here(
+                &ledger,
+                actor,
+                crate::runtime::unix_milliseconds(),
+            )?)
+        } else if let Some(record) = ledger.agents.iter().find(|record| record.id == key) {
+            registered(record)
+        } else if let Some(spawn) = spawn() {
+            match spawn
+                .child
+                .as_deref()
+                .and_then(|child| ledger.agents.iter().find(|record| record.id == child))
+            {
+                Some(record) => registered(record),
+                None => Found::Spawn(Box::new(spawn.clone()), runtime.spawn_state_facts(spawn)),
+            }
+        } else {
+            // A name or a pane, as a letter's recipient is named; a bare
+            // pane id is one of the caller's own machine.
+            let pane =
+                crate::address::named_pane_id(runtime.node().as_str(), &actor.device_id, key);
+            registered(super::shown_record(&ledger, key, &pane)?.ok_or("agent_unavailable")?)
+        };
+        Ok(Self {
+            ledger,
+            sleeping,
+            found,
+        })
+    }
+
+    /// The answer, for a caller on `device`.
+    pub(crate) fn answer(self, device: &str) -> Value {
+        match self.found {
+            Found::Agent(record, facts) => {
+                let life = super::life(&record, &self.sleeping);
+                let mut state = facts.state(Some(life), record.parent.as_deref());
+                // The declaration is the ledger's, so it is said whether or
+                // not a row shows it now: asleep, or on a device away.
+                if let Some(turn) = self.ledger.human_turns.get(&record.id) {
+                    state.waiting = Some(crate::delivery::answer::Waiting::human(turn));
+                }
+                json!(crate::delivery::answer::AgentShow {
+                    agent: super::agent_view(&record, &self.ledger, &self.sleeping),
+                    state,
+                })
+            }
+            Found::Spawn(spawn, facts) => {
+                let parent =
+                    (spawn.mode == super::SpawnMode::Delegation).then_some(spawn.parent.as_str());
+                json!(crate::delivery::answer::SpawnShow {
+                    spawn: spawn_ref(&spawn, device),
+                    state: facts.state(None, parent),
+                })
+            }
+        }
+    }
+}
+
+/// A spawn that stopped partway with its pane made names that spawn and
+/// pane in its refusal, so the caller can read the pane, answer its screen
+/// and ask `hide agent show <spawn id>` without a registration
+/// (`super::split_refusal` takes the detail off again).
+fn incomplete_spawn(client: &Client, actor: &Actor, command: &Command, code: String) -> String {
+    let Command::Spawn { parent, intent, .. } = command else {
+        return code;
+    };
+    let (bare, cause) = super::split_refusal(&code);
+    if !super::INCOMPLETE_SPAWN.contains(&bare) {
+        return code;
+    }
+    let (bare, cause) = (bare.to_owned(), cause.map(str::to_owned));
+    let Ok(ledger) = state(client) else {
+        return code;
+    };
+    let parent = match parent.as_deref() {
+        None | Some(super::HERE) => super::live_self(&ledger, actor)
+            .next()
+            .map(|record| record.id.clone()),
+        Some(parent) => Some(parent.to_owned()),
+    };
+    let found = parent.and_then(|parent| {
+        ledger
+            .spawns
+            .iter()
+            .find(|spawn| spawn.parent == parent && spawn.intent == *intent && spawn.pane.is_some())
+    });
+    match found {
+        Some(spawn) => {
+            let spawn = spawn_ref(spawn, &actor.device_id);
+            let mut detail = json!({"id": spawn.id, "pane": spawn.pane});
+            if let Some(cause) = cause {
+                detail["cause"] = json!(cause);
+            }
+            super::refusal(&bare, &detail.to_string())
+        }
+        None => bare,
+    }
+}
+
+/// A spawn as an answer names it: its pane as `hide pane send` takes it from
+/// a caller on `device`, bare on the caller's own machine.
+pub(crate) fn spawn_ref(
+    spawn: &super::SpawnRecord,
+    device: &str,
+) -> crate::delivery::answer::SpawnRef {
+    crate::delivery::answer::SpawnRef {
+        id: spawn.id.clone(),
+        intent: spawn.intent.clone(),
+        name: spawn.name.clone(),
+        kind: spawn.kind.clone(),
+        machine: spawn.machine.clone(),
+        pane: spawn
+            .pane
+            .as_ref()
+            .map(|pane| match spawn.machine.as_deref() {
+                Some(machine) if machine != device => crate::address::scoped_pane_id(machine, pane),
+                _ => pane.clone(),
+            }),
+        child: spawn.child.clone(),
+    }
+}
+
+pub(crate) fn mutate(
+    client: &Client,
+    authority: &Authority,
+    actor: &Actor,
+    mutation: Mutation,
+) -> Result<Value, String> {
+    client.submit(
+        Effect::Agents {
+            authority: Authority {
+                caller: authority.caller.clone(),
+                context: authority.context.clone(),
+                also_reads: Vec::new(),
+                proven: crate::delivery::worker::Proven::Now,
+                registers: Vec::new(),
+                written: None,
+            },
+            actor: actor.clone(),
+            mutation: Box::new(mutation),
+        },
+        STORE_TIMEOUT,
+    )
+}
+/// `request` holding its profile on `device` while it starts
+/// (`launch::holds`).
+fn hold_start(
+    client: &Client,
+    device: &str,
+    request: crate::launch::Request,
+) -> Result<crate::launch::Request, String> {
+    client
+        .runtime
+        .upgrade()
+        .ok_or("delivery_unavailable")?
+        .lock()
+        .map_err(|_| "delivery_unavailable")?
+        .hold_profile_start(device, request)
+        .map_err(|refusal| super::refusal(refusal.code, &refusal.detail))
+}
+
+pub(super) fn context(client: &Client, device: &str) -> Result<CoordinationContext, String> {
+    client
+        .runtime
+        .upgrade()
+        .ok_or("delivery_unavailable")?
+        .lock()
+        .map_err(|_| "delivery_unavailable")?
+        .coordination_context(device)
+}
+fn agents(engine: &dyn Engine) -> Result<Vec<ProjectedAgent>, String> {
+    agents_with_timeout(engine, Duration::from_secs(2))
+}
+fn agents_with_timeout(
+    engine: &dyn Engine,
+    timeout: Duration,
+) -> Result<Vec<ProjectedAgent>, String> {
+    engine
+        .agents(Wait::Each(timeout))
+        .map_err(|error| match error {
+            EngineError::Answer(_) => "native_identity_unavailable".into(),
+            error => error.to_string(),
+        })
+}
+fn native_matches(agent: &ProjectedAgent, pane: &str, name: Option<&str>, kind: &str) -> bool {
+    agent.pane_id == pane
+        && name.is_none_or(|name| agent.name.as_deref() == Some(name))
+        && agent.agent.as_deref().is_some_and(|observed| {
+            hide_agent_adapter::canonical_kind(observed) == hide_agent_adapter::canonical_kind(kind)
+        })
+}
+#[allow(clippy::disallowed_methods)] // a production wait, not test code
+fn wait_native_identity(
+    engine: &dyn Engine,
+    pane: &str,
+    name: Option<&str>,
+    kind: &str,
+    answer_by: Instant,
+) -> Result<ProjectedAgent, String> {
+    // The public socket start acknowledges the typed command before the
+    // process and its native session are detected. Wait for that observation,
+    // never send another start, and keep every read within one finite deadline.
+    // The agent runs by now, so a read the engine did not answer says nothing of
+    // it: the wait reads again, and at its deadline the spawn leaves the
+    // registration to an identity wait rather than an agent nothing tracks.
+    let deadline = (Instant::now() + Duration::from_secs(5)).min(answer_by);
+    loop {
+        let remaining = deadline.saturating_duration_since(Instant::now());
+        if remaining.is_zero() {
+            return Err("native_identity_unavailable".into());
+        }
+        let observed = match agents_with_timeout(engine, remaining.min(Duration::from_secs(2))) {
+            Ok(observed) => observed,
+            Err(detail) => {
+                crate::diagnostic!(json!({
+                    "component": "spawn", "kind": "identity.read_failed", "pane_id": pane,
+                    "detail": detail,
+                }));
+                Vec::new()
+            }
+        };
+        if let Some(agent) = observed.into_iter().find(|agent| {
+            native_matches(agent, pane, name, kind)
+                && agent.lineage_session.is_some()
+                && agent.agent_session.is_some()
+        }) {
+            return Ok(agent);
+        }
+        std::thread::sleep(
+            deadline
+                .saturating_duration_since(Instant::now())
+                .min(Duration::from_millis(100)),
+        );
+    }
+}
+/// Waits until the engine reports the agent `name` in `pane` ready for input
+/// (`BRIEF_READY_WAIT`, ending by the spawn's `answer_by`), the moment the
+/// spawn's brief may be typed. An agent that does not take input in that
+/// time is `brief_not_submitted`: nothing was typed, and the same command
+/// waits again (or starts the agent once more, when it ended). The answer's
+/// detail and the log say why (`NotReady::cause`): a question on its screen,
+/// an agent that ended, one not ready, or one the engine could not read.
+fn brief_ready(
+    engine: &dyn Engine,
+    spawn: &str,
+    pane: &str,
+    name: &str,
+    answer_by: Instant,
+) -> Result<(), BriefNotReady> {
+    use crate::delivery::ladder::NotReady;
+    crate::delivery::ladder::ready(engine, pane, name, brief_wait(answer_by)).map_err(|not| {
+        let kind = match &not {
+            NotReady::Request(_) => return BriefNotReady::Refused(not.detail()),
+            NotReady::Unread(_) => "brief.agent_unread",
+            NotReady::Late(_) | NotReady::Asking(_) => "brief.agent_not_ready",
+            NotReady::Ended(_) => "brief.agent_ended",
+        };
+        let cause = not.cause().unwrap_or("unread");
+        let reason = brief_refused_because(spawn, pane, kind, cause, not.detail());
+        if cause == "agent_ended" {
+            BriefNotReady::Ended(reason)
+        } else {
+            BriefNotReady::Running(reason)
+        }
+    })
+}
+
+/// Has the core wait for the session of spawn `spawn`'s agent in `pane` on
+/// `device` and bind it as the spawn's child (`identity_wait`); asking again
+/// answers the same wait.
+#[allow(clippy::too_many_arguments)]
+fn await_identity(
+    client: &Client,
+    authority: &Authority,
+    actor: &Actor,
+    device: &str,
+    pane: &str,
+    name: &str,
+    kind: &str,
+    spawn: &str,
+) -> Result<(), String> {
+    mutate(
+        client,
+        authority,
+        actor,
+        Mutation::AwaitIdentity {
+            wait: super::identity_wait::IdentityWait {
+                id: String::new(),
+                machine: device.to_owned(),
+                pane: pane.to_owned(),
+                name: name.to_owned(),
+                kind: kind.to_owned(),
+                owed: super::identity_wait::Owed::Spawn {
+                    spawn: spawn.to_owned(),
+                },
+            },
+        },
+    )
+    .map(drop)
+}
+
+/// Why a spawn's brief was not typed, as `brief_ready` answers it.
+enum BriefNotReady {
+    /// The engine refused the read itself; the code as it came.
+    Refused(String),
+    /// The agent still runs: it asks a question, or is not ready yet.
+    Running(String),
+    /// The agent ended before it took its brief.
+    Ended(String),
+}
+
+fn brief_refused(spawn: &str, pane: &str, kind: &str, detail: String) -> String {
+    crate::diagnostic!(json!({
+        "component": "spawn", "kind": kind, "spawn": spawn, "pane_id": pane, "detail": detail,
+    }));
+    "brief_not_submitted".to_owned()
+}
+
+/// `brief_refused` for a brief whose agent did not take input, with the
+/// cause in the log and in the refusal's detail, which the spawn's answer
+/// carries as its `cause` (`incomplete_spawn`).
+fn brief_refused_because(
+    spawn: &str,
+    pane: &str,
+    kind: &str,
+    cause: &str,
+    detail: String,
+) -> String {
+    crate::diagnostic!(json!({
+        "component": "spawn", "kind": kind, "spawn": spawn, "pane_id": pane, "cause": cause,
+        "detail": detail,
+    }));
+    super::refusal("brief_not_submitted", cause)
+}
+
+/// The program the engine starts `kind` by (the definition's first
+/// executable, `start_prompt::program_of`) and how the pane's node starts it
+/// now, asked before every start of the spawn: what the start names and
+/// whether the brief can ride it. It only ever lets a start name a file or
+/// carry its brief: a program the node does not find (on Windows a `.ps1`
+/// alone, which the pane's PowerShell still runs), a node that could not be
+/// asked, or no node at all leave the start as it was, by the program's name
+/// with its brief typed. A device's start was refused already when its node
+/// did not find the program (`check_target`).
+fn start_form(
+    node: Option<&dyn crate::node_access::NodeLink>,
+    engine: &dyn crate::engine::Engine,
+    kind: &str,
+    spawn: &str,
+) -> (String, Option<StartForm>) {
+    let program = crate::start_prompt::program_of(engine, kind);
+    let Some(node) = node else {
+        return (program, None);
+    };
+    let form = crate::start_prompt::start_form(node, &program, TARGET_CHECK_TIMEOUT)
+        .unwrap_or_else(|error| {
+            crate::diagnostic!(json!({
+                "component": "spawn", "kind": "start.form_unread", "spawn": spawn,
+                "agent_kind": kind, "program": program, "cause": error.to_string(),
+            }));
+            None
+        });
+    (program, form)
+}
+
+/// The words a fresh start of `kind` adds to carry `brief` as its launch
+/// prompt (`start_prompt::launched`, the one decision), or `None` where the
+/// brief is typed once the agent runs; a reason to type it is logged.
+/// Decided once, for the spawn's first start, and saved with
+/// `BriefLaunched`.
+fn launch_prompt(
+    kind: &str,
+    args: &[String],
+    brief: &str,
+    here: bool,
+    form: Option<&StartForm>,
+) -> Option<Vec<String>> {
+    crate::start_prompt::launched(kind, args, brief, here, form)
+        .map_err(|refusal| {
+            crate::diagnostic!(json!({
+                "component": "spawn", "kind": "brief.launch_refused", "agent_kind": kind,
+                "detail": refusal.detail(),
+            }));
+        })
+        .ok()
+        .flatten()
+}
+
+/// The words this start of the spawn adds to carry its brief, `None` where
+/// the brief is typed once the agent runs. A brief already launched carries
+/// the words saved with it (`launch_words`) and asks nothing again, so a start
+/// typed again for the same spawn cannot start the agent without its brief;
+/// a record an earlier build saved without its words is given them as that
+/// build gave them, every launched brief carried as given, with no machine
+/// asked, and fails `brief_launch_unrecorded` where that start could carry
+/// none. Only a fresh start whose brief was never sent decides
+/// (`launch_prompt`).
+fn brief_words(
+    reserved: &SpawnRecord,
+    start_args: &[String],
+    here: bool,
+    form: Option<&StartForm>,
+) -> Result<Option<Vec<String>>, String> {
+    let Some(brief) = reserved.brief.as_deref() else {
+        return Ok(None);
+    };
+    let launched_before = reserved
+        .brief_input
+        .as_ref()
+        .is_some_and(|input| input.route == SendRoute::Launch);
+    if launched_before && reserved.launch_words.is_empty() {
+        return crate::start_prompt::carried(&reserved.kind, start_args, brief)
+            .map(Some)
+            .map_err(|_| "brief_launch_unrecorded".to_owned());
+    }
+    if launched_before {
+        return Ok(Some(reserved.launch_words.clone()));
+    }
+    // A brief that went in, or may have, never rides a start again.
+    if reserved.brief_phase() != super::BriefPhase::NotTyped {
+        return Ok(None);
+    }
+    Ok(launch_prompt(&reserved.kind, start_args, brief, here, form))
+}
+
+/// Sends `brief` down its prepared route, the one submission path the
+/// doorbell uses too. Its typing was reserved first (`Mutation::BriefTyping`),
+/// and the route it answers is saved after (`Mutation::Briefed`); the
+/// agent's own record confirms it (`delivery::typed`). A send whose answer
+/// was lost answers `SendRoute::Lost`, so the brief counts as sent and no
+/// retry of the spawn sends it again (engineering principle 11). A send
+/// that sent nothing is `brief_not_submitted`, and the typing it reserved
+/// stays spent.
+pub(crate) fn send_brief(
+    engine: &dyn Engine,
+    target: &InputTarget,
+    spawn: &str,
+    brief: &str,
+) -> Result<SendRoute, String> {
+    let route = match crate::delivery::ladder::deliver(engine, target, brief) {
+        Delivered::Sent(route) => route,
+        Delivered::Lost(code) => {
+            crate::diagnostic!(json!({
+                "component": "spawn", "kind": "brief.send_lost", "spawn": spawn,
+                "pane_id": target.raw_pane_id, "code": code,
+            }));
+            return Ok(SendRoute::Lost);
+        }
+        Delivered::NotYet(code) => {
+            return Err(brief_refused(
+                spawn,
+                &target.raw_pane_id,
+                "brief.prompt_refused",
+                code.to_owned(),
+            ));
+        }
+    };
+    crate::diagnostic!(json!({
+        "component": "spawn", "kind": "brief.submitted", "spawn": spawn,
+        "pane_id": target.raw_pane_id, "bytes": brief.len(), "route": route,
+    }));
+    Ok(route)
+}
+
+/// The actor of `agent` on `device`; `on_node` when that device is the core's
+/// own node, whose panes the core names without a device prefix.
+fn actor_for(agent: &ProjectedAgent, device: &str, on_node: bool) -> Result<Actor, String> {
+    let actor = Actor {
+        pane_id: if on_node {
+            agent.pane_id.clone()
+        } else {
+            crate::address::scoped_pane_id(device, &agent.pane_id)
+        },
+        // The engine's own identifier for the agent: its name, else its pane. It
+        // keys the pane, never labels it (`AgentRecord::wire_name`).
+        name: agent.name.clone().unwrap_or_else(|| agent.pane_id.clone()),
+        kind: agent.agent.clone().ok_or("native_identity_unavailable")?,
+        device_id: device.into(),
+        session: agent.lineage_session.clone(),
+    };
+    actor.require_native_identity()?;
+    Ok(actor)
+}
+pub(crate) struct HostIdentity<'a> {
+    pub(crate) machine: &'a str,
+    pub(crate) on_node: bool,
+    pub(crate) scope: &'a str,
+    pub(crate) native_machine: &'a str,
+}
+pub(super) fn record(
+    agent: &ProjectedAgent,
+    host: HostIdentity<'_>,
+    instance: String,
+    name: Option<String>,
+    parent: Option<String>,
+    project: Option<String>,
+) -> Result<AgentRecord, String> {
+    let session = native_session(agent.agent_session.as_ref())?;
+    let native = Native {
+        pane: &agent.pane_id,
+        session,
+        terminal_id: Some(agent.terminal_id.clone()),
+        actor: actor_for(agent, host.machine, host.on_node)?,
+    };
+    Ok(registration(native, &host, instance, name, parent, project))
+}
+
+/// The session a registration records for an agent, from the engine's own
+/// reference to it, for every kind: an id, or a session file's path.
+pub(crate) fn native_session(
+    reference: Option<&crate::sidebar::SessionAgentSessionPayload>,
+) -> Result<String, String> {
+    let session = reference
+        .ok_or("native_identity_unavailable")?
+        .value
+        .clone();
+    super::kept_session(&session)?;
+    Ok(session)
+}
+
+/// What a registration says of the agent the engine shows in a pane: the
+/// engine's own pane id, the agent's session, its terminal and its actor.
+pub(crate) struct Native<'a> {
+    pub(crate) pane: &'a str,
+    pub(crate) session: String,
+    pub(crate) terminal_id: Option<String>,
+    pub(crate) actor: Actor,
+}
+
+/// The registration of `native` on `host`: the one shape every registration
+/// of an engine's agent takes, from the engine's list (`record`) or from the
+/// session the core observes (`Runtime::heir_record`), so a later
+/// registration of the same pane converges on it (`insert_record`).
+pub(crate) fn registration(
+    native: Native<'_>,
+    host: &HostIdentity<'_>,
+    instance: String,
+    name: Option<String>,
+    parent: Option<String>,
+    project: Option<String>,
+) -> AgentRecord {
+    AgentRecord {
+        id: String::new(),
+        // A pane id is never a name: the engine's fallback identifier for an
+        // agent it never named, or a name restating the pane, is none.
+        name: name.filter(|name| name != native.pane),
+        machine: host.machine.into(),
+        host_scope: host.scope.into(),
+        native_machine: host.native_machine.into(),
+        session: native.session,
+        instance,
+        pane: native.pane.to_owned(),
+        parent,
+        origin: None,
+        project,
+        actor: native.actor,
+        ended: false,
+        terminal_id: native.terminal_id,
+        forked: false,
+        successor: None,
+    }
+}
+
+pub(crate) fn run(
+    client: Client,
+    authority: Authority,
+    actor: Actor,
+    command: Command,
+) -> Result<Value, String> {
+    match command {
+        Command::List { live } => {
+            let (ledger, sleeping) = registrations(&client)?;
+            Ok(json!(crate::delivery::answer::AgentList {
+                // A code-owned identity (Hide's own, such as Desk's, an
+                // external tool's, the operator's) is the origin of the work
+                // it starts, not an agent: it runs in no pane, so the list
+                // of agents leaves it out, and `origin_tool` names a tool.
+                items: ledger
+                    .agents
+                    .iter()
+                    .filter(|record| !record.actor.code_owned())
+                    .filter(|record| !live || !record.ended)
+                    .map(|record| super::agent_view(record, &ledger, &sleeping))
+                    .collect(),
+            }))
+        }
+        Command::Show { id } => show(&client, &actor, &id),
+        Command::AskHuman { kind, place } => {
+            let kind = super::human_turn::HumanKind::parse(&kind)?;
+            let place = super::human_turn::place_of(&place)?;
+            mutate(
+                &client,
+                &authority,
+                &actor,
+                Mutation::AskHuman {
+                    turn: Some((kind, place)),
+                },
+            )
+        }
+        Command::AskHumanClear => mutate(
+            &client,
+            &authority,
+            &actor,
+            Mutation::AskHuman { turn: None },
+        ),
+        Command::End {
+            id,
+            actor: asserted,
+            keep_pane,
+        } => super::end::end(&client, &authority, &actor, id, asserted, keep_pane),
+        Command::Register {
+            check,
+            machine,
+            host_scope,
+            session,
+            instance,
+            name,
+            pane,
+            parent,
+            project,
+        } => {
+            if ![&host_scope, &instance, &name, &pane]
+                .into_iter()
+                .all(|s| super::key(s))
+            {
+                return Err("invalid_registration".into());
+            }
+            super::kept_session(&session)?;
+            let machine = registration_machine(machine, &actor.device_id)?;
+            let CoordinationContext {
+                engine,
+                host_scope: actual_scope,
+                machine: native_machine,
+                on_node,
+                ..
+            } = context(&client, &machine)?;
+            if on_node && host_scope != actual_scope {
+                return Err("host_scope_conflict".into());
+            }
+            let observed = agents(engine.as_ref())?;
+            let native = observed
+                .iter()
+                .find(|agent| agent.pane_id == pane)
+                .ok_or("target_unavailable")?;
+            if native.lineage_session != crate::engine::tokens::session_digest(&session) {
+                return Err("session_identity_conflict".into());
+            }
+            let ledger = state(&client)?;
+            let parent = parent
+                .map(|id| {
+                    if id == super::HERE {
+                        super::live_self(&ledger, &actor)
+                            .next()
+                            .map(|p| p.id.clone())
+                            .ok_or("parent_unavailable".to_owned())
+                    } else {
+                        Ok(id)
+                    }
+                })
+                .transpose()?;
+            let record = record(
+                native,
+                HostIdentity {
+                    machine: &machine,
+                    scope: &host_scope,
+                    native_machine: &native_machine,
+                    on_node,
+                },
+                instance,
+                Some(name),
+                parent,
+                project,
+            )?;
+            let value = mutate(
+                &client,
+                &authority,
+                &actor,
+                Mutation::Register { record, check },
+            )?;
+            if !check {
+                publish_tokens(
+                    &client,
+                    engine.as_ref(),
+                    value["id"].as_str().ok_or("agent_unavailable")?,
+                )?;
+            }
+            Ok(value)
+        }
+        Command::RegisterSelf { project } => {
+            if project
+                .as_deref()
+                .is_some_and(|project| !super::key(project))
+            {
+                return Err("invalid_registration".into());
+            }
+            let ledger = state(&client)?;
+            let id = own_registration(&client, &authority, &actor, &ledger, project)?;
+            Ok(json!({"id": id}))
+        }
+        command @ Command::Spawn { .. } => spawn(&client, &authority, &actor, command.clone())
+            .map_err(|code| incomplete_spawn(&client, &actor, &command, code)),
+    }
+}
+/// A registration is always on the caller's own machine, which its pane
+/// capability already names; a machine the caller restates must agree with it.
+fn registration_machine(requested: Option<String>, caller: &str) -> Result<String, String> {
+    match requested {
+        None => Ok(caller.to_owned()),
+        Some(machine) if !super::key(&machine) => Err("invalid_registration".into()),
+        Some(machine) if machine != caller => Err("machine_identity_conflict".into()),
+        Some(machine) => Ok(machine),
+    }
+}
+pub(super) fn publish_tokens(client: &Client, engine: &dyn Engine, id: &str) -> Result<(), String> {
+    let ledger = state(client)?;
+    let child = ledger
+        .agents
+        .iter()
+        .find(|record| record.id == id)
+        .ok_or("agent_unavailable")?;
+    if let Some(related) = super::lineage::related(child, &ledger) {
+        super::lineage::write_record(engine, child, related)?;
+    }
+    Ok(())
+}
+/// The caller's own live registration, made from what the engine reports of its
+/// pane when it has none yet: a spawn's parent, and the session that takes a
+/// mission over (`Command::RegisterSelf`). Converges on the existing record.
+fn own_registration(
+    client: &Client,
+    authority: &Authority,
+    actor: &Actor,
+    ledger: &crate::delivery::ledger::Ledger,
+    project: Option<String>,
+) -> Result<String, String> {
+    if let Some(own) = super::live_self(ledger, actor).next() {
+        return Ok(own.id.clone());
+    }
+    if actor.hide_owned() {
+        // Hide's own work (Desk, Hide AI) has no pane for the engine to
+        // report: its record is the origin it registers here, once.
+        return register_code_owned(client, authority, actor);
+    }
+    let CoordinationContext {
+        engine,
+        host_scope,
+        machine: native_machine,
+        on_node,
+        ..
+    } = context(client, &actor.device_id)?;
+    let observed = agents(engine.as_ref())?;
+    let native = observed
+        .iter()
+        .find(|agent| {
+            actor_for(agent, &actor.device_id, on_node)
+                .is_ok_and(|current| current.same_identity(actor))
+        })
+        .ok_or("parent_unavailable")?;
+    let record = record(
+        native,
+        HostIdentity {
+            machine: &actor.device_id,
+            scope: &host_scope,
+            native_machine: &native_machine,
+            on_node,
+        },
+        native.pane_id.clone(),
+        // The engine's name for the caller while it has one; a caller the engine never
+        // named stays unnamed instead of taking its pane id for a name.
+        native.name.clone(),
+        None,
+        project,
+    )?;
+    mutate(
+        client,
+        authority,
+        actor,
+        Mutation::Register {
+            record,
+            check: false,
+        },
+    )?["id"]
+        .as_str()
+        .map(str::to_owned)
+        .ok_or_else(|| "parent_unavailable".into())
+}
+
+/// Registers a code-owned identity, a Factory's or Hide's own, as the
+/// parent or origin of the agents it starts (D-14); converges on the
+/// existing record.
+fn register_code_owned(
+    client: &Client,
+    authority: &Authority,
+    actor: &Actor,
+) -> Result<String, String> {
+    if !actor.code_owned() {
+        return Err("reserved_name".into());
+    }
+    let record = AgentRecord {
+        id: String::new(),
+        name: Some(actor.name.clone()),
+        machine: actor.device_id.clone(),
+        host_scope: actor.kind.clone(),
+        native_machine: actor.kind.clone(),
+        session: actor.name.clone(),
+        instance: actor.pane_id.clone(),
+        pane: actor.pane_id.clone(),
+        parent: None,
+        origin: None,
+        project: None,
+        actor: actor.clone(),
+        ended: false,
+        terminal_id: None,
+        forked: false,
+        successor: None,
+    };
+    let registered = mutate(
+        client,
+        authority,
+        actor,
+        Mutation::Register {
+            record,
+            check: false,
+        },
+    )?;
+    registered["id"]
+        .as_str()
+        .map(str::to_owned)
+        .ok_or_else(|| "parent_unavailable".into())
+}
+
+/// How long the device's node may take to answer one of the spawn's checks.
+const TARGET_CHECK_TIMEOUT: Duration = Duration::from_secs(8);
+
+/// Whether `folder` is a folder on the machine `node` runs, asked of that
+/// machine now and off the runtime lock: one that is gone is refused as
+/// [`super::FOLDER_GONE`], and a machine that cannot answer refuses the
+/// start as unanswered, since an unattended start never runs in a folder
+/// no one confirmed.
+fn folder_there(
+    node: Option<&dyn crate::node_access::NodeLink>,
+    folder: &str,
+) -> Result<(), String> {
+    use crate::node_access::{call_as, link_failure_code};
+    let node = node.ok_or("machine_unavailable")?;
+    match call_as::<Option<String>>(
+        node,
+        hide_node_link::protocol::Call::Directory {
+            path: folder.to_owned(),
+        },
+        TARGET_CHECK_TIMEOUT,
+    ) {
+        Ok(Some(_)) => Ok(()),
+        Ok(None) => Err(super::FOLDER_GONE.to_owned()),
+        Err(error) => Err(link_failure_code(&error)),
+    }
+}
+
+/// The destination a mission's spawn starts a new branch from, judged
+/// before anything is made (PRD mission-destination D-04): the mission's
+/// destination when the spawn's repository is the mission's project, read
+/// on the repository's machine and compared by the Git directory every
+/// worktree of it shares, so a path spelled another way, a link to the
+/// folder or a worktree of it is the project (with-hide/hide#2634). A node's
+/// worker sent to another repository is refused with the two folders named,
+/// never started from that repository's own branch; any other spawn of the
+/// Conductor's there starts as one outside the mission does.
+fn mission_destination(
+    node: Option<&dyn crate::node_access::NodeLink>,
+    repo: &str,
+    admission: Option<&crate::runtime::missions::MissionAdmission>,
+) -> Result<Option<String>, String> {
+    use crate::node_access::{LinkError, call_as};
+    use hide_node_link::{cleanup::RepositoryDirs, protocol::Call};
+    let Some(admission) = admission else {
+        return Ok(None);
+    };
+    let Some(project) = admission.project.as_deref() else {
+        return Ok(admission.destination.clone());
+    };
+    let node = node.ok_or("machine_unavailable")?;
+    let repository = |path: &str| {
+        call_as::<Option<RepositoryDirs>>(
+            node,
+            Call::Repository {
+                path: path.to_owned(),
+            },
+            TARGET_CHECK_TIMEOUT,
+        )
+        .map_err(|error| {
+            crate::diagnostic!(json!({
+                "component": "spawn", "kind": "mission_repository_unread",
+                "mission": admission.mission, "cause": error.to_string(),
+            }));
+            match error {
+                LinkError::Refused(_) => "repository_unavailable".to_owned(),
+                _ => "machine_unavailable".to_owned(),
+            }
+        })
+    };
+    let spawned = repository(repo)?.ok_or("repository_unavailable")?;
+    if repository(project)?.is_some_and(|own| own.common_dir == spawned.common_dir) {
+        return Ok(admission.destination.clone());
+    }
+    if admission.node_worker {
+        return Err(super::refusal(
+            "mission_other_repository",
+            &format!("{repo} is not a checkout of the mission's project {project}"),
+        ));
+    }
+    Ok(None)
+}
+
+/// Judges a device that is not the caller's before anything is made there:
+/// the id names a device, the device takes work now, `repo` (when this
+/// attempt still has to make the checkout) is a repository there, and the
+/// agent CLI is installed there. The node link is taken under the runtime
+/// lock and called after it is released.
+fn check_target(
+    client: &Client,
+    actor: &Actor,
+    device: &str,
+    kind: &str,
+    intent: &str,
+    repository: Option<&str>,
+    agent: bool,
+) -> Result<(), String> {
+    use crate::node_access::{LinkError, call_as};
+    use hide_node_link::{cleanup::RepositoryDirs, protocol::Call};
+    let (link, engine) = client
+        .runtime
+        .upgrade()
+        .ok_or("delivery_unavailable")?
+        .lock()
+        .map_err(|_| "delivery_unavailable")?
+        .spawn_target(&actor.device_id, device)?;
+    // A node that did not answer says nothing about the repository or the
+    // CLI, so it is the device that is unavailable; only its own answer can
+    // refuse them.
+    let unavailable = |check: &str, error: LinkError| {
+        // The caller is told what to do next; what the node said stays here.
+        crate::diagnostic!(json!({
+            "component": "spawn", "kind": "device_check_failed", "device": device,
+            "intent": intent, "check": check, "cause": error.to_string()
+        }));
+        match error {
+            LinkError::Refused(_) => None,
+            _ => Some("machine_unavailable".to_owned()),
+        }
+    };
+    if let Some(repository) = repository {
+        match call_as::<Option<RepositoryDirs>>(
+            link.as_ref(),
+            Call::Repository {
+                path: repository.to_owned(),
+            },
+            TARGET_CHECK_TIMEOUT,
+        ) {
+            Ok(Some(_)) => {}
+            Ok(None) => return Err("repository_unavailable".into()),
+            Err(error) => {
+                return Err(
+                    unavailable("repository", error).unwrap_or("repository_unavailable".into())
+                );
+            }
+        }
+    }
+    if !agent {
+        return Ok(());
+    }
+    match call_as::<Option<StartForm>>(
+        link.as_ref(),
+        Call::AgentInstalled {
+            // The device's own engine says what the agent is started by.
+            name: crate::start_prompt::program_of(engine.as_ref(), kind),
+        },
+        TARGET_CHECK_TIMEOUT,
+    ) {
+        Ok(Some(_)) => Ok(()),
+        Ok(None) => Err("agent_not_installed".into()),
+        Err(error) => {
+            Err(unavailable("agent_installed", error).unwrap_or("agent_not_installed".into()))
+        }
+    }
+}
+
+/// Judges whether `kind` on `machine` has Hide's hook in place, from that
+/// machine's kit report, before anything is made for the spawn
+/// (`runtime::start_hook`). Where a pass may put it in place, one runs on
+/// the machine's own kit worker, off the runtime lock, and the spawn judges
+/// again from its answer.
+#[allow(clippy::disallowed_methods)] // a production wait, not test code
+fn check_hook(
+    client: &Client,
+    machine: &str,
+    kind: &str,
+    profile: Option<&str>,
+    intent: &str,
+) -> Result<Option<crate::runtime::start_hook::ProfileHook>, String> {
+    use crate::runtime::start_hook::{HookRefusal, StartHook};
+    let refused = |refusal: HookRefusal, stage: &str| {
+        crate::diagnostic!(json!({
+            "component": "spawn", "kind": "hook.refused", "device": machine,
+            "agent_kind": kind, "intent": intent, "reason": refusal.code(), "stage": stage,
+        }));
+        refusal.code().to_owned()
+    };
+    let runtime = client.runtime.upgrade().ok_or("delivery_unavailable")?;
+    let asked = {
+        let mut locked = runtime.lock().map_err(|_| "delivery_unavailable")?;
+        match locked.start_hook(machine, kind, profile) {
+            StartHook::Ready => {
+                return locked
+                    .start_hook_proof(machine, profile)
+                    .map_err(|refusal| refused(refusal, "report"));
+            }
+            StartHook::Refused(refusal) => return Err(refused(refusal, "report")),
+            StartHook::Pass(_) => locked.ask_start_pass(machine)?,
+        }
+    };
+    let deadline = Instant::now() + super::HOOK_PASS_WAIT;
+    loop {
+        {
+            let locked = runtime.lock().map_err(|_| "delivery_unavailable")?;
+            if locked.start_pass_answered(machine, asked) {
+                return locked
+                    .start_hook_after_pass(machine, kind, profile)
+                    .and_then(|()| locked.start_hook_proof(machine, profile))
+                    .map_err(|refusal| refused(refusal, "pass"));
+            }
+            if !locked.kit_reachable(machine) {
+                return Err("machine_unavailable".into());
+            }
+        }
+        if Instant::now() >= deadline {
+            crate::diagnostic!(json!({
+                "component": "spawn", "kind": "hook.pass_unanswered", "device": machine,
+                "agent_kind": kind, "intent": intent, "waited_ms": super::HOOK_PASS_WAIT.as_millis(),
+            }));
+            return Err(refused(HookRefusal::Unconfirmed, "wait"));
+        }
+        std::thread::sleep(Duration::from_millis(100));
+    }
+}
+
+fn spawn(
+    client: &Client,
+    authority: &Authority,
+    actor: &Actor,
+    mut command: Command,
+) -> Result<Value, String> {
+    // The caller's own device is the absence of a device: one intent, one
+    // spelling.
+    if let Command::Spawn { machine, .. } = &mut command
+        && machine.as_deref() == Some(actor.device_id.as_str())
+    {
+        *machine = None;
+    }
+    // The caller waits this long for the answer, besides the hook's wait
+    // below; the new shell's wait and every wait after the start (the agent
+    // taking input, its session) end inside it, so a stopped shell or a slow
+    // agent is answered rather than timed out.
+    let mut answer_by = Instant::now()
+        + answer_wait(matches!(
+            &command,
+            Command::Spawn {
+                machine: Some(_),
+                ..
+            }
+        ));
+    let Command::Spawn {
+        parent,
+        machine,
+        name,
+        intent,
+        kind,
+        repo,
+        branch,
+        path,
+        args,
+        launch,
+        profile,
+        task,
+        brief,
+        mission,
+        plan_node,
+        plan,
+        beside,
+        pick,
+    } = &command
+    else {
+        return Err("invalid_spawn".into());
+    };
+    // The core names the place before it hands a spawn here
+    // (`Runtime::spawn_place`). With no branch the child works in the plain
+    // folder `repo` itself, which takes no worktree path of its own.
+    let Some(repo) = repo else {
+        return Err("invalid_spawn".into());
+    };
+    let branch = branch.as_ref();
+    if branch.is_none() && path.is_some() {
+        return Err("invalid_spawn".into());
+    }
+    // A plan step's spawn runs only as the core admitted it.
+    if plan_node.is_some() != plan.is_some() {
+        return Err("invalid_spawn".into());
+    }
+    // Where a spawn opens says who answers for it: beside its caller is the
+    // operator's to watch, so it never has a parent, and a supervised child
+    // opens in a tab of its own (docs/delivery.md).
+    if *beside && parent.is_some() {
+        return Err("beside_with_parent".into());
+    }
+    if brief
+        .as_ref()
+        .is_some_and(|brief| brief.trim().is_empty() || brief.len() > crate::delivery::BODY_LIMIT)
+    {
+        return Err("invalid_brief".into());
+    }
+    if parent.as_ref().is_some_and(|parent| !super::key(parent))
+        || machine.as_ref().is_some_and(|machine| !super::key(machine))
+        || ![name, intent, kind, repo]
+            .into_iter()
+            .chain(branch)
+            .all(|s| super::key(s))
+        || args.len() > 128
+        || args.iter().map(String::len).sum::<usize>() > 8192
+        || args.iter().any(|arg| arg.contains('\0'))
+        || task.as_ref().is_some_and(|task| {
+            task.kind.home().is_none() || task.target.as_deref().is_some_and(|t| !super::key(t))
+        })
+    {
+        return Err("invalid_spawn".into());
+    }
+    if !crate::fork::valid_agent_name(name) {
+        return Err("invalid_agent_name".into());
+    }
+    // The choice goes before the native arguments, which may end with the
+    // first prompt after `--`; the machine's permission choice goes before
+    // both once the child's machine is known.
+    let mut start_args =
+        crate::runtime::agent_choice::choice_arguments(kind, launch).map_err(|detail| {
+            crate::diagnostic!(json!({
+                "component": "spawn", "kind": "spawn.invalid_launch_choice", "intent": intent,
+                "agent_kind": kind, "detail": detail,
+            }));
+            "invalid_launch_choice"
+        })?;
+    start_args.extend(args.iter().cloned());
+    // The device probe takes the kind as a program name, so only a kind Hide
+    // can start reaches it.
+    if machine.is_some() && hide_agent_adapter::start_kind(kind).is_none() {
+        return Err("invalid_spawn".into());
+    }
+    let mut ledger = state(client)?;
+    // An earlier attempt of this intent by the same parent: every check
+    // below judges a retry by what that attempt already did (engineering
+    // #11).
+    let earlier = super::earlier_spawn(&ledger, actor, parent.as_deref(), intent).cloned();
+    // A spawn beside its caller opens in the caller's own tab, so it is
+    // judged before anything is registered, reserved or created; a retry of
+    // an intent whose pane exists already is judged by what it did, and a
+    // completed one stays offline.
+    let beside_of = if *beside {
+        let placed = earlier
+            .as_ref()
+            .is_some_and(|record| record.beside && (record.pane.is_some() || record.completed));
+        Some(beside_target(
+            client,
+            authority,
+            actor,
+            machine.as_deref(),
+            (!placed).then_some((repo.as_str(), branch.map(String::as_str), path.as_deref())),
+            intent,
+        )?)
+    } else {
+        None
+    };
+    if let Some(device) = machine {
+        // Nothing is created for a device that cannot take the spawn, so the
+        // judgment comes before the parent is registered or the intent
+        // reserved, and a retry of an intent that already progressed or
+        // completed is judged by what it already did.
+        // Another agent's id is judged before any device is probed, so a
+        // device's answer never reaches a caller with no authority over it.
+        if let Some(explicit) = parent.as_deref().filter(|parent| *parent != super::HERE)
+            && !resolve_actor(&ledger, explicit).is_some_and(|parent| parent.same_identity(actor))
+        {
+            return Err("parent_authority_required".into());
+        }
+        if earlier
+            .as_ref()
+            .is_some_and(|record| record.machine != *machine)
+        {
+            return Err("intent_conflict".into());
+        }
+        let started = earlier.as_ref().is_some_and(|record| record.pane.is_some());
+        if !earlier.as_ref().is_some_and(|record| record.completed) {
+            check_target(
+                client,
+                actor,
+                device,
+                kind,
+                intent,
+                // A retry whose pane exists needs the device only to be
+                // reachable: the repository and the agent were already used.
+                // A plain folder is no repository; the core found it among
+                // the device's projects (`Runtime::spawn_place`).
+                (!started && branch.is_some()).then_some(repo.as_str()),
+                !started,
+            )?;
+        }
+    }
+    // A mission's spawn that may still make its worktree is judged against
+    // the mission's project before anything is reserved, so a refused one
+    // leaves nothing behind and the same intent with the project's folder
+    // goes through (with-hide/hide#2634); the destination it finds is the
+    // one the worktree starts from. An attempt whose worktree is recorded
+    // already is past the judgment.
+    let judged = match (branch, mission.as_deref()) {
+        (Some(_), Some(admission))
+            if admission.project.is_some()
+                && !earlier.as_ref().is_some_and(|record| record.path.is_some()) =>
+        {
+            let device = machine.as_deref().unwrap_or(&actor.device_id);
+            let node = context(client, device)
+                .map_err(|reason| {
+                    if machine.is_some() {
+                        "machine_unavailable".to_owned()
+                    } else {
+                        reason
+                    }
+                })?
+                .node;
+            Some(mission_destination(node.as_deref(), repo, Some(admission))?)
+        }
+        _ => None,
+    };
+    // The item an admission judged is the one that starts; a spawn none
+    // judged picks here, once, before its hook is judged, and keeps that
+    // same request through node resolution. Completed retries need no
+    // new choice.
+    let agent = if earlier.as_ref().is_some_and(|record| record.completed) {
+        None
+    } else if let Some(Picked(request)) = pick {
+        Some((**request).clone())
+    } else {
+        let runtime = client.runtime.upgrade().ok_or("delivery_unavailable")?;
+        let locked = runtime.lock().map_err(|_| "delivery_unavailable")?;
+        Some(locked.spawn_request(actor, machine.as_deref(), kind, profile.as_deref(), repo)?)
+    };
+    let mut hook_proof = None;
+    // The child's hook is judged before anything is made for it, on every
+    // attempt that has not typed its start yet: one that has is past what a
+    // hook changes (with-hide/hide-private#661, #662).
+    if !earlier
+        .as_ref()
+        .is_some_and(|record| record.completed || record.typed > 0)
+    {
+        let child_machine = machine.as_deref().unwrap_or(&actor.device_id);
+        let hook_started = Instant::now();
+        let profile = agent.as_ref().and_then(|request| request.profile());
+        hook_proof = check_hook(
+            client,
+            child_machine,
+            kind,
+            profile.as_ref().map(|(id, _)| id.0.as_str()),
+            intent,
+        )?;
+        // The caller's exchange adds `HOOK_PASS_WAIT` to its wait for this.
+        answer_by += hook_started.elapsed();
+    }
+    // An automation's run works unattended, so its folder is read as its
+    // machine has it now, not as the catalog read it up to a minute ago: a
+    // pane asked for a folder that is gone opens in the home folder
+    // instead, and the run would work there. It is asked before anything is
+    // reserved, so one that is gone leaves nothing behind; a retry whose pane
+    // exists is judged before its start is typed.
+    let unattended = task
+        .as_ref()
+        .is_some_and(|task| task.kind == super::TaskKind::Automation);
+    if unattended && earlier.as_ref().is_none_or(|record| record.pane.is_none()) {
+        let device = machine.as_deref().unwrap_or(&actor.device_id);
+        let node = context(client, device)
+            .map_err(|reason| {
+                if machine.is_some() {
+                    "machine_unavailable".to_owned()
+                } else {
+                    reason
+                }
+            })?
+            .node;
+        folder_there(node.as_deref(), repo)?;
+    }
+    // The device checks above only read, so a slow device never holds the
+    // process-wide lock that local and Factory spawns need; everything that
+    // creates something runs under it.
+    let single = SPAWN.try_lock().map_err(|_| "spawn_busy")?;
+    let parent_id = if parent.as_deref().is_none_or(|parent| parent == super::HERE) {
+        // A device's path names no project of the caller's machine.
+        own_registration(
+            client,
+            authority,
+            actor,
+            &ledger,
+            machine.is_none().then(|| repo.clone()),
+        )?
+    } else {
+        parent.clone().ok_or("parent_unavailable")?
+    };
+    ledger = state(client)?;
+    if !resolve_actor(&ledger, &parent_id).is_some_and(|parent| parent.same_identity(actor)) {
+        return Err("parent_authority_required".into());
+    }
+    let reserved = mutate(
+        client,
+        authority,
+        actor,
+        Mutation::Reserve {
+            parent: parent_id.clone(),
+            command: command.clone(),
+        },
+    )?;
+    let mut reserved: SpawnRecord =
+        serde_json::from_value(reserved).map_err(|_| "spawn_unavailable")?;
+    if reserved.completed {
+        let (ledger, sleeping) = registrations(client)?;
+        return Ok(view(
+            ledger
+                .agents
+                .iter()
+                .find(|record| Some(&record.id) == reserved.child.as_ref())
+                .ok_or("child_unavailable")?,
+            &ledger,
+            &sleeping,
+        ));
+    }
+    // Everything the child needs happens on its own device; only the parent's
+    // authority and watch stay with the caller.
+    let child_device = reserved
+        .machine
+        .clone()
+        .unwrap_or_else(|| actor.device_id.clone());
+    let CoordinationContext {
+        engine,
+        host_scope,
+        machine: native_machine,
+        codex: codex_daemon,
+        permissions,
+        on_node,
+        node,
+    } = context(client, &child_device).map_err(|reason| {
+        if reserved.machine.is_some() {
+            "machine_unavailable".to_owned()
+        } else {
+            reason
+        }
+    })?;
+    let agent = agent.expect("an incomplete spawn has a launch choice");
+    // The start holds its profile from here, so a removal planned
+    // meanwhile is refused, and one under way refuses it (B27).
+    let agent = hold_start(client, &child_device, agent.with_choice(&reserved.launch))?;
+    // The child's machine answers for its profile before the spawn makes
+    // its pane, so a profile that is gone or a program that cannot run
+    // leaves no pane behind (PRD agent-profiles B20, B22).
+    let launch = crate::launch::resolve(node.as_deref(), &agent)
+        .map_err(|refusal| super::refusal(refusal.code, &refusal.detail))?;
+    if hook_proof
+        .as_ref()
+        .is_some_and(|proof| !proof.matches(&launch))
+    {
+        return Err(crate::runtime::start_hook::HookRefusal::Unchecked
+            .code()
+            .to_owned());
+    }
+    // A device that stops answering partway leaves the spawn reserved and
+    // resumable: the caller is told the device is unavailable, and the same
+    // command continues once it answers again.
+    let (spawn_id, on_device) = (reserved.id.clone(), reserved.machine.is_some());
+    // A worktree spawn of a mission is judged against its project first.
+    let placed = (|| -> Result<Value, String> {
+        if reserved.pane.is_none() {
+            // An engine that names a pane before it runs anything there (the
+            // core's own) has this record name it first, so the pane is
+            // never seen running unregistered, and a pane whose holder does
+            // not start is taken off the record in the same call (PRD
+            // engine-bundle-3-core-owns D-11). The engine names a pane only once
+            // it runs, so its pane is recorded below, after the call.
+            let engine = engine.gated(crate::engine::Gate::placing(SpawnPlacement {
+                client: client.clone(),
+                authority: Authority {
+                    caller: authority.caller.clone(),
+                    context: authority.context.clone(),
+                    also_reads: Vec::new(),
+                    proven: crate::delivery::worker::Proven::Now,
+                    registers: Vec::new(),
+                    written: None,
+                },
+                actor: actor.clone(),
+                spawn: reserved.id.clone(),
+            }));
+            // How the pane's shell says it has finished starting, recorded
+            // with the pane so every later start in it waits the same way.
+            let shell;
+            // Reconcile a worktree whose creation reply was interrupted. The
+            // existing local/device engine and checkout owner are shared with
+            // the product's worktree/start path; no spawn-specific SSH exists.
+            let existing = match branch {
+                Some(branch) => engine
+                    .worktree_path(Wait::Each(Duration::from_secs(5)), repo, branch)
+                    .map_err(String::from)?,
+                None => Some(repo.clone()),
+            };
+            // `made`: this spawn made the worktree, now or in an attempt whose
+            // reply was lost; only such a worktree is trusted for an agent
+            // that asks (agy), as for a task's worktree. A worktree that was
+            // already the operator's keeps whatever trust they gave it.
+            let (checkout, pane, seed_tab, made) = if let Some(existing) = existing {
+                if path.as_ref().is_some_and(|path| path != &existing) {
+                    return Err("checkout_path_conflict".into());
+                }
+                let folder_name = || {
+                    repo.trim_end_matches('/')
+                        .rsplit('/')
+                        .next()
+                        .unwrap_or(repo)
+                        .to_owned()
+                };
+                let owner = match branch {
+                    Some(branch) => crate::checkout_owner::OwnerOpen::Worktree {
+                        path: existing.clone(),
+                        repository_root: repo.clone(),
+                        label: if existing == *repo {
+                            folder_name()
+                        } else {
+                            branch.clone()
+                        },
+                    },
+                    // A plain folder's owner: the workspace carrying its
+                    // mark, else one made at the folder.
+                    None => {
+                        let owner = crate::checkout_owner::OwnerOpen::for_checkout(
+                            &child_device,
+                            repo,
+                            repo,
+                            false,
+                            &folder_name(),
+                        );
+                        if on_node { owner.on_node() } else { owner }
+                    }
+                };
+                // The persistent unique tab label makes an interrupted tab-create
+                // discoverable before a retry could create another child pane.
+                let snapshot = engine.session(Wait::Each(Duration::from_secs(5))).map_err(
+                    |error| match error {
+                        EngineError::Answer(_) => "snapshot_unavailable".to_owned(),
+                        error => error.to_string(),
+                    },
+                )?;
+                let label = format!("hide:{}", reserved.id);
+                let made = made_by_spawn(
+                    &existing,
+                    repo,
+                    snapshot
+                        .workspaces
+                        .iter()
+                        .map(|workspace| workspace.label.as_str()),
+                    &label,
+                );
+                // A split beside the caller runs the engine's own shell, as a fork's
+                // does, so only a tab is launched with Hide's.
+                let launch = beside_of
+                    .is_none()
+                    .then(|| crate::agent_start::shell_launch(node.as_deref(), &reserved.id))
+                    .flatten();
+                // A tab under the spawn's label is one this spawn opened, with
+                // the launch when there is one; a workspace under it holds
+                // the engine's own first tab, which was never replaced.
+                let labelled_tab = snapshot
+                    .tabs
+                    .iter()
+                    .find(|tab| tab.label == label)
+                    .and_then(|tab| snapshot.panes.iter().find(|pane| pane.tab_id == tab.tab_id))
+                    .map(|pane| (pane.pane_id.clone(), true));
+                let existing_pane = labelled_tab.or_else(|| {
+                    snapshot
+                        .workspaces
+                        .iter()
+                        .find(|workspace| workspace.label == label)
+                        .and_then(|workspace| {
+                            snapshot
+                                .panes
+                                .iter()
+                                .find(|pane| pane.workspace_id == workspace.workspace_id)
+                        })
+                        .map(|pane| (pane.pane_id.clone(), false))
+                });
+                let mut seed_tab = None;
+                let pane = match (beside_of.as_deref(), existing_pane) {
+                    // The engine's own shell runs in the split, as in a fork's.
+                    (Some(caller), _) => {
+                        shell = ShellStart::Plain;
+                        let (pane, split) = beside_pane(
+                            engine.as_ref(),
+                            &snapshot,
+                            caller,
+                            &existing,
+                            &reserved.id,
+                            &child_device,
+                        )?;
+                        // Drawing ahead is only the screen's: the engine's layout
+                        // replaces it, so a runtime that cannot draw it now
+                        // never fails the spawn.
+                        if split
+                            && on_node
+                            && let Some(runtime) = client.runtime.upgrade()
+                        {
+                            match runtime.lock() {
+                                Ok(mut runtime) => runtime.draw_answered_split(caller, &pane),
+                                Err(_) => crate::diagnostic!(json!({
+                                    "component": "spawn", "kind": "beside.draw_skipped",
+                                    "spawn": reserved.id, "pane_id": pane,
+                                })),
+                            }
+                        }
+                        pane
+                    }
+                    (None, Some((pane, launched))) => {
+                        shell = ShellStart::of_tab(launched, launch.as_ref());
+                        pane
+                    }
+                    (None, None) => {
+                        let tab = crate::checkout_owner::open::open_owner_tab(
+                            engine.as_ref(),
+                            &owner,
+                            &existing,
+                            &label,
+                            false,
+                            launch
+                                .as_ref()
+                                .map(|launch| launch.env.clone())
+                                .unwrap_or_default(),
+                            launch.as_ref().map(|launch| launch.command.as_slice()),
+                        )
+                        .map_err(|failure| match failure.code() {
+                            Some(hide_node_link::holders::HOLDER_CAP_REFUSAL) => {
+                                holder_cap(&child_device, failure.message())
+                            }
+                            Some(super::WORKSPACE_CLOSING) => {
+                                super::refusal(super::WORKSPACE_CLOSING, failure.message())
+                            }
+                            _ => failure.message().to_owned(),
+                        })?;
+                        shell = ShellStart::of_tab(tab.launched, launch.as_ref());
+                        seed_tab = tab.initial_label.map(|label| super::naming::SeedTab {
+                            id: tab.tab_id,
+                            label,
+                        });
+                        tab.pane_id
+                    }
+                };
+                (existing, pane, seed_tab, made)
+            } else if beside_of.is_some() {
+                // The caller's worktree was listed a moment ago and is gone
+                // now; a spawn beside never makes one.
+                return Err("beside_other_checkout".into());
+            } else {
+                // A folder spawn's place is the folder, found above.
+                let branch = branch.ok_or("invalid_spawn")?;
+                // A mission's worktree starts from its destination's newest
+                // commit (PRD mission-destination D-04); any other from the
+                // branch the repository's own folder has out. A device whose
+                // helper is not connected leaves the start to the engine: the
+                // destination as named, or the folder's own HEAD.
+                let destination = match &judged {
+                    Some(destination) => destination.clone(),
+                    None => mission_destination(node.as_deref(), repo, mission.as_deref())?,
+                };
+                let start = match node.as_deref() {
+                    Some(node) => {
+                        crate::worktree_control::new_branch_start(node, repo, destination)
+                    }
+                    None => destination,
+                };
+                let created = engine
+                    .create_worktree(
+                        Wait::Each(WORKTREE_CREATE_TIMEOUT),
+                        repo,
+                        branch,
+                        start.as_deref(),
+                        Some(&format!("hide:{}", reserved.id)),
+                        path.as_deref(),
+                        false,
+                    )
+                    .map_err(|error| match error {
+                        EngineError::Request(message) | EngineError::Answer(message) => message,
+                        EngineError::Refused { code, message }
+                            if code == hide_node_link::holders::HOLDER_CAP_REFUSAL =>
+                        {
+                            holder_cap(&child_device, &message)
+                        }
+                        error => worktree_create_refusal(error),
+                    })?;
+                let launch = crate::agent_start::shell_launch(node.as_deref(), &reserved.id);
+                let tab = crate::checkout_owner::open::replace_tab(
+                    engine.as_ref(),
+                    crate::checkout_owner::open::OwnedTab {
+                        initial_label: Some(created.tab_label),
+                        workspace_id: created.workspace_id,
+                        tab_id: created.tab_id,
+                        pane_id: created.pane_id,
+                        launched: false,
+                    },
+                    &created.path,
+                    &format!("hide:{}", reserved.id),
+                    false,
+                    launch
+                        .as_ref()
+                        .map(|launch| launch.env.clone())
+                        .unwrap_or_default(),
+                    launch.as_ref().map(|launch| launch.command.as_slice()),
+                );
+                shell = ShellStart::of_tab(tab.launched, launch.as_ref());
+                let seed_tab = tab.initial_label.map(|label| super::naming::SeedTab {
+                    id: tab.tab_id,
+                    label,
+                });
+                (created.path, tab.pane_id, seed_tab, true)
+            };
+            if made {
+                crate::agent_start::trust_worktree(
+                    node.as_deref(),
+                    kind,
+                    &checkout,
+                    agent.profile().map(|(id, _)| id).as_ref(),
+                )?;
+            }
+            // The terminal is recorded with the pane, so a later attempt can
+            // tell this pane from another terminal that later answers to the same id.
+            let terminal = pane_terminal(engine.as_ref(), &pane)?;
+            reserved = serde_json::from_value(mutate(
+                client,
+                authority,
+                actor,
+                Mutation::Advance {
+                    seed_tab,
+                    id: reserved.id.clone(),
+                    path: Some(checkout),
+                    made,
+                    pane: Some(pane),
+                    terminal: Some(terminal),
+                    shell: shell.program().map(str::to_owned),
+                    child: None,
+                },
+            )?)
+            .map_err(|_| "spawn_unavailable")?;
+            // The record names the split now, so its label has done its work
+            // and leaves the engine's own title of the pane.
+            if let (Some(_), Some(pane)) = (beside_of.as_ref(), reserved.pane.as_deref()) {
+                let cleared = engine
+                    .rename_pane(Wait::Each(Duration::from_secs(5)), pane, None)
+                    .map_err(String::from);
+                if let Err(detail) = cleared {
+                    crate::diagnostic!(json!({
+                        "component": "spawn", "kind": "beside.label_kept",
+                        "spawn": reserved.id, "pane_id": pane, "detail": detail,
+                    }));
+                }
+            }
+        }
+        let pane = reserved.pane.clone().ok_or("spawn_unavailable")?;
+        let pane = pane.as_str();
+        let shell = ShellStart::launched(reserved.shell.clone());
+        let observed = agents(engine.as_ref())?;
+        let live = observed
+            .iter()
+            .find(|agent| native_matches(agent, pane, Some(name), kind));
+        if live.is_none() {
+            // A changed session in an already registered child is refused. A
+            // retry never launches over a replacement occupant.
+            if reserved.child.is_some() {
+                return Err("child_identity_changed".into());
+            }
+            if reserved.typed > 0 {
+                // A start of this spawn was typed here already. While the engine
+                // holds its name with no agent (`launch_pending`), it gives
+                // that name to whatever agent shows in this terminal and
+                // refuses another start here, so nothing is typed while the
+                // agent may still be starting: asking again later answers it.
+                let held = observed.iter().any(|agent| {
+                    agent.pane_id == pane
+                        && agent.name.as_deref() == Some(name)
+                        && agent.agent.is_none()
+                });
+                if held && !name_released(engine.as_ref(), name) {
+                    return Err("native_identity_unavailable".into());
+                }
+                // The engine gave that start up. Only a shell back at rest, with
+                // nothing of its own in the foreground, takes the start again,
+                // and only once: a start typed into a question at startup is
+                // typed again at the prompt that followed, and a second one
+                // that ends the same way is the answer.
+                if reserved.typed >= 2 || shell_alone(engine.as_ref(), pane) != Ok(true) {
+                    return Err("agent_not_started".into());
+                }
+                crate::diagnostic!(json!({
+                    "component": "spawn", "kind": "start.resent", "spawn": reserved.id,
+                    "pane_id": pane,
+                }));
+            }
+            close_unstarted_attempts(engine.as_ref(), &*state(client)?, &reserved, &observed);
+            let (program, form) = start_form(node.as_deref(), engine.as_ref(), kind, &reserved.id);
+            let mut start_args = with_permission(kind, &permissions, start_args);
+            // A fresh start carries the brief as its prompt argument where
+            // the agent holds that through its own start screens
+            // (`AgentApi::LaunchPrompt`). The words are decided for the
+            // first start and saved before it, so a start typed again carries
+            // the same words and nothing ever types the brief.
+            let launched_before = reserved
+                .brief_input
+                .as_ref()
+                .is_some_and(|input| input.route == SendRoute::Launch);
+            let words = brief_words(&reserved, &start_args, !on_device, form.as_ref())?;
+            let carried = words.clone();
+            if let Some(words) = words {
+                if !launched_before {
+                    reserved = serde_json::from_value(mutate(
+                        client,
+                        authority,
+                        actor,
+                        Mutation::BriefLaunched {
+                            id: reserved.id.clone(),
+                            words: words.clone(),
+                        },
+                    )?)
+                    .map_err(|_| "spawn_unavailable")?;
+                }
+                start_args.extend(words);
+                crate::diagnostic!(json!({
+                    "component": "spawn", "kind": "brief.launched", "spawn": reserved.id,
+                    "pane_id": pane,
+                }));
+            }
+            // The pane's shell opened where its machine put it: an unattended
+            // start is typed only while its folder is there, so a folder gone
+            // before the pane was made, its shell left in the home folder,
+            // starts no agent.
+            let folder = reserved.path.as_deref().unwrap_or(repo);
+            let check = || {
+                if unattended {
+                    folder_there(node.as_deref(), folder)
+                } else {
+                    Ok(())
+                }
+            };
+            let started = crate::live::start_agent(
+                engine.as_ref(),
+                node.as_deref(),
+                &reserved.id,
+                pane,
+                shell,
+                shell_wait(answer_by),
+                name,
+                launch.clone(),
+                start_args,
+                codex_daemon,
+                form.as_ref()
+                    .and_then(|form| crate::engine::StartProgram::of(&program, form)),
+                &check,
+            )
+            .map_err(|not| {
+                // A pane nothing of this start is left in closes, so the
+                // spawn leaves no shell behind (PRD agent-profiles B22) and
+                // the same intent starts again in a new one. A pane an
+                // earlier start of this spawn was typed into keeps it: the
+                // engine may still hold the agent's name there.
+                if let Some(why) = not.unused.filter(|_| reserved.typed == 0) {
+                    close_unstarted_pane(
+                        client,
+                        authority,
+                        actor,
+                        engine.as_ref(),
+                        &reserved,
+                        pane,
+                        why,
+                    );
+                }
+                not.refusal
+            })?;
+            reserved = serde_json::from_value(mutate(
+                client,
+                authority,
+                actor,
+                Mutation::Typed {
+                    id: reserved.id.clone(),
+                    profile: started.profile,
+                },
+            )?)
+            .map_err(|_| "spawn_unavailable")?;
+            // A launched brief waits on the agent's own start, which can take
+            // many seconds cold: the clock its record is owed by starts once
+            // the agent is seen taking it (`BriefLaunched` again), as a typed
+            // brief's starts at its typing, so a slow start raises no notice.
+            // An agent working on it has taken it while the engine still
+            // reads its start as launching, so the child is bound right after
+            // that sighting rather than once its first turn ends, and its
+            // letters are not refused for that turn. Unseen within the wait,
+            // the clock keeps the start's moment.
+            if let Some(words) = carried {
+                match crate::delivery::ladder::took_launch(
+                    engine.as_ref(),
+                    pane,
+                    name,
+                    brief_wait(answer_by),
+                ) {
+                    Ok(()) => {
+                        reserved = serde_json::from_value(mutate(
+                            client,
+                            authority,
+                            actor,
+                            Mutation::BriefLaunched {
+                                id: reserved.id.clone(),
+                                words,
+                            },
+                        )?)
+                        .map_err(|_| "spawn_unavailable")?;
+                    }
+                    Err(not) => crate::diagnostic!(json!({
+                        "component": "spawn", "kind": "brief.launch_ready_unseen",
+                        "spawn": reserved.id, "pane_id": pane, "detail": format!("{not:?}"),
+                    })),
+                }
+            }
+        }
+        // The brief is the child's first prompt, submitted once the agent
+        // takes input and before its session is waited for: an agent that
+        // reports its session only at its first turn (Codex, OpenCode 2)
+        // reports it on this very turn. A spawn asked again after the brief
+        // went in never submits it twice.
+        // A brief that went in, or whose outcome the agent's own record
+        // already settled (`BriefPhase::Confirmed` before `Briefed` was
+        // saved), is never typed again: the spawn goes on to bind and
+        // complete. One whose send was reserved and not saved is asked again,
+        // and its reservation answers that it may have arrived.
+        let phase = reserved.brief_phase();
+        if let Some(brief) = reserved.brief.clone().filter(|_| {
+            matches!(
+                phase,
+                super::BriefPhase::NotTyped | super::BriefPhase::Sending
+            )
+        }) {
+            if hide_agent_adapter::adapter(kind).is_some_and(|row| row.key.brief_after_session()) {
+                // Its session start drops an Enter typed during it
+                // (`AgentId::brief_after_session`). Unseen within the wait,
+                // the brief goes in anyway and its record still judges it.
+                if let Err(reason) =
+                    wait_native_identity(engine.as_ref(), pane, Some(name), kind, answer_by)
+                {
+                    crate::diagnostic!(json!({
+                        "component": "spawn", "kind": "brief.session_unseen",
+                        "spawn": reserved.id, "pane_id": pane, "reason": reason,
+                    }));
+                }
+            }
+            match brief_ready(engine.as_ref(), &reserved.id, pane, name, answer_by) {
+                Ok(()) => {}
+                Err(BriefNotReady::Refused(code) | BriefNotReady::Ended(code)) => return Err(code),
+                // The agent runs on with its brief untyped: the core watches
+                // it as the spawn's (`identity_wait`), so its end is logged
+                // with the brief it never took, and it is bound if the
+                // operator gives it a turn of their own. The same command
+                // still types the brief once (`identity_wait::bind`).
+                Err(BriefNotReady::Running(code)) => {
+                    await_identity(
+                        client,
+                        authority,
+                        actor,
+                        &child_device,
+                        pane,
+                        name,
+                        kind,
+                        &reserved.id,
+                    )?;
+                    return Err(code);
+                }
+            }
+            let pane_key = if on_node {
+                pane.to_owned()
+            } else {
+                crate::address::scoped_pane_id(&child_device, pane)
+            };
+            let target = InputTarget {
+                pane_id: pane_key,
+                raw_pane_id: pane.to_owned(),
+                kind: kind.to_owned(),
+            };
+            // Saved before it is sent, so a send a crash interrupts is
+            // counted and never repeated blindly (engineering #11).
+            let reservation = mutate(
+                client,
+                authority,
+                actor,
+                Mutation::BriefTyping {
+                    id: reserved.id.clone(),
+                },
+            );
+            let sent = match reservation {
+                // An earlier attempt's send may have arrived and its outcome
+                // was never saved: this spawn answers as that one would
+                // have, sent and unconfirmed, and the agent's own record
+                // decides (`hide agent show` says which).
+                Err(code) if code == "brief_send_lost" => {
+                    crate::diagnostic!(json!({
+                        "component": "spawn", "kind": "brief.send_unconfirmed",
+                        "spawn": reserved.id, "pane_id": pane,
+                    }));
+                    SendRoute::Lost
+                }
+                Err(code) if code == "brief_attempts_spent" => {
+                    return Err(brief_refused(
+                        &reserved.id,
+                        pane,
+                        "brief.attempts_spent",
+                        code,
+                    ));
+                }
+                Err(code) => return Err(code),
+                Ok(value) => {
+                    reserved = serde_json::from_value(value).map_err(|_| "spawn_unavailable")?;
+                    match send_brief(engine.as_ref(), &target, &reserved.id, &brief) {
+                        Ok(sent) => sent,
+                        Err(code) => {
+                            // Nothing was sent: the brief may be typed again.
+                            mutate(
+                                client,
+                                authority,
+                                actor,
+                                Mutation::BriefUnsent {
+                                    id: reserved.id.clone(),
+                                },
+                            )?;
+                            return Err(code);
+                        }
+                    }
+                }
+            };
+            reserved = serde_json::from_value(mutate(
+                client,
+                authority,
+                actor,
+                Mutation::Briefed {
+                    id: reserved.id.clone(),
+                    route: sent,
+                },
+            )?)
+            .map_err(|_| "spawn_unavailable")?;
+        }
+        // The child's pane keeps its launch choice for the restarts Hide
+        // makes of it, under the id the core knows the pane by and the name
+        // it was started under. It is kept before the agent shows its
+        // session, which an agent that reports it only at its first turn
+        // does later, so the record binds to that session when it arrives.
+        if reserved.started_profile.is_none()
+            && let Some(runtime) = client.runtime.upgrade()
+        {
+            let pane_id = if on_node {
+                pane.to_owned()
+            } else {
+                crate::address::scoped_pane_id(&child_device, pane)
+            };
+            runtime
+                .lock()
+                .map_err(|_| "delivery_unavailable")?
+                .record_pane_launch(
+                    &pane_id,
+                    kind,
+                    name,
+                    &reserved.launch,
+                    reserved.started_profile.as_ref(),
+                    None,
+                );
+        }
+        let native = match wait_native_identity(engine.as_ref(), pane, Some(name), kind, answer_by)
+        {
+            Err(reason) if reason == "native_identity_unavailable" => {
+                // The agent rests without a session (Codex and OpenCode 2
+                // report theirs at their first turn): the core binds it when
+                // the engine shows one, and the caller hears it has not yet.
+                await_identity(
+                    client,
+                    authority,
+                    actor,
+                    &child_device,
+                    pane,
+                    name,
+                    kind,
+                    &reserved.id,
+                )?;
+                return Err(reason);
+            }
+            native => native?,
+        };
+        let session = native
+            .agent_session
+            .as_ref()
+            .map(|session| session.value.as_str());
+        if let Err(reason) = session.map_or(Ok(()), super::kept_session) {
+            // The agent runs but can never be registered, and a retry of
+            // this intent meets the same session: the pane this spawn made is
+            // closed rather than left running with nothing tracking it.
+            close_refused_pane(engine.as_ref(), &reserved, pane, reason);
+            return Err(reason.into());
+        }
+        let mut child = record(
+            &native,
+            HostIdentity {
+                machine: &child_device,
+                scope: &host_scope,
+                native_machine: &native_machine,
+                on_node,
+            },
+            pane.into(),
+            Some(name.clone()),
+            reserved.mode.responsibility(&parent_id),
+            reserved.path.clone(),
+        )?;
+        child.origin = reserved.mode.origin(&parent_id);
+        reserved = serde_json::from_value(mutate(
+            client,
+            authority,
+            actor,
+            Mutation::BindChild {
+                id: reserved.id.clone(),
+                record: child,
+            },
+        )?)
+        .map_err(|_| "spawn_unavailable")?;
+        let child_id = reserved.child.clone().ok_or("child_unavailable")?;
+        publish_tokens(client, engine.as_ref(), &child_id)?;
+        mutate(
+            client,
+            authority,
+            actor,
+            Mutation::Complete {
+                id: reserved.id.clone(),
+            },
+        )?;
+        // The receipt-driven lineage worker alone owns naming. Keeping it
+        // out of this path also keeps completed replay entirely offline.
+        let (ledger, sleeping) = registrations(client)?;
+        Ok(view(
+            ledger
+                .agents
+                .iter()
+                .find(|record| record.id == child_id)
+                .ok_or("child_unavailable")?,
+            &ledger,
+            &sleeping,
+        ))
+    })();
+    // Nothing after this creates anything, so a device that has gone quiet
+    // never holds the lock for the probe below.
+    drop(single);
+    placed.map_err(|reason| {
+        // The caller may have stopped waiting for this answer, so the log is
+        // where a spawn that stopped partway is seen; the same intent
+        // continues it.
+        crate::diagnostic!(json!({
+            "component": "spawn", "kind": "spawn.unfinished", "spawn": spawn_id,
+            "reason": reason,
+        }));
+        if on_device {
+            device_unreachable(engine.as_ref(), &child_device, &spawn_id, reason)
+        } else {
+            reason
+        }
+    })
+}
+
+/// A spawn's record told each pane the engine makes for it before the pane
+/// runs anything ([`crate::engine::Placement`]): the record's mutation takes
+/// the delivery store's turn and the runtime's lock, never the engine's
+/// topology lock, which the engine let go before it asked.
+struct SpawnPlacement {
+    client: Client,
+    authority: Authority,
+    actor: Actor,
+    spawn: String,
+}
+
+impl crate::engine::Placement for SpawnPlacement {
+    fn place(&self, pane: &str) -> Result<(), EngineError> {
+        mutate(
+            &self.client,
+            &self.authority,
+            &self.actor,
+            Mutation::Place {
+                id: self.spawn.clone(),
+                pane: pane.to_owned(),
+            },
+        )
+        .map(drop)
+        .map_err(|code| EngineError::Refused {
+            message: format!("spawn {} could not name pane {pane}: {code}", self.spawn),
+            code,
+        })
+    }
+
+    fn withdraw(&self, pane: &str) {
+        let withdrawn = mutate(
+            &self.client,
+            &self.authority,
+            &self.actor,
+            Mutation::Withdraw {
+                id: self.spawn.clone(),
+                pane: pane.to_owned(),
+            },
+        );
+        if let Err(code) = withdrawn {
+            // The record names a pane that never ran until the same intent
+            // asks again, which finds no such pane.
+            crate::diagnostic!(json!({
+                "component": "spawn", "kind": "placement.withdraw_failed",
+                "spawn": self.spawn, "pane_id": pane, "code": code,
+            }));
+        }
+    }
+}
+
+/// The caller's own pane a spawn beside it splits, on the caller's own
+/// device: refused, with nothing created, when the child would run on another
+/// device or in another checkout than the caller's (a new worktree, another
+/// branch or another folder), or when the caller is no agent pane Hide knows.
+/// `target` is the repository, branch and folder asked for, compared with
+/// the engine's worktrees, or with no branch the plain folder itself; none
+/// for a retry whose pane exists already.
+fn beside_target(
+    client: &Client,
+    authority: &Authority,
+    actor: &Actor,
+    machine: Option<&str>,
+    target: Option<(&str, Option<&str>, Option<&str>)>,
+    intent: &str,
+) -> Result<String, String> {
+    let refused = |reason: &str| {
+        crate::diagnostic!(json!({
+            "component": "spawn", "kind": "beside.refused", "intent": intent,
+            "pane_id": actor.pane_id, "reason": reason,
+        }));
+        reason.to_owned()
+    };
+    if machine.is_some() {
+        return Err(refused("beside_other_machine"));
+    }
+    let checkout = authority.context.checkout_path.trim_end_matches('/');
+    if actor.code_owned() || checkout.is_empty() {
+        return Err(refused("beside_needs_agent_pane"));
+    }
+    let pane = crate::address::pane_of(&actor.pane_id, &actor.device_id)
+        .unwrap_or(&actor.pane_id)
+        .to_owned();
+    let Some((repo, branch, path)) = target else {
+        return Ok(pane);
+    };
+    let existing = match branch {
+        Some(branch) => {
+            let CoordinationContext { engine, .. } = context(client, &actor.device_id)?;
+            engine
+                .worktree_path(Wait::Each(Duration::from_secs(5)), repo, branch)
+                .map_err(String::from)?
+        }
+        None => Some(repo.to_owned()),
+    };
+    let same = |other: &str| other.trim_end_matches('/') == checkout;
+    if !existing.as_deref().is_some_and(same) || path.is_some_and(|path| !same(path)) {
+        return Err(refused("beside_other_checkout"));
+    }
+    Ok(pane)
+}
+
+/// The pane a spawn beside `caller` runs in, and whether it was split now:
+/// the pane an earlier attempt split and labelled, else a new split right of
+/// the caller, labelled before anything else so that, once labelled, a retry
+/// finds it rather than splitting again. A split that cannot be labelled is
+/// closed; one whose own reply was lost is never labelled, and a retry makes
+/// its own.
+fn beside_pane(
+    engine: &dyn Engine,
+    snapshot: &crate::session_sync::ProjectionState,
+    caller: &str,
+    cwd: &str,
+    spawn: &str,
+    machine: &str,
+) -> Result<(String, bool), String> {
+    let label = crate::start_claim::spawn_label(spawn);
+    if let Some(pane) = snapshot
+        .panes
+        .iter()
+        .find(|pane| pane.label.as_deref() == Some(label.as_str()))
+    {
+        return Ok((pane.pane_id.clone(), false));
+    }
+    let refused = |detail: String| {
+        crate::diagnostic!(json!({
+            "component": "spawn", "kind": "beside.split_failed", "spawn": spawn,
+            "pane_id": caller, "detail": detail,
+        }));
+        "beside_pane_unavailable".to_owned()
+    };
+    let pane = match engine.split_beside(
+        Wait::Each(Duration::from_secs(5)),
+        caller,
+        Some(cwd),
+        Default::default(),
+    ) {
+        Err(EngineError::Request(message)) => return Err(message),
+        Err(EngineError::Refused { code, message })
+            if code == hide_node_link::holders::HOLDER_CAP_REFUSAL =>
+        {
+            return Err(holder_cap(machine, &message));
+        }
+        pane => pane.map_err(|error| refused(error.to_string()))?,
+    };
+    match engine.rename_pane(Wait::Each(Duration::from_secs(5)), &pane, Some(&label)) {
+        Ok(()) => {}
+        Err(EngineError::Request(message)) => return Err(message),
+        Err(error) => {
+            let closed = close_pane(engine, &pane);
+            return Err(refused(format!(
+                "{error}; split pane {pane} closed: {}",
+                closed.is_ok()
+            )));
+        }
+    }
+    crate::diagnostic!(json!({
+        "component": "spawn", "kind": "beside.split", "spawn": spawn,
+        "pane_id": caller, "created": pane,
+    }));
+    Ok((pane, true))
+}
+
+/// Whether the engine has let go of `name`. The engine holds the name of a start whose
+/// agent never showed until that start's own deadline, and settles a passed
+/// deadline only when the name is read, which this `agent.get` is.
+fn name_released(engine: &dyn Engine, name: &str) -> bool {
+    engine
+        .delivery_agent(Wait::Each(Duration::from_secs(2)), name)
+        .is_err_and(|error| error.code() == Some("agent_not_found"))
+}
+
+/// Whether `pane`'s shell alone holds its terminal: no program it started
+/// runs in the foreground.
+fn shell_alone(engine: &dyn Engine, pane: &str) -> Result<bool, String> {
+    engine
+        .pane_processes(Wait::Each(Duration::from_secs(2)), pane)
+        .map_err(String::from)
+        .map(|group| group.shell_holds_terminal())
+}
+
+/// The terminal the engine runs in `pane` now.
+fn pane_terminal(engine: &dyn Engine, pane: &str) -> Result<String, String> {
+    engine
+        .pane_terminal(Wait::Each(super::PANE_WAIT), pane)
+        .map_err(String::from)
+}
+
+/// What the pane a spawn or a registration recorded is now, against the
+/// terminal recorded with it: a pane id can outlive its terminal (ids were
+/// handed out again after a server was replaced, and a live handoff moves
+/// a pane), so the pane is the record's only while it runs that terminal.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(super) enum RecordedPane {
+    /// It runs the recorded terminal.
+    Same,
+    /// The record is from before terminals were recorded.
+    Unrecorded,
+    /// The id runs another terminal now.
+    Replaced,
+    /// The engine has no such pane.
+    Gone,
+}
+
+pub(super) fn recorded_pane(
+    engine: &dyn Engine,
+    recorded: Option<&str>,
+    pane: &str,
+) -> Result<RecordedPane, EngineError> {
+    match engine.pane_terminal(Wait::Each(super::PANE_WAIT), pane) {
+        Err(error) if error.code() == Some("pane_not_found") => Ok(RecordedPane::Gone),
+        Err(error) => Err(error),
+        Ok(terminal) => Ok(match recorded {
+            None => RecordedPane::Unrecorded,
+            Some(recorded) if recorded == terminal => RecordedPane::Same,
+            Some(_) => RecordedPane::Replaced,
+        }),
+    }
+}
+
+/// Closes the pane of every earlier attempt of `reserved`: a spawn of the
+/// same parent, name and device that made a pane and never bound a child,
+/// because its agent did not start (a refused start, or one engine typed that
+/// never showed its agent). Each new attempt is its own intent with a pane of
+/// its own, so the earlier pane would stay behind as an extra tab, holding the
+/// agent's name in the engine when its start was typed. A pane id can outlive its
+/// terminal (ids were handed out again after a server was replaced, and a
+/// live handoff moves a pane), so a pane is the attempt's own only
+/// while it runs the terminal the attempt recorded; any other pane under that
+/// id, and a record from before terminals were recorded, is logged and left
+/// open. A pane where an agent shows or the shell does not hold the terminal
+/// is left alone, and a pane that cannot be read or closed is logged and left
+/// to the engine's own answer.
+fn close_unstarted_attempts(
+    engine: &dyn Engine,
+    ledger: &crate::delivery::ledger::Ledger,
+    reserved: &SpawnRecord,
+    observed: &[ProjectedAgent],
+) {
+    let earlier = ledger.spawns.iter().filter(|record| {
+        record.id != reserved.id
+            && record.parent == reserved.parent
+            && record.name == reserved.name
+            && record.machine == reserved.machine
+            && record.child.is_none()
+            && !record.completed
+            && record.pane != reserved.pane
+    });
+    for record in earlier {
+        let Some(pane) = record.pane.as_deref() else {
+            continue;
+        };
+        if observed
+            .iter()
+            .any(|agent| agent.pane_id == pane && agent.agent.is_some())
+        {
+            continue;
+        }
+        let closed =
+            match same_terminal(engine, record, pane).and_then(|()| shell_alone(engine, pane)) {
+                Ok(false) => continue,
+                Ok(true) => close_pane(engine, pane),
+                Err(reason) => Err(reason),
+            };
+        crate::diagnostic!(json!({
+            "component": "spawn", "kind": "unstarted_attempt.close", "spawn": reserved.id,
+            "attempt": record.id, "pane_id": pane, "closed": closed.is_ok(),
+            "reason": closed.err(),
+        }));
+    }
+}
+
+/// Closes the pane `reserved` made, which nothing of its start is left in
+/// (`why`: a shell that had not finished starting when the start's wait ran
+/// out, so nothing was typed, or a profile's program that did not start, so
+/// the pane is a shell again), and takes it off the spawn: the attempt
+/// leaves no tab, and the same intent opens a new pane with a new shell. A pane that no longer runs the terminal the spawn recorded is left
+/// alone. Every outcome is logged; the caller's refusal says why either way.
+fn close_unstarted_pane(
+    client: &Client,
+    authority: &Authority,
+    actor: &Actor,
+    engine: &dyn Engine,
+    reserved: &SpawnRecord,
+    pane: &str,
+    why: &str,
+) {
+    let closed = same_terminal(engine, reserved, pane)
+        .and_then(|()| close_pane(engine, pane))
+        .and_then(|()| {
+            mutate(
+                client,
+                authority,
+                actor,
+                Mutation::Withdraw {
+                    id: reserved.id.clone(),
+                    pane: pane.to_owned(),
+                },
+            )
+            .map(drop)
+        });
+    crate::diagnostic!(json!({
+        "component": "spawn", "kind": "unstarted_pane.close", "spawn": reserved.id,
+        "pane_id": pane, "why": why, "closed": closed.is_ok(), "reason": closed.err(),
+    }));
+}
+
+/// Closes the pane `reserved` made, whose agent started but whose session a
+/// registration cannot keep (`reason`), when it is still the terminal the
+/// spawn recorded.
+pub(super) fn close_refused_pane(
+    engine: &dyn Engine,
+    reserved: &SpawnRecord,
+    pane: &str,
+    reason: &str,
+) {
+    let closed = same_terminal(engine, reserved, pane).and_then(|()| close_pane(engine, pane));
+    crate::diagnostic!(json!({
+        "component": "spawn", "kind": "refused_pane.close", "spawn": reserved.id,
+        "pane_id": pane, "refusal": reason, "closed": closed.is_ok(),
+        "reason": closed.err(),
+    }));
+}
+
+/// Closes the pane `record`'s start made, for its owner's cleanup (PRD
+/// automations D-13): only while it still runs the terminal the start
+/// recorded, so a pane that later answers to the same id is never closed.
+/// What became of it: `closed`, `none` (the start made no pane), `gone`,
+/// `replaced` (another terminal runs there) or `unrecorded` (a record from
+/// before terminals were kept, which proves nothing and is left).
+pub(crate) fn close_spawn_pane(
+    engine: &dyn Engine,
+    record: &SpawnRecord,
+) -> Result<&'static str, String> {
+    let Some(pane) = record.pane.as_deref() else {
+        return Ok("none");
+    };
+    let Some(recorded) = record.terminal.as_deref() else {
+        return Ok("unrecorded");
+    };
+    match recorded_pane(engine, Some(recorded), pane).map_err(String::from)? {
+        RecordedPane::Same => close_pane(engine, pane).map(|()| "closed"),
+        RecordedPane::Gone => Ok("gone"),
+        RecordedPane::Replaced | RecordedPane::Unrecorded => Ok("replaced"),
+    }
+}
+
+/// Whether `pane` is still the terminal `record` recorded with it, so a pane
+/// that later answers to the same id is never taken for the spawn's.
+fn same_terminal(engine: &dyn Engine, record: &SpawnRecord, pane: &str) -> Result<(), String> {
+    let recorded = record
+        .terminal
+        .as_deref()
+        .ok_or("pane_identity_unrecorded")?;
+    match recorded_pane(engine, Some(recorded), pane).map_err(String::from)? {
+        RecordedPane::Same => Ok(()),
+        RecordedPane::Replaced | RecordedPane::Unrecorded => Err("pane_replaced".to_owned()),
+        RecordedPane::Gone => Err("pane_gone".to_owned()),
+    }
+}
+
+pub(super) fn close_pane(engine: &dyn Engine, pane: &str) -> Result<(), String> {
+    engine
+        .close_pane(Wait::Each(super::PANE_WAIT), pane)
+        .map_err(String::from)
+}
+
+/// A failure of a spawn's work on a device, as the caller should read it: the
+/// device is unavailable when its engine no longer answers, whatever step was
+/// running; any other failure keeps its own code. The dropped cause is logged
+/// with the device and the spawn it belongs to.
+fn device_unreachable(engine: &dyn Engine, device: &str, spawn: &str, reason: String) -> String {
+    match engine.agents(Wait::Each(Duration::from_secs(2))) {
+        Err(
+            error @ (EngineError::NotRunning(_)
+            | EngineError::Transport(_)
+            | EngineError::Unanswered(_)),
+        ) => {
+            crate::diagnostic!(json!({
+                "component": "spawn", "kind": "device_unreachable", "device": device,
+                "spawn": spawn, "reason": reason, "cause": error.to_string()
+            }));
+            "machine_unavailable".to_owned()
+        }
+        _ => reason,
+    }
+}
+
+/// Records the fork Hide started in pane `child` from the agent in pane
+/// `source`, under the engine name `name` the fork's start gave it. The
+/// source is registered now, while it is the execution that was forked; the
+/// fork is registered once the engine shows its own session, which Codex reports
+/// only at the fork's first turn, so the registration waits for it in the
+/// ledger (`identity_wait`) rather than for a fixed time here.
+pub(crate) fn link_fork(
+    context: &crate::live::LiveContext,
+    source: &str,
+    child: &str,
+    name: &str,
+) -> Result<(), String> {
+    let runtime = context.runtime.upgrade().ok_or("delivery_unavailable")?;
+    let (client, authority, actor) = runtime
+        .lock()
+        .map_err(|_| "delivery_unavailable")?
+        .coordination_fork_context(source)?;
+    let CoordinationContext {
+        engine,
+        host_scope,
+        machine: native_machine,
+        on_node,
+        ..
+    } = self::context(&client, &actor.device_id)?;
+    let observed = agents(engine.as_ref())?;
+    let native_source = observed
+        .iter()
+        .find(|agent| agent.pane_id == source)
+        .ok_or("parent_unavailable")?;
+    let ledger = state(&client)?;
+    let source_id = if let Some(existing) = ledger
+        .agents
+        .iter()
+        .find(|record| !record.ended && record.actor.same_identity(&actor))
+    {
+        existing.id.clone()
+    } else {
+        let source_record = record(
+            native_source,
+            HostIdentity {
+                machine: &actor.device_id,
+                scope: &host_scope,
+                native_machine: &native_machine,
+                on_node,
+            },
+            source.into(),
+            native_source.name.clone(),
+            None,
+            None,
+        )?;
+        let source_value = mutate(
+            &client,
+            &authority,
+            &actor,
+            Mutation::Register {
+                record: source_record,
+                check: false,
+            },
+        )?;
+        source_value["id"]
+            .as_str()
+            .ok_or("parent_unavailable")?
+            .to_owned()
+    };
+    mutate(
+        &client,
+        &authority,
+        &actor,
+        Mutation::AwaitIdentity {
+            wait: super::identity_wait::IdentityWait {
+                id: String::new(),
+                machine: actor.device_id.clone(),
+                pane: child.into(),
+                name: name.into(),
+                kind: native_source.agent.clone().ok_or("parent_unavailable")?,
+                owed: super::identity_wait::Owed::Fork { origin: source_id },
+            },
+        },
+    )
+    .map(drop)
+}
+
+/// Whether the existing worktree `existing` of `repo` is one this spawn
+/// made in an attempt whose reply was lost: `worktree.create` names the
+/// workspace it makes `label` (`hide:<spawn id>`). The repository itself,
+/// or a worktree with no such workspace, is the operator's.
+fn made_by_spawn<'a>(
+    existing: &str,
+    repo: &str,
+    mut workspaces: impl Iterator<Item = &'a str>,
+    label: &str,
+) -> bool {
+    existing != repo && workspaces.any(|workspace| workspace == label)
+}
+
+/// A spawn's arguments behind the permission choice of the machine it
+/// starts on (`agent_permission`). A full-access option the spawn's own
+/// native arguments already name is not given twice, with its value if it
+/// has one: a CLI may refuse an option given twice (Grok 1.0.70 refuses
+/// `--always-approve` twice), and the operator who wrote it meant theirs.
+/// Codex's `-c` overrides are the exception: Codex accepts them repeated and
+/// the later one wins (0.166.0, 2026-11-01), so Hide's go first and a
+/// spawn's own `-c`, an effort or its own approval policy, never stands in
+/// for them. A spawn's own Claude Code `--settings` replaces Hide's warning
+/// setting rather than joining it, because Claude Code 2.1.316 keeps only the
+/// last `--settings` it is given (measured 2026-11-01), so such a spawn stops
+/// at the bypass warning. Typed options go as typed.
+fn with_permission(
+    kind: &str,
+    permissions: &crate::agent_permission::AgentPermissions,
+    args: Vec<String>,
+) -> Vec<String> {
+    use crate::agent_permission::AgentPermission;
+    let permission = crate::agent_permission::of(permissions, kind);
+    let mut start: Vec<String> = match &permission {
+        AgentPermission::Full => {
+            let named = |name: &str| {
+                args.iter()
+                    .take_while(|arg| arg.as_str() != "--")
+                    .any(|arg| arg == name)
+            };
+            crate::agent_permission::full_access(kind)
+                .iter()
+                .filter(|option| {
+                    option
+                        .first()
+                        .is_none_or(|name| overridden_later(kind, name) || !named(name))
+                })
+                .flat_map(|option| option.iter().map(|word| (*word).to_owned()))
+                .collect()
+        }
+        _ => crate::agent_permission::arguments(kind, &permission),
+    };
+    start.extend(args);
+    start
+}
+
+/// Whether `kind`'s CLI takes a full-access option named `name` again with
+/// the later one winning: Codex's `-c` configuration override.
+fn overridden_later(kind: &str, name: &str) -> bool {
+    name == "-c"
+        && hide_agent_adapter::adapter(kind).and_then(|row| row.start)
+            == Some(hide_agent_adapter::LaunchDialect::Codex)
+}
+
+#[cfg(test)]
+mod tests {
+    /// The host's own git answering for real repositories on this machine.
+    struct OwnHost(hide_host::serve::Env);
+    impl crate::node_access::NodeLink for OwnHost {
+        fn call(
+            &self,
+            call: hide_node_link::protocol::Call,
+            _timeout: std::time::Duration,
+        ) -> Result<crate::node_access::LinkAnswer, crate::node_access::LinkError> {
+            hide_host::serve::handle_in(call, &self.0)
+                .map(crate::node_access::LinkAnswer::Parsed)
+                .map_err(crate::node_access::LinkError::Refused)
+        }
+    }
+
+    fn git_in(dir: &std::path::Path, args: &[&str]) {
+        let output = std::process::Command::new("git")
+            .arg("-C")
+            .arg(dir)
+            .args(args)
+            .output()
+            .unwrap();
+        assert!(output.status.success(), "git {args:?}: {output:?}");
+    }
+
+    /// A repository at `dir` with one commit on `main`.
+    fn repository(dir: &std::path::Path) {
+        std::fs::create_dir_all(dir).unwrap();
+        git_in(dir, &["init", "-q", "-b", "main"]);
+        git_in(dir, &["config", "user.name", "Fixture"]);
+        git_in(dir, &["config", "user.email", "fixture@example.invalid"]);
+        git_in(dir, &["config", "commit.gpgsign", "false"]);
+        git_in(dir, &["commit", "-q", "--allow-empty", "-m", "a"]);
+    }
+
+    /// with-hide/hide#2634: a mission's spawn on its own machine starts from
+    /// the destination whenever its repository is the mission's project,
+    /// however the folder is named (another spelling, a worktree of it); a
+    /// node's worker sent to another repository is refused with both folders
+    /// named, and the Conductor's other spawns there start without the
+    /// destination. A worker on another machine carries the destination as
+    /// its admission named it.
+    #[test]
+    fn a_missions_spawn_takes_its_destination_in_any_checkout_of_its_project_only() {
+        use crate::runtime::missions::MissionAdmission;
+        let folder = tempfile::tempdir().unwrap();
+        let project = folder.path().join("project");
+        let other = folder.path().join("other");
+        repository(&project);
+        repository(&other);
+        let linked = folder.path().join("project-topic");
+        git_in(
+            &project,
+            &[
+                "worktree",
+                "add",
+                "-q",
+                "-b",
+                "topic",
+                linked.to_str().unwrap(),
+            ],
+        );
+        let host = OwnHost(hide_host::serve::Env::standalone(None));
+        let wire = |path: &std::path::Path| {
+            hide_platform::path::to_wire(&hide_platform::fs::identity::canonical(path).unwrap())
+                .unwrap()
+        };
+        let admission = |node_worker: bool| MissionAdmission {
+            mission: "mission-1".into(),
+            destination: Some("hide/base".into()),
+            project: Some(wire(&project)),
+            node_worker,
+            ..Default::default()
+        };
+        let destination = |repo: &str, admission: &MissionAdmission| {
+            super::mission_destination(Some(&host), repo, Some(admission))
+        };
+        let sep = std::path::MAIN_SEPARATOR;
+        for repo in [
+            wire(&project),
+            format!("{}{sep}.", project.display()),
+            project.to_str().unwrap().to_owned(),
+            wire(&linked),
+        ] {
+            assert_eq!(
+                destination(&repo, &admission(true)),
+                Ok(Some("hide/base".into())),
+                "{repo}"
+            );
+        }
+        // A link to the project's folder is the project too.
+        #[cfg(unix)]
+        {
+            let link = folder.path().join("project-link");
+            std::os::unix::fs::symlink(&project, &link).unwrap();
+            assert_eq!(
+                destination(link.to_str().unwrap(), &admission(true)),
+                Ok(Some("hide/base".into()))
+            );
+        }
+        let refused = destination(&wire(&other), &admission(true)).unwrap_err();
+        assert!(refused.starts_with("mission_other_repository"), "{refused}");
+        assert!(refused.contains(&wire(&other)), "{refused}");
+        assert!(refused.contains(&wire(&project)), "{refused}");
+        assert_eq!(destination(&wire(&other), &admission(false)), Ok(None));
+        let elsewhere = MissionAdmission {
+            project: None,
+            ..admission(true)
+        };
+        assert_eq!(
+            destination("/on/the/device", &elsewhere),
+            Ok(Some("hide/base".into()))
+        );
+        assert_eq!(
+            super::mission_destination(Some(&host), "/r", None),
+            Ok(None)
+        );
+    }
+
+    /// A start typed again for a spawn whose brief rode its first start
+    /// carries the saved words, whatever the adapter or the machine would
+    /// decide now; a record an earlier build saved
+    /// without its words is given them as that build gave them, and fails
+    /// where that start can carry none.
+    #[test]
+    fn a_launched_brief_carries_its_saved_words_on_every_later_start() {
+        let record = |kind: &str, route: Option<&str>, words: &[&str]| -> super::SpawnRecord {
+            serde_json::from_value(serde_json::json!({
+                "id": "spawn-1", "parent": "agent-1", "intent": "i", "name": "child",
+                "kind": kind, "repo": "/r", "branch": "b", "requested_path": null,
+                "args": [], "path": null, "pane": "w1:p1", "child": null,
+                "brief": "-go", "briefed": route.is_some(),
+                "brief_input": route.map(|route| serde_json::json!({
+                    "attempts": 1, "typed_at_unix_ms": 1, "route": route,
+                })),
+                "launch_words": words,
+            }))
+            .unwrap()
+        };
+        use hide_node_link::protocol::StartForm;
+        let by_name = Some(&StartForm::Program);
+        // Saved words win over what the adapter would give now: OpenCode's
+        // brief is typed today, and its earlier launch is not undone.
+        assert_eq!(
+            super::brief_words(
+                &record("opencode", Some("launch"), &["--prompt=-go"]),
+                &[],
+                true,
+                by_name,
+            ),
+            Ok(Some(vec!["--prompt=-go".to_owned()]))
+        );
+        // An earlier build's launched record has no words: its start gave
+        // the brief as carried, and nothing is asked.
+        assert_eq!(
+            super::brief_words(&record("codex", Some("launch"), &[]), &[], true, by_name),
+            Ok(Some(vec!["--".to_owned(), "-go".to_owned()]))
+        );
+        assert_eq!(
+            super::brief_words(
+                &record("codex", Some("launch"), &[]),
+                &["--".into(), "mine".into()],
+                true,
+                by_name,
+            ),
+            Err("brief_launch_unrecorded".to_owned())
+        );
+        // A brief that was typed is never launched by a later start.
+        assert_eq!(
+            super::brief_words(&record("codex", Some("typed"), &[]), &[], true, by_name),
+            Ok(None)
+        );
+        // Only a fresh start decides: here it launches as its node starts
+        // the program, by its name or its file, and a device's start, and a
+        // program Windows runs through cmd.exe, is typed.
+        assert_eq!(
+            super::brief_words(&record("codex", None, &[]), &[], false, by_name),
+            Ok(None)
+        );
+        let direct = StartForm::Direct {
+            program: "C:/node/node.exe".into(),
+            leading: vec!["C:/npm/node_modules/@openai/codex/bin/codex.js".into()],
+        };
+        for form in [by_name, Some(&direct)] {
+            assert_eq!(
+                super::brief_words(&record("codex", None, &[]), &[], true, form),
+                Ok(Some(vec!["--".to_owned(), "-go".to_owned()]))
+            );
+        }
+        assert_eq!(
+            super::brief_words(
+                &record("codex", None, &[]),
+                &[],
+                true,
+                Some(&StartForm::Batch)
+            ),
+            Ok(None)
+        );
+    }
+
+    #[test]
+    fn a_full_access_option_the_spawn_names_itself_is_left_to_the_spawn_with_its_value() {
+        let full = crate::agent_permission::CLAUDE_FULL_ACCESS;
+        let start = |native: &[&str]| {
+            super::with_permission(
+                "claude",
+                &Default::default(),
+                native.iter().map(|arg| (*arg).to_owned()).collect(),
+            )
+        };
+        assert_eq!(start(&["--", "go"]), [&full[..], &["--", "go"]].concat());
+        // The spawn's own settings replace Hide's whole option, never only
+        // its name, which would leave Hide's value standing alone.
+        assert_eq!(
+            start(&["--settings", "/x.json", "--", "go"]),
+            [full[0], "--settings", "/x.json", "--", "go"]
+        );
+        assert_eq!(start(&[full[0]]), [full[1], full[2], full[0]]);
+        // A word after `--` is the prompt, not an option.
+        assert_eq!(
+            start(&["--", "--settings"]),
+            [&full[..], &["--", "--settings"]].concat()
+        );
+    }
+
+    #[test]
+    fn a_codex_spawn_with_its_own_override_still_starts_with_full_access_first() {
+        let full = crate::agent_permission::CODEX_FULL_ACCESS;
+        let start = |native: &[&str]| {
+            super::with_permission(
+                "codex",
+                &Default::default(),
+                native.iter().map(|arg| (*arg).to_owned()).collect(),
+            )
+        };
+        // An effort is a `-c` too; it does not stand in for full access.
+        let effort = ["-c", "model_reasoning_effort=low", "--", "go"];
+        assert_eq!(start(&effort), [&full[..], &effort[..]].concat());
+        // The spawn's own policy comes after Hide's, where Codex lets it win.
+        let own = ["-c", "approval_policy=on-request"];
+        assert_eq!(start(&own), [&full[..], &own[..]].concat());
+    }
+
+    #[test]
+    fn only_a_worktree_the_spawn_made_counts_as_made_by_it() {
+        let label = "hide:spawn-1";
+        assert!(made_by_spawn(
+            "/r/wt",
+            "/r",
+            ["main", label].into_iter(),
+            label
+        ));
+        assert!(!made_by_spawn(
+            "/r/wt",
+            "/r",
+            ["main", "hide:spawn-2"].into_iter(),
+            label
+        ));
+        assert!(!made_by_spawn("/r", "/r", [label].into_iter(), label));
+    }
+
+    /// A spawn's new shell gets what the steps before its start left of the
+    /// answer time, and nothing once they used it all: the instants are
+    /// built, so no clock decides it.
+    #[test]
+    fn a_spawns_shell_waits_for_what_its_earlier_steps_left_of_the_answer_time() {
+        let now = Instant::now();
+        let answer_by = now + Duration::from_millis(300);
+        assert_eq!(left_of(answer_by, now), Duration::from_millis(300));
+        assert_eq!(
+            left_of(answer_by, now + Duration::from_millis(100)),
+            Duration::from_millis(200)
+        );
+        assert_eq!(left_of(answer_by, answer_by), Duration::ZERO);
+        assert_eq!(
+            left_of(answer_by, answer_by + Duration::from_millis(1)),
+            Duration::ZERO
+        );
+    }
+
+    use super::*;
+    use crate::engine::fake::{FakeEngine, processes, reply, session};
+    use std::sync::atomic::{AtomicUsize, Ordering};
+
+    /// A spawn's answer time that ends no wait in these tests.
+    fn far() -> Instant {
+        Instant::now() + super::super::SPAWN_ANSWER_WAIT
+    }
+
+    /// Issue 666: a spawn's start asks its node about the program its
+    /// definition starts the agent by, and names that program in the file it
+    /// carries, not the agent's kind. Kiro's kind is `kiro` and its first
+    /// executable `kiro-cli`; the node looks the name up on its `PATH`.
+    #[test]
+    fn a_spawns_start_asks_its_node_about_the_definitions_first_executable_not_the_kind() {
+        struct Asked(std::sync::Mutex<Vec<String>>);
+        impl crate::node_access::NodeLink for Asked {
+            fn call(
+                &self,
+                call: hide_node_link::protocol::Call,
+                _: Duration,
+            ) -> Result<crate::node_access::LinkAnswer, crate::node_access::LinkError> {
+                let hide_node_link::protocol::Call::AgentInstalled { name } = call else {
+                    panic!("the node was asked {call:?}");
+                };
+                self.0.lock().unwrap().push(name);
+                Ok(crate::node_access::LinkAnswer::Parsed(
+                    json!({"direct": {"program": "C:\\npm\\kiro-cli.js", "leading": []}}),
+                ))
+            }
+        }
+        let fake = FakeEngine::start(|method, _| panic!("unexpected {method}"));
+        let engine = fake.engine();
+        let node = Asked(std::sync::Mutex::default());
+        let (program, form) = start_form(Some(&node), engine.as_ref(), "kiro", "spawn-1");
+        assert_eq!(program, "kiro-cli");
+        assert_eq!(*node.0.lock().unwrap(), ["kiro-cli"]);
+        // The file the node named stands for the word the start line begins
+        // with, which is the program and not the kind.
+        let file = crate::engine::StartProgram::of(&program, &form.expect("the node named a file"))
+            .expect("a direct start names a file");
+        assert_eq!(file.name, "kiro-cli");
+        assert_eq!(file.program, "C:\\npm\\kiro-cli.js");
+        // No node leaves the start by the program's name.
+        let (program, form) = start_form(None, engine.as_ref(), "kiro", "spawn-1");
+        assert_eq!((program.as_str(), form), ("kiro-cli", None));
+    }
+
+    /// A `worktree.create` whose answer never came may still finish in
+    /// the engine, so it is one stable code the same intent resolves; a refusal
+    /// and a connection that never opened keep their own words.
+    #[test]
+    fn a_worktree_create_with_no_answer_is_refused_as_unconfirmed() {
+        for lost in [
+            "response could not be read: timed out",
+            "response was empty",
+        ] {
+            assert_eq!(
+                worktree_create_refusal(EngineError::Unanswered(lost.into())),
+                WORKTREE_UNCONFIRMED,
+                "{lost}"
+            );
+        }
+        assert_eq!(
+            worktree_create_refusal(EngineError::Transport(
+                "connect failed for /s: refused".into()
+            )),
+            "connect failed for /s: refused"
+        );
+        assert_eq!(
+            worktree_create_refusal(EngineError::Refused {
+                code: "branch_in_use".into(),
+                message: "taken".into()
+            }),
+            "branch_in_use: taken"
+        );
+    }
+
+    #[test]
+    fn a_registration_lands_on_the_callers_own_machine() {
+        assert_eq!(
+            registration_machine(None, crate::node::TEST_NODE).as_deref(),
+            Ok(crate::node::TEST_NODE)
+        );
+        assert_eq!(registration_machine(None, "mini").as_deref(), Ok("mini"));
+        assert_eq!(
+            registration_machine(Some("mini".into()), "mini").as_deref(),
+            Ok("mini")
+        );
+        assert_eq!(
+            registration_machine(Some(crate::node::TEST_NODE.into()), "mini"),
+            Err("machine_identity_conflict".into())
+        );
+        assert_eq!(
+            registration_machine(Some(String::new()), crate::node::TEST_NODE),
+            Err("invalid_registration".into())
+        );
+    }
+
+    /// An agent the engine never named is registered with no name: its pane id,
+    /// which the engine offers as its identifier, is not a name, and neither is a
+    /// name that only restates the pane.
+    #[test]
+    fn registering_an_agent_the_engine_never_named_stores_no_name() {
+        let fake = FakeEngine::start(move |method, _| {
+            assert_eq!(method, "session");
+            reply(session(json!({"agents":[{
+                "pane_id":"w9J:p9R","workspace_id":"w9J","tab_id":"w9J:t1",
+                "terminal_id":"terminal","revision":1,"focused":false,
+                "agent_status":"idle","agent":"claude",
+                "agent_session":{"source":"herdr:claude","agent":"claude",
+                    "kind":"id","value":"parent-session"}}]})))
+        });
+        let native =
+            wait_native_identity(fake.engine().as_ref(), "w9J:p9R", None, "claude", far()).unwrap();
+        assert_eq!(native.name, None);
+        let host = || HostIdentity {
+            machine: crate::node::TEST_NODE,
+            scope: "scope",
+            native_machine: "machine",
+            on_node: true,
+        };
+        let make = |name: Option<String>| {
+            record(&native, host(), "terminal".into(), name, None, None).unwrap()
+        };
+        let unnamed = make(native.name.clone());
+        assert_eq!(unnamed.name, None);
+        assert_eq!(make(Some("w9J:p9R".into())).name, None);
+        assert_eq!(make(Some("lead".into())).name.as_deref(), Some("lead"));
+    }
+
+    /// Pi names its session by its file path, which the engine keeps up to 4096
+    /// bytes: a registration keeps the same, and a longer one is refused by
+    /// its own reason when the record is made, never as an unavailable ledger.
+    #[test]
+    fn a_session_path_registers_up_to_the_engine_s_bound_and_past_it_is_refused_by_name() {
+        for (bytes, expected) in [
+            (crate::delivery::SESSION_LIMIT, None),
+            (
+                crate::delivery::SESSION_LIMIT + 1,
+                Some(super::super::SESSION_TOO_LONG),
+            ),
+        ] {
+            let file = "/session.jsonl";
+            let path = format!("/{}{file}", "d".repeat(bytes - file.len() - 1));
+            let reported = path.clone();
+            let fake = FakeEngine::start(move |method, _| {
+                assert_eq!(method, "session");
+                reply(session(json!({"agents":[{
+                    "pane_id":"w9J:p9R","workspace_id":"w9J","tab_id":"w9J:t1",
+                    "terminal_id":"terminal","revision":1,"focused":false,
+                    "agent_status":"idle","agent":"pi","name":"child",
+                    "agent_session":{"source":"herdr:pi","agent":"pi",
+                        "kind":"path","value":reported}}]})))
+            });
+            let native = wait_native_identity(
+                fake.engine().as_ref(),
+                "w9J:p9R",
+                Some("child"),
+                "pi",
+                far(),
+            )
+            .unwrap();
+            let made = record(
+                &native,
+                HostIdentity {
+                    machine: crate::node::TEST_NODE,
+                    scope: "scope",
+                    native_machine: "machine",
+                    on_node: true,
+                },
+                "terminal".into(),
+                native.name.clone(),
+                None,
+                None,
+            );
+            match expected {
+                None => assert_eq!(made.unwrap().session, path),
+                Some(code) => assert_eq!(made.unwrap_err(), code),
+            }
+        }
+    }
+
+    #[test]
+    fn native_identity_accepts_known_agent_spellings() {
+        // B5/D-08: spelling does not change the native agent's identity.
+        for (requested, reported, session_agent) in [
+            ("CODEX", "codex", "codex"),
+            ("codex", " Codex", "codex"),
+            ("claude_code", "claude", "claude"),
+        ] {
+            let fake = FakeEngine::start(move |method, _| {
+                assert_eq!(method, "session");
+                reply(session(json!({"agents":[{
+                    "pane_id":"w2:p1","workspace_id":"w2","tab_id":"w2:t1",
+                    "terminal_id":"fixture-child-terminal","revision":1,
+                    "focused":false,"agent_status":"idle","agent":reported,"name":"child",
+                    "agent_session":{"source":format!("herdr:{session_agent}"),
+                        "agent":session_agent,"kind":"id","value":"fixture-child-session"}
+                }]})))
+            });
+            let child = wait_native_identity(
+                fake.engine().as_ref(),
+                "w2:p1",
+                Some("child"),
+                requested,
+                far(),
+            )
+            .unwrap();
+            assert_eq!(child.agent.as_deref(), Some(reported));
+            assert_eq!(
+                child.lineage_session,
+                crate::engine::tokens::session_digest("fixture-child-session")
+            );
+        }
+    }
+
+    #[test]
+    fn an_accepted_start_waits_for_native_identity_without_starting_again() {
+        let observations = Arc::new(AtomicUsize::new(0));
+        let reads = observations.clone();
+        let fake = FakeEngine::start(move |method, _| {
+            assert_eq!(method, "session");
+            let mut agent = json!({"pane_id":"w2:p1","workspace_id":"w2",
+                "tab_id":"w2:t1","terminal_id":"fixture-child-terminal",
+                "revision":1,"focused":false,"agent_status":"idle",
+                "agent":"claude","name":"child"});
+            if reads.fetch_add(1, Ordering::SeqCst) > 0 {
+                agent["agent_session"] = json!({"source":"herdr:claude",
+                    "agent":"claude","kind":"id","value":"fixture-child-session"});
+            }
+            reply(session(json!({"agents":[agent]})))
+        });
+        let child = wait_native_identity(
+            fake.engine().as_ref(),
+            "w2:p1",
+            Some("child"),
+            "claude",
+            far(),
+        )
+        .unwrap();
+        assert_eq!(
+            child.lineage_session,
+            crate::engine::tokens::session_digest("fixture-child-session")
+        );
+        assert_eq!(observations.load(Ordering::SeqCst), 2);
+        assert_eq!(fake.methods(), ["session", "session"]);
+    }
+    /// A Factory parent and the spawn records of its attempts, each made the
+    /// way the executor makes them: reserved, then advanced with its pane and
+    /// the terminal recorded with it (none for a record an older build wrote).
+    struct Attempts {
+        actor: Actor,
+        ledger: crate::delivery::ledger::Ledger,
+        parent: String,
+    }
+
+    impl Attempts {
+        fn new() -> Self {
+            let actor = Actor {
+                pane_id: "factory".into(),
+                name: "factory".into(),
+                kind: "codex".into(),
+                device_id: crate::node::TEST_NODE.into(),
+                session: crate::engine::tokens::session_digest("native-factory"),
+            };
+            let mut ledger = crate::delivery::ledger::Ledger::default();
+            let parent = super::super::apply(
+                &mut ledger,
+                &actor,
+                &Mutation::Register {
+                    record: AgentRecord {
+                        id: String::new(),
+                        name: Some("factory".into()),
+                        machine: crate::node::TEST_NODE.into(),
+                        host_scope: "fixture".into(),
+                        native_machine: "fixture-machine".into(),
+                        session: "native-factory".into(),
+                        instance: "factory-terminal".into(),
+                        pane: "factory".into(),
+                        parent: None,
+                        origin: None,
+                        project: None,
+                        ended: false,
+                        terminal_id: None,
+                        forked: false,
+                        successor: None,
+                        actor: actor.clone(),
+                    },
+                    check: false,
+                },
+                1,
+            )
+            .unwrap()["id"]
+                .as_str()
+                .unwrap()
+                .to_owned();
+            Self {
+                actor,
+                ledger,
+                parent,
+            }
+        }
+
+        fn attempt(
+            &mut self,
+            name: &str,
+            intent: &str,
+            pane: &str,
+            terminal: Option<&str>,
+        ) -> SpawnRecord {
+            let reserved = super::super::apply(
+                &mut self.ledger,
+                &self.actor,
+                &Mutation::Reserve {
+                    parent: self.parent.clone(),
+                    command: Command::Spawn {
+                        pick: None,
+                        mission: None,
+                        plan_node: None,
+                        plan: None,
+                        parent: Some(self.parent.clone()),
+                        machine: None,
+                        name: name.into(),
+                        intent: intent.into(),
+                        kind: "claude".into(),
+                        repo: Some("/fixture".into()),
+                        branch: Some("factory/801".into()),
+                        path: None,
+                        args: Vec::new(),
+                        launch: Default::default(),
+                        task: None,
+                        brief: None,
+                        beside: false,
+                        profile: None,
+                    },
+                },
+                1,
+            )
+            .unwrap();
+            serde_json::from_value(
+                super::super::apply(
+                    &mut self.ledger,
+                    &self.actor,
+                    &Mutation::Advance {
+                        seed_tab: None,
+                        id: reserved["id"].as_str().unwrap().into(),
+                        path: Some("/fixture.worktrees/801".into()),
+                        made: false,
+                        pane: Some(pane.into()),
+                        terminal: terminal.map(Into::into),
+                        shell: None,
+                        child: None,
+                    },
+                    1,
+                )
+                .unwrap(),
+            )
+            .unwrap()
+        }
+    }
+
+    /// An engine whose panes run the given terminals, each with its shell
+    /// alone at the prompt unless named busy, and that closes what it is
+    /// asked to.
+    fn attempt_panes(
+        terminals: &'static [(&'static str, &'static str)],
+        busy: &'static [&'static str],
+    ) -> Arc<FakeEngine<'static>> {
+        FakeEngine::start(move |method, params| {
+            let pane = params["pane"].as_str().unwrap().to_owned();
+            match method {
+                "pane_terminal" => {
+                    let (_, terminal) = terminals
+                        .iter()
+                        .find(|(id, _)| *id == pane)
+                        .expect("a pane the fixture runs");
+                    reply((*terminal).to_owned())
+                }
+                "pane_processes" => {
+                    let foreground = if busy.contains(&pane.as_str()) {
+                        4200
+                    } else {
+                        4100
+                    };
+                    reply(processes(&json!({"shell_pid": 4100,
+                        "foreground_process_group_id": foreground,
+                        "foreground_processes": [{"pid": foreground, "name": "zsh"}]})))
+                }
+                "close_pane" => reply(()),
+                other => panic!("unexpected {other}"),
+            }
+        })
+    }
+
+    fn closed_panes(fake: &FakeEngine<'static>) -> Vec<String> {
+        fake.calls_of("close_pane")
+            .into_iter()
+            .map(|params| params["pane"].as_str().unwrap().to_owned())
+            .collect()
+    }
+
+    /// A Factory retry is a new attempt with its own intent and pane; the
+    /// earlier attempts of the same parent and name whose agent never
+    /// started are closed, so no extra tab and no held name stays behind.
+    /// A pane where an agent shows or the shell is busy, another name's
+    /// spawn and the attempt's own pane are left alone.
+    #[test]
+    fn a_new_attempt_closes_the_idle_panes_of_earlier_attempts_that_never_started() {
+        let mut attempts = Attempts::new();
+        attempts.attempt("worker", "factory-801", "w2:p1", Some("t1"));
+        attempts.attempt("worker", "factory-801-a1", "w2:p2", Some("t2"));
+        attempts.attempt("worker", "factory-801-a2", "w2:p3", Some("t3"));
+        attempts.attempt("other", "factory-857", "w3:p1", Some("t31"));
+        let current = attempts.attempt("worker", "factory-801-a3", "w2:p4", Some("t4"));
+        // The shell runs a command in w2:p3: that attempt is busy.
+        let fake = attempt_panes(
+            &[
+                ("w2:p1", "t1"),
+                ("w2:p2", "t2"),
+                ("w2:p3", "t3"),
+                ("w3:p1", "t31"),
+            ],
+            &["w2:p3"],
+        );
+        // An agent shows in w2:p2, and the engine holds the name for the start in
+        // w2:p1 that never showed one.
+        let observed: Vec<ProjectedAgent> = session(json!({"agents": [
+            {"pane_id": "w2:p1", "workspace_id": "w2", "tab_id": "w2:t1",
+                "terminal_id": "t1", "revision": 0, "focused": false,
+                "agent_status": "unknown", "name": "worker", "launch_pending": true},
+            {"pane_id": "w2:p2", "workspace_id": "w2", "tab_id": "w2:t2",
+                "terminal_id": "t2", "revision": 0, "focused": false,
+                "agent_status": "idle", "agent": "claude"},
+        ]}))
+        .agents;
+        close_unstarted_attempts(
+            fake.engine().as_ref(),
+            &attempts.ledger,
+            &current,
+            &observed,
+        );
+        assert_eq!(closed_panes(&fake), ["w2:p1"]);
+    }
+
+    /// Herdr handed a pane id out again after its server was replaced (issue
+    /// 874), so an earlier attempt's pane id can name an idle shell the attempt never
+    /// made (issue 874). Only a pane still running the terminal the attempt
+    /// recorded is its own and closed; a pane id now running another
+    /// terminal, and a record an older build wrote without one, are left
+    /// open and logged.
+    #[test]
+    fn an_earlier_attempt_pane_is_closed_only_while_it_runs_the_terminal_the_attempt_recorded() {
+        let mut attempts = Attempts::new();
+        let kept = attempts.attempt("worker", "factory-801", "w2:p1", Some("t1"));
+        let replaced = attempts.attempt("worker", "factory-801-a1", "w2:p2", Some("t2-before"));
+        let unrecorded = attempts.attempt("worker", "factory-801-a2", "w2:p3", None);
+        let current = attempts.attempt("worker", "factory-801-a3", "w2:p4", Some("t4"));
+        let fake = attempt_panes(
+            &[("w2:p1", "t1"), ("w2:p2", "t2-after"), ("w2:p3", "t3")],
+            &[],
+        );
+        let ((), records) = crate::diagnostics::capture(|| {
+            close_unstarted_attempts(fake.engine().as_ref(), &attempts.ledger, &current, &[]);
+        });
+        assert_eq!(closed_panes(&fake), ["w2:p1"]);
+        let outcome = |attempt: &SpawnRecord| {
+            records
+                .iter()
+                .find(|record| {
+                    record["kind"] == "unstarted_attempt.close" && record["attempt"] == attempt.id
+                })
+                .map(|record| (record["closed"].clone(), record["reason"].clone()))
+        };
+        assert_eq!(outcome(&kept), Some((json!(true), Value::Null)));
+        assert_eq!(
+            outcome(&replaced),
+            Some((json!(false), json!("pane_replaced")))
+        );
+        assert_eq!(
+            outcome(&unrecorded),
+            Some((json!(false), json!("pane_identity_unrecorded")))
+        );
+    }
+
+    #[test]
+    fn completed_spawn_replay_after_restart_preserves_report_stop_end_and_explicit_watch() {
+        use crate::delivery::{ledger, mailbox, store, watch, worker::Worker};
+        use crate::handle::ChangeNotifier;
+        use crate::runtime::delivery::tests::{authority, fixture};
+        use crate::sidebar::SessionSnapshotPayload;
+        let base = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .parent()
+            .unwrap()
+            .join("agents/runs/hcoord-retire/replay-tests");
+        hide_platform::fs::private::create_dir_all(&base).unwrap();
+        // The same public command is exercised through the resident store
+        // after reload. No native connector exists: replay must return its
+        // durable result before attempting another pane or worktree action.
+        let _turn = SPAWN_TURN.lock().unwrap_or_else(|e| e.into_inner());
+        for ending in ["report", "stop", "end", "explicit"] {
+            let root = tempfile::Builder::new()
+                .prefix("replay-")
+                .tempdir_in(&base)
+                .unwrap();
+            let (runtime, _, _, path) = fixture(root.path());
+            let parent = AgentRecord {
+                id: String::new(),
+                name: Some("sender".into()),
+                machine: crate::node::TEST_NODE.into(),
+                host_scope: "fixture".into(),
+                native_machine: "fixture-machine".into(),
+                session: "native-parent".into(),
+                instance: "parent-terminal".into(),
+                pane: "sender".into(),
+                parent: None,
+                origin: None,
+                project: None,
+                ended: false,
+                terminal_id: None,
+                forked: false,
+                successor: None,
+                actor: Actor {
+                    pane_id: "sender".into(),
+                    name: "sender".into(),
+                    kind: "codex".into(),
+                    device_id: crate::node::TEST_NODE.into(),
+                    session: crate::engine::tokens::session_digest("native-parent"),
+                },
+            };
+            let actor = parent.actor.clone();
+            let child_actor = Actor {
+                pane_id: "recipient".into(),
+                name: "recipient".into(),
+                kind: "codex".into(),
+                device_id: crate::node::TEST_NODE.into(),
+                session: crate::engine::tokens::session_digest("native-child"),
+            };
+            let payload: SessionSnapshotPayload = serde_json::from_value(json!({"agents":[
+                {"id":"sender","pane_id":"sender","agent":"codex","agent_status":"working",
+                    "state_change_seq":1,"lineage_session":actor.session},
+                {"id":"recipient","pane_id":"recipient","agent":"codex","agent_status":"working",
+                    "state_change_seq":1,"lineage_session":child_actor.session},
+            ]}))
+            .unwrap();
+            runtime.lock().unwrap().observe_delivery_laid(
+                crate::node::TEST_NODE,
+                &payload,
+                None,
+                None,
+            );
+            let now = std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_millis() as u64;
+            let mut state = ledger::Ledger::default();
+            let parent_id = super::super::apply(
+                &mut state,
+                &actor,
+                &Mutation::Register {
+                    record: parent,
+                    check: false,
+                },
+                now,
+            )
+            .unwrap()["id"]
+                .as_str()
+                .unwrap()
+                .to_owned();
+            let command = Command::Spawn {
+                pick: None,
+                mission: None,
+                plan_node: None,
+                plan: None,
+                parent: Some("here".into()),
+                machine: None,
+                name: "recipient".into(),
+                intent: "one-child".into(),
+                kind: "codex".into(),
+                repo: Some("/fixture".into()),
+                branch: Some("topic".into()),
+                path: None,
+                args: Vec::new(),
+                launch: Default::default(),
+                task: None,
+                brief: None,
+                beside: false,
+                profile: None,
+            };
+            let spawn = super::super::apply(
+                &mut state,
+                &actor,
+                &Mutation::Reserve {
+                    parent: parent_id.clone(),
+                    command: command.clone(),
+                },
+                now,
+            )
+            .unwrap()["id"]
+                .as_str()
+                .unwrap()
+                .to_owned();
+            super::super::apply(
+                &mut state,
+                &actor,
+                &Mutation::Advance {
+                    seed_tab: None,
+                    id: spawn.clone(),
+                    path: Some("/fixture/topic".into()),
+                    made: false,
+                    pane: Some("recipient".into()),
+                    terminal: None,
+                    shell: None,
+                    child: None,
+                },
+                now,
+            )
+            .unwrap();
+            let child = AgentRecord {
+                id: String::new(),
+                name: Some("recipient".into()),
+                machine: crate::node::TEST_NODE.into(),
+                host_scope: "fixture".into(),
+                native_machine: "fixture-machine".into(),
+                session: "native-child".into(),
+                instance: "child-terminal".into(),
+                pane: "recipient".into(),
+                parent: Some(parent_id.clone()),
+                origin: None,
+                project: Some("/fixture/topic".into()),
+                actor: child_actor.clone(),
+                ended: false,
+                terminal_id: None,
+                forked: false,
+                successor: None,
+            };
+            let child_id = super::super::apply(
+                &mut state,
+                &actor,
+                &Mutation::BindChild {
+                    id: spawn.clone(),
+                    record: child,
+                },
+                now,
+            )
+            .unwrap()["child"]
+                .as_str()
+                .unwrap()
+                .to_owned();
+            let receipt =
+                super::super::apply(&mut state, &actor, &Mutation::Complete { id: spawn }, now)
+                    .unwrap();
+            let initial_watch = receipt["auto_watch_id"].as_str().unwrap();
+            match ending {
+                "end" => {
+                    super::super::apply(
+                        &mut state,
+                        &actor,
+                        &Mutation::End {
+                            id: child_id.clone(),
+                            actor: Some(parent_id),
+                        },
+                        now,
+                    )
+                    .unwrap();
+                }
+                "stop" => watch::stop(&mut state, &actor, initial_watch).unwrap(),
+                _ => {
+                    let report = mailbox::send(
+                        &mut state,
+                        &child_actor,
+                        &actor,
+                        "done",
+                        "completed",
+                        "report",
+                        None,
+                        now,
+                    )
+                    .unwrap();
+                    mailbox::apply(
+                        &mut state,
+                        &actor,
+                        None,
+                        &mailbox::Command::Confirm {
+                            ids: vec![report.id],
+                        },
+                        now,
+                    )
+                    .unwrap();
+                    if ending == "explicit" {
+                        let watch = watch::start(&mut state, &actor, &child_actor, now).unwrap();
+                        assert_ne!(watch.id, initial_watch);
+                    }
+                }
+            }
+            store::save(&path, &state).unwrap();
+            let restored = store::load(&path).unwrap();
+            let expected_watch = restored.watches.first().map(|watch| watch.id.clone());
+            let next_id = restored.next_id;
+            runtime
+                .lock()
+                .unwrap()
+                .publish_delivery(Arc::new(restored), false);
+            let (worker, client) = Worker::spawn(
+                Arc::downgrade(&runtime),
+                ChangeNotifier::noop(),
+                path.clone(),
+            )
+            .unwrap();
+            let result = run(client, authority(&actor), actor, command).unwrap();
+            assert_eq!(result["id"], child_id, "{ending}");
+            assert_eq!(result["registered"], ending != "end", "{ending}");
+            assert_eq!(
+                result["watch"]["id"].as_str(),
+                expected_watch.as_deref(),
+                "{ending}"
+            );
+            drop(worker);
+            let after = store::load(&path).unwrap();
+            assert_eq!(after.agents.len(), 2, "{ending}");
+            assert_eq!(after.next_id, next_id, "{ending}");
+            assert!(after.spawns[0].completed);
+            assert_eq!(
+                after.spawns[0].auto_watch_id.as_deref(),
+                Some(initial_watch)
+            );
+            assert_eq!(
+                after
+                    .agents
+                    .iter()
+                    .find(|record| record.id == child_id)
+                    .unwrap()
+                    .ended,
+                ending == "end",
+                "{ending}"
+            );
+            assert_eq!(
+                after.watches.first().map(|watch| &watch.id),
+                expected_watch.as_ref(),
+                "{ending}"
+            );
+        }
+    }
+}

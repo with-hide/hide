@@ -9,10 +9,13 @@ from pathlib import Path
 import subprocess
 import sys
 import tempfile
+from types import SimpleNamespace
 import unittest
+from unittest.mock import Mock
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
-from agent_journey.controller import command_answer
+from agent_journey.controller import Controller, command_answer
+from agent_live_check.processes import ProcessError
 
 DRIVER = Path(__file__).resolve().parents[1] / "agent_journey/controller_command.py"
 
@@ -56,6 +59,34 @@ class ControllerCommand(unittest.TestCase):
         self.assertEqual(result["phase"], "output_limit")
         self.assertLessEqual(len(out), 1024 * 1024)
         self.assertLessEqual(len(err), 1024 * 1024)
+
+
+class PaneRead(unittest.TestCase):
+    def controller(self, value, code=0):
+        controller = Controller.__new__(Controller)
+        controller.pane = "controller-pane"
+        controller.runtime = SimpleNamespace(
+            hide=Path("private/bin/hide"), daemon_env={"HOME": "private/home"},
+            pane_credentials={controller.pane: Path("private/reference.json")},
+            owner=SimpleNamespace(run=Mock(return_value=(code, json.dumps(value), ""))),
+        )
+        return controller
+
+    def test_visible_screen_reaches_the_judge_without_losing_style_or_rows(self):
+        screen = "\x1b[31mred\x1b[0m\r\n  next"
+        controller = self.controller({"ok": True, "value": {"text": screen, "truncated": False}})
+        self.assertEqual(controller.read_pane("child", visible=True), screen)
+        args, kwargs = controller.runtime.owner.run.call_args
+        self.assertEqual(args[0], [str(controller.runtime.hide), "pane", "read", "child",
+                                  "--source", "visible", "--format", "ansi", "--json"])
+        self.assertEqual(kwargs["env"]["HIDE_CAP_REF"], str(Path("private/reference.json")))
+
+    def test_a_truncated_or_refused_screen_cannot_be_judged_as_empty(self):
+        for answer, code in [({"ok": True, "value": {"text": "", "truncated": True}}, 0),
+                             ({"ok": False, "reason": "pane_unavailable"}, 1),
+                             ({"ok": True, "value": {}}, 0)]:
+            with self.subTest(answer=answer), self.assertRaises(ProcessError):
+                self.controller(answer, code).read_pane("child", visible=True)
 
 
 class ControllerAnswer(unittest.TestCase):

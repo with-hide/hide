@@ -7,15 +7,22 @@
 //! The file is a sibling of Hide's own `state.json`, not a plugin's
 //! configuration directory: a path keyed to a plugin id would tie Hide to
 //! whichever plugin happened to be first.
+//!
+//! Every choice is of an agent item (PRD agent-profiles-phase2 D-07, B20): an
+//! agent and the profile it runs as. The built-in default item is written as
+//! every file before items wrote an agent, and a profile is a field an older
+//! Hide does not know beside it, so an older Hide reads a newer file agent by
+//! agent and a newer one reads an older file as built-in default items.
 
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 
+use hide_agent_adapter::ProfileId;
 use serde::{Deserialize, Serialize};
 
 use crate::router::RouterConfig;
 use crate::usage_limit::UsageLimit;
-use crate::{AiError, Availability, PROVIDERS, ProviderId};
+use crate::{AiError, Availability, Item, PROVIDERS, ProviderId};
 
 /// What the operator chose. A field that is absent from the file takes the
 /// default rather than making the whole file unreadable, and a field this
@@ -27,20 +34,24 @@ use crate::{AiError, Availability, PROVIDERS, ProviderId};
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 #[serde(from = "RawSettings", into = "RawSettingsOut")]
 pub struct AiSettings {
-    /// The agent that answers: Settings › Hide AI › Runs on. Only meaningful
+    /// The item that answers: Settings › Hide AI › Runs on. Only meaningful
     /// while `chosen`; before then it is the first agent of the fixed order,
     /// which nothing asks anything of.
-    pub provider: ProviderId,
-    /// Whether `provider` was chosen, by the operator or by the first-run
+    pub runs_on: Item,
+    /// Whether `runs_on` was chosen, by the operator or by the first-run
     /// rule (D-18), and so is stored. An unchosen settings value runs no
     /// background request: Hide features work without a model until an agent
     /// can answer (B47). It is the `provider` key being in the file.
     pub chosen: bool,
-    /// The model each provider is asked for, keyed by the provider's id. A
-    /// provider with no entry is asked for its own default; an empty value is
-    /// the CLI's default (no `--model`). The key is a string so an entry for
-    /// an agent a newer Hide knows survives this build's rewrite.
+    /// The model each built-in default item is asked for, keyed by the
+    /// provider's id. A provider with no entry is asked for its own default;
+    /// an empty value is the CLI's default (no `--model`). The key is a
+    /// string so an entry for an agent a newer Hide knows survives this
+    /// build's rewrite.
     pub models: BTreeMap<String, String>,
+    /// The model of each profile item, by the provider's id and then the
+    /// profile's: `models` for items of a profile. Written only with an entry.
+    pub profile_models: BTreeMap<String, BTreeMap<String, String>>,
     /// Whether agent labels are asked of a provider (Settings › Hide AI ›
     /// Features, Agent summaries). On unless the operator turned it off.
     pub agent_summary: bool,
@@ -48,67 +59,102 @@ pub struct AiSettings {
     /// (Settings › Hide AI, D-14). The rest of the choice is kept so turning
     /// it back on resumes exactly where it was.
     pub enabled: bool,
-    /// The agents asked, in this order, when `provider` cannot answer (D-16).
+    /// The items asked, in this order, when `runs_on` cannot answer (D-16).
     /// Empty by default, for an existing file too: nothing moves to another
     /// vendor unless the operator added it here.
     pub fallback: Vec<FallbackEntry>,
-    /// How much of an agent's week Hide AI may use before it moves to the
-    /// next agent of the order (Settings › Hide AI › Usage limit). One value
+    /// How much of an account's week Hide AI may use before it moves to the
+    /// next item of the order (Settings › Hide AI › Usage limit). One value
     /// for every feature Hide AI starts on its own; absent from the file it
     /// is 90%, and it is written only when the operator chose another.
     pub usage_limit: UsageLimit,
-    /// The connected device each agent runs on, by the agent's id: an agent
-    /// with no entry runs on the core's own machine (PRD wsl-device B11).
-    /// One machine per agent, so Runs on and a fallback entry never name the
-    /// same agent twice. The key is a string so an entry for an agent a newer
-    /// Hide knows survives this build's rewrite; written only when an agent
-    /// runs on a device.
+    /// The connected device each built-in default item runs on, by the
+    /// agent's id: an item with no entry runs on the core's own machine (PRD
+    /// wsl-device B11). One machine per item, so Runs on and a fallback entry
+    /// never name the same item twice. The key is a string so an entry for
+    /// an agent a newer Hide knows survives this build's rewrite; written
+    /// only when an item runs on a device.
     pub machines: BTreeMap<String, String>,
+    /// The device of each profile item placed on one, by the provider's id
+    /// and then the profile's: `machines` for items of a profile, whose
+    /// profile is that device's.
+    pub profile_machines: BTreeMap<String, BTreeMap<String, String>>,
 }
 
-/// One agent the operator added under "If <Runs on> can't answer".
-#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+/// One item the operator added under "If <Runs on> can't answer".
+#[derive(Clone, Debug, Eq, PartialEq)]
 pub struct FallbackEntry {
-    pub provider: ProviderId,
+    pub item: Item,
     /// The model it is asked for; the provider's default when absent.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub model: Option<String>,
 }
 
 /// Why a fallback entry was not added.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum FallbackRefusal {
-    /// The agent already answers first, so asking it again is no fallback.
+    /// The item already answers first, so asking it again is no fallback.
     IsRunsOn,
     AlreadyListed,
 }
 
 /// The file as it is written: `provider` only once it was chosen, so a file
-/// that only turned a switch does not make a choice for the operator.
+/// that only turned a switch does not make a choice for the operator, and a
+/// built-in default item exactly as a file before items wrote it.
 #[derive(Serialize)]
 struct RawSettingsOut {
     #[serde(skip_serializing_if = "Option::is_none")]
     provider: Option<&'static str>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    profile: Option<String>,
     models: BTreeMap<String, String>,
+    #[serde(skip_serializing_if = "BTreeMap::is_empty")]
+    profile_models: BTreeMap<String, BTreeMap<String, String>>,
     agent_summary: bool,
     enabled: bool,
-    fallback: Vec<FallbackEntry>,
+    fallback: Vec<RawFallbackOut>,
     #[serde(skip_serializing_if = "UsageLimit::is_default")]
     usage_limit: UsageLimit,
     #[serde(skip_serializing_if = "BTreeMap::is_empty")]
     machines: BTreeMap<String, String>,
+    #[serde(skip_serializing_if = "BTreeMap::is_empty")]
+    profile_machines: BTreeMap<String, BTreeMap<String, String>>,
+}
+
+/// A fallback entry as it is written: `profile` only for a profile item,
+/// beside the agent an older Hide reads it as.
+#[derive(Serialize)]
+struct RawFallbackOut {
+    provider: &'static str,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    profile: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    model: Option<String>,
 }
 
 impl From<AiSettings> for RawSettingsOut {
     fn from(settings: AiSettings) -> Self {
+        let chosen = settings.chosen;
         Self {
-            provider: settings.chosen.then(|| settings.provider.as_str()),
+            provider: chosen.then(|| settings.runs_on.provider.as_str()),
+            profile: chosen
+                .then(|| settings.runs_on.profile_id().map(str::to_owned))
+                .flatten(),
             models: settings.models,
+            profile_models: settings.profile_models,
             agent_summary: settings.agent_summary,
             enabled: settings.enabled,
-            fallback: settings.fallback,
+            fallback: settings
+                .fallback
+                .into_iter()
+                .map(|entry| RawFallbackOut {
+                    provider: entry.item.provider.as_str(),
+                    profile: entry.item.profile_id().map(str::to_owned),
+                    model: entry.model,
+                })
+                .collect(),
             usage_limit: settings.usage_limit,
             machines: settings.machines,
+            profile_machines: settings.profile_machines,
         }
     }
 }
@@ -119,7 +165,11 @@ struct RawSettings {
     #[serde(default)]
     provider: Option<String>,
     #[serde(default)]
+    profile: Option<String>,
+    #[serde(default)]
     models: BTreeMap<String, String>,
+    #[serde(default)]
+    profile_models: BTreeMap<String, BTreeMap<String, String>>,
     #[serde(default = "on")]
     agent_summary: bool,
     #[serde(default = "on")]
@@ -130,39 +180,64 @@ struct RawSettings {
     usage_limit: UsageLimit,
     #[serde(default)]
     machines: BTreeMap<String, String>,
+    #[serde(default)]
+    profile_machines: BTreeMap<String, BTreeMap<String, String>>,
 }
 
 #[derive(Deserialize)]
 struct RawFallback {
     provider: String,
     #[serde(default)]
+    profile: Option<String>,
+    #[serde(default)]
     model: Option<String>,
+}
+
+/// The item a file names: its agent, and the profile beside it, the built-in
+/// default without one (or with the default's own id).
+fn item_named(provider: ProviderId, profile: Option<String>) -> Item {
+    Item::of(provider, profile.map(ProfileId))
+}
+
+/// A map of devices with the entries that name no device left out: an empty
+/// device id is the core's machine.
+fn placed(machines: BTreeMap<String, String>) -> BTreeMap<String, String> {
+    machines
+        .into_iter()
+        .filter(|(_, device)| !device.is_empty())
+        .collect()
 }
 
 impl From<RawSettings> for AiSettings {
     fn from(raw: RawSettings) -> Self {
         let named = raw.provider.as_deref().and_then(ProviderId::from_id);
         let mut settings = Self {
-            provider: named.unwrap_or_else(default_provider),
+            runs_on: match named {
+                Some(provider) => item_named(provider, raw.profile),
+                None => Item::agent(default_provider()),
+            },
             chosen: named.is_some(),
             models: raw.models,
+            profile_models: raw.profile_models,
             agent_summary: raw.agent_summary,
             enabled: raw.enabled,
             fallback: Vec::new(),
             usage_limit: raw.usage_limit,
-            // An empty device id names no device: the core's machine.
-            machines: raw
-                .machines
+            machines: placed(raw.machines),
+            profile_machines: raw
+                .profile_machines
                 .into_iter()
-                .filter(|(_, device)| !device.is_empty())
+                .map(|(agent, profiles)| (agent, placed(profiles)))
+                .filter(|(_, profiles)| !profiles.is_empty())
                 .collect(),
         };
         for entry in raw.fallback {
             if let Some(entry_provider) = ProviderId::from_id(&entry.provider) {
-                // A file edited by hand can name the same agent twice or the
+                // A file edited by hand can name the same item twice or the
                 // one that already answers first; both read as the list the
                 // operator can build in Settings.
-                let _ = settings.add_fallback(entry_provider, entry.model);
+                let _ =
+                    settings.add_fallback(item_named(entry_provider, entry.profile), entry.model);
             }
         }
         settings
@@ -172,7 +247,7 @@ impl From<RawSettings> for AiSettings {
 impl Default for AiSettings {
     fn default() -> Self {
         Self {
-            provider: default_provider(),
+            runs_on: Item::agent(default_provider()),
             chosen: false,
             models: PROVIDERS
                 .iter()
@@ -184,11 +259,13 @@ impl Default for AiSettings {
                     )
                 })
                 .collect(),
+            profile_models: BTreeMap::new(),
             agent_summary: on(),
             enabled: on(),
             fallback: Vec::new(),
             usage_limit: UsageLimit::default(),
             machines: BTreeMap::new(),
+            profile_machines: BTreeMap::new(),
         }
     }
 }
@@ -209,136 +286,206 @@ pub fn default_model(provider: ProviderId) -> &'static str {
     provider.default_model()
 }
 
-impl AiSettings {
-    /// The model this provider will be asked for, whether or not the file
-    /// named one.
-    pub fn model(&self, provider: ProviderId) -> &str {
-        self.models
-            .get(provider.as_str())
-            .map(String::as_str)
-            .unwrap_or_else(|| default_model(provider))
+/// The entry of `item` in a map keyed as the file keys one: by the agent for
+/// a built-in default item, by the agent and then the profile for a profile
+/// item.
+fn entry<'a>(
+    agents: &'a BTreeMap<String, String>,
+    profiles: &'a BTreeMap<String, BTreeMap<String, String>>,
+    item: &Item,
+) -> Option<&'a String> {
+    match item.profile_id() {
+        None => agents.get(item.provider.as_str()),
+        Some(profile) => profiles.get(item.provider.as_str())?.get(profile),
     }
+}
 
-    pub fn set_model(&mut self, provider: ProviderId, model: impl Into<String>) {
-        self.models
-            .insert(provider.as_str().to_owned(), model.into());
-    }
-
-    /// The device `provider` runs on; `None` is the core's own machine.
-    pub fn machine(&self, provider: ProviderId) -> Option<&str> {
-        self.machines.get(provider.as_str()).map(String::as_str)
-    }
-
-    /// Places `provider` on a connected device, or with `None` on the core's
-    /// own machine, wherever it is in the order.
-    pub fn place(&mut self, provider: ProviderId, device: Option<String>) {
-        match device.filter(|device| !device.is_empty()) {
-            Some(device) => {
-                self.machines.insert(provider.as_str().to_owned(), device);
-            }
-            None => {
-                self.machines.remove(provider.as_str());
+/// Sets or, with `None`, removes the entry of `item` in such a map, leaving
+/// no empty agent behind.
+fn set_entry(
+    agents: &mut BTreeMap<String, String>,
+    profiles: &mut BTreeMap<String, BTreeMap<String, String>>,
+    item: &Item,
+    value: Option<String>,
+) {
+    let agent = item.provider.as_str().to_owned();
+    match (item.profile_id(), value) {
+        (None, Some(value)) => {
+            agents.insert(agent, value);
+        }
+        (None, None) => {
+            agents.remove(&agent);
+        }
+        (Some(profile), Some(value)) => {
+            profiles
+                .entry(agent)
+                .or_default()
+                .insert(profile.to_owned(), value);
+        }
+        (Some(profile), None) => {
+            if let Some(listed) = profiles.get_mut(&agent) {
+                listed.remove(profile);
+                if listed.is_empty() {
+                    profiles.remove(&agent);
+                }
             }
         }
     }
+}
 
-    /// The device each agent this build knows runs on, for the agents placed
-    /// on one; every other agent runs on the core's own machine.
-    pub fn machines_by_provider(&self) -> BTreeMap<ProviderId, String> {
+impl AiSettings {
+    /// The model this item will be asked for, whether or not the file named
+    /// one: a profile item with none takes its agent's registry default,
+    /// never the built-in default item's choice, since a profile can run
+    /// another provider's models.
+    pub fn model(&self, item: &Item) -> &str {
+        entry(&self.models, &self.profile_models, item)
+            .map(String::as_str)
+            .unwrap_or_else(|| default_model(item.provider))
+    }
+
+    pub fn set_model(&mut self, item: &Item, model: impl Into<String>) {
+        set_entry(
+            &mut self.models,
+            &mut self.profile_models,
+            item,
+            Some(model.into()),
+        );
+    }
+
+    /// The device `item` runs on; `None` is the core's own machine.
+    pub fn machine(&self, item: &Item) -> Option<&str> {
+        entry(&self.machines, &self.profile_machines, item).map(String::as_str)
+    }
+
+    /// Places `item` on a connected device, or with `None` on the core's own
+    /// machine, wherever it is in the order.
+    pub fn place(&mut self, item: &Item, device: Option<String>) {
+        let device = device.filter(|device| !device.is_empty());
+        set_entry(&mut self.machines, &mut self.profile_machines, item, device);
+    }
+
+    /// Every item of the order: Runs on, then the fallback list.
+    pub fn order(&self) -> Vec<Item> {
+        self.router_config().priority
+    }
+
+    /// The device of each item placed on one: each agent this build knows,
+    /// and each profile item of the order; every other item runs on the
+    /// core's own machine.
+    pub fn machines_by_item(&self) -> BTreeMap<Item, String> {
         PROVIDERS
             .iter()
-            .filter_map(|provider| Some((*provider, self.machine(*provider)?.to_owned())))
+            .map(|provider| Item::agent(*provider))
+            .chain(self.order().into_iter().filter(|item| !item.is_default()))
+            .filter_map(|item| {
+                let device = self.machine(&item)?.to_owned();
+                Some((item, device))
+            })
             .collect()
     }
 
-    /// The model each provider's backend is built with: a fallback agent with
-    /// its own entry uses that model, everything else the model chosen for
-    /// the provider. One value per registered provider, so a router built
-    /// from it can also be asked about agents that are not in use.
-    pub fn models_by_provider(&self) -> BTreeMap<ProviderId, String> {
+    /// The model each item's backend is built with: a fallback entry with
+    /// its own model uses that model, everything else the model chosen for
+    /// the item. One value for every agent's built-in default item, so a
+    /// router built from it can also be asked about agents that are not in
+    /// use, and one for each profile item of the order.
+    pub fn models_by_item(&self) -> BTreeMap<Item, String> {
         PROVIDERS
             .iter()
-            .map(|provider| (*provider, self.effective_model(*provider).to_owned()))
+            .map(|provider| Item::agent(*provider))
+            .chain(self.order().into_iter().filter(|item| !item.is_default()))
+            .map(|item| {
+                let model = self.effective_model(&item).to_owned();
+                (item, model)
+            })
             .collect()
     }
 
-    fn effective_model(&self, provider: ProviderId) -> &str {
-        if provider != self.provider
+    /// [`Self::models_by_item`] of the agents' built-in default items alone:
+    /// what the Settings read of every agent is built with.
+    pub fn default_models(&self) -> BTreeMap<ProviderId, String> {
+        PROVIDERS
+            .iter()
+            .map(|provider| {
+                let model = self.effective_model(&Item::agent(*provider)).to_owned();
+                (*provider, model)
+            })
+            .collect()
+    }
+
+    /// The model `item` is asked for where it stands in the order.
+    pub fn effective_model(&self, item: &Item) -> &str {
+        if *item != self.runs_on
             && let Some(model) = self
                 .fallback
                 .iter()
-                .find(|entry| entry.provider == provider)
+                .find(|entry| entry.item == *item)
                 .and_then(|entry| entry.model.as_deref())
         {
             return model;
         }
-        self.model(provider)
+        self.model(item)
     }
 
-    /// Makes `provider` the agent that answers (Runs on). An agent that was
-    /// in the fallback list leaves it, and the model chosen for it there
-    /// becomes its model, because asking the same agent twice is no fallback
-    /// and the operator's choice of model should not be lost with the entry
-    /// (D-27, B44).
-    pub fn set_provider(&mut self, provider: ProviderId) {
-        if let Some(position) = self
-            .fallback
-            .iter()
-            .position(|entry| entry.provider == provider)
-        {
+    /// Makes `item` the one that answers (Runs on). An item that was in the
+    /// fallback list leaves it, and the model chosen for it there becomes
+    /// its model, because asking the same item twice is no fallback and the
+    /// operator's choice of model should not be lost with the entry (D-27,
+    /// B44).
+    pub fn set_runs_on(&mut self, item: Item) {
+        if let Some(position) = self.fallback.iter().position(|entry| entry.item == item) {
             let entry = self.fallback.remove(position);
             if let Some(model) = entry.model {
-                self.set_model(provider, model);
+                self.set_model(&item, model);
             }
         }
-        self.provider = provider;
+        self.runs_on = item;
         self.chosen = true;
     }
 
-    /// Adds an agent at the end of the fallback list; order is the order of
-    /// adding (D-16).
+    /// Adds an item at the end of the fallback list; order is the order of
+    /// adding (D-16). Another item of the Runs on agent is a fallback like
+    /// any other (PRD agent-profiles-phase2 B16): only the same item is
+    /// refused.
     pub fn add_fallback(
         &mut self,
-        provider: ProviderId,
+        item: Item,
         model: Option<String>,
     ) -> Result<(), FallbackRefusal> {
-        if provider == self.provider {
+        if item == self.runs_on {
             return Err(FallbackRefusal::IsRunsOn);
         }
-        if self.fallback.iter().any(|entry| entry.provider == provider) {
+        if self.fallback.iter().any(|entry| entry.item == item) {
             return Err(FallbackRefusal::AlreadyListed);
         }
-        self.fallback.push(FallbackEntry { provider, model });
+        self.fallback.push(FallbackEntry { item, model });
         Ok(())
     }
 
-    pub fn remove_fallback(&mut self, provider: ProviderId) {
-        self.fallback.retain(|entry| entry.provider != provider);
+    pub fn remove_fallback(&mut self, item: &Item) {
+        self.fallback.retain(|entry| entry.item != *item);
     }
 
     /// Sets the model of one fallback entry; `None` returns it to the
-    /// provider's default. An agent that is not listed is left alone.
-    pub fn set_fallback_model(&mut self, provider: ProviderId, model: Option<String>) {
-        if let Some(entry) = self
-            .fallback
-            .iter_mut()
-            .find(|entry| entry.provider == provider)
-        {
+    /// provider's default. An item that is not listed is left alone.
+    pub fn set_fallback_model(&mut self, item: &Item, model: Option<String>) {
+        if let Some(entry) = self.fallback.iter_mut().find(|entry| entry.item == *item) {
             entry.model = model;
         }
     }
 
-    /// The router policy this choice produces: the chosen agent first, then
-    /// the fallback list in the order it was added, and nothing else. An agent
+    /// The router policy this choice produces: the chosen item first, then
+    /// the fallback list in the order it was added, and nothing else. An item
     /// that is in neither is never asked (D-16), however many are installed.
     ///
-    /// Everything else about the policy stays the default: a chosen agent
+    /// Everything else about the policy stays the default: a chosen item
     /// that cannot answer still steps aside to the next one, and that move is
     /// still sticky, because the retry and cooldown constants are the
     /// defaults.
     pub fn router_config(&self) -> RouterConfig {
-        let mut priority = vec![self.provider];
-        priority.extend(self.fallback.iter().map(|entry| entry.provider));
+        let mut priority = vec![self.runs_on.clone()];
+        priority.extend(self.fallback.iter().map(|entry| entry.item.clone()));
         RouterConfig {
             priority,
             // An unchosen settings value has no agent to ask (B47).
@@ -347,20 +494,21 @@ impl AiSettings {
         }
     }
 
-    /// Whether a router built for `other` asks the same agents, in the same
+    /// Whether a router built for `other` asks the same items, in the same
     /// order, for the same models, on the same machines as one built for this
-    /// value. Whoever holds
-    /// a router across a settings change compares with this, so a removed
-    /// fallback agent stops receiving text and an added one is tried.
+    /// value. Whoever holds a router across a settings change compares with
+    /// this, so a removed fallback item stops receiving text and an added one
+    /// is tried.
     pub fn routes_like(&self, other: &Self) -> bool {
-        self.router_config().priority == other.router_config().priority
-            && self.models_by_provider() == other.models_by_provider()
-            && self.machines_by_provider() == other.machines_by_provider()
+        self.order() == other.order()
+            && self.models_by_item() == other.models_by_item()
+            && self.machines_by_item() == other.machines_by_item()
     }
 
     /// The agent a first run should start on: the first of the fixed order
     /// that can answer, `None` when none can (D-18). `availability` is what
-    /// the router reported; an agent missing from it cannot answer.
+    /// the router reported; an agent missing from it cannot answer. A first
+    /// run chooses a built-in default item only.
     ///
     /// This is only consulted while nobody has chosen. Once the operator has
     /// chosen, their choice stands even while it is degraded, because the
@@ -446,6 +594,11 @@ pub fn save(home: &Path, settings: &AiSettings) -> Result<(), AiError> {
 mod tests {
     use super::*;
 
+    /// The built-in default items of `providers`, in their order.
+    fn agents(providers: &[ProviderId]) -> Vec<Item> {
+        providers.iter().copied().map(Item::agent).collect()
+    }
+
     fn home(name: &str) -> PathBuf {
         tempfile::Builder::new()
             .prefix(&format!("hide-ai-settings-{name}-"))
@@ -478,7 +631,7 @@ mod tests {
         let home = home("absent");
         let settings = load(&home).expect("a missing file is not a failure");
         assert_eq!(settings, AiSettings::default());
-        assert_eq!(settings.provider, ProviderId::CLAUDE);
+        assert_eq!(settings.runs_on, Item::agent(ProviderId::CLAUDE));
         assert!(
             settings.enabled,
             "Hide AI is on until the operator turns it off"
@@ -488,15 +641,15 @@ mod tests {
             "nothing falls back by default"
         );
         assert_eq!(
-            settings.model(ProviderId::CODEX),
+            settings.model(&Item::agent(ProviderId::CODEX)),
             crate::codex::DEFAULT_MODEL
         );
         assert_eq!(
-            settings.model(ProviderId::CLAUDE),
+            settings.model(&Item::agent(ProviderId::CLAUDE)),
             crate::claude::DEFAULT_MODEL
         );
         assert_eq!(
-            settings.model(ProviderId::GROK),
+            settings.model(&Item::agent(ProviderId::GROK)),
             "",
             "an agent measured against nothing yet is asked for its CLI default"
         );
@@ -511,7 +664,7 @@ mod tests {
             r#"{"provider":"claude","spending_cap":{"weekly":10},"schema_version":9}"#,
         );
         let settings = load(&home).expect("an unknown field does not make the file unreadable");
-        assert_eq!(settings.provider, ProviderId::CLAUDE);
+        assert_eq!(settings.runs_on, Item::agent(ProviderId::CLAUDE));
         assert!(
             settings.agent_summary,
             "a file written before the switch existed leaves summaries on"
@@ -521,7 +674,7 @@ mod tests {
             "a file written before the switch existed leaves Hide AI on"
         );
         assert_eq!(
-            settings.model(ProviderId::CLAUDE),
+            settings.model(&Item::agent(ProviderId::CLAUDE)),
             crate::claude::DEFAULT_MODEL,
             "a provider the file named no model for takes the backend's own default"
         );
@@ -538,14 +691,14 @@ mod tests {
             r#"{"provider":"codex","models":{"codex":"gpt-5.6-luna","claude":"haiku"},"agent_summary":false}"#,
         );
         let settings = load(&home).expect("the old file is readable");
-        assert_eq!(settings.provider, ProviderId::CODEX);
-        assert_eq!(settings.model(ProviderId::CLAUDE), "haiku");
+        assert_eq!(settings.runs_on, Item::agent(ProviderId::CODEX));
+        assert_eq!(settings.model(&Item::agent(ProviderId::CLAUDE)), "haiku");
         assert!(!settings.agent_summary);
         assert!(settings.enabled);
         assert!(settings.fallback.is_empty());
         assert_eq!(
             settings.router_config().priority,
-            vec![ProviderId::CODEX],
+            agents(&[ProviderId::CODEX]),
             "the other provider is no longer appended behind the choice"
         );
         std::fs::remove_dir_all(home).expect("the temporary home is removable");
@@ -561,7 +714,7 @@ mod tests {
             r#"{"provider":"some-future-agent","models":{"some-future-agent":"x-1"},"fallback":[{"provider":"some-future-agent"},{"provider":"codex","model":"m"}]}"#,
         );
         let settings = load(&home).expect("an unknown agent does not make the file unreadable");
-        assert_eq!(settings.provider, ProviderId::CLAUDE);
+        assert_eq!(settings.runs_on, Item::agent(ProviderId::CLAUDE));
         assert!(
             !settings.chosen,
             "a choice naming an agent this build does not know is no choice"
@@ -569,7 +722,7 @@ mod tests {
         assert_eq!(
             settings.fallback,
             vec![FallbackEntry {
-                provider: ProviderId::CODEX,
+                item: Item::agent(ProviderId::CODEX),
                 model: Some("m".to_owned())
             }],
             "only the agent this build knows stays in the list"
@@ -597,15 +750,15 @@ mod tests {
                 .to_string(),
             );
             let settings = load(&home).expect("retired settings remain readable");
-            assert_eq!(settings.provider, ProviderId::CLAUDE);
+            assert_eq!(settings.runs_on, Item::agent(ProviderId::CLAUDE));
             assert!(!settings.chosen);
             assert!(!settings.router_config().enabled);
             assert_eq!(
                 settings.router_config().priority,
-                [ProviderId::CLAUDE, ProviderId::CODEX]
+                agents(&[ProviderId::CLAUDE, ProviderId::CODEX])
             );
             assert_eq!(settings.fallback.len(), 1);
-            assert_eq!(settings.fallback[0].provider, ProviderId::CODEX);
+            assert_eq!(settings.fallback[0].item, Item::agent(ProviderId::CODEX));
             assert_eq!(settings.models[retired], "saved-model");
             assert_eq!(settings.models["antigravity"], "gemini-3.8-flash-high");
             save(&home, &settings).expect("the file is writable");
@@ -687,16 +840,21 @@ mod tests {
     fn a_saved_choice_is_what_the_next_load_returns() {
         let home = home("roundtrip");
         let mut settings = AiSettings {
-            provider: ProviderId::CLAUDE,
+            runs_on: Item::agent(ProviderId::CLAUDE),
             ..AiSettings::default()
         };
-        settings.set_model(ProviderId::CLAUDE, "sonnet");
+        settings.set_model(&Item::agent(ProviderId::CLAUDE), "sonnet");
         settings.agent_summary = false;
         settings.enabled = false;
         settings
-            .add_fallback(ProviderId::CODEX, Some("gpt-5.6-luna".to_owned()))
+            .add_fallback(
+                Item::agent(ProviderId::CODEX),
+                Some("gpt-5.6-luna".to_owned()),
+            )
             .unwrap();
-        settings.add_fallback(ProviderId::PI, None).unwrap();
+        settings
+            .add_fallback(Item::agent(ProviderId::PI), None)
+            .unwrap();
         save(&home, &settings).expect("the settings file is writable");
         assert_eq!(load(&home).expect("the saved file is readable"), settings);
         assert!(
@@ -713,21 +871,25 @@ mod tests {
     #[test]
     fn the_chosen_agent_leads_and_only_the_fallback_list_follows_it() {
         let mut settings = AiSettings {
-            provider: ProviderId::CLAUDE,
+            runs_on: Item::agent(ProviderId::CLAUDE),
             chosen: true,
             ..AiSettings::default()
         };
         assert_eq!(
             settings.router_config().priority,
-            vec![ProviderId::CLAUDE],
+            agents(&[ProviderId::CLAUDE]),
             "an empty fallback list means no fallback, however many agents are installed"
         );
-        settings.add_fallback(ProviderId::PI, None).unwrap();
-        settings.add_fallback(ProviderId::CODEX, None).unwrap();
+        settings
+            .add_fallback(Item::agent(ProviderId::PI), None)
+            .unwrap();
+        settings
+            .add_fallback(Item::agent(ProviderId::CODEX), None)
+            .unwrap();
         let config = settings.router_config();
         assert_eq!(
             config.priority,
-            vec![ProviderId::CLAUDE, ProviderId::PI, ProviderId::CODEX],
+            agents(&[ProviderId::CLAUDE, ProviderId::PI, ProviderId::CODEX]),
             "the order of adding is the order of trying"
         );
         assert!(config.enabled);
@@ -749,26 +911,33 @@ mod tests {
     #[test]
     fn turning_hide_ai_off_reaches_the_router_and_keeps_the_rest_of_the_choice() {
         let mut settings = AiSettings::default();
-        settings.add_fallback(ProviderId::CODEX, None).unwrap();
+        settings
+            .add_fallback(Item::agent(ProviderId::CODEX), None)
+            .unwrap();
         settings.enabled = false;
         let config = settings.router_config();
         assert!(!config.enabled);
-        assert_eq!(config.priority, vec![ProviderId::CLAUDE, ProviderId::CODEX]);
+        assert_eq!(
+            config.priority,
+            agents(&[ProviderId::CLAUDE, ProviderId::CODEX])
+        );
     }
 
     #[test]
     fn the_agent_that_answers_first_is_never_its_own_fallback_and_one_agent_is_listed_once() {
         let mut settings = AiSettings::default();
         assert_eq!(
-            settings.add_fallback(ProviderId::CLAUDE, None),
+            settings.add_fallback(Item::agent(ProviderId::CLAUDE), None),
             Err(FallbackRefusal::IsRunsOn)
         );
-        settings.add_fallback(ProviderId::CODEX, None).unwrap();
+        settings
+            .add_fallback(Item::agent(ProviderId::CODEX), None)
+            .unwrap();
         assert_eq!(
-            settings.add_fallback(ProviderId::CODEX, None),
+            settings.add_fallback(Item::agent(ProviderId::CODEX), None),
             Err(FallbackRefusal::AlreadyListed)
         );
-        settings.remove_fallback(ProviderId::CODEX);
+        settings.remove_fallback(&Item::agent(ProviderId::CODEX));
         assert!(settings.fallback.is_empty());
     }
 
@@ -778,19 +947,21 @@ mod tests {
     fn choosing_a_listed_agent_as_runs_on_takes_it_out_of_the_list() {
         let mut settings = AiSettings::default();
         settings
-            .add_fallback(ProviderId::CODEX, Some("gpt-x".to_owned()))
+            .add_fallback(Item::agent(ProviderId::CODEX), Some("gpt-x".to_owned()))
             .unwrap();
-        settings.add_fallback(ProviderId::PI, None).unwrap();
-        settings.set_provider(ProviderId::CODEX);
-        assert_eq!(settings.provider, ProviderId::CODEX);
+        settings
+            .add_fallback(Item::agent(ProviderId::PI), None)
+            .unwrap();
+        settings.set_runs_on(Item::agent(ProviderId::CODEX));
+        assert_eq!(settings.runs_on, Item::agent(ProviderId::CODEX));
         assert_eq!(
             settings.fallback,
             vec![FallbackEntry {
-                provider: ProviderId::PI,
+                item: Item::agent(ProviderId::PI),
                 model: None
             }]
         );
-        assert_eq!(settings.model(ProviderId::CODEX), "gpt-x");
+        assert_eq!(settings.model(&Item::agent(ProviderId::CODEX)), "gpt-x");
     }
 
     #[test]
@@ -804,7 +975,7 @@ mod tests {
         assert_eq!(
             settings.fallback,
             vec![FallbackEntry {
-                provider: ProviderId::PI,
+                item: Item::agent(ProviderId::PI),
                 model: None
             }]
         );
@@ -814,14 +985,20 @@ mod tests {
     #[test]
     fn a_fallback_agent_is_built_with_its_own_model() {
         let mut settings = AiSettings::default();
-        settings.set_model(ProviderId::CODEX, "gpt-chosen");
+        settings.set_model(&Item::agent(ProviderId::CODEX), "gpt-chosen");
         settings
-            .add_fallback(ProviderId::CODEX, Some("gpt-fallback".to_owned()))
+            .add_fallback(
+                Item::agent(ProviderId::CODEX),
+                Some("gpt-fallback".to_owned()),
+            )
             .unwrap();
-        let models = settings.models_by_provider();
-        assert_eq!(models[&ProviderId::CODEX], "gpt-fallback");
-        assert_eq!(models[&ProviderId::CLAUDE], crate::claude::DEFAULT_MODEL);
-        assert_eq!(models[&ProviderId::PI], "");
+        let models = settings.models_by_item();
+        assert_eq!(models[&Item::agent(ProviderId::CODEX)], "gpt-fallback");
+        assert_eq!(
+            models[&Item::agent(ProviderId::CLAUDE)],
+            crate::claude::DEFAULT_MODEL
+        );
+        assert_eq!(models[&Item::agent(ProviderId::PI)], "");
     }
 
     #[test]
@@ -874,7 +1051,7 @@ mod tests {
             "with no agent chosen no request is asked of any model (B47)"
         );
         let mut chosen = reread;
-        chosen.set_provider(ProviderId::CODEX);
+        chosen.set_runs_on(Item::agent(ProviderId::CODEX));
         assert!(chosen.chosen && chosen.router_config().enabled);
         save(&home, &chosen).expect("the file is writable");
         assert!(
@@ -892,14 +1069,20 @@ mod tests {
     fn an_agent_placed_on_a_device_stays_there_and_an_older_file_runs_everything_here() {
         let older: AiSettings =
             serde_json::from_str(r#"{"provider":"claude","models":{}}"#).unwrap();
-        assert!(older.machines_by_provider().is_empty());
+        assert!(older.machines_by_item().is_empty());
         let written = serde_json::to_string(&older).unwrap();
         assert!(!written.contains("machines"), "{written}");
 
         let mut placed = older.clone();
-        placed.set_provider(ProviderId::CLAUDE);
-        placed.place(ProviderId::CLAUDE, Some("wsl-ubuntu".to_owned()));
-        assert_eq!(placed.machine(ProviderId::CLAUDE), Some("wsl-ubuntu"));
+        placed.set_runs_on(Item::agent(ProviderId::CLAUDE));
+        placed.place(
+            &Item::agent(ProviderId::CLAUDE),
+            Some("wsl-ubuntu".to_owned()),
+        );
+        assert_eq!(
+            placed.machine(&Item::agent(ProviderId::CLAUDE)),
+            Some("wsl-ubuntu")
+        );
         assert!(
             !placed.routes_like(&older),
             "the agent moved to another machine"
@@ -908,8 +1091,8 @@ mod tests {
             serde_json::from_str(&serde_json::to_string(&placed).unwrap()).unwrap();
         assert_eq!(reread, placed);
 
-        placed.place(ProviderId::CLAUDE, None);
-        assert_eq!(placed.machine(ProviderId::CLAUDE), None);
+        placed.place(&Item::agent(ProviderId::CLAUDE), None);
+        assert_eq!(placed.machine(&Item::agent(ProviderId::CLAUDE)), None);
         assert!(placed.routes_like(&older));
     }
 
@@ -925,5 +1108,257 @@ mod tests {
         assert!(settings.chosen);
         let written = serde_json::to_string(&RawSettingsOut::from(settings)).unwrap();
         assert!(!written.contains("pr_summary"));
+    }
+
+    fn profile(provider: ProviderId, id: &str) -> Item {
+        Item::of(provider, Some(ProfileId(id.to_owned())))
+    }
+
+    /// PRD agent-profiles-phase2 B20, D-12: a file that names agents only
+    /// reads each as its built-in default item, and a choice of built-in
+    /// default items is written byte for byte as a file before items was
+    /// (the shape `docs/AI_PROVIDERS.md` shows), so nothing a machine
+    /// already has changes on upgrade.
+    #[test]
+    fn a_file_of_agents_reads_as_their_default_items_and_writes_back_the_same_bytes() {
+        let before = r#"{
+  "provider": "claude",
+  "models": {
+    "claude": "sonnet",
+    "codex": "gpt-5.6-luna"
+  },
+  "agent_summary": true,
+  "enabled": true,
+  "fallback": [
+    {
+      "provider": "codex",
+      "model": "gpt-5.6-luna"
+    },
+    {
+      "provider": "pi"
+    }
+  ],
+  "usage_limit": 95,
+  "machines": {
+    "pi": "wsl-ubuntu"
+  }
+}"#;
+        let settings: AiSettings = serde_json::from_str(before).unwrap();
+        assert_eq!(settings.runs_on, Item::agent(ProviderId::CLAUDE));
+        assert_eq!(
+            settings.order(),
+            agents(&[ProviderId::CLAUDE, ProviderId::CODEX, ProviderId::PI])
+        );
+        assert_eq!(
+            settings.machine(&Item::agent(ProviderId::PI)),
+            Some("wsl-ubuntu")
+        );
+        assert_eq!(serde_json::to_string_pretty(&settings).unwrap(), before);
+    }
+
+    /// B16, B20: Runs on, a fallback entry, a model and a machine of a
+    /// profile item are kept beside the agent they belong to and read back
+    /// as that item; the built-in default item of the same agent stays an
+    /// item of its own.
+    #[test]
+    fn a_profile_item_is_written_beside_its_agent_and_read_back_as_that_item() {
+        let work = profile(ProviderId::CLAUDE, "p-work");
+        let gateway = profile(ProviderId::CLAUDE, "p-gw");
+        let mut settings = AiSettings::default();
+        settings.set_runs_on(work.clone());
+        settings.set_model(&work, "opus");
+        settings
+            .add_fallback(gateway.clone(), Some("glm-4.6".to_owned()))
+            .unwrap();
+        settings
+            .add_fallback(Item::agent(ProviderId::CLAUDE), None)
+            .unwrap();
+        settings.place(&gateway, Some("wsl-ubuntu".to_owned()));
+
+        let written = serde_json::to_value(&settings).unwrap();
+        assert_eq!(written["provider"], "claude");
+        assert_eq!(written["profile"], "p-work");
+        assert_eq!(written["profile_models"]["claude"]["p-work"], "opus");
+        assert_eq!(
+            written["fallback"],
+            serde_json::json!([
+                { "provider": "claude", "profile": "p-gw", "model": "glm-4.6" },
+                { "provider": "claude" },
+            ])
+        );
+        assert_eq!(written["profile_machines"]["claude"]["p-gw"], "wsl-ubuntu");
+        assert!(written.get("machines").is_none(), "{written}");
+
+        let reread: AiSettings = serde_json::from_value(written).unwrap();
+        assert_eq!(reread, settings);
+        assert_eq!(reread.model(&work), "opus");
+        assert_eq!(
+            reread.model(&Item::agent(ProviderId::CLAUDE)),
+            crate::claude::DEFAULT_MODEL,
+            "the built-in default item keeps its own model"
+        );
+        assert_eq!(reread.effective_model(&gateway), "glm-4.6");
+        assert_eq!(reread.machine(&gateway), Some("wsl-ubuntu"));
+        assert_eq!(reread.machine(&Item::agent(ProviderId::CLAUDE)), None);
+        assert_eq!(
+            reread.order(),
+            vec![
+                work.clone(),
+                gateway.clone(),
+                Item::agent(ProviderId::CLAUDE)
+            ]
+        );
+        // The default profile's own id names the built-in default item.
+        assert_eq!(
+            Item::of(ProviderId::CLAUDE, Some(ProfileId::default_profile())),
+            Item::agent(ProviderId::CLAUDE)
+        );
+    }
+
+    /// B16: another item of the Runs on agent is a fallback like any other;
+    /// the same item, as Runs on or listed already, is refused.
+    #[test]
+    fn another_item_of_the_runs_on_agent_is_a_fallback_and_the_same_item_is_refused() {
+        let work = profile(ProviderId::CLAUDE, "p-work");
+        let mut settings = AiSettings::default();
+        settings.set_runs_on(work.clone());
+        assert_eq!(
+            settings.add_fallback(work.clone(), None),
+            Err(FallbackRefusal::IsRunsOn)
+        );
+        settings
+            .add_fallback(Item::agent(ProviderId::CLAUDE), None)
+            .unwrap();
+        settings
+            .add_fallback(profile(ProviderId::CLAUDE, "p-gw"), None)
+            .unwrap();
+        assert_eq!(
+            settings.add_fallback(profile(ProviderId::CLAUDE, "p-gw"), None),
+            Err(FallbackRefusal::AlreadyListed)
+        );
+        // Choosing a listed item as Runs on takes it off the list with its model.
+        settings.set_fallback_model(&Item::agent(ProviderId::CLAUDE), Some("haiku".to_owned()));
+        settings.set_runs_on(Item::agent(ProviderId::CLAUDE));
+        assert_eq!(
+            settings.order(),
+            vec![
+                Item::agent(ProviderId::CLAUDE),
+                profile(ProviderId::CLAUDE, "p-gw")
+            ]
+        );
+        assert_eq!(settings.model(&Item::agent(ProviderId::CLAUDE)), "haiku");
+        assert!(
+            !settings.routes_like(&AiSettings {
+                runs_on: work,
+                ..settings.clone()
+            }),
+            "another item of the same agent is another route"
+        );
+    }
+
+    /// The reading of `hide-ai/src/settings.rs` at tag `v1.2.5`, copied as it
+    /// is there: the expected answer of an older Hide reading a newer file
+    /// comes from that build's code, not from this one's.
+    mod v1_2_5 {
+        use std::collections::BTreeMap;
+
+        use serde::Deserialize;
+
+        use crate::ProviderId;
+        use crate::usage_limit::UsageLimit;
+
+        fn on() -> bool {
+            true
+        }
+
+        /// The file as it is read, before the registry judges the ids in it.
+        /// Every field is kept, though this reader uses only the order: each
+        /// one's type is part of whether v1.2.5 can read the file at all.
+        #[derive(Deserialize)]
+        #[expect(
+            dead_code,
+            reason = "copied whole from v1.2.5, whose types decide the parse"
+        )]
+        pub(super) struct RawSettings {
+            #[serde(default)]
+            pub(super) provider: Option<String>,
+            #[serde(default)]
+            pub(super) models: BTreeMap<String, String>,
+            #[serde(default = "on")]
+            pub(super) agent_summary: bool,
+            #[serde(default = "on")]
+            pub(super) enabled: bool,
+            #[serde(default)]
+            pub(super) fallback: Vec<RawFallback>,
+            #[serde(default)]
+            pub(super) usage_limit: UsageLimit,
+            #[serde(default)]
+            pub(super) machines: BTreeMap<String, String>,
+        }
+
+        #[derive(Deserialize)]
+        pub(super) struct RawFallback {
+            pub(super) provider: String,
+            #[serde(default)]
+            pub(super) model: Option<String>,
+        }
+
+        /// What v1.2.5's `From<RawSettings>` makes of it: Runs on, and the
+        /// fallback list its `add_fallback` builds (the Runs on agent and a
+        /// repeated agent dropped).
+        /// Runs on as the file named it, and the fallback list with each
+        /// entry's model.
+        pub(super) type Order = (Option<ProviderId>, Vec<(ProviderId, Option<String>)>);
+
+        pub(super) fn read(bytes: &str) -> serde_json::Result<Order> {
+            let raw: RawSettings = serde_json::from_str(bytes)?;
+            let named = raw.provider.as_deref().and_then(ProviderId::from_id);
+            let provider = named.unwrap_or(crate::PROVIDERS[0]);
+            let mut fallback: Vec<(ProviderId, Option<String>)> = Vec::new();
+            for entry in raw.fallback {
+                if let Some(entry_provider) = ProviderId::from_id(&entry.provider)
+                    && entry_provider != provider
+                    && !fallback.iter().any(|(listed, _)| *listed == entry_provider)
+                {
+                    fallback.push((entry_provider, entry.model));
+                }
+            }
+            Ok((named, fallback))
+        }
+    }
+
+    /// B20, D-12: a file with profile items, read as v1.2.5 reads it, is read
+    /// agent by agent and nothing fails: Runs on is its agent, a fallback
+    /// entry of the Runs on agent or of an agent already listed is dropped,
+    /// and the rest of the order is kept.
+    #[test]
+    fn a_file_of_profile_items_reads_agent_by_agent_in_the_v1_2_5_reader() {
+        let mut settings = AiSettings::default();
+        settings.set_runs_on(profile(ProviderId::CLAUDE, "p-work"));
+        settings.set_model(&profile(ProviderId::CLAUDE, "p-work"), "opus");
+        settings
+            .add_fallback(profile(ProviderId::CLAUDE, "p-gw"), Some("opus".to_owned()))
+            .unwrap();
+        settings
+            .add_fallback(
+                Item::agent(ProviderId::CODEX),
+                Some("gpt-5.6-luna".to_owned()),
+            )
+            .unwrap();
+        settings
+            .add_fallback(profile(ProviderId::CODEX, "p-team"), None)
+            .unwrap();
+        settings.place(
+            &profile(ProviderId::CODEX, "p-team"),
+            Some("wsl".to_owned()),
+        );
+        let bytes = serde_json::to_string_pretty(&settings).unwrap();
+
+        let (provider, fallback) = v1_2_5::read(&bytes).expect("v1.2.5 reads the file");
+        assert_eq!(provider, Some(ProviderId::CLAUDE));
+        assert_eq!(
+            fallback,
+            [(ProviderId::CODEX, Some("gpt-5.6-luna".to_owned()))]
+        );
     }
 }

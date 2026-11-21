@@ -42,6 +42,18 @@ function TooltipTrigger({ ref, ...props }: ComponentProps<typeof TooltipPrimitiv
 }
 
 /**
+ * The Escape presses a hint closed on. A hint is no layer: Radix's dismiss
+ * marks the press handled, and a handler that still owes Escape its answer
+ * (closing the lane) asks `escapeConsumed` rather than `defaultPrevented`.
+ */
+const hintEscapes = new WeakSet<Event>();
+
+/** Whether something other than a closing hint already answered this Escape. */
+export function escapeConsumed(event: { defaultPrevented: boolean; nativeEvent: Event }): boolean {
+  return event.defaultPrevented && !hintEscapes.has(event.nativeEvent);
+}
+
+/**
  * A hint is drawn under a browser page it meets, since the page is a native
  * view, and it never freezes one. When pages are shown, the hint measures
  * itself as it mounts, before Radix places it, and takes the first side that
@@ -81,8 +93,12 @@ function TooltipContent({ ref, className, side = "top", align = "center", sideOf
         side={clear ?? side}
         align={align}
         sideOffset={sideOffset}
-        className={cn("pointer-events-none z-50 max-w-(--size-tooltip-max-width) text-balance rounded-sm border border-border bg-popover px-sm py-xs text-caption text-popover-foreground shadow-lg", className)}
+        className={cn("pointer-events-none z-50 max-w-(--size-tooltip-max-width) text-balance rounded-sm border border-border bg-popover px-sm py-xs text-caption text-popover-foreground shadow-overlay", className)}
         {...props}
+        onEscapeKeyDown={(event) => {
+          props.onEscapeKeyDown?.(event);
+          if (!event.defaultPrevented) hintEscapes.add(event);
+        }}
         onMouseDown={(event) => {
           props.onMouseDown?.(event);
           // A hint that can be hovered may hold a button. Pressing it must not
@@ -157,9 +173,12 @@ function Hint({
   side,
   reveals = false,
   active = true,
+  content,
   children,
 }: {
   label: string;
+  /** What the hint draws when it is richer than the label's plain lines; the label stays the control's name. */
+  content?: ReactNode;
   shortcut?: ReactNode;
   contentClassName?: string;
   side?: "top" | "right" | "bottom" | "left";
@@ -175,8 +194,8 @@ function Hint({
         {children}
       </TooltipTrigger>
       <TooltipContent side={side} className={contentClassName}>
-        <span className="inline-flex items-center gap-sm whitespace-pre-line">
-          {label}
+        <span className={content ? "block" : "inline-flex items-center gap-sm whitespace-pre-line"}>
+          {content ?? label}
           {shortcut ? <span className="text-muted-foreground">{shortcut}</span> : null}
         </span>
       </TooltipContent>

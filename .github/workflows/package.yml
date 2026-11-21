@@ -3,10 +3,11 @@
 # `bash scripts/verify-web.sh desktop package` with the update files and
 # blockmaps beside them, and each installed and started there (D-32), because
 # no machine of either system is at hand to try a package on: the Windows
-# installer installs for the user, survives a reinstall while a Herdr server
+# installer installs for the user, survives a reinstall while the daemon
 # runs from the build's runtime copy and uninstalls
 # (`desktop/scripts/smoke-windows-installer.mjs`); the deb installs on Ubuntu
-# and the rpm in a Fedora container; each installed app then starts without a
+# and in a bare Ubuntu container, the rpm in a Fedora container; each installed
+# app finds every library it links and then starts without a
 # window (`desktop/scripts/smoke-package.mjs`). The installed Windows app is
 # then opened with its window (`desktop/e2e/packaged-window.spec.ts`), and the
 # shell it draws is kept. Last, on both systems, a release-numbered build of
@@ -24,7 +25,7 @@
 #
 # `include-macos` adds the macOS dmg and zip and runs the packaged app's own
 # specs on the app the zip holds, which is what the updater installs: the
-# signed bundle with its own host, daemon and Herdr, which no other lane
+# signed bundle with its own host, daemon and pane holder, which no other lane
 # starts; the dmg is mounted and its app's signature checked. A release asks
 # for `macos-signing: developer-id`, so what it ships is what those specs
 # started: signed with the Developer ID certificate and notarized, dmg
@@ -32,16 +33,17 @@
 # tag can use (docs/BUILD.md). Pull requests and the nightly keep the ad-hoc
 # signature and reach no secret.
 #
-# Every call also builds the two Linux device helpers (`device-helpers.yml`),
-# which a release candidate hands the private publisher (docs/BUILD.md), and
-# makes the Linux device bundles from them once (`device-bundles`): the Mac
-# app and the Windows app, whose WSL distributions are Linux devices (PRD
-# wsl-device D-04), ship that one manifest, so each names the archives the
-# release has. The Mac and Windows native builds do not wait for the
-# helpers: `compile (macos)` and `compile (windows)` build the web shell and
-# the release binaries while the helpers build, and each package job needs
-# its compile and the bundles before it assembles the app, so a failed helper
-# or compile fails the package and no app is made without them.
+# Every call also builds the two Linux device helpers (`device-helpers.yml`)
+# and makes, once, every device kit a release candidate produces
+# (`device-bundles`): both Linux kits from those helpers and the Windows kit
+# from `compile (windows)`'s binaries with the pinned ConPTY runtime, the
+# bytes the Windows app ships. A release candidate hands them to the private
+# publisher, which adds the Mac kit and the manifest (docs/BUILD.md). No app
+# carries or publishes a device kit: a core of any system fetches them from
+# its own release (hide-node/src/ssh/kit/). The native builds do not wait for
+# the helpers: `compile (macos)` and `compile (windows)` build the web shell
+# and the release binaries while the helpers build, and each package needs
+# only its compile.
 name: package
 
 on:
@@ -142,7 +144,13 @@ jobs:
 
   device-bundles:
     name: device bundles
-    needs: [helper-identity, device-helpers]
+    # Every kit a candidate makes, once per run, from the bytes that ship: the
+    # two Linux helpers and `compile (windows)`'s binaries, which the Windows
+    # app packages as they are, with the pinned ConPTY runtime beside them
+    # (docs/BUILD.md, Device helper release bundles). No manifest: the
+    # private publisher writes the release's over these archives and its Mac
+    # kit.
+    needs: [helper-identity, device-helpers, windows-compile]
     runs-on: ubuntu-latest
     timeout-minutes: 15
     steps:
@@ -153,27 +161,34 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: 22
-      - name: Install zsh for the Herdr fetch
-        run: sudo apt-get install -y --no-install-recommends zsh
       - uses: actions/download-artifact@v8
         with:
           name: hide-device-helper-linux-x86_64
           path: desktop/out/device-helpers/linux-x86_64
+          digest-mismatch: error
       - uses: actions/download-artifact@v8
         with:
           name: hide-device-helper-linux-aarch64
           path: desktop/out/device-helpers/linux-aarch64
-      - name: Make the Linux device bundles and their manifest
+          digest-mismatch: error
+      - uses: actions/download-artifact@v8
+        with:
+          name: hide-windows-release-binaries
+          path: desktop/out/windows-compile
+          digest-mismatch: error
+      - name: Fetch the pinned ConPTY runtime the Windows app ships
+        run: python3 scripts/fetch-conpty.py --out desktop/out/windows-compile/holder-conpty
+      - name: Make the device kits this candidate produces
         env:
           VERSION: ${{ needs.helper-identity.outputs.version }}
           SOURCE_SHA: ${{ needs.helper-identity.outputs.source-sha }}
           BUILD_ORDER: ${{ needs.helper-identity.outputs.build-order }}
-        run: node desktop/scripts/device-helpers.mjs bundle "$VERSION" "$SOURCE_SHA" "$BUILD_ORDER"
-      - name: Keep the bundles for the packages that carry their manifest
+        run: node desktop/scripts/device-helpers.mjs bundle "$VERSION" "$SOURCE_SHA" "$BUILD_ORDER" | tee -a "$GITHUB_STEP_SUMMARY"
+      - name: Keep the kits for the private publisher
         uses: actions/upload-artifact@v7
         with:
           name: hide-device-bundles
-          path: desktop/out/device-bundles/*
+          path: desktop/out/device-bundles/*.tar.gz
           if-no-files-found: error
           retention-days: 7
 
@@ -220,6 +235,10 @@ jobs:
           node-version: 22
           cache: pnpm
           cache-dependency-path: pnpm-lock.yaml
+      # The relay WebAssembly's binding tool, restored never saved here (`.github/actions/relay-tools`).
+      - uses: ./.github/actions/relay-tools
+        with:
+          save: false
       - name: Install dependencies
         timeout-minutes: 5
         run: bash scripts/verify-web.sh install
@@ -251,7 +270,7 @@ jobs:
     # checkout. docs/BUILD.md, "CI's Rust caches", says why a restored
     # dependency cannot change what ships, and where that argument stops.
     # It waits for nothing: the Linux app carries no device kit.
-    timeout-minutes: 60
+    timeout-minutes: 80
     defaults:
       run:
         shell: bash
@@ -284,8 +303,12 @@ jobs:
           node-version: 22
           cache: pnpm
           cache-dependency-path: pnpm-lock.yaml
-      - name: Install zsh for the Herdr fetch, rpmbuild for the rpm and a display for the update test
-        run: sudo apt-get install -y --no-install-recommends zsh rpm xvfb
+      - name: Install zsh for the panes, rpmbuild for the rpm and a display for the update test
+        timeout-minutes: 6
+        uses: ./.github/actions/apt-install
+        with:
+          packages: zsh rpm xvfb
+          minutes: 3
       - name: Name the version
         env:
           REQUESTED: ${{ inputs.version }}
@@ -306,10 +329,14 @@ jobs:
               *) git fetch --quiet --unshallow origin +refs/heads/main:refs/remotes/origin/main ;;
             esac
           fi
+      # The relay WebAssembly's binding tool, restored never saved here (`.github/actions/relay-tools`).
+      - uses: ./.github/actions/relay-tools
+        with:
+          save: false
       - run: bash scripts/verify-web.sh install
       - name: Package the unsigned app, its installers and update files
-        # The packager builds the web shell and the release binaries,
-        # fetches the pinned Herdr and refuses when any of them cannot run;
+        # The packager builds the web shell and the release binaries and
+        # refuses when any of them cannot run;
         # electron-builder then wraps the app in desktop/out/release.
         timeout-minutes: 50
         env:
@@ -322,6 +349,7 @@ jobs:
         id: installed
         timeout-minutes: 10
         run: |
+          bash scripts/ci-apt-dns.sh
           sudo apt-get install -y "./desktop/out/release/hide-v${HIDE_VERSION}-linux-x64.deb"
           app=/opt/hide
           # Every account can reach the app; a new terminal's `hide` is the CLI, the app menu has the window, and no sandbox step was asked of anyone.
@@ -335,6 +363,25 @@ jobs:
       - name: Start the installed package without a window
         timeout-minutes: 5
         run: node desktop/scripts/smoke-package.mjs "${{ steps.installed.outputs.app }}"
+      # The runner above already carries a desktop's libraries, so a library
+      # the deb forgot to depend on is only missed on a bare system, such as
+      # a WSL distribution; this one has nothing but what the deb pulls in.
+      # Node is the runner's own, mounted, so apt installs nothing else.
+      # `--init` reaps the daemons `hide stop` ends: bash execs the last
+      # command, so no shell is left as PID 1 to reap them, and an unreaped
+      # daemon reads as still running to the smoke's end check.
+      - name: Install the deb in a bare Ubuntu and start it without a window
+        timeout-minutes: 15
+        run: |
+          docker run --rm --init -e RUNNER_ENVIRONMENT -v "$PWD:/w" -v "$(readlink -f "$(command -v node)"):/usr/local/bin/node:ro" -w /w ubuntu:24.04 bash -euo pipefail -c '
+            export DEBIAN_FRONTEND=noninteractive
+            bash scripts/ci-apt-dns.sh
+            apt-get update -q
+            apt-get install -y -q --no-install-recommends "/w/desktop/out/release/hide-v'"$HIDE_VERSION"'-linux-x64.deb"
+            [ -s /etc/machine-id ] || tr -d - </proc/sys/kernel/random/uuid >/etc/machine-id
+            useradd -m person
+            runuser -u person -- node desktop/scripts/smoke-package.mjs /opt/hide
+          '
       - name: Install the rpm in Fedora and start it without a window
         timeout-minutes: 15
         run: |
@@ -358,7 +405,7 @@ jobs:
           # The fixture's own `hide status` and `hide stop` read target/debug;
           # these are the package's binaries, so no workspace is built twice.
           mkdir -p target/debug
-          cp "${{ steps.installed.outputs.app }}/resources/hide" "${{ steps.installed.outputs.app }}/resources/hided" target/debug/
+          cp "${{ steps.installed.outputs.app }}/resources/"{hide,hided,hide-agent-hooks,hide-holder} target/debug/
       - name: Build two release versions of the same app for the update test
         # N is installed, N+1 is served from a local feed (PRD auto-update
         # D-29); both are the package above with another version, so the
@@ -371,25 +418,22 @@ jobs:
           test -d "$bundle"
           node desktop/scripts/installers.mjs "$bundle" 0.0.1 "$RUNNER_TEMP/update-n"
           node desktop/scripts/installers.mjs "$bundle" 0.0.2 "$RUNNER_TEMP/update-next"
+          bash scripts/ci-apt-dns.sh
           sudo apt-get install -y --allow-downgrades "$RUNNER_TEMP/update-n/hide-v0.0.1-linux-x64.deb"
       - name: Update the installed app to the next version
         # The installed N finds N+1, downloads it, and Restart in the Help
-        # menu installs it while the Herdr server and the daemon keep running
+        # menu installs it while the engine's panes and the daemon keep running
         # (desktop/e2e/packaged-update.spec.ts).
         id: update
-        timeout-minutes: 15
+        timeout-minutes: 30
         env:
           HIDE_E2E_UPDATE_APP: ${{ steps.installed.outputs.app }}/hide
           HIDE_E2E_UPDATE_FEED: ${{ runner.temp }}/update-next
           HIDE_E2E_UPDATE_VERSION: 0.0.2
-          HIDE_E2E_HERDR_BIN: ${{ steps.installed.outputs.app }}/resources/herdr
-          HIDE_E2E_SCREENSHOT_DIR: ${{ runner.temp }}/hide-e2e
-        run: |
-          mkdir -p "$HIDE_E2E_SCREENSHOT_DIR"
-          xvfb-run -a bash scripts/verify-web.sh desktop e2e packaged-update.spec.ts
+        run: bash scripts/package-e2e.sh update packaged-update.spec.ts
       - name: Mint the development issues token
-        # Development issues live in with-hide/hide-private (docs/TESTING.md,
-        # Flaky tests); one App token reads this run here and files there. A run
+        # Development issues live in this repository (docs/TESTING.md,
+        # Flaky tests); the App's token reads this run and files them. A run
         # without the App's key, such as a fork's, files nothing and stays green.
         id: issues-token
         if: ${{ !cancelled() }}
@@ -400,7 +444,7 @@ jobs:
           client-id: ${{ vars.HIDE_ISSUES_APP_CLIENT_ID }}
           private-key: ${{ secrets.HIDE_ISSUES_APP_KEY }}
           owner: with-hide
-          repositories: hide,hide-private
+          repositories: hide
       - name: Report flaky and failed window tests
         # See the macOS job below.
         id: flaky
@@ -409,15 +453,15 @@ jobs:
         timeout-minutes: 5
         env:
           GH_TOKEN: ${{ steps.issues-token.outputs.token }}
-        run: python3 scripts/ci-flaky-report.py --suite desktop --playwright desktop/e2e-report.json
+        run: |
+          python3 scripts/package-e2e-report.py agents/runs/package-e2e
+          python3 scripts/ci-flaky-report.py --suite desktop --playwright agents/runs/package-e2e/report.json
       - name: Keep the failed window run
         if: ${{ failure() || steps.flaky.outputs.flaky == 'true' }}
         uses: actions/upload-artifact@v7
         with:
           name: hide-package-window-logs-linux
-          path: |
-            ${{ runner.temp }}/hide-e2e
-            desktop/test-results
+          path: agents/runs/package-e2e
           if-no-files-found: ignore
       - name: Keep the package
         # Exactly the system's release files (installers.mjs leaves nothing else there); kept
@@ -435,12 +479,13 @@ jobs:
   windows-package:
     name: package (windows)
     # Its own job, so the Linux package does not wait for the Windows
-    # binaries and the device bundles this one needs.
-    needs: [helper-identity, device-bundles, windows-compile]
+    # binaries this one needs. It carries no device kit: a core fetches its
+    # kits from its own release (hide-node/src/ssh/kit/).
+    needs: [helper-identity, windows-compile]
     env:
       HIDE_POSTHOG_PROJECT_TOKEN: ${{ vars.HIDE_POSTHOG_PROJECT_TOKEN }}
     runs-on: windows-latest
-    timeout-minutes: 60
+    timeout-minutes: 90
     defaults:
       run:
         shell: bash
@@ -461,7 +506,7 @@ jobs:
           node-version: 22
           cache: pnpm
           cache-dependency-path: pnpm-lock.yaml
-      - name: Take the identity the binaries and the bundles were made with
+      - name: Take the identity the binaries were made with
         env:
           VERSION: ${{ needs.helper-identity.outputs.version }}
           BUILD_ORDER: ${{ needs.helper-identity.outputs.build-order }}
@@ -473,16 +518,11 @@ jobs:
           name: hide-windows-release-binaries
           path: ${{ github.workspace }}
           digest-mismatch: error
-      - uses: actions/download-artifact@v8
-        with:
-          name: hide-device-bundles
-          path: desktop/out/device-bundles
-          digest-mismatch: error
       - run: bash scripts/verify-web.sh install
       - name: Package the unsigned app, its installers and update files
         # The packager assembles `compile (windows)`'s checked binaries with
-        # the run's device bundles, fetches the pinned Herdr and refuses when
-        # any of them cannot run; electron-builder then wraps the app in
+        # the holder's pinned ConPTY runtime and refuses when any of them
+        # cannot run; electron-builder then wraps the app in
         # desktop/out/release.
         timeout-minutes: 50
         env:
@@ -491,7 +531,7 @@ jobs:
       - name: Check each installer against its checksum
         working-directory: desktop/out/release
         run: for checksum in *.sha256; do sha256sum -c "$checksum"; done
-      - name: Install, install again while Herdr runs, and uninstall
+      - name: Install, install again while the daemon runs, and uninstall
         timeout-minutes: 15
         run: node desktop/scripts/smoke-windows-installer.mjs "desktop/out/release/hide-v${HIDE_VERSION}-windows-x64-setup.exe"
       - name: Install the package
@@ -511,20 +551,17 @@ jobs:
           # The fixture's own `hide status` and `hide stop` read target/debug;
           # these are the package's binaries, so no workspace is built twice.
           mkdir -p target/debug
-          cp "${{ steps.installed.outputs.app }}/resources/hide.exe" "${{ steps.installed.outputs.app }}/resources/hided.exe" target/debug/
+          cp "${{ steps.installed.outputs.app }}/resources/"{hide,hided,hide-agent-hooks,hide-holder}.exe target/debug/
+          cp -R "${{ steps.installed.outputs.app }}/resources/holder-conpty" target/debug/
       - name: The packaged app's window
-        # The installed hide.exe with its window, against a private HOME, state
-        # and Herdr (desktop/e2e/packaged-window.spec.ts); the shell it draws
-        # is kept below.
+        # The installed hide.exe with its window, against a private HOME and
+        # state (desktop/e2e/packaged-window.spec.ts); the shell it draws is
+        # kept below.
         id: window
-        timeout-minutes: 10
+        timeout-minutes: 20
         env:
           HIDE_E2E_PACKAGED_APP: ${{ steps.installed.outputs.app }}/hide.exe
-          HIDE_E2E_HERDR_BIN: ${{ steps.installed.outputs.app }}/resources/herdr.exe
-          HIDE_E2E_SCREENSHOT_DIR: ${{ runner.temp }}/hide-e2e
-        run: |
-          mkdir -p "$HIDE_E2E_SCREENSHOT_DIR"
-          bash scripts/verify-web.sh desktop e2e packaged-window.spec.ts status-page.spec.ts
+        run: bash scripts/package-e2e.sh window packaged-window.spec.ts status-page.spec.ts
       - name: Build two release versions of the same app for the update test
         # N is installed, N+1 is served from a local feed (PRD auto-update
         # D-29); both are the package above with another version, so the
@@ -540,28 +577,20 @@ jobs:
           MSYS_NO_PATHCONV=1 "$RUNNER_TEMP/update-n/hide-v0.0.1-windows-x64-setup.exe" /S
       - name: Update the installed app to the next version
         # The installed N finds N+1, downloads it, and Restart in the Help
-        # menu installs it while the Herdr server and the daemon keep running
+        # menu installs it while the engine's panes and the daemon keep running
         # (desktop/e2e/packaged-update.spec.ts).
         id: update
-        timeout-minutes: 15
+        timeout-minutes: 30
         env:
           HIDE_E2E_UPDATE_APP: ${{ steps.installed.outputs.app }}/hide.exe
           HIDE_E2E_UPDATE_FEED: ${{ runner.temp }}/update-next
           HIDE_E2E_UPDATE_VERSION: 0.0.2
-          HIDE_E2E_HERDR_BIN: ${{ steps.installed.outputs.app }}/resources/herdr.exe
-          HIDE_E2E_SCREENSHOT_DIR: ${{ runner.temp }}/hide-e2e
         run: |
-          mkdir -p "$HIDE_E2E_SCREENSHOT_DIR"
-          # The installer stops every program under the install folder, and
-          # the app runs its Herdr server from the build's runtime copy, so
-          # the test's server runs from the packaged folder, not the install.
-          HIDE_E2E_HERDR_BIN="$(sed -n 's/^bundle=//p' "$RUNNER_TEMP/package.out")/resources/herdr.exe"
-          export HIDE_E2E_HERDR_BIN
-          test -f "$HIDE_E2E_HERDR_BIN"
-          bash scripts/verify-web.sh desktop e2e packaged-update.spec.ts
+          MSYS_NO_PATHCONV=1 "$RUNNER_TEMP/update-n/hide-v0.0.1-windows-x64-setup.exe" /S
+          bash scripts/package-e2e.sh update packaged-update.spec.ts
       - name: Mint the development issues token
-        # Development issues live in with-hide/hide-private (docs/TESTING.md,
-        # Flaky tests); one App token reads this run here and files there. A run
+        # Development issues live in this repository (docs/TESTING.md,
+        # Flaky tests); the App's token reads this run and files them. A run
         # without the App's key, such as a fork's, files nothing and stays green.
         id: issues-token
         if: ${{ !cancelled() }}
@@ -572,7 +601,7 @@ jobs:
           client-id: ${{ vars.HIDE_ISSUES_APP_CLIENT_ID }}
           private-key: ${{ secrets.HIDE_ISSUES_APP_KEY }}
           owner: with-hide
-          repositories: hide,hide-private
+          repositories: hide
       - name: Report flaky and failed window tests
         # See the macOS job below.
         id: flaky
@@ -581,22 +610,22 @@ jobs:
         timeout-minutes: 5
         env:
           GH_TOKEN: ${{ steps.issues-token.outputs.token }}
-        run: python3 scripts/ci-flaky-report.py --suite desktop --playwright desktop/e2e-report.json
+        run: |
+          python3 scripts/package-e2e-report.py agents/runs/package-e2e
+          python3 scripts/ci-flaky-report.py --suite desktop --playwright agents/runs/package-e2e/report.json
       - name: Keep the packaged window
         if: steps.window.outcome == 'success'
         uses: actions/upload-artifact@v7
         with:
           name: hide-package-window-windows
-          path: ${{ runner.temp }}/hide-e2e/*.png
+          path: agents/runs/package-e2e/window/screenshots/*.png
           if-no-files-found: error
       - name: Keep the failed window run
         if: ${{ failure() || steps.flaky.outputs.flaky == 'true' }}
         uses: actions/upload-artifact@v7
         with:
           name: hide-package-window-logs-windows
-          path: |
-            ${{ runner.temp }}/hide-e2e
-            desktop/test-results
+          path: agents/runs/package-e2e
           if-no-files-found: ignore
       - name: Keep the package
         # Exactly the system's release files (installers.mjs leaves nothing else there); kept
@@ -653,6 +682,10 @@ jobs:
           node-version: 22
           cache: pnpm
           cache-dependency-path: pnpm-lock.yaml
+      # The relay WebAssembly's binding tool, restored never saved here (`.github/actions/relay-tools`).
+      - uses: ./.github/actions/relay-tools
+        with:
+          save: false
       - name: Install dependencies
         timeout-minutes: 5
         run: bash scripts/verify-web.sh install
@@ -676,13 +709,13 @@ jobs:
 
   macos-package:
     name: package (macos)
-    needs: [helper-identity, device-bundles, macos-compile]
+    needs: [helper-identity, macos-compile]
     env:
       HIDE_POSTHOG_PROJECT_TOKEN: ${{ vars.HIDE_POSTHOG_PROJECT_TOKEN }}
     if: ${{ inputs.include-macos }}
     runs-on: macos-15
     # Notarization waits on Apple, which takes minutes and now and then longer.
-    timeout-minutes: 100
+    timeout-minutes: 110
     # An empty name is no environment: the ad-hoc runs reach no secret.
     environment: ${{ inputs.macos-signing == 'developer-id' && 'release' || '' }}
     steps:
@@ -725,11 +758,6 @@ jobs:
         with:
           name: hide-macos-release-binaries
           path: ${{ github.workspace }}
-          digest-mismatch: error
-      - uses: actions/download-artifact@v8
-        with:
-          name: hide-device-bundles
-          path: desktop/out/device-bundles
           digest-mismatch: error
       - name: Install the Developer ID certificate and the notary key
         # The certificate goes into a keychain of this job's own, put on the
@@ -804,23 +832,19 @@ jobs:
           # The existing fixtures locate the CLI in target/debug. These exact
           # packaged release binaries avoid building a second workspace.
           mkdir -p target/debug
-          cp "$app/Contents/Resources/hide" "$app/Contents/Resources/hided" target/debug/
+          cp "$app/Contents/Resources/"{hide,hided,hide-agent-hooks,hide-holder} target/debug/
       - name: Install the pinned Electron runtime for the package fixtures
         timeout-minutes: 5
         run: bash scripts/verify-web.sh desktop electron-install
       - name: Packaged app launch, session search, and isolated install kit
-        timeout-minutes: 10
+        timeout-minutes: 20
         env:
           HIDE_E2E_APP: ${{ steps.bundle.outputs.app }}
           HIDE_E2E_PACKAGED_APP: ${{ steps.bundle.outputs.app }}/Contents/MacOS/hide
-          HIDE_E2E_HERDR_BIN: ${{ steps.bundle.outputs.app }}/Contents/Resources/herdr
-          HIDE_E2E_SCREENSHOT_DIR: ${{ runner.temp }}/hide-e2e
-        run: |
-          mkdir -p "$HIDE_E2E_SCREENSHOT_DIR"
-          bash scripts/verify-web.sh desktop e2e local-kit.spec.ts server-picker.spec.ts status-page.spec.ts --project background
+        run: bash scripts/package-e2e.sh macos local-kit.spec.ts server-picker.spec.ts status-page.spec.ts --project background
       - name: Mint the development issues token
-        # Development issues live in with-hide/hide-private (docs/TESTING.md,
-        # Flaky tests); one App token reads this run here and files there. A run
+        # Development issues live in this repository (docs/TESTING.md,
+        # Flaky tests); the App's token reads this run and files them. A run
         # without the App's key, such as a fork's, files nothing and stays green.
         id: issues-token
         if: ${{ !cancelled() }}
@@ -831,7 +855,7 @@ jobs:
           client-id: ${{ vars.HIDE_ISSUES_APP_CLIENT_ID }}
           private-key: ${{ secrets.HIDE_ISSUES_APP_KEY }}
           owner: with-hide
-          repositories: hide,hide-private
+          repositories: hide
       - name: Report flaky and failed tests
         # A test that fails its retry too becomes a `Failed test` annotation,
         # which the run's summary shows and the nightly report files; see
@@ -843,16 +867,16 @@ jobs:
         timeout-minutes: 5
         env:
           GH_TOKEN: ${{ steps.issues-token.outputs.token }}
-        run: python3 scripts/ci-flaky-report.py --suite desktop --playwright desktop/e2e-report.json
+        run: |
+          python3 scripts/package-e2e-report.py agents/runs/package-e2e
+          python3 scripts/ci-flaky-report.py --suite desktop --playwright agents/runs/package-e2e/report.json
       - name: Keep the failed package run
         # A flaky run keeps it as a failed one does; see web-e2e.yml.
         if: ${{ failure() || steps.flaky.outputs.flaky == 'true' }}
         uses: actions/upload-artifact@v7
         with:
           name: hide-macos-package-logs
-          path: |
-            ${{ runner.temp }}/hide-e2e
-            desktop/test-results
+          path: agents/runs/package-e2e
           if-no-files-found: ignore
       - name: Keep the package
         uses: actions/upload-artifact@v7

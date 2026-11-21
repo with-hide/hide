@@ -24,15 +24,22 @@ describe("practiceUrl", () => {
 });
 
 describe("practiceBounds", () => {
+  const screen = { x: 0, y: 0, width: 1920, height: 1080 };
+
   it("opens smaller than the main window, against its lower right, so the main window shows above and to the left", () => {
-    expect(practiceBounds({ x: 100, y: 50, width: 1400, height: 900 })).toEqual({ x: 310, y: 185, width: 1190, height: 765 });
+    expect(practiceBounds({ x: 100, y: 50, width: 1800, height: 900 }, screen)).toEqual({ x: 370, y: 185, width: 1530, height: 765 });
   });
 
-  it("never opens below the smallest window size", () => {
-    expect(practiceBounds({ x: 0, y: 0, width: 720, height: 480 })).toEqual({ x: 0, y: 0, width: 720, height: 480 });
+  it("opens wide enough to show the lane beside the agents, keeping to the screen", () => {
+    expect(practiceBounds({ x: 100, y: 50, width: 1400, height: 900 }, screen)).toEqual({ x: 220, y: 185, width: 1280, height: 765 });
+    expect(practiceBounds({ x: 0, y: 0, width: 720, height: 480 }, screen)).toEqual({ x: 0, y: 0, width: 1280, height: 480 });
+  });
+
+  it("takes the whole screen's width when the screen is narrower than that", () => {
+    expect(practiceBounds({ x: 0, y: 0, width: 1100, height: 700 }, { x: 0, y: 0, width: 1152, height: 720 })).toEqual({ x: 0, y: 105, width: 1152, height: 595 });
   });
 
   it("takes the default size when there is no main window", () => {
-    expect(practiceBounds(undefined)).toEqual({ width: 1280, height: 800 });
+    expect(practiceBounds(undefined, screen)).toEqual({ width: 1280, height: 800 });
   });
 });

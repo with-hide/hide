@@ -1,9 +1,10 @@
 import { UsageOverview } from "./UsageOverview";
-import { BrandOwl } from "./components/brand-owl";
+import { useOffersReconnect } from "./centerReconnect";
+import { EmptyWelcome } from "./components/empty-welcome";
 import { firstRunStep } from "./firstRun";
 import { useSetupWalk } from "./FirstRunWizard";
 import { useInterfaceTranslation } from "./i18n/client";
-import { ChevronDownIcon } from "lucide-react";
+import { ChevronDownIcon, LoaderCircleIcon } from "lucide-react";
 import { useEffect, useLayoutEffect, useMemo, useRef, type ReactNode } from "react";
 import type { Actions } from "./actions";
 import { Button } from "./components/ui/button";
@@ -32,7 +33,9 @@ import { OverviewGraph } from "./OverviewGraph";
 import { OverviewHistory } from "./OverviewHistory";
 import { workKey } from "./sessionWork";
 import { OverviewProjectHome } from "./OverviewProjectHome";
-import { HerdrMovedLine } from "./HerdrTakeover";
+import type { ToolCell } from "./agentScope";
+import { toolProjects } from "./toolCells";
+import { InToolCell } from "./components/tool-mark";
 
 // The five Overview tabs share a device and project scope. Account usage
 // keeps its global scope. A wide detail retains the list beneath it, so
@@ -46,7 +49,7 @@ const TAB_LABEL = {
   usage: "usage.title",
 } as const satisfies Record<MainView, string>;
 
-export function MainScreen({ actions, deviceId }: { actions: Actions; deviceId: string }) {
+export function MainScreen({ actions, deviceId, tool = null }: { actions: Actions; deviceId: string; tool?: ToolCell | null }) {
   const { t } = useInterfaceTranslation();
   const rest = useShellStore((s) => s.rest);
   const agents = useShellStore((s) => s.agents);
@@ -54,9 +57,10 @@ export function MainScreen({ actions, deviceId }: { actions: Actions; deviceId: 
   const setView = useUiStore((s) => s.setMainView);
   const panel = useUiStore((s) => s.overview.panel);
   const projectId = useUiStore((s) => s.overview.projectId);
-  const section = useMemo(() => mainSections(rest, agents, deviceId)[0] ?? null, [rest, agents, deviceId]);
+  const section = useMemo(() => mainSections(rest, deviceId)[0] ?? null, [rest, deviceId]);
   const availability: DeviceAvailability = section?.availability ?? { state: "ready" };
-  const projects = useMemo(() => boardProjects(rest, agents, deviceId), [rest, agents, deviceId]);
+  // A tool's cell draws the tool's work on every device it reached, and nothing of the operator's (PRD hide-external-control D-48).
+  const projects = useMemo(() => (tool ? toolProjects(boardProjects(rest, agents), tool) : boardProjects(rest, agents, deviceId)), [rest, agents, deviceId, tool]);
   const rows = useMemo(() => everyAgent(rest, agents), [rest, agents]);
   const scoped = useMemo(() => projectId ? projects.filter(({ workspace }) => workspace.id === projectId) : projects, [projects, projectId]);
   const backlog = useMemo(() => backlogTally(scoped), [scoped]);
@@ -75,23 +79,27 @@ export function MainScreen({ actions, deviceId }: { actions: Actions; deviceId: 
   const unavailable = availability.state === "unavailable" && section ? section.device : null;
   const needsLiveDevice = view !== "usage" && view !== "history";
   // A Home with no project says what to do first in the backlog's and the Projects' place (sidebar-task-lens B42).
-  const noProject = availability.state === "ready" && projects.length === 0;
+  const noProject = availability.state === "ready" && projects.length === 0 && !tool;
+  // A tool's cell with no work says so in the work's place (B42).
+  const noToolWork = tool !== null && projects.length === 0;
+  // A count is drawn only once the device has answered; before that a 0 would be a number nobody read.
+  const counted = availability.state === "ready";
   const counts: Record<MainView, ReactNode> = {
-    work: <Count value={workCount} />,
-    backlog: <Count value={backlog.open} />,
-    projects: <Count value={projects.length} />,
+    work: counted ? <Count value={workCount} /> : null,
+    backlog: counted ? <Count value={backlog.open} /> : null,
+    projects: counted ? <Count value={projects.length} /> : null,
     history: null,
     usage: null,
   };
   const widePanel = panel?.kind === "item" || (panel?.kind === "record" && panel.returnTo === "history");
   return (
+    <InToolCell.Provider value={tool !== null}>
     <section className="flex min-h-0 min-w-0 flex-1 flex-col bg-background" aria-label={t("overview.title")} data-main-screen="true" data-main-view={view}>
-      <OpeningStatus actions={actions} />
       <div className="flex shrink-0 flex-wrap items-center justify-between gap-md border-b border-border px-lg py-xs" data-overview-navigation="true">
-        <Tabs className="min-w-0 overflow-x-auto" value={view} onValueChange={(value) => { setView(value as MainView); useUiStore.getState().setOverview({ panel: null }); }}>
-          <TabsList aria-label={t("overview.viewLabel")} className={cn("gap-md rounded-none bg-transparent p-0", unavailable && needsLiveDevice && "opacity-(--opacity-dimmed)")}>
+        <Tabs className="-mb-[calc(var(--spacing-xs)+var(--size-hairline))] min-w-0 self-end overflow-x-auto" value={view} onValueChange={(value) => { setView(value as MainView); useUiStore.getState().setOverview({ panel: null }); }}>
+          <TabsList variant="underline" aria-label={t("overview.viewLabel")} className={cn("gap-md rounded-none p-0", unavailable && needsLiveDevice && "opacity-(--opacity-dimmed)")}>
             {MAIN_VIEWS.map((choice) => (
-              <TabsTrigger key={choice} value={choice} data-main-tab={choice} className="h-auto rounded-none border-b-2 border-transparent px-xs py-sm data-[state=active]:border-primary data-[state=active]:bg-transparent">
+              <TabsTrigger key={choice} value={choice} data-main-tab={choice} className="px-xs py-sm">
                 {t(TAB_LABEL[choice])}
                 {counts[choice]}
               </TabsTrigger>
@@ -100,9 +108,10 @@ export function MainScreen({ actions, deviceId }: { actions: Actions; deviceId: 
         </Tabs>
         {view !== "usage" ? <ProjectChip projects={projects.map(({ workspace }) => workspace)} /> : null}
       </div>
-      <HerdrMovedLine actions={actions} />
       {unavailable && needsLiveDevice ? (
         <DeviceUnanswered device={unavailable} availability={availability} actions={actions} />
+      ) : availability.state === "loading" && needsLiveDevice ? (
+        <DeviceLoading text={availability.text} />
       ) : (
         <div className="relative flex min-h-0 flex-1">
           <div className="min-h-0 min-w-0 flex-1 overflow-y-auto" data-overview-body={view} inert={widePanel || undefined} aria-hidden={widePanel || undefined}>
@@ -113,8 +122,10 @@ export function MainScreen({ actions, deviceId }: { actions: Actions; deviceId: 
               <OverviewHistory projects={projects} deviceId={deviceId} actions={actions} />
             ) : noProject ? (
               <NoProjectView actions={actions} />
+            ) : noToolWork ? (
+              <p className="px-lg py-md text-caption text-muted-foreground" data-tool-cell-empty="true">{t("taskLens.tool.empty")}</p>
             ) : view === "work" ? (
-              <OverviewGraph projects={projects} deviceId={deviceId} actions={actions} onOpenRecord={(session) => useUiStore.getState().setOverview({ panel: { kind: "record", session, returnTo: "work" } })} />
+              <OverviewGraph projects={projects} deviceId={deviceId} tool={tool} actions={actions} onOpenRecord={(session) => useUiStore.getState().setOverview({ panel: { kind: "record", session, returnTo: "work" } })} />
             ) : view === "backlog" ? (
               <OverviewBacklog projects={projects} deviceId={deviceId} actions={actions} />
             ) : selectedProject ? (
@@ -137,6 +148,7 @@ export function MainScreen({ actions, deviceId }: { actions: Actions; deviceId: 
         </div>
       )}
     </section>
+    </InToolCell.Provider>
   );
 }
 
@@ -148,7 +160,7 @@ function OverviewDetail({ kind, wide, children }: { kind: string; wide: boolean;
     (target ?? frame.current)?.focus({ preventScroll: true });
     return () => queueMicrotask(() => returnFocus(new Event("closeAutoFocus", { cancelable: true })));
   }, [returnFocus]);
-  return <aside ref={frame} tabIndex={-1} className={cn("flex shrink-0 flex-col bg-background outline-none", wide ? "absolute inset-0 z-10 overflow-y-auto" : "w-(--size-lane-min) border-l border-border overview-narrow:absolute overview-narrow:inset-y-0 overview-narrow:right-0 overview-narrow:z-10 overview-narrow:shadow-lg")} data-overview-panel={kind}>{children}</aside>;
+  return <aside ref={frame} tabIndex={-1} className={cn("flex shrink-0 flex-col bg-background outline-none", wide ? "absolute inset-0 z-10 overflow-y-auto" : "w-(--size-lane-min) border-l border-border overview-narrow:absolute overview-narrow:inset-y-0 overview-narrow:right-0 overview-narrow:z-10 overview-narrow:shadow-overlay")} data-overview-panel={kind}>{children}</aside>;
 }
 
 function Count({ value }: { value: number }) {
@@ -179,14 +191,25 @@ function ProjectChip({ projects }: { projects: readonly { id: string; label: str
   );
 }
 
+/** A device on its way (B4): what it waits for, in place of counts and lists nobody has read yet. */
+function DeviceLoading({ text }: { text: string }) {
+  return (
+    <div className="flex flex-1 flex-col items-center justify-center gap-sm p-xl text-center" data-device-loading="true">
+      <LoaderCircleIcon aria-hidden="true" className="size-(--size-icon) animate-spin text-muted-foreground" />
+      <p role="status" className="text-body text-subtle-foreground">{text}</p>
+    </div>
+  );
+}
+
 /** A device that does not answer (B4): why, and Reconnect, in place of the tabs' content. */
 function DeviceUnanswered({ device, availability, actions }: { device: Device; availability: DeviceAvailability; actions: Actions }) {
   const { t, i18n } = useInterfaceTranslation();
   const name = useShellStore((s) => machineName(s.rest?.navigator?.devices, device.id, t));
   // B4: since when the device stopped answering, as the core recorded it on that transition; its reason is the tooltip.
   const since = useShellStore((s) => s.rest?.status?.remote?.find((row) => row.target_id === device.id)?.unreachable_since_unix_ms ?? null);
+  const retry = availability.state === "unavailable" ? availability.retry : undefined;
+  useOffersReconnect(retry ? device.id : null);
   if (availability.state !== "unavailable") return null;
-  const retry = availability.retry;
   const words = since === null ? t("overviewTasks.unanswered", { device: name }) : t("overviewTasks.unansweredSince", { device: name, since: ageWords(requireInterfaceLanguage(i18n.language), Date.now() - since, t) });
   return (
     <div role="status" className="flex flex-1 flex-col items-center justify-center gap-md p-xl text-center" data-device-unavailable={device.id}>
@@ -213,9 +236,7 @@ function NoProjectView({ actions }: { actions: Actions }) {
   const setup = useSetupWalk((s) => s.step);
   const chord = commandLabel("new_workspace");
   return (
-    <div className="flex min-h-full flex-1 flex-col items-center justify-center gap-md p-xl text-center" data-main-empty-home="no_project">
-      {firstRun === null && setup === null ? <BrandOwl pose="ai" className="size-(--size-owl-empty)" /> : null}
-      <p className="text-subhead break-keep text-subtle-foreground">{t("firstRun.home.noProject")}</p>
+    <EmptyWelcome pose="factory" owl={firstRun === null && setup === null} title={t("firstRun.home.noProjectTitle")} detail={t("firstRun.home.noProjectDetail")} data-main-empty-home="no_project">
       <span className="flex items-center gap-sm">
         <Button onClick={() => actions.openAddProject()} data-main-empty-home-action="new_workspace">
           {t("firstRun.home.addProject")}
@@ -225,32 +246,7 @@ function NoProjectView({ actions }: { actions: Actions }) {
       <Button variant="ghost" size="sm" onClick={() => openPractice()} data-main-empty-home-action="practice">
         {t("firstRun.home.practice")}
       </Button>
-    </div>
+    </EmptyWelcome>
   );
 }
 
-/**
- * A Workspace or agent asked for from here that is not in front yet: a quiet
- * line while it is on its way, and the refusal with Dismiss when it was not
- * brought forward, so the operator stays where they were (B2, B21).
- */
-export function OpeningStatus({ actions }: { actions: Actions }) {
-  const { t } = useInterfaceTranslation();
-  const opening = useUiStore((s) => s.opening);
-  if (!opening) return null;
-  if (!opening.failure) {
-    return (
-      <p role="status" className="shrink-0 px-md pt-sm text-caption text-muted-foreground" data-opening="pending">
-        {t("overview.opening")}
-      </p>
-    );
-  }
-  return (
-    <div role="alert" className="mx-md mt-sm flex shrink-0 items-center gap-sm rounded-sm bg-card px-sm py-xs text-caption text-warning" data-opening="failed">
-      <span className="min-w-0 flex-1 break-words">{t("overview.notOpened", { reason: opening.failure })}</span>
-      <Button variant="secondary" onClick={() => actions.dismissOpening()} data-opening-dismiss="true">
-        {t("workspace.dismiss")}
-      </Button>
-    </div>
-  );
-}

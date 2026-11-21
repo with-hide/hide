@@ -38,16 +38,6 @@ it.each([
   } finally { await unmount(); }
 });
 
-it("keeps a live terminal readable while another client holds its wheel", async () => {
-  const { container, unmount } = await draw(notice("controlled_elsewhere"));
-  try {
-    const caption = container.querySelector('[data-pane-notice="controlled_elsewhere"]')!;
-    expect(caption.textContent).toBe("scroll held by another client");
-    // A corner caption, not a cover over the terminal.
-    expect(caption.className).not.toContain("inset-0");
-  } finally { await unmount(); }
-});
-
 it("refuses a notice the core never publishes", async () => {
   vi.spyOn(console, "error").mockImplementation(() => {});
   await expect(draw(notice("result"))).rejects.toThrow("Unknown core pane notice: result");

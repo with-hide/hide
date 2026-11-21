@@ -1,6 +1,6 @@
 // What the snapshot frames a page receives say about a pane's in-process subagents, for the specs that move
 // a pane's counts through an agent's hook (OpenCode's plugin, Pi's and omp's extension). The hook reports them
-// to the core, so the snapshot is where they are observed; Herdr holds none of them.
+// to the core, so the snapshot is where they are observed; the engine holds none of them.
 
 import type { Page } from "@playwright/test";
 
@@ -39,10 +39,4 @@ export function snapshotCounts(page: Page, pane: string): () => { working: numbe
     }
   }));
   return () => last;
-}
-
-/** The in-process subagents working in `pane`, as the last snapshot frame the page received that names it says. */
-export function snapshotWorking(page: Page, pane: string): () => number | null | undefined {
-  const counts = snapshotCounts(page, pane);
-  return () => counts()?.working;
 }

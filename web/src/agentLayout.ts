@@ -12,7 +12,7 @@ export const AGENT_WORDS: AreaWords = { kind: "agent" };
 export const remoteGroupReason = () => translate("panes.agent.remoteGroupReason");
 const EDGES: Edge[] = ["right", "left", "up", "down"];
 export type AgentCommand = "rename_tab" | "new_tab" | "copy_name" | "close_tab" | `split_${Edge}` | `move_${Edge}` | "focus_next" | "focus_previous" | "grow" | "shrink";
-/** One drawn Agent area tree; `remote` when its tabs are another device's Herdr, which splits no group. */
+/** One drawn Agent area tree; `remote` when its tabs are another device's engine, which splits no group. */
 export type AgentFrame = { workspace: { device_id: string; path: string }; remote: boolean; layout: AgentLayout; geometry: Geometry; sizes: LayoutSizes };
 export function agentMenu(frame: AgentFrame, id: string): MenuEntry<AgentCommand>[] {
   const located = locateDisplay(frame.layout.root, id);

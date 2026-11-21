@@ -15,6 +15,7 @@ use hide_platform::process::OwnedChild;
 use serde_json::{Value, json};
 
 use crate::programs;
+use crate::stand_in_daemon::StandInDaemon;
 use crate::stand_ins;
 
 const PANE: &str = "w1:p2";
@@ -41,6 +42,7 @@ esac
 }
 
 struct Kit {
+    daemon: StandInDaemon,
     root: tempfile::TempDir,
 }
 
@@ -51,7 +53,11 @@ impl Kit {
         std::fs::create_dir(&bin).unwrap();
         stand_ins::place(programs::hook(), &bin.join("hide-agent-hooks"));
         stand_ins::program(&bin.join("hide"), &fake_hide());
-        Self { root }
+        let daemon = StandInDaemon::serve(
+            &bin.join("hide"),
+            &[("FAKE_HIDE_LOG", root.path().join("asked.log").into())],
+        );
+        Self { daemon, root }
     }
 
     fn log(&self) -> PathBuf {
@@ -89,7 +95,8 @@ impl Kit {
         command
             .env(hide_platform::host::HOME_VARIABLE, self.root.path())
             .env("FAKE_HIDE_LOG", self.log())
-            .env("HERDR_PANE_ID", PANE);
+            .env("HIDE_PANE_ID", PANE);
+        self.daemon.route(&mut command);
         let mut child = OwnedChild::spawn(&mut command).unwrap();
         let mut stdin = child.take_stdin().unwrap();
         stdin.write_all(payload.to_string().as_bytes()).unwrap();
@@ -118,9 +125,9 @@ fn a_plan_waiting_for_review_refuses_a_write_from_the_record_without_calling_hid
         json!({"session_id": SESSION, "cwd": "/tmp/fixture-project",
             "hook_event_name": "UserPromptSubmit", "prompt": "go on"}),
     );
-    assert!(prompt.contains("Plan: now Core events (1/4)"), "{prompt}");
+    assert!(prompt.contains("Task: now Core events (1/4)"), "{prompt}");
     assert!(
-        prompt.contains("The plan waits for the operator's review"),
+        prompt.contains("The task's steps wait for the operator's review"),
         "{prompt}"
     );
     let pulled = kit.asked();
@@ -137,7 +144,7 @@ fn a_plan_waiting_for_review_refuses_a_write_from_the_record_without_calling_hid
         answer["hookSpecificOutput"]["permissionDecisionReason"]
             .as_str()
             .unwrap()
-            .contains("the plan is waiting for the operator's review")
+            .contains("the task's steps are waiting for the operator's review")
     );
     let commit = kit.tool("Bash", json!({"command": "git commit -m wip"}));
     assert!(commit.contains("\"deny\""), "{commit}");

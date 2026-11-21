@@ -52,6 +52,15 @@ class Plan(unittest.TestCase):
     def test_retired_cursor_is_absent_from_the_active_journey(self):
         self.assertNotIn("cursor", cells.plan(contract(), ["codex"]))
 
+    def test_every_agent_row_is_planned(self):
+        # The own engine's first-input fix closed the Pi and OpenCode rows.
+        for fake in (False, True):
+            for agent in ("pi", "opencode"):
+                with self.subTest(fake=fake, agent=agent):
+                    table = cells.plan(contract(), [agent, "codex"], fake_model=fake)
+                    self.assertEqual(table[agent]["start"]["status"], cells.PENDING)
+                    self.assertEqual(table["codex"]["start"]["status"], cells.PENDING)
+
     def test_a_legacy_cursor_row_is_excluded_in_every_cell_and_counts_nowhere(self):
         rows = contract()
         legacy = {**next(row for row in rows if row["id"] == "codex"), "id": "cursor"}
@@ -61,6 +70,15 @@ class Plan(unittest.TestCase):
         passed = {name: cells.cell(cells.PASS, "fixture") for name in cells.CELLS}
         self.assertEqual(cells.exit_code({"codex": passed, "cursor": table["cursor"]}, ["codex", "cursor"],
                                          setup_failed=False), 0)
+
+    def test_no_cell_of_a_registered_agent_is_excluded(self):
+        selected = ["codex", "antigravity", "omp", "claude-code", "grok", "pi", "opencode"]
+        for fake in (True, False):
+            with self.subTest(fake=fake):
+                table = cells.plan(contract(), selected, fake_model=fake)
+                actual = {(agent, name) for agent in selected for name, value in table[agent].items()
+                          if value["status"] == cells.EXCLUDED}
+                self.assertEqual(actual, set())
 
     def test_a_new_adapter_participates_without_a_second_agent_list(self):
         codex = next(row for row in contract() if row["id"] == "codex")
@@ -119,6 +137,24 @@ class ExitCodes(unittest.TestCase):
 
 
 class Verdicts(unittest.TestCase):
+    def test_a_profile_passes_only_when_its_cells_pass_and_its_sessions_lie_in_its_account(self):
+        passed = {name: cells.cell(cells.PASS, "") for name in cells.CELLS}
+        folder = "/run/home/.journey-profile/claude"
+        session = folder + "/projects/x/s.jsonl"
+        self.assertEqual(cells.profile_verdict(passed, [session], folder)[0], cells.PASS)
+        self.assertEqual(cells.profile_verdict({**passed, "letter": cells.cell(cells.NA, "")}, [session], folder)[0],
+                         cells.PASS)
+        failed = {**passed, "resume": cells.cell(cells.FAIL, "native session changed")}
+        self.assertEqual(cells.profile_verdict(failed, [session], folder),
+                         (cells.FAIL, "the profile's resume: fail: native session changed"))
+        status, reason = cells.profile_verdict(passed, ["/run/home/.claude/projects/x/s.jsonl"], folder)
+        self.assertEqual(status, cells.FAIL)
+        self.assertIn("outside its account", reason)
+        self.assertEqual(cells.profile_verdict(passed, [folder + "-other/s.jsonl"], folder)[0], cells.FAIL)
+        self.assertEqual(cells.profile_verdict(passed, [], folder)[0], cells.FAIL)
+        # OpenCode's session is a row of the account's database, read in that account alone.
+        self.assertEqual(cells.profile_verdict(passed, ["opencode/ses_1"], folder)[0], cells.PASS)
+
     def test_spawn_needs_registered_running_connected_and_a_native_session(self):
         self.assertEqual(cells.spawn_verdict(spawned())[0], cells.PASS)
         status, reason = cells.spawn_verdict(spawned(session=None, connection="pending"))
@@ -133,7 +169,7 @@ class Verdicts(unittest.TestCase):
                   {"role": "assistant", "text": "JOURNEY-1", "at": 12_300}]
         status, reason = cells.turn_verdict([("working", 10_500), ("stopped", 12_400)], events, "JOURNEY-1")
         self.assertEqual((status, reason), (cells.PASS, "row read working, then idle after the answer"))
-        # A turn Herdr never saw working passes on the idle after its answer, and says so with its length.
+        # A turn the screen never read as working passes on the idle after its answer, and says so with its length.
         status, reason = cells.turn_verdict([("unknown", 9_000), ("stopped", 13_000)], events, "JOURNEY-1")
         self.assertEqual(status, cells.PASS)
         self.assertIn("working not seen: a turn shorter than Herdr's detection, 2.3 s", reason)
@@ -150,14 +186,13 @@ class Verdicts(unittest.TestCase):
         self.assertEqual(cells.turn_verdict([("stopped", 13_000)], events, "JOURNEY-0", after=1),
                          (cells.FAIL, "Hide's reader found no answer to the prompt"))
 
-    def test_the_emitter_must_be_herdrs_own_integration(self):
-        self.assertEqual(cells.emitter_verdict({"source": "herdr:codex"}, "herdr:codex")[0], cells.PASS)
-        self.assertEqual(cells.emitter_verdict({"source": "hide:hook"}, "herdr:codex")[0], cells.FAIL)
-        self.assertEqual(cells.emitter_verdict(None, "herdr:codex")[0], cells.FAIL)
-        # agy's integration reports under its target, not its kind (the contract's `herdr_source`).
-        self.assertEqual(cells.emitter_verdict({"source": "herdr:antigravity_cli"}, "herdr:antigravity_cli")[0],
-                         cells.PASS)
-        self.assertEqual(cells.emitter_verdict({"source": "herdr:agy"}, "herdr:antigravity_cli")[0], cells.FAIL)
+    def test_native_identity_needs_the_registration_ledger_not_just_a_projected_row(self):
+        session = {"observation": "hide.agent.list", "kind": "id", "value": "native-session"}
+        self.assertEqual(cells.emitter_verdict(session)[0], cells.PASS)
+        for invalid in (None, {**session, "observation": "snapshot"}, {**session, "value": ""},
+                        {**session, "kind": "unknown"}, {"source": "herdr:claude"}):
+            with self.subTest(session=invalid):
+                self.assertEqual(cells.emitter_verdict(invalid)[0], cells.FAIL)
 
     def test_a_reply_passes_only_with_the_token_from_the_assistant_in_that_session(self):
         events = [{"role": "user", "text": "Reply with exactly JOURNEY-1"}, {"role": "assistant", "text": "JOURNEY-1"}]
@@ -218,7 +253,7 @@ class Verdicts(unittest.TestCase):
     def test_the_contract_names_each_agents_letter_and_wake_forms(self):
         rows = {row["id"]: row for row in contract()}
         self.assertEqual({key: (rows[key]["letter"], rows[key]["wake"]) for key in rows if key != "cursor"}, {
-            "claude-code": ("bell", "pane"), "codex": ("bell", "pane"), "antigravity": ("next_prompt", "pane"),
+            "claude-code": ("bell", "pane"), "codex": ("bell", "pane"), "antigravity": ("bell", "pane"),
             "grok": ("bell", "sleeping_session"), "opencode": ("next_prompt", "sleeping_session"),
             "pi": ("next_prompt", "sleeping_session"), "omp": ("next_prompt", "sleeping_session")})
 

@@ -4,13 +4,12 @@ import { PanelsTopLeftIcon, XIcon } from "lucide-react";
 import { memo, useEffect, useRef, useState } from "react";
 import type { Actions } from "./actions";
 import { StatusMark } from "./components/status-mark";
-import { markTone, markWords, recordWords } from "./agentRow";
+import { agentWithProfile, markTone, markWords, recordWords } from "./agentRow";
 import { AgentRecordTitle } from "./components/agent-record-title";
 import { agentsByPane } from "./paneAgents";
 import { usePaneAgents } from "./PaneHeaderBand";
-import { AgentMark } from "./AgentMark";
+import { AgentMark, ProfileBadge } from "./AgentMark";
 import { useAgentLogosShown } from "./agentLogoMode";
-import { agentProductName } from "./agentAdapters";
 import { Button } from "./components/ui/button";
 import { Keycap } from "./components/ui/keycap";
 import { Input } from "./components/ui/input";
@@ -21,20 +20,23 @@ import { tabFit, type AreaTabInteraction } from "./AreaTree";
 import { useInterfaceTranslation } from "./i18n/client";
 import type { TabFit } from "./areaLayout";
 import { composingKey } from "./keys";
+import { PairMark } from "./components/pair-mark";
+import { markedPairs } from "./pairView";
+import { workspaceViewOf } from "./workspace";
 
 // The sole Agent tab rendering unit, reused by every local and device area.
 const NONE: AsyncOperation[] = [];
 
-/** Phases of a close the core is still confirming with Herdr (`operations.rs`). */
+/** Phases of a close the core is still confirming with the engine (`operations.rs`). */
 const IN_FLIGHT = new Set(["transmitting", "awaiting_topology", "unknown"]);
 
 export function AgentDraftTab({ id, interaction, actions, number = null }: { id: string; interaction: AreaTabInteraction; actions: Actions; number?: number | null }) {
   const { t } = useInterfaceTranslation();
   const label = t("groups.newTab");
-  return <TabButton entry={{ id, source_id: id, kind: "herdr", label, preview: false }} identity={label} agentPaneCount={0} editor={null} mark={<PanelsTopLeftIcon className="size-(--size-icon-sm) shrink-0" />} active={interaction.selected} areaActive={interaction.areaActive} closing={false} closeLabel={t("shell.closeTab", { title: label })} number={number} fit={interaction.fit} dragging={interaction.dragging} onSelect={interaction.select} onClose={() => actions.closeTab(id)} onPointerDown={interaction.press} />;
+  return <TabButton entry={{ id, source_id: id, kind: "engine", label, preview: false }} identity={label} agentPaneCount={0} editor={null} mark={<PanelsTopLeftIcon className="size-(--size-icon-sm) shrink-0" />} active={interaction.selected} areaActive={interaction.areaActive} closing={false} closeLabel={t("shell.closeTab", { title: label })} number={number} fit={interaction.fit} dragging={interaction.dragging} onSelect={interaction.select} onClose={() => actions.closeTab(id)} onPointerDown={interaction.press} />;
 }
 
-/** "closing…" while the core is still confirming a close with Herdr. */
+/** "closing…" while the core is still confirming a close with the engine. */
 export function closingSuffix(targetId: string, kind: "tab.close" | "pane.close", operations: AsyncOperation[]): boolean {
   return operations.some((op) => op.kind === kind && op.target_id === targetId && IN_FLIGHT.has(op.phase));
 }
@@ -52,20 +54,23 @@ export function AgentTab({ entry, checkout, interaction, actions, renaming, onCa
   // The core gives only agent panes an identity, on local and device tabs alike.
   // Native subagents live inside that pane and are not additional panes.
   const agentPaneCount = tab?.panes.reduce((count, pane) => count + Number(pane.identity_label !== null), 0) ?? 0;
-  const identity = `${agent ? t("panes.agent.tabIdentityAgent", { kind: agentProductName(agent.agent_kind), label: entry.label }) : t("panes.agent.tabIdentityTerminal", { label: entry.label })}${agent ? ` · ${markWords(t, agent)}` : ""}${agentPaneCount > 0 ? ` · ${t("panes.agent.tabPaneCount", { count: agentPaneCount })}` : ""}`;
-  return <TabButton recordAgent={recordAgent} entry={entry} editor={renaming ? <TabRenameInput key={entry.source_id} entry={entry} actions={actions} onCancel={onCancelRename} /> : null} identity={[identity, recordAgent && recordWords(t, recordAgent)].filter(Boolean).join(" · ")} agentPaneCount={agentPaneCount} mark={<TabMark agent={agent} />} active={interaction.selected} areaActive={interaction.areaActive} closeDisabled={moving} closing={closingSuffix(entry.source_id, "tab.close", operations)} closeLabel={t("shell.closeTab", { title: entry.label })} number={number} fit={interaction.fit} dragging={interaction.dragging} onSelect={interaction.select} onClose={() => actions.closeTab(entry.source_id)} onPointerDown={event => { if (!moving) interaction.press(event); }} />;
+  // A tab in pair view leads with the pair view mark and says so (PRD lane-desk-pair-view B22).
+  const paired = useShellStore((s) => markedPairs(workspaceViewOf(s.rest)).some((pair) => pair.tab_id === entry.source_id));
+  const identity = `${paired ? `${t("panes.pair.mark")} · ` : ""}${agent ? t("panes.agent.tabIdentityAgent", { kind: agentWithProfile(t, agent), label: entry.label }) : t("panes.agent.tabIdentityTerminal", { label: entry.label })}${agent ? ` · ${markWords(t, agent)}` : ""}${agentPaneCount > 0 ? ` · ${t("panes.agent.tabPaneCount", { count: agentPaneCount })}` : ""}`;
+  return <TabButton recordAgent={recordAgent} entry={entry} editor={renaming ? <TabRenameInput key={entry.source_id} entry={entry} actions={actions} onCancel={onCancelRename} /> : null} identity={[identity, recordAgent && recordWords(t, recordAgent)].filter(Boolean).join(" · ")} agentPaneCount={agentPaneCount} mark={<>{paired ? <PairMark data-pair-tab={entry.source_id} /> : null}<TabMark agent={agent} /></>} active={interaction.selected} areaActive={interaction.areaActive} closeDisabled={moving} closing={closingSuffix(entry.source_id, "tab.close", operations)} closeLabel={t("shell.closeTab", { title: entry.label })} number={number} fit={interaction.fit} dragging={interaction.dragging} onSelect={interaction.select} onClose={() => actions.closeTab(entry.source_id)} onPointerDown={event => { if (!moving) interaction.press(event); }} />;
 }
 
 /**
  * An agent tab's mark: its status, then its logo while logos are shown or an
- * ⌥ hold peeks at them (PRD agent-logo-view-mode B7, B13); a tab with no agent
- * is the neutral `>_` in both modes.
+ * ⌥ hold peeks at them (PRD agent-logo-view-mode B7, B13), wearing the profile
+ * badge of a profile agent, which stands alone while logos are hidden (PRD
+ * agent-profiles B17); a tab with no agent is the neutral `>_` in both modes.
  */
 function TabMark({ agent }: { agent: TabAgent | null | undefined }) {
   const shown = useAgentLogosShown();
   const status = agent ? <StatusMark mark={agent.mark} className={markTone(agent)} data-tab-status={agent.status_code} /> : null;
-  if (agent && !shown) return status;
-  return <>{status}<AgentMark kind={agent?.agent_kind} /></>;
+  if (agent && !shown) return <>{status}{agent.profile ? <ProfileBadge profile={agent.profile} standalone /> : null}</>;
+  return <>{status}<AgentMark kind={agent?.agent_kind} profile={agent?.profile} /></>;
 }
 
 function TabRenameInput({ entry, actions, onCancel }: { entry: StripTab; actions: Actions; onCancel: () => void }) {

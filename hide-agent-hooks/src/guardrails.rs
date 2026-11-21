@@ -289,7 +289,12 @@ pub fn write_policy(home: &Path, policy: &Policy) -> std::io::Result<()> {
 /// What a tool call does, as its runtime's payload says.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum Action {
-    Shell(String),
+    /// A shell call, with the syntax of the shell that runs it
+    /// (`hide_session::call_shell::syntax`), which every guard reads it in.
+    Shell {
+        command: String,
+        syntax: hide_shell::Syntax,
+    },
     Write(Vec<String>),
     Read(Vec<String>),
     /// A file write whose target was cut off with the rest of a payload too
@@ -439,7 +444,7 @@ pub fn decide_with(
     let facts = Facts::new(policy, home);
     let cwd = absolute(home, cwd, cwd);
     let refusal = match action {
-        Action::Shell(command) => git::shell(&facts, &cwd, command, dirty),
+        Action::Shell { command, syntax } => git::shell(&facts, &cwd, command, *syntax, dirty),
         Action::Write(paths) => paths
             .iter()
             .find_map(|path| write(&facts, &cwd, &absolute(home, &cwd, Path::new(path)))),
@@ -732,10 +737,10 @@ pub fn record_refusal(home: &Path, runtime: &str, pane: Option<&str>, refusal: &
         "unread": refusal.unread,
         "runtime": runtime,
         "pane": pane,
-        "at_unix_ms": crate::spawn_guard::now_ms(),
+        "at_unix_ms": crate::hook_log::now_ms(),
     })
     .to_string();
-    let _ = crate::spawn_guard::append_line(&crate::spawn_guard::log_path(home), &line);
+    crate::hook_log::append(home, &line);
 }
 
 /// A shell call named more words than the files protection checks, so the
@@ -746,10 +751,10 @@ fn record_word_limit(home: &Path) {
             "component": "guardrails",
             "kind": "guard.word_limit",
             "limit": git::WORD_LIMIT,
-            "at_unix_ms": crate::spawn_guard::now_ms(),
+            "at_unix_ms": crate::hook_log::now_ms(),
         })
         .to_string();
-        let _ = crate::spawn_guard::append_line(&crate::spawn_guard::log_path(home), &line);
+        crate::hook_log::append(home, &line);
     }
 }
 
@@ -763,10 +768,10 @@ pub fn record_unreadable(home: &Path, runtime: &str, failure: PolicyFailure) {
             "kind": "policy.unreadable",
             "cause": failure.code(),
             "runtime": runtime,
-            "at_unix_ms": crate::spawn_guard::now_ms(),
+            "at_unix_ms": crate::hook_log::now_ms(),
         })
         .to_string();
-        let _ = crate::spawn_guard::append_line(&crate::spawn_guard::log_path(home), &line);
+        crate::hook_log::append(home, &line);
     }
 }
 
@@ -783,10 +788,10 @@ pub fn record_failure(home: &Path, runtime: &str, cause: &str) {
             "kind": "guard.failed",
             "cause": cause,
             "runtime": runtime,
-            "at_unix_ms": crate::spawn_guard::now_ms(),
+            "at_unix_ms": crate::hook_log::now_ms(),
         })
         .to_string();
-        let _ = crate::spawn_guard::append_line(&crate::spawn_guard::log_path(home), &line);
+        crate::hook_log::append(home, &line);
     }
 }
 

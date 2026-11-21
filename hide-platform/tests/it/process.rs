@@ -17,11 +17,12 @@ use hide_platform::fs::identity::{canonical, file_id};
 #[cfg(unix)]
 use hide_platform::process::GuardedSpawnError;
 use hide_platform::process::{
-    CaptureFailureKind, GroupEnd, MAX_CAPTURE_BYTES, OWNER_LAUNCH_KEYS, OwnedChild, OwnerWatch,
-    RUN_OUTPUT_CAP, RunFailure, argv_of, boot_id, cwd_of, descendants, descends_from, detach,
-    group_members, image_of, is_alive, kill_tree, measure_tree, name_of, parent_of,
-    restrict_to_login_environment, run_to_end, run_to_end_tied, running, set_output_aside,
-    start_time, terminate, terminate_group,
+    CaptureFailureKind, FOREIGN_PANE_IDENTITY, GroupEnd, MAX_CAPTURE_BYTES, OWNER_LAUNCH_KEYS,
+    OwnedChild, OwnerWatch, RUN_OUTPUT_CAP, RunFailure, argv_of, boot_id, cpu_time, cwd_of,
+    descendants, descends_from, detach, group_members, image_of, is_alive,
+    is_foreign_pane_identity, kill_tree, lineage, measure_tree, name_of, observed_cwd_of,
+    parent_of, restrict_to_login_environment, run_to_end, run_to_end_tied, running,
+    set_output_aside, start_time, terminate, terminate_group,
 };
 
 const ROLE: &str = "HIDE_PLATFORM_PROC_ROLE";
@@ -32,6 +33,8 @@ const ROLE: &str = "HIDE_PLATFORM_PROC_ROLE";
 /// (`a_running_child_cannot_extend_the_capture_deadline`, the uncooperative
 /// launch) states its own short one.
 const HANG_LIMIT: Duration = Duration::from_secs(30);
+/// The processor time the `spin` role works for.
+const SPIN_WORK: Duration = Duration::from_millis(300);
 // Test-only handoff: arm recovery before the short-lived parent exits.
 const PIPE_OWNER: &str = "HIDE_PLATFORM_PROC_PIPE_OWNER";
 /// Where the `sleep` role writes its pid once it runs, for a test that cannot
@@ -247,10 +250,50 @@ fn child_role() {
                 "the spawner ended before its first holder held a file"
             );
         }
+        // Works until it has used `SPIN_WORK` of processor time, then waits.
+        "spin" => {
+            let mut sum = 0_u64;
+            while cpu_time(std::process::id()).unwrap() < SPIN_WORK {
+                for value in 0..100_000_u64 {
+                    sum = std::hint::black_box(sum.wrapping_add(value));
+                }
+            }
+            println!("READY {}", std::process::id());
+            thread::sleep(Duration::from_secs(60));
+        }
         "sleep" => {
             println!("READY {}", std::process::id());
             write_ready_file();
             thread::sleep(Duration::from_secs(60));
+        }
+        // A terminal's shell: the leader of a session of its own, running
+        // nothing.
+        #[cfg(unix)]
+        "session_alone" => {
+            // SAFETY: setsid takes nothing and has no memory effects.
+            assert!(unsafe { libc::setsid() } >= 0);
+            println!("READY {}", std::process::id());
+            thread::sleep(Duration::from_secs(60));
+        }
+        // A session leader whose session holds a process another member
+        // started and left behind when it exited, as `sh -c "sleep 120 &"`
+        // leaves one: no descendant of the leader, still of its session.
+        #[cfg(unix)]
+        "session_with_orphan" => {
+            // SAFETY: setsid takes nothing and has no memory effects.
+            assert!(unsafe { libc::setsid() } >= 0);
+            let mut starter = role_command("orphaner").spawn().unwrap();
+            let orphan = ready_number(starter.stdout.take().unwrap());
+            starter.wait().unwrap();
+            println!("READY {orphan}");
+            thread::sleep(Duration::from_secs(60));
+        }
+        // Starts a sleeping child, says which, and exits without it.
+        #[cfg(unix)]
+        "orphaner" => {
+            let child = role_command("sleep").stdout(Stdio::null()).spawn().unwrap();
+            println!("READY {}", child.id());
+            std::mem::forget(child);
         }
         // A child with one child of its own that has left no handle behind.
         "tree" => {
@@ -992,6 +1035,30 @@ impl Drop for FixtureProcess {
 /// it (with-hide/hide-private#327). Each round ends the holder from outside,
 /// as an owner's end does, and removes the file the moment it no longer
 /// counts.
+/// A process's processor time counts what it worked and nothing of what it
+/// waited: a child that worked `SPIN_WORK` reads at least that, and a child
+/// that only sleeps gains none of it while the other works. Nothing bounds
+/// the count by the time the child ran: Windows counts in its clock's ticks,
+/// and a child that ran 307 ms read 312.5 ms.
+#[test]
+fn processor_time_counts_a_process_s_work_and_not_its_wait() {
+    let mut sleeper = OwnedChild::spawn(&mut role_command("sleep")).unwrap();
+    let sleeping = ready_number(sleeper.take_stdout().unwrap());
+    let slept_before = cpu_time(sleeping).unwrap();
+
+    let mut spinner = OwnedChild::spawn(&mut role_command("spin")).unwrap();
+    let spinning = ready_number(spinner.take_stdout().unwrap());
+    let worked = cpu_time(spinning).unwrap();
+    assert!(worked >= SPIN_WORK, "worked {worked:?}");
+
+    let slept = cpu_time(sleeping).unwrap() - slept_before;
+    assert!(
+        slept < SPIN_WORK / 3,
+        "a sleeping child gained {slept:?} while the other worked {worked:?}"
+    );
+    assert!(sleeper.kill_tree().unwrap() && spinner.kill_tree().unwrap());
+}
+
 #[test]
 fn a_process_that_has_ended_holds_no_file_it_had_open() {
     let _serial = serial();
@@ -1013,6 +1080,50 @@ fn a_process_that_has_ended_holds_no_file_it_had_open() {
         let removed = std::fs::remove_file(&held);
         child.wait().unwrap();
         drop(process);
+        removed.unwrap_or_else(|error| {
+            panic!("round {round}: the file of a process that ended is held: {error}")
+        });
+    }
+}
+
+/// A process's end is one answer whichever call reads it: once `start_time`
+/// says a process has ended, `is_alive` says so too, and a file it held
+/// open, shared with no one, can be removed at once. Windows sets a
+/// process's exit code before it closes the handles the process held and
+/// signals its object; `start_time` once answered by the exit code, so a
+/// pane record read its holder as ended while the holder still held its
+/// socket (with-hide/hide-private#585). Each look asks `start_time` before
+/// `is_alive`, so an end `start_time` saw is already there for `is_alive`.
+/// A Unix zombie is ended for `is_alive` and still has a start time, so
+/// there the look ends with `is_alive`'s answer and the child is reaped.
+#[test]
+fn a_process_whose_start_time_says_it_ended_has_ended_for_is_alive_and_its_files() {
+    let _serial = serial();
+    let folder = tempfile::tempdir().unwrap();
+    for round in 0..8 {
+        let held = folder.path().join(format!("held-{round}"));
+        let mut command = role_command("hold_file");
+        command.env(READY_FILE, &held);
+        let mut child = command.spawn().unwrap();
+        let pid = ready_number(child.stdout.take().unwrap());
+        let started = start_time(pid).unwrap();
+        terminate(pid).unwrap();
+        let looking = Instant::now();
+        loop {
+            let ended = start_time(pid).map_or(true, |now| now != started);
+            let alive = is_alive(pid);
+            assert!(
+                !(ended && alive),
+                "round {round}: start_time said process {pid} ended while is_alive said it runs"
+            );
+            if ended || !alive {
+                break;
+            }
+            assert!(looking.elapsed() < HANG_LIMIT, "process {pid} never ended");
+            thread::yield_now();
+        }
+        let removed = std::fs::remove_file(&held);
+        child.wait().unwrap();
         removed.unwrap_or_else(|error| {
             panic!("round {round}: the file of a process that ended is held: {error}")
         });
@@ -2095,6 +2206,118 @@ fn killing_by_pid_ends_the_process_and_its_descendants() {
     );
 }
 
+/// `pid` as it runs now, as a pane record names it.
+fn recorded(pid: u32) -> hide_platform::process::Recorded {
+    hide_platform::process::Recorded {
+        pid,
+        started: hide_platform::process::start_time(pid).unwrap(),
+    }
+}
+
+/// A pane's shell runs alone while ending its session would end nothing
+/// else (with-hide/hide-private#646). On Unix that is every process of the
+/// session it leads, one left there by a process that exited included,
+/// though it is no descendant of the shell any more; a pid that names
+/// another process than the one recorded is no answer at all.
+#[cfg(unix)]
+#[test]
+fn a_session_leader_runs_alone_until_its_session_holds_another_process() {
+    use hide_platform::process::{Recorded, runs_alone};
+    let _serial = serial();
+    // The holder's end ends the shell's session whichever holder it is.
+    let holder = recorded(std::process::id());
+    let mut alone = role_command("session_alone").spawn().unwrap();
+    let leader = recorded(ready_number(alone.stdout.take().unwrap()));
+    assert!(runs_alone(holder, leader).unwrap());
+    let taken = Recorded {
+        started: leader.started + 1,
+        ..leader
+    };
+    assert!(
+        runs_alone(holder, taken).is_err(),
+        "a pid another process took is not the recorded shell"
+    );
+    kill_tree(leader.pid).unwrap();
+    alone.wait().unwrap();
+
+    let mut with = role_command("session_with_orphan").spawn().unwrap();
+    let orphan = ready_number(with.stdout.take().unwrap());
+    let leader = recorded(with.id());
+    assert!(
+        !hide_platform::process::descendants(leader.pid)
+            .unwrap()
+            .contains(&orphan),
+        "the orphan was handed to another parent"
+    );
+    assert!(
+        !runs_alone(holder, leader).unwrap(),
+        "a process left in the session is ended with it"
+    );
+    hide_platform::process::terminate(orphan).unwrap();
+    kill_tree(leader.pid).unwrap();
+    with.wait().unwrap();
+}
+
+/// On Windows a shell runs alone while the kill-on-close job its holder
+/// holds it in runs nothing else: this process stands for the holder,
+/// holding the job of a [`hide_platform::process::Session`] as a holder
+/// does, its handle never inherited. A process in that job that is no
+/// descendant of the shell is ended with the job, so it counts; a holder
+/// that holds no job of the shell, and a pid another process took, are no
+/// answer at all.
+#[cfg(windows)]
+#[test]
+fn a_shell_runs_alone_until_the_job_its_holder_holds_runs_another_process() {
+    use std::os::windows::io::AsRawHandle;
+    use windows_sys::Win32::System::JobObjects::AssignProcessToJobObject;
+
+    use hide_platform::process::{Recorded, Session, SessionEnd, runs_alone};
+    let _serial = serial();
+    let holder = recorded(std::process::id());
+    let mut session = Session::new().unwrap();
+    let job = session.job();
+    let join = |child: &std::process::Child| {
+        // SAFETY: both handles are open for the call.
+        let joined = unsafe { AssignProcessToJobObject(job.cast(), child.as_raw_handle().cast()) };
+        assert_ne!(joined, 0, "{}", std::io::Error::last_os_error());
+    };
+    let mut shell = role_command("sleep").spawn().unwrap();
+    ready_number(shell.stdout.take().unwrap());
+    let outside = recorded(shell.id());
+    assert!(
+        runs_alone(holder, outside).is_err(),
+        "a holder that holds no job of the shell cannot say"
+    );
+    join(&shell);
+    session.adopt(shell.id()).unwrap();
+    let shell_recorded = recorded(shell.id());
+    assert!(runs_alone(holder, shell_recorded).unwrap());
+    assert!(
+        runs_alone(
+            holder,
+            Recorded {
+                started: shell_recorded.started + 1,
+                ..shell_recorded
+            }
+        )
+        .is_err(),
+        "a pid another process took is not the recorded shell"
+    );
+    let mut beside = role_command("sleep").spawn().unwrap();
+    ready_number(beside.stdout.take().unwrap());
+    join(&beside);
+    assert!(
+        !runs_alone(holder, shell_recorded).unwrap(),
+        "a process of the job that is no descendant of the shell ends with it"
+    );
+    assert_eq!(
+        session.end(Duration::from_secs(10)).unwrap(),
+        SessionEnd::Ended
+    );
+    shell.wait().unwrap();
+    beside.wait().unwrap();
+}
+
 #[test]
 fn killing_a_process_that_is_already_gone_is_not_an_error() {
     let _serial = serial();
@@ -2327,7 +2550,7 @@ fn ending_a_job_ends_its_leader_and_what_it_started_and_nothing_else() {
     bystander.kill_tree().unwrap();
 }
 
-/// A job that ended on its own between Herdr naming it and the end is told
+/// A job that ended on its own between the engine naming it and the end is told
 /// as such, not as a failure to end it.
 #[test]
 fn ending_a_job_whose_leader_has_ended_finds_it_gone() {
@@ -2424,6 +2647,40 @@ fn a_pid_that_does_not_exist_is_not_found() {
     assert_eq!(measure_tree(pid).unwrap_err().kind(), ErrorKind::NotFound);
 }
 
+/// A pid above `i32::MAX` fits no Unix `pid_t` and is never one Windows
+/// hands out, so every read answers it as a process that has ended, as it
+/// answers a pid nothing holds.
+#[test]
+fn a_pid_the_system_cannot_hold_reads_as_ended() {
+    for pid in [i32::MAX as u32 + 1, u32::MAX - 1, u32::MAX] {
+        assert!(!is_alive(pid), "pid {pid}");
+        for (read, error) in [
+            ("start_time", start_time(pid).map(drop)),
+            ("parent_of", parent_of(pid).map(drop)),
+            ("cpu_time", cpu_time(pid).map(drop)),
+            ("name_of", name_of(pid).map(drop)),
+            ("argv_of", argv_of(pid).map(drop)),
+            (
+                "line_input",
+                hide_platform::process::line_input(pid).map(drop),
+            ),
+            ("measure_tree", measure_tree(pid).map(drop)),
+            #[cfg(unix)]
+            ("cwd_of", cwd_of(pid).map(drop)),
+            #[cfg(unix)]
+            ("image_of", image_of(pid).map(drop)),
+        ] {
+            assert_eq!(
+                error.unwrap_err().kind(),
+                ErrorKind::NotFound,
+                "{read} of pid {pid}"
+            );
+        }
+        assert!(descendants(pid).unwrap().is_empty(), "pid {pid}");
+        assert!(!descends_from(pid, std::process::id()), "pid {pid}");
+    }
+}
+
 #[test]
 fn the_working_directory_is_the_kernels_answer_or_unsupported() {
     let _serial = serial();
@@ -2455,43 +2712,58 @@ fn the_working_directory_is_the_kernels_answer_or_unsupported() {
     child.wait().unwrap();
 }
 
+/// The folder another process works in is known on every system: the
+/// kernel's answer on macOS and Linux, the process's own parameters on
+/// Windows, so a folder a program works in is never removed as unused.
 #[test]
-fn the_arguments_are_the_ones_the_process_started_with_or_unsupported() {
+fn the_observed_working_directory_is_the_folder_the_process_works_in() {
     let _serial = serial();
-    let program = std::env::current_exe().unwrap();
+    let folder = tempfile::tempdir().unwrap();
     let mut child = role_command("sleep")
-        .arg("a word with spaces")
+        .current_dir(folder.path())
         .spawn()
         .unwrap();
     let pid = child.id();
     ready_number(child.stdout.take().unwrap());
-    match argv_of(pid) {
-        Ok(argv) => {
-            if cfg!(windows) {
-                panic!("Windows keeps no command line another process can read");
-            }
-            assert_eq!(
-                argv,
-                [
-                    program.to_str().unwrap(),
-                    "--exact",
-                    "process::child_role",
-                    "--nocapture",
-                    "--test-threads=1",
-                    "a word with spaces",
-                ],
-            );
-        }
-        Err(error) => {
-            if !cfg!(windows) {
-                panic!("only Windows cannot answer: {error}");
-            }
-            assert_eq!(error.kind(), ErrorKind::Unsupported);
-        }
-    }
+    let observed = observed_cwd_of(pid);
+    child.kill().unwrap();
+    child.wait().unwrap();
+    let canonical = hide_platform::fs::identity::canonical;
+    assert_eq!(
+        canonical(&observed.unwrap()).unwrap(),
+        canonical(folder.path()).unwrap()
+    );
+}
+
+#[test]
+fn the_arguments_are_the_ones_the_process_started_with() {
+    let _serial = serial();
+    let program = std::env::current_exe().unwrap();
+    let arguments = [
+        "a word with spaces",
+        "",
+        "한글",
+        "a\"quoted\"word",
+        "C:\\a path\\",
+    ];
+    let mut child = role_command("sleep").args(arguments).spawn().unwrap();
+    let pid = child.id();
+    ready_number(child.stdout.take().unwrap());
+    let actual = argv_of(pid);
     child.kill().unwrap();
     child.wait().unwrap();
     drop(child);
+    let expected: Vec<&str> = [
+        program.to_str().unwrap(),
+        "--exact",
+        "process::child_role",
+        "--nocapture",
+        "--test-threads=1",
+    ]
+    .into_iter()
+    .chain(arguments)
+    .collect();
+    assert_eq!(actual.unwrap(), expected);
     if !cfg!(windows) {
         assert!(gone_within(pid, Duration::from_secs(5)));
         assert_eq!(
@@ -2582,10 +2854,51 @@ fn a_process_group_lists_its_members_where_the_system_has_them() {
             "no such group"
         );
     }
+    // Windows has no process group: a job's first process stands in for it,
+    // and the group is that process and every process under it.
     #[cfg(windows)]
+    {
+        let _serial = serial();
+        let (mut child, grandchild) = owned_tree();
+        let members = group_members(child.id()).unwrap();
+        assert!(
+            members.contains(&child.id()) && members.contains(&grandchild),
+            "{members:?}"
+        );
+        assert_eq!(group_members(grandchild).unwrap(), vec![grandchild]);
+        child.kill_tree().unwrap();
+        child.wait().unwrap();
+        // The held child is known to have ended and keeps its pid. A raw
+        // grandchild pid can still be ending or name another process by now.
+        assert_eq!(
+            group_members(child.id()).unwrap_err().kind(),
+            ErrorKind::NotFound,
+            "an ended leader leads nothing"
+        );
+    }
+}
+
+/// Windows names no foreground for a console: the program a shell runs now,
+/// its oldest child still running, stands in for it, and the shell itself
+/// while it runs none.
+#[cfg(windows)]
+#[test]
+fn a_consoles_foreground_is_the_program_its_shell_runs_or_the_shell() {
+    use hide_platform::process::console_foreground;
+    let _serial = serial();
+    let (mut shell, program) = owned_tree();
+    assert_eq!(console_foreground(shell.id()).unwrap(), program);
     assert_eq!(
-        group_members(std::process::id()).unwrap_err().kind(),
-        ErrorKind::Unsupported
+        console_foreground(program).unwrap(),
+        program,
+        "a program that runs nothing holds its console itself"
+    );
+    shell.kill_tree().unwrap();
+    shell.wait().unwrap();
+    // As above, retain the ended process's handle while asking about it.
+    assert_eq!(
+        console_foreground(shell.id()).unwrap_err().kind(),
+        ErrorKind::NotFound
     );
 }
 
@@ -2617,6 +2930,25 @@ fn a_tree_descends_from_its_root_and_not_the_other_way() {
     assert!(!descends_from(own, pid));
     assert!(!descends_from(pid, grandchild));
     assert!(!descends_from(pid, u32::MAX));
+}
+
+#[test]
+fn a_lineage_runs_from_a_process_up_to_its_ancestor_with_each_start() {
+    let _serial = serial();
+    let (child, grandchild) = owned_tree();
+    let (own, pid) = (std::process::id(), child.id());
+    let start = |pid| start_time(pid).unwrap();
+    assert_eq!(
+        lineage(grandchild, own),
+        Some(vec![
+            (grandchild, start(grandchild)),
+            (pid, start(pid)),
+            (own, start(own)),
+        ])
+    );
+    assert_eq!(lineage(pid, pid), Some(vec![(pid, start(pid))]));
+    assert_eq!(lineage(own, pid), None, "an ancestor is no descendant");
+    assert_eq!(lineage(pid, grandchild), None);
 }
 
 // A group outlives its leader, and a pid that led one still names it, which is
@@ -2950,6 +3282,41 @@ fn a_pipe_holder_outside_the_tree_does_not_hold_the_answer() {
     );
 }
 
+/// The seven variables of the operator's Herdr pane identity that a Hide pane must
+/// never be given. Each is pinned by its own assertion below and in the login
+/// child test, so one leaking name fails a test by its name.
+const FOREIGN_PANE_NAMES: [&str; 7] = [
+    "HERDR_ENV",
+    "HERDR_PANE_ID",
+    "HERDR_WORKSPACE_ID",
+    "HERDR_TAB_ID",
+    "HERDR_BIN_PATH",
+    "HERDR_SOCKET_PATH",
+    "HERDR_SESSION",
+];
+
+/// The one rule that withholds the operator's Herdr pane identity from a Hide
+/// pane: the holder's pane environment and the desk process call
+/// `is_foreign_pane_identity`, so the prefix and its case rule are fixed here
+/// and nowhere else. The node's ssh command keeps its own case-sensitive match
+/// on the same prefix, so a lowercase `herdr_*` variable still reaches ssh.
+#[test]
+fn the_foreign_pane_identity_is_the_herdr_prefix_whatever_the_case() {
+    assert_eq!(FOREIGN_PANE_IDENTITY, "HERDR_");
+    for name in FOREIGN_PANE_NAMES {
+        assert!(is_foreign_pane_identity(name), "{name} is withheld");
+    }
+    for name in ["herdr_env", "Herdr_Session"] {
+        assert!(
+            is_foreign_pane_identity(name),
+            "{name} is withheld whatever its case"
+        );
+    }
+    for name in ["HIDE_PANE_ID", "HERDRX", "HERD", "PATH", "CLAUDECODE"] {
+        assert!(!is_foreign_pane_identity(name), "{name} is kept");
+    }
+}
+
 /// What a child that must find the account's login is started with: the
 /// variables its system reads for the account, the programs and the scratch
 /// folders, and none of the hook and nested-session markers the parent was
@@ -2959,8 +3326,10 @@ fn a_pipe_holder_outside_the_tree_does_not_hold_the_answer() {
 fn a_login_child_gets_the_account_variables_and_nothing_else() {
     let _serial = serial();
     let mut command = role_command("login_env_parent");
+    for name in FOREIGN_PANE_NAMES {
+        command.env(name, "1");
+    }
     command
-        .env("HERDR_ENV", "1")
         .env("CLAUDECODE", "1")
         .env("HIDE_PLATFORM_PROC_UNLISTED", "1");
     let output = command.output().unwrap();
@@ -2970,10 +3339,13 @@ fn a_login_child_gets_the_account_variables_and_nothing_else() {
         .collect();
     assert!(!keys.is_empty(), "the child reported no environment");
 
-    for withheld in ["HERDR_ENV", "CLAUDECODE", "HIDE_PLATFORM_PROC_UNLISTED"] {
+    for withheld in FOREIGN_PANE_NAMES
+        .into_iter()
+        .chain(["CLAUDECODE", "HIDE_PLATFORM_PROC_UNLISTED"])
+    {
         assert!(
             !keys.iter().any(|key| key == withheld),
-            "{withheld} {keys:?}"
+            "{withheld} leaked into the login child: {keys:?}"
         );
     }
     let expected: &[&str] = if cfg!(windows) {
@@ -3277,4 +3649,39 @@ fn windows_sets_no_output_aside() {
     let log = dir.path().join("core.log");
     let error = set_output_aside(&log, &log.with_extension("log.1"), OUTPUT_LIMIT).unwrap_err();
     assert_eq!(error.kind(), ErrorKind::Unsupported, "{error}");
+}
+
+/// A runtime's script names the npm package it belongs to on every system,
+/// in either separator, so a generic `cli.js` still says which program runs:
+/// the nearest `node_modules` owns it, a scoped name keeps its scope, and a
+/// path that is ambiguous or has no file under its package names none.
+#[test]
+fn a_script_names_the_npm_package_it_belongs_to_on_every_system() {
+    use hide_platform::process::package_of_script;
+    for (script, package) in [
+        (
+            "/usr/lib/node_modules/@earendil-works/pi-coding-agent/dist/cli.js",
+            Some("@earendil-works/pi-coding-agent"),
+        ),
+        (
+            "/opt/homebrew/lib/node_modules/opencode-ai/bin/opencode",
+            Some("opencode-ai"),
+        ),
+        (
+            r"C:\npm\node_modules\@oh-my-pi\pi-coding-agent\dist\cli.js",
+            Some("@oh-my-pi/pi-coding-agent"),
+        ),
+        (
+            "/n/node_modules/@oh-my-pi/pi-coding-agent/node_modules/helper/cli.js",
+            Some("helper"),
+        ),
+        ("/work/cli.js", None),
+        (
+            "/n/node_modules/@oh-my-pi/pi-coding-agent/../other/cli.js",
+            None,
+        ),
+        ("/n/node_modules/@oh-my-pi/pi-coding-agent", None),
+    ] {
+        assert_eq!(package_of_script(script).as_deref(), package, "{script}");
+    }
 }

@@ -15,7 +15,7 @@ describe("snapshot merge", () => {
       usage: null,
       agents: [],
       focusedPaneId: null,
-      herdrState: null,
+      engineState: null,
       find: null,
       listings: {},
       pathRefusal: null,
@@ -64,7 +64,7 @@ describe("snapshot merge", () => {
 
   it("keeps the device the core names on a device's agent row, and the row's identity across frames", () => {
     const store = useShellStore.getState();
-    const device = (agents: unknown[]) => ({ target_id: "hq3mini", state: "connected", message: null, herdr_version: null, session: { agents } });
+    const device = (agents: unknown[]) => ({ target_id: "hq3mini", state: "connected", message: null, session: { agents } });
     const row = { id: "a", pane_id: "remote:hq3mini:pane:w1:p4", device_id: "hq3mini", device_pane_id: "w1:p4", agent_kind: "claude", session_id: "s-1" };
     store.applyFrame({ type: "snapshot", payload: { revision: 1, rest: { status: { remote: [device([row])] } } } as never });
     const stamped = useShellStore.getState().rest?.status?.remote?.[0]?.session?.agents[0];
@@ -85,7 +85,7 @@ describe("snapshot merge", () => {
 
   it("drops the front Workspace's view when a delta no longer carries one", () => {
     const store = useShellStore.getState();
-    const view = { device_id: "local", path: "/h/hide", open: true, documents: true, tool: "explorer", pinned: false, document_width: null, detail_width: null, explorer_width: null, panel_width: null, lane_called: 0, lane_calls: 0, lane_called_side: "view" };
+    const view = { device_id: "local", path: "/h/hide", open: true, tray: { tab_id: "t1", shown: true, count: 0 }, tool: "explorer", document_width: null, explorer_width: null, panel_width: null, lane_called: 0, lane_calls: 0, lane_called_side: "view" };
     store.applyFrame({ type: "snapshot", payload: { revision: 1, rest: { workspace_view: view } as never } });
     expect(useShellStore.getState().rest?.workspace_view?.path).toBe("/h/hide");
     store.applyFrame({ type: "delta", payload: { revision: 2, rest: { focused: { pane_id: "p2" } } } });
@@ -94,7 +94,7 @@ describe("snapshot merge", () => {
 
   it("merges negotiated semantic fields, retains omitted lists and clears explicit values", () => {
     const store = useShellStore.getState();
-    const view = { device_id: "local", path: "/fixture", open: true, documents: true, tool: null };
+    const view = { device_id: "local", path: "/fixture", open: true, tray: { tab_id: "t1", shown: true, count: 0 }, tool: null };
     const workspaces = [{ id: "a", checkouts: [] }, { id: "b", checkouts: [] }];
     const remote = [{ target_id: "device", session: { workspaces } }];
     store.applyFrame({ type: "snapshot", payload: { revision: 1, rest_format: "semantic-rest-v1", rest: {
@@ -154,14 +154,14 @@ describe("snapshot merge", () => {
             ],
           },
           focused: { pane_id: "p1" },
-          status: { herdr: { state: "unconfigured" } },
+          status: { engine: { state: "unconfigured" } },
         },
       },
     });
     const state = useShellStore.getState();
     expect(state.agents).toHaveLength(1);
     expect(state.focusedPaneId).toBe("p1");
-    expect(state.herdrState).toBe("unconfigured");
+    expect(state.engineState).toBe("unconfigured");
   });
 
   it("draws unknown enum rows without stalling", () => {

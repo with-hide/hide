@@ -1,6 +1,6 @@
 // The production lane on its Hide AI tool's Memory tab over invented wire values,
 // one state per document, for comparison with the v7 design exports (PRD
-// project-memory-v2 D-17, B19-B32). Runtime policy is tested in herdr-core.
+// project-memory-v2 D-17, B19-B32). Runtime policy is tested in hide-core.
 import { useLayoutEffect, useMemo } from "react";
 import { createActions } from "../actions";
 import { InterfaceLanguageBoundary } from "../i18n/client";
@@ -96,9 +96,9 @@ export function memorySceneProject(state: MemorySceneState): ProjectMemory {
   }
 }
 
-/** The lane pinned on the Hide AI tool (lane id `memory`), the scene's width wide. */
-const VIEW: WorkspaceView = { device_id: "local", path: "/projects/herdr-ide", open: true, documents: false, tool: "memory", pinned: true, document_width: null, detail_width: null, explorer_width: null, panel_width: null, lane_called: 0, lane_calls: 0, lane_called_side: "view" };
-const FRAME: LaneFrame = { mode: "docked", agents: 0, width: 0, view: null, tool: { field: "panel_width", width: 0, min: 360 }, stacked: false, narrowPin: false };
+/** The lane open on the Hide AI tool (lane id `memory`), the scene's width wide. */
+const VIEW: WorkspaceView = { device_id: "local", path: "/projects/herdr-ide", open: true, tray: { tab_id: "t1", shown: false, count: 0 }, tool: "memory", document_width: null, explorer_width: null, panel_width: null, lane_called: 0, lane_calls: 0, lane_called_side: "view" };
+const FRAME: LaneFrame = { mode: "overlay", agents: 0, width: 0, view: null, tool: { field: "panel_width", width: 0, min: 360 }, stacked: false };
 const SIZES: LaneSizes = { agentMin: 480, viewMin: 360, viewIdeal: 520, lanePage: 900, explorerMin: 180, explorerIdeal: 240, panelMin: 360, panelIdeal: 400, divider: 8 };
 
 export function MemoryScene({ theme, state, width, language }: MemorySceneParams) {
@@ -113,6 +113,7 @@ export function MemoryScene({ theme, state, width, language }: MemorySceneParams
   }), []);
   const rest = useMemo(() => ({
     navigator: {
+      siblings_shown: 5,
       focused_device_id: "local", focused_checkout_id: "main", focused_workspace_id: "herdr-ide",
       devices: [{ id: "local", label: "This Mac", kind: "local", state: "local" }],
       workspaces: [{ id: "herdr-ide", label: "herdr-ide", device_id: "local", path: "/projects/herdr-ide", checkouts: [{ id: "main", workspace_id: "herdr-ide", path: "/projects/herdr-ide", label: "main", tabs: [], active_tab_id: null, strip: [] }] }],

@@ -2,8 +2,33 @@ schema = 1
 id = "omp"
 name = "omp"
 executables = ["omp"]
+packages = ["@oh-my-pi/pi-coding-agent"]
 home = "~/.omp/agent"
 hooks = "omp"
 
 [resume]
 session = ["--resume", "{session}"]
+
+# Where an account's folders are (docs/ARCHITECTURE.md, Agent profiles and
+# accounts): omp's own profiles, ~/.omp/profiles/<name>/agent.
+[account]
+by = "name"
+
+[account.vars]
+OMP_PROFILE = { profile = "{account}" }
+
+[account.paths]
+hooks = false
+hook_trust = false
+plugins = { default = "~/.omp/agent/extensions", profile = "~/.omp/profiles/{account}/agent/extensions" }
+skills = "shared"
+folder_trust = false
+sessions = { default = "~/.omp/agent/sessions", profile = "~/.omp/profiles/{account}/agent/sessions" }
+login = { default = "~/.omp/agent/agent.db", profile = "~/.omp/profiles/{account}/agent/agent.db" }
+state = { default = "~/.omp/agent", profile = "~/.omp/profiles/{account}/agent" }
+usage = false
+mcp = { default = "~/.omp/agent/mcp.json", profile = "~/.omp/profiles/{account}/agent/mcp.json" }
+mcp_format = "claude"
+
+[account.forbid]
+vars = ["PI_CODING_AGENT_DIR", "PI_PROFILE", "PI_CONFIG_DIR"]

@@ -1,31 +1,18 @@
-import { ChevronDownIcon, ChevronRightIcon } from "lucide-react";
+import { ChevronDownIcon, ChevronRightIcon, EyeIcon } from "lucide-react";
 import type { TFunction } from "i18next";
 import { useInterfaceTranslation } from "../i18n/client";
 import { cn } from "../lib/utils";
 import type { AgentRow, AskSubject, RaiseVerb } from "../snapshot";
 import type { LineParts } from "../agentRow";
-import { askSubjectLead, askSubjectText } from "../askSubject";
+import { askSubjectText } from "../askSubject";
+import { DeviceChip } from "./device-chip";
+import { HumanTurnCopy, type CopyText } from "./human-turn-copy";
 
 // The parts every agent tree draws the same way (PRD agent-hierarchy-screens
-// D-37 to D-43): the verb a Needs You row starts with, the one descendant
+// D-37 to D-43): a Needs You row's ask line, the one descendant
 // mark a folded parent wears, the
 // elbow rails and the chevron lane of a tree row, and the tree button. The
 // core decides every value; these only draw it.
-
-/** 승인 · 질문 · 확인 · 초안: colored text, no box (D-37); a row's turn word (status-marks B5), or a mission decision's 판단 (needs-you-cleanup D-01). */
-export function VerbText({ verb, subject }: { verb: RaiseVerb; subject?: AskSubject | null }) {
-  const { t } = useInterfaceTranslation();
-  return (
-    <span className="shrink-0 font-semibold text-warning" data-verb={verb}>
-      {askVerb(t, verb, subject)}
-    </span>
-  );
-}
-
-/** The word an ask leads with: its verb's, or the subject's own (`판단`). */
-export function askVerb(t: TFunction<"translation">, verb: RaiseVerb, subject?: AskSubject | null): string {
-  return askSubjectLead(t, subject) ?? t(`agentSessions.verb.${verb}`);
-}
 
 /** What to do, or the verb's own words when no label line or letter says it (B3). */
 export function askWhat(t: TFunction<"translation">, verb: RaiseVerb, what: string | null | undefined, subject?: AskSubject | null): string {
@@ -33,9 +20,14 @@ export function askWhat(t: TFunction<"translation">, verb: RaiseVerb, what: stri
   return what ?? t(`agentSessions.ask.${verb}`);
 }
 
-/** An ask as a line's parts, the verb leading, so a list cuts only what to do (status-marks B5, B33). */
+/**
+ * An ask as a line's parts: what to do, with no verb leading it. The warning
+ * colour and the row's `!` already say it is the operator's turn, and whether
+ * it is a question, an approval or a decision is what the line itself says
+ * (status-marks B5, B33; the verb words stay in notifications and hints).
+ */
 export function askParts(t: TFunction<"translation">, ask: NonNullable<AgentRow["state"]["ask"]>): LineParts {
-  return { lead: askVerb(t, ask.verb, ask.subject), text: askWhat(t, ask.verb, ask.what, ask.subject), tail: moreTail(t, ask.more) };
+  return { lead: null, text: askWhat(t, ask.verb, ask.what, ask.subject), tail: moreTail(t, ask.more) };
 }
 
 /** The count of the other asks under one root, `외 N건`, or null with none (needs-you-cleanup D-13). */
@@ -43,19 +35,44 @@ export function moreTail(t: TFunction<"translation">, more: number): string | nu
   return more > 0 ? t("agentSessions.moreAsks", { count: more }) : null;
 }
 
-/** A Needs You row's second line: the verb and what to do, and the count of the other asks waiting under the same root (B2, needs-you-cleanup B9). */
-export function AskLine({ ask, className }: { ask: NonNullable<AgentRow["state"]["ask"]>; className?: string }) {
+/** A decision with Views linked to it says on its row how many wait to be looked at, an eye and the count; its card lists them. */
+export function DecisionViewsCount({ subject, hidden }: { subject: AskSubject | null | undefined; hidden?: boolean }) {
+  const { t } = useInterfaceTranslation();
+  const views = subject?.cause === "mission_decision" ? (subject.views ?? 0) : 0;
+  if (!views) return null;
+  return (
+    <span aria-hidden={hidden} className="flex shrink-0 items-center gap-xxs self-center text-muted-foreground" title={t("mission.banner.looks", { count: views })} data-ask-views={views}>
+      <EyeIcon aria-hidden="true" className="size-(--size-icon-sm)" />
+      {views}
+    </span>
+  );
+}
+
+/**
+ * A Needs You row's second line: what to do, and the count of the other asks
+ * waiting under the same root (B2, needs-you-cleanup B9). A person's turn
+ * says its kind and place as plain text the operator can select and copy,
+ * never a link, with Copy beside the place where the surface draws Done
+ * (`copy`) and its device's chip (PRD ask-human B9, B10); the row's open
+ * button stays under every other part of the line. `textHidden` keeps the
+ * words from assistive technology on a row whose open button already says
+ * them, while Copy stays reachable.
+ */
+export function AskLine({ ask, copy, textHidden = false, className }: { ask: NonNullable<AgentRow["state"]["ask"]>; copy?: CopyText; textHidden?: boolean; className?: string }) {
   const { t } = useInterfaceTranslation();
   const what = askWhat(t, ask.verb, ask.what, ask.subject);
   const more = moreTail(t, ask.more);
+  const human = ask.subject?.cause === "human_turn" ? ask.subject : null;
+  const hidden = textHidden || undefined;
   return (
-    <span className={cn("flex min-w-0 items-baseline gap-xs text-caption", className)} data-ask-line={ask.verb} data-ask-subject={ask.subject?.cause}>
-      <VerbText verb={ask.verb} subject={ask.subject} />
-      <span aria-hidden="true" className="shrink-0 text-warning">·</span>
-      <span className="min-w-0 truncate text-warning" title={what}>
+    <span className={cn("group/turn flex min-w-0 items-baseline gap-xs text-caption", className)} data-ask-line={ask.verb} data-ask-subject={ask.subject?.cause}>
+      <span aria-hidden={hidden} className={cn("min-w-0 truncate text-warning", human && "pointer-events-auto cursor-text select-text")} title={what} data-human-turn-place={human ? human.id : undefined}>
         {what}
       </span>
-      {more ? <span className="shrink-0 text-muted-foreground" data-ask-more={ask.more}>· {more}</span> : null}
+      {human && copy ? <HumanTurnCopy turn={human} copy={copy} /> : null}
+      {human?.device ? <span aria-hidden={hidden} className="contents"><DeviceChip label={human.device} variant="inline" className="shrink-0 self-center" /></span> : null}
+      <DecisionViewsCount subject={ask.subject} hidden={hidden} />
+      {more ? <span aria-hidden={hidden} className="shrink-0 text-muted-foreground" data-ask-more={ask.more}>· {more}</span> : null}
     </span>
   );
 }
@@ -134,6 +151,12 @@ export function cappedPlaces(depths: readonly number[], limit: number): TreePlac
 }
 
 /**
+ * The last child's elbow: its parent's rail bends into the row on a rounded corner and stops there, rather than
+ * a straight rail that runs on below the last row. Position it with the rail's left and the elbow's height.
+ */
+export const RAIL_ELBOW = "border-0 border-b-(length:--size-hairline) border-l-(length:--size-hairline) border-solid border-lineage-rail rounded-bl-md";
+
+/**
  * The rails left of a tree row (D-38): a rail down each level whose ancestor
  * has a later sibling, then this row's elbow from its parent's chevron lane.
  * No tint is laid behind an opened subtree.
@@ -153,8 +176,10 @@ export function TreeRails({ place }: { place: TreePlace }) {
         </span>
       ) : (
         <span className="relative w-(--size-lineage-indent) shrink-0" data-tree-elbow={place.last ? "last" : "middle"}>
-          <span className={cn("absolute top-0 left-(--size-lineage-rail-x) w-(--size-hairline) bg-lineage-rail", place.last ? "h-(--size-lineage-elbow-y)" : "bottom-0")} />
-          <span className="absolute top-(--size-lineage-elbow-y) right-0 left-(--size-lineage-rail-x) h-(--size-hairline) bg-lineage-rail" />
+          {place.last ? <span className={cn("absolute top-0 right-0 left-(--size-lineage-rail-x) h-(--size-lineage-elbow-y)", RAIL_ELBOW)} /> : <>
+            <span className="absolute top-0 bottom-0 left-(--size-lineage-rail-x) w-(--size-hairline) bg-lineage-rail" />
+            <span className="absolute top-(--size-lineage-elbow-y) right-0 left-(--size-lineage-rail-x) h-(--size-hairline) bg-lineage-rail" />
+          </>}
         </span>
       )}
     </span>
@@ -174,8 +199,10 @@ export function TreeChevron({ name, open, onToggle, hangs, chain, disabled = fal
       <span aria-hidden="true" className="relative w-(--size-lineage-chevron) shrink-0 self-stretch">
         {chain ? <>
           {/* Below the indent limit the parent's rail comes down this lane and turns to the mark. */}
-          <span className={cn("absolute top-0 left-(--size-lineage-rail-x) w-(--size-hairline) bg-lineage-rail", chain.on ? "bottom-0" : "h-(--size-lineage-elbow-y)")} />
-          <span className="absolute top-(--size-lineage-elbow-y) right-xxs left-(--size-lineage-rail-x) h-(--size-hairline) bg-lineage-rail" />
+          {chain.on ? <>
+            <span className="absolute top-0 bottom-0 left-(--size-lineage-rail-x) w-(--size-hairline) bg-lineage-rail" />
+            <span className="absolute top-(--size-lineage-elbow-y) right-xxs left-(--size-lineage-rail-x) h-(--size-hairline) bg-lineage-rail" />
+          </> : <span className={cn("absolute top-0 right-xxs left-(--size-lineage-rail-x) h-(--size-lineage-elbow-y)", RAIL_ELBOW)} />}
         </> : hangs ? <span className="absolute top-(--size-lineage-elbow-y) right-xxs left-none h-(--size-hairline) bg-lineage-rail" /> : null}
       </span>
     );

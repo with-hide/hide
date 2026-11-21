@@ -1,11 +1,21 @@
 //! A device's start script (PRD system-ssh-device-link D-02, B22-B24): one
 //! POSIX `sh` that runs over the same input and output the device's link
 //! then uses, so a device signs in once per connection. The `ssh` or
-//! `wsl.exe` that reaches the device runs [`WRAPPER`]; the node sends the
-//! script as its first line, and then, step by step, waiting for each
-//! answer: what the account is ([`probe`]), which of the build's files it
-//! already holds ([`install`]), each missing file whole, and the helper's
-//! start ([`start`]), after which the same pipes are the helper's link.
+//! `wsl.exe` that reaches the device runs [`remote_command`] or [`WRAPPER`];
+//! the node sends the script as its first line, and then, step by step,
+//! waiting for each answer: what the account is ([`probe`]), which of the
+//! build's files it already holds ([`install`]), each missing file whole, and
+//! the helper's start ([`start`]), after which the same pipes are the
+//! helper's link.
+//!
+//! A Windows device answers the same steps from a PowerShell form of the
+//! script (`bootstrap.ps1`). Its OpenSSH runs the remote command in `cmd.exe`
+//! by default, which has no `sh`: the one command every login shell is given
+//! starts `sh` where there is one and a small PowerShell wrapper where `cmd`
+//! runs it, and the wrapper asks for its own script in place of the `sh` one
+//! the node sent first ([`probe`]). An MSYS or Cygwin `sh` on Windows (Git
+//! Bash as the account's shell) hands over to the same wrapper, so a Windows
+//! machine always answers from the PowerShell script.
 //!
 //! The connection to a core on another machine runs the same script (PRD
 //! system-ssh-device-link B33, `super::super::session`), with steps of its
@@ -18,7 +28,8 @@
 //! `head -c <size>`, and macOS's `head` reads through a buffer that would
 //! take bytes past the file's end if they were already waiting; the node
 //! sends nothing after a file until the device has answered for it, so
-//! nothing is ever waiting.
+//! nothing is ever waiting. The PowerShell script reads through one buffer of
+//! its own, which the same rule leaves empty when it hands the link over.
 //!
 //! A file goes beside its final name in a folder only the account can
 //! enter, is checked against its digest and renamed into place, so the final
@@ -26,24 +37,128 @@
 //! file in use, and the next connection sends only what is missing (B23).
 //! The install folder and every folder above it must be ones no other
 //! account can change (OpenSSH's own rule for key files), checked on the
-//! path the folder really is.
+//! path the folder really is; on Windows by their owners and access lists,
+//! by `hide_platform::fs::private`'s rule, with no link anywhere on the path.
 
 use super::*;
+use hide_host::serve::{HOME_FOLDER_VARIABLES, agent_home_variables};
 
-/// The remote command an `ssh` runs: reads the script as one line from the
-/// link's own input and runs it. It is the same in every login shell (sh,
-/// bash, zsh, fish, csh): single quotes, and nothing inside them any of
-/// those reads.
-pub(crate) const REMOTE_COMMAND: &str = "sh -c 'IFS= read -r s && eval \"$s\"'";
-
-/// [`REMOTE_COMMAND`] as the words of a program run without a shell
-/// (`wsl.exe -e`).
+/// The words that read the script as one line from the link's own input and
+/// run it, as a program run without a shell (`wsl.exe -e`) takes them.
 pub(crate) const WRAPPER: [&str; 3] = ["sh", "-c", "IFS= read -r s && eval \"$s\""];
+
+/// The remote command an `ssh` runs, in whichever shell the account logs in
+/// with. Every POSIX shell (sh, bash, zsh, fish, csh, tcsh) parses all of it
+/// and runs only its first statement, which replaces the shell with
+/// [`WRAPPER`]; the rest is plain words and single-quoted ones, which none of
+/// them reads. `cmd.exe`, Windows OpenSSH's default, knows no single quote:
+/// the `&&` inside the first one ends a command, `exec` is no command there,
+/// and the `&` inside the last one starts the PowerShell wrapper, with `rem`
+/// taking what is left. A PowerShell login shell (5.1 or 7) finds no `exec`,
+/// goes on to its next statement, the same wrapper, and casts the last word
+/// away.
+pub(crate) fn remote_command() -> String {
+    let wrapper = powershell_wrapper();
+    format!(
+        "exec {} {} '{}' ; {POWERSHELL} '{wrapper}' ; [void]'& {POWERSHELL} \"{wrapper}\" & rem '",
+        WRAPPER[0], WRAPPER[1], WRAPPER[2]
+    )
+}
+
+/// Windows PowerShell 5.1, which every Windows 10 and 11 has, with no
+/// profile of the account's and nothing it could stop to ask. Its .NET is
+/// the one whose access lists the script reads, so a PowerShell 7 login
+/// shell starts it too rather than running the wrapper itself.
+const POWERSHELL: &str = "powershell.exe -NoProfile -NonInteractive -Command";
+
+/// The PowerShell that runs on a Windows device in place of `sh`: it says it
+/// wants its own script (`script powershell`), drops every line before a
+/// byte count (the `sh` script the node sent before it knew), and runs the
+/// script of that many bytes that follows ([`powershell_script`]), with `$i`
+/// and `$o` the link's unbuffered input and output. It reads a byte at a
+/// time, so it takes nothing past the script.
+///
+/// They are .NET's console streams; the script reads and writes through
+/// overlapped streams instead where the link's pipes are overlapped, as
+/// Windows OpenSSH's are (`bootstrap.ps1`).
+///
+/// It turns PowerShell's module auto-loading off and imports the one module
+/// the wrapper and the script use (`Write-Output`, `New-Object`, `Add-Type`)
+/// by name. Auto-loading finds a cmdlet by reading every module on the
+/// module path, which an account's module analysis cache answers when it is
+/// warm; with that cache unusable, a fresh CI runner's 260 modules took a
+/// first `Write-Output` 12 to 38 s, saying nothing meanwhile, and the
+/// per-user cache never warmed between starts (with-hide/hide-private#580).
+/// The import by name costs under a second cold, and a cmdlet outside it
+/// fails at once by name instead of starting that scan.
+///
+/// It travels as plain words inside every shell's quotes at once, so it holds
+/// no character any of them would read there (checked by a test): no quote,
+/// none of `cmd.exe`'s `& | < > ^ %`, no `!` (csh's history), no `\` (fish's
+/// escape) and no backtick. It is readable PowerShell rather than an encoded
+/// one, which Windows' malware scan refuses beside the `sh` words.
+const POWERSHELL_WRAPPER: &str = "
+$PSModuleAutoLoadingPreference=[Management.Automation.PSModuleAutoLoadingPreference]::None;
+Import-Module Microsoft.PowerShell.Utility;
+$i=[Console]::OpenStandardInput();$o=[Console]::OpenStandardOutput();
+$b=[Text.Encoding]::ASCII.GetBytes(((Write-Output HIDE1 script powershell) -join [char]9)+[char]10);
+$o.Write($b,0,$b.Length);$o.Flush();
+$n=0;
+while(1){
+$m=New-Object IO.MemoryStream;
+while(1){$c=$i.ReadByte();if($c -lt 0){exit 0};if($c -eq 10){break};$m.WriteByte($c)};
+if([int]::TryParse([Text.Encoding]::ASCII.GetString($m.ToArray()),[ref]$n)){break}
+};
+if($n -le 0 -or $n -gt 4194304){exit 65};
+$s=New-Object byte[] $n;$r=0;
+while($r -lt $n){$k=$i.Read($s,$r,$n-$r);if($k -le 0){exit 0};$r+=$k};
+iex ([Text.Encoding]::UTF8.GetString($s))
+";
+
+/// [`POWERSHELL_WRAPPER`] as the one line every shell is given.
+fn powershell_wrapper() -> String {
+    POWERSHELL_WRAPPER
+        .lines()
+        .map(str::trim)
+        .collect::<String>()
+}
+
+/// The Windows device's script (`bootstrap.ps1`), which the wrapper runs.
+const POWERSHELL_SCRIPT: &str = include_str!("bootstrap.ps1");
+
+/// What the wrapper answers when it runs, asking for [`powershell_script`].
+const ASKS_FOR_POWERSHELL: [&str; 2] = ["script", "powershell"];
+
+/// The PowerShell script's text, with the variables a home of the node's
+/// own clears and the agent homes it sets.
+fn powershell_text() -> String {
+    let variables = HOME_FOLDER_VARIABLES
+        .iter()
+        .map(|name| format!("'{name}'"))
+        .collect::<Vec<_>>()
+        .join(",");
+    let agents = agent_home_variables()
+        .iter()
+        .map(|(variable, folder)| format!("'{variable}={folder}'"))
+        .collect::<Vec<_>>()
+        .join(",");
+    POWERSHELL_SCRIPT
+        .replace("@HOME_FOLDER_VARIABLES@", &variables)
+        .replace("@AGENT_HOMES@", &agents)
+}
+
+/// The PowerShell script as the wrapper reads it: its size in bytes on a
+/// line, then its UTF-8 text.
+fn powershell_script() -> String {
+    let text = powershell_text();
+    format!("{}\n{text}", text.len())
+}
 
 /// The script, one statement per line; [`script_line`] joins it into the
 /// single line [`WRAPPER`] reads. Every line ends where a space may follow.
 const SCRIPT: &str = r#"
 set -fu;
+case $(uname -s) in MINGW*|MSYS*|CYGWIN*) MSYS_NO_PATHCONV=1 MSYS2_ARG_CONV_EXCL='*' exec @POWERSHELL@ '@WRAPPER@';; esac;
 T=$(printf '\t');
 say() { printf 'HIDE1'; for w in "$@"; do printf '\t%s' "$w"; done; printf '\n'; };
 uid=$(id -u) || exit 65;
@@ -55,13 +170,16 @@ hs=yes;
 if command -v sha256sum >/dev/null 2>&1; then sum() { sha256sum < "$1" | cut -d ' ' -f 1; };
 elif command -v shasum >/dev/null 2>&1; then sum() { shasum -a 256 < "$1" | cut -d ' ' -f 1; };
 else hs=none; sum() { echo none; }; fi;
+gz=-; if command -v gzip >/dev/null 2>&1; then gz=gzip; fi;
+unpack() { case $1 in zput) gzip -dc 2>/dev/null || { cat >/dev/null; return 1; };; *) cat;; esac; };
 safe() { set -- $(ls -ldn -- "$1" 2>/dev/null); case ${1:-} in d*) ;; *) return 3;; esac; [ "${3:-}" = "$uid" ] || [ "${3:-}" = 0 ] || return 1; case $1 in ?????w*|????????w*) ;; *) return 0;; esac; [ "$3" = 0 ] || return 2; case $1 in ?????????[tT]*) return 0;; esac; return 2; };
 mine() { set -- $(ls -ldn -- "$1" 2>/dev/null); [ "${3:-}" = "$uid" ] || return 1; case ${1:-} in ?????w*|????????w*) return 1;; esac; return 0; };
 store() { { (umask 077; mkdir -p -- "${1%/*}") && cat > "$1"; } || { cat > /dev/null; return 1; }; };
+below() { u=$root; ur=$1; while :; do up=${ur%%/*}; case $up in ''|.|..) ub="$1 is not a path below the install folder"; return 1;; esac; u=$u/$up; [ ! -L "$u" ] || { ub="$u is a link, so the helper was not installed there; remove it on the device"; return 1; }; case $ur in */*) ur=${ur#*/};; *) return 0;; esac; if [ ! -d "$u" ]; then [ -n "${2:-}" ] || return 0; (umask 077; mkdir -- "$u") 2>/dev/null || { [ -d "$u" ] && [ ! -L "$u" ]; } || { ub="$u could not be made"; return 1; }; fi; mine "$u" || { ub="$u belongs to another account or can be changed by one, so the helper was not installed there; remove it on the device"; return 1; }; done; };
 o= e= x= t=;
 trap 'rm -f -- ${o:+"$o"} ${e:+"$e"} ${x:+"$x"} ${t:+"$t"}' EXIT;
 trap 'exit 129' HUP; trap 'exit 130' INT; trap 'exit 141' PIPE; trap 'exit 143' TERM;
-say probe "$me" "${HOME:-}" "$(uname -s)" "$(uname -m)" "${mid:--}" "$hs";
+say probe "$me" "${HOME:-}" "$(uname -s)" "$(uname -m)" "${mid:--}" "$hs" "$gz";
 root=;
 while IFS=$T read -r cmd a b c d; do
 case $cmd in
@@ -75,16 +193,16 @@ chmod 700 -- "$r" 2>/dev/null;
 mine "$r" && [ ! -L "$a" ] || { say fail "$r must be a folder owned by the account and not writable by others; the helper was not installed"; continue; };
 root=$r; say root "$r";;
 held) [ -n "$root" ] || { say fail "no install folder was chosen"; exit 65; }; i=0;
-while [ "$i" -lt "$a" ] && IFS=$T read -r rel dig; do i=$((i+1)); f=$root/$rel; if [ -f "$f" ] && [ ! -L "$f" ] && mine "$f" && [ "$(sum "$f")" = "$dig" ]; then say held "$rel"; fi; done;
+while [ "$i" -lt "$a" ] && IFS=$T read -r rel dig; do i=$((i+1)); f=$root/$rel; if below "$rel" && [ -f "$f" ] && [ ! -L "$f" ] && mine "$f" && [ "$(sum "$f")" = "$dig" ]; then say held "$rel"; fi; done;
 say end;;
-put) [ -n "$root" ] || { say fail "no install folder was chosen"; exit 65; }; f=$root/$a; t=${f%/*}/.upload-${f##*/}-$$;
+put|zput) [ -n "$root" ] || { say fail "no install folder was chosen"; exit 65; }; below "$a" make || { head -c "$d" >/dev/null; say fail "$ub"; continue; }; f=$root/$a; t=${f%/*}/.upload-${f##*/}-$$;
 find "${f%/*}" -maxdepth 1 -name '.upload-*' -mmin +10 -exec rm -f {} + 2>/dev/null;
-if head -c "$d" | store "$t" && [ "$(sum "$t")" = "$b" ] && chmod -- "$c" "$t" && mv -f -- "$t" "$f"; then t=; say ok; else rm -f -- "$t"; t=; say fail "$a did not arrive whole"; fi;;
+if head -c "$d" | unpack "$cmd" | store "$t" && [ "$(sum "$t")" = "$b" ] && chmod -- "$c" "$t" && mv -f -- "$t" "$f"; then t=; say ok; else rm -f -- "$t"; t=; say fail "$a did not arrive whole"; fi;;
 start) [ -n "$root" ] || { say fail "no install folder was chosen"; exit 65; }; h=$root/$a;
-case $b in session=*) unset HERDR_SOCKET_PATH; HERDR_SESSION=${b#session=}; export HERDR_SESSION;; socket=*) unset HERDR_SESSION; HERDR_SOCKET_PATH=${b#socket=}; export HERDR_SOCKET_PATH;; esac;
-[ -x "$h" ] || { say fail "the helper $h is missing"; exit 65; };
+below "$a" || { say fail "$ub"; exit 65; }; [ -x "$h" ] && mine "$h" || { say fail "the helper $h is missing or can be changed by other accounts"; exit 65; };
+case ${b:--} in -) ;; *) { (umask 077; mkdir -p -- "$b") && HOME=$b && export HOME && unset @HOME_FOLDER_VARIABLES@@AGENT_HOMES@; } || { say fail "the home $b could not be made"; exit 65; };; esac;
 cd -- "$HOME" 2>/dev/null || :;
-say start; exec "$h" node serve --own-herdr;;
+say start; exec "$h" node serve;;
 run) set --; i=0; while [ "$i" -lt "$a" ] && IFS= read -r w; do set -- "$@" "$w"; i=$((i+1)); done;
 o=$(mktemp "${TMPDIR:-/tmp}/hide-run.XXXXXX") && e=$(mktemp "${TMPDIR:-/tmp}/hide-run.XXXXXX") && x=$(mktemp "${TMPDIR:-/tmp}/hide-run.XXXXXX") || { rm -f -- ${o:+"$o"} ${e:+"$e"}; o= e= x=; say fail "no temporary file for the command's output"; continue; };
 { { command "$@" </dev/null; echo $? >"$x"; } 2>&1 1>&3 3>&- | head -c $((b+1)) >"$e"; } 3>&1 | head -c $((b+1)) >"$o";
@@ -102,14 +220,34 @@ esac;
 done
 "#;
 
-/// The script as the one line [`WRAPPER`] reads, with its line end.
+/// Each agent's home variable set to its folder inside the home `$b` names,
+/// made private, as the POSIX script's commands.
+fn posix_agent_homes() -> String {
+    agent_home_variables()
+        .iter()
+        .map(|(variable, folder)| {
+            format!(
+                " && (umask 077; mkdir -p -- \"$b/{folder}\") && {variable}=$b/{folder} && export {variable}"
+            )
+        })
+        .collect()
+}
+
+/// The script as the one line [`WRAPPER`] reads, with its line end. On
+/// Windows, under an MSYS or Cygwin `sh`, its first statement hands the link
+/// to the PowerShell wrapper, which asks for its own script as it does under
+/// `cmd.exe`.
 pub(crate) fn script_line() -> String {
     let mut line = SCRIPT
         .lines()
         .map(str::trim)
         .filter(|line| !line.is_empty())
         .collect::<Vec<_>>()
-        .join(" ");
+        .join(" ")
+        .replace("@POWERSHELL@", POWERSHELL)
+        .replace("@WRAPPER@", &powershell_wrapper())
+        .replace("@HOME_FOLDER_VARIABLES@", &HOME_FOLDER_VARIABLES.join(" "))
+        .replace("@AGENT_HOMES@", &posix_agent_homes());
     line.push('\n');
     line
 }
@@ -154,6 +292,11 @@ pub(crate) struct Facts {
     /// reads it there. A consent binds to it (D-09), so a machine that
     /// reports none is refused before anything is installed.
     pub machine_id: String,
+    /// Whether the account unpacks a gzip stream (`gzip` on a POSIX device,
+    /// .NET on Windows), so an install sends its files packed
+    /// (with-hide/hide-private#582); a device without it takes them as they
+    /// are.
+    pub unpacks: bool,
 }
 
 #[derive(Debug)]
@@ -165,15 +308,25 @@ pub(crate) enum ProbeError {
 }
 
 /// Sends the script and reads the account's answer, skipping what a login
-/// file printed before it.
+/// file printed before it. A Windows device's wrapper asks for the
+/// PowerShell script first, which it is sent once.
 pub(crate) fn probe(pipe: &mut dyn Pipe, until: Instant) -> Result<Facts, ProbeError> {
-    pipe.send(script_line().as_bytes(), until)
-        .map_err(|reason| ProbeError::Stopped(Stop::Ended(reason)))?;
+    let send = |pipe: &mut dyn Pipe, line: String| {
+        pipe.send(line.as_bytes(), until)
+            .map_err(|reason| ProbeError::Stopped(Stop::Ended(reason)))
+    };
+    send(pipe, script_line())?;
+    let mut asked = false;
     for _ in 0..MAX_GREETING_LINES {
         let line = pipe.line(until).map_err(ProbeError::Stopped)?;
         let Some(fields) = answer(&line) else {
             continue;
         };
+        if !asked && fields == ASKS_FOR_POWERSHELL {
+            asked = true;
+            send(pipe, powershell_script())?;
+            continue;
+        }
         return read_probe(&fields).map_err(ProbeError::Unsupported);
     }
     Err(ProbeError::Unsupported(format!(
@@ -190,7 +343,7 @@ fn answer(line: &[u8]) -> Option<Vec<String>> {
 }
 
 fn read_probe(fields: &[String]) -> Result<Facts, String> {
-    let [step, user, home, system, machine, id, digest] = fields else {
+    let [step, user, home, system, machine, id, digest, unpack] = fields else {
         return Err(format!(
             "The device answered an unreadable probe: {fields:?}"
         ));
@@ -201,12 +354,26 @@ fn read_probe(fields: &[String]) -> Result<Facts, String> {
             fields.join(" ")
         ));
     }
-    if !hide_platform::wsl::valid_user_name(user) {
+    let (os, arch) = platform_of(&format!("{system} {machine}"))?;
+    let windows = os == "windows";
+    let named = if windows {
+        windows_user_name(user)
+    } else {
+        hide_platform::wsl::valid_user_name(user)
+    };
+    if !named {
         return Err(format!(
             "The device's account {user:?} is not a name Hide can run as"
         ));
     }
-    if !home.starts_with('/') || home.chars().any(char::is_control) {
+    // A home in the wire spelling of the device's own system: `/home/me`, or
+    // `C:/Users/me` on Windows.
+    let rooted = if windows {
+        !home.starts_with('/') && hide_platform::path::is_wire_absolute(home)
+    } else {
+        home.starts_with('/')
+    };
+    if !rooted || home.chars().any(char::is_control) {
         return Err("The device's account has no usable home folder".to_owned());
     }
     if digest != "yes" {
@@ -215,7 +382,6 @@ fn read_probe(fields: &[String]) -> Result<Facts, String> {
                 .to_owned(),
         );
     }
-    let (os, arch) = platform_of(&format!("{system} {machine}"))?;
     let machine_id = id.trim().to_lowercase();
     if !valid_machine_id(&machine_id) {
         return Err(NO_MACHINE_ID.to_owned());
@@ -226,6 +392,7 @@ fn read_probe(fields: &[String]) -> Result<Facts, String> {
         os,
         arch,
         machine_id,
+        unpacks: unpack == "gzip",
     })
 }
 
@@ -233,6 +400,17 @@ fn read_probe(fields: &[String]) -> Result<Facts, String> {
 /// the consent binds to that id, and without it this machine cannot be told
 /// from another that answers at the same address.
 pub(crate) const NO_MACHINE_ID: &str = "The device reports no machine id (/etc/machine-id, or a Mac's hardware id), so Hide cannot tell it from another machine at this address and installs nothing; give it one (on Linux, `sudo systemd-machine-id-setup`) and connect again";
+
+/// A Windows account name as the system allows it: at most 256 characters
+/// (`UNLEN`), none of them a control character or one Windows reserves in
+/// account names. Any script may be in it, so a name such as `이호연` is one.
+fn windows_user_name(user: &str) -> bool {
+    !user.is_empty()
+        && user.chars().count() <= 256
+        && !user
+            .chars()
+            .any(|c| c.is_control() || "\"/\\[]:;|=,+*?<>".contains(c))
+}
 
 /// An id as a system writes it: letters, digits and `-`, `_` or `.`, at most
 /// 128 of them; `-` alone is the script's word for none.
@@ -255,52 +433,56 @@ pub(crate) struct Installed {
 
 /// Puts `payload` in its version folder under `helper_root` (`~/` is the
 /// account's home), sending only the files the device does not already hold
-/// whole.
+/// whole, each packed with gzip when the device `unpacks` it
+/// ([`Facts::unpacks`]): the link, not the device's disk, is what an install
+/// waits on (with-hide/hide-private#582). The digest a file is checked
+/// against is its own, so a stream that did not unpack whole fails as a file
+/// that did not arrive.
 pub(crate) fn install(
     pipe: &mut dyn Pipe,
     helper_root: &str,
     home: &str,
     payload: &Payload,
+    unpacks: bool,
 ) -> Result<Installed, EstablishError> {
     let deadline = Instant::now() + INSTALL_TIMEOUT;
-    let failed = |reason: String| EstablishError::Install(reason);
+    use hide_node_link::device::InstallStop::{Local, Refused};
+    let failed = |stop, reason: String| EstablishError::install(stop, reason);
     let root = match helper_root.strip_prefix("~/") {
         Some(rest) => format!("{}/{rest}", home.trim_end_matches('/')),
-        None if helper_root.starts_with('/') => helper_root.to_owned(),
+        None if hide_platform::path::is_wire_absolute(helper_root) => helper_root.to_owned(),
         None => {
-            return Err(failed(format!(
-                "The helper install root {helper_root:?} must be absolute or start with ~/"
-            )));
+            return Err(failed(
+                Local,
+                format!(
+                    "The helper install root {helper_root:?} must be absolute or start with ~/"
+                ),
+            ));
         }
     };
     if root.split('/').any(|part| part == ".." || part == ".") || !plain(&root) {
         return Err(failed(
+            Local,
             "The helper install root is not a plain path".to_owned(),
         ));
     }
     let resolved = match step(pipe, &format!("root\t{root}\n"), deadline)?.as_slice() {
-        [kind, resolved] if kind == "root" && resolved.starts_with('/') => resolved.clone(),
-        other => return Err(failed(refusal(other))),
+        [kind, resolved] if kind == "root" && hide_platform::path::is_wire_absolute(resolved) => {
+            resolved.clone()
+        }
+        other => return Err(failed(Refused, refusal(other))),
     };
     let version = &payload.version()[..16];
-    let mut files: Vec<(String, &Package)> = payload
+    let files: Vec<(String, &Package)> = payload
         .files
         .iter()
         .map(|file| (format!("{version}/{}", file.relative), file))
         .collect();
-    if let Some(herdr) = &payload.herdr {
-        files.push((
-            format!(
-                "{}/{}/{}",
-                hide_kit::device_herdr::HERDR_DIR,
-                herdr_copy_name(herdr),
-                herdr.relative
-            ),
-            herdr,
-        ));
-    }
     if files.iter().any(|(relative, _)| !plain(relative)) {
-        return Err(failed("The build names a file Hide cannot send".to_owned()));
+        return Err(failed(
+            Local,
+            "The build names a file Hide cannot send".to_owned(),
+        ));
     }
     let mut asked = format!("held\t{}\n", files.len());
     for (relative, file) in &files {
@@ -314,7 +496,7 @@ pub(crate) fn install(
                 held.insert(relative.clone());
             }
             [kind] if kind == "end" => break,
-            other => return Err(failed(refusal(other))),
+            other => return Err(failed(Refused, refusal(other))),
         }
     }
     let mut upload = Upload {
@@ -328,40 +510,56 @@ pub(crate) fn install(
             continue;
         }
         let mode = if file.executable { "700" } else { "600" };
+        let packed = if unpacks {
+            let started = Instant::now();
+            let packed = pack(&file.bytes).map_err(|error| {
+                failed(Local, format!("{relative} could not be packed: {error}"))
+            })?;
+            upload.pack_ms += started.elapsed().as_millis() as u64;
+            Some(packed)
+        } else {
+            None
+        };
+        let (step, wire) = match &packed {
+            Some(packed) => ("zput", packed.as_slice()),
+            None => ("put", file.bytes.as_slice()),
+        };
         send(
             pipe,
             format!(
-                "put\t{relative}\t{}\t{mode}\t{}\n",
+                "{step}\t{relative}\t{}\t{mode}\t{}\n",
                 file.digest,
-                file.bytes.len()
+                wire.len()
             )
             .as_bytes(),
             deadline,
         )?;
-        send(pipe, &file.bytes, deadline)?;
+        send(pipe, wire, deadline)?;
+        upload.bytes += file.bytes.len() as u64;
+        upload.wire += wire.len() as u64;
         match read_step(pipe, deadline)?.as_slice() {
             [kind] if kind == "ok" => {
                 upload.sent += 1;
                 fresh |= index == 0;
             }
             [kind, reason] if kind == "fail" => {
-                // The helper, a chosen Herdr and its pin must arrive before
-                // the helper starts; an optional kit part the kit reports.
-                if index == 0
-                    || file.relative == hide_kit::device_herdr::HERDR_PIN
-                    || file.relative == hide_kit::device_herdr::HERDR_PROGRAM
-                {
-                    return Err(failed(format!("The device could not take {reason}")));
+                // The helper must arrive before it starts; an optional kit
+                // part the kit reports.
+                if index == 0 {
+                    return Err(failed(
+                        Refused,
+                        format!("The device could not take {reason}"),
+                    ));
                 }
                 upload.missing.push(reason.clone());
             }
-            other => return Err(failed(refusal(other))),
+            other => return Err(failed(Refused, refusal(other))),
         }
     }
     let helper = payload
         .files
         .first()
-        .ok_or_else(|| failed("The build carries no helper".to_owned()))?;
+        .ok_or_else(|| failed(Local, "The build carries no helper".to_owned()))?;
     let helper_relative = format!("{version}/{}", helper.relative);
     Ok(Installed {
         helper_path: format!("{resolved}/{helper_relative}"),
@@ -371,36 +569,52 @@ pub(crate) fn install(
     })
 }
 
-/// Which Herdr server the helper bridges to the core: the account's own,
-/// a named session, or a socket the registration names (B24).
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub(crate) enum HerdrChoice {
-    Account,
-    Session(String),
-    Socket(String),
+/// `bytes` as one gzip member, at the fast level: a program packs to about
+/// a third, and a slower level saves little more on the link for much more
+/// of the node's time.
+fn pack(bytes: &[u8]) -> std::io::Result<Vec<u8>> {
+    use std::io::Write;
+    let mut packer = flate2::write::GzEncoder::new(
+        Vec::with_capacity(bytes.len() / 2),
+        flate2::Compression::fast(),
+    );
+    packer.write_all(bytes)?;
+    packer.finish()
 }
 
 /// Starts the helper in place of the script; from its answer on, the pipes
-/// are the helper's link.
+/// are the helper's link. `home`, an absolute path in the device's own wire
+/// spelling, is the home the helper runs with in place of the account's
+/// (`HIDE_DEV_DEVICE_HOME`, [`super::super::device::resolve_device_home`]),
+/// made private where it is missing. Every per-user folder the helper and
+/// what it starts read follows it: `HOME`, on Windows also `USERPROFILE`,
+/// `APPDATA`, `LOCALAPPDATA`, `TEMP` and `TMP` made under it, every
+/// variable that would move one elsewhere ([`HOME_FOLDER_VARIABLES`])
+/// cleared, and each agent's own home variable set to its folder under it
+/// ([`agent_home_variables`]), in both scripts.
 pub(crate) fn start(
     pipe: &mut dyn Pipe,
     helper_relative: &str,
-    herdr: &HerdrChoice,
+    home: Option<&str>,
 ) -> Result<(), EstablishError> {
-    let choice = match herdr {
-        HerdrChoice::Account => "-".to_owned(),
-        HerdrChoice::Session(session) => format!("session={session}"),
-        HerdrChoice::Socket(socket) => format!("socket={socket}"),
-    };
-    if !plain(&choice) || !plain(helper_relative) {
+    if !plain(helper_relative) {
         return Err(EstablishError::Helper(
-            "The device's Herdr session or socket is not a plain name".to_owned(),
+            "The device's helper path is not a plain name".to_owned(),
         ));
     }
+    let home = match home {
+        None => "-",
+        Some(home) if remote_path(home) => home,
+        Some(_) => {
+            return Err(EstablishError::Helper(
+                "The device's home is not a plain absolute path".to_owned(),
+            ));
+        }
+    };
     let deadline = Instant::now() + STEP_TIMEOUT;
     match step(
         pipe,
-        &format!("start\t{helper_relative}\t{choice}\n"),
+        &format!("start\t{helper_relative}\t{home}\n"),
         deadline,
     )?
     .as_slice()
@@ -412,22 +626,25 @@ pub(crate) fn start(
 
 /// Puts this build in its version folder under `root` on a machine that
 /// already runs a build of Hide's (a core update, PRD core-host-node-move
-/// B10), sending only the files it lacks or holds damaged, without the
-/// device's Herdr. Answers where the build's `hided` is.
+/// B10), sending only the files it lacks or holds damaged, packed as
+/// [`install`] packs them. Answers where the build's `hided` is.
 pub(crate) fn install_build(
     pipe: &mut dyn Pipe,
     root: &str,
     home: &str,
     payload: Payload,
+    unpacks: bool,
 ) -> Result<String, EstablishError> {
-    let payload = payload.without_herdr();
     if !payload.missing.is_empty() {
-        return Err(EstablishError::Install(format!(
-            "This build cannot update a core without all of its parts: {}",
-            payload.missing.join("; ")
-        )));
+        return Err(EstablishError::install(
+            hide_node_link::device::InstallStop::Local,
+            format!(
+                "This build cannot update a core without all of its parts: {}",
+                payload.missing.join("; ")
+            ),
+        ));
     }
-    install(pipe, root, home, &payload).map(|installed| installed.helper_path)
+    install(pipe, root, home, &payload, unpacks).map(|installed| installed.helper_path)
 }
 
 /// Why a step of a connection to a core's machine did not finish. After
@@ -687,10 +904,12 @@ pub(crate) fn attach(
     }
 }
 
-/// An absolute path the script takes as one field: plain, `/`-separated,
-/// with no `.` or `..` step.
+/// An absolute path the script takes as one field: plain, in the wire
+/// spelling (`/srv/x`, or `C:/x` on Windows), with no `.` or `..` step.
 fn remote_path(path: &str) -> bool {
-    plain(path) && path.starts_with('/') && !path.split('/').any(|part| part == "." || part == "..")
+    plain(path)
+        && hide_platform::path::is_wire_absolute(path)
+        && !path.split('/').any(|part| part == "." || part == "..")
 }
 
 /// A field the script reads whole: no tab, no line end, no control
@@ -701,7 +920,10 @@ fn plain(field: &str) -> bool {
 
 fn send(pipe: &mut dyn Pipe, bytes: &[u8], until: Instant) -> Result<(), EstablishError> {
     pipe.send(bytes, until).map_err(|reason| {
-        EstablishError::Install(format!("The device stopped taking the install: {reason}"))
+        EstablishError::install(
+            hide_node_link::device::InstallStop::Ended,
+            format!("The device stopped taking the install: {reason}"),
+        )
     })
 }
 
@@ -711,19 +933,24 @@ fn step(pipe: &mut dyn Pipe, line: &str, until: Instant) -> Result<Vec<String>, 
 }
 
 fn read_step(pipe: &mut dyn Pipe, until: Instant) -> Result<Vec<String>, EstablishError> {
-    let line = pipe.line(until).map_err(|stop| {
-        EstablishError::Install(match stop {
-            Stop::Quiet => {
-                "The device did not answer the install in time; nothing was started".to_owned()
-            }
-            Stop::Ended(reason) => format!("The connection ended during the install: {reason}"),
-        })
+    let line = pipe.line(until).map_err(|stop| match stop {
+        Stop::Quiet => EstablishError::install(
+            hide_node_link::device::InstallStop::Quiet,
+            "The device did not answer the install in time; nothing was started",
+        ),
+        Stop::Ended(reason) => EstablishError::install(
+            hide_node_link::device::InstallStop::Ended,
+            format!("The connection ended during the install: {reason}"),
+        ),
     })?;
     answer(&line).ok_or_else(|| {
-        EstablishError::Install(format!(
-            "The device answered the install with {:?}",
-            String::from_utf8_lossy(&line)
-        ))
+        EstablishError::install(
+            hide_node_link::device::InstallStop::Refused,
+            format!(
+                "The device answered the install with {:?}",
+                String::from_utf8_lossy(&line)
+            ),
+        )
     })
 }
 
@@ -740,3 +967,7 @@ fn refusal(fields: &[String]) -> String {
 #[cfg(all(test, unix))]
 #[path = "bootstrap_tests.rs"]
 mod tests;
+
+#[cfg(all(test, windows))]
+#[path = "bootstrap_windows_tests.rs"]
+mod windows_tests;

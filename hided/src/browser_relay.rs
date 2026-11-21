@@ -298,7 +298,7 @@ pub(crate) async fn pump(
 /// why it ended. A relay is one `hide browser` command, so this is no
 /// high-frequency path.
 fn log(display_id: &str, way: Way, reason: &str, code: u16, bytes: usize) {
-    herdr_core::diagnostic!(json!({
+    hide_core::diagnostic!(json!({
         "component": "browser_relay",
         "kind": "relay.ended",
         "display_id": display_id,

@@ -72,6 +72,7 @@ export const MENU_LAYOUT: Readonly<Record<"app" | "File" | "Edit" | "View" | "Pa
     "toggle_left_sidebar",
     "toggle_sidebar_lens",
     "overview",
+    "open_missions",
     "add_backlog",
     "sidebar_projects",
     "toggle_device_rail",
@@ -86,11 +87,11 @@ export const MENU_LAYOUT: Readonly<Record<"app" | "File" | "Edit" | "View" | "Pa
     "text_smaller",
     "text_reset",
   ],
-  Pane: ["split_right", "split_down", "toggle_zoom", "toggle_plan", null, "keep_open", null, ...AREA_COMMANDS],
+  Pane: ["split_right", "split_down", null, "focus_pane_left", "focus_pane_right", "focus_pane_up", "focus_pane_down", null, "toggle_zoom", "pair_view", "toggle_plan", null, "keep_open", null, ...AREA_COMMANDS],
   Help: ["shortcuts"],
 };
 
-/** Commands the menu carries only while Settings › Desk has Desk on (D-76). */
+/** Commands the menu carries only while Settings › Labs › Desk has Desk on (D-76). */
 export const DESK_ONLY: readonly CommandId[] = ["desk_terminal"];
 
 export const KEYBOARD_ONLY: readonly CommandId[] = [
@@ -110,7 +111,7 @@ function commandItem(command: Command, send: (id: CommandId) => void, t: TFuncti
 
 // A reported set is the editable commands the operator rebound; anything past
 // these caps is not one. The core refuses a stored set past the same caps
-// (`BINDINGS_CAP` and `BINDING_TEXT_CAP` in herdr-core/src/runtime/events.rs);
+// (`BINDINGS_CAP` and `BINDING_TEXT_CAP` in hide-core/src/runtime/events.rs);
 // change them together. The cap holds every editable command with room to
 // spare: `menu.test.ts` fails when a new one would no longer fit.
 export const BINDINGS_CAP = 48;

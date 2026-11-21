@@ -11,12 +11,21 @@
 
 import { contextBridge, ipcRenderer, type IpcRendererEvent } from "electron";
 import type { BrowserCommand, BrowserHostEvent, BrowserSync } from "../../../web/src/host";
-import type { ExternalGrant, ExternalKind, ExternalRead, HerdrRestart, NotificationPermission, ProbedPath, UpdateStatus, WindowChrome } from "../../../web/src/host";
-import { BINDINGS_CHANNEL, COME_FORWARD_CHANNEL, DESK_CHANNEL, BROWSER_CAPTURE_CHANNEL, BROWSER_COMMAND_CHANNEL, BROWSER_CYCLE_END_CHANNEL, BROWSER_EVENT_CHANNEL, BROWSER_SYNC_CHANNEL, COMMAND_CHANNEL, EDITOR_AVAILABLE_CHANNEL, EDITOR_OPEN_CHANNEL, LANGUAGE_CHANNEL, NOTIFY_BADGE_CHANNEL, NOTIFY_CHANNEL, NOTIFY_OPEN_CHANNEL, NOTIFY_PERMISSION_CHANNEL, NOTIFY_SETTINGS_CHANNEL, NOTIFY_WITHDRAW_CHANNEL, OPEN_PATH_CHANNEL, EXTERNAL_DESCRIBE_CHANNEL, EXTERNAL_LIVE_CHANNEL, EXTERNAL_OPEN_CHANNEL, EXTERNAL_READ_CHANNEL, PICK_FOLDER_CHANNEL, PRACTICE_OPEN_CHANNEL, PROBE_PATHS_CHANNEL, HERDR_RESTART_CHANNEL, QUIT_CHANNEL, REVEAL_CHANNEL, UPDATE_CHECK_CHANNEL, UPDATE_PRERELEASE_CHANNEL, UPDATE_RESTART_CHANNEL, UPDATE_STATUS_CHANNEL, UPDATE_STATUS_GET_CHANNEL, WINDOW_CHROME_CHANNEL, WINDOW_CHROME_GET_CHANNEL } from "../channel";
+import type { ExternalGrant, ExternalKind, ExternalRead, FirewallAnswer, FirewallState, NotificationPermission, ProbedPath, UpdateStatus, WindowChrome } from "../../../web/src/host";
+import { COMPUTER_USE_CHANNEL, COMPUTER_USE_GET_CHANNEL, BINDINGS_CHANNEL, COME_FORWARD_CHANNEL, DESK_CHANNEL, BROWSER_CAPTURE_CHANNEL, BROWSER_COMMAND_CHANNEL, BROWSER_CYCLE_END_CHANNEL, BROWSER_EVENT_CHANNEL, BROWSER_SYNC_CHANNEL, COMMAND_CHANNEL, EDITOR_AVAILABLE_CHANNEL, EDITOR_OPEN_CHANNEL, FIREWALL_ALLOW_CHANNEL, FIREWALL_STATE_CHANNEL, LANGUAGE_CHANNEL, NOTIFY_BADGE_CHANNEL, NOTIFY_CHANNEL, NOTIFY_OPEN_CHANNEL, NOTIFY_PERMISSION_CHANNEL, NOTIFY_SETTINGS_CHANNEL, NOTIFY_WITHDRAW_CHANNEL, OPEN_PATH_CHANNEL, EXTERNAL_DESCRIBE_CHANNEL, EXTERNAL_LIVE_CHANNEL, EXTERNAL_OPEN_CHANNEL, EXTERNAL_READ_CHANNEL, PICK_FOLDER_CHANNEL, PRACTICE_OPEN_CHANNEL, PROBE_PATHS_CHANNEL, REVEAL_CHANNEL, UPDATE_CHECK_CHANNEL, UPDATE_DISMISS_CHANNEL, UPDATE_PRERELEASE_CHANNEL, UPDATE_RESTART_CHANNEL, UPDATE_STATUS_CHANNEL, UPDATE_STATUS_GET_CHANNEL, WINDOW_CHROME_CHANNEL, WINDOW_CHROME_GET_CHANNEL } from "../channel";
 
 contextBridge.exposeInMainWorld("hideHost", {
   kind: "electron",
   platform: process.platform,
+  onComputerUse(listener: (inUse: boolean) => void): () => void {
+    const handler = (_event: IpcRendererEvent, value: unknown) => {
+      if (typeof value === "boolean") listener(value);
+    };
+    ipcRenderer.on(COMPUTER_USE_CHANNEL, handler);
+    // Register before requesting the current value: a transition cannot be lost.
+    ipcRenderer.send(COMPUTER_USE_GET_CHANNEL);
+    return () => ipcRenderer.removeListener(COMPUTER_USE_CHANNEL, handler);
+  },
   onCommand(listener: (id: string) => void): () => void {
     const handler = (_event: IpcRendererEvent, id: unknown) => {
       if (typeof id === "string") listener(id);
@@ -70,6 +79,12 @@ contextBridge.exposeInMainWorld("hideHost", {
   notificationPermission(): Promise<NotificationPermission> {
     return ipcRenderer.invoke(NOTIFY_PERMISSION_CHANNEL) as Promise<NotificationPermission>;
   },
+  firewallState(): Promise<FirewallState> {
+    return ipcRenderer.invoke(FIREWALL_STATE_CHANNEL) as Promise<FirewallState>;
+  },
+  allowFirewall(): Promise<FirewallAnswer> {
+    return ipcRenderer.invoke(FIREWALL_ALLOW_CHANNEL) as Promise<FirewallAnswer>;
+  },
   openNotificationSettings(): void {
     ipcRenderer.send(NOTIFY_SETTINGS_CHANNEL);
   },
@@ -110,12 +125,6 @@ contextBridge.exposeInMainWorld("hideHost", {
   openInEditor(path: string): void {
     ipcRenderer.send(EDITOR_OPEN_CHANNEL, path);
   },
-  restartHerdr(): Promise<HerdrRestart> {
-    return ipcRenderer.invoke(HERDR_RESTART_CHANNEL) as Promise<HerdrRestart>;
-  },
-  quit(): void {
-    ipcRenderer.send(QUIT_CHANNEL);
-  },
   openPractice(language: string, chapter?: string): void {
     ipcRenderer.send(PRACTICE_OPEN_CHANNEL, language, chapter);
   },
@@ -143,6 +152,9 @@ contextBridge.exposeInMainWorld("hideHost", {
     },
     setPrerelease(on: boolean): void {
       ipcRenderer.send(UPDATE_PRERELEASE_CHANNEL, on);
+    },
+    dismiss(version: string): void {
+      ipcRenderer.send(UPDATE_DISMISS_CHANNEL, version);
     },
   },
   browser: {

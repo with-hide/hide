@@ -4,6 +4,8 @@
 //! ownership proof as labels. Only file modification time and size cross
 //! the boundary; paths, native IDs and conversation records never do.
 
+use crate::account::Accounts;
+use hide_agent_adapter::AccountKey;
 use std::path::Path;
 use std::time::SystemTime;
 
@@ -25,6 +27,10 @@ pub struct SessionActivityRequest {
     /// An effect's admitted native owner, including when its reference is a path.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub expected_id: Option<String>,
+    /// The account the agent runs, or will run, in, which the session is
+    /// read in; the node refuses one it did not register.
+    #[serde(default, skip_serializing_if = "AccountKey::is_default")]
+    pub account: AccountKey,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -36,12 +42,16 @@ pub struct SessionActivity {
 /// The session's activity, or why it cannot be read: a read that met the
 /// agent writing its records ([`ReadRefusal::InMotion`]) says nothing about
 /// the session or its route, and a read a moment later can answer.
-pub fn read(home: &Path, request: &SessionActivityRequest) -> Result<SessionActivity, ReadRefusal> {
+pub fn read(
+    accounts: &Accounts,
+    request: &SessionActivityRequest,
+) -> Result<SessionActivity, ReadRefusal> {
+    let accounts = &accounts.reading(request.agent, &request.account)?;
     if request.agent == Agent::OpenCode {
-        return crate::opencode::activity(home, request);
+        return crate::opencode::activity(accounts, request);
     }
     let (path, before) = label_transcript::locate_confirmed(
-        home,
+        accounts,
         request.agent,
         &request.reference_kind,
         &request.reference_value,
@@ -63,8 +73,14 @@ pub fn read(home: &Path, request: &SessionActivityRequest) -> Result<SessionActi
             .as_deref()
             .ok_or("session_route_unconfirmed")?;
         let cwd = request.cwd.as_deref().ok_or("session_route_unconfirmed")?;
-        crate::native_file::confirm_route(home, request.agent, &path, native_id, Path::new(cwd))
-            .map_err(|error| ReadRefusal::of(&error))?;
+        crate::native_file::confirm_route(
+            accounts,
+            request.agent,
+            &path,
+            native_id,
+            Path::new(cwd),
+        )
+        .map_err(|error| ReadRefusal::of(&error))?;
     }
     if request.agent == Agent::Cursor {
         let native_id = before
@@ -72,10 +88,10 @@ pub fn read(home: &Path, request: &SessionActivityRequest) -> Result<SessionActi
             .as_deref()
             .ok_or("session_route_unconfirmed")?;
         let cwd = request.cwd.as_deref().ok_or("session_route_unconfirmed")?;
-        let activity = crate::cursor::activity(home, &path, native_id, cwd)
+        let activity = crate::cursor::activity(accounts.home(), &path, native_id, cwd)
             .map_err(|error| error.to_string())?;
         let after =
-            crate::confirm_session_file(home, request.agent, &path, Some(native_id), Some(cwd))
+            crate::confirm_session_file(accounts, request.agent, &path, Some(native_id), Some(cwd))
                 .map_err(|error| ReadRefusal::of(&error))?;
         if before.owner != after.owner || before.incarnation != after.incarnation {
             return Err("session_activity_read_changed".into());
@@ -102,7 +118,7 @@ pub fn read(home: &Path, request: &SessionActivityRequest) -> Result<SessionActi
         .as_deref()
         .or_else(|| (request.reference_kind == "id").then_some(request.reference_value.as_str()));
     let after = crate::confirm_session_file(
-        home,
+        accounts,
         request.agent,
         &path,
         reported_id,
@@ -168,6 +184,7 @@ mod tests {
 
     fn request(path: &Path, agent: Agent) -> SessionActivityRequest {
         SessionActivityRequest {
+            account: Default::default(),
             agent,
             reference_kind: "path".to_owned(),
             reference_value: path.to_string_lossy().into_owned(),
@@ -182,7 +199,7 @@ mod tests {
         for agent in [Agent::Claude, Agent::Codex] {
             let home = tempfile::tempdir().unwrap();
             let path = transcript(home.path(), agent);
-            let result = read(home.path(), &request(&path, agent)).unwrap();
+            let result = read(&crate::Accounts::new(home.path()), &request(&path, agent)).unwrap();
             assert_eq!(result.bytes, fs::metadata(&path).unwrap().len());
             assert!(result.modified_at_unix_ms > 0);
             let value = serde_json::to_value(result).unwrap();
@@ -201,23 +218,31 @@ mod tests {
         let mut input = request(&path, Agent::Codex);
         input.reference_kind = "opaque".to_owned();
         assert_eq!(
-            read(home.path(), &input).unwrap_err(),
+            read(&crate::Accounts::new(home.path()), &input).unwrap_err(),
             ReadRefusal::Refused("session_kind_unsupported".into())
         );
         input.reference_kind = "path".to_owned();
         input.reference_value.clear();
         assert_eq!(
-            read(home.path(), &input).unwrap_err(),
+            read(&crate::Accounts::new(home.path()), &input).unwrap_err(),
             ReadRefusal::Refused("label_session_reference_missing".into())
         );
         let outside = home.path().join("outside.jsonl");
         fs::copy(&path, &outside).unwrap();
         assert_eq!(
-            read(home.path(), &request(&outside, Agent::Codex)).unwrap_err(),
+            read(
+                &crate::Accounts::new(home.path()),
+                &request(&outside, Agent::Codex)
+            )
+            .unwrap_err(),
             ReadRefusal::Refused("label_session_outside_roots".into())
         );
         fs::remove_file(&path).unwrap();
-        let error = read(home.path(), &request(&path, Agent::Codex)).unwrap_err();
+        let error = read(
+            &crate::Accounts::new(home.path()),
+            &request(&path, Agent::Codex),
+        )
+        .unwrap_err();
         assert!(
             !error
                 .reason()
@@ -239,6 +264,7 @@ mod tests {
             }
         }
         let input = SessionActivityRequest {
+            account: Default::default(),
             agent: Agent::Codex,
             reference_kind: "id".into(),
             reference_value: "missing-native".into(),
@@ -247,7 +273,7 @@ mod tests {
             expected_id: None,
         };
         assert_eq!(
-            read(home.path(), &input).unwrap_err(),
+            read(&crate::Accounts::new(home.path()), &input).unwrap_err(),
             ReadRefusal::Refused(format!(
                 "session_capacity:discovery_entries:{}",
                 crate::SESSION_DISCOVERY_LIMIT
@@ -267,6 +293,7 @@ mod tests {
             let path = transcript(home.path(), agent);
             fs::write(path.parent().unwrap().join("ignored.txt"), b"ignored").unwrap();
             let input = SessionActivityRequest {
+                account: Default::default(),
                 agent,
                 reference_kind: "id".into(),
                 reference_value: "native-a".into(),
@@ -274,7 +301,7 @@ mod tests {
                 exact_route: false,
                 expected_id: None,
             };
-            let before = read(home.path(), &input).unwrap();
+            let before = read(&crate::Accounts::new(home.path()), &input).unwrap();
             use std::io::Write;
             fs::OpenOptions::new()
                 .append(true)
@@ -282,7 +309,7 @@ mod tests {
                 .unwrap()
                 .write_all(b"new private bytes\n")
                 .unwrap();
-            let after = read(home.path(), &input).unwrap();
+            let after = read(&crate::Accounts::new(home.path()), &input).unwrap();
             assert!(after.bytes > before.bytes);
             assert!(after.modified_at_unix_ms >= before.modified_at_unix_ms);
             assert_eq!(after.bytes, fs::metadata(&path).unwrap().len());
@@ -296,7 +323,11 @@ mod tests {
         let path = transcript(home.path(), Agent::Codex);
         fs::write(&path, "{\"type\":\"event_msg\",\"payload\":{}}\n").unwrap();
         assert_eq!(
-            read(home.path(), &request(&path, Agent::Codex)).unwrap_err(),
+            read(
+                &crate::Accounts::new(home.path()),
+                &request(&path, Agent::Codex)
+            )
+            .unwrap_err(),
             ReadRefusal::Refused("label_session_metadata_unconfirmed".into())
         );
     }

@@ -1,4 +1,4 @@
-// hide-opencode-plugin@12 sha256=887dac2f496e336a68b6fd13025116e0e6edbb8841c719b49ceefe640f4ea1ee
+// hide-opencode-plugin@15 sha256=aa10e3ee6b772d5e0bd70e587f4439b5c8bc0868c4e9ff06ff16893cae4ac543
 // Hide's OpenCode 1.x plugin, written by Hide's install kit (hide-agent-hooks).
 // An edit is kept and shown as edited in Settings; Reinstall puts Hide's back.
 // Outside a Herdr pane Hide manages, or when its helper is gone, it does nothing.
@@ -14,7 +14,7 @@ const HELPER = "/kit path/it's/hide-agent-hooks";
 const ROUTE = [];
 
 // The prompt budget is Claude Code's prompt hook's; the tool budget is the
-// spawn guard's. OpenCode puts no limit on a hook, so these are the limits.
+// opener guard's. OpenCode puts no limit on a hook, so these are the limits.
 const PROMPT_BUDGET_MS = 1850;
 const TOOL_BUDGET_MS = 2500;
 const START_BUDGET_MS = 8000;
@@ -28,9 +28,6 @@ const OUTPUT_LIMIT = 64 * 1024;
 // Far inside the helper's 256 KiB input, so a pasted log never costs a prompt its letters.
 const PROMPT_TEXT_LIMIT = 32 * 1024;
 const RUNNING_LIMIT = 8;
-const OBSERVATION_BUDGET_MS = 1500;
-const OBSERVATION_COMMAND_LIMIT = 64 * 1024;
-const OBSERVATION_RESULT_LIMIT = 128 * 1024;
 const SESSION_LIMIT = 512;
 // Any spelling of the reminder tag OpenCode's model reads as one, opening or closing.
 const REMINDER_TAG = /<(\s*\/?\s*system-reminder)/gi;
@@ -123,10 +120,9 @@ function fileArgs(args) {
   return named;
 }
 
-// A pane Hide manages: one on the core's own engine names itself HIDE_PANE_ID first, a Herdr pane by its three
-// variables (`hide_agent_hooks::pane`, the rule the helper and the CLI share).
+// A pane Hide manages names itself HIDE_PANE_ID (`hide_agent_hooks::pane`, the rule the helper and the CLI share).
 function inPane(env) {
-  return Boolean(env.HIDE_PANE_ID) || (env.HERDR_ENV === "1" && Boolean(env.HERDR_PANE_ID) && Boolean(env.HERDR_SOCKET_PATH));
+  return Boolean(env.HIDE_PANE_ID);
 }
 
 function helperPresent() {
@@ -305,28 +301,51 @@ function rootOf(state, sessionID) {
 }
 
 /**
- * Sends the pane's subagent counts when they changed, or always when `force`. One report runs at a time and only
- * the newest waiting one follows it, so a burst of subagents costs two helper runs, not one per change. The
- * promise settles once the counts known now have been sent.
+ * What a child session says of the subagent it runs, for the pane's list of them: OpenCode titles a subagent's session
+ * `<task> (@<agent> subagent)`, and OpenCode 2 names the agent beside it (`tui.js` reads both the same way). Words the helper makes one short line.
  */
-function publishCounts(state, force) {
-  let working = 0;
+function subagentOf(title, agent) {
+  const text = typeof title === "string" ? title : "";
+  const named = /^(.*?)\s*\(@([^()\s]+) subagent\)\s*$/.exec(text);
+  const kind = typeof agent === "string" && agent ? agent : named ? named[2] : "";
+  const task = (named ? named[1] : text).trim();
+  return { kind: kind || undefined, task: task || undefined };
+}
+
+/**
+ * The running children under the pane's root as the helper lists them, oldest first, and how many children ran and
+ * finished: the counts and the list one report carries.
+ */
+function runningChildren(state, under) {
+  const running = [];
   let done = 0;
   for (const [child, status] of state.children) {
-    if (rootOf(state, child) !== state.root) continue;
-    if (status.busy) working += 1;
+    if (!under(child)) continue;
+    if (status.busy) running.push({ id: child, kind: status.kind, task: status.task, started_unix_ms: status.started });
     else if (status.ran) done += 1;
   }
-  const key = `${working}/${done}`;
+  running.sort((a, b) => (a.started_unix_ms ?? 0) - (b.started_unix_ms ?? 0));
+  return { running, done };
+}
+
+/**
+ * Sends the pane's subagent counts, with the running ones it names, when they changed, or always when `force`. One
+ * report runs at a time and only the newest waiting one follows it, so a burst of subagents costs two helper runs,
+ * not one per change. The promise settles once the counts known now have been sent.
+ */
+function publishCounts(state, force) {
+  const { running, done } = runningChildren(state, (child) => rootOf(state, child) === state.root);
+  const working = running.length;
+  const key = `${working}/${done}/${running.map((child) => child.id).join(",")}`;
   if (!force && key === state.published) return state.counting ?? Promise.resolve();
   // Only a report the core took counts as published: a failed one is sent again with the next change, prompt or rest.
   state.published = key;
-  state.nextCount = { working, done, key };
+  state.nextCount = { working, done, running, key };
   state.counting ??= (async () => {
     while (state.nextCount) {
       const next = state.nextCount;
       state.nextCount = null;
-      const answer = await helper(state, "subagents", { session_id: state.root, working: next.working, done: next.done }, COUNT_BUDGET_MS);
+      const answer = await helper(state, "subagents", { session_id: state.root, working: next.working, done: next.done, running: next.running }, COUNT_BUDGET_MS);
       if (answer?.reported !== true && state.published === next.key) state.published = null;
     }
     state.counting = null;
@@ -378,7 +397,9 @@ async function onEvent(state, client, event) {
     if (!info?.id) return;
     remember(state, state.parents, info.id, info.parentID ?? null, parentEviction(state));
     // A child still running is never forgotten: it would leave the working count while it works.
-    if (info.parentID) remember(state, state.children, info.id, { busy: false, ran: false }, [(child) => !child.busy]);
+    if (info.parentID) remember(state, state.children, info.id, { busy: false, ran: false, ...subagentOf(info.title) }, [(child) => !child.busy]);
+    // A new root session is the pane's from its start, so letters and the inbox reach it before its first turn.
+    else await helper(state, "session", { session_id: info.id }, COUNT_BUDGET_MS);
     return;
   }
   if (type === "session.status") {
@@ -389,6 +410,7 @@ async function onEvent(state, client, event) {
       const busy = kind === "busy" || kind === "retry";
       child.busy = busy;
       child.ran ||= busy;
+      if (busy) child.started ??= Date.now();
       await publishCounts(state, false);
     } else if (sessionID === state.root && (kind === "busy" || kind === "retry")) {
       await publishTurn(state, "working");
@@ -416,11 +438,6 @@ async function onEvent(state, client, event) {
   }
   if (type === "message.part.updated") {
     const part = properties.part;
-    // A thrown V1 execute never reaches `tool.execute.after`. Its terminal
-    // error part carries the executed input and call identity instead.
-    if (part?.type === "tool" && part.state?.status === "error") {
-      await observeTool(state, part.sessionID, part.callID, part.tool, part.state.input, null, true);
-    }
     // Hide's own text part is written once; a tool part is updated through its run and carries the letters its
     // result got once it is completed.
     const key = part?.type === "tool" ? (part.state?.status === "completed" ? toolKey(part.sessionID, part.callID) : undefined) : part?.id;
@@ -487,7 +504,6 @@ function holdPending(state, key, entry) {
  * written twice, and the receipt comes with the stored part, before the next result in practice.
  */
 async function onToolResult(state, sessionID, input, output) {
-  await observeTool(state, sessionID, input?.callID, input?.tool, input?.args, output, false);
   if (!sessionID || sessionID !== state.root || typeof input?.callID !== "string") return;
   if (handoverOpen(state)) return;
   const answer = await helper(state, "letters", { session_id: sessionID }, LETTERS_BUDGET_MS);
@@ -498,23 +514,6 @@ async function onToolResult(state, sessionID, input, output) {
   const text = `<system-reminder>\n${answer.context.replace(REMINDER_TAG, "<\u200b$1")}\n</system-reminder>`;
   output.output = typeof output.output === "string" && output.output ? `${output.output}\n\n${text}` : text;
   if (letters.length > 0) holdPending(state, toolKey(sessionID, input.callID), { session: sessionID, letters, text });
-}
-
-/** No pending command map: V1 after/error both include the executed input.
- * The helper owns its CLI child and deadline; duplicate terminal events
- * converge in the proof-bound store by actual session and call id. */
-async function observeTool(state, sessionID, callID, tool, args, result, failed) {
-  const command = args?.command;
-  if (tool !== "bash" || typeof command !== "string" || !(command.includes("herdr") || command.includes("HERDR_BIN_PATH"))) return;
-  if (typeof sessionID !== "string" || typeof callID !== "string" || Buffer.byteLength(command, "utf8") > OBSERVATION_COMMAND_LIMIT) { state.lost += 1; return; }
-  const output = typeof result?.output === "string" ? result.output : null;
-  const truncated = (output === null ? 0 : Buffer.byteLength(output, "utf8")) > OBSERVATION_RESULT_LIMIT || result?.metadata?.truncated === true;
-  await helper(state, "observation", {
-    session_id: sessionID,
-    observation: { command, call_id: callID, failed, truncated,
-      asynchronous: Boolean(result?.metadata?.background || result?.metadata?.sessionId),
-      result: truncated ? null : output },
-  }, OBSERVATION_BUDGET_MS);
 }
 
 async function onPrompt(state, client, directory, input, output) {
@@ -565,11 +564,11 @@ async function onTool(state, sessionID, directory, input, output) {
   let request;
   if (tool === "bash") {
     const command = output?.args?.command;
-    // Every shell call comes here: one asks the helper while a guardrail is on, or, in a Herdr pane, when it can
-    // start an agent through Herdr or hand a result to the system opener.
+    // Every shell call comes here: one asks the helper while a guardrail is on, or, in a pane, when it can hand a
+    // result to the system opener.
     if (typeof command !== "string") return null;
-    const launch = !state.guardOnly && (command.includes("herdr") || command.includes("HERDR_BIN_PATH") || mayOpen(command));
-    if (!launch && !namesGlobal(command) && !guardrailsOn(state)) return null;
+    const opens = !state.guardOnly && mayOpen(command);
+    if (!opens && !namesGlobal(command) && !guardrailsOn(state)) return null;
     // OpenCode runs a relative `workdir` in the session's folder, not where this process started.
     const workdir = output.args.workdir;
     const cwd = typeof workdir === "string" && workdir ? (typeof directory === "string" ? path.resolve(directory, workdir) : workdir) : directory;

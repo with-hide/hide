@@ -19,7 +19,7 @@ function world(): SnapshotRest {
   const checkout = { agent_scope: emptyScope(), id: "c", workspace_id: "w", path: "/fixture", label: "fixture", tabs, active_tab_id: "t1", strip: [] };
   return {
     navigator: { focused_device_id: "local", focused_checkout_id: "c", focused_workspace_id: "w", devices: [{ id: "local", label: "This Mac", kind: "local", state: "local" }], workspaces: [{ agent_scope: emptyScope(), id: "w", label: "fixture", device_id: "local", checkouts: [checkout, { ...checkout, id: "other", path: "/other", tabs: [{ ...tabs[0], id: "other-tab" }] }] }] },
-    workspace_view: { device_id: "local", path: "/fixture", open: true, documents: true, tool: null, layout: { root: { area: { id: "a1", active: "d1", displays: ["d1", "d2"].map((id) => ({ id, kind: "browser", label: id, url: "about:blank", state: "open", tab_id: null })) } }, active_area: "a1", display_count: 2, limits }, agent_layout: { root: { split: { id: "s1", axis: "row", ratio: 0.5, first: { area: { id: "a1", active: "t1", displays: ["t1", "t2", "t3"].map((id) => ({ id })) } }, second: { area: { id: "a2", active: "outside", displays: [{ id: "outside" }] } } } }, active_area: "a1", canvases: {}, display_count: 4, limits } },
+    workspace_view: { device_id: "local", path: "/fixture", open: true, tray: { tab_id: "t1", shown: true, count: 0 }, tool: null, layout: { root: { area: { id: "a1", active: "d1", displays: ["d1", "d2"].map((id) => ({ id, kind: "browser", label: id, url: "about:blank", state: "open", tab_id: null })) } }, active_area: "a1", display_count: 2, limits }, agent_layout: { root: { split: { id: "s1", axis: "row", ratio: 0.5, first: { area: { id: "a1", active: "t1", displays: ["t1", "t2", "t3"].map((id) => ({ id })) } }, second: { area: { id: "a2", active: "outside", displays: [{ id: "outside" }] } } } }, active_area: "a1", canvases: {}, display_count: 4, limits } },
   } as unknown as SnapshotRest;
 }
 function draw(rest: SnapshotRest) {
@@ -78,8 +78,8 @@ describe("focused-area recent tabs", () => {
     useUiStore.setState({ screen: { kind: "main" } });
     expect(areaCycle(rest, owner)).toBeNull();
     useUiStore.setState({ screen: { kind: "workspace" } });
-    // The documents folded behind a tool: their Views are out of sight (PRD lane-two-columns B11).
-    rest.workspace_view!.documents = false;
+    // The desk folded behind a tool: its Views are out of sight (PRD lane-two-columns B11).
+    rest.workspace_view!.tray.shown = false;
     rest.workspace_view!.tool = "changes";
     expect(areaCycle(rest, { kind: "view", workspace: "c", areaId: "a1" })).toBeNull();
     rest.workspace_view!.agent_layout!.canvases.a1 = "outside";
@@ -193,9 +193,9 @@ describe("Agent pane cycle (issue 301)", () => {
     expect(panes(cycle)).toEqual(["t1-pane", "t2-pane", "other-tab-pane", "remote:mini:pane:p1"]);
     expect(cycle.index).toBe(0);
     const rows = Object.fromEntries(cycle.items.map((row) => [row.target.kind === "pane" ? row.target.paneId : row.key, row]));
-    expect(rows["t1-pane"]).toMatchObject({ title: "planner", detail: { kind: "surface", place: "fixture", surface: "herdr" }, chip: null, agent: expect.objectContaining({ agent_kind: "claude" }) });
-    expect(rows["other-tab-pane"]).toMatchObject({ title: "fixer", detail: { kind: "surface", place: "fixture · review", surface: "herdr" }, chip: null });
-    expect(rows["remote:mini:pane:p1"]).toMatchObject({ title: "reviewer", detail: { kind: "surface", place: "api", surface: "herdr" }, chip: { label: "mini", local: false }, agent: expect.objectContaining({ agent_kind: "codex" }) });
+    expect(rows["t1-pane"]).toMatchObject({ title: "planner", detail: { kind: "surface", place: "fixture", surface: "engine" }, chip: null, agent: expect.objectContaining({ agent_kind: "claude" }) });
+    expect(rows["other-tab-pane"]).toMatchObject({ title: "fixer", detail: { kind: "surface", place: "fixture · review", surface: "engine" }, chip: null });
+    expect(rows["remote:mini:pane:p1"]).toMatchObject({ title: "reviewer", detail: { kind: "surface", place: "api", surface: "engine" }, chip: { label: "mini", local: false }, agent: expect.objectContaining({ agent_kind: "codex" }) });
   });
 
   it("from a pane with no agent, lands first on the most recent agent pane", () => {

@@ -2,7 +2,7 @@
 //! hide-plan D-14, D-15, D-30).
 //!
 //! The core hands a small summary ([`PlanContext`]) with the answer to the
-//! prompt hook's letter pull and with every `hide plan` command's answer;
+//! prompt hook's letter pull and with every `hide task` command's answer;
 //! the hook or the CLI writes it to the pane's record here. The prompt hook
 //! turns it into one line of session context ([`hint`]), and the pre-tool
 //! hook reads only this record to refuse the three things a plan or a
@@ -17,7 +17,7 @@ use std::path::{Path, PathBuf};
 use serde::{Deserialize, Serialize};
 
 use crate::guardrails::Action;
-use crate::spawn_guard::{command_words, shell_line};
+use hide_shell::{command_words, shell_line};
 
 /// The record's version; one of another version is not read.
 const RECORD_VERSION: u32 = 1;
@@ -127,22 +127,14 @@ struct Record {
     context: PlanContext,
 }
 
-/// Where the pane's record lives, under Hide's own directory.
-fn record_path(home: &Path, pane_id: &str) -> PathBuf {
-    let safe: String = pane_id
-        .chars()
-        .map(|character| {
-            if character.is_ascii_alphanumeric() || character == '-' || character == '_' {
-                character
-            } else {
-                '_'
-            }
-        })
-        .collect();
-    home.join(".hide")
-        .join("agent-hooks")
-        .join("plans")
-        .join(format!("{safe}.json"))
+/// Where the pane's record lives, under Hide's own directory. A state route
+/// that does not resolve is that error, so a hook writes no plan record into
+/// another daemon's folder (engineering rule 4).
+fn record_path(home: &Path, pane_id: &str) -> std::io::Result<PathBuf> {
+    Ok(crate::route::pane_file(
+        &crate::route::pane_records(home)?.join("plans"),
+        pane_id,
+    ))
 }
 
 /// Writes the pane's record whole, private to the account.
@@ -152,7 +144,7 @@ pub fn write(
     session: &str,
     context: &PlanContext,
 ) -> std::io::Result<()> {
-    let path = record_path(home, pane_id);
+    let path = record_path(home, pane_id)?;
     if let Some(parent) = path.parent() {
         hide_platform::fs::private::create_dir_all(parent)?;
     }
@@ -168,7 +160,7 @@ pub fn write(
 /// The pane's record for `session`, if the hook wrote one for it.
 pub fn read(home: &Path, pane_id: &str, session: Option<&str>) -> Option<PlanContext> {
     use std::io::Read;
-    let file = std::fs::File::open(record_path(home, pane_id)).ok()?;
+    let file = std::fs::File::open(record_path(home, pane_id).ok()?).ok()?;
     let mut bytes = Vec::new();
     file.take(RECORD_LIMIT + 1).read_to_end(&mut bytes).ok()?;
     if bytes.len() as u64 > RECORD_LIMIT {
@@ -197,7 +189,7 @@ pub fn hint(context: &PlanContext, now: u64) -> Option<String> {
     let mut lines = Vec::new();
     if let Some(plan) = context.plan.as_ref().filter(|plan| !plan.finished) {
         let mut line = format!(
-            "Plan: now {}",
+            "Task: now {}",
             plan.current
                 .as_ref()
                 .map_or("-", |step| step.title.as_str())
@@ -210,7 +202,7 @@ pub fn hint(context: &PlanContext, now: u64) -> Option<String> {
         lines.push(line);
         if context.proposed() {
             lines.push(
-                "The plan waits for the operator's review: writing files, git commit and git push are blocked until the operator answers in the conversation. If they approve, run hide plan approve; if they ask for changes, send the revised plan with hide plan set --json '<plan>' --ask rather than a file; if they say not to, run hide plan drop.".to_owned(),
+                "The task's steps wait for the operator's review: writing files, git commit and git push are blocked until the operator answers in the conversation. If they approve, run hide task approve; if they ask for changes, send the revised steps with hide task set --json '<plan>' --ask rather than a file; if they say not to, run hide task drop.".to_owned(),
             );
         } else if now.saturating_sub(plan.updated_at_unix_ms) > STALE_AFTER_MS {
             let key = plan
@@ -218,7 +210,7 @@ pub fn hint(context: &PlanContext, now: u64) -> Option<String> {
                 .as_ref()
                 .map_or("<key>", |step| step.key.as_str());
             lines.push(format!(
-                "Mark a finished step with `hide plan node {key} --status done` and the step you are on with `--status working`."
+                "Mark a finished step with `hide task node {key} --status done` and the step you are on with `--status working`."
             ));
         }
     }
@@ -294,7 +286,9 @@ pub enum Refused {
     ProposedPlan,
     /// `gh pr merge` by a worker of a mission that goes up to pull requests.
     MissionMerge,
-    /// `git push --force*` or `git rebase`, in any Hide pane.
+    /// `git push --force*` or `git rebase` by an agent of a mission node,
+    /// whose checked commit has to stay the one checked. Outside a mission
+    /// the project's guardrails alone judge these.
     HistoryRewrite,
 }
 
@@ -311,13 +305,13 @@ impl Refused {
     pub fn reason(self) -> &'static str {
         match self {
             Self::ProposedPlan => {
-                "Not run: the plan is waiting for the operator's review (run hide plan approve once they answer). Reading and looking around still run; write, commit and push wait for the operator's answer. A revised plan goes up with hide plan set --json '<plan>' --ask."
+                "Not run: the task's steps are waiting for the operator's review (run hide task approve once they answer). Reading and looking around still run; write, commit and push wait for the operator's answer. Revised steps go up with hide task set --json '<plan>' --ask."
             }
             Self::MissionMerge => {
                 "Not run: this mission goes up to pull requests, so its workers do not merge. Report the pull request to the Conductor; the operator merges."
             }
             Self::HistoryRewrite => {
-                "Not run: Hide panes do not rewrite pushed history. Push a new commit instead of a force push, and merge the base into the branch instead of rebasing."
+                "Not run: an agent of a mission does not force push or rebase, so the commit its node was checked on stays the one checked. Do not replace it with another command; tell the Conductor what you needed and wait for its answer."
             }
         }
     }
@@ -332,10 +326,10 @@ pub fn record_refusal(home: &Path, runtime: &str, pane: &str, refused: Refused) 
         "rule": refused.code(),
         "runtime": runtime,
         "pane": pane,
-        "at_unix_ms": crate::spawn_guard::now_ms(),
+        "at_unix_ms": crate::hook_log::now_ms(),
     })
     .to_string();
-    let _ = crate::spawn_guard::append_line(&crate::spawn_guard::log_path(home), &line);
+    crate::hook_log::append(home, &line);
 }
 
 /// The refusal `action` meets under `context`, if any. Reading, searching
@@ -346,22 +340,13 @@ pub fn refusal(context: &PlanContext, action: &Action) -> Option<Refused> {
         .mission
         .as_ref()
         .is_some_and(|work| work.scope == "pr");
+    let rewrite_barred = context.mission.is_some();
     match action {
         Action::Write(_) | Action::UnreadWrite if proposed => Some(Refused::ProposedPlan),
-        Action::Shell(command) => shell(command, proposed, merge_barred),
+        Action::Shell { command, syntax } => {
+            shell(command, *syntax, proposed, merge_barred, rewrite_barred)
+        }
         _ => None,
-    }
-}
-
-fn program(word: &str) -> String {
-    let name = Path::new(word)
-        .file_name()
-        .map(|name| name.to_string_lossy().into_owned())
-        .unwrap_or_default();
-    if name.to_ascii_lowercase().ends_with(".exe") {
-        name[..name.len() - 4].to_owned()
-    } else {
-        name
     }
 }
 
@@ -380,14 +365,20 @@ fn git_subcommand(args: &[String]) -> Option<(&str, &[String])> {
     Some((args.get(at)?.as_str(), &args[at + 1..]))
 }
 
-fn shell(command: &str, proposed: bool, merge_barred: bool) -> Option<Refused> {
-    let line = shell_line(command);
+fn shell(
+    command: &str,
+    syntax: hide_shell::Syntax,
+    proposed: bool,
+    merge_barred: bool,
+    rewrite_barred: bool,
+) -> Option<Refused> {
+    let line = shell_line(command, syntax);
     for words in &line.commands {
-        let (words, _) = command_words(words, &|_| None, true);
+        let words = command_words(words, true);
         let Some((first, args)) = words.split_first() else {
             continue;
         };
-        match program(first).as_str() {
+        match syntax.program(first).as_str() {
             "git" => {
                 let Some((subcommand, rest)) = git_subcommand(args) else {
                     continue;
@@ -400,11 +391,12 @@ fn shell(command: &str, proposed: bool, merge_barred: bool) -> Option<Refused> {
                         || (arg.starts_with('+') && arg.len() > 1)
                 });
                 match subcommand {
-                    "push" if force => return Some(Refused::HistoryRewrite),
+                    "push" if rewrite_barred && force => return Some(Refused::HistoryRewrite),
                     "rebase"
-                        if !rest
-                            .iter()
-                            .any(|arg| matches!(arg.as_str(), "--abort" | "--quit")) =>
+                        if rewrite_barred
+                            && !rest
+                                .iter()
+                                .any(|arg| matches!(arg.as_str(), "--abort" | "--quit")) =>
                     {
                         return Some(Refused::HistoryRewrite);
                     }
@@ -447,7 +439,10 @@ mod tests {
     }
 
     fn shell_action(command: &str) -> Action {
-        Action::Shell(command.to_owned())
+        Action::Shell {
+            command: command.to_owned(),
+            syntax: hide_shell::Syntax::Posix,
+        }
     }
 
     #[test]
@@ -474,49 +469,84 @@ mod tests {
         assert_eq!(refusal(&context, &Action::Read(vec!["a".into()])), None);
     }
 
-    #[test]
-    fn an_approved_or_absent_plan_refuses_only_history_rewrites() {
-        let approved = PlanContext {
-            plan: Some(plan("approved", 0)),
-            ..PlanContext::default()
-        };
-        assert_eq!(
-            refusal(&approved, &shell_action("git commit -m x && git push")),
-            None
-        );
-        for rewrite in [
-            "git push --force origin b",
-            "git push -f",
-            "git push --force-with-lease",
-            "git push origin +b",
-            "git rebase main",
-        ] {
-            assert_eq!(
-                refusal(&PlanContext::default(), &shell_action(rewrite)),
-                Some(Refused::HistoryRewrite),
-                "{rewrite}"
-            );
-        }
-        assert_eq!(
-            refusal(&PlanContext::default(), &shell_action("git rebase --abort")),
-            None
-        );
-    }
-
-    #[test]
-    fn only_a_pr_scope_worker_is_refused_a_merge() {
-        let worker = |scope: &str| PlanContext {
+    fn mission_agent(scope: &str, role: &str) -> PlanContext {
+        PlanContext {
             mission: Some(MissionWork {
                 mission: "m1".into(),
                 node: "core".into(),
                 scope: scope.into(),
                 range: "up to the PR".into(),
-                role: "worker".into(),
+                role: role.into(),
                 line: None,
                 criteria: None,
             }),
             ..PlanContext::default()
+        }
+    }
+
+    const REWRITES: [&str; 5] = [
+        "git push --force origin b",
+        "git push -f",
+        "git push --force-with-lease",
+        "git push origin +b",
+        "git rebase main",
+    ];
+
+    /// A user's agent asked to rebase was refused in every Hide pane and
+    /// merged the base instead; outside a mission a rebase or a force push
+    /// is the operator's call and the project's guardrails alone judge it.
+    #[test]
+    fn outside_a_mission_a_rebase_or_force_push_runs() {
+        let approved = PlanContext {
+            plan: Some(plan("approved", 0)),
+            ..PlanContext::default()
         };
+        for context in [&approved, &PlanContext::default()] {
+            for rewrite in REWRITES {
+                assert_eq!(refusal(context, &shell_action(rewrite)), None, "{rewrite}");
+            }
+        }
+        assert_eq!(
+            refusal(&approved, &shell_action("git commit -m x && git push")),
+            None
+        );
+    }
+
+    #[test]
+    fn a_mission_agent_is_refused_a_rebase_or_force_push() {
+        for context in [
+            mission_agent("pr", "worker"),
+            mission_agent("merge", "worker"),
+            mission_agent("pr", "checker"),
+        ] {
+            for rewrite in REWRITES {
+                assert_eq!(
+                    refusal(&context, &shell_action(rewrite)),
+                    Some(Refused::HistoryRewrite),
+                    "{rewrite}"
+                );
+            }
+            assert_eq!(refusal(&context, &shell_action("git rebase --abort")), None);
+        }
+    }
+
+    /// The refusal names no other command to run in its place: a reason
+    /// that offered one was followed over the operator's own request.
+    #[test]
+    fn no_refusal_offers_another_command_in_its_place() {
+        for refused in [
+            Refused::ProposedPlan,
+            Refused::MissionMerge,
+            Refused::HistoryRewrite,
+        ] {
+            let reason = refused.reason();
+            assert!(!reason.contains("instead"), "{reason}");
+        }
+    }
+
+    #[test]
+    fn only_a_pr_scope_worker_is_refused_a_merge() {
+        let worker = |scope: &str| mission_agent(scope, "worker");
         assert_eq!(
             refusal(&worker("pr"), &shell_action("gh pr merge 12 --squash")),
             Some(Refused::MissionMerge)
@@ -528,6 +558,55 @@ mod tests {
         assert_eq!(refusal(&worker("pr"), &shell_action("gh pr view 12")), None);
     }
 
+    /// with-hide/hide-private#576: Claude Code's PowerShell tool call is
+    /// judged, read as PowerShell reads it, command names without case.
+    #[test]
+    fn a_powershell_call_meets_the_same_refusals() {
+        let proposed = PlanContext {
+            plan: Some(plan("proposed", 0)),
+            ..PlanContext::default()
+        };
+        let payload = |command: &str| {
+            serde_json::json!({
+                "cwd": "/r",
+                "tool_name": "PowerShell",
+                "tool_input": { "command": command },
+            })
+            .to_string()
+        };
+        let judged = |context: &PlanContext, command: &str| {
+            let call = crate::guardrails::payload::read_hook(
+                payload(command).as_bytes(),
+                false,
+                hide_agent_adapter::HookDialect::ClaudeCode,
+            )
+            .expect("a PowerShell call is read");
+            refusal(context, &call.action)
+        };
+        assert_eq!(
+            judged(&proposed, r"Set-Location .\repo; Git commit -m 'x'"),
+            Some(Refused::ProposedPlan)
+        );
+        assert_eq!(
+            judged(
+                &mission_agent("pr", "worker"),
+                "GIT.EXE push --force origin x"
+            ),
+            Some(Refused::HistoryRewrite)
+        );
+        assert_eq!(
+            judged(&PlanContext::default(), "GIT.EXE push --force origin x"),
+            None
+        );
+        assert_eq!(
+            judged(&proposed, "$r = git commit -m x"),
+            Some(Refused::ProposedPlan)
+        );
+        assert_eq!(judged(&proposed, "Get-Content README.md"), None);
+        // A line PowerShell refuses to parse runs, as it does today.
+        assert_eq!(judged(&proposed, "git commit -m 'x"), None);
+    }
+
     #[test]
     fn the_hint_names_the_current_and_next_step_and_adds_the_update_command_when_stale() {
         let fresh = PlanContext {
@@ -536,12 +615,12 @@ mod tests {
         };
         assert_eq!(
             hint(&fresh, 5 * 60_000).unwrap(),
-            "Plan: now Core events (1/4) · next Web map · updated 5 min ago"
+            "Task: now Core events (1/4) · next Web map · updated 5 min ago"
         );
         let stale = hint(&fresh, 31 * 60_000).unwrap();
         assert!(
             stale.ends_with(
-                "`hide plan node core --status done` and the step you are on with `--status working`."
+                "`hide task node core --status done` and the step you are on with `--status working`."
             ),
             "{stale}"
         );
@@ -579,7 +658,10 @@ mod tests {
             for call in example["commands"].as_array().unwrap() {
                 let input = call["input"].as_str().unwrap().to_owned();
                 let action = match call["tool"].as_str().unwrap() {
-                    "shell" => Action::Shell(input),
+                    "shell" => Action::Shell {
+                        command: input,
+                        syntax: hide_shell::Syntax::Posix,
+                    },
                     "write" => Action::Write(vec![input]),
                     other => panic!("unknown tool {other}"),
                 };
@@ -639,7 +721,7 @@ mod tests {
         );
         // The record the hook wrote before the change.
         let home = tempfile::tempdir().unwrap();
-        let path = record_path(home.path(), "w1:p2");
+        let path = record_path(home.path(), "w1:p2").unwrap();
         std::fs::create_dir_all(path.parent().unwrap()).unwrap();
         let saved = serde_json::json!({"version": 1, "session": "session-a", "context": worker});
         std::fs::write(&path, serde_json::to_vec(&saved).unwrap()).unwrap();

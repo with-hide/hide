@@ -11,6 +11,9 @@ import { requireInterfaceLanguage } from "../i18n/locale";
 import { canRetryDevice, deviceLine, deviceProblemLine, deviceSubtitle, hostLine, kitProblems, retrySignsIn } from "../settings";
 import type { Device, RemoteStatus } from "../snapshot";
 import { useShellStore } from "../store";
+import { switchOffered } from "../deviceSwitch";
+import { deviceConnectOffered, ownWindow } from "../pairing";
+import { DeviceSwitchButton, DeviceSwitchLine } from "./DeviceSwitch";
 import { DeviceSignIn } from "./SignInPrompt";
 import { FixCommand } from "./FixCommand";
 import { KitProblem } from "./MachineKit";
@@ -40,8 +43,8 @@ export type DeviceRowHandlers = {
 export type DeviceRowPlace = { name: string; core: boolean; own: boolean; windowIsNode: boolean; connected: boolean; coreName: string };
 
 /**
- * One device (PRD settings-cleanup B54, B55): its name, alias, platform, Herdr
- * version and connection state on one line with Test and the ⋯ menu. A line
+ * One device (PRD settings-cleanup B54, B55): its name, alias, platform
+ * and connection state on one line with Test and the ⋯ menu. A line
  * grows under it only when something needs the operator: a refused connection,
  * a helper that is not allowed or not running, a part of Hide's kit that
  * failed, or the result of a test they asked for.
@@ -52,7 +55,12 @@ export function DeviceRow({ device, status, focused, place, actions, handlers }:
   // A node that dials in has no SSH connection to test or retry here.
   const remote = device.kind === "remote" && device.dials_in !== true;
   // The core's machine seen from a node: its platform, since "local" would name the window's machine.
-  const subtitle = device.kind !== "remote" && place.windowIsNode ? (device.host?.platform ?? "") : deviceSubtitle(device, status, t, place.coreName);
+  const subtitle = device.kind !== "remote" && place.windowIsNode ? (device.host?.platform ?? "") : deviceSubtitle(device, t, place.coreName);
+  // A helper device says it is on the old connection and offers the switch
+  // (B35), from this computer's own window only (B52).
+  const ownScreen = useShellStore((s) => ownWindow(s.pairing));
+  const deviceConnect = useShellStore((s) => deviceConnectOffered(s.daemon));
+  const switchable = ownScreen && switchOffered(device, deviceConnect);
   return (
     <Row
       data-device-row={device.id}
@@ -76,12 +84,14 @@ export function DeviceRow({ device, status, focused, place, actions, handlers }:
           ) : null}
         </span>
       }
-      detail={<DeviceAttention device={device} actions={actions} onAct={handlers.onAct} onAllow={handlers.onAllow} />}
+      detail={<DeviceAttention device={device} actions={actions} switchable={switchable} onAct={handlers.onAct} onAllow={handlers.onAllow} />}
     >
       <Status tone={line.tone} data-device-state={`${device.id}:${device.state}`}>
         {line.text}
       </Status>
       {focused ? <Status tone="muted">{t("devices.selected")}</Status> : null}
+      {switchable ? <Status tone="muted" data-device-old-link={device.id}>{t("devices.switch.old")}</Status> : null}
+      {switchable && !device.switch ? <DeviceSwitchButton device={device} actions={actions} /> : null}
       {remote && canRetryDevice(device, status) ? (
         <Button
           variant="secondary"
@@ -182,15 +192,15 @@ function DeviceMenu({ device, focused, place, actions, handlers }: { device: Dev
 }
 
 /** The lines under a device that something needs the operator for; a healthy device has none. */
-function DeviceAttention({ device, actions, onAct, onAllow }: { device: Device; actions: Actions; onAct: () => void; onAllow: (device: Device) => void }) {
+function DeviceAttention({ device, actions, switchable, onAct, onAllow }: { device: Device; actions: Actions; switchable: boolean; onAct: () => void; onAllow: (device: Device) => void }) {
   const { t, i18n } = useInterfaceTranslation();
   // SSH trust, sign-in and helper consent belong to a device this core dials, not to a node that dials in.
   const remote = device.kind === "remote" && device.dials_in !== true;
   const signIn = remote ? (device.sign_in ?? null) : null;
   const host = device.host;
   const needsAllow = host !== undefined && (host.consent !== "granted" || host.state === "identity_changed");
-  // Consent starts the helper that installs or updates Herdr, including
-  // when Herdr cannot yet supply a readable session. A failed helper kit
+  // Consent starts the helper that installs or updates Hide's kit, including
+  // when the engine cannot yet supply a readable session. A failed helper kit
   // must keep its reason and Retry visible before that session connects.
   // An unsupported platform keeps its reason visible too, without a Retry.
   // The helper is the link, so an ssh failure, an unsupported system ssh
@@ -201,6 +211,7 @@ function DeviceAttention({ device, actions, onAct, onAllow }: { device: Device; 
   const kit = device.kit;
   const kitShown = kit !== undefined && (Boolean(kit.unavailable) || Boolean(kit.refused) || kit.busy || kitProblems(kit).length > 0);
   const rows = [
+    switchable && device.switch ? <DeviceSwitchLine key="switch" device={device} actions={actions} /> : null,
     deviceLinkShown(device) ? <DeviceLink key="link" device={device} actions={actions} /> : null,
     ownWords ? (
       <p key="message" className="break-words font-mono text-caption text-muted-foreground" data-device-message={device.id}>
@@ -229,32 +240,6 @@ function DeviceAttention({ device, actions, onAct, onAllow }: { device: Device; 
           </Button>
         ) : null}
         {host?.message ? <Note tone={helper.tone === "muted" ? "muted" : "warn"}>{host.message}</Note> : null}
-      </div>
-    ) : null,
-    // The line is about the server last reached; an unreachable device says that instead.
-    remote && device.state === "ready" && device.herdr_behind ? (
-      <div key="herdr" className="space-y-xxs" data-device-herdr-behind={`${device.id}:${device.herdr_behind.cause}`}>
-        <Status tone="warn">{t("devices.herdrBehind", { server: device.herdr_behind.server_version, version: device.herdr_behind.version })}</Status>
-        <Note tone="warn">
-          {device.herdr_behind.cause === "cannot_hand_off" ? t("devices.herdrBehindUpdate") : t("devices.herdrBehindRestart", { version: device.herdr_behind.version })}
-        </Note>
-      </div>
-    ) : null,
-    remote && kit?.herdr_start_failed ? (
-      <div key="herdr-start" className="flex flex-wrap items-center gap-x-sm gap-y-xs" data-device-herdr-start-failed={device.id}>
-        <Status tone="warn">{t("devices.herdrStartFailed")}</Status>
-        <Button
-          variant="secondary"
-          size="sm"
-          disabled={kit.busy}
-          onClick={() => {
-            onAct();
-            actions.reinstallKit(device.id);
-          }}
-          data-device-herdr-start-retry={device.id}
-        >
-          {t("common.retry")}
-        </Button>
       </div>
     ) : null,
     kitShown ? <KitProblem key="kit" device={device} actions={actions} onAct={onAct} /> : null,

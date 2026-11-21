@@ -3,26 +3,16 @@ herdr
 
 Copyright 2025 herdr contributors.
 
-This application bundles the herdr binary from:
+This application includes code taken from herdr v0.9.5:
 https://github.com/herdrdev/herdr/releases/tag/v0.9.5
 
-BEGIN HERDR PROVENANCE
-This application distributes the upstream Herdr release v0.9.5 from herdrdev/herdr.
-The bundled binary's code is not modified by hide; on macOS a release replaces only its ad-hoc signature with hide's Developer ID one, which notarization requires.
-hide proposes an upstream stable release through herdr-update.yml only when it is run by hand; updates must pass contract and runtime checks.
-END HERDR PROVENANCE
+- hide-vt, herdr's crates/ghostty-vt binding to libghostty-vt, renamed (hide-vt/PATCHES.md);
+- vendor/portable-pty, herdr's patched copy of portable-pty, with hide's changes (its PATCHES.md);
+- the agent screen detection rule grammar and the screen rules of the agent definition files.
 
+hide no longer bundles or runs the herdr binary.
 herdr is distributed under the Apache License, Version 2.0.
 The license text from the upstream release's LICENSE file is reproduced in full below.
-
-The bundled macOS arm64 binary is verified at build time:
-Version: 0.9.5
-SHA-256: fb77c2232a05a8035421382c894392f4174e4e38a18e48af3dd0290157c3a7e2
-
-The Windows and Linux packages carry the same release's Windows and Linux assets,
-each verified against the digest contracts/herdr-bundle.json records for it at build time.
-The Windows asset ships as upstream laid it out: herdr.exe, its ConPTY runtime in conpty/,
-and that runtime's license and notice in THIRD-PARTY-NOTICES/ beside them.
 
                                  Apache License
                            Version 2.0, January 2004

@@ -9,7 +9,7 @@ import { findArea as findAgentArea, activeDisplay as activeAgentDisplay, adjacen
 // the same code against the same snapshot. Each action is one core event
 // (dispatch is fire-and-forget; a sequence would arrive as several frames).
 
-import type { AgentLogoMode, AgentLogoModeSetPayload, PaneTurnRowMode, PaneTurnRowModeSetPayload, ColorThemeSetPayload, FocusCheckoutPayload, InterfaceLanguageSetPayload, UiStateUsageHints, UsagePinSetPayload, UsageHiddenSetPayload } from "./generated/hided-ws";
+import type { AgentLogoMode, AgentLogoModeSetPayload, DesktopActivityPayload, HumanTurnDonePayload, PaneTurnRowMode, PaneTurnRowModeSetPayload, ColorThemeSetPayload, FocusCheckoutPayload, InterfaceLanguageSetPayload, UiStateUsageHints, UsagePinSetPayload, UsageHiddenSetPayload } from "./generated/hided-ws";
 import type { MessageKey } from "./i18n/catalogs";
 import { translate } from "./i18n/client";
 import type { InterfaceLanguage } from "./i18n/locale";
@@ -36,11 +36,12 @@ import { frontDeviceId, localDeviceId, railShown } from "./devices";
 import { machineName, windowDeviceId } from "./screenMachine";
 import { allAgents, boardProjects } from "./navigation";
 import { cardOfItem } from "./overviewTasks";
-import { conductorUnanswered, missionOfPane, takeOverPrompt, takeOverProvider } from "./missions";
+import { missionOfPane, takeOverPrompt, takeOverProvider } from "./missions";
 import { planOfPane } from "./plans";
 import { backlogIntent } from "./overviewBacklog";
 import { MISSED_FOLD, sessionOfAgent, workKey } from "./sessionWork";
-import { expectSurface, type Surface } from "./recent";
+import { expectSurface, recentPanes, type Surface } from "./recent";
+import { frontTool, keptBy, toolKeeps } from "./toolCells";
 import { useStartPanel, useInlineStarts } from "./startDraft";
 import { contextAgents, remoteConnected, remoteContext, remoteControl, remoteRequestId, remoteTargetOfPane, remoteView, withDeviceForward, type RemoteAction, type RemoteView } from "./remote";
 import { armKeyTarget } from "./keyTarget";
@@ -82,15 +83,17 @@ import { fileUrl, focusBrowserDisplay, isHtmlFile } from "./browserViews";
 import { requestLine } from "./editor/lineRequest";
 import { paneContext, terminalPathOwner, type FoundPath } from "./terminalLinkProvider";
 import { externalBridge, externalLineKey, notePendingGrant, useExternalStore } from "./externalFiles";
-import { homeOpening } from "./hideAiOrigin";
+import type { AiItemRef } from "./hideAi";
+import { automationOpening, homeOpening } from "./hideAiOrigin";
 import { agentsByPane, allAgents as allPaneAgents } from "./paneAgents";
 import { archiveWorking } from "./archive";
 import { beginOpening } from "./opening";
 import { deskOn, threadKeyPane } from "./desk";
 import { afterKeep, openThread as openDeskThread, toggleLane as toggleDeskLane } from "./deskLane";
-import { useShellStore } from "./store";
-import { useUiStore, type MainView, type OverviewPlace, type PendingClose, type PendingViewsClose } from "./ui";
+import { focusedPaneOf, useShellStore } from "./store";
+import { AUTOMATION_ENTRY, MISSION_ENTRY, useUiStore, type MainView, type OverviewPlace, type PendingClose, type PendingViewsClose } from "./ui";
 import { browserClipboard, type Clipboard, type ClipboardContent } from "./clipboard";
+import type { PairingVerb } from "./pairing";
 import type { DispatchFn } from "./ws";
 import { closeShortcutPolicy, drawnViews, keyboardCommandOwner, keyboardInputRevision, keyboardOwner, newTabPolicy } from "./viewFocus";
 import { focusTerminal } from "./terminals";
@@ -115,7 +118,8 @@ import {
   type ViewMenuId,
   type ViewWorkspace,
 } from "./viewLayout";
-import { workspaceViewOf, type LaneView, type Tool } from "./workspace";
+import { frontCard, workspaceViewOf, type LaneView, type Tool } from "./workspace";
+import { drawnPair, pairModeOn, pairOffer } from "./pairView";
 import { startRequestId } from "./startAnswer";
 
 /** The `device_id` an event carries: none for the core's own node, which the core takes as the default. */
@@ -126,10 +130,10 @@ function deviceField(device: string, node: string): { device_id?: string } {
 export type Actions = ReturnType<typeof createActions>;
 
 /**
- * Whether an event puts the front Workspace's unpinned lane up (PRD
- * right-lane B15, B16): a tool, a reveal or a linked folder. Read here,
- * where every operator event passes, so no path can forget it; it is page
- * state and never sent. Choosing an agent or a tab leaves the lane as it
+ * Whether an event calls the front Workspace's lane up (PRD right-lane B15,
+ * B16): a tool, a reveal, the desk, an open or a linked folder. Read here,
+ * where every operator event passes, so no path can forget to draw the
+ * column the call is for in a stacked lane. Choosing an agent or a tab leaves the lane as it
  * is: only the operator closes it. An open, a History selection or a Recent
  * Panels display calls the lane through the core's call number instead
  * (`laneCalls.ts`), the one way a call from the CLI or another page arrives too.
@@ -152,12 +156,7 @@ export function laneCalled(event: Parameters<DispatchFn>[0]): boolean {
  * paste goes through `clipboard`, the system one unless the screen gives its
  * own (the practice window keeps its copies off the operator's clipboard).
  */
-/** Takeover starts whose handover token a confirmation may still ask for. */
-const HANDOVER_TOKENS_KEPT = 8;
-
 export function createActions(send: DispatchFn, clipboard?: Clipboard) {
-  /** The handover token each takeover start was made with, by its request id, so a confirmation of that start names the same one. */
-  const handoverTokens = new Map<string, string>();
   const dispatch: DispatchFn = (event) => {
     if (laneCalled(event)) {
       // A stacked lane draws the column the call is for (PRD lane-two-columns B19).
@@ -278,13 +277,41 @@ export function createActions(send: DispatchFn, clipboard?: Clipboard) {
     const context = remoteContext(rest());
     if (!context) return null;
     if (!remoteConnected(context)) {
-      ui().setNotice({ text: translate("shell.deviceNotConnected", { device: machineName(rest()?.navigator?.devices, context.device.id, translate), command: translate(command) }), refreshable: false });
+      ui().showNotice({ level: "info", text: translate("shell.deviceNotConnected", { device: machineName(rest()?.navigator?.devices, context.device.id, translate), command: translate(command) }), refreshable: false });
       return null;
     }
     return { targetId: context.device.id, view: remoteView(context.session, rest()?.workspace_view), agents: context.session?.agents ?? [] };
   };
 
   const sendRemote = (targetId: string, request: RemoteAction) => dispatch(remoteControl(targetId, request));
+
+  /**
+   * The one event that opens a pane for the operator, wherever it lives: this
+   * machine's `focus_pane`, or the device's `remote_control` focus_pane. It
+   * also brings the pane's device forward when that device is not in front, so
+   * a row, a chip or a relationship Open that reaches a pane on another device
+   * (or back to this one) shows it, rather than focusing it out of sight. Every
+   * way of opening an agent pane builds its event here (docs/UI_BEHAVIOR.md,
+   * "Agent panes and the Agents explorer": a parent row opens a device child).
+   */
+  const openPaneEvent = (paneId: string, options: { requestId?: string; report?: boolean; revealUnseen?: boolean } = {}) => {
+    const node = localDeviceId(rest());
+    const target = remoteTargetOfPane(rest(), paneId) ?? node;
+    const forward = frontDeviceId(rest()) !== target;
+    if (target !== node) {
+      const event = remoteControl(target, { action: "focus_pane", pane_id: paneId }, options.requestId);
+      const reported = options.report ? { ...event, payload: { ...event.payload, report_pane_focus_outcome: true } } : event;
+      return { event: forward ? withDeviceForward(reported) : reported, remote: true };
+    }
+    return {
+      event: {
+        schema_version: 2,
+        kind: "focus_pane",
+        payload: { pane_id: paneId, origin: "operator", focus_device: forward, ...(options.requestId ? { request_id: options.requestId } : {}), ...(options.revealUnseen ? { reveal_unseen: true } : {}) },
+      },
+      remote: false,
+    };
+  };
 
   /**
    * A child chip, a Return or a relationship Open (S6 B15, B16): one
@@ -304,16 +331,7 @@ export function createActions(send: DispatchFn, clipboard?: Clipboard) {
       ui().setRelation({ ...asked, timedOut: true });
     }, RELATION_ANSWER_TIMEOUT_MS);
     ui().setScreen({ kind: "workspace" });
-    const targetId = remoteTargetOfPane(rest(), targetPaneId);
-    if (targetId) {
-      dispatch({
-        schema_version: 2,
-        kind: "remote_control",
-        payload: { target_id: targetId, request_id: requestId, report_pane_focus_outcome: true, action: "focus_pane", pane_id: targetPaneId },
-      });
-      return;
-    }
-    dispatch({ schema_version: 2, kind: "focus_pane", payload: { pane_id: targetPaneId, origin: "operator", request_id: requestId } });
+    dispatch(openPaneEvent(targetPaneId, { requestId, report: true }).event);
   };
 
   /** The id of the core's task slot now, so a request can tell its own answer from an older one. */
@@ -328,7 +346,7 @@ export function createActions(send: DispatchFn, clipboard?: Clipboard) {
     const consequence = closeScope(rest(), panes.map((p) => p.id));
     const decision = closeDecision(consequence);
     if (decision.action === "status_unknown") {
-      ui().setNotice({ text: statusUnknownNotice(decision.label, translate), refreshable: true });
+      ui().showNotice({ level: "important", text: statusUnknownNotice(decision.label, translate), refreshable: true });
       return;
     }
     // An agent with live descendants outside what closes asks the subtree
@@ -411,7 +429,7 @@ export function createActions(send: DispatchFn, clipboard?: Clipboard) {
 
   /**
    * A project or checkout row. On a selected SSH device a project can hold
-   * several Herdr workspaces, and the checkout names the one to focus.
+   * several engine workspaces, and the checkout names the one to focus.
    */
   const focusCheckout = (workspaceId: string, checkoutId: string, expanded?: FocusCheckoutPayload["expanded"], projectExpanded?: boolean) => {
     const context = remoteContext(rest());
@@ -451,7 +469,7 @@ export function createActions(send: DispatchFn, clipboard?: Clipboard) {
    * did once. The core keeps the lane per Workspace, so another Workspace is
    * never touched.
    */
-  const setWorkspaceView = (patch: { open?: boolean; documents?: boolean; tool?: Tool | null; pinned?: boolean; document_width?: number; detail_width?: number; explorer_width?: number; panel_width?: number; width_request_id?: string; reveal?: string }) => {
+  const setWorkspaceView = (patch: { open?: boolean; documents?: boolean; tool?: Tool | null; document_width?: number; explorer_width?: number; panel_width?: number; width_request_id?: string; reveal?: string; pair_ratio?: number }) => {
     if (!workspaceViewOf(rest())) return diagnostic("workspace_view: no Workspace in front");
     return dispatch({ schema_version: 2, kind: "workspace_view", payload: patch });
   };
@@ -467,12 +485,6 @@ export function createActions(send: DispatchFn, clipboard?: Clipboard) {
   /** Whether the viewing column draws `view` now. */
   const viewUp = (view: LaneView) => laneUp() && ui().drawnLane.view === view;
 
-  /** Whether the core says the 보기 slot stands in front of the documents (PRD sidebar-task-lens D-50). */
-  const detailShown = () => {
-    const detail = rest()?.ui_state?.detail;
-    return Boolean(detail?.shown && detail.items.length > 0);
-  };
-
   /**
    * Shows one tool in the tool column (B3, B14): a stacked lane draws the
    * tool, and nothing is sent when the column already holds it. An open lane's viewing column is left as it is; a
@@ -485,17 +497,95 @@ export function createActions(send: DispatchFn, clipboard?: Clipboard) {
     if (view.tool !== tool || !view.open) setWorkspaceView({ tool });
   };
 
-  /** Puts `item` in the 보기 slot in front (PRD sidebar-task-lens B14, B15; lane-two-columns B9): the Workspace, its Agent tab and the keyboard stay. */
-  const openDetail = (item: import("./snapshot").DetailItem) => {
+  /**
+   * Puts `item` as a card tab on a desk (PRD sidebar-task-lens B14, B15;
+   * lane-two-columns B9) where it was pressed (operator decision
+   * 2026-11-09): `here` the slot in front, the Workspace, its Agent tab and
+   * the keyboard staying; `{ pane }` or `owner` the slot of that agent, whose
+   * pane the core brings forward in the same event.
+   */
+  /** The `at` an open event carries; `here` is the core's default and goes unsaid. */
+  const placeOf = (at: import("./snapshot").DetailPlace) => (at === "here" ? {} : { at });
+
+  const openDetail = (item: import("./snapshot").DetailItem, at: import("./snapshot").DetailPlace = "here") => {
     if (!workspaceViewOf(rest())) return diagnostic("detail_open: no Workspace in front");
     ui().setStackFront("view");
-    dispatch({ schema_version: 2, kind: "detail_open", payload: { item } });
+    dispatch({ schema_version: 2, kind: "detail_open", payload: { item, ...placeOf(at) } });
   };
 
   /** Whether a Workspace is in front to draw the lane, rather than Home (B17). */
   const workspaceInFront = () => ui().screen?.kind === "workspace" && Boolean(frontCheckout(rest()) && workspaceViewOf(rest()));
 
-  /** Closes the lane (B15): ⌘E, the path's menu and Escape on an unpinned lane; both columns keep their shape for ⌘E's reopen. */
+  /**
+   * A row with a View to look at brings its newest unseen View forward with
+   * the pane (PRD unseen-agent-views B3): the core does both in the pane's
+   * focus. A device's pane is focused on its device, and its View, which
+   * this core holds, follows in the checkout's focus.
+   */
+  const openAgent = (paneId: string, look?: LookAt) => {
+    beginOpening({ paneId });
+    // A request id makes the core answer this click, a pane that is gone
+    // or a device's refusal included, so the opening says why at once
+    // rather than waiting out its bound in silence (issue 2505).
+    const { event, remote } = openPaneEvent(paneId, { requestId: remoteRequestId(), report: true, revealUnseen: Boolean(look) });
+    dispatch(event);
+    if (remote) {
+      if (look?.workspace_id && look.checkout_id) dispatch({ schema_version: 2, kind: "focus_checkout", payload: { workspace_id: look.workspace_id, checkout_id: look.checkout_id, display_id: look.view_id } });
+      return;
+    }
+    // The core's answer moves the keys only when it moves the focus, so a
+    // pane already focused would leave them on the row, link or mark that
+    // was pressed. The operator asked for the pane, so the open takes the
+    // keys itself while the pane is on screen; the terminal reports no
+    // click for a focus it is given (`focusTerminal`).
+    if (ui().screen?.kind === "workspace" && useShellStore.getState().focusedPaneId === paneId) focusTerminal(paneId);
+    // From the mission screen's `← <pane>` the pane is often the focused one
+    // already, so the core moves nothing: the Workspace comes back at once
+    // and the terminal takes the keys once it is drawn (PRD mission-screen B14).
+    else if (ui().screen?.kind === "missions" && useShellStore.getState().focusedPaneId === paneId) {
+      ui().setScreen({ kind: "workspace" });
+      requestAnimationFrame(() => focusTerminal(paneId));
+    }
+  };
+
+  /**
+   * A device's tile pressed while a tool's cell is in front: the cell in
+   * front is read from what the center shows (`frontTool`), so the center
+   * comes back to the device on something no tool keeps. The device's
+   * Workspace as the core holds it, unless the pane it focuses is a tool's;
+   * else that device's pane the keyboard was in last that no tool keeps;
+   * else its Overview. True when the pane's own open brings the device
+   * forward, so nothing more is sent.
+   */
+  const showDeviceFromTool = (deviceId: string): boolean => {
+    const now = rest();
+    ui().setOverview({ deviceId: null, projectId: null, panel: null });
+    const focused = now ? focusedPaneOf(now) : null;
+    if (frontDeviceId(now) === deviceId && frontCheckout(now) && workspaceViewOf(now) && !(focused && toolKeeps(now, deviceId, focused))) {
+      ui().setScreen({ kind: "workspace" });
+      return false;
+    }
+    const agents = allPaneAgents(useShellStore.getState().agents, now?.status?.remote);
+    const pane = recentPanes(now).find((id) => agents.some((row) => row.pane_id === id && (row.device_id ?? localDeviceId(now)) === deviceId) && !toolKeeps(now, deviceId, id));
+    if (pane) {
+      openAgent(pane);
+      return true;
+    }
+    ui().setScreen({ kind: "main", deviceId });
+    return false;
+  };
+
+  /**
+   * What a mission's detail opens as a card tab on a desk (a node's plan, a worker's
+   * or checker's record) is drawn by the Workspace in front, not on the
+   * mission screen, so the screen gives way to it first (PRD mission-screen
+   * D-09); with no Workspace in front the screen stays.
+   */
+  const leaveMissionsForSlot = () => {
+    if (ui().screen?.kind === "missions" && frontCheckout(rest()) && workspaceViewOf(rest())) ui().setScreen({ kind: "workspace" });
+  };
+
+  /** Closes the lane (B15): ⌘E, the path's menu and Escape in the lane; both columns keep their shape for ⌘E's reopen. */
   const closeLane = () => setWorkspaceView({ open: false });
 
   /** The tool column's ×, a pressed tool icon or its chord (B14): the tool column alone closes; the documents stay. */
@@ -505,31 +595,40 @@ export function createActions(send: DispatchFn, clipboard?: Clipboard) {
   const toggleTool = (tool: Tool) => (toolUp(tool) ? closeTool() : showTool(tool));
 
   /**
-   * Brings the documents in front of the viewing column (B6, B11): an
-   * unpinned lane comes up, a stacked lane draws them, and the keyboard goes
+   * Brings the desk in front of the viewing column (B6, B11): the lane comes
+   * up, a stacked lane draws them, and the keyboard goes
    * into the active area, so typing and ⌘W act on the document the operator
-   * brought back rather than on the terminal behind it.
+   * brought back rather than on the terminal behind it. From the rail's desk
+   * button it stops on the area's front tab instead: a click or Tab enters
+   * the editor, and Escape there closes the lane (PRD lane-desk-pair-view B30).
    */
-  const showDocuments = () => {
+  const showDocuments = (onTab = false) => {
     const view = workspaceViewOf(rest());
     if (!view) return diagnostic("workspace_view: no Workspace in front");
     ui().setStackFront("view");
-    if (!view.open || !view.documents || detailShown()) setWorkspaceView({ documents: true });
+    if (!view.open || !view.tray.shown) setWorkspaceView({ documents: true });
     if (view.layout && (view.layout.display_count ?? 0) > 0) {
-      followFocus({ workspace: { device_id: view.device_id, path: view.path }, layout: view.layout }, { areaId: view.layout.active_area });
+      const workspace = { device_id: view.device_id, path: view.path };
+      if (onTab) ui().setViewFocusRequest({ workspace: workspaceKey(workspace), areaId: view.layout.active_area, tab: true });
+      else followFocus({ workspace, layout: view.layout }, { areaId: view.layout.active_area });
     }
   };
 
-  /** The documents' own ✕ (B12): the viewing column closes, every view kept on the documents button; the tool column stays. */
-  const closeDocuments = () => setWorkspaceView({ documents: false });
+  /** The documents' own ✕ (B12): the viewing column closes, every view kept on the documents button; the tool column stays. Pair view draws none, since only its own ways out end it (D-46). */
+  const closeDocuments = () => {
+    if (drawnPair(workspaceViewOf(rest()))) return diagnostic("close documents: pair view keeps its desk");
+    setWorkspaceView({ documents: false });
+  };
 
   /** The rail's documents button or its command (B2, B11): the documents fold while they show, else they come in front; with no document nothing happens but a diagnostic. */
   const toggleDocuments = () => {
     const view = workspaceViewOf(rest());
     if (!view) return diagnostic("workspace_view: no Workspace in front");
+    // In pair view the desk is always drawn: the button takes the keyboard to it and folds nothing (D-46).
+    if (drawnPair(view)) return showDocuments(true);
     if (viewUp("documents")) return setWorkspaceView({ documents: false });
     if ((view.layout?.display_count ?? 0) === 0) return diagnostic("toggle documents: no document is open");
-    showDocuments();
+    showDocuments(true);
   };
 
   /**
@@ -541,19 +640,16 @@ export function createActions(send: DispatchFn, clipboard?: Clipboard) {
   const toggleLane = () => {
     // Desk's room has a lane of its own (PRD session-docs-and-assistant B32).
     if (ui().screen?.kind === "desk") return ui().setDeskLane(toggleDeskLane);
+    // ⌘E does nothing in pair view: only ⌘., ◧ and the strip's way back end it (D-46).
+    if (drawnPair(workspaceViewOf(rest()))) return diagnostic("toggle_lane: pair view ends only by its own ways out");
     if (laneUp()) return closeLane();
     const view = workspaceViewOf(rest());
     if (!view) return diagnostic("workspace_view: no Workspace in front");
     setWorkspaceView({ open: true });
-    const documents = view.layout && (view.layout.display_count ?? 0) > 0 && (view.documents || view.tool === null);
+    const documents = view.layout && (view.layout.display_count ?? 0) > 0 && (view.tray.shown || view.tool === null);
     if (documents && view.layout) {
       followFocus({ workspace: { device_id: view.device_id, path: view.path }, layout: view.layout }, { areaId: view.layout.active_area });
     }
-  };
-
-  /** The pin (B5): pinned, the lane docks; unpinned, it stays up over Agent Views until the operator closes it with ⌘E or Escape. */
-  const setLanePinned = (pinned: boolean) => {
-    setWorkspaceView({ pinned });
   };
 
   /**
@@ -955,7 +1051,8 @@ export function createActions(send: DispatchFn, clipboard?: Clipboard) {
     const document = state.documents[tab.id] ?? null;
     const carries = documentCloseCarries({ draft: latestDraft(tab.id), document, dirty: tab.dirty });
     if (carries.kind === "unloaded" && last) {
-      ui().setNotice({
+      ui().showNotice({
+        level: "important",
         text: translate("shell.unloadedChanges", { name: tab.label }),
         refreshable: false,
         dontSave: { workspace: frame.workspace, displayId },
@@ -974,7 +1071,7 @@ export function createActions(send: DispatchFn, clipboard?: Clipboard) {
    * close was asked on. A copy stored in this browser stays a recovery item.
    */
   const closeViewWithoutSaving = (target: { workspace: ViewWorkspace; displayId: string }) => {
-    ui().setNotice(null);
+    ui().dismissNotices((notice) => notice.dontSave?.displayId === target.displayId);
     const frame = frameNow();
     if (frame && workspaceKey(frame.workspace) === workspaceKey(target.workspace)) followViewClose(frame, target.displayId);
     if (dispatch({ schema_version: 2, kind: "view_layout", payload: viewLayoutPayload(target.workspace, { action: "close", display_id: target.displayId, discard: true }) }) === false) stopCloseFocus?.();
@@ -1161,6 +1258,11 @@ export function createActions(send: DispatchFn, clipboard?: Clipboard) {
       ui().openSettings(tab);
     },
 
+    /** 확인하기 on an install an agent asked for: its confirm in Settings › 스킬·MCP. */
+    openStoreAsk(id: string) {
+      ui().openStoreAsk(id);
+    },
+
     setAccent(hex: string) {
       updateUiState({ accent_hex: hex });
     },
@@ -1198,6 +1300,15 @@ export function createActions(send: DispatchFn, clipboard?: Clipboard) {
     /** Sleep agent from the pane menu (B15). */
     sleepAgent(paneId: string) {
       dispatch({ schema_version: 2, kind: "agent_sleep", payload: { pane_id: paneId } });
+    },
+
+    /**
+     * Done on a person's turn (PRD ask-human B18): the core sends the agent
+     * that declared `declaration` one letter and takes the declaration down;
+     * a repeat from any surface finds nothing standing and sends nothing.
+     */
+    finishHumanTurn(declaration: string) {
+      dispatch({ schema_version: 2, kind: "human_turn_done", payload: { declaration } satisfies HumanTurnDonePayload });
     },
 
     /**
@@ -1327,7 +1438,34 @@ export function createActions(send: DispatchFn, clipboard?: Clipboard) {
     revokePhone(phoneId: string) {
       dispatch({ schema_version: 2, kind: "mobile_revoke", payload: { phone_id: phoneId } });
     },
-    setPushMode(mode: "off" | "app_closed" | "always") {
+    /**
+     * One thing the operator does about pairing this machine with another
+     * Hide (PRD device-connect-iroh B1-B3, B24-B26, B50): hided's pairing
+     * answers it for this window alone, and what changed comes back in the
+     * `pairing` frame and the snapshot's paired machines.
+     */
+    pairing(verb: PairingVerb, payload: Record<string, unknown> = {}) {
+      dispatch({ schema_version: 2, kind: `pairing_${verb}`, payload });
+    },
+    /**
+     * Settings › External tools (PRD hide-external-control B3, B4, B12,
+     * B13): the operator's answer to a tool's request and the level or
+     * disconnect of a connected one, each one core event; the `access`
+     * section shows the outcome.
+     */
+    approveAccess(id: string, level: import("./snapshot").AccessLevel) {
+      dispatch({ schema_version: 2, kind: "access_approve", payload: { id, level } });
+    },
+    refuseAccess(id: string) {
+      dispatch({ schema_version: 2, kind: "access_refuse", payload: { id } });
+    },
+    setAccessLevel(id: string, level: import("./snapshot").AccessLevel) {
+      dispatch({ schema_version: 2, kind: "access_level", payload: { id, level } });
+    },
+    revokeAccess(id: string) {
+      dispatch({ schema_version: 2, kind: "access_revoke", payload: { id } });
+    },
+    setPushMode(mode: "app_closed" | "always") {
       dispatch({ schema_version: 2, kind: "mobile_push_mode", payload: { mode } });
     },
     observeAgents(observing: boolean) {
@@ -1361,9 +1499,10 @@ export function createActions(send: DispatchFn, clipboard?: Clipboard) {
       updateUiState(hints);
     },
 
-    /** Runs on is `provider` on `device` (null: the core's own machine); with `model`, that agent's model, wherever it runs. */
-    chooseAi(provider: string, model?: string, device: string | null = null) {
-      dispatch({ schema_version: 2, kind: "ai_settings", payload: model === undefined ? { provider, device } : { provider, model } });
+    /** Runs on is `item` on its device (null: the core's own machine); with `model`, that item's model, wherever it runs (PRD agent-profiles-phase2 D-07). */
+    chooseAi(item: AiItemRef, model?: string) {
+      const named = { provider: item.provider, ...(item.profile ? { profile: item.profile } : {}) };
+      dispatch({ schema_version: 2, kind: "ai_settings", payload: model === undefined ? { ...named, device: item.device } : { ...named, model } });
     },
     /** The `에이전트 요약` switch (PRD overview-request-view D-11): off, agent labels are neither asked for nor shown. */
     setAgentSummary(on: boolean) {
@@ -1377,12 +1516,12 @@ export function createActions(send: DispatchFn, clipboard?: Clipboard) {
     setHideAiEnabled(on: boolean) {
       dispatch({ schema_version: 2, kind: "ai_settings", payload: { enabled: on } });
     },
-    /** Adds an agent at the end of "If <Runs on> can't answer" (D-16). */
-    addAiFallback(provider: string, device: string | null = null) {
-      dispatch({ schema_version: 2, kind: "ai_settings", payload: { fallback_add: provider, device } });
+    /** Adds an item at the end of "If <Runs on> can't answer" (D-16); another item of the Runs on agent may be one (PRD agent-profiles-phase2 B16). */
+    addAiFallback(item: AiItemRef) {
+      dispatch({ schema_version: 2, kind: "ai_settings", payload: { fallback_add: item.provider, ...(item.profile ? { profile: item.profile } : {}), device: item.device } });
     },
-    removeAiFallback(provider: string) {
-      dispatch({ schema_version: 2, kind: "ai_settings", payload: { fallback_remove: provider } });
+    removeAiFallback(item: AiItemRef) {
+      dispatch({ schema_version: 2, kind: "ai_settings", payload: { fallback_remove: item.provider, ...(item.profile ? { profile: item.profile } : {}) } });
     },
 
     /** Reinstall on a machine's row repairs every part that needs it; a hook row names its one part. */
@@ -1418,21 +1557,22 @@ export function createActions(send: DispatchFn, clipboard?: Clipboard) {
       dispatch({ schema_version: 2, kind: "first_run_back", payload: { from } });
     },
     /**
-     * The operator's answer to moving their older Herdr server (PRD herdr-takeover): `move` hands it to Hide's Herdr, `later` leaves the
-     * wizard's Herdr step without moving, `continue` closes a moved server's step. One press is one event; a second `move` while one
-     * runs is the same move.
+     * The operator's answer to moving this machine's Herdr save into Hide's own engine (PRD engine-bundle-4-herdr-removal): `move`
+     * stops Hide's Herdr and moves its session, `import` imports a save read only, `look` reads it again, `continue` closes the
+     * last move's result. One press is one event; a second press while a move runs is the same move. `device` names a
+     * device's save (B18); absent, it is this machine's.
      */
-    herdrTakeover(action: "move" | "later" | "continue" | "look" | "stop_failed") {
-      dispatch({ schema_version: 2, kind: "herdr_takeover", payload: { action } });
+    herdrImport(action: "import" | "look" | "continue", device?: string) {
+      dispatch({ schema_version: 2, kind: "herdr_import", payload: device === undefined ? { action } : { action, device } });
     },
-    saveFirstRunDraft(draft: { agents?: string[]; devices?: string[]; project_device?: string; project_path?: string; project_form?: import("./snapshot").FirstRunProjectForm }) {
+    saveFirstRunDraft(draft: { agents?: string[]; devices?: string[]; project_device?: string; project_form?: import("./snapshot").FirstRunProjectForm }) {
       dispatch({ schema_version: 2, kind: "first_run_draft", payload: draft });
     },
-    listHerdrProfiles() {
-      dispatch({ schema_version: 2, kind: "herdr_profiles_list", payload: {} });
+    listMachineProfiles() {
+      dispatch({ schema_version: 2, kind: "machine_profiles_list", payload: {} });
     },
-    connectHerdrProfile(profileId: string) {
-      dispatch({ schema_version: 2, kind: "herdr_profile_connect", payload: { profile_id: profileId, host_consent: true } });
+    connectMachineProfile(profileId: string) {
+      dispatch({ schema_version: 2, kind: "machine_profile_connect", payload: { profile_id: profileId, host_consent: true } });
     },
     /** The Devices step went away: the sign-ins its own Connect started end, as a closed screen's do (B8). */
     withdrawFirstRunSignIns() {
@@ -1457,8 +1597,12 @@ export function createActions(send: DispatchFn, clipboard?: Clipboard) {
     },
 
     /** This desktop window shows agent notifications, or stops; hided judges agent changes only while one does. */
-    wantAgentNotices(wanted: boolean) {
-      dispatch({ schema_version: 2, kind: "desktop_notices", payload: { wanted } });
+    wantAgentNotices(wanted: boolean, needsYou = wanted) {
+      dispatch({ schema_version: 2, kind: "desktop_notices", payload: { wanted, needs_you: needsYou } });
+    },
+
+    reportComputerUse(inUse: boolean) {
+      dispatch({ schema_version: 2, kind: "desktop_activity", payload: { in_use: inUse } satisfies DesktopActivityPayload });
     },
 
     /** An agent's switch on its machine's row (agent adapters): its skill and hook go in or come out. */
@@ -1469,6 +1613,38 @@ export function createActions(send: DispatchFn, clipboard?: Clipboard) {
     /** An agent's 권한 on its machine's row: full access, the CLI's own questions, or options the operator typed. */
     setAgentPermission(deviceId: string, agent: string, permission: { mode: "full" | "ask" } | { mode: "custom"; text: string }) {
       dispatch({ schema_version: 2, kind: "agent_permission_set", payload: { device_id: deviceId, agent, ...permission } });
+    },
+
+    /**
+     * One change to a machine's agent profiles (PRD agent-profiles B1-B13,
+     * B26-B28). The core checks it as `hide agent profile` is checked and
+     * answers in `status.agent_profile_answer` under `requestId`.
+     */
+    changeAgentProfile(deviceId: string, requestId: string, change: import("./agentProfiles").ProfileChange) {
+      dispatch({ schema_version: 2, kind: "agent_profile_change", payload: { device_id: deviceId, request_id: requestId, change } });
+    },
+
+    /**
+     * Changes to one machine's store of skills and MCP items, in order (PRD
+     * skill-mcp-manager): a switch, an install, a delete, an undo, a take-over,
+     * an update. The core answers in `status.store_answers` under `requestId`.
+     */
+    changeStore(deviceId: string, requestId: string, changes: import("./snapshot").StoreChange[]) {
+      dispatch({ schema_version: 2, kind: "kit_store", payload: { device_id: deviceId, request_id: requestId, changes } });
+    },
+
+    /** [이 Mac에서 복사] for a device (B28): this Mac's store goes to that device's; the answer lands under `requestId`. */
+    copyStore(deviceId: string, requestId: string) {
+      dispatch({ schema_version: 2, kind: "kit_store_copy", payload: { device_id: deviceId, request_id: requestId } });
+    },
+
+    /**
+     * The operator's answer to an install or update an agent asked for (B32):
+     * `confirm` false declines it; an MCP's key values typed on the confirm
+     * travel only in this event, to the machine's store.
+     */
+    answerStoreAsk(id: string, confirm: boolean, detail: { names?: string[]; keys?: Record<string, string> } = {}) {
+      dispatch({ schema_version: 2, kind: "store_ask_answer", payload: { id, confirm, ...detail } });
     },
 
     /** A tab showing the kit opened: this Mac's parts are read once. */
@@ -1485,11 +1661,12 @@ export function createActions(send: DispatchFn, clipboard?: Clipboard) {
       dispatch({ schema_version: 2, kind: "agent_definitions_read", payload: {} });
     },
 
-    registerDevice(id: string, label: string, alias: string, options: { hostConsent: boolean; herdrSocketPath: string | null }) {
+    /** Adds an SSH device; the core gives it its id, its machine's own once it first connects. */
+    registerDevice(label: string, alias: string, options: { hostConsent: boolean; switchFirst?: boolean }) {
       dispatch({
         schema_version: 2,
         kind: "register_device",
-        payload: { id, label, ssh_alias: alias, host_consent: options.hostConsent, herdr_socket_path: options.herdrSocketPath },
+        payload: { label, ssh_alias: alias, host_consent: options.hostConsent, ...(options.switchFirst ? { switch_first: true } : {}) },
       });
     },
 
@@ -1586,17 +1763,46 @@ export function createActions(send: DispatchFn, clipboard?: Clipboard) {
     /**
      * A rail tile (PRD home-device-rail D-09): that device in front. A device
      * Overview on screen follows the device, so the sidebar and the center
-     * keep naming the same one.
+     * keep naming the same one. From a tool's cell the center comes back to
+     * the device on something no tool keeps (`showDeviceFromTool`), since
+     * the cell in front is read from what the center shows.
      */
     focusDevice(deviceId: string) {
       const screen = ui().screen;
-      if (screen?.kind === "main" && screen.deviceId !== deviceId) {
+      // The mission screen follows the rail to the device chosen (PRD mission-screen D-06), a tool's mission screen too (B40).
+      if (screen?.kind === "missions") {
+        ui().setMissions({ deviceId: null });
+        if (screen.tool !== undefined) ui().setScreen({ kind: "missions" });
+      } else if (frontTool(rest(), screen) !== null) {
+        if (showDeviceFromTool(deviceId)) return;
+      } else if (screen?.kind === "main" && screen.deviceId !== deviceId) {
         // The rail's choice replaces a device the Overview's own switch picked earlier (D-02, D-17).
         ui().setOverview({ deviceId: null, projectId: null, panel: null });
         ui().setScreen({ kind: "main", deviceId });
       }
       if (frontDeviceId(rest()) === deviceId) return;
       dispatch({ schema_version: 2, kind: "focus_device", payload: { device_id: deviceId } });
+    },
+
+    /**
+     * A tool's tile (PRD hide-external-control D-45, D-54, B40, B47): the
+     * tool's Overview as the center's page, which names the tool, so its
+     * cell is in front (`frontTool`) until the center shows something else.
+     * This machine comes to the front under it, so the cell gone (a
+     * disconnect, a leave, View only) leaves the window on This Mac (B44).
+     */
+    focusTool(connection: string) {
+      const screen = ui().screen;
+      if (screen?.kind === "missions") ui().setMissions({ deviceId: null });
+      // Under the cell stands this window's own machine, which the window shows again once the cell goes (B44).
+      const own = windowDeviceId(rest()?.navigator?.devices);
+      // The Overview's own pick and the page's named device both give way, as a rail tile's choice does, so the cell gone leaves the Overview on the rail's machine.
+      ui().setOverview({ deviceId: null, projectId: null, panel: null });
+      // The tool's Overview is the center's page, not a layer over the Workspace (D-54, B47): its agents, its missions
+      // and the Views it opened, each one press from its pane or View. A device tile takes the center back (`focusDevice`).
+      // It names this window's own machine, which the page shows again once the cell goes.
+      useUiStore.setState({ screen: { kind: "main", deviceId: own, tool: connection }, overviewOpen: false, overviewReturnFocus: null, overviewReveal: null, overlay: "none", opening: null });
+      if (frontDeviceId(rest()) !== own) dispatch({ schema_version: 2, kind: "focus_device", payload: { device_id: own } });
     },
 
     /** Every entry point of Add device (the rail's `+`, the hidden rail's menu, Add project's Host list) opens the one dialog (D-11). */
@@ -1686,37 +1892,41 @@ export function createActions(send: DispatchFn, clipboard?: Clipboard) {
     },
 
     /**
-     * A new tab in a checkout, or in a device's Home (`home`), with the
-     * provider started in it (D-05); `terminal` is the tab alone. `prompt` is
+     * A new tab in a checkout with the provider started in it (D-05); `terminal` is the tab alone. `prompt` is
      * the agent's first prompt, sent once it is ready, `model` a catalog id
      * (absent is the CLI's default), and `requestId` how the surface finds its
      * own answer among the core's receipts. A device's start names `deviceId`;
      * this machine's leaves it out.
      */
     startAgent(request: {
-      target: { checkoutPath: string } | { home: true };
+      target: { checkoutPath: string };
       deviceId?: string;
       provider: AgentKind;
       model?: string | null;
       prompt?: string | null;
       requestId?: string;
+      /** The profile the operator picked in the start panel; absent lets the core pick (PRD agent-profiles D-32). */
+      profile?: string | null;
       tabTarget?: import("./agentLayout").AgentStartTarget;
       confirmOnly?: boolean;
       /** The session to resume instead of a new conversation (PRD link-graph B12); never with a prompt. */
       resumeSessionId?: string;
       resumeSessionPath?: string;
+      /** False keeps the screen in front instead of bringing the started pane's Workspace forward (the start panel's `stay`). */
+      present?: boolean;
     }) {
-      if (!request.tabTarget && request.requestId && !request.resumeSessionId) beginOpening({ startRequestId: request.requestId });
+      if (request.present !== false && !request.tabTarget && request.requestId && !request.resumeSessionId) beginOpening({ startRequestId: request.requestId });
       dispatch({
         schema_version: 2,
         kind: "agent_start_in_checkout",
         payload: {
-          ...("checkoutPath" in request.target ? { checkout_path: request.target.checkoutPath } : { home: true }),
+          checkout_path: request.target.checkoutPath,
           ...(request.deviceId ? deviceField(request.deviceId, localDeviceId(rest())) : {}),
           provider: request.provider,
           ...(request.model ? { model: request.model } : {}),
           ...(request.prompt ? { prompt: request.prompt } : {}),
           ...(request.requestId ? { request_id: request.requestId } : {}),
+          ...(request.profile ? { profile: request.profile } : {}),
           ...(request.tabTarget ? { target: request.tabTarget } : {}),
           ...(request.confirmOnly ? { confirm_only: true } : {}),
           ...(request.resumeSessionId ? { resume_session_id: request.resumeSessionId } : {}),
@@ -1736,10 +1946,10 @@ export function createActions(send: DispatchFn, clipboard?: Clipboard) {
      * Opens the start panel. Over Settings the panel takes Settings' place,
      * because Settings holds the keyboard, and Settings is what was in front (B25).
      */
-    openStartPanel(projectId?: string) {
+    openStartPanel(projectId?: string, options?: { stay?: boolean }) {
       const overSettings = ui().overlay === "settings";
       if (overSettings) ui().closeOverlay("settings");
-      useStartPanel.getState().open(overSettings, projectId ? { projectId } : null);
+      useStartPanel.getState().open(overSettings, projectId ? { projectId } : null, options?.stay === true);
     },
 
     /**
@@ -1817,7 +2027,7 @@ export function createActions(send: DispatchFn, clipboard?: Clipboard) {
     },
 
     /**
-     * A Hide AI branch in the lane's 보기 slot (PRD hide-ai-branch-first-apply
+     * A Hide AI branch as a card tab on a desk (PRD hide-ai-branch-first-apply
      * B4): its card of files, or with `path` that file's diff against the
      * branch's base. One event; the checkout in front, its Agent tab and the
      * keyboard stay where they are.
@@ -1828,24 +2038,30 @@ export function createActions(send: DispatchFn, clipboard?: Clipboard) {
       dispatch({ schema_version: 2, kind: "detail_open", payload: { item: { kind: "branch", workspace_id: workspaceId, row, ...(path ? { path } : {}) } } });
     },
 
-    /** A session link retains repository identity even when its maker moved projects. */
-    openSessionPullRequest(pull: {workspace_id: string | null; url: string; number: number}) {
+    /**
+     * A session link retains repository identity even when its maker moved
+     * projects. `at` says where it was pressed: an agent's row passes its
+     * pane, a card tab on the desk in front `here`, and a place with no agent leaves
+     * it to the agent that made the pull request.
+     */
+    openSessionPullRequest(pull: {workspace_id: string | null; url: string; number: number}, at: import("./snapshot").DetailPlace = "owner") {
       const projects = catalogWorkspaces(rest());
       const project = projects.find((row) => row.id === pull.workspace_id && row.pull_requests?.some((pr) => pr.number === pull.number && sameGithubPullRequest(pr.url, pull.url)))
         ?? projects.find((row) => row.pull_requests?.some((pr) => pr.number === pull.number && sameGithubPullRequest(pr.url, pull.url)));
-      if (project) this.openPrCard(project.id, pull.number);
+      if (project) this.openPrCard(project.id, pull.number, undefined, at);
       else this.openLink(pull.url, false);
     },
 
     /**
-     * A pull request's decision card (PRD sidebar-task-lens D-43, D-50,
-     * B14, B17): one event, and the core puts the card in the lane's 보기
-     * slot; the Workspace in front, its Agent tab and the keyboard stay. At
-     * Home the PR's Workspace opens too, with the card in its lane. A project
-     * this core does not read opens the page on GitHub instead. A modal
-     * Overview closes first so the card shows.
+     * A pull request's decision card (PRD sidebar-task-lens D-50, B14,
+     * B17): one event, and the core puts the card on the desk of the
+     * agent `at` names (operator decision 2026-11-09): by default the one
+     * that made it, which comes forward with its pane. At Home the PR's
+     * Workspace opens too, with the card in its lane. A project this core
+     * does not read opens the page on GitHub instead. A modal Overview
+     * closes first so the card shows.
      */
-    openPrCard(projectId: string, number: number, checkoutId?: string) {
+    openPrCard(projectId: string, number: number, checkoutId?: string, at: import("./snapshot").DetailPlace = "owner") {
       const project = catalogWorkspaces(rest()).find((row) => row.id === projectId);
       if (!project) return diagnostic(`pr_open: no project ${projectId}`);
       const pull = project.pull_requests?.find((row) => row.number === number);
@@ -1856,29 +2072,121 @@ export function createActions(send: DispatchFn, clipboard?: Clipboard) {
       const state = ui();
       const openWorkspace = !workspaceInFront();
       if (state.overviewOpen || state.screen?.kind !== "workspace") state.setScreen({ kind: "workspace" });
-      dispatch({ schema_version: 2, kind: "pr_open", payload: { workspace_id: projectId, pr_number: number, ...(checkoutId ? { checkout_id: checkoutId } : {}), ...(openWorkspace ? { open_workspace: true } : {}) } });
+      dispatch({ schema_version: 2, kind: "pr_open", payload: { workspace_id: projectId, pr_number: number, ...(checkoutId ? { checkout_id: checkoutId } : {}), ...(openWorkspace ? { open_workspace: true } : {}), ...placeOf(at) } });
     },
 
     /**
-     * A mission's map in the lane's 보기 slot (PRD software-factory-conductor
-     * B14, B46): the Conductor row's mark, the task list or the Overview open
-     * it. Away from a Workspace, the mission's checkout comes to the front
-     * first, its Agent tab and the keyboard where they were.
+     * The sidebar's `미션` row, `Open missions` and a chord bound to the
+     * retired `Toggle Mission tool` (PRD mission-screen B2, B21): the mission
+     * screen on its table, whatever the center showed (D-04), the device the
+     * rail has in front, every project and 끝남 folded (B3, B4).
      */
-    openMission(missionId: string) {
+    /** The mission screen of the scope in front: a tool's cell's lists the tool's missions (PRD hide-external-control B40). */
+    openMissions() {
+      const tool = frontTool(rest(), ui().screen);
+      ui().setMissions(MISSION_ENTRY);
+      ui().setScreen(tool ? { kind: "missions", tool: tool.connection } : { kind: "missions" });
+    },
+
+    /**
+     * The sidebar's `자동화` row (PRD automations B1, D-01): the automation
+     * screen on its table, whatever the center showed, as the `미션` row opens
+     * the mission screen.
+     */
+    openAutomations() {
+      ui().setAutomations(AUTOMATION_ENTRY);
+      ui().setScreen({ kind: "automations" });
+    },
+
+    /**
+     * One automation on the automation screen, with the run whose terminal
+     * the detail shows, if any (B11, B15-B17): the sidebar's row, a Needs You
+     * line or a run agent's row brings it, whatever the center showed.
+     */
+    openAutomation(id: string, run: number | null = null) {
+      const state = ui();
+      if (state.overviewOpen) state.setOverviewOpen(false);
+      state.setAutomations({ selected: id, run, form: null });
+      if (state.screen?.kind !== "automations") state.setScreen({ kind: "automations" });
+    },
+
+    /**
+     * A press on an automation whose result the snapshot shows (PRD
+     * automations B11, B16, B19, B23, B25, B27): `automation_run`,
+     * `automation_pause`, `automation_resume`, `automation_remove`,
+     * `automation_seen`, `automation_run_stop` and `automation_run_viewing`,
+     * each the core's `Call` of that name. A refusal is the core's to log;
+     * the screen draws what the section then says. Opening a finished run's
+     * conversation is a call the run view waits on (`callAutomations`), since
+     * its refusal is the operator's to read.
+     */
+    automation(kind: "run" | "pause" | "resume" | "remove" | "seen", id: string) {
+      dispatch({ schema_version: 2, kind: `automation_${kind}`, payload: { id } });
+    },
+    automationRunStop(id: string, run: number) {
+      dispatch({ schema_version: 2, kind: "automation_run_stop", payload: { id, run } });
+    },
+    /** The detail shows the run's terminal (`on`), or no longer does: while it does, the core keeps that terminal open (B15). */
+    automationRunViewing(id: string, run: number, on: boolean) {
+      dispatch({ schema_version: 2, kind: "automation_run_viewing", payload: { id, run, on } });
+    },
+
+    /**
+     * A mission's map as a card tab on a desk, under the same rules
+     * as a pull request's card (operator decision 2026-11-09, replacing PRD
+     * mission-screen D-09, B12): a pane's mission chip, a 내 차례 or Needs
+     * You row and the Overview open it in the Conductor's slot, which the
+     * core brings forward with its pane, or in the slot in front while no
+     * Conductor of this machine holds the mission; an agent row's mark
+     * passes its pane, the row pressed (operator decision 2026-11-09). Away
+     * from a
+     * Workspace (Home, the Overview, the mission screen with no checkout in
+     * front) the mission's checkout comes to the front first, as a card's
+     * project does; a mission whose checkout no list holds opens on the
+     * mission screen instead, the one other place a map draws.
+     */
+    openMission(missionId: string, at: import("./snapshot").DetailPlace = "owner") {
       const mission = rest()?.missions?.items.find((row) => row.id === missionId);
       if (!mission) return diagnostic(`mission_open: no mission ${missionId}`);
       const state = ui();
       if (state.overviewOpen) state.setOverviewOpen(false);
+      leaveMissionsForSlot();
       if (!workspaceInFront()) {
         const checkout = (mission.device_id === localDeviceId(rest()) ? rest()?.navigator?.workspaces : rest()?.status?.remote?.find((row) => row.target_id === mission.device_id)?.session?.workspaces)
           ?.flatMap((row) => row.checkouts)
           .find((row) => row.path === mission.checkout_path);
-        if (!checkout) return diagnostic(`mission_open: checkout ${mission.checkout_path} is not listed`);
+        if (!checkout) {
+          diagnostic(`mission_open: checkout ${mission.checkout_path} is not listed; showing the mission screen`);
+          return this.showMissionOnScreen(missionId);
+        }
         this.openWorkspace(mission.device_id, checkout.workspace_id, checkout.id);
         state.setScreen({ kind: "workspace" });
       }
-      dispatch({ schema_version: 2, kind: "detail_open", payload: { item: { kind: "mission", mission: missionId } } });
+      ui().setStackFront("view");
+      dispatch({ schema_version: 2, kind: "detail_open", payload: { item: { kind: "mission", mission: missionId }, ...placeOf(at) } });
+    },
+
+    /**
+     * A mission's detail on the mission screen (PRD mission-screen B10, B11,
+     * B13): a row of the screen's table or list, ↑ and ↓ in the list. A
+     * mission of another device brings that device's rail tile forward first.
+     */
+    showMissionOnScreen(missionId: string) {
+      const mission = rest()?.missions?.items.find((row) => row.id === missionId);
+      if (!mission) return diagnostic(`mission_open: no mission ${missionId}`);
+      const state = ui();
+      const projectId = state.missions.projectId === mission.workspace_id ? state.missions.projectId : null;
+      // A tool's mission screen lists the tool's missions on every device, so its row opens beside the list and the cell stays (B40).
+      if (state.screen?.kind === "missions" && state.screen.tool !== undefined && keptBy(mission, state.screen.tool)) return state.setMissions({ selected: missionId, projectId });
+      if (mission.device_id !== frontDeviceId(rest())) this.focusDevice(mission.device_id);
+      // A chip that leaves this mission out lets go, so the list beside it holds the mission (B10).
+      state.setMissions({ deviceId: mission.device_id, selected: missionId, projectId });
+      if (state.screen?.kind !== "missions") state.setScreen({ kind: "missions" });
+    },
+
+    /** The mission the mission screen's detail shows, or none, so the core sends that mission's events alone (PRD mission-screen D-16); a card as a card tab on a desk the core reads itself. */
+    missionShown(missionId: string | null) {
+      dispatch({ schema_version: 2, kind: "mission_shown", payload: { mission: missionId } });
     },
 
     /**
@@ -1890,6 +2198,10 @@ export function createActions(send: DispatchFn, clipboard?: Clipboard) {
     /** 미션 종료 (UI_BEHAVIOR, A mission's map): the core asks the Conductor to end it, or cancels a mission no Conductor holds. */
     endMission(missionId: string) {
       dispatch({ schema_version: 2, kind: "mission_end", payload: { mission: missionId } });
+    },
+    /** 치우기 on a mission's 내 차례 row (operator decision 2026-11-20): the core keeps the row out until something newer asks the operator. */
+    putAwayMission(missionId: string) {
+      dispatch({ schema_version: 2, kind: "mission_put_away", payload: { mission: missionId } });
     },
     /** 다시 열기 on a closed mission's map (PRD mission-node-simple B18): the operator's reopen, as the Conductor's `hide mission reopen`. */
     reopenMission(missionId: string) {
@@ -1907,35 +2219,24 @@ export function createActions(send: DispatchFn, clipboard?: Clipboard) {
     settleMissionNode(missionId: string, node: string, action: import("./snapshot").MissionOperatorAction, since?: number) {
       dispatch({ schema_version: 2, kind: "mission_attention", payload: { mission: missionId, node, action, ...(since === undefined ? {} : { since_unix_ms: since }) } });
     },
+    /** The panel's folded 지시 원문 was opened: the core puts that node's brief in the `mission_brief` section. */
+    readMissionBrief(missionId: string, node: string) {
+      dispatch({ schema_version: 2, kind: "mission_brief_read", payload: { mission: missionId, node } });
+    },
+    /** A turn card's `전체 보기` was pressed: the core reads that turn's last message and puts it in the `turn_answer` section. */
+    readTurnAnswer(paneId: string, offset: number) {
+      dispatch({ schema_version: 2, kind: "turn_answer_read", payload: { pane_id: paneId, offset } });
+    },
     takeOverMission(missionId: string, request?: { requestId: string; confirmOnly: boolean }) {
       const mission = rest()?.missions?.items.find((row) => row.id === missionId);
       if (!mission) return diagnostic(`mission_take: no mission ${missionId}`);
       const provider = takeOverProvider(mission, rest()?.ui_state?.agent_start);
-      // A Conductor still there is handed over once, to the session this start makes (PRD mission-node-simple B15): the core keeps the token, and only this prompt names it. A confirmation of the same start keeps its token.
-      let handover: string | undefined;
-      const key = request?.requestId ?? "";
-      if (request?.confirmOnly) {
-        // A confirmation is the start's last use of its token.
-        handover = handoverTokens.get(key);
-        handoverTokens.delete(key);
-      } else if (conductorUnanswered(mission)) {
-        handover = globalThis.crypto.randomUUID();
-        if (key) {
-          handoverTokens.set(key, handover);
-          // Starts that were never confirmed leave at most a few behind.
-          for (const old of handoverTokens.keys()) {
-            if (handoverTokens.size <= HANDOVER_TOKENS_KEPT) break;
-            handoverTokens.delete(old);
-          }
-        }
-        dispatch({ schema_version: 2, kind: "mission_handover", payload: { mission: missionId, token: handover } });
-      }
       this.startAgent({
         target: { checkoutPath: mission.checkout_path },
         ...(mission.device_id !== localDeviceId(rest()) ? { deviceId: mission.device_id } : {}),
         provider,
         model: rest()?.ui_state?.agent_start?.models?.[provider] ?? null,
-        prompt: takeOverPrompt(mission, handover),
+        prompt: takeOverPrompt(mission),
         ...request,
       });
     },
@@ -1947,8 +2248,29 @@ export function createActions(send: DispatchFn, clipboard?: Clipboard) {
      * as the operator's own input, refuses it once the question with `key`
      * changed, and keeps the first answer to the same question.
      */
-    answerMission(missionId: string, key: number, answer: { option: number } | { text: string } | { resend: true }) {
+    answerMission(missionId: string, key: number, answer: { option: number } | { text: string } | { resend: true } | { now: true }) {
       dispatch({ schema_version: 2, kind: "mission_answer", payload: { mission: missionId, key, ...answer } });
+    },
+
+    /** `자료 요청` on the question with `key`: its Conductor is asked once for one page to look at. */
+    askMissionMaterial(missionId: string, key: number) {
+      dispatch({ schema_version: 2, kind: "mission_material", payload: { mission: missionId, key } });
+    },
+
+    /**
+     * A View linked to the question with `key` (PRD mission-human-gate D-20)
+     * or in the `결과` of done node `node` (issue 2637): an open one
+     * comes forward as any View does; a closed one is opened again by the
+     * core from what its link kept, its checkout brought forward, in one
+     * event.
+     */
+    openLinkedView(missionId: string, owner: { key: number } | { node: string }, view: import("./snapshot").LinkedView) {
+      if (!view.closed) return this.openViewAt(view.device_id, view.checkout_path, view.display_id);
+      const project = catalogWorkspaces(rest()).find((row) => row.device_id === view.device_id && row.checkouts.some((checkout) => checkout.path === view.checkout_path));
+      const checkout = project?.checkouts.find((row) => row.path === view.checkout_path);
+      if (!project || !checkout) return diagnostic(`linked view: ${view.checkout_path} is no longer open on ${view.device_id}`);
+      beginOpening({ checkoutId: checkout.id, deviceId: view.device_id, path: checkout.path, workspaceId: project.id });
+      dispatch({ schema_version: 2, kind: "mission_view_reopen", payload: { mission: missionId, ...owner, view: view.view } });
     },
 
     /** The fields of Settings › Mission one edit changes (D-31, B48); the core keeps the rest and checks the result before it is kept. */
@@ -2000,9 +2322,10 @@ export function createActions(send: DispatchFn, clipboard?: Clipboard) {
       openDetail(item);
     },
 
+    /** A card's control pressed while its card is in front of the drawn desk folds the desk; otherwise it opens the card (PRD lane-desk-pair-view B6). */
     toggleDetailItem(item: import("./snapshot").DetailItem) {
-      if (detailShown() && viewUp("detail") && sameDetailItem(rest()?.ui_state?.detail?.items.at(-1), item)) {
-        return dispatch({ schema_version: 2, kind: "detail_show", payload: { shown: false } });
+      if (viewUp("documents") && sameDetailItem(frontCard(workspaceViewOf(rest())), item)) {
+        return setWorkspaceView({ documents: false });
       }
       openDetail(item);
     },
@@ -2014,35 +2337,11 @@ export function createActions(send: DispatchFn, clipboard?: Clipboard) {
       showTool("memory");
     },
 
-    /**
-     * The Mission tool on its defaults (PRD mission-tool B9): its head's ⚙,
-     * the empty tool's `바꾸기 ›` and the map head's ⚙ all open it here, never
-     * a settings window.
-     */
+    /** The mission detail's ⚙ (PRD mission-screen B10): Settings › Mission, the one place a new mission's defaults are edited. */
     openMissionSettings() {
-      if (!workspaceInFront()) return diagnostic("mission_settings: no Workspace in front");
-      useUiStore.getState().setMissionToolPage("settings");
-      showTool("mission");
+      ui().openSettings("conductor");
     },
 
-    /** ← in the 보기 head (B47): the item opened before, or the slot closes. */
-    detailBack() {
-      dispatch({ schema_version: 2, kind: "detail_back", payload: {} });
-    },
-
-    /** ✕ in the 보기 head (B47): the slot empties and the lane goes back to its tool, or closes. */
-    detailClose() {
-      dispatch({ schema_version: 2, kind: "detail_close", payload: {} });
-    },
-
-    /** The rail's 보기 button (lane-two-columns B11): the viewing column draws the slot again, or, pressed while it does, folds. */
-    toggleDetail() {
-      if (detailShown() && viewUp("detail")) {
-        return dispatch({ schema_version: 2, kind: "detail_show", payload: { shown: false } });
-      }
-      ui().setStackFront("view");
-      dispatch({ schema_version: 2, kind: "detail_show", payload: { shown: true } });
-    },
 
     /** The 프로젝트 | 태스크 switch (B1), or ⇧⌘B with `show` set while the sidebar is hidden (B2). */
     setSidebarLens(lens: import("./snapshot").SidebarLens, show = false) {
@@ -2080,7 +2379,7 @@ export function createActions(send: DispatchFn, clipboard?: Clipboard) {
      * A task's row asked for from outside the list (B40): a pane head's agent
      * tree button or a started backlog item. The sidebar shows the 태스크 list
      * with the row unfolded and selected, and the agent's record opens in the
-     * 보기 slot, or in the Overview's panel at Home.
+     * desk, or in the Overview's panel at Home.
      */
     revealTask(paneId: string) {
       const agent = allPaneAgents(useShellStore.getState().agents, rest()?.status?.remote).find((row) => row.pane_id === paneId);
@@ -2247,7 +2546,7 @@ export function createActions(send: DispatchFn, clipboard?: Clipboard) {
       dispatch({ schema_version: 2, kind: "suggestion_action", payload: { workspace_id: workspaceId, id, action, ...(preview === undefined ? {} : { preview }) } });
     },
 
-    /** Opens Desk's room (PRD Desk 1차 B1); switched off in Settings › Desk, there is no room to open (D-76). */
+    /** Opens Desk's room (PRD Desk 1차 B1); switched off in Settings › Labs › Desk, there is no room to open (D-76). */
     openDesk() {
       if (!deskOn(useShellStore.getState().desk)) return diagnostic("desk: switched off");
       ui().setScreen({ kind: "desk" });
@@ -2321,7 +2620,7 @@ export function createActions(send: DispatchFn, clipboard?: Clipboard) {
       dispatch({ schema_version: 2, kind: "desk_install", payload: { agent } });
     },
 
-    /** Settings › Desk (B4, B19, B21). */
+    /** Settings › Labs › Desk (B4, B19, B21). */
     deskSettings(settings: { enabled: boolean; default_agent: DeskAgentId | null; location: DeskLocation; cap: number; permissions: DeskPermissions }) {
       dispatch({ schema_version: 2, kind: "desk_settings_set", payload: settings });
     },
@@ -2480,37 +2779,16 @@ export function createActions(send: DispatchFn, clipboard?: Clipboard) {
       const agent = agentsByPane(allPaneAgents(state.agents, state.rest?.status?.remote)).get(paneId);
       const home = agent?.state.asking ? null : homeOpening(state.rest, agent);
       if (home) return this.openSuggestion(home.deviceId, home.workspaceId, home.row);
+      // An automation run's row opens its terminal in the automation screen, where the run is; a View it opened opens as any row's does (PRD automations B15).
+      const run = agent?.look ? null : automationOpening(state.automations, agent);
+      if (run) return this.openAutomation(run.id, run.run);
       this.openAgent(paneId, agent?.look);
     },
 
-    /**
-     * A row with a View to look at brings its newest unseen View forward with
-     * the pane (PRD unseen-agent-views B3): the core does both in the pane's
-     * focus. A device's pane is focused on its device, and its View, which
-     * this core holds, follows in the checkout's focus.
-     */
-    openAgent(paneId: string, look?: LookAt) {
-      beginOpening({ paneId });
-      const node = localDeviceId(rest());
-      const target = remoteTargetOfPane(rest(), paneId) ?? node;
-      const forward = frontDeviceId(rest()) !== target;
-      if (target !== node) {
-        const event = remoteControl(target, { action: "focus_pane", pane_id: paneId });
-        dispatch(forward ? withDeviceForward(event) : event);
-        if (look?.workspace_id && look.checkout_id) dispatch({ schema_version: 2, kind: "focus_checkout", payload: { workspace_id: look.workspace_id, checkout_id: look.checkout_id, display_id: look.view_id } });
-        return;
-      }
-      dispatch({ schema_version: 2, kind: "focus_pane", payload: { pane_id: paneId, origin: "operator", focus_device: forward, ...(look ? { reveal_unseen: true } : {}) } });
-      // The core's answer moves the keys only when it moves the focus, so a
-      // pane already focused would leave them on the row, link or mark that
-      // was pressed. The operator asked for the pane, so the open takes the
-      // keys itself while the pane is on screen; the terminal reports no
-      // click for a focus it is given (`focusTerminal`).
-      if (ui().screen?.kind === "workspace" && useShellStore.getState().focusedPaneId === paneId) focusTerminal(paneId);
-    },
+    openAgent,
 
     /**
-     * Pins or unpins a project. A row Herdr shows without a registration is
+     * Pins or unpins a project. A row the engine shows without a registration is
      * registered with its device and root by the same event (PRD
      * sidebar-context-menus D-14), so pinning it is one action.
      */
@@ -2520,8 +2798,8 @@ export function createActions(send: DispatchFn, clipboard?: Clipboard) {
 
     /**
      * A new tab in one checkout, brought to the front (PRD sidebar-context-menus
-     * D-08): the core focuses the checkout and asks Herdr for the tab in the
-     * same event. A device's checkout gets its tab on that device's Herdr.
+     * D-08): the core focuses the checkout and asks the engine for the tab in the
+     * same event. A device's checkout gets its tab on that device's engine.
      */
     newTabIn(deviceId: string, checkout: Checkout) {
       beginOpening({ checkoutId: checkout.id, deviceId, path: checkout.path, workspaceId: checkout.workspace_id });
@@ -2559,7 +2837,7 @@ export function createActions(send: DispatchFn, clipboard?: Clipboard) {
       if (!tab?.id) return diagnostic(`close_tab: no tab holds ${paneId}`);
       if (targetId && status?.state !== "connected") {
         const label = machineName(rest()?.navigator?.devices, targetId, translate);
-        ui().setNotice({ text: translate("shell.deviceNotConnected", { device: label, command: translate("shell.command.closeTab") }), refreshable: false });
+        ui().showNotice({ level: "info", text: translate("shell.deviceNotConnected", { device: label, command: translate("shell.command.closeTab") }), refreshable: false });
         return;
       }
       requestClose("tab", tab.id, tab.panes, targetId);
@@ -2613,6 +2891,10 @@ export function createActions(send: DispatchFn, clipboard?: Clipboard) {
       purpose: string | null;
       taskKey?: string | null;
       prompt?: string | null;
+      /** As `startAgent`'s. */
+      profile?: string | null;
+      /** As `startAgent`'s. */
+      present?: boolean;
     }) {
       // A worktree on this machine comes forward through its start's follow
       // in the core; the page only presents what the core selected, as for an
@@ -2620,7 +2902,7 @@ export function createActions(send: DispatchFn, clipboard?: Clipboard) {
       // (`followStartedPane`).
       const local = request.deviceId === localDeviceId(rest());
       const requestId = request.requestId ?? (local ? startRequestId() : undefined);
-      if (local && requestId) beginOpening({ startRequestId: requestId, startKind: "worktree_create" });
+      if (local && requestId && request.present !== false) beginOpening({ startRequestId: requestId, startKind: "worktree_create" });
       dispatch({
         schema_version: 2,
         kind: "create_worktree",
@@ -2635,6 +2917,7 @@ export function createActions(send: DispatchFn, clipboard?: Clipboard) {
           purpose: request.purpose,
           ...(request.taskKey ? { task_key: request.taskKey } : {}),
           ...(request.prompt ? { prompt: request.prompt } : {}),
+          ...(request.profile ? { profile: request.profile } : {}),
         },
       });
     },
@@ -2671,8 +2954,9 @@ export function createActions(send: DispatchFn, clipboard?: Clipboard) {
     cancelPaneMovePreview(requestId: string) {
       dispatch({ schema_version: 2, kind: "pane_move_preview_cancel", payload: { request_id: requestId } });
     },
-    checkPaneMove(requestId: string) {
-      dispatch({ schema_version: 2, kind: "pane_move_check", payload: { request_id: requestId } });
+    /** Asks the core to settle a move whose answer this page did not get; `request` is the move this page sent, so a move the core never received is settled too. */
+    checkPaneMove(requestId: string, request?: import("./paneMove").PaneMoveIntent) {
+      dispatch({ schema_version: 2, kind: "pane_move_check", payload: request ? { request_id: requestId, request } : { request_id: requestId } });
     },
     runAgentCommand,
 
@@ -2706,13 +2990,13 @@ export function createActions(send: DispatchFn, clipboard?: Clipboard) {
     /**
      * A Recent Panels or Recent Projects commit: the surface comes forward in
      * its own checkout, bringing this machine and that Workspace to the front
-     * when they are not, as one event. A Herdr tab is a `focus_tab`; a display
+     * when they are not, as one event. An engine tab is a `focus_tab`; a display
      * is the checkout's `focus_checkout` naming it, and the keyboard follows
      * into the display once the core shows it.
      */
     openSurface(surface: Surface) {
       if (surface.deviceId !== localDeviceId(rest())) {
-        // A device's tab comes forward on that device's Herdr, bringing the device with it: one event for rail, sidebar and center (D-16).
+        // A device's tab comes forward on that device's engine, bringing the device with it: one event for rail, sidebar and center (D-16).
         const status = rest()?.status?.remote?.find((row) => row.target_id === surface.deviceId);
         const checkout = status?.session?.workspaces.flatMap((row) => row.checkouts).find((row) => row.id === surface.checkoutId);
         if (!checkout) return diagnostic(`recent: ${surface.checkoutId} is no longer open on ${surface.deviceId}`);
@@ -2728,7 +3012,7 @@ export function createActions(send: DispatchFn, clipboard?: Clipboard) {
       const ids = { workspace_id: surface.workspaceId, checkout_id: surface.checkoutId };
       expectSurface(surface.key);
       beginOpening({ checkoutId: checkout.id, deviceId: node, path: checkout.path, workspaceId: surface.workspaceId });
-      if (surface.kind === "herdr") {
+      if (surface.kind === "engine") {
         dispatch({ schema_version: 2, kind: "focus_tab", payload: { ...ids, tab_id: surface.id, ...focusDevice } });
         return;
       }
@@ -2742,9 +3026,9 @@ export function createActions(send: DispatchFn, clipboard?: Clipboard) {
 
     reorderTab(stripId: string, toIndex: number) {
       // A device's strip is arranged by the core as this machine's is; a
-      // Herdr tab moves on the device's own Herdr (`reorder_tab`).
+      // engine tab moves on the device's own engine (`reorder_tab`).
       // A file slot moves with the device offline too; the core refuses a
-      // Herdr move while the device is not connected.
+      // engine move while the device is not connected.
       const context = remoteContext(rest());
       if (context) {
         const checkout = remoteView(context.session, rest()?.workspace_view)?.checkout;
@@ -2773,9 +3057,7 @@ export function createActions(send: DispatchFn, clipboard?: Clipboard) {
         workspace: ui().screen?.kind === "workspace" ? checkout?.id ?? null : null,
         displayId: viewUp("documents") ? area?.active ?? null : null,
         paneIds: tab?.panes.map((pane) => pane.id) ?? [],
-        detailShown: ui().screen?.kind === "workspace" && !ui().overviewOpen && viewUp("detail"),
       });
-      if (target.kind === "detail") return this.detailClose();
       if (target.kind === "view") return closeView(target.id);
       if (target.kind === "pane") return this.closePane(target.id);
       diagnostic(`close_shortcut: ${target.reason}`);
@@ -2910,7 +3192,7 @@ export function createActions(send: DispatchFn, clipboard?: Clipboard) {
     },
 
     refreshStatus() {
-      ui().setNotice(null);
+      ui().dismissNotices((notice) => notice.refreshable);
       dispatch({ schema_version: 2, kind: "refresh_status", payload: {} });
     },
 
@@ -2952,7 +3234,10 @@ export function createActions(send: DispatchFn, clipboard?: Clipboard) {
       const here = current();
       const paneId = target ?? useShellStore.getState().focusedPaneId;
       const pane = here?.tab?.panes.find((row) => row.id === paneId);
-      if (!here?.tab?.id || !pane) return diagnostic("create_pane: no focused pane");
+      // Named, because a split that sends nothing is otherwise invisible:
+      // the core's keyboard pane outside the tab it shows was the whole
+      // trace of a flaky split (with-hide/hide-private issue 476).
+      if (!here?.tab?.id || !pane) return diagnostic(`create_pane: no focused pane in the visible tab (pane ${paneId ?? "none"}, tab ${here?.tab?.id ?? "none"})`);
       const requestId = remoteRequestId();
       dispatch({
         schema_version: 2,
@@ -2972,9 +3257,50 @@ export function createActions(send: DispatchFn, clipboard?: Clipboard) {
         sendRemote(host.targetId, { action: "toggle_pane_zoom", pane_id: paneId });
         return;
       }
+      // Pair view leaves the tab's layout and zoom as they are (PRD lane-desk-pair-view D-16).
+      if (drawnPair(workspaceViewOf(rest()))) return diagnostic("toggle_zoom: pair view leaves the tab's zoom as it is");
       const paneId = target ?? useShellStore.getState().focusedPaneId;
       if (!paneId) return diagnostic("toggle_zoom: no focused pane");
       dispatch({ schema_version: 2, kind: "toggle_zoom", payload: { pane_id: paneId } });
+    },
+
+    /**
+     * ◧ on a pane's head or in its menus, and the strip's way back (PRD
+     * lane-desk-pair-view B18, B20, B26, D-46): the pane beside its tab's
+     * desk, or, pressed on the pane already there, pair view off everywhere
+     * (D-45). The core decides what the desk puts in front and refuses a
+     * pane with nothing to show.
+     */
+    togglePairView(paneId: string) {
+      const pair = drawnPair(workspaceViewOf(rest()));
+      dispatch({ schema_version: 2, kind: "pair_view", payload: pair?.pane_id === paneId ? {} : { pane_id: paneId } });
+    },
+
+    /**
+     * ⌘. (B18, B26, D-45): the mode turns off wherever the keyboard is, even
+     * on a shell pane that draws its tab's own layout; otherwise the focused
+     * pane goes beside its desk, and a pane with nothing to show changes
+     * nothing (B19).
+     */
+    pairViewKey() {
+      const view = workspaceViewOf(rest());
+      if (pairModeOn(view)) return void dispatch({ schema_version: 2, kind: "pair_view", payload: {} });
+      const paneId = useShellStore.getState().focusedPaneId;
+      if (!paneId || pairOffer(view, paneId) !== "off") return diagnostic(`pair_view: nothing to show beside ${paneId ?? "no pane"}`);
+      dispatch({ schema_version: 2, kind: "pair_view", payload: { pane_id: paneId } });
+    },
+
+    /**
+     * A desk tab's pin (B17, D-21, D-42): that tab beside the pane of the
+     * agent it belongs to, or the focused pane for a tab nobody's agent
+     * opened. The desk draws no pin in pair view.
+     */
+    pinPairView(displayId: string) {
+      const view = workspaceViewOf(rest());
+      const owner = view?.layout ? locateDisplay(view.layout.root, displayId)?.display.owner_pane : null;
+      const paneId = owner ?? useShellStore.getState().focusedPaneId;
+      if (!paneId) return diagnostic("pair_view: the pin has no pane to show beside the desk");
+      dispatch({ schema_version: 2, kind: "pair_view", payload: { pane_id: paneId, display_id: displayId } });
     },
 
     /** ⌘= / ⌘- / ⌘0 scale whichever surface is showing: an image or PDF
@@ -3083,11 +3409,13 @@ export function createActions(send: DispatchFn, clipboard?: Clipboard) {
         if (frontCheckout(rest()) && rest()?.workspace_view) state.setScreen({ kind: "workspace" });
         return;
       }
-      // Every open starts on the rail's front device with no project chosen (B1), as a page or as a layer.
+      // Every open starts on the scope in front, the rail's device or a tool's cell, with no project chosen (B1), as a page or as a layer.
       state.setOverview({ deviceId: null, projectId: null, panel: null });
       useUiStore.setState({ overviewReveal: null });
       if (state.screen?.kind !== "workspace" || !frontCheckout(rest()) || !rest()?.workspace_view) {
-        state.setScreen({ kind: "main" });
+        // A layer over a tool's pane reads the tool from the pane; the page names it, as the tool's tile does.
+        const tool = frontTool(rest(), state.screen);
+        state.setScreen(tool ? { kind: "main", tool: tool.connection } : { kind: "main" });
         return;
       }
       const target = state.overlay === "search" ? state.searchReturnFocus : document.activeElement instanceof HTMLElement ? document.activeElement : null;
@@ -3130,16 +3458,33 @@ export function createActions(send: DispatchFn, clipboard?: Clipboard) {
 
     /**
      * A session's record (PRD sidebar-task-lens D-44, B15, B17): in the
-     * lane's 보기 slot, where the core starts its read, or in the Overview's
-     * panel when no Workspace is in front. The keyboard stays where it is.
+     * desk of the agent `at` names (operator decision 2026-11-09), by
+     * default the session's own, which the core brings forward with its
+     * pane, where it starts its read, or in the Overview's panel when no
+     * Workspace is in front. A session with no pane on this machine opens in
+     * the slot in front.
      */
-    openSessionRecord(session: import("./snapshot").WorkSession) {
-      if (workspaceInFront() && !ui().overviewOpen) return openDetail({ kind: "record", session });
+    openSessionRecord(session: import("./snapshot").WorkSession, at: import("./snapshot").DetailPlace = "owner") {
+      if (workspaceInFront() && !ui().overviewOpen) return openDetail({ kind: "record", session }, at);
+      // A tool's Overview page opens its own session's record in its own panel, so the press stays in the tool's cell (PRD hide-external-control B40).
+      const screen = ui().screen;
+      if (screen?.kind === "main" && screen.tool !== undefined && !ui().overviewOpen) {
+        const tool = screen.tool;
+        const own = allPaneAgents(useShellStore.getState().agents, rest()?.status?.remote).some((row) => row.session_id === session.session_id && toolKeeps(rest(), session.device_id, row.pane_id, tool));
+        if (own) return ui().setOverview({ panel: { kind: "record", session } });
+      }
       this.openOverview(session.device_id, { panel: { kind: "record", session } });
     },
-    /** A session's plan, large in the lane's 보기 slot (PRD hide-plan B11); the keyboard stays in the terminal. */
-    openPlan(session: import("./snapshot").WorkSession) {
-      dispatch({ schema_version: 2, kind: "detail_open", payload: { item: { kind: "plan", session } } });
+    /**
+     * A session's plan, large as a card tab on a desk (PRD hide-plan B11), in
+     * the session's own slot as its record opens (operator decision
+     * 2026-11-09); a mission node's `크게 ›` passes `here`, so the plan stays
+     * in the slot the map was pressed in, as a worker's record does.
+     */
+    openPlan(session: import("./snapshot").WorkSession, at: import("./snapshot").DetailPlace = "owner") {
+      leaveMissionsForSlot();
+      if (ui().screen?.kind === "missions") return diagnostic("plan_open: no Workspace in front to draw the slot");
+      dispatch({ schema_version: 2, kind: "detail_open", payload: { item: { kind: "plan", session }, ...placeOf(at) } });
     },
     /**
      * ⇧⌘U: pins the focused pane's plan chip open, or a Conductor pane's
@@ -3154,19 +3499,27 @@ export function createActions(send: DispatchFn, clipboard?: Clipboard) {
       if (ui().planPane === paneId) return ui().setPlanPane(null);
       if (planOfPane(state.rest, paneId) || missionOfPane(state.rest, allPaneAgents(state.agents, state.rest?.status?.remote), paneId)) ui().setPlanPane(paneId);
     },
-    /** A child's record from the one shown (B16): it takes the slot, and ← comes back to the parent. */
+    /**
+     * A child's record from the one shown (B16): it takes the slot, and ←
+     * comes back to the parent. From a mission's detail it opens as any record
+     * does, in the Workspace in front or at Home in the Overview's panel.
+     */
     openChildRecord(session: import("./snapshot").WorkSession) {
+      if (ui().screen?.kind === "missions") {
+        leaveMissionsForSlot();
+        return this.openSessionRecord(session);
+      }
       dispatch({ schema_version: 2, kind: "detail_open", payload: { item: { kind: "record", session } } });
     },
     /**
-     * A pane head's title (B15): the slot shows that session's record, or,
-     * when the lane already draws it, the lane goes back to its tool. The
-     * keyboard stays in the pane's terminal.
+     * A pane head's title (B15): its session's record opens on the pane's
+     * tab desk, or, while the drawn desk shows it in front, the desk folds.
+     * The keyboard goes to the pane pressed.
      */
-    togglePaneRecord(session: import("./snapshot").WorkSession) {
-      const top = rest()?.ui_state?.detail?.items.at(-1);
-      if (top?.kind === "record" && workKey(top.session) === workKey(session) && viewUp("detail")) return this.toggleDetail();
-      this.openSessionRecord(session);
+    togglePaneRecord(session: import("./snapshot").WorkSession, paneId: string) {
+      const top = frontCard(workspaceViewOf(rest()));
+      if (top?.kind === "record" && workKey(top.session) === workKey(session) && viewUp("documents")) return setWorkspaceView({ documents: false });
+      this.openSessionRecord(session, { pane: paneId });
     },
     searchSessionWork(query: string, options?: import("./snapshot").SessionSearchOptions) {
       dispatch({ schema_version: 2, kind: "session_work_search", payload: { query, ...(options ? { options } : {}) } });
@@ -3224,18 +3577,18 @@ export function createActions(send: DispatchFn, clipboard?: Clipboard) {
     readSessionRecord(session: import("./snapshot").WorkSession) {
       dispatch({ schema_version: 2, kind: "session_record_open", payload: { session } });
     },
-    /** The Overview panel's record closed: the 보기 slot's own record, when it holds one, is read again. */
+    /** The Overview panel's record closed: the record in front of the desk, when there is one, is read again. */
     leaveOverviewRecord() {
       // Another record taking the panel reads its own session; only a record that left the screen hands the read back.
       const state = ui();
       const shown = state.overviewOpen || state.screen?.kind === "main";
       if (shown && state.overview.panel?.kind === "record") return;
-      const top = rest()?.ui_state?.detail?.items.at(-1);
+      const top = frontCard(workspaceViewOf(rest()));
       const lane = top?.kind === "record" ? top.session : null;
       if (lane) dispatch({ schema_version: 2, kind: "session_record_open", payload: { session: lane } });
       else dispatch({ schema_version: 2, kind: "session_record_close", payload: {} });
     },
-    /** `레인에서 보기` (B18): the Overview closes, the checkout opens and the 보기 slot shows the same record. */
+    /** `레인에서 보기` (B18): the Overview closes, the checkout opens and a desk shows the same record. */
     viewRecordInLane(deviceId: string, workspaceId: string, checkoutId: string, session: import("./snapshot").WorkSession) {
       this.closeOverview();
       this.openWorkspace(deviceId, workspaceId, checkoutId);
@@ -3263,7 +3616,7 @@ export function createActions(send: DispatchFn, clipboard?: Clipboard) {
     openViewAt(deviceId: string, checkoutPath: string, displayId: string) {
       const front = frontViewWorkspace();
       const state = ui();
-      if (!state.overviewOpen && state.screen?.kind !== "main" && state.screen?.kind !== "desk" && front?.device_id === deviceId && front.path === checkoutPath) {
+      if (!state.overviewOpen && state.screen?.kind !== "main" && state.screen?.kind !== "desk" && state.screen?.kind !== "missions" && state.screen?.kind !== "automations" && front?.device_id === deviceId && front.path === checkoutPath) {
         showDocuments();
         focusView(displayId, true);
         return;
@@ -3284,7 +3637,6 @@ export function createActions(send: DispatchFn, clipboard?: Clipboard) {
     toggleDocuments,
     showDocuments,
     closeLane,
-    setLanePinned,
 
     toggleLane,
 
@@ -3313,7 +3665,7 @@ export function createActions(send: DispatchFn, clipboard?: Clipboard) {
      * hands the question to the core, which opens the agent's search or
      * answers that this pane's find bar should open (`FindBar` acts on the
      * answer); any other pane's find bar opens now. The core searches a
-     * device pane through that device's Herdr.
+     * device pane through that device's engine.
      */
     openFind(target?: string) {
       if (ui().overlay === "find") {
@@ -3333,8 +3685,9 @@ export function createActions(send: DispatchFn, clipboard?: Clipboard) {
       ui().openOverlay("find");
     },
 
-    /** Add a project: the dialog, whose ways depend on the host chosen and on whether this window has a folder picker (`hostWays`). */
-    openAddProject() {
+    /** Add a project: the dialog, whose ways depend on the host chosen and on whether this window has a folder picker (`hostWays`). `device` is the host it opens on, the focused device without one. */
+    openAddProject(device: string | null = null) {
+      ui().setAddProjectDevice(device);
       ui().openOverlay("add_project");
     },
 
@@ -3372,35 +3725,55 @@ export function createActions(send: DispatchFn, clipboard?: Clipboard) {
     /**
      * Registers a folder on `deviceId`; a device's own helper judges it against that device's home.
      * `confirmed` carries the operator's answer to the question a folder outside home asks: it names
-     * that same path, and the boundary takes it for no other (PRD wsl-device B15).
+     * that same path, and the boundary takes it for no other (PRD wsl-device B15). `requestId` names
+     * the add so its refusal is read as its own (`last_error.request_id`, `path_refused.request_id`).
      */
-    createWorkspace(path: string, label: string, deviceId = localDeviceId(rest()), confirmed = false) {
+    createWorkspace(path: string, label: string, deviceId = localDeviceId(rest()), confirmed = false, requestId?: string) {
       const confirmation = confirmed ? { confirmed_outside_home: path } : {};
-      dispatch({ schema_version: 2, kind: "create_workspace", payload: { ...deviceField(deviceId, localDeviceId(rest())), path, label, initialize_git: false, ...confirmation } });
+      const request = requestId ? { request_id: requestId } : {};
+      dispatch({ schema_version: 2, kind: "create_workspace", payload: { ...deviceField(deviceId, localDeviceId(rest())), path, label, initialize_git: false, ...confirmation, ...request } });
     },
 
-    /** Asks hided whether a clone could land at `parent/name`; answered as a `clone_target` frame. */
-    checkCloneTarget(parent: string, name: string) {
-      dispatch({ schema_version: 2, kind: "clone_target", payload: { parent, name } });
+    /**
+     * Asks whether a clone could land at `parent/name` on `deviceId`: hided's `$HOME` line answers for
+     * the core's machine, the device's node for a device; answered as a `clone_target` frame.
+     */
+    checkCloneTarget(parent: string, name: string, deviceId = localDeviceId(rest())) {
+      dispatch({ schema_version: 2, kind: "clone_target", payload: { ...deviceField(deviceId, localDeviceId(rest())), parent, name } });
     },
 
-    /** Clones `url` into `parent/name` on this machine; the core reports it as `repository_clone`. */
-    cloneRepository(url: string, parent: string, name: string) {
-      dispatch({ schema_version: 2, kind: "clone_repository", payload: { url, parent, name } });
+    /** Clones `url` into `parent/name` on `deviceId`; the core reports it as `repository_clone`. */
+    cloneRepository(url: string, parent: string, name: string, deviceId = localDeviceId(rest())) {
+      dispatch({ schema_version: 2, kind: "clone_repository", payload: { ...deviceField(deviceId, localDeviceId(rest())), url, parent, name } });
+    },
+
+    /** One folder under `deviceId`'s home for Add a project's folder list, answered as a `home_folder_list` frame. */
+    listHomeFolder(deviceId: string, path: string) {
+      dispatch({ schema_version: 2, kind: "home_folder_list", payload: { device_id: deviceId, path } });
+    },
+
+    /** The projects worth adding on `deviceId`, answered as an `importable_projects` frame (PRD device-add-project D-09). */
+    listImportableProjects(deviceId: string) {
+      dispatch({ schema_version: 2, kind: "importable_projects", payload: { device_id: deviceId } });
+    },
+
+    /** The core remembers the folder the list last showed on each machine (PRD device-add-project D-04). */
+    setAddProjectFolder(deviceId: string, path: string) {
+      dispatch({ schema_version: 2, kind: "add_project_folder_set", payload: { device_id: deviceId, path } });
     },
 
     cancelRepositoryClone(id: number) {
       dispatch({ schema_version: 2, kind: "cancel_repository_clone", payload: { id } });
     },
 
-    /** Asks hided where Create new project would make `name` in `parent`; answered as a `project_target` frame. */
-    probeProjectTarget(parent: string, name: string) {
-      dispatch({ schema_version: 2, kind: "project_target", payload: { parent, name } });
+    /** Asks where Create new project would make `name` in `parent` on `deviceId`; answered as a `project_target` frame. */
+    probeProjectTarget(parent: string, name: string, deviceId = localDeviceId(rest())) {
+      dispatch({ schema_version: 2, kind: "project_target", payload: { ...deviceField(deviceId, localDeviceId(rest())), parent, name } });
     },
 
-    /** Makes `path` as a new folder with its own Git repository, then registers it; on the core's machine only, whichever window asks. */
-    createProject(path: string, label: string) {
-      dispatch({ schema_version: 2, kind: "create_workspace", payload: { path, label, initialize_git: true, new_folder: true } });
+    /** Makes `path` as a new folder with its own Git repository on `deviceId`, then registers it there. */
+    createProject(path: string, label: string, deviceId = localDeviceId(rest())) {
+      dispatch({ schema_version: 2, kind: "create_workspace", payload: { ...deviceField(deviceId, localDeviceId(rest())), path, label, initialize_git: true, new_folder: true } });
     },
 
     /** Removes a registration after its panes close (D-10); the folder is never touched. */

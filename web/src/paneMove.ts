@@ -52,5 +52,6 @@ export function paneMoveStartTarget(header: HTMLElement, target: EventTarget | n
   if (target.closest("[data-pane-move-excluded], [data-pane-status-mark]")) return false;
   // The record button and title wrappers also own padding/gaps with no content.
   // Those gaps look like the rest of the unused header, so they share its gesture.
-  return target === header || !!target.closest("[data-pane-move-grip], [data-pane-move-title], [data-pane-move-blank], [data-pane-record]");
+  // The head's left row is header too: its gaps are the header's own.
+  return target === header || (target instanceof HTMLElement && target.dataset.paneMoveRow === "true") || !!target.closest("[data-pane-move-grip], [data-pane-move-title], [data-pane-move-blank], [data-pane-record]");
 }

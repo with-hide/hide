@@ -1,21 +1,56 @@
 # The WSL device lane (hided/tests/it/wsl_device.rs, docs/TESTING.md): this
-# build's Linux helper, command and hooks and the pinned Linux Herdr,
-# installed through `wsl.exe` into a real WSL 2 distribution on GitHub's
-# Windows runner and reached over the one pipe the link owns (PRD wsl-device
-# D-16). Windows cannot build the Linux programs, so a Linux job builds them
-# and hands them to the Windows job as an artifact. The test owns the
-# distribution `setup-wsl` makes for it: it adds a user, changes the default
-# one and stops the distribution, which it may do only on a runner.
-# `pr.yml` runs it for a change to the crates the WSL link crosses.
+# build's Linux helper, command, hooks and pane holder, installed through
+# `wsl.exe` into a real WSL 2 distribution on GitHub's Windows runner and
+# reached over the one pipe the link owns (PRD wsl-device D-16). Windows
+# cannot build the Linux programs, so a Linux job builds them and hands them
+# to the Windows job as an artifact. The test owns the distribution
+# `setup-wsl` makes for it: it adds a user, changes the default one and stops
+# the distribution, which it may do only on a runner.
+#
+# The same Windows job is a Windows core dialing devices over Windows' own
+# OpenSSH (hided/tests/it/windows_ssh_device.rs, with-hide/hide-private#501):
+# the runner's OpenSSH Server as a Windows device, and an sshd in the same
+# distribution as a Linux device, each reached with `ssh.exe` from this
+# build's Windows programs laid out as the Windows package lays them out.
+# `pr.yml` runs the lane for a change to the crates these links cross.
 name: wsl device lane
 
 on:
   workflow_call:
+    inputs:
+      repeat:
+        description: How many times each test of the Windows ssh walks runs; 1 is the lane as `pr.yml` runs it.
+        type: string
+        default: '1'
+      tests:
+        description: The filter of the Windows ssh walks to run; empty runs every one of them.
+        type: string
+        default: ''
     # The development issues App's key (docs/TESTING.md, Flaky tests). A run
     # without it, such as a fork's, files no issue and passes as before.
     secrets:
       HIDE_ISSUES_APP_KEY:
         required: false
+  # A branch shows a flaky test of this lane fixed by repeating it on the
+  # system that failed (docs/TESTING.md, Flaky tests): a fix is shown by
+  # repetition in a CI job, not on a machine under load, and a pull request
+  # runs these walks only for a change to the crates they cross. The runner
+  # is the Windows job, which is the only one that runs them.
+  #   gh workflow run wsl-device.yml --ref <branch> -f repeat=20
+  workflow_dispatch:
+    inputs:
+      repeat:
+        description: How many times each test of the Windows ssh walks runs, 1 to 100.
+        type: string
+        default: '1'
+      tests:
+        description: The filter of the tests to repeat; empty runs the lane's own selection.
+        type: string
+        default: ''
+      threads:
+        description: How many walks run at once, for telling one that fails beside another from one that fails alone; empty is nextest's own count.
+        type: string
+        default: ''
 
 permissions:
   contents: read
@@ -39,33 +74,13 @@ jobs:
         timeout-minutes: 5
         with:
           save: false
-      - name: Install zsh
-        # The Herdr fetch script is zsh, which the Linux image lacks. The
-        # mirror can stall (web-e2e.yml), so apt retries and gives up on a
-        # silent connection.
-        timeout-minutes: 5
-        run: |
-          printf 'Acquire::Retries "3";\nAcquire::http::Timeout "30";\nAcquire::https::Timeout "30";\n' \
-            | sudo tee /etc/apt/apt.conf.d/99-ci-timeouts >/dev/null
-          sudo apt-get install -y --no-install-recommends zsh
       - name: Build the Linux programs
         timeout-minutes: 20
-        run: |
-          bash scripts/verify-cargo.sh cli
-          bash scripts/verify-cargo.sh build -p hide-holder --bin hide-holder
-      - name: Fetch the pinned Linux Herdr
-        id: herdr
-        timeout-minutes: 5
-        # Assigned first, so a failed fetch fails this step rather than
-        # handing the next one an empty path.
-        run: |
-          bin=$(zsh scripts/fetch-herdr-runtime.sh --platform linux-x86_64)
-          echo "bin=$bin" >> "$GITHUB_OUTPUT"
+        # hided, hide, the hooks and the pane holder.
+        run: bash scripts/verify-cargo.sh cli
       - name: Name the programs for a Linux device
         # The helper's package rule (`hided-linux-x86_64`, ...), stripped so
         # the artifact stays small.
-        env:
-          HERDR: ${{ steps.herdr.outputs.bin }}
         run: |
           kit="$RUNNER_TEMP/wsl-kit"
           mkdir -p "$kit"
@@ -73,7 +88,6 @@ jobs:
             cp "target/debug/$name" "$kit/$name-linux-x86_64"
             strip "$kit/$name-linux-x86_64"
           done
-          cp "$HERDR" "$kit/herdr-linux-x86_64"
       - uses: actions/upload-artifact@v7
         with:
           name: hide-wsl-kit
@@ -99,6 +113,12 @@ jobs:
         with:
           set: workspace
           save: false
+      # hide-vt's Zig inputs and caches, which the vt lane saves: the Windows
+      # pane holder the ssh walks install links hide-vt.
+      - uses: ./.github/actions/vt-cache
+        timeout-minutes: 5
+        with:
+          save: false
       - name: Install cargo-nextest
         timeout-minutes: 3
         run: bash scripts/install-nextest.sh
@@ -107,6 +127,101 @@ jobs:
         # read as WSL's.
         timeout-minutes: 30
         run: bash scripts/verify-cargo.sh nextest --profile ci -p hided --test it --no-run
+      - name: Build the Windows programs and fetch the ConPTY runtime
+        # hided, hide, the hooks and the pane holder under their `.exe`
+        # names, and the pinned ConPTY runtime the holder loads: the build
+        # folder the ssh walks lay out as the Windows package does.
+        timeout-minutes: 20
+        run: |
+          bash scripts/verify-cargo.sh cli
+          python scripts/fetch-conpty.py --out "$RUNNER_TEMP/holder-conpty"
+      - name: Windows' own OpenSSH Server and a key it takes for this account
+        # The optional feature a person turns on in Settings, started as the
+        # service it installs. The runner's account is an administrator, so
+        # sshd reads its key from administrators_authorized_keys, which only
+        # Administrators and SYSTEM may hold. The step prints how long the
+        # install took.
+        # It listens on a port of its own: WSL forwards a port the
+        # distribution listens on to this loopback, and Ubuntu's own ssh
+        # socket answered 127.0.0.1:22 in place of this server once the
+        # distribution ran. One connection with Windows' own ssh.exe proves
+        # the server takes the key before the walks start, and runs ssh.exe
+        # once on a quiet runner: on 2026-11-05 the walks' first `ssh -V`,
+        # run while the distribution started beside them, took 7 to 10 s
+        # against the core's 10 s bound; after this connection (under 1 s)
+        # it took 0.1 s.
+        timeout-minutes: 15
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          # An empty argument reaches a program as "" (ssh-keygen's empty
+          # passphrase), whatever this PowerShell's default.
+          $PSNativeCommandArgumentPassing = 'Standard'
+          $port = 47623
+          $started = Get-Date
+          Add-WindowsCapability -Online -Name OpenSSH.Server~~~~0.0.1.0 | Out-Null
+          # The first start writes sshd_config, with the port commented out.
+          Start-Service sshd
+          "openssh_server_install_seconds=$([int]((Get-Date) - $started).TotalSeconds)"
+          $config = Join-Path $env:ProgramData 'ssh\sshd_config'
+          # What the server did with each session, which the walks' own
+          # diagnostics cannot see: the login shell and the start script run
+          # under this sshd, not under the client whose tree Hide records
+          # (with-hide/hide-private#2564). DEBUG1 logs the command it runs for
+          # a session, and nothing else is kept: a passing run reads none of
+          # it, and the step below prints the tail only when a walk failed.
+          (Get-Content $config) `
+            -replace '^#?Port .*', "Port $port" `
+            -replace '^#?LogLevel .*', 'LogLevel DEBUG1' | Set-Content -Encoding ascii $config
+          $sshdLog = Join-Path $env:RUNNER_TEMP 'sshd.log'
+          Add-Content -Encoding utf8 -Path $env:GITHUB_ENV -Value "HIDE_E2E_WINDOWS_SSHD_LOG=$sshdLog"
+          $service = Get-CimInstance Win32_Service -Filter "Name='sshd'"
+          $binPath = $service.PathName
+          $exe = $binPath.Trim('"').Split('"')[0]
+          # The service is told to keep its own log. Its command line keeps
+          # what it already had after the exe (`-f` and the config), with
+          # `-E` added: resetting it to the exe alone would drop a `-f` the
+          # image set and start sshd on its default config, which the key
+          # check below would then fail on with nothing saying why.
+          $rest = if ($binPath -match '^"[^"]+"\s*(.*)$') { $Matches[1] } elseif ($binPath -match '^\S+\s*(.*)$') { $Matches[1] } else { '' }
+          $rest = ($rest -replace '\s*-E\s+"?[^"]*"?', '').Trim()
+          $arguments = if ($rest) { "$rest -E `"$sshdLog`"" } else { "-f `"$config`" -E `"$sshdLog`"" }
+          & sc.exe config sshd binPath= "`"$exe`" $arguments" | Out-Null
+          if ($LASTEXITCODE -ne 0) { throw "sshd's log could not be configured" }
+          # The redirection guard Windows' OpenSSH installer turns on for
+          # sshd.exe (PowerShell/openssh-portable install-sshd.ps1), which
+          # this capability's install leaves off: every process of a session
+          # then refuses a junction no administrator made, as on a PC whose
+          # OpenSSH turned it on (with-hide/hide-private#501).
+          $ifeo = 'HKLM:\SOFTWARE\Microsoft\Windows NT\CurrentVersion\Image File Execution Options\sshd.exe'
+          New-Item -Path $ifeo -Force | Out-Null
+          New-ItemProperty -Path $ifeo -Name MitigationOptions -PropertyType Binary -Force `
+            -Value ([byte[]](0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0x10)) | Out-Null
+          Restart-Service sshd
+          $dir = Join-Path $env:RUNNER_TEMP 'windows-ssh'
+          New-Item -ItemType Directory -Force $dir | Out-Null
+          & "$env:SystemRoot\System32\OpenSSH\ssh-keygen.exe" -q -t ed25519 -C fixture -N '' -f "$dir\client"
+          if ($LASTEXITCODE -ne 0) { throw "ssh-keygen failed" }
+          $keys = Join-Path $env:ProgramData 'ssh\administrators_authorized_keys'
+          Copy-Item "$dir\client.pub" $keys
+          icacls.exe $keys /inheritance:r /grant '*S-1-5-32-544:F' /grant '*S-1-5-18:F' | Out-Null
+          if ($LASTEXITCODE -ne 0) { throw "icacls failed" }
+          $hostKey = Get-Content (Join-Path $env:ProgramData 'ssh\ssh_host_ed25519_key.pub')
+          Set-Content -Encoding ascii -Path "$dir\known_hosts" -Value "[127.0.0.1]:$port $hostKey"
+          Set-Content -Encoding ascii -Path "$dir\port" -Value $port
+          $started = Get-Date
+          & "$env:SystemRoot\System32\OpenSSH\ssh.exe" -p $port -i "$dir\client" -o IdentitiesOnly=yes -o BatchMode=yes `
+            -o "UserKnownHostsFile=$dir\known_hosts" -o "GlobalKnownHostsFile=$dir\known_hosts" "$env:USERNAME@127.0.0.1" exit
+          if ($LASTEXITCODE -ne 0) { throw "the server did not take the key on port $port" }
+          "first_ssh_connection_seconds=$([int]((Get-Date) - $started).TotalSeconds)"
+          Add-Content -Encoding utf8 -Path $env:GITHUB_ENV -Value "HIDE_E2E_WINDOWS_SSH_DIR=$dir"
+      - name: Use a working resolver on the disposable runner
+        # Azure's default resolver returned SERVFAIL for Ubuntu package hosts
+        # in Windows too, not only through WSL's DNS tunnel (#2460).
+        # The shared check leaves healthy defaults alone and validates the
+        # replacement before selecting it. WSL keeps its normal DNS tunnel.
+        timeout-minutes: 2
+        run: bash scripts/ci-apt-dns.sh
       - name: A fresh WSL 2 distribution
         # Its first-run setup is left undone (RunOOBE 1, default user root),
         # which the test reads as a distribution Hide must refuse before it
@@ -116,7 +231,27 @@ jobs:
         with:
           distribution: Ubuntu-24.04
           wsl-version: 2
-          additional-packages: git python3
+      - name: Install the distribution's packages after DNS is ready
+        # setup-wsl's apt update can report DNS failures and still succeed,
+        # leaving its one install attempt to fail before any product test.
+        # Keep first-run setup undone; only root installs the prerequisites.
+        # DNS and downloads share the existing 300 s network budget.
+        # Ten minutes also bounds WSL startup and offline installation.
+        timeout-minutes: 10
+        run: |
+          diagnostics() {
+            wsl.exe --version || true
+            powershell.exe -NoProfile -Command 'Resolve-DnsName archive.ubuntu.com; Resolve-DnsName security.ubuntu.com; Get-DnsClientServerAddress -AddressFamily IPv4' || true
+            wsl.exe --distribution Ubuntu-24.04 --user root -- bash -c '
+              uname -a
+              cat /etc/wsl.conf
+              cat /etc/resolv.conf
+              timeout 15 getent ahostsv4 archive.ubuntu.com security.ubuntu.com
+            ' || true
+          }
+          trap diagnostics ERR
+          wsl.exe --version
+          wsl.exe --distribution Ubuntu-24.04 --user root --cd "$GITHUB_WORKSPACE" -- env APT_BUDGET_SECONDS=300 RUNNER_ENVIRONMENT="$RUNNER_ENVIRONMENT" bash scripts/ci-apt-install.sh git python3 openssh-server
       - uses: actions/download-artifact@v8
         timeout-minutes: 5
         with:
@@ -130,9 +265,68 @@ jobs:
         # The test prints the WSL version and install counts it saw. Both
         # walks own the one distribution, so they run one after the other.
         run: bash scripts/verify-cargo.sh nextest --profile ci -p hided --test it -E 'test(=wsl_device::a_wsl_distribution_connects_works_and_ends_with_its_link) | test(=wsl_device::a_wsl_device_keeps_a_windows_drive_project_its_page_and_hide_ai_across_a_reconnect) | test(=wsl_device::a_wsl_own_engine_device_runs_its_panes_in_holders_with_no_herdr)' --run-ignored only --test-threads 1 --success-output immediate
+      - name: A Windows core dials a Windows and a Linux device over Windows' own ssh
+        # After the WSL walks, which own the distribution while they run. Each
+        # walk prints how long its connection took and how its build reached
+        # the device. A hand run repeats them with no retry, so one failed run
+        # fails the job and a green one proves the fix (docs/TESTING.md,
+        # Flaky tests).
+        # The lane's own 15 minutes, or enough for the repeat a hand run asked
+        # for (docs/TESTING.md, The repeat lane, bounds one the same way).
+        timeout-minutes: ${{ inputs.repeat == '' && 15 || inputs.repeat == '1' && 15 || 45 }}
+        env:
+          HIDE_E2E_WSL_DISTRO: Ubuntu-24.04
+          HIDE_E2E_WSL_PACKAGES: ${{ runner.temp }}/wsl-kit
+          HIDE_HOLDER_CONPTY: ${{ runner.temp }}\holder-conpty
+          REPEAT: ${{ inputs.repeat || '1' }}
+          TESTS: ${{ inputs.tests || '' }}
+          THREADS: ${{ inputs.threads }}
+        run: |
+          filter="$TESTS"
+          if [ -z "$filter" ]; then filter='test(/^windows_ssh_device::/)'; fi
+          case "$REPEAT" in ''|*[!0-9]*|0) echo "repeat must be a positive number, not '$REPEAT'" >&2; exit 1 ;; esac
+          threads=()
+          if [ -n "$THREADS" ]; then threads=(--test-threads "$THREADS"); fi
+          # A repetition shows a fix only if one failure fails the job, so no
+          # retry; a single run (the pull request's lane) keeps the ci
+          # profile's retry, so a flaky walk is filed rather than failing it.
+          stress=()
+          if [ "$REPEAT" != 1 ]; then stress=(--stress-count "$REPEAT" --retries 0); fi
+          status=0
+          log="$RUNNER_TEMP/nextest-stress.log"
+          bash scripts/verify-cargo.sh nextest --profile ci -p hided --test it -E "$filter" --run-ignored only --success-output immediate ${stress[@]+"${stress[@]}"} ${threads[@]+"${threads[@]}"} 2>&1 | tee "$log" || status=$?
+          # nextest's `--stress-count` ends 0 when its last iteration passed,
+          # whatever the others did, so the exit status alone proves nothing:
+          # the summary it printed is what says whether every iteration
+          # passed. `scripts/check-stress-report.py` reads that summary, and
+          # its own doc names run 43626029599, where this lane went green while
+          # its summary said `20/20 stress run iterations: 19 passed, 1 failed`.
+          if [ "$REPEAT" != 1 ] && ! python3 scripts/check-stress-report.py --summary "$log" --repeat "$REPEAT"; then
+            status=1
+          fi
+          # What the server did with the sessions a failed walk could not
+          # start, kept only when one failed (with-hide/hide-private#2564).
+          # A log that was never written is said so: an empty group would
+          # read as a server that did nothing.
+          if [ "$status" -ne 0 ]; then
+            log=${HIDE_E2E_WINDOWS_SSHD_LOG:-}
+            if [ -z "$log" ]; then
+              echo "sshd's log was not named in this run"
+            elif [ ! -f "$log" ]; then
+              echo "sshd wrote no log at $log"
+            else
+              echo "::group::sshd's log for the failed walks ($(wc -c < "$log") bytes)"
+              tail -c 65536 "$log"
+              echo "::endgroup::"
+            fi
+            echo "::group::connections at the end"
+            netstat.exe -ano | grep -E ":47623" | head -50 || true
+            echo "::endgroup::"
+          fi
+          exit "$status"
       - name: Mint the development issues token
-        # Development issues live in with-hide/hide-private (docs/TESTING.md,
-        # Flaky tests); one App token reads this run here and files there. A run
+        # Development issues live in this repository (docs/TESTING.md,
+        # Flaky tests); the App's token reads this run and files them. A run
         # without the App's key, such as a fork's, files nothing and stays green.
         id: issues-token
         if: ${{ !cancelled() }}
@@ -143,7 +337,7 @@ jobs:
           client-id: ${{ vars.HIDE_ISSUES_APP_CLIENT_ID }}
           private-key: ${{ secrets.HIDE_ISSUES_APP_KEY }}
           owner: with-hide
-          repositories: hide,hide-private
+          repositories: hide
       - name: Report flaky and failed tests
         if: ${{ !cancelled() }}
         continue-on-error: true

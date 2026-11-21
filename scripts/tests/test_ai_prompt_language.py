@@ -38,7 +38,7 @@ class AiPromptLanguage(unittest.TestCase):
         return root, load_check(root)
 
     def test_korean_in_a_prompt_is_found(self):
-        _, check = self.tree({'herdr-core/src/label.rs': REQUEST.format(system='goal은 한국어 명사구입니다.')})
+        _, check = self.tree({'hide-core/src/label.rs': REQUEST.format(system='goal은 한국어 명사구입니다.')})
         self.assertEqual(check.main(), 1)
 
     def test_a_fixed_output_language_is_found(self):
@@ -63,23 +63,23 @@ class AiPromptLanguage(unittest.TestCase):
             '#[cfg(test)]\nmod tests { const FIXTURE: &str = "파서 버그 고쳐줘 in Korean"; }\n'
         )
         root, check = self.tree({
-            'herdr-core/src/label.rs': clean,
-            'herdr-core/src/other.rs': 'fn word() -> &\'static str { "요청" }\n',
+            'hide-core/src/label.rs': clean,
+            'hide-core/src/other.rs': 'fn word() -> &\'static str { "요청" }\n',
         })
-        self.assertEqual(check.sources(), ['herdr-core/src/label.rs'])
+        self.assertEqual(check.sources(), ['hide-core/src/label.rs'])
         self.assertEqual(check.main(), 0)
 
     def test_a_listed_prompt_source_that_is_gone_fails(self):
-        root, check = self.tree({'herdr-core/src/label.rs': REQUEST.format(system='Name the goal.')})
+        root, check = self.tree({'hide-core/src/label.rs': REQUEST.format(system='Name the goal.')})
         check.PROMPT_ONLY = {'hide-kit/src/missing_prompt.rs': 'gone'}
         self.assertEqual(check.main(), 1)
 
     def test_an_excused_file_fails_on_a_new_finding(self):
         text = REQUEST.format(system='Name the goal.') + 'fn tail() -> &\'static str { "읽으세요" }\n'
-        root, check = self.tree({'herdr-core/src/fixture.rs': text})
-        check.NOT_PROMPTS = {'herdr-core/src/fixture.rs': (1, 'a worker prompt')}
+        root, check = self.tree({'hide-core/src/fixture.rs': text})
+        check.NOT_PROMPTS = {'hide-core/src/fixture.rs': (1, 'a worker prompt')}
         self.assertEqual(check.main(), 0)
-        (root / 'herdr-core/src/fixture.rs').write_text(text + 'fn more() -> &\'static str { "in Korean" }\n')
+        (root / 'hide-core/src/fixture.rs').write_text(text + 'fn more() -> &\'static str { "in Korean" }\n')
         self.assertEqual(check.main(), 1)
 
     def test_the_repository_prompts_pass(self):
@@ -88,7 +88,7 @@ class AiPromptLanguage(unittest.TestCase):
         )
         module = importlib.util.module_from_spec(spec)
         spec.loader.exec_module(module)
-        self.assertIn('herdr-core/src/labels/context_label.rs', module.sources())
+        self.assertIn('hide-core/src/labels/context_label.rs', module.sources())
         self.assertEqual(module.main(), 0)
 
 

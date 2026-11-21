@@ -10,7 +10,7 @@
 import { expect, test, type Page } from "@playwright/test";
 import { startFixture, type AgentFixture } from "./engine-fixture";
 import { labelAgentPane, setAgentState } from "./fixture-agents";
-import type { FixtureLabel } from "./herdr-fixture";
+import type { FixtureLabel } from "./pane-fixture";
 import { asFirstRun, startHided, type Daemon } from "./hided-fixture";
 import { countSent, screenshot } from "./wire";
 import { chord } from "./chords";

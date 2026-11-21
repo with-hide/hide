@@ -77,7 +77,7 @@ export function communicationLines(pairs: readonly Communication[], drawn: (id: 
 }
 
 /** One drawn communication line: the pairs folded onto its two ends, their counts summed per drawn direction. */
-export type ExchangeLine = { id: string; from: string; to: string; active: boolean; muted: boolean; badged: boolean; letters: number; direct: number; directions: { from: string; to: string; letters: number; direct: number }[] };
+export type ExchangeLine = { id: string; from: string; to: string; active: boolean; muted: boolean; badged: boolean; letters: number; directions: { from: string; to: string; letters: number }[] };
 
 /**
  * Communication lines between what their sessions are drawn as: pairs folded onto the same two ends are one
@@ -92,16 +92,14 @@ export function exchangeLines(lines: ReturnType<typeof communicationLines>, draw
     const to = drawnAs(pair.target)!;
     if (from === to) continue;
     const key = JSON.stringify([from, to].sort());
-    const line = merged.get(key) ?? { id: pair.id, from, to, active: false, muted: true, badged: touched.has(from) || touched.has(to), letters: 0, direct: 0, directions: [] };
+    const line = merged.get(key) ?? { id: pair.id, from, to, active: false, muted: true, badged: touched.has(from) || touched.has(to), letters: 0, directions: [] };
     line.active ||= active;
     line.muted &&= muted;
     line.letters += pair.letters;
-    line.direct += pair.direct;
     for (const sent of pair.directions) {
       const [start, end] = [drawnAs(sent.from)!, drawnAs(sent.to)!];
-      const direction = line.directions.find((row) => row.from === start && row.to === end) ?? line.directions[line.directions.push({ from: start, to: end, letters: 0, direct: 0 }) - 1]!;
+      const direction = line.directions.find((row) => row.from === start && row.to === end) ?? line.directions[line.directions.push({ from: start, to: end, letters: 0 }) - 1]!;
       direction.letters += sent.letters;
-      direction.direct += sent.direct;
     }
     merged.set(key, line);
   }

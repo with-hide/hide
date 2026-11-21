@@ -22,7 +22,7 @@ The cost of this layout is one full build cache per worktree, which is why a wor
 A release `hided` carries `web/dist` inside the binary: `hided/build.rs` embeds every file under it when the profile is `release` and fails the build when `web/dist/index.html` is missing, so a release build is always `pnpm --dir web build` first, then `cargo build --release --locked -p hided --bins -p hide-agent-hooks --bin hide-agent-hooks -p hide-holder --bin hide-holder` (`scripts/verify-cargo.sh release`), which prepares hide-vt's Zig inputs first because the pane holder links it ([The terminal parser and Zig](#the-terminal-parser-and-zig)); every job that builds release binaries restores the vt lane's entries (`.github/actions/vt-cache`).
 `desktop/scripts/package.mjs` performs that build before staging the release binaries into the app bundle, so a packaged app's SessionStart probe has a matching `hide-agent-hooks` executable even without a separate CLI on `PATH`.
 A debug `hided` embeds nothing and reads `web/dist` from disk at run time (`HIDED_UI_DIR` overrides the lookup), so a rebuilt web shell shows up without a cargo rebuild.
-The web measurement (`MEASURE_SCENARIO=multi HIDE_MEASURE_RUN_DIR=agents/runs/<slug>/measure/<attempt> bash scripts/web-shell-measure/run.sh`, `docs/PERFORMANCE_TESTING.md`) needs that release `hided` at `target/release/hided` inside the worktree it measures; it is never redirected, for the same reason as the release binaries.
+The web measurement (`MEASURE_SCENARIO=keys HIDE_MEASURE_RUN_DIR=agents/runs/<slug>/measure/<attempt> bash scripts/web-shell-measure/run.sh`, `docs/PERFORMANCE_TESTING.md`) needs that release `hided`, with `hide-holder` beside it, at `target/release/` inside the worktree it measures; it is never redirected, for the same reason as the release binaries.
 On 2026-09-09 one abandoned worktree held 5.3 GB, over half of the 10 GB across all eight.
 An earlier design sent test builds to `/tmp/hide-verify-<uid>/<hash>/`, keyed by checkout path so a run judging the tree would not dirty it; the reason had lapsed once the harness scored only tracked files, and the caches it left behind reached 7.5 GB with no worktree owning them.
 Hide's own merged-worktree cleanup had grown a step that forked `bash` to compute and delete that path, which this layout makes unnecessary.
@@ -31,6 +31,7 @@ Hide's own merged-worktree cleanup had grown a step that forked `bash` to comput
 An agent worktree is built a few times and discarded, which never repays an incremental cache; what it does instead is grow one per worktree, and those had reached 1.5 GB.
 Debug output is what makes a stale worktree expensive, because nothing strips it: a debug `hided` measures about 165 MB, with no debug info, against 24 MB for the release binary.
 `sha2` is built at `opt-level = 3` in dev builds too: a development daemon installs its own debug `hided` and `hide` (about 140 MB each) on a device over SSH and takes each file's SHA-256 here first, and unoptimized that digest took longer than the remote mailbox lane waits for a ready device; the SSH itself is the system `ssh`, which no build compiles.
+`miniz_oxide` and `crc32fast` are too, for the same install's gzip packing (with-hide/hide-private#582): unoptimized, packing one 276 MiB debug `hided` took 10.6 s, optimized 0.8 s.
 
 ## A debug build is kept small
 
@@ -39,7 +40,7 @@ Three causes made most of a debug build, and each has a rule below.
 `scripts/verify-cargo.sh hakari` in the rust lane and `scripts/tests/test_debug_build_size.py` in the policy lane fail a change that brings one back.
 
 The measurement started each time from an empty `target/` in a clone of `main` at `6472cb38`, on an Apple silicon Mac with the toolchain `rust-toolchain.toml` pins.
-It ran the commands one worktree's work runs, in order: `cargo test --locked --workspace --no-run`, `cargo build --locked -p hided --bins -p hide-agent-hooks --bin hide-agent-hooks` (`verify-cargo.sh cli`), `cargo test --locked -p herdr-core --no-run`, `cargo test --locked -p hide-platform -p hide-herdr-client --no-run` and `cargo clippy --locked --workspace --all-targets`, and read `du -sm target` after each.
+It ran the commands one worktree's work runs, in order: `cargo test --locked --workspace --no-run`, `cargo build --locked -p hided --bins -p hide-agent-hooks --bin hide-agent-hooks` (`verify-cargo.sh cli`), `cargo test --locked -p hide-core --no-run`, `cargo test --locked -p hide-platform -p hide-herdr-client --no-run` and `cargo clippy --locked --workspace --all-targets`, and read `du -sm target` after each.
 Each row adds its change to the row above it.
 
 | Build | After the workspace tests | After all five | Compile time, all five |
@@ -56,14 +57,14 @@ The workspace lists the same 3,326 tests (17 ignored) before and after.
 ### Debug builds carry no debug info
 
 `[profile.dev] debug = false` covers the workspace's crates and every dependency.
-Debug info was most of what a debug build wrote: 214 of the 331 MB of object code in the 20 largest dependency libraries was DWARF, herdr-core's library was half DWARF even at `line-tables-only`, and on macOS any debug info keeps every object file a binary linked beside it in `target/debug/deps`, because the debugger reads the DWARF from there (2.2 GB of the build above).
+Debug info was most of what a debug build wrote: 214 of the 331 MB of object code in the 20 largest dependency libraries was DWARF, hide-core's library was half DWARF even at `line-tables-only`, and on macOS any debug info keeps every object file a binary linked beside it in `target/debug/deps`, because the debugger reads the DWARF from there (2.2 GB of the build above).
 A panic still prints its file, line and column, which are compiled into the binary as data rather than read from debug info; a backtrace names its functions without lines.
 For a debugger or a backtrace with lines, turn debug info on for one build, `CARGO_PROFILE_DEV_DEBUG=line-tables-only cargo test -p <crate>` (`true` for variables too); every crate builds again under another hash beside the default build, so that worktree pays for both until it is removed.
 The change invalidates CI's cached dependency builds once; the first run on `main` after it rebuilds and saves them.
 
 ### One feature set per dependency
 
-Cargo resolves a dependency's features from the members a command selects, so `-p herdr-core`, `--workspace` and `--bins` each built tokio, hyper and serde_json with a different set, under a different hash, and every crate above them again beside the first copy.
+Cargo resolves a dependency's features from the members a command selects, so `-p hide-core`, `--workspace` and `--bins` each built tokio, hyper and serde_json with a different set, under a different hash, and every crate above them again beside the first copy.
 `workspace-hack` is a member with no code whose manifest turns on, for each third-party crate, the union of the features any member asks of it; every other member depends on it, so every command resolves one set.
 [cargo-hakari](https://docs.rs/cargo-hakari) writes it from `.config/hakari.toml` for the systems the workspace is built and packaged for.
 Cargo's own `resolver.feature-unification = "workspace"` does the same without a crate, but it is unstable in the pinned toolchain ([rust-lang/cargo#14774](https://github.com/rust-lang/cargo/issues/14774)); once it is stable it replaces `workspace-hack`.
@@ -71,14 +72,28 @@ Cargo's own `resolver.feature-unification = "workspace"` does the same without a
 After adding or changing a dependency or its features, run `cargo hakari generate` and `cargo hakari manage-deps --yes` and commit what they write; `bash scripts/install-hakari.sh` installs the pinned release.
 It writes each version as a semver range rather than the members' exact pins, since `Cargo.lock` decides the version either way, so a patch or minor bump such as Dependabot's weekly group leaves it unchanged; a major bump or a changed feature set needs the two commands.
 The rust lane runs `scripts/verify-cargo.sh hakari`, which fails when either command would change a file.
-`hide-platform` and `hide-herdr-client` stay off the shared set (`final-excludes`): the OS contract lanes build and test exactly those two, which would otherwise compile tokio, hyper and schemars for nothing.
+`hide-platform` stays off the shared set (`final-excludes`): the OS contract lanes build and test exactly that crate, which would otherwise compile tokio, hyper and schemars for nothing.
 `hide-vt`, `hide-holder` and `hide-holder-protocol` stay off it too: a pane's holder runs for as long as its pane, so the program carries only the few dependencies it names.
+`hide-peer-protocol` stays off it as well: `contracts/peer-link.json` is written from that crate alone, with its four dependencies.
 Their own dependencies still count toward the set, and a command that selects them alone builds their small subtree once more.
+
+The iroh transport, `hide-peer-iroh`, is on the shared set although only it links iroh.
+What iroh turns on in crates the rest of the workspace already builds (tokio, syn, tower, hyper-util, once_cell) would otherwise make a `--workspace` command and a `-p` one resolve different features, and each would build nearly every crate again: `cargo tree` showed syn, tokio, tower, tracing, once_cell and hyper-util differing between the two before the crate joined the set.
+A crate only the transport reaches is another matter: listed in `workspace-hack` it would become every member's build, so `scripts/check-iroh-stays-behind-the-seam.py` fails when one is, and it then goes under `[final-excludes] third-party` in `.config/hakari.toml`.
 
 hakari cannot unify a member's own features, so no member has a feature only a test build turns on.
 `hide-host`'s `call-log` and `hide-node`'s `test-support` were enabled by other members' dev-dependencies, which built those crates and every crate above them twice, once for a test build and once for a `--bins` build.
 The git call log is now a recorder the core's tests turn on at run time (`hide_host::worktrees::record_git_calls`), which records nothing in a running daemon, and `RemoteHost::detached` is always compiled.
 `test_debug_build_size.py` refuses a dev-dependency that sets a member's features.
+
+### Licenses and advisories
+
+`deny.toml` is what [cargo-deny](https://github.com/EmbarkStudios/cargo-deny) holds the lockfile to: every crate's license is one of the permissive ones listed there, and none has an advisory in the RustSec database.
+`bash scripts/verify-cargo.sh deny` runs both checks (`deny licenses` or `deny advisories` for one), over every platform and feature, so a crate only the Windows or Linux package links is read too; `bash scripts/install-cargo-deny.sh` installs the pinned release.
+The Rust lane runs it for a pull request that changes `Cargo.lock`, `deny.toml` or the installer, and nightly.
+Main's push run does not: the advisory database changes with no commit of ours, and a new advisory against a crate main already has is the nightly's to report, not a reason to stop merges.
+A new license is added to `deny.toml` in the pull request that brings its crate.
+An advisory is fixed by moving the crate; when the fix is behind a pin and the fault reaches no code Hide calls, it is listed under `ignore` with that reason and what removes the entry.
 
 ### One integration test binary per crate
 
@@ -153,7 +168,7 @@ Three things made the copies: a key named after the job, so the rust lane, the w
 | Set | What it holds | Saved by, on main only | Read by |
 | --- | --- | --- | --- |
 | `workspace` | The debug build of the dependencies, one feature set for every member (`workspace-hack`) | `rust workspace` on Linux, `windows check` on Windows, `desktop e2e` shard 1 on macOS | Every other lane that builds Rust, and a release tag's tests |
-| `platform` | `hide-platform` and `hide-herdr-client` built alone, outside that feature set | `os contract` on each system | Nothing else |
+| `platform` | `hide-platform` built alone, outside that feature set | `os contract` on each system | Nothing else |
 | `release` | The release profile's dependencies | `package.yml`'s Windows and Linux package jobs and its macOS compile | The packages of a pull request and a release tag, and the nightly measurement |
 
 Each set is saved by one job per system, the one that builds the most of it, because a key that exists is never saved again: two savers would race and the loser's extra build would be lost every run.
@@ -180,10 +195,11 @@ The macOS app the private publisher signs is built on the Mac mini from its own 
 
 `hide-vt` is the terminal parser the pane holder (`hide-holder`) links: Herdr's binding to libghostty-vt, renamed ([hide-vt/PATCHES.md](../hide-vt/PATCHES.md) lists its origin and every change).
 libghostty-vt is Zig and C, 22 MB of source, and is never copied into this repository, so a build needs three inputs it downloads once: the Zig 0.16.0 compiler for the machine, the Herdr source archive whose `vendor/libghostty-vt` is the source dist with Herdr's patches applied, and the eight Zig packages that build reads.
-`hide-vt/build-inputs.json` pins each one by digest; it is the only place the versions are written, and it pins its own Herdr release, separate from the Herdr release Hide bundles (`contracts/herdr-bundle.json`), because the parser moves only when someone moves it.
+`hide-vt/build-inputs.json` pins each one by digest; it is the only place the versions are written, and it pins the Herdr release the binding was taken from, because the parser moves only when someone moves it.
 
 `scripts/prepare-vt-inputs.py` is the one preparation step, on every system and in every lane.
-It downloads each input, refuses one whose sha256 differs from its pin, checks that every one of Herdr's patches applies in reverse to the extracted tree (so the tree is the dist plus exactly those patches), has Zig fetch the packages, which Zig checks against its own content hash, and moves the finished folder into place in one rename.
+It downloads each input, refuses one whose sha256 differs from its pin, checks that every one of Herdr's patches applies in reverse to the extracted tree (so the tree is the dist plus exactly those patches), applies Hide's own patches from `hide-vt/patches/`, each pinned by sha256 ([hide-vt/PATCHES.md](../hide-vt/PATCHES.md) gives each one's reason), has Zig fetch the packages, which Zig checks against its own content hash, and moves the finished folder into place in one rename.
+The `translate_c` package is fetched over git (`git+https://codeberg.org/...#<commit>`), not as codeberg's generated archive: on 2026-11-09 codeberg's archive endpoint stopped answering while its git service kept working, which failed every CI build that prepared the inputs, and Zig's content hash of the git checkout is the same as the archive's.
 A refusal names the input, the digest it found and the one pinned, and leaves nothing behind.
 The folder is `<cache>/vt/<pin digest>-<system>`, where `<cache>` is `HIDE_BUILD_CACHE`, else `~/.cache/hide-build`, else `%LOCALAPPDATA%\hide-build` on Windows; on macOS it holds about 470 MB, 415 MB of it the Zig compiler.
 It is a download cache like the Rust toolchain, shared by every checkout and never written by a build, and the three most recently prepared entries are kept.
@@ -202,8 +218,10 @@ The Mac mini's release jobs therefore prepare the inputs as its verify job `vt (
 
 In CI, `.github/actions/vt-cache` restores the prepared folder, keyed by the pin file, system and architecture, and Zig's caches, keyed by the pin file, `hide-vt/build.rs` (which fixes the target mapping and the `ReleaseFast` optimize mode), system and architecture.
 Both live under the runner's temporary folder at fixed paths, because Zig's C-header cache keys include the compiler's installation path, and outside `target/`, which the workspace set's rust-cache entry holds.
-The `vt` lane is each system's one saver, on main only; `rust workspace`, `windows check` and the release's workspace tests restore, and a miss costs a download, never a failure.
-`scripts/tests/test_vt_cache.py` holds every job to that.
+The `vt` lane is each system's one saver, on main only; it has no Linux arm64 leg, so the remote mailbox lane's arm64 run on main saves that system.
+Every other job that builds hide-vt restores, and a miss costs a download, never a failure.
+A job that builds hide-vt without the action downloads the pinned packages on every run, so one package host being down fails every pull request: on 2026-11-18 codeberg.org stopped resolving and five jobs that did not restore failed at `translate-c` (#2631).
+`scripts/tests/test_vt_cache.py` holds every job to that: it reads each job's `verify-cargo.sh` calls the way `selects_vt` there does, and the device helpers' build, and fails a job that builds hide-vt without the action, and it fixes each saver's `save` condition.
 
 The `vt` lane (`.github/workflows/vt.yml`) builds hide-vt on Linux, macOS and Windows from empty Zig caches and again from kept ones, recording the caches' sizes, runs its tests and Clippy and the pane holder's ([TESTING.md](TESTING.md#the-pane-holder)), builds it again with the network denied on Linux (`unshare --net`) and macOS (`sandbox-exec`) after showing the wrapper denies it, and runs `scripts/check-vt-build-refusals.sh`, which shows a missing Zig, another Zig version and a download of other bytes each stopping with its reason.
 On 2026-11-01 (main's run 41283189059) a build from empty Zig caches took 157 s with a largest process of 813 MiB on Linux, 108 s and 1,072 MiB on Windows and 45 s and 778 MiB on the Mac mini, and a build from kept caches 1.6 to 2.3 s and at most 300 MiB; the caches were 259 to 500 MiB and the prepared inputs about 450 MiB.
@@ -245,7 +263,7 @@ The no-argument `test` mode remains the full locked workspace gate.
 Focused delivery and session-activity filters and their nonzero-test prerequisite are listed in [delivery.md: Verification](delivery.md#verification).
 Each compiler or test process's failure reaches the caller.
 
-CI uses scoped Cargo modes `test-scoped`, `check`, `build` and `clippy` with trailing Cargo arguments, for example `bash scripts/verify-cargo.sh test-scoped -p hide-platform -p hide-herdr-client`.
+CI uses scoped Cargo modes `test-scoped`, `check`, `build` and `clippy` with trailing Cargo arguments, for example `bash scripts/verify-cargo.sh test-scoped -p hide-platform -p hide-holder`.
 Each adds `--locked`, reuses the installed toolchain, clears inherited Herdr and legacy coordination overrides, and fixes output to this worktree's `target/`.
 Scoped modes accept at most 128 arguments and refuse `--target-dir`, `--manifest-path` and `--config`; an unknown mode exits 2.
 The sealed `test`, `lint`, `release` and `cli` invocations keep their existing behavior.
@@ -290,7 +308,7 @@ They check that a caller's `CARGO_TARGET_DIR` cannot move the release binaries, 
 They require macOS with Cargo.
 
 
-The Windows/Linux package smoke uses an isolated HOME and Herdr socket to check the command from a fresh shell, both configured agent hooks and the completed retirement row.
+The Windows/Linux package smoke uses an isolated HOME and state folder to check the command from a fresh shell, both configured agent hooks and the completed retirement row.
 It then uses a second complete package fixture with an executable overlay that changes the daemon hash, proving replacement, refreshed command and hook paths, same-build reuse and standalone refusal.
 All test daemons and temporary files are cleaned up on failure as well as success.
 
@@ -316,19 +334,19 @@ An acquisition failure blocks the suite at that prerequisite and retains the ups
 | --- | --- |
 | `pnpm --dir desktop dev` | Bundles `desktop/dist/` with esbuild and launches the app unpackaged; it finds this worktree's `target/{debug,release}/hide` itself |
 | `pnpm --dir desktop typecheck`, `lint`, `test` | The desktop CI lane |
-| `pnpm --dir desktop e2e` | Playwright `_electron` against a private hided and pinned Herdr; needs `web/dist`, `target/debug/hide` and `hided`, and the pinned `herdr` as the web e2e does |
-| `pnpm --dir desktop package` | `desktop/scripts/package.mjs`: builds the release binaries and fetches the pinned Herdr, bundles `hided`, `hide`, `hide-agent-hooks`, `hide-holder` (the pane holder, which runs only with the development switch `HIDE_DEV_PANE_HOLDER`) and `herdr` into `Contents/Resources` and the notification permission helper into `Contents/MacOS/hide-notification-status`, signed under the app's identifier, signs `desktop/out/hide-darwin-<arch>/hide.app` (bundle id `me.grab.hide.desktop`), writes the release version into the app's own `package.json` (the version the app and its updater report) and puts `desktop/resources/app-update.yml`, the updater's download folder name, in its resources; `desktop/scripts/installers.mjs` then wraps the finished app with electron-builder (`--prepackaged`, so the app and its signature are what was checked) into `desktop/out/release`: `hide-v<version>-macos-<arch>.dmg` and the `.zip` the updater installs, `latest-mac.yml` and the zip's `.blockmap`, each installer beside a `.sha256` checksum; nothing is installed. The signature is ad-hoc unless one of two variables asks otherwise. An ad-hoc signature changes with every build, and macOS keys a privacy grant such as Screen Recording to the signature, so each install of an ad-hoc build asks for those grants again; set `HIDE_SIGN_IDENTITY` to a code-signing identity in your keychain (its name or SHA-1, such as an `Apple Development` or `Developer ID Application` certificate) and a local package is signed with it under the hardened runtime, not notarized, and keeps the grants across installs. `HIDE_MACOS_SIGNING=developer-id` is what the official macOS publisher sets: every executable in the bundle, Herdr included, is then signed with the Developer ID certificate under the hardened runtime with the exceptions in `desktop/resources/entitlements/`, Apple notarizes the app and the ticket is stapled, and the run fails unless Gatekeeper accepts the app expanded from the zip as notarized; the dmg is signed, notarized and stapled too, and must pass `spctl -t open`. That mode needs `HIDE_SIGN_IDENTITY`, `HIDE_NOTARY_KEY_PATH`, `HIDE_NOTARY_KEY_ID` and `HIDE_NOTARY_ISSUER`, which `desktop/scripts/macos-signing.mjs` defines and checks together before the build. On Windows x64 and Linux x64 the same command builds that system's package, unsigned: the folder `desktop/out/hide-win32-x64/` or `hide-linux-x64/` with the same binaries (`.exe` on Windows, with Herdr's `conpty/` beside `herdr.exe` and the pane holder's own pinned ConPTY runtime in `holder-conpty/`, which `scripts/fetch-conpty.py` fetches and checks against `contracts/conpty.json`, failing the package on any other digest) in its `resources/`, wrapped into `desktop/out/release` as the per-user NSIS installer `hide-v<version>-windows-x64-setup.exe` with `latest.yml` and its `.blockmap` (`desktop/resources/windows/installer.nsh` stops the daemon on uninstall), or as `hide-v<version>-linux-x64.deb` and `.rpm` into `/opt/hide` with one `latest-linux.yml` (`desktop/resources/linux/` holds the package scripts that link `/usr/bin/hide` to the CLI and set up the sandbox), each installer beside a `.sha256`. `node desktop/scripts/installers.mjs <app folder> <version> <out>` wraps an already packaged Windows or Linux app again under another version, which the CI update test uses for its two builds; on Linux these test builds make only the deb, its checksum and update file, while release packaging still makes both the deb and rpm. Each system packages its own desktop host, and a machine of another architecture than its host Herdr asset is refused; a release Mac or Windows app also requires the Linux device bundles described below, and a local package on either carries none |
-| `node desktop/scripts/smoke-package.mjs <installed app folder>` | On Windows or Linux only: takes the folder the system's installer put the app in, prepares its runtime (on Windows the copy under the private home that `hide runtime prepare` makes), and with a private home (stand-in `claude` and `codex` programs in `~/.local/bin`, so both agents are installed) and state folder runs the bundled `herdr --version`, the device helper, `hide-agent-hooks doctor`, and `hide connect`, `/health`, the embedded shell, first-launch CLI and hooks, a command from a fresh shell, the completed retirement row, replacement by a second package fixture, refreshed paths, same-build reuse, standalone refusal and `hide stop`, then waits for each daemon pid it started to end (ten seconds, a named failure beyond that); on Windows it also checks that the next prepare removed the first build's runtime copy; `.github/workflows/package.yml` runs it after installing each package, and `desktop/scripts/smoke-windows-installer.mjs` checks the Windows installer's install, reinstall while a Herdr server runs, and uninstall. It refuses macOS, where first-launch kit behavior is covered by the isolated desktop suite |
+| `pnpm --dir desktop e2e` | Playwright `_electron` against a private hided and its pane holders; needs `web/dist`, `target/debug/hide`, `hided` and `hide-holder`, as the web e2e does |
+| `pnpm --dir desktop package` | `desktop/scripts/package.mjs`: builds the release binaries, bundles `hided`, `hide`, `hide-agent-hooks` and `hide-holder` (the pane holder every pane runs in) into `Contents/Resources` and the notification permission helper into `Contents/MacOS/hide-notification-status`, signed under the app's identifier, signs `desktop/out/hide-darwin-<arch>/hide.app` (bundle id `me.grab.hide.desktop`), writes the release version into the app's own `package.json` (the version the app and its updater report) and puts `desktop/resources/app-update.yml`, the updater's download folder name, in its resources; `desktop/scripts/installers.mjs` then wraps the finished app with electron-builder (`--prepackaged`, so the app and its signature are what was checked) into `desktop/out/release`: `hide-v<version>-macos-<arch>.dmg` and the `.zip` the updater installs, `latest-mac.yml` and the zip's `.blockmap`, each installer beside a `.sha256` checksum; nothing is installed. The signature is ad-hoc unless one of two variables asks otherwise. An ad-hoc signature changes with every build, and macOS keys a privacy grant such as Screen Recording to the signature, so each install of an ad-hoc build asks for those grants again; set `HIDE_SIGN_IDENTITY` to a code-signing identity in your keychain (its name or SHA-1, such as an `Apple Development` or `Developer ID Application` certificate) and a local package is signed with it under the hardened runtime, not notarized, and keeps the grants across installs. `HIDE_MACOS_SIGNING=developer-id` is what the official macOS publisher sets: every executable in the bundle is then signed with the Developer ID certificate under the hardened runtime with the exceptions in `desktop/resources/entitlements/`, Apple notarizes the app and the ticket is stapled, and the run fails unless Gatekeeper accepts the app expanded from the zip as notarized; the dmg is signed, notarized and stapled too, and must pass `spctl -t open`. That mode needs `HIDE_SIGN_IDENTITY`, `HIDE_NOTARY_KEY_PATH`, `HIDE_NOTARY_KEY_ID` and `HIDE_NOTARY_ISSUER`, which `desktop/scripts/macos-signing.mjs` defines and checks together before the build. On Windows x64 and Linux x64 the same command builds that system's package, unsigned: the folder `desktop/out/hide-win32-x64/` or `hide-linux-x64/` with the same binaries (`.exe` on Windows, with the pane holder's pinned ConPTY runtime in `holder-conpty/`, which `scripts/fetch-conpty.py` fetches and checks against `contracts/conpty.json`, failing the package on any other digest) in its `resources/`, wrapped into `desktop/out/release` as the per-user NSIS installer `hide-v<version>-windows-x64-setup.exe` with `latest.yml` and its `.blockmap` (`desktop/resources/windows/installer.nsh` stops the daemon on uninstall), or as `hide-v<version>-linux-x64.deb` and `.rpm` into `/opt/hide` with one `latest-linux.yml` (`desktop/resources/linux/` holds the package scripts that link `/usr/bin/hide` to the CLI and set up the sandbox), each installer beside a `.sha256`. `node desktop/scripts/installers.mjs <app folder> <version> <out>` wraps an already packaged Windows or Linux app again under another version, which the CI update test uses for its two builds; on Linux these test builds make only the deb, its checksum and update file, while release packaging still makes both the deb and rpm. Each system packages its own desktop host, and a machine of another architecture than the package's is refused; no package carries or publishes a device kit, which a release candidate makes ([Device helper release bundles](#device-helper-release-bundles)) |
+| `node desktop/scripts/smoke-package.mjs <installed app folder>` | On Windows or Linux only: takes the folder the system's installer put the app in, prepares its runtime (on Windows the copy under the private home that `hide runtime prepare` makes), and with a private home (stand-in `claude` and `codex` programs in `~/.local/bin`, so both agents are installed) and state folder checks the package carries no Herdr and, on Linux, that every ELF file it installs finds each library it links (which the Electron host, never started by these checks, would otherwise fail on at its first launch), then runs the device helper, `hide-agent-hooks doctor`, and `hide connect`, `/health`, the embedded shell, first-launch CLI and hooks, a command from a fresh shell, the completed retirement row, replacement by a second package fixture, refreshed paths, same-build reuse, standalone refusal and `hide stop`, then waits for each daemon pid it started to end (ten seconds, a named failure beyond that); on Windows it also checks that the next prepare removed the first build's runtime copy; `.github/workflows/package.yml` runs it after installing each package, and `desktop/scripts/smoke-windows-installer.mjs` checks the Windows installer's install, reinstall while the daemon runs, and uninstall. It refuses macOS, where first-launch kit behavior is covered by the isolated desktop suite |
 
 Every build of `hide` carries the version and commit `hide version` reports (`hided/build.rs`): `HIDE_VERSION` if it was set for the build, else the crate's version, and `HIDE_COMMIT`, else for a release build the checkout's `HEAD`.
 A release passes `HIDE_VERSION` from its tag; a local package leaves it unset and `package.mjs` names the build after the newest `v<version>` tag behind it and its commit, `0.4.0-main.<commit>` (`.dirty` when tracked files differ), so a local build never claims a release, even on a tagged commit, and its version is no release number the app would update from.
 `package.mjs` sets both to what it ships and refuses to package when it cannot read the commit; a debug build given no `HIDE_COMMIT` reports none, because following `HEAD` would rebuild `hided` after every commit.
 
 The app attaches to whatever daemon the environment names: without `HIDE_STATE_DIR` it is the operator's own at `~/.hide/state`.
-For QA, set `HIDE_STATE_DIR`, `HOME`, `HERDR_SOCKET_PATH` and `HIDE_DESKTOP_USER_DATA_DIR` to private paths, as `desktop/e2e/fixture.ts` does and refuses to launch without.
+For QA, set `HIDE_STATE_DIR`, `HOME` and `HIDE_DESKTOP_USER_DATA_DIR` to private paths, as `desktop/e2e/fixture.ts` does and refuses to launch without.
 Use `web/e2e/platform-fixture.ts` for the native executable and tool paths and for Windows `USERPROFILE`, `APPDATA` and `LOCALAPPDATA` inside that private home.
 The fixture C shim needs the runner's native compiler, `cc` on Unix or `clang.exe` on Windows, which Playwright's `globalSetup` runs once before any test (`web/e2e/shims/build.ts`); this is a fixture prerequisite, not an installed product requirement.
-A packaged app does not need `hide` on `PATH`: it ships its own CLI and Herdr, and only falls back to a login-shell PATH search and the well-known install directories when its own bundled CLI is somehow missing (see `docs/ARCHITECTURE.md`, The desktop host).
+A packaged app does not need `hide` on `PATH`: it ships its own CLI, and only falls back to a login-shell PATH search and the well-known install directories when its own bundled CLI is somehow missing (see `docs/ARCHITECTURE.md`, The desktop host).
 macOS may refuse the unsigned app's first launch until it is opened once with Open from the context menu.
 
 The desktop e2e runs beside the operator's own work on the same Mac (issue 232).
@@ -340,15 +358,13 @@ The suite runs the focus tests after every other one (`desktop/playwright.config
 
 ## Device helper release bundles
 
-The Mac desktop host remains Apple Silicon; Linux x64 and Linux ARM64 devices download their kit on first connection.
-The app carries only `Contents/Resources/device-bundles.json`, alongside its five native programs.
-The Windows app carries the same manifest in `resources/device-bundles.json`, because each WSL distribution of the PC is a Linux device that downloads its kit the same way (PRD wsl-device D-04).
-Foreign helper and Herdr binaries are separate release assets, never app resources.
-The pinned release publishes both Linux Herdr assets; their upstream digests live only in `contracts/herdr-bundle.json`.
-`scripts/bump-herdr.sh <release-tag>` verifies those assets with the host platforms, refusing a missing required asset or a changed digest of the same pinned release.
-The fetch script verifies foreign bytes without executing them; matching native lanes also check the reported version.
+Every platform a device kit is made for is named once, in `contracts/device-kits.json`: the manifest's format and name, the archive name, the four programs, and for each platform its Rust target, the job that produces it, its program suffix, the executable header its programs must have and any runtime files beside them.
+The core (`hide-node/src/ssh/kit/`) and the packaging scripts (`desktop/scripts/device-helpers.mjs`) read it, and `scripts/check-device-kits-single-source.py` fails when a platform name appears anywhere else in their code, so a new platform is one entry there and a runner.
+It carries Linux x64, Linux ARM64, macOS ARM64 and Windows x64; an Intel Mac or a Windows ARM PC is refused at the probe, before anything is installed, with the reason the contract gives ([INSTALL.md](INSTALL.md#what-each-system-supports)).
+No app carries a device kit or its manifest: a core of any system fetches `device-bundles.json` and the kits it names from its own release (with-hide/hide-private#501 decision 1).
+The packager verifies foreign bytes without executing them, by their executable headers.
 
-`.github/workflows/device-helpers.yml` is the reusable producer.
+`.github/workflows/device-helpers.yml` is the reusable producer of the Linux kits.
 Its required string inputs are `source-sha` (full public source commit), `version` (the app version, optionally prefixed with `v`) and `build-order` (decimal order, including `0` for a fixture).
 It explicitly checks out the public repository.
 The Linux runners build natively on `ubuntu-24.04` and `ubuntu-24.04-arm` using the existing package recipe after the web build.
@@ -362,49 +378,69 @@ Never redirect a release target directory.
 | `hide-device-helper-linux-aarch64` | `desktop/out/device-helpers/linux-aarch64/` | same five files |
 
 Each producer manifest records platform, source commit, version, build order and each helper's SHA-256.
-`package.yml` resolves one identity with `desktop/scripts/build-identity.mjs` and calls the producer on every call, beside the Windows and Linux packages; a [release candidate](#unsigned-release-candidates) keeps both artifacts for the private publisher.
-Its `device bundles` job then makes the bundles below once, with `desktop/scripts/device-helpers.mjs bundle <version> <source-sha> <build-order>`, and keeps them as the `hide-device-bundles` artifact (the two archives and `device-bundles.json`).
-The Mac and Windows apps both ship that one manifest: a gzip archive made twice would not be the same bytes, so a manifest made by one job and archives made by another would never match.
-Neither native lane waits for the helpers to compile: `compile (macos)` and `compile (windows)` run `desktop package compile` while the helpers build, and `package (macos)` and `package (windows)` need their compile and the bundles, download the binaries and `hide-device-bundles` into `desktop/out/device-bundles/` and run `desktop package assemble`, so a failed helper skips both apps and fails the run; `package (linux)` is a job of its own that waits for none of them, since the Linux app carries no device kit.
-A package that finds bundles there takes them only when they were made for its exact source, version and order and every archive has the size and digest the manifest names (`readDeviceBundles`); a release Windows app refuses to package without them.
-A local package on macOS or Windows (no `HIDE_VERSION`) carries no device manifest and needs neither helpers nor bundles: its `-main.` version has no published release, so the daemon would refuse to download a kit for it anyway, and the helpers build only on Linux runners, so asking for them made a local Mac install wait about fifteen minutes and left a Windows source build unable to finish.
-A device connected to such a build reports that the build has no device download manifest, unless developer-provided device artifacts are found first.
-`desktop/scripts/device-helpers.mjs build <platform> <version> <source-sha> <build-order>` is the producer command on its matching runner after dependency installation and `rustup target add <triple>`.
-Packaging refuses missing members, a different source/version/order, digest mismatches, links, files above 256 MiB and incorrect executable headers.
+`package.yml` resolves one identity with `desktop/scripts/build-identity.mjs` and calls the producer on every call, beside the Windows and Linux packages.
+
+The kits are made once per run by its `device bundles` job, with `desktop/scripts/device-helpers.mjs bundle <version> <source-sha> <build-order>`: every kit of the contract whose producer is not the private publisher (`makeCandidateKits`), today both Linux kits and the Windows kit.
+It needs both helpers and `compile (windows)`, and reads each producer's output where it downloaded it (`candidateKitSources`):
+
+| Producer | Downloaded into this checkout | Checked against |
+| --- | --- | --- |
+| `device-helpers` | the two helper artifacts, as above | each helper's `manifest.json`, its executable header and digest |
+| `windows-compile` | `hide-windows-release-binaries` into `desktop/out/windows-compile/` (`target/release/*.exe`, `desktop/out/release-binaries.json`), and `scripts/fetch-conpty.py --out desktop/out/windows-compile/holder-conpty` | the binaries' record (`checkReleaseBinaries`), each program's PE header, and the ConPTY pin in `contracts/conpty.json`, which the fetch refuses any other digest of |
+
+The Windows kit is therefore the bytes the Windows app packages, from the one Windows compile of the run, with no second build; Windows bytes stay unsigned.
+The job keeps the three archives, and no manifest, as the `hide-device-bundles` artifact; it writes each kit's name, digest and size to the job summary.
+No package waits for it or carries its output: each package needs only its own compile, and a failed helper or Windows compile skips the candidate's receipt.
+A local package (no `HIDE_VERSION`) needs neither helpers nor kits: its `-main.` version has no published release, so a core of that build downloads no kit anyway.
+`desktop/scripts/device-helpers.mjs build <platform> <version> <source-sha> <build-order>` is the Linux producer command on its matching runner after dependency installation and `rustup target add <triple>`.
+Making a kit refuses missing members, a different source/version/order, digest mismatches, links, files above 256 MiB and incorrect executable headers.
 Downloaded artifacts need not retain executable mode bits.
 
-Before building the native app, or before assembling it from compiled binaries, `prepareDeviceBundles` copies the helpers and pinned Herdr into private worktree staging.
-Linux bytes remain unchanged; only the native Mac app follows the existing Developer ID signing and notarization path.
-It hashes the final files and builds one gzip-compressed USTAR archive per platform, containing exactly five regular entries at its root: `hided`, `hide`, `hide-agent-hooks`, `hide-holder`, `herdr`.
-The pane holder is sent only to a device of the core's own engine (PRD engine-bundle-3-core-owns D-22, `HelperPackages::payload_for`); a device on its Herdr is sent the other four, exactly as before the kit carried the holder, so only the one cached download grows by the holder's size.
-No paths, links, extended attributes or PAX records belong in an archive.
+`makeDeviceKit(platform, folder, version, output)` makes one archive from a folder holding exactly the kit's files under their kit names and answers its manifest entry, read back from the archive by `readDeviceKit(platform, archive, version)`, the core's checks in JavaScript.
+The bytes are taken as they are: no program is signed, stripped or rewritten on the way into an archive.
+Each archive is one gzip-compressed USTAR archive holding exactly the kit's files as regular entries under their `/`-separated paths: the four programs, with the platform's suffix (`.exe` on Windows), and the runtime files the contract lists, such as the Windows holder's ConPTY runtime under `holder-conpty/`; a Linux or Mac kit is the four programs at its root.
+A device is sent every file, the pane holder apart from the helper's version folder (PRD engine-bundle-3-core-owns D-22, `HelperPackages::payload_for`); no archive carries Herdr (PRD engine-bundle-4-herdr-removal D-2).
+No links, folder entries, extended attributes or PAX records belong in an archive.
 The archive's name is `hide-device-<platform>-<app-version>.tar.gz`, without a leading `v` in the version.
-The uncompressed five-file total and the compressed archive are each capped at 256 MiB.
+The uncompressed total and the compressed archive are each capped at 256 MiB.
 
-`device-bundles.json` has `format: 2` (format 1 had no holder; an app reads only its own release's manifest, so no build reads both), `version`, full `commit`, decimal string `order`, and `platforms` keyed by the two Linux platform names above.
-Each platform records `asset`, archive `sha256`, archive `size` in bytes, and `files` keyed by the five program names, each with its final `sha256` and `size`.
+`device-bundles.json` has `format: 4`, `version`, full `commit`, decimal string `order`, and `platforms` keyed by every platform of the contract.
+Format 3 named only the two Linux kits, for the manifest each app carried; format 2 carried Herdr beside the holder and format 1 had no holder; a core reads only its own release's manifest, so no build reads two.
+Each platform records `asset`, archive `sha256`, archive `size` in bytes, and `files` keyed by the kit's file names, each with its final `sha256` and `size`.
 Hashes are lowercase SHA-256 hex.
-The app ships this small manifest; the Mac package's `desktop/out/release/` receives a copy and both archives alongside the installers and updater files, and the Windows package publishes neither, so each archive is a release asset once.
+`writeDeviceManifest(output, identity, entries)` writes it over one entry per contract platform, each an archive already in `output` with that size and digest, and refuses anything less.
 `desktop/out/device-bundles/` keeps the intermediate output, never anything under `/tmp`.
 
-The private publisher must take the two artifacts from the release candidate run it selected, as it takes the Linux and Windows packages and [the Mac binaries](#the-candidates-mac-build), require every helper's SHA-256 to equal the receipt's `device_helpers`, download them into the paths above, then run `desktop package assemble` with its Developer ID settings; it builds no helper and compiles no binary itself.
-It must also download that run's `hide-device-bundles` into `desktop/out/device-bundles/`, so its Mac app publishes the archives the candidate's Windows app names; bundles it made itself would carry other digests, and every WSL kit download of that release would be refused.
-It must publish both `hide-device-<platform>-<app-version>.tar.gz` assets and `device-bundles.json` on the **same public `v<app-version>` release** as the Mac app.
-Do not re-sign or repack an archive after the manifest is made, and do not substitute output from another source or run.
-The public release validator and draft writer require 18 assets in total: the existing 15 installers, checksums, updater files and blockmaps, plus both Linux bundles and their manifest.
-They verify each bundle's size and SHA-256 against the manifest; draft preparation also requires its source commit to match the release event before any GitHub request.
+The private publisher (with-hide/hide-private#501 N4) takes `hide-device-bundles` from the release candidate run it selected, as it takes the Linux and Windows packages and [the Mac binaries](#the-candidates-mac-build), and requires each archive's entry, read with `readDeviceKit`, to equal the receipt's `device_kits`.
+It signs the Mac programs for the app, makes `hide-device-macos-aarch64-<app-version>.tar.gz` from those signed bytes with `makeDeviceKit`, and writes `device-bundles.json` over the three candidate archives, taken unchanged, and its own with `writeDeviceManifest`; it builds no helper and compiles no binary itself.
+The Mac kit needs no notarization: files a core uploads over ssh carry no quarantine attribute, so Gatekeeper never assesses them.
+It must publish the four archives and `device-bundles.json` on the **same public `v<app-version>` release** as the Mac app, which must be immutable.
+Do not re-sign or repack an archive after the manifest is made, and do not substitute output from another source or run: a kit made again would not be the same bytes, and every kit download of that release would be refused.
+The public release validator and draft writer require 20 assets in total: the existing 15 installers, checksums, updater files and blockmaps, plus a kit for every platform of the contract and their manifest.
+They refuse a release short of a kit before anything else, verify that the manifest names this release and source and every platform of the contract with each kit's files, and verify each kit's size and SHA-256 against the manifest; draft preparation also requires its source commit to match the release event before any GitHub request.
 The private workflow is maintained outside this repository; the public producer and package run do not establish that publishing is connected or a release has shipped.
 
-The connection worker fetches only `https://github.com/with-hide/hide/releases/download/v<app-version>/<asset>` with HTTPS, a 60-second request bound and at most five redirects.
-It checks archive size and hash, then exact entry names, regular-file types, sizes, program hashes and executable headers before atomically publishing a cache slot.
+### Which programs a device gets
+
+Every core picks a device's programs by one rule (`HelperPackages`, `hide-node/src/ssh/kit/select.rs`), on the connection worker and never under the runtime mutex.
+A developer's `<name>-<os>-<arch>` file in the build's folder comes first (`holder-conpty-<os>-<arch>` for the Windows runtime folder); for the core's own platform, its own programs under their system's names come next; for any other platform the contract carries, the kit of this build's release.
+From a folder a device gets exactly the runtime files its kit names, the files a release kit carries, and a folder short of one is refused with its name; the Windows kit's runtime is held to `contracts/conpty.json` by hide-node's contract test, which a change to the pin runs.
+A build that is not a published release (a `-main.` or `0.0.0-` version, one without a commit, or one no package numbered, such as a plain `cargo build --release`, whose build order is 0) downloads nothing, and its refusal names the developer folder: `node desktop/scripts/device-helpers.mjs stage <device-bundles.json> <archive> <folder>` checks a release or CI kit against its manifest and unpacks it there under those names.
+
+The connection worker fetches `https://github.com/with-hide/hide/releases/download/v<app-version>/device-bundles.json`, then the kit's archive, over HTTPS with at most five redirects;
+a request fails once nothing arrives or leaves for 30 seconds, so a slow download that keeps arriving runs on, and half an hour bounds it in all (`hide-node/src/ssh/kit/cache.rs`, `RELEASE`); the manifest is capped at 64 KiB and a kit at 256 MiB.
+Before any archive it refuses a manifest whose version, commit or build order differs from the ones compiled into the build (`hided::cli::RELEASE`), whose format is not the contract's, or which does not name exactly the contract's platforms and each kit's files.
+It checks archive size and hash, then exact entry names, regular-file types, sizes, file hashes and the programs' executable headers before atomically publishing a cache slot.
+
 The cache path belongs to `hide_kit::layout::device_bundle_cache`: `~/.hide/cache/device-bundles/`.
-A five-second process lock serializes cache access; each of two platform slots holds one verified kit, and one staging folder holds the current download.
-The maximum is 1024 MiB including the two 256 MiB kits, one 256 MiB staging kit and its 256 MiB compressed archive, plus the fixed lock file.
-A reconnect verifies and reuses its cached bytes offline; an app update replaces mismatched slots, and a failed download leaves no usable partial kit.
+It holds the lock file, the release's manifest, `recent` (the slots from most to least recently used), one staging folder for the download in progress and one slot per platform a device of this account needed; any other entry is refused, never removed.
+A five-second process lock serializes cache access, and a kit's bytes are read before the lock is released, so another build cannot evict a kit while it is read.
+Everything in it, the staging kit and its archive included, stays within 1024 MiB: a download that would pass it first removes the least recently used slots.
+A fixed slot per platform would have held four 256 MiB kits beside a 256 MiB staging kit and its archive, 1.5 GiB, so the four platforms share the old two-platform limit instead.
+A reconnect verifies and reuses its cached bytes offline; a slot of another build or with changed bytes is replaced, and a failed download leaves no usable partial kit.
 Every exit explicitly cleans staging before releasing the cache lock; if cleanup fails, the device reason retains both failures and a structured diagnostic names the platform and release, while Drop makes a backup attempt.
 Files in the cache are inert private data; upload gives the verified programs executable permission on the device.
 Missing releases, network failures and verification errors reach the existing device failure and Retry path.
-Local/main builds report that no matching device release exists; an existing developer artifact folder still takes precedence.
 Physical device startup, the private publisher and official signing/notarization remain separate verification claims.
 
 ## Developer ID signing
@@ -445,7 +481,7 @@ The workflow revision is main's dispatch revision and may differ from the source
 `package.yml`, `device-helpers.yml` and `agent-journey.yml` run their steps from that dispatch revision on the source's checkout, so the workflow refuses a source at which any of them or the phone deployment script differs from main; choose a newer source instead.
 
 The workflow first uploads and confirms [the hosted phone app](#the-hosted-phone-release), stopping desktop preparation if that fails.
-It then reuses `package.yml` for unsigned Linux and Windows installers, including their installation, packaged-window and update checks, and for both [Linux device helpers](#device-helper-release-bundles), built beside them on public runners.
+It then reuses `package.yml` for unsigned Linux and Windows installers, including their installation, packaged-window and update checks, and for the [device kits](#device-helper-release-bundles) a candidate makes: both Linux kits, built beside them on public runners, and the Windows kit from the Windows app's own compile.
 Beside them it compiles the Mac app's release binaries on the Mac mini ([The candidate's Mac build](#the-candidates-mac-build)).
 It runs the existing `agent-journey.yml` on the same source, with stand-ins on Linux and macOS, Windows form checks, and fake-model lanes on all three systems.
 It signs no agent in: since 2026-10-27, by the operator's decision, a real login is measured only by the release's local run on the Mac ([CONTRIBUTING.md: Releases](../CONTRIBUTING.md#releases)), so the workflow summary records signed-in providers as **not measured**; a package failure blocks the receipt, and a stand-in or fake-model failure fails the run, which no consumer takes.
@@ -456,19 +492,21 @@ The reusable workflows' optional `source-sha` defaults to the caller commit, and
 An explicit order allows separately prepared packages of one numeric version to share one build identity.
 The operator assigns a strictly increasing order within that numeric version, including release-candidate to stable transitions; a private-only change takes a new patch version.
 
-Only after the phone upload and confirmation, packaging, both helpers and the Mac binaries succeed does the workflow upload `hide-release-candidate`, containing only `candidate.json`; the run succeeds only when the journey passes too, and a consumer takes only a successful run:
+Only after the phone upload and confirmation, packaging, the device kits and the Mac binaries succeed does the workflow upload `hide-release-candidate`, containing only `candidate.json`; the run succeeds only when the journey passes too, and a consumer takes only a successful run:
 
 ```json
-{"schema":4,"repository":"with-hide/hide","public_sha":"<source SHA>","tag":"vX.Y.Z","build_order":"<decimal>","verification_run_id":"<decimal>","workflow_sha":"<workflow SHA>","run_id":"<decimal>","run_attempt":1,"live_agents":false,
- "device_helpers":{"linux-aarch64":{"hide":"<sha256>","hide-agent-hooks":"<sha256>","hided":"<sha256>"},"linux-x86_64":{"hide":"<sha256>","hide-agent-hooks":"<sha256>","hided":"<sha256>"}},
+{"schema":5,"repository":"with-hide/hide","public_sha":"<source SHA>","tag":"vX.Y.Z","build_order":"<decimal>","verification_run_id":"<decimal>","workflow_sha":"<workflow SHA>","run_id":"<decimal>","run_attempt":1,"live_agents":false,
+ "device_kits":{"linux-aarch64":{"asset":"hide-device-linux-aarch64-X.Y.Z.tar.gz","sha256":"<sha256>","size":<bytes>,"files":{"hide":{"sha256":"<sha256>","size":<bytes>},"…":{}}},"linux-x86_64":{"…":{}},
+  "windows-x86_64":{"asset":"hide-device-windows-x86_64-X.Y.Z.tar.gz","sha256":"<sha256>","size":<bytes>,"files":{"hided.exe":{"sha256":"<sha256>","size":<bytes>},"holder-conpty/conpty.dll":{"…":{}},"…":{}}}},
  "macos_binaries":{"hide":"<sha256>","hide-agent-hooks":"<sha256>","hide-holder":"<sha256>","hided":"<sha256>"}}
 ```
 
-The installer artifacts keep the names `hide-package-linux` and `hide-package-windows`, the helper artifacts `hide-device-helper-linux-x86_64` and `hide-device-helper-linux-aarch64`, and the Mac binaries `hide-macos-release-binaries`; candidate artifacts expire after seven days.
+The installer artifacts keep the names `hide-package-linux` and `hide-package-windows`, the kits `hide-device-bundles`, the helper artifacts `hide-device-helper-linux-x86_64` and `hide-device-helper-linux-aarch64`, and the Mac binaries `hide-macos-release-binaries`; candidate artifacts expire after seven days, except `hide-windows-release-binaries`, which only this run's jobs read and which expires after one.
 All receipt fields describe public facts, with IDs and order as decimal strings and `schema` and `run_attempt` as integers.
 Schema 2 adds the boolean `live_agents`, which records whether provider checks were requested, not their per-cell verdicts; since 2026-10-27 it is always `false`, kept so the private consumer that requires it reads the receipt unchanged.
 Schema 3 adds `device_helpers`, each Linux platform's helper digests, recorded by the receipt job only after it checked both artifacts' manifests, executable headers and digests against `public_sha`, the tag's version and `build_order` (`withDeviceHelpers` in `scripts/release-candidate.mjs`); from schema 3, `verification_run_id` names the verify run without proving it passed.
 Schema 4 adds `macos_binaries`, the digests of the release binaries (`hided`, `hide`, `hide-agent-hooks` and, since the pane holder shipped, `hide-holder`) compiled for macOS, recorded only after the compile artifact's `release-binaries.json` named `public_sha`, the tag's version and `build_order` and every binary matched it (`withMacosBinaries`).
+Schema 5 replaces `device_helpers` with `device_kits`: the manifest entry (`asset`, `sha256`, `size`, `files`) of every kit the candidate made, read from the `hide-device-bundles` archives with the core's checks, and recorded only after every program in each matched the build its producer recorded for `public_sha`, the tag's version and `build_order`, a Linux helper's manifest or the Windows compile's `release-binaries.json` (`withDeviceKits`); the publisher copies those entries into the release's manifest unchanged.
 Consumers retaining schema 1 support must treat its missing selection as the original live-enabled workflow, never as evidence that all providers passed.
 A consumer verifies the successful manual main run, its trusted workflow revision, current attempt, matching receipt and artifact inventory, and that the verify run the receipt names and its `verify` job concluded success, before consuming it; a receipt alone proves neither GitHub origin nor that a package is signed.
 Run evidence and reports remain workflow artifacts, separate from distributable files.
@@ -490,7 +528,7 @@ Unlike this relocatable distribution, [`actions/setup-python` on self-hosted mac
 
 A self-hosted runner of a public repository would run whatever a pull request's workflow asks of it, so the Mac mini takes only this job:
 
-- **Only this workflow, on main.** The Team plan's runner groups can be limited to repositories but not to workflows, so the runner refuses the rest itself: its job-started hook (`scripts/candidate-runner/job-started.sh`) stops every job, before any of its steps runs, unless the job's repository, event, ref and workflow ref are this repository's `release-candidate.yml` dispatched on `refs/heads/main`. Failing the hook would still let the worker run `if: always()` and `if: failure()` steps and actions' `pre` steps, so the hook empties the work folder and kills the job's worker, its parent; the listener completes the job as failed and stays online. The worker dies before it uploads the job's log, so GitHub shows the job failed with no log; the refusal is in the Mac mini's system log, `log show --last 1h --predicate 'process == "logger"'`. Where the hook's parent is not the worker, as an update of the runner could make it, the hook cannot stop that job's steps alone, so it stops the whole runner: it sets the registration aside as `~hiderunner/actions-runner/.runner.stopped` and kills the runner's worker and listener, and the LaunchDaemon, which has no `KeepAlive`, starts nothing more, so the runner stays offline until its administrator restores it. A hook sees the job's own `github` context and never a workflow's `env:`, so no pull request, fork or branch push can name those values. Pull requests from outside contributors also wait for a maintainer's approval before any workflow runs.
+- **Only this workflow, on main.** The Team plan's runner groups can be limited to repositories but not to workflows, so the runner refuses the rest itself: its job-started hook (`scripts/candidate-runner/job-started.sh`) stops every job, before any of its steps runs, unless the job's repository, event, ref and workflow ref are this repository's `release-candidate.yml` dispatched on `refs/heads/main`. Failing the hook would still let the worker run `if: always()` and `if: failure()` steps and actions' `pre` steps, so the hook empties the work folder and kills the job's worker, its parent; the listener completes the job as failed and stays online. The worker dies before it uploads the job's log, so GitHub shows the job failed with no log; the refusal is in the Mac mini's system log, `log show --last 1h --predicate 'process == "logger"'`. Where the hook's parent is not the worker, as an update of the runner could make it, the hook cannot stop that job's steps alone, so it stops the whole runner: it sets the registration aside as `~hiderunner/actions-runner/.runner.stopped` and kills the runner's worker and listener, and the LaunchDaemon, which has no `KeepAlive`, starts nothing more, so the runner stays offline until its administrator restores it. A hook sees the job's own `github` context and never a workflow's `env:`, so no pull request, fork or branch push can name those values. A pull request from an outside contributor also waits for a maintainer to approve each workflow run (the repository requires it of all outside contributors, because GitHub's first-time-contributor setting goes by merge history and cannot read the approved list), except one whose author is in `.github/APPROVED_CONTRIBUTORS`, whose runs the contribution gate approves (`CONTRIBUTING.md`, How the repository treats a pull request).
 - **Its own account.** The runner runs as `hiderunner`, a standard account with no login and a password no one knows, from a LaunchDaemon, so it needs no one logged in; it cannot read the operator's home. Its hooks are root's, under `/usr/local/libexec/hide-candidate-runner`.
 - **Nothing kept.** The job-completed hook (`scripts/candidate-runner/job-completed.sh`) empties the runner's work folder after every job, whatever its result: the checkout and its release build, the cargo registry (the daemon points `CARGO_HOME` there), setup-node's Node and pnpm with its store. The account keeps only rustup and the toolchain the source pins; the hook removes any other.
 
@@ -512,7 +550,7 @@ Moving the three helped little: the jobs that kept pull requests waiting were th
 Since 2026-11-01 a pull request runs no macOS job unless it changes a macOS path ([TESTING.md](TESTING.md#where-the-macos-runners-went)), so the runner serves main's push runs and the nightly's `verify` call, which run every macOS job, and those few pull requests.
 
 - **One switch.** `pr.yml`'s `plan` job reads the variable once, as its `self-hosted-macos` output, and passes it to `vt.yml`, `omp-contract.yml` and `package.yml`, whose macOS job runs on `fromJSON(<input> || '"macos-15"')`. The value is a JSON `runs-on`, `["self-hosted","hide-ci"]`; unset, every one of those jobs runs on GitHub's `macos-15` again. Turn the runner off with `gh variable delete HIDE_MACOS_CI_RUNNER -R with-hide/hide` and on with `gh variable set HIDE_MACOS_CI_RUNNER -R with-hide/hide --body '["self-hosted","hide-ci"]'`; the next run follows it, and nothing else names the label (`scripts/tests/test_ci_runner.py`). Other callers of those workflows (the nightly's own `package.yml` call, a release) never pass it and stay hosted.
-- **Never a fork's code.** The `plan` output is empty for a pull request whose head repository is not this one, so a fork's run asks for `macos-15`. A fork's pull request runs the fork's copy of the workflow, which could name the label itself, so the runner's job-started hook (`scripts/ci-runner/job-started.sh`) also refuses, before any step, a job of another repository, a pull request event whose head repository is not with-hide/hide, and a job whose event file it cannot read; like the candidate runner's hook, it empties the work folder and kills the job's worker, and stops the whole runner when its parent is not the worker. Pull requests from outside contributors also wait for a maintainer's approval before any workflow runs.
+- **Never a fork's code.** The `plan` output is empty for a pull request whose head repository is not this one, so a fork's run asks for `macos-15`. A fork's pull request runs the fork's copy of the workflow, which could name the label itself, so the runner's job-started hook (`scripts/ci-runner/job-started.sh`) also refuses, before any step, a job of another repository, a pull request event whose head repository is not with-hide/hide, and a job whose event file it cannot read; like the candidate runner's hook, it empties the work folder and kills the job's worker, and stops the whole runner when its parent is not the worker. A pull request from an outside contributor also waits for a maintainer to approve each workflow run, except one whose author is in `.github/APPROVED_CONTRIBUTORS`, whose runs the contribution gate approves.
 - **Out of the operator's files.** The runner runs under the operator's account from the LaunchAgent `dev.withhide.ci-runner`, at `nice` 10 so the Hermes gateways on the same Mac come first; it is not an account boundary, which is what the candidate runner's account is. Each job gets a HOME, TMPDIR, rustup home, cargo home and hide-vt input folder inside `~/actions-runner-hide-ci`, so a step such as `git config --global` or a pinned toolchain install never touches the account's own.
 - **Nothing kept.** The job-completed hook (`scripts/ci-runner/job-completed.sh`) empties the work folder (the checkout, its target folder, the cargo registry, setup-node's Node), the job's HOME and its TMPDIR after every job, whatever its result, and removes any Rust toolchain but the one the source pins.
 - **One job at a time.** The Mac mini has 10 cores and 16 GB and shares a 228 GB disk, about 12 GB free on 2026-11-01, with the Hermes gateways and the release runners, and a release build takes about 10 GB; a second runner would let two such builds fill the disk.
@@ -528,8 +566,9 @@ The tag is the one source of the release's kind: `releaseKind` in `scripts/check
 A `vX.Y.Z` tag is a stable release, published with `make_latest: "true"`; a `vX.Y.Z-rc.N` tag runs the same gates, the signed and notarized macOS build included, and is published as a pre-release with `make_latest: "false"`, which withhide.dev's download links ignore.
 Its packages report the version without the `v`, such as `0.4.0-rc.1`, and are named for it, such as `hide-v0.4.0-rc.1-macos-arm64.zip`; the macOS bundle version and the Windows file version are the numeric prefix, `0.4.0`.
 The publisher assembles all three systems' packages before `node scripts/release-draft.mjs <tag> <event-commit-sha> <directory>` prepares the matching draft.
+A release that fixes a problem no one should keep running requires the update of every older app by naming the oldest version that may keep running in its notes, `<!-- hide-min-version: X.Y.Z -->`, never above its own version; the line can be added after publishing with `gh release edit <tag> --notes-file <file>`, and removed the same way ([INSTALL.md: Update](INSTALL.md#update)).
 The file-only entrypoint is `node scripts/check-release-assets.mjs <tag> <directory> [release-pages.json]`.
-The directory must contain exactly that tag's eighteen files (`expectedAssetNames`): the macOS ARM64 dmg and zip, the Windows x64 `setup.exe`, the Linux x64 deb and rpm, one SHA-256 sidecar per installer, `latest-mac.yml`, `latest.yml`, `latest-linux.yml`, the zip's and the setup's `.blockmap`, both Linux device bundles and `device-bundles.json`.
+The directory must contain exactly that tag's twenty files (`expectedAssetNames`): the macOS ARM64 dmg and zip, the Windows x64 `setup.exe`, the Linux x64 deb and rpm, one SHA-256 sidecar per installer, `latest-mac.yml`, `latest.yml`, `latest-linux.yml`, the zip's and the setup's `.blockmap`, the device kit of every platform `contracts/device-kits.json` carries and `device-bundles.json`.
 The gate rejects a missing target, extra or mixed-version files, symbolic links, empty files, an incorrectly named sidecar, and a mismatched digest, and reads each update file strictly: its version must be the tag's, and every file it names must be in the release with the SHA-512 digest and size it states, since the app's updater refuses a download that differs; hashing streams bytes rather than retaining each package in memory.
 Before any release write, the writer checks that the current tag still resolves to the event commit; the workflow passes its contents-write token as `GH_TOKEN`.
 A missing credential, moved tag, or failed initial API read blocks preparation before writes; package workflow artifacts remain available.
@@ -562,6 +601,9 @@ Its source guard does not establish that the repository setting is on; verify it
 `bash scripts/build-relay-wasm.sh` builds `hide-relay-protocol` for `wasm32-unknown-unknown` from source.
 The compiler comes from the root `rust-toolchain.toml`; the script installs that toolchain's WASM standard library and the exact `wasm-bindgen-cli` version matching `Cargo.lock`, with `--locked` CLI dependencies.
 Compiler output, binding tools and their build output all stay inside this worktree's `target/`.
+In CI the installed tool, `target/relay-tools`, comes from `.github/actions/relay-tools`, keyed by that `wasm-bindgen` version and the system and saved on main by one job per system, so a web job skips the minute the install compiles for.
+`scripts/tests/test_relay_tools_cache.py` reads every workflow: a job that builds the web shell, compiles the desktop package or calls `build-relay-wasm.sh` (or a script that does) must restore the tool before its first such step, and only the two `web-e2e.yml` jobs save it.
+The release candidate's `phone` job is the one exception and compiles the tool itself, because it publishes to production with every action pinned to a commit and the restore is an unpinned `actions/cache` tag.
 The crate retains `rlib` and `cdylib` outputs to use one standard Cargo build path for native and WASM; native verification also links the small cdylib, while consumers link the rlib.
 Generated browser bindings and `relay_bg.wasm` land in ignored `hide-relay-protocol/pkg/`; no compiled binary or third-party CDN script is committed.
 The library is excluded from hakari's native workspace feature union because the union includes operating-system dependencies that cannot compile for WASM; its own direct dependencies and target features remain locked.
@@ -626,6 +668,8 @@ There is no age-based deletion and no reliance on expiring Actions artifacts for
 The assembled site is capped at 4,096 files and 256 MiB, with at most 16 MiB per file and 30 seconds per HTTP read; exceeding a cap stops the release and asks for a host-limit review, without pruning protocols.
 
 The existing phone build's CSP is checked before upload and also installed as an HTTP header, with `frame-ancestors 'none'`, `Referrer-Policy: no-referrer` and `X-Content-Type-Options: nosniff`.
+Each retained protocol bundle under `/p/<N>/` is served with the policy its own page was built with, so a newer build that changes the policy leaves older bundles' headers matching their pages; the root and shared assets take the new build's policy, and the confirmation reads every page's header against its own page.
+The one exception is each protocol's `look-frame.html`, the frame an HTML View is drawn in: its own policy, which must keep `default-src`, `connect-src`, `form-action`, `frame-src` and `object-src` at `'none'` and name no `'self'`, is checked before upload and installed as its header with `frame-ancestors 'self'`, and the confirmation reads that header back ([ARCHITECTURE.md](ARCHITECTURE.md#the-mobile-companion)).
 Scripts come only from the same site, with the narrow WASM compilation allowance; connections go only to the same site and `wss://relay.withhide.dev`.
 There are no external scripts or analytics in the phone app, and an analytics-enabled or Git-linked host project is refused.
 After upload, CI reads the inventory, protocol union and every listed file from `app.withhide.dev`, requiring the exact source, bytes and CSP headers before desktop preparation begins.
@@ -655,10 +699,354 @@ Without both installed CLI paths this external-binary case is explicitly skipped
 The existing phone browser journey checks that CSP blocks an external script.
 These checks prove the release contract, not actual credentials, hosting, DNS, a live upload or a physical phone; those remain the deployment node's acceptance checks.
 
+## The iOS app
+
+`mobile/` is the Capacitor host that carries the phone web app inside an iOS app (bundle id `me.grab.hide.ios`, team `GH6F6ZA497`, iPhone only, iOS 15 or later, the lowest Capacitor 8 supports); [ARCHITECTURE.md](ARCHITECTURE.md#the-ios-app-host) owns what it is.
+Xcode does not run on every Mac this repository is built on, so the app builds on the Mac mini and nothing about the build needs node or Rust there.
+
+`bash mobile/scripts/build-ios.sh` is the one command.
+It runs, on this machine:
+
+1. `bash scripts/verify-web.sh web build:phone`, the same phone build the hosted site uses (`HIDE_IOS_SKIP_PHONE_BUILD=1` reuses `web/phone-dist`, for a run after only Swift changed);
+2. `mobile/scripts/check-versions.mjs`, which refuses a Capacitor version that differs between `mobile/package.json`, `CapApp-SPM` and `HideShell`, and a plugin list (`BridgeGate.appPlugins`) that differs from the plugins the package defines;
+3. `mobile/scripts/assemble.mjs`, which fills `mobile/www/` (ignored): the loader and the current protocol's bundle from step 1, and every older `p/<n>/` bundle that `mobile/retained-bundles.json` pins, then `protocols.json` as their union and no `sw.js`.
+   The build trusts the pin and nothing the server says about itself: each pinned file is read from `https://app.withhide.dev` and must match its pinned size and SHA-256, so a file that differs, a pinned file or protocol the site no longer serves, a protocol the site serves that the pin lacks, or a page whose content policy is not the phone site's stops the build with the file named; the app never ships fewer bundles than the pin lists without someone changing the pin.
+   The protocol this source speaks is never pinned: it comes from step 1;
+4. `cap sync ios`, which copies that folder into the Xcode project;
+5. an `rsync` of `mobile/ios/` to `~/hide-ios-build/<branch>/ios/` on the machine named by `HIDE_IOS_BUILD_HOST` (default `mini`), where `mobile/scripts/mini-ios.sh` is piped over `ssh` to run `xcodebuild` for the simulator with derived data and the Swift packages inside that folder, then two test runs on an iOS Simulator: the `HideShell` package's tests, and the `AppTests` target hosted in the app, whose test drives the app's own `ShellViewController` and proves a call from a sandboxed or same-origin frame never reaches a plugin while the main frame's does (delete the line that installs `BridgeGate` and it fails).
+   A failing test fails the command.
+
+`bash mobile/scripts/build-ios.sh run` installs the built app in a simulator of its own on the mini (`hide-ios-<branch>`, created if missing), launches it, waits `HIDE_IOS_SETTLE` seconds (default 15) and captures the screen.
+With `HIDE_IOS_PAIR_LINK=<pairing link>` the debug build follows that link at launch and presses Connect, since a simulator has no camera (the hook is compiled out of a release build); the link travels on the standard input of the script, in front of it, so it is in no argument and in no file on the mini, and there is nothing to remove.
+A pairing code lives five minutes and only while a Mobile page of that Hide stays open, so the page that showed it (or a client that sent `mobile_observe`) must still be connected when the simulator launches.
+`HIDE_IOS_TAPS='<css selector>;;<css selector>'` presses those on the page, in order, once each is there (`[data-phone-host]` the saved computer, `[data-phone-tab="settings"]`, `[data-phone-setting="language"]`, `[data-phone-add]`, `[data-phone-scan]`), `<selector>::=<text>` fills a field with that text instead of pressing it and `<selector>::^` scrolls it to the top instead, `HIDE_IOS_APPEARANCE=light|dark` sets the simulator's appearance, `HIDE_IOS_HOME=1` captures the home screen with the icon, and `HIDE_IOS_LAUNCH_SCREEN=1` holds the app on its launch screen (it starts and waits for a debugger that never comes) and captures that.
+The taps (and `HIDE_DEBUG_NOW`, a local date and time the page's clock starts from, which `store-shots` sets), like the link, are read by the debug build only; `check-release-app.sh` fails a release whose binary holds the name of any of the three.
+`HIDE_IOS_CAPTURE=<file.png>` copies the capture back; otherwise it is `~/hide-ios-build/<branch>/shots/run.png` on the mini.
+`bash mobile/scripts/build-ios.sh allow` presses Allow on iOS's notification question for the built app (a UI test, `AppUITests`, because `simctl` cannot answer it; `HIDE_IOS_TAPS` makes the page ask it), and the grant stays in the simulator; `push` delivers the Apple-shaped body in `HIDE_IOS_PUSH_BODY` to the app as Apple would and captures the banner, which showed the fixed text only: the extension was not seen to run under `simctl push` (the simulator's notification pipeline finished with no `HideNotification` process), so a decrypted banner is proven by the hosted extension test and only a real phone proves the delivery.
+`HIDE_IOS_RECORD=<file.mp4>` records a `run` from before launch through the capture and copies the recording back even if its UI test fails; the owned recorder is stopped on every exit.
+For an isolated relay fixture, use `HIDE_IOS_RELAY_PORT=<port>` on `build` and each `run`: only that loopback endpoint is admitted by the simulator assembly, SSH forwards it to the local fixture, and release refuses this option.
+The run closes its fixture app on every exit, including a failed launch or capture, so forwarded connections cannot keep SSH open; keeping the simulator does not keep that app running.
+After pairing that fixture, `HIDE_IOS_JOURNEY=back` checks an interior swipe and an edge swipe in the conversation; `HIDE_IOS_JOURNEY=notification` taps the `Phone launch check` notification delivered by `push` and waits for the fixture conversation.
+These opt-in UI journeys require `run` with a simulator relay, sync the UI test source before running the selected test, and leave the ordinary build and permission test unchanged.
+`bash mobile/scripts/build-ios.sh store-shots` makes the App Store screenshots, in Korean and English, from the demo mode ([the store page](#the-store-page)).
+`bash mobile/scripts/build-ios.sh clean` deletes that simulator and the branch's whole folder there.
+
+Everything a command starts it ends: the simulator it created is shut down and deleted, and one it found off is shut down again, on every exit including a failure (a trap in `mini-ios.sh`).
+`HIDE_IOS_KEEP_SIMULATOR=1` leaves the simulator booted for a check by hand and marks it; the next command of the branch that does not ask to keep it ends that simulator too, so `clean` is not the only way it goes.
+The Swift tests of a `build` run on the branch's simulator and clear the pairing Keychain items they test, so a pairing kept for a check does not survive a later `build`: pair again after it.
+The mini runs other work, and nothing prunes a branch it does not own, so each branch's state is one folder of about 0.5 GB (`~/hide-ios-build/<branch>/`) plus one simulator; once 4 other branches hold a folder there, the build refuses before it copies anything and prints the folders.
+Run `bash mobile/scripts/build-ios.sh clean` from those branches, or `rm -rf` a folder it names after `xcrun simctl delete` of its `hide-ios-<branch>` simulator, then retry.
+The build prints the machine's free disk when it ends.
+
+`bash scripts/verify-web.sh mobile test` runs the node tests of `mobile/` (the assembler against a pin that differs or a protocol that is missing, the pin generator, the Capacitor version check, which also refuses a plugin package or product the app links without the fixed plugin list changing, and the release gate below), which `pr.yml`'s checks lane runs.
+The Swift tests need Xcode, so only the build command above runs them; [Swift tests are not in CI](#swift-tests-are-not-in-ci) says why.
+The simulator build is signed ad hoc (`CODE_SIGN_IDENTITY=-`, no account or certificate), not left unsigned, because the simulator gives the Keychain only to an app that carries its entitlements and answers -34018 to an unsigned one; [The release build](#the-release-build) signs and uploads one with the team's own certificate.
+
+### The store page
+
+`mobile/store/` is the App Store page as source: the text in `metadata/` (the folder layout fastlane's `deliver` reads, so the files can be pasted by hand or uploaded by it: one folder each for `en-US` and `ko` with `name`, `subtitle`, `description`, `keywords`, `promotional_text`, `release_notes` and the three URLs, `primary_category`, `secondary_category` and `copyright` beside them, and `review_information/notes.txt`, the notes for App Review), `age-rating.md` (the answers of the age-rating questionnaire and the reason for each) and `shots.json` (the screenshots: their steps, headlines and support lines in both languages).
+Nothing here is uploaded by any command; the person who owns the App Store Connect account enters it there.
+`mobile/scripts/check-store-text.mjs` (run by `bash scripts/verify-web.sh mobile test`) fails a field over Apple's limit (name and subtitle 30, promotional text 170, keywords 100, description and release notes 4000, review notes 4000), another company's product name (or Apple's) in the name, the subtitle, the keywords or a screenshot's words (`store-limits.mjs` is the one list), keywords with a space, a repeat or a word the name or subtitle already carries, a description that names an agent without saying Hide is independent of its maker, a description whose first two lines do not say it works with Hide from withhide.dev, and any drift from the decided name, English subtitle, URLs and categories.
+
+`store-shots` does the same phone build and copy to the mini as `build` and then runs no test.
+On the mini the app runs in a simulator of its own, one shot at a time, in demo mode, with the debug inputs of [the simulator run](#the-ios-app): `HIDE_DEBUG_TAPS` presses each step of a shot (`<selector>::=<text>` fills a field, `<selector>::^` scrolls to it), `HIDE_DEBUG_NOW` starts the page's clock at 2026-11-09 09:41, `simctl status_bar override` fixes the bar at 9:41 with a full battery and full signal, and the simulator itself is set to the shot's language and to light appearance, so what iOS draws (the notification's time word) is in that language too.
+The app writes `hide-debug-taps` in its temporary folder when the last step is pressed (`done`) or one is never found (`failed <step>`), and the script waits on that file, so a shot whose steps did not finish stops the run instead of being captured; the notification shot is also captured before its banner arrives, and the run fails when the two captures are the same file, and `compose` refuses a capture that is not the canvas's size.
+The simulator is asked once, in English, to allow notifications (the UI test `allow` uses), so the notification shot is the whole simulator screen with the banner iOS drew for the app's own sample notification; nothing in it is composed.
+The raw captures come back to this Mac and `mobile/scripts/store-shots.mjs compose` frames each in a device frame with its headline and writes `<language>/<file>.png` at 1206x2622, 8-bit RGB with no alpha, which is the required iPhone size.
+The headline's lines are the ones `shots.json` writes (a list of one or two lines, the accent inside one of them), so the face's width never splits an accent. The frame is the only thing the script draws: colors are `design/tokens.json` (`--swatch-hide`, `--accent-choice-lime`, the Hide light theme's foreground) and type is the Inter and Pretendard files the app ships.
+The app's screen is the capture as taken, with its demo bar, and carries no other company's name or logo because the sample data names none ([Phone demo mode](UI_BEHAVIOR.md#phone-demo-mode)).
+The PNGs are run artifacts under `agents/runs/ios-mission/store-assets/` (`HIDE_STORE_SHOTS_OUT` changes it) and are never committed ([AGENTS.md](../AGENTS.md#evidence-belongs-outside-the-repository)).
+
+### The release build
+
+`bash mobile/scripts/build-ios.sh release` is the one command that makes a signed build of the app and uploads it to TestFlight.
+It refuses a working tree with tracked changes, `HIDE_IOS_SKIP_PHONE_BUILD` (a release builds the phone bundle from the commit it uploads) and a commit that already has an upload record ([Uploading a commit twice](#uploading-a-commit-twice)); it runs everything `build` runs (the phone build, the pin check, `cap sync`, the Swift tests on the mini, and a failing test stops it before anything is signed), and then, on the mini (`mobile/scripts/mini-release.sh`, piped over `ssh` like `mini-ios.sh`):
+
+1. takes the machine's release lock and reads the secrets, checking all of them ([secrets](#the-releases-secrets));
+2. archives the app in the Release configuration with signing off, with the version and build number given on the command line (never written into the repository);
+3. exports the archive with automatic signing, which makes the App Store profile and signs with the team's cloud-managed Apple Distribution certificate, so no distribution private key exists on the mini and no keychain is read or changed;
+4. unpacks the signed ipa, reads its property lists and signature, and runs the release checks ([Release checks](#release-checks)); one failed check stops the command with every failure named, before anything is uploaded;
+5. validates and uploads that same ipa with `xcrun altool --validate-app` and `--upload-app`, then writes the upload record and prints the build's state once with the delivery id Apple gave the upload. `HIDE_IOS_NO_UPLOAD=1` stops after the validation, before anything is sent to TestFlight, which proves a change to the command without making a build.
+
+It exits non-zero with the reason at the first failure (a step outside the tools names itself), prints the end of the log once the log has been searched for a secret, and ends each long step that outlives its bound (archive 20 minutes, export and validate 15, upload 30; a whole run took about 6).
+Each step runs in a process group of its own, so a bound or a signal ends it with everything it started.
+A whole run took about 6 minutes and the mini's free disk fell by about 1 GB (2026-11-10: 24 GB to 23 GB), most of the time in the Swift tests, Apple's validation and the upload.
+The command stops before it starts only when the mini has less than 5 GB free, a few times what a run uses, so a run cannot fill the disk under the mini's other work; a run that runs out of space anyway fails at the step that ran out.
+
+**Version and build number.**
+The version is the app's own: the `version` of `mobile/package.json`, three numbers, and it moves only when the app is released to the App Store, not with the desktop release.
+The phone is a shell around a hosted phone page, so a desktop release reaches it through the phone protocol ([Retained bundles and the pin](#retained-bundles-and-the-pin)), which needs no store release; the app and the desktop number their releases apart, and what says whether a desktop and a phone work together is the protocol, never the two versions.
+The first App Store version is 1.2.7 (released 2026-11-13): Apple refuses a version number below the one released, and refuses to delete the only version of an app, so the number cannot go back.
+The next app release raises `version` above 1.2.7.
+The build number is the UTC time of the machine that starts the command, taken after the Swift tests and just before the mini starts, `YYYYMMDDHHMMSS`: it rises with every run, a second run on the same commit uploads under a new number, and nothing is edited by hand.
+App Store Connect refuses a build number that is not higher than every earlier build of the same version, so two runs that overlap are decided by the order they upload in, and a mini whose clock runs backwards is refused after the upload with Apple's own message.
+A run that fails before the upload, or whose upload Apple refused, is run again as it is.
+`bash mobile/scripts/build-ios.sh status <delivery id>` reads an upload's state again (`altool --build-status`, with the key from the same files) and changes nothing; it exits non-zero when altool fails or does not answer in 5 minutes.
+A run between app releases uploads another build of the version in `mobile/package.json`: once Apple has approved a version, a run from main that still carries it is refused by Apple's validation after the whole build, and raising `version` in that file (in a pull request, like any change) is the way out.
+Builds made between releases are development builds; expire them in App Store Connect before an external group or a review sees the build list.
+
+#### What a release owns
+
+`mini-release.sh` lists, in one place, everything a run creates, and one cleanup removes exactly that list on a normal end, a failed step, TERM, HUP or INT, and a closed standard output:
+
+| What | Where | How it goes |
+| --- | --- | --- |
+| The machine's release lock | `~/hide-ios-build/.release.lock` | held by the kernel (`flock`) on a descriptor of the running shell, so it ends with the shell however that ends; its text (pid, start time, branch) only names the holder, and is emptied |
+| The work folder | `~/hide-ios-build/<branch>/release/` | removed: the archive, derived data, the archive's result bundle and the one the export is given, the export, the unpacked ipa, the temporary folder and the private home the tools that reach App Store Connect run with |
+| xcodebuild's distribution logs | `App_*.xcdistributionlogs` and `XcodeDistPipeline.*` in the account's temporary folder | deleted unread, by name, those made since the run started |
+
+A dropped ssh connection sends the remote no hang-up and closes its output; the script ignores SIGPIPE, so its next write fails and it ends through the same cleanup, which never stops on its own output.
+The step that was running when the connection dropped finishes first (an upload goes, and is recorded).
+The lock is one per machine, not per branch, because what it guards is: the account's temporary folder, the disk floor, the Apple account and its build numbers.
+While it is held a second release, of any branch, is refused naming the holder, and a `build` or `clean` of the holder's branch is refused too; `status` and `uploads` take no lock.
+Only the lock's "held by another" answer reads as a running release; a lock that cannot be taken or read (no `perl`, a file that will not open) stops the command naming that.
+The lock is taken when `mini-release.sh` starts, after `release`'s own build phase on the mini (the `ios/` copy, the Debug build and tests, the `release-inputs/` copy), which `busy` checks but does not hold: a second `release` or a `build` of the same branch started during that phase can still copy another tree under the first (a known gap; closing it means archiving from a copy made under the lock).
+A run ended by SIGKILL or a restart skips the cleanup and leaves `release/`, whose private home holds altool's log (the key id and path) and xcodebuild's URL cache (tokens that expire in 20 minutes), until the next release of that branch or `clean` removes it; nothing else can run then to remove it.
+xcodebuild writes its distribution logs, which hold a signed token and the key's ids, into the account's temporary folder, which it takes from the system (confstr) and not from `$TMPDIR` or the home, so they cannot be put in the work folder; the machine lock is what makes deleting them by name safe, and the one case it does not cover is an export another program starts on the mini during a release.
+`xcodebuild -exportArchive`, `altool --validate-app`, `--upload-app` and `--build-status` run with `CFFIXED_USER_HOME` set to the work folder's private home: altool's logs (its command line with the key id and path) and xcodebuild's URL cache (signed App Store Connect tokens) land there and go with it.
+The home's `Library/Caches` is made before the tools start: without it CFNetwork puts the URL cache in the account's cache folder (`getconf DARWIN_USER_CACHE_DIR`) instead, which a run on the mini showed.
+On the mini (2026-11-10, commit 955d040723) the export still signed with the cloud certificate and got its App Store profile, and Apple's validation passed, that way; afterwards `~/Library/Logs/ContentDelivery/com.apple.itunes.altool/`, `~/Library/Caches/com.apple.dt.xcodebuild/`, the account's provisioning profile folders and the account's cache folder were unchanged, and no altool URL cache appeared in the cache folder.
+
+What stays on the mini after a run: `~/hide-ios-build/<branch>/release.log`, redacted and searched; `~/hide-ios-build/uploads.log`, the upload record; the empty lock file (a lock file is never deleted, since a run that opened the old one and a run that made a new one could both hold a lock); and in the account's temporary folder (mode 700) what Apple's frameworks leave under names any program uses, so they are not deleted by name: per run about 20 to 30 `CFNetworkDownload_*.tmp` files of 1 to 2 KB from the export and validation, 3 `cms~~~*` files of about 5 KB, and 5 `ResultBundle_*` folders of 28 to 100 KB from the export, which writes these beside the one `-resultBundlePath` names.
+On the mini none of those holds the key id or a token (counted, not read, 2026-11-10); nothing in this command removes them, and macOS clears the temporary folder of old files on its own schedule (the day's earlier runs' files were still there that evening).
+`clean` removes the branch folder.
+
+#### Uploading a commit twice
+
+The mini's `~/hide-ios-build/uploads.log`, one for the machine, gets a line when an upload starts and another when it ends: time, commit, version, build number, delivery id (`started` has none yet), state and branch.
+A caller whose connection dropped, which sends the remote no hang-up, may not know whether the upload went, and `build-ios.sh` then says to read the record; `bash mobile/scripts/build-ios.sh uploads` prints it, `status <delivery id>` asks Apple, and a `started` line with no `uploaded` line after it means look in App Store Connect before running again.
+`release` refuses a commit that has any line in the record, under any branch name (main after a merge, a renamed branch), before the build and again on the mini, and says which; `HIDE_IOS_RELEASE_AGAIN=1` uploads it again on purpose (a new build number, the same commit).
+
+**Why altool uploads.**
+Xcode 26.6 also uploads from `xcodebuild -exportArchive` with `destination` set to `upload`, but that signs again while it uploads, so the bytes that were checked are not the bytes that went.
+`xcrun altool --upload-app` (altool 26.40.1) sends the exact ipa the checks read, and `--validate-app` runs Apple's own validation on it first.
+Apple's move from altool to notarytool is for notarization; the upload and validate commands are in 26.40.1's help.
+Both tools put the key's id and issuer id on their command line (visible to the same account's `ps` on the mini) and read the key file by path; the id, the issuer id and the path are not the key, and the file's body is never an argument.
+
+#### The release's secrets
+
+Three values, registered in `mobile/release-env.json` (the key, its shape, and what a missing one costs), shown by `mobile/release.env.example`, and held equal by a test.
+They are the App Store Connect Team API key's id, its issuer id and the path of its `.p8` file.
+They live on the mini in `~/.config/hide-ios/` (mode 700): `AuthKey_<key id>.p8` and `release.env` (both mode 600), and in no checkout and no GitHub secret; the same three names set in the mini's environment work without the file.
+The key needs the Admin role, since an App Manager key cannot make the cloud-managed distribution certificate and profiles.
+The command checks every key before it builds, in one report: a missing key, a value of the wrong shape, a key file named for another key id or readable by another account each stop it, naming the key and the kind of problem and never a value.
+A line of `release.env` that is not a registered name is refused, and the file is read as `KEY=VALUE` lines, never run.
+
+The key file is read by Apple's tools from its path and by nothing else: the command checks its name, owner and mode and never opens, copies or hashes it, and never passes its body anywhere.
+The ids and the path reach xcodebuild and altool as arguments (they are not the key); every pattern the command searches or replaces them with travels in a pipe, never in a file or another program's arguments.
+Nothing runs under `set -x`, and every line xcodebuild and altool print passes through a filter that replaces the three values, in any letter case, with the names of their keys, and a whole token with `<token>`, before it reaches the log or the terminal.
+Before a failed step shows the end of its log, and at every exit, the log is searched for the three values in any letter case, for anything shaped like a token or part of one (`eyJ` and a JSON header) and for a PEM private key header; if one is there the log is deleted, the end of it is not shown and the command fails.
+The search cannot see a key's body printed without its PEM header; nothing in the command has a path to print it, since only Apple's tools read the file.
+`mobile/scripts/mini-release.test.mjs` runs the script with stand-ins for the Apple tools and the macOS commands it asks questions of (so it runs in the `checks` lane, not only on a Mac): the stand-ins print their arguments and a token and write distribution logs where the real export does, and the tests prove that the script never reads the key file (it runs with the file unreadable), no copy of the key exists while the export runs, no value is in the arguments of a `sed` or `grep`, the log and the output hold none of the values, and the run leaves nothing behind after a failed export, a step outside the tools, a time bound (with the step's grandchildren), TERM during the export and a standard output closed mid-run; and that a second branch's release is refused while one runs, a lock whose text names a live process the kernel does not hold the lock for is not believed, and the upload record refuses the same commit under another branch name.
+Rotating a key is replacing the two files; nothing in the repository changes.
+
+#### Release checks
+
+`mobile/scripts/check-release-app.sh` reads the signed app, not the project, so a setting that never reached the binary cannot pass.
+It lists every failed check and the upload never starts after one.
+`mobile/scripts/check-release-app.test.mjs` spoils each fact in turn and requires its check to fail; the signature's Apple Distribution authority is checked by `mini-release.sh` and tested in `mini-release.test.mjs`.
+
+| The signed app | Must be |
+| --- | --- |
+| Identity | bundle id `me.grab.hide.ios`, the version and build number the command passed, iPhone only, minimum iOS 15.0, built with an iOS 26 SDK (Apple's upload rule since 2026-04-28) |
+| Export compliance | `ITSAppUsesNonExemptEncryption` is in the app and `false`, and no `ITSEncryptionExportComplianceCode`; the value rests on the operator's two answers in App Store Connect's questionnaire (the app uses standard encryption algorithms, and is not distributed in France), so a build no longer waits at Missing Compliance; answer them again, and change the value, if the encryption method changes or distribution in France or the EU starts (a `true` without the code Apple issues after reviewing documents is refused at validation, error 90592) |
+| Debug left out | Capacitor `loggingBehavior` none, `CAPACITOR_DEBUG` not on, no App Transport Security exception, no `server.url` or cleartext, no allowed navigation, web view inspection off, the debug pairing hook's name (`HIDE_DEBUG_PAIR_LINK`) absent from the binary and `BridgeGate` present in it |
+| Privacy manifest | `PrivacyInfo.xcprivacy` in the app: no tracking, no tracking domains, nothing collected, and a reason for every required-reason API it declares; Capacitor 8.6.0's own two frameworks declare none and call none (read from the archive's symbols on 2026-11-10); the app's own code reads `UserDefaults` for the first-run marker that clears a Keychain item left by an earlier install, so its manifest declares `NSPrivacyAccessedAPICategoryUserDefaults` with reason `CA92.1`, and a node that adds code calling another required-reason API adds its declaration in the same change |
+| Signature | signed by an Apple Distribution certificate, valid with `--strict --deep`; the profile is an App Store profile of team `GH6F6ZA497` for iOS, with no device list |
+| Entitlements | exactly the list in `mobile/release-expect.json`: `aps-environment` production, Associated Domains, and `keychain-access-groups` with the app's own group first and the push-keys group second (the order is what makes the app's own group the default one); a node that adds a capability adds its entitlement to that list in the same change, and a build with an entitlement nobody listed fails |
+| Background modes | `UIBackgroundModes` is exactly `remote-notification` |
+| App extensions | exactly the extensions `release-expect.json` names (the notification extension): its own bundle id, the app's version and build number, extension point `com.apple.usernotifications.service`, minimum iOS, no App Transport Security exception, no background modes, a privacy manifest that tracks nothing, entitlements exactly its list (the push-keys group only, so no pairing group, no `aps-environment`), and no networking code in its binary; the extension is signed before the app, and `--deep --strict` fails otherwise |
+| Web bundle | every file of `public/` is in the manifest `mobile/scripts/bundle-manifest.mjs` made after `cap sync` (the assembled folder, every retained file as pinned, and the two Cordova files Capacitor adds), with its SHA-256, and none is missing |
+
+The Release configuration of the project itself sets `CAPACITOR_DEBUG = false` and carries no `DEBUG` condition; the Debug configuration alone reads `ios/debug.xcconfig`.
+The app icon is the placeholder the project carries until the native node's icon lands; App Store Connect's processing is what judges it.
+
+#### Swift tests are not in CI
+
+The Swift tests (`HideShell` and the app's own controller) run on the mini in `build` and again at the start of `release`, and nowhere else.
+What closes this is a macOS lane for the paths under `mobile/ios/`: a `MACOS_PATHS` entry and its job in `scripts/ci-plan.py`, a lane in `pr.yml` and a runner for it, with the mini's `hide-ci` runner ([The Mac mini CI runner](#the-mac-mini-ci-runner)) the candidate because a hosted macOS runner queues for 53 minutes at the 90th percentile ([TESTING.md](TESTING.md#where-the-macos-runners-went)).
+It also needs the operator's decision to share the mini's disk and one job at a time with a simulator build, and a change to a workflow plans every lane, so it is a separate change and not part of making the upload.
+The release gate's own tests (the check script, the manifest, the secrets) are node tests and run in the `checks` lane with the rest of `mobile/`.
+
+#### Later: from the desktop release
+
+The release workflow of the private repository can run this command after it publishes a desktop release that needs a new app (not every desktop release does): `bash mobile/scripts/build-ios.sh release` on the operator's Mac, which reaches the mini the same way and needs the same three files there.
+A workflow on the candidate runner is not possible as it stands: that runner accepts only `release-candidate.yml` on main, runs as an account with no access to the key, and a hosted macOS job would need the key as a GitHub secret.
+The protocol order in [Retained bundles and the pin](#retained-bundles-and-the-pin) applies first: build the app from the main that carries the new protocol's bundle, with the previous one pinned.
+
+#### When a node adds an extension or a capability
+
+The release gate reads only the app. A node that adds a notification service extension adds, in the same change: its `aps-environment` (`production`, which the export turns the project's `development` into) in `mobile/release-expect.json`; its entitlements file at `ios/App/<name>/<name>.entitlements` and its entry in `appExtensions`, from which `embed entitlements` signs it before the app, each with its file's build settings (`$(AppIdentifierPrefix)`, `$(PRODUCT_BUNDLE_IDENTIFIER)`, `$(APS_ENVIRONMENT)`) resolved to the Release values, since an archive made with signing off resolves none and a setting the release does not know stops the run; the same step writes `AppIdentifierPrefix` (the team id and a dot) into each bundle's `Info.plist`, which that archive leaves empty and from which the code names its keychain groups, and the release check refuses a signed app or extension without it, because an app without it keeps a push key where its extension cannot read it and every notification stays the fixed text; the same checks for each `PlugIns/*.appex` in `check-release-app.sh` (a bundle id under `me.grab.hide.ios.`, the app's version and build, its exact entitlements with no `get-task-allow`, an App Store profile of the team, the Apple Distribution authority, and a privacy manifest of its own when it reads `UserDefaults`); one manifest per target in the privacy-manifest test; and the extension's App ID capabilities (app group, keychain sharing) registered in the developer account, since automatic signing creates its second profile but not its capabilities.
+
+### Retained bundles and the pin
+
+An older phone protocol's bundle stays in the app so a desktop that still speaks it keeps working.
+`mobile/retained-bundles.json` is the one place that says which: for each retained protocol, every file's path, size and SHA-256.
+A human reads its diff in the pull request that changes it; nothing else decides what the app carries.
+
+To change it, run `pnpm --dir mobile pin` from a checkout with network access.
+It reads `https://app.withhide.dev` (`phone-site.json` and then each file of each protocol older than this source's), requires the downloaded bytes to agree with the site's own inventory, and rewrites the file with one line per file.
+Open the diff and check that only what you meant moved: a protocol added when a new one was released and the previous one was retired from the site's `current`, a file whose hash changed only when you rebuilt a retained bundle on purpose, and no line removed unless a protocol is being dropped from the app.
+Commit it on its own, so its review is only that.
+
+The bundles in the app are chosen when the app is built, and the app never fetches code when it runs.
+A desktop that speaks a newer phone protocol than any bundle inside the app makes the loader show its version screen worded for the app ("Update the Hide app"), and only a new app release clears it.
+So a protocol bump and an app release take this order: raise `PHONE_PROTOCOL` and release the desktop, whose candidate uploads the new `p/<n>/` to the hosted site; build the app from that main (the assembler picks the new bundle up from source, and the previous protocol is pinned in a pull request of its own with `pnpm --dir mobile pin` before the app is built); submit it and wait for approval; and only then ship the desktop that speaks the new protocol to users, because until the app is approved an iOS phone stays on the version screen.
+Raising a protocol number for an addition is not needed ([ARCHITECTURE.md](ARCHITECTURE.md#the-mobile-companion)), which keeps this order for the rare change an older side would misread.
+
+## The Android app
+
+`mobile/android/` is the Capacitor host that carries the phone web app inside an Android app (`me.grab.hide.android`, Android 9 or later, compiled for and targeting API 36); [ARCHITECTURE.md](ARCHITECTURE.md#the-android-app-host) owns what it is.
+It builds with the same web folder as the iOS app, and its emulator runs on the Mac mini, beside the iOS simulator, so nothing about the build needs node or Rust there.
+Its version is `mobile/android/version.json`, which `app/build.gradle` reads and checks as `X.Y.Z`; the version code is 1 in a debug build and the Unix minute of the run in a release ([The release build](#the-android-release-build)).
+
+### Setting up the build machine
+
+The mini holds, under its own account and nothing system-wide but Homebrew's packages:
+
+1. `brew install openjdk@21 android-commandlinetools` (Gradle 8.14 and the Android Gradle plugin 8.13 run on JDK 21);
+2. an SDK in `~/Library/Android/sdk`: `sdkmanager --sdk_root="$HOME/Library/Android/sdk" --install "cmdline-tools;latest" platform-tools "platforms;android-36" "build-tools;36.0.0" emulator "system-images;android-36;google_apis_playstore;arm64-v8a"`, then `sdkmanager --licenses`;
+3. one emulator, `avdmanager create avd -n hide-android -k "system-images;android-36;google_apis_playstore;arm64-v8a" -d pixel_7`; the Play Store image carries Google Play services, which the code scanner needs.
+
+Together they take about 7 GB (the SDK about 4 GB, the emulator's disk about 2 GB).
+The scripts name these paths themselves (`mobile/scripts/mini-android.sh`), so no shell profile on the mini changes.
+
+### Building and running
+
+`bash mobile/scripts/build-android.sh` is the one command.
+It runs, on this machine, the phone build, `check-versions.mjs` and `assemble.mjs` as the iOS build does, then `cap sync android`, and copies `mobile/android/` and the Capacitor library it names (from `node_modules`, at the same place relative to it) to `~/hide-android-build/<branch>/` on the machine named by `HIDE_ANDROID_BUILD_HOST` (default `mini`).
+There `mini-android.sh`, piped over `ssh`, runs `./gradlew testDebugUnitTest assembleDebug assembleDebugAndroidTest` (the JVM tests and the debug app), boots the emulator, installs the app and its instrumented tests and runs them in the app's own process with its real web view (`BridgeGateWebViewTest`, `ShellNavigationWebViewTest`, `PairingStoreKeystoreTest`, `PushKeyStoreKeystoreTest`, `HidePushServiceTest`, `HidePushPluginTest`, through the debug build's `ShellTestActivity`); a failing test fails the command.
+It also copies the iOS app's `NoticeWords.swift` to the same place relative to the project, which `NoticeWordsTest` holds the Android words equal to; the JVM tests fail without it rather than pass on nothing.
+`HIDE_ANDROID_SKIP_PHONE_BUILD=1` reuses `web/phone-dist`.
+
+`bash mobile/scripts/build-android.sh run` installs the built debug app, launches it, waits `HIDE_ANDROID_SETTLE` seconds (default 15) and captures the screen; `HIDE_ANDROID_CAPTURE=<file.png>` copies the capture back, with the app's log beside it as `<file>.log`.
+A pairing link on its standard input (`printf '%s' "$link" | bash mobile/scripts/build-android.sh run`) reaches the app as the App Link a camera would open, and Connect is pressed once the page asks, since an emulator has no camera to point at a screen; the link is in no argument and in no file on the mini.
+`HIDE_ANDROID_TAPS` presses, fills and scrolls to elements of the page as `HIDE_IOS_TAPS` does, and `HIDE_ANDROID_APPEARANCE=light|dark` sets the emulator's appearance.
+The link, the taps and the clock are read by the debug build only (`app/src/debug/`); the release build has an empty stand-in.
+`bash mobile/scripts/build-android.sh clean` deletes the branch's folder there.
+
+For a relay fixture, start `target/debug/hide-relay --listen 127.0.0.1:<port>` and a candidate hided with `HIDE_RELAY_URL=ws://127.0.0.1:<port>/ws` on this machine, and pass `HIDE_ANDROID_RELAY_PORT=<port>` to `build` and each `run`: the phone build connects to `ws://127.0.0.1:<port>/ws`, the assembly admits only that endpoint, SSH forwards the port to the mini and `adb reverse` forwards the emulator's port to it.
+Only a debug build may reach cleartext `127.0.0.1`; a release build refuses cleartext traffic.
+A pairing code lives five minutes, so show it right before the `run`.
+
+One emulator runs on the mini at a time: a command takes a kernel lock (flock) on `~/hide-android-build/.emulator-lock`, as the iOS release does, waits for it up to ten minutes and then refuses, naming the holder its text records (pid, start time, branch).
+The lock ends with the command's shell however that ends, and no program the command starts inherits it.
+Everything a command starts it ends on every exit, a failure included: the emulator it booted (the device's disk synced first, since `emu kill` skips the device's own shutdown and a half-written file there loses the web view's later storage writes; then `emu kill` and up to 30 s to exit; a signal to its process group only if it will not stop), the adb server it started on a port of its own (5039, so an adb another program runs is never touched), the port it reversed and the lock.
+A command killed before it could (a `SIGKILL`, a lost connection) is cleaned by the next one: holding the lock, that one ends the emulator the killed one recorded in `~/hide-android-build/.emulator-run` the same way (the same pid and start time, so a reused pid is never signalled), and with it the port reversed through it, and the adb server on its port, before it starts its own; `mobile/scripts/mini-android.test.mjs` proves it against stand-ins.
+The app's data stays in the emulator between runs, so a pairing survives a restart of the app and of the emulator; the instrumented tests of a `build` remove the pairing items they test, so pair again after a `build`.
+Each branch's state is one folder of about 0.25 GB; once 4 other branches hold a folder there, the build refuses and prints them, as the iOS build does.
+Gradle's download cache is the mini account's own `~/.gradle`, shared by every branch, and Gradle runs without its daemon, so nothing of a build stays running.
+
+### The Android app's notifications
+
+The app receives notices through Firebase Cloud Messaging ([ARCHITECTURE.md](ARCHITECTURE.md#the-android-app-host)), on the Firebase project of the relay's Google Cloud project, `dependable-data-513506-p7`, where the Android app `me.grab.hide.android` is registered.
+The build applies no Google services Gradle plugin and holds no `google-services.json`: the four values Firebase reads when the app starts (app id, project id, sender id and API key) are `mobile/android/app/src/main/res/values/firebase.xml`, copied from that project's `google-services.json` for the app, and a new Firebase app or key is a change to that file.
+They ship inside every APK, so they are public by design; the API key (`Android key (auto created by Firebase)`) is restricted in Google Cloud to Android apps with package `me.grab.hide.android` signed by one of the listed certificates and to two APIs, Firebase Installations and FCM registration:
+
+```bash
+gcloud services api-keys update <key id> --project dependable-data-513506-p7 \
+  --allowed-application=sha1_fingerprint=<SHA-1>,package_name=me.grab.hide.android \
+  --api-target=service=firebaseinstallations.googleapis.com --api-target=service=fcmregistrations.googleapis.com
+```
+
+The certificates listed are the build machine's debug key (`~/.android/debug.keystore` on the mini, which signs the emulator's debug app) and the release upload key (`~/.config/hide-android/upload-certificate.pem`); Google Play's app signing certificate is added once Play signs the app, since a phone installs the app Play signed.
+An `--allowed-application` list replaces the earlier one, so an update names every certificate, and a build signed by a certificate not listed gets no token (`token_unavailable` on the switch).
+The relay's own access to FCM is its service account's, not this key ([RELAY_PROTOCOL.md](RELAY_PROTOCOL.md)).
+An emulator gets a token only once Google Play services has checked it in with Google; one whose check-in keeps failing (`AUTHENTICATION_FAILED` or `bad security token` in its log, `token_unavailable` on the switch) checks in again after `adb shell pm clear com.google.android.gsf` and `adb shell pm clear com.google.android.gms`, which leaves the Hide app's data alone.
+
+### The upload key
+
+Play App Signing holds the app signing key, which Google made and keeps; ours is the upload key, which only proves to Play that a bundle came from us, and which Play can replace on request.
+It lives on the mini in `~/.config/hide-android/` (mode 700), beside nothing else of Hide's:
+
+| File (mode 600) | What it is |
+| --- | --- |
+| `upload.p12` | the PKCS12 keystore: alias `upload`, RSA 4096, self-signed `CN=Hide Android upload key`, valid until 2054-03-31; made 2026-11-13 |
+| `upload-certificate.pem` | its certificate; SHA-256 `12:F9:F3:EF:BA:C0:09:AA:76:4B:DC:6E:F7:D0:DC:98:B5:69:B4:82:B8:5E:40:29:DA:C6:B8:80:24:7A:9B:0C`, the `uploadCertificateSha256` of `mobile/android-release-expect.json` |
+| `release.env` | the release's secrets as `KEY=VALUE` lines ([The release's secrets](#the-android-releases-secrets)) |
+| `play-service-account.json` | the Play service account's key, once the Play account exists |
+
+The backup is the keystore and its certificate in the encrypted disk image `hide-android-keys-backup-2026-11-13.dmg` (AES-256) in the operator's iCloud Drive, and two entries in the Passwords app (iCloud Keychain): `Hide Android upload key` (the keystore's password, which PKCS12 makes the key's too) and `Hide Android keys backup dmg` (the image's passphrase).
+The image was read back after it was made and its keystore compared equal to the mini's.
+To restore the key to a build machine: open the image with its passphrase, copy `upload.p12` and `upload-certificate.pem` into `~/.config/hide-android/` (`chmod 700` the folder, `600` the files), and write `release.env` from `mobile/android-release.env.example` with the password from the Passwords app.
+A key that is lost or leaked does not lose the app: make a new upload key (`keytool -genkeypair -storetype PKCS12 -keyalg RSA -keysize 4096 -validity 10000 -alias upload`, the password through `-storepass:file`), ask for an upload key reset in Play Console (Setup, App signing) with its certificate, back it up the same way, and change `uploadCertificateSha256` in a pull request.
+
+### The Android release build
+
+`bash mobile/scripts/build-android.sh release` makes a signed release bundle (AAB) and uploads it to Play's internal testing track.
+It refuses tracked changes, a commit that is not on `origin/main`, a commit that already has an upload record (the mini's `~/hide-android-build/uploads.log`, whose last line for the commit decides; `HIDE_ANDROID_RELEASE_AGAIN=1` uploads it again on purpose), `HIDE_ANDROID_SKIP_PHONE_BUILD` and `HIDE_ANDROID_RELAY_PORT`; it runs everything `build` runs (the phone build, the pin check, `cap sync`, the JVM tests and the instrumented tests on the mini's emulator, and a failing test stops it before anything is signed), and then, on the mini (`mobile/scripts/mini-android-release.sh`, piped over `ssh`):
+
+1. takes the machine's Android release lock (`~/hide-android-build/.release.lock`, a kernel lock like the iOS release's, refused naming the holder) and reads the secrets, checking all of them, the keystore's password against the keystore among them;
+2. builds the bundle unsigned with `./gradlew bundleRelease -PhideVersionCode=<code>`: Gradle is handed no secret;
+3. signs it with `jarsigner` and the upload key, verifies the signature (no entry it does not cover) and reads its signer's certificate with `keytool -printcert -jarfile`;
+4. unpacks the signed bundle and runs `mobile/scripts/check-release-aab.py` on it ([Release checks](#android-release-checks)); one failed check stops the command with every failure named;
+5. uploads it with Play's publishing API through one edit: the bundle (Play's answer must name the same version code and SHA-256), the internal track's release with status `completed`, and the commit of the edit; the upload record gets a line when the bundle starts to go and another when the edit is committed.
+
+`HIDE_ANDROID_NO_UPLOAD=1` stops after the release checks, before anything is sent to Play, and keeps the checked bundle on the mini as `~/hide-android-build/<branch>/signed.aab` (`HIDE_ANDROID_BUNDLE_OUT=<file.aab>` copies it back); it may run from a branch, so a change to the command is proven before it merges, and it is how Play's first build is made, since Play's API cannot upload a new app's first build and it goes up by hand in Play Console (the `android-release` skill in with-hide/hide-private has Play's steps in order).
+On the mini (2026-11-13) a whole no-upload run took about 8 minutes, most of it the phone build and the emulator's tests; the bundle is about 34 MB.
+
+**Version and version code.**
+The version name is `mobile/android/version.json`; Play orders builds by the version code alone, which is the Unix minute the command takes after the tests (`node mobile/scripts/release-version.mjs android`): it rises with every run, a second run on the same commit takes a new one, it stays under Play's limit of 2100000000 until the year 5962, and nothing is edited by hand.
+
+**What a release owns.**
+`mini-android-release.sh` lists, in one place, what a run creates, and one cleanup removes exactly that on a normal end, a failed step, TERM, HUP or INT, and a closed standard output: the lock (its text emptied), the work folder `~/hide-android-build/<branch>/release/` (the unsigned and the signed bundle, the unpacked bundle, the signers, the API's answers, the temporary folder), a curl still talking to Play, and a Play edit it opened and did not commit, which it deletes so nothing it uploaded reaches a track (the record gets a `deleted` line, and that commit may run again).
+Gradle runs in a process group of its own with a 20-minute bound, so a bound or a signal ends it with every process it started; signing is bounded at 5 minutes, each API call at 2 and the upload at 30.
+What stays: `release.log` (redacted and searched), the machine's `uploads.log`, the empty lock file, Gradle's unsigned release outputs in the branch's project, and after a no-upload run `signed.aab`; `clean` removes the branch folder.
+A `build`, `store-shots` or `clean` of the branch a release is running from, and a second release of any branch, are refused while the lock is held.
+
+#### The Android release's secrets
+
+Four values, registered in `mobile/android-release-env.json` (each key, its shape, and what it is for), shown by `mobile/android-release.env.example`, and held equal by a test: the keystore's path, the key's alias, the keystore's password, and the path of the Play service account's key file, which only an upload needs.
+They are read from `~/.config/hide-android/release.env` (mode 600) as `KEY=VALUE` lines, never run, and never from the environment: a value in the environment would reach every program the run starts, Gradle among them, so one found there stops the command.
+They stay in variables of the script's shell that are never exported.
+The password reaches `keytool` and `jarsigner` through a pipe (`-storepass:file /dev/fd/N`); signing runs in the foreground for that reason, since a background step does not inherit the pipe.
+The service account's private key reaches `openssl` through a pipe to sign a one-hour assertion, which reaches curl on its standard input and is traded for an access token, which reaches each API call as a header read from curl's standard input; none of them is ever an argument, a file or an environment variable.
+Every line the tools print passes through a filter that replaces the password and the token values with their names and anything shaped like an access token (`ya29.`) or an assertion with `<token>`; before a failed step shows the end of its log, and at every exit, the log is searched for those values and shapes and for a PEM private key header, and a log that holds one is deleted and the command fails.
+The command checks every value before it builds, in one report naming the key and the kind of problem, never a value: a missing key, a wrong shape, a file another account can read, a password that does not open the keystore, a service account file that is not one.
+`mobile/scripts/mini-android-release.test.mjs` runs the script with stand-ins for Gradle, keytool, jarsigner, unzip and curl (and the real openssl): it proves that no secret reaches an argument, an environment, the output or the log, that the token reaches Play only as a header, that the edit is deleted when the commit fails, the bundle's version code differs or the upload is interrupted, and that a run leaves no work folder or held lock after a failure or a TERM.
+
+#### Android release checks
+
+`mobile/scripts/check-release-aab.py` reads the signed bundle, not the project: the manifest and the XML resources in the compiled form the build wrote (aapt2's XmlNode protocol buffers, read with Python's standard library, the `python3` macOS's command line tools carry), so a setting that never reached the bundle cannot pass.
+It lists every failed check, and the upload never starts after one; `mobile/scripts/check-release-aab.test.mjs` writes a bundle in that form, spoils each fact in turn and requires its check to fail.
+
+| The signed bundle | Must be |
+| --- | --- |
+| Identity | package `me.grab.hide.android`, the version and version code the command passed, minimum SDK 28, target SDK 36, the base module only |
+| Debug left out | not debuggable, not test-only, no class or string of the debug build's inputs (`hide_debug_`, `hide-debug-`, `ShellTestActivity`) in its code |
+| No cleartext | no `usesCleartextTraffic`; the network security configuration the app names refuses cleartext in its base and in every part, has no debug overrides, trusts no user certificates, and has no qualified copy that would replace it on some phones |
+| Nothing leaves the phone | `allowBackup` false, and data extraction rules that exclude every domain from both cloud backup and device transfer and include nothing |
+| Permissions | exactly the list in `mobile/android-release-expect.json`: today `INTERNET` and `POST_NOTIFICATIONS` (asked only when notifications are turned on), and from the libraries `ACCESS_NETWORK_STATE` (ML Kit's code scanner and Firebase), `WAKE_LOCK` and `com.google.android.c2dm.permission.RECEIVE` (Firebase Cloud Messaging, [The Android app's notifications](#the-android-apps-notifications)) and the app's own `DYNAMIC_RECEIVER_NOT_EXPORTED_PERMISSION` (AndroidX), which it also declares; no camera (the scanner runs in Google Play services) and no advertising id; a node that adds a permission adds it there in the same change |
+| Exported components | exactly the list: the app's `ShellActivity` (the launcher and the pairing link), Firebase's `FirebaseInstanceIdReceiver`, which only a holder of `com.google.android.c2dm.permission.SEND` (Google Play services) can reach, and AndroidX's `ProfileInstallReceiver`, which only a holder of `android.permission.DUMP` can reach |
+| Web view | Capacitor's configuration: web view inspection off, logging none, no server url or cleartext, no allowed navigation, no mixed content |
+| Native libraries | exactly the four in `mobile/android-release-expect.json`: `libdatastore_shared_counter.so` for arm64-v8a, armeabi-v7a, x86 and x86_64, from AndroidX DataStore (`androidx.datastore` 1.1.7, which `firebase-common` brings with Firebase Messaging); they are aligned to 16 KB pages as Play requires, and only multi-process DataStore loads them, which Firebase does not use; a Firebase or DataStore update that changes them changes this list, and any other native library fails |
+| Web bundle | every file of `assets/public/` is in the manifest `bundle-manifest.mjs` made after `cap sync` (`android`), with its SHA-256, and none is missing |
+| Signature | signed by the upload key alone (the certificate's SHA-256 is `uploadCertificateSha256`); `jarsigner -verify` finds no entry the signature does not cover |
+
+### The store page of the Android app
+
+`mobile/store/android/` is the Google Play page as source: the text in `metadata/` (the layout fastlane's `supply` reads: one folder each for `en-US` and `ko-KR` with `title`, `short_description`, `full_description` and `changelogs/default`), `play-forms.md` (the answers for the Play Console forms that are not text, with the reason for each: data safety, content rating, target audience, ads, app access, countries and store settings) and `shots.json` (which of the iOS shots Play shows, in which order, the sizes, and the Play locale of each language).
+The words and steps of a shot stay in `mobile/store/shots.json`, so the two stores say the same things; `shots.json` here only names them.
+Nothing here is uploaded by any command; the person who owns the Play Console account enters it there.
+`mobile/scripts/check-store-text.mjs` (run by `bash scripts/verify-web.sh mobile test`, with the iOS page) fails a Play field over Play's limit (title 30, short description 80, full description 4000, release notes 500), another company's product name in the title or the short description, a description that names an agent without saying Hide is independent of its maker or whose first two lines do not say it works with Hide from withhide.dev, an emoji or a word of four or more capital letters, a title other than the decided one, a missing file or locale, and a shot list that is not Play's size or names a shot that does not exist (`store-limits.mjs` holds the limits and the names).
+
+`bash mobile/scripts/build-android.sh store-shots` makes the screenshots, the feature graphic and the icon.
+It does the same phone build and copy to the mini as `build`, builds the debug app without tests, and there takes the emulator lock and runs the app in demo mode, one shot at a time, with the debug inputs of [a run](#building-and-running): the screen is set to 1080x1920 (and put back on exit), Android's own demo mode fixes the system bar at 9:41 with a full battery and signal, the app's language is set to the shot's Play locale (`cmd locale set-app-locales`), appearance is light, and the page's clock starts at the same time as the iOS shots'.
+The app writes `hide-debug-taps` when the last step is pressed, and the script waits for it as the run does, so a shot whose steps did not finish stops the run instead of being captured.
+The raw captures come back to this Mac and `mobile/scripts/store-shots.mjs compose-android` frames each in a device frame with its headline, as the iOS shots are, and writes the layout `supply` reads under `HIDE_STORE_SHOTS_OUT` (default `agents/runs/android-mission/store-assets`): `<locale>/images/phoneScreenshots/<file>.png` at 1080x1920 (24-bit, no alpha), `<locale>/images/featureGraphic.png` at 1024x500 (24-bit, the first shot's capture beside its words) and `<locale>/images/icon.png` at 512x512 (32-bit; the iOS app's icon art, which is a full square of the Android icon's background and owl).
+`compose-android` refuses a capture that is not 1080x1920, so a capture of another device or a failed screenshot is never framed.
+The shots carry no notification: the app's notifications are the system's own and are not part of a screen capture.
+The images are run artifacts and are never committed ([AGENTS.md](../AGENTS.md#evidence-belongs-outside-the-repository)).
+
+### In CI
+
+The release gate's own tests (the check, the release command, the secrets registry) are node tests in `mobile/` and run in the `checks` lane.
+The `Android app` lane of `pr.yml` runs the JVM tests and a debug build on Linux, on the runner's own Android SDK, for a change under `mobile/android/` ([TESTING.md](TESTING.md#how-many-jobs-a-run-starts)); the instrumented tests need an emulator and run only through `build` above.
+
 ## Mobile relay server
 
-[RELAY_DEPLOYMENT.md](RELAY_DEPLOYMENT.md) owns the production main-CI artifact, Linux installation and rollback, systemd/proxy/collector configuration and scoped cloud operations.
-The manual `relay-artifact.yml` producer builds only the relay from its exact protected-main dispatch SHA and retains source/run and SHA-256 evidence; it signs nothing and deploys nothing.
+Installing, updating and operating the production relay is owned by a private operations document, not this guide.
+The manual `relay-artifact.yml` producer builds the phone relay from its exact protected-main dispatch SHA, and the device relay below, and retains source/run and SHA-256 evidence for both; it signs nothing and deploys nothing.
 
 `bash scripts/verify-cargo.sh build -p hide-relay --bin hide-relay` builds the standalone memory-only server into `target/debug/hide-relay` (`.exe` on Windows).
 Run `target/debug/hide-relay --listen 127.0.0.1:8787` for local clients; `/ws` accepts WebSockets and `/health` answers the uptime check.
@@ -669,3 +1057,16 @@ It reads no environment override, configuration file, database, persistent state
 Its CLI parser is `hide-relay/src/config.rs`, budget authority is `limits.rs`, and [RELAY_PROTOCOL.md](RELAY_PROTOCOL.md) defines forwarding, proxy trust, log collection and reconnect semantics.
 Ctrl+C on every system, or SIGTERM on Unix, drains the server; the operating service manager owns restarting it.
 `bash scripts/verify-cargo.sh test-scoped -p hide-relay` starts private loopback listeners and real protocol clients and stops them on every exit path.
+
+## Device relay server
+
+The relay computers fall back to when they cannot reach each other directly is the upstream `iroh-relay` server, run as its own service beside the phone relay on the same machine and host (`deploy/relay/`), never a fork.
+`deploy/relay/iroh-relay.version` pins its version; `bash scripts/build-iroh-relay.sh` builds that crates.io release with the lock file it published into `target/iroh-relay/bin/iroh-relay`, and `relay-artifact.yml` records its version and SHA-256 in the artifact's `source.json`, which `scripts/relay-deploy.py` checks before staging.
+Move the pin with the workspace's `iroh`: `scripts/tests/test_relay_deploy.py` fails while `Cargo.lock` holds another `iroh-relay`.
+Caddy terminates TLS for `device-relay.withhide.dev` and re-encrypts to the relay's loopback HTTPS listener (`iroh-relay.toml`); the relay answers address discovery on UDP 7842 itself with the certificate Caddy obtained, read through systemd credentials.
+iroh-relay 1.4.1 does not enforce its own accept-rate settings and has no connection cap, so `iroh-relay.nft` holds both on Caddy's loopback connections, beside the per-client receive limit in `iroh-relay.toml`.
+There is no per-address cap: iroh-relay sees only Caddy's address, and port 443 is shared with the phone relay, whose per-address limit is a rate of new sockets, so a cap on open connections there could refuse phone connections behind one shared NAT.
+The connection cap is sized to the descriptors the shared Caddy may hold, two per device connection beside the phone relay's; the arithmetic sits beside the rule.
+`iroh-relay-meter.py` runs every minute and owns whether the relay runs: it adds what the relay sent to the month from the table's counters, writes an alert event at 80% of the 300 GB cap, stops the relay at the cap until the next UTC month or `iroh-relay-meter.py resume`, and starts it once Caddy holds the certificate, again when the certificate's fingerprint changes (systemd hides the relay's own copy from the meter).
+`relay-deploy.py install` starts the device relay only after the phone relay is healthy; a device relay that does not come up fails an installation, which is rolled back, but not a recovery, which keeps the phone relay running and reports it. A previous release is restored on its own inventory, so a release staged before the device relay existed can still be rolled back to.
+`scripts/tests/test_relay_deploy.py` checks those rules and the files agreeing with each other; `relay-deploy-check.yml` installs the real upstream release behind real Caddy, nftables and systemd on a Linux runner.

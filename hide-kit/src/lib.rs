@@ -25,15 +25,14 @@ pub mod agents;
 mod cli;
 mod codex_trust;
 mod coordination_retirement;
+pub mod current;
 mod device;
-pub mod device_herdr;
-mod herdr_integration;
 pub mod holders;
 mod hooks;
-mod labels;
 pub mod layout;
 pub mod legacy;
 mod local;
+pub mod mcp_keys;
 pub mod panes;
 pub mod process;
 mod record;
@@ -42,6 +41,8 @@ mod retired_agents;
 pub mod retirement_inspection;
 pub mod runtime;
 mod state_route;
+pub mod store;
+mod targets;
 mod why;
 
 use std::collections::BTreeSet;
@@ -58,12 +59,32 @@ pub use agents::{
     AgentAdapter, AgentReport, Availability, Feature, HookSupport, PieceReport, SkillDir,
 };
 pub use coordination_retirement::preflight as retirement_preflight;
-pub use device::{CURRENT, device_target};
-pub use labels::{HCOORD_PLUGIN_ID, LABELS_PLUGIN_ID, Retirement, labels_home, plugin_state_dir};
+pub use current::CURRENT;
+pub use device::{device_target, guest_target, remove_guest};
 pub use legacy::{BuildPlace, build_of, is_build_name};
 pub use local::{STANDALONE_REASON, bundled_kit_dir, holds_package_runtime, local_target};
 pub use record::kit_state_dir;
 pub use refusal::{KitRefusal, RefusalCause};
+pub use targets::{
+    KitProfiles, ProfilePlace, ProfileReport, ProfileSource, prepare_account, trust_writable,
+};
+
+/// What a retirement took off one machine.
+#[derive(Clone, Debug, Default, Eq, PartialEq, Serialize, Deserialize)]
+pub struct Retirement {
+    /// Each part found and taken out, in a few words.
+    #[serde(default)]
+    pub removed: Vec<String>,
+    /// Why a part stayed; the next kit pass tries again.
+    #[serde(default)]
+    pub failures: Vec<String>,
+}
+
+impl Retirement {
+    pub fn is_empty(&self) -> bool {
+        self.removed.is_empty() && self.failures.is_empty()
+    }
+}
 pub(crate) use why::Reason;
 pub use why::{PartCause, PartWhy};
 
@@ -178,7 +199,7 @@ pub struct KitReport {
     #[serde(default)]
     pub agents: Vec<AgentReport>,
     /// The machine's Codex has the shared daemon setting, so Hide starts it
-    /// with `--no-daemon` (`herdr-core`'s `codex_launch`); `Some(false)` is a
+    /// with `--no-daemon` (`hide-core`'s `codex_launch`); `Some(false)` is a
     /// Codex read to be older than the setting, `None` no Codex or a failed
     /// read. Hide reads it and never changes it (PRD settings-cleanup D-12).
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -217,20 +238,21 @@ pub struct KitReport {
     /// record, so it stays true across launches until answered.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub held_for_onboarding: bool,
-    /// What an apply took out of the retired labels plugin; empty when there
-    /// was nothing of it (PRD labels-in-hided D-12).
-    #[serde(default, skip_serializing_if = "Retirement::is_empty")]
-    pub labels_retirement: Retirement,
-    /// What an apply took off the machine from older layouts: the
-    /// standalone hcoord Herdr plugin and the folders `~/.hide` replaced;
-    /// empty when there was nothing (PRD hide-home-layout D-13, D-14).
+    /// What an apply took off the machine from older layouts: the folders
+    /// `~/.hide` replaced; empty when there was nothing (PRD hide-home-layout
+    /// D-13, D-14).
     #[serde(default, skip_serializing_if = "Retirement::is_empty")]
     pub legacy_retirement: Retirement,
-    /// What a device's node did about the Herdr server on its registered
-    /// socket after this pass (PRD device-herdr-update); only a device's
-    /// apply carries it.
+    /// The machine's profiles whose accounts the kit installs into, each
+    /// with where its pieces are (PRD agent-profiles D-09); empty when the
+    /// pass was given none, and in a report from a build that predates them.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub profiles: Vec<ProfileReport>,
+    /// The machine's store of skills and MCP items, each with its cells
+    /// (PRD skill-mcp-manager); absent in a report from a build that
+    /// predates it.
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub herdr: Option<Box<device_herdr::HerdrUpdate>>,
+    pub store: Option<store::StoreReport>,
     /// The pass stopped before changing anything, and why; the report then
     /// has no part and no agent.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -268,6 +290,12 @@ pub fn login_agents(home: &Path) -> hide_platform::user_agents::UserAgents {
 pub struct KitTarget {
     /// The account's home, whose configuration files the hooks go into.
     pub home: PathBuf,
+    /// The Hide installation this kit belongs to on the account
+    /// (`hide_agent_hooks::route::APP_INSTALL` for a desktop package's,
+    /// `install_of_root` for a helper root's): each installation keeps its
+    /// own hook entries, plugin files and record beside another's
+    /// (docs/agent-hooks.md, More than one Hide on an account).
+    pub install: String,
     /// The folder holding `hide` and `hide-agent-hooks`. The hooks and
     /// command link name this folder, so it must outlive the
     /// process: the desktop package's resources on this machine, the helper
@@ -280,12 +308,6 @@ pub struct KitTarget {
     /// `Contents/Resources`, such as a device helper root, so a `hide` link
     /// into one of them is replaced rather than left as the operator's.
     pub owned_roots: Vec<PathBuf>,
-    /// The machine's Herdr server, which the retired labels plugin is taken
-    /// out of.
-    pub herdr_socket: PathBuf,
-    /// The `herdr` CLI, needed only to take out a GitHub install of the
-    /// retired labels plugin; `None` when the machine has none Hide can find.
-    pub herdr_bin: Option<PathBuf>,
     /// The machine's `codex`, found on the agents' search
     /// (`agents::search_path`) and run with it; `None` when Hide finds none.
     pub codex: Option<Program>,
@@ -305,6 +327,17 @@ pub struct KitTarget {
     /// Raised by the kit's owner when it is going away: a child the kit is
     /// waiting on is ended and no further part is started.
     pub stop: Arc<AtomicBool>,
+    /// Where the machine's profiles are read from, the node's profile file,
+    /// whose accounts get the agents' pieces (`targets`); a pass reads it
+    /// once it holds the account's lock. `None` leaves every profile account
+    /// as the record has it: a caller with no profile file.
+    pub profiles: Option<ProfileSource>,
+    /// The installation of another machine's work on this account (a
+    /// guest's, PRD device-connect-iroh D-77 (4)): it keeps its hook entries
+    /// and the agents' pieces and nothing else here. The account's `hide`
+    /// command, its login agents and the retirement of an old layout are
+    /// the account's own Hide's, and this pass leaves them alone.
+    pub hooks_only: bool,
 }
 
 /// What an apply is allowed to do. The launch or connection pass is the
@@ -327,6 +360,9 @@ pub struct Scope {
     /// machine (PRD settings-cleanup D-12, B27). Only this request ever does
     /// it, and it answers in `KitReport::codex_daemon_off`.
     pub codex_daemon_off: bool,
+    /// The operator's changes to the machine's store, in order (PRD
+    /// skill-mcp-manager); each answers in `StoreReport::outcomes`.
+    pub store: Vec<store::StoreChange>,
 }
 
 impl Scope {
@@ -383,6 +419,14 @@ impl Scope {
         self
     }
 
+    /// The operator's changes to the store, and nothing else.
+    pub fn store(changes: impl IntoIterator<Item = store::StoreChange>) -> Self {
+        Self {
+            store: changes.into_iter().collect(),
+            ..Self::default()
+        }
+    }
+
     /// The operator's request to turn Codex's shared server off, and nothing
     /// else.
     pub fn codex_daemon_off() -> Self {
@@ -397,6 +441,7 @@ impl Scope {
             && self.agent_on.is_empty()
             && self.agent_off.is_empty()
             && !self.codex_daemon_off
+            && self.store.is_empty()
     }
 
     /// Two requests for one machine as one; for an agent named by both, the
@@ -404,6 +449,7 @@ impl Scope {
     pub fn merge(mut self, later: Scope) -> Scope {
         self.restore.extend(later.restore);
         self.codex_daemon_off |= later.codex_daemon_off;
+        self.store.extend(later.store);
         for id in later.agent_on {
             self.agent_off.remove(&id);
             self.agent_on.insert(id);
@@ -440,11 +486,26 @@ pub(crate) enum Observed {
 
 fn observe(id: ComponentId, target: &KitTarget) -> Observed {
     match id {
+        ComponentId::Cli if target.hooks_only => Observed::Absent(Reason::with(
+            PartCause::OtherInstall,
+            cli::link_path(target).display().to_string(),
+            "the hide command of this account is its own Hide's; this installation keeps none"
+                .to_owned(),
+        )),
+        ComponentId::CoordinationRetirement if target.hooks_only => Observed::Absent(
+            Reason::not_changed("the old layout of this account is its own Hide's to retire"),
+        ),
         ComponentId::Cli => cli::observe(target),
-        ComponentId::ClaudeCodeHook => {
-            hooks::observe(target, hide_agent_hooks::AgentRuntime::ClaudeCode)
-        }
-        ComponentId::CodexHook => hooks::observe(target, hide_agent_hooks::AgentRuntime::Codex),
+        ComponentId::ClaudeCodeHook => hooks::observe(
+            target,
+            hide_agent_hooks::AgentRuntime::ClaudeCode,
+            (&target.home).into(),
+        ),
+        ComponentId::CodexHook => hooks::observe(
+            target,
+            hide_agent_hooks::AgentRuntime::Codex,
+            (&target.home).into(),
+        ),
         ComponentId::CoordinationRetirement => coordination_retirement::observe(target),
     }
 }
@@ -452,11 +513,17 @@ fn observe(id: ComponentId, target: &KitTarget) -> Observed {
 fn install(id: ComponentId, target: &KitTarget) -> Result<(), String> {
     match id {
         ComponentId::Cli => cli::install(target),
-        ComponentId::ClaudeCodeHook => {
-            hooks::install(target, hide_agent_hooks::AgentRuntime::ClaudeCode)
-        }
-        ComponentId::CodexHook => hooks::install(target, hide_agent_hooks::AgentRuntime::Codex),
-        ComponentId::CoordinationRetirement => coordination_retirement::install(target).map(|_| ()),
+        ComponentId::ClaudeCodeHook => hooks::install(
+            target,
+            hide_agent_hooks::AgentRuntime::ClaudeCode,
+            (&target.home).into(),
+        ),
+        ComponentId::CodexHook => hooks::install(
+            target,
+            hide_agent_hooks::AgentRuntime::Codex,
+            (&target.home).into(),
+        ),
+        ComponentId::CoordinationRetirement => coordination_retirement::install(target),
     }
 }
 
@@ -532,6 +599,17 @@ fn report(
     }
 }
 
+/// The Codex hook part is in place and Codex has not trusted it: `reason`
+/// is the kit's sentence, and the cause is the one every reader words.
+fn mark_untrusted(part: &mut ComponentReport, reason: String) {
+    part.state = ComponentState::Failed;
+    part.why = Some(PartWhy {
+        cause: PartCause::CodexUntrusted,
+        value: None,
+    });
+    part.reason = Some(reason);
+}
+
 /// How long a kit waits for another kit changing the same account.
 const LOCK_DEADLINE: Duration = Duration::from_secs(90);
 
@@ -583,7 +661,12 @@ pub(crate) fn lock_account(target: &KitTarget) -> Result<AccountLock, KitRefusal
 /// a re-read never lists parts and agents a pass could not install, and the
 /// operator's Try again is answered by the same check.
 pub fn status(target: &KitTarget) -> KitReport {
-    let mut record = match retirement_preflight(target).and_then(|()| record::load(&target.home)) {
+    let preflight = if target.hooks_only {
+        Ok(())
+    } else {
+        retirement_preflight(target)
+    };
+    let mut record = match preflight.and_then(|()| record::load(&target.home, &target.install)) {
         Ok(record) => record,
         Err(refusal) => return KitReport::refused(refusal),
     };
@@ -601,23 +684,30 @@ pub fn status(target: &KitTarget) -> KitReport {
         .map(|id| {
             let observed = observe(id, target);
             // `status` asks Codex no trust question, so Codex's trust is
-            // what the last pass found (`codex_trust`).
-            let failure = (id == ComponentId::CodexHook
+            // what the last pass found (`codex_trust`), with the cause that
+            // pass gave it.
+            let untrusted = (id == ComponentId::CodexHook
                 && matches!(observed, Observed::Current)
                 && !switched_off(id))
             .then(|| codex_trust::remembered(target))
             .flatten();
-            report(
-                id,
-                target,
-                observed,
-                recorded(id),
-                switched_off(id),
-                failure,
-            )
+            let mut part = report(id, target, observed, recorded(id), switched_off(id), None);
+            if let Some(reason) = untrusted {
+                mark_untrusted(&mut part, reason);
+            }
+            part
         })
         .collect();
     let agents = agent_kit::status(target, &record, &agent_kit::part_views(&components));
+    let detection = agents::Detection::probe(target);
+    // One read of the profiles for both: the store's places are the
+    // accounts the profile report names.
+    let read = targets::read_profiles(target);
+    let profiles = targets::status(target, &record, &detection, read.as_ref());
+    // The store is the account's: an installation that keeps only its hooks
+    // here reads none of it.
+    let store =
+        (!target.hooks_only).then(|| store::status(target, &record, &detection, read.as_ref()));
     let daemon = codex_daemon(target);
     KitReport {
         components,
@@ -629,9 +719,9 @@ pub fn status(target: &KitTarget) -> KitReport {
         codex_capability_unread: daemon.unread,
         codex_daemon_off: None,
         held_for_onboarding: held,
-        labels_retirement: Retirement::default(),
         legacy_retirement: Retirement::default(),
-        herdr: None,
+        profiles,
+        store,
         refused: None,
     }
 }
@@ -760,13 +850,18 @@ pub fn apply(target: &KitTarget, scope: &Scope) -> KitReport {
     let daemon_off = scope
         .codex_daemon_off
         .then(|| turn_codex_daemon_off(target));
-    let mut report = apply_scope(target, scope);
+    // A source is read before the account lock, so a slow repository holds
+    // no other pass up.
+    let fetched = store::fetch(target, &scope.store);
+    let mut report = apply_scope(target, scope, fetched);
     report.codex_daemon_off = daemon_off;
     report
 }
 
-fn apply_scope(target: &KitTarget, scope: &Scope) -> KitReport {
-    if let Err(refusal) = retirement_preflight(target) {
+fn apply_scope(target: &KitTarget, scope: &Scope, fetched: store::Fetched) -> KitReport {
+    if !target.hooks_only
+        && let Err(refusal) = retirement_preflight(target)
+    {
         return KitReport::refused(refusal);
     }
     let _lock = match lock_account(target) {
@@ -775,7 +870,7 @@ fn apply_scope(target: &KitTarget, scope: &Scope) -> KitReport {
     };
     // Without its record the kit cannot tell which parts are Hide's, so the
     // pass stops here, before anything below changes (engineering rule 4).
-    let mut record = match record::load(&target.home) {
+    let mut record = match record::load(&target.home, &target.install) {
         Ok(record) => record,
         Err(refusal) => return KitReport::refused(refusal),
     };
@@ -785,18 +880,14 @@ fn apply_scope(target: &KitTarget, scope: &Scope) -> KitReport {
         Ok(lock) => lock,
         Err(refusal) => return KitReport::refused(refusal),
     };
-    let (mut legacy_retirement, retirement_failure) = match coordination_retirement::install(target)
-    {
-        Ok(report) => (report, None),
-        Err(reason) => (Retirement::default(), Some(reason)),
+    let retirement_failure = if target.hooks_only {
+        None
+    } else {
+        coordination_retirement::install(target).err()
     };
-    let labels_retirement = labels::retire(target);
+    let mut legacy_retirement = Retirement::default();
     let mut changed = agent_kit::hold_for_onboarding(&mut record);
     changed |= record.remember_state_route(layout::state_dir_from_process(&target.home));
-    if retirement_failure.is_none() && !record.has_retired(HCOORD_PLUGIN_ID) {
-        record.mark_retired(HCOORD_PLUGIN_ID);
-        changed = true;
-    }
     let mut components = Vec::with_capacity(ComponentId::ALL.len());
     let mut trust_codex = false;
     for id in ComponentId::ALL {
@@ -863,8 +954,7 @@ fn apply_scope(target: &KitTarget, scope: &Scope) -> KitReport {
             observed
         };
         // The entries are in place for an agent that is on: Codex is asked to
-        // trust them below, once Herdr's integration is in place too (PRD
-        // codex-hook-trust D-05, codex-herdr-hook-trust D-03).
+        // trust them below (PRD codex-hook-trust D-05).
         if id == ComponentId::CodexHook
             && failure.is_none()
             && !turning_off
@@ -890,32 +980,43 @@ fn apply_scope(target: &KitTarget, scope: &Scope) -> KitReport {
     }
     let applied = agent_kit::apply(target, scope, &mut record);
     changed |= applied.changed;
-    // Whether this pass wrote the entries or found them, Codex trusts Hide's
-    // and, when the kit installed it, Herdr's, in one check: Herdr's
-    // integration is only in place now. A failure is the Codex part's, and the
-    // other parts are already installed.
+    // Every profile's account follows the same switches and Reinstall as
+    // the default one (PRD agent-profiles D-28). The profiles are read once,
+    // under the lock, for the accounts and the store alike.
+    let read = targets::read_profiles(target);
+    let (profiles, profiles_changed) = targets::apply(
+        target,
+        scope,
+        &BTreeSet::new(),
+        &mut record,
+        &applied.detection,
+        read.as_ref(),
+    );
+    changed |= profiles_changed;
+    // The store's items follow the same switches: an agent switched on, a
+    // new profile or a new agent gets every item that is on (D-13, D-31).
+    // An installation that keeps only its hooks here leaves the store to the
+    // account's own Hide.
+    let store = (!target.hooks_only).then(|| {
+        store::pass(
+            target,
+            scope,
+            &record,
+            &applied.detection,
+            read.as_ref(),
+            fetched,
+        )
+    });
+    // Whether this pass wrote the entries or found them, Codex trusts Hide's,
+    // A failure is the Codex part's, and the other parts are already installed.
     if trust_codex
         && !target.stop.load(Ordering::Relaxed)
-        && let Some(codex) = agents::adapter_of_part(ComponentId::CodexHook)
-        && let Some(failure) = codex_trust::ensure(
-            target,
-            // Herdr's entries only while Herdr says its integration is in place.
-            if applied.herdr_current(codex.herdr.target) {
-                record.herdr_hook_entries(codex.id)
-            } else {
-                &[]
-            },
-        )
+        && let Some(failure) = codex_trust::ensure(target)
         && let Some(part) = components
             .iter_mut()
             .find(|part| part.id == ComponentId::CodexHook)
     {
-        part.state = ComponentState::Failed;
-        part.why = Some(PartWhy {
-            cause: PartCause::CodexUntrusted,
-            value: None,
-        });
-        part.reason = Some(failure);
+        mark_untrusted(part, failure);
     }
     let agents = agent_kit::reports(
         target,
@@ -966,11 +1067,127 @@ fn apply_scope(target: &KitTarget, scope: &Scope) -> KitReport {
         codex_capability_unread: daemon.unread,
         codex_daemon_off: None,
         held_for_onboarding,
-        labels_retirement,
         legacy_retirement,
-        herdr: None,
+        profiles,
+        store,
         refused: None,
     }
+}
+
+/// A pass over the machine's store alone, for a cell, a button or a
+/// command of the store's and the follow of its folders (PRD
+/// skill-mcp-manager): under the account's lock like every pass, with the
+/// agents' switches as the record has them and nothing else of the kit run.
+pub fn apply_store(target: &KitTarget, changes: Vec<store::StoreChange>) -> store::StoreReport {
+    let scope = Scope::store(changes);
+    let fetched = store::fetch(target, &scope.store);
+    if let Err(refusal) = retirement_preflight(target) {
+        return store::StoreReport::refused(refusal.detail);
+    }
+    let _lock = match lock_account(target) {
+        Ok(lock) => lock,
+        Err(refusal) => return store::StoreReport::refused(refusal.detail),
+    };
+    let record = match record::load(&target.home, &target.install) {
+        Ok(record) => record,
+        Err(refusal) => return store::StoreReport::refused(refusal.detail),
+    };
+    store::pass(
+        target,
+        &scope,
+        &record,
+        &agents::Detection::probe(target),
+        targets::read_profiles(target).as_ref(),
+        fetched,
+    )
+}
+
+/// This machine's store as a copy carries it to a device (PRD
+/// skill-mcp-manager B28): every item with its files, and an MCP server with
+/// its key values, read under the account's lock. Nothing of it may be
+/// logged; the device takes each item in as a `Receive` change.
+pub fn export_store(target: &KitTarget) -> store::StoreExport {
+    let refused = |refusal: KitRefusal| store::StoreExport {
+        items: Vec::new(),
+        refused: Some(store::StoreRefusal {
+            cause: store::StoreRefusalCause::Failed,
+            reason: refusal.detail,
+        }),
+    };
+    if let Err(refusal) = retirement_preflight(target) {
+        return refused(refusal);
+    }
+    let _lock = match lock_account(target) {
+        Ok(lock) => lock,
+        Err(refusal) => return refused(refusal),
+    };
+    let record = match record::load(&target.home, &target.install) {
+        Ok(record) => record,
+        Err(refusal) => return refused(refusal),
+    };
+    store::export(
+        target,
+        &record,
+        &agents::Detection::probe(target),
+        targets::read_profiles(target).as_ref(),
+    )
+}
+
+/// The follow of the store's folders (PRD skill-mcp-manager D-33): a pass
+/// over the store when a folder an item follows changed, else `None` with
+/// nothing done but a stat of each such folder, so it can run every few
+/// seconds.
+pub fn follow_store(target: &KitTarget) -> Option<store::StoreReport> {
+    store::follow_due(target).then(|| apply_store(target, Vec::new()))
+}
+
+/// What a pass over the machine's profile accounts did.
+#[derive(Clone, Debug, Default, Eq, PartialEq, Serialize, Deserialize)]
+pub struct ProfilesApplied {
+    /// Each profile of [`KitTarget::profiles`], in use or going.
+    pub profiles: Vec<ProfileReport>,
+    /// The record could not be saved: the pieces are in place, but the next
+    /// pass does not know they are Hide's (`KitRefusal`'s detail, for the log).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub unsaved: Option<String>,
+}
+
+/// Installs and takes out the agents' pieces in the machine's profile
+/// accounts alone, for a profile added, changed, reinstalled or removed
+/// (PRD agent-profiles D-09, D-28): under the account's lock, as every pass,
+/// and with nothing else of the kit run. The profiles in `reinstall` have
+/// their pieces put back even where the operator took them out.
+pub fn apply_profiles(
+    target: &KitTarget,
+    reinstall: &BTreeSet<hide_agent_adapter::ProfileId>,
+) -> Result<ProfilesApplied, KitRefusal> {
+    let _lock = lock_account(target)?;
+    let mut record = record::load(&target.home, &target.install)?;
+    let _previous_owner = state_route::claim(target, &record)?;
+    let detection = agents::Detection::probe(target);
+    let (profiles, changed) = targets::apply(
+        target,
+        &Scope::automatic(),
+        reinstall,
+        &mut record,
+        &detection,
+        targets::read_profiles(target).as_ref(),
+    );
+    let unsaved = changed
+        .then(|| record::save(&target.home, &record).err())
+        .flatten();
+    Ok(ProfilesApplied { profiles, unsaved })
+}
+
+/// Every profile account judged without changing anything.
+pub fn profile_status(target: &KitTarget) -> Result<Vec<ProfileReport>, KitRefusal> {
+    let record = record::load(&target.home, &target.install)?;
+    Ok(targets::status(
+        target,
+        &record,
+        &agents::Detection::probe(target),
+        targets::read_profiles(target).as_ref(),
+    ))
 }
 
 /// What the machine's Codex says about its shared daemon, read without
@@ -1091,23 +1308,52 @@ pub fn remove(target: &KitTarget) -> RemoveReport {
     let mut components = Vec::new();
     for id in ComponentId::ALL {
         let outcome = match id {
+            ComponentId::Cli if target.hooks_only => RemoveOutcome::Kept {
+                reason: "the account's hide command is its own Hide's".to_owned(),
+            },
             ComponentId::Cli => cli::remove(target),
-            ComponentId::ClaudeCodeHook => {
-                hooks::remove(target, hide_agent_hooks::AgentRuntime::ClaudeCode)
-            }
-            ComponentId::CodexHook => hooks::remove(target, hide_agent_hooks::AgentRuntime::Codex),
+            ComponentId::ClaudeCodeHook => hooks::remove(
+                target,
+                hide_agent_hooks::AgentRuntime::ClaudeCode,
+                (&target.home).into(),
+            ),
+            ComponentId::CodexHook => hooks::remove(
+                target,
+                hide_agent_hooks::AgentRuntime::Codex,
+                (&target.home).into(),
+            ),
             ComponentId::CoordinationRetirement => RemoveOutcome::Kept {
                 reason: "retirement preserves the old ledger folder".to_owned(),
             },
         };
         components.push((id, outcome));
     }
-    // Before the record goes: it is what says which integrations were Hide's.
-    let herdr = match record::load(&target.home) {
-        Ok(record) => agent_kit::remove_herdr(target, &record),
-        Err(_) => Vec::new(),
+    // Before the record goes: it is what says which integrations were Hide's
+    // and which profile accounts hold Hide's pieces (PRD agent-profiles D-28).
+    let (profiles, shared) = match record::load(&target.home, &target.install) {
+        Ok(record) => (targets::remove(target, &record), record.others_installed()),
+        Err(_) => (Vec::new(), true),
     };
-    if let Err(reason) = record::forget(&target.home) {
+    // The store is the account's: another installation of Hide there keeps
+    // it and what it applied (PRD skill-mcp-manager B30).
+    let store = if target.hooks_only {
+        vec![(
+            "store".to_owned(),
+            RemoveOutcome::Kept {
+                reason: "the account's store is its own Hide's".to_owned(),
+            },
+        )]
+    } else if shared {
+        vec![(
+            "store".to_owned(),
+            RemoveOutcome::Kept {
+                reason: "another Hide on this account keeps the store".to_owned(),
+            },
+        )]
+    } else {
+        store::remove(target)
+    };
+    if let Err(reason) = record::forget(&target.home, &target.install) {
         components.push((
             ComponentId::Cli,
             RemoveOutcome::Failed {
@@ -1116,12 +1362,13 @@ pub fn remove(target: &KitTarget) -> RemoveReport {
         ));
     }
     let mut agents = agent_kit::remove(target);
-    agents.extend(herdr);
+    agents.extend(profiles);
+    agents.extend(store);
     RemoveReport { components, agents }
 }
 
 /// `base` joined with `parts`, each folder checked in turn: the kit keeps
-/// code there that launchd and Herdr run as this account, so a folder that
+/// code there that launchd and the agents run as this account, so a folder that
 /// is a link, belongs to another account or that others can write to is
 /// refused rather than trusted. With `create`, a missing folder is made 0700;
 /// without it, a missing folder ends the check, since nothing below it can be
@@ -1212,11 +1459,27 @@ pub(crate) fn write_atomically(
         .map_err(|error| format!("{} could not be written: {error}", path.display()))
 }
 
-// The suite drives the kit against a stand-in Herdr on a Unix socket and with
-// shell scripts for the programs it installs, so it runs where those do; the
-// Windows kit is tested with the device helper that installs it there.
-#[cfg(all(test, unix))]
+/// A folder the test owns, short whatever `TMPDIR` is: a socket made below it
+/// must fit a Unix socket path (104 bytes on macOS), which a long `TMPDIR`
+/// takes (docs/TESTING.md, Writing a Rust test, rule 7). Windows names a pipe
+/// and has no such limit.
+#[cfg(test)]
+pub(crate) fn short_tempdir() -> tempfile::TempDir {
+    let mut folder = tempfile::Builder::new();
+    folder.prefix("hk");
+    #[cfg(unix)]
+    return folder.tempdir_in("/tmp").unwrap();
+    #[cfg(not(unix))]
+    return folder.tempdir().unwrap();
+}
+
+// The kit against a HOME fixture, on every system; its cases that need a
+// stand-in daemon on a Unix socket or shell scripts run where those do.
+#[cfg(test)]
 mod tests;
+// What released builds' kits left in an account, read by this build.
+#[cfg(test)]
+mod upgrade_tests;
 // The Windows tests of `process` start a program the job has not started yet.
 #[cfg(all(test, windows))]
 #[path = "../../hide-platform/tests/it/stand_ins.rs"]

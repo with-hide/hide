@@ -32,6 +32,8 @@ use std::time::{Duration, Instant, SystemTime};
 
 use crate::host;
 
+mod launcher;
+
 /// How long the login shell has to answer, as long as the desktop host gives
 /// it when it asks the same question.
 const LOGIN_SHELL_DEADLINE: Duration = Duration::from_secs(10);
@@ -318,7 +320,7 @@ pub fn find_cli(name: &str) -> Option<Program> {
 /// the account installed. Every program a node starts by name is started
 /// this way. Only a process's first command waits for the login shell, and
 /// at most [`FIRST_READ_WITHIN`]; a caller that must have the shell's
-/// current answer (a move's checks, a login item's Herdr server) asks
+/// current answer (a move's checks, a login item's daemon) asks
 /// [`account_path`] and runs [`command_on`] with it.
 pub fn command(program: impl AsRef<Path>) -> Command {
     command_on(account_path_now().as_deref(), program)
@@ -512,6 +514,16 @@ impl Program {
         Self { path, search }
     }
 
+    /// The program the file `path` is, run with `search`, when this account
+    /// can start it ([`runnable`]); why it cannot otherwise.
+    pub fn at(path: &Path, search: OsString) -> Result<Self, String> {
+        runnable(path, Some(&search))?;
+        Ok(Self {
+            path: path.to_path_buf(),
+            search,
+        })
+    }
+
     pub fn path(&self) -> &Path {
         &self.path
     }
@@ -525,6 +537,12 @@ impl Program {
         &self.search
     }
 
+    /// How the program starts ([`Start`]), read afresh at each ask: an
+    /// update of the agent can move the script its launcher runs.
+    pub fn start(&self) -> Start {
+        start(&self.path, &self.search)
+    }
+
     /// A command that runs the program with the `PATH` it was found on. A
     /// caller that rebuilds the environment sets [`Self::search`] again
     /// after it.
@@ -535,20 +553,130 @@ impl Program {
     }
 }
 
-/// Whether Windows runs `path` through `cmd.exe`, as it runs a batch file
-/// (`.cmd`, `.bat`: npm's shim of every CLI it installs is one). `cmd.exe`
-/// reads the whole command line again, at most 8,191 characters of it,
-/// expands `%` in it and reads `"` and, outside quotes, `& | < > ^` as its
-/// own, so an argument that holds them does not reach the program as it was
-/// given. No program elsewhere is started that way.
-pub fn runs_through_cmd(path: &Path) -> bool {
-    cfg!(windows)
+/// How a program that was found starts so that each argument it is given
+/// reaches it whole (with-hide/hide-private#573).
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub enum Start {
+    /// `program` takes the arguments itself, after `leading`: the program
+    /// that was found, on every system unless it is a Windows batch file, or
+    /// the program npm's Windows launcher runs, with the words the launcher
+    /// puts before the caller's ([`launcher`]).
+    Direct {
+        program: PathBuf,
+        leading: Vec<OsString>,
+    },
+    /// A Windows batch file that is not npm's launcher: Windows runs it
+    /// through `cmd.exe`, which reads the whole command line again, at most
+    /// 8,191 characters of it, expands `%` in it and reads `"` and, outside
+    /// quotes, `& | < > ^` as its own, so an argument that holds them does
+    /// not reach the program as it was given. Why it was not read is logged
+    /// (`platform.launcher_unresolved`).
+    Batch,
+}
+
+/// Whether a start typed into a pane's shell names its program's file
+/// rather than its name. On Windows PowerShell finds a name by its own rule,
+/// a `.ps1` before the `.cmd` beside it, and npm writes both, so the file
+/// [`Program::find`] found and [`Program::start`] read is not the one the
+/// shell would run by name. Elsewhere the shell finds a name on the `PATH`
+/// as [`Program::find`] does.
+pub const START_NAMES_FILE: bool = cfg!(windows);
+
+/// How the program at `path` starts when it runs with `search` as its
+/// `PATH`: a Windows batch file is read as npm's launcher, whose Node is the
+/// one `search` holds, and anything else takes its arguments itself.
+pub fn start(path: &Path, search: &OsStr) -> Start {
+    let batch = cfg!(windows)
         && path
             .extension()
             .and_then(OsStr::to_str)
             .is_some_and(|extension| {
                 extension.eq_ignore_ascii_case("cmd") || extension.eq_ignore_ascii_case("bat")
-            })
+            });
+    if !batch {
+        return Start::Direct {
+            program: path.to_path_buf(),
+            leading: Vec::new(),
+        };
+    }
+    match launcher::resolve(path, search, &host::path_extensions()) {
+        Ok(start) => start,
+        Err(reason) => {
+            // The reason only: the launcher's path names the account.
+            eprintln!("platform.launcher_unresolved reason={reason:?}");
+            Start::Batch
+        }
+    }
+}
+
+/// Whether this account can start the file `path` run with `search` as its
+/// `PATH` (this process's own when `None`): a file it may run and, for a
+/// script that names its interpreter on its first line (`#!`), an
+/// interpreter that is such a file too, found on `search` when the script
+/// asks `env` for it. A program that passes and still ends at its start (a
+/// library its system lacks) fails as the program it is. Why it cannot,
+/// naming the file, otherwise.
+pub fn runnable(path: &Path, search: Option<&OsStr>) -> Result<(), String> {
+    if !path.is_file() {
+        return Err(format!("{} is not a file", path.display()));
+    }
+    if !host::is_program(path) {
+        return Err(format!(
+            "{} is not a program this account may run",
+            path.display()
+        ));
+    }
+    let Some(interpreter) = interpreter(path) else {
+        return Ok(());
+    };
+    let found = match interpreter {
+        Interpreter::File(file) => host::is_program(&file).then_some(file.clone()).ok_or(file),
+        Interpreter::Named(name) => {
+            let search = search
+                .map(OsStr::to_owned)
+                .or_else(|| std::env::var_os("PATH"))
+                .unwrap_or_default();
+            host::find_program(&search, &name).ok_or_else(|| PathBuf::from(name))
+        }
+    };
+    found.map(drop).map_err(|missing| {
+        format!(
+            "{} runs {}, which is not a program here",
+            path.display(),
+            missing.display()
+        )
+    })
+}
+
+/// The interpreter a script's first line names (`#!`).
+enum Interpreter {
+    /// By its file.
+    File(PathBuf),
+    /// By the name `env` finds on the `PATH` (`#!/usr/bin/env node`).
+    Named(String),
+}
+
+/// The interpreter the file at `path` names on its first line, if it is a
+/// script that names one. Only Unix starts a script by its first line.
+fn interpreter(path: &Path) -> Option<Interpreter> {
+    use std::io::Read;
+    if cfg!(windows) {
+        return None;
+    }
+    let mut head = [0_u8; 256];
+    let read = std::fs::File::open(path).ok()?.read(&mut head).ok()?;
+    let line = head[..read].strip_prefix(b"#!")?;
+    let line = line.split(|byte| *byte == b'\n').next().unwrap_or(line);
+    let line = String::from_utf8_lossy(line);
+    let mut words = line.split_whitespace();
+    let file = PathBuf::from(words.next()?);
+    if file.file_name() != Some(OsStr::new("env")) {
+        return Some(Interpreter::File(file));
+    }
+    // `env`'s own options (`-S`) and the variables it sets come first.
+    words
+        .find(|word| !word.starts_with('-') && !word.contains('='))
+        .map(|name| Interpreter::Named(name.to_owned()))
 }
 
 /// The folders installers put a CLI in that a daemon's `PATH` may not reach.
@@ -577,25 +705,6 @@ mod tests {
     use std::sync::mpsc;
 
     use super::*;
-
-    /// Only a batch file on Windows runs through `cmd.exe`: npm's `.cmd`
-    /// shim, a `.bat`, either case; a `.exe`, or any program elsewhere,
-    /// takes its arguments itself.
-    #[test]
-    fn only_a_batch_file_on_windows_runs_through_cmd() {
-        for (path, batch) in [
-            ("C:/npm/codex.cmd", true),
-            ("C:/x/agent.BAT", true),
-            ("C:/x/claude.exe", false),
-            ("/usr/bin/codex", false),
-        ] {
-            assert_eq!(
-                runs_through_cmd(Path::new(path)),
-                batch && cfg!(windows),
-                "{path}"
-            );
-        }
-    }
 
     const LONG: Duration = Duration::from_secs(3600);
 

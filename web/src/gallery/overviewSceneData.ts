@@ -4,7 +4,7 @@
 // volume, and one session's record. Every value is made up; the core's
 // projections are fixed here as data, never recomputed.
 import type { AgentScope, TaskCardScope } from "../agentScope";
-import type { AgentPullRequest, AgentRow, AgentState, BacklogItem, RowMark, Checkout, IssueWork, LinkSummaries, ProjectDisk, SessionRecord, SnapshotRest, Task, TaskSource, WorkSession, Workspace, WorktreeDisk } from "../snapshot";
+import type { AgentPullRequest, AgentRow, AgentState, BacklogItem, RowMark, Checkout, IssueWork, LinkSummaries, MissedWork, ProjectDisk, SessionRecord, SnapshotRest, Task, TaskSource, WorkSession, Workspace, WorktreeDisk } from "../snapshot";
 import { EMPTY_GALLERY_SCOPE } from "./agentScopes";
 import states from "./agentStates.json";
 import { checkout, listedPull, REFERENCE_FOLDS, workspace } from "./sceneData";
@@ -32,6 +32,8 @@ function pull(repository: string, number: number, title: string, state: PullStat
 }
 
 type AgentSpec = {
+  /** The subagents its session runs inside itself, which orbit its circle. */
+  subagents?: number;
   pane: string;
   title: string;
   look: Look;
@@ -75,6 +77,7 @@ function agent(spec: AgentSpec, now: number): AgentRow {
     lineage_parent_pane_id: spec.parent ?? null,
     lineage_depth: spec.parent ? 1 : 0,
     lineage_child_pane_ids: spec.children ?? [],
+    subagents: spec.subagents,
     request: { verb: spec.look === "working" ? "working" : "idle", verb_since_unix_ms: now - spec.ago, request: null, later_by: null, pull_requests: pulls.map((one) => one.pr) },
     // The core's list; in this scene only roots hold pull requests, so each holds its own.
     pulls: pulls.length ? { pulls: pulls.map((one) => listedPull(one.pr.number, one.pr.title, one.state, null, one.pr.url)) } : null,
@@ -136,10 +139,10 @@ export function overviewWorld(now: number): OverviewWorld {
   const billingPr = pull("example/billing-api", 88, "Verify webhook signatures", "failed");
   const agents: AgentRow[] = [
     agent({ pane: "h-a3", title: "배포 전 변경 확인", look: "asking", ago: 3 * MINUTE, ask: { verb: "answer", what: "프로덕션 배포 전에 이번 변경 범위를 확인해 주세요", more: 0 }, pulls: [{ pr: hidePrs.release, state: "mergeable" }] }, now),
-    agent({ pane: "h-a1", now: "좁은 폭 줄바꿈 고치는 중", title: "사이드바 가독성 개선", look: "working", ago: MINUTE, children: ["h-a1c1", "h-a1c2", "h-a1c3", "h-a1c4"], pulls: [{ pr: hidePrs.sidebar, state: "pending" }] }, now),
+    agent({ pane: "h-a1", now: "좁은 폭 줄바꿈 고치는 중", title: "사이드바 가독성 개선", look: "working", ago: MINUTE, subagents: 3, children: ["h-a1c1", "h-a1c2", "h-a1c3", "h-a1c4"], pulls: [{ pr: hidePrs.sidebar, state: "pending" }] }, now),
     agent({ pane: "h-a1c1", title: "컴포넌트 구조 정리", look: "working", ago: 40_000, kind: "codex", parent: "h-a1", children: ["h-a1g1"] }, now),
     agent({ pane: "h-a1c2", title: "한글 가독성 확인", look: "done", ago: 6 * MINUTE, parent: "h-a1" }, now),
-    agent({ pane: "h-a1c3", title: "긴 한국어와 English title wrapping 검토", look: "working", ago: 3 * MINUTE, parent: "h-a1", kind: "codex" }, now),
+    agent({ pane: "h-a1c3", title: "긴 한국어와 English title wrapping 검토", look: "working", ago: 3 * MINUTE, parent: "h-a1", kind: "codex", subagents: 2 }, now),
     agent({ pane: "h-a1c4", title: "키보드 이동 확인", look: "idle", ago: 15 * MINUTE, parent: "h-a1" }, now),
     agent({ pane: "h-a1g1", title: "모바일 표 너비 조정", look: "working", ago: 2 * MINUTE, parent: "h-a1c1" }, now),
     agent({ pane: "h-e1", now: "English 화면 단축키 확인 중", title: "키보드 단축키와 English 화면 연결 검증", look: "working", ago: 4 * MINUTE, kind: "codex" }, now),
@@ -248,10 +251,9 @@ export function overviewWorld(now: number): OverviewWorld {
       available: true, limit: 2000, retained_count: 12, truncated: false, retention_ms: 86_400_000,
       sessions: agents.map((row) => ({ device_id: "local", pane_id: row.pane_id, session_digest: `fixture-${row.pane_id}`, launch_model: row.agent_kind === "codex" ? "model-c" : "model-a", launch_effort: row.agent_kind === "codex" ? "medium" : "high" })),
       letters: Array.from({ length: 12 }, (_, i) => ({ id: `fixture-letter-${i}`, sender: { device_id: "local", pane_id: i % 2 ? "h-a1c1" : "b-1", session: i % 2 ? "fixture-h-a1c1" : "fixture-b-1" }, recipient: { device_id: "local", pane_id: i % 2 ? "h-a1" : "h-a3", session: i % 2 ? "fixture-h-a1" : "fixture-h-a3" }, kind: i % 3 ? "progress" : "request", at_unix_ms: now - i * MINUTE })),
-      // Herdr input with no letter between two teams draws the dotted direct-only line.
-      direct_inputs: Array.from({ length: 3 }, (_, i) => ({ id: `fixture-direct-${i}`, sender: { device_id: "local", pane_id: "h-e1", session: "fixture-h-e1" }, recipient: { device_id: "local", pane_id: "s-1", session: "fixture-s-1" }, at_unix_ms: now - (i + 2) * MINUTE })),
     },
     navigator: {
+      siblings_shown: 5,
       workspaces,
       inactive_projects: [],
       no_agent_projects: [],
@@ -273,7 +275,7 @@ export function overviewWorld(now: number): OverviewWorld {
   } as SnapshotRest;
 
   const request = (offset: number, text: string, ago: number, summary: string | null = null) => ({ offset, text, at_unix_ms: now - ago, author: "operator" as const, images: 0, summary, answers: null, letter_from: null, count: 1, goal_command: false });
-  const blank = { asks: [], omitted_requests: 0, outputs: [], pr_groups: [], artifacts: [], children: [] };
+  const blank = { asks: [], folded_asks: [], omitted_requests: 0, outputs: [], pr_groups: [], children: [] };
   const child = (pane: string, title: string): SessionRecord => ({
     ...blank,
     session: { device_id: "local", agent: pane === "h-a1c1" ? "codex" : "claude", session_id: `session-${pane}` }, title, fallback_title: "Agent", native_title: title, manual_title: null, state: pane === "h-a1c1" ? "working" : "idle",
@@ -300,10 +302,20 @@ export function overviewWorld(now: number): OverviewWorld {
     }],
     outputs: [output],
     pr_groups: [{ child: null, name: "사이드바 가독성 개선", pulls: [listedPull(output.number, output.title, "pending", null, output.url)] }],
-    artifacts: ["사이드바 가독성 점검표"],
     children: [child("h-a1c1", "컴포넌트 구조 정리"), child("h-a1c2", "한글 가독성 확인")],
   };
-  const linkSummaries: LinkSummaries = { projects: {}, filling: false };
+  // The device's open missed work, which the backlog's `놓친 일 N` gathers (scene state backlog-missed opens it), a question the session ended without an answer to among it.
+  const missed = (id: string, kind: MissedWork["kind"], text: string, ago: number): MissedWork => ({ id, kind, text, status: "open", at_unix_ms: now - ago, turn_offset: 1, issue_repository: null, issue_number: null, backlog_key: null, creating: false });
+  const linkSummaries: LinkSummaries = { filling: false, projects: { hide: { work: [
+    { session: { device_id: "local", agent: "claude", session_id: "session-missed-1" }, title: "채점 목업 정리", fallback_title: "Claude", native_title: "채점 목업 정리", manual_title: null, cwd: "/work/hide", ended_at_unix_ms: now - 12 * MINUTE, open_missed: 3, subtree_open_missed: 3, missed: [
+      missed("missed-4", "ask", "첨부별 쪽수 칸을 새로 만들지", 11 * MINUTE),
+      missed("missed-1", "problem", "좁은 폭에서 점수 열이 겹쳐요", 12 * MINUTE),
+      missed("missed-2", "follow_up", "첨부별 쪽수 칸을 따로 두면 비교가 쉬워요", 14 * MINUTE),
+    ] },
+    { session: { device_id: "local", agent: "codex", session_id: "session-missed-2" }, title: "설정 문구 다듬기", fallback_title: "Codex", native_title: "설정 문구 다듬기", manual_title: null, cwd: "/work/hide", ended_at_unix_ms: now - 50 * MINUTE, open_missed: 1, subtree_open_missed: 1, missed: [
+      missed("missed-3", "leftover", "영문 문구의 마침표 통일이 남았어요", 50 * MINUTE),
+    ] },
+  ] } } };
   return { rest, agents, record, recordSession, recordPane: "h-a1", linkSummaries };
 }
 
@@ -334,11 +346,6 @@ export function overviewFocusWorld(now: number, content: string): OverviewWorld 
     row.record_summary = "기록에 보관한 진행 요약 · saved conversation summary";
   }
   if (content === "resting") for (const row of agents) Object.assign(row, { mark: "quiet", group: "seen", state: { ...get("h-r1").state } });
-  if (content === "direct") world.rest.overview_graph!.direct_inputs = [
-    { id: "fixture-direct-one", sender: { device_id: "local", pane_id: "h-a1c1", session: "fixture-h-a1c1" }, recipient: { device_id: "local", pane_id: "h-a1", session: "fixture-h-a1" }, at_unix_ms: now - MINUTE },
-    { id: "fixture-direct-two", sender: { device_id: "local", pane_id: "h-a1c1", session: "fixture-h-a1c1" }, recipient: { device_id: "local", pane_id: "h-a1", session: "fixture-h-a1" }, at_unix_ms: now - 2 * MINUTE },
-    { id: "fixture-direct-cross-project", sender: { device_id: "local", pane_id: "b-1", session: "fixture-b-1" }, recipient: { device_id: "local", pane_id: "h-a3", session: "fixture-h-a3" }, at_unix_ms: now - 3 * MINUTE },
-  ];
   if (content === "empty") {
     agents.splice(0);
     for (const project of world.rest.navigator!.workspaces!) { project.agent_scope = scopeWith([]); for (const checkout of project.checkouts) checkout.agent_scope = scopeWith([]); }

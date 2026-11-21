@@ -3,7 +3,7 @@ use std::path::Path;
 use std::process::Command;
 use std::time::Duration;
 
-use herdr_core::workspace_control::{Action, Edge};
+use hide_core::workspace_control::{Action, Edge};
 use hide_platform::process;
 
 use crate::env::{self, Env};
@@ -12,16 +12,28 @@ use crate::state_file::{self, DaemonState};
 
 #[derive(Debug, Eq, PartialEq)]
 pub enum CommandKind {
-    Delivery(herdr_core::delivery::Command),
+    Delivery(hide_core::delivery::Command),
+    /// `hide import herdr [--yes]`: what this machine's Herdr session would
+    /// bring into Hide's own engine, and with `--yes` the move (PRD
+    /// engine-bundle-4-herdr-removal B17).
+    ImportHerdr {
+        yes: bool,
+    },
     /// `hide agent spawn … --brief-file <path>`: the spawn, whose brief is
     /// read from `path` in the caller's account when it runs.
     AgentSpawnBriefFile {
-        command: herdr_core::delivery::Command,
+        command: hide_core::delivery::Command,
         path: String,
     },
     /// `hide mission …`: a Conductor's mission (PRD software-factory-conductor).
     Mission(crate::mission_cli::MissionCli),
     Plan(crate::plan_cli::PlanCli),
+    /// `hide automation …` (PRD automations B9, B10).
+    Automation(crate::automation_cli::AutomationCli),
+    /// `hide agent profile …` (PRD agent-profiles D-33).
+    AgentProfile(hide_core::agent_profiles::ProfileCommand),
+    /// `hide skill …` / `hide mcp …` (PRD skill-mcp-manager D-19).
+    Store(hide_core::store_command::StoreCommand),
     /// `hide agent catalog [--machine <id>]`.
     AgentCatalog {
         machine: Option<String>,
@@ -40,7 +52,18 @@ pub enum CommandKind {
         id: String,
         actor: Option<String>,
     },
+    /// `hide session fold-ask <id> --reason <text>`: one of the caller's
+    /// session's open questions, folded with its reason.
+    FoldAsk {
+        id: String,
+        reason: String,
+    },
     Device(crate::device_cli::DeviceCli),
+    /// `hide always-on …`: a paired machine's login item and firewall rules.
+    AlwaysOn(crate::always_on::cli::Command),
+    /// `hide access request|status|leave|list`: an external tool's own
+    /// connection.
+    Access(crate::access_cli::AccessCli),
     /// `hide pane …`, `hide agent read` and `hide workspace purpose`.
     Pane(crate::pane_cli::PaneCli),
     Help,
@@ -66,6 +89,14 @@ pub enum CommandKind {
         json: bool,
     },
     Stop,
+    /// `hide restart --daemon <pid> --started <start>`: `stop`, then
+    /// `connect`, for the daemon with that pid and start time only. A daemon runs it for itself when its pane holders
+    /// died without saying why (`holder_restart`), so the start finds and
+    /// settles them; it is not listed, as `connect` is not.
+    Restart {
+        daemon: u32,
+        started: u64,
+    },
     /// `hide runtime prepare`: the folder this package's runtime runs from,
     /// made first on Windows (`hide_kit::runtime`), as one JSON line for the
     /// desktop host.
@@ -78,6 +109,8 @@ pub enum CommandKind {
         target: String,
         wait: bool,
         request_id: Option<String>,
+        /// `--repo <folder>`: the project to open in (D-57).
+        repo: Option<String>,
     },
     BrowserConnect {
         display_id: Option<String>,
@@ -88,6 +121,8 @@ pub enum CommandKind {
     BrowserHelp,
     /// `hide guide`: the agent's guide to Hide (`crate::guide`).
     Guide,
+    /// `hide issue help`: the guide for reporting a bug in Hide itself.
+    IssueHelp,
     WorkspaceBootstrap,
     /// `hide workspace memory`: a hook's Project Memory from the core, with
     /// the prompt on stdin (PRD core-host-node-move B14).
@@ -98,11 +133,6 @@ pub enum CommandKind {
     },
     WorkspaceInfo,
     WorkspaceHookInfo,
-    /// Private post-tool transport. Its bounded metadata is read from stdin:
-    /// one observation per recipient, or per started agent with `--start`.
-    ObservationHook {
-        start: bool,
-    },
     /// Private hook transport: one agent hook's report on its pane's agent
     /// (`HookStatusReport` as JSON on stdin), proven like every hook request.
     StatusHook,
@@ -117,33 +147,38 @@ pub enum CommandKind {
     WorkspaceAction {
         action: Action,
         request_id: Option<String>,
+        /// `--repo <folder>` of `hide file open` and `hide diff open`: the
+        /// project to open in (D-57); none for every other action.
+        repo: Option<String>,
     },
     /// `hide links`: a read of the link record (PRD link-graph D-19).
-    Links(herdr_core::links::query::LinksQuery),
+    Links(hide_core::links::query::LinksQuery),
     /// `hide session list|record|read`: the Project's sessions, narrowed in
     /// three steps (PRD agent-session-read D-01).
     Session(crate::session_cli::Cli),
     /// `hide memory show|search|add|forget|undo|placed|building|unbuilt|outdated|skipped|stale|release`
     /// (PRD project-memory-v2 D-03, D-11; PRD memory-stale-cards).
-    Memory(herdr_core::memory_command::MemoryCommand),
+    Memory(hide_core::memory_command::MemoryCommand),
 }
 
 const LINKS_USAGE: &str = "usage: hide links pr <number> | issue <number> | branch <name> | session <id> [--all-projects]";
 
 const MEMORY_USAGE: &str = "usage: hide memory show <card> | search <words> | add <text> | forget <card> | undo <card> | placed <card> <path> | building <card> <branch> <path> | unbuilt <card> <reason> | outdated <card> <reason> | skipped <card> <reason> | stale <card> <reason> | release <card> | recheck <card>";
 
-const BROWSER_USAGE: &str = "usage: hide browser open <url-or-path> [--wait] [--request-id <id>] | connect [--display <id>] | help | <command> <display> ... (see hide browser help)";
+const BROWSER_USAGE: &str = "usage: hide browser open <url-or-path> [--wait] [--repo <folder>] [--request-id <id>] | connect [--display <id>] | help | <command> <display> ... (see hide browser help)";
 
 /// What an open with the `--beside` it no longer takes answers (PRD
 /// unseen-agent-views D-24, B27): an agent's open is always a tab of the
 /// active View area, and only the operator splits the areas.
-const BESIDE_REMOVED: &str = "open no longer takes --beside: run the same command again without --beside; the View opens as a tab of the active View area";
+const BESIDE_REMOVED: &str = "open no longer takes --beside: run the same command again without --beside; the View opens as a tab of the active View area of your tab's Views";
 
-const FILE_USAGE: &str = "usage: hide file open <path> [--request-id <id>]";
+const FILE_USAGE: &str = "usage: hide file open <path> [--repo <folder>] [--request-id <id>]";
 
-const DIFF_USAGE: &str = "usage: hide diff open <path> [--request-id <id>]";
+const DIFF_USAGE: &str = "usage: hide diff open <path> [--repo <folder>] [--request-id <id>]";
 
 const OPEN_USAGE: &str = "usage: hide [open] [<path>]";
+
+const IMPORT_USAGE: &str = "usage: hide import herdr [--yes]";
 
 const VIEW_USAGE: &str = "usage: hide view list [--session <id|here>] | status <view-id> | select <view-id> [--request-id <id>] | close <view-id> [--request-id <id>] | split <view-id> --area <area-id> --edge left|right|up|down [--request-id <id>] | move <view-id> --area <area-id> --index <n> [--request-id <id>]";
 
@@ -175,9 +210,13 @@ fn topic_usage(topic: &str) -> Option<String> {
         "request" | "inbox" | "watch" => usage(crate::delivery_cli::USAGE),
         "agent" => usage(crate::agent_cli::USAGE),
         "ps" => usage(crate::ps_cli::USAGE),
-        "device" => usage(crate::device_cli::USAGE),
+        "skill" => usage(crate::store_cli::SKILL_USAGE),
+        "mcp" => usage(crate::store_cli::MCP_USAGE),
+        "device" => usage(crate::device_cli::usage_here()),
+        "access" => usage(crate::access_cli::USAGE),
         "mission" => usage(crate::mission_cli::USAGE),
-        "plan" => usage(crate::plan_cli::USAGE),
+        "task" => usage(crate::plan_cli::USAGE),
+        "automation" => usage(crate::automation_cli::USAGE),
         "links" => LINKS_USAGE.to_owned(),
         "session" => usage(crate::session_cli::USAGE),
         "memory" => MEMORY_USAGE.to_owned(),
@@ -190,10 +229,13 @@ fn topic_usage(topic: &str) -> Option<String> {
             "hide workspace info\nhide workspace purpose <text>\nhide workspace remove <path> [--delete-branch] [--force]",
         ),
         "status" => "usage: hide status [--json]".to_owned(),
+        "import" => IMPORT_USAGE.to_owned(),
         "stop" => "usage: hide stop".to_owned(),
+        "always-on" => crate::always_on::cli::USAGE.to_owned(),
         "open" => OPEN_USAGE.to_owned(),
         "version" => "usage: hide version [--json]".to_owned(),
         "guide" => "usage: hide guide".to_owned(),
+        "issue" => usage(crate::issue_cli::USAGE),
         "contract" => "usage: hide contract --json".to_owned(),
         _ => return None,
     })
@@ -201,21 +243,24 @@ fn topic_usage(topic: &str) -> Option<String> {
 
 /// `hide --help`: the commands a person types, then the ones an agent in a
 /// Hide pane uses. The host's and the hooks' own commands (`connect`,
-/// `serve`, `dev`, `runtime prepare`, `observation`, `workspace bootstrap`,
+/// `serve`, `dev`, `runtime prepare`, `workspace bootstrap`,
 /// `workspace memory`) are not listed.
 fn help_text() -> String {
     let indent =
         |lines: &str| -> String { lines.lines().map(|line| format!("  {line}\n")).collect() };
     let mut text = String::from(
-        "usage: hide [command]\n\nFor you\n  hide                      open Hide\n  hide <path>, hide .       open a folder as a project in Hide, adding it if it is not one yet\n  hide status [--json]      show whether Hide is running\n  hide stop                 stop Hide's background service\n  hide version [--json]     show this build's version\n\nFor agents in a Hide pane\n  hide guide                the agent guide to everything below\n  hide contract --json      the commands tools call, as JSON\n",
+        "usage: hide [command]\n\nFor you\n  hide                      open Hide\n  hide <path>, hide .       open a folder as a project in Hide, adding it if it is not one yet\n  hide status [--json]      show whether Hide is running\n  hide stop                 stop Hide's background service\n  hide version [--json]     show this build's version\n\nFor agents in a Hide pane\n  hide guide                the agent guide to everything below\n  hide issue help           how to report a bug in Hide itself\n  hide contract --json      the commands tools call, as JSON\n",
     );
     for lines in [
         crate::delivery_cli::USAGE,
         crate::agent_cli::USAGE,
         crate::ps_cli::USAGE,
-        crate::device_cli::USAGE,
+        crate::store_cli::SKILL_USAGE,
+        crate::store_cli::MCP_USAGE,
+        crate::device_cli::usage_here(),
         crate::mission_cli::USAGE,
         crate::plan_cli::USAGE,
+        crate::automation_cli::USAGE,
         crate::pane_cli::USAGE,
         "hide workspace info",
         FILE_USAGE.trim_start_matches("usage: "),
@@ -228,6 +273,9 @@ fn help_text() -> String {
     ] {
         text.push_str(&indent(lines));
     }
+    text.push_str("\nFor a tool outside Hide's panes, on the machine where Hide's core runs\n");
+    text.push_str(&indent(crate::access_cli::USAGE));
+    text.push_str("  Once the operator approves it, the tool runs the commands above as its connection: View only reads, Act also starts, ends and writes to agents.\n");
     text.push_str(
         "\nA command's name wins over a folder of the same name: hide status is the command, hide ./status opens the folder status.\nOn a connected device, hide <path> works in a Hide pane there or in a plain ssh shell as the account Hide connects with, and brings Hide's window to that device's folder.\n\nCommands that act on the operator's screen (workspace, file, diff, view, browser) need Hide's window open and a pane or shell inside a registered checkout.\nThey never start Hide.\nhide links needs only that pane or shell and a running Hide, and reads the project it is in unless --all-projects is given.\nhide session needs the same and reads the sessions of the project it is in and of the connected devices' checkouts of its repository, as each checkout's origin names it: list to scan one line per session, record to read one as its session record shows it, read for a few raw events around one request.\nhide memory reads, adds to and forgets from that project's Project Memory, which Hide keeps for the projects of its own device and of every linked device with a Memory reader.\nhide memory release ends a hold that an agent's stale report put on a card.\nhide memory recheck has a card checked again, out of every hook until the check ends; an agent may ask only for a card its conversation was given.\nRun in a Hide shell pane with no agent, it also lets that card's text be reported stale once more.\n",
     );
@@ -260,14 +308,36 @@ pub const COMMIT: Option<&str> = match env!("HIDE_BUILD_COMMIT").as_bytes() {
     _ => Some(env!("HIDE_BUILD_COMMIT")),
 };
 
+/// This build as its release names it: what the release's device kit
+/// manifest must name before a kit of it is fetched
+/// (with-hide/hide-private#501 decision 1).
+pub const RELEASE: hide_node::ssh::host::ReleaseIdentity = hide_node::ssh::host::ReleaseIdentity {
+    version: VERSION,
+    commit: COMMIT,
+    order: ORDER,
+};
+
 pub fn parse_args(args: &[String]) -> Result<CommandKind, String> {
+    // `hide plan` is what `hide task` was called: a session started under
+    // the old `hide-plan` skill still types it, so it is read as `hide task`
+    // and no table lists it. Drop this once the oldest build that updates in
+    // place writes the `hide-task` skill (`hide_kit::agents::RETIRED_SKILLS`).
+    let renamed: Vec<String>;
+    let args = if args.get(1).map(String::as_str) == Some("plan") {
+        let mut words = args.to_vec();
+        words[1] = "task".to_owned();
+        renamed = words;
+        renamed.as_slice()
+    } else {
+        args
+    };
     // `--help` or `-h` ending any command asks for that command's usage; the
-    // guides of `agent spawn`, `mission` and `plan` answer it themselves.
+    // guides of `agent spawn`, `mission` and `task` answer it themselves.
     if let (Some(topic), Some("--help" | "-h")) = (
         args.get(1).map(String::as_str),
         args.last().filter(|_| args.len() > 2).map(String::as_str),
     ) && !(args[2..] == ["spawn", "--help"]
-        || (matches!(topic, "mission" | "plan") && args.len() == 3))
+        || (matches!(topic, "mission" | "task" | "automation") && args.len() == 3))
         && let Some(text) = topic_usage(topic)
     {
         return Ok(CommandKind::Usage(text));
@@ -285,6 +355,10 @@ pub fn parse_args(args: &[String]) -> Result<CommandKind, String> {
         Some("guide") => match iter.next() {
             None => Ok(CommandKind::Guide),
             Some(_) => Err("usage: hide guide".to_owned()),
+        },
+        Some("issue") => match (iter.next().map(String::as_str), iter.next()) {
+            (Some("help" | "--help"), None) => Ok(CommandKind::IssueHelp),
+            _ => Err(usage(crate::issue_cli::USAGE)),
         },
         Some("contract") => match (iter.next().map(String::as_str), iter.next()) {
             (Some("--json"), None) => Ok(CommandKind::Contract),
@@ -304,6 +378,28 @@ pub fn parse_args(args: &[String]) -> Result<CommandKind, String> {
             Ok(CommandKind::Status { json })
         }
         Some("stop") => Ok(CommandKind::Stop),
+        Some("always-on") => crate::always_on::cli::parse(&args[2..]).map(CommandKind::AlwaysOn),
+        Some("restart") => match (
+            iter.next().map(String::as_str),
+            iter.next().and_then(|pid| pid.parse().ok()),
+            iter.next().map(String::as_str),
+            iter.next().and_then(|start| start.parse().ok()),
+            iter.next(),
+        ) {
+            (Some("--daemon"), Some(daemon), Some("--started"), Some(started), None) => {
+                Ok(CommandKind::Restart { daemon, started })
+            }
+            _ => Err("usage: hide restart --daemon <pid> --started <start>".to_owned()),
+        },
+        Some("import") => match (
+            iter.next().map(String::as_str),
+            iter.next().map(String::as_str),
+            iter.next(),
+        ) {
+            (Some("herdr"), None, None) => Ok(CommandKind::ImportHerdr { yes: false }),
+            (Some("herdr"), Some("--yes"), None) => Ok(CommandKind::ImportHerdr { yes: true }),
+            _ => Err(IMPORT_USAGE.to_owned()),
+        },
         Some("runtime") => match (iter.next().map(String::as_str), iter.next()) {
             (Some("prepare"), None) => Ok(CommandKind::RuntimePrepare),
             _ => Err("usage: hide runtime prepare".to_owned()),
@@ -347,6 +443,29 @@ pub fn parse_args(args: &[String]) -> Result<CommandKind, String> {
                 .map(CommandKind::Pane)
                 .map_err(|reason| wrong(reason, crate::pane_cli::USAGE))
         }
+        Some("agent") if args.get(2).map(String::as_str) == Some("profile") => {
+            crate::cli_contract::admit(&args[1..])
+                .map_err(|refusal| format!("{refusal}\n{}", usage(crate::profile_cli::USAGE)))?;
+            crate::profile_cli::parse(&args[3..])
+                .map(CommandKind::AgentProfile)
+                .map_err(|reason| wrong(reason, crate::profile_cli::USAGE))
+        }
+        Some(topic @ ("skill" | "mcp")) => {
+            let (kind, usage_text) = if topic == "skill" {
+                (hide_kit::store::ItemKind::Skill, crate::store_cli::SKILL_USAGE)
+            } else {
+                (hide_kit::store::ItemKind::Mcp, crate::store_cli::MCP_USAGE)
+            };
+            if matches!(args.get(2).map(String::as_str), None | Some("help" | "--help")) {
+                println!("{usage_text}");
+                std::process::exit(0);
+            }
+            crate::cli_contract::admit(&args[1..])
+                .map_err(|refusal| format!("{refusal}\n{}", usage(usage_text)))?;
+            crate::store_cli::parse(kind, &args[2..])
+                .map(CommandKind::Store)
+                .map_err(|reason| wrong(reason, usage_text))
+        }
         Some("agent") if args.get(2).map(String::as_str) == Some("catalog") => {
             crate::cli_contract::admit(&args[1..])
                 .map_err(|refusal| format!("{refusal}\n{}", usage(crate::agent_cli::USAGE)))?;
@@ -362,15 +481,28 @@ pub fn parse_args(args: &[String]) -> Result<CommandKind, String> {
                 .map(CommandKind::Mission)
                 .map_err(|reason| wrong(reason, crate::mission_cli::USAGE))
         }
-        Some("plan") if matches!(args.get(2).map(String::as_str), Some("help" | "--help")) => {
+        Some("task") if matches!(args.get(2).map(String::as_str), Some("help" | "--help")) => {
             crate::plan_cli::parse(args[2..].iter()).map(CommandKind::Plan)
         }
-        Some("plan") => {
+        Some("task") => {
             crate::cli_contract::admit(&args[1..])
                 .map_err(|refusal| format!("{refusal}\n{}", usage(crate::plan_cli::USAGE)))?;
             crate::plan_cli::parse(iter)
                 .map(CommandKind::Plan)
                 .map_err(|reason| wrong(reason, crate::plan_cli::USAGE))
+        }
+        Some("automation")
+            if matches!(args.get(2).map(String::as_str), Some("help" | "--help")) =>
+        {
+            crate::automation_cli::parse(&args[2..]).map(CommandKind::Automation)
+        }
+        Some("automation") => {
+            crate::cli_contract::admit(&args[1..]).map_err(|refusal| {
+                format!("{refusal}\n{}", usage(crate::automation_cli::USAGE))
+            })?;
+            crate::automation_cli::parse(&args[2..])
+                .map(CommandKind::Automation)
+                .map_err(|reason| wrong(reason, crate::automation_cli::USAGE))
         }
         Some("agent") => {
             crate::cli_contract::admit(&args[1..])
@@ -394,10 +526,17 @@ pub fn parse_args(args: &[String]) -> Result<CommandKind, String> {
         }
         Some("device") => {
             crate::cli_contract::admit(&args[1..])
-                .map_err(|refusal| format!("{refusal}\n{}", usage(crate::device_cli::USAGE)))?;
+                .map_err(|refusal| format!("{refusal}\n{}", usage(crate::device_cli::usage_here())))?;
             crate::device_cli::parse(iter)
                 .map(CommandKind::Device)
-                .map_err(|reason| wrong(reason, crate::device_cli::USAGE))
+                .map_err(|reason| wrong(reason, crate::device_cli::usage_here()))
+        }
+        Some("access") => {
+            crate::cli_contract::admit(&args[1..])
+                .map_err(|refusal| format!("{refusal}\n{}", usage(crate::access_cli::USAGE)))?;
+            crate::access_cli::parse(iter)
+                .map(CommandKind::Access)
+                .map_err(|reason| wrong(reason, crate::access_cli::USAGE))
         }
         Some(topic @ ("request" | "inbox" | "watch")) => {
             crate::cli_contract::admit(&args[1..])
@@ -407,13 +546,6 @@ pub fn parse_args(args: &[String]) -> Result<CommandKind, String> {
                 .map_err(|reason| wrong(reason, crate::delivery_cli::USAGE))
         }
         Some("browser") => parse_browser(iter),
-        Some("observation") => match (iter.next().map(String::as_str), iter.next()) {
-            (Some("--hook"), None) => Ok(CommandKind::ObservationHook { start: false }),
-            (Some("--hook"), Some(flag)) if flag == "--start" && iter.next().is_none() => {
-                Ok(CommandKind::ObservationHook { start: true })
-            }
-            _ => Err("usage: hide observation --hook [--start]".into()),
-        },
         Some("workspace") => match iter.next().map(String::as_str) {
             Some("memory") => {
                 let words: Vec<&str> = iter.map(String::as_str).collect();
@@ -453,6 +585,18 @@ pub fn parse_args(args: &[String]) -> Result<CommandKind, String> {
         Some("diff") => parse_open(iter, false),
         Some("view") => parse_view(iter),
         Some("links") => parse_links(iter),
+        Some("session") if args.get(2).map(String::as_str) == Some("fold-ask") => {
+            crate::cli_contract::admit(&args[1..])
+                .map_err(|refusal| format!("{refusal}\n{}", usage(crate::session_cli::USAGE)))?;
+            let args = args[3..]
+                .iter()
+                .filter(|arg| *arg != "--json")
+                .cloned()
+                .collect::<Vec<_>>();
+            crate::session_cli::parse_fold_ask(&args)
+                .map(|(id, reason)| CommandKind::FoldAsk { id, reason })
+                .map_err(|reason| wrong(reason, crate::session_cli::USAGE))
+        }
         Some("session") => crate::session_cli::parse(iter)
             .map(CommandKind::Session)
             .map_err(|reason| wrong(reason, crate::session_cli::USAGE)),
@@ -493,7 +637,7 @@ fn parse_catalog(args: &[String]) -> Result<CommandKind, String> {
 }
 
 fn parse_links<'a>(iter: impl Iterator<Item = &'a String>) -> Result<CommandKind, String> {
-    use herdr_core::links::query::{LinksQuery, QueryTarget};
+    use hide_core::links::query::{LinksQuery, QueryTarget};
     let mut all_projects = false;
     let mut words = Vec::new();
     for word in iter {
@@ -533,54 +677,55 @@ fn parse_links<'a>(iter: impl Iterator<Item = &'a String>) -> Result<CommandKind
 }
 
 fn parse_memory<'a>(mut iter: impl Iterator<Item = &'a String>) -> Result<CommandKind, String> {
-    use herdr_core::memory_command::MemoryCommand;
+    use hide_core::memory_command::MemoryCommand;
     let verb = iter.next().map(String::as_str);
     let words = iter.map(String::as_str).collect::<Vec<_>>();
     let rest = words.join(" ");
-    let command = match (verb, words.as_slice()) {
-        (Some("show"), [card]) => herdr_core::memory_command::parse_card(card)
-            .map(|number| MemoryCommand::Show { number }),
-        (Some("forget"), [card]) => herdr_core::memory_command::parse_card(card)
-            .map(|number| MemoryCommand::Forget { number }),
-        (Some("undo"), [card]) => herdr_core::memory_command::parse_card(card)
-            .map(|number| MemoryCommand::Undo { number }),
-        (Some("release"), [card]) => herdr_core::memory_command::parse_card(card)
-            .map(|number| MemoryCommand::Release { number }),
-        (Some("recheck"), [card]) => herdr_core::memory_command::parse_card(card)
-            .map(|number| MemoryCommand::Recheck { number }),
-        (Some("placed"), [card, path]) => {
-            herdr_core::memory_command::parse_card(card).map(|number| MemoryCommand::Placed {
-                number,
-                path: (*path).to_owned(),
-            })
-        }
-        (Some("building"), [card, branch, path]) => herdr_core::memory_command::parse_card(card)
-            .map(|number| MemoryCommand::Building {
-                number,
-                branch: (*branch).to_owned(),
-                path: (*path).to_owned(),
-            }),
-        (Some(verb @ ("outdated" | "skipped" | "unbuilt" | "stale")), [card, reason @ ..])
-            if !reason.is_empty() =>
-        {
-            herdr_core::memory_command::parse_card(card).map(|number| {
-                let reason = reason.join(" ");
-                match verb {
-                    "skipped" => MemoryCommand::Skipped { number, reason },
-                    "unbuilt" => MemoryCommand::Unbuilt { number, reason },
-                    "stale" => MemoryCommand::Stale { number, reason },
-                    _ => MemoryCommand::Outdated { number, reason },
-                }
-            })
-        }
-        (Some("search"), [_, ..]) if !rest.trim().is_empty() => {
-            Some(MemoryCommand::Search { words: rest })
-        }
-        (Some("add"), [_, ..]) if !rest.trim().is_empty() => {
-            Some(MemoryCommand::Add { text: rest })
-        }
-        _ => None,
-    };
+    let command =
+        match (verb, words.as_slice()) {
+            (Some("show"), [card]) => hide_core::memory_command::parse_card(card)
+                .map(|number| MemoryCommand::Show { number }),
+            (Some("forget"), [card]) => hide_core::memory_command::parse_card(card)
+                .map(|number| MemoryCommand::Forget { number }),
+            (Some("undo"), [card]) => hide_core::memory_command::parse_card(card)
+                .map(|number| MemoryCommand::Undo { number }),
+            (Some("release"), [card]) => hide_core::memory_command::parse_card(card)
+                .map(|number| MemoryCommand::Release { number }),
+            (Some("recheck"), [card]) => hide_core::memory_command::parse_card(card)
+                .map(|number| MemoryCommand::Recheck { number }),
+            (Some("placed"), [card, path]) => {
+                hide_core::memory_command::parse_card(card).map(|number| MemoryCommand::Placed {
+                    number,
+                    path: (*path).to_owned(),
+                })
+            }
+            (Some("building"), [card, branch, path]) => hide_core::memory_command::parse_card(card)
+                .map(|number| MemoryCommand::Building {
+                    number,
+                    branch: (*branch).to_owned(),
+                    path: (*path).to_owned(),
+                }),
+            (Some(verb @ ("outdated" | "skipped" | "unbuilt" | "stale")), [card, reason @ ..])
+                if !reason.is_empty() =>
+            {
+                hide_core::memory_command::parse_card(card).map(|number| {
+                    let reason = reason.join(" ");
+                    match verb {
+                        "skipped" => MemoryCommand::Skipped { number, reason },
+                        "unbuilt" => MemoryCommand::Unbuilt { number, reason },
+                        "stale" => MemoryCommand::Stale { number, reason },
+                        _ => MemoryCommand::Outdated { number, reason },
+                    }
+                })
+            }
+            (Some("search"), [_, ..]) if !rest.trim().is_empty() => {
+                Some(MemoryCommand::Search { words: rest })
+            }
+            (Some("add"), [_, ..]) if !rest.trim().is_empty() => {
+                Some(MemoryCommand::Add { text: rest })
+            }
+            _ => None,
+        };
     command
         .map(CommandKind::Memory)
         .ok_or_else(|| MEMORY_USAGE.to_owned())
@@ -598,7 +743,7 @@ fn parse_open<'a>(
         .next()
         .filter(|path| !path.is_empty() && !path.starts_with('-'))
         .ok_or(usage)?;
-    let mut request_id = None;
+    let (mut request_id, mut repo) = (None, None);
     while let Some(option) = iter.next() {
         match option.as_str() {
             "--beside" => return Err(BESIDE_REMOVED.to_owned()),
@@ -610,6 +755,7 @@ fn parse_open<'a>(
                         .clone(),
                 );
             }
+            "--repo" if repo.is_none() => repo = Some(folder_value(iter.next()).ok_or(usage)?),
             _ => return Err(usage.to_owned()),
         }
     }
@@ -618,7 +764,11 @@ fn parse_open<'a>(
     } else {
         Action::OpenDiff { path: path.clone() }
     };
-    Ok(CommandKind::WorkspaceAction { action, request_id })
+    Ok(CommandKind::WorkspaceAction {
+        action,
+        request_id,
+        repo,
+    })
 }
 
 fn parse_view<'a>(mut iter: impl Iterator<Item = &'a String>) -> Result<CommandKind, String> {
@@ -700,7 +850,18 @@ fn parse_view<'a>(mut iter: impl Iterator<Item = &'a String>) -> Result<CommandK
         },
         _ => return Err(usage.to_owned()),
     };
-    Ok(CommandKind::WorkspaceAction { action, request_id })
+    Ok(CommandKind::WorkspaceAction {
+        action,
+        request_id,
+        repo: None,
+    })
+}
+
+/// A folder option's value: non-empty and not another option.
+fn folder_value(value: Option<&String>) -> Option<String> {
+    value
+        .filter(|folder| !folder.is_empty() && !folder.starts_with('-'))
+        .cloned()
 }
 
 fn parse_browser<'a>(mut iter: impl Iterator<Item = &'a String>) -> Result<CommandKind, String> {
@@ -727,11 +888,14 @@ fn parse_browser<'a>(mut iter: impl Iterator<Item = &'a String>) -> Result<Comma
     if verb != Some("open") {
         return Err(BROWSER_USAGE.to_owned());
     }
-    let (mut target, mut wait, mut request_id) = (None, false, None);
+    let (mut target, mut wait, mut request_id, mut repo) = (None, false, None, None);
     while let Some(arg) = iter.next() {
         match arg.as_str() {
             "--beside" => return Err(BESIDE_REMOVED.to_owned()),
             "--wait" if !wait => wait = true,
+            "--repo" if repo.is_none() => {
+                repo = Some(folder_value(iter.next()).ok_or(BROWSER_USAGE)?);
+            }
             "--request-id" if request_id.is_none() => {
                 request_id = Some(
                     iter.next()
@@ -749,6 +913,7 @@ fn parse_browser<'a>(mut iter: impl Iterator<Item = &'a String>) -> Result<Comma
         target,
         wait,
         request_id,
+        repo,
     })
 }
 
@@ -795,12 +960,20 @@ pub fn run(kind: CommandKind) -> Result<(), String> {
         print!("{}", crate::plan_cli::HELP);
         return Ok(());
     }
+    if kind == CommandKind::Automation(crate::automation_cli::AutomationCli::Help) {
+        print!("{}", crate::automation_cli::HELP);
+        return Ok(());
+    }
     if kind == CommandKind::BrowserHelp {
         print!("{}", crate::browser_page::HELP);
         return Ok(());
     }
     if kind == CommandKind::Guide {
         print!("{}", crate::guide::text());
+        return Ok(());
+    }
+    if kind == CommandKind::IssueHelp {
+        print!("{}", crate::issue_cli::HELP);
         return Ok(());
     }
     let env = match needed_keys(&kind).map_or_else(env::load, env::load_for) {
@@ -814,16 +987,20 @@ pub fn run(kind: CommandKind) -> Result<(), String> {
                     | CommandKind::AgentSpawnBriefFile { .. }
                     | CommandKind::Mission(_)
                     | CommandKind::Plan(_)
+                    | CommandKind::Automation(_)
                     | CommandKind::AgentCatalog { .. }
+                    | CommandKind::AgentProfile(_)
+                    | CommandKind::Store(_)
                     | CommandKind::Ps(_)
                     | CommandKind::AgentSleep { .. }
                     | CommandKind::AgentArchive { .. }
+                    | CommandKind::FoldAsk { .. }
                     | CommandKind::Device(_)
+                    | CommandKind::Access(_)
                     | CommandKind::Pane(_)
                     | CommandKind::WorkspaceRemove(_)
                     | CommandKind::WorkspaceInfo
                     | CommandKind::WorkspaceHookInfo
-                    | CommandKind::ObservationHook { .. }
                     | CommandKind::StatusHook
                     | CommandKind::ViewList { .. }
                     | CommandKind::ViewStatus { .. }
@@ -852,15 +1029,20 @@ pub fn run(kind: CommandKind) -> Result<(), String> {
     match kind {
         CommandKind::Mission(command) => crate::mission_cli::run(&env, command),
         CommandKind::Plan(command) => crate::plan_cli::run(&env, command),
+        CommandKind::Automation(cli) => crate::automation_cli::run(&env, cli),
         CommandKind::AgentCatalog { machine } => crate::mission_cli::run_catalog(&env, machine),
+        CommandKind::AgentProfile(command) => crate::profile_cli::run(&env, command),
+        CommandKind::Store(command) => crate::store_cli::run(&env, command),
         CommandKind::Ps(options) => crate::ps_cli::run(&env, &options),
         CommandKind::AgentSleep { id, actor } => crate::agent_cli::run_sleep(&env, id, actor),
         CommandKind::AgentArchive { id, actor } => crate::agent_cli::run_archive(&env, id, actor),
+        CommandKind::FoldAsk { id, reason } => crate::session_cli::run_fold_ask(&env, &id, &reason),
         CommandKind::Device(cli) => crate::device_cli::run(&env, &cli),
+        CommandKind::Access(cli) => crate::access_cli::run(&env, &cli),
         CommandKind::Pane(cli) => crate::pane_cli::run(&env, cli),
         CommandKind::WorkspaceRemove(cli) => crate::worktree_cli::run(&env, cli),
         CommandKind::Delivery(command) => {
-            if matches!(&command, herdr_core::delivery::Command::Agents { .. }) {
+            if matches!(&command, hide_core::delivery::Command::Agents { .. }) {
                 crate::agent_cli::run(&env, command)
             } else {
                 crate::delivery_cli::run(&env, command)
@@ -875,6 +1057,7 @@ pub fn run(kind: CommandKind) -> Result<(), String> {
         | CommandKind::Usage(_)
         | CommandKind::BrowserHelp
         | CommandKind::Guide
+        | CommandKind::IssueHelp
         | CommandKind::Version { .. }
         | CommandKind::Contract => unreachable!("handled above"),
         CommandKind::Open => open(&env),
@@ -883,6 +1066,11 @@ pub fn run(kind: CommandKind) -> Result<(), String> {
         CommandKind::Status { json: true } => status_json(&env.state_dir),
         CommandKind::Status { json: false } => status(&env.state_dir, env.idle_secs),
         CommandKind::Stop => stop(&env.state_dir),
+        CommandKind::AlwaysOn(command) => {
+            crate::always_on::cli::run(&command, &env.home, &env.state_dir, env.device_connect)
+        }
+        CommandKind::Restart { daemon, started } => restart(&env, daemon, started),
+        CommandKind::ImportHerdr { yes } => import_herdr(&env, yes),
         CommandKind::RuntimePrepare => runtime_prepare(&env.home),
         CommandKind::Serve { keep_alive } => serve(env, keep_alive),
         CommandKind::Dev => dev(env),
@@ -890,7 +1078,24 @@ pub fn run(kind: CommandKind) -> Result<(), String> {
             target,
             wait,
             request_id,
-        } => browser_open(&env, &target, wait, request_id.as_deref()),
+            repo,
+        } => {
+            let target = match repo {
+                Some(repo) => {
+                    let cwd = std::env::current_dir().map_err(|_| "cwd_unavailable".to_owned())?;
+                    let Ok(url) = crate::browser_cli::address(&target, &cwd) else {
+                        return workspace_refusal(
+                            "invalid_address",
+                            "Use an http or https address, or a readable HTML file",
+                        );
+                    };
+                    enter_repo(&env, &repo)?;
+                    url
+                }
+                None => target,
+            };
+            browser_open(&env, &target, wait, request_id.as_deref())
+        }
         CommandKind::BrowserConnect { display_id } => {
             let answer = browser_connect_value(&env, display_id.as_deref(), true)?;
             println!("{answer}");
@@ -943,55 +1148,6 @@ pub fn run(kind: CommandKind) -> Result<(), String> {
                     .to_owned())
             }
         }
-        CommandKind::ObservationHook { start } => {
-            use hide_node_link::panes::{
-                HookCommand, OBSERVATION_ITEM_LIMIT, OBSERVATION_RECIPIENT_LIMIT,
-            };
-            use std::io::Read;
-            // One item per recipient, each already bounded; the array adds
-            // its brackets and commas.
-            let limit = (OBSERVATION_ITEM_LIMIT + 1) * OBSERVATION_RECIPIENT_LIMIT + 2;
-            let mut bytes = Vec::new();
-            std::io::stdin()
-                .lock()
-                .take((limit + 1) as u64)
-                .read_to_end(&mut bytes)
-                .map_err(|_| "observation_input_unavailable")?;
-            if bytes.len() > limit {
-                return Err("observation_input_too_large".into());
-            }
-            let observations: Vec<hide_node_link::panes::DirectObservation> =
-                serde_json::from_slice(&bytes).map_err(|_| "observation_input_invalid")?;
-            if observations.is_empty() || observations.len() > OBSERVATION_RECIPIENT_LIMIT {
-                return Err("observation_input_invalid".into());
-            }
-            // Each recipient is proven and recorded on its own; one refusal
-            // does not withhold the others.
-            let mut refusal = None;
-            for observation in observations {
-                let command = if start {
-                    HookCommand::StartObservation { observation }
-                } else {
-                    HookCommand::Observation { observation }
-                };
-                let answer = crate::workspace_cli::request_hook(&env, command)?;
-                if answer["ok"] != true && refusal.is_none() {
-                    refusal = Some(answer);
-                }
-            }
-            let answer = refusal.unwrap_or_else(|| {
-                serde_json::json!({"type":"workspace_result","ok":true,"result":{"queued":true}})
-            });
-            println!("{answer}");
-            if answer["ok"] == true {
-                Ok(())
-            } else {
-                Err(answer["reason"]
-                    .as_str()
-                    .unwrap_or("observation_unavailable")
-                    .into())
-            }
-        }
         CommandKind::WorkspaceMemory {
             event,
             runtime,
@@ -1017,7 +1173,19 @@ pub fn run(kind: CommandKind) -> Result<(), String> {
         }
         CommandKind::ViewList { session } => view_list(&env, session.as_deref()),
         CommandKind::ViewStatus { view_id } => view_status(&env, &view_id),
-        CommandKind::WorkspaceAction { action, request_id } => {
+        CommandKind::WorkspaceAction {
+            action,
+            request_id,
+            repo,
+        } => {
+            let action = match repo {
+                Some(repo) => {
+                    let action = absolute_action(action)?;
+                    enter_repo(&env, &repo)?;
+                    action
+                }
+                None => action,
+            };
             workspace_action(&env, action, request_id.as_deref())
         }
         CommandKind::Links(query) => links(&env, &query),
@@ -1028,14 +1196,14 @@ pub fn run(kind: CommandKind) -> Result<(), String> {
 
 /// Prints a `hide memory` answer as text an agent reads; a refusal prints
 /// its reason and next action as one JSON line and exits non-zero (B8, B16).
-fn memory(env: &Env, command: &herdr_core::memory_command::MemoryCommand) -> Result<(), String> {
-    use herdr_core::memory_command::{MemoryCommand, next_action};
+fn memory(env: &Env, command: &hide_core::memory_command::MemoryCommand) -> Result<(), String> {
+    use hide_core::memory_command::{MemoryCommand, next_action};
     if !command.valid() {
         let reason = match command {
             MemoryCommand::Add { .. } => "memory_text_too_long",
             MemoryCommand::Placed { .. } => "memory_path_not_found",
             MemoryCommand::Building { branch, .. }
-                if !herdr_core::memory_command::branch_name(branch) =>
+                if !hide_core::memory_command::branch_name(branch) =>
             {
                 "memory_branch_not_found"
             }
@@ -1068,10 +1236,10 @@ fn memory(env: &Env, command: &herdr_core::memory_command::MemoryCommand) -> Res
 }
 
 fn memory_text(
-    command: &herdr_core::memory_command::MemoryCommand,
+    command: &hide_core::memory_command::MemoryCommand,
     result: &serde_json::Value,
 ) -> String {
-    use herdr_core::memory_command::MemoryCommand;
+    use hide_core::memory_command::MemoryCommand;
     let text = |value: &serde_json::Value| value.as_str().unwrap_or_default().to_owned();
     match command {
         MemoryCommand::Show { .. } => {
@@ -1272,7 +1440,7 @@ fn parse_workspace_memory(words: &[&str]) -> Result<CommandKind, String> {
     if !matches!(*event, "SessionStart" | "UserPromptSubmit")
         || runtime.is_empty()
         || runtime.chars().any(char::is_control)
-        || !herdr_core::delivery::valid_session(session)
+        || !hide_core::delivery::valid_session(session)
     {
         return Err(WORKSPACE_MEMORY_USAGE.to_owned());
     }
@@ -1300,7 +1468,7 @@ fn json_memory_hook_ask(
 
 /// Prints the record's answer as one line; a refusal prints its reason and
 /// next action and exits non-zero (B42, B43).
-fn links(env: &Env, query: &herdr_core::links::query::LinksQuery) -> Result<(), String> {
+fn links(env: &Env, query: &hide_core::links::query::LinksQuery) -> Result<(), String> {
     let mut credential = match crate::workspace_cli::Credential::acquire(env) {
         Ok(credential) => credential,
         Err(reason) => return query_refusal(&reason, bootstrap_next_action(&reason), true),
@@ -1322,10 +1490,82 @@ fn links(env: &Env, query: &herdr_core::links::query::LinksQuery) -> Result<(), 
     }
 }
 
+/// `--repo <folder>` (D-57): moves the command into `folder` before it
+/// asks Hide, so a caller outside Hide's panes, an external tool among them,
+/// is bound to the project checkout that holds it, exactly as if it had run
+/// there: the command's working folder stays the one thing that names its
+/// checkout, and the option gives no caller a checkout it could not reach
+/// with `cd`. A pane's command opens in its own checkout whatever folder it
+/// runs in, so it is refused the option rather than have it ignored.
+fn enter_repo(env: &Env, repo: &str) -> Result<(), String> {
+    if env.pane_id.is_some() || std::env::var_os(crate::env::HIDE_CAP_REF).is_some() {
+        return workspace_refusal(
+            "repo_from_pane",
+            "An agent in a Hide pane opens in its own checkout; run the command without --repo",
+        );
+    }
+    std::env::set_current_dir(repo).or_else(|_| {
+        workspace_refusal(
+            "repo_not_found",
+            "Name the folder of a project Hide shows with --repo, and retry",
+        )
+    })
+}
+
+/// `action` with its path read against the folder the command ran in, before
+/// `--repo` moves the command elsewhere.
+fn absolute_action(action: Action) -> Result<Action, String> {
+    let absolute = |path: String| {
+        absolute_caller_path(&path)
+            .or_else(|reason| workspace_refusal(&reason, "Check the current directory and retry"))
+    };
+    Ok(match action {
+        Action::OpenFile { path } => Action::OpenFile {
+            path: absolute(path)?,
+        },
+        Action::OpenDiff { path } => Action::OpenDiff {
+            path: absolute(path)?,
+        },
+        other => other,
+    })
+}
+
 fn workspace_action(env: &Env, action: Action, request_id: Option<&str>) -> Result<(), String> {
     let answer = workspace_action_value(env, action, request_id)?;
     println!("{answer}");
     Ok(())
+}
+
+/// `hide mission decide --show <path>`: opens the path as the caller's View,
+/// an HTML file as a page and anything else as a file, and answers its id.
+/// A refusal is printed as the open's own line.
+pub(crate) fn open_view_for_decision(env: &Env, path: &str) -> Result<String, String> {
+    let page = std::path::Path::new(path)
+        .extension()
+        .and_then(|extension| extension.to_str())
+        .is_some_and(|extension| {
+            extension.eq_ignore_ascii_case("html") || extension.eq_ignore_ascii_case("htm")
+        });
+    let action = if page {
+        let cwd = std::env::current_dir().map_err(|_| "cwd_unavailable".to_owned())?;
+        match crate::browser_cli::address(path, &cwd) {
+            Ok(url) => Action::OpenBrowser {
+                url,
+                area_id: None,
+                new_target: false,
+            },
+            Err(_) => return workspace_refusal("invalid_address", "Use a readable HTML file"),
+        }
+    } else {
+        Action::OpenFile {
+            path: path.to_owned(),
+        }
+    };
+    let answer = workspace_action_value(env, action, None)?;
+    answer["result"]["view_id"]
+        .as_str()
+        .map(str::to_owned)
+        .ok_or_else(|| "invalid_response".to_owned())
 }
 
 fn workspace_action_value(
@@ -1390,6 +1630,17 @@ fn workspace_action_value(
 /// What the caller can do about a refused credential bootstrap. The daemon
 /// answers the bootstrap with a reason only, so the CLI names the next step.
 pub(crate) fn bootstrap_next_action(reason: &str) -> &'static str {
+    if let Some(next_action) = hide_agent_hooks::hook_request::install::next_action(reason) {
+        return next_action;
+    }
+    // An external tool's credential is refused before any command runs.
+    if let Some(next_action) = crate::access::next_action(reason) {
+        return next_action;
+    }
+    // A pane of another Hide's work here, while that Hide is away.
+    if let Some(next_action) = crate::guest_node::away::next_action(reason) {
+        return next_action;
+    }
     match reason {
         "checkout_not_registered" => crate::pane_auth::CHECKOUT_NEXT_ACTION,
         "caller_unavailable" => "Retry from a live shell inside a registered project checkout",
@@ -1401,7 +1652,34 @@ pub(crate) fn bootstrap_next_action(reason: &str) -> &'static str {
 /// named was gone and the bare bootstrap that replaces it was refused;
 /// nothing was sent, and the bootstrap's next step still applies.
 pub(crate) fn bootstrap_refused(reason: &str) -> bool {
-    matches!(reason, "checkout_not_registered" | "caller_unavailable")
+    crate::access::next_action(reason).is_some()
+        || crate::guest_node::away::next_action(reason).is_some()
+        || matches!(
+            reason,
+            "checkout_not_registered"
+                | "caller_unavailable"
+                | hide_agent_hooks::hook_request::install::INSTALL_UNCONFIRMED
+                | hide_agent_hooks::hook_request::install::OTHER_INSTALL
+        )
+}
+
+/// Why a folder a command was given cannot be spelled as the core spells it.
+#[derive(Debug, Eq, PartialEq)]
+pub(crate) enum WireFolder {
+    /// It cannot be made absolute from the working directory.
+    Unresolved,
+    /// Its path has no wire spelling.
+    Unspelled,
+}
+
+/// A folder a command was given on this machine, absolute and spelled as
+/// the core spells paths: its real path when it exists, so a link, `.` or
+/// `/tmp` names the folder Hide registered, and the absolute path when it
+/// is gone.
+pub(crate) fn wire_folder(raw: &str) -> Result<String, WireFolder> {
+    let absolute = std::path::absolute(raw).map_err(|_| WireFolder::Unresolved)?;
+    let path = hide_platform::fs::identity::canonical(&absolute).unwrap_or(absolute);
+    hide_platform::path::to_wire(&path).map_err(|_| WireFolder::Unspelled)
 }
 
 /// One refused command's line, `{"ok":false,"error":{"code","message"}}`,
@@ -1446,7 +1724,7 @@ fn workspace_action_before_send_refusal<T>(request_id: &str, reason: &str) -> Re
     Err(reason.to_owned())
 }
 
-fn absolute_caller_path(path: &str) -> Result<String, String> {
+pub(crate) fn absolute_caller_path(path: &str) -> Result<String, String> {
     use std::path::{Component, PathBuf};
     let cwd = std::env::current_dir().map_err(|_| "cwd_unavailable".to_owned())?;
     let input = PathBuf::from(path);
@@ -1461,7 +1739,7 @@ fn absolute_caller_path(path: &str) -> Result<String, String> {
         }
     }
     // A pane's cwd may be reached through a platform alias such as macOS
-    // /var -> /private/var, while Herdr reports the checkout's real path.
+    // /var -> /private/var, while the engine reports the checkout's real path.
     // Resolve the nearest existing ancestor so deleted diff paths still
     // retain their final components and the host can judge them in its root.
     let mut ancestor = normalized.as_path();
@@ -1840,12 +2118,7 @@ impl ConnectError {
 /// installed app's daemon is the operator's. A daemon that will not stop
 /// is a start failure. Only the daemon of this state folder is looked at,
 /// so a dev or e2e daemon elsewhere is never replaced, and stopping it
-/// leaves Herdr, its panes and their agents running.
-///
-/// The app's own `hide` first moves a Herdr server another Hide app
-/// started onto this app's Herdr, its panes kept
-/// ([`crate::herdr_handoff`]), so the daemon follows a server of the same
-/// app.
+/// leaves the pane holders, their panes and their agents running.
 ///
 /// The whole look-and-replace holds this state folder's connect lock, so
 /// two connects never both stop a daemon and start their own.
@@ -1976,14 +2249,6 @@ fn find_or_start(env: &Env) -> Result<Healthy, ConnectError> {
         .ok()
         .as_deref()
         .and_then(hide_kit::bundled_kit_dir);
-    // Before the daemon, so a daemon this connect starts or keeps finds the
-    // server it will follow already running this app's Herdr.
-    if let Some(herdr) = package.as_deref().and_then(|kit| given_herdr(env, kit))
-        && let Some(socket) = &env.herdr_socket_path
-        && let Some(record) = crate::herdr_handoff::hand_off(&herdr, Path::new(socket)).record()
-    {
-        eprintln!("{record}");
-    }
     if let Some((state, health)) = healthy_daemon(env) {
         let running = health.get("build").and_then(serde_json::Value::as_str);
         if running == Some(build.as_str()) {
@@ -2022,6 +2287,49 @@ fn find_or_start(env: &Env) -> Result<Healthy, ConnectError> {
             ConnectError::StartFailed(detail)
         })?;
     }
+    // A paired machine's core runs under its login item (PRD
+    // device-connect-iroh D-41): the item starts it, with its marker put
+    // back, and a core of an older build it started is updated. An item
+    // that cannot start it (no GUI session, turned off in the login items,
+    // its task deleted) leaves the core to this start, so the app opens.
+    let agents = crate::always_on::agents_for(&env.home);
+    let item_started = crate::login_item::installed(&agents, &env.home, &env.state_dir)
+        .map_err(ConnectError::StartFailed)?
+        && match crate::login_item::start_installed(&agents, &env.home, &env.state_dir) {
+            Ok(()) => true,
+            Err(message) => {
+                eprintln!(
+                    "{}",
+                    serde_json::json!({
+                        "component": "hide", "kind": "core.item_unavailable",
+                        "message": message,
+                    })
+                );
+                false
+            }
+        };
+    if item_started {
+        let (state, health) = wait_for_item_core(env)?;
+        if health["build"] == build.as_str() {
+            return Ok((state, health));
+        }
+        if package.is_none() {
+            return Err(ConnectError::OtherBuild(format!(
+                "the core its login item runs (pid {}) is build {}; this hide is not from a desktop package (build {build}) and does not update it",
+                state.pid,
+                health["build"].as_str().unwrap_or("unknown"),
+            )));
+        }
+        let program = health["starter"]["program"]
+            .as_str()
+            .map(std::path::PathBuf::from)
+            .ok_or_else(|| {
+                ConnectError::StartFailed(
+                    "the core its login item started names no program".to_owned(),
+                )
+            })?;
+        return update_started_core(env, (state, health), &build, &program);
+    }
     let spawned_at = unix_ms();
     let mut daemon = spawn_daemon(env, false).map_err(ConnectError::StartFailed)?;
     let started = wait_healthy(env, &mut daemon, spawned_at);
@@ -2030,10 +2338,26 @@ fn find_or_start(env: &Env) -> Result<Healthy, ConnectError> {
     started
 }
 
-/// The Herdr the app in `kit` ships, when it is the one this connect was
-/// given (`HERDR_BIN_PATH`).
-fn given_herdr(env: &Env, kit: &Path) -> Option<std::path::PathBuf> {
-    crate::herdr_handoff::shipped_herdr(kit, env.herdr_bin_path.as_deref())
+/// How long the core a login item started has to answer `/health`.
+const ITEM_CORE_ANSWERS_WITHIN: Duration = Duration::from_secs(30);
+
+/// The daemon of this state folder once the core its login item started
+/// answers, of whatever build.
+#[allow(clippy::disallowed_methods)] // a production wait, not test code
+fn wait_for_item_core(env: &Env) -> Result<Healthy, ConnectError> {
+    let deadline = std::time::Instant::now() + ITEM_CORE_ANSWERS_WITHIN;
+    loop {
+        if let Some(healthy) = healthy_daemon(env) {
+            return Ok(healthy);
+        }
+        if std::time::Instant::now() >= deadline {
+            return Err(ConnectError::NoResponse(format!(
+                "the core its login item starts did not answer within {}s",
+                ITEM_CORE_ANSWERS_WITHIN.as_secs()
+            )));
+        }
+        std::thread::sleep(HEALTH_PAUSE);
+    }
 }
 
 /// How long an updated core has to answer `/health` once its update said
@@ -2116,7 +2440,10 @@ fn update_started_core(
         .map_err(failed)?;
     let packages = daemon_binary()
         .map(|hided| {
-            hide_node::ssh::host::HelperPackages::new(hided.parent().map(Path::to_path_buf))
+            hide_node::ssh::host::HelperPackages::new(
+                hided.parent().map(Path::to_path_buf),
+                RELEASE,
+            )
         })
         .map_err(failed)?;
     let new = packages.install_here(&root).map_err(failed)?;
@@ -2129,8 +2456,10 @@ fn update_started_core(
         .arg(program)
         .args(["--intent", &intent]);
     // Its own process group, so a host that gives up on this connect and
-    // kills it never cuts the update short.
-    let finished = hide_platform::process::run_to_end(
+    // kills it never cuts the update short. A test fixture's update starts
+    // the core as its resident child, which leaves its job on Windows; the
+    // login item's core is Task Scheduler's and in no job of this process.
+    let finished = hide_platform::process::run_to_end_letting_residents_leave(
         &mut command,
         crate::core_update::WITHIN,
         &std::sync::atomic::AtomicBool::new(false),
@@ -2345,7 +2674,7 @@ fn open_path_result(answer: &serde_json::Value) -> Result<serde_json::Value, Str
         let reason = answer["reason"].as_str().unwrap_or("project_open_failed");
         let next = answer["next_action"]
             .as_str()
-            .unwrap_or_else(|| herdr_core::project_open::next_action(reason));
+            .unwrap_or_else(|| hide_core::project_open::next_action(reason));
         return Err(open_path_refusal(reason, next));
     }
     let result = answer["result"].clone();
@@ -2382,7 +2711,7 @@ fn open_path_next_action(reason: &str) -> &'static str {
         "request_timeout" => {
             "Run it again: a folder already added is only brought forward, never added twice"
         }
-        other => herdr_core::project_open::next_action(other),
+        other => hide_core::project_open::next_action(other),
     }
 }
 
@@ -2435,7 +2764,9 @@ fn connect_json(env: &Env) -> Result<(), String> {
 /// about or stopped.
 fn needed_keys(kind: &CommandKind) -> Option<&'static [&'static str]> {
     match kind {
-        CommandKind::Stop | CommandKind::Status { json: true } => Some(env::STATE_FOLDER_KEYS),
+        CommandKind::Stop | CommandKind::Status { json: true } | CommandKind::AlwaysOn(_) => {
+            Some(env::STATE_FOLDER_KEYS)
+        }
         CommandKind::RuntimePrepare => Some(&[env::HOME]),
         CommandKind::Status { json: false } => Some(env::STATUS_KEYS),
         _ => None,
@@ -2444,7 +2775,15 @@ fn needed_keys(kind: &CommandKind) -> Option<&'static [&'static str]> {
 
 fn status_json(state_dir: &Path) -> Result<(), String> {
     let line = match healthy_daemon_in(state_dir) {
-        Some((state, health)) => attached_json(&state, &health, "running")?,
+        Some((state, health)) => {
+            let mut line = attached_json(&state, &health, "running")?;
+            // The process answers, so a host attaches to it; whether it
+            // takes pane commands is its listeners' answer.
+            if let Some(listeners) = health.get("listeners") {
+                line["listeners"] = listeners.clone();
+            }
+            line
+        }
         None => serde_json::json!({ "running": false }),
     };
     println!("{line}");
@@ -2499,33 +2838,150 @@ fn screen_node(health: &serde_json::Value) -> Result<Option<String>, String> {
         .ok_or_else(|| "the node daemon names a machine this build does not take".to_owned())
 }
 
-fn status(state_dir: &Path, idle_secs: u64) -> Result<(), String> {
-    match healthy_daemon_in(state_dir).map(|(state, _)| state) {
-        Some(state) => {
-            let health = health_json(state.port, HEALTH_REQUEST)?;
-            let clients = health
-                .get("clients")
-                .and_then(|value| value.as_u64())
-                .unwrap_or(0);
-            let idle = health
-                .get("idle_remaining_secs")
-                .and_then(|value| value.as_u64())
-                .unwrap_or(idle_secs);
-            println!(
-                "Hide is running  pid {}  port {}  clients {}  idle {}s remaining",
-                state.pid, state.port, clients, idle
+/// `hide import herdr [--yes]` (B17): what this machine's Herdr session
+/// would bring in and what moving it ends, and with `--yes` the same move or
+/// import the screen's button makes, through the daemon's token as `hide
+/// <path>` asks.
+fn import_herdr(env: &Env, yes: bool) -> Result<(), String> {
+    let (state, _) = connect(env).map_err(|error| error.detail())?;
+    let answer =
+        crate::workspace_cli::request_herdr_import_with_token(state.port, &state.token, yes)?;
+    if answer["ok"] != true {
+        return Err(format!(
+            "{}: {}",
+            answer["reason"]
+                .as_str()
+                .unwrap_or("herdr_import_unavailable"),
+            answer["next_action"]
+                .as_str()
+                .unwrap_or("Run the command again")
+        ));
+    }
+    for line in import_herdr_lines(&answer["result"], yes) {
+        println!("{line}");
+    }
+    Ok(())
+}
+
+/// The lines `hide import herdr` prints for the daemon's `result`.
+fn import_herdr_lines(result: &serde_json::Value, yes: bool) -> Vec<String> {
+    let offered = &result["offered"];
+    let count = |field: &str| offered[field].as_u64().unwrap_or(0);
+    let mut lines = Vec::new();
+    if offered["failure"] == "unreadable" {
+        lines.push(format!(
+            "Hide could not read the Herdr session: {}",
+            offered["reason"].as_str().unwrap_or("no reason given")
+        ));
+    }
+    if let Some(refused) = offered["refused"].as_array() {
+        for workspace in refused {
+            lines.push(format!(
+                "Not moved: {}: {}",
+                workspace["label"].as_str().unwrap_or(""),
+                workspace["reason"].as_str().unwrap_or("")
+            ));
+        }
+    }
+    if count("workspaces") == 0 && count("waiting") > 0 && offered["kind"] == "import" {
+        lines.push(format!(
+            "Herdr closed, so {} conversations an earlier import left open in it can resume here.",
+            count("waiting")
+        ));
+        lines.push(if result["asked"] == true {
+            "Resuming: Hide starts again with them.".to_owned()
+        } else if yes {
+            "Nothing was resumed: a move is already under way.".to_owned()
+        } else {
+            "Run `hide import herdr --yes` to resume them.".to_owned()
+        });
+        return lines;
+    }
+    if count("workspaces") == 0 {
+        if lines.is_empty() {
+            lines.push("This machine has no Herdr session left to move into Hide.".to_owned());
+        }
+        return lines;
+    }
+    let what = format!(
+        "{} workspaces, {} tabs and {} agents",
+        count("workspaces"),
+        count("tabs"),
+        count("agents")
+    );
+    let moving = offered["kind"] == "move";
+    if moving {
+        lines.push(format!("Hide's Herdr is running {what}."));
+        lines.push("Moving stops it: the commands running in it end, and the agents reopen where their conversations left off.".to_owned());
+    } else {
+        lines.push(format!("The Herdr session holds {what}."));
+        lines.push("Importing leaves Herdr as it is.".to_owned());
+        if offered["herdr_running"] == true {
+            lines.push(
+                "Herdr is running, so the conversations open in it open here as shells.".to_owned(),
             );
-            Ok(())
         }
-        None => {
-            println!("Hide is not running");
-            Ok(())
-        }
+    }
+    lines.push(match (result["asked"] == true, yes, moving) {
+        (true, _, true) => "Moving: Hide starts again with them.".to_owned(),
+        (true, _, false) => "Importing: Hide starts again with them.".to_owned(),
+        (false, true, _) => "Nothing was moved: a move is already under way.".to_owned(),
+        (false, false, true) => "Run `hide import herdr --yes` to move them.".to_owned(),
+        (false, false, false) => "Run `hide import herdr --yes` to import them.".to_owned(),
+    });
+    lines
+}
+
+fn status(state_dir: &Path, idle_secs: u64) -> Result<(), String> {
+    match healthy_daemon_in(state_dir) {
+        Some((state, health)) => println!("{}", status_text(&state, &health, idle_secs)),
+        None => println!("Hide is not running"),
+    }
+    Ok(())
+}
+
+/// What `hide status` says of the daemon `state` names, from its `/health`:
+/// running, or, while a listener it serves takes no connection, what that
+/// refuses. A daemon of a build before `listeners` reports none.
+fn status_text(state: &DaemonState, health: &serde_json::Value, idle_secs: u64) -> String {
+    let clients = health
+        .get("clients")
+        .and_then(|value| value.as_u64())
+        .unwrap_or(0);
+    let idle = health
+        .get("idle_remaining_secs")
+        .and_then(|value| value.as_u64())
+        .unwrap_or(idle_secs);
+    let problems: Vec<String> = [
+        (
+            "pane_bootstrap",
+            "pane commands and agent hooks are refused",
+        ),
+        ("node_attach", "other machines' nodes cannot connect"),
+    ]
+    .into_iter()
+    .filter_map(|(listener, refused)| {
+        let advice = match health["listeners"][listener].as_str()? {
+            "failing" => "Hide tries again; restart Hide if it stays",
+            "stopped" => "restart Hide",
+            _ => return None,
+        };
+        Some(format!("  {refused}: {advice}"))
+    })
+    .collect();
+    let facts = format!(
+        "pid {}  port {}  clients {clients}  idle {idle}s remaining",
+        state.pid, state.port
+    );
+    if problems.is_empty() {
+        format!("Hide is running  {facts}")
+    } else {
+        format!("Hide is not working  {facts}\n{}", problems.join("\n"))
     }
 }
 
 /// Answers the folder the desktop host runs this package's daemon, CLI and
-/// Herdr from, as one JSON line. A Windows package's is a copy outside its
+/// pane holder from, as one JSON line. A Windows package's is a copy outside its
 /// install folder (PRD auto-update D-10), made here once per build, and the
 /// copies of other builds nothing runs from are removed; what could not be
 /// removed is reported to stderr as records the host logs (D-11). Elsewhere
@@ -2582,7 +3038,59 @@ fn runtime_prepare(home: &Path) -> Result<(), String> {
     Ok(())
 }
 
+/// Ends the daemon `daemon` and starts the next, when `daemon` is still the
+/// one this state folder names. A daemon that was stopped or replaced since
+/// the request was made is never touched, and nothing is started for it.
+/// The check, the stop and the start all happen under `connect.lock`, the
+/// boundary discovery uses, so a successor another `hide connect` starts
+/// between them is never ended or replaced by this stale request; the
+/// replacement is a start of the daemon beside this program, not a discovery
+/// that could replace a successor of another build.
+fn restart(env: &Env, daemon: u32, started: u64) -> Result<(), String> {
+    restart_under_lock(&env.state_dir, daemon, started, &|state| {
+        stop_daemon(&env.state_dir, state)?;
+        let spawned_at = unix_ms();
+        let mut child = spawn_daemon(env, false)?;
+        let healthy = wait_healthy(env, &mut child, spawned_at);
+        // The daemon outlives this command; nothing waits for it.
+        std::mem::forget(child);
+        healthy.map(|_| ()).map_err(|error| error.detail())
+    })
+}
+
+fn restart_under_lock(
+    state_dir: &Path,
+    daemon: u32,
+    started: u64,
+    replace: &dyn Fn(&DaemonState) -> Result<(), String>,
+) -> Result<(), String> {
+    let _serialized = state_file::lock_connect(state_dir)
+        .map_err(|error| format!("the connect lock: {error}"))?;
+    match daemon_to_restart(state_dir, daemon, started)? {
+        Some(state) => replace(&state),
+        None => Ok(()),
+    }
+}
+
+/// The state of the daemon `hide restart` may end: the one this folder names
+/// now, when it is the process `daemon` started at `started`, and still that
+/// process: a successor that took the pid has another start time.
+fn daemon_to_restart(
+    state_dir: &Path,
+    daemon: u32,
+    started: u64,
+) -> Result<Option<DaemonState>, String> {
+    Ok(state_file::read_state(state_dir)
+        .map_err(|e| e.to_string())?
+        .filter(|state| {
+            state.pid == daemon && state.pid_started == Some(started) && still_the_daemon(state)
+        }))
+}
+
 fn stop(state_dir: &Path) -> Result<(), String> {
+    // First, so a login item does not start the core again (PRD
+    // device-connect-iroh D-41); `hide connect` puts it back.
+    crate::login_item::release(state_dir)?;
     match state_file::read_state(state_dir).map_err(|e| e.to_string())? {
         Some(state) if still_the_daemon(&state) => {
             stop_daemon(state_dir, &state)?;
@@ -2701,22 +3209,10 @@ fn daemon_binary() -> Result<std::path::PathBuf, String> {
 }
 
 fn spawn_daemon(env: &Env, keep_alive: bool) -> Result<std::process::Child, String> {
-    // The daemon would refuse the same value after it is spawned; checking
-    // here answers `start_failed` with the path instead of a ten-second
-    // `no_response` that names nothing.
-    if let Some(error) = env::herdr_bin_error(env) {
-        return Err(error);
-    }
     let mut command = Command::new(daemon_binary()?);
     command.env("HIDE_STATE_DIR", &env.state_dir);
     if keep_alive {
         command.env("HIDE_KEEP_ALIVE", "1");
-    }
-    if let Some(socket) = &env.herdr_socket_path {
-        command.env("HERDR_SOCKET_PATH", socket);
-    }
-    if let Some(bin) = &env.herdr_bin_path {
-        command.env("HERDR_BIN_PATH", bin);
     }
     if let Some(origin) = &env.vite_origin {
         command.env("HIDE_VITE_ORIGIN", origin);
@@ -2759,7 +3255,7 @@ fn wait_healthy(
         Ok(healthy) => Ok(healthy),
         Err(Waited::Timeout(detail)) => Err(ConnectError::NoResponse(detail)),
         Err(Waited::Exited(status)) => {
-            let refusal = herdr_core::diagnostics::newest_record(
+            let refusal = hide_core::diagnostics::newest_record(
                 &env.state_dir.join("core-state.json"),
                 |record| refused_by(record, pid, spawned_at),
             );
@@ -2787,7 +3283,7 @@ fn refused_by(record: &serde_json::Value, pid: u32, spawned_at: u64) -> bool {
             .is_some_and(|at| at >= spawned_at)
 }
 
-fn unix_ms() -> u64 {
+pub(crate) fn unix_ms() -> u64 {
     std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
         .map(|elapsed| elapsed.as_millis() as u64)
@@ -3011,7 +3507,6 @@ mod tests {
             pid: 1,
             port,
             token: "t".to_owned(),
-            socket: None,
             started_at: String::new(),
             pid_started: None,
         };
@@ -3053,7 +3548,6 @@ mod tests {
             pid,
             port: 7001,
             token: "abc".into(),
-            socket: None,
             started_at: "now".into(),
             pid_started,
         }
@@ -3281,10 +3775,162 @@ mod tests {
         ended.wait().unwrap();
     }
 
+    #[cfg(unix)]
+    #[test]
+    fn a_restart_ends_only_the_daemon_that_asked() {
+        let mut daemon = Command::new("sleep").arg("30").spawn().unwrap();
+        let pid = daemon.id();
+        let started = process::start_time(pid).unwrap();
+        let dir = tempfile::tempdir().unwrap();
+        assert!(
+            daemon_to_restart(dir.path(), pid, started)
+                .unwrap()
+                .is_none()
+        );
+        state_file::write_state(dir.path(), &recorded(pid, Some(started))).unwrap();
+        assert!(
+            daemon_to_restart(dir.path(), pid, started)
+                .unwrap()
+                .is_some()
+        );
+        // Another daemon took the folder.
+        assert!(
+            daemon_to_restart(dir.path(), pid + 1, started)
+                .unwrap()
+                .is_none()
+        );
+        // A successor took the pid: its state is valid, the request's start
+        // is the one before it.
+        assert!(
+            daemon_to_restart(dir.path(), pid, started - 1)
+                .unwrap()
+                .is_none()
+        );
+        // The state names a start the process no longer has.
+        state_file::write_state(dir.path(), &recorded(pid, Some(started + 1))).unwrap();
+        assert!(
+            daemon_to_restart(dir.path(), pid, started)
+                .unwrap()
+                .is_none()
+        );
+        daemon.kill().unwrap();
+        daemon.wait().unwrap();
+    }
+
+    /// A successor that takes the folder while a restart waits for the
+    /// connect lock is never replaced by it; the daemon that asked is.
+    #[cfg(unix)]
+    #[test]
+    fn a_restart_waiting_for_the_lock_leaves_a_successor_alone() {
+        let mut old = Command::new("sleep").arg("30").spawn().unwrap();
+        let mut successor = Command::new("sleep").arg("30").spawn().unwrap();
+        let started = process::start_time(old.id()).unwrap();
+        let dir = tempfile::tempdir().unwrap();
+        state_file::write_state(dir.path(), &recorded(old.id(), Some(started))).unwrap();
+        let replaced = std::sync::atomic::AtomicUsize::new(0);
+        let lock = state_file::lock_connect(dir.path()).unwrap();
+        std::thread::scope(|scope| {
+            let waiting = scope.spawn(|| {
+                restart_under_lock(dir.path(), old.id(), started, &|_| {
+                    replaced.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+                    Ok(())
+                })
+            });
+            // The successor's connect wins the lock and records itself.
+            let theirs = process::start_time(successor.id()).unwrap();
+            state_file::write_state(dir.path(), &recorded(successor.id(), Some(theirs))).unwrap();
+            drop(lock);
+            waiting.join().unwrap().unwrap();
+        });
+        assert_eq!(replaced.load(std::sync::atomic::Ordering::SeqCst), 0);
+
+        state_file::write_state(dir.path(), &recorded(old.id(), Some(started))).unwrap();
+        restart_under_lock(dir.path(), old.id(), started, &|state| {
+            assert_eq!(state.pid, old.id());
+            replaced.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+            Ok(())
+        })
+        .unwrap();
+        assert_eq!(replaced.load(std::sync::atomic::Ordering::SeqCst), 1);
+        for child in [&mut old, &mut successor] {
+            child.kill().unwrap();
+            child.wait().unwrap();
+        }
+    }
+
     #[test]
     fn a_state_with_no_recorded_start_is_judged_by_liveness() {
         assert!(still_the_daemon(&recorded(std::process::id(), None)));
         assert!(!still_the_daemon(&recorded(0, None)));
+    }
+
+    /// B17: `hide import herdr` reads, `--yes` moves, and anything else is
+    /// its usage; what it prints says what moves and what moving ends.
+    #[test]
+    fn import_herdr_says_what_moves_and_moves_only_with_yes() {
+        let parse = |args: &[&str]| {
+            parse_args(&args.iter().map(|arg| (*arg).to_owned()).collect::<Vec<_>>())
+        };
+        assert_eq!(
+            parse(&["hide", "import", "herdr"]).unwrap(),
+            CommandKind::ImportHerdr { yes: false }
+        );
+        assert_eq!(
+            parse(&["hide", "import", "herdr", "--yes"]).unwrap(),
+            CommandKind::ImportHerdr { yes: true }
+        );
+        for wrong in [
+            &["hide", "import"][..],
+            &["hide", "import", "other-tool"][..],
+        ] {
+            assert_eq!(parse(wrong).unwrap_err(), IMPORT_USAGE, "{wrong:?}");
+        }
+        let offered = |kind: &str, running: bool| {
+            serde_json::json!({
+                "kind": kind, "stage": "offered", "workspaces": 2, "tabs": 3, "agents": 1,
+                "waiting": 0, "herdr_running": running, "failure": null, "reason": null, "refused": [],
+            })
+        };
+        assert_eq!(
+            import_herdr_lines(
+                &serde_json::json!({"offered": offered("move", true), "asked": false}),
+                false
+            ),
+            [
+                "Hide's Herdr is running 2 workspaces, 3 tabs and 1 agents.",
+                "Moving stops it: the commands running in it end, and the agents reopen where their conversations left off.",
+                "Run `hide import herdr --yes` to move them.",
+            ]
+        );
+        assert_eq!(
+            import_herdr_lines(
+                &serde_json::json!({"offered": offered("import", true), "asked": true}),
+                true
+            ),
+            [
+                "The Herdr session holds 2 workspaces, 3 tabs and 1 agents.",
+                "Importing leaves Herdr as it is.",
+                "Herdr is running, so the conversations open in it open here as shells.",
+                "Importing: Hide starts again with them.",
+            ]
+        );
+        assert_eq!(
+            import_herdr_lines(
+                &serde_json::json!({"offered": {
+                    "kind": "import", "stage": "offered", "workspaces": 0, "tabs": 0, "agents": 0,
+                    "waiting": 2, "herdr_running": false, "failure": null, "reason": null, "refused": [],
+                }, "asked": false}),
+                false
+            ),
+            [
+                "Herdr closed, so 2 conversations an earlier import left open in it can resume here.",
+                "Run `hide import herdr --yes` to resume them.",
+            ]
+        );
+        assert_eq!(
+            import_herdr_lines(&serde_json::json!({"offered": null, "asked": false}), false),
+            ["This machine has no Herdr session left to move into Hide."]
+        );
     }
 
     #[test]
@@ -3320,11 +3966,11 @@ mod tests {
             (&["hide", "ps", "--help"][..], usage(crate::ps_cli::USAGE)),
             (
                 &["hide", "device", "-h"][..],
-                usage(crate::device_cli::USAGE),
+                usage(crate::device_cli::usage_here()),
             ),
             (
                 &["hide", "device", "add", "--help"][..],
-                usage(crate::device_cli::USAGE),
+                usage(crate::device_cli::usage_here()),
             ),
             (
                 &["hide", "request", "send", "--help"][..],
@@ -3350,7 +3996,7 @@ mod tests {
             parse(&["hide", "device"]).unwrap_err(),
             format!(
                 "hide device needs a subcommand\n{}",
-                usage(crate::device_cli::USAGE)
+                usage(crate::device_cli::usage_here())
             )
         );
         assert!(
@@ -3486,7 +4132,7 @@ mod tests {
 
     #[test]
     fn workspace_memory_reads_at_most_the_prompt_limit_and_keeps_whole_characters() {
-        let limit = herdr_core::memory_hook::PROMPT_LIMIT_BYTES;
+        let limit = hide_core::memory_hook::PROMPT_LIMIT_BYTES;
         let long = "가".repeat(limit);
         let read = crate::workspace_cli::read_memory_prompt(long.as_bytes()).unwrap();
         assert!(
@@ -3508,6 +4154,14 @@ mod tests {
             parse_args(&args).unwrap()
         };
         assert_eq!(parse(&["hide", "connect"]), CommandKind::Connect);
+        assert_eq!(
+            parse(&["hide", "restart", "--daemon", "4242", "--started", "77"]),
+            CommandKind::Restart {
+                daemon: 4242,
+                started: 77
+            }
+        );
+        assert!(parse_args(&["hide", "restart"].map(String::from)).is_err());
         assert_eq!(
             parse(&["hide", "status", "--json"]),
             CommandKind::Status { json: true }
@@ -3549,13 +4203,52 @@ mod tests {
         }
     }
 
+    /// `hide status` says Hide runs only while its listeners take
+    /// connections; a stopped or failing pane bootstrap is named with what
+    /// it refuses and what to do.
+    #[test]
+    fn status_says_what_a_listener_that_takes_no_connection_refuses() {
+        let state = DaemonState {
+            pid: 42,
+            port: 7001,
+            token: "abc".into(),
+            started_at: "now".into(),
+            pid_started: None,
+        };
+        let health = |pane: &str| {
+            serde_json::json!({
+                "clients": 1,
+                "idle_remaining_secs": 30,
+                "listeners": {"pane_bootstrap": pane, "node_attach": "accepting"},
+            })
+        };
+        assert_eq!(
+            status_text(&state, &health("accepting"), 0),
+            "Hide is running  pid 42  port 7001  clients 1  idle 30s remaining"
+        );
+        assert_eq!(
+            status_text(&state, &health("stopped"), 0),
+            "Hide is not working  pid 42  port 7001  clients 1  idle 30s remaining\n  \
+             pane commands and agent hooks are refused: restart Hide"
+        );
+        assert_eq!(
+            status_text(&state, &health("failing"), 0),
+            "Hide is not working  pid 42  port 7001  clients 1  idle 30s remaining\n  \
+             pane commands and agent hooks are refused: Hide tries again; restart Hide if it stays"
+        );
+        // A daemon of a build before `listeners` is read as before.
+        assert_eq!(
+            status_text(&state, &serde_json::json!({}), 9),
+            "Hide is running  pid 42  port 7001  clients 0  idle 9s remaining"
+        );
+    }
+
     #[test]
     fn attached_json_carries_the_token_url() {
         let state = DaemonState {
             pid: 42,
             port: 7001,
             token: "abc".into(),
-            socket: None,
             started_at: "now".into(),
             pid_started: None,
         };
@@ -3582,6 +4275,17 @@ mod tests {
                 target: "index.html".into(),
                 wait: false,
                 request_id: None,
+                repo: None,
+            })
+        );
+        // D-57: an outside caller names the project to open in.
+        assert_eq!(
+            parse(&["hide", "browser", "open", "hello.html", "--repo", "/films"]),
+            Ok(CommandKind::BrowserOpen {
+                target: "hello.html".into(),
+                wait: false,
+                request_id: None,
+                repo: Some("/films".into()),
             })
         );
         // Open no longer takes --beside, and says how to run it again
@@ -3604,6 +4308,7 @@ mod tests {
                 target: "localhost:3000".into(),
                 wait: true,
                 request_id: Some("1234567890000-abc".into()),
+                repo: None,
             })
         );
         for bad in [
@@ -3613,6 +4318,11 @@ mod tests {
             &["hide", "browser", "open", "a", "b"],
             &["hide", "browser", "open", "a", "--pane"],
             &["hide", "browser", "open", "a", "--reveal"],
+            &["hide", "browser", "open", "a", "--repo"],
+            &["hide", "browser", "open", "a", "--repo", "--wait"],
+            &[
+                "hide", "browser", "open", "a", "--repo", "/x", "--repo", "/y",
+            ],
             &[
                 "hide", "browser", "open", "a", "--pane", "p1", "--pane", "p2",
             ],
@@ -3623,7 +4333,7 @@ mod tests {
 
     #[test]
     fn memory_reads_a_card_name_and_joins_words_and_text() {
-        use herdr_core::memory_command::MemoryCommand;
+        use hide_core::memory_command::MemoryCommand;
         let parse = |line: &[&str]| {
             parse_args(&line.iter().map(|arg| (*arg).to_owned()).collect::<Vec<_>>())
         };
@@ -3721,7 +4431,7 @@ mod tests {
 
     #[test]
     fn memory_answers_read_as_text_with_the_files_a_card_cites() {
-        use herdr_core::memory_command::MemoryCommand;
+        use hide_core::memory_command::MemoryCommand;
         let shown = memory_text(
             &MemoryCommand::Show { number: 3 },
             &serde_json::json!({
@@ -3855,7 +4565,7 @@ mod tests {
 
     #[test]
     fn links_reads_one_target_and_has_no_write_command() {
-        use herdr_core::links::query::{LinksQuery, QueryTarget};
+        use hide_core::links::query::{LinksQuery, QueryTarget};
         let parse = |line: &[&str]| {
             parse_args(&line.iter().map(|arg| (*arg).to_owned()).collect::<Vec<_>>())
         };
@@ -3927,9 +4637,11 @@ mod tests {
                     edge: Edge::Right
                 },
                 request_id: Some("1234567890000-abc".into()),
+                repo: None,
             })
         );
         assert!(parse(&["hide", "view", "select", "d2", "--workspace", "other"]).is_err());
+        assert!(parse(&["hide", "view", "select", "d2", "--repo", "/films"]).is_err());
         assert!(parse(&["hide", "view", "move", "d2", "--area", "a1"]).is_err());
         assert!(
             parse(&[
@@ -3987,6 +4699,7 @@ mod tests {
                     path: "src/lib.rs".into(),
                 },
                 request_id: None,
+                repo: None,
             })
         );
         for removed in [
@@ -4006,8 +4719,21 @@ mod tests {
                     path: "src/lib.rs".into(),
                 },
                 request_id: None,
+                repo: None,
             })
         );
+        assert_eq!(
+            parse(&["hide", "file", "open", "notes.md", "--repo", "/films"]),
+            Ok(CommandKind::WorkspaceAction {
+                action: Action::OpenFile {
+                    path: "notes.md".into(),
+                },
+                request_id: None,
+                repo: Some("/films".into()),
+            })
+        );
+        assert!(parse(&["hide", "file", "open", "a", "--repo"]).is_err());
+        assert!(parse(&["hide", "diff", "open", "a", "--repo", "/x", "--repo", "/y"]).is_err());
         assert!(parse(&["hide", "file", "open", "src/lib.rs", "--workspace", "other"]).is_err());
         assert!(parse(&["hide", "file", "open", "src/lib.rs", "--reveal"]).is_err());
     }
@@ -4100,7 +4826,12 @@ mod tests {
             serde_json::json!({"type":"workspace_result","ok":true,"result":{"label":"app"}});
         std::thread::scope(|scope| {
             panes
-                .start(scope, &output, &bridges, "/tmp/hide-test-herdr.sock")
+                .start(
+                    scope,
+                    &output,
+                    &bridges,
+                    hide_host::pane_holders::PaneSlot::default(),
+                )
                 .unwrap();
             let panes = &panes;
             let answered = answer.clone();

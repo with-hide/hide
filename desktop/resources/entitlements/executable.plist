@@ -1,7 +1,7 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <!--
-  hided, hide, hide-agent-hooks, the bundled Herdr and the notification
+  hided, hide, hide-agent-hooks and the notification
   permission helper, which only reads the app's notification settings, run
   under the hardened runtime with no exceptions
   (desktop/scripts/macos-signing.mjs): none of them generates code at run time

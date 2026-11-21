@@ -65,14 +65,19 @@
 .usage-comparison-bar { display: flex; flex-direction: column-reverse; justify-content: flex-start; min-width: 0; outline: none; border-radius: var(--radius-xs); opacity: var(--opacity-usage-level-3); }
 .usage-comparison-bar[data-selected="true"], .usage-comparison-bar:hover, .usage-comparison-bar:focus-visible { opacity: 1; box-shadow: 0 0 0 var(--size-hairline) var(--foreground); }
 .usage-comparison-bar[data-pending="true"] { border: var(--size-hairline) dashed var(--border); }
-.usage-series { display: block; flex-shrink: 0; width: 100%; background: var(--primary); }
-.usage-series[data-series="1"] { background: var(--accent-choice-sky); }
-.usage-series[data-series="2"] { background: var(--accent-choice-violet); }
-.usage-series[data-series="3"] { background: var(--accent-choice-amber); }
-.usage-series[data-series="4"] { background: var(--agent-working); }
-.usage-series[data-series="5"] { background: var(--muted-foreground); }
-.usage-series[data-series="6"] { background: var(--device-remote); }
-.usage-series[data-series="7"], .usage-series[data-series="8"] { background: var(--swatch-hide); }
+/* Each agent takes the chart colour nearest its own mark where the palette
+   has one (Claude Code orange, Codex deep blue, Grok's monochrome as grey,
+   Hide AI in Hide's own lime); the rest take the remaining distinct hues.
+   The index follows contracts/agent-adapters.json, Hide AI last. */
+.usage-series { display: block; flex-shrink: 0; width: 100%; background: var(--muted-foreground); }
+.usage-series[data-series="0"] { background: var(--accent-choice-amber); }
+.usage-series[data-series="1"] { background: var(--agent-working); }
+.usage-series[data-series="2"] { background: var(--muted-foreground); }
+.usage-series[data-series="3"] { background: var(--accent-choice-sky); }
+.usage-series[data-series="4"] { background: var(--accent-choice-violet); }
+.usage-series[data-series="5"] { background: var(--kind-task); }
+.usage-series[data-series="6"] { background: var(--kind-mission); }
+.usage-series[data-series="7"] { background: var(--primary); }
 .usage-series-key { width: var(--size-icon-sm); height: var(--size-icon-sm); border-radius: var(--radius-xs); }
 .usage-model-name { max-width: var(--size-usage-popover); white-space: normal; overflow-wrap: anywhere; }
 .usage-table .usage-total-row { background: var(--secondary); font-weight: 600; }

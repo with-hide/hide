@@ -16,12 +16,12 @@ use hide_platform::process::OwnedChild;
 use serde_json::{Value, json};
 
 use crate::programs;
+use crate::stand_in_daemon::StandInDaemon;
 use crate::stand_ins;
 
 const PANE: &str = "w1:p3";
 const CONVERSATION: &str = "ade08778-fcdd-4e96-88ba-fd1c4e594fa2";
 const SUBAGENT: &str = "7956974a-cd2e-41c0-bd3b-4c12822badd5";
-const START: &str = "herdr agent start probe --kind claude --pane w1:p9";
 
 /// The stand-in `hide`: the checkout is registered, the pane has one letter
 /// and every other call (Memory, the Workspace) is
@@ -45,6 +45,7 @@ exec /bin/sleep 60
 "#;
 
 struct Machine {
+    daemon: StandInDaemon,
     _dir: tempfile::TempDir,
     root: PathBuf,
     home: PathBuf,
@@ -65,7 +66,15 @@ impl Machine {
     }
 
     fn with_hide(hide: &str) -> Self {
-        let dir = tempfile::tempdir().unwrap();
+        // Short whatever `TMPDIR` is: the payload below carries paths from
+        // here and must fit PIPE_BUF, and the stand-in daemon's socket is below it.
+        // Windows has no `/tmp` and no such limit.
+        let mut folder = tempfile::Builder::new();
+        folder.prefix("ah");
+        #[cfg(unix)]
+        let dir = folder.tempdir_in("/tmp").unwrap();
+        #[cfg(not(unix))]
+        let dir = folder.tempdir().unwrap();
         let root = dir.path().canonicalize().unwrap();
         let home = root.join("home");
         let bin = root.join("bin");
@@ -81,7 +90,9 @@ impl Machine {
         let policy = home.join(".hide/agent-hooks/guardrails.json");
         std::fs::create_dir_all(policy.parent().unwrap()).unwrap();
         std::fs::write(policy, r#"{"version":1,"projects":[]}"#).unwrap();
+        let daemon = StandInDaemon::serve(&bin.join("hide"), &[("HOME", home.clone().into())]);
         Self {
+            daemon,
             _dir: dir,
             root,
             home,
@@ -122,9 +133,9 @@ impl Machine {
                 command.env_remove(key);
             }
         }
-        command.env("HERDR_SOCKET_PATH", self.root.join("no-herdr.sock"));
+        self.daemon.route(&mut command);
         if let Some(pane) = pane {
-            command.env("HERDR_PANE_ID", pane);
+            command.env("HIDE_PANE_ID", pane);
         }
         let mut child = OwnedChild::spawn(&mut command).unwrap();
         let output = child
@@ -136,7 +147,7 @@ impl Machine {
             diagnostics: format!(
                 "stderr={:?}; guard={:?}; hide_calls={:?}",
                 String::from_utf8_lossy(&output.stderr),
-                std::fs::read_to_string(self.home.join(".hide/agent-hooks/spawn-guard.log")),
+                std::fs::read_to_string(self.daemon.records().join("spawn-guard.log")),
                 std::fs::read_to_string(self.root.join("hide-calls")),
             ),
         }
@@ -160,16 +171,30 @@ impl Machine {
     }
 
     /// agy's transcript of `conversation`, opened by `parent`'s message as
-    /// agy writes a subagent's.
+    /// agy 1.5.9 writes a subagent's: after what a hook injected at its start.
     fn subagent_of(&self, conversation: &str, parent: &str) {
         let path = transcript(&self.home, conversation);
         std::fs::create_dir_all(path.parent().unwrap()).unwrap();
-        let first = json!({
+        let injected = json!({
             "step_index": 0,
+            "source": "SYSTEM_SDK",
             "type": "SYSTEM_MESSAGE",
-            "content": format!("[Message] sender={parent} subject=task\nLook at the tests."),
+            "content": "<SYSTEM_MESSAGE>\nThe following system message was injected by a SessionStart hook:\nanother tool's note\n</SYSTEM_MESSAGE>",
         });
-        std::fs::write(path, format!("{first}\n")).unwrap();
+        let message = json!({
+            "step_index": 1,
+            "source": "SYSTEM",
+            "type": "SYSTEM_MESSAGE",
+            "content": format!("<SYSTEM_MESSAGE>\n[Message] timestamp=2026-11-15T12:20:22Z sender={parent} priority=MESSAGE_PRIORITY_HIGH content=Look at the tests.\n</SYSTEM_MESSAGE>"),
+        });
+        std::fs::write(path, format!("{injected}\n{message}\n")).unwrap();
+    }
+
+    /// The subagents and counts the pane's record keeps under `session`.
+    fn record_of(&self, session: &str) -> Option<hide_agent_hooks::counters::SessionRecord> {
+        hide_agent_hooks::counters::records_in(&self.daemon.records(), PANE)
+            .into_iter()
+            .find(|record| record.session.as_deref() == Some(session))
     }
 }
 
@@ -207,16 +232,8 @@ fn injected(run: &Run) -> String {
 }
 
 #[test]
-fn a_direct_agent_start_is_denied_in_agys_shape_and_every_other_call_is_left_to_agy() {
+fn an_ordinary_call_is_left_to_agy() {
     let machine = Machine::new();
-
-    let denied = refusal(&machine.run("PreToolUse", &machine.shell(START), Some(PANE)));
-    let reason = denied["reason"].as_str().unwrap();
-    assert!(
-        reason.contains("hide agent spawn --parent here"),
-        "{reason}"
-    );
-    assert!(reason.contains("--branch topic"), "{reason}");
 
     let ask = json!({ "decision": "ask" });
     let view = json!({
@@ -226,7 +243,7 @@ fn a_direct_agent_start_is_denied_in_agys_shape_and_every_other_call_is_left_to_
     for (payload, pane) in [
         (machine.shell("cargo test"), Some(PANE)),
         (view, Some(PANE)),
-        (machine.shell(START), None),
+        (machine.shell("open out/report.html"), None),
         (json!("not agy's payload"), Some(PANE)),
     ] {
         let run = machine.run("PreToolUse", &payload, pane);
@@ -327,7 +344,7 @@ fn a_prompts_first_model_call_injects_the_panes_letter_and_then_confirms_it() {
         ]
     );
 
-    // Outside a Herdr pane the gap asks nothing and answers nothing.
+    // Outside a pane Hide manages the gap asks nothing and answers nothing.
     let outside = machine.run(
         "UserPromptSubmit",
         &json!({ "conversationId": CONVERSATION, "invocationNum": 2 }),
@@ -336,6 +353,36 @@ fn a_prompts_first_model_call_injects_the_panes_letter_and_then_confirms_it() {
     assert_eq!(outside.stdout, "");
     assert!(outside.status_ok);
     assert_eq!(machine.inbox_calls().len(), 4);
+}
+
+/// The core takes a bell's turn by the digest of the prompt the hook runs
+/// for, so agy's prompt hook names it: without it a bell typed into agy's
+/// empty prompt reads as the operator's own prompt and its letters stay
+/// queued (#2580). The prompt is agy's `lastUserInput`.
+#[test]
+fn a_prompts_first_model_call_names_its_prompt_by_digest() {
+    let machine = Machine::new();
+
+    let run = machine.run(
+        "UserPromptSubmit",
+        &json!({
+            "conversationId": CONVERSATION,
+            "invocationNum": 0,
+            "lastUserInput": "please run the tests",
+        }),
+        Some(PANE),
+    );
+
+    assert!(run.status_ok, "{}", run.diagnostics);
+    // SHA-256 of `please run the tests`, from Python hashlib.
+    assert_eq!(
+        machine.inbox_calls()[0],
+        format!(
+            "inbox --hook --prompt-digest \
+             d5f5d18e68c6739345b7f53abb632b17c1c3663c1aebedc5a7d23987ec1ae706 \
+             --session {CONVERSATION}"
+        )
+    );
 }
 
 #[test]
@@ -359,6 +406,66 @@ fn a_subagent_is_given_no_guidance_and_takes_no_letter_of_the_panes() {
         assert_eq!(run.stdout, "");
     }
     assert!(machine.inbox_calls().is_empty());
+}
+
+/// agy 1.5.9 runs a subagent's start and first model call before it writes
+/// the parent's message, and names a subagent's every event with an empty
+/// `lastUserInput`. That subagent gets nothing of the pane's, never stands
+/// as the pane's session, and its next model call counts it under the pane's
+/// own conversation with the task its parent gave it.
+#[test]
+fn a_subagent_known_before_its_parent_is_counted_from_its_next_model_call() {
+    let machine = Machine::new();
+    let own = machine.run(
+        "SessionStart",
+        &json!({ "conversationId": CONVERSATION, "lastUserInput": "Fan out" }),
+        Some(PANE),
+    );
+    assert!(own.status_ok, "{}", own.diagnostics);
+    let asked = machine.inbox_calls().len();
+    let subagent = |event: &str, invocation: Option<u64>| {
+        let mut payload = json!({ "conversationId": SUBAGENT, "lastUserInput": "" });
+        if let Some(invocation) = invocation {
+            payload["invocationNum"] = json!(invocation);
+        }
+        machine.run(event, &payload, Some(PANE))
+    };
+
+    for run in [
+        subagent("SessionStart", None),
+        subagent("UserPromptSubmit", Some(0)),
+    ] {
+        assert!(run.status_ok, "{}", run.diagnostics);
+        assert_eq!(run.stdout, "");
+    }
+    assert_eq!(machine.inbox_calls().len(), asked);
+    assert!(machine.record_of(SUBAGENT).is_none());
+    assert!(
+        machine
+            .record_of(CONVERSATION)
+            .unwrap()
+            .subagents
+            .is_empty()
+    );
+
+    machine.subagent_of(SUBAGENT, CONVERSATION);
+    let next = subagent("UserPromptSubmit", Some(1));
+    assert!(next.status_ok, "{}", next.diagnostics);
+    assert_eq!(next.stdout, "");
+    let record = machine.record_of(CONVERSATION).unwrap();
+    assert_eq!(record.counters.working, 1);
+    let listed: Vec<_> = record
+        .subagents
+        .iter()
+        .map(|subagent| (subagent.id.as_str(), subagent.task.as_deref()))
+        .collect();
+    assert_eq!(listed, [(SUBAGENT, Some("Look at the tests."))]);
+    assert_eq!(machine.inbox_calls().len(), asked);
+
+    assert!(subagent("Stop", None).status_ok);
+    let record = machine.record_of(CONVERSATION).unwrap();
+    assert_eq!((record.counters.working, record.counters.done), (0, 1));
+    assert!(machine.record_of(SUBAGENT).is_none());
 }
 
 /// agy's call of `tool` with `args`, in the checkout.
@@ -446,9 +553,9 @@ fn a_hide_that_never_answers_lets_the_call_run_well_inside_the_blocks_timeout() 
             .unwrap(),
     );
 
-    // A direct start has a bounded daemon check; a native question runs normally.
+    // An opening has a bounded daemon check; a native question runs normally.
     for payload in [
-        machine.shell(START),
+        machine.shell("open out/report.html"),
         call(&machine, "ask_question", json!({ "Question": "q" })),
     ] {
         let started = Instant::now();

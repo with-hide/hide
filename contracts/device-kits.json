@@ -1,0 +1,53 @@
+{
+  "format": 4,
+  "manifest": "device-bundles.json",
+  "asset": "hide-device-{platform}-{version}.tar.gz",
+  "programs": ["hided", "hide", "hide-agent-hooks", "hide-holder"],
+  "kits": {
+    "linux-x86_64": {
+      "os": "linux",
+      "arch": "x86_64",
+      "target": "x86_64-unknown-linux-gnu",
+      "producer": "device-helpers",
+      "suffix": "",
+      "header": { "kind": "elf", "machine": 62 },
+      "runtime": {}
+    },
+    "linux-aarch64": {
+      "os": "linux",
+      "arch": "aarch64",
+      "target": "aarch64-unknown-linux-gnu",
+      "producer": "device-helpers",
+      "suffix": "",
+      "header": { "kind": "elf", "machine": 183 },
+      "runtime": {}
+    },
+    "macos-aarch64": {
+      "os": "macos",
+      "arch": "aarch64",
+      "target": "aarch64-apple-darwin",
+      "producer": "publisher",
+      "suffix": "",
+      "header": { "kind": "mach-o", "cputype": 16777228 },
+      "runtime": {}
+    },
+    "windows-x86_64": {
+      "os": "windows",
+      "arch": "x86_64",
+      "target": "x86_64-pc-windows-msvc",
+      "producer": "windows-compile",
+      "suffix": ".exe",
+      "header": { "kind": "pe", "machine": 34404 },
+      "runtime": {
+        "holder-conpty/conpty.dll": false,
+        "holder-conpty/x64/OpenConsole.exe": true,
+        "holder-conpty/arm64/OpenConsole.exe": true,
+        "holder-conpty/conpty-files.json": false
+      }
+    }
+  },
+  "refused": {
+    "macos-x86_64": "Intel Mac devices are not supported; Hide ships for Apple Silicon Macs only",
+    "windows-aarch64": "Windows ARM devices are not supported yet; Hide's Windows programs ship for x64 PCs only"
+  }
+}

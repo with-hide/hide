@@ -2,8 +2,8 @@ import { expect, type ElectronApplication } from "@playwright/test";
 import { execFileSync } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
-import os from "node:os";
-import { startHerdr } from "../../web/e2e/herdr-fixture";
+import { openProject, withControl } from "../../web/e2e/daemon-actions";
+import { startEngine } from "../../web/e2e/engine-fixture";
 import { chord } from "../../web/e2e/chords";
 import { enterWorkspace } from "../../web/e2e/wire";
 import { openServerButton, startServer } from "../../web/e2e/server-fixture";
@@ -16,20 +16,24 @@ test.use({ actionTimeout: 15_000 });
 // host and daemon. Absent this path, CI exercises the current desktop build.
 const executablePath = process.env.HIDE_E2E_PACKAGED_APP;
 
-test("native fixture refuses shared runtime state before launch", () => {
-  const run = isolate({ socket: path.join(os.tmpdir(), "fixture.sock"), bin: "/usr/bin/true" }, "state-guard");
+test("native fixture refuses shared runtime state before launch", async () => {
+  const engine = await startEngine();
+  const run = isolate(engine, "state-guard");
   try {
     expect(() => assertIsolated(run.env)).not.toThrow();
     expect(() => assertIsolated({ ...run.env, HIDE_STATE_DIR: "" })).toThrow("HIDE_STATE_DIR");
   } finally {
     // This case launches no process and never invokes a daemon/kit command.
     run.cleanup();
+    engine.stop();
   }
 });
 
 test("server picker in a background native window", async () => {
-  const herdr = await startHerdr({ agents: false });
-  const run = isolate(herdr, "server-picker");
+  // The app starts its own daemon, packaged or not, so none runs before the launch: an empty engine,
+  // whose project is made once that daemon answers, over the repository and servers made beforehand.
+  const engine = await startEngine();
+  const run = isolate(engine, "server-picker");
   let app: ElectronApplication | null = null;
   const servers = [];
   try {
@@ -37,15 +41,17 @@ test("server picker in a background native window", async () => {
       run.env.HIDE_CLI_PATH = path.resolve(executablePath, "../../Resources/hide");
       delete run.env.HIDED_UI_DIR;
     }
-    const cwd = fs.realpathSync(path.join(herdr.root, "fixture"));
+    const cwd = fs.realpathSync(path.join(engine.root, "fixture"));
     execFileSync("git", ["init", "-q"], { cwd });
     execFileSync("git", ["-c", "user.name=Fixture", "-c", "user.email=fixture@example.invalid", "commit", "-q", "--allow-empty", "-m", "Fixture"], { cwd });
     servers.push(await startServer(cwd), await startServer(cwd, "::1"));
-    const foreign = path.join(herdr.root, "foreign-project");
+    const foreign = path.join(engine.root, "foreign-project");
     fs.mkdirSync(foreign);
     servers.push(await startServer(foreign, "::1", servers[0]!.port));
     ({ app } = await launch(run.env, { executablePath }));
     const page = await shellPage(app);
+    const { port, token } = JSON.parse(fs.readFileSync(path.join(run.env.HIDE_STATE_DIR!, "hided.json"), "utf8")) as { port: number; token: string };
+    await withControl({ origin: `http://127.0.0.1:${port}`, token }, (control) => openProject(control, cwd, "fixture"));
     await enterWorkspace(page, "fixture");
     const candidate = await app.evaluate(({ BrowserWindow }) => ({ pid: process.pid, executable: process.execPath, resources: process.resourcesPath, source: BrowserWindow.getAllWindows()[0]!.getMediaSourceId(), windows: BrowserWindow.getAllWindows().length }));
     expect(candidate.windows).toBe(1);
@@ -91,6 +97,7 @@ test("server picker in a background native window", async () => {
   } finally {
     await app?.close();
     for (const server of servers) server.child.kill();
-    run.cleanup(); herdr.stop();
+    run.cleanup();
+    engine.stop();
   }
 });

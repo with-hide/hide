@@ -1,0 +1,881 @@
+//! What a mission's decision shows the operator to look at (operator
+//! decision 2026-11-09, after mission-42's 보기 칸 decision asked the operator
+//! to look at captures its card did not link): the Views linked to the
+//! question, each a fact recorded when the View was named or opened, never
+//! a guess from a name or a time window.
+//!
+//! A View is linked, in this order, when:
+//! 1. the Conductor names it with `hide mission decide --show` (the CLI opens
+//!    a path as a View first and sends its id);
+//! 2. the Conductor opened it since the mission's question before was asked,
+//!    or since the mission was created, and it is still open when `decide`
+//!    runs: kept on the mission record, whoever conducts it, so a restart
+//!    or a take loses none and no agent runtime has to report its turns;
+//! 3. the stopped node's worker, or an agent under it, opened it in the
+//!    node's current attempt and it is still open when `decide` runs.
+//!
+//! The list is made when `decide` runs and kept on the question: the named
+//! Views first, then the opened ones newest first, at most
+//! [`VIEW_LINK_LIMIT`]; nothing opened later joins it. Each link keeps what
+//! its View was (kind, name, address), so a View looked at or closed later
+//! stays listed until the question is answered or cleared, and a closed one
+//! opens again from what its link kept (PRD mission-human-gate D-20).
+//! Linking marks nothing seen or unseen and raises nothing: the decision's
+//! row, its read state and the Needs You count are the question's alone.
+//! With none linked the operator can ask the Conductor for one page to look
+//! at (`자료 요청`), once per question, which never holds the answer back.
+//!
+//! A done node's `결과` lists the same rows from the node's own links of its
+//! current attempt (with-hide/hide#2637), each kept with what its View was
+//! when the worker opened it, so a closed one opens again the same way: one
+//! row builder and one reopen serve both, by the links' owner
+//! ([`LinkOwner`]).
+
+use serde::Serialize;
+use serde_json::json;
+
+use super::Runtime;
+use super::workspace_view::WorkspaceKey;
+use crate::delivery::Actor;
+use crate::missions::{
+    KeptView, Mission, MissionNode, NodeStatus, VIEW_LINK_LIMIT, ViewLink, WakeEvent,
+    push_view_link,
+};
+use crate::view_layout::{Display, DisplayKind};
+
+/// How deep an opener's parents are walked to find the node's worker.
+const LINEAGE_LIMIT: usize = 32;
+/// The reopen requests whose outcome is kept for the press that sent them:
+/// four times the phones a Mac pairs (hided's `MAX_PHONES`), each sending one
+/// press at a time, and the oldest that ended goes first, so a press still
+/// waiting keeps its outcome while others come and go.
+const REOPENS_KEPT: usize = 16;
+/// How long a reopen waits for its View before it reads as not opened: a
+/// device answers within a stage and its front lands within
+/// `CHOICE_LANDING_TIMEOUT_MS` after, as a reveal there does.
+pub(super) const REOPEN_WAIT_MS: u64 =
+    super::CLOSE_STAGE_TIMEOUT_MS + super::workspace_view::CHOICE_LANDING_TIMEOUT_MS;
+
+/// The reopen requests a press named (`mission_view_reopen` with a request
+/// id, the phone's), so the press ends on what the core did. Memory only.
+#[derive(Default)]
+pub(crate) struct Reopens {
+    asked: std::collections::VecDeque<Reopen>,
+    /// Counts the outcomes' changes, which a decision card compares.
+    pub(super) edit: u64,
+}
+
+impl Reopens {
+    /// Whether a press `request_id` can be kept: one already kept is, and
+    /// otherwise the list has room or a press that ended to make room.
+    fn has_room(&self, request_id: &str) -> bool {
+        self.asked.len() < REOPENS_KEPT
+            || self
+                .asked
+                .iter()
+                .any(|asked| asked.request_id == request_id || asked.state != ReopenState::Waiting)
+    }
+
+    /// Keeps `reopen`, replacing a press of the same id, and at the cap the
+    /// oldest press that ended (`has_room` said there is one).
+    fn record(&mut self, reopen: Reopen) {
+        self.asked
+            .retain(|asked| asked.request_id != reopen.request_id);
+        if self.asked.len() >= REOPENS_KEPT
+            && let Some(ended) = self
+                .asked
+                .iter()
+                .position(|asked| asked.state != ReopenState::Waiting)
+        {
+            self.asked.remove(ended);
+        }
+        self.asked.push_back(reopen);
+        self.edit = self.edit.wrapping_add(1);
+    }
+}
+
+struct Reopen {
+    request_id: String,
+    mission: String,
+    owner: LinkOwner,
+    /// The link's token (`ViewLink::token`).
+    view: String,
+    /// Where it opens and what, so a file that could not be read refuses it.
+    place: WorkspaceKey,
+    kind: DisplayKind,
+    address: String,
+    state: ReopenState,
+    until: u64,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum ReopenState {
+    /// Its View may still open; the row says whether it has.
+    Waiting,
+    /// Its wait ended; the row says whether it opened.
+    Ended,
+    /// It opens nothing, for the reason the log names.
+    Refused,
+}
+
+/// Whose links a row of a mission's Views belongs to: the open decision's
+/// question, by its key, or a node's current attempt, by the node's key (a
+/// done node's `결과`, with-hide/hide#2637). A press names its row by both,
+/// so a question asked again or a node gone opens nothing.
+#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub(super) enum LinkOwner {
+    Question(u64),
+    Node(String),
+}
+
+/// The links `owner` lists on `mission`, in the order its rows show them:
+/// the open question's as `decide` kept them, or the ones a node's worker
+/// and the agents under it opened in its current attempt, oldest first.
+/// None when the question is no longer the open one or the node is gone.
+fn owner_links<'a>(mission: &'a Mission, owner: &LinkOwner) -> Option<Vec<&'a ViewLink>> {
+    match owner {
+        LinkOwner::Question(key) => mission
+            .decision
+            .as_ref()
+            .and(mission.question.as_ref())
+            .filter(|question| question.key == *key)
+            .map(|question| question.views.iter().collect()),
+        LinkOwner::Node(key) => mission.node(key).map(|node| {
+            node.views
+                .iter()
+                .filter(|link| link.attempt == node.attempts)
+                .collect()
+        }),
+    }
+}
+
+/// What became of a press that asked a row's View to open again, by its
+/// request id: open again when the row is no longer closed, refused when
+/// nothing will open, still waiting otherwise.
+#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
+pub struct ViewReopen {
+    pub request_id: String,
+    #[serde(skip_serializing_if = "std::ops::Not::not")]
+    pub refused: bool,
+}
+
+/// Who linked a View to the decision, as its row names it.
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum LinkedViewBy {
+    Conductor,
+    Worker,
+}
+
+/// A View linked to a mission's open decision, open or closed, as the
+/// decision's card lists it.
+#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
+pub struct LinkedView {
+    pub device_id: String,
+    /// The checkout whose View list holds it.
+    pub checkout_path: String,
+    pub display_id: String,
+    /// The name a press asks for its View by (`ViewLink::token`), which
+    /// tells two checkouts apart without either path.
+    pub view: String,
+    pub kind: crate::view_layout::DisplayKind,
+    /// Its name as its tab says it.
+    pub label: String,
+    /// The operator has not looked at it since it was opened.
+    #[serde(skip_serializing_if = "std::ops::Not::not")]
+    pub unseen: bool,
+    /// It was closed since the decision linked it: the row stays, and
+    /// pressing it opens it again from what the link kept (D-20). The
+    /// display id is then the link's, which no View has.
+    #[serde(skip_serializing_if = "std::ops::Not::not")]
+    pub closed: bool,
+    pub by: LinkedViewBy,
+    /// The pane the agent that opened it is in now, whose 볼 것 the phone
+    /// opens it from, a closed one once it opened again; absent while that
+    /// agent is closed.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub pane_id: Option<String>,
+    /// Every kept press that asked it to open again, oldest first, so two
+    /// phones pressing it at once each find their own outcome.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub reopens: Vec<ViewReopen>,
+}
+
+impl Runtime {
+    /// An agent's `hide file|diff|browser open` from `pane` landed in View
+    /// `view_id` of `key`: a mission's Conductor keeps it for its next
+    /// question, and a node's worker, or an agent under it, links it to the
+    /// node's attempt with what the View is, so the node's `결과` opens it
+    /// again once it closed.
+    pub(super) fn link_mission_view(
+        &mut self,
+        key: &WorkspaceKey,
+        view_id: &str,
+        pane: &str,
+        now: u64,
+    ) {
+        if self.missions.book.missions.is_empty() {
+            return;
+        }
+        let pane = crate::address::named_pane_id(self.node.as_str(), &key.0, pane);
+        let Some(actor) = self
+            .delivery_observations
+            .get(&pane)
+            .map(|observation| observation.actor.clone())
+        else {
+            return;
+        };
+        let link = ViewLink {
+            device_id: key.0.clone(),
+            checkout_path: key.1.clone(),
+            display_id: view_id.to_owned(),
+            attempt: 0,
+            at_unix_ms: now,
+            worker: false,
+            kept: None,
+        };
+        let kept = self.view_display(key, view_id).and_then(kept_of);
+        let lineage = self.lineage_of(&actor);
+        let mut changed = false;
+        for index in 0..self.missions.book.missions.len() {
+            let mission = &self.missions.book.missions[index];
+            if !mission.status.open() {
+                continue;
+            }
+            if mission.conductor.actor.same_identity(&actor) {
+                let mission = &mut self.missions.book.missions[index];
+                changed |= push_view_link(&mut mission.conductor_views, link.clone());
+                continue;
+            }
+            let Some(node) = mission.nodes.iter().position(|node| {
+                node.status == crate::missions::NodeStatus::Working
+                    && node
+                        .agent_id
+                        .as_deref()
+                        .is_some_and(|worker| lineage.iter().any(|id| id == worker))
+            }) else {
+                continue;
+            };
+            let target = &mut self.missions.book.missions[index].nodes[node];
+            let attempt = ViewLink {
+                attempt: target.attempts,
+                kept: kept.clone(),
+                ..link.clone()
+            };
+            changed |= push_view_link(&mut target.views, attempt);
+        }
+        if changed {
+            self.save_missions();
+        }
+    }
+
+    /// The registration `actor` runs as and every parent above it, nearest
+    /// first: whose node's attempt a View it opens belongs to.
+    fn lineage_of(&self, actor: &Actor) -> Vec<String> {
+        let Ok(ledger) = self.delivery_state() else {
+            return Vec::new();
+        };
+        let mut lineage = Vec::new();
+        let mut next = ledger
+            .agents
+            .iter()
+            .find(|record| !record.ended && record.actor.same_identity(actor));
+        while let Some(record) = next {
+            if lineage.len() >= LINEAGE_LIMIT || lineage.contains(&record.id) {
+                break;
+            }
+            lineage.push(record.id.clone());
+            next = record
+                .parent
+                .as_deref()
+                .and_then(|parent| ledger.agents.iter().find(|record| record.id == parent));
+        }
+        lineage
+    }
+
+    /// The Views a question of mission `id` shows, made when `decide` runs
+    /// and kept on it: the ones `--show` names in the Conductor's checkout,
+    /// in their order, then, for a new question (`fresh`), the ones the
+    /// Conductor opened since the question before, which it takes off the
+    /// mission, and the ones the stopped `node`'s worker opened in its
+    /// current attempt, newest first and each only while it is open. An id
+    /// no View of that checkout has is refused, and then nothing is taken.
+    pub(super) fn question_view_links(
+        &mut self,
+        id: &str,
+        actor: &Actor,
+        show: &[String],
+        node: Option<&str>,
+        fresh: bool,
+    ) -> Result<Vec<ViewLink>, String> {
+        let mut links: Vec<ViewLink> = Vec::new();
+        if !show.is_empty() {
+            let place = self.show_place(id, actor).ok_or("mission_show_unknown")?;
+            let now = super::memory::now_ms();
+            for view in show {
+                let display = self
+                    .view_display(&place, view)
+                    .ok_or("mission_show_unknown")?;
+                let link = ViewLink {
+                    device_id: place.0.clone(),
+                    checkout_path: place.1.clone(),
+                    display_id: view.clone(),
+                    attempt: 0,
+                    at_unix_ms: now,
+                    worker: false,
+                    kept: kept_of(display),
+                };
+                if !links.iter().any(|known| known.same_view(&link)) {
+                    links.push(link);
+                }
+            }
+        }
+        if !fresh {
+            return Ok(links);
+        }
+        let Some(mission) = self.missions.book.get_mut(id) else {
+            return Ok(links);
+        };
+        let mut opened = std::mem::take(&mut mission.conductor_views);
+        if let Some(node) = node.and_then(|key| mission.node(key)) {
+            opened.extend(
+                node.views
+                    .iter()
+                    .filter(|link| link.attempt == node.attempts)
+                    .map(|link| ViewLink {
+                        attempt: 0,
+                        worker: true,
+                        ..link.clone()
+                    }),
+            );
+        }
+        // Newest first; on a tie the Conductor's, which came first.
+        opened.sort_by_key(|link| std::cmp::Reverse(link.at_unix_ms));
+        for mut link in opened {
+            if links.len() >= VIEW_LINK_LIMIT {
+                break;
+            }
+            let key = (link.device_id.clone(), link.checkout_path.clone());
+            let Some(display) = self.view_display(&key, &link.display_id) else {
+                continue;
+            };
+            if !links.iter().any(|known| known.same_view(&link)) {
+                link.kept = kept_of(display);
+                links.push(link);
+            }
+        }
+        Ok(links)
+    }
+
+    /// The checkout a View id the Conductor shows names a View of: the one
+    /// its pane works in, else the one the mission was created in.
+    pub(super) fn show_place(&self, id: &str, actor: &Actor) -> Option<WorkspaceKey> {
+        self.conductor_checkout(actor).or_else(|| {
+            let mission = self.missions.book.get(id)?;
+            Some((mission.device_id.clone(), mission.checkout_path.clone()))
+        })
+    }
+
+    /// The checkout the Conductor's pane works in, whose Views `--show`
+    /// names, while the catalog holds that pane.
+    fn conductor_checkout(&self, actor: &Actor) -> Option<WorkspaceKey> {
+        let pane =
+            crate::address::named_pane_id(self.node.as_str(), &actor.device_id, &actor.pane_id);
+        self.catalog_workspaces()
+            .filter(|workspace| workspace.device_id == actor.device_id)
+            .flat_map(|workspace| &workspace.checkouts)
+            .find(|checkout| {
+                checkout.tabs.iter().any(|tab| {
+                    tab.panes.iter().any(|known| {
+                        crate::address::named_pane_id(
+                            self.node.as_str(),
+                            &actor.device_id,
+                            &known.id,
+                        ) == pane
+                    })
+                })
+            })
+            .map(|checkout| (actor.device_id.clone(), checkout.path.clone()))
+    }
+
+    /// The Views `mission`'s open decision lists: the ones linked when it
+    /// was asked, in that order (`view_rows`).
+    pub(super) fn decision_views(&self, mission: &Mission) -> Vec<LinkedView> {
+        let Some(question) = mission.decision.as_ref().and(mission.question.as_ref()) else {
+            return Vec::new();
+        };
+        let owner = LinkOwner::Question(question.key);
+        self.view_rows(mission, &owner, &question.views.iter().collect::<Vec<_>>())
+    }
+
+    /// The documents a done `node` left, its `결과` (with-hide/hide#2637):
+    /// the Views its worker and the agents under it opened in its current
+    /// attempt, oldest first (`view_rows`); none for a node not done.
+    pub(super) fn node_views(&self, mission: &Mission, node: &MissionNode) -> Vec<LinkedView> {
+        if node.status != NodeStatus::Done {
+            return Vec::new();
+        }
+        let owner = LinkOwner::Node(node.key.clone());
+        let Some(links) = owner_links(mission, &owner) else {
+            return Vec::new();
+        };
+        self.view_rows(mission, &owner, &links)
+    }
+
+    /// The rows of `owner`'s `links`, in their order. An open one is read
+    /// from its View, the one its link names or, after it closed and opened
+    /// again, one showing the same document or page; a closed one from what
+    /// its link kept. A closed link that kept nothing (recorded before links
+    /// kept anything, or an outside file) is not listed.
+    fn view_rows(
+        &self,
+        mission: &Mission,
+        owner: &LinkOwner,
+        links: &[&ViewLink],
+    ) -> Vec<LinkedView> {
+        links
+            .iter()
+            .filter_map(|link| {
+                let by = if link.worker || matches!(owner, LinkOwner::Node(_)) {
+                    LinkedViewBy::Worker
+                } else {
+                    LinkedViewBy::Conductor
+                };
+                let view = link.token();
+                let reopens: Vec<ViewReopen> = self
+                    .missions
+                    .reopens
+                    .asked
+                    .iter()
+                    .filter(|asked| {
+                        asked.mission == mission.id && asked.owner == *owner && asked.view == view
+                    })
+                    .map(|asked| ViewReopen {
+                        request_id: asked.request_id.clone(),
+                        refused: asked.state == ReopenState::Refused,
+                    })
+                    .collect();
+                let pane_of = |opener: Option<&crate::view_feedback::Opener>| {
+                    opener.and_then(|opener| self.view_opener_snapshot(opener).pane_id)
+                };
+                let Some(display) = self.linked_display(link) else {
+                    let kept = link.kept.as_ref()?;
+                    return Some(LinkedView {
+                        device_id: link.device_id.clone(),
+                        checkout_path: link.checkout_path.clone(),
+                        display_id: link.display_id.clone(),
+                        view,
+                        kind: kept.kind,
+                        label: kept.label.clone(),
+                        unseen: false,
+                        closed: true,
+                        by,
+                        pane_id: pane_of(kept.opener.as_ref()),
+                        reopens,
+                    });
+                };
+                Some(LinkedView {
+                    device_id: link.device_id.clone(),
+                    checkout_path: link.checkout_path.clone(),
+                    display_id: display.id.clone(),
+                    view,
+                    kind: display.kind,
+                    label: super::view_areas::display_label(display),
+                    unseen: display.unseen.is_some(),
+                    closed: false,
+                    by,
+                    pane_id: pane_of(display.opener.as_ref()),
+                    reopens,
+                })
+            })
+            .collect()
+    }
+
+    /// The open View a decision's `link` stands for: the one it names, else
+    /// one showing what it kept.
+    fn linked_display(&self, link: &ViewLink) -> Option<&Display> {
+        let key = (link.device_id.clone(), link.checkout_path.clone());
+        self.view_display(&key, &link.display_id).or_else(|| {
+            let kept = link.kept.as_ref()?;
+            self.view_displays(&key)
+                .filter(|display| kept.shown_by(display))
+                .max_by_key(|display| display.last_focused_unix_ms)
+        })
+    }
+
+    /// The operator pressed a row of `owner` on mission `id`
+    /// (`mission_view_reopen`), the open question's or a done node's,
+    /// naming its link by `view` (`ViewLink::token`): an open View takes
+    /// its area, and a closed one
+    /// opens again from what the link kept, as the View of the agent that
+    /// had it open, if one did. Either is shown in its checkout brought
+    /// forward with its device, at once or once that device's engine has
+    /// brought it forward (`reveal_in_checkout`). Whether it is open now.
+    fn reopen_linked_view(
+        &mut self,
+        id: &str,
+        owner: &LinkOwner,
+        view: &str,
+    ) -> Result<(ViewLink, bool), &'static str> {
+        let mission = self.missions.book.get(id).ok_or("mission_unknown")?;
+        let link = owner_links(mission, owner)
+            .ok_or(match owner {
+                LinkOwner::Question(_) => "mission_decision_changed",
+                LinkOwner::Node(_) => "mission_node_unknown",
+            })?
+            .into_iter()
+            .find(|link| link.token() == view)
+            .cloned()
+            .ok_or("mission_view_unknown")?;
+        let place = (link.device_id.clone(), link.checkout_path.clone());
+        let (workspace_id, checkout_id) = self
+            .agent_workspace_ids(&place)
+            .ok_or("mission_view_checkout_gone")?;
+        if let Some(display_id) = self.linked_display(&link).map(|display| display.id.clone()) {
+            self.reveal_in_checkout(super::session::FrontReveal::Display {
+                workspace_id,
+                checkout_id,
+                display_id,
+            });
+            return Ok((link, true));
+        }
+        let kept = link.kept.clone().ok_or("mission_view_not_kept")?;
+        match kept.kind {
+            DisplayKind::File => {
+                self.reveal_path(super::events::RevealPathPayload {
+                    path: kept.address.clone(),
+                    workspace_id: workspace_id.clone(),
+                    checkout_id: checkout_id.clone(),
+                    is_directory: false,
+                    opener_pane: None,
+                    kept_opener: kept.opener,
+                });
+            }
+            DisplayKind::Browser => {
+                self.place_browser_as(&kept.address, place, kept.opener)
+                    .map_err(|refusal| {
+                        crate::diagnostic!(json!({
+                            "component": "missions", "kind": "mission.view_reopen_page_refused",
+                            "mission": id, "owner": owner, "refusal": refusal,
+                        }));
+                        "mission_view_open_refused"
+                    })?;
+            }
+            DisplayKind::Diff => {
+                self.reveal_in_checkout(super::session::FrontReveal::Diff {
+                    workspace_id: workspace_id.clone(),
+                    checkout_id: checkout_id.clone(),
+                    path: kept.address.clone(),
+                    committed: kept.committed,
+                    opener: kept.opener,
+                });
+            }
+            DisplayKind::External | DisplayKind::Card => return Err("mission_view_not_kept"),
+        }
+        // Not open now, it opens only while its file's read or its device's
+        // front is still to come; otherwise the reveal was refused as it was
+        // asked (a display cap, a checkout it cannot read from, a file that
+        // could not be read).
+        let open = self.linked_display(&link).is_some();
+        let waits = self.reveal_waits_on(&link.device_id)
+            || (kept.kind == DisplayKind::File
+                && self.document_open_pending(&workspace_id, &checkout_id, &kept.address));
+        if !open && !waits {
+            return Err("mission_view_open_refused");
+        }
+        Ok((link, open))
+    }
+
+    pub(super) fn mission_view_reopen_event(
+        &mut self,
+        payload: super::events::MissionViewReopenPayload,
+    ) -> bool {
+        let super::events::MissionViewReopenPayload {
+            mission,
+            key,
+            node,
+            view,
+            request_id,
+        } = payload;
+        let owner = match (key, node) {
+            (Some(key), None) => LinkOwner::Question(key),
+            (None, Some(node)) => LinkOwner::Node(node),
+            (key, node) => {
+                crate::diagnostic!(json!({
+                    "component": "missions", "kind": "mission.view_reopen_refused",
+                    "mission": mission, "question": key, "node": node, "view": view,
+                    "code": "mission_view_owner_invalid",
+                }));
+                return false;
+            }
+        };
+        // A press is kept until it ends, never pushed out while it waits:
+        // with every kept press waiting, a new one opens nothing, and the
+        // phone that sent it ends its own wait.
+        if let Some(request_id) = &request_id
+            && !self.missions.reopens.has_room(request_id)
+        {
+            crate::diagnostic!(json!({
+                "component": "missions", "kind": "mission.view_reopen_refused",
+                "mission": mission, "owner": owner, "view": view,
+                "code": "mission_view_reopens_full",
+            }));
+            return false;
+        }
+        let outcome = self.reopen_linked_view(&mission, &owner, &view);
+        if let Err(code) = outcome {
+            crate::diagnostic!(json!({
+                "component": "missions", "kind": "mission.view_reopen_refused",
+                "mission": mission, "owner": owner, "view": view, "code": code,
+            }));
+        }
+        let Some(request_id) = request_id else {
+            return outcome.is_ok();
+        };
+        // A press that names no row of this question has no row to tell.
+        let (place, kind, address, state) = match &outcome {
+            Ok((link, open)) => (
+                (link.device_id.clone(), link.checkout_path.clone()),
+                link.kept
+                    .as_ref()
+                    .map_or(DisplayKind::External, |kept| kept.kind),
+                link.kept
+                    .as_ref()
+                    .map(|kept| kept.address.clone())
+                    .unwrap_or_default(),
+                if *open {
+                    ReopenState::Ended
+                } else {
+                    ReopenState::Waiting
+                },
+            ),
+            Err(_) => (
+                Default::default(),
+                DisplayKind::External,
+                String::new(),
+                ReopenState::Refused,
+            ),
+        };
+        self.missions.reopens.record(Reopen {
+            request_id,
+            mission,
+            owner,
+            view,
+            place,
+            kind,
+            address,
+            state,
+            until: super::memory::now_ms().saturating_add(REOPEN_WAIT_MS),
+        });
+        true
+    }
+
+    /// A press on row `view` whose View has not come yet, as a device's
+    /// checkout behind keeps one until its front lands.
+    #[cfg(test)]
+    pub(super) fn hold_reopen(&mut self, request_id: &str, mission: &str, key: u64, view: &str) {
+        self.missions.reopens.record(Reopen {
+            request_id: request_id.into(),
+            mission: mission.into(),
+            owner: LinkOwner::Question(key),
+            view: view.into(),
+            place: Default::default(),
+            kind: DisplayKind::File,
+            address: String::new(),
+            state: ReopenState::Waiting,
+            until: super::memory::now_ms().saturating_add(REOPEN_WAIT_MS),
+        });
+    }
+
+    /// A file a waiting reopen asked for could not be read: nothing will
+    /// open for it.
+    pub(super) fn refuse_reopens_of_file(&mut self, place: &WorkspaceKey, path: &str) {
+        let reopens = &mut self.missions.reopens;
+        let mut changed = false;
+        for asked in reopens.asked.iter_mut().filter(|asked| {
+            asked.state == ReopenState::Waiting
+                && asked.kind == DisplayKind::File
+                && asked.place == *place
+                && asked.address == path
+        }) {
+            asked.state = ReopenState::Refused;
+            changed = true;
+        }
+        if changed {
+            reopens.edit = reopens.edit.wrapping_add(1);
+        }
+    }
+
+    /// A reopen still waiting past its time ends: one whose View opened
+    /// reads as open by its row, any other as refused, so no press waits
+    /// for a View that never comes.
+    pub(super) fn expire_mission_view_reopens(&mut self, now_unix_ms: u64) -> bool {
+        let due: Vec<usize> = self
+            .missions
+            .reopens
+            .asked
+            .iter()
+            .enumerate()
+            .filter(|(_, asked)| asked.state == ReopenState::Waiting && asked.until <= now_unix_ms)
+            .map(|(index, _)| index)
+            .collect();
+        if due.is_empty() {
+            return false;
+        }
+        for index in due {
+            let asked = &self.missions.reopens.asked[index];
+            let open = self
+                .missions
+                .book
+                .get(&asked.mission)
+                .and_then(|mission| owner_links(mission, &asked.owner))
+                .and_then(|links| links.into_iter().find(|link| link.token() == asked.view))
+                .is_some_and(|link| self.linked_display(link).is_some());
+            if !open {
+                crate::diagnostic!(json!({
+                    "component": "missions", "kind": "mission.view_reopen_refused",
+                    "mission": asked.mission, "owner": asked.owner, "view": asked.view,
+                    "code": "mission_view_not_opened",
+                }));
+            }
+            self.missions.reopens.asked[index].state = if open {
+                ReopenState::Ended
+            } else {
+                ReopenState::Refused
+            };
+        }
+        self.missions.reopens.edit = self.missions.reopens.edit.wrapping_add(1);
+        true
+    }
+
+    /// What `mission`'s rows of Views compare to know their Views moved:
+    /// the View layouts' change count and the presses' while its open
+    /// decision or a done node links any, else zero, so a mission with none
+    /// pays nothing for a View's change.
+    pub(super) fn mission_views_generation(&self, mission: &Mission) -> u64 {
+        let decision = mission.decision.is_some()
+            && mission
+                .question
+                .as_ref()
+                .is_some_and(|question| !question.views.is_empty());
+        let nodes = mission.nodes.iter().any(|node| {
+            node.status == NodeStatus::Done
+                && node.views.iter().any(|link| link.attempt == node.attempts)
+        });
+        if !decision && !nodes {
+            return 0;
+        }
+        self.workspace_views
+            .as_ref()
+            .map_or(0, |store| store.generation)
+            .wrapping_add(self.missions.reopens.edit)
+    }
+
+    /// The operator's `자료 요청` on question `key` of mission `id`: the
+    /// Conductor is asked once for one page to look at, and asks again with
+    /// it. Asking twice, or about a question it changed since, sends nothing.
+    pub(super) fn ask_decision_material(&mut self, id: &str, key: u64) -> Result<bool, String> {
+        let mission = self.missions.book.get(id).ok_or("mission_unknown")?;
+        if !mission.status.open() || mission.decision.is_none() {
+            return Err("mission_decision_changed".into());
+        }
+        let question = mission
+            .question
+            .as_ref()
+            .ok_or("mission_decision_changed")?;
+        if question.key != key {
+            return Err("mission_decision_changed".into());
+        }
+        if question.material_asked {
+            return Ok(false);
+        }
+        if !self.conductor_present(&mission.conductor.actor) {
+            return Err("mission_conductor_gone".into());
+        }
+        let now = super::memory::now_ms();
+        let target = self.missions.book.get_mut(id).ok_or("mission_unknown")?;
+        let node = target
+            .question
+            .as_ref()
+            .and_then(|question| question.node.clone())
+            .unwrap_or_default();
+        if let Some(question) = target.question.as_mut() {
+            question.material_asked = true;
+        }
+        target.updated_at_unix_ms = now;
+        let intent = super::missions::record_wake(
+            target,
+            node,
+            None,
+            WakeEvent::MaterialAsked,
+            None,
+            Some(format!("material-{key}")),
+        );
+        crate::diagnostic!(json!({
+            "component": "missions", "kind": "mission.material_asked",
+            "mission": id, "question": key, "intent": intent,
+        }));
+        self.save_missions();
+        Ok(true)
+    }
+
+    pub(super) fn mission_material_event(&mut self, id: &str, key: u64) -> bool {
+        self.ask_decision_material(id, key).unwrap_or_else(|code| {
+            crate::diagnostic!(json!({
+                "component": "missions", "kind": "mission.material_refused",
+                "mission": id, "question": key, "code": code,
+            }));
+            false
+        })
+    }
+}
+
+/// What a decision's link keeps of `display`: its kind, its name as its tab
+/// says it and its address.
+fn kept_of(display: &Display) -> Option<KeptView> {
+    KeptView::of(display, super::view_areas::display_label(display))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn press(request_id: &str, state: ReopenState) -> Reopen {
+        Reopen {
+            request_id: request_id.into(),
+            mission: "mission-1".into(),
+            owner: LinkOwner::Question(1),
+            view: "v1".into(),
+            place: ("local".into(), "/repo".into()),
+            kind: DisplayKind::File,
+            address: "/repo/notes.md".into(),
+            state,
+            until: 0,
+        }
+    }
+
+    /// A press is never pushed out while it waits: at the cap the oldest
+    /// press that ended goes, and with every kept press waiting a new one
+    /// is not kept (and so not run), while one already kept still is.
+    #[test]
+    fn a_waiting_reopen_is_kept_until_it_ends() {
+        let mut reopens = Reopens::default();
+        reopens.record(press("ended", ReopenState::Refused));
+        for index in 1..REOPENS_KEPT {
+            reopens.record(press(&format!("w{index}"), ReopenState::Waiting));
+        }
+        assert!(reopens.has_room("new"));
+        reopens.record(press("new", ReopenState::Waiting));
+        let kept: Vec<&str> = reopens
+            .asked
+            .iter()
+            .map(|asked| asked.request_id.as_str())
+            .collect();
+        assert_eq!(kept.len(), REOPENS_KEPT);
+        assert!(!kept.contains(&"ended"));
+        assert!(kept.contains(&"w1") && kept.contains(&"new"));
+        assert!(!reopens.has_room("later"));
+        assert!(reopens.has_room("w1"));
+    }
+}

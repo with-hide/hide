@@ -124,12 +124,14 @@ def exception(row, pin):
     return None
 
 
-def configure_update(declaration, home):
-    """Apply the Rust declaration after the provider config, before any CLI starts."""
+def configure_update(declaration, home, path=None):
+    """Apply the Rust declaration after the provider config, before any CLI
+    starts: in the default account under `home`, or in the file `path` names,
+    the same file of a profile's own account."""
     update = declaration["auto_update"]
     if update["kind"] == "environment":
         return {update["name"]: update["value"]}
-    path = home / update["path"]
+    path = path or home / update["path"]
     value = json.loads(update["value"])
     replacement = path.with_suffix(path.suffix + ".next")
     if path.suffix == ".toml":

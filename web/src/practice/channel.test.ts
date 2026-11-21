@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 import { afterEach, expect, it, vi } from "vitest";
-import { CHAPTERS } from "./chapters";
+import { CHAPTERS, nextChapter } from "./chapters";
 import { FIRST_CHAPTER, openPractice, PRACTICE_CHANNEL, practiceAddress, type PracticeMessage } from "./channel";
 
 // How the shell opens the practice window on a chapter (docs/UI_BEHAVIOR.md,
@@ -11,8 +11,9 @@ afterEach(() => {
   vi.unstubAllGlobals();
 });
 
-it("starts a newcomer on chapter 0", () => {
-  expect(CHAPTERS.find((chapter) => chapter.id === FIRST_CHAPTER)?.number).toBe(0);
+it("starts a newcomer on the mission, wherever it stands in the list, and leads on from it to the list's first flow", () => {
+  const mission = CHAPTERS.find((chapter) => chapter.id === FIRST_CHAPTER)!;
+  expect(nextChapter(mission)).toBe(CHAPTERS[0]);
 });
 
 it("opens a browser tab on the chapter's address and tells a window already open to play it", async () => {

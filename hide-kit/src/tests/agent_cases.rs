@@ -2,7 +2,11 @@
 //! the skill stub and the guidance hooks, against a private HOME.
 
 use super::*;
-use crate::agents::{ADAPTERS, GUIDE_SKILL, MISSION_SKILL, PLAN_SKILL, RETIRED_SKILLS, SKILLS};
+use crate::agents::{ADAPTERS, GUIDE_SKILL, ISSUE_SKILL, MISSION_SKILL, RETIRED_SKILLS, SKILLS};
+
+// Frozen output of the previous build, independent of the retirement table.
+const TASK_V1_TEXT: &str = "---\nname: hide-task\ndescription: \"Carry a task yourself in Hide and keep its steps: what each delivers, what it waits on, which one you are on, and the operator's review when they ask for one. Use when a task in a Hide pane takes more than a few steps, or the operator asks you to plan first or have the steps reviewed. To conduct several agents carrying PRs as a group, use hide-mission instead.\"\n---\n\n<!-- hide-skill@1: written by Hide; remove it from Settings, Agents -->\n\nFirst check that this session runs in a pane Hide manages: Hide's session guidance names this checkout, or `hide workspace info` answers `\"ok\":true`. If neither, stop here; this skill does not apply. Inside Hide, run `hide task help` and follow what it prints: it is the task's contract, with the commands, the steps' shape, when to put the steps up for review with `--ask`, how to approve or drop them on the operator's words, and how to keep them current.\n";
+const MISSION_V1_TEXT: &str = "---\nname: hide-mission\ndescription: \"Conduct a mission of agents in Hide: plan it with the operator, start the workers, replan, report. Use when the operator asks for a mission or for several PRs carried as a group.\"\n---\n\n<!-- hide-skill@1: written by Hide; remove it from Settings, Agents -->\n\nFirst check that this session runs in a pane Hide manages: Hide's session guidance names this checkout, or `hide workspace info` answers `\"ok\":true`. If neither, stop here; this skill does not apply. Inside Hide, run `hide mission help` and follow what it prints: it is the Conductor's contract, with the commands, how to cut the mission into nodes and brief each worker, the cap and the candidates, replanning on the operator's words, asking the operator a decision with choices they can answer from the map, whose answer arrives in your conversation as their own message, recording a direct change's commit and a verify node's verdict, merging, the report and taking a mission over.\n";
 
 fn agent<'a>(report: &'a KitReport, id: &str) -> &'a AgentReport {
     report
@@ -181,9 +185,10 @@ fn an_older_stub_is_replaced_without_the_operator_asking() {
     apply(&fixture.target, &Scope::agents(["grok"], []));
     let path = shared_skill(&fixture);
     let current = std::fs::read_to_string(&path).unwrap();
-    let older = format!("hide-skill@{}", GUIDE_SKILL.version - 1);
+    // B8: the released v7 stub must advance to the mission-routing guide.
+    let older = "hide-skill@7";
     let marker = format!("hide-skill@{}", GUIDE_SKILL.version);
-    std::fs::write(&path, current.replace(&marker, &older)).unwrap();
+    std::fs::write(&path, current.replace(&marker, older)).unwrap();
 
     let before = status(&fixture.target);
     assert_eq!(agent(&before, "grok").skill.state, ComponentState::Outdated);
@@ -197,7 +202,7 @@ fn an_older_stub_is_replaced_without_the_operator_asking() {
 }
 
 /// The skills folder an earlier build filled with `hide-browser` and
-/// `hide-conductor` version 1 alone, recorded as Hide's.
+/// `hide-conductor` version 1 and the retired plan/task stubs, recorded as Hide's.
 fn earlier_build_folder(fixture: &Fixture) -> PathBuf {
     let root = written_folder(fixture);
     // That build wrote none of the current stubs.
@@ -209,6 +214,10 @@ fn earlier_build_folder(fixture: &Fixture) -> PathBuf {
     std::fs::write(root.join("hide-browser/SKILL.md"), "---\nname: hide-browser\ndescription: Read and drive a browser display inside Hide. Use when a task involves a web page, a local app in a browser tab, or checking what a page shows.\n---\n\n<!-- hide-skill@1: written by Hide; remove it from Settings, Agents -->\n\nRun `hide browser help` and follow what it prints. It explains how to open a page, read it by refs, check a change with `--diff`, and what to do when a command fails.\n").unwrap();
     std::fs::create_dir_all(root.join("hide-conductor")).unwrap();
     std::fs::write(root.join("hide-conductor/SKILL.md"), "---\nname: hide-conductor\ndescription: Run a mission in Hide as its Conductor: plan the work with the operator, start the agents that do it, follow their pull requests, and report. Use when the operator gives you a goal to carry out with several agents, or asks you to take over a mission.\n---\n\n<!-- hide-skill@1: written by Hide; remove it from Settings, Agents -->\n\nRun `hide mission help` and follow what it prints. It explains how to plan a mission with the operator, start and follow its workers, change the plan when told, merge, report, and take over a mission whose Conductor is gone.\n").unwrap();
+    std::fs::create_dir_all(root.join("hide-plan")).unwrap();
+    std::fs::write(root.join("hide-plan/SKILL.md"), "---\nname: hide-plan\ndescription: \"Keep your own plan of the task in Hide: its steps, what each waits on, which one you are on, and the operator's review when they ask for one. Use when a task in a Hide pane takes more than a few steps, or the operator asks you to plan first or have the plan reviewed.\"\n---\n\n<!-- hide-skill@1: written by Hide; remove it from Settings, Agents -->\n\nFirst check that this session runs in a pane Hide manages: Hide's session guidance names this checkout, or `hide workspace info` answers `\"ok\":true`. If neither, stop here; this skill does not apply. Inside Hide, run `hide task help` and follow what it prints: it is the plan's contract, with the commands, the steps' shape, when to put the plan up for review with `--ask`, how to approve or drop it on the operator's words, and how to keep its steps current.\n").unwrap();
+    std::fs::create_dir_all(root.join("hide-task")).unwrap();
+    std::fs::write(root.join("hide-task/SKILL.md"), TASK_V1_TEXT).unwrap();
     root
 }
 
@@ -219,10 +228,10 @@ fn written_folder(fixture: &Fixture) -> PathBuf {
     fixture.home().join(".agents/skills")
 }
 
-/// The earlier build's `hide-browser` and `hide-conductor` go, and the
-/// current stubs are written in their place.
+/// Earlier builds' browser, conductor, plan and task stubs go,
+/// and the current stubs are written in their place.
 #[test]
-fn an_earlier_builds_two_stubs_give_way_to_the_current_ones() {
+fn earlier_builds_retired_stubs_give_way_to_the_current_ones() {
     let fixture = Fixture::new();
     let root = earlier_build_folder(&fixture);
     assert_eq!(
@@ -238,6 +247,8 @@ fn an_earlier_builds_two_stubs_give_way_to_the_current_ones() {
     );
     assert!(!root.join("hide-browser").exists());
     assert!(!root.join("hide-conductor").exists());
+    assert!(!root.join("hide-plan").exists());
+    assert!(!root.join("hide-task").exists());
     for skill in SKILLS {
         assert_eq!(
             std::fs::read_to_string(skill.file_in(&root)).unwrap(),
@@ -257,7 +268,8 @@ fn an_earlier_builds_two_stubs_give_way_to_the_current_ones() {
             .text()
             .contains(hide_agent_hooks::intent_table!())
     );
-    assert!(GUIDE_SKILL.text().contains("<!-- hide-skill@5:"));
+    assert!(GUIDE_SKILL.text().contains("<!-- hide-skill@12:"));
+    assert!(!GUIDE_SKILL.text().contains("hide task help"));
     // The mission's stub names missions and the Conductor for the agent
     // choosing it, and sends it to the help that owns the commands.
     assert!(
@@ -270,10 +282,125 @@ fn an_earlier_builds_two_stubs_give_way_to_the_current_ones() {
             .text()
             .contains("description: \"Conduct a mission of agents in Hide")
     );
-    assert!(MISSION_SKILL.text().contains("run `hide mission help`"));
-    // The plan's stub sends the agent to the help that owns the plan's
-    // commands.
-    assert!(PLAN_SKILL.text().contains("run `hide plan help`"));
+    assert!(MISSION_SKILL.text().contains("Run `hide mission help`"));
+    for rule in [
+        "explicitly asks for a mission or invokes `/hide-mission`",
+        "do not ask which way to work again",
+        "The operator asks for planning first or review",
+        "two or more PRs or work in parallel",
+        "Another agent needs to review or check",
+        "long enough to fill the conversation context",
+        "first ask the operator in one line: Shall I run this as a mission, or do it directly?",
+        "Wait for their answer and follow it",
+        "If none applies, do the work directly without asking",
+    ] {
+        assert!(MISSION_SKILL.text().contains(rule), "{rule}");
+    }
+    assert!(!MISSION_SKILL.text().contains("hide task help"));
+    assert!(MISSION_SKILL.text().contains("<!-- hide-skill@3:"));
+    // The issue stub names the bug and sends the agent to the help that owns
+    // the procedure and the template.
+    assert!(ISSUE_SKILL.text().starts_with("---\nname: hide-issue\n"));
+    assert!(
+        ISSUE_SKILL
+            .text()
+            .contains("description: \"Report a bug in Hide itself")
+    );
+    assert!(ISSUE_SKILL.text().contains("run `hide issue help`"));
+    assert!(ISSUE_SKILL.text().contains("<!-- hide-skill@1:"));
+    // The session-start table sends the agent to it.
+    assert!(
+        GUIDE_SKILL
+            .text()
+            .contains("`hide issue help`, which the `hide-issue` skill")
+    );
+}
+
+/// The retired entry must match the file shipped before the merge exactly.
+#[test]
+fn the_retired_task_text_is_the_previous_builds_output() {
+    let retired = RETIRED_SKILLS
+        .iter()
+        .find(|skill| skill.name == "hide-task")
+        .unwrap();
+    assert_eq!(retired.texts, &[TASK_V1_TEXT]);
+}
+
+fn three_stub_folder(fixture: &Fixture) -> PathBuf {
+    let root = written_folder(fixture);
+    std::fs::write(root.join("hide-mission/SKILL.md"), MISSION_V1_TEXT).unwrap();
+    std::fs::create_dir_all(root.join("hide-task")).unwrap();
+    std::fs::write(root.join("hide-task/SKILL.md"), TASK_V1_TEXT).unwrap();
+    root
+}
+
+#[test]
+fn three_installed_stubs_converge_to_two_in_one_update() {
+    let fixture = Fixture::new();
+    let root = three_stub_folder(&fixture);
+    assert_eq!(
+        agent(&status(&fixture.target), "grok").skill.state,
+        ComponentState::Outdated
+    );
+
+    for _ in 0..2 {
+        let report = apply(&fixture.target, &Scope::automatic());
+        assert_eq!(
+            agent(&report, "grok").skill.state,
+            ComponentState::Installed
+        );
+        let mut names: Vec<_> = std::fs::read_dir(&root)
+            .unwrap()
+            .map(|entry| entry.unwrap().file_name())
+            .collect();
+        names.sort();
+        assert_eq!(names, ["hide", "hide-issue", "hide-mission"]);
+        assert_eq!(
+            std::fs::read_to_string(root.join("hide-mission/SKILL.md")).unwrap(),
+            MISSION_SKILL.text()
+        );
+    }
+}
+
+#[test]
+fn an_edited_task_stub_survives_updates_reinstall_and_uninstall() {
+    let fixture = Fixture::new();
+    let root = three_stub_folder(&fixture);
+    let file = root.join("hide-task/SKILL.md");
+    let edited = format!("{TASK_V1_TEXT}Always ask me first.\n");
+    std::fs::write(&file, &edited).unwrap();
+
+    for scope in [
+        Scope::automatic(),
+        Scope::automatic(),
+        Scope::agents(["grok"], []),
+    ] {
+        let report = apply(&fixture.target, &scope);
+        assert_eq!(
+            agent(&report, "grok").skill.state,
+            ComponentState::Installed
+        );
+        assert_eq!(std::fs::read_to_string(&file).unwrap(), edited);
+    }
+    apply(&fixture.target, &Scope::agents([], ["grok", "codex"]));
+    assert_eq!(std::fs::read_to_string(&file).unwrap(), edited);
+    assert!(!root.join("hide").exists());
+    assert!(!root.join("hide-mission").exists());
+}
+
+#[test]
+fn uninstall_removes_an_unedited_task_stub_and_keeps_other_files() {
+    let fixture = Fixture::new();
+    let root = three_stub_folder(&fixture);
+    let note = root.join("hide-task/notes.md");
+    std::fs::write(&note, "My task notes").unwrap();
+
+    apply(&fixture.target, &Scope::agents([], ["grok", "codex"]));
+
+    assert!(!root.join("hide-task/SKILL.md").exists());
+    assert!(!root.join("hide").exists());
+    assert!(!root.join("hide-mission").exists());
+    assert_eq!(std::fs::read_to_string(note).unwrap(), "My task notes");
 }
 
 /// Every `hide-conductor` a build wrote under that name gives way to
@@ -285,11 +412,10 @@ fn the_renamed_conductor_stub_goes_and_the_operators_own_stays() {
         .iter()
         .find(|skill| skill.name == "hide-conductor")
         .unwrap();
-    // The last version under the old name is the current stub's text.
+    // The last conductor version was renamed to mission v1 without changes.
     assert_eq!(
         conductor.texts.last().unwrap().to_string(),
-        MISSION_SKILL
-            .text()
+        MISSION_V1_TEXT
             .replace("name: hide-mission", "name: hide-conductor")
             .replace("hide-skill@1:", "hide-skill@3:")
     );
@@ -686,6 +812,46 @@ fn an_agent_found_only_by_its_program_reports_its_folder_as_not_made_yet() {
     let claude = agent(&report, "claude-code");
     assert_eq!(claude.skill.state, ComponentState::Absent);
     assert!(!claude.needs_attention());
+}
+
+#[test]
+fn a_claude_folder_made_after_a_pass_gets_its_hook_and_skill_on_the_next_pass() {
+    // with-hide/hide-private#662: a device joined before Claude Code was
+    // first started there.
+    let fixture = Fixture::new();
+    std::fs::remove_dir_all(fixture.home().join(".claude")).unwrap();
+    executable(&fixture.home().join(".local/bin/claude"), "#!/bin/sh\n");
+
+    let report = apply(&fixture.target, &Scope::automatic());
+    let claude = agent(&report, "claude-code");
+    let hook = claude.hook.as_ref().unwrap();
+    assert_eq!(hook.state, ComponentState::Absent, "{report:?}");
+    assert_eq!(hook.why.as_ref().unwrap().cause, PartCause::AgentAbsent);
+
+    // Claude Code's first start makes its folder; a read sees the hook
+    // waiting to go in, and the next pass puts it in.
+    std::fs::create_dir_all(fixture.home().join(".claude")).unwrap();
+    let read = status(&fixture.target);
+    let claude = agent(&read, "claude-code");
+    assert_eq!(
+        claude.hook.as_ref().unwrap().state,
+        ComponentState::NotInstalled
+    );
+    assert!(claude.needs_attention());
+
+    let report = apply(&fixture.target, &Scope::automatic());
+    let claude = agent(&report, "claude-code");
+    assert_eq!(
+        claude.hook.as_ref().unwrap().state,
+        ComponentState::Installed,
+        "{report:?}"
+    );
+    assert_eq!(claude.skill.state, ComponentState::Installed);
+    assert_eq!(
+        state(&report, ComponentId::ClaudeCodeHook),
+        ComponentState::Installed
+    );
+    assert!(fixture.settings().contains("hide-agent-hooks"));
 }
 
 #[test]
@@ -1234,76 +1400,34 @@ fn claude_code_and_codex_do_everything_opencode_pi_omp_and_antigravity_collabora
     // the table: what Hide does for each agent in this build (D-10, B18;
     // opencode-plugin D-11: OpenCode takes letters and is refused a launch,
     // so it is no longer Basic, while no bell rings for it; grok-grok-hooks:
-    // Grok and Grok get the spawn guard from their official hooks, and Grok
-    // the subagent count (Grok's hooks never fire for a Task subagent, issue
-    // 911), take no letters and stay Basic, and Grok discards a
-    // session-start hook's output). The session-reader common contract B1/B6
+    // Grok gets the opener guard and the subagent count from its official
+    // hooks (they never fire for a Task subagent, issue 911), takes no
+    // letters and stays Basic, and discards a session-start hook's output). The session-reader common contract B1/B6
     // enables starts for the five agents besides Claude Code and Codex
     // without enabling their future reader/sleep/fork features. The complete
     // Pi and OMP slices add native title and exact sleep/fork beside the
     // accepted extension's collaboration features (reader B1/B2/B3/B14, D13);
     // the Grok slice adds the same to its hook features and Grok stays Basic;
     // the OpenCode slice does the same beside its plugin.
-    let opencode = [
-        Skill,
-        Guidance,
-        Letters,
-        Memory,
-        SpawnGuard,
-        HerdrIntegration,
-        Sleep,
-        Fork,
-        Start,
-        Titles,
-    ];
+    let opencode = [Skill, Guidance, Letters, Memory, Sleep, Fork, Start, Titles];
     // pi-omp-extension D-08, D-09, D-10: Pi and omp take letters and Memory
     // and are refused a launch through Hide's extension; only omp runs
     // subagents, and no bell rings for either. Their session readers add sleep, fork and titles.
-    let pi = [
-        Skill,
-        Guidance,
-        Letters,
-        Memory,
-        SpawnGuard,
-        HerdrIntegration,
-        Sleep,
-        Fork,
-        Start,
-        Titles,
-    ];
-    let omp = [
-        Skill,
-        Guidance,
-        Letters,
-        Memory,
-        SpawnGuard,
-        HerdrIntegration,
-        Sleep,
-        Fork,
-        Start,
-        Titles,
+    let pi = [Skill, Guidance, Letters, Memory, Sleep, Fork, Start, Titles];
+    let omp = [Skill, Guidance, Letters, Memory, Sleep, Fork, Start, Titles];
+    // with-hide/hide#2580: agy is rung at rest, once the screen read shows its
+    // empty prompt, beside omp's features.
+    let antigravity = [
+        Skill, Guidance, Letters, Bell, Memory, Sleep, Fork, Start, Titles,
     ];
     let expected: [(&str, &[Feature], bool); 7] = [
         ("claude-code", &Feature::ALL, false),
         ("codex", &Feature::ALL, false),
-        (
-            "grok",
-            &[
-                Skill,
-                Bell,
-                SpawnGuard,
-                HerdrIntegration,
-                Sleep,
-                Fork,
-                Start,
-                Titles,
-            ],
-            true,
-        ),
+        ("grok", &[Skill, Bell, Sleep, Fork, Start, Titles], true),
         ("opencode", &opencode, false),
         ("pi", &pi, false),
         ("omp", &omp, false),
-        ("antigravity", &omp, false),
+        ("antigravity", &antigravity, false),
     ];
     assert_eq!(
         ADAPTERS.iter().map(|row| row.id).collect::<Vec<_>>(),
@@ -1328,7 +1452,7 @@ fn the_features_the_hook_gives_are_the_ones_a_hook_runtime_exists_for() {
     // Hide's (OpenCode's plugin, Pi's and omp's extension) or agy's hook
     // block, which answers its prompt event,
     // which the hook crate speaks a dialect for; the subagent count and the
-    // spawn guard also come from Grok's and Grok's own hook files. An agent
+    // opener guard also come from Grok's own hook file. An agent
     // claiming them without a hook would be a popover that says more than
     // the kit installs.
     let with_runtime: Vec<&str> = ADAPTERS
@@ -1368,15 +1492,6 @@ fn the_features_the_hook_gives_are_the_ones_a_hook_runtime_exists_for() {
             "{}: memory",
             row.id
         );
-        // The spawn guard needs any hook of Hide's, including Grok's and
-        // Grok's own hook files, and its own declaration.
-        let hook = !matches!(row.hook, HookSupport::None);
-        assert_eq!(
-            row.supports(crate::agents::Feature::SpawnGuard),
-            hook && declared.spawn_guard.is_some(),
-            "{}: spawn guard",
-            row.id
-        );
     }
 }
 
@@ -1388,7 +1503,7 @@ fn grok_hooks(fixture: &Fixture) -> PathBuf {
 fn grok_gets_its_own_hook_file_beside_the_others_and_only_inside_its_own_folder() {
     let fixture = Fixture::new();
     install(&fixture, "grok", ".grok");
-    // Herdr's and Orca's files are already there and stay byte for byte.
+    // Another tool's file is already there and stays byte for byte.
     let herdr = br#"{"hooks":{"Stop":[{"hooks":[{"type":"command","command":"/herdr.sh"}]}]}}"#;
     set_up(&fixture, ".grok/hooks");
     std::fs::write(fixture.home().join(".grok/hooks/herdr.json"), herdr).unwrap();
@@ -1489,7 +1604,7 @@ fn grok_without_its_own_folder_gets_no_folder_and_its_row_says_why() {
 }
 
 fn opencode_plugin(fixture: &Fixture) -> PathBuf {
-    hide_agent_hooks::opencode::PLUGIN.path(fixture.home())
+    hide_agent_hooks::opencode::PLUGIN.path(fixture.home(), None)
 }
 
 #[test]
@@ -1515,6 +1630,7 @@ fn opencode_switched_on_gets_hides_plugin_beside_herdrs_and_reads_installed() {
                 &fixture.target.kit_dir.join("hide-agent-hooks"),
                 &crate::layout::state_dir_from_process(fixture.home()),
             )
+            .and_then(|target| target.of_install(&fixture.target.install))
             .unwrap()
         )
     );
@@ -1661,4 +1777,47 @@ fn switching_pi_off_forgets_hides_folder_trust_and_keeps_the_operators() {
         read(),
         serde_json::json!({ operators.to_str().unwrap(): false })
     );
+}
+
+/// A stub's text moves only with its version: a stub whose text changes at
+/// the same version reads, on every machine that has the released stub, as
+/// one the operator edited (`Skill::observe_in`), so it is never replaced.
+/// A change to a stub's text, the session-start table included, raises its
+/// version and pins the new text here.
+#[test]
+fn a_stub_text_changes_only_with_its_version() {
+    use sha2::Digest;
+    let pinned = [
+        (
+            "hide",
+            12,
+            "892d346de301fc7d3ddcb419a472344ff2b9ae4e2ce7e7d2f42de73ddceb5549",
+        ),
+        (
+            "hide-mission",
+            3,
+            "a7ea89f57899a6d251afb12277cfd835c1da5bc2b5b6067759ab22b7baf1b08f",
+        ),
+        (
+            "hide-issue",
+            1,
+            "01a4b9e83e9a1caafb4e2caafca4ee82ea7d9fb62fac79c88ec29b06a51bb798",
+        ),
+    ];
+    for skill in SKILLS {
+        let digest: String = sha2::Sha256::digest(skill.text().as_bytes())
+            .iter()
+            .map(|byte| format!("{byte:02x}"))
+            .collect();
+        let (_, version, text) = pinned
+            .iter()
+            .find(|(name, ..)| *name == skill.name)
+            .unwrap_or_else(|| panic!("{} is not pinned", skill.name));
+        assert_eq!(
+            (skill.version, digest.as_str()),
+            (*version, *text),
+            "the {} stub's text changed: raise its version and pin the new text's digest",
+            skill.name
+        );
+    }
 }

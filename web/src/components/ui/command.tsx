@@ -26,9 +26,12 @@ function CommandDialog({
   ...props
 }: ComponentProps<typeof Dialog> & { title?: string; description?: string; className?: string }) {
   const { t } = useInterfaceTranslation();
+  // The list draws on the dialog's own surface: the dialog lights a selected
+  // row in `--dialog-hover`, a step under `bg-popover`, and on a popover's own
+  // fill the selection would vanish.
   return (
     <Dialog {...props}>
-      <DialogContent className={cn("top-(--size-settings-sheet-window-inset) w-(--size-search-sheet-w) translate-y-0 p-none", className)}>
+      <DialogContent className={cn("top-(--size-settings-sheet-window-inset) w-(--size-search-sheet-w) translate-y-0 p-none [&_[data-slot=command]]:bg-transparent", className)}>
         <DialogTitle className="sr-only">{title ?? t("shell.commandPalette")}</DialogTitle>
         <DialogDescription className="sr-only">{description ?? t("shell.commandDescription")}</DialogDescription>
         {children}

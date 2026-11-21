@@ -29,10 +29,11 @@ const CHILD: WorkSession = { device_id: "local", agent: "codex", session_id: "ch
 const request = (offset: number, text: string, patch: Partial<WorkRequest> = {}): WorkRequest => ({ offset, at_unix_ms: AT + offset * MIN, text, author: "operator", images: 0, summary: null, answers: null, letter_from: null, count: 1, goal_command: false, ...patch });
 const ask = (id: string, text: string): MissedWork => ({ id, kind: "ask", text, status: "open", at_unix_ms: AT, turn_offset: 1, issue_repository: null, issue_number: null, creating: false, backlog_key: null });
 const output = (number: number, state: string, source: WorkSession): WorkOutput => ({ kind: "pr", repository: "acme/app", number, title: `PR title ${number}`, url: `https://example.invalid/pull/${number}`, state, stale: false, last_read_at_unix_ms: AT, created_at_unix_ms: AT + number, source, source_name: source.session_id });
+const issue = (number: number, state: "open" | "closed", source: WorkSession = SESSION): WorkOutput => ({ ...output(number, state, source), kind: "issue", title: `Issue title ${number}`, url: `https://example.invalid/issues/${number}` });
 const pull = (number: number, state: PrState, extra: Partial<SessionPull> = {}) => sessionPull(number, state, { title: `PR title ${number}`, ...extra });
 const flow = (id: string, name: string, at: number, requests: WorkRequest[], result: WorkFlow["result"] = null): WorkFlow => ({ id, name, at_unix_ms: at, requests, request_count: requests.filter((one) => !one.letter_from).length, result });
 const status = (end: RecordStatus["end"], line: string, limited: string | null = null): RecordStatus => ({ end, line, at_unix_ms: AT + 20 * MIN, limited, settled: null });
-const EMPTY = { status: null, asks: [], flows: [], omitted_requests: 0, outputs: [], pr_groups: [], artifacts: [], children: [] };
+const EMPTY = { status: null, asks: [], folded_asks: [], flows: [], omitted_requests: 0, outputs: [], pr_groups: [], children: [] };
 const child: RecordValue = { ...EMPTY, session: CHILD, title: "Child work", fallback_title: "Codex", native_title: null, manual_title: null, state: "idle", cwd: null, path: null, started_at_unix_ms: AT + 2, ended_at_unix_ms: null, status: status("done", "Report sent") };
 const BASE: RecordValue = {
   ...EMPTY,
@@ -47,12 +48,19 @@ const BASE: RecordValue = {
   children: [child],
 };
 
-async function mount(record: RecordValue | null, options: { summaries?: boolean; rest?: SnapshotRest; overview?: boolean; locator?: { request_offset: number; query?: string } } = {}) {
+/** The front Workspace with `session`'s record as the one card of its tab's desk, drawn while `shown`. */
+const desk = (shown: boolean, session: WorkSession = SESSION) => ({
+  device_id: "local", path: "/p", open: true, tool: null, tray: { tab_id: "t1", shown, count: 1 },
+  layout: { root: { area: { id: "area-1", active: "card-1", displays: [{ id: "card-1", kind: "card", card: { kind: "record", session } }] } }, active_area: "area-1", display_count: 1 },
+});
+
+async function mount(record: RecordValue | null, options: { summaries?: boolean; rest?: SnapshotRest; overview?: boolean; locator?: { request_offset: number; query?: string }; folded?: boolean; frontOf?: WorkSession; target?: WorkSession } = {}) {
   vi.stubGlobal("IS_REACT_ACT_ENVIRONMENT", true);
   vi.stubGlobal("ResizeObserver", class { observe() {} unobserve() {} disconnect() {} });
   initializeInterfaceI18n("en");
   const rest = { navigator: { devices: [{ id: "local", kind: "local" }] }, status: { background_ai: { provider: "claude", providers: [], unavailable_reason: null, enabled: options.summaries !== false, chosen: true, agent_summary: options.summaries !== false } } } as unknown as SnapshotRest;
-  useShellStore.setState({ rest: options.rest ?? rest, sessionRecord: record ? { session: SESSION, loading: false, failure: null, record } : null });
+  const shown = options.rest ?? rest;
+  useShellStore.setState({ rest: { ...shown, workspace_view: shown.workspace_view ?? desk(options.folded !== true, options.frontOf) } as SnapshotRest, sessionRecord: record ? { session: SESSION, loading: false, failure: null, record } : null });
   const container = document.createElement("div");
   document.body.append(container);
   const root = createRoot(container);
@@ -61,7 +69,7 @@ async function mount(record: RecordValue | null, options: { summaries?: boolean;
   const showTrail = async (trail: readonly WorkSession[] = []) => {
     await act(async () => root.render(<TooltipProvider>{options.overview
       ? <SessionRecord actions={actions} target={SESSION} frame={{ kind: "overview", trail, locator: options.locator, onTrail: () => undefined, onRead: () => undefined, onLeave: () => undefined }} />
-      : <SlotSessionRecord actions={actions} target={SESSION} />}</TooltipProvider>));
+      : <SlotSessionRecord actions={actions} target={options.target ?? SESSION} />}</TooltipProvider>));
   };
   await showTrail();
   return { container, sent, showTrail, unmount: async () => { await act(async () => root.unmount()); } };
@@ -229,6 +237,28 @@ it("lists what waits on the operator, puts one away with Skip and brings it back
   try { expect(none.container.querySelector("[data-record-asks]")).toBeNull(); } finally { await none.unmount(); }
 });
 
+it("keeps what Hide AI settled folded under one closed line with each reason, and one press opens it again as the operator's (status-model.md, A question still waiting)", async () => {
+  const folded: MissedWork = { ...ask("ask-2", "Split the settings change into its own PR?"), status: "folded", reason: "The lead chose a separate PR" };
+  const { container, sent, unmount } = await mount({ ...BASE, asks: [ask("ask-1", "Approve the PRD?")], folded_asks: [folded] });
+  try {
+    // Folded, not waiting: the open list neither counts nor shows it.
+    expect(container.querySelector("[data-record-asks]")!.getAttribute("data-record-asks")).toBe("1");
+    expect(text(container.querySelector("[data-record-asks]"))).not.toContain("Split the settings");
+    const toggle = container.querySelector<HTMLButtonElement>("[data-record-folded-toggle]")!;
+    expect(text(toggle)).toBe("Settled 1");
+    expect(container.querySelector('[data-record-folded-ask="ask-2"]')).toBeNull();
+    await act(async () => toggle.click());
+    const line = container.querySelector('[data-record-folded-ask="ask-2"]')!;
+    expect(text(line)).toContain("Split the settings change into its own PR?");
+    expect(text(line.querySelector("[data-record-folded-reason]"))).toBe("The lead chose a separate PR");
+    sent.length = 0;
+    await act(async () => container.querySelector<HTMLButtonElement>('[data-record-folded-reopen="ask-2"]')!.click());
+    expect(sent.map((event) => event.payload)).toEqual([{ session: SESSION, id: "ask-2", status: "open" }]);
+  } finally { await unmount(); }
+  const none = await mount({ ...BASE, asks: [ask("ask-1", "Approve the PRD?")] });
+  try { expect(none.container.querySelector("[data-record-folded-asks]")).toBeNull(); } finally { await none.unmount(); }
+});
+
 it("shows the last real turn on top with a usage limit as a badge, and blocked when every turn hit it (B10)", async () => {
   const limited = await mount({ ...BASE, status: status("question", "Only the rehearsal is left", "Limit reached · resets 13:00") });
   try {
@@ -273,17 +303,26 @@ it("keeps a closed PR in the fold, dimmed, beside the merged ones (status-model,
   } finally { await unmount(); }
 });
 
-it("lists outputs other than PRs once, and no line without them (B22)", async () => {
-  const shown = await mount({ ...BASE, artifacts: ["Record PRD", "record-cases.html"] });
-  try { expect([...shown.container.querySelectorAll("[data-record-artifact]")].map(text)).toEqual(["Record PRD", "record-cases.html"]); } finally { await shown.unmount(); }
+it("lists the issues the tree made as rows that open their page, a closed one dimmed, and no line without Views or issues (B22)", async () => {
+  const opened = vi.spyOn(window, "open").mockImplementation(() => null);
+  const shown = await mount({ ...BASE, outputs: [...BASE.outputs, issue(41, "open"), issue(40, "closed", CHILD)] });
+  try {
+    const rows = [...shown.container.querySelectorAll<HTMLButtonElement>("[data-record-issue]")];
+    expect(rows.map((row) => [text(row), row.dataset.issueClosed ?? null])).toEqual([["Issue title 41#41", null], ["Issue title 40#40", "true"]]);
+    await act(async () => rows[0]!.click());
+    expect(opened).toHaveBeenCalledWith("https://example.invalid/issues/41", "_blank", "noopener,noreferrer");
+  } finally { opened.mockRestore(); await shown.unmount(); }
+  // Pull requests stay in their own section.
   const none = await mount(BASE);
   try { expect(none.container.querySelector("[data-record-artifacts]")).toBeNull(); } finally { await none.unmount(); }
 });
 
 it("draws the raw request list and the PRs only with summaries off, saying so once (B28)", async () => {
-  const { container, unmount } = await mount({ ...BASE, asks: [ask("ask-1", "Approve?")], artifacts: ["Record PRD"] }, { summaries: false });
+  const { container, unmount } = await mount({ ...BASE, asks: [ask("ask-1", "Approve?")], outputs: [...BASE.outputs, issue(41, "open")] }, { summaries: false });
   try {
-    expect(container.querySelector("[data-record-flows], [data-record-asks], [data-record-artifacts], [data-record-limited]")).toBeNull();
+    expect(container.querySelector("[data-record-flows], [data-record-asks], [data-record-limited]")).toBeNull();
+    // An issue is GitHub's fact, not Hide AI's, so it stays.
+    expect(container.querySelector('[data-record-issue="41"]')).not.toBeNull();
     expect(container.querySelectorAll("[data-record-raw-requests] [data-record-request]")).toHaveLength(3);
     expect(text(container.querySelector('[data-record-request="10"]'))).toContain("Write the PRD now");
     expect(text(container).split("AI summaries off")).toHaveLength(2);
@@ -327,7 +366,7 @@ it("opens the past flow holding a History hit and shows its words with the query
   }
 });
 
-it("asks for the record once when the slot draws one nothing has read, as after a relaunch, and not when it is read", async () => {
+it("asks for the record once when the desk's front card tab draws one nothing has read, as after a relaunch, and not when it is read", async () => {
   const restored = await mount(null);
   try {
     expect(restored.sent).toEqual([{ schema_version: 2, kind: "detail_open", payload: { item: { kind: "record", session: SESSION } } }]);
@@ -337,7 +376,7 @@ it("asks for the record once when the slot draws one nothing has read, as after 
   try { expect(read.sent).toEqual([]); } finally { await read.unmount(); }
 });
 
-it("asks again when the window lands on a new core session while the slot still draws the record", async () => {
+it("asks again when the window lands on a new core session while the desk's front card tab still draws the record", async () => {
   const restored = await mount(null);
   try {
     expect(restored.sent).toHaveLength(1);
@@ -347,6 +386,17 @@ it("asks again when the window lands on a new core session while the slot still 
     await act(async () => useShellStore.setState({ sessionRecord: { session: SESSION, loading: true, failure: null, record: null } }));
     expect(restored.sent).toHaveLength(2);
   } finally { await restored.unmount(); }
+});
+
+it("asks for no read while its desk is folded, which would bring the desk up again (lane-desk-pair-view B14)", async () => {
+  const folded = await mount(null, { folded: true });
+  try { expect(folded.sent).toEqual([]); } finally { await folded.unmount(); }
+  const drawn = await mount(BASE);
+  try {
+    // The desk button folds the desk, and the core stops the card's read with it.
+    await act(async () => useShellStore.setState({ rest: { ...useShellStore.getState().rest!, workspace_view: desk(false) } as SnapshotRest, sessionRecord: { session: null, loading: false, failure: null, record: null } }));
+    expect(drawn.sent).toEqual([]);
+  } finally { await drawn.unmount(); }
 });
 
 it("expands a child in place and opens its full record only with the explicit action", async () => {
@@ -559,7 +609,7 @@ it("leads with the request's own first line when no row shows the turn, and draw
 
 const view = (id: string, patch: Partial<RecordView> = {}): RecordView => ({ device_id: "local", checkout_path: "/fixture/checkout", display_id: id, kind: "file", label: `${id}.md`, path: `/fixture/checkout/${id}.md`, document_kind: "markdown", lines: [`# ${id}`, "first lines"], session: SESSION, ...patch });
 
-it("draws an image as a thumbnail and every View with no picture as a compact row, then the named outputs, with +N for the rest (D-40)", async () => {
+it("draws an image as a thumbnail and every View with no picture as a compact row, then the issues, with +N for the rest (D-40)", async () => {
   const scene = sidebarScene("reference", REFERENCE_FOLDS, AT).rest;
   const rest = { ...scene, status: { ...scene.status, background_ai: { provider: "claude", providers: [], unavailable_reason: null, enabled: true, chosen: true, agent_summary: true } } } as SnapshotRest;
   const checkout = rest.navigator!.workspaces!.find((row) => row.id === "hide")!.checkouts[0]!;
@@ -570,7 +620,7 @@ it("draws an image as a thumbnail and every View with no picture as a compact ro
     view("child-board", { label: "menu.excalidraw", path: "/fixture/checkout/design/menu.excalidraw", document_kind: undefined, lines: undefined, session: CHILD }),
     view("e"), view("f"),
   ];
-  const record = { ...BASE, artifacts: ["Release notes"] };
+  const record = { ...BASE, outputs: [...BASE.outputs, issue(41, "open")] };
   const { container, sent, unmount } = await mount(record, { rest });
   try {
     await act(async () => useShellStore.setState({ sessionRecord: { session: SESSION, loading: false, failure: null, record, views } }));
@@ -586,8 +636,36 @@ it("draws an image as a thumbnail and every View with no picture as a compact ro
     expect(more.getAttribute("data-record-gallery-more")).toBe("2");
     await act(async () => more.click());
     expect(kinds()).toHaveLength(6);
-    expect(text(gallery.querySelector("[data-record-artifact]"))).toBe("Release notes");
+    expect(text(gallery.querySelector('[data-record-issue="41"] [data-record-view-detail]'))).toBe("#41");
     await act(async () => gallery.querySelector<HTMLButtonElement>('[data-record-view="doc"]')!.click());
     expect(sent.find((event) => event.kind === "focus_checkout")?.payload).toMatchObject({ checkout_id: checkout.id, display_id: "doc" });
+  } finally { await unmount(); }
+});
+
+it("waits quietly, asking for no read, when a record card tab out of its desk's front has drawn nothing yet (PRD lane-desk-pair-view D-13)", async () => {
+  const other: WorkSession = { device_id: "local", agent: "codex", session_id: "other" };
+  // A record no card drew in this page yet: the kept drawings outlive a test.
+  const fresh: WorkSession = { device_id: "local", agent: "claude", session_id: "never-drawn" };
+  const { container, sent, unmount } = await mount(null, { frontOf: other, target: fresh });
+  try {
+    expect(container.querySelector("[data-record-waiting]")).not.toBeNull();
+    expect(container.querySelector("[aria-busy]")).toBeNull();
+    expect(sent).toEqual([]);
+  } finally { await unmount(); }
+});
+
+it("keeps what a record card tab out of its desk's front drew while the core reads another, and only the front one asks to read (PRD lane-desk-pair-view D-13)", async () => {
+  const { container, sent, unmount } = await mount(BASE);
+  try {
+    expect(container.querySelector("[data-record-content]")).not.toBeNull();
+    // The desk's front card is another record, which the core reads now.
+    const other: WorkSession = { device_id: "local", agent: "codex", session_id: "other" };
+    await act(async () => useShellStore.setState((state) => ({
+      rest: { ...state.rest!, workspace_view: desk(true, other) } as SnapshotRest,
+      sessionRecord: { session: other, loading: true, failure: null, record: null },
+    })));
+    expect(container.querySelector("[data-record-loading]")).toBeNull();
+    expect(text(container.querySelector("[data-record-content] h2"))).toContain("Session goal");
+    expect(sent.filter((event) => event.kind === "detail_open")).toEqual([]);
   } finally { await unmount(); }
 });

@@ -35,6 +35,7 @@ import { MobileTab } from "../MobileTab";
 import { OverviewPage } from "../Overview";
 import { DevicesTab } from "../settings/DevicesTab";
 import { Sidebar } from "../sidebar";
+import { NOTHING_UNDER_WAY } from "../pairing";
 import { useShellStore } from "../store";
 import { PALETTE_HIDE_CLASS } from "../theme";
 import { feedChunks, terminalFor } from "../terminals";
@@ -64,9 +65,9 @@ const SIDEBAR_WIDTH: Record<LandingShot, number> = { hero: 320, tasks: 320, quie
 const WORKSPACE_SHOTS: readonly LandingShot[] = ["hero", "tasks", "quiet", "prs", "team", "pr", "record", "conductor", "memory", "browser-spec", "browser-page", "browser"];
 /** The browser story's shots by how far it got. */
 const BROWSER_STEPS: Partial<Record<LandingShot, BrowserStep>> = { "browser-spec": 1, "browser-page": 2, browser: 3 };
-/** The shots whose lane shows an item in its 보기 slot. */
+/** The shots whose desk shows a card tab. */
 const LANE_SHOTS: readonly LandingShot[] = ["pr", "record", "conductor"];
-/** The slot's width in a lane shot: room for a card, a record or a map beside the lead. */
+/** The desk's width in a lane shot: room for a card, a record or a map beside the lead. */
 const DETAIL_WIDTH: Record<LandingLane, number> = { pr: 620, record: 620, conductor: 720 };
 
 /**
@@ -100,8 +101,11 @@ export function LandingScene({ shot, theme }: LandingSceneParams) {
       rest.status = { ...rest.status, background_ai: { provider: "claude", providers: [], unavailable_reason: null, enabled: true, chosen: true, agent_summary: true } } as SnapshotRest["status"];
       const project = rest.navigator!.workspaces!.find((row) => row.id === "hide")!;
       const tab = project.checkouts[0]!.tabs[0]!;
-      rest.ui_state = { ...rest.ui_state!, detail: { items: [laneItem(lane, scene.agents)], shown: true } };
-      rest.workspace_view = { ...rest.workspace_view!, tool: null, detail_width: DETAIL_WIDTH[lane] };
+      const card = { id: "card", tab_id: null, path: "", label: "", kind: "card" as const, committed: null, preview: false, state: "open" as const, reason: null, card: laneItem(lane, scene.agents) };
+      rest.workspace_view = {
+        ...rest.workspace_view!, tool: null, document_width: DETAIL_WIDTH[lane], tray: { ...rest.workspace_view!.tray, shown: true, count: 1 },
+        layout: { root: { area: { id: "v1", active: card.id, displays: [card] } }, active_area: "v1", display_count: 1, limits: { areas: 4, depth: 3, displays: 32 } },
+      };
       // The lead alone in its tab, so the slot beside it has the room.
       rest.pane_layouts = [{ workspace_id: project.id, tab_id: tab.id!, focused_pane_id: LEAD_PANE, zoomed: false, root: { type: "pane", pane_id: LEAD_PANE } }];
       if (lane === "conductor") rest.missions = { items: [landingMission(now, scene.agents)] };
@@ -153,7 +157,7 @@ export function LandingScene({ shot, theme }: LandingSceneParams) {
   }, [shot]);
 
   useLayoutEffect(() => {
-    useShellStore.setState({ rest: fixture.rest, agents: fixture.agents, mobile: fixture.mobile, usage: fixture.usage ? { nodes: [fixture.usage] } : null, linkSummaries: fixture.usage ? landingTaskTitles() : null, memory: { project: fixture.memory }, connection: "live", linkPanel: fixture.linkPanel, sessionRecord: fixture.sessionRecord, ...(fixture.editor ? { editor: fixture.editor, documents: fixture.documents } : {}) });
+    useShellStore.setState({ rest: fixture.rest, agents: fixture.agents, pairing: NOTHING_UNDER_WAY, mobile: fixture.mobile, usage: fixture.usage ? { nodes: [fixture.usage] } : null, linkSummaries: fixture.usage ? landingTaskTitles() : null, memory: { project: fixture.memory }, connection: "live", linkPanel: fixture.linkPanel, sessionRecord: fixture.sessionRecord, ...(fixture.editor ? { editor: fixture.editor, documents: fixture.documents } : {}) });
     useUiStore.setState({ screen: { kind: workspace ? "workspace" : "main" }, overviewOpen: false, stackFront: "view", ...(shot === "map" ? { mainView: "work" as const } : shot === "projects" ? { mainView: "projects" as const } : {}) });
     const root = document.documentElement;
     root.classList.toggle("dark", theme === "dark");

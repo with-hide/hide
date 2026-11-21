@@ -26,7 +26,7 @@ import { useErrorSince } from "./errorSince";
  */
 type Sent = { device: string; path: string; at: number; known: ReadonlySet<string> };
 
-export type Shown = { path: string; reason: string; text: string };
+export type Shown = { path: string; reason: string; text: string; home?: boolean };
 
 /** The core's kind for a device helper's answer that its folder is outside that device's home. */
 const DEVICE_ASKS = "workspace.create_refused.needs_confirmation";
@@ -57,12 +57,12 @@ export function useRegistration(registrations: readonly WorkspaceRegistration[])
   const shown = shellRefusal
     ? { ...shellRefusal, text: refusalText(shellRefusal.reason, t) }
     : sent && hided
-      ? { path: hided.confirm ?? sent.path, reason: hided.reason, text: refusalText(hided.reason, t) }
+      ? { path: hided.confirm ?? sent.path, reason: hided.reason, text: refusalText(hided.reason, t, hided.home === true), ...(hided.home ? { home: true } : {}) }
       : sent && coreError
         ? coreError.kind === "workspace.create_registered"
           ? { path: sent.path, reason: "already_registered", text: refusalText("already_registered", t) }
           : coreError.kind === DEVICE_ASKS
-            ? { path: coreError.confirm ?? sent.path, reason: "needs_confirmation", text: refusalText("needs_confirmation", t) }
+            ? { path: coreError.confirm ?? sent.path, reason: "needs_confirmation", text: refusalText("needs_confirmation", t, coreError.home === true), ...(coreError.home ? { home: true } : {}) }
             : { path: sent.path, reason: coreError.kind, text: coreErrorText(coreError, t, "coreError.project.addFailed") }
         : null;
 

@@ -5,11 +5,13 @@ The job follows hide-platform's `process` (Windows): the child starts
 suspended, joins its job, and only then runs, so nothing it starts is ever
 outside the job; the job ends everything in it when its last handle closes
 (`KILL_ON_JOB_CLOSE`), so an owner that dies without cleaning up still takes
-the tree with it. The handle is never inheritable and no child is given it.
+the tree with it. A process may leave it only by asking (`BREAKAWAY_OK`,
+never silently): a pane holder hided starts through `start_resident`, which
+the run owns by the record its node writes (`holder_owned.py`) and ends at
+teardown. The handle is never inheritable and no child is given it.
 The private files follow hide-platform's `fs::private` (Windows): created
 with an access list naming only this account, and checked by owner and
-access list. The account's Path in the registry is where a pane Herdr opens
-reads its PATH (`UserPath`). Imported only on Windows.
+access list. Imported only on Windows.
 """
 
 import ctypes
@@ -19,7 +21,6 @@ import os
 import threading
 import time
 from typing import NamedTuple
-import winreg
 
 kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
 advapi32 = ctypes.WinDLL("advapi32", use_last_error=True)
@@ -45,6 +46,7 @@ JOB_OBJECT_LIMIT_ACTIVE_PROCESS = 0x00000008
 JOB_OBJECT_LIMIT_JOB_MEMORY = 0x00000200
 JOB_OBJECT_LIMIT_DIE_ON_UNHANDLED_EXCEPTION = 0x00000400
 JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE = 0x00002000
+JOB_OBJECT_LIMIT_BREAKAWAY_OK = 0x00000800
 JOB_BASIC_ACCOUNTING = 1
 JOB_BASIC_PROCESS_ID_LIST = 3
 JOB_ASSOCIATE_COMPLETION_PORT = 7
@@ -191,7 +193,7 @@ class Job:
         try:
             limits = ExtendedLimit()
             limits.BasicLimitInformation.LimitFlags = (
-                JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE | JOB_OBJECT_LIMIT_ACTIVE_PROCESS
+                JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE | JOB_OBJECT_LIMIT_BREAKAWAY_OK | JOB_OBJECT_LIMIT_ACTIVE_PROCESS
                 | JOB_OBJECT_LIMIT_JOB_MEMORY | JOB_OBJECT_LIMIT_DIE_ON_UNHANDLED_EXCEPTION)
             limits.BasicLimitInformation.ActiveProcessLimit = processes
             limits.JobMemoryLimit = committed
@@ -562,46 +564,3 @@ def is_private(path):
         return True
     finally:
         LocalFree(descriptor)
-
-
-class UserPath:
-    """`folder` first on this account's own Path in the registry until
-    `close`. Herdr builds a Windows pane's environment from the registry (its
-    portable-pty reads HKLM's and HKCU's Environment over the server's own),
-    so a PATH given to Herdr never reaches a pane Hide opens, and an agent the
-    run starts there is found only through this Path, as an operator's is.
-    It changes the account, so it is held only on a disposable CI runner and
-    refused anywhere else."""
-
-    def __init__(self, folder):
-        from .protection import ProtectionError
-        if os.environ.get("GITHUB_ACTIONS") != "true":
-            raise ProtectionError("user_path_changed_only_on_a_ci_runner: GITHUB_ACTIONS is not true, "
-                                  "and this account's registry is not the run's to change")
-        self.folder = str(folder)
-        with winreg.OpenKey(winreg.HKEY_CURRENT_USER, "Environment", 0,
-                            winreg.KEY_QUERY_VALUE | winreg.KEY_SET_VALUE) as key:
-            try:
-                value, kind = winreg.QueryValueEx(key, "Path")
-                self.existed = True
-            except FileNotFoundError:
-                value, kind, self.existed = "", winreg.REG_EXPAND_SZ, False
-            winreg.SetValueEx(key, "Path", 0, kind, f"{self.folder};{value}" if value else self.folder)
-
-    def close(self):
-        """Takes `folder` back out, keeping whatever else changed the Path
-        meanwhile; a Path that did not exist before is removed again."""
-        with winreg.OpenKey(winreg.HKEY_CURRENT_USER, "Environment", 0,
-                            winreg.KEY_QUERY_VALUE | winreg.KEY_SET_VALUE) as key:
-            try:
-                value, kind = winreg.QueryValueEx(key, "Path")
-            except FileNotFoundError:
-                return
-            entries = value.split(";")
-            wanted = os.path.normcase(self.folder)
-            entries = next(([*entries[:index], *entries[index + 1:]] for index, entry in enumerate(entries)
-                            if os.path.normcase(entry) == wanted), entries)
-            if entries or self.existed:
-                winreg.SetValueEx(key, "Path", 0, kind, ";".join(entries))
-            else:
-                winreg.DeleteValue(key, "Path")

@@ -1,0 +1,12 @@
+[Unit]
+Description=Hide device relay connection limits and traffic counters
+Before=hide-iroh-relay.service
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+ExecStart=/usr/sbin/nft -f /opt/hide-relay/current/iroh-relay.nft
+ExecStop=/usr/sbin/nft delete table inet hide_iroh_relay
+TimeoutStartSec=20
+StandardOutput=null
+StandardError=journal

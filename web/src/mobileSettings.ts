@@ -1,7 +1,7 @@
 // The pure rules behind Settings > Mobile (PRD mobile-companion B1-B7,
 // B10, B14, B15, B29; settings-cleanup B57-B59): which Tailscale steps show
 // and with what fix, how the code countdown and a phone's row read, and the
-// push choices. hided owns every value; this only words what its `mobile` frame
+// phone push setting. hided owns every value; this only words what its `mobile` frame
 // reported, so each rule is tested without a browser.
 
 import type { TFunction } from "i18next";
@@ -40,13 +40,7 @@ export type PhoneRow = {
   revoke_at_ms: number;
 };
 
-export type PushMode = "off" | "app_closed" | "always";
-
-export const PUSH_CHOICES: readonly { id: PushMode; label: MessageKey; detail: MessageKey }[] = [
-  { id: "off", label: "mobileSetup.push.off", detail: "mobileSetup.push.offDescription" },
-  { id: "app_closed", label: "mobileSetup.push.appClosed", detail: "mobileSetup.push.appClosedDescription" },
-  { id: "always", label: "mobileSetup.push.always", detail: "mobileSetup.push.alwaysDescription" },
-];
+export type PushMode = "app_closed" | "always";
 
 /** A Tailscale step that needs the operator: what is wrong, what to do, and where to do it. */
 export type FailedStep = {

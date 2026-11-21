@@ -1,7 +1,7 @@
-import type { AgentScope } from "./agentScope";
+import type { AgentScope, ToolCell } from "./agentScope";
 import type { ProjectSettings, ProjectSettingsWrite } from "./projectSettings";
 // The parts of the core's `rest` section the web shell reads, typed as the
-// core serializes them (herdr-core/src/model.rs), plus the pure selectors that
+// core serializes them (hide-core/src/model.rs), plus the pure selectors that
 // resolve the operator's focused checkout, its visible tab and that tab's
 // layout. Every selector is a lookup: the snapshot carries every tab's layout,
 // so a tab switch never draws a waiting state (PRD S2 B3).
@@ -14,15 +14,31 @@ export type AgentStatusCode = "error" | "question" | "approval" | "working" | "d
 /** Whose move is next (`RowMark`): the operator's, the operator's to look at a View the agent opened (PRD unseen-agent-views D-05), in progress (the agent works, or `waiting` on proven work, D-25), unread as finished, unread otherwise, nothing (resting), a state Hide cannot read, or asleep (status-marks D-21). */
 export type RowMark = "turn" | "look" | "going" | "waiting" | "done" | "unread" | "quiet" | "unknown" | "asleep";
 
-/** What a quiet row waits on (`AgentWait`): its descendants, a background job its session proves is running, the reply to a Hide request it sent, or its pull request's checks. */
-export type AgentWait = "children" | "background" | "reply" | "checks";
+/** What a quiet row waits on (`AgentWait`): its descendants, a background job its session proves is running, the reply to a Hide request it sent, its pull request's checks, or the subagents its session still runs. */
+export type AgentWait = "children" | "background" | "reply" | "checks" | "subagents";
+
+/**
+ * One subagent an agent runs inside its own session, as its hook reported it
+ * (docs/UI_BEHAVIOR.md, Subagents): what kind it is and what it was asked to
+ * do when the agent says, and when it started. It has no pane, so nothing
+ * about it opens anything.
+ */
+export type SubagentRow = {
+  id: string;
+  /** The agent's own name for its kind (`Explore`); absent when the agent names none worth showing. */
+  kind?: string;
+  /** What it was asked to do, one short line; absent when the agent does not say. */
+  task?: string;
+  /** When the hook first heard it run; absent for one it heard of before it kept the time. */
+  started_unix_ms?: number;
+};
 
 /** Why a row's second line is on screen (`RowLine::mode`); see agentRow.ts. */
 export type LineMode = "request" | "news" | "waiting" | "kept" | "quiet" | "vanished" | "checks_passed" | "checks_failed";
 
 export type StatusTone = { kind: "warning" | "working" | "success" | "subtle" | "news"; read: boolean };
 
-/** Agent decisions are projected by herdr-core::agent_state, never reconstructed by the shell. */
+/** Agent decisions are projected by hide-core::agent_state, never reconstructed by the shell. */
 export type AgentState = {
   session: { group: SessionGroup; line: string | null; unfinished: boolean };
   attention: boolean; needs_you: boolean; root: boolean;
@@ -84,9 +100,10 @@ export type HideAiTask = { kind: string; target?: string };
 
 /**
  * The screen that owns what a Hide AI task does (PRD hide-ai-work-home D-10); a kind the core has no home for carries none.
- * Every known kind's home is the Hide AI tool's 제안 tab: a Memory promotion is one of its rows (PRD hide-ai-suggestions D-02, B2).
+ * A Memory promotion or a suggestion's home is the Hide AI tool's 제안 tab, where it is one of the rows (PRD hide-ai-suggestions D-02, B2);
+ * an automation run's is the automation screen, where its terminal is (PRD automations D-11, B15).
  */
-export type HideAiHome = "suggestions";
+export type HideAiHome = "suggestions" | "automations";
 
 /** What the home waits for the operator to do, beyond what the agent itself asks (D-14); the core decides it. */
 /** `branch_ready`: the agent committed on its branch and the operator decides (PRD hide-ai-branch-first-apply B3). */
@@ -99,18 +116,29 @@ export type HomeTurn = { kind: "pr_review" | "ci_failed"; pr_number: number } | 
  */
 export type HideAi = { task?: HideAiTask; home?: HideAiHome; workspace_id?: string; turn?: HomeTurn };
 
+/**
+ * An external tool's work (PRD hide-external-control D-09, D-15): an agent the tool started, or one started under it.
+ * `owns` says the tool keeps it now (its connection stands at Act); the core decides it and the lists it leaves.
+ */
+export type ToolWork = { connection: string; name: string; owns: boolean };
+
 /** A checkout Hide AI made for an agent it started, joined to a checkout by device and path. */
-export type HideAiCheckout = { device_id: string; path: string; task?: HideAiTask };
+/** A checkout Hide made for Hide AI's agent, or for an external tool's while the tool keeps its work (`tool`, its name). */
+export type HideAiCheckout = { device_id: string; path: string; task?: HideAiTask; tool?: string };
 
 export type AgentRow = {
   /** Set by the core from the coordination record of the spawn, never from a branch name. */
   hide_ai?: HideAi;
+  /** An external tool started this agent, or an agent of the tool started it under itself; set by the core from the same record. */
+  tool?: ToolWork;
+  /** The operator's lists leave this row out (`agent_state::listed_for_operator`); the core's scopes already did, and the phone reads it. */
+  unlisted?: boolean;
   resolved?: { at_unix_ms: number; source: "operator" | "automatic" } | null;
   /** Resolved within the last 24 hours, so Sessions still lists it. */
   resolved_recent?: boolean;
   /** The operator's ★ or a read, unanswered ask, and since when it waits (PRD revisit-group). */
   revisit?: { starred: boolean; read_ask: boolean; since_unix_ms: number } | null;
-  escalation?: { cause: "parent_blocked" | "draft" | "bell_exhausted" | "undelivered" | "child_blocked" | "observer_unconfirmed" | "input_unconfirmed"; letter_id: string | null; since_unix_ms: number | null; human_notice: boolean } | null;
+  escalation?: { cause: "parent_blocked" | "draft" | "child_blocked" | "observer_unconfirmed" | "input_unconfirmed" | "human_turn"; letter_id: string | null; since_unix_ms: number | null; human_notice: boolean } | null;
   /** How many letters wait on this pane for a possible draft, once it has rested; absent while none waits (docs/delivery.md). */
   letters_waiting?: number;
   /** On a lineage root: every raised descendant, lead first. */
@@ -123,11 +151,13 @@ export type AgentRow = {
   id: string;
   pane_id: string;
   identity_label: string;
+  /** The name of the profile the agent runs with (`b`), absent on its agent's built-in default; the title stays the default's (PRD agent-profiles B17). */
+  profile?: string;
   /** Conversation display provenance, independent of lifecycle and hook health. */
   record_connection?: "checking" | "confirmed" | "unconfirmed";
   record_summary?: string;
-  /** The name Herdr knows the agent by (`agent start --name`, `agent rename`); absent when it was given none. */
-  herdr_name?: string;
+  /** The name the engine knows the agent by (`hide agent spawn --name`); absent when it was given none. */
+  given_name?: string;
   agent_kind: string;
   /** The checkout that physically owns this pane. */
   checkout_label?: string | null;
@@ -148,11 +178,15 @@ export type AgentRow = {
   user_turn?: UserTurnFact;
   /** A question the core asks on this row for the agent (`AskSubject`); the row then has no sentence of its own. */
   ask_subject?: AskSubject;
+  /** The questions the session put to the operator that still wait and that the operator sent nothing since, oldest first (`OpenAsksSnapshot`, status-model.md: A question still waiting): the row's `?N`, the pane's mark and the turn card's list; absent while none does. */
+  open_asks?: OpenAsks;
+  /** The person's turn this row leads with, its own or a descendant's (PRD ask-human); absent when none stands. */
+  human_turn?: HumanTurnLead;
   /** When the core last saw this agent change state (epoch ms), retained for state ordering. */
   changed_at_unix_ms: number | null;
   /** Latest actual native request in the proven session (epoch ms). Absent when unknown; never fall back to state observation time. */
   last_prompt_at_unix_ms?: number | null;
-  /** The core's ordering key: `changed_at_unix_ms` as thirteen digits, else Herdr's state sequence zero-padded, so it sorts as text. */
+  /** The core's ordering key: `changed_at_unix_ms` as thirteen digits, else the engine's state sequence zero-padded, so it sorts as text. */
   last_activity?: string;
   emphasized: boolean;
   unread: boolean;
@@ -178,6 +212,18 @@ export type AgentRow = {
   wait?: AgentWait;
   /** The background tasks a finished turn left running, which its line ends with (status-marks D-19); absent when none. */
   background_left?: number;
+  /** The descendants still working under a root whose finished turn the operator has not read, which its line ends with; absent when none. */
+  children_left?: number;
+  /** How many subagents its session runs inside itself now, counted on its children chip; absent when none run and when Hide cannot read the count (docs/UI_BEHAVIOR.md, Subagents). */
+  subagents?: number;
+  /** The subagents counted in `subagents`, oldest first, as many as the core lists (it may list fewer than it counts); absent when none run. */
+  subagent_rows?: SubagentRow[];
+  /** The subagents still running under a finished turn the operator has not read, which its line ends with; absent when none. */
+  subagents_left?: number;
+  /** How many things its `wait` waits on, which its line counts (`자식 2개 기다림`); absent for running checks and when it waits for nothing. */
+  wait_count?: number;
+  /** How many of its own subagents its wait waits on too, which a children wait's line adds (`자식 1개 · 서브에이전트 2개 기다림`); absent when none. */
+  wait_subagents?: number;
   /** How deep under its lineage root; a root is 0. */
   lineage_depth?: number;
   /** Whether the operator has this row's descendants folded away; folded is the default. */
@@ -186,7 +232,7 @@ export type AgentRow = {
   lineage_worktree_badge?: string | null;
   /** Present only while Hide holds this agent asleep (PRD agent-sleep); absent when awake. */
   sleep?: AgentSleep;
-  /** The conversation id Herdr recorded for this agent; absent when it recorded none. */
+  /** The conversation id the engine recorded for this agent; absent when it recorded none. */
   session_id?: string | null;
   /** The agent searches its own conversation, so ⌘F asks the core where the search goes (`pane_find_open`). */
   own_find?: boolean;
@@ -200,9 +246,25 @@ export type UserTurnFact = {
   content: { text: string; choices: string[]; truncated: boolean } | null;
 };
 
-export const ASK_SUBJECT_CAUSES = ["plan_review", "mission_decision", "mission_attention", "input_unconfirmed"] as const;
-/** A question the core asks on a row for the agent (`AskSubject`), which every surface words in the interface language: a plan waiting for review, the decision a Conductor's mission waits on, a mission node waiting on the operator to look (its title and why), or a brief or letter Hide typed that the agent never took. */
-export type AskSubject = { cause: "plan_review"; steps: number } | { cause: "mission_decision"; line: string } | { cause: "mission_attention"; node: string; reason: MissionAttentionReason } | { cause: "input_unconfirmed"; input: "brief" | "letter"; spent: boolean; held: boolean };
+export const ASK_SUBJECT_CAUSES = ["plan_review", "mission_decision", "mission_attention", "input_unconfirmed", "human_turn", "open_ask"] as const;
+/** A question the core asks on a row for the agent (`AskSubject`), which every surface words in the interface language: a plan waiting for review, the decision a Conductor's mission waits on, a mission node waiting on the operator to look (its title and why), a brief or letter Hide typed that the agent never took, or a step only a person can take that the agent declared (`hide agent ask-human`, PRD ask-human): its declaration, kind, place and the device's name, absent for this machine. */
+export type AskSubject = { cause: "plan_review"; steps: number } | { cause: "mission_decision"; line: string; views?: number } | { cause: "mission_attention"; node: string; reason: MissionAttentionReason; unmet?: number } | { cause: "input_unconfirmed"; input: "brief" | "letter"; spent: boolean; held: boolean } | { cause: "human_turn"; id: string; kind: HumanKind; place: string; device?: string } | { cause: "open_ask"; id: string; line: string };
+/** The questions a row's session put to the operator that still wait (`OpenAsksSnapshot`). */
+export type OpenAsks = { session: WorkSession; items: OpenAsk[] };
+/** One question that still waits on the operator; `id` is the record's, which 무시하기 names. */
+export type OpenAsk = { id: string; text: string; at_unix_ms: number };
+
+export const HUMAN_KINDS = ["auth", "permission", "install"] as const;
+/** What a person's turn asks for (`contracts/snapshot-wire-enums.json`: `human_kind`): a sign-in or unlock, a permission, or the confirm of an install an agent asked for with `hide skill` / `hide mcp`, which the core lays itself. */
+export type HumanKind = typeof HUMAN_KINDS[number];
+
+/**
+ * The person's turn a row leads with (`HumanTurnLead`, PRD ask-human D-09,
+ * D-17, D-20): on the agent that declared it and on its lineage root. Done
+ * settles `id`; `device_id` is where the declaring pane runs, absent for
+ * this machine, and Done waits while it is not connected (D-21).
+ */
+export type HumanTurnLead = { id: string; kind: HumanKind; place: string; pane_id: string; title: string; device_id?: string; since_unix_ms: number | null; own: boolean };
 
 /** How the label read a turn's end (`LabelEnd`). */
 export type LabelEnd = "working" | "question" | "blocked" | "done" | "waiting" | "unfinished" | "limited";
@@ -234,7 +296,51 @@ export type AgentRequest = {
   later_by: RequestSender | null;
   /** The chip first (D-46), then the other live ones, then settled ones. */
   pull_requests: AgentPullRequest[];
+  /** The agent's answer to the shown request once its turn is over (`TurnAnswerSnapshot`), for the turn card. */
+  answer?: TurnAnswer;
+  /** The letters and started agents since the shown request (`LettersSinceSnapshot`). */
+  letters?: LettersSince;
 };
+
+/** The agent's answer to the shown request: the label's line and the head of its last message. */
+export type TurnAnswer = {
+  /** The shown request's offset, which names the turn when the whole answer is read (`turn_answer_read`). */
+  offset: number;
+  end?: LabelEnd;
+  line?: string;
+  head?: string;
+  /** The message says more than `head` and can be read whole. */
+  whole: boolean;
+  at_unix_ms: number;
+};
+
+/** Which way a card line went, seen from the row's pane (`LetterDirection`). */
+export type LetterDirection = "sent" | "received" | "started";
+
+/** What a card line is marked with (`LetterMark`). */
+export type LetterMark = "waiting_answer" | "reply" | "block" | "report" | "question" | "progress";
+
+/** One line of the turn card's letter list (`LetterLineSnapshot`). */
+export type LetterLine = { direction: LetterDirection; peer: RequestSender; mark?: LetterMark; line?: string; at_unix_ms: number };
+
+/**
+ * One agent the pane worked with since the request (`PeerLineSnapshot`): what
+ * it last said that matters, or what the pane last sent it, with how many
+ * blocks went between them and whether the pane started it.
+ */
+export type PeerLine = { peer: RequestSender; mark?: LetterMark; line?: string; at_unix_ms: number; blocks?: number; started?: boolean };
+
+/**
+ * The letters since the shown request: a line per agent (at most six, the
+ * rest counted), and for the whole list the newest eight lines oldest first,
+ * interim reports only counted.
+ */
+export type LettersSince = { total: number; progress: number; letters: number; recent: LetterLine[]; peers: PeerLine[]; more_peers: number };
+
+/** A question a later turn put to the operator (`AskedSnapshot`); `current` when it ended the newest turn. */
+
+/** The whole answer the operator opened on a turn card (`turn_answer`), one at a time. */
+export type TurnAnswerRead = { pane_id: string | null; offset: number | null; phase: "reading" | "ready" | "failed" | null; text: string | null };
 
 /** A turn before the shown request (`TurnSnapshot`): the label's summary of its request and how it ended. */
 export type AgentTurn = {
@@ -272,7 +378,12 @@ export type AgentSleep = {
   since_unix_ms: number;
   /** The last progress line it reported before it slept. */
   progress?: string | null;
+  /** Why Hide put it to sleep, when its hover says so; absent otherwise. */
+  cause?: SleepCause | null;
 };
+
+/** Why Hide put an agent to sleep (`contracts/snapshot-wire-enums.json`: `sleep_cause`): its machine was short of memory. */
+export type SleepCause = "memory_pressure";
 
 /**
  * Where a fork came from (`ForkSourceSnapshot`): the source's pane and title while
@@ -287,7 +398,7 @@ export type ForkSource = { pane_id?: string | null; label?: string | null };
  * forkable agent cannot fork yet, and `forked_from` is present on a fork.
  */
 /** Why Sleep agent or Fork is disabled now, as a code (`AgentActionRefusal`); the web words it by `agentActionRefusal.<code>`. */
-export type AgentActionRefusal = "device" | "unsupported" | "core_machine_only" | "asleep" | "working" | "waiting_for_you" | "unknown_activity" | "no_conversation";
+export type AgentActionRefusal = "unsupported" | "core_machine_only" | "asleep" | "working" | "waiting_for_you" | "unknown_activity" | "no_conversation";
 
 export type PaneFork = { available: boolean; reason?: AgentActionRefusal | null; forked_from?: ForkSource | null };
 
@@ -454,7 +565,7 @@ export type PrWrite = {
 };
 
 /** Why a `gh` lookup failed, as the core names it; the catalogs word each (issueSettings.gh*). */
-export type GithubFailureCategory = "not_installed" | "not_logged_in" | "no_github_remote" | "network_or_rate_limit";
+export type GithubFailureCategory = "not_installed" | "outdated" | "not_logged_in" | "no_github_remote" | "network_or_rate_limit";
 
 /** How a repository's `gh` lookup is doing, apart from what it found (`GithubStatusSnapshot`). */
 export type GithubStatus = {
@@ -621,7 +732,7 @@ export type IssueWork = {
 };
 
 /** Why a backlog item was not made or not undone (`BacklogFailure`). */
-export type BacklogFailure = "not_installed" | "not_logged_in" | "no_github_remote" | "network_or_rate_limit" | "queue_full" | "unconfirmed" | "repository_changed" | "unavailable" | "refused";
+export type BacklogFailure = "not_installed" | "outdated" | "not_logged_in" | "no_github_remote" | "network_or_rate_limit" | "queue_full" | "unconfirmed" | "repository_changed" | "unavailable" | "refused";
 
 /** One item the backlog add made or is making (`BacklogItemSnapshot`). */
 export type BacklogItem = {
@@ -709,7 +820,7 @@ export type PrFeedback = {
 };
 
 /** The Overview's pull-request work in flight (`PrWorkSnapshot`), one slot each. */
-/** `branch_diffs`: the Hide AI branch files read now, the 보기 slot's and the open 제안 row's, at most two. */
+/** `branch_diffs`: the Hide AI branch files read now, a card tab's and the open 제안 row's, at most two. */
 export type PrWork = { link: PrLink | null; feedback: PrFeedback | null; cards?: PrCard[]; branch_diffs?: BranchDiff[] };
 
 /** One file's committed diff on a Hide AI branch against its base, read on the Project's machine (PRD hide-ai-branch-first-apply B4). */
@@ -741,7 +852,7 @@ export type PaneRow = {
   ports?: number[];
   servers?: { host: string; port: number }[];
   id: string;
-  herdr_label: string | null;
+  engine_label: string | null;
   terminal_title: string | null;
   cwd: string;
   status_code: AgentStatusCode;
@@ -755,7 +866,7 @@ export type PaneRow = {
   fork?: PaneFork;
 };
 
-export type TabAgent = Pick<AgentRow, "agent_kind" | "mark" | "demand" | "activity" | "emphasized" | "wait" | "status_code"> & { state: Pick<AgentState, "mark_tone"> };
+export type TabAgent = Pick<AgentRow, "agent_kind" | "mark" | "demand" | "activity" | "emphasized" | "wait" | "status_code" | "profile"> & { state: Pick<AgentState, "mark_tone"> };
 
 export type Tab = {
   /** `named_by_operator`: the manual name is one the operator gave through Rename, which keeps the tab when its agents leave. */
@@ -772,7 +883,7 @@ export type Tab = {
 
 export type StripTab = {
   id: string;
-  kind: "herdr" | "file" | "diff" | "session";
+  kind: "engine" | "file" | "diff" | "session";
   source_id: string;
   label: string;
   preview: boolean;
@@ -918,8 +1029,8 @@ export type Workspace = {
   registered: boolean;
   temporary: boolean;
   pinned: boolean;
-  /** The device's Hide Home (`~/hide`, PRD home-device-rail D-01): drawn as the Home row, never in the Projects list. */
-  is_home?: boolean;
+  /** An automation's own folder, registered only so its runs start there: no list draws it (PRD automations D-08, B30). Absent while false. */
+  unlisted?: boolean;
   last_activity_unix_ms?: number | null;
   /** What `Remove project…` would close, counted by the core (D-10). */
   removal?: { pane_count: number; running_agent_count: number };
@@ -1012,7 +1123,7 @@ export type DiskCleanup = {
   phase: DiskCleanupPhase;
   main_head: string | null;
   message: string | null;
-  /** Set when in-use could not be read (no Herdr connection, a failed process read): nothing is selectable. */
+  /** Set when in-use could not be read (no engine connection, a failed process read): nothing is selectable. */
   usage_error: string | null;
   /** The in-use reads are in: cache cells may be ticked while worktree checks still run (phase `loading`). */
   usage_ready: boolean;
@@ -1079,6 +1190,8 @@ export type PaneHeader = {
   finished?: boolean;
   /** The agent waits on its children: how many descendants work, said after the request. */
   waiting_on_children?: number;
+  /** The agent rests while subagents run inside its session: how many, said after the request. */
+  waiting_on_subagents?: number;
 };
 /** The shown request in one line and its images, which the row counts. */
 export type PaneTurnRequest = {text: string | null; images: number};
@@ -1094,8 +1207,6 @@ export type TerminalPane = {
   transport_message: string | null;
   /** Core transport identity; absent in older snapshots and fixtures. */
   transport_generation?: number;
-  /** This client only observes the pane and Herdr did not move it for the last wheel; absent while false. */
-  scroll_held_elsewhere?: boolean;
 };
 
 /** Where keys sent against a creation request go (PRD instant-pane-topology D-11). */
@@ -1161,8 +1272,6 @@ export type WorkspaceRegistration = {
   path: string;
   device_id: string;
   pinned: boolean;
-  /** This registration is the device's Home (`~/hide`). */
-  home?: boolean;
 };
 
 export type PaneFind = {
@@ -1272,12 +1381,18 @@ export type TaskView = "status" | "project";
 export type SidebarProject = { device_id: string; workspace_id: string };
 
 /** One 마무리 맡기기 and where it stands (`status.stray_hand_offs`). */
+/** One add's receipt: `refused` carries the core's error kind and message. */
+export type ProjectAddReceipt = { request_id: string; device_id: string; path: string } & (
+  | { state: "pending" | "added" }
+  | { state: "refused"; kind: string; message: string }
+);
 export type StrayHandOff = { request_id: string; checkout_id: string; state: "sending" | "sent" | "failed" };
 
-/** One thing the lane's 보기 slot shows (`DetailItem`, PRD sidebar-task-lens D-50). */
+/** One card a desk tab shows (`DetailItem`, PRD sidebar-task-lens D-50; lane-desk-pair-view D-13). */
 export type DetailItem =
   | { kind: "pull_request"; workspace_id: string; number: number }
   | { kind: "record"; session: WorkSession }
+  /** A Conductor's mission map, opened wherever a mission is pressed outside the mission screen's table. */
   | { kind: "mission"; mission: string }
   /** A project's worktrees and their disk use, from the Project tool's Git tile (PRD lane-two-columns B30). */
   | { kind: "worktrees"; workspace_id: string }
@@ -1288,6 +1403,16 @@ export type DetailItem =
   | { kind: "plan"; session: WorkSession }
   /** A Hide AI branch waiting for a decision, by its 제안 row: its files, or one file's diff (PRD hide-ai-branch-first-apply B4). */
   | { kind: "branch"; workspace_id: string; row: string; path?: string | null };
+
+/**
+ * Which Agent tab's desk a card opens on, where it was pressed (PRD
+ * lane-desk-pair-view D-12, B6, B7): `here` the desk in front, beside what
+ * it holds, for what a card opens inside a card; `{ pane }` the desk of the
+ * tab of the agent whose row, head or chip was pressed, that pane taking the
+ * keyboard; `owner` the desk of the tab of the agent that owns the item,
+ * pressed where no agent is.
+ */
+export type DetailPlace = "here" | "owner" | { pane: string };
 
 /** Whether two 보기 items show the same thing: a record by its session, the rest by their fields. */
 export function sameDetailItem(a: DetailItem | null | undefined, b: DetailItem): boolean {
@@ -1310,8 +1435,10 @@ export type MissionStatus = "planning" | "running" | "merge_wait" | "done" | "ca
 export type MissionScope = "pr" | "merge";
 /** How strongly the Conductor has a mission's nodes checked (`mission_strength`); guidance for the Conductor, never a gate. */
 export type MissionStrength = "fast" | "normal" | "thorough";
-/** A node's kind (`mission_node_kind`), each done by its own rule (D-15); `external` watches a pull request or branch outside the mission (PRD mission-map-git-criteria D-20). */
-export type MissionNodeKind = "change" | "research" | "verify" | "external";
+/** A node's kind (`mission_node_kind`), each done by its own rule (D-15): a code node (`change`), a general node whose `preset` says its work (PRD node-presets D-01), or `external`, which watches a pull request or branch outside the mission (PRD mission-map-git-criteria D-20). */
+export type MissionNodeKind = "change" | "general" | "external";
+/** A general node's preset (`mission_node_preset`, PRD node-presets D-02); a general node may have none. */
+export type MissionNodePreset = "research" | "verify" | "deploy";
 /** How a change node's work lands (`mission_delivery`). */
 export type MissionDelivery = "pr" | "direct";
 /** A registered agent's life (`hide agent show`'s `runtime`): running, put to sleep by Hide, or ended. */
@@ -1322,13 +1449,17 @@ export type MissionNodeStatus = "planned" | "working" | "done" | "dropped";
 export type MissionBlocked = "upstream_dropped";
 
 /** Why a node waits on someone to look (`mission_attention_reason`, PRD mission-node-simple D-04). */
-export const MISSION_ATTENTION_REASONS = ["merged_unproven", "worker_ended", "pr_closed", "unplanned_pr", "conductor_failed", "wake_refused", "close_refused"] as const;
+export const MISSION_ATTENTION_REASONS = ["merged_unproven", "worker_ended", "pr_closed", "unplanned_pr", "conductor_failed", "wake_refused", "close_refused", "human_gate", "not_started", "warning_stood", "wait_stood"] as const;
 export type MissionAttentionReason = typeof MISSION_ATTENTION_REASONS[number];
+/** A standing cell that is not a raise, as the safety net's row names it (`mission_health::CellReason`, PRD letters-missions-simplify D-23). */
+export const MISSION_HELD_CELL_REASONS = ["ci_failed", "ci_cancelled", "changes_requested", "outside_failed", "warning_review_fails", "warning_stopped"] as const;
+export type MissionHeldCellReason = typeof MISSION_HELD_CELL_REASONS[number];
 /** Who a raised node waits on (`mission_attention_to`, D-05). */
 export type MissionAttentionTo = "conductor" | "operator";
 /** The `!` a node carries (`AttentionView`): why, the pull request it is about, who looks and since when, and, waiting on the operator, whether a Needs You row carries it; without one the mission itself is the Needs You item (D-19, B14). */
 /** `item`: the mission itself is a Needs You item for it, decided by the core (waits on the operator, no row carries it, the mission still asks, the node is not dropped). */
-export type MissionAttention = { reason: MissionAttentionReason; pr: number | null; to: MissionAttentionTo; since_unix_ms: number; on_row: boolean; item: boolean };
+/** `choices`: the operator's choices for it, in the order drawn, decided by the core (`AttentionReason::choices`); the screen draws them and decides none. */
+export type MissionAttention = { reason: MissionAttentionReason; pr: number | null; to: MissionAttentionTo; since_unix_ms: number; on_row: boolean; item: boolean; choices: MissionOperatorAction[]; unmet_nodes?: number };
 /** What Hide itself did to a node (`mission_hide_action`, D-03). */
 export type MissionHideAction = "done" | "attached" | "woke";
 /** Why Hide woke a worker (`mission_fix_reason`, D-13). */
@@ -1337,8 +1468,15 @@ export type MissionFixReason = "ci_failed" | "conflict" | "changes_requested";
 export type MissionHideMark = { action: MissionHideAction; pr?: number; why?: MissionFixReason; at_unix_ms: number };
 /** What the operator chose for a node that waits on them (`mission_operator_action`, B15, B16). */
 export type MissionOperatorAction = "done" | "drop" | "attach" | "leave" | "resume";
-/** One of a node's pull requests (`NodePrView`), the current one last. */
-export type MissionNodePr = { number: number; state: PrState | null; url: string | null };
+/** One of a node's pull requests (`NodePrView`), the current one last: `base` is the branch it merges into as GitHub last answered, absent until it answered and from a core before it. */
+export type MissionNodePr = { number: number; state: PrState | null; url: string | null; base?: string };
+
+/** Who merges a node's pull request (`mission_merge_by`, PRD mission-destination D-10, D-35). */
+export type MissionMergeBy = "operator" | "conductor";
+/** Where that merge stands, decided by the core (`mission_merge_step`): `due` is the operator's turn, only for a node whose own plan gives them its merge. */
+export type MissionMergeStep = "ahead" | "due" | "merged";
+/** Who merges a change delivered by pull request and where it stands (`NodeMerge`, D-45): `why` is the plan's reason when the node's own value gives the operator its merge, absent when the scope decides. */
+export type MissionNodeMerge = { by: MissionMergeBy; why?: string; state: MissionMergeStep; /** Still-open held PRs, in held order; older cores omit it. */ prs?: number[] };
 
 /** A verify node's verdict (`mission_verdict`, PRD mission-plan-visibility B33). */
 export type MissionVerdict = "pass" | "fail";
@@ -1357,7 +1495,7 @@ export type MissionLanding =
   | { state: "unread"; action: MissionLandingAction };
 
 /** A finish line's kind (`mission_criterion_kind`, PRD mission-map-git-criteria D-09-D-11, D-21). */
-export type MissionCriterionKind = "own" | "check" | "ci" | "review" | "verify" | "defect";
+export type MissionCriterionKind = "own" | "check" | "ci" | "review" | "verify" | "defect" | "human";
 /** A finish line's state as it stands now (`mission_criterion_state`); a check passed on an older commit reads open (B7). */
 export type MissionCriterionState = "open" | "pass" | "fail" | "skipped";
 /** Who recorded a line (`mission_recorded_role`, D-23). */
@@ -1367,7 +1505,7 @@ export type MissionCheckRule = "all" | "majority";
 
 /** One agent of a review or verification: what the plan asked, the registration bound to it and its own answer. */
 /** One checker of a review or verify line; `pane_id` and `machine` are the bound checker's pane now, as the core resolves it from `agent_id` (B29). */
-export type MissionChecker = { worker: MissionWorker; agent_id?: string; state: MissionCriterionState; evidence?: string; summary?: string; at_unix_ms?: number; pane_id?: string; machine?: string };
+export type MissionChecker = { worker: MissionWorker; agent_id?: string; state: MissionCriterionState; evidence?: string; summary?: string; at_unix_ms?: number; commit?: string; pane_id?: string; machine?: string };
 
 /** One finish line of a node (`Criterion`): only the fields its kind carries are present. */
 export type MissionCriterion = {
@@ -1383,16 +1521,48 @@ export type MissionCriterion = {
   commit?: string;
   reruns?: number;
   rerunning?: boolean;
+  /** The CI on `commit` failed after its rerun and sent the node back to work, once per head. */
+  sent_back?: boolean;
   /** `decision` is the operator's answered question a check command or CI skip rests on (`⤳ operator 결정`). */
   skip?: { reason: string; decision?: number };
   rule?: MissionCheckRule;
   checkers?: MissionChecker[];
-  /** The node whose work found a defect. */
+  /** Of the checkers that decide the line, how many passed, as the core counts them; absent while one or none decides (`Tally`). */
+  tally?: { passed: number; total: number };
+  /** The node whose work found a defect; absent on a defect the operator's answer to the node's gate wrote. */
   found_by?: string;
+  /** Where the operator answered from, on a passed gate (`human`) and on the defect their answer to it wrote (`mission_gate_via`, PRD mission-human-gate D-21). */
+  via?: MissionGateVia;
+  /** On a gate: the key of the decision that asks it now. */
+  asked?: number;
+  /** On a gate: when it asks, before its node starts, or once the Conductor shows it or its node's own lines are met, before review and CI (PRD node-presets D-06); absent for `end` and from a core before start gates. */
+  when?: MissionGateWhen;
+};
+
+/** Where the operator's answer to a gate came from (`mission_gate_via`). */
+export type MissionGateVia = "card" | "phone" | "pane";
+/** Where a node's gate stands, derived by the core (`mission_gate_state`, PRD mission-human-gate D-09). */
+export type MissionGateState = "ahead" | "open" | "passed";
+/** When a gate asks (`mission_gate_when`, PRD node-presets D-06): before its node starts, or before its review and CI once shown or once its own lines are met. */
+export type MissionGateWhen = "start" | "end";
+/** The place the operator looks before a node is done (`GateView`): what to look at, the decision that asks it (`ask`, its question's key), since when it waits, when it has waited long (`오래 기다림`, compared with the clock), and once passed where the answer came from and the words. */
+export type MissionGate = {
+  state: MissionGateState;
+  look: string;
+  /** Absent from a core before start gates, which asks every gate at the end. */
+  when?: MissionGateWhen;
+  ask: number | null;
+  since_unix_ms: number | null;
+  long_wait_at_unix_ms: number | null;
+  via: MissionGateVia | null;
+  said: string | null;
 };
 
 /** What an external node watches (`External`). */
 export type MissionExternal = { pr: number } | { branch: string };
+
+/** Where an outside node's work goes (`OutsideView`, PRD mission-destination D-14): its pull request's base and state as GitHub last answered, or the default branch its branch is judged against; each absent until read. */
+export type MissionOutside = { base?: string; state?: PrState };
 
 /** What the Conductor asked beside its decision (`Question`, B25, B32); `key` names it, so an answer to a changed question is refused. */
 export type MissionQuestion = {
@@ -1403,13 +1573,43 @@ export type MissionQuestion = {
   recommend: number | null;
   /** The node the decision stopped. */
   node: string | null;
+  /** The other nodes the decision is about, beside `node`, whose raises wait on it with the Conductor; absent when it names none, and from an older core. */
+  nodes?: string[];
   asked_at_unix_ms: number;
+  /** The operator asked the Conductor for something to look at (`자료 요청`); absent until then. */
+  material_asked?: boolean;
 };
 
+/** A View linked to a mission's open decision or to a done node's `결과`, open or closed (`LinkedView`): on a decision the Conductor's, named with `--show` or opened since the question before, or the stopped node's worker's in its current attempt; on a node what its worker opened in its current attempt. */
+export type LinkedView = {
+  device_id: string;
+  checkout_path: string;
+  display_id: string;
+  /** The name a press asks for its View by, which says no path (`ViewLink::token`). */
+  view: string;
+  kind: ViewDisplaySnapshot["kind"];
+  label: string;
+  /** The operator has not looked at it since it was opened; absent once they have. */
+  unseen?: boolean;
+  /** It closed since the decision linked it: the row stays and opens it again from what the link kept (`display_id` is then the link's). */
+  closed?: boolean;
+  /** Who linked it (`contracts/snapshot-wire-enums.json`: `mission_decision_view_by`). */
+  by: "conductor" | "worker";
+  /** The pane of the agent that opened it, while that agent is open. */
+  pane_id?: string;
+  /** Each kept press that asked it to open again, by request id: refused when nothing will open; open again is `closed` gone. */
+  reopens?: ViewReopen[];
+};
+
+/** What became of a press that asked a linked View to open again (`ViewReopen`). */
+export type ViewReopen = { request_id: string; refused?: boolean };
+
 /** Where the operator's answer is (`mission_answer_state`, B26, B28). */
-export type MissionAnswerState = "sending" | "waiting" | "delivered" | "unconfirmed";
+export type MissionAnswerState = "sending" | "waiting" | "unconfirmed";
 /** The operator's answer from the banner (`AnswerView`); `option` counts from 1, none for a written answer. */
-export type MissionAnswer = { key: number; text: string; option: number | null; state: MissionAnswerState };
+/** What a waiting answer waits for (`mission_answer_hold`, `AnswerHold`): the Conductor works, the operator's own typing is in its input, the quiet period just after either, a menu of its own waits, another wait that ends on its own, or `지금 보내기` was pressed. */
+export type MissionAnswerHold = "working" | "typing" | "recent" | "approval" | "other" | "forced";
+export type MissionAnswer = { key: number; text: string; option: number | null; state: MissionAnswerState; /** Absent from an older core and from the phone's relay. */ hold?: MissionAnswerHold };
 /** Why the last answer did not reach the Conductor, or why one still waits (`session_unreadable`) (`mission_answer_failure`, B28, B39). */
 export type MissionAnswerFailure = "conductor_gone" | "device_disconnected" | "send_failed" | "session_unreadable";
 
@@ -1440,20 +1640,27 @@ export type MissionEvent = {
   action?: MissionOperatorAction;
 };
 
-/** The events of the mission open in the 보기 slot (`MissionEventsSnapshot`, D-22): `dropped` past the 500 kept (B21). */
+/** The events of the mission open as a card tab on a desk (`MissionEventsSnapshot`, D-22): `dropped` past the 500 kept (B21). */
 export type MissionEventsSnapshot = { mission: string | null; events: MissionEvent[]; dropped: number };
 
-/** The agent a node or a candidate names, with its model and effort. */
-export type MissionWorker = { agent: string; model?: string | null; effort?: string | null; effort_auto?: boolean };
+/** The brief of the node whose folded box the operator opened (`mission_brief`): one node at a time, `text` null when the node holds none. */
+export type MissionBriefSnapshot = { mission: string | null; node: string | null; text: string | null };
 
-/** The agent, model and effort Hide started a node's worker with (`missions::NodeLaunch`). */
-export type MissionNodeLaunch = { agent_id: string; agent: string; model?: string | null; effort?: string | null };
+/** The agent item a node's plan or a checker names, with its model and effort: `profile` is a profile's id on the mission's machine, absent for the agent's built-in default (PRD agent-profiles-phase2 D-08). */
+export type MissionWorker = { agent: string; profile?: string | null; model?: string | null; effort?: string | null; effort_auto?: boolean };
+
+/** The agent item, model and effort Hide started a node's worker with (`missions::NodeLaunch`): `profile` is the profile it started with, by its id on the worker's machine and its name then; none for the built-in default. */
+export type MissionNodeLaunch = { agent_id: string; agent: string; profile?: { id: string; name: string } | null; model?: string | null; effort?: string | null };
 
 /** One node of a mission's map, with what the map draws and nothing the shell works out (`NodeView`). */
 export type MissionNode = {
   key: string;
   title: string;
   kind: MissionNodeKind;
+  /** A general node's preset, and the icon key the core's preset table names for a general node (PRD node-presets D-02, D-08); absent on other nodes and from an older core. */
+  preset?: MissionNodePreset | null;
+  icon?: string | null;
+  /** What it waits on, as the plan wrote it: `<node>`, or `<node>:<line>` for one finish line of that node (`missionDependency` reads it). */
   depends_on: string[];
   status: MissionNodeStatus;
   blocked: MissionBlocked | null;
@@ -1472,6 +1679,8 @@ export type MissionNode = {
   /** Every pull request the node holds, the current one last (PRD mission-node-simple D-10). */
   prs: MissionNodePr[];
   base_pr: number | null;
+  /** The node it stacks on while that one's work is not in main: it starts from that node's branch and its pull request is based there (`NodeStack`); absent when not stacked and from an older core. */
+  stack?: MissionNodeStack | null;
   branch: string | null;
   pr_state: PrState | null;
   pr_url: string | null;
@@ -1479,14 +1688,24 @@ export type MissionNode = {
   stage: number | null;
   attempts: number;
   line: string | null;
+  /** The first line of its worker's last report to the Conductor (`MissionNode::reported`): a done node's `결과` shows it as the conclusion while `line` is none. */
+  reported?: string;
+  /** A done node's documents (issue 2637): the Views its worker and the agents under it opened in its current attempt, open or closed; absent on any other node. */
+  views?: LinkedView[];
   change: string | null;
   review: string | null;
   /** The node's finish lines as they stand now (PRD mission-map-git-criteria B32). */
   criteria: MissionCriterion[];
+  /** The steps its Conductor planned for the node (at most 8): what the card and the panel show until the worker's own `plan` exists, and what a step of that plan is compared with. */
+  steps: string[];
+  /** The size in bytes of the brief its worker was started on; none until a worker is bound. The text is read when the panel's folded box opens (`mission_brief`). */
+  brief_bytes: number | null;
   /** Lines that pass or were skipped of `criteria` (what the gate counts), and how many were skipped; B28's `기준 n/m ⤳k` shows `criteria_met - criteria_skipped` as `n`. */
   criteria_met: number;
   criteria_skipped: number;
   external: MissionExternal | null;
+  /** Where an outside node's work goes, for its branch line; absent for any other node and from a core before it. */
+  outside?: MissionOutside;
   /** An outside node Hide could not read: it stays waiting, the reason is in the diagnostic log (`확인 못 함`, B20). */
   unread: boolean;
   /** How often a later node's defect opened it again (`↻n`, B21). */
@@ -1495,7 +1714,7 @@ export type MissionNode = {
   finished_at_unix_ms: number | null;
   /** A direct change's commit on main, as the Conductor recorded it (B33): its shown result, never proof it is there. */
   commit: string | null;
-  /** Where its work is on its way to main, as the core decides it (`herdr-core/src/runtime/mission_landing.rs`). */
+  /** Where its work is on its way to main, as the core decides it (`hide-core/src/runtime/mission_landing.rs`). */
   landing: MissionLanding | null;
   verdict: MissionVerdict | null;
   checks: { passed: number; total: number } | null;
@@ -1505,25 +1724,93 @@ export type MissionNode = {
   attention: MissionAttention | null;
   /** What Hide itself did to the node last (D-07, D-15). */
   hide: MissionHideMark | null;
+  /** Its review's or verification's rounds against the mission's limit (`ReviewRounds`): null before a checker answered, absent from an older core. */
+  review_rounds?: MissionReviewRounds | null;
+  /** When it could have started, the mission's start or its last dependency done (`ready_at`); null while it cannot, absent from an older core. */
+  ready_at_unix_ms?: number | null;
+  /** When it last went to work, its start or back from a finish (`MissionNode::worked_at_unix_ms`): its work counts from here (`nodeSpans`); null for a node of a book from before it, absent from an older core. */
+  worked_at_unix_ms?: number | null;
+  /** When the lines its worker answers first all stood met in this run of its work (`MissionNode::own_met_at_unix_ms`): its work ends and its review and CI begin here (`nodeSpans`); null before then and for a node of a book from before it. */
+  own_met_at_unix_ms?: number | null;
+  /** When Hide last read a new head on one of its pull requests. */
+  pushed_at_unix_ms?: number | null;
+  /** The warnings it carries, its Conductor's alone: the card's `⚠`. */
+  warnings?: MissionNodeWarning[];
+  /** Who or what it waits on now, decided once by the core (`WaitingOn`); absent from an older core. */
+  waiting_on?: MissionWaitingOn | null;
+  /** Whether a node in progress is worked now (`NodeWork`, hide-private issue 680): null when it is not in progress or Hide cannot see its worker's row, absent from an older core. */
+  work?: MissionNodeWork | null;
+  /** The node's gate (PRD mission-human-gate); absent for a node without one. */
+  gate?: MissionGate;
+  /** Who merges its pull request and where that stands (`NodeMerge`); absent for a node that is no change by pull request, and from a core before it. */
+  merge?: MissionNodeMerge;
+  /** What it waits on that its Conductor set (`Mission::wait_of`): its own hold (`hide mission node --hold`) or the mission's delay (`hide mission delay`, `mission` true), why and until when; no warning or stall rises on it until then. Null while nothing holds it, absent from an older core. */
+  wait?: MissionNodeWait | null;
 };
+
+/** A node's wait as the core decides it (`NodeWait`): the map's and the phone's `기다리는 중 · <why> · <time>`. */
+export type MissionNodeWait = { why: string; until_unix_ms: number; mission: boolean };
+
+/** A node in progress as the core reads its worker (`NodeWork`): working, resting while the node waits on `on`, asleep while Hide holds its worker asleep (a sleep, not a wait), stopped with nothing to wait on since `since_unix_ms` (why when its hook said), or with no worker since `since_unix_ms` (absent until a warning judgment saw it, and from a core before it). */
+export type MissionNodeWork =
+  | { state: "working" }
+  | { state: "waiting"; on: MissionWaitingOn }
+  | { state: "asleep" }
+  | { state: "stopped"; cause: MissionStopCause | null; since_unix_ms: number }
+  | { state: "no_worker"; since_unix_ms?: number | null };
+/** Why a node's worker stopped (`StopCause`): the provider refused its turn on a usage limit or with an API error, with the agent's own first line for it. */
+export type MissionStopCause = { kind: "limit"; line: string } | { kind: "error"; line: string };
+
+/** What the operator does to let a Conductor's held letters through (`delivery::held::HeldFor`, `contracts/snapshot-wire-enums.json`: `mission_letters_held_for`). */
+export type MissionLettersHeldFor = "approval" | "draft";
+/** The letters to a running mission's Conductor only the operator can let through (`HeldLetters`, hide-private issue 678). */
+export type MissionHeldLetters = { count: number; reason: MissionLettersHeldFor; since_unix_ms: number };
+
+/** The node a node stacks on, its branch and its current pull request (`NodeStack`). */
+export type MissionNodeStack = { on: string; branch: string | null; pr: number | null };
+
+/** Who or what a node waits on now (`WaitingOn`): the map's card reads the nodes before it, `hide mission show` every kind. */
+export type MissionWaitingOn =
+  | { kind: "attention"; to: MissionAttentionTo; reason: MissionAttentionReason }
+  | { kind: "nodes"; keys: string[] }
+  /** The merge of the pull request it stacks on comes first (`WaitingOn::Below`). */
+  | { kind: "below"; node: string }
+  | { kind: "decision" | "blocked" | "start" | "worker" | "review" | "verify" | "ci" | "merge" | "conductor" };
+
+/** A node's review or verification rounds (`ReviewRounds`): the line, the distinct heads its checkers answered, and the rounds the mission's strength allows. */
+export type MissionReviewRounds = { line: string; rounds: number; limit: number };
+
+/** What a node's warning is about (`WarningKind`): its review or verification failing at the strength's round limit, or its worker stopped. */
+export type MissionWarningKind = "review_fails" | "stopped";
+/** A warning a node carries (`NodeWarning`): raised at `since_unix_ms`, standing on the fact at `from_unix_ms`, its letter queued for the Conductor at `told_unix_ms` (none while the queue was full). */
+export type MissionNodeWarning = { kind: MissionWarningKind; from_unix_ms: number; since_unix_ms: number; told_unix_ms?: number | null; cause?: MissionStopCause | null };
+
+/** One node the safety net holds (`HeldNodeView`): its unresolved cell (a raise's reason or a standing cell's fact) and since when it stands. */
+export type MissionHeldNode = { key: string; title: string; reason: MissionAttentionReason | MissionHeldCellReason; pr: number | null; since_unix_ms: number };
+/** The safety net (`SafetyNetView`): whether a Conductor holds the mission, what its minutes count from, and the held nodes oldest first. */
+export type MissionSafetyNet = { conductor_present: boolean; since_unix_ms: number; nodes: MissionHeldNode[] };
+/** A line the Conductor skipped on its own, with no decision of the operator's (`SkippedAloneView`); `text` is the words of a line the plan wrote. */
+export type MissionSkip = { node: string; title: string; line: string; kind: MissionCriterionKind; text?: string; reason: string; by: string; at_unix_ms: number };
 
 /** One mission as the map draws it (`MissionView`). */
 export type Mission = {
   id: string;
   title: string;
+  /** The external tool whose agent conducts it (PRD hide-external-control B30, D-15): listed and answered as any mission, its row and map head name the tool. */
+  tool?: ToolWork;
   workspace_id: string;
   project: string;
   checkout_path: string;
   device_id: string;
   status: MissionStatus;
   scope: MissionScope;
+  /** The branch the mission's results go to, the one the core judges it against (`Runtime::judged_destination`): what it records, else the project's default branch; absent only while neither can be read, and from a core before destinations, so the map names no branch then. */
+  destination?: string;
   cap: number;
   /** Made before node criteria: its nodes show their sentence only and nothing is gated (B23). */
   exempt: boolean;
   /** Settings › Mission's default when the mission was created, then what its plan names; null for one from before verification strength. */
   strength: MissionStrength | null;
-  /** Whether a checker comes from another company than the node's worker, as Settings › Mission said when the mission was created; null for one from before. */
-  other_vendor: boolean | null;
   /** `takes_answers`: its agent takes an answer typed from the banner, which the doorbell types only into the agents it rings (B26). */
   conductor: { pane_id: string; name: string; agent_kind: string; session: WorkSession | null; present: boolean; takes_answers: boolean };
   nodes: MissionNode[];
@@ -1537,12 +1824,26 @@ export type Mission = {
   decision: string | null;
   /** What the Conductor said beside `decision`; null for a decision from before it. */
   question: MissionQuestion | null;
+  /** The Views linked to that decision that are still open; absent when none. */
+  decision_views?: LinkedView[];
   answer: MissionAnswer | null;
   /** The operator asked the Conductor to end the mission and it has not closed it yet (`미션 종료`). */
   end_asked?: boolean;
+  /** Letters to the Conductor only the operator can let through, while the mission runs; absent from an older core. */
+  conductor_letters?: MissionHeldLetters | null;
   answer_failed: MissionAnswerFailure | null;
   delay: string | null;
+  /** When the delay ends by itself; every delay has an end (`Mission::delay_until_unix_ms`). */
+  delay_until_unix_ms?: number | null;
   report: string | null;
+  /**
+   * The mission's one card for the raises its Conductor has not settled (`SafetyNetView`): none while nothing is held, with no Conductor at
+   * once, and with one once the oldest held raise stood 20 minutes. The operator's turn for raised nodes is this, never a card per node
+   * (hide-private docs/missions.md, the principle of 2026-11-11). Absent from an older core.
+   */
+  safety_net?: MissionSafetyNet | null;
+  /** The lines the Conductor skipped on its own, oldest first: the map's `Conductor가 정한 것` (`SkippedAloneView`). Absent from an older core. */
+  skipped_alone?: MissionSkip[];
   created_at_unix_ms: number;
   started_at_unix_ms: number | null;
   closed_at_unix_ms: number | null;
@@ -1552,6 +1853,18 @@ export type Mission = {
   stale: boolean;
   github_stale: boolean;
   github_read_at_unix_ms: number | null;
+};
+
+/**
+ * What the mission rules both screens share read of a node (`missionEntry`, `turnItems`, `missionCells`): the desktop's `MissionNode` and the
+ * phone's trimmed one (`hided/src/mobile/missions.rs`) both carry it, so one rule groups a mission wherever it is drawn.
+ */
+/** The phone's nodes carry no choices: it takes none (`attention` without `choices`). */
+export type MissionNodeBrief = Pick<MissionNode, "key" | "title" | "kind" | "preset" | "icon" | "depends_on" | "status" | "blocked" | "pr" | "pr_state" | "landing" | "agent_runtime" | "gate" | "merge" | "wait"> & { attention: Omit<MissionAttention, "choices"> | null; work?: { state: MissionNodeWork["state"] } | null };
+/** What those rules read of a mission, and so what the phone receives of one. */
+export type MissionBrief<N extends MissionNodeBrief = MissionNodeBrief> = Pick<Mission, "id" | "status" | "decision" | "landing_order" | "created_at_unix_ms" | "closed_at_unix_ms" | "conductor_letters" | "safety_net" | "skipped_alone" | "question"> & {
+  conductor: Pick<Mission["conductor"], "present">;
+  nodes: N[];
 };
 
 /** The missions the core keeps; `failed` when the record could not be read (B21). */
@@ -1617,19 +1930,20 @@ export type PlanView = {
 export type PlansSnapshot = { items: PlanView[] };
 
 /** Settings › Mission (D-31): the cap, the default scope, the worker candidates, a new mission's verification strength and whether its checkers come from another company. */
-export type ConductorCandidate = { agent: string; model?: string | null; effort?: string | null; purpose: string };
-export type ConductorSettings = { concurrency: number; default_scope: MissionScope; candidates: ConductorCandidate[]; default_strength: MissionStrength; other_vendor: boolean; clean_merged: boolean };
-
-/** The 보기 slot: what it opened, oldest first and the one it shows last, and whether the lane draws it. */
-export type DetailSlot = { items: DetailItem[]; shown: boolean };
+/** A candidate's `profile` is a profile's id on this machine, absent for the agent's built-in default (PRD agent-profiles-phase2 D-08, B14). */
+export type ConductorCandidate = { agent: string; profile?: string | null; model?: string | null; effort?: string | null; purpose: string };
+/** Which way every mission's map runs: what a node waits on above it, or to its left. */
+export type MissionMapFlow = "down" | "across";
+export type ConductorSettings = { concurrency: number; default_scope: MissionScope; candidates: ConductorCandidate[]; default_strength: MissionStrength; clean_merged: boolean; map_flow?: MissionMapFlow };
 
 /** Which sessions the Overview map lights (`contracts/snapshot-wire-enums.json`: `overview_graph_focus`). */
 export type OverviewGraphFocus = "all" | "turn" | "working" | "results";
 export type GraphProjectKey = { device_id: string; workspace_id: string };
-/** A session by machine, Herdr pane and session digest (or native id), so a reused pane is never taken for it. */
+/** A session by machine, engine pane and session digest (or native id), so a reused pane is never taken for it. */
 export type GraphSessionKey = { device_id: string; pane_id: string; session: string | null };
 /** One device's map of every project, or one project's own map (PRD overview-graph-remembered D-07). */
-export type GraphScope = { kind: "all"; device_id: string } | { kind: "project"; device_id: string; workspace_id: string };
+/** `tool`: the external tool whose map it is, by connection id, whose places are its own; absent on a device's map (PRD hide-external-control B40). */
+export type GraphScope = { kind: "all"; device_id: string; tool?: string } | { kind: "project"; device_id: string; workspace_id: string; tool?: string };
 /** A dropped place in map units at interface scale one (D-08). */
 export type GraphPlace<K> = { scope: GraphScope; key: K; x: number; y: number };
 /** The Overview Work map's remembered choices (`ui_state.overview_graph`, D-05); each list keeps the most recently changed last. */
@@ -1667,7 +1981,7 @@ export type ViewDisplaySnapshot = {
   path: string;
   /** The document's name, a browser page's title (its host until it has one), or an outside file's name. */
   label: string;
-  kind: "file" | "diff" | "browser" | "external";
+  kind: "file" | "diff" | "browser" | "external" | "card";
   /** Which History group a diff shows; null for a file. */
   committed: boolean | null;
   preview: boolean;
@@ -1685,14 +1999,20 @@ export type ViewDisplaySnapshot = {
   /** Its unsent comments, and of those the ones whose letter expired (B14, B29); absent for none. */
   comments?: number;
   not_delivered?: number;
+  /** An agent opened it and the operator has not looked at it since (PRD unseen-agent-views B10); absent once they have. */
+  unseen?: boolean;
   /** An outside file's desktop grant, name and viewer (PRD outside-path-in-hide); absent for every other kind. */
   external?: { grant: string; name: string; kind: import("./host").ExternalKind };
+  /** A card tab's card (PRD lane-desk-pair-view D-13); absent for every other kind. */
+  card?: DetailItem;
+  /** The pane of the agent this desk tab belongs to (PRD lane-desk-pair-view B24, D-41): an agent's View its opener's, a card its owner's; absent for what the operator opened. */
+  owner_pane?: string | null;
 };
 
 /** An agent that opened a View (`ViewOpenerSnapshot`). */
 export type ViewOpener = {
   name: string;
-  /** The agent's Herdr kind, for its logo and product name. */
+  /** The agent's kind as the engine reports it, for its logo and product name. */
   provider: string;
   device_id: string;
   /** The pane the agent is in now; absent while it is closed (B6). */
@@ -1881,8 +2201,6 @@ export type Device = {
   ssh_alias: string | null;
   /** The WSL distribution of this PC the device is (PRD wsl-device D-20); absent from an older daemon. */
   wsl_distro?: string | null;
-  /** The Herdr socket the registration names on the device; null reads its default server. */
-  herdr_socket_path?: string | null;
   agent_count: number;
   test: { state: string; checked_at_unix_ms: number | null; stages: DeviceTestStage[] } | null;
   host?: DeviceHost;
@@ -1892,12 +2210,35 @@ export type Device = {
   machine_name?: string | null;
   /** A node that dials the core rather than a device the core dials (`DeviceSnapshot::dials_in`). */
   dials_in?: boolean;
-  /**
-   * The device's Herdr server stays on an older release than Hide's pinned
-   * Herdr (`DeviceSnapshot::herdr_behind`); null while it runs the pin or newer.
-   */
-  herdr_behind?: HerdrBehind | null;
+  /** The connection id of the paired machine this device is (`DeviceSnapshot::peer_key`): its Settings row is the pairing's, and this device serves its rail tile and panes. */
+  peer_key?: string | null;
+  /** Where the switch of this helper device to its machine's own Hide stands (`DeviceSnapshot::switch`); absent while none runs or failed. */
+  switch?: DeviceSwitch | null;
+  /** What the Hide this core started on the device's machine over SSH still needs to stay reachable (`DeviceSnapshot::needs`); absent when it needs nothing. */
+  needs?: DeviceNeeds | null;
+  /** Whether the switch to its machine's own Hide is offered on this device (`DeviceSnapshot::switchable`): a helper device dialed over SSH that has connected. */
+  switchable?: boolean;
+  /** How many of the device's terminals its switch could not take up again and closed (`DeviceSnapshot::not_carried`); absent when none. */
+  not_carried?: number | null;
+  /** Added over SSH to be switched at once (`DeviceSnapshot::switch_first`): its switch is asked when it first connects, and cancelling that takes the device off again. */
+  switch_first?: boolean;
 };
+
+/**
+ * What a machine's Hide, started over SSH, needs from the operator to stay
+ * reachable with no one at it (`contracts/snapshot-wire-enums.json`:
+ * `device_needs`): automatic login on a Mac, or on Linux the `command` an
+ * administrator runs there.
+ */
+export type DeviceNeeds = { kind: "auto_login" | "linger"; command?: string | null };
+
+/**
+ * A helper device's switch to the connection of the Hide on its machine
+ * (`contracts/snapshot-wire-enums.json`: `device_switch_state`). `reason` is
+ * the code of why a `failed` one stopped; the device is the helper's until
+ * the switch lands, so a failed one changed nothing.
+ */
+export type DeviceSwitch = { state: "checking" | "installing" | "connecting" | "failed"; reason?: string | null };
 
 /**
  * Why a device's SSH connection did not come up, by what the operator does
@@ -1925,10 +2266,6 @@ export type DeviceSignIn = { question: number; key_command: string | null } & (
 /** The operator's reply to what ssh asks, on whichever screen shows it: the device row, a node window's strip, the move dialog. */
 export type SignInReply = { reply: "text"; text: string } | { reply: "accept" } | { reply: "cancel" };
 
-/** Why a device's Herdr stays older than Hide's (`contracts/snapshot-wire-enums.json`: `herdr_behind_cause`). */
-export type HerdrBehindCause = "cannot_hand_off" | "handoff_failed";
-
-export type HerdrBehind = { server_version: string; version: string; cause: HerdrBehindCause };
 
 /** One part of the install kit (`contracts/snapshot-wire-enums.json`: `kit_component_id`). */
 export type KitComponentId = "cli" | "claude_code_hook" | "codex_hook" | "coordination_retirement";
@@ -1940,30 +2277,28 @@ export type KitComponentState = "installed" | "outdated" | "not_installed" | "re
 export type KitAgentAvailability = "available" | "not_installed" | "unsupported_system";
 
 /** The first-run wizard's steps (`contracts/snapshot-wire-enums.json`: `first_run_step`). */
-export type FirstRunStep = "herdr" | "agents" | "devices" | "notifications" | "project" | "done";
+export type FirstRunStep = "agents" | "devices" | "notifications" | "project" | "done";
 
 export type FirstRun = { version: number; step: FirstRunStep };
 export type FirstRunProjectForm = { view?: "add" | "clone" | "create" | ""; url?: string; parent?: string; name?: string };
-export type FirstRunChoices = { agents?: string[] | null; /** Null until a device row is checked or unchecked (PRD wsl-device B1). */ devices?: string[] | null; project_device?: string | null; project_path?: string; project_form?: FirstRunProjectForm; notifications_answered?: boolean };
-export type HerdrProfileRefusal = "no_consent" | "disabled" | "invalid_target" | "discovery_pending" | "device_limit" | "profile_moved";
+export type FirstRunChoices = { agents?: string[] | null; /** Null until a device row is checked or unchecked (PRD wsl-device B1). */ devices?: string[] | null; project_device?: string | null; project_form?: FirstRunProjectForm; notifications_answered?: boolean };
+export type MachineProfileRefusal = "no_consent" | "invalid_target" | "discovery_pending" | "device_limit";
 
-/** A machine the first-run Devices step offers: a saved Herdr profile, an ssh config Host, both as one row, or this PC's WSL. */
-export type HerdrProfile = {
-  id: string; label: string; target: string; session: string; enabled: boolean;
-  /** Herdr saved it. */
-  herdr: boolean;
-  /** The ssh config Host the row is, or the one the profile's target is. */
+/** A machine the first-run Devices step offers: an ssh config Host, or this PC's WSL. */
+export type MachineProfile = {
+  id: string; label: string; target: string;
+  /** The ssh config Host the row is. */
   ssh_host: string | null;
   /** `user@host:port` as `ssh -G` resolved the Host. */
   address: string | null;
-  /** Set on the one row that is this PC's default WSL distribution, not a saved profile (PRD wsl-device B1). */
+  /** Set on the one row that is this PC's default WSL distribution, not a Host (PRD wsl-device B1). */
   wsl_distro?: string | null;
   added_as: string | null; problem: string | null; device_id: string | null;
   connect_state: string;
-  /** Why Hide declined to connect it (`herdr_profile_refusal`); a tried connection that failed has none. */
-  connect_refusal: HerdrProfileRefusal | null;
+  /** Why Hide declined to connect it (`profile_refusal`); a tried connection that failed has none. */
+  connect_refusal: MachineProfileRefusal | null;
 };
-export type HerdrProfiles = { state: "idle" | "loading" | "ready" | "failed"; error: string | null; profiles: HerdrProfile[]; truncated: boolean };
+export type MachineProfiles = { state: "idle" | "loading" | "ready" | "failed"; error: string | null; profiles: MachineProfile[]; truncated: boolean };
 
 /** The flow version this build draws; the core keeps the same number (`FIRST_RUN_VERSION`). */
 export const FIRST_RUN_VERSION = 1;
@@ -2002,8 +2337,6 @@ export type KitAgent = {
   chosen: boolean;
   skill: KitPiece;
   hook: KitPiece | null;
-  /** Herdr's own integration for the agent; every supported agent has one, so null only from a device helper whose build predates the field. */
-  herdr?: KitPiece | null;
   /** Hide does only some of what it does for Claude Code with this agent: the row wears the Partial chip, on or off. */
   partial?: boolean;
   /** Every feature of the Partial popover in the table's order (`hide_kit::Feature` ids); `supported` is what this build does. */
@@ -2021,8 +2354,6 @@ export type KitFeatureId =
   | "letters"
   | "bell"
   | "memory"
-  | "spawn_guard"
-  | "herdr_integration"
   | "sleep"
   | "fork"
   | "start"
@@ -2067,8 +2398,6 @@ export type KitRefusal = {
 };
 
 export type Kit = {
-  /** The device could not start its pinned Herdr; retry an install pass. */
-  herdr_start_failed?: boolean;
   unavailable: KitUnavailable | null;
   busy: boolean;
   /** The machine's last pass or read stopped before changing anything; its parts and agents are then empty. */
@@ -2088,12 +2417,261 @@ export type Kit = {
   codex_daemon_on?: boolean | null;
   /** The last turn-off of the shared server on this machine; absent until one was asked. */
   codex_daemon_off?: CodexDaemonOff | null;
+  /** The machine's agent profiles as its node lists them (PRD agent-profiles D-04); null until first read. */
+  profiles?: MachineAgentProfiles | null;
+  /** The machine's store of skills and MCP items as its kit last reported it (PRD skill-mcp-manager); null until the machine was read. */
+  store?: StoreReport | null;
+  /** The cells whose change waits for a new agent session (B17). */
+  store_new_session?: { item: string; column: string }[];
+};
+
+/** What a store item is (`store_item_kind`). */
+export type StoreItemKind = "skill" | "mcp";
+
+/** Where an item came from (`hide_kit::store::Source`). */
+export type StoreSource =
+  | { kind: "git"; url: string; path?: string; reference?: string | null; commit: string; tag?: string | null }
+  | { kind: "folder"; path: string }
+  | { kind: "copy"; from: string }
+  | { kind: "pasted" };
+
+/** The short version a row shows beside the name (B36). */
+export type StoreVersion =
+  | { kind: "tag" | "commit" | "pinned"; value: string }
+  | { kind: "folder" | "copy" | "remote" | "npm_latest" | "unpinned" };
+
+/** One cell column of a kind's rows: a skill folder or an agent (`Column`). */
+export type StoreColumn = { id: string; agents: string[]; also?: string[] };
+
+/** One file of a skill (`FileEntry`); `executable` is the ▲ of the confirm screens. */
+export type StoreFile = { path: string; size: number; executable: boolean };
+
+/** One agent's cell of an item's row (`store_cell_state`). */
+export type StoreCellState = "on" | "off" | "waiting" | "hand_written" | "failed" | "unsupported" | "agent_off";
+
+/** What kind of failure a failed cell's is (`store_cell_failure`), which the screen words in one line. */
+export type StoreCellFailure = "unreadable" | "unwritable" | "keys" | "pending";
+export type StoreCell = {
+  column: string;
+  state: StoreCellState;
+  /** The kit's own sentence, for the log; the screen words the state and the failure. */
+  reason?: string | null;
+  failure?: StoreCellFailure | null;
+  /** The real path of `place`, the agent's file or folder. */
+  path?: string | null;
+  changed_at_unix_ms?: number | null;
+  /** The key of the place the state speaks of, which a take-over names (decisions 2026-11-19). */
+  place?: string | null;
+  /** A hand-written MCP cell's server as that place holds it, key names only: what a take-over brings in (B20). */
+  server?: McpServer | null;
+};
+
+/** How an MCP server is reached; the names of its keys, never a value. */
+export type McpReach =
+  | { kind: "local"; command: string; args?: string[]; env?: string[] }
+  | { kind: "remote"; transport: "http" | "sse"; url: string; headers?: string[] };
+
+export type McpServer = { name: string; reach: McpReach };
+
+/** One item's row (`ItemReport`). */
+export type StoreItem = {
+  id: string;
+  kind: StoreItemKind;
+  name: string;
+  /** The GitHub account a git source belongs to, whose kept picture is in `StoreReport.avatars`. */
+  owner?: string | null;
+  source: StoreSource;
+  version: StoreVersion;
+  update?: StoreVersion | null;
+  on: boolean;
+  folder_missing?: boolean;
+  files?: StoreFile[];
+  /** A skill's own description, when its SKILL.md gives one. */
+  description?: string | null;
+  server?: McpServer | null;
+  /** The columns the operator switched off while the item is on. */
+  off_for?: string[];
+  cells: StoreCell[];
+};
+
+/** One copy of an entry Hide did not write (`FoundCopy`). */
+/** An agent's copy Hide does not manage; an MCP copy carries its server as that place holds it, key names only (B20). */
+export type StoreFoundCopy = { place: string; agents: string[]; profiles?: string[]; path: string; link?: string | null; digest: string; refused?: string | null; server?: McpServer | null };
+
+/** What agents hold that Hide does not manage ('에이전트에만 있음', B19). */
+export type StoreUnmanaged = { kind: StoreItemKind; name: string; copies: StoreFoundCopy[]; same: boolean };
+
+export type StoreTrashCause = { kind: "deleted" } | { kind: "replaced"; place: string; path: string };
+
+export type StoreTrash = { id: string; kind: StoreItemKind; name: string; at_unix_ms: number; cause: StoreTrashCause };
+
+/** What the operator gave as a source (B3, B5). */
+export type StoreSourceSpec = { kind: "git"; url: string } | { kind: "folder"; path: string };
+
+export type StoreFoundSkill = { name: string; path: string; description?: string | null; digest: string; taken?: boolean };
+
+/** What a source answered (B3-B6). */
+export type StorePreview = {
+  id: string;
+  source: StoreSourceSpec;
+  url?: string | null;
+  commit?: string | null;
+  tag?: string | null;
+  reference?: string | null;
+  skills: StoreFoundSkill[];
+  agents: string[];
+  at_unix_ms: number;
+};
+
+/** What an update would change (B23). */
+export type StoreUpdateDiff = {
+  id: string;
+  item: string;
+  from: StoreVersion;
+  to: StoreVersion;
+  commit: string;
+  summary: string[];
+  at_unix_ms: number;
+};
+
+/** One server a paste read as (B8, B9). */
+export type McpPastedServer = { server: McpServer; given?: string[]; taken?: boolean; agents?: string[] };
+
+export type McpPreview = { id: string; servers: McpPastedServer[]; at_unix_ms: number };
+
+/** Why a store pass could not run at all (`store_pass_refusal`); the sentence stays in the log. */
+export type StorePassRefusal = "keys_secret_gone" | "unreadable";
+
+/** A machine's store after a pass or a read (`StoreReport`). */
+export type StoreReport = {
+  columns: Partial<Record<StoreItemKind, StoreColumn[]>>;
+  items: StoreItem[];
+  unmanaged: StoreUnmanaged[];
+  trash: StoreTrash[];
+  previews: StorePreview[];
+  diffs: StoreUpdateDiff[];
+  mcp_previews?: McpPreview[];
+  checked_at_unix_ms?: number | null;
+  follows?: boolean;
+  refused?: string | null;
+  refusal?: StorePassRefusal | null;
+  /** The machine's home folder, which the screen spells as `~`. */
+  home?: string | null;
+  /** The kept pictures of the items' GitHub owners, as data addresses: the screen never loads one from the web. */
+  avatars?: Record<string, string>;
+};
+
+/** Why a change was refused (`store_refusal_cause`). */
+export type StoreRefusalCause = "not_found" | "no_skills" | "no_access" | "unreachable" | "no_git" | "too_large" | "name_taken" | "differs" | "too_many" | "unsupported" | "failed";
+
+/** The operator's change to a machine's store (`StoreChange`), as the screen sends it. */
+export type StoreAdoptConfirmation = { kind: "skill"; digest: string } | { kind: "mcp"; server: McpServer };
+
+export type StoreChange =
+  | { op: "inspect"; source: StoreSourceSpec }
+  | { op: "install"; preview: string; names: string[] }
+  | { op: "set"; item: string; column?: string; on: boolean }
+  | { op: "delete"; item: string }
+  | { op: "restore"; entry: string }
+  | { op: "forget"; entry: string }
+  | { op: "adopt"; kind: StoreItemKind; name: string; from?: string; confirmed?: StoreAdoptConfirmation }
+  | { op: "check_updates" }
+  | { op: "preview_update"; item: string }
+  | { op: "update"; item: string; commit: string }
+  | { op: "read_mcp"; text: string }
+  | { op: "add_mcp"; server: McpServer; keys?: Record<string, string>; from?: { preview: string; index: number } }
+  | { op: "cancel_mcp"; preview: string }
+  | { op: "set_mcp"; item: string; server: McpServer; keys?: Record<string, string> }
+  | { op: "receive"; item: unknown };
+
+/** How one change of a pass ended; `made` names what it made for its asker to show (an inspect's preview, a paste's MCP preview, an update preview's diff). */
+export type StoreChangeOutcome = { change: StoreChange; refused?: { cause: StoreRefusalCause; reason: string } | null; made?: string | null };
+
+/** What one store request came to (`status.store_answers`), found by its request id. */
+export type StoreAnswer = { request_id: string; device_id: string; state: "pending" | "done" | "refused"; outcomes: StoreChangeOutcome[]; refused?: { cause: StoreRefusalCause; reason: string } };
+
+/** An install or update an agent asked for with `hide skill` / `hide mcp`, waiting on the operator's confirm (B32). */
+export type StoreAsk = {
+  id: string;
+  device_id: string;
+  /** The asking agent's pane. */
+  pane_id: string;
+  since_unix_ms: number;
+} & (
+  | { what: "install"; preview: string; names: string[] }
+  | { what: "update"; item: string; diff: string }
+  | { what: "add_mcp"; server: McpServer }
+  | { what: "set_mcp"; item: string; server: McpServer }
+);
+
+/** Whether a machine's profiles could be read (`contracts/snapshot-wire-enums.json`: `profiles_state`). */
+export type AgentProfilesState = "listed" | "unsupported" | "unreadable";
+/** Where a profile's pieces are (`profile_install`): the agent's own account, one of its own, or a state of removal. */
+export type AgentProfileInstall = "default" | "own" | "refused" | "removing" | "remove_failed";
+
+/** One profile as the core lists it (`ProfileSnapshot`): no variable's value. */
+export type AgentProfileWire = {
+  id: string;
+  /** The agent's id. */
+  kind: string;
+  name: string;
+  /** The folder or omp name it runs in; null for the agent's own account. */
+  account: string | null;
+  program: string | null;
+  env_keys: string[];
+  version: number;
+  /** Null until the kit judged this version. */
+  install: AgentProfileInstall | null;
+  folder: string | null;
+  hook: KitPiece | null;
+  skill: KitPiece | null;
+  /** Whether its account is signed in (`profile_login`); null where nothing is shown: a program of its own, the agent's default account, no way to look (B10). */
+  login?: AgentProfileLogin | null;
+  /** Its last start ran in another of the machine's accounts: its program sets a folder of its own (B25). */
+  wrapper_folder?: boolean;
+  /** A new start may take it now (`ProfileSnapshot::startable`): the core's one judgment, which an automatic preselection follows (D-30). */
+  startable: boolean;
+};
+
+/** What a node found of a profile account's sign-in (`contracts/snapshot-wire-enums.json`: `profile_login`). */
+export type AgentProfileLogin = "signed_in" | "signed_out" | "unknown";
+
+export type MachineAgentProfiles = {
+  state: AgentProfilesState;
+  version: number;
+  profiles: AgentProfileWire[];
+  /** Each agent's default profile where it is not the built-in one, by agent id. */
+  defaults: Record<string, string>;
+};
+
+/** What Settings › Agents' last profile request came to (`status.agent_profile_answer`). */
+export type AgentProfileAnswer = {
+  request_id: string;
+  device_id: string;
+  state: "pending" | "done" | "refused";
+  code?: string;
+  field?: "kind" | "name" | "account" | "program" | "env" | "profile";
+  env_key?: string;
+  /** The machine's English words, for the log and the CLI; the screen words `reason`. */
+  text?: string;
+  reason?: "kind_unknown" | "profiles_full" | "name_empty" | "name_long" | "name_control" | "name_builtin" | "name_taken" | "program_long" | "profile_builtin" | "profile_missing" | "profile_removing" | "profile_other_kind" | "node_variable" | "account_home_missing" | "account_unsupported" | "account_needs_folder" | "account_needs_name" | "account_empty" | "account_relative" | "account_is_default" | "account_name" | "account_unprepared" | "env_too_many" | "env_name" | "env_reserved" | "env_repeated" | "env_value" | "other";
+  /** The bound a `*_long`, `profiles_full` or `env_too_many` reason crossed. */
+  limit?: number;
+  /** Agents running with it, and starts holding it with no pane yet (`starting`). */
+  in_use?: { pane_id: string; title: string; place: string; asleep: boolean; starting?: boolean }[];
+  projects?: string[];
+  /** How many of Settings › Mission's candidates name the profile (PRD agent-profiles-phase2 B22). */
+  candidates?: number;
+  /** Hide AI's Runs on or fallback list names the profile (PRD agent-profiles-phase2 B22). */
+  hide_ai?: boolean;
+  values?: [string, string][];
+  added?: string;
 };
 
 /** One pane's rectangle in a remote tab, as fractions of the tab's area (`RemotePaneLayoutFrame`). */
 export type RemotePaneFrame = { pane_id: string; x: number; y: number; width: number; height: number };
 
-/** A remote tab's geometry: Herdr reports rectangles, not the local split tree (`RemotePaneLayoutSnapshot`). */
+/** A remote tab's geometry: the device's engine reports rectangles, not the local split tree (`RemotePaneLayoutSnapshot`). */
 export type RemotePaneLayout = {
   workspace_id: string;
   tab_id: string;
@@ -2103,10 +2681,10 @@ export type RemotePaneLayout = {
 };
 
 /**
- * What the core projected from one SSH device's Herdr (`RemoteSessionSnapshot`).
+ * What the core projected from one SSH device's engine (`RemoteSessionSnapshot`).
  * Every id is scoped to the target (`remote:<target>:workspace:…`, `…:tab:…`,
  * `…:pane:…`), so a remote id can never name a local pane, and the focus
- * fields are that Herdr's own.
+ * fields are that engine's own.
  */
 export type RemoteSession = {
   workspaces: Workspace[];
@@ -2124,7 +2702,6 @@ export type RemoteStatus = {
   /** `connected`, `not_connected`, `stale`, `disabled`, `socket_missing`, or a failure word. */
   state: string;
   message: string | null;
-  herdr_version: string | null;
   /** The last session read from that host; kept while `stale`. */
   session?: RemoteSession | null;
   /** How far the device's helper has confirmed its projects (`device_catalog`). */
@@ -2136,16 +2713,15 @@ export type RemoteStatus = {
 /**
  * `resolving`: the helper is being asked; `ready`: every directory is
  * confirmed; `unavailable`: the helper cannot be asked now (why is in the log).
- * An unconfirmed directory is listed as its Herdr workspace alone.
+ * An unconfirmed directory is listed as its engine workspace alone.
  */
 export type DeviceCatalog = {
   state: "resolving" | "ready" | "unavailable";
   refused: { path: string; message: string }[];
 };
 
-export type HerdrStatus = {
+export type EngineStatus = {
   state?: string;
-  socket_path?: string | null;
   message?: string | null;
   expected_protocol?: number | null;
   received_protocol?: number | null;
@@ -2153,35 +2729,25 @@ export type HerdrStatus = {
 };
 
 /**
- * The operator's own older Herdr server on this machine and how far moving it
- * went (PRD herdr-takeover): `kind` is `move`, `restart` (Herdr cannot hand it
- * over here), `update_hide` (a newer protocol) or `look` (a server Hide cannot
- * use could not be read: always `failed`, with no versions); `stage` is
- * `offered`, `moving` (a move starts on its own), `failed`, or `moved` while
- * the wizard shows the result or the operator's own `herdr` is not settled.
- * `path_herdr` is that `herdr` after a move left it behind: Hide `updating`
- * it, `updated`, or `behind` when the operator has to run the command.
+ * What this machine's Herdr save offers to import into Hide's own engine, and what the last import came to (PRD
+ * engine-bundle-4-herdr-removal D-7, D-8). `import` for a save, read only; `result` when only the last import's
+ * left-out workspaces wait to be read. `herdr_running` says a Herdr runs on with the save's conversations open, so an
+ * import opens them as shells.
  */
-export type HerdrTakeover = {
-  kind: "move" | "restart" | "update_hide" | "look";
+export type HerdrImport = {
+  kind: "import" | "result";
   stage: "offered" | "moving" | "failed" | "moved";
-  server_version: string;
-  version: string;
-  same_protocol: boolean;
-  failure: "refused" | "not_confirmed" | "unreadable" | "stop_failed" | null;
-  path_herdr: { stage: "updating" | "updated" | "behind"; version: string } | null;
-};
-
-/**
- * The Herdr this app ships and the operator's own `herdr`, as Settings > About
- * names them; `path_herdr` is null when the operator's terminal finds none.
- * `behind` says its commands are refused by a server on Hide's protocol, and
- * `update_command` is the one command that brings it up, which Hide runs after
- * a move unless it asks for `sudo`.
- */
-export type HerdrVersions = {
-  hide: string;
-  path_herdr: { version: string; behind: boolean; update_command: string } | null;
+  workspaces: number;
+  tabs: number;
+  agents: number;
+  /** Conversations an earlier import left open in their Herdr, which an import resumes now that it is closed (B15). */
+  waiting: number;
+  herdr_running: boolean;
+  failure: "unreadable" | null;
+  reason: string | null;
+  refused: { label: string; reason: string }[];
+  /** The device whose save this is; absent for this machine's (B18). */
+  device?: string;
 };
 
 export type EnvironmentStatus = {
@@ -2218,6 +2784,8 @@ export type AiProvider = {
   /** The model it is asked for; empty is the CLI's own default. */
   model: string;
   models: string[];
+  /** The name the agent shows for a listed model where it differs from the model a start passes (Claude Code's `displayName`); absent with none. */
+  model_labels?: Record<string, string>;
   /** The list is documented rather than queried, as an older peer may report. */
   models_fixed: boolean;
   /** "CLI default" can be chosen: the agent is asked with no `--model`. */
@@ -2228,6 +2796,29 @@ export type AiProvider = {
   weekly?: AiWeekly | null;
   /** The figure is at or past the usage limit, so Hide AI does not ask this agent (the core decides). Absent from an older daemon. */
   past_limit?: boolean;
+  /** Each of the machine's profiles of this agent, its list read as that profile runs, in the list's order; absent with none and while no screen reads model lists. */
+  profile_models?: AiProfileModels[];
+};
+
+/** One profile's model list, read with its own account, variables and wrapper. */
+export type AiProfileModels = {
+  /** The profile's id. */
+  profile: string;
+  /** The profile's version the list was read for; a list of another version than the profile's now is not its list. */
+  version: number;
+  /** Empty when the list could not be read, which `models_unavailable_reason` says; a screen then offers the agent's own list. */
+  models: string[];
+  model_labels?: Record<string, string>;
+  models_fixed: boolean;
+  models_unavailable_reason: string | null;
+  /** The profile's sign-in as its agent's row says it (`AiProvider.state`), read with the profile's own account. Absent from a peer that predates profile items. */
+  state?: string;
+  message?: string | null;
+  /** Runs on and Add agent offer the item. */
+  selectable?: boolean;
+  /** The weekly usage of the profile's own account; null for a profile with no figure of its own. */
+  weekly?: AiWeekly | null;
+  past_limit?: boolean;
 };
 
 /** One agent's weekly usage: a percent and when the week resets (unix ms), when the agent said. */
@@ -2236,6 +2827,10 @@ export type AiWeekly = { used_percent: number; resets_at_ms: number | null };
 /** The agents tried, in this order, when Runs on cannot answer. */
 export type AiFallback = {
   provider: string;
+  /** The profile of the agent it runs as (PRD agent-profiles-phase2 D-07); null or absent is its built-in default. */
+  profile?: string | null;
+  /** `profile` is one its machine no longer lists (B21): shown as a missing profile, passed over by Hide AI. */
+  profile_missing?: boolean;
   /** The connected device it runs on; null or absent is the core's own machine. */
   device?: string | null;
   model: string;
@@ -2244,12 +2839,16 @@ export type AiFallback = {
 /** Why Runs on is not answering, and who answers instead; absent while it answers. */
 export type AiRefusal = {
   provider: string;
-  /** `usage_limited`, `past_limit`, `needs_login`, `not_installed`, `unavailable` or `unsupported`. */
+  /** The profile Runs on runs as; null or absent is its built-in default. */
+  profile?: string | null;
+  /** `usage_limited`, `past_limit`, `needs_login`, `not_installed`, `unavailable`, `unsupported` or `profile_missing`. */
   reason: string;
   /** When a usage limit or the week ends (unix ms), when the agent said. */
   retry_at_ms: number | null;
   /** The listed agent answering instead; null when none can. */
   using: string | null;
+  /** The profile `using` runs as; null or absent is its built-in default. */
+  using_profile?: string | null;
   /** With `past_limit`: the agent's weekly percent and the limit it is past. */
   used_percent?: number | null;
   limit?: number | null;
@@ -2302,6 +2901,12 @@ export type BackgroundAi = {
   enabled?: boolean;
   /** Runs on; null when nobody chose and none can be chosen yet. */
   provider: string | null;
+  /** The profile of Runs on's agent it runs as (PRD agent-profiles-phase2 D-07); null or absent is its built-in default. */
+  profile?: string | null;
+  /** `profile` is one its machine no longer lists, or the machine keeps no profiles (B6, B21). */
+  profile_missing?: boolean;
+  /** The model Runs on is asked for; empty is the CLI's own default. Absent from an older daemon, which keeps it on Runs on's row. */
+  model?: string;
   /** The connected device Runs on's agent runs on; null or absent is the core's own machine. */
   device?: string | null;
   chosen: boolean;
@@ -2352,6 +2957,8 @@ export type TaskOperation = {
  */
 export type RepositoryClone = {
   id: number;
+  /** The machine the clone runs on and registers its project on; absent from an older daemon, whose clones ran on the core's machine. */
+  device_id?: string;
   host: string;
   /** The folder the clone creates, canonical; the registration carries the same path. */
   path: string;
@@ -2475,7 +3082,7 @@ export type MemoryQuestion =
  * Why a failed promotion's agent never started (`memory_start_failure_code`):
  * `detail` is the line its new pane's shell stopped at, for `shell_starting`.
  */
-export type MemoryStartFailure = { code: "shell_starting" | "agent_not_started" | "card_not_processed" | "other"; detail: string | null };
+export type MemoryStartFailure = { code: "shell_starting" | "agent_not_started" | "agent_hook_not_ready" | "card_not_processed" | "other"; detail: string | null };
 
 export type MemoryDocument = {
   authority: "outdated" | "card_newer" | "ask";
@@ -2565,7 +3172,7 @@ export type SuggestionAttemptPhase = "starting" | "working" | "ready" | "merging
 /** What the attempt's agent was asked: commit on the branch, push it as one pull request, or make it again on its base. */
 export type SuggestionAttemptPurpose = "branch" | "pr" | "rebase";
 
-/** A ready branch as its row and the 보기 slot's branch card draw it (B3, B4). */
+/** A ready branch as its row and a branch card tab draw it (B3, B4). */
 export type SuggestionBranch = {
   name: string;
   base: string | null;
@@ -2709,13 +3316,13 @@ export type ProjectSuggestions = {
   global?: { path: string; unusable: GlobalInstructionUnusable | null } | null;
 };
 
-/** An agent Desk talks to over ACP, by its Herdr name (PRD Desk 1차, D-79); `contracts/snapshot-wire-enums.json` `desk_agent`. */
+/** An agent Desk talks to over ACP, by its kind name (PRD Desk 1차, D-79); `contracts/snapshot-wire-enums.json` `desk_agent`. */
 export type DeskAgentId = "claude" | "codex" | "grok" | "opencode" | "pi" | "omp" | "agy";
 /** `desk_agent_state`; `off` is a chosen agent Settings › Agents has since switched off. */
 export type DeskAgentState = "checking" | "ready" | "preparing" | "install_failed" | "node_missing" | "cli_missing" | "no_ask_mode" | "off";
 export type DeskHostState = "idle" | "starting" | "ready" | "thinking" | "stopped";
 export type DeskApprovalState = "waiting" | "allowed" | "allowed_conversation" | "rejected" | "closed";
-/** A Settings › Desk › 권한 row (D-82): `desk_permission_row`. */
+/** A Settings › Labs › Desk › 권한 row (D-82): `desk_permission_row`. */
 export type DeskPermissionRow = "hide" | "read" | "shell" | "edit";
 /** `desk_permission_answer`: 바로 or 묻기. */
 export type DeskPermissionAnswer = "run" | "ask";
@@ -2743,7 +3350,7 @@ export type DeskAgent = {
   signed_in: boolean | null;
   /** The agent's own sign-in command, for the `login_needed` notice. */
   login_command: string;
-  /** The rows of Settings › Desk › 권한 the agent runs without asking, whatever they say (D-82): its own setup lets those run before Hide hears of them. */
+  /** The rows of Settings › Labs › Desk › 권한 the agent runs without asking, whatever they say (D-82): its own setup lets those run before Hide hears of them. */
   always_runs: DeskPermissionRow[];
   /** What the agent's last session offered; empty until one opened. */
   models: DeskChoice[];
@@ -2779,7 +3386,7 @@ export type DeskSteps = { sessions: number; files: number; letters: number; star
 /** `desk_job_reason`. */
 export type DeskJobReason = "spawn_failed" | "exited" | "device_disconnected";
 /** `desk_job_failure`: why a start failed, grouped by what the operator can do (`desk.jobFailure.*`). */
-export type DeskJobFailure = "device_unavailable" | "agent_not_installed" | "branch_in_use" | "project_unavailable" | "already_started" | "busy" | "not_started" | "invalid_request" | "other";
+export type DeskJobFailure = "device_unavailable" | "agent_not_installed" | "agent_hook_not_ready" | "branch_in_use" | "project_unavailable" | "already_started" | "busy" | "not_started" | "invalid_request" | "other";
 /** `desk_output_kind`. */
 export type DeskOutputKind = "image" | "page" | "doc" | "pr";
 /**
@@ -2792,7 +3399,10 @@ export type DeskOutput = { id: string; kind: DeskOutputKind; label: string; thum
 /** A tab kept in Desk's 보기 column: a job's output as its card listed it when it was kept, or a mission's map (B31, B34). */
 export type DeskKeptTab = { kind: "output"; job: string; output: DeskOutput } | { kind: "mission"; mission: string; title: string };
 /** The mission a Conductor job runs, as its `미션 k/n` chip (B34). */
-export type DeskMission = { id: string; title: string; status: MissionStatus; done: number; total: number; deciding: boolean };
+/** What of an open mission waits on the operator, as every mission chip marks it: its decision, or a node raised to the operator (a stall among them). */
+export type MissionTurn = "decision" | "attention";
+
+export type DeskMission = { id: string; title: string; status: MissionStatus; done: number; total: number; turn: MissionTurn | null; delay: string | null; delay_until_unix_ms?: number | null };
 /** One session Desk started or queued; `id` is the spawn's intent, `pane_id` its thread's key. */
 export type DeskJob = {
   id: string;
@@ -2835,6 +3445,146 @@ export type DeskMentions = {
   projects: { id: string; name: string; sessions: string[] }[];
 };
 
+/** What an approved external tool may do (PRD hide-external-control D-06, D-34): see what Hide shows, or that and set agents to work. */
+export type AccessLevel = "view" | "act";
+
+/**
+ * The `access` section (PRD hide-external-control B2, B11, B15): the requests
+ * waiting for the operator and the approved tools on the core's machine. The
+ * core decides every value; Settings › External tools words them and sends
+ * the operator's approve, refuse, level and disconnect back.
+ */
+export type AccessSection = {
+  /** The core's machine, where every tool runs. */
+  machine: string;
+  /** How many tools may connect (`n / 16`). */
+  limit: number;
+  /** Oldest first. */
+  pending: AccessPending[];
+  /** In the order they were approved. */
+  connections: AccessConnection[];
+};
+
+export type AccessPending = { id: string; name: string; program: string | null; requested_ms: number };
+
+export type AccessConnection = {
+  id: string;
+  name: string;
+  level: AccessLevel;
+  program: string | null;
+  created_ms: number;
+  /** Moved at most once a minute (B34). */
+  last_used_ms: number;
+  /** How many live agents the tool started, and how many open missions those agents conduct. */
+  agent_count: number;
+  mission_count: number;
+};
+
+/** A day of the week as a schedule names it (`contracts/snapshot-wire-enums.json` `automation_weekday`). */
+export type AutomationWeekday = "sun" | "mon" | "tue" | "wed" | "thu" | "fri" | "sat";
+
+/**
+ * When an automation runs (PRD automations D-06, B6): one of the form's
+ * choices or a five-field cron line, `HH:MM` in the zone of the machine that
+ * runs it. The core reads a cron line that equals a choice as that choice
+ * (`reads_as`); the screen only words it.
+ */
+export type AutomationSchedule =
+  | { kind: "daily"; time: string }
+  | { kind: "weekdays"; time: string }
+  | { kind: "weekly"; days: AutomationWeekday[]; time: string }
+  | { kind: "every_minutes"; minutes: number }
+  | { kind: "every_hours"; hours: number; time: string }
+  | { kind: "cron"; expr: string };
+
+/** The agent, profile, model and effort every run starts with (D-07), as the agent start names them. */
+export type AutomationAgent = { kind: string; profile?: string; model?: string; effort?: string };
+
+/** Why an automation does not run on schedule (`automation_pause_reason`): only `operator` is quiet; the rest are its own Needs You line (D-12). */
+export type AutomationPauseReason = "operator" | "login_expired" | "folder_missing" | "agent_missing" | "folder_detached" | "machine_changed" | "folder_in_repository";
+
+export type AutomationRunState = "starting" | "running" | "succeeded" | "failed" | "stopped";
+
+export type AutomationRun = {
+  number: number;
+  trigger: "scheduled" | "manual" | "missed";
+  due_unix_ms?: number;
+  started_at_unix_ms: number;
+  ended_at_unix_ms?: number;
+  state: AutomationRunState;
+  /** The attempt going now or last (D-17), from 1. */
+  attempt: number;
+  /** Why the last attempt failed or the run ended, a code the screen words. */
+  reason?: string;
+  /** The terminal the screen shows for the run: its agent's pane while it runs or its terminal is open, else its conversation's opened again (B16, B17). */
+  pane_id?: string;
+  /** Its conversation is open again: `이어서 대화 중` (B17). */
+  opened: boolean;
+  /** Its conversation can be opened again. */
+  resumable: boolean;
+  conversation_missing: boolean;
+  branch?: string;
+  seen: boolean;
+  /** What its conversation spent, absent until Hide's usage ledger read it (D-26, B39). */
+  spend?: AutomationSpend;
+};
+
+/**
+ * What a run's conversation spent as Hide's usage ledger read it from the agent's own records (D-26, B39): its new
+ * tokens and their price in millionths of a dollar; `unpriced` when some calls had no price, so the price is a lower bound.
+ */
+export type AutomationSpend = { tokens: number; micro_usd: number; unpriced: boolean };
+
+/**
+ * One record of an automation, newest first: a run, the times skipped one after another for the same reason
+ * (`count` from `at_unix_ms` to `last_unix_ms`, one time when 1), or the times missed while nothing could run them (D-15).
+ */
+export type AutomationRecord =
+  | ({ kind: "run" } & AutomationRun)
+  | { kind: "skipped"; at_unix_ms: number; last_unix_ms: number; count: number; reason: { kind: "previous_running" } | { kind: "usage_limit"; agent: string } }
+  | { kind: "missed"; first_unix_ms: number; last_unix_ms: number; count: number; reason: "core_off" | "asleep" };
+
+export type Automation = {
+  id: string;
+  name: string;
+  task: string;
+  /** As chosen, which the form opens on. */
+  schedule: AutomationSchedule;
+  /** The choice it reads as. */
+  reads_as: AutomationSchedule;
+  /** None while it is paused. */
+  next_run_at_unix_ms: number | null;
+  agent: AutomationAgent;
+  /** Its own folder (`default`) or a project's; `worktree` makes one per run. */
+  folder: { path: string; default: boolean; worktree: boolean };
+  paused?: { reason: AutomationPauseReason; at_unix_ms: number };
+  /** A run goes now: [지금 실행] is refused (B19). */
+  running: boolean;
+  unseen: number;
+  /** What the runs its records keep spent together, and how many of them the ledger read (B39); absent while it read none. */
+  recent_spend?: AutomationSpend & { runs: number };
+  records: AutomationRecord[];
+};
+
+/**
+ * The `automations` section (PRD automations D-02): the automations of this
+ * window's core, which runs them on its own machine (D-21). Its own section,
+ * absent until the core restored its book.
+ */
+export type AutomationsSection = {
+  items: Automation[];
+  /** Finished runs not looked at, over every automation: the sidebar row's number (B1). */
+  unseen: number;
+  /** The agent last chosen, the form's default (D-07). */
+  last_choice?: AutomationAgent;
+  /** The zone the schedules are read in, by its IANA name. */
+  zone?: string;
+  /** `~/hide/automations` on this machine, which the form names under its default folder (B5). */
+  own_folder_root?: string;
+  /** The saved automations could not be read and were set aside as `file`; gone once an automation is made. */
+  unreadable?: { file: string; at_unix_ms: number };
+};
+
 /** The `desk` section: absent until hided starts Desk. */
 export type DeskSection = {
   selection: { agent: DeskAgentId | null; model: string | null; effort: string | null };
@@ -2843,7 +3593,7 @@ export type DeskSection = {
   /** `generation` moves on 새 대화; `dropped` items left the front past the cap. */
   conversation: { generation: number; items: DeskItem[]; dropped: number };
   approvals_waiting: number;
-  /** `enabled` is Settings › Desk's switch, off by default (D-76): off, no entry to Desk is drawn. */
+  /** `enabled` is Settings › Labs › Desk's switch, off by default (D-76): off, no entry to Desk is drawn. */
   settings: { enabled: boolean; default_agent: DeskAgentId | null; location: DeskLocation; cap: number; permissions: DeskPermissions };
   /** The lane's pin and the tabs kept in its 보기 column, oldest first, at most 16 (B31, B32). */
   lane: { pinned: boolean; kept: DeskKeptTab[] };
@@ -2953,7 +3703,7 @@ export type WorkSession = { device_id: string; agent: string; session_id: string
  */
 export type WorkRequest = { offset: number; at_unix_ms: number; text: string; author: "operator" | "parent"; images: number; summary: string | null; answers: string | null; letter_from: string | null; count: number; repeats?: number[]; goal_command: boolean };
 export type WorkEnd = "working" | "question" | "blocked" | "done" | "waiting" | "unfinished" | "limited";
-export type MissedWork = { id: string; kind: "leftover" | "problem" | "follow_up" | "ask"; text: string; status: "open" | "resolved" | "issue" | "dismissed" | "backlog"; at_unix_ms: number; turn_offset: number; issue_repository: string | null; issue_number: number | null; backlog_key: string | null; creating: boolean };
+export type MissedWork = { id: string; kind: "leftover" | "problem" | "follow_up" | "ask"; text: string; status: "open" | "resolved" | "issue" | "dismissed" | "backlog" | "folded"; at_unix_ms: number; turn_offset: number; issue_repository: string | null; issue_number: number | null; backlog_key: string | null; creating: boolean; /** Why Hide AI folded it; only on a folded question. */ reason?: string };
 export type WorkOutput = { kind: "pr" | "issue"; repository: string; number: number; title: string; url: string; state: string; stale: boolean; last_read_at_unix_ms: number | null; created_at_unix_ms: number; source: WorkSession; source_name: string };
 export type TurnOutcome = { end: WorkEnd; line: string; at_unix_ms: number };
 /** Every pull request a flow made, merged or closed, from Hide's stored PR facts (PRD session-record-fact-status D-01). */
@@ -2979,8 +3729,8 @@ export type PrGroup = { child: WorkSession | null; name: string; pulls: SessionP
 export type SessionRecord = {
   session: WorkSession; title: string; fallback_title: string; native_title: string | null; manual_title: string | null; state: string | null;
   cwd: string | null; project?: string | null; repository?: string | null; path: string | null; started_at_unix_ms: number | null; ended_at_unix_ms: number | null;
-  status: RecordStatus | null; asks: MissedWork[]; flows: WorkFlow[]; omitted_requests: number;
-  outputs: WorkOutput[]; pr_groups: PrGroup[]; pr_omitted?: number; artifacts: string[]; children: SessionRecord[];
+  status: RecordStatus | null; asks: MissedWork[]; /** The current flow's questions Hide AI folded (status-model.md, A question still waiting). */ folded_asks: MissedWork[]; flows: WorkFlow[]; omitted_requests: number;
+  outputs: WorkOutput[]; pr_groups: PrGroup[]; pr_omitted?: number; children: SessionRecord[];
   /** The session's own plan, kept after it ends (PRD hide-plan B9, B21); its `pane_id` is empty. */
   plan?: PlanView;
 };
@@ -3079,6 +3829,8 @@ export type SleepingSession = {
   reason: string | null;
   wake_available: boolean;
   checking: boolean;
+  /** Why Hide put it to sleep, when its hover says so; absent otherwise. */
+  cause?: SleepCause | null;
 };
 
 /** One archived root and the descendants archived with it (`ArchivedSessionSnapshot`, PRD session-archive). */
@@ -3120,16 +3872,32 @@ export type OverviewGraphMetadata = {
   truncated: boolean;
   retention_ms: number;
   letters: OverviewGraphLetter[];
-  direct_inputs?: { id: string; sender: OverviewGraphParty; recipient: OverviewGraphParty; at_unix_ms: number }[];
   sessions: { device_id: string; pane_id: string; session_digest: string; launch_model: string | null; launch_effort: string | null }[];
+};
+
+/**
+ * One guest machine and its panes on this machine. A pane is drawn and typed
+ * into by its `id`, `guest:<device_id>:pane:<pane>`, which is not the
+ * `remote:` address of a pane on that machine.
+ */
+export type GuestPanes = {
+  /** The guest's device id, the id `navigator.peers` names it by. */
+  device_id: string;
+  /** Its connection id. */
+  key: string;
+  panes: { id: string; pane: string; since_unix_ms: number }[];
 };
 
 export type SnapshotRest = {
   overview_graph?: OverviewGraphMetadata;
   /** Every mission and its map (PRD software-factory-conductor). */
   missions?: MissionsSnapshot;
-  /** The events of the mission open in the 보기 slot (PRD mission-plan-visibility D-22). */
+  /** The events of the mission open as a card tab on a desk (PRD mission-plan-visibility D-22). */
   mission_events?: MissionEventsSnapshot;
+  /** The brief of the one node whose folded box was opened; `text` is null when it holds none. */
+  mission_brief?: MissionBriefSnapshot;
+  /** The whole answer the operator opened on a turn card (`runtime/turn_answer.rs`). */
+  turn_answer?: TurnAnswerRead;
   /** Each pane's own plan (PRD hide-plan). */
   plans?: PlansSnapshot;
   git_worktrees_loading?: boolean;
@@ -3137,6 +3905,8 @@ export type SnapshotRest = {
   remains?: RemainsSnapshot | null;
   navigator?: {
     agent_scope?: AgentScope;
+    /** How many siblings a tree shows under one parent before its "N more" (PRD agent-hierarchy-screens B12), held by the core. */
+    siblings_shown?: number;
     focused_workspace_id?: string | null;
     focused_checkout_id?: string | null;
     /** The focused checkout's root, which the Explorer reveals under. */
@@ -3153,7 +3923,15 @@ export type SnapshotRest = {
     /** Newest archived first (D-09). */
     archived_sessions?: ArchivedSession[];
     devices?: Device[];
+    /** The device the last Add over SSH did not add, with the code of why its switch stopped (`NavigatorSnapshot::device_not_added`); absent otherwise. */
+    device_not_added?: { label: string; reason: string } | null;
+    /** The Hides this machine is paired with, as its daemon settled them (`peer_machines`); absent while there are none. */
+    peers?: import("./pairing").Peer[];
+    /** The panes other machines' work runs in on this machine, by guest (hide-core `guest_panes`); absent while there are none. */
+    guest_panes?: GuestPanes[];
     focused_device_id?: string | null;
+    /** One cell per external tool connected at Act, beside the devices (PRD hide-external-control D-45). */
+    tools?: ToolCell[];
   };
   connection?: { kind: string; state: string; target_id: string | null };
   task_operation?: TaskOperation | null;
@@ -3181,6 +3959,10 @@ export type SnapshotRest = {
     expanded_paths?: string[];
     /** Each SSH device's expanded Explorer folders; this machine's are `expanded_paths`. */
     device_expanded_paths?: Record<string, string[]>;
+    /** The folder Add a project's folder list last showed on the core's machine (PRD device-add-project D-04). */
+    add_project_folder?: string | null;
+    /** The same for each device, by device id. */
+    device_add_project_folders?: Record<string, string>;
     /** Projects whose checkouts the sidebar folds. */
     collapsed_workspace_ids?: string[];
     /** Checkouts whose agent rows the Projects list opened; absence is closed, where line two names the agents. */
@@ -3200,8 +3982,6 @@ export type SnapshotRest = {
     practice?: Record<string, { version: number; step: number; finished: boolean }>;
     /** The sidebar's invitation to practice was closed with its × (`practice_invite_close`); absent reads as open. */
     practice_invite_closed?: boolean;
-    /** The lane's 보기 slot (D-50), one per window. */
-    detail?: DetailSlot;
     /** The Overview Work map's remembered choices; absent reads as the defaults. */
     overview_graph?: OverviewGraphChoices;
     selected_path?: string | null;
@@ -3263,19 +4043,28 @@ export type SnapshotRest = {
   };
   status?: {
     server_discovery?: { loading: boolean; failure: string | null };
-    herdr?: HerdrStatus;
-    /** What Hide offers for the operator's own older Herdr server on this machine (PRD herdr-takeover); absent when nothing. */
-    herdr_takeover?: HerdrTakeover | null;
-    herdr_versions?: HerdrVersions | null;
+    engine?: EngineStatus;
+    /** What this machine's Herdr save offers to move into Hide's own engine; absent when nothing (B11). */
+    herdr_import?: HerdrImport | null;
+    /** What each device of Hide's own engine offers, each naming its `device` (B18). */
+    herdr_import_devices?: HerdrImport[];
     remote?: RemoteStatus[];
     environment?: EnvironmentStatus[];
     agent_hooks?: AgentHooks;
     background_ai?: BackgroundAi;
     /** The Host entries Add device lists, read on an `ssh_hosts_list` event (PRD settings-cleanup D-19). */
     ssh_hosts?: SshHosts;
-    /** The operator's agent definition files left out, with why (PRD engine-bundle-3-core-owns D-17, B24); absent while the development switch `HIDE_DEV_PANE_HOLDER` is off. */
+    /** The operator's agent definition files left out, with why (PRD engine-bundle-3-core-owns D-17, B24); absent until the core has read them. */
     agent_definitions?: AgentDefinitions | null;
-    herdr_profiles?: HerdrProfiles;
+    machine_profiles?: MachineProfiles;
+    /** What Settings › Agents' last profile request came to; absent until one was made. */
+    agent_profile_answer?: AgentProfileAnswer;
+    /** What the latest store requests came to, oldest first and bounded; a request finds its own by id (PRD skill-mcp-manager). */
+    store_answers?: StoreAnswer[];
+    /** The installs and updates agents asked for that wait on the operator's confirm (B32). */
+    store_asks?: StoreAsk[];
+    /** The core's final automatic start choice for each project and agent. */
+    start_profiles?: Record<string, { device_id: string; root: string; profiles: Record<string, string> }>;
     diagnostics?: CoreDiagnostic[];
     async_operations?: AsyncOperation[];
     /** Bounded read-only hover text; never an attachment or a focus request. */
@@ -3286,15 +4075,21 @@ export type SnapshotRest = {
     browser_opens?: import("./viewLayout").BrowserOpenReceipt[];
     /** The latest 마무리 맡기기 presses, oldest first and bounded (PRD project-panel-results B12, B13). */
     stray_hand_offs?: StrayHandOff[];
+    /** The adds that named a request id (Add a project's importable list), oldest first and bounded, each with its own outcome (PRD device-add-project B25). */
+    project_adds?: ProjectAddReceipt[];
     /** The core's most recent failure; the shell logs its detail (B5). */
-    last_error?: { kind: string; message: string; retryable: boolean; occurred_at: number; request_id?: string | null; confirm?: string | null } | null;
+    last_error?: { kind: string; message: string; retryable: boolean; occurred_at: number; request_id?: string | null; confirm?: string | null; home?: true } | null;
   };
   recent_closed?: RecentClosed;
   explorer_operation?: ExplorerOperation | null;
   /** The front Workspace's layout and tools (S6 D-10); absent when no Workspace is in front. */
   workspace_view?: import("./workspace").WorkspaceView | null;
   /** All retained Browser Views, including those outside the front Workspace. */
-  browser_views?: { device_id: string; path: string; view_id: string; area_id: string }[];
+  /**
+   * `tray`: the Agent tab whose desk holds the page, absent for one on no desk, which still loads (PRD lane-desk-pair-view D-37).
+   * `url` and `load`: a web page's address and the load the core last asked of it, so the host loads a page no desk on screen shows (B32); null and 0 for an outside HTML file.
+   */
+  browser_views?: { device_id: string; path: string; view_id: string; area_id: string; tray?: string | null; url?: string | null; load?: number }[];
   /** Positive connected Workspace area authority from the core, including empty areas; incarnation changes on revoke/regrant. */
   browser_scopes?: { device_id: string; path: string; area_id: string; incarnation: number }[];
   /** The desktop grants every outside file's tab stands on, across every Workspace; absent while none does. */
@@ -3334,12 +4129,35 @@ export function focusedCheckout(rest: SnapshotRest | null): Checkout | null {
 
 /**
  * Every project the core's catalog carries: this machine's and registered ones
- * in the navigator, then each device's Herdr session. The core looks a
+ * in the navigator, then each device's engine session. The core looks a
  * checkout up in the same two places (`catalog_checkout`); device ids are
  * scoped, so one id never names checkouts on two machines.
  */
 export function catalogWorkspaces(rest: SnapshotRest | null): Workspace[] {
   return catalogOf(rest?.navigator?.workspaces, rest?.status?.remote);
+}
+
+const listedOf = new WeakMap<readonly Workspace[], Workspace[]>();
+
+/**
+ * The projects a person picks from: every one but an automation's own
+ * folder, which the core registers only so its runs can start there (PRD
+ * automations D-08, B30). The same array while none is unlisted, and one
+ * kept list per source array, so a store selector that returns it is stable.
+ */
+export function listedWorkspaces(workspaces: Workspace[]): Workspace[] {
+  if (!workspaces.some((workspace) => workspace.unlisted)) return workspaces;
+  let listed = listedOf.get(workspaces);
+  if (!listed) {
+    listed = workspaces.filter((workspace) => !workspace.unlisted);
+    listedOf.set(workspaces, listed);
+  }
+  return listed;
+}
+
+/** `catalogWorkspaces` as a person picks from it: every project but an automation's own folder (`listedWorkspaces`). */
+export function listedCatalog(rest: SnapshotRest | null): Workspace[] {
+  return listedWorkspaces(catalogWorkspaces(rest));
 }
 
 /** `catalogWorkspaces` from the two fields it reads, for a component that subscribes to those alone. */
@@ -3362,7 +4180,7 @@ export function deviceOfCheckout(rest: SnapshotRest | null, id: string): string 
 
 /**
  * The checkout the operator is looking at: this machine's focus while it is
- * the selected device, otherwise that device's own Herdr focus, which the core
+ * the selected device, otherwise that device's own engine focus, which the core
  * follows (`front_checkout`).
  */
 export function frontCheckout(rest: SnapshotRest | null): Checkout | null {
@@ -3401,7 +4219,7 @@ export function editorTabFor(editor: EditorSnapshot | null, tabId: string | null
 
 const NO_PATHS: string[] = [];
 
-/** One agent's 권한 on one machine (`herdr-core/src/agent_permission.rs`). */
+/** One agent's 권한 on one machine (`hide-core/src/agent_permission.rs`). */
 export type AgentPermission = { mode: "full" } | { mode: "ask" } | { mode: "custom"; text: string; options: string[] };
 
 const FULL_ACCESS: AgentPermission = { mode: "full" };
@@ -3434,15 +4252,3 @@ export function changesFor(changes: ChangesSnapshot | null, rootPath: string | n
   if (!changes || !rootPath || changes.root_path !== rootPath) return null;
   return changes;
 }
-
-export function paneIds(node: LayoutNode): string[] {
-  if (node.type === "pane") return [node.pane_id];
-  return [...paneIds(node.first), ...paneIds(node.second)];
-}
-
-/** The pane a divider between `first` and `second` names in `resize_pane`: the last pane of the first subtree. */
-export function dividerPaneId(first: LayoutNode): string {
-  const ids = paneIds(first);
-  return ids[ids.length - 1] ?? "";
-}
-

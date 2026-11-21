@@ -1,8 +1,8 @@
 //! A device's terminals inside its one node link (PRD core-host-node-terminal
 //! D-10, D-18, D-19, D-20).
 //!
-//! On the device, [`NodeTerminals`] runs the node's [`Service`] for the
-//! device's Herdr and sends what it says up the link: reports first, then
+//! On the device, [`NodeTerminals`] runs the node's [`Service`] over its
+//! pane holders and sends what it says up the link: reports first, then
 //! one line of output per pane in turn, so a pane that floods its output
 //! cannot hold another pane's frames or the core's answers back. A pane
 //! whose unsent output passes [`MAX_UNSENT_OUTPUT_BYTES`] loses it and is
@@ -45,13 +45,14 @@ use std::time::{Duration, Instant};
 
 use hide_node_link::terminal::{
     GridSize, KeyTarget, MAX_TERMINAL_LINE_BYTES, MAX_UNSENT_KEY_BYTES, MAX_UNSENT_OUTPUT_BYTES,
-    PaneTerminalState, ReportSink, TerminalControl, TerminalDown, TerminalLine, TerminalNode,
-    TerminalOutput, TerminalReport, TerminalUp,
+    PaneTerminalState, ReportSink, TerminalClipboard, TerminalControl, TerminalDown, TerminalLine,
+    TerminalNode, TerminalOutput, TerminalReport, TerminalUp,
 };
 use serde_json::json;
 
+use super::copies::{MAX_WAITING_COPIES, WaitingCopies};
 use super::protocol::{decode_base64, encode_base64};
-use super::{LocalAttacher, OutputSink, RetryPolicy, Service};
+use super::{OutputSink, Service};
 
 /// Reports a device keeps unsent before a new one takes the place of the
 /// waiting one about its subject ([`TerminalReport::same_subject`]), so a
@@ -111,6 +112,14 @@ struct UplinkState {
     panes: HashMap<String, PaneUplink>,
     /// Panes with output waiting, in turn.
     order: VecDeque<String>,
+    /// Clipboard writes not sent yet, the latest line of each pane, which go
+    /// ahead of every pane's output.
+    clipboard: WaitingCopies<Vec<u8>>,
+    /// On a node that outlives its links and keeps every pane's session
+    /// itself: the panes the linked core attached and has not released,
+    /// the only ones whose output goes up. `None` on any other node, whose
+    /// panes have a session only while its core attached them.
+    admitted: Option<HashSet<String>>,
 }
 
 #[derive(Default)]
@@ -162,9 +171,48 @@ impl Uplink {
         self.ready.notify_one();
     }
 
+    /// Whether the linked core takes `pane`'s output.
+    fn admits(state: &UplinkState, pane: &str) -> bool {
+        state
+            .admitted
+            .as_ref()
+            .is_none_or(|admitted| admitted.contains(pane))
+    }
+
+    /// From now on only the panes the linked core attaches go up.
+    fn admit_by_attach(&self) {
+        lock(&self.state).admitted = Some(HashSet::new());
+    }
+
+    /// The linked core attached `pane`; whether it was not going up before.
+    fn admit(&self, pane: &str) -> bool {
+        lock(&self.state)
+            .admitted
+            .as_mut()
+            .is_some_and(|admitted| admitted.insert(pane.to_owned()))
+    }
+
+    /// The linked core released `pane`, or lost it: nothing of it goes up,
+    /// and what waited is dropped. `false` on a node whose core's release
+    /// ends the pane's session instead.
+    fn dismiss(&self, pane: &str) -> bool {
+        let mut state = lock(&self.state);
+        let Some(admitted) = state.admitted.as_mut() else {
+            return false;
+        };
+        admitted.remove(pane);
+        state.panes.remove(pane);
+        state.order.retain(|queued| queued != pane);
+        state.clipboard.forget(pane);
+        true
+    }
+
     fn push_output(&self, pane: &str, bytes: &[u8], full: bool) {
         {
             let mut state = lock(&self.state);
+            if !Self::admits(&state, pane) {
+                return;
+            }
             if state.withheld {
                 if !state.stopped {
                     state.panes.entry(pane.to_owned()).or_default().dropping = true;
@@ -253,10 +301,43 @@ impl Uplink {
         self.ready.notify_one();
     }
 
+    /// Queues what a pane's program wrote to the clipboard, in place of a
+    /// write of that pane still waiting. While the core draws none of the
+    /// node's panes it is dropped, as output is: the screen that draws them
+    /// had it.
+    fn push_clipboard(&self, pane: &str, text: &[u8]) {
+        {
+            let state = lock(&self.state);
+            if state.withheld || !Self::admits(&state, pane) {
+                return;
+            }
+        }
+        let Some(line) = line_of(TerminalUp::Clipboard(TerminalClipboard::new(pane, text))) else {
+            return;
+        };
+        let mut state = lock(&self.state);
+        if state.stopped || state.withheld {
+            return;
+        }
+        if let Some(dropped) = state.clipboard.push(pane, line)
+            && state.diagnostics.len() < MAX_UNSENT_DIAGNOSTICS
+        {
+            state.diagnostics.push_back(json!({
+                "component": "node_terminal",
+                "kind": "terminal.clipboard_dropped",
+                "pane_id": dropped,
+                "cap": MAX_WAITING_COPIES,
+            }));
+        }
+        drop(state);
+        self.ready.notify_one();
+    }
+
     fn forget(&self, pane: &str) {
         let mut state = lock(&self.state);
         state.panes.remove(pane);
         state.order.retain(|queued| queued != pane);
+        state.clipboard.forget(pane);
     }
 
     /// The next line to send, and the panes to draw again now that the link
@@ -295,6 +376,9 @@ impl Uplink {
             if let Some(ahead) = ahead {
                 drop(state);
                 return Some((line_of(ahead), redraws));
+            }
+            if let Some((_, line)) = state.clipboard.pop() {
+                return Some((Some(line), redraws));
             }
             while let Some(pane) = state.order.pop_front() {
                 let Some(entry) = state.panes.get_mut(&pane) else {
@@ -336,6 +420,7 @@ impl Uplink {
                 entry.dropping = true;
                 entry.redraw = false;
             }
+            state.clipboard.clear();
             state.order.clear();
         } else {
             for entry in state.panes.values_mut() {
@@ -348,6 +433,17 @@ impl Uplink {
         self.ready.notify_one();
     }
 
+    /// A new link takes the lines from here on: what a link that ended
+    /// stopped is sent again.
+    fn restart(&self) {
+        let mut state = lock(&self.state);
+        state.stopped = false;
+        // The new link's core attaches what it draws.
+        if let Some(admitted) = state.admitted.as_mut() {
+            admitted.clear();
+        }
+    }
+
     fn stop(&self) {
         let mut state = lock(&self.state);
         state.stopped = true;
@@ -355,6 +451,7 @@ impl Uplink {
         state.diagnostics.clear();
         state.panes.clear();
         state.order.clear();
+        state.clipboard.clear();
         drop(state);
         self.ready.notify_all();
     }
@@ -369,6 +466,10 @@ impl OutputSink for UplinkOutputs {
 
     fn forget(&self, pane: &str) {
         self.0.forget(pane);
+    }
+
+    fn clipboard(&self, pane: &str, text: &[u8]) {
+        self.0.push_clipboard(pane, text);
     }
 }
 
@@ -396,8 +497,19 @@ pub fn forward_diagnostic(record: serde_json::Value) {
     }
 }
 
-/// How a device node attaches to the Herdr at a socket.
-type AttacherFor = Box<dyn Fn(&str) -> Box<dyn super::Attacher> + Send + Sync>;
+/// [`forward_diagnostic`] for a node that outlives its links: a record goes
+/// up the link while one takes lines, and to `otherwise` while none does,
+/// where the device's node drops it.
+pub fn forward_diagnostic_or(record: serde_json::Value, otherwise: impl FnOnce(serde_json::Value)) {
+    let uplink = DIAGNOSTICS
+        .get()
+        .and_then(|current| lock(current).upgrade())
+        .filter(|uplink| !lock(&uplink.state).stopped);
+    match uplink {
+        Some(uplink) => uplink.push_diagnostic(record),
+        None => otherwise(record),
+    }
+}
 
 /// Where a node's pane output goes: up its link and, on a node that draws
 /// its own panes on its own screens, to those screens too.
@@ -416,18 +528,46 @@ impl OutputSink for NodeOutputs {
         self.screen.forget(pane);
         self.uplink.forget(pane);
     }
+
+    /// To the node's own screens and, while the core draws the node's
+    /// panes too, up the link: each screen writes it only if its window is
+    /// the one in front.
+    fn clipboard(&self, pane: &str, text: &[u8]) {
+        self.screen.clipboard(pane, text);
+        self.uplink.push_clipboard(pane, text);
+    }
+
+    /// The link's reader draws at the view it asked for; only the node's
+    /// own screens are told.
+    fn grid(&self, pane: &str, rows: u16, cols: u16) {
+        self.screen.grid(pane, rows, cols);
+    }
 }
 
 /// A device node's terminal service, as its link's serve loop reaches it.
 pub struct NodeTerminals {
     service: Mutex<Option<Arc<Service>>>,
     /// The node's pane holders, once its core started its terminals over
-    /// them (`Call::HoldersStart`) rather than over its Herdr.
+    /// them (`Call::HoldersStart`).
     holders: Mutex<Option<Arc<dyn hide_node_link::holders::PaneHolders>>>,
+    /// The same holders as this node started them, for what it asks of
+    /// them itself.
+    local: Mutex<Option<Arc<super::holder::Holders>>>,
     uplink: Arc<Uplink>,
-    attacher: AttacherFor,
     /// The node's own screens, for a node whose core runs elsewhere.
     screen: Option<Arc<dyn OutputSink>>,
+    /// Where a node that outlives its links keeps its holders, in place of
+    /// the device node's folders.
+    resident: Option<ResidentFolders>,
+}
+
+/// The folders of a node that outlives its links (a guest's node, PRD
+/// device-connect-iroh D-77): its own state folder, and the folder its
+/// holders' version folders sit under in place of the account's home.
+#[derive(Clone, Debug)]
+pub struct ResidentFolders {
+    pub state_dir: std::path::PathBuf,
+    pub holders_home: std::path::PathBuf,
 }
 
 impl Default for NodeTerminals {
@@ -437,57 +577,120 @@ impl Default for NodeTerminals {
 }
 
 impl NodeTerminals {
-    /// The service of a device's node: `herdr terminal session` children of
-    /// the pinned Herdr the account's helper holds (PRD device-herdr-update
-    /// D-10), or of the `herdr` on the account's own search path when none
-    /// arrived.
+    /// The service of a device's node, started over its pane holders when
+    /// its core asks (`Call::HoldersStart`).
     pub fn new() -> Self {
-        Self::with_attacher(Box::new(|socket: &str| {
-            let herdr = hide_platform::host::home_dir()
-                .ok()
-                .and_then(|home| hide_kit::device_herdr::pinned_for_account(&home))
-                .or_else(|| {
-                    hide_platform::programs::find_cli("herdr")
-                        .map(hide_platform::programs::Program::into_path)
-                });
-            Box::new(LocalAttacher::new(herdr, socket.into())) as Box<dyn super::Attacher>
-        }))
+        Self {
+            service: Mutex::default(),
+            holders: Mutex::default(),
+            local: Mutex::default(),
+            uplink: Arc::default(),
+            screen: None,
+            resident: None,
+        }
+    }
+
+    /// The service of a node that outlives its links: its service, holders
+    /// and panes stay when a link ends, and only what goes up the link
+    /// stops until the next one ([`NodeTerminals::relink`]). Its output
+    /// reaches `tap` always, and the link while there is one.
+    pub fn resident(tap: Arc<dyn OutputSink>, folders: ResidentFolders) -> Self {
+        let mut terminals = Self::new();
+        terminals.screen = Some(tap);
+        terminals.resident = Some(folders);
+        terminals.uplink.admit_by_attach();
+        // It starts with no link: until its first one (`relink`), nothing
+        // waits to go up, and its diagnostics go where a node with no link
+        // sends them (`forward_diagnostic_or`).
+        terminals.uplink.stop();
+        terminals
+    }
+
+    /// A new link starts: its lines go up again.
+    pub fn relink(&self) {
+        self.uplink.restart();
+    }
+
+    /// The holders this node started, once it has.
+    pub fn holders(&self) -> Option<Arc<dyn hide_node_link::holders::PaneHolders>> {
+        lock(&self.holders).clone()
+    }
+
+    /// Calls `tell` with a pane whose holder died without saying why
+    /// (`Holders::on_holder_lost`); nothing before the node started its
+    /// holders. What the node does about it is the caller's.
+    pub fn on_holder_lost(&self, tell: Arc<dyn Fn(&str) + Send + Sync>) {
+        if let Some(holders) = lock(&self.local).as_ref() {
+            holders.on_holder_lost(tell);
+        }
+    }
+
+    /// This node's panes that may still run, as its holders' records say;
+    /// none before it started its holders.
+    pub fn live_panes(&self) -> Result<Vec<String>, String> {
+        match lock(&self.local).as_ref() {
+            Some(holders) => holders.live_pane_ids(),
+            None => Ok(Vec::new()),
+        }
     }
 
     /// The service of a node whose core runs on another machine (PRD
-    /// core-host-node-remote-core D-06): its panes' output reaches its own
-    /// `screen` always, and its link only while the core says a screen of
-    /// the core's own draws them.
-    /// `herdr` is the binary this machine's daemon runs its Herdr with.
-    pub fn for_screen(screen: Arc<dyn OutputSink>, herdr: std::path::PathBuf) -> Self {
-        let mut terminals = Self::with_attacher(Box::new(move |socket: &str| {
-            Box::new(LocalAttacher::new(Some(herdr.clone()), socket.into()))
-                as Box<dyn super::Attacher>
-        }));
+    /// core-host-node-remote-core D-06): its panes run in its pane holders,
+    /// and their output reaches its own `screen` always, and its link only
+    /// while the core says a screen of the core's own draws them.
+    pub fn for_screen(screen: Arc<dyn OutputSink>) -> Self {
+        let mut terminals = Self::new();
         terminals.uplink.withhold(true);
         terminals.screen = Some(screen);
         terminals
     }
 
-    fn with_attacher(attacher: AttacherFor) -> Self {
-        Self {
-            service: Mutex::default(),
-            holders: Mutex::default(),
-            uplink: Arc::default(),
+    /// Starts the service over `attacher` in place of the node's holders,
+    /// for a test that drives the device's link with a stand-in pane.
+    #[cfg(test)]
+    fn start_service(&self, attacher: Box<dyn super::Attacher>) -> Result<(), String> {
+        let started = Service::start(
             attacher,
-            screen: None,
-        }
+            self.outputs(),
+            Arc::new(UplinkReports(Arc::clone(&self.uplink))),
+            super::RetryPolicy::Automatic,
+        )
+        .map_err(|error| format!("The device's terminal service could not start: {error}"))?;
+        *lock(&self.service) = Some(Arc::new(started));
+        Ok(())
     }
 
     fn take_control(&self, control: TerminalControl) {
         match control {
-            // A node with no screen of its own always sends its output up.
+            // A node with no screen of its own always sends its output up,
+            // and so does one whose tap is another machine's window.
             TerminalControl::Mirror { on } => {
-                if self.screen.is_some() {
+                if self.screen.is_some() && self.resident.is_none() {
                     self.uplink.withhold(!on);
                 }
             }
             control => self.with_service(|service| service.control(control)),
+        }
+    }
+
+    /// A control of the linked core. On a node that keeps every pane's
+    /// session itself (a guest's node, PRD device-connect-iroh D-77 (5)),
+    /// the core's attach and release only say whether the pane's output
+    /// goes up to it: the session stays for the host's tap, and a pane that
+    /// goes up again is drawn whole.
+    fn take_link_control(&self, control: TerminalControl) {
+        match control {
+            TerminalControl::Release { pane, .. } if self.uplink.dismiss(&pane) => {}
+            TerminalControl::Attach { ref pane, .. } if self.uplink.admit(pane) => {
+                let pane = pane.clone();
+                self.take_control(control);
+                self.with_service(|service| service.redraw(&pane));
+            }
+            TerminalControl::Forget { ref pane } => {
+                self.uplink.dismiss(pane);
+                self.take_control(control);
+            }
+            control => self.take_control(control),
         }
     }
 
@@ -513,35 +716,6 @@ impl NodeTerminals {
 }
 
 impl hide_host::serve::Terminals for NodeTerminals {
-    fn start(&self, herdr_socket: &str) -> Result<(), String> {
-        let mut service = lock(&self.service);
-        if lock(&self.holders).is_some() {
-            return Err(
-                "This node's terminals run on its pane holders; one node runs one engine's panes"
-                    .to_owned(),
-            );
-        }
-        if service.is_some() {
-            return Ok(());
-        }
-        let outputs = self.outputs();
-        // A Herdr node's terminals: holders run when its core asks for them
-        // (`start_holders`), never because of this process's environment.
-        super::holder::device_switch()?;
-        let started = Service::start(
-            (self.attacher)(herdr_socket),
-            outputs,
-            Arc::new(UplinkReports(Arc::clone(&self.uplink))),
-            // A device's panes have always waited for the operator's
-            // Reconnect after a failed attach.
-            RetryPolicy::Manual,
-        )
-        .map_err(|error| format!("The device's terminal service could not start: {error}"))?;
-        *service = Some(Arc::new(started));
-        *lock(DIAGNOSTICS.get_or_init(|| Mutex::new(Weak::new()))) = Arc::downgrade(&self.uplink);
-        Ok(())
-    }
-
     /// The node's terminals over its own pane holders, in the device node's
     /// own state folder (`hide_kit::layout::device_node_state`), apart from
     /// a Hide that runs on the same account, so neither reconciles the
@@ -555,34 +729,40 @@ impl hide_host::serve::Terminals for NodeTerminals {
         if let Some(holders) = holders.as_ref() {
             return Ok(Arc::clone(holders));
         }
-        if service.is_some() {
-            return Err(
-                "This node's terminals run on its Herdr; one node runs one engine's panes"
-                    .to_owned(),
-            );
-        }
         let home = hide_platform::host::home_dir()
             .map_err(|error| format!("pane holders need the account's home: {error}"))?;
-        let state_dir = hide_kit::layout::device_node_state(&home);
+        // Raised before the first holder starts, which gets the limit this
+        // node started with back; recorded once the link takes records, since
+        // a device's stderr reaches no log and the link reads it as a failure.
+        let open_files = crate::diagnostics::raise_open_files();
+        let (holders_home, state_dir) = match &self.resident {
+            Some(folders) => (folders.holders_home.clone(), folders.state_dir.clone()),
+            None => (home.clone(), hide_kit::layout::device_node_state(&home)),
+        };
         let super::holder::LocalTerminals {
             service: started,
             holders: opened,
         } = super::holder::Holders::start_local(
-            Some(super::holder::HolderFolders {
-                home: &home,
+            super::holder::HolderFolders {
+                home: &holders_home,
                 state_dir: &state_dir,
-            }),
-            Box::new(NoHerdr),
+            },
             self.outputs(),
             Arc::new(UplinkReports(Arc::clone(&self.uplink))),
         )?;
-        let opened = opened.ok_or("the node's pane holders did not open")?;
-        let panes: Arc<dyn hide_node_link::holders::PaneHolders> = Arc::new(
-            super::engine_panes::LocalPanes::for_account(opened, Arc::clone(&started), home),
-        );
+        *lock(&self.local) = Some(Arc::clone(&opened));
+        let panes =
+            super::engine_panes::LocalPanes::for_account(opened, Arc::clone(&started), home);
+        let panes: Arc<dyn hide_node_link::holders::PaneHolders> = Arc::new(match self.resident {
+            Some(_) => panes.scanning_again(),
+            None => panes,
+        });
         *service = Some(started);
         *holders = Some(Arc::clone(&panes));
         *lock(DIAGNOSTICS.get_or_init(|| Mutex::new(Weak::new()))) = Arc::downgrade(&self.uplink);
+        if let Some(record) = open_files {
+            crate::diagnostic!(record);
+        }
         Ok(panes)
     }
 
@@ -607,7 +787,7 @@ impl hide_host::serve::Terminals for NodeTerminals {
             return;
         }
         match down {
-            TerminalDown::Control { control } => self.take_control(control),
+            TerminalDown::Control { control } => self.take_link_control(control),
             TerminalDown::InputPermit {
                 ticket,
                 pane,
@@ -659,6 +839,11 @@ impl hide_host::serve::Terminals for NodeTerminals {
 
     fn stop(&self) {
         self.uplink.stop();
+        // A node that outlives its links keeps its service and its panes'
+        // sessions: its tap still draws them, and the next link finds them.
+        if self.resident.is_some() {
+            return;
+        }
         // Closed outside the lock, and only then is the link's end done:
         // each session is released and its attach child has exited, so a
         // core that starts in this process next (a move back) attaches
@@ -666,23 +851,6 @@ impl hide_host::serve::Terminals for NodeTerminals {
         if let Some(service) = lock(&self.service).take() {
             service.close();
         }
-    }
-}
-
-/// A node whose panes are all holder panes opens nothing through Herdr.
-struct NoHerdr;
-
-impl super::Attacher for NoHerdr {
-    fn open(
-        &self,
-        pane: &str,
-        _: super::protocol::Mode,
-        _: u16,
-        _: u16,
-    ) -> Result<super::SessionParts, String> {
-        Err(format!(
-            "pane {pane} has no holder on this device, and this node runs no Herdr"
-        ))
     }
 }
 
@@ -725,6 +893,7 @@ impl TerminalNode for NodeTerminals {
 /// for output and the core for reports, each told which device it is.
 pub trait DeviceSink: Send + Sync {
     fn output(&self, device: &str, pane: &str, bytes: &[u8], full: bool);
+    fn clipboard(&self, device: &str, pane: &str, text: &[u8]);
     fn report(&self, device: &str, report: TerminalReport);
 }
 
@@ -1358,6 +1527,16 @@ impl ProxyShared {
                     "kind": "terminal.output_unreadable",
                     "device": self.device,
                     "pane_id": device_text(&output.pane, DEVICE_RECORD_NAME),
+                    "message": device_text(&message, DEVICE_RECORD_TEXT),
+                })),
+            },
+            TerminalUp::Clipboard(clipboard) => match clipboard.text() {
+                Ok(text) => self.sink.clipboard(&self.device, &clipboard.pane, &text),
+                Err(message) => self.record(json!({
+                    "component": "device_terminal",
+                    "kind": "terminal.clipboard_unreadable",
+                    "device": self.device,
+                    "pane_id": device_text(&clipboard.pane, DEVICE_RECORD_NAME),
                     "message": device_text(&message, DEVICE_RECORD_TEXT),
                 })),
             },

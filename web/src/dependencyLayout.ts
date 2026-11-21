@@ -117,12 +117,19 @@ export function downPathAround(from: Box, to: Box, cards: readonly Box[], gap: n
 }
 
 /**
- * An edge drawn back up a top-down graph, outside its layout (a defect a
- * later node found in an earlier one): from the right side of `from` to the
- * right side of `to`, bowed `gap` past the further right of the two, so it
- * reads as going back rather than as one more dependency.
+ * An edge drawn back against the graph's flow, outside its layout (a defect a
+ * later node found in an earlier one), on the side no dependency edge uses:
+ * down, from the right side of `from` to the right side of `to`, bowed `gap`
+ * past the further right of the two; across, from the bottom of each, bowed
+ * past the lower; so it reads as going back rather than as one more dependency.
  */
-export function backPath(from: Box, to: Box, gap: number): string {
+export function backPath(from: Box, to: Box, gap: number, flow: Flow = "down"): string {
+  if (flow === "across") {
+    const x1 = (from.left + from.right) / 2;
+    const x2 = (to.left + to.right) / 2;
+    const below = Math.max(from.bottom, to.bottom) + gap * 2;
+    return `M ${x1} ${from.bottom} C ${x1} ${below}, ${x2} ${below}, ${x2} ${to.bottom}`;
+  }
   const y1 = (from.top + from.bottom) / 2;
   const y2 = (to.top + to.bottom) / 2;
   const side = Math.max(from.right, to.right) + gap * 2;

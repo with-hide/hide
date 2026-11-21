@@ -1,20 +1,23 @@
-import { ArrowRightIcon, ChevronRightIcon, GitBranchIcon, HistoryIcon, ScrollTextIcon, SquareTerminalIcon, XIcon } from "lucide-react";
+import { ArrowRightIcon, CheckIcon, ChevronRightIcon, EyeIcon, GitBranchIcon, HistoryIcon, HourglassIcon, ScrollTextIcon, SquareTerminalIcon } from "lucide-react";
 import { useMemo, useState, type ReactNode } from "react";
 import type { Actions } from "./actions";
 import { AgentMark } from "./AgentMark";
 import { agentMarkOf } from "./agentLogos";
 import { CheckerPopover, useCheckerStatus, VerdictReason, VERDICT_TONE } from "./components/mission-checker";
 import { CriterionMark } from "./components/criterion-mark";
+import { useMinuteClock } from "./components/elapsed";
+import { MapPanel, MapPanelHead } from "./components/map-page";
 import { MissionNodeMark } from "./components/mission-node-mark";
 import { MissionPrMark } from "./components/mission-pr";
 import { Badge } from "./components/ui/badge";
 import { Button } from "./components/ui/button";
 import { Hint } from "./components/ui/tooltip";
+import { LinkedViewRow } from "./components/linked-view";
 import { useInterfaceTranslation } from "./i18n/client";
 import { formatDateTime } from "./i18n/format";
 import { requireInterfaceLanguage } from "./i18n/locale";
 import { cn } from "./lib/utils";
-import { CheckerRow, markWord, MissionDevice, RunText, useMissionDeviceName, useNodeRun, useNodeTimes, useWorkerRow } from "./missionParts";
+import { CheckerRow, markWord, MissionDevice, RunText, useMissionDeviceName, useNodeRun, useNodeSpans, useNodeTimes, useWorkerRow } from "./missionParts";
 import {
   attentionWords,
   cardLine,
@@ -22,7 +25,9 @@ import {
   criteriaTally,
   criterionName,
   criterionNote,
+  dependencyNodes,
   eventWords,
+  gateWaitedLong,
   hideWords,
   landingLeft,
   lineOutrun,
@@ -30,17 +35,22 @@ import {
   missionOpen,
   nodeLook,
   nodeQuestion,
+  nodeSteps,
+  nodePace,
   nodeResumable,
   openAttention,
   ownCriteria,
   shortCommit,
 } from "./missions";
 import { AttentionChoices } from "./components/mission-attention";
-import { ProgressCells } from "./components/mission-tone";
-import { PlanChecklist } from "./components/plan-checklist";
+import { PILL_TONE, ProgressCells } from "./components/mission-tone";
+import { PlanChecklist, PlannedSteps } from "./components/plan-checklist";
 import { planCells, planCount } from "./plans";
+import { formatBytes } from "./i18n/format";
 import { sessionOfAgent } from "./sessionWork";
 import type { MessageKey } from "./i18n/catalogs";
+import { presetIcon } from "./components/mission-line";
+import { lineNode, nodeKindWord, resultLine } from "./missionLine";
 import type { Mission, MissionChecker, MissionCriterion, MissionEvent, MissionNode, PlanView } from "./snapshot";
 import { useShellStore } from "./store";
 
@@ -49,22 +59,31 @@ import { useShellStore } from "./store";
 // scrolls (its mark, title, the ways to its worker's terminal and record, and
 // one line of who works it, how long it took and its branch), what waits on
 // someone, its worker's plan, what it made, its finish lines as one list, the
-// nodes before and after it as one line, and its events folded.
+// nodes before and after it as one line, and its events folded. A done node
+// starts with what it made and its finish lines, its result first
+// (issue 2637), and its plan follows as history.
 
 export function MissionNodePanel({ mission, node, events, end, onSelect, onClose, actions }: { mission: Mission; node: MissionNode; events: MissionEvent[] | null; end: number; onSelect: (key: string) => void; onClose: () => void; actions: Actions }) {
+  const done = node.status === "done";
+  const made = <Made mission={mission} node={node} events={events} actions={actions} />;
+  const criteria = <Criteria mission={mission} node={node} actions={actions} />;
   return (
-    <div className="@container/mission-panel flex min-w-0 flex-col gap-md px-md pb-sm text-body" data-mission-detail={node.key}>
+    <MapPanel data={{ "data-mission-detail": node.key }}>
       <Head mission={mission} node={node} events={events} end={end} onClose={onClose} actions={actions} />
+      {done ? made : null}
+      {done ? criteria : null}
+      <Gate mission={mission} node={node} />
       <Attention mission={mission} node={node} actions={actions} />
       <Now mission={mission} node={node} events={events} />
       <Plan mission={mission} node={node} actions={actions} />
-      <Made mission={mission} node={node} />
-      <Criteria mission={mission} node={node} actions={actions} />
+      {done ? null : made}
+      {done ? null : criteria}
       <Links mission={mission} node={node} onSelect={onSelect} />
       <Ways mission={mission} node={node} actions={actions} />
       <HideRecord mission={mission} node={node} events={events} />
       <Events node={node} events={events} />
-    </div>
+      <Brief key={node.key} mission={mission} node={node} actions={actions} />
+    </MapPanel>
   );
 }
 
@@ -79,11 +98,13 @@ export function MissionNodePanel({ mission, node, events, end, onSelect, onClose
 function Head({ mission, node, events, end, onClose, actions }: { mission: Mission; node: MissionNode; events: MissionEvent[] | null; end: number; onClose: () => void; actions: Actions }) {
   const { t } = useInterfaceTranslation();
   const look = nodeLook(mission, node);
-  const worker = useNodeRun(node);
+  const worker = useNodeRun(mission, node);
   const device = useMissionDeviceName(node.machine);
   const times = useNodeTimes(mission, node, events, end);
+  // Where its time went (mission-82): work, review and CI, and the wait before it, in place of the one total; a node the record cannot split keeps the total.
+  const spans = useNodeSpans(mission, node, end);
   const facts = [
-    ...(times?.took ? [t("mission.elapsed.total", { elapsed: times.took })] : []),
+    ...(spans ? [spans] : times?.took ? [t("mission.elapsed.total", { elapsed: times.took })] : []),
     ...(node.attempts >= 2 ? [t("mission.badge.attempts", { count: node.attempts })] : []),
     ...(node.reopened > 0 ? [t("mission.badge.reopened", { count: node.reopened })] : []),
   ];
@@ -91,10 +112,12 @@ function Head({ mission, node, events, end, onClose, actions }: { mission: Missi
   // The worker's life beside its model (B4): asleep or ended, as `hide agent show` says it.
   const life = node.agent_runtime === "asleep" || node.agent_runtime === "ended" ? t(node.agent_runtime === "asleep" ? "mission.worker.asleep" : "mission.worker.ended") : null;
   const branch = node.branch ?? (node.external && "branch" in node.external ? node.external.branch : null);
-  const kind = KIND_SHORT[node.kind];
+  // A general node's preset by its icon and name, a waiting node by its hourglass, as its card draws them (PRD node-presets D-08, D-13); a change, the usual kind, says nothing.
+  const kind = node.kind === "change" ? null : nodeKindWord(node);
+  const KindIcon = node.kind === "external" ? HourglassIcon : presetIcon(node.preset);
   const parts: ReactNode[] = [
-    ...(kind ? [<span key="kind" className="shrink-0 font-semibold text-subtle-foreground" data-panel-kind={node.kind}>{t(kind)}</span>] : []),
-    ...(worker ? [<span key="run" className="flex min-w-0 items-center gap-xxs">{worker.agent ? <AgentMark kind={worker.agent} /> : null}<RunText run={worker.run} /></span>] : []),
+    ...(kind ? [<span key="kind" className="flex shrink-0 items-center gap-xxs font-semibold text-subtle-foreground" data-panel-kind={node.kind} data-panel-preset={node.kind === "general" ? (node.preset ?? "general") : undefined}><KindIcon aria-hidden="true" className="size-(--size-icon-sm) shrink-0" />{t(kind)}</span>] : []),
+    ...(worker ? [<span key="run" className="flex min-w-0 items-center gap-xxs">{worker.agent ? <AgentMark kind={worker.agent} profile={worker.run.profile} /> : null}<RunText run={worker.run} /></span>] : []),
     ...(device ? [<MissionDevice key="device" name={device} />] : []),
     ...facts.map((fact) => <span key={fact} className="shrink-0 tabular-nums" data-panel-fact="true">{fact}</span>),
     ...(replan
@@ -118,33 +141,17 @@ function Head({ mission, node, events, end, onClose, actions }: { mission: Missi
       : []),
   ];
   return (
-    <section className="sticky top-0 z-10 -mx-md flex min-w-0 flex-col gap-xxs bg-background px-md pb-xs pt-sm" data-panel-part="head">
-      <div className="flex min-w-0 items-start gap-xs">
-        <MissionNodeMark look={look} label={markWord(node, look, t)} className="mt-xxs" />
-        <h3 className="min-w-0 flex-1 break-words text-subhead font-semibold [word-break:keep-all]" data-panel-title="true">{node.title}</h3>
-        <WorkerWays mission={mission} node={node} actions={actions} />
-        <Hint label={t("mission.panel.close")}>
-          <Button variant="ghost" size="icon-sm" className="-mr-xs shrink-0 text-muted-foreground" aria-label={t("mission.panel.close")} onClick={onClose} data-panel-close="true">
-            <XIcon />
-          </Button>
-        </Hint>
-      </div>
-      {parts.length > 0 ? (
-        <p className="flex min-w-0 flex-wrap items-center gap-x-sm gap-y-xxs text-caption text-muted-foreground" data-panel-meta="true">
-          {parts}
-        </p>
-      ) : null}
-    </section>
+    <MapPanelHead
+      mark={<MissionNodeMark look={look} label={markWord(node, look, t)} pace={nodePace(mission, node)} />}
+      title={node.title}
+      ways={<WorkerWays mission={mission} node={node} actions={actions} />}
+      close={t("mission.panel.close")}
+      onClose={onClose}
+      facts={parts.length > 0 ? parts : null}
+    />
   );
 }
 
-/** A node's kind as the head's first fact; a change, the usual kind, says nothing. */
-const KIND_SHORT: Record<MissionNode["kind"], MessageKey | null> = {
-  change: null,
-  research: "mission.kind.research",
-  verify: "mission.panel.kindVerify",
-  external: "mission.kind.external",
-};
 
 /**
  * The head's ways out (B31): the node's current pull request as its PR mark
@@ -165,13 +172,13 @@ function WorkerWays({ mission, node, actions }: { mission: Mission; node: Missio
     <>
       {node.pr != null && card ? (
         <Hint label={card}>
-          <Button size="sm" variant="secondary" className="shrink-0 px-xs" aria-label={card} disabled={!node.pr_url} onClick={() => node.pr_url && actions.openSessionPullRequest({ workspace_id: mission.workspace_id, url: node.pr_url, number: node.pr! })} data-node-pr-card={node.pr}>
+          <Button size="sm" variant="secondary" className="shrink-0 px-xs" aria-label={card} disabled={!node.pr_url} onClick={() => node.pr_url && actions.openSessionPullRequest({ workspace_id: mission.workspace_id, url: node.pr_url, number: node.pr! }, "here")} data-node-pr-card={node.pr}>
             <MissionPrMark number={node.pr} state={node.pr_state} stale={mission.github_stale} />
           </Button>
         </Hint>
       ) : null}
       <Hint label={t("mission.toTerminal")}>
-        <Button size="sm" variant="secondary" className="shrink-0 px-xs mission-panel-words:px-sm" aria-label={t("mission.toTerminal")} disabled={!node.pane_id || !row} onClick={() => node.pane_id && actions.openAgent(node.pane_id)} data-node-terminal="true">
+        <Button size="sm" variant="secondary" className="shrink-0 px-xs mission-panel-words:px-sm" aria-label={t("mission.toTerminal")} disabled={!node.pane_id} onClick={() => node.pane_id && actions.openAgent(node.pane_id)} data-node-terminal="true">
           <SquareTerminalIcon aria-hidden="true" className="mission-panel-words:hidden" />
           <span className="hidden mission-panel-words:inline">{t("mission.panel.terminal")}</span>
         </Button>
@@ -196,6 +203,46 @@ function Part({ title, children, part }: { title: ReactNode; children: ReactNode
 }
 
 /**
+ * The place the plan has the operator look at this node (PRD mission-human-gate
+ * D-07, B10), as one tinted card: the eye, `볼 것` and when at its head, what to
+ * look at as its large bold line, and once looked at where the answer came from
+ * with its words (`창에서 답함 · “ㄱㄱ”`, B21). Reached it has the deep border
+ * and `내 차례`, with `오래 기다림` after 24 hours (B22, B23); looked at it is a
+ * border and grey text. While the open decision asks about this node the card
+ * is not drawn: the panel's own question and choices already say it (D-25).
+ */
+function Gate({ mission, node }: { mission: Mission; node: MissionNode }) {
+  const { t } = useInterfaceTranslation();
+  const minute = useMinuteClock();
+  const gate = node.gate;
+  if (!gate) return null;
+  if (gate.state === "open" && nodeQuestion(mission, node) !== null) return null;
+  const long = gateWaitedLong(gate, minute);
+  const when = gate.state === "open" ? t("agents.mark.turn") : gate.state === "passed" ? t("mission.gate.passed") : t("mission.gate.when");
+  return (
+    <section
+      className={cn("flex min-w-0 flex-col gap-xs rounded-md border px-sm py-sm [&>:not(:first-child)]:ml-[calc(var(--size-icon-sm)+var(--spacing-xs))]", gate.state === "open" ? "tone-hold border-mission-hold/40 bg-mission-hold/10" : gate.state === "ahead" ? "tone-hold border-mission-hold/30 bg-mission-hold/5" : "border-border")}
+      data-panel-part="gate"
+      data-panel-gate={gate.state}
+    >
+      <div className="flex min-w-0 items-center gap-xs text-caption">
+        {gate.state === "passed" ? <CheckIcon aria-hidden="true" className="size-(--size-icon-sm) shrink-0 text-muted-foreground" /> : <EyeIcon aria-hidden="true" className="size-(--size-icon-sm) shrink-0 text-mission-hold" />}
+        <span className={cn("font-semibold", gate.state === "passed" ? "text-muted-foreground" : "text-mission-hold")}>{t("mission.gate.title")}</span>
+        <span className={cn("min-w-0 flex-1 truncate text-right", gate.state === "open" ? "font-semibold text-mission-hold" : "text-muted-foreground")} title={when} data-panel-gate-when="true">{when}</span>
+        {long ? <span className="shrink-0 text-muted-foreground" data-panel-gate-long="true">· {t("mission.gate.long")}</span> : null}
+      </div>
+      <p className={cn("min-w-0 break-words text-title font-semibold", gate.state === "passed" && "text-muted-foreground")}>{gate.look}</p>
+      {gate.state === "passed" && gate.via ? (
+        <p className="min-w-0 break-words text-caption text-muted-foreground" data-panel-gate-via={gate.via}>
+          {t(`mission.gate.via.${gate.via}`)}
+          {gate.said ? <> · <span className="text-foreground">“{gate.said}”</span></> : null}
+        </p>
+      ) : null}
+    </section>
+  );
+}
+
+/**
  * What waits on someone to look at the node (PRD mission-node-simple B2,
  * B15-B17): who looks, why, and the operator's choices for that reason, which
  * the operator may take before the Conductor does; each settles it with one
@@ -204,7 +251,8 @@ function Part({ title, children, part }: { title: ReactNode; children: ReactNode
 function Attention({ mission, node, actions }: { mission: Mission; node: MissionNode; actions: Actions }) {
   const { t } = useInterfaceTranslation();
   const words = attentionWords(node, t);
-  if (!words || !node.attention || !openAttention(mission, node)) return null;
+  // A reached gate is said by the gate card above, and its choices by the mission's 내 차례 (D-25).
+  if (!words || !node.attention || !openAttention(mission, node) || node.attention.reason === "human_gate") return null;
   return (
     <Part title={t("mission.attention")} part="attention">
       <p className="min-w-0 break-words border-l-2 border-mission-hold pl-sm" data-panel-attention={node.attention.reason} data-panel-attention-to={node.attention.to}>
@@ -232,8 +280,8 @@ function Now({ mission, node, events }: { mission: Mission; node: MissionNode; e
   const question = ended ? null : nodeQuestion(mission, node);
   const options = question ? (mission.question?.options ?? []) : [];
   const checks = ended || question || look === "done" ? [] : node.criteria.filter((line) => (line.kind === "review" || line.kind === "verify") && line.state === "open" && (line.checkers?.length ?? 0) > 0);
-  // Beside a question, finished work or an ended node only the Conductor's own line is left to say; a done research node's line is its conclusion, which the result shows.
-  const own = node.line && !node.plan && !(node.kind === "research" && look === "done") ? { text: node.line, attention: false } : null;
+  // Beside a question or an ended node only the Conductor's own line is left to say; a done node's line is its conclusion, which the result part shows.
+  const own = node.line && !node.plan && look !== "done" ? { text: node.line, attention: false } : null;
   const line = ended || question || look === "done" || node.plan ? own : cardLine(mission, node, null, t);
   if (!question && !line && checks.length === 0) return null;
   // The Conductor's line is its own word; once Hide's facts moved past it, it stays readable but dimmed (B4).
@@ -266,27 +314,48 @@ function Now({ mission, node, events }: { mission: Mission; node: MissionNode; e
 }
 
 /**
- * Its worker's own plan (PRD hide-plan D-17, D-18): `계획`, a cell per step,
- * `n/m` and `크게 ›`, which opens the plan's map in the 보기 slot as the pane
- * chip's does, over the checklist. A finished, dropped or cancelled node
- * keeps the plan its worker left, folded under `펼치기`.
+ * How the node's work goes, `작업 방식`: its worker's own plan once it exists
+ * (PRD hide-plan D-17, D-18), `n/m`, a cell per step and `크게 ›`, which opens
+ * the plan's map as a card tab on a desk as the pane chip's does, over the
+ * checklist, with `바뀜` on a step the worker changed from the Conductor's;
+ * else the steps the Conductor planned, as a list of steps not begun. A
+ * finished, dropped or cancelled node keeps the plan its worker left, folded
+ * under `펼치기`.
  */
 function Plan({ mission, node, actions }: { mission: Mission; node: MissionNode; actions: Actions }) {
   const look = nodeLook(mission, node);
-  const plan = node.plan;
-  if (!plan) return null;
+  const work = nodeSteps(node);
+  if (!work) return null;
   const ended = look === "done" || look === "dropped" || look === "cancelled";
   // Picking another node gives a new fold, so each finished node opens folded.
-  return <PlanPart key={node.key} plan={plan} folded={ended} actions={actions} />;
+  return node.plan ? (
+    <PlanPart key={node.key} plan={node.plan} planned={node.steps} folded={ended} actions={actions} />
+  ) : (
+    <PlannedPart steps={node.steps} />
+  );
 }
 
-function PlanPart({ plan, folded, actions }: { plan: PlanView; folded: boolean; actions: Actions }) {
+/** The Conductor's steps before the worker has put its own plan up: a list of steps not begun, under the count. */
+function PlannedPart({ steps }: { steps: readonly string[] }) {
+  const { t } = useInterfaceTranslation();
+  return (
+    <section className="flex min-w-0 flex-col gap-xs" data-panel-part="plan" data-panel-plan="planned">
+      <div className="flex min-w-0 items-center gap-xs text-caption text-muted-foreground">
+        <h4 className="shrink-0">{t("mission.panel.approach")}</h4>
+        <span className="shrink-0" data-panel-plan-count="planned">{t("mission.steps.planned", { count: steps.length })}</span>
+      </div>
+      <div className="min-w-0 text-caption"><PlannedSteps steps={steps} /></div>
+    </section>
+  );
+}
+
+function PlanPart({ plan, planned, folded, actions }: { plan: PlanView; planned: readonly string[]; folded: boolean; actions: Actions }) {
   const { t } = useInterfaceTranslation();
   const [open, setOpen] = useState(!folded);
   return (
     <section className="flex min-w-0 flex-col gap-xs" data-panel-part="plan" data-panel-plan={open ? "open" : "folded"}>
       <div className="flex min-w-0 items-center gap-xs text-caption text-muted-foreground">
-        <h4 className="shrink-0">{t("plan.title")}</h4>
+        <h4 className="shrink-0">{t("mission.panel.approach")}</h4>
         <ProgressCells tones={planCells(plan)} size="chip" />
         <span className="shrink-0 font-mono tabular-nums" data-panel-plan-count="true">{planCount(plan)}</span>
         {folded ? (
@@ -295,26 +364,51 @@ function PlanPart({ plan, folded, actions }: { plan: PlanView; folded: boolean; 
             <ChevronRightIcon aria-hidden="true" className={cn("size-(--size-icon-sm) transition-transform", open && "rotate-90")} />
           </Button>
         ) : null}
-        <Button variant="text" size="inline" className="ml-auto shrink-0 text-caption" onClick={() => actions.openPlan(plan.session)} data-panel-plan-large="true">
+        <Button variant="text" size="inline" className="ml-auto shrink-0 text-caption" onClick={() => actions.openPlan(plan.session, "here")} data-panel-plan-large="true">
           {t("plan.large")}
           <ChevronRightIcon aria-hidden="true" className="size-(--size-icon-sm)" />
         </Button>
       </div>
-      {open ? <div className="min-w-0 text-caption"><PlanChecklist plan={plan} /></div> : null}
+      {open ? <div className="min-w-0 text-caption"><PlanChecklist plan={plan} planned={planned} /></div> : null}
     </section>
   );
 }
 
 /**
- * What the node made (B31): its earlier pull requests with their states and
- * the base its current one stacks on, the CI line, its commit on main, a
- * research conclusion or a verify node's verdict; its current pull request
- * and its branch are the head's. Nothing the record does not hold.
+ * What the node made (B31): a done node's conclusion, the Conductor's line or
+ * else the first line of its worker's last report, and the documents its
+ * worker left, each opening with one press (issue 2637); its earlier
+ * pull requests with their states and the base its current one stacks on, the
+ * CI line, its commit on main and a general node's verdict; its current pull
+ * request and its branch are the head's. Nothing the record does not hold.
  */
-function Made({ mission, node }: { mission: Mission; node: MissionNode }) {
+function Made({ mission, node, events, actions }: { mission: Mission; node: MissionNode; events: MissionEvent[] | null; actions: Actions }) {
   const { t } = useInterfaceTranslation();
   const ci = node.criteria.find((line) => line.kind === "ci");
   const rows: [string, ReactNode][] = [];
+  const done = node.status === "done";
+  const conclusion = done ? (node.line ?? node.reported ?? null) : null;
+  if (conclusion) {
+    // The Conductor's line stays its own word, dimmed once Hide's facts moved past it (B4); a report's line is the worker's last word.
+    const behind = conclusion === node.line && lineOutrun(node, events);
+    rows.push([
+      t("mission.panel.conclusion"),
+      <span key="conclusion" className={cn("min-w-0 break-keep text-body text-foreground [overflow-wrap:anywhere]", behind && "text-muted-foreground opacity-(--opacity-dimmed)")} title={behind ? t("mission.line.behind") : undefined} data-panel-line-behind={behind || undefined} data-panel-conclusion={node.line ? "line" : "report"}>{conclusion}</span>,
+    ]);
+  }
+  const views = done ? (node.views ?? []) : [];
+  if (views.length > 0) {
+    rows.push([
+      t("mission.panel.documents"),
+      <ul key="documents" className="flex min-w-0 flex-col" data-panel-documents={views.length}>
+        {views.map((view) => (
+          <li key={`${view.device_id}:${view.checkout_path}:${view.display_id}`} className="min-w-0">
+            <LinkedViewRow view={view} by={false} onOpen={(linked) => actions.openLinkedView(mission.id, { node: node.key }, linked)} data={{ "data-panel-document": view.display_id }} />
+          </li>
+        ))}
+      </ul>,
+    ]);
+  }
   const outside = node.external && "pr" in node.external ? [{ number: node.external.pr, state: node.pr_state, url: node.pr_url }] : [];
   // The current pull request is the head's button; the earlier ones and the base it stacks on stay here. An outside node has no head button.
   const prs = node.prs.length > 0 ? node.prs.filter((pr) => node.kind === "external" || pr.number !== node.pr) : outside;
@@ -333,13 +427,16 @@ function Made({ mission, node }: { mission: Mission; node: MissionNode }) {
   const left = landingLeft(node);
   if (commit) rows.push(["main", <span key="commit" className="font-mono text-caption" title={commit} data-panel-commit={commit}>{t("mission.result.main", { commit: shortCommit(commit) })}</span>]);
   else if (left) rows.push(["main", <span key="left" className="font-semibold text-mission-hold" data-panel-landing={left}>{t(left === "merge" ? "mission.landing.merge" : "mission.landing.join")}</span>]);
-  if (node.kind === "research" && node.status === "done" && node.line) rows.push([t("mission.result.conclusion"), <span key="c" className="break-words" data-panel-conclusion="true">{node.line}</span>]);
-  if (node.kind === "verify" && node.verdict) {
+  // A done general node's verdict as its card's result line reads it, whatever its preset or plan (PRD node-presets D-08); its line is the conclusion above.
+  const result = node.kind === "general" ? resultLine(lineNode(node)) : null;
+  if (result && result.shows === "verdict") {
     rows.push([
       t("mission.result.verify"),
-      <span key="v" className={cn("font-mono font-semibold", node.verdict === "fail" && "text-mission-failed")} data-panel-verdict={node.verdict}>
-        {t(node.verdict === "pass" ? "mission.result.pass" : "mission.result.fail")}
-        {node.checks ? ` ${node.checks.passed}/${node.checks.total}` : ""}
+      <span key="result" className="flex min-w-0 flex-wrap items-baseline gap-x-xs" data-panel-result={result.shows}>
+        <span className={cn("shrink-0 font-mono font-semibold", result.verdict === "fail" && "text-mission-failed")} data-panel-verdict={result.verdict}>
+          {t(result.verdict === "pass" ? "mission.result.pass" : "mission.result.fail")}
+          {result.checks ? ` ${result.checks.passed}/${result.checks.total}` : ""}
+        </span>
       </span>,
     ]);
   }
@@ -378,6 +475,7 @@ const TAG: Record<MissionCriterion["kind"], MessageKey> = {
   ci: "mission.criteria.tag.ci",
   review: "mission.criteria.tag.review",
   verify: "mission.criteria.tag.verify",
+  human: "mission.criteria.tag.human",
 };
 
 /**
@@ -417,6 +515,9 @@ function CriterionLine({ mission, line, actions }: { mission: Mission; line: Mis
   const note = line.state === "skipped" ? null : criterionNote(line, mission, t);
   const checks = line.kind === "review" || line.kind === "verify" ? { kind: line.kind, checkers: line.checkers ?? [] } : null;
   const whole = [name, note, line.evidence].filter(Boolean).join("\n\n");
+  // The worker's one line under every line (issue 2637): a failed line's verdict and a skipped one's already carry it.
+  const summary = line.summary?.trim() || null;
+  const verdict = (line.state === "skipped" && line.skip != null) || (line.state === "fail" && !checks);
   return (
     <li className="grid min-w-0 grid-cols-[var(--size-agent-mark)_minmax(0,1fr)] items-center gap-x-xs gap-y-xxs">
       <div className="contents" data-panel-line={line.key} data-line-state={line.state} data-line-kind={line.kind}>
@@ -435,8 +536,15 @@ function CriterionLine({ mission, line, actions }: { mission: Mission; line: Mis
       </div>
       {line.state === "skipped" && line.skip ? (
         <Verdict tone="skipped" word={t("mission.verdict.skipped")}>
+          {summary ? <p className="min-w-0 break-keep text-foreground [overflow-wrap:anywhere]" data-line-summary="true">{summary}</p> : null}
           <p className="min-w-0 break-words text-foreground" data-verdict-summary="true">{criterionNote(line, mission, t)}</p>
         </Verdict>
+      ) : null}
+      {summary && !verdict ? (
+        <p className="col-start-2 flex min-w-0 gap-xs text-caption text-muted-foreground" data-line-summary="true">
+          <span aria-hidden="true" className="shrink-0 text-subtle-foreground">└</span>
+          <span className="min-w-0 break-keep [overflow-wrap:anywhere]">{summary}</span>
+        </p>
       ) : null}
       {line.state === "fail" && !checks ? (
         <Verdict tone="fail" word={t("mission.verdict.failed")}>
@@ -459,7 +567,7 @@ function Verdict({ tone, word, who, children }: { tone: "fail" | "skipped"; word
   return (
     <div className={cn("col-start-2 flex min-w-0 flex-col gap-xxs rounded-xs border-l-2 bg-secondary px-sm py-xs text-caption", tone === "fail" ? "border-mission-failed" : "border-mission-hold")} data-panel-verdict={tone}>
       <span className="flex min-w-0 items-center gap-xs">
-        <span className={cn("shrink-0 rounded-full px-xs text-micro font-semibold", tone === "fail" ? "bg-mission-failed/15 text-mission-failed" : "bg-mission-hold/15 text-mission-hold")}>{word}</span>
+        <span className={cn("shrink-0 rounded-full px-xs text-micro font-semibold", tone === "fail" ? PILL_TONE.failed : PILL_TONE.hold)}>{word}</span>
         {who ? <span className="flex min-w-0 items-center gap-xxs text-muted-foreground"><AgentMark kind={who} /><span className="truncate">{agentMarkOf(who)?.label ?? who}</span></span> : null}
       </span>
       {children}
@@ -492,8 +600,8 @@ function CheckerChip({ mission, kind, checker, actions }: { mission: Mission; ki
  */
 function Links({ mission, node, onSelect }: { mission: Mission; node: MissionNode; onSelect: (key: string) => void }) {
   const { t } = useInterfaceTranslation();
-  const before = node.depends_on.flatMap((key) => mission.nodes.find((other) => other.key === key) ?? []);
-  const after = mission.nodes.filter((other) => other.depends_on.includes(node.key));
+  const before = dependencyNodes(node).flatMap((key) => mission.nodes.find((other) => other.key === key) ?? []);
+  const after = mission.nodes.filter((other) => dependencyNodes(other).includes(node.key));
   if (before.length === 0 && after.length === 0) return null;
   const arrow = <ArrowRightIcon aria-hidden="true" className="size-(--size-icon-sm) shrink-0 text-muted-foreground" />;
   const pills = (nodes: MissionNode[], which: "before" | "after") => (
@@ -606,6 +714,41 @@ function Events({ node, events }: { node: MissionNode; events: MissionEvent[] | 
           })}
         </ol>
       ) : null}
+    </section>
+  );
+}
+
+/**
+ * The brief its worker was started on, the panel's last part and folded
+ * until the operator opens it: `지시 원문 · 2.4 KB`. The map carries only the
+ * size, so opening asks the core for the text, which arrives for this node
+ * alone. Nothing is drawn for a node whose worker was never started.
+ */
+function Brief({ mission, node, actions }: { mission: Mission; node: MissionNode; actions: Actions }) {
+  const { t, i18n } = useInterfaceTranslation();
+  const [open, setOpen] = useState(false);
+  const brief = useShellStore((s) => s.rest?.mission_brief);
+  if (node.brief_bytes == null) return null;
+  const text = open && brief?.mission === mission.id && brief.node === node.key ? brief.text : null;
+  const size = formatBytes(requireInterfaceLanguage(i18n.language), node.brief_bytes);
+  return (
+    <section className="flex min-w-0 flex-col gap-xs border-t border-border pt-sm" data-panel-part="brief" data-panel-brief={open ? "open" : "folded"}>
+      <Button
+        variant="text"
+        size="inline"
+        className="w-fit text-caption"
+        aria-expanded={open}
+        onClick={() => {
+          if (!open) actions.readMissionBrief(mission.id, node.key);
+          setOpen(!open);
+        }}
+        data-panel-brief-toggle="true"
+      >
+        <ChevronRightIcon aria-hidden="true" className={cn("size-(--size-icon-sm) transition-transform", open && "rotate-90")} />
+        {t("mission.brief.title")}
+        <span className="text-muted-foreground" data-panel-brief-size="true">· {size}</span>
+      </Button>
+      {text ? <pre className="max-h-(--size-relationship-list-max) min-w-0 overflow-auto whitespace-pre-wrap break-words rounded-xs border border-border bg-background p-sm font-mono text-caption text-subtle-foreground" data-panel-brief-text="true">{text}</pre> : null}
     </section>
   );
 }

@@ -45,10 +45,16 @@ SPREAD_WARNING = 1.15
 # duration, and a test's tags and retry mark after its title:
 # "✓   1 e2e/file.spec.ts:45:1 › title @platform (retry #1) (4.9s)", and a
 # skipped test's line has `-` and no duration. A Windows runner's list
-# reporter prints `ok` where the others print `✓`.
+# reporter prints `ok` where the others print `✓`, and prints the directory
+# and separator as Windows spells them (`e2e\file.spec.ts`), so both separators
+# are read and the directory is taken off either way: a shard file that kept
+# `e2e\file.spec.ts` matches no listed test, and every Windows shard would fail
+# its `check`.
 PROJECT = r"(?:\[[^\]]+\] › )?"
-LISTED = re.compile(r"^\s+" + PROJECT + r"(?:e2e/)?(?P<file>[^\s:]+\.spec\.ts):\d+:\d+ › (?P<title>.+?)\s*$")
-RUN_LINE = r"\s+\d+\s+" + PROJECT + r"(?:e2e/)?(?P<file>[^\s:]+\.spec\.ts):\d+:\d+ › "
+DIRECTORY = r"(?:e2e[\\/])?"
+SPEC = r"(?P<file>[^\s:\\/]+\.spec\.ts):\d+:\d+ › "
+LISTED = re.compile(r"^\s+" + PROJECT + DIRECTORY + SPEC + r"(?P<title>.+?)\s*$")
+RUN_LINE = r"\s+\d+\s+" + PROJECT + DIRECTORY + SPEC
 PASSED = re.compile(r"(?:^|\s)(?:✓|ok)" + RUN_LINE + r"(?P<title>.+) \((?P<value>\d+(?:\.\d+)?)(?P<unit>ms|s|m)\)\s*$")
 SKIPPED = re.compile(r"(?:^|\s)-" + RUN_LINE + r"(?P<title>.+?)\s*$")
 # What a run prints after a title and `--list` does not; a title may end in a

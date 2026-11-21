@@ -16,7 +16,7 @@ use std::sync::Mutex;
 use serde::de::{self, Visitor};
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
 
-use crate::ProviderId;
+use crate::Item;
 
 /// What a settings file without the field, and a fresh install, use.
 pub const DEFAULT_LIMIT_PERCENT: u8 = 90;
@@ -110,10 +110,10 @@ pub struct UsageReading {
     pub resets_at_unix_ms: Option<u64>,
 }
 
-/// An agent at or past the limit, and what the screen and the log say of it.
-#[derive(Clone, Copy, Debug, PartialEq)]
+/// An item at or past the limit, and what the screen and the log say of it.
+#[derive(Clone, Debug, PartialEq)]
 pub struct PastLimit {
-    pub provider: ProviderId,
+    pub item: Item,
     pub used_percent: f64,
     pub limit_percent: u8,
     pub resets_at_unix_ms: Option<u64>,
@@ -122,7 +122,7 @@ pub struct PastLimit {
 #[derive(Debug, Default)]
 struct State {
     limit: UsageLimit,
-    readings: BTreeMap<ProviderId, UsageReading>,
+    readings: BTreeMap<Item, UsageReading>,
 }
 
 /// The limit and the readings a router judges a request by. The core writes
@@ -139,9 +139,11 @@ impl UsageLimits {
         Self::default()
     }
 
-    /// Replaces the limit and the readings. Returns whether anything moved,
-    /// so a caller republishes only a real change.
-    pub fn set(&self, limit: UsageLimit, readings: &BTreeMap<ProviderId, UsageReading>) -> bool {
+    /// Replaces the limit and the readings, one per item: an item's account's
+    /// figure, so two items of one account read the same (PRD
+    /// agent-profiles-phase2 D-07). Returns whether anything moved, so a
+    /// caller republishes only a real change.
+    pub fn set(&self, limit: UsageLimit, readings: &BTreeMap<Item, UsageReading>) -> bool {
         let mut state = self.lock();
         if state.limit == limit && state.readings == *readings {
             return false;
@@ -155,39 +157,40 @@ impl UsageLimits {
         self.lock().limit
     }
 
-    /// The reading of one agent, whether or not it is past the limit.
-    pub fn reading(&self, provider: ProviderId) -> Option<UsageReading> {
-        self.lock().readings.get(&provider).copied()
+    /// The reading of one item, whether or not it is past the limit.
+    pub fn reading(&self, item: &Item) -> Option<UsageReading> {
+        self.lock().readings.get(item).copied()
     }
 
-    /// Whether `provider` cannot answer a background request now: a limit is
-    /// set, the agent has a reading at or past it, and that reading's window
-    /// has not reset. An agent with no reading is never past the limit.
-    pub fn past_limit(&self, provider: ProviderId, now_unix_ms: u64) -> Option<PastLimit> {
+    /// Whether `item` cannot answer a background request now: a limit is
+    /// set, the item has a reading at or past it, and that reading's window
+    /// has not reset. An item with no reading, as an account Hide reads no
+    /// figure for, is never past the limit.
+    pub fn past_limit(&self, item: &Item, now_unix_ms: u64) -> Option<PastLimit> {
         let state = self.lock();
         let limit = state.limit.threshold()?;
-        let reading = state.readings.get(&provider)?;
+        let reading = state.readings.get(item)?;
         if reading
             .resets_at_unix_ms
             .is_some_and(|reset| reset <= now_unix_ms)
         {
             return None;
         }
-        (reading.used_percent >= f64::from(limit)).then_some(PastLimit {
-            provider,
+        (reading.used_percent >= f64::from(limit)).then(|| PastLimit {
+            item: item.clone(),
             used_percent: reading.used_percent,
             limit_percent: limit,
             resets_at_unix_ms: reading.resets_at_unix_ms,
         })
     }
 
-    /// Whether `providers` is not empty and every one of them is past the
-    /// limit: no agent of the order can answer, so Hide AI is paused.
-    pub fn all_past(&self, providers: &[ProviderId], now_unix_ms: u64) -> bool {
-        !providers.is_empty()
-            && providers
+    /// Whether `items` is not empty and every one of them is past the
+    /// limit: no item of the order can answer, so Hide AI is paused.
+    pub fn all_past(&self, items: &[Item], now_unix_ms: u64) -> bool {
+        !items.is_empty()
+            && items
                 .iter()
-                .all(|provider| self.past_limit(*provider, now_unix_ms).is_some())
+                .all(|item| self.past_limit(item, now_unix_ms).is_some())
     }
 
     fn lock(&self) -> std::sync::MutexGuard<'_, State> {
@@ -198,6 +201,7 @@ impl UsageLimits {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::ProviderId;
 
     fn reading(used: f64, resets: Option<u64>) -> UsageReading {
         UsageReading {
@@ -208,7 +212,13 @@ mod tests {
 
     fn limits(limit: UsageLimit, rows: &[(ProviderId, UsageReading)]) -> UsageLimits {
         let gate = UsageLimits::new();
-        gate.set(limit, &rows.iter().copied().collect());
+        gate.set(
+            limit,
+            &rows
+                .iter()
+                .map(|(provider, reading)| (Item::agent(*provider), *reading))
+                .collect(),
+        );
         gate
     }
 
@@ -250,10 +260,13 @@ mod tests {
             ],
         );
         let past = gate
-            .past_limit(ProviderId::CLAUDE, 1_000)
+            .past_limit(&Item::agent(ProviderId::CLAUDE), 1_000)
             .expect("90 is at the limit");
         assert_eq!((past.limit_percent, past.used_percent), (90, 90.0));
-        assert!(gate.past_limit(ProviderId::CODEX, 1_000).is_none());
+        assert!(
+            gate.past_limit(&Item::agent(ProviderId::CODEX), 1_000)
+                .is_none()
+        );
     }
 
     #[test]
@@ -261,13 +274,13 @@ mod tests {
         let rows = [(ProviderId::CLAUDE, reading(99.0, None))];
         assert!(
             limits(UsageLimit::None, &rows)
-                .past_limit(ProviderId::CLAUDE, 1_000)
+                .past_limit(&Item::agent(ProviderId::CLAUDE), 1_000)
                 .is_none(),
             "No limit never stops an agent"
         );
         assert!(
             limits(UsageLimit::Percent(80), &rows)
-                .past_limit(ProviderId::CODEX, 1_000)
+                .past_limit(&Item::agent(ProviderId::CODEX), 1_000)
                 .is_none(),
             "an agent with no figure is not limited"
         );
@@ -279,9 +292,13 @@ mod tests {
             UsageLimit::Percent(80),
             &[(ProviderId::CLAUDE, reading(95.0, Some(5_000)))],
         );
-        assert!(gate.past_limit(ProviderId::CLAUDE, 4_999).is_some());
         assert!(
-            gate.past_limit(ProviderId::CLAUDE, 5_000).is_none(),
+            gate.past_limit(&Item::agent(ProviderId::CLAUDE), 4_999)
+                .is_some()
+        );
+        assert!(
+            gate.past_limit(&Item::agent(ProviderId::CLAUDE), 5_000)
+                .is_none(),
             "the figure belongs to a week that is over"
         );
     }
@@ -295,16 +312,17 @@ mod tests {
                 (ProviderId::CODEX, reading(96.0, None)),
             ],
         );
-        let order = [ProviderId::CLAUDE, ProviderId::CODEX];
+        let order = [ProviderId::CLAUDE, ProviderId::CODEX].map(Item::agent);
         assert!(gate.all_past(&order, 0));
-        assert!(!gate.all_past(&[ProviderId::CLAUDE, ProviderId::GROK], 0));
+        assert!(!gate.all_past(&[ProviderId::CLAUDE, ProviderId::GROK].map(Item::agent), 0));
         assert!(!gate.all_past(&[], 0), "an empty order is not a pause");
     }
 
     #[test]
     fn setting_what_is_already_there_reports_no_change() {
         let gate = UsageLimits::new();
-        let rows: BTreeMap<_, _> = [(ProviderId::CLAUDE, reading(40.0, Some(9)))].into();
+        let rows: BTreeMap<_, _> =
+            [(Item::agent(ProviderId::CLAUDE), reading(40.0, Some(9)))].into();
         assert!(gate.set(UsageLimit::Percent(95), &rows));
         assert!(!gate.set(UsageLimit::Percent(95), &rows));
         assert!(gate.set(UsageLimit::None, &rows));

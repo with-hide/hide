@@ -6,8 +6,8 @@
 //! same private diagnostic the other hooks use.
 //!
 //! The operations reuse the Claude Code and Codex hook's parts: the letter
-//! intake (`delivery`), the spawn guard
-//! (`spawn_guard`), the pane counts (`counters`, `report`) and Project Memory
+//! intake (`delivery`), the guards (`guardrails`, `plan_record`,
+//! `opener_guard`), the pane counts (`counters`, `report`) and Project Memory
 //! (`memory`). What differs is only the transport: these agents have no
 //! command hook, so the script hands over the facts a hook payload would
 //! carry. What each agent gets follows its adapter declaration.
@@ -16,11 +16,10 @@ use std::io::{Read, Write};
 use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
 
-use hide_agent_adapter::{AgentAdapter, PluginDialect};
+use hide_agent_adapter::{AgentAdapter, HookDialect, PluginDialect};
 use hide_agent_hooks::delivery::{self, Intake, Prompt};
 use hide_agent_hooks::memory::{self, HookMemoryOutcome, MemoryRequest, memory_context_until};
 use hide_agent_hooks::runtime::HookEvent;
-use hide_agent_hooks::spawn_guard as guard;
 use hide_agent_hooks::{counters, guardrails, guidance, report};
 use serde::Deserialize;
 use serde_json::{Value, json};
@@ -43,7 +42,7 @@ struct Input {
     session_id: Option<String>,
     /// The agent's own id for the session, which Memory and its receipts know
     /// it by; Pi's and omp's extension names the session by its file for
-    /// letters, as Herdr does, and sends this beside it.
+    /// letters and sends this beside it.
     native_session: Option<String>,
     prompt: Option<String>,
     cwd: Option<PathBuf>,
@@ -60,6 +59,10 @@ struct Input {
     args: Option<Value>,
     working: u32,
     done: u32,
+    /// The running subagents the script names, part of `working`: each one's
+    /// id, the kind and task its agent gave it and when it started (the
+    /// `subagents` operation).
+    running: Vec<report::HookSubagent>,
     /// The turn the script saw the session's own events start, end or wait
     /// in (the `turn` operation).
     turn: Option<report::HookTurn>,
@@ -69,13 +72,10 @@ struct Input {
     /// The version of the script that asks; Pi's and omp's extension sends it,
     /// and one this build does not write is answered with nothing (B13).
     version: Option<u32>,
-    /// The script only guards this session: it runs outside a Herdr pane, or
+    /// The script only guards this session: it runs outside a pane Hide manages, or
     /// is an agent started in another agent's shell, which a pane variable
     /// it inherited does not make the pane's own (PRD agent-guardrails B22).
     guard_only: bool,
-    /// Transient Post input, consumed by the same owned helper. Never stored
-    /// in the metadata admission request.
-    observation: Option<Value>,
 }
 
 /// The agent a script speaks for: its adapter row and the runtime id the
@@ -98,6 +98,15 @@ impl Agent {
 
     fn runtime(&self) -> &'static str {
         self.adapter.id
+    }
+
+    /// The hook dialect its tool calls are read in.
+    fn hook_dialect(&self) -> HookDialect {
+        match self.dialect {
+            PluginDialect::OpenCode => HookDialect::OpenCode,
+            PluginDialect::Pi => HookDialect::Pi,
+            PluginDialect::Omp => HookDialect::Omp,
+        }
     }
 
     /// Whether `version` is the script this build writes. OpenCode's plugin
@@ -154,12 +163,6 @@ pub fn run(agent: &str, operation: Option<&str>, started: Instant) {
         Some("prompt") => prompt(&home, &agent, input, started + PROMPT_BUDGET),
         Some("confirm") => confirm(&home, input, started + CONFIRM_BUDGET),
         Some("tool") => tool(&home, &agent, input, started + TOOL_BUDGET),
-        Some("observation")
-            if agent.adapter.observation
-                == hide_agent_adapter::ObservationSupport::Plugin(agent.dialect) =>
-        {
-            observation(&home, &agent, &input, started)
-        }
         Some("letters") if agent.adapter.tool_letters.is_some() => {
             letters(&home, input, started + LETTERS_BUDGET)
         }
@@ -167,52 +170,10 @@ pub fn run(agent: &str, operation: Option<&str>, started: Instant) {
             subagents(&home, &agent, input, started)
         }
         Some("turn") => turn(&home, &agent, input, started),
+        Some("session") => session_start(&home, &agent, input, started),
         _ => json!({}),
     };
     answer(&output);
-}
-
-fn observation(home: &Path, agent: &Agent, input: &Input, started: Instant) -> Value {
-    use hide_agent_hooks::observation::{self, ObservationCorrelation, ToolResult};
-    let Some(post) = input.observation.as_ref() else {
-        return json!({});
-    };
-    if input.guard_only {
-        return json!({});
-    }
-    let Some(command) = post["command"].as_str() else {
-        return json!({});
-    };
-    let Some(session) = input.session_id.as_deref() else {
-        return json!({});
-    };
-    let Some(call_id) = post["call_id"].as_str() else {
-        return json!({});
-    };
-    let now = std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .map(|duration| duration.as_millis() as u64)
-        .unwrap_or(0);
-    let parsed = observation::observe(
-        ToolResult {
-            runtime_id: agent.runtime(),
-            session_id: session,
-            call_id,
-            command,
-            correlation_kind: ObservationCorrelation::ToolCall,
-            result: post.get("result"),
-            failed: post["failed"] == true,
-            interrupted: post["interrupted"] == true,
-            truncated: post["truncated"] == true,
-            asynchronous: post["asynchronous"] == true,
-        },
-        now,
-        &|name| std::env::var(name).ok(),
-    );
-    let accepted = parsed
-        .as_ref()
-        .is_some_and(|parsed| observation::send(home, parsed, started + observation::SEND_BUDGET));
-    json!({ "observed": accepted })
 }
 
 fn answer(value: &Value) {
@@ -319,6 +280,8 @@ fn prompt_memory(
     // The Hide global instruction comes with the session-start ask, in its
     // own slot outside Memory's quota (PRD memory-self-improve D-31).
     let mut global = None;
+    // The Project's other sessions come with it too, once.
+    let mut sessions = None;
     if input.memory_first.unwrap_or(input.first) {
         let index = memory_context_until(request(HookEvent::SessionStart), home, deadline);
         start = matches!(
@@ -330,14 +293,17 @@ fn prompt_memory(
         // capsule when the guidance came first; Memory off answers no
         // capsule, so a later prompt does not carry it again.
         global = index.global.filter(|_| input.first || start);
+        sessions = index.sessions.filter(|_| input.first || start);
     }
     let prompt = memory_context_until(request(HookEvent::UserPromptSubmit), home, deadline);
     let body = prompt.context.as_deref().unwrap_or_default();
     let (context, index_kept) = bounded_memory_capsule(&context, body);
-    let context = match (global, context) {
-        (Some(global), Some(context)) => Some(format!("{global}{context}")),
-        (global, context) => global.or(context),
-    };
+    // The session's open questions ride outside Memory's quota, last.
+    let parts = [global, context, sessions, prompt.asks];
+    let context = parts
+        .iter()
+        .any(Option::is_some)
+        .then(|| parts.into_iter().flatten().collect::<String>());
     (context, start && index_kept)
 }
 
@@ -384,21 +350,14 @@ fn confirm(home: &Path, input: Input, deadline: Instant) -> Value {
     if input.letters.is_empty() || !delivery::valid_letter_ids(&input.letters) {
         return json!({});
     }
-    let intake = Intake {
-        context: String::new(),
-        ids: input.letters,
-        plan_context: None,
-    };
-    match delivery::confirm(&intake, deadline) {
-        Ok(()) => json!({ "confirmed": intake.ids }),
-        Err(failure) => {
-            delivery::diagnose_failure(home, &failure);
-            json!({})
-        }
+    // One that misses is kept for the core as a prompt hook's is.
+    match delivery::confirm_or_owe(home, &input.letters, input.session_id.as_deref(), deadline) {
+        Ok(()) => json!({ "confirmed": input.letters }),
+        Err(_) => json!({}),
     }
 }
 
-/// The project's guardrails for a shell or file tool, the spawn guard for
+/// The project's guardrails for a shell or file tool, the opener guard for
 /// the shell (`bash`, OpenCode 2's `shell`): `deny`
 /// carries the reason the script refuses with, and every other outcome lets
 /// the call run, as the Claude Code and Codex guards do.
@@ -414,7 +373,7 @@ fn tool(home: &Path, agent: &Agent, input: Input, deadline: Instant) -> Value {
                 .map(|command| json!({ "command": command }))
         })?;
         Some(guardrails::payload::ToolCall {
-            action: guardrails::payload::action(tool, &args)?,
+            action: guardrails::payload::action(agent.hook_dialect(), tool, &args)?,
             cwd: input.cwd.clone(),
         })
     };
@@ -426,8 +385,8 @@ fn tool(home: &Path, agent: &Agent, input: Input, deadline: Instant) -> Value {
         hide_agent_hooks::global_guard::record_refusal(home, runtime, pane.as_deref());
         return json!({ "deny": reason });
     }
-    // The guardrails hold in any session of a guarded project, a Herdr pane
-    // or not (PRD agent-guardrails B22); the guards after them only in one.
+    // The guardrails hold in any session of a guarded project, a pane or not
+    // (PRD agent-guardrails B22); the guards after them only in one.
     if let Some(reason) = guardrails::refusal_for(home, runtime, pane.as_deref(), call) {
         return json!({ "deny": reason });
     }
@@ -450,19 +409,13 @@ fn tool(home: &Path, agent: &Agent, input: Input, deadline: Instant) -> Value {
         return json!({});
     };
     match input.tool.as_deref() {
-        Some("bash" | "shell") => {
+        Some(tool @ ("bash" | "shell")) => {
             let Some(command) = input.command.as_deref() else {
                 return json!({});
             };
-            let refusal = guard::pane_refusal(
-                home,
-                runtime,
-                &pane,
-                command,
-                input.cwd,
-                &program,
-                deadline,
-                &|name| std::env::var(name).ok(),
+            let syntax = hide_session::call_shell::syntax(agent.hook_dialect(), tool);
+            let refusal = hide_agent_hooks::opener_guard::pane_refusal(
+                home, runtime, &pane, command, syntax, &program, deadline,
             );
             refusal.map_or_else(|| json!({}), |reason| json!({ "deny": reason }))
         }
@@ -481,25 +434,37 @@ fn subagents(home: &Path, agent: &Agent, input: Input, started: Instant) -> Valu
         done: input.done,
     };
     let who = reporter(agent, &input);
-    if counters::store(home, &pane, counts, who).is_err() {
-        return json!({});
-    }
+    // A refused record write does not keep the session's identity from the
+    // core: the counts it carried are left out instead (engineering rules 4
+    // and 10).
+    let stored = counters::store(home, &pane, counts, &input.running, who);
     let outcome = report::report(
         &report::HookStatusReport {
             runtime: agent.runtime().to_owned(),
             version: hide_agent_hooks::HOOK_VERSION,
             session: who.session.map(str::to_owned),
             turn: None,
-            counts: Some(report::HookCounts {
+            counts: stored.is_ok().then_some(report::HookCounts {
                 working: counts.working,
                 done: counts.done,
             }),
+            subagents: stored
+                .as_ref()
+                .ok()
+                .map(|running| report::reported_subagents(running)),
             session_start: false,
             waiting: None,
+            account: None,
+            refused: None,
         },
         started + report::REPORT_TIMEOUT,
     );
-    let _ = report::record_outcome(home, &pane, agent.runtime(), "subagent count", &outcome);
+    let record_error = stored
+        .err()
+        .map(|error| format!("the pane's count could not be stored: {error}"))
+        .map_or(Ok(()), Err);
+    let outcome = report::outcome(record_error, outcome);
+    report::record_and_say(home, &pane, agent.runtime(), "subagent count", &outcome);
     json!({ "reported": outcome.is_ok() })
 }
 
@@ -514,38 +479,104 @@ fn turn(home: &Path, agent: &Agent, input: Input, started: Instant) -> Value {
     }
     let who = reporter(agent, &input);
     let counted = agent.adapter.subagent_counts.is_some();
-    let outcome = counters::apply(
+    // The turn comes from the script's own event, so a refused record write
+    // keeps its report and leaves out only the counts the record held
+    // (engineering rules 4 and 10).
+    let kept = counters::apply(
         home,
         &pane,
         counters::Change::None,
         who,
         counters::Said::Turn(turn),
         None,
-    )
-    .map_err(|error| format!("the pane's record could not be changed: {error}"))
-    .and_then(|applied| {
-        report::report(
-            &report::HookStatusReport {
-                runtime: agent.runtime().to_owned(),
-                version: hide_agent_hooks::HOOK_VERSION,
-                session: who.session.map(str::to_owned),
-                turn: Some(turn),
-                counts: counted.then_some(report::HookCounts {
+        counters::Told::default(),
+    );
+    let reported = report::report(
+        &report::HookStatusReport {
+            runtime: agent.runtime().to_owned(),
+            version: hide_agent_hooks::HOOK_VERSION,
+            session: who.session.map(str::to_owned),
+            turn: Some(turn),
+            counts: kept.as_ref().ok().and_then(|applied| {
+                counted.then_some(report::HookCounts {
                     working: applied.counters.working,
                     done: applied.counters.done,
-                }),
-                session_start: false,
-                waiting: None,
-            },
-            started + report::REPORT_TIMEOUT,
-        )
-    });
-    let _ = report::record_outcome(home, &pane, agent.runtime(), "turn", &outcome);
+                })
+            }),
+            subagents: kept.as_ref().ok().and_then(|applied| {
+                counted.then(|| report::reported_subagents(&applied.subagents))
+            }),
+            session_start: false,
+            waiting: None,
+            account: None,
+            refused: None,
+        },
+        started + report::REPORT_TIMEOUT,
+    );
+    let record_error = kept
+        .err()
+        .map(|error| format!("the pane's record could not be changed: {error}"))
+        .map_or(Ok(()), Err);
+    let outcome = report::outcome(record_error, reported);
+    report::record_and_say(home, &pane, agent.runtime(), "turn", &outcome);
+    json!({ "reported": outcome.is_ok() })
+}
+
+/// The session the pane's agent started or was switched to, reported as a
+/// command hook's session start is, so the core knows the pane's session
+/// before its first turn and letters and the inbox reach it from the start
+/// (PRD engine-bundle-4-herdr-removal, mission c3): on the core's own engine
+/// nothing else names it. The counts are the
+/// script's to send; a session start says nothing of them.
+fn session_start(home: &Path, agent: &Agent, input: Input, started: Instant) -> Value {
+    let Some(pane) = pane() else {
+        return json!({});
+    };
+    let who = reporter(agent, &input);
+    if input.guard_only || who.session.is_none() {
+        return json!({});
+    }
+    // The session's identity is what the core binds a start by, and it comes
+    // from the script's own call, so a refused record write does not keep it
+    // back (engineering rules 4 and 10).
+    let kept = counters::apply(
+        home,
+        &pane,
+        counters::Change::None,
+        who,
+        counters::Said::Nothing,
+        None,
+        counters::Told::default(),
+    );
+    let reported = report::report(
+        &report::HookStatusReport {
+            runtime: agent.runtime().to_owned(),
+            version: hide_agent_hooks::HOOK_VERSION,
+            session: who.session.map(str::to_owned),
+            turn: None,
+            counts: None,
+            subagents: None,
+            session_start: true,
+            waiting: None,
+            // The plugin's helper runs in the agent's own environment.
+            account: hide_agent_hooks::account::reported_variables(agent.runtime(), |name| {
+                std::env::var_os(name)
+            }),
+            refused: None,
+        },
+        started + report::REPORT_TIMEOUT,
+    );
+    let record_error = kept
+        .err()
+        .map(|error| format!("the pane's record could not be changed: {error}"))
+        .map_or(Ok(()), Err);
+    let outcome = report::outcome(record_error, reported);
+    report::record_and_say(home, &pane, agent.runtime(), "session start", &outcome);
     json!({ "reported": outcome.is_ok() })
 }
 
 /// The script's session as the pane record and the core key it: the agent's
-/// own id, which is what Herdr reports for OpenCode's pane.
+/// own id, which is what the pane's record names for OpenCode.
 fn reporter<'a>(agent: &Agent, input: &'a Input) -> counters::Reporter<'a> {
     counters::Reporter {
         agent: Some(agent.runtime()),

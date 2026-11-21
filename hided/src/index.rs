@@ -18,7 +18,8 @@
 //! tie. The result limit is the palette's 80.
 
 use hide_host::index::Walked;
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
+use std::path::Path;
 use std::sync::{Arc, Mutex, MutexGuard};
 use std::time::{Duration, Instant};
 
@@ -206,12 +207,16 @@ impl Drop for Walk {
 /// that is removed drops its index on the next reconcile.
 pub struct IndexService {
     entries: Mutex<HashMap<IndexKey, Arc<Entry>>>,
+    /// The roots the catalog carried at the last `set_roots`, so one that
+    /// came or went is seen.
+    roots: Mutex<HashSet<IndexKey>>,
 }
 
 impl IndexService {
     pub fn new() -> Self {
         Self {
             entries: Mutex::new(HashMap::new()),
+            roots: Mutex::new(HashSet::new()),
         }
     }
 
@@ -231,13 +236,35 @@ impl IndexService {
     }
 
     /// Keeps only the roots still in the catalog, so a removed checkout's
-    /// index does not live on.
+    /// index does not live on. A root that came or went also drops the index
+    /// of every root it holds or sits in on that device: a home project's list
+    /// leaves out the projects registered inside it, so a project added or
+    /// removed there makes it stale, and a walk still running for it ends
+    /// into an entry nothing reads (PRD home-folder-project D-05).
     pub fn set_roots(&self, roots: &[IndexKey]) {
+        let now: HashSet<IndexKey> = roots.iter().cloned().collect();
+        let changed: Vec<IndexKey> = {
+            let mut last = self
+                .roots
+                .lock()
+                .unwrap_or_else(|poisoned| poisoned.into_inner());
+            let changed = last.symmetric_difference(&now).cloned().collect();
+            *last = now;
+            changed
+        };
         let mut entries = self
             .entries
             .lock()
             .unwrap_or_else(|poisoned| poisoned.into_inner());
-        entries.retain(|key, _| roots.contains(key));
+        entries.retain(|key, _| {
+            roots.contains(key)
+                && !changed.iter().any(|(device, root)| {
+                    *device == key.0
+                        && key.1 != *root
+                        && (Path::new(root).starts_with(&key.1)
+                            || Path::new(&key.1).starts_with(root))
+                })
+        });
     }
 
     /// The ranked matches for one root of one device. The first call starts
@@ -365,6 +392,46 @@ mod tests {
             );
             std::thread::sleep(std::time::Duration::from_millis(5));
         }
+    }
+
+    #[test]
+    fn a_project_added_or_removed_inside_a_root_drops_that_roots_list_only() {
+        let service = IndexService::new();
+        let key = |device: &str, root: &str| (device.to_owned(), root.to_owned());
+        fn walked(name: &str) -> Walked {
+            Walked {
+                paths: vec![name.to_owned()],
+                truncated: false,
+            }
+        }
+        let home = key("mac", "/home/me");
+        let other = key("mac", "/srv/other");
+        let elsewhere = key("mini", "/home/me");
+        service.set_roots(&[home.clone(), other.clone(), elsewhere.clone()]);
+        for (device, root) in [&home, &other, &elsewhere] {
+            let _ = service.query(device, root, "", || Ok(walked("old")));
+        }
+        let held = |service: &IndexService, (device, root): &IndexKey| {
+            let entries = service.entries.lock().unwrap();
+            entries.contains_key(&(device.clone(), root.clone()))
+        };
+
+        // A project registered inside home on the same device.
+        let inside = key("mac", "/home/me/work/app");
+        service.set_roots(&[
+            home.clone(),
+            other.clone(),
+            elsewhere.clone(),
+            inside.clone(),
+        ]);
+        assert!(!held(&service, &home));
+        assert!(held(&service, &other));
+        assert!(held(&service, &elsewhere));
+
+        // The same root set again changes nothing.
+        let _ = service.query("mac", "/home/me", "", || Ok(walked("new")));
+        service.set_roots(&[home.clone(), other.clone(), elsewhere.clone(), inside]);
+        assert!(held(&service, &home));
     }
 
     #[test]

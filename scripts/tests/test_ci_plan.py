@@ -21,21 +21,21 @@ MACOS_LANES = {"os-contract-macos", "vt", "holder-restart", "desktop-e2e", "pack
 # `package`, `agent-clis` and `holder-restart`, which are planned by their own
 # paths only.
 FULL = [
-    "policy", "rust", "checks", "relay-protocol", "os-contract", "os-contract-macos", "vt", "agy-contract", "omp-contract", "agent-journey",
-    "windows-check", "windows-e2e", "windows-desktop", "windows-wsl", "web-e2e", "remote-mailbox", "desktop-e2e",
+    "policy", "rust", "checks", "android", "docs", "relay-protocol", "os-contract", "os-contract-macos", "vt", "agy-contract", "omp-contract", "agent-journey",
+    "windows-check", "windows-e2e", "windows-desktop", "windows-wsl", "web-e2e", "remote-mailbox", "remote-mailbox-arm",
+    "desktop-e2e",
 ]
 # Every lane, independently named: CI edits must exercise the planner's decisions.
 ALL = [
-    "policy", "rust", "checks", "relay-protocol", "os-contract", "os-contract-macos", "vt", "holder-restart", "agy-contract", "omp-contract", "agent-journey",
-    "agent-clis", "windows-check", "windows-e2e", "windows-desktop", "windows-wsl", "web-e2e", "remote-mailbox", "desktop-e2e",
-    "package",
+    "policy", "rust", "checks", "android", "docs", "relay-protocol", "os-contract", "os-contract-macos", "vt", "holder-restart", "agy-contract", "omp-contract", "agent-journey",
+    "agent-clis", "windows-check", "windows-e2e", "windows-desktop", "windows-wsl", "web-e2e", "remote-mailbox",
+    "remote-mailbox-arm", "repeat", "desktop-e2e", "package",
 ]
 # A full plan with a package input.
 PACKAGED = FULL + ["package"]
 # The paths a pull request changed when `package.yml` had its own trigger.
 PACKAGE_INPUTS = (
     "desktop/scripts/package.mjs", "desktop/scripts/build.mjs", "desktop/package.json", "desktop/resources/entitlements.plist",
-    "contracts/herdr-bundle.json", "scripts/fetch-herdr-runtime.sh", "scripts/fetch-herdr-runtime.ps1",
     "scripts/verify-cargo.sh", "scripts/verify-web.sh", "scripts/toolchain-env.sh",
     "hided/build.rs", "hided/src/cli.rs", "hide-kit/src/lib.rs", "hide-agent-hooks/src/main.rs",
     ".github/workflows/package.yml", ".github/workflows/device-helpers.yml", ".github/workflows/release.yml",
@@ -61,9 +61,21 @@ class Selection(unittest.TestCase):
                          "desktop/e2e/fixture-cleanup.unit.ts"):
                 with self.subTest(status=status, path=path):
                     result = plan(path, status=status)
-                    self.assertEqual(result["lanes"], ["policy", "checks", "windows-check"])
+                    # An added or modified unit test also plans the lane that
+                    # repeats it; a deleted one has no test left to repeat.
+                    expected = ["policy", "checks", "windows-check"] + (["repeat"] if status in ("A", "M") else [])
+                    self.assertEqual(result["lanes"], expected)
                     self.assertEqual(result["rust_packages"], [])
                     self.assertFalse(ci.reads_no_lane(status, path, CRATES, ROOT))
+
+    def test_the_android_app_host_plans_its_own_lane_and_the_mobile_check(self):
+        for status in ("A", "M", "D"):
+            for path in ("mobile/android/app/src/main/java/me/grab/hide/android/BridgeGate.java", "mobile/android/app/build.gradle"):
+                with self.subTest(status=status, path=path):
+                    self.assertEqual(plan(path, status=status)["lanes"], ["policy", "checks", "android"])
+        # The scripts that build it and check its lists are shared with the iOS app and plan every lane.
+        self.assertIn("android", plan("mobile/scripts/check-versions.mjs")["lanes"])
+        self.assertIn("rust", plan("mobile/scripts/check-versions.mjs")["lanes"])
 
     def test_web_unit_tests_keep_their_rust_and_css_build_readers(self):
         # sidebar.rs scans all web/src TS, including comments in test files;
@@ -71,16 +83,21 @@ class Selection(unittest.TestCase):
         for path in ("web/src/new.test.ts", "web/src/components/new.test.tsx"):
             with self.subTest(path=path):
                 result = plan(path)
-                self.assertEqual(set(result["lanes"]), {"policy", "rust", "checks", "web-e2e", "desktop-e2e"})
-                self.assertEqual(result["rust_packages"], ["herdr-core"])
+                self.assertEqual(set(result["lanes"]), {"policy", "rust", "checks", "web-e2e", "desktop-e2e", "repeat"})
+                self.assertEqual(result["rust_packages"], ["hide-core"])
+                self.assertEqual(result["repeat"]["units"], [path])
         self.assertEqual(set(plan("web/e2e/platform-program.unit.ts")["lanes"]),
-                         {"policy", "checks", "web-e2e", "windows-e2e", "desktop-e2e", "windows-desktop", "windows-check"})
+                         {"policy", "checks", "web-e2e", "windows-e2e", "desktop-e2e", "windows-desktop", "windows-check", "repeat"})
 
     def test_unit_tests_do_not_remove_a_products_lanes_or_a_conservative_fallback(self):
         for product in ("web/src/terminals.ts", "desktop/src/main/index.ts", "desktop/src/main/updater.ts", "hide-platform/src/lib.rs",
                         "Cargo.lock", "scripts/ci-plan.py", "unclaimed/config.json"):
             with self.subTest(product=product):
-                expected = set(plan(product)["lanes"]) | {"checks"}
+                # The changed unit test adds the lane that repeats it, beside
+                # a product that plans every lane too: the pull request's diff
+                # still names the test.
+                base = plan(product)
+                expected = set(base["lanes"]) | {"checks", "repeat"}
                 self.assertEqual(set(plan("desktop/src/main/new.test.ts", product)["lanes"]), expected | {"windows-check"})
         self.assertIn("package", plan("desktop/src/main/updater.ts")["lanes"])
         self.assertEqual(plan("web/src/new.test.ts", status="R100")["lanes"], FULL)
@@ -98,12 +115,12 @@ class Selection(unittest.TestCase):
     def test_a_file_another_lane_reads_plans_that_lane(self):
         notes = plan("AGENTS.md")
         self.assertEqual(notes["lanes"], ["policy", "rust"])
-        self.assertEqual(notes["rust_packages"], ["herdr-core"])
-        self.assertIn("herdr-core", plan("hided/src/core.rs")["rust_packages"])
+        self.assertEqual(notes["rust_packages"], ["hide-core"])
+        self.assertIn("hide-core", plan("hided/src/core.rs")["rust_packages"])
         self.assertTrue({"web-e2e", "windows-e2e"} <= set(plan("desktop/src/main/wirePath.ts")["lanes"]))
         self.assertTrue({"checks", "web-e2e"} <= set(plan("design/tokens.json")["lanes"]))
         # The README e2e spec reads the README, its logo and its hero picture.
-        for path in ("README.md", "design/brand/hide-icon-blinking.svg", "site/assets/video/kick-conductor.gif"):
+        for path in ("README.md", "design/brand/hide-icon-blinking.svg", "site/public/assets/video/kick-conductor.gif"):
             with self.subTest(path=path):
                 self.assertIn("web-e2e", plan(path)["lanes"])
         # A guide a test reads is more than documentation.
@@ -111,14 +128,14 @@ class Selection(unittest.TestCase):
         guide = plan("docs/AI_PROVIDERS.md")
         self.assertEqual(guide["lanes"], ["policy", "rust"])
         self.assertEqual(guide["rust_packages"], ["hide-agent-adapter"])
-        self.assertEqual(plan("web/src/assets/agents/manifest.json")["rust_packages"], ["herdr-core", "hide-agent-adapter"])
+        self.assertEqual(plan("web/src/assets/agents/manifest.json")["rust_packages"], ["hide-agent-adapter", "hide-core"])
 
     def test_a_web_display_change_runs_both_suites_of_the_shell_and_skips_windows(self):
         result = plan("web/src/components/ui/button.tsx", "web/src/Overview.tsx")
-        # herdr-core's structure tests scan the shell's sources, and the
+        # hide-core's structure tests scan the shell's sources, and the
         # desktop suite drives the same shell inside the app.
-        self.assertEqual(set(result["lanes"]), {"policy", "checks", "web-e2e", "desktop-e2e", "rust"})
-        self.assertEqual(result["rust_packages"], ["herdr-core"])
+        self.assertEqual(set(result["lanes"]), {"policy", "checks", "docs", "web-e2e", "desktop-e2e", "rust"})
+        self.assertEqual(result["rust_packages"], ["hide-core"])
         # The phone page is served by hided, and the app never loads it.
         for path in ("web/mobile.html", "web/public/m/sw.js"):
             with self.subTest(path=path):
@@ -134,9 +151,9 @@ class Selection(unittest.TestCase):
         self.assertIn("desktop-e2e", result["lanes"])
 
     def test_a_crate_only_change_leaves_the_desktop_suite_to_mains_full_run(self):
-        # The accepted risk: #1147 changed only herdr-core and broke
+        # The accepted risk: #1147 changed only hide-core and broke
         # desktop/e2e/right-lane.spec.ts, which main's full run found.
-        result = plan("herdr-core/src/runtime/workspace_view.rs", "herdr-core/src/runtime/tests/workspace_view.rs",
+        result = plan("hide-core/src/runtime/workspace_view.rs", "hide-core/src/runtime/tests/workspace_view.rs",
                       "web/e2e/s3.spec.ts", "docs/UI_BEHAVIOR.md")
         self.assertFalse(result["full"])
         self.assertIn("web-e2e", result["lanes"])
@@ -155,16 +172,16 @@ class Selection(unittest.TestCase):
 
     def test_a_platform_spec_keeps_its_platform_lanes_on_linux_and_windows(self):
         lanes = set(plan("web/e2e/s3.spec.ts")["lanes"])
-        self.assertEqual(lanes, {"policy", "checks", "web-e2e", "windows-e2e"})
+        self.assertEqual(lanes, {"policy", "checks", "web-e2e", "windows-e2e", "repeat"})
         lanes = set(plan("web/e2e/new-tab.spec.ts")["lanes"])
-        self.assertEqual(lanes, {"policy", "checks", "web-e2e"})
+        self.assertEqual(lanes, {"policy", "checks", "web-e2e", "repeat"})
 
     def test_the_remote_mailbox_lane_follows_the_crates_it_builds_and_tests(self):
         # It builds hided, hide, the agent hooks and the host helper and runs
         # hided's remote_delivery test, so a change to one of those crates
         # or to a crate they depend on plans it.
         for path in (
-            "herdr-core/src/lib.rs", "hided/src/lib.rs", "hide-agent-hooks/src/lib.rs", "hide-host/src/lib.rs",
+            "hide-core/src/lib.rs", "hided/src/lib.rs", "hide-agent-hooks/src/lib.rs", "hide-host/src/lib.rs",
             "hide-platform/src/process.rs", "hide-kit/src/lib.rs", "hide-session/src/lib.rs", "hided/tests/it/remote_delivery.rs",
             "hide-node/src/ssh/bootstrap.rs", "hide-node-link/src/device.rs", "hided/tests/it/system_ssh.rs",
         ):
@@ -173,7 +190,7 @@ class Selection(unittest.TestCase):
         # The web shell, its specs and the desktop host do not reach it.
         for path in (
             "web/e2e/s3.spec.ts", "web/e2e/new-tab.spec.ts", "web/src/host.ts", "web/src/Overview.tsx", "web/playwright.config.ts",
-            "web/e2e/herdr-fixture.ts", "desktop/src/main/wirePath.ts", "desktop/src/preload/index.ts", "docs/TESTING.md",
+            "web/e2e/pane-fixture.ts", "desktop/src/main/wirePath.ts", "desktop/src/preload/index.ts", "docs/TESTING.md",
         ):
             with self.subTest(path=path):
                 self.assertNotIn("remote-mailbox", plan(path)["lanes"])
@@ -186,7 +203,7 @@ class Selection(unittest.TestCase):
 
     def test_the_remote_mailbox_lane_follows_the_crates_it_builds_and_tests(self):
         for path in (
-            "herdr-core/src/lib.rs", "hided/tests/it/remote_delivery.rs", "hided/src/main.rs",
+            "hide-core/src/lib.rs", "hided/tests/it/remote_delivery.rs", "hided/src/main.rs",
             "hide-host/src/lib.rs", "hide-agent-hooks/src/lib.rs", "hide-platform/src/process.rs",
             "hide-session/src/lib.rs", "hide-ai/src/lib.rs",
         ):
@@ -204,18 +221,87 @@ class Selection(unittest.TestCase):
         # A change no rule claims plans every lane, this one included.
         self.assertIn("remote-mailbox", plan("scripts/verify-cargo.sh")["lanes"])
 
+    def test_the_arm64_mailbox_lane_follows_the_device_link_and_its_kit_contract(self):
+        for path in (
+            "hide-node/src/ssh/kit/cache.rs", "hide-node/src/ssh/bootstrap.rs", "hide-node-link/src/device.rs",
+            "hided/tests/it/device_own_engine.rs", "contracts/device-kits.json",
+        ):
+            with self.subTest(path=path):
+                self.assertIn("remote-mailbox-arm", plan(path)["lanes"])
+        # What the x86_64 lane builds besides the device link is its to catch.
+        for path in (
+            "hide-core/src/lib.rs", "hided/src/lib.rs", "hide-platform/src/process.rs", "hide-host/src/lib.rs",
+            "hided/tests/it/remote_delivery.rs", "web/src/host.ts", "docs/TESTING.md",
+        ):
+            with self.subTest(path=path):
+                self.assertNotIn("remote-mailbox-arm", plan(path)["lanes"])
+        for event in ("push", "schedule", "workflow_dispatch"):
+            with self.subTest(event=event):
+                self.assertIn("remote-mailbox-arm", ci.plan(event, None, None, ROOT)["lanes"])
+        self.assertIn("runner: ubuntu-24.04-arm", pr_jobs()["remote-mailbox-arm"])
+
+    def test_the_device_kit_contract_plans_what_hide_node_plans_and_the_scripts_that_read_it(self):
+        contract = plan("contracts/device-kits.json")
+        self.assertFalse(contract["full"])
+        node = plan("hide-node/src/ssh/kit/contract.rs")
+        self.assertEqual(contract["rust_packages"], node["rust_packages"])
+        # The desktop unit suite runs the packaging scripts' tests, and the
+        # package lane carries the kits. The contract file holds no test, so
+        # it plans no repeat of one; the Rust file that reads it does.
+        self.assertEqual(set(contract["lanes"]), (set(node["lanes"]) | {"checks", "package"}) - {"repeat"})
+        self.assertIn("repeat", node["lanes"])
+
+    def test_the_peer_link_contract_plans_what_the_crate_that_includes_it_plans(self):
+        contract = plan("contracts/peer-link.json")
+        self.assertFalse(contract["full"])
+        protocol = plan("hide-peer-protocol/src/hello.rs")
+        self.assertEqual(contract["rust_packages"], protocol["rust_packages"])
+        # The daemon links it through hide-peer, so its lanes run too.
+        self.assertLessEqual({"hide-peer-protocol", "hide-peer", "hide-kit", "hided"}, set(contract["rust_packages"]))
+        self.assertEqual(set(contract["lanes"]), set(protocol["lanes"]) - {"repeat"})
+
+    def test_licenses_and_advisories_are_checked_where_a_dependency_changed_and_nightly(self):
+        for path in ("Cargo.lock", "deny.toml", "scripts/install-cargo-deny.sh"):
+            with self.subTest(path=path):
+                result = plan(path)
+                self.assertTrue(result["deny"])
+                # The Rust lane, which runs the check, is planned with it.
+                self.assertIn("rust", result["lanes"])
+        for path in ("hide-peer/src/peers.rs", "hide-peer-iroh/Cargo.toml", ".github/workflows/pr.yml", "docs/BUILD.md"):
+            with self.subTest(path=path):
+                self.assertFalse(plan(path)["deny"])
+        # A new advisory is the nightly's to find; it never stops main.
+        self.assertFalse(ci.plan("push", None, None, ROOT)["deny"])
+        for event in ("schedule", "workflow_dispatch"):
+            with self.subTest(event=event):
+                self.assertTrue(ci.plan(event, None, None, ROOT)["deny"])
+                self.assertTrue(ci.plan(event, None, None, ROOT, nightly_agent_checks=True)["deny"])
+        rust = pr_jobs()["rust"]
+        self.assertIn("DENY: ${{ needs.plan.outputs.deny }}", rust)
+        self.assertEqual(rust.count("if: env.DENY == 'true'"), 2)
+
+    def test_the_conpty_pin_runs_the_kit_contract_test_that_holds_the_windows_kit_to_it(self):
+        pin = plan("contracts/conpty.json")
+        self.assertFalse(pin["full"])
+        self.assertIn("rust", pin["lanes"])
+        self.assertIn("hide-node", pin["rust_packages"])
+        # Its own lanes stay: the holder's Windows tests and the package.
+        self.assertLessEqual({"vt", "package", "windows-e2e", "holder-restart"}, set(pin["lanes"]))
+
     def test_the_wsl_lane_follows_the_crates_the_wsl_link_crosses(self):
         for path in (
             "hide-platform/src/wsl.rs", "hide-node/src/ssh/wsl.rs", "hide-node-link/src/device.rs",
             "hide-host/src/serve.rs", "hided/src/node_cli.rs", "hided/tests/it/wsl_device.rs",
-            ".github/workflows/wsl-device.yml",
+            "hided/tests/it/windows_ssh_device.rs", ".github/workflows/wsl-device.yml",
+            "hide-kit/src/cli_windows.rs", "hide-kit/src/current.rs",
         ):
             with self.subTest(path=path):
                 self.assertIn("windows-wsl", plan(path)["lanes"])
         # The core's WSL decisions have unit tests of their own; the daemon,
         # the web shell and documentation do not reach the link.
         for path in (
-            "herdr-core/src/runtime/hosts.rs", "hided/src/lib.rs", "web/src/settings/AddDevice.tsx", "docs/TESTING.md",
+            "hide-core/src/runtime/hosts.rs", "hided/src/lib.rs", "web/src/settings/AddDevice.tsx", "docs/TESTING.md",
+            "hide-kit/src/agents.rs", "hide-kit/src/cli.rs", "hide-kit/src/device.rs",
         ):
             with self.subTest(path=path):
                 self.assertNotIn("windows-wsl", plan(path)["lanes"])
@@ -231,7 +317,7 @@ class Selection(unittest.TestCase):
         self.assertIn("windows-desktop", plan("desktop/e2e/gone.spec.ts", status="D")["lanes"])
 
     def test_the_windows_desktop_lane_follows_what_differs_by_system(self):
-        for path in ("hided/src/lib.rs", "hide-platform/src/process.rs", "hide-kit/src/lib.rs", "web/src/host.ts", "web/e2e/herdr-fixture.ts"):
+        for path in ("hided/src/lib.rs", "hide-platform/src/process.rs", "hide-kit/src/lib.rs", "web/src/host.ts", "web/e2e/pane-fixture.ts"):
             with self.subTest(path=path):
                 self.assertIn("windows-desktop", plan(path)["lanes"])
         for path in ("web/src/Overview.tsx", "hide-session/src/lib.rs", "web/e2e/new-tab.spec.ts", "docs/TESTING.md"):
@@ -254,19 +340,20 @@ class Selection(unittest.TestCase):
         )
         self.assertNotIn("desktop-e2e", result["lanes"])
         # The data-only adapter and the screen rules it compiles, the
-        # text-only shell reader and the terminal parser are independent, and
-        # workspace-hack depends on no member; every other crate consumes the
-        # platform layer.
+        # text-only shell reader, the terminal parser and what two machines
+        # say to each other are independent, and workspace-hack depends on no
+        # member; every other crate consumes the platform layer.
         self.assertEqual(result["rust_packages"],
                          [name for name in EVERY_PACKAGE
-                          if name not in ("hide-agent-adapter", "hide-screen-rules", "hide-shell", "hide-vt", "hide-relay", "hide-relay-protocol", "workspace-hack")])
+                          if name not in ("hide-agent-adapter", "hide-screen-rules", "hide-shell", "hide-vt", "hide-relay", "hide-relay-protocol", "hide-peer-protocol",
+                                          "workspace-hack")])
         self.assertFalse(result["full"])
 
     def test_an_adapter_change_tests_its_real_consumers_and_compiles_on_windows(self):
         # These consumers follow the workspace manifests, independently of the planner.
         consumers = [
-            "herdr-core", "hide-agent-adapter", "hide-agent-hooks", "hide-ai", "hide-desk", "hide-holder", "hide-host",
-            "hide-kit", "hide-memory", "hide-node", "hide-node-link", "hide-session", "hided",
+            "hide-agent-adapter", "hide-agent-hooks", "hide-ai", "hide-core", "hide-desk", "hide-holder", "hide-host",
+            "hide-kit", "hide-memory", "hide-node", "hide-node-link", "hide-peer", "hide-peer-iroh", "hide-session", "hided",
         ]
         for path in ("hide-agent-adapter/src/lib.rs", "hide-agent-adapter/Cargo.toml"):
             with self.subTest(path=path):
@@ -310,8 +397,8 @@ class Selection(unittest.TestCase):
             with self.subTest(path=path):
                 self.assertNotIn("vt", plan(path)["lanes"])
 
-    def test_the_macos_os_contract_runs_for_the_two_crates_it_tests(self):
-        for path in ("hide-herdr-client/src/lib.rs", "hide-platform/src/process.rs"):
+    def test_the_macos_os_contract_runs_for_the_crate_it_tests(self):
+        for path in ("hide-platform/src/process.rs",):
             with self.subTest(path=path):
                 lanes = set(plan(path)["lanes"])
                 self.assertTrue({"os-contract", "os-contract-macos"} <= lanes)
@@ -320,7 +407,7 @@ class Selection(unittest.TestCase):
         # Their OS differences are checked on Linux and Windows; main's full
         # run runs the desktop suite for them, and the nightly the macOS leg
         # and the macOS `@platform` tests.
-        for path in ("herdr-core/src/lib.rs", "hided/src/lib.rs", "hide-host/src/lib.rs", "hide-session/src/lib.rs"):
+        for path in ("hide-core/src/lib.rs", "hided/src/lib.rs", "hide-host/src/lib.rs", "hide-session/src/lib.rs"):
             with self.subTest(path=path):
                 self.assertEqual(set(plan(path)["lanes"]) & MACOS_LANES, set())
         self.assertEqual(set(plan("web/src/Overview.tsx")["lanes"]) & MACOS_LANES, {"desktop-e2e"})
@@ -329,7 +416,7 @@ class Selection(unittest.TestCase):
             with self.subTest(path=path):
                 lanes = set(plan(path)["lanes"])
                 self.assertFalse(lanes & MACOS_LANES, lanes & MACOS_LANES)
-        self.assertEqual(set(plan("herdr-core/src/lib.rs")["lanes"]) & {"os-contract", "windows-e2e"}, {"os-contract", "windows-e2e"})
+        self.assertEqual(set(plan("hide-core/src/lib.rs")["lanes"]) & {"os-contract", "windows-e2e"}, {"os-contract", "windows-e2e"})
 
     def test_what_goes_into_a_package_plans_the_package_lane_and_nothing_else_does(self):
         # The kit and hooks a packaged daemon runs reach the packaged app only through it.
@@ -337,7 +424,7 @@ class Selection(unittest.TestCase):
             with self.subTest(path=path):
                 self.assertIn("package", plan(path)["lanes"])
         for path in (
-            "hided/src/lib.rs", "hided/src/core.rs", "herdr-core/src/lib.rs", "hide-platform/src/process.rs",
+            "hided/src/lib.rs", "hided/src/core.rs", "hide-core/src/lib.rs", "hide-platform/src/process.rs",
             "desktop/src/main/index.ts", "desktop/e2e/fixture.ts", "web/src/store.ts", "docs/TESTING.md",
             "Cargo.lock", "pnpm-lock.yaml",
         ):
@@ -352,12 +439,12 @@ class Selection(unittest.TestCase):
         # independent of the planner's map. Other operating systems stay planned.
         cases = (
             ("docs/TESTING.md", set()),
-            ("herdr-core/src/lib.rs", set()),
+            ("hide-core/src/lib.rs", set()),
             ("web/mobile.html", set()),
             ("web/public/m/sw.js", set()),
             ("web/e2e/new-tab.spec.ts", set()),
             ("web/src/Overview.tsx", {"desktop-e2e"}),
-            ("web/e2e/herdr-fixture.ts", {"desktop-e2e"}),
+            ("web/e2e/pane-fixture.ts", {"desktop-e2e"}),
             ("desktop/src/main/index.ts", {"desktop-e2e"}),
             ("desktop/src/main/updater.ts", {"desktop-e2e", "package"}),
             ("desktop/src/main/updater.test.ts", set()),
@@ -365,7 +452,6 @@ class Selection(unittest.TestCase):
             ("hide-kit/src/lib.rs", {"package"}),
             ("hide-ai/src/omp.rs", {"omp-contract"}),
             ("hide-platform/src/process.rs", {"os-contract-macos", "omp-contract"}),
-            ("hide-herdr-client/src/lib.rs", {"os-contract-macos"}),
         )
         for status in ("A", "M", "D"):
             for path, expected in cases:
@@ -392,7 +478,7 @@ class Selection(unittest.TestCase):
                             ci.aggregate(needs_for(result, package=outcome))
         # New helper names stay conservative until their readers are established.
         self.assertEqual(plan("desktop/scripts/new-helper.mjs")["lanes"], PACKAGED)
-        self.assertEqual(plan("desktop/scripts/installers.mjs", "herdr-core/src/lib.rs")["lanes"],
+        self.assertEqual(plan("desktop/scripts/installers.mjs", "hide-core/src/lib.rs")["lanes"],
                          ["policy", "rust", "checks", "os-contract", "agent-journey", "windows-check", "windows-e2e",
                           "windows-desktop", "web-e2e", "remote-mailbox", "package"])
 
@@ -413,7 +499,7 @@ class Selection(unittest.TestCase):
     def test_the_desktop_lane_follows_what_the_app_runs(self):
         for path in (
             "desktop/src/main/index.ts", "desktop/static/icon.png", "desktop/e2e/desktop.spec.ts", "web/src/shortcuts.ts",
-            "web/src/Overview.tsx", "web/index.html", "web/e2e/herdr-fixture.ts",
+            "web/src/Overview.tsx", "web/index.html", "web/e2e/pane-fixture.ts",
         ):
             with self.subTest(path=path):
                 self.assertIn("desktop-e2e", plan(path)["lanes"])
@@ -421,7 +507,7 @@ class Selection(unittest.TestCase):
         for path in (
             "web/e2e/new-tab.spec.ts", "web/playwright.config.ts", "web/mobile.html", "web/public/m/manifest.webmanifest",
             "docs/TESTING.md", "design/tokens.json",
-            "herdr-core/src/lib.rs", "hided/src/lib.rs", "hide-platform/src/process.rs", "hide-session/src/lib.rs",
+            "hide-core/src/lib.rs", "hided/src/lib.rs", "hide-platform/src/process.rs", "hide-session/src/lib.rs",
         ):
             with self.subTest(path=path):
                 self.assertNotIn("desktop-e2e", plan(path)["lanes"])
@@ -433,11 +519,11 @@ class Selection(unittest.TestCase):
         crate_only = ["policy", "rust", "os-contract", "agent-journey", "windows-check", "windows-e2e", "windows-desktop",
                       "web-e2e", "remote-mailbox"]
         for paths, lanes in (
-            (("herdr-core/src/lib.rs",), crate_only),
-            (("herdr-core/src/lib.rs", "desktop/src/main/index.ts"),
+            (("hide-core/src/lib.rs",), crate_only),
+            (("hide-core/src/lib.rs", "desktop/src/main/index.ts"),
              ["policy", "rust", "checks", "os-contract", "agent-journey", "windows-check", "windows-e2e",
               "windows-desktop", "web-e2e", "remote-mailbox", "desktop-e2e"]),
-            (("web/src/Overview.tsx",), ["policy", "rust", "checks", "web-e2e", "desktop-e2e"]),
+            (("web/src/Overview.tsx",), ["policy", "rust", "checks", "docs", "web-e2e", "desktop-e2e"]),
             (("docs/TESTING.md",), ["policy"]),
             (("mystery/file.txt",), FULL),
             (("desktop/scripts/package.mjs", "mystery/file.txt"), PACKAGED),
@@ -452,10 +538,8 @@ class Selection(unittest.TestCase):
         for entries in (
             [("M", ".github/workflows/pr.yml")],
             [("M", "scripts/verify-web.sh")],
-            [("M", "contracts/herdr-bundle.json")],
             [("M", "Cargo.lock")],
             [("M", "pnpm-lock.yaml")],
-            [("M", "scripts/check-runtime-gates.sh")],
             [("M", "contracts/delivery-envelope.json")],
             [("M", "web/package.json")],
             [("M", "scripts/design-scratch.mjs")],
@@ -477,6 +561,24 @@ class Selection(unittest.TestCase):
         result = ci.plan("pull_request", "0" * 40, "HEAD", ROOT)
         self.assertTrue(result["full"])
         self.assertIn("comparison unavailable", result["reasons"]["rust"][0])
+
+    def test_a_merge_group_runs_the_fast_checks_and_nothing_else(self):
+        # What two changes that each passed break together without a conflict
+        # is a compile, type or baseline failure: a group runs those checks only,
+        # and main's push run after the merge runs every lane.
+        result = ci.plan("merge_group", None, None, ROOT)
+        self.assertEqual(result["lanes"], ["policy", "merge-rust", "merge-web"])
+        self.assertFalse(result["macos"]["runs"])
+        ci.aggregate(needs_for(result))
+        with self.assertRaisesRegex(ValueError, "merge-web: planned, expected success, got failure"):
+            ci.aggregate(needs_for(result, merge_web="failure"))
+        with self.assertRaisesRegex(ValueError, "rust: not planned, expected skipped"):
+            ci.aggregate(needs_for(result, rust="success"))
+        # No other run plans the group's own checks, a change to CI included.
+        for result in (ci.plan("push", None, None, ROOT), ci.select([("M", ".github/workflows/pr.yml")], CRATES, ROOT)):
+            self.assertFalse({"merge-rust", "merge-web"} & set(result["lanes"]))
+        workflow = (ROOT / ".github/workflows/pr.yml").read_text()
+        self.assertRegex(workflow[:workflow.index("\njobs:\n")], r"\n  merge_group:\n")
 
     def test_nightly_owns_the_agent_checks_once_and_keeps_failure_reporting(self):
         # The default remains a full plan. Only the explicit caller contract
@@ -583,25 +685,60 @@ class NamedPaths(unittest.TestCase):
 
     def test_paths_no_lane_reads_plan_policy_alone(self):
         for path in (
-            "site/index.html", "spikes/web-shell/measure/summarize.py", "agents/prd/x/prd.md",
+            "agents/prd/x/prd.md",
             ".gitignore", "web/.gitignore", "LICENSE", "NOTICE", ".github/pull_request_template.md", ".github/dependabot.yml",
             ".github/ISSUE_TEMPLATE/bug.yml", ".github/DISCUSSION_TEMPLATE/ideas.yml", ".github/APPROVED_CONTRIBUTORS",
             "scripts/tests/test_ci_plan.py", "scripts/check-harness-ignore-anchor.sh",
-            "scripts/web-shell-measure/run.sh", "scripts/rust_scan.py",
+            "scripts/web-shell-measure/run.sh",
             # The design contract's generators and checks, which `design-contract.yml` runs.
             "scripts/gen-tokens.mjs",
             "scripts/check-design-contract.mjs", "scripts/check-web-tokens.mjs", "scripts/check-agent-logos.mjs",
-            "scripts/premerge-check.py", "scripts/merge-order.py", "scripts/pull_requests.py",
-            "contracts/README.md", "site/README.md",
+            "scripts/merge-order.py", "scripts/pull_requests.py",
+            "contracts/README.md",
         ):
             with self.subTest(path=path):
                 result = plan(path)
                 self.assertEqual(result["lanes"], ["policy"])
                 self.assertFalse(result["full"])
 
+    def test_the_user_docs_lane_reads_the_site_the_parts_the_shell_and_the_cli_list(self):
+        for path in ("site/public/index.html", "site/src/content/docs/docs/guides/x.md", "site/README.md", "site/astro.config.mjs",
+                     "scripts/docs/check-all.mjs", "web/docs-embed.html", "web/docs-embed.config.ts", "web/src/docs/embed.tsx",
+                     "web/src/components/session-row.tsx", "contracts/hide-cli.json", "hided/src/cli.rs"):
+            with self.subTest(path=path):
+                self.assertIn("docs", self.lanes(path))
+        # Only the site, its scripts and the parts' build plan `docs` alone with policy.
+        for path in ("site/public/index.html", "site/src/content/docs/docs/guides/x.md", "scripts/docs/lib.mjs", "web/docs-embed.html"):
+            with self.subTest(path=path):
+                self.assertEqual(plan(path)["lanes"], ["policy", "docs"])
+        # A unit test and a crate other than the CLI's help are not what the docs build reads.
+        for path in ("web/src/new.test.ts", "hide-core/src/lib.rs", "docs/UI_BEHAVIOR.md"):
+            with self.subTest(path=path):
+                self.assertNotIn("docs", self.lanes(path))
+
+    def test_a_change_to_each_file_that_owns_help_text_plans_the_docs_lane(self):
+        # `hide --help` is what the CLI reference reads, so a command added in any of its owners
+        # needs its note in the same pull request, not first on main.
+        for path in ci.HELP_SOURCES:
+            with self.subTest(path=path):
+                result = plan(path)
+                self.assertIn("docs", result["lanes"])
+                self.assertFalse(result["full"])
+        # A sibling that owns no help text does not.
+        for path in ("hided/src/browser_routes.rs", "hided/src/profile_cli.rs", "hided/src/server.rs"):
+            with self.subTest(path=path):
+                self.assertNotIn("docs", self.lanes(path))
+
+    def test_help_text_owners_are_the_modules_cli_rs_joins(self):
+        source = (ROOT / "hided/src/cli.rs").read_text()
+        body = source[source.index("fn help_text()"):]
+        body = body[:body.index("\n}\n")]
+        joined = {f"hided/src/{name}.rs" for name in re.findall(r"crate::(\w+)::(?:USAGE\b|usage_here\(\))", body)}
+        self.assertEqual(joined | {"hided/src/cli.rs"}, set(ci.HELP_SOURCES))
+
     def test_web_e2e_helpers_reach_the_desktop_and_windows_lanes_but_not_rust(self):
         want = {"policy", "checks", "web-e2e", "windows-e2e", "desktop-e2e", "windows-desktop", "windows-check"}
-        for path in ("web/e2e/herdr-fixture.ts", "web/e2e/shims/build.ts", "web/e2e/shims/noop.c", "web/e2e/test-size-baseline.json"):
+        for path in ("web/e2e/pane-fixture.ts", "web/e2e/shims/build.ts", "web/e2e/shims/noop.c", "web/e2e/test-size-baseline.json"):
             with self.subTest(path=path):
                 self.assertEqual(self.lanes(path), want)
 
@@ -634,12 +771,11 @@ class NamedPaths(unittest.TestCase):
             with self.subTest(path=path):
                 self.assertIn("agent-journey", self.lanes(path))
                 self.assertIn("rust", self.lanes(path))
-        # The live check the journey runs and the web e2e drives, and its
-        # Windows forms' test, which only the journey's Windows job runs.
+        # The live check the journey runs, and its Windows forms' test,
+        # which only the journey's Windows job runs.
         for path in ("scripts/agent_live_check/processes.py", "scripts/agent_live_check/windows.py"):
             with self.subTest(path=path):
-                self.assertEqual(self.lanes(path), {"policy", "web-e2e", "agent-journey", "holder-restart"})
-        self.assertEqual(self.lanes("scripts/agent-live-check.py"), {"policy", "web-e2e", "agent-journey"})
+                self.assertEqual(self.lanes(path), {"policy", "agent-journey", "holder-restart"})
         self.assertEqual(self.lanes("scripts/tests/test_agent_live_windows.py"), {"policy", "agent-journey"})
         self.assertEqual(self.lanes("scripts/tests/test_agent_live_protection.py"), {"policy"})
 
@@ -650,9 +786,9 @@ class NamedPaths(unittest.TestCase):
         # (with-hide/hide-private#358). Every crate builds into a program the
         # journey runs, so its product code plans the lane.
         for path in (
-            "hide-memory/src/store/upkeep.rs", "hide-agent-hooks/src/guidance.rs", "herdr-core/src/memory_hook.rs",
-            "herdr-core/src/runtime/memory_analysis.rs", "herdr-core/src/coordination/started.rs",
-            "herdr-core/src/delivery/mod.rs", "herdr-core/src/agent_sleep.rs", "hide-session/src/lib.rs",
+            "hide-memory/src/store/upkeep.rs", "hide-agent-hooks/src/guidance.rs", "hide-core/src/memory_hook.rs",
+            "hide-core/src/runtime/memory_analysis.rs", "hide-core/src/coordination/started.rs",
+            "hide-core/src/delivery/mod.rs", "hide-core/src/agent_sleep.rs", "hide-session/src/lib.rs",
             "hide-agent-adapter/src/lib.rs", "hided/src/spawn.rs", "hided/build.rs", "hide-memory/Cargo.toml",
         ):
             with self.subTest(path=path):
@@ -662,8 +798,8 @@ class NamedPaths(unittest.TestCase):
                 self.assertIn("agent-journey", self.lanes(f"{directory}/src/lib.rs"))
         # A crate's tests, test modules and other examples build into none of them.
         for path in (
-            "hided/tests/it/remote_delivery.rs", "herdr-core/src/runtime/tests/agent_sleep.rs",
-            "herdr-core/src/runtime/tests.rs", "herdr-core/src/checkout_start_tests.rs",
+            "hided/tests/it/remote_delivery.rs", "hide-core/src/runtime/tests/agent_sleep.rs",
+            "hide-core/src/runtime/tests.rs", "hide-core/src/checkout_start_tests.rs",
             "hide-agent-hooks/tests/fixtures/bell-prompt-identity.json", "hide-memory/benches/x.rs",
         ):
             with self.subTest(path=path):
@@ -671,8 +807,10 @@ class NamedPaths(unittest.TestCase):
 
     def test_the_shared_prompt_identity_examples_run_the_hooks_and_policy_readers(self):
         result = plan("hide-agent-hooks/tests/fixtures/bell-prompt-identity.json")
-        # The journey runs the hook program, which the test fixture is not part of.
-        self.assertEqual(set(result["lanes"]), self.lanes("hide-agent-hooks/src/delivery.rs") - {"agent-journey"})
+        # The journey runs the hook program, which the test fixture is not part
+        # of, and the fixture declares no test, so it repeats none: the Rust
+        # file beside it does.
+        self.assertEqual(set(result["lanes"]), self.lanes("hide-agent-hooks/src/delivery.rs") - {"agent-journey", "repeat"})
         self.assertIn("hide-agent-hooks", result["rust_packages"])
         self.assertIn("policy", result["lanes"])
 
@@ -700,7 +838,9 @@ class NamedPaths(unittest.TestCase):
         self.assertEqual(selected, registered)
         for path in registered:
             with self.subTest(path=path):
-                self.assertEqual(self.lanes(path), {"policy", "checks", "windows-check"})
+                # A registered desktop unit test is also a changed test, which
+                # the `repeat` lane repeats.
+                self.assertEqual(self.lanes(path), {"policy", "checks", "windows-check", "repeat"})
         # Both retained jobs run both Vitest suites; a configured matrix alone
         # would not establish that these tests are executed on Windows.
         for lane in ("checks", "windows-check"):
@@ -729,10 +869,10 @@ class NamedPaths(unittest.TestCase):
 
     def test_a_contract_plans_the_tests_and_the_shell_that_read_it(self):
         expected = {
-            "contracts/hided-ws.schema.json": ({"policy", "rust"}, ["herdr-core"]),
-            "contracts/snapshot-wire-enums.json": ({"policy", "rust", "checks"}, ["herdr-core"]),
+            "contracts/hided-ws.schema.json": ({"policy", "rust"}, ["hide-core"]),
+            "contracts/snapshot-wire-enums.json": ({"policy", "rust", "checks"}, ["hide-core"]),
             "contracts/agent-adapters.json": ({"policy", "rust", "checks", "web-e2e", "desktop-e2e"}, ["hide-agent-adapter"]),
-            "contracts/hide-cli.json": ({"policy", "rust"}, ["hided"]),
+            "contracts/hide-cli.json": ({"policy", "rust", "docs"}, ["hided"]),
             "contracts/usage-coverage.json": ({"policy", "rust"}, ["hide-agent-adapter"]),
         }
         sources = code_sources()
@@ -758,6 +898,9 @@ class NamedPaths(unittest.TestCase):
                         read.add("checks")
                     elif source.startswith("web/src/"):
                         read |= {"checks", "web-e2e", "desktop-e2e"}
+                    elif source.startswith("scripts/docs/"):
+                        # The user docs' CLI reference reads the commands the contract describes.
+                        read.add("docs")
                     else:
                         read.add(f"unplanned reader: {source}")
                 self.assertEqual(read, (lanes - {"policy"}) | {f"crate:{name}" for name in packages})
@@ -771,11 +914,10 @@ class NamedPaths(unittest.TestCase):
         for path in (
             ".github/workflows/pr.yml",
             "scripts/ci-plan.py", "scripts/verify-cargo.sh", "scripts/verify-web.sh", "scripts/ci-flaky-report.py",
-            "scripts/fetch-herdr-runtime.sh", "scripts/install-nextest.sh", "scripts/toolchain-env.sh",
+            "scripts/install-nextest.sh", "scripts/toolchain-env.sh",
             # Every member but two depends on `workspace-hack`, which holds
             # nearly every third-party crate: a lock change reaches them all.
             "pnpm-lock.yaml", "web/package.json", "desktop/package.json", "Cargo.lock", ".config/nextest.toml", "clippy.toml",
-            "contracts/herdr-bundle.json", "contracts/herdr-api.schema.json",
             "mystery/file.txt", "scripts/some-new-script.sh", "web/some-new-config.json",
         ):
             with self.subTest(path=path):
@@ -786,11 +928,11 @@ class NamedPaths(unittest.TestCase):
     def test_a_crate_readme_is_still_the_crates_change(self):
         # The crate may include it in a doc test; the documentation rule only
         # covers folders no rule claims.
-        self.assertTrue({"rust", "windows-check"} <= self.lanes("herdr-core/README.md"))
+        self.assertTrue({"rust", "windows-check"} <= self.lanes("hide-core/README.md"))
 
     def test_a_named_path_does_not_narrow_a_plan_that_has_another_reason(self):
-        self.assertEqual(self.lanes("site/index.html", "web/src/Overview.tsx"), self.lanes("web/src/Overview.tsx"))
-        self.assertEqual(plan("site/index.html", "Cargo.lock")["lanes"], FULL)
+        self.assertEqual(self.lanes("agents/prd/x/prd.md", "web/src/Overview.tsx"), self.lanes("web/src/Overview.tsx"))
+        self.assertEqual(plan("agents/prd/x/prd.md", "Cargo.lock")["lanes"], FULL)
 
     def test_no_script_named_as_unread_is_called_by_a_lane(self):
         # The claim behind POLICY_ONLY's scripts: nothing but `policy` (and a
@@ -802,8 +944,7 @@ class NamedPaths(unittest.TestCase):
             (workflows / name).read_text()
             for name in ("web-e2e.yml", "desktop-e2e.yml", "os-contract.yml", "remote-mailbox.yml", "package.yml")
         )
-        for helper in ("verify-cargo.sh", "verify-web.sh", "toolchain-env.sh", "install-nextest.sh", "fetch-herdr-runtime.sh",
-                       "fetch-herdr-runtime.ps1", "ci-flaky-report.py", "check-herdr-schema.py"):
+        for helper in ("verify-cargo.sh", "verify-web.sh", "toolchain-env.sh", "install-nextest.sh", "ci-flaky-report.py"):
             callers += (ROOT / "scripts" / helper).read_text()
         checked = 0
         for pattern in ci.POLICY_ONLY:
@@ -817,10 +958,10 @@ class NamedPaths(unittest.TestCase):
 
 
 def code_sources():
-    """Each Rust, web and desktop source's code with comment lines left out, by path, with its crate."""
+    """Each Rust, web, desktop and user docs source's code with comment lines left out, by path, with its crate."""
     crate_of = {directory: crate["name"] for directory, crate in CRATES.items()}
     sources = {}
-    for folder in [*crate_of, "web/src", "web/e2e", "desktop/src", "desktop/e2e", "desktop/scripts"]:
+    for folder in [*crate_of, "web/src", "web/e2e", "desktop/src", "desktop/e2e", "desktop/scripts", "scripts/docs"]:
         for source in (ROOT / folder).rglob("*"):
             if source.suffix not in (".rs", ".ts", ".tsx", ".mjs", ".js") or "node_modules" in source.parts:
                 continue
@@ -846,10 +987,8 @@ def runner_jobs(block):
     """How many runner jobs one `pr.yml` job starts: a reusable workflow starts its own."""
     if "uses: ./.github/workflows/web-e2e.yml" in block:
         shards = int(re.search(r"\n      shards: (\d+)", block).group(1))
-        # The core's own engine runs the same tests over as many shards again.
-        engines = 2 if "\n      own-engine: true" in block else 1
         # With more than one shard parallel daemon and web builds precede them.
-        return shards * engines + (2 if shards > 1 else 0)
+        return shards + (2 if shards > 1 else 0)
     if "uses: ./.github/workflows/desktop-e2e.yml" in block:
         # Each shard builds in place.
         return int(re.search(r"\n      shards: (\d+)", block).group(1))
@@ -859,11 +998,15 @@ def runner_jobs(block):
         return max(len(json.loads(found)) for found in re.findall(r"'(\[[^']*\])'", systems))
     if "uses: ./.github/workflows/relay-protocol.yml" in block:
         return 3
+    if "uses: ./.github/workflows/repeat.yml" in block:
+        # The count, the web specs' run, the unit tests' run, the Rust modules'
+        # run and the verdict.
+        return 5
     if "uses: ./.github/workflows/wsl-device.yml" in block:
         # Windows cannot build the Linux programs the distribution runs.
         return 2
     if "uses: ./.github/workflows/agent-journey.yml" in block:
-        # The stand-ins run on each system but Windows, and Windows has its forms job.
+        # Stand-ins run on each system but Windows; Windows has its forms job.
         systems = json.loads(re.search(r"systems: '(\[[^']*\])'", block).group(1))
         return len([system for system in systems if system != "windows"]) + ("windows" in systems)
     if "uses: ./.github/workflows/package.yml" in block:
@@ -910,7 +1053,7 @@ class Workflows(unittest.TestCase):
         for event, action, expected in (("pull_request", "synchronize", True),
                                         ("pull_request", "edited", False),
                                         ("pull_request", "opened", True),
-                                        ("push", "", False), ("schedule", "", False),
+                                        ("push", "", False), ("merge_group", "", False), ("schedule", "", False),
                                         ("workflow_dispatch", "", False)):
             with self.subTest(event=event, action=action):
                 code = condition.replace("github.event_name", repr(event)).replace("github.event.action", repr(action))
@@ -981,7 +1124,8 @@ class Workflows(unittest.TestCase):
 
     def test_the_most_a_pull_request_starts_is_the_count_testing_md_states(self):
         jobs = pr_jobs()
-        most = 2 + sum(runner_jobs(jobs[lane]) for lane in ci.LANES)
+        # A merge group's own two checks never run on a pull request.
+        most = 2 + sum(runner_jobs(jobs[lane]) for lane in ci.PATH_LANES)
         # The 2026-10-05 run started 23 jobs. Since then the macOS desktop
         # suite's second shard and the fifth and sixth web shards were added
         # because the suites outgrew their shards' step caps, which a smaller
@@ -998,12 +1142,25 @@ class Workflows(unittest.TestCase):
         # planned only for a change to the holder, the node's holder code, the
         # agent pins or the lane's scripts, add three.
         # Native and WASM relay interoperability adds one job on each OS.
-        # The core's own engine runs the web suite over as many shards again
-        # as Herdr's, on Linux and Windows, until the Herdr lane goes with
-        # Herdr (PRD engine-bundle-3-core-owns D-24): seven more.
         # The package lane already ran six preparation/compile jobs omitted
         # from the old count; correcting the accounting starts no new job.
-        self.assertLessEqual(most, 57, "a run starts more jobs than the suites and native SDK contracts need")
+        # Every suite runs once, on the core's own engine, since the Herdr lanes
+        # were removed (PRD engine-bundle-4-herdr-removal D-2).
+        # The remote mailbox lane's Linux arm64 leg adds one, planned only
+        # for the device link's crates, its device test and the device kit
+        # contract (with-hide/hide-private#501).
+        # The repeat lane's count, web specs, unit tests, Rust modules and
+        # final verdict raise it from 51 to 56. The verdict requires actual
+        # completed runs from every leg the count chose. The user docs lane
+        # adds one, planned for `site/`, the web shell's sources,
+        # `scripts/docs/`, `hided/src/cli.rs` and the CLI contract.
+        # The Android app host's lane adds one, planned for `mobile/android/`.
+        # The Windows `@platform` lane's third shard, its daemon and shell
+        # builds now outside the shard, and its second shard raise it from 58
+        # to 62: one job held the suite at 22.4 minutes, the longest of a run,
+        # and three shards plan 4.2 minutes of tests each (docs/TESTING.md,
+        # "Balancing the e2e shards").
+        self.assertLessEqual(most, 62, "a run starts more jobs than the suites and native SDK contracts need")
         testing = (ROOT / "docs/TESTING.md").read_text()
         self.assertIn(f"starts at most {most} jobs", testing)
 
@@ -1037,16 +1194,16 @@ class MacosOnPullRequests(unittest.TestCase):
         before = plan("web/src/Overview.tsx")
         self.assertIn("desktop-e2e", before["lanes"])
         result = pr_plan("web/src/Overview.tsx")
-        self.assertEqual(result["lanes"], ["policy", "rust", "checks", "web-e2e"])
+        self.assertEqual(result["lanes"], ["policy", "rust", "checks", "docs", "web-e2e"])
         self.assertNoMacos(result)
         self.assertIn("macOS jobs: skipped", ci.summary(result))
 
     def test_a_pull_request_without_a_macos_path_plans_none_whatever_else_it_plans(self):
         for status in ("A", "M"):
             for path in (
-                "herdr-core/src/lib.rs", "hided/src/lib.rs", "desktop/src/main/index.ts", "desktop/src/main/host.ts",
-                "desktop/static/icon.png", "desktop/e2e/desktop.spec.ts", "web/e2e/herdr-fixture.ts",
-                "hide-herdr-client/src/lib.rs", "hide-platform/src/wsl.rs", "hide-platform/src/path.rs",
+                "hide-core/src/lib.rs", "hided/src/lib.rs", "desktop/src/main/index.ts", "desktop/src/main/host.ts",
+                "desktop/static/icon.png", "desktop/e2e/desktop.spec.ts", "web/e2e/pane-fixture.ts",
+                "hide-platform/src/wsl.rs", "hide-platform/src/path.rs",
                 "hide-kit/src/lib.rs", "hide-ai/src/omp.rs", "hide-holder/src/lib.rs",
                 "desktop/scripts/build-identity.mjs", "desktop/scripts/macos-signing.test.mjs",
                 "desktop/src/main/updater.test.ts", "Cargo.lock", "mystery/file.txt",
@@ -1078,7 +1235,6 @@ class MacosOnPullRequests(unittest.TestCase):
             ("desktop/native/notification-status/main.swift", set(MACOS_LANES) - {"holder-restart"}),
             ("desktop/resources/entitlements/app.plist", set(MACOS_LANES) - {"holder-restart"}),
             ("hide-vt/build.rs", {"vt", "holder-restart"}),
-            ("contracts/herdr-bundle.json", set(MACOS_LANES) - {"holder-restart"}),
             (".github/workflows/pr.yml", set(MACOS_LANES)),
             (".github/workflows/desktop-e2e.yml", set(MACOS_LANES)),
             (".github/actions/rust-cache/action.yml", set(MACOS_LANES)),
@@ -1133,7 +1289,7 @@ class MacosOnPullRequests(unittest.TestCase):
             pr.commit("topic", "web", {"web/src/x.ts": "two\n"})
             pr.check_out_merge()
             result = pr.plan(None)
-            self.assertEqual(result["lanes"], ["policy", "rust", "checks", "web-e2e"])
+            self.assertEqual(result["lanes"], ["policy", "rust", "checks", "docs", "web-e2e"])
             self.assertFalse(result["macos"]["runs"])
             pr.commit("topic", "platform", {"hide-platform/src/a.rs": '#[cfg(target_os = "macos")]\nfn a() {}\n'})
             pr.check_out_merge()
@@ -1160,6 +1316,16 @@ class MacosOnPullRequests(unittest.TestCase):
 
 
 class Aggregate(unittest.TestCase):
+    def test_a_sparse_checkout_carries_every_script_its_scripts_load(self):
+        # A job that checks out only some scripts dies at import when one of them
+        # loads a sibling the list left out, before it can report on any lane.
+        for workflow in sorted((ROOT / ".github/workflows").glob("*.yml")):
+            for block in re.findall(r"sparse-checkout: \|\n((?:[ \t]+\S.*\n)+?)[ \t]+sparse-checkout-cone-mode", workflow.read_text()):
+                listed = {line.strip() for line in block.splitlines()}
+                for script in sorted(path for path in listed if path.endswith(".py")):
+                    for sibling in re.findall(r'Path\(__file__\)\.resolve\(\)\.parent / "([^"]+\.py)"', (ROOT / script).read_text()):
+                        self.assertIn(f"scripts/{sibling}", listed, f"{workflow.name}: {script} loads {sibling}")
+
     def test_nightly_requires_selected_jobs_and_rejects_failed_or_missing_agent_checks(self):
         jobs = {"web-e2e-macos", "web-e2e-windows", "remote-mailbox-macos", "agy-contract-all",
                 "agent-trust-contract-all", "agent-journey", "holder-restart", "desktop-e2e", "perf", "verify", "package"}
@@ -1198,12 +1364,12 @@ class Aggregate(unittest.TestCase):
 
     def test_planned_success_and_unplanned_skip_pass(self):
         for result in (plan("docs/BUILD.md"), plan("web/src/Overview.tsx"), plan(".github/workflows/pr.yml"),
-                       plan("herdr-core/src/lib.rs")):
+                       plan("hide-core/src/lib.rs")):
             ci.aggregate(needs_for(result))
 
     def test_a_crate_only_plan_fails_when_the_desktop_suite_ran(self):
         with self.assertRaisesRegex(ValueError, "desktop-e2e: not planned"):
-            ci.aggregate(needs_for(plan("herdr-core/src/lib.rs"), desktop_e2e="success"))
+            ci.aggregate(needs_for(plan("hide-core/src/lib.rs"), desktop_e2e="success"))
 
     def test_a_planned_lane_that_did_not_succeed_fails(self):
         result = plan("web/src/shortcuts.ts")
@@ -1295,7 +1461,7 @@ class ReuseGreenRun(unittest.TestCase):
         directory = tempfile.TemporaryDirectory()
         self.addCleanup(directory.cleanup)
         self.pr = PullRequest(directory.name)
-        base = self.pr.commit("main", "base", {"docs/a.md": LINES, "web/src/x.ts": LINES, "herdr-core/src/lib.rs": "one\n"})
+        base = self.pr.commit("main", "base", {"docs/a.md": LINES, "web/src/x.ts": LINES, "hide-core/src/lib.rs": "one\n"})
         self.pr.git("checkout", "-qb", "topic")
         head = self.pr.commit("topic", "change", {
             "web/src/x.ts": LINES.replace("line 2\n", "line two\n"),
@@ -1313,7 +1479,7 @@ class ReuseGreenRun(unittest.TestCase):
     def test_a_push_that_only_merges_main_and_resolves_a_documentation_conflict_reuses_the_run(self):
         # Main changed a file the pull request does not change, and the line
         # of the guide the pull request changed.
-        self.pr.commit("main", "main moves", {"herdr-core/src/lib.rs": "two\n", "docs/a.md": LINES.replace("line 2\n", "line 2!\n")})
+        self.pr.commit("main", "main moves", {"hide-core/src/lib.rs": "two\n", "docs/a.md": LINES.replace("line 2\n", "line 2!\n")})
         self.pr.merge_main_into_topic(resolve={"docs/a.md": LINES.replace("line 2\n", "line two!\n")})
         self.pr.commit("topic", "guide", {"docs/b.md": "new\n"})
         self.pr.check_out_merge()
@@ -1340,8 +1506,10 @@ class ReuseGreenRun(unittest.TestCase):
         self.assertRuns(self.pr.plan(lambda: self.green), "main changed web/src/x.ts")
 
     def test_only_registered_unit_checks_rerun_after_a_green_app_run(self):
-        for path, lanes in (("desktop/src/main/x.test.ts", ["policy", "checks", "windows-check"]),
-                            ("desktop/e2e/windows-processes.unit.ts", ["policy", "checks", "windows-check"])):
+        # A changed unit test also plans the lane that repeats it; the run
+        # that reuses a green one rechecks it, so it plans that lane too.
+        for path, lanes in (("desktop/src/main/x.test.ts", ["policy", "checks", "windows-check", "repeat"]),
+                            ("desktop/e2e/windows-processes.unit.ts", ["policy", "checks", "windows-check", "repeat"])):
             with self.subTest(path=path):
                 self.pr.git("checkout", "-q", "topic")
                 self.pr.git("reset", "--hard", self.green["head"])
@@ -1361,7 +1529,7 @@ class ReuseGreenRun(unittest.TestCase):
         self.pr.commit("topic", "unit assertion", {"desktop/src/main/x.test.ts": "second\n"})
         self.pr.check_out_merge()
         first = self.pr.plan(lambda: self.green)
-        self.assertEqual(first["lanes"], ["policy", "checks", "windows-check"])
+        self.assertEqual(first["lanes"], ["policy", "checks", "windows-check", "repeat"])
         # This partial green must not claim that its app lanes checked a new
         # head: later runs still compare with the original app-tested commits.
         anchor = ci.plan_record(first, 7, 202)["verified"]
@@ -1369,6 +1537,7 @@ class ReuseGreenRun(unittest.TestCase):
         self.pr.git("rm", "desktop/src/main/x.test.ts")
         self.pr.git("commit", "-qm", "delete unit test")
         self.pr.check_out_merge()
+        # A deleted unit test has no test left to repeat.
         deleted = self.pr.plan(lambda: anchor)
         self.assertEqual(deleted["lanes"], ["policy", "checks", "windows-check"])
         self.assertEqual(deleted["verified"], self.green)
@@ -1506,11 +1675,11 @@ class LastGreenRun(unittest.TestCase):
             self.assertIn(why, str(caught.exception))
 
     def test_only_a_path_no_lane_but_policy_reads_is_left_out_of_the_comparison(self):
-        for name in ("docs/ARCHITECTURE.md", "CONTRIBUTING.md", "design/hide-ui.lib.pen", "site/index.html",
+        for name in ("docs/ARCHITECTURE.md", "CONTRIBUTING.md", "design/hide-ui.lib.pen",
                      "scripts/tests/test_ci_plan.py"):
             self.assertTrue(ci.reads_no_lane("M", name, CRATES, ROOT), name)
         for name in ("docs/UI_BEHAVIOR.md", "AGENTS.md", "hided/README.md", "web/src/App.tsx", "Cargo.lock",
-                     "contracts/herdr-bundle.json", "web/e2e/cmdk.spec.ts", "unknown/file"):
+                     "contracts/conpty.json", "web/e2e/cmdk.spec.ts", "unknown/file", "site/public/index.html"):
             self.assertFalse(ci.reads_no_lane("M", name, CRATES, ROOT), name)
         self.assertFalse(ci.reads_no_lane("T", "docs/ARCHITECTURE.md", CRATES, ROOT))
 
@@ -1544,7 +1713,7 @@ class ReverseDependencies(unittest.TestCase):
     def test_the_workspace_graph_has_every_crate(self):
         self.assertIn("hide-platform", CRATES)
         self.assertEqual(CRATES["hide-platform"]["name"], "hide-platform")
-        self.assertIn("hided", CRATES["herdr-core"]["consumers"])
+        self.assertIn("hided", CRATES["hide-core"]["consumers"])
 
 
 if __name__ == "__main__":

@@ -83,17 +83,17 @@ export type UsageChip = { agent: string; window?: WindowKind; named: boolean; pe
 /** Pins are shared core state. A missing agent reading collapses its pins into one dim mark. */
 export function usageChips(rows: readonly AgentUsage[], prefs: UsagePreferences, now: number): UsageChip[] {
   return AGENT_ADAPTERS.flatMap<UsageChip>((adapter) => {
-    if (!hasLimits(adapter) || prefs.hidden.includes(adapter.herdr_kind)) return [];
-    const pins = prefs.pinned.filter((pin) => pin.agent === adapter.herdr_kind)
+    if (!hasLimits(adapter) || prefs.hidden.includes(adapter.agent_cli)) return [];
+    const pins = prefs.pinned.filter((pin) => pin.agent === adapter.agent_cli)
       .sort((a, b) => WINDOW_ORDER.indexOf(a.window) - WINDOW_ORDER.indexOf(b.window));
     if (!pins.length) return [];
-    const cell = rows.find((row) => row.agent === adapter.herdr_kind)?.limits;
-    if (!cell || cell.state !== "reading") return [{ agent: adapter.herdr_kind, named: false, percent: null, state: cell?.state ?? "loading" }];
+    const cell = rows.find((row) => row.agent === adapter.agent_cli)?.limits;
+    if (!cell || cell.state !== "reading") return [{ agent: adapter.agent_cli, named: false, percent: null, state: cell?.state ?? "loading" }];
     const windows = pins.flatMap((pin) => {
       const row = limitWindow(cell, pin.window);
       return row && !["not_offered", "unreadable"].includes(row.outcome.state) ? [row] : [];
     });
-    return windows.map((window) => ({ agent: adapter.herdr_kind, window: window.kind,
+    return windows.map((window) => ({ agent: adapter.agent_cli, window: window.kind,
       named: windows.length > 1 || windowPercent(window, now) === null,
       percent: windowPercent(window, now), state: window.outcome.state }));
   });

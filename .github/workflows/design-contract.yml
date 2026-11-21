@@ -25,4 +25,4 @@ jobs:
       - name: Check public tokens, contrast, bundled agent marks and raw controls
         run: |
           node scripts/check-design-contract.mjs
-          node --test scripts/tests/token-contrast.test.mjs scripts/tests/ui-parts.test.mjs
+          node --test scripts/tests/token-contrast.test.mjs scripts/tests/gen-tokens.test.mjs scripts/tests/ui-parts.test.mjs

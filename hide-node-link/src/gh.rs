@@ -11,6 +11,9 @@ use serde::{Deserialize, Serialize};
 #[serde(rename_all = "snake_case")]
 pub enum GithubFailureCategory {
     NotInstalled,
+    /// `gh` is older than [`MINIMUM_VERSION`], so the commands below are
+    /// ones it may refuse.
+    Outdated,
     NotLoggedIn,
     NoGithubRemote,
     NetworkOrRateLimit,
@@ -21,6 +24,7 @@ impl GithubFailureCategory {
     pub fn english(self) -> &'static str {
         match self {
             Self::NotInstalled => "not installed",
+            Self::Outdated => "too old",
             Self::NotLoggedIn => "not logged in",
             Self::NoGithubRemote => "no GitHub remote",
             Self::NetworkOrRateLimit => "network or rate limit",
@@ -263,6 +267,53 @@ fn is_issue_attempt_query(value: &str) -> bool {
 /// the branch landed.
 pub const MERGED_PROOF_LIMIT: &str = "100";
 pub const MERGED_PROOF_FIELDS: &str = "headRefOid,baseRefName";
+
+/// The oldest `gh` whose `--json` fields and flags cover every command line
+/// [`allowed`] names: 2.72.0 is the first that knows `closingIssuesReferences`
+/// in `gh pr list`, which 2.71.0 refuses as an unknown JSON field, and that
+/// refusal failed every pull request read of a machine with gh 2.58.0. The
+/// rust lane runs every shape against this release
+/// (`hide-host/tests/it/gh_floor.rs`), so a field or flag a newer release
+/// added fails there until this moves with it.
+pub const MINIMUM_VERSION: GhVersion = GhVersion(2, 72, 0);
+
+/// `gh --version`, asked once per pass before `auth status`, so a `gh` older
+/// than [`MINIMUM_VERSION`] is named as that rather than as the first field
+/// it refuses.
+pub const VERSION: [&str; 1] = ["--version"];
+
+/// A `gh` release, compared part by part.
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Ord, PartialOrd)]
+pub struct GhVersion(pub u32, pub u32, pub u32);
+
+impl GhVersion {
+    /// The release `gh --version` names on its first line, `gh version 2.76.2
+    /// (2025-07-30)`; a build from source adds a suffix after the patch
+    /// (`2.76.2-12-gabcdef`), which is ignored. `None` for anything else,
+    /// such as the `DEV` an unversioned build prints.
+    pub fn of_output(output: &str) -> Option<Self> {
+        let version = output
+            .lines()
+            .next()?
+            .strip_prefix("gh version ")?
+            .split_whitespace()
+            .next()?;
+        let mut parts = version.splitn(3, '.');
+        let major = parts.next()?.parse().ok()?;
+        let minor = parts.next()?.parse().ok()?;
+        let patch = parts.next()?;
+        let digits = patch
+            .find(|c: char| !c.is_ascii_digit())
+            .unwrap_or(patch.len());
+        Some(Self(major, minor, patch[..digits].parse().ok()?))
+    }
+}
+
+impl std::fmt::Display for GhVersion {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{}.{}.{}", self.0, self.1, self.2)
+    }
+}
 
 /// The signed-in account's login, read once per pass beside `auth status`:
 /// it tells the Work tab which pull requests are the operator's own and which
@@ -542,8 +593,12 @@ pub fn answered_output(arguments: &[&str], mut stdout: String) -> String {
 /// rename keeps, and whether it is public (`공개`, PRD overview-device-tasks D-35).
 pub const REPOSITORY_FIELDS: &str = "nameWithOwner,id,visibility,defaultBranchRef";
 
+/// Whether the node may run `gh` with `arguments`. Every shape named here has
+/// a line in `hide-host/tests/it/gh_floor.rs`, which runs it against the
+/// [`MINIMUM_VERSION`] release.
 pub fn allowed(arguments: &[&str]) -> bool {
     arguments == ["auth", "status"]
+        || arguments == VERSION
         || is_job_log_read(arguments)
         || is_conditional_read(arguments)
         || is_pull_digest_read(arguments)
@@ -612,7 +667,8 @@ pub fn allowed(arguments: &[&str]) -> bool {
                 || is_issue_attempt_query(arguments[3])
                 || is_pr_facts_query(arguments[3])
                 || is_pr_card_query(arguments[3])
-                || is_checkout_checks_query(arguments[3])))
+                || is_checkout_checks_query(arguments[3])
+                || is_head_runs_query(arguments[3])))
 }
 
 /// A conditional read prints the response headers and no body: only the
@@ -660,8 +716,10 @@ pub fn pull_digest_arguments(repository: &str) -> Option<Vec<String>> {
 
 /// The result a commit's check runs add up to, in the words the PR mark uses,
 /// by the same rule as the core's `rollup_checks`: any failed run fails it,
-/// else any unfinished run leaves it pending.
-pub const CHECK_RUNS_VERDICT_JQ: &str = "[.check_runs[]|if .status!=\"completed\" then \"pending\" elif (.conclusion|IN(\"failure\",\"timed_out\",\"cancelled\",\"action_required\",\"startup_failure\",\"stale\")) then \"failed\" elif (.conclusion|IN(\"success\",\"neutral\",\"skipped\")) then \"passing\" else \"unknown\" end]|if any(.==\"failed\") then \"failed\" elif any(.==\"pending\") then \"pending\" elif any(.==\"unknown\") then \"unknown\" elif length==0 then \"none\" else \"passing\" end";
+/// else any unfinished run leaves it pending. GitHub Actions' check runs are
+/// left out: they are judged by their workflow runs ([`head_runs_query`]),
+/// because a cancelled run's jobs stay listed beside its replacement's.
+pub const CHECK_RUNS_VERDICT_JQ: &str = "[.check_runs[]|select(.app.slug!=\"github-actions\")|if .status!=\"completed\" then \"pending\" elif (.conclusion|IN(\"failure\",\"timed_out\",\"cancelled\",\"action_required\",\"startup_failure\",\"stale\")) then \"failed\" elif (.conclusion|IN(\"success\",\"neutral\",\"skipped\")) then \"passing\" else \"unknown\" end]|if any(.==\"failed\") then \"failed\" elif any(.==\"pending\") then \"pending\" elif any(.==\"unknown\") then \"unknown\" elif length==0 then \"none\" else \"passing\" end";
 
 /// The same for a commit's combined status (a commit with no statuses reports
 /// `pending` with a count of zero, which is no result).
@@ -891,22 +949,66 @@ pub fn checkout_checks_query(repository: &str, commits: &[String]) -> Option<Str
 }
 
 fn is_checkout_checks_query(value: &str) -> bool {
-    let Some(rest) = value.strip_prefix("query=query HideCheckoutChecks { repository(owner:\"")
-    else {
-        return false;
-    };
-    let Some((owner, rest)) = rest.split_once("\",name:\"") else {
-        return false;
-    };
-    let Some((name, rest)) = rest.split_once('"') else {
-        return false;
-    };
-    let commits: Vec<String> = rest
+    commits_query_parts(value, "HideCheckoutChecks").is_some_and(|(repository, commits)| {
+        checkout_checks_query(&repository, &commits).is_some_and(|query| query == value)
+    })
+}
+
+/// The most head commits one [`head_runs_query`] asks about.
+pub const HEAD_RUNS_COMMIT_LIMIT: usize = 50;
+
+/// The most check suites one commit's runs are read with. A commit with more
+/// cannot be judged from the ones read, so the core says it does not know.
+pub const HEAD_RUNS_SUITE_LIMIT: usize = 100;
+
+/// A fixed read of the workflow runs on up to [`HEAD_RUNS_COMMIT_LIMIT`]
+/// exact commits: each check suite (one per GitHub Actions run) with the
+/// workflow and event that started it, its state, and when it last changed.
+/// A run queued before its jobs exist is a suite already, while no check run
+/// of it is listed yet.
+pub fn head_runs_query(repository: &str, commits: &[String]) -> Option<String> {
+    if !is_repository(repository)
+        || commits.is_empty()
+        || commits.len() > HEAD_RUNS_COMMIT_LIMIT
+        || commits.iter().any(|sha| !is_commit(sha))
+        || commits
+            .iter()
+            .collect::<std::collections::HashSet<_>>()
+            .len()
+            != commits.len()
+    {
+        return None;
+    }
+    let (owner, name) = repository.split_once('/')?;
+    let objects = commits.iter().enumerate().map(|(index, sha)| format!(
+        "c{index}: object(oid:\"{sha}\") {{ ... on Commit {{ checkSuites(first:{HEAD_RUNS_SUITE_LIMIT}) {{ totalCount nodes {{ status conclusion updatedAt workflowRun {{ databaseId event workflow {{ databaseId }} }} }} }} }} }}"
+    )).collect::<Vec<_>>().join(" ");
+    Some(format!(
+        "query=query HideHeadRuns {{ repository(owner:\"{owner}\",name:\"{name}\") {{ {objects} }} }}"
+    ))
+}
+
+fn is_head_runs_query(value: &str) -> bool {
+    commits_query_parts(value, "HideHeadRuns").is_some_and(|(repository, commits)| {
+        head_runs_query(&repository, &commits).is_some_and(|query| query == value)
+    })
+}
+
+/// The repository and commits a fixed per-commit query names, read back so
+/// the query can be built again and compared whole.
+fn commits_query_parts(value: &str, query: &str) -> Option<(String, Vec<String>)> {
+    let rest = value
+        .strip_prefix("query=query ")?
+        .strip_prefix(query)?
+        .strip_prefix(" { repository(owner:\"")?;
+    let (owner, rest) = rest.split_once("\",name:\"")?;
+    let (name, rest) = rest.split_once('"')?;
+    let commits = rest
         .split("object(oid:\"")
         .skip(1)
         .filter_map(|part| part.split_once('"').map(|(sha, _)| sha.to_owned()))
         .collect();
-    checkout_checks_query(&format!("{owner}/{name}"), &commits).is_some_and(|query| query == value)
+    Some((format!("{owner}/{name}"), commits))
 }
 
 fn is_checks_verdict_read(arguments: &[&str]) -> bool {
@@ -1071,6 +1173,29 @@ pub enum GhAnswer {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn a_version_is_read_from_the_first_line_gh_prints_and_compared_by_parts() {
+        let read = |output: &str| GhVersion::of_output(output);
+        assert_eq!(
+            read(
+                "gh version 2.58.0 (2024-10-01)\nhttps://github.com/cli/cli/releases/tag/v2.58.0\n"
+            ),
+            Some(GhVersion(2, 58, 0))
+        );
+        assert_eq!(
+            read("gh version 2.76.2-12-gabcdef (2025-07-30)"),
+            Some(GhVersion(2, 76, 2))
+        );
+        assert_eq!(read("gh version DEV"), None);
+        assert_eq!(read("gh version 2.72"), None);
+        assert_eq!(read(""), None);
+        assert!(GhVersion(2, 58, 0) < MINIMUM_VERSION);
+        assert!(GhVersion(2, 100, 0) > MINIMUM_VERSION);
+        assert!(GhVersion(3, 0, 0) > MINIMUM_VERSION);
+        assert_eq!(MINIMUM_VERSION.to_string(), "2.72.0");
+        assert!(allowed(&VERSION));
+    }
+
     use super::*;
 
     #[test]
@@ -1089,6 +1214,29 @@ mod tests {
         assert!(checkout_checks_query("example/fixture", &["main".into()]).is_none());
         assert!(checkout_checks_query("example/fixture", &vec!["a".repeat(40); 2]).is_none());
         assert!(checkout_checks_query("../fixture", &commits).is_none());
+    }
+
+    #[test]
+    fn head_runs_allow_only_fixed_exact_sha_reads_up_to_the_cap() {
+        let commits: Vec<_> = (0..HEAD_RUNS_COMMIT_LIMIT)
+            .map(|i| format!("{i:040x}"))
+            .collect();
+        let query = head_runs_query("example/fixture", &commits).unwrap();
+        assert!(allowed(&["api", "graphql", "-f", &query]));
+        assert!(!allowed(&[
+            "api",
+            "graphql",
+            "-f",
+            &query.replace("updatedAt", "updatedAt body")
+        ]));
+        let over: Vec<_> = (0..=HEAD_RUNS_COMMIT_LIMIT)
+            .map(|i| format!("{i:040x}"))
+            .collect();
+        assert!(head_runs_query("example/fixture", &over).is_none());
+        assert!(head_runs_query("example/fixture", &[]).is_none());
+        assert!(head_runs_query("example/fixture", &["main".into()]).is_none());
+        assert!(head_runs_query("example/fixture", &vec!["a".repeat(40); 2]).is_none());
+        assert!(head_runs_query("../fixture", &commits[..1]).is_none());
     }
 
     /// Detail paging may vary only its repository, issue and bounded cursor;

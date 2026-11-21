@@ -2,7 +2,7 @@
 //! pane (PRD core-host-node-terminal).
 //!
 //! A node owns its panes' terminal attaches and their bytes: keys from the
-//! screen reach the node's writer and a frame from Herdr reaches the screen
+//! screen reach the node's writer and a frame from the pane reaches the screen
 //! without passing the core. The core decides which panes attach and keeps
 //! the facts it projects; it says so with [`TerminalControl`] and hears what
 //! happened as [`TerminalReport`]. Neither carries a key or a frame's bytes,
@@ -10,10 +10,13 @@
 //! pasted attachment's paths).
 //!
 //! Pane ids here are the node's own: a device's node knows its panes by its
-//! Herdr's ids, and the screen side scopes them to the device.
+//! the engine's ids, and the screen side scopes them to the device.
 
 use std::sync::Arc;
 
+/// What a pointer event did and with which button
+/// ([`TerminalControl::Mouse`]), as the pane's holder takes them.
+pub use hide_holder_protocol::{MouseAction, MouseButton};
 use serde::{Deserialize, Serialize};
 
 /// Panes one node keeps attached at once (D-18). A pane wanted past it is
@@ -27,7 +30,7 @@ pub const MAX_UNSENT_KEY_BYTES: usize = 256 * 1024;
 /// watch belongs to an operation the core has already closed.
 pub const MAX_FRAME_WATCHES: usize = 64;
 /// The longest pane or creation id a screen may name to a node. A device
-/// pane's id, `remote:<device>:pane:<Herdr's id>`, is the longest, with a
+/// pane's id, `remote:<device>:pane:<the device's id>`, is the longest, with a
 /// device id of at most 256 bytes; the node's pane caps count entries, so
 /// this bounds their bytes too.
 pub const MAX_PANE_ID_BYTES: usize = 512;
@@ -59,7 +62,7 @@ pub const MAX_ATTACHMENT_INPUT_BYTES: usize = 64 * 1024;
 #[derive(Clone, Debug, Eq, PartialEq, Deserialize, Serialize)]
 #[serde(tag = "op", rename_all = "snake_case")]
 pub enum TerminalControl {
-    /// Attach the pane, in control when Herdr allows it. A pane with no
+    /// Attach the pane, in control when the pane's holder allows it. A pane with no
     /// size waits for [`TerminalControl::Resize`]. `manual` is an operator's
     /// Reconnect: it starts again from a first attempt.
     Attach {
@@ -72,14 +75,14 @@ pub enum TerminalControl {
     /// The pane's tab left the attach window: end its session and keep only
     /// that it was released, with the core's words for why.
     Release { pane: String, message: String },
-    /// Herdr no longer has the pane: forget everything about it.
+    /// The engine no longer has the pane: forget everything about it.
     Forget { pane: String },
-    /// Hide asked Herdr to close the pane (`closing`), or that close ended.
+    /// Hide asked the engine to close the pane (`closing`), or that close ended.
     /// A session that ends while its pane closes is not a failure, and keys
     /// for it are refused.
     Closing { pane: String, closing: bool },
     /// The PTY size the core settled for the pane: the grid its view fits
-    /// in the rectangle drawn for it, confirmed by Herdr or not, since the
+    /// in the rectangle drawn for it, confirmed by the engine or not, since the
     /// controller alone sizes the PTY (PRD grid-ahead-of-herdr D-02).
     Resize { pane: String, size: GridSize },
     /// The panes of the tabs on screen. A failed attach is retried on its
@@ -103,16 +106,32 @@ pub enum TerminalControl {
         #[serde(default)]
         modifiers: u8,
     },
-    /// Bytes the core writes itself (a click's mouse report).
-    Write { pane: String, data: String },
+    /// A pointer event for a controlled pane over its zero-based cell, which
+    /// the pane's holder reports in the program's mouse mode or drops when
+    /// the program tracks none.
+    Mouse {
+        pane: String,
+        action: MouseAction,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        button: Option<MouseButton>,
+        column: u16,
+        row: u16,
+        #[serde(default)]
+        modifiers: u8,
+        /// The cell under the pointer when a held button dragged it past
+        /// the grid's edge (`hide_holder_protocol::Mouse::outside`); a node
+        /// built before it ignores it and reports the nearest cell.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        outside: Option<(i32, i32)>,
+    },
     /// The agent in the pane sleeps: keys for it are dropped until it wakes.
     Asleep { pane: String, asleep: bool },
-    /// A creation the screen sends keys against before Herdr names its pane.
+    /// A creation the screen sends keys against before the engine names its pane.
     RequestOpen { request: String, fork: bool },
     /// The pane exists but its creation is still starting. All clients' keys
     /// for it join this request's queue on the pane's node.
     RequestHold { request: String, pane: String },
-    /// Herdr's answer for the creation named its pane.
+    /// The engine's answer for the creation named its pane.
     RequestResolve { request: String, pane: String },
     /// The creation made no pane the keys may follow.
     RequestDiscard { request: String, reason: String },
@@ -152,8 +171,6 @@ pub struct GridSize {
 #[derive(Clone, Debug, Eq, PartialEq, Deserialize, Serialize)]
 pub struct PaneTerminalState {
     pub state: String,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub mode: Option<String>,
     pub generation: u64,
     pub attempt: u64,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -227,7 +244,7 @@ pub enum AttachmentInputOutcome {
     Cancelling,
 }
 
-/// Where a screen's key goes: a pane, or a creation whose pane Herdr has not
+/// Where a screen's key goes: a pane, or a creation whose pane the engine has not
 /// named yet.
 #[derive(Clone, Debug, Eq, PartialEq, Deserialize, Serialize)]
 #[serde(rename_all = "snake_case")]
@@ -278,6 +295,9 @@ pub enum TerminalUp {
     Report {
         report: TerminalReport,
     },
+    /// What a pane's program wrote to the clipboard, once, for the screen
+    /// that looks at the pane: never kept for one that connects later.
+    Clipboard(TerminalClipboard),
     /// A diagnostic record the device's terminal service wrote; the core's
     /// side files it with the device it came from, since a device's own log
     /// reaches no one.
@@ -319,6 +339,39 @@ pub struct TerminalOutput {
     /// The bytes draw the whole screen (they start with a reset).
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub full: bool,
+}
+
+/// What one pane's program wrote to the clipboard (OSC 52), as it leaves a
+/// node.
+#[derive(Clone, Debug, Eq, PartialEq, Deserialize, Serialize)]
+pub struct TerminalClipboard {
+    pub pane: String,
+    /// Base64 of the text, at most [`hide_holder_protocol::MAX_CLIPBOARD`]
+    /// bytes.
+    pub data: String,
+}
+
+impl TerminalClipboard {
+    pub fn new(pane: &str, text: &[u8]) -> Self {
+        Self {
+            pane: pane.to_owned(),
+            data: encode_base64(text),
+        }
+    }
+
+    /// The text, or why it is refused: a line from another machine's node
+    /// is held to the bound a holder keeps.
+    pub fn text(&self) -> Result<Vec<u8>, String> {
+        let most = hide_holder_protocol::MAX_CLIPBOARD;
+        if self.data.len() > most.div_ceil(3) * 4 {
+            return Err(format!("a clipboard write past {most} bytes"));
+        }
+        let text = decode_base64(&self.data)?;
+        if text.len() > most {
+            return Err(format!("a clipboard write past {most} bytes"));
+        }
+        Ok(text)
+    }
 }
 
 /// A side-channel input's permission, not acknowledgment that bytes were written.
@@ -526,7 +579,7 @@ impl TerminalControl {
             | Self::Closing { pane, .. }
             | Self::Resize { pane, .. }
             | Self::Scroll { pane, .. }
-            | Self::Write { pane, .. }
+            | Self::Mouse { pane, .. }
             | Self::Asleep { pane, .. }
             | Self::AttachmentHold { pane, .. }
             | Self::WatchFrame { pane } => Some(pane),
@@ -570,7 +623,6 @@ mod tests {
             pane: "w1:p1".into(),
             state: PaneTerminalState {
                 state: "controlling".into(),
-                mode: Some("control".into()),
                 generation: 3,
                 attempt: 1,
                 message: None,

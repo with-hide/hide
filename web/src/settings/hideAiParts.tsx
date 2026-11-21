@@ -1,5 +1,6 @@
+import { itemName, missingItemName } from "../agentProfiles";
 import { Status, type Tone } from "../components/settings-rows";
-import { percentOf, providerReason, resetTime } from "../hideAi";
+import { percentOf, providerReason, resetTime, type AiItem } from "../hideAi";
 import { useInterfaceTranslation } from "../i18n/client";
 import { requireInterfaceLanguage } from "../i18n/locale";
 import { coreMachineAway, machineName } from "../screenMachine";
@@ -14,9 +15,18 @@ export function useHideAiWords() {
   const devices = useShellStore((s) => s.rest?.navigator?.devices);
   const coreMachine = coreMachineAway(devices, t);
   const time = (unixMs: number) => resetTime(language, unixMs);
-  /** An agent as the tab names it: "Claude Code", or for one on a connected device "Claude Code · WSL Ubuntu" (PRD wsl-device B11). */
-  const name = (provider: AiProvider): string =>
-    provider.device_id ? `${provider.label} · ${machineName(devices, provider.device_id, t)}` : provider.label;
+  const onMachine = (provider: AiProvider, named: string): string =>
+    provider.device_id ? `${named} · ${machineName(devices, provider.device_id, t)}` : named;
+  /**
+   * An item as the tab names it, the way the start panel does (PRD agent-profiles-phase2 D-01): "Claude Code",
+   * "Claude Code · work", a profile its machine no longer lists "Claude Code · Missing profile" (B21), and on a
+   * connected device with the device after it, "Claude Code · WSL Ubuntu" (PRD wsl-device B11).
+   */
+  const name = (provider: AiProvider | AiItem): string => {
+    const item = "profile" in provider ? provider : null;
+    if (item?.missing) return onMachine(provider, missingItemName(t, provider.label));
+    return onMachine(provider, itemName(t, provider.label, item?.profileName ?? item?.profile ?? null));
+  };
   /** One short state: "Signed in", "Out of usage until 3:10 PM". */
   const state = (provider: AiProvider): { tone: Tone; text: string } => {
     switch (providerReason(provider)) {
@@ -63,8 +73,8 @@ export function useHideAiWords() {
     }
     return { tone: base.tone, text: t("hideAi.state.weekly", { state: base.text, percent }) };
   };
-  /** Why Runs on is not answering, as a sentence about the agent: "Claude Code is out of usage until 3:10 PM". */
-  const refusal = (provider: AiProvider, why: AiRefusal): string => {
+  /** Why Runs on is not answering, as a sentence about the item: "Claude Code · work is out of usage until 3:10 PM". */
+  const refusal = (provider: AiProvider | AiItem, why: AiRefusal): string => {
     const agent = name(provider);
     switch (why.reason) {
       case "usage_limited":
@@ -81,6 +91,9 @@ export function useHideAiWords() {
         return t("hideAi.reason.notInstalled", { agent });
       case "unsupported":
         return t("hideAi.reason.unsupported", { agent });
+      // The item's name is the reason: its profile is gone (B21).
+      case "profile_missing":
+        return onMachine(provider, missingItemName(t, provider.label));
       default:
         return t("hideAi.reason.unavailable", { agent });
     }
@@ -91,11 +104,11 @@ export function useHideAiWords() {
 }
 
 /** An agent's state as symbol plus words, never colour alone (design 7). */
-export function ProviderState({ provider }: { provider: AiProvider }) {
+export function ProviderState({ provider }: { provider: AiProvider | AiItem }) {
   const { stateWithUsage } = useHideAiWords();
   const { tone, text } = stateWithUsage(provider);
   return (
-    <Status tone={tone} data-ai-state={`${provider.id}:${provider.state}`}>
+    <Status tone={tone} data-ai-state={`${"profile" in provider && provider.profile ? `${provider.id}#${provider.profile}` : provider.id}:${provider.state}`}>
       {text}
     </Status>
   );

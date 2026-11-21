@@ -1,8 +1,9 @@
 import { describe, expect, it } from "vitest";
+import { frontCard, type WorkspaceView } from "../../workspace";
 import "../chapters";
 import chapter from "../chapters/mission";
 import type { CoreEvent } from "../world";
-import { BEATS, CONDUCTOR, MISSION_WORLD, SIGN_IN_FILE, openedFile, showsExplorer, type MissionModel } from "./mission";
+import { BEATS, CONDUCTOR, MISSION_WORLD, type MissionModel } from "./mission";
 
 const doneAt = (id: string, model: MissionModel) => chapter.steps.find((step) => step.id === id)!.done!(model);
 const typedInto = (pane_id: string, text: string): CoreEvent => ({ kind: "key", payload: { pane_id, bytes_base64: btoa(text) } });
@@ -21,7 +22,7 @@ const asking = () => beat(beat(running()));
 const finish = (model: MissionModel) => beat(beat(beat(model)));
 const answered = () => apply(asking(), answer({ option: 1 }));
 
-describe("chapter 0's plan, approved before anything runs (UI_BEHAVIOR, Practice window)", () => {
+describe("the mission flow's plan, approved before anything runs (UI_BEHAVIOR, Practice window)", () => {
   it("plans for a while before the plan stands", () => {
     const model = planning();
     expect(missionIn(model)).toBeNull();
@@ -55,18 +56,18 @@ describe("chapter 0's plan, approved before anything runs (UI_BEHAVIOR, Practice
   });
 });
 
-describe("chapter 0's question, from 내 차례 to the map's banner (UI_BEHAVIOR, Practice window)", () => {
+describe("the mission flow's question, from 내 차례 to the map's banner (UI_BEHAVIOR, Practice window)", () => {
   it("comes a while into the run, with the Conductor's choices and the one it recommends", () => {
     const question = missionIn(asking())!.question!;
     expect(doneAt("running", asking())).toBe(true);
     expect(question.options![question.recommend! - 1]).toBeDefined();
   });
 
-  it("is looked at when the Conductor is opened while it asks, not when coming back from a worker", () => {
-    const opened = apply(asking(), { kind: "focus_pane", payload: { pane_id: CONDUCTOR, origin: "operator" } });
-    expect(doneAt("needsyou", opened)).toBe(true);
-    const back = apply(asking(), { kind: "focus_pane", payload: { pane_id: CONDUCTOR, origin: "operator", request_id: "r1" } });
-    expect(doneAt("needsyou", back)).toBe(false);
+  it("is looked at when the Conductor is opened while it asks, by its 내 차례 row's answered open as by a click, and not before it asks", () => {
+    const open = (request: Record<string, unknown>): CoreEvent => ({ kind: "focus_pane", payload: { pane_id: CONDUCTOR, origin: "operator", ...request } });
+    expect(doneAt("needsyou", apply(asking(), open({ request_id: "r1" })))).toBe(true);
+    expect(doneAt("needsyou", apply(asking(), open({})))).toBe(true);
+    expect(doneAt("needsyou", beat(beat(apply(running(), open({ request_id: "r1" })))))).toBe(false);
   });
 
   it("changes the plan on a pressed choice or a written answer, and the Conductor reads which", () => {
@@ -93,11 +94,11 @@ describe("chapter 0's question, from 내 차례 to the map's banner (UI_BEHAVIOR
   });
 });
 
-describe("chapter 0's end: the report and Memory (UI_BEHAVIOR, Practice window)", () => {
+describe("the mission flow's end: the report and Memory (UI_BEHAVIOR, Practice window)", () => {
   it("finishes a while after the answer, with the Conductor's report", () => {
-    expect(doneAt("graph", answered())).toBe(false);
+    expect(doneAt("finishing", answered())).toBe(false);
     const done = finish(answered());
-    expect(doneAt("graph", done)).toBe(true);
+    expect(doneAt("finishing", done)).toBe(true);
     expect(missionIn(done)!.report).not.toBeNull();
     expect(MISSION_WORLD.later!(done)).toBeNull();
   });
@@ -116,24 +117,18 @@ describe("chapter 0's end: the report and Memory (UI_BEHAVIOR, Practice window)"
   });
 });
 
-describe("chapter 0's result in the Explorer (UI_BEHAVIOR, Practice window)", () => {
-  const done = () => finish(answered());
-  const frames = (model: MissionModel) => MISSION_WORLD.snapshot(model, Date.now()).frames!;
-
-  it("marks the files the finished parts changed, and only those", () => {
-    const changed = (model: MissionModel) => frames(model).changes!.entries.map((entry) => entry.relative_path);
-    expect(changed(running())).toEqual([]);
-    expect(changed(done())).toEqual(["db/migrations/0042_login_tokens.sql", "web/src/pages/SignIn.tsx", "src/auth/magicLink.ts", "mail/templates/sign-in.html"]);
-    expect(changed(finish(apply(asking(), answer({ option: 2 }))))).toContain("src/auth/password.ts");
-  });
-
-  it("opens the Explorer from its tool and a file of the checkout beside it, and nothing outside it", () => {
-    const explorer = apply(done(), { kind: "workspace_view", payload: { tool: "explorer" } });
-    expect(showsExplorer(explorer)).toBe(true);
-    const open = (path: string) => MISSION_WORLD.apply(explorer, { kind: "file_open", payload: { path, workspace_id: "hide-practice", preview: true } });
-    const opened = open(SIGN_IN_FILE)!;
-    expect(openedFile(opened)).toBe(SIGN_IN_FILE);
-    expect(frames(opened).documents!.file1!.contents_utf8).toContain("Use a password instead");
-    expect(open("/elsewhere/SignIn.tsx")).toBeNull();
+describe("the mission's card as a desk tab (operator decision 2026-11-09; PRD lane-desk-pair-view D-13)", () => {
+  it("opens beside the pane from the chip and goes with its tab's ✕, the lane drawing it while it stands", () => {
+    const rest = (model: MissionModel) => MISSION_WORLD.snapshot(model, Date.now()).rest;
+    const open = apply(planned(), { kind: "detail_open", payload: { item: { kind: "mission", mission: "practice-mission" } } });
+    expect(doneAt("chip", open)).toBe(true);
+    expect(frontCard(rest(open).workspace_view as WorkspaceView)).toEqual({ kind: "mission", mission: "practice-mission" });
+    expect(rest(open).workspace_view!.open).toBe(true);
+    // A card of anything else is not this world's; the mission's card again changes nothing it shows.
+    expect(MISSION_WORLD.apply(planned(), { kind: "detail_open", payload: { item: { kind: "cost", workspace_id: "w" } } })).toBeNull();
+    const closed = apply(open, { kind: "view_layout", payload: { workspace: { device_id: "local", path: "/" }, action: "close", display_id: "card-0" } });
+    expect(doneAt("leave", closed)).toBe(true);
+    expect(frontCard(rest(closed).workspace_view as WorkspaceView)).toBeNull();
+    expect(rest(closed).workspace_view!.open).toBe(false);
   });
 });

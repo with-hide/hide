@@ -25,6 +25,7 @@ import { remoteRequestId } from "./remote";
 import { keyboardOwner } from "./viewFocus";
 import { useInterfaceTranslation } from "./i18n/client";
 import { requireInterfaceLanguage } from "./i18n/locale";
+import { ToolMark } from "./components/tool-mark";
 
 // ⌘K (PRD cmdk-navigation): a palette that goes to things. A query finds an
 // agent, project, checkout, device, issue or pull request by name or #number;
@@ -47,7 +48,7 @@ const askedProjects = new Set<string>();
 
 const GITHUB_ROW_ID = "github-search";
 
-/** The longest query the core searches GitHub for (`SEARCH_QUERY_LIMIT` in herdr-core/src/github.rs). */
+/** The longest query the core searches GitHub for (`SEARCH_QUERY_LIMIT` in hide-core/src/github.rs). */
 const SEARCH_QUERY_LIMIT = 200;
 
 const TONE_CLASS: Record<Tone, string> = {
@@ -272,7 +273,7 @@ function EntryIcon({ entry }: { entry: SearchEntry }) {
   if (entry.kind === "agent" || entry.kind === "session") {
     return (
       <span className="flex w-(--size-agent-badge-compact) shrink-0 justify-center" aria-hidden="true">
-        {entry.agent ? <StatusMark mark={entry.agent.mark} className={markTone(entry.agent)} /> : null}
+        {entry.agent ? <StatusMark mark={entry.agent.mark} human={entry.agent.human_turn !== undefined} className={markTone(entry.agent)} /> : null}
       </span>
     );
   }
@@ -312,6 +313,7 @@ function SearchRow({ entry, read, onSelect }: { entry: SearchEntry; read: Projec
             {entry.agentKind ? <span className="sr-only">, {agentProductName(entry.agentKind)}</span> : null}
             {entry.agent ? <span className="sr-only">, {markWords(t, entry.agent)}</span> : null}
             {entry.chip ? <DeviceChip label={entry.chip.label} local={entry.chip.local} className="max-w-2/5" /> : null}
+            <ToolMark tool={entry.agent?.tool} className="max-w-2/5" />
           </span>
           {entry.subtitle ? <span data-palette-detail="true" className="truncate text-caption text-muted-foreground">{entry.subtitle}</span> : null}
         </span>

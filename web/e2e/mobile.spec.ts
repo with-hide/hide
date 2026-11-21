@@ -3,7 +3,7 @@
 // its four checklist states to a QR; an iPhone-sized touch page pairs with the
 // QR's code, lists the agents in four groups, opens a detail, and its reply
 // and quick keys reach the pane's PTY; a loopback push endpoint decrypts
-// what hided sends and proves the three modes, the viewing rule and the Seen
+// what hided sends and proves the pause switch, the viewing rule and the Seen
 // clear; revoke, the phone limit, the seven-day revoke, the unreachable line
 // and the empty list follow; the start sheet starts an agent in a checkout and
 // in Home and keeps its text while the phone is away; and no code, credential
@@ -14,19 +14,21 @@
 // only a debug hided accepts.
 
 import { devices, expect, test, type Browser, type BrowserContext, type Page } from "@playwright/test";
-import { spawnSync } from "node:child_process";
 import crypto from "node:crypto";
 import fs from "node:fs";
 import http from "node:http";
 import path from "node:path";
 import { startFixture, type AgentFixture } from "./engine-fixture";
-import { closePane, sendKeys, withControl } from "./daemon-actions";
+import { checkoutAt, closePane, coreLog, openProject, sendKeys, withControl } from "./daemon-actions";
+import { initGithubRepository } from "./github-remote";
+import { fakeGh, git, head, moveHead, writes } from "./work-prs-fixture";
 import { elsewhereTab, finishUnseenTurn, sessionIn, setAgentAsking, setAgentSession, setAgentState } from "./fixture-agents";
-import { claudeProjects, continueFixtureTranscript, labelMarker } from "./herdr-fixture";
+import { claudeProjects, continueFixtureTranscript, labelMarker } from "./pane-fixture";
 import { DNS, FakeTailscale } from "./fake-tailscale";
 import { startHided, type Daemon } from "./hided-fixture";
-import { screenshot, THIS_MACHINE } from "./wire";
+import { enterWorkspace, screenshot, THIS_MACHINE } from "./wire";
 import { chord } from "./chords";
+import { quietFor } from "./wait";
 
 test.describe.configure({ timeout: 240_000 });
 
@@ -100,24 +102,27 @@ async function phoneContext(browser: Browser, push?: { endpoint: string; p256dh:
       const record = { subscribed: 0, unsubscribed: 0, permission: "default" as NotificationPermission };
       (window as unknown as { __push: typeof record }).__push = record;
       let current: unknown = null;
-      const fake = {
+      const fake = (applicationServerKey: ArrayBuffer) => ({
         endpoint: subscription.endpoint,
+        options: { applicationServerKey, userVisibleOnly: true },
         toJSON: () => ({ endpoint: subscription.endpoint, keys: { p256dh: subscription.p256dh, auth: subscription.auth } }),
         unsubscribe: async () => {
           record.unsubscribed += 1;
           current = null;
           return true;
         },
-      };
+      });
       Object.defineProperty(Notification, "permission", { configurable: true, get: () => record.permission });
       Notification.requestPermission = async () => {
         record.permission = "granted";
         return "granted";
       };
-      PushManager.prototype.subscribe = async function () {
+      PushManager.prototype.subscribe = async function (options) {
+        const key = options!.applicationServerKey as BufferSource;
+        const bytes = ArrayBuffer.isView(key) ? new Uint8Array(key.buffer, key.byteOffset, key.byteLength) : new Uint8Array(key);
         record.subscribed += 1;
-        current = fake;
-        return fake as unknown as PushSubscription;
+        current = fake(bytes.slice().buffer);
+        return current as PushSubscription;
       };
       PushManager.prototype.getSubscription = async function () {
         return current as PushSubscription | null;
@@ -183,21 +188,21 @@ async function showPairing(page: Page): Promise<void> {
   await page.locator('[data-mobile-show-code="true"]').click({ timeout: 20_000 });
 }
 
-/** Picks a push mode in the one dropdown on Settings > Notifications (PRD settings-left-nav B6), and returns to Mobile. */
-async function choosePush(page: Page, mode: "off" | "app_closed" | "always"): Promise<void> {
+/** Changes the phone pause switch on Settings > Notifications (PRD settings-left-nav B6), and returns to Mobile. */
+async function choosePush(page: Page, mode: "app_closed" | "always"): Promise<void> {
   await page.locator('[data-settings-tab="notifications"]').click();
-  await page.locator("[data-push-select]").click();
-  await page.locator(`[data-push-choice="${mode}"]`).click();
-  await expect(page.locator(`[data-push-detail="${mode}"]`)).toBeVisible();
+  const toggle = page.locator("[data-phone-push-rest]");
+  if ((await toggle.getAttribute("aria-checked")) !== String(mode === "app_closed")) await toggle.click();
+  await expect(toggle).toHaveAttribute("aria-checked", String(mode === "app_closed"));
   await page.locator('[data-settings-tab="mobile"]').click();
   await expect(page.locator('[data-mobile-tab="true"]')).toBeVisible();
   await page.getByText("Advanced · Connect directly with Tailscale", { exact: true }).click();
 }
 
 /** The push mode Settings > Notifications shows, read there before returning to Mobile. */
-async function expectPush(page: Page, label: string): Promise<void> {
+async function expectPush(page: Page, rest: boolean): Promise<void> {
   await page.locator('[data-settings-tab="notifications"]').click();
-  await expect(page.locator("[data-push-select]")).toHaveText(label);
+  await expect(page.locator("[data-phone-push-rest]")).toHaveAttribute("aria-checked", String(rest));
   await page.locator('[data-settings-tab="mobile"]').click();
   await expect(page.locator('[data-mobile-tab="true"]')).toBeVisible();
   await page.getByText("Advanced · Connect directly with Tailscale", { exact: true }).click();
@@ -218,28 +223,50 @@ async function shownPairingUrl(page: Page, daemon: Daemon): Promise<string> {
   return pairingUrl(page, daemon);
 }
 
-function coreLog(daemon: Daemon): string {
-  const dir = path.join(daemon.stateDir, "Logs");
-  if (!fs.existsSync(dir)) return "";
-  return fs
-    .readdirSync(dir)
-    .filter((name) => name.startsWith("core"))
-    .map((name) => fs.readFileSync(path.join(dir, name), "utf8"))
-    .join("\n");
+type Listed = { kind: string; pane_id?: string; read?: boolean; children?: Listed[]; more_children?: Listed[] };
+
+/** Whether a top row, or a child under it, is the pane. */
+function lists(row: Listed, pane: string): boolean {
+  return row.pane_id === pane || [...(row.children ?? []), ...(row.more_children ?? [])].some((child) => lists(child, pane));
 }
 
-/** The group the phone was last told a pane is in, from its own `agents` frames. */
-function groupOf(frames: string[], pane: string): string | null {
-  for (let index = frames.length - 1; index >= 0; index -= 1) {
-    const frame = JSON.parse(frames[index] ?? "{}") as { type?: string; groups?: { group: string; agents: { pane_id: string }[] }[] };
-    if (frame.type !== "agents") continue;
-    return frame.groups?.find((group) => group.agents.some((agent) => agent.pane_id === pane))?.group ?? null;
+/** The row of the pane, at the top or under its parent. */
+function rowIn(rows: Listed[], pane: string): Listed | null {
+  for (const row of rows) {
+    if (row.pane_id === pane) return row;
+    const child = rowIn([...(row.children ?? []), ...(row.more_children ?? [])], pane);
+    if (child) return child;
   }
   return null;
 }
 
-async function noPushFor(received: Push[], count: number, ms = 3_000): Promise<void> {
-  await new Promise((resolve) => setTimeout(resolve, ms));
+type AgentsFrame = { type?: string; groups?: { group: string; rows: Listed[]; more?: Listed[] }[] };
+
+/** The phone's last `agents` frame. */
+function lastAgents(frames: string[]): AgentsFrame | null {
+  for (let index = frames.length - 1; index >= 0; index -= 1) {
+    const frame = JSON.parse(frames[index] ?? "{}") as AgentsFrame;
+    if (frame.type === "agents") return frame;
+  }
+  return null;
+}
+
+/** The group the phone was last told a pane is in, from its own `agents` frames. */
+function groupOf(frames: string[], pane: string): string | null {
+  return lastAgents(frames)?.groups?.find((group) => [...group.rows, ...(group.more ?? [])].some((row) => lists(row, pane)))?.group ?? null;
+}
+
+/** Whether the phone was last told the pane's ask is one the operator read. */
+function readOf(frames: string[], pane: string): boolean | null {
+  for (const group of lastAgents(frames)?.groups ?? []) {
+    const row = rowIn([...group.rows, ...(group.more ?? [])], pane);
+    if (row) return row.read === true;
+  }
+  return null;
+}
+
+/** No push arrived past the first `count`. */
+function noPushBeyond(received: Push[], count: number): void {
   expect(received).toHaveLength(count);
 }
 
@@ -261,8 +288,8 @@ test("Settings > Mobile to a paired phone: list, detail, reply, quick keys, push
     await openMobileSettings(page, daemon);
     const toggle = page.locator('[data-mobile-switch="true"]');
     await expect(toggle).toHaveAttribute("aria-checked", "false");
-    await expect(page.locator("[data-push-select]")).toHaveCount(0);
-    await expectPush(page, "Off");
+    await expect(page.locator("[data-phone-push-rest]")).toHaveCount(0);
+    await expectPush(page, true);
     expect(tailscale.calls()).toBe("");
 
     // B2: the CLI is missing, so the first step carries the download link and the rest wait.
@@ -341,7 +368,7 @@ test("Settings > Mobile to a paired phone: list, detail, reply, quick keys, push
     const oneRow = phone.locator(`[data-phone-agent$="|${one}"]`);
     const twoRow = phone.locator(`[data-phone-agent$="|${two}"]`);
     await expect(phone.locator('[data-phone-group="needs_you"]').locator(`[data-phone-agent$="|${one}"]`)).toBeVisible({ timeout: 20_000 });
-    await expect(oneRow.locator("[data-phone-line]")).toHaveText("Question · 배포 전에 테스트를 다시 돌릴까요?");
+    await expect(oneRow.locator("[data-phone-line]")).toHaveText("배포 전에 테스트를 다시 돌릴까요?");
     await expect(phone.locator('[data-phone-group="working"]').locator(`[data-phone-agent$="|${two}"]`)).toBeVisible();
     await expect(phone.locator("[data-phone-group] h2").first()).toContainText("Needs You");
     // B21: live; two asks and joins one under Needs You without a reload.
@@ -350,11 +377,11 @@ test("Settings > Mobile to a paired phone: list, detail, reply, quick keys, push
     // B41: an idle list sends nothing; the phone hears only changes.
     const agentFrames = () => frames.filter((frame) => frame.includes('"type":"agents"')).length;
     const idleStart = agentFrames();
-    await new Promise((resolve) => setTimeout(resolve, 3_000));
+    await quietFor(page, 3_000, "an idle phone list is sent no agents frame");
     expect(agentFrames() - idleStart).toBeLessThanOrEqual(1);
     await screenshot(phone, "mobile-phone-list");
 
-    // The agent's conversation: Herdr reports one's Claude session, whose
+    // The agent's conversation: the pane reports one's Claude session, whose
     // transcript holds 70 turns with tool output and injected context among them.
     const transcript = path.join(claudeProjects(fixture), "e2e", `${SESSION}.jsonl`);
     fs.mkdirSync(path.dirname(transcript), { recursive: true });
@@ -414,8 +441,9 @@ test("Settings > Mobile to a paired phone: list, detail, reply, quick keys, push
     await expect(rows).not.toContainText("line 001");
     const scrollback = phone.locator("[data-phone-scrollback]");
     expect(await scrollback.evaluate((element) => element.scrollHeight - element.scrollTop - element.clientHeight)).toBeLessThan(48);
-    // B24: a row as wide as the desktop pane wraps at the phone's width; nothing scrolls sideways.
-    await expect(rows).toContainText("wide www");
+    // B24: a line wider than the desktop pane comes as one line, which wraps at the phone's width
+    // rather than at the pane's; nothing scrolls sideways.
+    await expect(rows.locator("span", { hasText: `wide ${"w".repeat(300)}` }).first()).toBeVisible();
     expect(await scrollback.evaluate((element) => element.scrollWidth - element.clientWidth)).toBeLessThanOrEqual(0);
     expect(await phone.evaluate(() => document.documentElement.scrollWidth - window.innerWidth)).toBeLessThanOrEqual(0);
     // B25: pulling to the top brings the older rows, up to what the pane holds.
@@ -461,64 +489,56 @@ test("Settings > Mobile to a paired phone: list, detail, reply, quick keys, push
     });
     await screenshot(phone, "mobile-phone-detail");
 
-    // B30: with push on, the list offers Turn on notifications; allowing it registers the subscription.
+    // The phone owns receiving: turning its switch on registers the subscription.
     await choosePush(page, "always");
-    await phone.locator('[data-phone-back="true"]').tap();
-    const enable = phone.locator('[data-phone-notifications="enable"]');
+    await phone.locator('[data-phone-back="true"]').tap(); await phone.locator('[data-phone-tab="settings"]').tap();
+    const enable = phone.getByRole("switch", { name: "Receive notifications", exact: true });
     await expect(enable).toBeVisible({ timeout: 20_000 });
     await enable.tap();
-    await expect(enable).toHaveCount(0, { timeout: 20_000 });
+    await expect(enable).toHaveAttribute("aria-checked", "true", { timeout: 20_000 }); await phone.locator('[data-phone-tab="agents"]').tap();
     await expect(page.locator("[data-mobile-phone-line]")).toHaveText("Just now · Receiving notifications");
 
-    // B31, B33 (always): two finishes; one notification for it, with no terminal content.
-    await finish(two);
+    // B31, B33 (always): two finishes, then asks; a finish is never pushed (2026-11-11), so the one push is the question.
+    await finish(two); await ask(fixture, daemon!, two, "배포할까요?");
     await expect.poll(() => push.received.length, { timeout: 20_000 }).toBe(1);
-    const done = push.received[0]!;
-    expect(done.payload.title).toBe("Agent two");
-    expect(done.payload.state).toBe("done");
-    expect(done.payload.tag).toBe(`${done.payload.device_id}|${two}`);
-    expect(done.payload.pane_id).toBe(two);
-    expect(JSON.stringify(done.payload)).not.toContain("fixture %");
-    expect(done.authorization).toMatch(/^vapid t=[\w-]+\.[\w-]+\.[\w-]+, k=[\w-]+$/);
+    const asked = push.received[0]!;
+    expect(asked.payload.title).toBe("Agent two");
+    expect(asked.payload.state).toBe("needs_you");
+    expect(asked.payload.tag).toBe(`${asked.payload.device_id}|${two}`);
+    expect(asked.payload.pane_id).toBe(two);
+    expect(JSON.stringify(asked.payload)).not.toContain("fixture %");
+    expect(asked.authorization).toMatch(/^vapid t=[\w-]+\.[\w-]+\.[\w-]+, k=[\w-]+$/);
 
-    // B33: while the phone views one, one's request sends nothing.
+    // B33: while the phone views one, its ask is read as under the desktop's focus (listed read, never announced).
     await oneRow.tap();
     await expect(detail).toBeVisible();
     await work(daemon!, one);
     await expect.poll(() => groupOf(frames, one)).toBe("working");
     await ask(fixture, daemon!, one, "정말 배포할까요?");
     await expect.poll(() => groupOf(frames, one)).toBe("needs_you");
-    await noPushFor(push.received, 1);
-    await expect.poll(() => coreLog(daemon as Daemon)).toContain('"reason":"viewing"');
+    // The ask is listed read, so the daemon raises no notice and logs no decision: the read row is the state to wait for.
+    await expect.poll(() => readOf(frames, one)).toBe(true);
+    noPushBeyond(push.received, 1);
     await phone.locator('[data-phone-back="true"]').tap();
 
-    // B33 (off): nothing.
-    await choosePush(page, "off");
-    await work(daemon!, two);
-    await expect.poll(() => groupOf(frames, two)).toBe("working");
-    await ask(fixture, daemon!, two, "끔에서는 조용히");
-    await expect.poll(() => groupOf(frames, two)).toBe("needs_you");
-    await noPushFor(push.received, 1);
-
-    // B33 (only while the app is closed): nothing while the desktop is connected. The
-    // desktop then reads two, which clears its notification (B34).
+    // A browser tab reports no system activity and cannot replace desktop notices,
+    // so the pause switch still sends here. Reading two clears its notice (B34).
     await choosePush(page, "app_closed");
     await work(daemon!, two);
     await expect.poll(() => groupOf(frames, two)).toBe("working");
-    await finish(two);
-    await expect.poll(() => groupOf(frames, two)).toBe("done");
-    await noPushFor(push.received, 1);
-    await expect.poll(() => coreLog(daemon as Daemon)).toContain('"mode":"app_closed","renderers":1');
+    await ask(fixture, daemon!, two, "브라우저가 열려 있을 때");
+    await expect.poll(() => push.received.length, { timeout: 20_000 }).toBe(2); // wait-ok: the browser-open question reaches the phone push endpoint
+    await expect.poll(() => groupOf(frames, two)).toBe("needs_you");
     await page.keyboard.press("Escape");
     await expect(page.locator('[data-mobile-tab="true"]')).toHaveCount(0);
     await page.locator(`nav[data-sidebar] [data-project] [data-agent-open="${two}"]`).click();
-    await expect(phone.locator('[data-phone-group="seen"]').locator(`[data-phone-agent$="|${two}"]`)).toBeVisible({ timeout: 20_000 });
+    await expect.poll(() => readOf(frames, two), { timeout: 20_000 }).toBe(true); // a read ask stays in Needs You (B11)
     await page.close();
     await work(daemon!, one);
     await expect.poll(() => groupOf(frames, one)).toBe("working");
     await ask(fixture, daemon!, one, "데스크톱이 닫혔을 때");
-    await expect.poll(() => push.received.length, { timeout: 20_000 }).toBe(2);
-    const closed = push.received[1]!;
+    await expect.poll(() => push.received.length, { timeout: 20_000 }).toBe(3);
+    const closed = push.received[2]!;
     expect(closed.payload.title).toBe("Agent one");
     expect(closed.payload.state).toBe("needs_you");
     expect(closed.payload.clear).toContain(`${closed.payload.device_id}|${two}`);
@@ -566,6 +586,47 @@ test("Settings > Mobile to a paired phone: list, detail, reply, quick keys, push
   }
 });
 
+// The direct phone uses the real daemon and /m/ worker; components cannot observe worker lookup and cleanup.
+test("a directly connected phone retries failed notification cleanup and can receive again", async ({ browser, page }) => {
+  const fixture = await startFixture({ agents: false });
+  const tailscale = new FakeTailscale(); tailscale.install(); tailscale.ready();
+  const push = await pushService();
+  let daemon: Daemon | null = null;
+  let context: BrowserContext | null = null;
+  try {
+    daemon = await startHided(fixture, "mobile-receiving", undefined, { HIDE_TAILSCALE_BIN: tailscale.bin });
+    await openMobileSettings(page, daemon);
+    await page.locator('[data-mobile-switch="true"]').click();
+    context = await phoneContext(browser, push);
+    const phone = await context.newPage();
+    await phone.goto(await shownPairingUrl(page, daemon));
+    await phone.locator('[data-phone-pair="true"]').tap();
+    await expect(phone.locator('[data-phone-connected="true"]')).toBeVisible();
+    await phone.locator('[data-phone-tab="settings"]').tap();
+    const receive = phone.getByRole("switch", { name: "Receive notifications", exact: true });
+    await receive.tap();
+    await expect(receive).toHaveAttribute("aria-checked", "true");
+    await phone.evaluate(() => {
+      const get = navigator.serviceWorker.getRegistration.bind(navigator.serviceWorker);
+      let fail = true;
+      navigator.serviceWorker.getRegistration = async (scope) => {
+        if (fail) { fail = false; throw new Error("fixture_worker_lookup"); }
+        return get(scope);
+      };
+    });
+    await receive.tap();
+    await expect(phone.locator('[data-phone-notifications="failed"] [role="alert"]')).toContainText("Try again");
+    await receive.tap();
+    await expect(phone.locator('[data-phone-notifications="off"]')).toBeVisible();
+    await expect.poll(() => phone.evaluate(() => (window as unknown as { __push: { unsubscribed: number } }).__push.unsubscribed)).toBe(1);
+    await receive.tap();
+    await expect(receive).toHaveAttribute("aria-checked", "true");
+    await expect.poll(() => phone.evaluate(() => (window as unknown as { __push: { subscribed: number } }).__push.subscribed)).toBe(2);
+  } finally {
+    await context?.close(); push.close(); daemon?.stop(); fixture.stop(); tailscale.remove();
+  }
+});
+
 test("the phone caches group and row status words in the desktop language", async ({ browser, page }) => {
   await page.setViewportSize({ width: 1440, height: 900 });
   const fixture = await startFixture({ agents: false });
@@ -610,24 +671,29 @@ test("the phone caches group and row status words in the desktop language", asyn
         status_working: "작업 중",
         status_done: "끝남",
         status_idle: "쉬는 중",
+        status_look: "볼 것",
         status_unknown: "상태 모름",
         status_waiting: "대기",
         status_stopped: "멈춤",
         status_unfinished: "일 남음",
+        subject_human_turn: "사람 차례",
+        subject_human_turn_auth: "인증",
+        subject_human_turn_install: "설치 확인",
+        subject_human_turn_permission: "허용",
         subject_input_unconfirmed_brief: "브리프 확인 안 됨",
         subject_input_unconfirmed_letter: "편지 확인 안 됨",
         subject_input_unconfirmed_brief_held: "브리프 못 받음",
         subject_input_unconfirmed_letter_held: "편지 못 받음",
         subject_mission_attention: "확인 필요",
-        subject_mission_attention_close_refused: "미션을 닫지 못함",
+        subject_mission_attention_close_refused: "작업은 끝남 · 확인 기록 빠짐",
         subject_mission_attention_conductor_failed: "Conductor가 실패로 기록함",
-        subject_mission_attention_merged_unproven: "PR 머지됨, 기준 기록이 없거나 실패",
+        subject_mission_attention_merged_unproven: "PR 머지됨, 통과 안 된 완료 기준이 있음",
         subject_mission_attention_pr_closed: "PR 머지 없이 닫힘",
         subject_mission_attention_unplanned_pr: "계획에 없던 PR",
         subject_mission_attention_wake_refused: "PR 일로 일꾼을 깨우지 못함",
-        subject_mission_attention_worker_ended: "일꾼 끝남, 일 남음",
+        subject_mission_attention_worker_ended: "일꾼이 일을 남기고 끝남",
         subject_mission_decision: "판단",
-        subject_plan_review: "계획 검토 · {{count}}단계",
+        subject_plan_review: "작업 단계 검토 · {{count}}단계",
       });
     await page.locator("[data-interface-language]").click();
     await page.locator('[data-language-option="system"]').click();
@@ -708,7 +774,7 @@ test("an empty list, the unreachable line, the phone limit and the seven-day rev
 
     // B29: the push mode survived the restart.
     await openMobileSettings(page, daemon);
-    await expectPush(page, "Only when the app is closed");
+    await expectPush(page, true);
 
     // B14: three more phones on record make four; a fifth is refused with the reason.
     const record = (id: string, lastSeen: number) => ({
@@ -758,7 +824,7 @@ test("an empty list, the unreachable line, the phone limit and the seven-day rev
   }
 });
 
-test("the phone's start sheet starts an agent in a checkout and in Home, and keeps its text while the phone is away", async ({ browser, page }) => {
+test("the phone's start sheet starts an agent in a checkout, lists no Home, and keeps its text while the phone is away", async ({ browser, page }) => {
   await page.setViewportSize({ width: 1440, height: 900 });
   const fixture = await startFixture({ agents: false });
   const tailscale = new FakeTailscale();
@@ -777,13 +843,15 @@ test("the phone's start sheet starts an agent in a checkout and in Home, and kee
     await phone.locator('[data-phone-pair="true"]').tap();
     await expect(phone.locator('[data-phone-connected="true"]')).toBeVisible({ timeout: 20_000 });
 
-    // B42: + opens the sheet; the target is This Mac's Home, the kind and model the remembered choice.
+    // B42: + opens the sheet; the target is a checkout on This Mac (no Home is listed), the kind and model the remembered choice.
     await phone.locator('[data-phone-start="true"]').tap();
     const sheet = phone.locator('[data-phone-start-sheet="true"]');
     await expect(sheet).toBeVisible();
     const target = sheet.locator('[data-phone-start-target="true"]');
-    await expect(target).toHaveValue(`home:${daemon.node}`, { timeout: 20_000 });
-    await expect(target.locator("option:checked")).toHaveText(`${THIS_MACHINE} · Home`);
+    await expect(target).not.toHaveValue("", { timeout: 20_000 });
+    await expect(target.locator("option:checked")).toContainText(`${THIS_MACHINE} · `);
+    await expect(target.locator("option", { hasText: "Home" })).toHaveCount(0);
+    await expect(target.locator('option[value^="home:"]')).toHaveCount(0);
     await expect(sheet.locator('[data-phone-start-kind="true"]')).toHaveValue("claude");
     await expect(sheet.locator('[data-phone-start-submit="true"]')).toBeDisabled();
     // B46: the Korean text and a long checkout name stay inside the phone's width.
@@ -805,19 +873,6 @@ test("the phone's start sheet starts an agent in a checkout and in Home, and kee
     await expect(detail).toBeVisible({ timeout: 45_000 });
     const pane = ((await detail.getAttribute("data-phone-detail")) ?? "").split("|").slice(1).join("|");
     expect(pane).not.toBe("");
-    // The model the agent was started with is the engine's to say; nothing Hide publishes carries the argument list.
-    if (fixture.engine === "herdr") {
-      const server = fixture as typeof fixture & { bin: string; env: NodeJS.ProcessEnv };
-      await expect
-        .poll(
-          () => {
-            const info = spawnSync(server.bin, ["pane", "process-info", "--pane", pane], { env: server.env, encoding: "utf8", timeout: 10_000 }).stdout;
-            return info.includes("--model") && info.includes("opus");
-          },
-          { timeout: 30_000 },
-        )
-        .toBe(true);
-    }
     await screenshot(phone, "mobile-phone-start-detail");
 
     // B44: the text was spent by the start; the remembered model is now the sheet's; offline keeps a new draft.
@@ -825,21 +880,263 @@ test("the phone's start sheet starts an agent in a checkout and in Home, and kee
     await phone.locator('[data-phone-start="true"]').tap();
     await expect(sheet.locator('[data-phone-start-text="true"]')).toHaveValue("");
     await expect(sheet.locator('[data-phone-start-model="true"]')).toHaveValue("opus", { timeout: 20_000 });
-    await sheet.locator('[data-phone-start-text="true"]').fill("Home에서 시작");
+    await sheet.locator('[data-phone-start-text="true"]').fill("오프라인 초안");
     await phoneContextA.setOffline(true);
     await expect(sheet.locator('[data-phone-start-unreachable="true"]')).toBeVisible({ timeout: 30_000 });
     await expect(sheet.locator('[data-phone-start-submit="true"]')).toBeDisabled();
-    await expect(sheet.locator('[data-phone-start-text="true"]')).toHaveValue("Home에서 시작");
+    await expect(sheet.locator('[data-phone-start-text="true"]')).toHaveValue("오프라인 초안");
     await screenshot(phone, "mobile-phone-start-offline");
     await phoneContextA.setOffline(false);
     await expect(phone.locator('[data-phone-connected="true"]')).toBeVisible({ timeout: 30_000 });
 
-    // B42, B43: This Mac's Home is the default target; the start lands on its agent.
-    await expect(target).toHaveValue(`home:${daemon.node}`);
+    // B42, B43: the first checkout is the default target again; the start lands on its agent.
+    await expect(target).not.toHaveValue("");
     await sheet.locator('[data-phone-start-submit="true"]').tap();
     await expect(detail).toBeVisible({ timeout: 45_000 });
     await expect(detail).not.toHaveAttribute("data-phone-detail", new RegExp(`\\|${pane}$`));
     await expect(sheet).toHaveCount(0);
+  } finally {
+    for (const context of contexts) await context.close();
+    daemon?.stop();
+    fixture.stop();
+    tailscale.remove();
+  }
+});
+
+/** A plan whose steps end in each kind of bottom line: a change by pull request whose merge the plan gives the operator, an outside pull request and branch, and research. */
+const LINE_PLAN = {
+  scope: "merge",
+  nodes: [
+    { key: "schema", title: "결제 DB · 환불 상태 열", kind: "change", delivery: "pr", operator_merge: "DB 변경은 직접 확인", criteria: ["마이그레이션이 돈다"] },
+    { key: "outside", title: "바깥 PR", kind: "external", external: { pr: 34 } },
+    { key: "lib", title: "바깥 브랜치", kind: "external", external: { branch: "feat/lib" } },
+    { key: "cause", title: "원인 조사", kind: "research", criteria: ["원인을 한 줄로 적는다"] },
+  ],
+};
+
+// PRD mission-destination D-51-D-54, B55-B57, B59: the core's own frame, through a phone paired with it, ends each step that
+// changes code in the desktop's branch line without the branch name, to the branch the mission's results go to (the
+// checkout's `main`), with the newest pull request and its count, lit by GitHub's answer as the PR list lights it, and the
+// plan's merge a person before the destination; research ends in its kind, the head names the branch, and nothing spills
+// past a card at the phone's width. A unit test cannot see that the core's frame carries what the card reads.
+test("the phone's mission page ends each step in the desktop's line to the mission's destination from the core's frame", async ({ browser, page }) => {
+  await page.setViewportSize({ width: 1440, height: 900 });
+  const fixture = await startFixture({ family: true });
+  const tailscale = new FakeTailscale();
+  tailscale.install();
+  tailscale.ready();
+  let daemon: Daemon | null = null;
+  const contexts: BrowserContext[] = [];
+  try {
+    const repo = path.join(fixture.root, "fixture");
+    fs.mkdirSync(repo, { recursive: true });
+    initGithubRepository(repo);
+    const gh = fakeGh(fixture.root);
+    daemon = await startHided(fixture, "mobile-mission-lines", undefined, { HIDE_TAILSCALE_BIN: tailscale.bin, PATH: `${gh.bin}${path.delimiter}${fixture.fixturePath}` });
+    const live = daemon;
+    const checkout = fs.realpathSync(repo);
+    const origin = path.join(fixture.root, "origin.git");
+    git(fixture.root, ["init", "--bare", origin]);
+    git(checkout, ["remote", "add", "origin", origin]);
+    git(checkout, ["push", "-u", "origin", "main"]);
+    // origin/HEAD names the default branch the catalog reads, which an outside branch goes to.
+    git(checkout, ["remote", "set-head", "origin", "main"]);
+    // The core reads the project's catalog for a client that shows it.
+    await page.goto(`${live.origin}/#token=${live.token}`);
+    await enterWorkspace(page, "fixture");
+    const conductor = fixture.runAs(fixture.panes[0]);
+    await withControl(live, (control) => control.until((rest) => rest.git_worktrees_loading === false || undefined, "the project catalog read"));
+    for (const args of [["create", "--title", "결제 테이블 정리"], ["plan", "--json", JSON.stringify(LINE_PLAN)], ["start"], ["node", "schema", "--status", "working", "--pr", "32"], ["node", "schema", "--pr", "31"]]) {
+      const ran = await conductor(["mission", ...args]);
+      expect(JSON.parse(ran.out.trim().split("\n").at(-1) ?? "null")?.ok, `${args[0]}: ${ran.out}`).toBe(true);
+    }
+    await withControl(live, async (control) => {
+      const at = await control.until((rest) => checkoutAt(rest, checkout), "the fixture checkout");
+      control.send("github_request", { workspace_id: at.workspace, refresh: true });
+    });
+
+    await openMobileSettings(page, live);
+    await page.locator('[data-mobile-switch="true"]').click();
+    const phoneContextA = await phoneContext(browser);
+    contexts.push(phoneContextA);
+    const phone = await phoneContextA.newPage();
+    await phone.goto(await shownPairingUrl(page, live));
+    await phone.locator('[data-phone-pair="true"]').tap();
+    await expect(phone.locator('[data-phone-connected="true"]')).toBeVisible({ timeout: 20_000 }); // wait-ok: the phone's pairing reaches connected
+    await phone.locator('[data-phone-tab="missions"]').tap();
+    await phone.locator("[data-phone-mission]").first().tap();
+
+    await expect(phone.locator("[data-mission-destination]")).toHaveAttribute("data-mission-destination", "main");
+    const card = (key: string) => phone.locator(`[data-mission-node="${key}"]`);
+    // Pull request #31, ready as GitHub answered, after #32: the PR list's mergeable mark, the newest number and the other's count, to `main`, the operator's merge ahead.
+    const line = (key: string) => card(key).locator("[data-node-line]");
+    await expect(line("schema")).toHaveAttribute("data-line-mark", "mergeable", { timeout: 30_000 }); // wait-ok: GitHub's answer for #31 reaches the phone's frame
+    await expect(line("schema")).toHaveText("#31 +1→main");
+    await expect(line("schema")).toHaveAttribute("data-line-person", "ahead");
+    await expect(card("schema").locator("[data-node-merge-turn]")).toHaveCount(0);
+    await expect(card("schema")).toHaveAttribute("aria-label", /Where it goes: #31 \+1 → main · Mergeable · You merge it/);
+    // An outside pull request and branch name what they watch and end where it goes; research ends in its kind.
+    await expect(line("outside")).toHaveText("↗#34→main", { timeout: 30_000 }); // wait-ok: the outside pull request's base reaches the phone's frame
+    await expect(line("lib")).toHaveText("↗ feat/lib→main");
+    await expect(line("cause")).toHaveAttribute("data-node-line", "result");
+    await expect(line("cause")).toHaveText("Research");
+    const spills = await phone.locator("[data-mission-node]").evaluateAll((cards) => cards.flatMap((one) => {
+      const right = one.getBoundingClientRect().right + 1;
+      const out = one.scrollWidth > one.clientWidth + 1 || [...one.querySelectorAll("[data-node-foot] *")].some((part) => part.getBoundingClientRect().right > right);
+      return out ? [one.getAttribute("data-mission-node")] : [];
+    }));
+    expect(spills).toEqual([]);
+    await screenshot(phone, "mobile-phone-mission-lines");
+  } finally {
+    for (const context of contexts) await context.close();
+    daemon?.stop();
+    fixture.stop();
+    tailscale.remove();
+  }
+});
+
+test("the phone's automations tab lists, runs, pauses and turns on again, keeps its list while the computer is away, and fills it again", async ({ browser, page }) => {
+  await page.setViewportSize({ width: 1440, height: 900 });
+  const fixture = await startFixture({ agents: false });
+  const tailscale = new FakeTailscale();
+  tailscale.install();
+  tailscale.ready();
+  let daemon: Daemon | null = null;
+  const contexts: BrowserContext[] = [];
+  try {
+    daemon = await startHided(fixture, "mobile-automations", undefined, { HIDE_TAILSCALE_BIN: tailscale.bin });
+    const live = daemon;
+    await openMobileSettings(page, live);
+    await page.locator('[data-mobile-switch="true"]').click();
+    const phoneContextA = await phoneContext(browser);
+    contexts.push(phoneContextA);
+    const phone = await phoneContextA.newPage();
+    await phone.goto(await shownPairingUrl(page, live));
+    await phone.locator('[data-phone-pair="true"]').tap();
+    await expect(phone.locator('[data-phone-connected="true"]')).toBeVisible({ timeout: 20_000 }); // wait-ok: the phone's pairing reaches connected
+
+    // B35: none yet, one line, and no button makes one.
+    await phone.locator('[data-phone-tab="automations"]').tap();
+    await expect(phone.locator('[data-phone-automations-state="empty"]')).toHaveText("No automations yetYou can create one by asking an agent");
+    await screenshot(phone, "mobile-phone-automations-empty");
+
+    // An automation made on the computer, as an agent's `hide automation add` makes it, reaches the phone's list.
+    await withControl(live, async (control) => {
+      control.send("automation_add", { name: "Sort new issues", task: "Sort the new issues by urgency.", schedule: { kind: "weekdays", time: "09:00" }, agent: { kind: "claude" } });
+    });
+    const row = phone.locator("[data-phone-automation]");
+    await expect(row).toHaveCount(1);
+    await expect(row.locator("[data-phone-automation-next]")).toContainText("Weekdays 09:00 · ");
+    const presses = row.locator("[data-phone-automation-press]");
+    await expect(presses).toHaveCount(2);
+
+    // B34: [멈춤] and [다시 켜기] reach the core and come back on the row.
+    await row.locator('[data-phone-automation-press="pause"]').tap();
+    await expect(row.locator("[data-phone-automation-paused]")).toHaveText("⏸ Paused");
+    await expect(row).toHaveAttribute("data-phone-automation-state", "paused");
+    await row.locator('[data-phone-automation-press="resume"]').tap();
+    await expect(row).toHaveAttribute("data-phone-automation-state", /on|running/);
+    await expect(row.locator('[data-phone-automation-press="pause"]')).toBeVisible();
+
+    // B34, B19: [지금 실행] from the page starts a run marked manual.
+    await row.locator('[data-slot="row-overlay-button"]').tap();
+    await expect(phone.locator("[data-phone-automation-page]")).toBeVisible();
+    await expect(phone.locator('[data-phone-automation-records-state="empty"]')).toBeVisible();
+    await phone.locator('[data-phone-automation-page] [data-phone-automation-press="run"]').tap();
+    await expect(phone.locator('[data-phone-automation-record="run"] [data-phone-automation-tag="manual"]')).toHaveCount(1, { timeout: 20_000 }); // wait-ok: the core's run reaches the phone's frame
+    await expect(phone.locator('[data-phone-automation-notice]')).toHaveCount(0);
+    await screenshot(phone, "mobile-phone-automation-page");
+    await phone.locator('[data-phone-back="automations"]').tap();
+
+    // B35: the computer goes away; the list stays dimmed under the other tabs' line with its buttons off, and fills again on reconnect.
+    daemon = await live.restart(async () => {
+      await expect(phone.locator('[data-phone-unreachable="true"]')).toBeVisible({ timeout: 20_000 }); // wait-ok: the phone notices the stopped hided by its lost socket
+      await expect(phone.locator('[data-phone-automations="true"] [aria-busy="true"] [data-phone-automation]')).toHaveCount(1);
+      for (const button of await phone.locator("[data-phone-automation-press]").all()) await expect(button).toBeDisabled();
+      await screenshot(phone, "mobile-phone-automations-unreachable");
+    });
+    // The tab carries no header of its own; the line leaving is the phone connected again.
+    await expect(phone.locator('[data-phone-unreachable="true"]')).toHaveCount(0, { timeout: 30_000 }); // wait-ok: the phone reconnects to the restarted hided
+    await expect(phone.locator("[data-phone-automation]")).toHaveCount(1);
+    await expect(phone.locator('[data-phone-automations="true"] [aria-busy="true"]')).toHaveCount(0);
+  } finally {
+    for (const context of contexts) await context.close();
+    daemon?.stop();
+    fixture.stop();
+    tailscale.remove();
+  }
+});
+
+test("the phone's PR tab lists a GitHub project's pull requests, refuses a merge whose head moved, then merges once on the head it read again", async ({ browser, page }) => {
+  await page.setViewportSize({ width: 1440, height: 900 });
+  const fixture = await startFixture({ agents: false });
+  const tailscale = new FakeTailscale();
+  tailscale.install();
+  tailscale.ready();
+  let daemon: Daemon | null = null;
+  const contexts: BrowserContext[] = [];
+  try {
+    // A GitHub project whose pull requests a fake `gh` answers and records every write of: nothing here reaches GitHub.
+    const repo = path.join(fixture.root, "repo");
+    fs.mkdirSync(repo);
+    initGithubRepository(repo);
+    fs.writeFileSync(path.join(repo, "README.md"), "# repo\n");
+    git(repo, ["add", "README.md"]);
+    git(repo, ["commit", "-m", "initial"]);
+    const gh = fakeGh(fixture.root);
+    daemon = await startHided(fixture, "mobile-prs", undefined, { HIDE_TAILSCALE_BIN: tailscale.bin, PATH: `${gh.bin}${path.delimiter}${fixture.fixturePath}` });
+    await withControl(daemon, async (control) => {
+      const project = await openProject(control, repo, "repo");
+      control.send("github_request", { workspace_id: project.workspace, refresh: true });
+    });
+    await openMobileSettings(page, daemon);
+    await page.locator('[data-mobile-switch="true"]').click();
+    const phoneContextA = await phoneContext(browser);
+    contexts.push(phoneContextA);
+    const phone = await phoneContextA.newPage();
+    await phone.goto(await shownPairingUrl(page, daemon));
+    await phone.locator('[data-phone-pair="true"]').tap();
+    await expect(phone.locator('[data-phone-connected="true"]')).toBeVisible({ timeout: 20_000 });
+
+    // B37: the open pull requests in the four groups, the merged one left out.
+    await phone.locator('[data-phone-tab="prs"]').tap();
+    const numbers = async (group: string) => (await phone.locator(`[data-phone-pr-group="${group}"] [data-phone-pr]`).evaluateAll((rows) => rows.map((row) => (row.getAttribute("data-phone-pr") ?? "").split("#")[1]))).sort();
+    await expect.poll(() => numbers("ready"), { timeout: 30_000 }).toEqual(["31"]);
+    expect(await numbers("failed")).toEqual(["32", "34"]);
+    expect(await numbers("review")).toEqual(["33", "35", "36"]);
+    await expect(phone.locator('[data-phone-pr$="#37"]')).toHaveCount(0);
+    await screenshot(phone, "mobile-phone-prs");
+
+    // B39-B41: the page reads the card, Merge asks once, and nothing is written until the confirmation is pressed.
+    await phone.locator('[data-phone-pr$="#31"]').tap();
+    await expect(phone.locator("[data-phone-pr-file]")).toHaveCount(2, { timeout: 30_000 });
+    await expect(phone.locator("[data-phone-pr-merge]")).toBeEnabled();
+    await phone.locator("[data-phone-pr-merge]").tap();
+    await expect(phone.locator("[data-phone-pr-confirm]")).toBeVisible();
+    await screenshot(phone, "mobile-phone-pr-confirm");
+    expect(writes(gh.state)).toEqual([]);
+
+    // B42, B43: a head that moved after the card was read is refused by GitHub, nothing merges, and the page says so in the desktop's words.
+    const shown = head(gh.state, 31);
+    const moved = `${shown.slice(0, 39)}e`;
+    moveHead(gh.state, 31, moved);
+    await phone.locator("[data-phone-pr-confirm-yes]").tap();
+    await expect(phone.locator('[data-phone-pr-write="failed"]')).toBeVisible({ timeout: 30_000 });
+    expect(writes(gh.state)).toHaveLength(1);
+    expect(writes(gh.state)[0]).toEqual(expect.arrayContaining(["pr", "merge", "31", "--match-head-commit", shown]));
+    await expect(phone.locator("[data-phone-pr-merge]")).toBeDisabled();
+    await screenshot(phone, "mobile-phone-pr-refused");
+
+    // Read again, the page shows the new head and one more confirmation merges on it: two writes in all, one per confirmed intent.
+    await phone.locator("[data-phone-pr-look-again]").tap();
+    // Look again reads the list and the card; the core takes a merge only once the list shows the head the card did.
+    await expect(phone.locator("[data-phone-pr-page]")).toContainText("(moved)", { timeout: 30_000 });
+    await expect(phone.locator("[data-phone-pr-page]")).toHaveAttribute("data-phone-pr-head", moved, { timeout: 30_000 });
+    await expect(phone.locator("[data-phone-pr-merge]")).toBeEnabled();
+    await phone.locator("[data-phone-pr-merge]").tap();
+    await phone.locator("[data-phone-pr-confirm-yes]").tap();
+    await expect.poll(() => writes(gh.state).length, { timeout: 30_000 }).toBe(2);
+    expect(writes(gh.state)[1]).toEqual(expect.arrayContaining(["pr", "merge", "31", "--match-head-commit", moved]));
   } finally {
     for (const context of contexts) await context.close();
     daemon?.stop();

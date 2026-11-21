@@ -1,0 +1,77 @@
+/* The docs wear the landing page's Owl Field palette: the variables below are the landing's `:root`
+   values from public/styles.css (dark by default, its `prefers-color-scheme: light` day field for Starlight's
+   light theme), mapped onto Starlight's scale. Change a color there first. */
+@font-face {
+  font-family: "Bricolage Grotesque";
+  src: url("/assets/fonts/BricolageGrotesque-Variable.woff2") format("woff2");
+  font-weight: 200 800;
+  font-stretch: 75% 100%;
+  font-display: swap;
+}
+@font-face {
+  font-family: "Geist Mono";
+  src: url("/assets/fonts/GeistMono-Variable.woff2") format("woff2");
+  font-weight: 100 900;
+  font-display: swap;
+}
+
+:root {
+  --sl-font: "Bricolage Grotesque", ui-sans-serif, -apple-system, BlinkMacSystemFont, "Segoe UI", "Apple SD Gothic Neo", "Malgun Gothic", sans-serif;
+  --sl-font-mono: "Geist Mono", ui-monospace, "SF Mono", Menlo, Consolas, monospace;
+  --sl-content-width: 46rem;
+  --sl-text-body: 1.0625rem;
+
+  /* Dark: the landing's night field, lime as the one accent. */
+  --sl-color-white: #f1f6f5;      /* --ink */
+  --sl-color-gray-1: #dbe6e5;
+  --sl-color-gray-2: #b7c9cc;     /* --second */
+  --sl-color-gray-3: #9cb1b3;     /* --muted */
+  --sl-color-gray-4: #5f7679;     /* --faint */
+  --sl-color-gray-5: #24383c;     /* --line */
+  --sl-color-gray-6: #15272a;     /* --surface */
+  --sl-color-black: #0d191b;      /* --bg */
+  --sl-color-bg-nav: #112023;     /* --bg-raised */
+  --sl-color-bg-sidebar: #0d191b;
+  --sl-color-hairline: #24383c;
+  --sl-color-hairline-light: #24383c;
+  --sl-color-hairline-shade: #112023;
+  --sl-color-accent-low: #1c2f12;
+  --sl-color-accent: #6bb82a;
+  --sl-color-accent-high: #b9ff66; /* --lime */
+}
+
+:root[data-theme="light"] {
+  /* Light: the landing's day field. */
+  --sl-color-white: #101112;      /* --ink */
+  --sl-color-gray-1: #20262a;
+  --sl-color-gray-2: #535b5f;     /* --muted */
+  --sl-color-gray-3: #6b7377;
+  --sl-color-gray-4: #8a9397;     /* --faint */
+  --sl-color-gray-5: #c9cfd2;     /* --line-strong */
+  --sl-color-gray-6: #eceef0;     /* --bg-raised */
+  --sl-color-gray-7: #f6f7f8;     /* --surface-2 */
+  --sl-color-black: #f4f4f6;      /* --bg */
+  --sl-color-bg-nav: #ffffff;
+  --sl-color-bg-sidebar: #f4f4f6;
+  --sl-color-hairline: #dde1e3;   /* --line */
+  --sl-color-hairline-light: #dde1e3;
+  --sl-color-hairline-shade: #eceef0;
+  --sl-color-accent-low: #dcefc4;
+  --sl-color-accent: #4f8a0b;
+  --sl-color-accent-high: #3e6b06; /* --accent-text */
+}
+
+h1, h2, h3, h4 { font-weight: 600; letter-spacing: -0.01em; }
+:root[data-theme="dark"] .sl-link-button.primary,
+:root:not([data-theme="light"]) .sl-link-button.primary { color: #101112; }
+
+/* A live part from the app, framed. */
+iframe[src*="/embed/"] {
+  width: 100%;
+  min-height: 8rem;
+  border: 1px solid var(--sl-color-hairline);
+  border-radius: 14px;
+  background: transparent;
+  color-scheme: normal;
+}
+.used-in { padding-left: 1.2rem; }

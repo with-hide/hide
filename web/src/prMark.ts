@@ -102,7 +102,7 @@ export function pullsStaleness(pulls: readonly SessionPull[]): PrStaleness | und
   return { stale: true, lastRead: stale.some((pull) => pull.last_read_at_unix_ms === null) ? null : Math.min(...stale.map((pull) => pull.last_read_at_unix_ms!)) };
 }
 
-/** A closed pull request is drawn dimmed in a session's list: it stays, but asks nothing (docs/status-model.md, One list per session). */
+/** A closed pull request is drawn dimmed in a session's list: it stays, but asks nothing (with-hide/hide-private docs/task-identity.md, One list per session). */
 export const CLOSED_DIM = "opacity-(--opacity-dimmed)";
 
 const PR_RANK = Object.fromEntries(Object.keys(PR_LOOK).map((state, rank) => [state, rank])) as Record<PrState, number>;

@@ -21,7 +21,7 @@ TABLE = Path(os.environ.get("HIDE_AGENT_CLIS_TABLE") or PINNED)
 
 
 def table():
-    """Each CLI's row by its Herdr kind."""
+    """Each CLI's row by its agent CLI kind."""
     return json.loads(TABLE.read_text())["clis"]
 
 

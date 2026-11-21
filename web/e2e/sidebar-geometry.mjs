@@ -10,9 +10,7 @@ const ROWS = [
   ["agent", "li[data-pane]", "data-pane"],
   ["checkout", "[data-checkout-menu]", "data-checkout-menu"],
   ["project", "[data-project-menu]", "data-project-menu"],
-  ["no-agent-projects", "[data-no-agent-projects]", "data-no-agent-projects"],
-  ["inactive-checkouts", "[data-inactive-checkouts]", "data-inactive-checkouts"],
-  ["inactive-projects", "[data-inactive-projects]", "data-inactive-projects"],
+  ["other-checkouts", "[data-other-checkouts]", "data-other-checkouts"],
 ];
 
 /** What ends or fills one line of a row: names, chips, badges, times and the fold slot. */
@@ -45,7 +43,7 @@ export async function rowBoxes(page) {
       for (const row of document.querySelectorAll(`nav[data-sidebar] ${selector}`)) {
         if (row.getClientRects().length === 0) continue;
         const box = row.getBoundingClientRect();
-        const list = row.closest("[data-project-list], [data-raised-list]");
+        const list = row.closest("[data-project-list]");
         const origin = list ? list.getBoundingClientRect() : { left: 0, top: 0 };
         const left = box.x - origin.left + (list?.scrollLeft ?? 0);
         const top = box.y - origin.top + (list?.scrollTop ?? 0);
@@ -154,7 +152,7 @@ export async function rowPartProblems(page) {
  */
 export async function sidebarColumns(page) {
   return page.evaluate(() => {
-    const list = "nav[data-sidebar] :is([data-project-list], [data-raised-list])";
+    const list = "nav[data-sidebar] [data-project-list]";
     const boxes = (parts) =>
       Array.from(document.querySelectorAll(`${list} :is(${parts})`))
         .filter((part) => part.getClientRects().length > 0)
@@ -185,7 +183,7 @@ export async function sidebarOverflow(page, width) {
     if (!nav) return ["no sidebar"];
     if (value !== null) nav.style.width = value;
     const problems = [];
-    for (const list of Array.from(document.querySelectorAll("[data-project-list], [data-raised-list]"))) {
+    for (const list of Array.from(document.querySelectorAll("[data-project-list]"))) {
       if (list.scrollWidth > list.clientWidth) problems.push(`list scrolls sideways ${list.scrollWidth} > ${list.clientWidth}`);
     }
     for (const row of Array.from(document.querySelectorAll("[data-pane], [data-checkout-row] > *, [data-project] > *"))) {
@@ -218,7 +216,7 @@ export async function sidebarRowsFit(page) {
     // line drawn only in marks is measured too. One drawn transparent or
     // hidden shows nothing: a row's + and ⋯ wait at opacity 0 in its badge's
     // cell until the pointer or the keyboard comes (PRD sidebar-titlebar-refresh D-04).
-    const parts = Array.from(document.querySelectorAll("nav[data-sidebar] :is([data-project-list], [data-raised-list]) *")).filter(
+    const parts = Array.from(document.querySelectorAll("nav[data-sidebar] [data-project-list] *")).filter(
       (part) =>
         part.checkVisibility({ opacityProperty: true, visibilityProperty: true }) &&
         (part.matches("svg, [data-mark], [data-hide-mark]") || Array.from(part.childNodes).some((node) => node.nodeType === Node.TEXT_NODE && node.textContent?.trim())),
@@ -230,27 +228,31 @@ export async function sidebarRowsFit(page) {
     for (const part of parts) {
       const rect = DOMRect.fromRect(part.getBoundingClientRect());
       for (let box = part.parentElement; box && box.tagName !== "NAV"; box = box.parentElement) {
-        const edge = box.getBoundingClientRect().bottom;
-        if (rect.bottom > edge + 0.5) {
-          if (getComputedStyle(box).overflowY === "visible") problems.push(`${name(part)} spills below its ${box.tagName.toLowerCase()}`);
-          else rect.height = Math.max(0, edge - rect.top);
+        // A raised section's item is `display: contents`: it has no box to spill from, only its head and rows do.
+        if (getComputedStyle(box).display !== "contents") {
+          const edge = box.getBoundingClientRect().bottom;
+          if (rect.bottom > edge + 0.5) {
+            if (getComputedStyle(box).overflowY === "visible") problems.push(`${name(part)} spills below its ${box.tagName.toLowerCase()}`);
+            else rect.height = Math.max(0, edge - rect.top);
+          }
         }
         if (box.tagName === "LI") break;
       }
       shown.set(part, rect);
     }
     const boxes = [...shown];
-    // A section header stuck to the list's top covers the rows that scroll
-    // under it by design (D-05), so a header's parts and a row's are not an
-    // overlap. In the flow a header sits above its rows, so a row meets one
-    // only while it is stuck; its `data-stuck` mark follows a scroll event a
-    // frame later, which a measurement straight after a scroll would miss.
-    // A header's own text spilling is the spill check's above.
+    // A raised section's head stuck to the list's top covers the rows that scroll
+    // under it by design (D-05), so a head's parts and a row's are not an
+    // overlap. In the flow a head sits above its rows, so a row meets one only
+    // while it is stuck. A head's own text spilling is the spill check's above.
     const inHeader = (part) => part.closest("[data-section-sticky]") !== null;
+    const inActions = (part) => part.closest("[data-row-actions]") !== null;
     for (const [i, [a, ra]] of boxes.entries()) {
       for (const [b, rb] of boxes.slice(i + 1)) {
         if (a.contains(b) || b.contains(a)) continue;
         if (inHeader(a) !== inHeader(b)) continue;
+        // A project row's buttons stand over the end of its name by design; the name fades under them.
+        if (inActions(a) !== inActions(b) && (a.closest("[data-row-name]") !== null || b.closest("[data-row-name]") !== null)) continue;
         const across = Math.min(ra.right, rb.right) - Math.max(ra.left, rb.left);
         const down = Math.min(ra.bottom, rb.bottom) - Math.max(ra.top, rb.top);
         if (across > 1 && down > 1) problems.push(`${name(a)} overlaps ${name(b)}`);

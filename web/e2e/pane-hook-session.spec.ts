@@ -5,16 +5,11 @@
 // new session. The pane's program once inherited the holder's own launch
 // metadata (`HIDE_PROCESS_OWNER_FD`), which the hook helper took for its
 // own owner, so it reported nothing and the row kept its old session.
-// Herdr learns a pane's session from its own integration, not from Hide's
-// hook, so the test runs on the own engine only.
 
 import { expect, test } from "@playwright/test";
 import { agentIn, sendKeys, withControl } from "./daemon-actions";
-import { e2eEngine } from "./e2e-engine";
 import { startFixture } from "./engine-fixture";
 import { startHided, type Daemon } from "./hided-fixture";
-
-test.skip(e2eEngine() !== "own", "Herdr takes a pane's session from its own integration, not from Hide's hook");
 
 test("a SessionStart hook run inside an agent's pane names the agent's new session", async () => {
   const fixture = await startFixture();

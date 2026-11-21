@@ -1,8 +1,9 @@
 // Shell-local UI state the core does not own: which overlay is open, the
-// pending close confirmation, and the one-line notice. Everything the core
+// pending close confirmation, and the notices in the window's corner. Everything the core
 // owns (focus, tabs, layout, sidebar visibility) stays in `store.ts`.
 
 import { create } from "zustand";
+import type { ToastLevel } from "./components/ui/toast";
 import type { ProjectSettingsTarget } from "./projectSettings";
 import type { Filter as DiskFilter } from "./diskCleanup";
 import type { Relation } from "./lineage";
@@ -15,8 +16,9 @@ import type { KeyboardOwner } from "./viewFocus";
 import { DESK_LANE_CLOSED, type DeskLaneWindow } from "./deskLane";
 import type { BrowserDevice } from "./browserDevice";
 import type { DeskMention } from "./desk";
-import { NO_CALLS_SEEN, type CallsSeen, type LaneMode, type LaneSide, type LaneView } from "./workspace";
+import { NO_CALLS_SEEN, NO_DRAWN_PAGES, type CallsSeen, type DrawnPages, type LaneMode, type LaneSide, type LaneView } from "./workspace";
 import type { Tool } from "./laneTools";
+import type { AutomationExample } from "./automationDraft";
 
 export type { ViewFocusRequest } from "./viewLayout";
 
@@ -66,9 +68,63 @@ export type PendingViewsClose = {
  * `main` is one device's all-projects Overview, the screen its Home row opens
  * (PRD home-device-rail D-13): `deviceId` names the device, and without one it
  * is the device in front. `desk` is Desk's room (PRD Desk 1차 B1), which
- * the sidebar's `◆ Desk` row opens.
+ * the sidebar's `◆ Desk` row opens. `missions` is one device's mission
+ * screen (PRD mission-screen D-01), which the sidebar's `미션` row and every
+ * mission entry open; where it stands is `MissionPlace`.
  */
-export type Screen = { kind: "main"; deviceId?: string } | { kind: "workspace" } | { kind: "desk" };
+/**
+ * The center's page. The Overview (`main`) and the mission screen show one
+ * scope: a device, the one they name or else the core's front device, or
+ * the external tool `tool` names, whose cell is then in front
+ * (`frontTool`, PRD hide-external-control D-54, B40).
+ */
+export type Screen = { kind: "main"; deviceId?: string; tool?: string } | { kind: "workspace" } | { kind: "desk" } | { kind: "missions"; tool?: string } | { kind: "automations" };
+
+/**
+ * The mission screen's page state (PRD mission-screen D-10): the device it
+ * shows, the mission its detail shows, the project chip, the pane it was
+ * opened from and the table's scroll. Page navigation, never saved; the core
+ * hears only which mission the detail shows (`mission_shown`, D-16).
+ */
+export type MissionPlace = {
+  /** The device whose missions it lists; null follows the rail's front device. A mission of another device names its own (B13). */
+  deviceId: string | null;
+  /** The mission the detail shows beside the list (B10); null shows the table (B2). */
+  selected: string | null;
+  /** The project chip (B3): a catalog project id, or null for every project. */
+  projectId: string | null;
+  /** 끝남 opened whole by `모두 ›` (B4). */
+  closedAll: boolean;
+  /** The table's scroll, so ✕ comes back to where it was (B11). */
+  scroll: number;
+};
+
+export const MISSION_ENTRY: MissionPlace = { deviceId: null, selected: null, projectId: null, closedAll: false, scroll: 0 };
+
+/**
+ * Where the automation screen stands (PRD automations D-02): the table, an
+ * automation's detail with the run its terminal shows, or the form. Page
+ * navigation, never saved; the core hears only the run whose terminal shows
+ * (`automation_run_viewing`, B15) and that a detail was opened (`automation_seen`, B11).
+ */
+export type AutomationPlace = {
+  /** The automation the detail shows; null shows the table. */
+  selected: string | null;
+  /** The run whose terminal the detail shows (B16, B17); null shows the run list alone. */
+  run: number | null;
+  /** The form, new or editing the selected automation (B4, B26); null shows the table or the detail. */
+  form: "new" | "edit" | null;
+  /**
+   * The selected automation and run are what the core just answered a make
+   * with (B8): they wait for the section that holds them instead of reading
+   * as removed, since the answer and the snapshot reach the window in no fixed order.
+   */
+  arriving: boolean;
+  /** The starting point a new automation's form opens on, picked on the empty screen (B2, B4); null opens it blank. */
+  example: AutomationExample | null;
+};
+
+export const AUTOMATION_ENTRY: AutomationPlace = { selected: null, run: null, form: null, arriving: false, example: null };
 
 /** What the operator is writing to Desk, kept while they go elsewhere: the words and the sessions and projects picked from the `@` menu. */
 export type DeskDraft = { text: string; mentions: DeskMention[] };
@@ -123,21 +179,45 @@ export function toggledFold(folds: readonly string[], fold: string): string[] {
 
 /** The Hide AI tool's two tabs (PRD hide-ai-suggestions D-01). */
 export type HideAiTab = "suggestions" | "memory";
-/** The Mission tool's two pages: the missions, or the defaults a new mission starts with (PRD mission-tool B9). */
-export type MissionToolPage = "list" | "settings";
 
 export type Overlay = "none" | "shortcuts" | "find" | "add_project" | "file_palette" | "diff_palette" | "search" | "settings" | "project_settings";
 
 /**
- * A notice the operator can act on: `refreshable` offers `refresh_status`
- * (activity unknown), and `dontSave` offers closing a view whose document
- * holds unsaved work this page cannot save, without saving it (S7 B5).
+ * A notice the operator can act on, shown in the window's corner: an `info`
+ * one leaves on its own, an `important` one stays until it is dismissed or
+ * its cause clears. `refreshable` offers `refresh_status` (activity unknown),
+ * and `dontSave` offers closing a view whose document holds unsaved work this
+ * page cannot save, without saving it (S7 B5). A notice with the same `key`,
+ * or with no key and the same text, replaces the one shown.
  */
 export type Notice = {
+  level: ToastLevel;
   text: string;
   refreshable: boolean;
   dontSave?: { workspace: ViewWorkspace; displayId: string };
+  key?: string;
 };
+
+export type ShownNotice = Notice & { id: number };
+
+/** The most notices the corner holds; past it the oldest info notice leaves first, then the oldest of any. */
+export const NOTICE_LIMIT = 3;
+
+let noticeSeq = 0;
+
+function sameNotice(a: Notice, b: Notice) {
+  return a.key !== undefined || b.key !== undefined ? a.key === b.key : a.text === b.text;
+}
+
+/** `notices` with `notice` shown newest, within `NOTICE_LIMIT`. */
+export function withNotice(notices: readonly ShownNotice[], notice: Notice): ShownNotice[] {
+  const next = [...notices.filter((shown) => !sameNotice(shown, notice)), { ...notice, id: ++noticeSeq }];
+  while (next.length > NOTICE_LIMIT) {
+    const info = next.findIndex((shown) => shown.level === "info");
+    next.splice(info >= 0 && info < next.length - 1 ? info : 0, 1);
+  }
+  return next;
+}
 
 /** A project or checkout management dialog, named by the row that opened it. */
 export type WorkspaceDialog =
@@ -204,7 +284,7 @@ export type PendingTrash = {
   inode: string | null;
   /**
    * The checkout and device the prompt was opened for. A device's front
-   * checkout follows its own Herdr focus and can move while the prompt is
+   * checkout follows its own engine focus and can move while the prompt is
    * open, so the confirmation goes to this target, not the one in front then (B34).
    */
   target: { root: string; device_id?: string };
@@ -235,6 +315,8 @@ type UiStore = {
   sidebarFocus: number;
   /** The raised Projects sections the operator unfolded past their cap; this page's alone, so a fresh list starts short. */
   raisedOpen: readonly string[];
+  /** The raised Projects sections the operator folded to their head; page-local, so a fresh list starts open. */
+  raisedFolded: readonly string[];
   /** The 태스크 list's open folds (`rest:<group>`, `cleanup:<group>`, `archived:<group>`); page-local, opened by the operator or by entering a resting task (sidebar-task-lens B5). */
   taskFoldsOpen: readonly string[];
   /** The Explorer row the operator last touched; the core owns the opened
@@ -265,21 +347,18 @@ type UiStore = {
    */
   taskTable: { filter: import("./projectStatus").TaskFilter; task: string | null };
   showTaskTable: (filter: import("./projectStatus").TaskFilter, task: string | null) => void;
-  /**
-   * The Mission tool's page, its start guide unfolded above the list and its
-   * 끝남 group opened whole (PRD mission-tool B7-B9). Page-local and never
-   * sent: the defaults it edits are the core's Settings › Mission values.
-   */
-  missionToolPage: MissionToolPage;
-  missionGuideOpen: boolean;
-  missionClosedAll: boolean;
-  setMissionToolPage: (page: MissionToolPage) => void;
-  setMissionGuideOpen: (open: boolean) => void;
-  setMissionClosedAll: (open: boolean) => void;
-  /** The column in front while a narrow pinned lane stacks its two (PRD lane-two-columns B19): a call or the rail's top buttons bring the viewing column, a tool its own. Never sent. */
+  /** Where the mission screen stands (PRD mission-screen D-10). */
+  missions: MissionPlace;
+  setMissions: (patch: Partial<MissionPlace>) => void;
+  /** Where the automation screen stands (PRD automations D-02). */
+  automations: AutomationPlace;
+  setAutomations: (patch: Partial<AutomationPlace>) => void;
+  /** The column in front while a narrow lane stacks its two (PRD lane-two-columns B19): a call or the rail's top buttons bring the viewing column, a tool its own. Never sent. */
   stackFront: LaneSide;
   /** What the page has read of the core's lane calls (`laneCalls.ts`). */
   laneCallsSeen: CallsSeen;
+  /** The page each Workspace drew last in front of its desk (`laneCalls.ts`). Never sent. */
+  drawnPages: DrawnPages;
   /**
    * The Workspace (`workspaceKey`) whose lane call put a page in front, until
    * the Workspace screen, which measures the body, widens its lane for it
@@ -311,6 +390,8 @@ type UiStore = {
   settingsTab: SettingsTab;
   /** Settings was opened to add a device: the Devices tab opens its Add dialog once and clears this. */
   addDeviceRequested: boolean;
+  /** The `hide skill` / `hide mcp` confirm 확인하기 opened, which Settings › 스킬·MCP shows until it is answered or gone. */
+  storeAskRequested: string | null;
   /** Settings was opened from the window's strip to give up a move's wait: the Devices tab opens the move dialog at its confirm once and clears this. */
   moveGiveUpRequested: boolean;
   pendingClose: PendingClose | null;
@@ -320,10 +401,12 @@ type UiStore = {
   /** The archived session whose delete waits for its confirmation (B28). */
   pendingArchiveDelete: { id: string } | null;
   cycle: Cycle | null;
-  /** A notice the operator can act on. */
-  notice: Notice | null;
+  /** The notices in the window's corner, oldest first. */
+  notices: ShownNotice[];
   /** The management dialog a sidebar menu opened, or null. */
   workspaceDialog: WorkspaceDialog | null;
+  /** The device Add a project opens on, set by the surface that opened it (the start panel's empty device); null follows the focused device. */
+  addProjectDevice: string | null;
   /** The pane whose plan chip is pinned open by its press or ⇧⌘U (PRD hide-plan B7). */
   planPane: string | null;
   /**
@@ -367,6 +450,7 @@ type UiStore = {
   setMainView: (view: MainView) => void;
   setRelation: (relation: Relation | null) => void;
   toggleRaised: (group: string) => void;
+  toggleRaisedFolded: (group: string) => void;
   toggleTaskFold: (key: string) => void;
   setExplorerSelection: (path: string | null) => void;
   requestEditorFind: (displayId: string | null) => void;
@@ -387,11 +471,17 @@ type UiStore = {
   /** The overlay ⌘K replaced when it opened, so Settings in front reads as a screen with nothing to relate to (PRD cmdk-navigation B7). */
   searchOver: Overlay;
   closeOverlay: (overlay?: Overlay) => void;
+  openStoreAsk: (id: string) => void;
+  clearStoreAsk: () => void;
   openSettings: (tab: SettingsTab) => void;
   openProjectSettings: (target: ProjectSettingsTarget, returnFocus?: HTMLElement | null, focus?: "name") => void;
   /** Opens Settings on Devices with the Add device dialog in front. */
   openAddDevice: () => void;
   clearAddDeviceRequest: () => void;
+  /** The devices whose switch to their machine's own Hide landed while this window watched, until their screen has been shown once (PRD device-connect-iroh D-48). */
+  switchedDevices: string[];
+  markSwitched: (deviceId: string) => void;
+  clearSwitched: (deviceId: string) => void;
   /** Opens Settings › Devices with the move dialog at its give-up confirm, from the window's strip. */
   openMoveGiveUp: () => void;
   clearMoveGiveUpRequest: () => void;
@@ -400,8 +490,12 @@ type UiStore = {
   setPendingViewsClose: (pending: PendingViewsClose | null) => void;
   setPendingArchiveDelete: (pending: { id: string } | null) => void;
   setCycle: (cycle: Cycle | null) => void;
-  setNotice: (notice: Notice | null) => void;
+  showNotice: (notice: Notice) => void;
+  dismissNotice: (id: number) => void;
+  /** Dismisses every notice `match` accepts, or every notice. */
+  dismissNotices: (match?: (notice: ShownNotice) => boolean) => void;
   setWorkspaceDialog: (dialog: WorkspaceDialog | null) => void;
+  setAddProjectDevice: (device: string | null) => void;
   setPlanPane: (paneId: string | null) => void;
   setWatchedTask: (id: number | null) => void;
   setFocusWhenListed: (paneId: string | null) => void;
@@ -450,6 +544,7 @@ export const useUiStore = create<UiStore>((set, get) => ({
   relation: null,
   sidebarFocus: 0,
   raisedOpen: [],
+  raisedFolded: [],
   taskFoldsOpen: [],
   explorerSelection: null,
   editorFindRequest: 0,
@@ -459,11 +554,11 @@ export const useUiStore = create<UiStore>((set, get) => ({
   laneExpanded: false,
   hideAiTab: "suggestions",
   openSuggestion: null,
-  missionToolPage: "list",
-  missionGuideOpen: false,
-  missionClosedAll: false,
+  missions: MISSION_ENTRY,
+  automations: AUTOMATION_ENTRY,
   stackFront: "view",
   laneCallsSeen: NO_CALLS_SEEN,
+  drawnPages: NO_DRAWN_PAGES,
   pageWiden: null,
   browserDevices: {},
   drawnLane: { mode: "closed", view: "none", tool: null, stacked: false },
@@ -477,14 +572,17 @@ export const useUiStore = create<UiStore>((set, get) => ({
   projectSettingsFocus: null,
   settingsTab: "general",
   addDeviceRequested: false,
+  storeAskRequested: null,
+  switchedDevices: [],
   moveGiveUpRequested: false,
   pendingClose: null,
   pendingArchive: null,
   pendingViewsClose: null,
   pendingArchiveDelete: null,
   cycle: null,
-  notice: null,
+  notices: [],
   workspaceDialog: null,
+  addProjectDevice: null,
   planPane: null,
   watchedTask: null,
   focusWhenListed: null,
@@ -503,6 +601,10 @@ export const useUiStore = create<UiStore>((set, get) => ({
   toggleRaised: (group) => {
     const open = get().raisedOpen;
     set({ raisedOpen: open.includes(group) ? open.filter((row) => row !== group) : [...open, group] });
+  },
+  toggleRaisedFolded: (group) => {
+    const folded = get().raisedFolded;
+    set({ raisedFolded: folded.includes(group) ? folded.filter((row) => row !== group) : [...folded, group] });
   },
   toggleTaskFold: (key) => {
     const open = get().taskFoldsOpen;
@@ -531,9 +633,9 @@ export const useUiStore = create<UiStore>((set, get) => ({
     for (const key of gone) delete next[key];
     set({ browserDevices: next });
   },
-  setMissionToolPage: (missionToolPage) => set({ missionToolPage }),
-  setMissionGuideOpen: (missionGuideOpen) => set({ missionGuideOpen }),
-  setMissionClosedAll: (missionClosedAll) => set({ missionClosedAll }),
+  setMissions: (patch) => set({ missions: { ...get().missions, ...patch } }),
+  // Any move but the one that names an answered automation ends its wait, and any but the one that picks an example drops it.
+  setAutomations: (patch) => set({ automations: { ...get().automations, arriving: false, example: null, ...patch } }),
   showHideAiTab: (hideAiTab, row) => set(row === undefined ? { hideAiTab } : { hideAiTab, openSuggestion: row }),
   taskTable: { filter: "all", task: null },
   showTaskTable: (filter, task) => set({ taskTable: { filter, task } }),
@@ -560,6 +662,10 @@ export const useUiStore = create<UiStore>((set, get) => ({
   openProjectSettings: (projectSettingsTarget, returnFocus, focus) => set({ overlay: "project_settings", projectSettingsTarget, projectSettingsFocus: focus ?? null, projectSettingsReturnFocus: returnFocus ?? (document.activeElement instanceof HTMLElement ? document.activeElement : null) }),
   openAddDevice: () => set({ overlay: "settings", settingsTab: "devices", addDeviceRequested: true }),
   clearAddDeviceRequest: () => set({ addDeviceRequested: false }),
+  openStoreAsk: (id) => set({ overlay: "settings", settingsTab: "skills", storeAskRequested: id }),
+  clearStoreAsk: () => set({ storeAskRequested: null }),
+  markSwitched: (deviceId) => set((state) => (state.switchedDevices.includes(deviceId) ? state : { switchedDevices: [...state.switchedDevices, deviceId] })),
+  clearSwitched: (deviceId) => set((state) => (state.switchedDevices.includes(deviceId) ? { switchedDevices: state.switchedDevices.filter((id) => id !== deviceId) } : state)),
   openMoveGiveUp: () => set({ overlay: "settings", settingsTab: "devices", moveGiveUpRequested: true }),
   clearMoveGiveUpRequest: () => set({ moveGiveUpRequested: false }),
   setPendingClose: (pendingClose) => set({ pendingClose }),
@@ -567,8 +673,11 @@ export const useUiStore = create<UiStore>((set, get) => ({
   setPendingViewsClose: (pendingViewsClose) => set({ pendingViewsClose }),
   setPendingArchiveDelete: (pendingArchiveDelete) => set({ pendingArchiveDelete }),
   setCycle: (cycle) => set({ cycle }),
-  setNotice: (notice) => set({ notice }),
+  showNotice: (notice) => set((state) => ({ notices: withNotice(state.notices, notice) })),
+  dismissNotice: (id) => set((state) => ({ notices: state.notices.filter((notice) => notice.id !== id) })),
+  dismissNotices: (match) => set((state) => ({ notices: match ? state.notices.filter((notice) => !match(notice)) : [] })),
   setWorkspaceDialog: (workspaceDialog) => set({ workspaceDialog }),
+  setAddProjectDevice: (addProjectDevice) => set({ addProjectDevice }),
   setPlanPane: (planPane) => set({ planPane }),
   setWatchedTask: (watchedTask) => set({ watchedTask }),
   setFocusWhenListed: (focusWhenListed) => set({ focusWhenListed }),

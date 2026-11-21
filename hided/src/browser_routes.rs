@@ -22,8 +22,8 @@ use axum::extract::State;
 use axum::http::{StatusCode, Uri};
 use axum::response::{IntoResponse, Response};
 use axum::routing::get;
-use herdr_core::node_access::{self, NodeLink};
-use herdr_core::workspace_control::BrowserRouteSource;
+use hide_core::node_access::{self, NodeLink};
+use hide_core::workspace_control::BrowserRouteSource;
 use hide_node::ssh::RemoteHost;
 use percent_encoding::{NON_ALPHANUMERIC, percent_decode_str, utf8_percent_encode};
 use serde::{Deserialize, Serialize};
@@ -32,10 +32,10 @@ use tokio::sync::{Mutex, Semaphore, oneshot, watch};
 
 use crate::browser_assets::{self, Asset};
 use crate::core::CoreHandle;
-use crate::link_mux::Mux;
 use crate::page_forward::{PageForward, PageLink};
 use crate::state_file::new_token;
 use hide_node::pane_proof::process_start;
+use hide_peer::mux::Mux;
 
 const MAX_ROUTES: usize = 12;
 const MAX_ROUTE_BUILDS: usize = 4;

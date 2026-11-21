@@ -8,10 +8,9 @@
 //! the screen through the [`OutputSink`], neither passing the core.
 //!
 //! The rules are the ones the core ran before this layer (D-12): an attach
-//! waits for a size, a pane another client controls is observed once, a
-//! frame at a grid the view is not drawn at is held until a full frame at
-//! the view's grid, an observer whose view changed size attaches again, a
-//! failed control attach is retried four times, and keys typed before a pane
+//! waits for a size, a frame at a grid the view is not drawn at is held
+//! until a full frame at the view's grid, a failed attach is retried four
+//! times, and keys typed before a pane
 //! can take them are held within their caps.
 //!
 //! One lock guards the service. A key, a frame and a control each take it
@@ -23,7 +22,9 @@
 //! return at once and never call back.
 
 mod command;
+pub mod copies;
 pub mod device;
+mod echo_timing;
 pub mod engine_panes;
 pub mod holder;
 mod input;
@@ -32,7 +33,7 @@ pub mod protocol;
 pub mod router;
 pub mod session;
 
-use std::collections::{HashMap, HashSet, VecDeque};
+use std::collections::{BTreeMap, HashMap, HashSet, VecDeque};
 use std::panic::{self, AssertUnwindSafe};
 use std::sync::{Arc, Condvar, Mutex, MutexGuard, Weak};
 use std::thread::{self, JoinHandle};
@@ -48,12 +49,8 @@ use self::input::{
     AttachmentHold, HeldChunk, InputFact, InputFacts, KeyRoute, PaneHold, Refusal, Refusals,
     Requests, Typed, Typist,
 };
-pub use self::protocol::Mode;
 use self::protocol::SessionEvent;
-pub use self::session::{
-    Attacher, Cleanup, LocalAttacher, OpenFailure, SessionEvents, SessionParts, SessionWriter,
-    Transport,
-};
+pub use self::session::{Attacher, Cleanup, OpenFailure, SessionEvents, SessionWriter, Transport};
 use self::session::{ChildHold, Children, Session};
 
 /// Where a node's frames go: the screen-side hub on this machine, or the
@@ -65,14 +62,19 @@ pub trait OutputSink: Send + Sync {
     /// The pane's output so far is no longer anyone's: it was released or is
     /// gone.
     fn forget(&self, pane: &str);
+    /// The text the pane's program wrote to the clipboard (OSC 52), for the
+    /// screen that looks at it to put on its own clipboard once. It is no
+    /// part of the pane's output: a sink never keeps it for a screen that
+    /// connects or draws the pane again later.
+    fn clipboard(&self, pane: &str, text: &[u8]);
+    /// The grid the pane's output that follows was drawn at, told before a
+    /// frame that starts the pane's picture and whenever it changes. Only a
+    /// sink that draws for a screen with no view of its own listens (a
+    /// guest node's tap).
+    fn grid(&self, _pane: &str, _rows: u16, _cols: u16) {}
 }
 
 pub use hide_node_link::terminal::ReportSink;
-
-/// How long an observed view's size has to hold before its observer is
-/// attached again at it: longer than the gap between a window drag's
-/// resizes.
-const OBSERVER_RESIZE_QUIET: Duration = Duration::from_millis(150);
 
 /// Panes a node tracks that were never asked to attach, each named by a
 /// screen's view or a core control. At it, those only a view named are
@@ -175,7 +177,6 @@ struct Lifecycle {
     message: Option<String>,
     generation: u64,
     attempt: u64,
-    mode: Option<Mode>,
     exit_category: Option<String>,
     retry_decision: &'static str,
 }
@@ -187,7 +188,6 @@ impl Default for Lifecycle {
             message: None,
             generation: 0,
             attempt: 0,
-            mode: None,
             exit_category: None,
             retry_decision: "automatic_initial",
         }
@@ -201,7 +201,8 @@ struct Pane {
     current_generation: Option<u64>,
     session: Option<Session>,
     pending_spawn: Option<SpawnRequest>,
-    commands: Vec<command::Receipt>,
+    /// The core's input waiting on the writer, with who typed it.
+    commands: Vec<(command::Receipt, Typist)>,
     release_after_input: Option<String>,
     /// The PTY size last settled, which an attach asks for.
     size: Option<GridSize>,
@@ -217,7 +218,8 @@ struct Pane {
     recovery: Option<Recovery>,
     need_full: bool,
     foreign_grid: Option<GridSize>,
-    observer_resized_at: Option<Instant>,
+    /// The grid the output sink was last told this pane is drawn at.
+    told_grid: Option<GridSize>,
     awaiting_size: bool,
     closing: bool,
     asleep: bool,
@@ -227,6 +229,9 @@ struct Pane {
     /// operator's keys typed meanwhile, written after the last letter's
     /// submit in the order typed (PRD engine-bundle-3-core-owns D-13).
     letter: Option<LetterHold>,
+    /// Held keys being written into the pane's program, from a submit on
+    /// (`Inner::replay`).
+    replay: Option<input::Replay>,
     first_frame_pending: bool,
     reported: Option<PaneTerminalState>,
 }
@@ -243,7 +248,6 @@ struct LetterHold {
 struct SpawnRequest {
     pane: String,
     generation: u64,
-    mode: Mode,
     /// `None` only for a pane that keeps its own size
     /// ([`Attacher::keeps_own_size`]).
     size: Option<GridSize>,
@@ -259,11 +263,62 @@ struct Attachment {
     delivering: bool,
 }
 
+/// A pane's input to the holder that runs it now (with-hide/hide-private#646):
+/// the writers of its sessions that still write, and whether any write to
+/// this holder failed, which stays until the holder changes, since what
+/// reached the holder is then not known. A writer that ended having
+/// written everything leaves no trace, so it holds no more than the
+/// writers that run and one flag.
+#[derive(Default)]
+struct HolderInput {
+    running: Vec<session::WriterLife>,
+    failed: bool,
+}
+
+/// The most writers of one pane's sessions counted at once. A released or
+/// replaced session's writer ends within its release's bound
+/// (`Session::drop`), so more than this many still writing means attaches
+/// came faster than writers end; the pane's input is then counted as not
+/// known rather than counted further.
+const MAX_HOLDER_WRITERS: usize = 8;
+
+impl HolderInput {
+    /// Takes the ended writers out, keeping a failure.
+    fn fold(&mut self) {
+        self.running.retain(|life| match life.end() {
+            session::WriterEnd::Running => true,
+            session::WriterEnd::Settled => false,
+            session::WriterEnd::Failed => {
+                self.failed = true;
+                false
+            }
+        });
+    }
+
+    /// Counts `life`, a new session's writer, within [`MAX_HOLDER_WRITERS`].
+    fn count(&mut self, pane: &str, life: session::WriterLife) {
+        self.fold();
+        if self.running.len() >= MAX_HOLDER_WRITERS {
+            self.running.remove(0);
+            if !self.failed {
+                crate::diagnostic!(json!({
+                    "component": "terminal_session",
+                    "kind": "terminal.holder_writers_over_cap",
+                    "pane_id": pane,
+                    "cap": MAX_HOLDER_WRITERS,
+                }));
+            }
+            self.failed = true;
+        }
+        self.running.push(life);
+    }
+}
+
 #[derive(Default)]
 struct Inner {
     panes: HashMap<String, Pane>,
     /// Panes whose next frame the core waits on, and when it asked: kept
-    /// apart from `panes`, since the core watches a pane Herdr just created
+    /// apart from `panes`, since the core watches a pane it just created
     /// before it attaches it, and a watch must not hold a pane's place.
     watches: HashMap<String, Instant>,
     requests: Requests,
@@ -279,6 +334,11 @@ struct Inner {
     deliveries: Vec<Delivery>,
     spawns: Vec<(SpawnRequest, ChildHold)>,
     retired: Vec<Session>,
+    /// What each pane's input to the holder that runs it now has come to
+    /// ([`HolderInput`]), kept apart from the pane's sessions, so a release,
+    /// an attach of this pane or another, or a forget leaves it, and set
+    /// back only when the pane's holder changes ([`Service::holder_replaced`]).
+    holder_input: BTreeMap<String, HolderInput>,
     /// Something may now be due earlier than the clock's current wait.
     wake_clock: bool,
     refusals: Refusals,
@@ -304,6 +364,14 @@ enum Delivery {
     },
     Forget {
         pane: String,
+    },
+    Clipboard {
+        pane: String,
+        text: Vec<u8>,
+    },
+    Grid {
+        pane: String,
+        size: GridSize,
     },
 }
 
@@ -350,6 +418,14 @@ pub struct Service {
     clock: Option<JoinHandle<()>>,
 }
 
+/// The refusal of input other than the sleep's own to a pane whose agent
+/// is asleep.
+pub(crate) const PANE_ASLEEP: &str = "pane_asleep";
+
+fn asleep_message(pane: &str) -> String {
+    format!("Pane {pane}'s agent is asleep; input was not sent")
+}
+
 fn unix_ms() -> u64 {
     SystemTime::now()
         .duration_since(UNIX_EPOCH)
@@ -359,6 +435,134 @@ fn unix_ms() -> u64 {
 }
 
 impl Service {
+    /// Whether `pane`'s agent is asleep, as the core last told this node.
+    pub(crate) fn asleep(&self, pane: &str) -> bool {
+        self.shared
+            .run(|inner, _| inner.panes.get(pane).is_some_and(|entry| entry.asleep))
+    }
+
+    /// Waits until everything handed to `pane`'s session writers before this
+    /// call has been written to the holder that runs it now, up to `within`:
+    /// the current session's, and those of the sessions released or replaced
+    /// before it, whose writers write what they were handed until they end.
+    /// A write to this holder that ever failed, or one still waiting when
+    /// `within` passes, is an error: what reached the holder is then not
+    /// known. Input held for the pane, for its attach or behind a letter, is
+    /// not waited for: a pane that is asleep drops or refuses it when it is
+    /// written.
+    pub(crate) fn writes_settled(&self, pane: &str, within: Duration) -> Result<(), String> {
+        let deadline = Instant::now() + within;
+        let failed =
+            || format!("a write to pane {pane}'s holder failed, so what reached it is not known");
+        let (done, settled) = std::sync::mpsc::channel();
+        let (earlier, handed) = self.shared.run(|inner, _| {
+            let current = inner
+                .panes
+                .get(pane)
+                .and_then(|entry| entry.session.as_ref());
+            let input = inner.holder_input.entry(pane.to_owned()).or_default();
+            input.fold();
+            if input.failed {
+                return Err(failed());
+            }
+            let current_life = current.map(Session::life);
+            let earlier: Vec<_> = input
+                .running
+                .iter()
+                .filter(|life| {
+                    !current_life
+                        .as_ref()
+                        .is_some_and(|current| current.same(life))
+                })
+                .cloned()
+                .collect();
+            let Some(session) = current else {
+                return Ok((earlier, false));
+            };
+            session
+                .after_writes(session::Written::new(move |written| {
+                    let _ = done.send(written);
+                }))
+                .map(|()| (earlier, true))
+                .map_err(|refused| refused.message(pane))
+        })?;
+        for life in earlier {
+            if let Err(why) = life.settled_by(deadline) {
+                self.shared.run(|inner, _| {
+                    if let Some(input) = inner.holder_input.get_mut(pane) {
+                        input.fold();
+                    }
+                });
+                return Err(format!(
+                    "an earlier session's writes to pane {pane}'s holder {why}, within {within:?}"
+                ));
+            }
+        }
+        if !handed {
+            return Ok(());
+        }
+        let left = deadline.saturating_duration_since(Instant::now());
+        match settled.recv_timeout(left) {
+            Ok(true) => Ok(()),
+            Ok(false) | Err(std::sync::mpsc::RecvTimeoutError::Disconnected) => Err(failed()),
+            Err(std::sync::mpsc::RecvTimeoutError::Timeout) => Err(format!(
+                "the writes to pane {pane}'s holder were not done within {within:?}"
+            )),
+        }
+    }
+
+    /// A new holder runs `pane` in place of the one that ran it: the pane's
+    /// input state starts afresh for it, and in the same step the pane is
+    /// attached again under a new generation, as an operator's Reconnect
+    /// is (a manual attach, since the renewal's close left the screen
+    /// closing, which an ordinary attach does not open again; the size the
+    /// core named for the pane is kept and sent to the holder). So a session
+    /// of the earlier holder, current or still opening, is
+    /// retired or never installed, its writer's late end lands in the state
+    /// it was counted in, which is gone, and no writer of the new holder is
+    /// counted before the state it belongs to exists. A pane no screen holds
+    /// is not attached: one attached only for the engine's input is released
+    /// now, its session and any opening one retired even while a caller's
+    /// input or a letter has yet to let go of it, and a released one stays
+    /// so, until the next input attaches it to the new holder
+    /// (`Inner::attach_for_input`).
+    pub(crate) fn holder_replaced(&self, pane: &str) {
+        self.shared.run(|inner, shared| {
+            inner.holder_input.remove(pane);
+            let entry = inner.panes.get(pane);
+            let for_input = entry.and_then(|entry| entry.release_after_input.clone());
+            let released = entry.is_some_and(|entry| {
+                entry.session.is_none() && matches!(entry.lifecycle.state, "released" | "idle")
+            });
+            if let Some(message) = for_input {
+                // Retired even while a caller's input or a letter has yet to
+                // let go of the pane: nothing of the earlier holder outlives
+                // its replacement.
+                inner.retire_released(pane, message);
+                return;
+            }
+            if released {
+                return;
+            }
+            inner.control(
+                shared,
+                TerminalControl::Attach {
+                    pane: pane.to_owned(),
+                    size: None,
+                    manual: true,
+                },
+            );
+        });
+    }
+
+    /// The holder that ran `pane` is ended and none runs it: what was
+    /// written to it is no longer anyone's.
+    pub(crate) fn holder_gone(&self, pane: &str) {
+        self.shared.run(|inner, _| {
+            inner.holder_input.remove(pane);
+        });
+    }
+
     fn route_input(&self, target: KeyTarget, chunk: HeldChunk) {
         let now = Instant::now();
         self.shared
@@ -367,14 +571,18 @@ impl Service {
 
     /// Types `input` into `pane` as the core's own engine, behind every key
     /// typed there before it. It is not the operator's typing: no input fact
-    /// is reported for it, and a letter's hold does not take it. A pane
-    /// whose session was released, since its tab left the last shown, is
-    /// attached again for it, and the input waits in the pane's hold as a
-    /// new pane's keys do (64 KiB, 3 s).
+    /// is reported for it, and a letter's hold does not take it. A pane no
+    /// screen holds is attached for it and released once the input ends
+    /// (`Inner::attach_for_input`), and the input waits in the pane's hold
+    /// as a new pane's keys do (64 KiB, 3 s). While the pane is asleep only
+    /// the sleep's own input ([`Typist::Sleeper`]) is taken; any other is
+    /// refused here, to its caller, and one queued when the pane went to
+    /// sleep is cancelled ([`TerminalControl::Asleep`]).
     fn type_input(
         &self,
         pane: &str,
         input: Typed,
+        by: Typist,
     ) -> Result<(), hide_node_link::holders::HolderError> {
         if input.len() > hide_node_link::terminal::INPUT_HOLD_LIMIT_BYTES {
             return Err(command::refused(
@@ -384,31 +592,30 @@ impl Service {
         }
         let now = Instant::now();
         let receipt = self.shared.run(|inner, shared| {
-            if inner.closed || !inner.panes.contains_key(pane) {
+            if inner.closed || !inner.takes_input(shared, pane) {
                 return Err(command::refused(
                     "pane_input_unavailable",
                     "Pane input has no live terminal owner",
                 ));
             }
-            let (receipt, command) = command::Receipt::take(&inner.permits)?;
-            if inner.panes.get(pane).is_some_and(|entry| {
-                entry.session.is_none() && !entry.closing && entry.lifecycle.state == "released"
-            }) {
-                inner.request_control(shared, pane, now);
+            if by != Typist::Sleeper && inner.panes.get(pane).is_some_and(|entry| entry.asleep) {
+                return Err(command::refused(PANE_ASLEEP, &asleep_message(pane)));
             }
+            let (receipt, command) = command::Receipt::take(&inner.permits)?;
+            inner.attach_for_input(shared, pane, now);
             inner
                 .panes
                 .get_mut(pane)
                 .expect("checked above")
                 .commands
-                .push(receipt.clone());
+                .push((receipt.clone(), by));
             inner.route_input(
                 KeyTarget::Pane(pane.to_owned()),
                 HeldChunk {
                     typed_at: now,
                     typed_at_unix_ms: unix_ms(),
                     input,
-                    by: Typist::Engine,
+                    by,
                     permit: None,
                     command: Some(command),
                 },
@@ -426,7 +633,9 @@ impl Service {
                 self.receipt.cancel("Pane input caller ended");
                 self.service.shared.run(|inner, _| {
                     if let Some(entry) = inner.panes.get_mut(self.pane) {
-                        entry.commands.retain(|receipt| receipt != &self.receipt);
+                        entry
+                            .commands
+                            .retain(|(receipt, _)| receipt != &self.receipt);
                         entry.hold.discard_finished_commands();
                     }
                     inner.finish_input_release(self.pane);
@@ -441,17 +650,20 @@ impl Service {
         input.receipt.wait()
     }
 
-    /// Types a letter into `pane` as the core's own engine: `body`, then
-    /// `submit` once `gap` has passed, on the caller's thread. The
-    /// operator's keys typed into the pane from the body until the submit
-    /// was handed over are held, at most 64 KiB and 3 s as a new pane's
-    /// are, and written after the submit in the order typed, so none lands
-    /// inside the letter and none is lost (PRD engine-bundle-3-core-owns
-    /// D-13). The hold ends on every way out, a panic included.
+    /// Types a letter into `pane` as the core's own engine: one submission
+    /// of `text`'s parts, then `submit` once `gap` has passed since the text
+    /// was written ([`Typed::Submit`]);
+    /// the holder that owns the program's terminal keeps the gap there, and
+    /// a holder built before submissions is refused it. The
+    /// operator's keys typed into the pane until the submission was handed
+    /// to the pane's writer are held, at most 64 KiB and 3 s as a new pane's
+    /// are, and written after it in the order typed, so none lands inside
+    /// the letter and none is lost (PRD engine-bundle-3-core-owns D-13). The
+    /// hold ends on every way out, a panic included.
     fn type_letter(
         &self,
         pane: &str,
-        body: Typed,
+        text: Vec<Typed>,
         submit: Typed,
         gap: Duration,
     ) -> Result<(), hide_node_link::holders::HolderError> {
@@ -462,33 +674,23 @@ impl Service {
         impl Drop for Letter<'_> {
             fn drop(&mut self) {
                 let now = Instant::now();
-                self.service.shared.run(|inner, _| {
-                    let Some(entry) = inner.panes.get_mut(self.pane) else {
-                        return;
-                    };
-                    let Some(letter) = entry.letter.as_mut() else {
-                        return;
-                    };
-                    letter.letters -= 1;
-                    if letter.letters > 0 {
-                        return;
-                    }
-                    let Some(held) = entry.letter.take() else {
-                        return;
-                    };
-                    for chunk in held.keys.take_in_order(self.pane, now) {
-                        inner.route_input(KeyTarget::Pane(self.pane.to_owned()), chunk, now);
-                    }
-                    inner.finish_input_release(self.pane);
-                });
+                self.service
+                    .shared
+                    .run(|inner, _| inner.end_letter(self.pane, now));
             }
         }
-        let _work = self.shared.run(|inner, _| {
-            if inner.closed || inner.panes.get(pane).is_none_or(|entry| entry.closing) {
+        let _work = self.shared.run(|inner, shared| {
+            if inner.closed
+                || !inner.takes_input(shared, pane)
+                || inner.panes.get(pane).is_some_and(|entry| entry.closing)
+            {
                 return Err(command::refused(
                     "pane_input_unavailable",
                     "Pane input has no live terminal owner",
                 ));
+            }
+            if inner.panes.get(pane).is_some_and(|entry| entry.asleep) {
+                return Err(command::refused(PANE_ASLEEP, &asleep_message(pane)));
             }
             let work = command::Work::take(&inner.permits)?;
             inner
@@ -504,56 +706,86 @@ impl Service {
             service: self,
             pane,
         };
-        self.type_input(pane, body)?;
-        self.letter_gap(pane, gap).and_then(|()| self.type_input(pane, submit)).map_err(|error| hide_node_link::holders::HolderError::Unreachable {
-            message: format!("Letter body was delivered, but submit was not confirmed: {error}; do not resend automatically"),
-        })
-    }
-
-    /// The configured submit gap is unchanged, but closing the pane or
-    /// node wakes its caller instead of retaining the letter until the gap.
-    fn letter_gap(
-        &self,
-        pane: &str,
-        gap: Duration,
-    ) -> Result<(), hide_node_link::holders::HolderError> {
-        let began = Instant::now();
-        loop {
-            let version = self.shared.clock_lock().version;
-            {
-                let inner = self.shared.lock();
-                if inner.closed || inner.panes.get(pane).is_none_or(|entry| entry.closing) {
-                    return Err(command::refused(
-                        "pane_input_cancelled",
-                        "Pane closed during letter delivery",
-                    ));
-                }
-            }
-            let left = gap.saturating_sub(began.elapsed());
-            if left.is_zero() {
-                return Ok(());
-            }
-            let clock = self.shared.clock_lock();
-            if clock.version == version {
-                drop(
-                    self.shared
-                        .wake
-                        .wait_timeout(clock, left)
-                        .unwrap_or_else(|e| e.into_inner()),
-                );
-            }
+        let part = |typed: Typed| match typed {
+            Typed::Bytes(bytes) => Ok(hide_holder_protocol::SubmitPart::Input(bytes)),
+            Typed::Paste(text) => Ok(hide_holder_protocol::SubmitPart::Paste(text)),
+            Typed::Keys(keys) => Ok(hide_holder_protocol::SubmitPart::Keys(keys)),
+            Typed::Submit(_) => Err(command::refused(
+                "pane_input_invalid",
+                "A letter's text or submit is not a submission of its own",
+            )),
+        };
+        if text.len() > hide_holder_protocol::MAX_SUBMIT_PARTS {
+            return Err(command::refused(
+                "pane_input_invalid",
+                "A letter's text has more parts than a submission takes",
+            ));
         }
+        if gap > hide_holder_protocol::MAX_SUBMIT_GAP {
+            return Err(command::refused(
+                "pane_input_invalid",
+                "A letter's submit gap is longer than a submission takes",
+            ));
+        }
+        let submission = hide_holder_protocol::Submit {
+            text: text.into_iter().map(part).collect::<Result<_, _>>()?,
+            gap,
+            enter: part(submit)?,
+        };
+        self.type_input(pane, Typed::Submit(Box::new(submission)), Typist::Engine)
     }
 }
 
 impl Inner {
+    /// One letter typed into `pane` ended. Once the last has, the keys the
+    /// letters held go ahead of the pane's replay queue when it has one,
+    /// since they were typed before the fork held the pane, or are written
+    /// in the order typed.
+    fn end_letter(&mut self, pane: &str, now: Instant) {
+        let Some(entry) = self.panes.get_mut(pane) else {
+            return;
+        };
+        let Some(letter) = entry.letter.as_mut() else {
+            return;
+        };
+        letter.letters -= 1;
+        if letter.letters > 0 {
+            return;
+        }
+        let Some(held) = entry.letter.take() else {
+            return;
+        };
+        let keys = held.keys.take_in_order(pane, now);
+        if let Some(replay) = entry.replay.as_mut() {
+            if replay.put_first(pane, keys) {
+                let request = replay.request.clone();
+                self.replay_overflowed(request);
+            }
+        } else {
+            for chunk in keys {
+                self.route_input(KeyTarget::Pane(pane.to_owned()), chunk, now);
+            }
+        }
+        self.pump_replay(pane, now);
+        self.finish_input_release(pane);
+    }
+
+    /// The replay queue for `request` dropped keys past its cap: the core
+    /// asks the operator to type them again (the fork's input-loss notice).
+    fn replay_overflowed(&mut self, request: String) {
+        self.reports.push(TerminalReport::RequestDiscarded {
+            request,
+            reason: "limit".to_owned(),
+        });
+    }
+
     fn route_input(&mut self, target: KeyTarget, chunk: HeldChunk, now: Instant) {
         let target = match target {
             // A request holds the operator's keys typed into a new pane until
             // its agent runs; the engine's own typing there (that agent's
             // start line) is what the request waits for, so it is never held
             // behind it.
-            KeyTarget::Pane(ref pane) if chunk.by != Typist::Engine => self
+            KeyTarget::Pane(ref pane) if !chunk.by.engine() => self
                 .requests
                 .holder(pane)
                 .map(KeyTarget::Request)
@@ -613,22 +845,24 @@ impl Service {
     }
 
     /// Ends every session it holds and starts none after, and returns once
-    /// each attach child it started has exited: its owner ended (the core
+    /// each session it opened has been released: its owner ended (the core
     /// whose role stopped for a move, in a process that goes on as a node;
-    /// a node whose link ended), whoever still holds the service. A child
-    /// still holding a pane would make the next client of this machine's
-    /// Herdr meet it (`owner_conflict`) and view the pane read-only, so the
-    /// role that follows starts only after this returns. A child still
-    /// live after [`CLOSE_WITHIN`] is left to its reaper and logged.
+    /// a node whose link ended), whoever still holds the service. A holder
+    /// takes one connection at a time, so the role that follows starts only
+    /// after this returns. A session still open after [`CLOSE_WITHIN`] is
+    /// left to its reaper and logged.
     pub fn close(&self) {
         self.shared.run(|inner, _| {
             inner.closed = true;
             inner.wake_clock = true;
             for (pane, session) in &mut inner.panes {
-                for receipt in &session.commands {
+                for (receipt, _) in &session.commands {
                     receipt.cancel("Terminal service closed");
                 }
                 session.hold.discard(pane, "service_closed");
+                if let Some(replay) = session.replay.take() {
+                    replay.discard(pane, "service_closed");
+                }
             }
             for (_, mut pane) in inner.panes.drain() {
                 inner.retired.extend(pane.session.take());
@@ -747,7 +981,6 @@ impl TerminalNode for Service {
                 && let Some(session) = entry
                     .session
                     .as_ref()
-                    .filter(|session| session.mode == Mode::Control)
                 && let Err(refused) = session.redraw(size.rows, size.cols)
             {
                 let message = refused.message(pane);
@@ -757,8 +990,7 @@ impl TerminalNode for Service {
     }
 
     fn redraw(&self, pane: &str) {
-        self.shared
-            .run(|inner, shared| inner.redraw(shared, pane, "redraw"));
+        self.shared.run(|inner, _| inner.redraw(pane, "redraw"));
     }
 }
 
@@ -811,17 +1043,22 @@ impl Shared {
             let handed = panic::catch_unwind(AssertUnwindSafe(|| match &delivery {
                 Delivery::Output { pane, bytes, full } => self.outputs.output(pane, bytes, *full),
                 Delivery::Forget { pane } => self.outputs.forget(pane),
+                Delivery::Clipboard { pane, text } => self.outputs.clipboard(pane, text),
+                Delivery::Grid { pane, size } => self.outputs.grid(pane, size.rows, size.cols),
             }));
             if handed.is_err() {
-                let (pane, forget) = match &delivery {
-                    Delivery::Output { pane, .. } => (pane, false),
-                    Delivery::Forget { pane } => (pane, true),
+                let (pane, what) = match &delivery {
+                    Delivery::Output { pane, .. } => (pane, "output"),
+                    Delivery::Forget { pane } => (pane, "forget"),
+                    Delivery::Clipboard { pane, .. } => (pane, "clipboard"),
+                    Delivery::Grid { pane, .. } => (pane, "grid"),
                 };
                 crate::diagnostic!(json!({
                     "component": "terminal_session",
                     "kind": "terminal.sink_panicked",
                     "pane_id": pane,
-                    "forget": forget,
+                    "forget": what == "forget",
+                    "delivery": what,
                 }));
             }
             // A frame's bytes are freed before the queue's lock is taken.
@@ -902,9 +1139,8 @@ impl Shared {
         let shared = Arc::downgrade(self);
         let pane = request.pane.clone();
         let generation = request.generation;
-        let mode = request.mode;
         let started = thread::Builder::new()
-            .name(format!("hide-node-terminal-{}-spawn-{pane}", mode.as_str()))
+            .name(format!("hide-node-terminal-spawn-{pane}"))
             .spawn(move || {
                 let Some(shared) = shared.upgrade() else {
                     return;
@@ -913,15 +1149,12 @@ impl Shared {
                     return;
                 }
                 let began = Instant::now();
-                let opened =
-                    shared
-                        .attacher
-                        .open_transport(&request.pane, request.mode, request.size);
+                let opened = shared.attacher.open_transport(&request.pane, request.size);
                 // The pane lease spans the actual open, not just its result.
                 // A stale successful open is shut down before releasing it.
                 if !shared.lock().spawn_current(&request) {
                     if let Ok(transport) = opened {
-                        transport.close(&request.pane);
+                        transport.close();
                     }
                     return;
                 }
@@ -936,7 +1169,7 @@ impl Shared {
                             });
                         }
                     });
-                    Session::start(&request.pane, generation, mode, transport, on_failure)
+                    Session::start(&request.pane, generation, transport, on_failure)
                         .map(|(session, reader)| (session.counted(child), reader, found_size))
                         .map_err(OpenFailure::retried)
                 });
@@ -945,7 +1178,6 @@ impl Shared {
                         shared,
                         &request.pane,
                         generation,
-                        mode,
                         result,
                         began.elapsed().as_millis(),
                     )
@@ -957,7 +1189,6 @@ impl Shared {
                     shared,
                     &pane,
                     generation,
-                    mode,
                     Err(OpenFailure::retried(format!(
                         "terminal session worker could not be started: {error}"
                     ))),
@@ -968,7 +1199,7 @@ impl Shared {
     }
 }
 
-/// Sleeps until the next retry, observer re-attach or held input report is
+/// Sleeps until the next retry or held input report is
 /// due; an idle service waits without waking.
 fn run_clock(shared: Weak<Shared>) {
     let mut seen = 0;
@@ -1124,7 +1355,6 @@ impl Inner {
         };
         let mut state = PaneTerminalState {
             state: pane.lifecycle.state.to_owned(),
-            mode: pane.lifecycle.mode.map(|mode| mode.as_str().to_owned()),
             generation: pane.lifecycle.generation,
             attempt: pane.lifecycle.attempt,
             message: pane.lifecycle.message.clone(),
@@ -1137,7 +1367,6 @@ impl Inner {
         };
         if let Some(message) = &pane.release_after_input {
             state.state = "released".to_owned();
-            state.mode = None;
             state.message = Some(message.clone());
             state.retry_decision = "on_next_visit".to_owned();
         }
@@ -1170,7 +1399,7 @@ impl Inner {
                     entry.size_from_holder = false;
                 }
                 if manual {
-                    for receipt in &entry.commands {
+                    for (receipt, _) in &entry.commands {
                         receipt.cancel("Terminal connection was replaced");
                     }
                     entry.hold.discard_finished_commands();
@@ -1184,7 +1413,7 @@ impl Inner {
                 }
                 self.request_control(shared, &pane, now);
                 if was_released {
-                    self.redraw(shared, &pane, "visible_again");
+                    self.redraw(&pane, "visible_again");
                 }
             }
             TerminalControl::Release { pane, message } => self.release(&pane, message),
@@ -1193,10 +1422,13 @@ impl Inner {
                 self.requests.forget(&pane);
                 if let Some(mut entry) = self.panes.remove(&pane) {
                     self.retired.extend(entry.session.take());
-                    for receipt in &entry.commands {
+                    for (receipt, _) in &entry.commands {
                         receipt.cancel("Pane was forgotten");
                     }
                     entry.hold.discard(&pane, "pane_gone");
+                    if let Some(replay) = entry.replay.take() {
+                        replay.discard(&pane, "pane_gone");
+                    }
                 }
                 self.facts.remove(&pane);
                 self.watches.remove(&pane);
@@ -1207,7 +1439,7 @@ impl Inner {
                     entry.closing = closing;
                     if closing {
                         self.wake_clock = true;
-                        for receipt in &entry.commands {
+                        for (receipt, _) in &entry.commands {
                             receipt.cancel("Pane is closing");
                         }
                         entry.hold.discard_finished_commands();
@@ -1238,7 +1470,7 @@ impl Inner {
                     .get(&pane)
                     .and_then(|entry| entry.session.as_ref())
                 {
-                    Some(session) if session.mode == Mode::Control => session
+                    Some(session) => session
                         .scroll(lines, column, row, modifiers)
                         .map_err(|refused| refused.message(&pane)),
                     _ => Err(format!(
@@ -1249,16 +1481,55 @@ impl Inner {
                     self.error(&pane, "terminal.scroll_failed", message);
                 }
             }
-            TerminalControl::Write { pane, data } => match protocol::decode_base64(&data) {
-                Ok(bytes) => {
-                    self.write_control(&pane, Typed::Bytes(bytes), Typist::Operator, None, now)
+            TerminalControl::Mouse {
+                pane,
+                action,
+                button,
+                column,
+                row,
+                modifiers,
+                outside,
+            } => {
+                let mouse = hide_holder_protocol::Mouse {
+                    action,
+                    button,
+                    col: column,
+                    row,
+                    outside,
+                    // The screen's bits (shift 1, ctrl 2, alt 4, meta 8) are
+                    // the protocol's.
+                    modifiers: hide_holder_protocol::Modifiers(modifiers),
+                };
+                let result = match self
+                    .panes
+                    .get(&pane)
+                    .and_then(|entry| entry.session.as_ref())
+                {
+                    Some(session) => session
+                        .mouse(mouse)
+                        .map_err(|refused| refused.message(&pane)),
+                    _ => Err(format!(
+                        "Pane {pane} has no terminal control session for a pointer event"
+                    )),
+                };
+                if let Err(message) = result {
+                    self.error(&pane, "terminal.mouse_failed", message);
                 }
-                Err(message) => self.error(&pane, "terminal.invalid_input", message),
-            },
+            }
             TerminalControl::Asleep { pane, asleep } => match self.panes.get_mut(&pane) {
                 Some(entry) => {
                     entry.asleep = asleep;
-                    if !asleep {
+                    if asleep {
+                        // The core's input that has not reached the writer
+                        // yet is not the agent's any more, and the shell's
+                        // never: its caller is told. The sleep's own is kept.
+                        for (receipt, by) in &entry.commands {
+                            if *by != Typist::Sleeper {
+                                receipt.cancel(&asleep_message(&pane));
+                            }
+                        }
+                        entry.hold.discard_finished_commands();
+                    } else {
                         entry.asleep_reported = false;
                     }
                 }
@@ -1278,6 +1549,7 @@ impl Inner {
             }
             TerminalControl::RequestResolve { request, pane } => {
                 self.expire_fork_input(now);
+                let fork = self.requests.is_fork(&request);
                 let held = self.requests.resolve(&request, &pane, now);
                 let held = input::fresh_chunks(&pane, held, now);
                 if held.is_empty() {
@@ -1290,8 +1562,12 @@ impl Inner {
                     "chunks": held.len(),
                     "bytes": held.iter().map(|chunk| chunk.input.len()).sum::<usize>(),
                 }));
-                for chunk in held {
-                    self.write_key(&pane, chunk, false, now);
+                if fork {
+                    self.replay(&pane, &request, held, now);
+                } else {
+                    for chunk in held {
+                        self.write_key(&pane, chunk, false, now);
+                    }
                 }
             }
             TerminalControl::RequestDiscard { request, reason } => {
@@ -1452,10 +1728,127 @@ impl Inner {
         });
     }
 
+    /// Hands the keys a fork request held for `pane` to the pane's one
+    /// replay queue ([`input::Replay`]), which gives them to the pane's
+    /// writer in the order typed once the pane takes keys.
+    fn replay(&mut self, pane: &str, request: &str, held: Vec<HeldChunk>, now: Instant) {
+        if !self.panes.contains_key(pane) && self.requests.names(pane) {
+            // The engine made the pane for keys the operator is already typing,
+            // before the core asked for it to attach.
+            self.panes.insert(pane.to_owned(), Pane::default());
+        }
+        let Some(entry) = self.panes.get_mut(pane) else {
+            return;
+        };
+        match entry.replay.as_mut() {
+            Some(replay) => {
+                let mut crossed = false;
+                for chunk in held {
+                    crossed |= replay.push(pane, chunk);
+                }
+                if crossed {
+                    let request = replay.request.clone();
+                    self.replay_overflowed(request);
+                }
+            }
+            None => {
+                entry.replay = Some(input::Replay::new(
+                    request,
+                    now + input::HELD_INPUT_MAX_AGE,
+                    held,
+                ));
+            }
+        }
+        self.wake_clock = true;
+        self.pump_replay(pane, now);
+    }
+
+    /// Gives the pane's writer its whole replay queue once the pane takes
+    /// keys: a session open, no letter being typed and not closing. To a
+    /// transport that takes submissions whole, each submit goes with the
+    /// keys typed before it as one submission, whose gap the holder keeps
+    /// ([`input::submissions`]), and the operator's keys typed after go
+    /// behind it. On Windows, a queue whose
+    /// submission's gap would end past the hold's age is dropped and
+    /// reported rather than started; once handed over, every submit is
+    /// written. A holder built before submissions takes none of them, which
+    /// is reported.
+    fn pump_replay(&mut self, pane: &str, now: Instant) {
+        loop {
+            let Some(entry) = self.panes.get_mut(pane) else {
+                return;
+            };
+            let submissions = entry
+                .session
+                .as_ref()
+                .filter(|_| !entry.closing && entry.letter.is_none())
+                .map(Session::submissions);
+            let Some(replay) = entry.replay.as_mut() else {
+                return;
+            };
+            let chunks = match submissions {
+                None => {
+                    let Some(permit) = replay.take_permit_head() else {
+                        return;
+                    };
+                    self.write_now(pane, permit, false, now);
+                    continue;
+                }
+                Some(session::Submissions::Refused) => {
+                    return self.drop_replay(pane, "unsupported");
+                }
+                Some(session::Submissions::Whole)
+                    if replay.submits()
+                        && replay.ends.saturating_duration_since(now)
+                            <= input::REPLAYED_SUBMIT_GAP =>
+                {
+                    return self.drop_replay(pane, "timeout");
+                }
+                Some(session::Submissions::Whole) => {
+                    input::submissions(entry.replay.take().expect("looked at above").take())
+                }
+            };
+            for chunk in chunks {
+                self.write_now(pane, chunk, false, now);
+            }
+            return;
+        }
+    }
+
+    /// Drops the rest of the pane's replay queue and tells the core, which
+    /// asks the operator to type it again (the fork's input-loss notice).
+    fn drop_replay(&mut self, pane: &str, reason: &str) {
+        let Some(replay) = self
+            .panes
+            .get_mut(pane)
+            .and_then(|entry| entry.replay.take())
+        else {
+            return;
+        };
+        let request = replay.request.clone();
+        replay.discard(pane, reason);
+        self.reports.push(TerminalReport::RequestDiscarded {
+            request,
+            reason: reason.to_owned(),
+        });
+    }
+
     /// Writes one key to its pane. `focus` is a key the operator typed into
     /// this pane on the screen; a key held for a creation reaches its new
     /// pane without moving the keyboard.
     fn write_key(&mut self, pane: &str, chunk: HeldChunk, focus: bool, now: Instant) {
+        if chunk.by == Typist::Operator
+            && let Some(replay) = self
+                .panes
+                .get_mut(pane)
+                .and_then(|entry| entry.replay.as_mut())
+        {
+            if replay.push(pane, chunk) {
+                let request = replay.request.clone();
+                self.replay_overflowed(request);
+            }
+            return;
+        }
         if chunk.by == Typist::Operator
             && let Some(letter) = self
                 .panes
@@ -1465,6 +1858,12 @@ impl Inner {
             letter.keys.hold(pane, chunk);
             return;
         }
+        self.write_now(pane, chunk, focus, now);
+    }
+
+    /// [`Self::write_key`] past the queues that hold the operator's keys: a
+    /// replay queue writes its own keys here.
+    fn write_now(&mut self, pane: &str, chunk: HeldChunk, focus: bool, now: Instant) {
         if let Some(permit) = &chunk.permit {
             use hide_node_link::terminal::InputPermitError;
             let result = if now >= permit.deadline() {
@@ -1496,7 +1895,6 @@ impl Inner {
                 .panes
                 .get(pane)
                 .and_then(|entry| entry.session.as_ref())
-                .filter(|session| session.mode == Mode::Control)
             {
                 if let Err(refused) = Self::write_session_chunk(session, chunk) {
                     self.error(pane, "terminal.write_failed", refused.message(pane));
@@ -1520,6 +1918,11 @@ impl Inner {
         let operator = chunk.by == Typist::Operator;
         let submitted = match &chunk.input {
             Typed::Bytes(bytes) => operator && input::submits(bytes),
+            Typed::Submit(submit) => {
+                operator
+                    && matches!(&submit.enter, hide_holder_protocol::SubmitPart::Input(bytes)
+                        if input::submits(bytes))
+            }
             Typed::Paste(_) | Typed::Keys(_) => false,
         };
         // A sleeping agent's pane takes none of the operator's typing; the
@@ -1609,6 +2012,7 @@ impl Inner {
             Typed::Bytes(bytes) => session.write(&bytes),
             Typed::Paste(text) => session.paste(text),
             Typed::Keys(keys) => session.keys(keys),
+            Typed::Submit(submit) => session.submit(submit),
         }
     }
 
@@ -1664,8 +2068,8 @@ impl Inner {
     /// The writer path every key takes once it is the pane's.
     fn write_typed(&mut self, pane: &str, chunk: HeldChunk, now: Instant) {
         if !self.panes.contains_key(pane) && self.requests.names(pane) {
-            // Herdr made the pane for keys the operator is already typing,
-            // before the core asked for it to attach.
+            // The engine made the pane for keys the operator is already
+            // typing, before the core asked for it to attach.
             self.panes.insert(pane.to_owned(), Pane::default());
         }
         if self
@@ -1700,6 +2104,17 @@ impl Inner {
             );
             return;
         };
+        if entry.asleep && by != Typist::Sleeper {
+            // Bytes a screen answers its terminal with are no more for the
+            // shell under a sleeping agent than a key is, and the core's own
+            // engine input that waited (a hold, a letter's held keys) is
+            // refused to its caller; only the sleep's own typing, its end and
+            // its wake, goes through.
+            if let Some(command) = command {
+                command.refused(&asleep_message(pane));
+            }
+            return;
+        }
         if entry.closing {
             self.refuse(
                 pane,
@@ -1709,28 +2124,11 @@ impl Inner {
             );
             return;
         }
-        if entry.asleep && by == Typist::Operator {
-            // Bytes a screen answers its terminal with are no more for the
-            // shell under a sleeping agent than a key is; the core's own
-            // engine typing its sleep and wake there goes through.
-            return;
-        }
         let result = match entry.session.as_ref() {
-            Some(session) if session.mode == Mode::Control => match command {
+            Some(session) => match command {
                 Some(command) => session.command(input, command),
                 None => Self::write_session(session, input),
             },
-            Some(_) => {
-                self.refuse(
-                    pane,
-                    "terminal.read_only",
-                    format!(
-                        "Pane {pane} is read-only because another client owns terminal control; use Reconnect to try again"
-                    ),
-                    now,
-                );
-                return;
-            }
             None => {
                 self.refuse(
                     pane,
@@ -1831,7 +2229,6 @@ impl Inner {
                     entry.lifecycle.state,
                     "starting"
                         | "controlling"
-                        | "observing"
                         | "unavailable"
                         | "ended"
                         | "closing"
@@ -1842,9 +2239,8 @@ impl Inner {
             self.sync(pane);
             return;
         }
-        // Herdr sizes the PTY from the attach, so attaching before a view has
-        // reported a size costs a full frame at a guessed size and a second
-        // one after the resize. A pane's holder already has a size and
+        // A pane no holder runs yet has no size of its own, so it waits for
+        // a view to report one. A pane's holder already has a size and
         // attaches at it.
         if entry.size.is_none() && !shared.attacher.keeps_own_size(pane) {
             let entry = self.panes.get_mut(pane).expect("checked above");
@@ -1873,7 +2269,6 @@ impl Inner {
         self.start_session(
             shared,
             pane,
-            Mode::Control,
             attempt,
             if attempt == 1 {
                 "automatic_initial"
@@ -1890,7 +2285,6 @@ impl Inner {
         &mut self,
         shared: &Arc<Shared>,
         pane: &str,
-        mode: Mode,
         attempt: u64,
         retry_decision: &'static str,
         message: Option<String>,
@@ -1916,7 +2310,6 @@ impl Inner {
         };
         entry.pending_spawn = None;
         entry.need_full = true;
-        entry.observer_resized_at = None;
         entry.current_generation = Some(generation);
         self.retired.extend(entry.session.take());
         entry.first_frame_pending = true;
@@ -1926,24 +2319,21 @@ impl Inner {
             message,
             generation,
             attempt,
-            mode: Some(mode),
             exit_category: None,
             retry_decision,
         };
-        if mode == Mode::Control {
-            self.schedule_recovery(
-                shared,
-                pane,
-                "Waiting for the first terminal frame".to_owned(),
-                now,
-            );
-            if let Some(recovery) = self
-                .panes
-                .get_mut(pane)
-                .and_then(|entry| entry.recovery.as_mut())
-            {
-                recovery.last_attempt_at_unix_ms = Some(unix_ms());
-            }
+        self.schedule_recovery(
+            shared,
+            pane,
+            "Waiting for the first terminal frame".to_owned(),
+            now,
+        );
+        if let Some(recovery) = self
+            .panes
+            .get_mut(pane)
+            .and_then(|entry| entry.recovery.as_mut())
+        {
+            recovery.last_attempt_at_unix_ms = Some(unix_ms());
         }
         let decision = self.retry_decision(pane, retry_decision);
         let entry = self.panes.get_mut(pane).expect("checked above");
@@ -1958,10 +2348,7 @@ impl Inner {
         self.note(
             pane,
             "terminal.session_requested",
-            format!(
-                "Starting terminal {} session for pane {pane}",
-                mode.as_str()
-            ),
+            format!("Starting terminal session for pane {pane}"),
         );
         if at_cap {
             let message = format!(
@@ -1972,7 +2359,6 @@ impl Inner {
                 pane,
                 generation,
                 attempt,
-                mode,
                 "attach_limit",
                 &message,
                 0,
@@ -1987,9 +2373,8 @@ impl Inner {
             }));
             return;
         }
-        // Herdr sizes the PTY from the attach, so there is no honest size to
-        // send when no view has reported one; a pane that arrives here
-        // without one is a routing bug, said rather than attached at a guess.
+        // A pane that keeps no size of its own and arrives here without one
+        // is a routing bug, said rather than attached at a guess.
         if size.is_none() && !shared.attacher.keeps_own_size(pane) {
             let message =
                 format!("Pane {pane} has no reported terminal size, so it cannot be attached");
@@ -1998,7 +2383,6 @@ impl Inner {
                 pane,
                 generation,
                 attempt,
-                mode,
                 "size_unknown",
                 &message,
                 0,
@@ -2013,7 +2397,6 @@ impl Inner {
             .pending_spawn = Some(SpawnRequest {
             pane: pane.to_owned(),
             generation,
-            mode,
             size,
         });
         self.admit_spawn(shared, pane);
@@ -2023,7 +2406,6 @@ impl Inner {
         !self.closed
             && self.panes.get(&request.pane).is_some_and(|entry| {
                 entry.current_generation == Some(request.generation)
-                    && entry.lifecycle.mode == Some(request.mode)
                     && entry.lifecycle.state == "starting"
             })
     }
@@ -2037,7 +2419,6 @@ impl Inner {
         };
         if self.closed
             || entry.current_generation != Some(request.generation)
-            || entry.lifecycle.mode != Some(request.mode)
             || entry.lifecycle.state != "starting"
         {
             entry.pending_spawn = None;
@@ -2066,7 +2447,6 @@ impl Inner {
         pane: &str,
         generation: u64,
         attempt: u64,
-        mode: Mode,
         category: &str,
         message: &str,
         elapsed_ms: u128,
@@ -2080,7 +2460,6 @@ impl Inner {
             message: Some(message.to_owned()),
             generation,
             attempt,
-            mode: Some(mode),
             exit_category: Some(category.to_owned()),
             retry_decision: "manual",
         };
@@ -2103,7 +2482,6 @@ impl Inner {
             "pane_id": pane,
             "generation": generation,
             "attempt": attempt,
-            "mode": mode.as_str(),
             "duration_ms": elapsed_ms,
             "exit_category": category,
             "retry_decision": self.retry_decision(pane, "manual"),
@@ -2116,15 +2494,12 @@ impl Inner {
         shared: &Arc<Shared>,
         pane: &str,
         generation: u64,
-        mode: Mode,
         result: Result<SpawnedSession, OpenFailure>,
         elapsed_ms: u128,
     ) {
         let now = Instant::now();
         let current = self.panes.get(pane).is_some_and(|entry| {
-            entry.current_generation == Some(generation)
-                && entry.lifecycle.mode == Some(mode)
-                && entry.lifecycle.state == "starting"
+            entry.current_generation == Some(generation) && entry.lifecycle.state == "starting"
         });
         if !current {
             // A late session for a pane that moved on ends with its parts,
@@ -2138,14 +2513,7 @@ impl Inner {
         let (session, reader, found_size) = match result {
             Ok(opened) => opened,
             Err(failure) if !failure.retried => {
-                self.ended_for_good(
-                    pane,
-                    generation,
-                    attempt,
-                    mode,
-                    failure.category,
-                    failure.message,
-                );
+                self.ended_for_good(pane, generation, attempt, failure.category, failure.message);
                 return;
             }
             Err(failure) => {
@@ -2154,7 +2522,6 @@ impl Inner {
                     pane,
                     generation,
                     attempt,
-                    mode,
                     failure.category,
                     failure.message,
                     elapsed_ms,
@@ -2173,8 +2540,7 @@ impl Inner {
             entry.size = entry.view.or(found_size);
             entry.size_from_holder = entry.view.is_none();
         }
-        if mode == Mode::Control
-            && let Some(size) = entry.size
+        if let Some(size) = entry.size
             && found_size != Some(size)
             && let Err(refused) = session.resize(size.rows, size.cols)
         {
@@ -2185,32 +2551,23 @@ impl Inner {
             );
         }
         let entry = self.panes.get_mut(pane).expect("checked above");
-        let held = entry.hold.take_chunks(pane, now);
-        if !held.is_empty() {
-            if mode == Mode::Control {
-                for chunk in held {
-                    if let Err(refused) = Self::write_session_chunk(&session, chunk) {
-                        self.error(pane, "terminal.write_failed", refused.message(pane));
-                    }
-                }
-            } else {
-                crate::diagnostic!(json!({
-                    "component": "terminal_input",
-                    "kind": "terminal.input_discarded",
-                    "pane_id": pane,
-                    "reason": "read_only",
-                    "bytes": held.iter().map(|chunk| chunk.input.len()).sum::<usize>(),
-                }));
+        for chunk in entry.hold.take_chunks(pane, now) {
+            if let Err(refused) = Self::write_session_chunk(&session, chunk) {
+                self.error(pane, "terminal.write_failed", refused.message(pane));
             }
         }
         let reader_shared = Arc::downgrade(shared);
         let reader_pane = pane.to_owned();
-        let reader_started = session::spawn_reader(pane, mode, reader, move |event| {
+        let echo = session.echo();
+        let reader_started = session::spawn_reader(pane, reader, move |event| {
+            if matches!(event, SessionEvent::Frame { .. }) {
+                echo.frame();
+            }
             let Some(shared) = reader_shared.upgrade() else {
                 return false;
             };
             shared.run_reading(|inner, shared| {
-                inner.session_event(shared, &reader_pane, generation, mode, event)
+                inner.session_event(shared, &reader_pane, generation, event)
             })
         });
         if let Err(message) = reader_started {
@@ -2220,7 +2577,6 @@ impl Inner {
                 pane,
                 generation,
                 attempt,
-                mode,
                 "reader_start_failed",
                 message,
                 elapsed_ms,
@@ -2228,38 +2584,32 @@ impl Inner {
             );
             return;
         }
+        for input in self.holder_input.values_mut() {
+            input.fold();
+        }
+        self.holder_input
+            .entry(pane.to_owned())
+            .or_default()
+            .count(pane, session.life());
         let entry = self.panes.get_mut(pane).expect("checked above");
         entry.session = Some(session);
         let message = entry.lifecycle.message.clone();
-        let decision = self.retry_decision(
-            pane,
-            if mode == Mode::Observe {
-                "manual"
-            } else {
-                "none"
-            },
-        );
+        let decision = self.retry_decision(pane, "none");
         let entry = self.panes.get_mut(pane).expect("checked above");
         entry.lifecycle = Lifecycle {
-            state: match mode {
-                Mode::Control => "controlling",
-                Mode::Observe => "observing",
-            },
+            state: "controlling",
             message,
             generation,
             attempt,
-            mode: Some(mode),
             exit_category: None,
             retry_decision: decision,
         };
         self.sync(pane);
+        self.pump_replay(pane, now);
         self.note(
             pane,
             "terminal.session_ready",
-            format!(
-                "Pane {pane} terminal {} session ready in {elapsed_ms} ms",
-                mode.as_str()
-            ),
+            format!("Pane {pane} terminal session ready in {elapsed_ms} ms"),
         );
         crate::diagnostic!(json!({
             "component": "terminal_session",
@@ -2267,7 +2617,6 @@ impl Inner {
             "pane_id": pane,
             "generation": generation,
             "attempt": attempt,
-            "mode": mode.as_str(),
             "duration_ms": elapsed_ms,
             "retry_decision": decision,
         }));
@@ -2280,19 +2629,15 @@ impl Inner {
         pane: &str,
         generation: u64,
         attempt: u64,
-        mode: Mode,
         category: &str,
         message: String,
         elapsed_ms: u128,
         now: Instant,
     ) {
         self.record_failure(
-            shared, pane, generation, attempt, mode, category, &message, elapsed_ms, now,
+            shared, pane, generation, attempt, category, &message, elapsed_ms, now,
         );
-        let notice = format!(
-            "\r\n[Terminal {} session for {pane} failed: {message}]\r\n",
-            mode.as_str()
-        );
+        let notice = format!("\r\n[Terminal session for {pane} failed: {message}]\r\n");
         self.output(pane, notice.into_bytes(), false);
         self.error(
             pane,
@@ -2311,7 +2656,6 @@ impl Inner {
         shared: &Arc<Shared>,
         pane: &str,
         generation: u64,
-        mode: Mode,
         event: SessionEvent,
     ) -> bool {
         match event {
@@ -2322,10 +2666,8 @@ impl Inner {
                 bytes,
             } => self
                 .frame(
-                    shared,
                     pane,
                     generation,
-                    mode,
                     bytes,
                     GridSize {
                         rows: height,
@@ -2334,16 +2676,31 @@ impl Inner {
                     full,
                 )
                 .is_some(),
-            SessionEvent::Closed { reason } => {
-                let category = protocol::closed_category(reason.as_deref());
-                self.closed(shared, pane, generation, mode, category, reason);
-                false
-            }
+            SessionEvent::Clipboard { text } => self.clipboard(pane, generation, text),
             SessionEvent::Ended { category, message } => {
-                self.closed(shared, pane, generation, mode, category, Some(message));
+                self.closed(shared, pane, generation, category, message);
                 false
             }
         }
+    }
+
+    /// Hands the screen what the current session's program wrote to the
+    /// clipboard, once; answers whether the session is still current.
+    fn clipboard(&mut self, pane: &str, generation: u64, text: Vec<u8>) -> bool {
+        let Some(entry) = self.panes.get(pane) else {
+            return false;
+        };
+        if entry.current_generation != Some(generation) || entry.session.is_none() {
+            return false;
+        }
+        // A pane attached only to take input has no screen looking at it.
+        if entry.release_after_input.is_none() {
+            self.deliveries.push(Delivery::Clipboard {
+                pane: pane.to_owned(),
+                text,
+            });
+        }
+        true
     }
 
     /// Hands a frame of the current session to the screen, unless its grid
@@ -2352,36 +2709,18 @@ impl Inner {
     #[allow(clippy::too_many_arguments)]
     fn frame(
         &mut self,
-        shared: &Arc<Shared>,
         pane: &str,
         generation: u64,
-        mode: Mode,
         bytes: Vec<u8>,
         arrived: GridSize,
         full: bool,
     ) -> Option<bool> {
         let entry = self.panes.get_mut(pane)?;
-        if entry.current_generation != Some(generation)
-            || entry
-                .session
-                .as_ref()
-                .is_none_or(|session| session.mode != mode)
-        {
+        if entry.current_generation != Some(generation) || entry.session.is_none() {
             return None;
         }
         let expected = entry.view.or(entry.size);
         if expected != Some(arrived) {
-            // Herdr draws an observer at the grid it attached with, and an
-            // observer has no writer to resize, so a view that changed size
-            // since would hold every frame from now on. It attaches again at
-            // the view's grid; this generation's reader retires.
-            if mode == Mode::Observe && expected.is_some() {
-                if entry.observer_resized_at.is_some() {
-                    return Some(false);
-                }
-                self.reattach_observer(shared, pane, "frame_grid");
-                return None;
-            }
             entry.need_full = true;
             if entry.foreign_grid.replace(arrived) != Some(arrived) {
                 crate::diagnostic!(json!({
@@ -2400,23 +2739,30 @@ impl Inner {
         // empty canvas is ever shown between the two.
         let reset = std::mem::take(&mut entry.need_full);
         let first = std::mem::take(&mut entry.first_frame_pending);
+        let regrid = reset || entry.told_grid.replace(arrived) != Some(arrived);
+        entry.told_grid = Some(arrived);
         let watched = self.watches.remove(pane).is_some();
-        if mode == Mode::Control {
-            if let Some(recovery) = entry.recovery.take() {
-                crate::diagnostic!(json!({
-                    "kind": "terminal.control_frame_ready", "pane_id": pane,
-                    "generation": generation, "occurred_at": unix_ms(),
-                    "retries": recovery.retries,
-                    "last_attempt_at_unix_ms": recovery.last_attempt_at_unix_ms,
-                    "rows": arrived.rows, "cols": arrived.cols,
-                }));
-            }
-            entry.lifecycle.message = None;
-            entry.lifecycle.retry_decision = "none";
-            self.sync(pane);
+        if let Some(recovery) = entry.recovery.take() {
+            crate::diagnostic!(json!({
+                "kind": "terminal.control_frame_ready", "pane_id": pane,
+                "generation": generation, "occurred_at": unix_ms(),
+                "retries": recovery.retries,
+                "last_attempt_at_unix_ms": recovery.last_attempt_at_unix_ms,
+                "rows": arrived.rows, "cols": arrived.cols,
+            }));
+        }
+        entry.lifecycle.message = None;
+        entry.lifecycle.retry_decision = "none";
+        self.sync(pane);
+        if regrid {
+            self.deliveries.push(Delivery::Grid {
+                pane: pane.to_owned(),
+                size: arrived,
+            });
         }
         // Only a frame this node began with a reset draws the whole screen
-        // for a reader that lost output; Herdr's own full frames may not.
+        // for a reader that lost output; a transport's own full frames may
+        // not.
         if reset {
             let mut drawn = Vec::with_capacity(bytes.len() + 2);
             drawn.extend_from_slice(b"\x1bc");
@@ -2440,9 +2786,8 @@ impl Inner {
         Some(true)
     }
 
-    /// A session's close, with the category its transport gave it. An owner
-    /// conflict falls back once to Herdr's read-only observer; a close that
-    /// says the pane is over or someone else's ([`final_close`]) is not
+    /// A session's close, with the category its transport gave it. A close
+    /// that says the pane is over or someone else's ([`final_close`]) is not
     /// tried again; every other close ends only the transport, never the
     /// pane.
     fn closed(
@@ -2450,61 +2795,20 @@ impl Inner {
         shared: &Arc<Shared>,
         pane: &str,
         generation: u64,
-        mode: Mode,
         category: &'static str,
-        reason: Option<String>,
+        message: String,
     ) {
         let now = Instant::now();
         let Some(entry) = self.panes.get_mut(pane) else {
             return;
         };
-        if entry.current_generation != Some(generation)
-            || entry
-                .session
-                .as_ref()
-                .is_none_or(|session| session.mode != mode)
-        {
+        if entry.current_generation != Some(generation) || entry.session.is_none() {
             return;
         }
         self.retired.extend(entry.session.take());
         let attempt = entry.lifecycle.attempt;
         let closing = entry.closing;
-        let message = reason
-            .unwrap_or_else(|| format!("Pane {pane} terminal {} session ended", mode.as_str()));
-        if mode == Mode::Control && category == "owner_conflict" {
-            crate::diagnostic!(json!({
-                "component": "terminal_session",
-                "kind": "terminal.control_owner_conflict",
-                "pane_id": pane,
-                "generation": generation,
-                "attempt": attempt,
-                "mode": mode.as_str(),
-                "exit_category": category,
-                "retry_decision": self.retry_decision(pane, "observe_once"),
-            }));
-            self.schedule_recovery(
-                shared,
-                pane,
-                "Another client owns terminal control; viewing read-only".to_owned(),
-                now,
-            );
-            let message = self
-                .panes
-                .get(pane)
-                .and_then(|entry| entry.recovery.as_ref())
-                .map(Recovery::message);
-            self.start_session(
-                shared,
-                pane,
-                Mode::Observe,
-                attempt,
-                "observe_once",
-                message,
-                now,
-            );
-            return;
-        }
-        // A pane Hide asked Herdr to close ends its transport as a
+        // A pane Hide asked to close ends its transport as a
         // consequence of the close. It is not a failure, so nothing is drawn
         // over its last frame.
         if closing {
@@ -2514,7 +2818,6 @@ impl Inner {
                 message: None,
                 generation,
                 attempt,
-                mode: Some(mode),
                 exit_category: Some(category.to_owned()),
                 retry_decision: "none",
             };
@@ -2525,14 +2828,13 @@ impl Inner {
                 "pane_id": pane,
                 "generation": generation,
                 "attempt": attempt,
-                "mode": mode.as_str(),
                 "exit_category": category,
                 "retry_decision": "none",
             }));
             return;
         }
         if final_close(category).is_some() {
-            self.ended_for_good(pane, generation, attempt, mode, category, message);
+            self.ended_for_good(pane, generation, attempt, category, message);
             return;
         }
         let entry = self.panes.get_mut(pane).expect("checked above");
@@ -2541,7 +2843,6 @@ impl Inner {
             message: Some(message.clone()),
             generation,
             attempt,
-            mode: Some(mode),
             exit_category: Some(category.to_owned()),
             retry_decision: "manual",
         };
@@ -2555,7 +2856,6 @@ impl Inner {
             "pane_id": pane,
             "generation": generation,
             "attempt": attempt,
-            "mode": mode.as_str(),
             "exit_category": category,
             "retry_decision": self.retry_decision(pane, "manual"),
         }));
@@ -2571,7 +2871,6 @@ impl Inner {
         pane: &str,
         generation: u64,
         attempt: u64,
-        mode: Mode,
         category: &'static str,
         message: String,
     ) {
@@ -2586,7 +2885,6 @@ impl Inner {
             message: Some(message.clone()),
             generation,
             attempt,
-            mode: Some(mode),
             exit_category: Some(category.to_owned()),
             retry_decision: "none",
         };
@@ -2601,7 +2899,6 @@ impl Inner {
             "pane_id": pane,
             "generation": generation,
             "attempt": attempt,
-            "mode": mode.as_str(),
             "exit_category": category,
             "retry_decision": "none",
         }));
@@ -2629,6 +2926,49 @@ impl Inner {
             "message": message,
             "retry_decision": self.retry_decision(pane, "manual"),
         }));
+    }
+
+    /// Whether the engine's input can go to `pane`: a pane this node tracks,
+    /// or one whose holder it runs or starts and tracks nothing of
+    /// ([`Attacher::holds`]), as after the node starts again or once
+    /// `forget_unowned` dropped an idle entry. Such a pane gets an entry
+    /// here, so the input attaches it (`attach_for_input`) as it does a
+    /// released one; the entries this adds are bounded by the holders the
+    /// node runs.
+    fn takes_input(&mut self, shared: &Shared, pane: &str) -> bool {
+        if self.panes.contains_key(pane) {
+            return true;
+        }
+        if !shared.attacher.holds(pane) {
+            return false;
+        }
+        self.panes.entry(pane.to_owned()).or_default();
+        true
+    }
+
+    /// Attaches `pane` for the engine's input only when no screen holds it:
+    /// one the core released, or one this node knows only from a control
+    /// such as `Asleep` that came before any attach (a device just linked,
+    /// with-hide/hide-private#660). It reads released throughout and is
+    /// released again once the input ends, unless the core attaches it
+    /// meanwhile, so a pane no screen shows keeps no session (and a
+    /// device's node sends no output) after it.
+    fn attach_for_input(&mut self, shared: &Arc<Shared>, pane: &str, now: Instant) {
+        let Some(entry) = self.panes.get_mut(pane) else {
+            return;
+        };
+        if entry.session.is_some()
+            || entry.closing
+            || !matches!(entry.lifecycle.state, "released" | "idle")
+        {
+            return;
+        }
+        let message =
+            entry.lifecycle.message.clone().unwrap_or_else(|| {
+                format!("Pane {pane} is attached only while Hide types into it")
+            });
+        entry.release_after_input.get_or_insert(message);
+        self.request_control(shared, pane, now);
     }
 
     fn finish_input_release(&mut self, pane: &str) {
@@ -2663,6 +3003,16 @@ impl Inner {
             }
             return;
         }
+        self.retire_released(pane, message);
+    }
+
+    /// Releases `pane` now, whatever input is still in flight: its session
+    /// and any opening one are retired (a late one reads the pane released
+    /// and is not installed), and it reads released until it attaches again.
+    fn retire_released(&mut self, pane: &str, message: String) {
+        let Some(entry) = self.panes.get_mut(pane) else {
+            return;
+        };
         entry.release_after_input = None;
         entry.pending_spawn = None;
         // A released pane draws no frame until it attaches again.
@@ -2672,12 +3022,14 @@ impl Inner {
         entry.awaiting_size = false;
         entry.recovery = None;
         entry.hold.discard(pane, "released");
+        if let Some(replay) = entry.replay.take() {
+            replay.discard(pane, "released");
+        }
         entry.lifecycle = Lifecycle {
             state: "released",
             message: Some(message),
             generation,
             attempt: entry.lifecycle.attempt,
-            mode: None,
             exit_category: None,
             retry_decision: "on_next_visit",
         };
@@ -2714,20 +3066,13 @@ impl Inner {
         }));
         let result = match entry.session.as_ref() {
             // At the size it has, a pane that awaits a full frame asks for one.
-            Some(session) if session.mode == Mode::Control && previous == Some(size) => session
+            Some(session) if previous == Some(size) => session
                 .redraw(size.rows, size.cols)
                 .map_err(|refused| refused.message(pane)),
-            Some(session) if session.mode == Mode::Control => session
+            Some(session) => session
                 .resize(size.rows, size.cols)
                 .map_err(|refused| refused.message(pane)),
-            // An observer cannot resize; it attaches again at the new grid
-            // once the size settles.
-            Some(_) if previous != Some(size) => {
-                entry.observer_resized_at = Some(now);
-                self.wake_clock = true;
-                Ok(())
-            }
-            _ => Ok(()),
+            None => Ok(()),
         };
         if let Err(message) = result {
             self.error(pane, "terminal.resize_failed", message);
@@ -2735,56 +3080,21 @@ impl Inner {
     }
 
     /// A reader lost output: the next frame it draws is a full one.
-    fn redraw(&mut self, shared: &Arc<Shared>, pane: &str, cause: &'static str) {
+    fn redraw(&mut self, pane: &str, cause: &'static str) {
         let Some(entry) = self.panes.get_mut(pane) else {
             return;
         };
         entry.need_full = true;
-        let size = entry.size;
-        let mode = entry.session.as_ref().map(|session| session.mode);
         crate::diagnostic!(json!({
             "component": "terminal", "kind": "terminal.redraw_requested",
             "pane_id": pane, "cause": cause,
             "generation": entry.current_generation,
         }));
-        match (mode, size) {
-            (Some(Mode::Control), Some(size)) => {
-                let result = entry
-                    .session
-                    .as_ref()
-                    .expect("mode read from it")
-                    .redraw(size.rows, size.cols);
-                if let Err(refused) = result {
-                    self.error(pane, "terminal.resize_failed", refused.message(pane));
-                }
-            }
-            (Some(Mode::Observe), _) => self.reattach_observer(shared, pane, cause),
-            _ => {}
+        if let (Some(session), Some(size)) = (entry.session.as_ref(), entry.size)
+            && let Err(refused) = session.redraw(size.rows, size.cols)
+        {
+            self.error(pane, "terminal.resize_failed", refused.message(pane));
         }
-    }
-
-    /// Starts the pane's observer again at the view's grid. Herdr draws an
-    /// observer at the grid it attached with, so this is how an observed
-    /// view changes size.
-    fn reattach_observer(&mut self, shared: &Arc<Shared>, pane: &str, cause: &'static str) {
-        let Some(entry) = self.panes.get(pane) else {
-            return;
-        };
-        let lifecycle = entry.lifecycle.clone();
-        crate::diagnostic!(json!({
-            "component": "terminal", "kind": "terminal.observer_reattached",
-            "pane_id": pane, "cause": cause,
-            "view": entry.view.or(entry.size).map(|size| [size.cols, size.rows]),
-        }));
-        self.start_session(
-            shared,
-            pane,
-            Mode::Observe,
-            lifecycle.attempt,
-            lifecycle.retry_decision,
-            lifecycle.message,
-            Instant::now(),
-        );
     }
 
     /// Advances what time alone moves, and answers when it must run next.
@@ -2802,26 +3112,21 @@ impl Inner {
         for entry in self.panes.values_mut() {
             entry.hold.expire_permits(now);
         }
-        let settled = self
+        let replays = self
             .panes
             .iter()
             .filter(|(_, entry)| {
                 entry
-                    .observer_resized_at
-                    .is_some_and(|at| now.saturating_duration_since(at) >= OBSERVER_RESIZE_QUIET)
+                    .replay
+                    .as_ref()
+                    .is_some_and(|replay| now >= replay.ends)
             })
             .map(|(pane, _)| pane.clone())
             .collect::<Vec<_>>();
-        for pane in settled {
-            let entry = self.panes.get_mut(&pane).expect("collected above");
-            entry.observer_resized_at = None;
-            if entry
-                .session
-                .as_ref()
-                .is_some_and(|session| session.mode == Mode::Observe)
-            {
-                self.reattach_observer(shared, &pane, "resize");
-            }
+        for pane in replays {
+            // Its pane did not take the keys in time: an attaching pane
+            // drops keys that old too.
+            self.drop_replay(&pane, "timeout");
         }
         let due = self
             .panes
@@ -2867,7 +3172,6 @@ impl Inner {
             self.start_session(
                 shared,
                 pane,
-                Mode::Control,
                 attempt,
                 "automatic_bounded",
                 Some(message.clone()),
@@ -2876,7 +3180,7 @@ impl Inner {
         } else {
             entry.lifecycle.message = Some(message.clone());
             entry.lifecycle.retry_decision = if retry { "automatic_bounded" } else { "manual" };
-            if !retry && entry.lifecycle.state != "observing" {
+            if !retry {
                 entry.lifecycle.state = "unavailable";
                 self.retired.extend(entry.session.take());
                 // A late spawn cannot revive an exhausted attempt.
@@ -2884,6 +3188,9 @@ impl Inner {
                 // The pane is no longer connecting; keys held for it would
                 // run whenever the operator reconnects, so they end here.
                 entry.hold.discard(pane, "session_failed");
+                if let Some(replay) = entry.replay.take() {
+                    replay.discard(pane, "session_failed");
+                }
             }
             self.sync(pane);
         }
@@ -2905,10 +3212,8 @@ impl Inner {
                 .as_ref()
                 .and_then(|recovery| recovery.due)
                 .filter(|_| self.shown.contains(pane));
-            let observer = entry
-                .observer_resized_at
-                .map(|at| at + OBSERVER_RESIZE_QUIET);
-            [retry, observer, entry.hold.permit_deadline()]
+            let replay = entry.replay.as_ref().map(|replay| replay.ends);
+            [retry, entry.hold.permit_deadline(), replay]
         });
         let facts = self.facts.values().map(InputFacts::deadline);
         panes

@@ -1,4 +1,4 @@
-// Settings, Shortcuts on an isolated pinned Herdr and hided (PRD settings-cleanup
+// Settings, Shortcuts on an isolated engine and hided (PRD settings-cleanup
 // B60-B63, B66): the chip is the control and a chord applies as it is pressed,
 // Escape cancels, restore and clear show on hover or keyboard focus, the eight
 // area commands fold into one line, and the sheet no longer carries the
@@ -14,10 +14,10 @@ test.describe.configure({ timeout: 120_000 });
 
 test("a chord chip rebinds as the chord is pressed, and the area commands fold into one line", async ({ page }) => {
   await page.setViewportSize({ width: 1200, height: 900 });
-  const herdr = await startFixture();
+  const engine = await startFixture();
   let daemon: Daemon | null = null;
   try {
-    daemon = await startHided(herdr, "shortcuts-settings");
+    daemon = await startHided(engine, "shortcuts-settings");
     const last = new Map<string, Record<string, unknown>>();
     countSent(page, last);
     await page.goto(`${daemon.origin}/#token=${daemon.token}`);
@@ -77,6 +77,6 @@ test("a chord chip rebinds as the chord is pressed, and the area commands fold i
     await screenshot(page, "settings-shortcuts");
   } finally {
     daemon?.stop();
-    herdr.stop();
+    engine.stop();
   }
 });

@@ -13,9 +13,11 @@ export type ProjectSettings = {
   name?: string;
   repository?: RepositoryConnection; issue_source?: "auto" | "github" | "local";
   new_work?: "checkout" | "worktree"; base_branch?: BaseBranchChoice; auto_fetch?: boolean; guardrails?: Guardrails;
+  /** The profile each agent starts with in this project, by agent id (PRD agent-profiles D-31); absent follows the agent's default. */
+  agent_profiles?: Record<string, string>;
 };
-/** `name: ""` gives the project its folder's name back. */
-export type ProjectSettingsPatch = Partial<Pick<ProjectSettings, "name" | "repository" | "issue_source" | "new_work" | "base_branch" | "auto_fetch" | "guardrails">>;
+/** `name: ""` gives the project its folder's name back; an agent's `null` profile follows the agent's default again. */
+export type ProjectSettingsPatch = Partial<Pick<ProjectSettings, "name" | "repository" | "issue_source" | "new_work" | "base_branch" | "auto_fetch" | "guardrails">> & { agent_profiles?: Record<string, string | null> };
 
 /** The longest name the core keeps, in characters (`project_settings::NAME_LENGTH`). */
 export const PROJECT_NAME_LENGTH = 64;

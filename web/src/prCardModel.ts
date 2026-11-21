@@ -53,7 +53,7 @@ export function primaryAction(kind: PrReason["kind"]): PrimaryAction {
 /** Why Merge cannot be pressed now, as the key of the reason word and its values; null when it can (B30). */
 export type MergeWhy = { key: "ci" | "failed" | "changes" | "agent" | "conflict" | "reviewer" | "approvals" | "github_more" | "blocked" | "draft" | "permission" | "unknown" | "unread"; count: number; base: string };
 
-export function mergeWhy(pr: PullRequest, card: PrCard | null, working: boolean): MergeWhy | null {
+export function mergeWhy(pr: PullRequest, card: Pick<PrCard, "merge"> | null, working: boolean): MergeWhy | null {
   const work = pr.work;
   if (!card?.merge) return { key: "unread", count: 0, base: "" };
   if (!card.merge.can_merge) return { key: "permission", count: 0, base: "" };
@@ -101,7 +101,7 @@ function blockedByReview(pr: PullRequest): MergeWhy {
 }
 
 /** The method Merge uses unless the operator picked another: GitHub's own default order. */
-export function defaultMethod(card: PrCard | null): PrMergeMethod | null {
+export function defaultMethod(card: Pick<PrCard, "merge"> | null): PrMergeMethod | null {
   const methods = card?.merge?.methods ?? [];
   return methods[0] ?? null;
 }

@@ -1,5 +1,78 @@
 {
+    "access": {
+        "choose": "HIDE_ACCESS",
+        "levels": [
+            "view",
+            "act"
+        ],
+        "refusals": {
+            "access_ambiguous": "This home keeps several tools' keys; set HIDE_ACCESS=<name> to choose one",
+            "access_core_only": "Run the tool on the machine where Hide's core runs",
+            "access_from_pane": "An agent in a Hide pane acts as itself; run hide access request from the tool, outside Hide's panes",
+            "access_key_unreadable": "This tool's key file cannot be read; run hide access request --name <name>, which replaces it and asks the operator again",
+            "access_limit": "16 tools are connected; ask the operator to disconnect one in Settings > External tools, then run hide access request again",
+            "access_name_taken": "A connected tool has this name; ask the operator to disconnect it in Settings > External tools, or choose another --name, then run hide access request again",
+            "access_needs_agent": "Only an agent in a Hide pane runs this; start one with hide agent spawn and ask it with hide request send",
+            "access_not_connected": "Run hide access request --name <name> first",
+            "access_pending": "Wait until the operator approves the request in Settings > External tools; the next hide command then runs as the tool",
+            "access_refused": "The operator refused this tool; run hide access request --name <name> to ask again",
+            "access_request_expired": "The request was dropped; run hide access request --name <name> to ask again",
+            "access_revoked": "The operator disconnected this tool; run hide access request --name <name> to ask again",
+            "access_spawn_parent": "A tool is no agent's parent; run hide agent spawn without --parent and follow the agent with hide agent show and hide inbox",
+            "access_unavailable": "Start Hide on this machine, then run the same command again",
+            "access_view_only": "This tool is View only; ask the operator to switch it to Act in Settings > External tools"
+        }
+    },
     "answers": {
+        "access_left": {
+            "properties": {
+                "name": {
+                    "type": "object"
+                },
+                "state": {
+                    "type": "object"
+                }
+            },
+            "required": [
+                "state",
+                "name"
+            ],
+            "type": "object"
+        },
+        "access_list": {
+            "properties": {
+                "connections": {
+                    "type": "object"
+                },
+                "limit": {
+                    "type": "object"
+                },
+                "machine": {
+                    "type": "object"
+                },
+                "pending": {
+                    "type": "object"
+                }
+            },
+            "required": [
+                "machine",
+                "limit",
+                "pending",
+                "connections"
+            ],
+            "type": "object"
+        },
+        "access_standing": {
+            "properties": {
+                "state": {
+                    "type": "object"
+                }
+            },
+            "required": [
+                "state"
+            ],
+            "type": "object"
+        },
         "acknowledged": {
             "$schema": "http://json-schema.org/draft-07/schema#",
             "description": "`hide inbox --ack`: the bundle it took and how many letters were in it.",
@@ -88,6 +161,7 @@
                     "enum": [
                         "running",
                         "asleep",
+                        "closed",
                         "ended"
                     ],
                     "type": "string"
@@ -132,6 +206,10 @@
                         "last_status": {
                             "type": "string"
                         },
+                        "operator_notified": {
+                            "description": "The operator was told that the observer did not look at this quiet episode's first warning (`human::claim`); the episode's activity clears it. Left out of the file while false.",
+                            "type": "boolean"
+                        },
                         "parent": {
                             "$ref": "#/definitions/Actor"
                         },
@@ -160,7 +238,8 @@
                         "last_status",
                         "last_state_change_seq",
                         "status_changed_at_unix_ms",
-                        "generation"
+                        "generation",
+                        "operator_notified"
                     ],
                     "type": "object"
                 }
@@ -203,10 +282,24 @@
                         "null"
                     ]
                 },
+                "origin_tool": {
+                    "description": "The name of the external tool whose connection started this agent (PRD hide-external-control B31); absent for every other start.",
+                    "type": [
+                        "string",
+                        "null"
+                    ]
+                },
                 "pane": {
                     "type": "string"
                 },
                 "parent": {
+                    "type": [
+                        "string",
+                        "null"
+                    ]
+                },
+                "profile": {
+                    "description": "The profile the agent runs with, named after its agent (`Claude \u00b7 work`); null for its agent's built-in default (PRD agent-profiles B17).",
                     "type": [
                         "string",
                         "null"
@@ -249,7 +342,9 @@
                 "pane",
                 "parent",
                 "origin",
+                "origin_tool",
                 "project",
+                "profile",
                 "runtime",
                 "connection",
                 "registered",
@@ -290,6 +385,336 @@
                 "installed_known",
                 "items"
             ],
+            "type": "object"
+        },
+        "agent_end": {
+            "$schema": "http://json-schema.org/draft-07/schema#",
+            "definitions": {
+                "Actor": {
+                    "properties": {
+                        "device_id": {
+                            "type": "string"
+                        },
+                        "kind": {
+                            "type": "string"
+                        },
+                        "name": {
+                            "type": "string"
+                        },
+                        "pane_id": {
+                            "type": "string"
+                        },
+                        "session": {
+                            "type": [
+                                "string",
+                                "null"
+                            ]
+                        }
+                    },
+                    "required": [
+                        "pane_id",
+                        "name",
+                        "kind",
+                        "device_id",
+                        "session"
+                    ],
+                    "type": "object"
+                },
+                "Connection": {
+                    "enum": [
+                        "connected",
+                        "disconnected"
+                    ],
+                    "type": "string"
+                },
+                "ConversationEnd": {
+                    "description": "The conversation of an ended registration.",
+                    "oneOf": [
+                        {
+                            "description": "Kept under \ubcf4\uad00\ub428, where \uc774\uc5b4\uac00\uae30 resumes it.",
+                            "enum": [
+                                "archived"
+                            ],
+                            "type": "string"
+                        },
+                        {
+                            "description": "Not kept: the archive holds as many sessions as it keeps, and none of them is at rest to make room.",
+                            "enum": [
+                                "archive_full"
+                            ],
+                            "type": "string"
+                        },
+                        {
+                            "description": "Nothing was archived: the pane stayed, was gone, showed no conversation Hide knows, or Hide could not form the record (its reason is in the diagnostic log).",
+                            "enum": [
+                                "none"
+                            ],
+                            "type": "string"
+                        }
+                    ]
+                },
+                "Names": {
+                    "properties": {
+                        "tab": {
+                            "$ref": "#/definitions/Outcome"
+                        },
+                        "workspace": {
+                            "$ref": "#/definitions/Outcome"
+                        }
+                    },
+                    "required": [
+                        "workspace",
+                        "tab"
+                    ],
+                    "type": "object"
+                },
+                "Outcome": {
+                    "enum": [
+                        "pending",
+                        "applied",
+                        "preserved",
+                        "failed"
+                    ],
+                    "type": "string"
+                },
+                "PaneEnd": {
+                    "description": "The pane of an ended registration.",
+                    "oneOf": [
+                        {
+                            "description": "Closed: its holder, shell, agent and everything under them ended.",
+                            "enum": [
+                                "closed"
+                            ],
+                            "type": "string"
+                        },
+                        {
+                            "description": "Left open, as `--keep-pane` asked.",
+                            "enum": [
+                                "kept"
+                            ],
+                            "type": "string"
+                        },
+                        {
+                            "description": "No pane of the registration runs: it closed before, or its id now names another terminal.",
+                            "enum": [
+                                "gone"
+                            ],
+                            "type": "string"
+                        },
+                        {
+                            "description": "Another conversation runs in the pane now, so it was left open.",
+                            "enum": [
+                                "other_agent"
+                            ],
+                            "type": "string"
+                        },
+                        {
+                            "description": "Left open: the registration is from before Hide recorded its pane's terminal, and no agent shows in the pane, so nothing proves the pane is still the registration's.",
+                            "enum": [
+                                "left"
+                            ],
+                            "type": "string"
+                        }
+                    ]
+                },
+                "Runtime": {
+                    "enum": [
+                        "running",
+                        "asleep",
+                        "closed",
+                        "ended"
+                    ],
+                    "type": "string"
+                },
+                "Watch": {
+                    "properties": {
+                        "activity_failures": {
+                            "format": "uint32",
+                            "minimum": 0.0,
+                            "type": "integer"
+                        },
+                        "first_warning_at_unix_ms": {
+                            "format": "uint64",
+                            "minimum": 0.0,
+                            "type": [
+                                "integer",
+                                "null"
+                            ]
+                        },
+                        "generation": {
+                            "default": 0,
+                            "format": "uint64",
+                            "minimum": 0.0,
+                            "type": "integer"
+                        },
+                        "id": {
+                            "type": "string"
+                        },
+                        "last_activity_at_unix_ms": {
+                            "format": "uint64",
+                            "minimum": 0.0,
+                            "type": "integer"
+                        },
+                        "last_state_change_seq": {
+                            "format": "uint64",
+                            "minimum": 0.0,
+                            "type": [
+                                "integer",
+                                "null"
+                            ]
+                        },
+                        "last_status": {
+                            "type": "string"
+                        },
+                        "operator_notified": {
+                            "description": "The operator was told that the observer did not look at this quiet episode's first warning (`human::claim`); the episode's activity clears it. Left out of the file while false.",
+                            "type": "boolean"
+                        },
+                        "parent": {
+                            "$ref": "#/definitions/Actor"
+                        },
+                        "status_changed_at_unix_ms": {
+                            "format": "uint64",
+                            "minimum": 0.0,
+                            "type": "integer"
+                        },
+                        "target": {
+                            "$ref": "#/definitions/Actor"
+                        },
+                        "warning_count": {
+                            "format": "uint8",
+                            "minimum": 0.0,
+                            "type": "integer"
+                        }
+                    },
+                    "required": [
+                        "id",
+                        "parent",
+                        "target",
+                        "last_activity_at_unix_ms",
+                        "first_warning_at_unix_ms",
+                        "warning_count",
+                        "activity_failures",
+                        "last_status",
+                        "last_state_change_seq",
+                        "status_changed_at_unix_ms",
+                        "generation",
+                        "operator_notified"
+                    ],
+                    "type": "object"
+                }
+            },
+            "description": "`hide agent end`: the registration as it ended, what became of the pane its agent ran in, and of the conversation that ran there.",
+            "properties": {
+                "connection": {
+                    "$ref": "#/definitions/Connection"
+                },
+                "conversation": {
+                    "$ref": "#/definitions/ConversationEnd"
+                },
+                "hostScope": {
+                    "type": "string"
+                },
+                "id": {
+                    "type": "string"
+                },
+                "instance": {
+                    "type": "string"
+                },
+                "machine": {
+                    "type": "string"
+                },
+                "name": {
+                    "type": "string"
+                },
+                "names": {
+                    "anyOf": [
+                        {
+                            "$ref": "#/definitions/Names"
+                        },
+                        {
+                            "type": "null"
+                        }
+                    ],
+                    "description": "Naming has its own receipt; it never changes successful spawn identity."
+                },
+                "origin": {
+                    "description": "The spawner, independently of responsibility; null for ordinary roots.",
+                    "type": [
+                        "string",
+                        "null"
+                    ]
+                },
+                "origin_tool": {
+                    "description": "The name of the external tool whose connection started this agent (PRD hide-external-control B31); absent for every other start.",
+                    "type": [
+                        "string",
+                        "null"
+                    ]
+                },
+                "pane": {
+                    "type": "string"
+                },
+                "parent": {
+                    "type": [
+                        "string",
+                        "null"
+                    ]
+                },
+                "profile": {
+                    "description": "The profile the agent runs with, named after its agent (`Claude \u00b7 work`); null for its agent's built-in default (PRD agent-profiles B17).",
+                    "type": [
+                        "string",
+                        "null"
+                    ]
+                },
+                "project": {
+                    "type": [
+                        "string",
+                        "null"
+                    ]
+                },
+                "registered": {
+                    "type": "boolean"
+                },
+                "runtime": {
+                    "$ref": "#/definitions/Runtime"
+                },
+                "session": {
+                    "type": "string"
+                },
+                "watch": {
+                    "anyOf": [
+                        {
+                            "$ref": "#/definitions/Watch"
+                        },
+                        {
+                            "type": "null"
+                        }
+                    ],
+                    "description": "The watch on this agent, if one is running."
+                }
+            },
+            "required": [
+                "pane",
+                "conversation",
+                "id",
+                "name",
+                "machine",
+                "hostScope",
+                "session",
+                "instance",
+                "parent",
+                "origin",
+                "origin_tool",
+                "project",
+                "profile",
+                "runtime",
+                "connection",
+                "registered",
+                "watch"
+            ],
+            "title": "AgentEnd",
             "type": "object"
         },
         "agent_list": {
@@ -364,10 +789,24 @@
                                 "null"
                             ]
                         },
+                        "origin_tool": {
+                            "description": "The name of the external tool whose connection started this agent (PRD hide-external-control B31); absent for every other start.",
+                            "type": [
+                                "string",
+                                "null"
+                            ]
+                        },
                         "pane": {
                             "type": "string"
                         },
                         "parent": {
+                            "type": [
+                                "string",
+                                "null"
+                            ]
+                        },
+                        "profile": {
+                            "description": "The profile the agent runs with, named after its agent (`Claude \u00b7 work`); null for its agent's built-in default (PRD agent-profiles B17).",
                             "type": [
                                 "string",
                                 "null"
@@ -410,7 +849,9 @@
                         "pane",
                         "parent",
                         "origin",
+                        "origin_tool",
                         "project",
+                        "profile",
                         "runtime",
                         "connection",
                         "registered",
@@ -453,6 +894,7 @@
                     "enum": [
                         "running",
                         "asleep",
+                        "closed",
                         "ended"
                     ],
                     "type": "string"
@@ -497,6 +939,10 @@
                         "last_status": {
                             "type": "string"
                         },
+                        "operator_notified": {
+                            "description": "The operator was told that the observer did not look at this quiet episode's first warning (`human::claim`); the episode's activity clears it. Left out of the file while false.",
+                            "type": "boolean"
+                        },
                         "parent": {
                             "$ref": "#/definitions/Actor"
                         },
@@ -525,7 +971,8 @@
                         "last_status",
                         "last_state_change_seq",
                         "status_changed_at_unix_ms",
-                        "generation"
+                        "generation",
+                        "operator_notified"
                     ],
                     "type": "object"
                 }
@@ -543,6 +990,55 @@
                 "items"
             ],
             "title": "AgentList",
+            "type": "object"
+        },
+        "agent_profile": {
+            "properties": {
+                "machine": {
+                    "type": "object"
+                },
+                "profile": {
+                    "type": "object"
+                }
+            },
+            "required": [
+                "machine",
+                "profile"
+            ],
+            "type": "object"
+        },
+        "agent_profile_removed": {
+            "properties": {
+                "machine": {
+                    "type": "object"
+                },
+                "projects_back_to_default": {
+                    "type": "object"
+                },
+                "removed": {
+                    "type": "object"
+                }
+            },
+            "required": [
+                "machine",
+                "removed",
+                "projects_back_to_default"
+            ],
+            "type": "object"
+        },
+        "agent_profiles": {
+            "properties": {
+                "machine": {
+                    "type": "object"
+                },
+                "profiles": {
+                    "type": "object"
+                }
+            },
+            "required": [
+                "machine",
+                "profiles"
+            ],
             "type": "object"
         },
         "agent_register_check": {
@@ -670,6 +1166,59 @@
                     ],
                     "type": "string"
                 },
+                "HumanKind": {
+                    "description": "The two steps only a person can take (D-03); any other word is refused, so a judgement call still goes to the parent as a letter.",
+                    "oneOf": [
+                        {
+                            "description": "Proving who you are: a sign-in, a re-authentication, an unlock.",
+                            "enum": [
+                                "auth"
+                            ],
+                            "type": "string"
+                        },
+                        {
+                            "description": "Granting access: an app connection, an OS permission.",
+                            "enum": [
+                                "permission"
+                            ],
+                            "type": "string"
+                        },
+                        {
+                            "description": "Confirming an install or an update an agent asked for with `hide skill` / `hide mcp` (PRD skill-mcp-manager B32): never declared with `hide agent ask-human`, it stands while the command waits and is answered on the confirm, not with Done.",
+                            "enum": [
+                                "install"
+                            ],
+                            "type": "string"
+                        }
+                    ]
+                },
+                "HumanTurn": {
+                    "description": "One agent's declaration. `id` names this declaration, not the agent: a different declaration is a new id, so a Done for an earlier one settles nothing and a letter is sent once per declaration.",
+                    "properties": {
+                        "declared_at_unix_ms": {
+                            "format": "uint64",
+                            "minimum": 0.0,
+                            "type": "integer"
+                        },
+                        "id": {
+                            "type": "string"
+                        },
+                        "kind": {
+                            "$ref": "#/definitions/HumanKind"
+                        },
+                        "place": {
+                            "description": "Where the person acts, as the agent wrote it on one line.",
+                            "type": "string"
+                        }
+                    },
+                    "required": [
+                        "id",
+                        "kind",
+                        "place",
+                        "declared_at_unix_ms"
+                    ],
+                    "type": "object"
+                },
                 "InputKind": {
                     "description": "What was typed, for the notice and the row: a spawn's brief or a letter.",
                     "enum": [
@@ -773,34 +1322,55 @@
                     "enum": [
                         "running",
                         "asleep",
+                        "closed",
                         "ended"
                     ],
                     "type": "string"
                 },
                 "WaitCause": {
-                    "description": "The causes an agent waits by: its own demand (docs/status-model.md, Where each axis comes from), a question the core laid on its row, or one of the escalation causes (Delegated escalation).",
-                    "enum": [
-                        "unknown",
-                        "question",
-                        "approval",
-                        "blocked",
-                        "plan_review",
-                        "mission_decision",
-                        "mission_attention",
-                        "input_unconfirmed",
-                        "draft",
-                        "parent_blocked",
-                        "bell_exhausted",
-                        "undelivered",
-                        "observer_unconfirmed"
-                    ],
-                    "type": "string"
+                    "description": "The causes an agent waits by: its own demand (docs/status-model.md, Where each axis comes from), a question the core laid on its row, or one of the escalation causes (with-hide/hide-private docs/task-identity.md, Delegated escalation).",
+                    "oneOf": [
+                        {
+                            "enum": [
+                                "unknown",
+                                "question",
+                                "approval",
+                                "blocked",
+                                "plan_review",
+                                "mission_decision",
+                                "mission_attention",
+                                "input_unconfirmed",
+                                "draft",
+                                "parent_blocked",
+                                "observer_unconfirmed"
+                            ],
+                            "type": "string"
+                        },
+                        {
+                            "description": "The agent declared a step only a person can take (`hide agent ask-human`), its own or, for a delegated child, raised to the operator.",
+                            "enum": [
+                                "human_turn"
+                            ],
+                            "type": "string"
+                        }
+                    ]
                 },
                 "Waiting": {
                     "description": "What an agent waits on, by the core's own cause.",
                     "properties": {
                         "cause": {
                             "$ref": "#/definitions/WaitCause"
+                        },
+                        "human": {
+                            "anyOf": [
+                                {
+                                    "$ref": "#/definitions/HumanTurn"
+                                },
+                                {
+                                    "type": "null"
+                                }
+                            ],
+                            "description": "For `human_turn`: the declaration, its kind, place and when it was made (PRD ask-human B7). The device is the agent's `machine`."
                         },
                         "letter_id": {
                             "description": "The letter the wait is about.",
@@ -845,7 +1415,8 @@
                         "since_unix_ms",
                         "letter_id",
                         "spawn_id",
-                        "text"
+                        "text",
+                        "human"
                     ],
                     "type": "object"
                 },
@@ -889,6 +1460,10 @@
                         "last_status": {
                             "type": "string"
                         },
+                        "operator_notified": {
+                            "description": "The operator was told that the observer did not look at this quiet episode's first warning (`human::claim`); the episode's activity clears it. Left out of the file while false.",
+                            "type": "boolean"
+                        },
                         "parent": {
                             "$ref": "#/definitions/Actor"
                         },
@@ -917,7 +1492,8 @@
                         "last_status",
                         "last_state_change_seq",
                         "status_changed_at_unix_ms",
-                        "generation"
+                        "generation",
+                        "operator_notified"
                     ],
                     "type": "object"
                 }
@@ -960,10 +1536,24 @@
                         "null"
                     ]
                 },
+                "origin_tool": {
+                    "description": "The name of the external tool whose connection started this agent (PRD hide-external-control B31); absent for every other start.",
+                    "type": [
+                        "string",
+                        "null"
+                    ]
+                },
                 "pane": {
                     "type": "string"
                 },
                 "parent": {
+                    "type": [
+                        "string",
+                        "null"
+                    ]
+                },
+                "profile": {
+                    "description": "The profile the agent runs with, named after its agent (`Claude \u00b7 work`); null for its agent's built-in default (PRD agent-profiles B17).",
                     "type": [
                         "string",
                         "null"
@@ -1010,13 +1600,222 @@
                 "pane",
                 "parent",
                 "origin",
+                "origin_tool",
                 "project",
+                "profile",
                 "runtime",
                 "connection",
                 "registered",
                 "watch"
             ],
             "title": "AgentShow",
+            "type": "object"
+        },
+        "ask_human": {
+            "$schema": "http://json-schema.org/draft-07/schema#",
+            "definitions": {
+                "HumanKind": {
+                    "description": "The two steps only a person can take (D-03); any other word is refused, so a judgement call still goes to the parent as a letter.",
+                    "oneOf": [
+                        {
+                            "description": "Proving who you are: a sign-in, a re-authentication, an unlock.",
+                            "enum": [
+                                "auth"
+                            ],
+                            "type": "string"
+                        },
+                        {
+                            "description": "Granting access: an app connection, an OS permission.",
+                            "enum": [
+                                "permission"
+                            ],
+                            "type": "string"
+                        },
+                        {
+                            "description": "Confirming an install or an update an agent asked for with `hide skill` / `hide mcp` (PRD skill-mcp-manager B32): never declared with `hide agent ask-human`, it stands while the command waits and is answered on the confirm, not with Done.",
+                            "enum": [
+                                "install"
+                            ],
+                            "type": "string"
+                        }
+                    ]
+                },
+                "HumanTurn": {
+                    "description": "One agent's declaration. `id` names this declaration, not the agent: a different declaration is a new id, so a Done for an earlier one settles nothing and a letter is sent once per declaration.",
+                    "properties": {
+                        "declared_at_unix_ms": {
+                            "format": "uint64",
+                            "minimum": 0.0,
+                            "type": "integer"
+                        },
+                        "id": {
+                            "type": "string"
+                        },
+                        "kind": {
+                            "$ref": "#/definitions/HumanKind"
+                        },
+                        "place": {
+                            "description": "Where the person acts, as the agent wrote it on one line.",
+                            "type": "string"
+                        }
+                    },
+                    "required": [
+                        "id",
+                        "kind",
+                        "place",
+                        "declared_at_unix_ms"
+                    ],
+                    "type": "object"
+                },
+                "Outcome": {
+                    "description": "What a declaration did (B1, B5, B6).",
+                    "oneOf": [
+                        {
+                            "description": "A new declaration; the operator is told.",
+                            "enum": [
+                                "declared"
+                            ],
+                            "type": "string"
+                        },
+                        {
+                            "description": "The same kind and place as the standing one: nothing moved.",
+                            "enum": [
+                                "unchanged"
+                            ],
+                            "type": "string"
+                        },
+                        {
+                            "description": "A different declaration replaced the standing one; the operator is told again.",
+                            "enum": [
+                                "replaced"
+                            ],
+                            "type": "string"
+                        },
+                        {
+                            "description": "`--clear` took the standing declaration down.",
+                            "enum": [
+                                "cleared"
+                            ],
+                            "type": "string"
+                        },
+                        {
+                            "description": "`--clear` found no declaration to take down. Not a failure.",
+                            "enum": [
+                                "nothing_to_clear"
+                            ],
+                            "type": "string"
+                        }
+                    ]
+                }
+            },
+            "description": "What `hide agent ask-human` answers.",
+            "properties": {
+                "agent": {
+                    "description": "The caller's registration.",
+                    "type": "string"
+                },
+                "declaration": {
+                    "anyOf": [
+                        {
+                            "$ref": "#/definitions/HumanTurn"
+                        },
+                        {
+                            "type": "null"
+                        }
+                    ],
+                    "description": "The declaration standing after the command; null once cleared."
+                },
+                "machine": {
+                    "description": "The device the agent runs on, which the operator goes to.",
+                    "type": "string"
+                },
+                "operator_notified": {
+                    "description": "Whether the operator was told: a new or replacing declaration.",
+                    "type": "boolean"
+                },
+                "outcome": {
+                    "$ref": "#/definitions/Outcome"
+                }
+            },
+            "required": [
+                "outcome",
+                "agent",
+                "machine",
+                "declaration",
+                "operator_notified"
+            ],
+            "title": "AskHumanAnswer",
+            "type": "object"
+        },
+        "automation": {
+            "properties": {
+                "automation": {
+                    "type": "object"
+                }
+            },
+            "required": [
+                "automation"
+            ],
+            "type": "object"
+        },
+        "automation_list": {
+            "properties": {
+                "items": {
+                    "type": "object"
+                }
+            },
+            "required": [
+                "items"
+            ],
+            "type": "object"
+        },
+        "automation_preview": {
+            "properties": {
+                "next_run_at": {
+                    "type": [
+                        "string",
+                        "null"
+                    ]
+                },
+                "next_run_at_unix_ms": {
+                    "type": [
+                        "integer",
+                        "null"
+                    ]
+                },
+                "reads_as": {
+                    "type": "object"
+                },
+                "reads_as_text": {
+                    "type": [
+                        "string",
+                        "null"
+                    ]
+                },
+                "zone": {
+                    "type": [
+                        "string",
+                        "null"
+                    ]
+                }
+            },
+            "required": [
+                "reads_as",
+                "next_run_at_unix_ms",
+                "next_run_at",
+                "zone"
+            ],
+            "type": "object"
+        },
+        "automation_removed": {
+            "properties": {
+                "removed": {
+                    "type": "object"
+                }
+            },
+            "required": [
+                "removed"
+            ],
             "type": "object"
         },
         "confirmed": {
@@ -1036,6 +1835,17 @@
             "title": "Confirmed",
             "type": "object"
         },
+        "device_accepted": {
+            "properties": {
+                "accepted": {
+                    "type": "object"
+                }
+            },
+            "required": [
+                "accepted"
+            ],
+            "type": "object"
+        },
         "device_added": {
             "properties": {
                 "device": {
@@ -1051,14 +1861,104 @@
             ],
             "type": "object"
         },
-        "device_list": {
+        "device_allowed": {
             "properties": {
-                "devices": {
+                "answered": {
                     "type": "object"
                 }
             },
             "required": [
-                "devices"
+                "answered"
+            ],
+            "type": "object"
+        },
+        "device_changed": {
+            "properties": {
+                "device_id": {
+                    "type": "object"
+                }
+            },
+            "required": [
+                "device_id"
+            ],
+            "type": "object"
+        },
+        "device_joined": {
+            "properties": {
+                "host": {
+                    "type": "object"
+                },
+                "name": {
+                    "type": "object"
+                },
+                "phase": {
+                    "type": "object"
+                }
+            },
+            "required": [
+                "host",
+                "name",
+                "phase"
+            ],
+            "type": "object"
+        },
+        "device_list": {
+            "properties": {
+                "devices": {
+                    "type": "object"
+                },
+                "guest_panes": {
+                    "type": "object"
+                },
+                "peers": {
+                    "type": "object"
+                }
+            },
+            "required": [
+                "devices",
+                "peers",
+                "guest_panes"
+            ],
+            "type": "object"
+        },
+        "device_looked": {
+            "properties": {
+                "look": {
+                    "type": "object"
+                }
+            },
+            "required": [
+                "look"
+            ],
+            "type": "object"
+        },
+        "device_paired": {
+            "properties": {
+                "device_id": {
+                    "type": "object"
+                },
+                "name": {
+                    "type": "object"
+                },
+                "paired": {
+                    "type": "object"
+                }
+            },
+            "required": [
+                "device_id",
+                "name",
+                "paired"
+            ],
+            "type": "object"
+        },
+        "device_projects_listed": {
+            "properties": {
+                "projects": {
+                    "type": "object"
+                }
+            },
+            "required": [
+                "projects"
             ],
             "type": "object"
         },
@@ -1090,6 +1990,54 @@
                 "started"
             ],
             "title": "Retried",
+            "type": "object"
+        },
+        "device_shared": {
+            "properties": {
+                "expires_unix_ms": {
+                    "type": "object"
+                },
+                "link": {
+                    "type": "object"
+                }
+            },
+            "required": [
+                "link",
+                "expires_unix_ms"
+            ],
+            "type": "object"
+        },
+        "device_switched": {
+            "properties": {
+                "device_id": {
+                    "type": "object"
+                },
+                "switch": {
+                    "type": "object"
+                }
+            },
+            "required": [
+                "device_id",
+                "switch"
+            ],
+            "type": "object"
+        },
+        "fold_ask": {
+            "properties": {
+                "id": {
+                    "type": "string"
+                },
+                "state": {
+                    "enum": [
+                        "folded",
+                        "already_closed"
+                    ]
+                }
+            },
+            "required": [
+                "id",
+                "state"
+            ],
             "type": "object"
         },
         "inbox": {
@@ -1143,6 +2091,28 @@
                             "type": "string"
                         }
                     ]
+                },
+                "BellFailure": {
+                    "description": "A bell that failed: the doorbell's code for it, and whether the engine had been asked to type the line, so it may be in the agent's input (`docs/delivery.md`, Letters while the agent works). A failure that typed nothing after one that may have keeps that one's `maybe_typed` and time: the line it may have typed is still where it was.",
+                    "properties": {
+                        "at_unix_ms": {
+                            "format": "uint64",
+                            "minimum": 0.0,
+                            "type": "integer"
+                        },
+                        "code": {
+                            "type": "string"
+                        },
+                        "maybe_typed": {
+                            "type": "boolean"
+                        }
+                    },
+                    "required": [
+                        "code",
+                        "maybe_typed",
+                        "at_unix_ms"
+                    ],
+                    "type": "object"
                 },
                 "BellTurn": {
                     "description": "The native session and submitted bell digest that own this intake.",
@@ -1206,10 +2176,31 @@
                                 "null"
                             ]
                         },
+                        "bell_ended": {
+                            "default": null,
+                            "description": "The bells whose result the store recorded: the doorbell rings a letter one bell at a time and records how each ended (typed, failed, or held after its reservation) before it reserves the next, so a result ends the bell reserved last. Fewer than `bell_attempts` while a bell is on its way. Null on a letter an earlier build rang, which kept no such count; an older build drops the field at its next save.",
+                            "format": "uint8",
+                            "minimum": 0.0,
+                            "type": [
+                                "integer",
+                                "null"
+                            ]
+                        },
                         "bell_errors": {
                             "format": "uint8",
                             "minimum": 0.0,
                             "type": "integer"
+                        },
+                        "bell_failure": {
+                            "anyOf": [
+                                {
+                                    "$ref": "#/definitions/BellFailure"
+                                },
+                                {
+                                    "type": "null"
+                                }
+                            ],
+                            "description": "Why the letter's last bell failed, while no bell typed after it went through; absent otherwise. Its sender reads the cause here, and the doorbell reads whether the line may be in the agent's input. An older build drops the field at its next save."
                         },
                         "bell_line": {
                             "default": null,
@@ -1273,10 +2264,28 @@
                             "description": "Sent with `hide request send --force` (PRD engine-bundle-1 D-14): its composer was read empty when it was sent, and the doorbell types its bell even while the recipient works, after reading the composer empty once more; a composer that shows text then leaves it an ordinary letter sent with `--now`. An older build drops the field and the letter waits as a `--now` letter.",
                             "type": "boolean"
                         },
+                        "from": {
+                            "default": null,
+                            "description": "The registration that sent the letter (PRD letters-missions-simplify D-02), whose live successor an answer goes to; null when the sender had none, as an older build's letters may.",
+                            "type": [
+                                "string",
+                                "null"
+                            ]
+                        },
                         "handed": {
                             "default": false,
-                            "description": "A prompt hook of the recipient's own session asked with the bell line's digest and was handed the letter's body to print. No bell is typed for it again, whether or not the hook's confirmation arrived (`delivery::doorbell`): the next bell's batch for the same recipient, a tool or turn-end hook or `hide inbox` brings it instead, and at its deadline it ends delivered without a receipt. An older build drops the field at its next save.",
+                            "description": "A prompt hook of the recipient's own session asked with the bell line's digest and was handed the letter's body to print. No bell is typed for it again, whether or not the hook's confirmation arrived (`delivery::doorbell`): the next bell's batch for the same recipient, a tool or turn-end hook or `hide inbox` brings it instead, and when its recipient ends with no successor it ends delivered without a receipt (`Ledger::end_letters_to`).",
                             "type": "boolean"
+                        },
+                        "handed_at_unix_ms": {
+                            "default": null,
+                            "description": "When a hook last handed the letter over, at a prompt (`handed`) or at a tool (`tool_handovers`), on the core's clock: a rest whose state moved after it is a rest that hook had ended before, when the core asks the pane's machine for a confirmation it could not send (`Doorbell::settle_owed`). Null until handed, and for a letter an older build handed.",
+                            "format": "uint64",
+                            "minimum": 0.0,
+                            "type": [
+                                "integer",
+                                "null"
+                            ]
                         },
                         "hook_confirmed": {
                             "default": null,
@@ -1311,16 +2320,6 @@
                             "minimum": 0.0,
                             "type": "integer"
                         },
-                        "intake_from": {
-                            "default": null,
-                            "description": "Where the letter's wait for intake began: on its recipient machine's clock while the ledger keeps one (`Ledger::node_clocks`), on the wall clock otherwise; null is its creation on the wall clock.",
-                            "format": "uint64",
-                            "minimum": 0.0,
-                            "type": [
-                                "integer",
-                                "null"
-                            ]
-                        },
                         "intent": {
                             "type": "string"
                         },
@@ -1342,6 +2341,14 @@
                         "state": {
                             "$ref": "#/definitions/State"
                         },
+                        "to": {
+                            "default": null,
+                            "description": "The registration the letter is addressed to: the agent, not its pane. `recipient` is where that registration runs now, which the store keeps with it: a move, a wake or Reopen carries it (`coordination::rebind`), and an end hands a pending letter to the agent that took over its pane (`coordination::succeed`) or ends it `no_recipient`. A letter an agent, a tool or Desk sends always names one, since the send registers an agent that had none (`Runtime::prepare_as`); null only when a letter Hide writes, or an older build wrote, went to an agent with none.",
+                            "type": [
+                                "string",
+                                "null"
+                            ]
+                        },
                         "tool_handovers": {
                             "default": 0,
                             "description": "How many tool events handed the letter over while its recipient worked (PRD letters-to-busy-agents D-11): a handover is confirmed by the script once the host kept it, and after three unconfirmed ones the letter waits for the next prompt or `hide inbox`, as it does after three bells.",
@@ -1362,6 +2369,16 @@
                                 }
                             ],
                             "default": null
+                        },
+                        "written": {
+                            "default": null,
+                            "description": "How many bytes at the start of `body` its sender wrote, when the core appended something after them (a report's list of the Views its sender opened, `Runtime::list_opened_views`); null when the body is all the sender's. A send under the same intent is the same letter again only when it says exactly the sender's part (B5).",
+                            "format": "uint",
+                            "minimum": 0.0,
+                            "type": [
+                                "integer",
+                                "null"
+                            ]
                         }
                     },
                     "required": [
@@ -1369,8 +2386,11 @@
                         "intent",
                         "sender",
                         "recipient",
+                        "from",
+                        "to",
                         "kind",
                         "body",
+                        "written",
                         "state",
                         "hook_confirmed",
                         "waiting_answer",
@@ -1386,14 +2406,15 @@
                         "bell_line",
                         "bell_turn",
                         "handed",
-                        "intake_from",
+                        "handed_at_unix_ms",
                         "immediate",
                         "forced",
                         "tool_handovers",
                         "bell_typed_at_unix_ms",
                         "bell_route",
                         "input_noticed",
-                        "input_noticed_at_unix_ms"
+                        "input_noticed_at_unix_ms",
+                        "bell_ended"
                     ],
                     "type": "object"
                 },
@@ -1431,15 +2452,39 @@
                     ]
                 },
                 "State": {
-                    "enum": [
-                        "pending",
-                        "delivered",
-                        "acknowledged",
-                        "cancelled",
-                        "expired",
-                        "undelivered"
-                    ],
-                    "type": "string"
+                    "description": "Where a letter stands. Hide ends a pending letter one of four ways (PRD letters-missions-simplify D-04): `delivered` once its recipient took it in, `superseded` by its sender's newer letter under the same intent, `no_recipient` when its recipient ended with no agent after it in its pane, and `expired` only at the update to this build. `acknowledged` is a delivered letter with its recipient's receipt, and `cancelled` its sender's own withdrawal.",
+                    "oneOf": [
+                        {
+                            "enum": [
+                                "pending",
+                                "delivered",
+                                "acknowledged",
+                                "cancelled"
+                            ],
+                            "type": "string"
+                        },
+                        {
+                            "description": "The same sender sent another body under the same intent while this one waited (`mailbox::send`).",
+                            "enum": [
+                                "superseded"
+                            ],
+                            "type": "string"
+                        },
+                        {
+                            "description": "Its recipient's registration ended with no successor (B2).",
+                            "enum": [
+                                "no_recipient"
+                            ],
+                            "type": "string"
+                        },
+                        {
+                            "description": "Ended at the update to this build (B25): a Hide letter still waiting then, or a letter an older build ended at its delivery deadline, which it called `undelivered`.",
+                            "enum": [
+                                "expired"
+                            ],
+                            "type": "string"
+                        }
+                    ]
                 },
                 "WarningReceipt": {
                     "description": "The inactivity episode and external notification reservation survive the watch itself, so stopping/restarting or sibling watches cannot resend.",
@@ -1488,7 +2533,14 @@
                     "type": "array"
                 },
                 "letters": {
-                    "description": "The letters shown in full, grouped by sender, then the caller's own letters that went undelivered.",
+                    "description": "The letters shown in full, grouped by sender.",
+                    "items": {
+                        "$ref": "#/definitions/Letter"
+                    },
+                    "type": "array"
+                },
+                "returned": {
+                    "description": "The caller's own letters that went undelivered, returned to it: each names the recipient that did not get it, and `bell_failure` why its last bell failed when one did.",
                     "items": {
                         "$ref": "#/definitions/Letter"
                     },
@@ -1497,6 +2549,7 @@
             },
             "required": [
                 "letters",
+                "returned",
                 "folded"
             ],
             "title": "Inbox",
@@ -1580,6 +2633,28 @@
                         }
                     ]
                 },
+                "BellFailure": {
+                    "description": "A bell that failed: the doorbell's code for it, and whether the engine had been asked to type the line, so it may be in the agent's input (`docs/delivery.md`, Letters while the agent works). A failure that typed nothing after one that may have keeps that one's `maybe_typed` and time: the line it may have typed is still where it was.",
+                    "properties": {
+                        "at_unix_ms": {
+                            "format": "uint64",
+                            "minimum": 0.0,
+                            "type": "integer"
+                        },
+                        "code": {
+                            "type": "string"
+                        },
+                        "maybe_typed": {
+                            "type": "boolean"
+                        }
+                    },
+                    "required": [
+                        "code",
+                        "maybe_typed",
+                        "at_unix_ms"
+                    ],
+                    "type": "object"
+                },
                 "BellTurn": {
                     "description": "The native session and submitted bell digest that own this intake.",
                     "properties": {
@@ -1630,15 +2705,39 @@
                     ]
                 },
                 "State": {
-                    "enum": [
-                        "pending",
-                        "delivered",
-                        "acknowledged",
-                        "cancelled",
-                        "expired",
-                        "undelivered"
-                    ],
-                    "type": "string"
+                    "description": "Where a letter stands. Hide ends a pending letter one of four ways (PRD letters-missions-simplify D-04): `delivered` once its recipient took it in, `superseded` by its sender's newer letter under the same intent, `no_recipient` when its recipient ended with no agent after it in its pane, and `expired` only at the update to this build. `acknowledged` is a delivered letter with its recipient's receipt, and `cancelled` its sender's own withdrawal.",
+                    "oneOf": [
+                        {
+                            "enum": [
+                                "pending",
+                                "delivered",
+                                "acknowledged",
+                                "cancelled"
+                            ],
+                            "type": "string"
+                        },
+                        {
+                            "description": "The same sender sent another body under the same intent while this one waited (`mailbox::send`).",
+                            "enum": [
+                                "superseded"
+                            ],
+                            "type": "string"
+                        },
+                        {
+                            "description": "Its recipient's registration ended with no successor (B2).",
+                            "enum": [
+                                "no_recipient"
+                            ],
+                            "type": "string"
+                        },
+                        {
+                            "description": "Ended at the update to this build (B25): a Hide letter still waiting then, or a letter an older build ended at its delivery deadline, which it called `undelivered`.",
+                            "enum": [
+                                "expired"
+                            ],
+                            "type": "string"
+                        }
+                    ]
                 },
                 "WarningReceipt": {
                     "description": "The inactivity episode and external notification reservation survive the watch itself, so stopping/restarting or sibling watches cannot resend.",
@@ -1692,10 +2791,31 @@
                         "null"
                     ]
                 },
+                "bell_ended": {
+                    "default": null,
+                    "description": "The bells whose result the store recorded: the doorbell rings a letter one bell at a time and records how each ended (typed, failed, or held after its reservation) before it reserves the next, so a result ends the bell reserved last. Fewer than `bell_attempts` while a bell is on its way. Null on a letter an earlier build rang, which kept no such count; an older build drops the field at its next save.",
+                    "format": "uint8",
+                    "minimum": 0.0,
+                    "type": [
+                        "integer",
+                        "null"
+                    ]
+                },
                 "bell_errors": {
                     "format": "uint8",
                     "minimum": 0.0,
                     "type": "integer"
+                },
+                "bell_failure": {
+                    "anyOf": [
+                        {
+                            "$ref": "#/definitions/BellFailure"
+                        },
+                        {
+                            "type": "null"
+                        }
+                    ],
+                    "description": "Why the letter's last bell failed, while no bell typed after it went through; absent otherwise. Its sender reads the cause here, and the doorbell reads whether the line may be in the agent's input. An older build drops the field at its next save."
                 },
                 "bell_line": {
                     "default": null,
@@ -1759,10 +2879,28 @@
                     "description": "Sent with `hide request send --force` (PRD engine-bundle-1 D-14): its composer was read empty when it was sent, and the doorbell types its bell even while the recipient works, after reading the composer empty once more; a composer that shows text then leaves it an ordinary letter sent with `--now`. An older build drops the field and the letter waits as a `--now` letter.",
                     "type": "boolean"
                 },
+                "from": {
+                    "default": null,
+                    "description": "The registration that sent the letter (PRD letters-missions-simplify D-02), whose live successor an answer goes to; null when the sender had none, as an older build's letters may.",
+                    "type": [
+                        "string",
+                        "null"
+                    ]
+                },
                 "handed": {
                     "default": false,
-                    "description": "A prompt hook of the recipient's own session asked with the bell line's digest and was handed the letter's body to print. No bell is typed for it again, whether or not the hook's confirmation arrived (`delivery::doorbell`): the next bell's batch for the same recipient, a tool or turn-end hook or `hide inbox` brings it instead, and at its deadline it ends delivered without a receipt. An older build drops the field at its next save.",
+                    "description": "A prompt hook of the recipient's own session asked with the bell line's digest and was handed the letter's body to print. No bell is typed for it again, whether or not the hook's confirmation arrived (`delivery::doorbell`): the next bell's batch for the same recipient, a tool or turn-end hook or `hide inbox` brings it instead, and when its recipient ends with no successor it ends delivered without a receipt (`Ledger::end_letters_to`).",
                     "type": "boolean"
+                },
+                "handed_at_unix_ms": {
+                    "default": null,
+                    "description": "When a hook last handed the letter over, at a prompt (`handed`) or at a tool (`tool_handovers`), on the core's clock: a rest whose state moved after it is a rest that hook had ended before, when the core asks the pane's machine for a confirmation it could not send (`Doorbell::settle_owed`). Null until handed, and for a letter an older build handed.",
+                    "format": "uint64",
+                    "minimum": 0.0,
+                    "type": [
+                        "integer",
+                        "null"
+                    ]
                 },
                 "hook_confirmed": {
                     "default": null,
@@ -1797,16 +2935,6 @@
                     "minimum": 0.0,
                     "type": "integer"
                 },
-                "intake_from": {
-                    "default": null,
-                    "description": "Where the letter's wait for intake began: on its recipient machine's clock while the ledger keeps one (`Ledger::node_clocks`), on the wall clock otherwise; null is its creation on the wall clock.",
-                    "format": "uint64",
-                    "minimum": 0.0,
-                    "type": [
-                        "integer",
-                        "null"
-                    ]
-                },
                 "intent": {
                     "type": "string"
                 },
@@ -1828,6 +2956,14 @@
                 "state": {
                     "$ref": "#/definitions/State"
                 },
+                "to": {
+                    "default": null,
+                    "description": "The registration the letter is addressed to: the agent, not its pane. `recipient` is where that registration runs now, which the store keeps with it: a move, a wake or Reopen carries it (`coordination::rebind`), and an end hands a pending letter to the agent that took over its pane (`coordination::succeed`) or ends it `no_recipient`. A letter an agent, a tool or Desk sends always names one, since the send registers an agent that had none (`Runtime::prepare_as`); null only when a letter Hide writes, or an older build wrote, went to an agent with none.",
+                    "type": [
+                        "string",
+                        "null"
+                    ]
+                },
                 "tool_handovers": {
                     "default": 0,
                     "description": "How many tool events handed the letter over while its recipient worked (PRD letters-to-busy-agents D-11): a handover is confirmed by the script once the host kept it, and after three unconfirmed ones the letter waits for the next prompt or `hide inbox`, as it does after three bells.",
@@ -1848,6 +2984,16 @@
                         }
                     ],
                     "default": null
+                },
+                "written": {
+                    "default": null,
+                    "description": "How many bytes at the start of `body` its sender wrote, when the core appended something after them (a report's list of the Views its sender opened, `Runtime::list_opened_views`); null when the body is all the sender's. A send under the same intent is the same letter again only when it says exactly the sender's part (B5).",
+                    "format": "uint",
+                    "minimum": 0.0,
+                    "type": [
+                        "integer",
+                        "null"
+                    ]
                 }
             },
             "required": [
@@ -1855,8 +3001,11 @@
                 "intent",
                 "sender",
                 "recipient",
+                "from",
+                "to",
                 "kind",
                 "body",
+                "written",
                 "state",
                 "hook_confirmed",
                 "waiting_answer",
@@ -1872,14 +3021,15 @@
                 "bell_line",
                 "bell_turn",
                 "handed",
-                "intake_from",
+                "handed_at_unix_ms",
                 "immediate",
                 "forced",
                 "tool_handovers",
                 "bell_typed_at_unix_ms",
                 "bell_route",
                 "input_noticed",
-                "input_noticed_at_unix_ms"
+                "input_noticed_at_unix_ms",
+                "bell_ended"
             ],
             "title": "Letter",
             "type": "object"
@@ -1918,6 +3068,28 @@
             },
             "required": [
                 "items"
+            ],
+            "type": "object"
+        },
+        "mission_node": {
+            "properties": {
+                "letters": {
+                    "type": [
+                        "array",
+                        "null"
+                    ]
+                },
+                "mission_id": {
+                    "type": "string"
+                },
+                "node": {
+                    "type": "object"
+                }
+            },
+            "required": [
+                "mission_id",
+                "node",
+                "letters"
             ],
             "type": "object"
         },
@@ -1967,7 +3139,7 @@
         },
         "pane_read": {
             "$schema": "http://json-schema.org/draft-07/schema#",
-            "description": "`hide pane read` and `hide agent read`: the pane's last lines, unwrapped.",
+            "description": "`hide pane read` and `hide agent read`: text in the requested form.",
             "properties": {
                 "pane": {
                     "description": "The pane read: a pane of the caller's own machine bare, as `hide ps` lists it there (`w1:p2`), another machine's as `remote:<device>:pane:<id>`.",
@@ -2009,7 +3181,7 @@
                     "type": "string"
                 }
             },
-            "description": "`hide pane send`: the pane typed into and what reached it. Each field says what Herdr took, never what the program in the pane did with it: `enter_sent` is an Enter written, not a prompt accepted.",
+            "description": "`hide pane send`: the pane typed into and what reached it. Each field says what the pane took, never what the program in the pane did with it: `enter_sent` is an Enter written, not a prompt accepted.",
             "properties": {
                 "enter_sent": {
                     "type": "boolean"
@@ -2100,6 +3272,13 @@
                                 "null"
                             ]
                         },
+                        "origin_tool": {
+                            "description": "The name of the external tool whose connection started this agent; absent for every other start.",
+                            "type": [
+                                "string",
+                                "null"
+                            ]
+                        },
                         "pane": {
                             "type": "string"
                         },
@@ -2153,6 +3332,7 @@
                         "parent_machine",
                         "parent_pane",
                         "parent",
+                        "origin_tool",
                         "watched_by",
                         "mission",
                         "project"
@@ -2211,7 +3391,7 @@
                             ]
                         },
                         "pane": {
-                            "description": "Herdr's pane id on `machine`.",
+                            "description": "The pane's id on `machine`.",
                             "type": "string"
                         },
                         "project": {
@@ -2265,7 +3445,7 @@
                     "type": "object"
                 },
                 "PsState": {
-                    "description": "The row's mark as every surface draws it (docs/status-model.md, The mark), `disconnected` for a row on a device that does not answer, and `ended` for an ended registration.",
+                    "description": "The row's mark as every surface draws it (docs/status-model.md, The mark), `disconnected` for a row on a device that does not answer, `closed` for a registration whose pane was closed for Reopen closed, and `ended` for an ended registration.",
                     "enum": [
                         "turn",
                         "look",
@@ -2276,6 +3456,7 @@
                         "quiet",
                         "unknown",
                         "asleep",
+                        "closed",
                         "disconnected",
                         "ended"
                     ],
@@ -2315,14 +3496,35 @@
             "$schema": "http://json-schema.org/draft-07/schema#",
             "description": "`hide workspace purpose`: the purpose the checkout now shows.",
             "properties": {
+                "checkout": {
+                    "description": "The folder of the checkout that shows it.",
+                    "type": "string"
+                },
                 "purpose": {
+                    "description": "The purpose, empty once cleared.",
                     "type": "string"
                 }
             },
             "required": [
+                "checkout",
                 "purpose"
             ],
             "title": "PurposeSet",
+            "type": "object"
+        },
+        "queued": {
+            "properties": {
+                "intent": {
+                    "type": "string"
+                },
+                "queued": {
+                    "const": true
+                }
+            },
+            "required": [
+                "queued",
+                "intent"
+            ],
             "type": "object"
         },
         "spawn_show": {
@@ -2388,6 +3590,59 @@
                         "observed_at_unix_ms",
                         "waiting",
                         "pending_inputs"
+                    ],
+                    "type": "object"
+                },
+                "HumanKind": {
+                    "description": "The two steps only a person can take (D-03); any other word is refused, so a judgement call still goes to the parent as a letter.",
+                    "oneOf": [
+                        {
+                            "description": "Proving who you are: a sign-in, a re-authentication, an unlock.",
+                            "enum": [
+                                "auth"
+                            ],
+                            "type": "string"
+                        },
+                        {
+                            "description": "Granting access: an app connection, an OS permission.",
+                            "enum": [
+                                "permission"
+                            ],
+                            "type": "string"
+                        },
+                        {
+                            "description": "Confirming an install or an update an agent asked for with `hide skill` / `hide mcp` (PRD skill-mcp-manager B32): never declared with `hide agent ask-human`, it stands while the command waits and is answered on the confirm, not with Done.",
+                            "enum": [
+                                "install"
+                            ],
+                            "type": "string"
+                        }
+                    ]
+                },
+                "HumanTurn": {
+                    "description": "One agent's declaration. `id` names this declaration, not the agent: a different declaration is a new id, so a Done for an earlier one settles nothing and a letter is sent once per declaration.",
+                    "properties": {
+                        "declared_at_unix_ms": {
+                            "format": "uint64",
+                            "minimum": 0.0,
+                            "type": "integer"
+                        },
+                        "id": {
+                            "type": "string"
+                        },
+                        "kind": {
+                            "$ref": "#/definitions/HumanKind"
+                        },
+                        "place": {
+                            "description": "Where the person acts, as the agent wrote it on one line.",
+                            "type": "string"
+                        }
+                    },
+                    "required": [
+                        "id",
+                        "kind",
+                        "place",
+                        "declared_at_unix_ms"
                     ],
                     "type": "object"
                 },
@@ -2470,6 +3725,7 @@
                     "enum": [
                         "running",
                         "asleep",
+                        "closed",
                         "ended"
                     ],
                     "type": "string"
@@ -2523,29 +3779,49 @@
                     "type": "object"
                 },
                 "WaitCause": {
-                    "description": "The causes an agent waits by: its own demand (docs/status-model.md, Where each axis comes from), a question the core laid on its row, or one of the escalation causes (Delegated escalation).",
-                    "enum": [
-                        "unknown",
-                        "question",
-                        "approval",
-                        "blocked",
-                        "plan_review",
-                        "mission_decision",
-                        "mission_attention",
-                        "input_unconfirmed",
-                        "draft",
-                        "parent_blocked",
-                        "bell_exhausted",
-                        "undelivered",
-                        "observer_unconfirmed"
-                    ],
-                    "type": "string"
+                    "description": "The causes an agent waits by: its own demand (docs/status-model.md, Where each axis comes from), a question the core laid on its row, or one of the escalation causes (with-hide/hide-private docs/task-identity.md, Delegated escalation).",
+                    "oneOf": [
+                        {
+                            "enum": [
+                                "unknown",
+                                "question",
+                                "approval",
+                                "blocked",
+                                "plan_review",
+                                "mission_decision",
+                                "mission_attention",
+                                "input_unconfirmed",
+                                "draft",
+                                "parent_blocked",
+                                "observer_unconfirmed"
+                            ],
+                            "type": "string"
+                        },
+                        {
+                            "description": "The agent declared a step only a person can take (`hide agent ask-human`), its own or, for a delegated child, raised to the operator.",
+                            "enum": [
+                                "human_turn"
+                            ],
+                            "type": "string"
+                        }
+                    ]
                 },
                 "Waiting": {
                     "description": "What an agent waits on, by the core's own cause.",
                     "properties": {
                         "cause": {
                             "$ref": "#/definitions/WaitCause"
+                        },
+                        "human": {
+                            "anyOf": [
+                                {
+                                    "$ref": "#/definitions/HumanTurn"
+                                },
+                                {
+                                    "type": "null"
+                                }
+                            ],
+                            "description": "For `human_turn`: the declaration, its kind, place and when it was made (PRD ask-human B7). The device is the agent's `machine`."
                         },
                         "letter_id": {
                             "description": "The letter the wait is about.",
@@ -2590,7 +3866,8 @@
                         "since_unix_ms",
                         "letter_id",
                         "spawn_id",
-                        "text"
+                        "text",
+                        "human"
                     ],
                     "type": "object"
                 }
@@ -2623,6 +3900,329 @@
                 "stopped"
             ],
             "title": "Stopped",
+            "type": "object"
+        },
+        "store_changed": {
+            "$schema": "http://json-schema.org/draft-07/schema#",
+            "description": "A change that ran (`add`, `update`, `on`, `off`, `remove`): the item it was about, null for an install of a source's skills, and each change's outcome, a refused one with its cause.",
+            "properties": {
+                "item": {
+                    "type": [
+                        "string",
+                        "null"
+                    ]
+                },
+                "machine": {
+                    "type": "string"
+                },
+                "outcomes": {
+                    "items": {
+                        "properties": {
+                            "change": {
+                                "description": "the change as it ran, a key's value emptied",
+                                "properties": {
+                                    "op": {
+                                        "type": "string"
+                                    }
+                                },
+                                "required": [
+                                    "op"
+                                ],
+                                "type": "object"
+                            },
+                            "refused": {
+                                "properties": {
+                                    "cause": {
+                                        "description": "one of store_refusal_cause in contracts/snapshot-wire-enums.json",
+                                        "type": "string"
+                                    },
+                                    "reason": {
+                                        "type": "string"
+                                    }
+                                },
+                                "required": [
+                                    "cause",
+                                    "reason"
+                                ],
+                                "type": "object"
+                            }
+                        },
+                        "required": [
+                            "change"
+                        ],
+                        "type": "object"
+                    },
+                    "type": "array"
+                }
+            },
+            "required": [
+                "machine",
+                "outcomes"
+            ],
+            "title": "StoreChanged",
+            "type": "object"
+        },
+        "store_item": {
+            "$schema": "http://json-schema.org/draft-07/schema#",
+            "description": "`hide skill show` / `hide mcp show`: the item as the machine's store reports it.",
+            "properties": {
+                "item": {
+                    "description": "the item as KitSnapshot.store reports it",
+                    "properties": {
+                        "cells": {
+                            "items": {
+                                "properties": {
+                                    "changed_at_unix_ms": {
+                                        "type": "integer"
+                                    },
+                                    "column": {
+                                        "type": "string"
+                                    },
+                                    "reason": {
+                                        "type": "string"
+                                    },
+                                    "state": {
+                                        "description": "one of store_cell_state in contracts/snapshot-wire-enums.json",
+                                        "type": "string"
+                                    }
+                                },
+                                "required": [
+                                    "column",
+                                    "state"
+                                ],
+                                "type": "object"
+                            },
+                            "type": "array"
+                        },
+                        "description": {
+                            "type": "string"
+                        },
+                        "files": {
+                            "items": {
+                                "type": "object"
+                            },
+                            "type": "array"
+                        },
+                        "folder_missing": {
+                            "type": "boolean"
+                        },
+                        "id": {
+                            "type": "string"
+                        },
+                        "kind": {
+                            "description": "one of store_item_kind in contracts/snapshot-wire-enums.json",
+                            "type": "string"
+                        },
+                        "name": {
+                            "type": "string"
+                        },
+                        "off_for": {
+                            "items": {
+                                "type": "string"
+                            },
+                            "type": "array"
+                        },
+                        "on": {
+                            "type": "boolean"
+                        },
+                        "server": {
+                            "description": "an MCP server: its name and reach, with the names of its keys and never a value",
+                            "type": "object"
+                        },
+                        "source": {
+                            "type": "object"
+                        },
+                        "update": {
+                            "description": "the version beside the name: a tag, a commit, or what the source is (folder, copy, remote, npm_latest, pinned, unpinned)",
+                            "properties": {
+                                "kind": {
+                                    "type": "string"
+                                },
+                                "value": {
+                                    "type": "string"
+                                }
+                            },
+                            "required": [
+                                "kind"
+                            ],
+                            "type": "object"
+                        },
+                        "version": {
+                            "description": "the version beside the name: a tag, a commit, or what the source is (folder, copy, remote, npm_latest, pinned, unpinned)",
+                            "properties": {
+                                "kind": {
+                                    "type": "string"
+                                },
+                                "value": {
+                                    "type": "string"
+                                }
+                            },
+                            "required": [
+                                "kind"
+                            ],
+                            "type": "object"
+                        }
+                    },
+                    "required": [
+                        "cells",
+                        "id",
+                        "kind",
+                        "name",
+                        "on",
+                        "source",
+                        "version"
+                    ],
+                    "type": "object"
+                },
+                "machine": {
+                    "type": "string"
+                }
+            },
+            "required": [
+                "item",
+                "machine"
+            ],
+            "title": "StoreShown",
+            "type": "object"
+        },
+        "store_list": {
+            "$schema": "http://json-schema.org/draft-07/schema#",
+            "definitions": {
+                "StoreLine": {
+                    "description": "One item as `list` answers it: no file list, the cells by column.",
+                    "properties": {
+                        "cells": {
+                            "items": {
+                                "$ref": "#/definitions/StoreLineCell"
+                            },
+                            "type": "array"
+                        },
+                        "id": {
+                            "type": "string"
+                        },
+                        "name": {
+                            "type": "string"
+                        },
+                        "on": {
+                            "type": "boolean"
+                        },
+                        "update": {
+                            "anyOf": [
+                                {
+                                    "description": "the version beside the name: a tag, a commit, or what the source is (folder, copy, remote, npm_latest, pinned, unpinned)",
+                                    "properties": {
+                                        "kind": {
+                                            "type": "string"
+                                        },
+                                        "value": {
+                                            "type": "string"
+                                        }
+                                    },
+                                    "required": [
+                                        "kind"
+                                    ],
+                                    "type": "object"
+                                },
+                                {
+                                    "type": "null"
+                                }
+                            ],
+                            "description": "The newer version a check found, null with none."
+                        },
+                        "version": {
+                            "description": "the version beside the name: a tag, a commit, or what the source is (folder, copy, remote, npm_latest, pinned, unpinned)",
+                            "properties": {
+                                "kind": {
+                                    "type": "string"
+                                },
+                                "value": {
+                                    "type": "string"
+                                }
+                            },
+                            "required": [
+                                "kind"
+                            ],
+                            "type": "object"
+                        }
+                    },
+                    "required": [
+                        "cells",
+                        "id",
+                        "name",
+                        "on",
+                        "update",
+                        "version"
+                    ],
+                    "type": "object"
+                },
+                "StoreLineCell": {
+                    "properties": {
+                        "column": {
+                            "type": "string"
+                        },
+                        "state": {
+                            "description": "one of store_cell_state in contracts/snapshot-wire-enums.json",
+                            "type": "string"
+                        }
+                    },
+                    "required": [
+                        "column",
+                        "state"
+                    ],
+                    "type": "object"
+                }
+            },
+            "description": "`hide skill list` / `hide mcp list`: the machine's items of one kind, each with its version and one cell per column.",
+            "properties": {
+                "columns": {
+                    "description": "The kind's columns, each with the agents its switch reaches.",
+                    "items": {
+                        "properties": {
+                            "agents": {
+                                "items": {
+                                    "type": "string"
+                                },
+                                "type": "array"
+                            },
+                            "also": {
+                                "items": {
+                                    "type": "string"
+                                },
+                                "type": "array"
+                            },
+                            "id": {
+                                "type": "string"
+                            }
+                        },
+                        "required": [
+                            "agents",
+                            "id"
+                        ],
+                        "type": "object"
+                    },
+                    "type": "array"
+                },
+                "items": {
+                    "items": {
+                        "$ref": "#/definitions/StoreLine"
+                    },
+                    "type": "array"
+                },
+                "kind": {
+                    "description": "one of store_item_kind in contracts/snapshot-wire-enums.json",
+                    "type": "string"
+                },
+                "machine": {
+                    "type": "string"
+                }
+            },
+            "required": [
+                "columns",
+                "items",
+                "kind",
+                "machine"
+            ],
+            "title": "StoreList",
             "type": "object"
         },
         "watch": {
@@ -2698,6 +4298,10 @@
                 "last_status": {
                     "type": "string"
                 },
+                "operator_notified": {
+                    "description": "The operator was told that the observer did not look at this quiet episode's first warning (`human::claim`); the episode's activity clears it. Left out of the file while false.",
+                    "type": "boolean"
+                },
                 "parent": {
                     "$ref": "#/definitions/Actor"
                 },
@@ -2726,7 +4330,8 @@
                 "last_status",
                 "last_state_change_seq",
                 "status_changed_at_unix_ms",
-                "generation"
+                "generation",
+                "operator_notified"
             ],
             "title": "Watch",
             "type": "object"
@@ -2804,6 +4409,10 @@
                         "last_status": {
                             "type": "string"
                         },
+                        "operator_notified": {
+                            "description": "The operator was told that the observer did not look at this quiet episode's first warning (`human::claim`); the episode's activity clears it. Left out of the file while false.",
+                            "type": "boolean"
+                        },
                         "parent": {
                             "$ref": "#/definitions/Actor"
                         },
@@ -2832,7 +4441,8 @@
                         "last_status",
                         "last_state_change_seq",
                         "status_changed_at_unix_ms",
-                        "generation"
+                        "generation",
+                        "operator_notified"
                     ],
                     "type": "object"
                 }
@@ -2845,7 +4455,7 @@
         },
         "worktree_removed": {
             "$schema": "http://json-schema.org/draft-07/schema#",
-            "description": "`hide workspace remove`: the worktree removed, with its Herdr workspace and panes closed first.",
+            "description": "`hide workspace remove`: the worktree removed, with its workspace and panes closed first.",
             "properties": {
                 "branch": {
                     "description": "Its local branch, when it had one.",
@@ -2876,7 +4486,1093 @@
             "type": "object"
         }
     },
+    "away": {
+        "refusals": {
+            "outbox_full": "Too many letters wait for the Hide this work belongs to; send again once it has reconnected",
+            "outbox_unavailable": "This machine could not keep the letter; send again once the Hide this work belongs to has reconnected",
+            "owner_offline": "The Hide this work belongs to is not connected and reconnects by itself; run the command again then. A letter (hide request send) is kept and delivered once it is back"
+        }
+    },
     "commands": [
+        {
+            "answers": [
+                "store_list"
+            ],
+            "arguments": [],
+            "command": "skill list",
+            "options": [
+                {
+                    "name": "--machine",
+                    "required": false,
+                    "requires": [],
+                    "value": {
+                        "type": "text"
+                    }
+                },
+                {
+                    "name": "--json",
+                    "required": false,
+                    "requires": [],
+                    "value": null
+                }
+            ],
+            "refusals": [
+                "machine_unknown",
+                "store_not_found",
+                "store_invalid",
+                "store_busy",
+                "store_unavailable",
+                "store_refused"
+            ],
+            "repeats_at_most": null,
+            "rest": null
+        },
+        {
+            "answers": [
+                "store_item"
+            ],
+            "arguments": [
+                {
+                    "name": "name",
+                    "value": {
+                        "type": "text"
+                    }
+                }
+            ],
+            "command": "skill show",
+            "options": [
+                {
+                    "name": "--machine",
+                    "required": false,
+                    "requires": [],
+                    "value": {
+                        "type": "text"
+                    }
+                },
+                {
+                    "name": "--json",
+                    "required": false,
+                    "requires": [],
+                    "value": null
+                }
+            ],
+            "refusals": [
+                "machine_unknown",
+                "store_not_found",
+                "store_invalid",
+                "store_busy",
+                "store_unavailable",
+                "store_refused"
+            ],
+            "repeats_at_most": null,
+            "rest": null
+        },
+        {
+            "answers": [
+                "store_changed"
+            ],
+            "arguments": [
+                {
+                    "name": "source",
+                    "value": {
+                        "type": "text"
+                    }
+                }
+            ],
+            "command": "skill add",
+            "options": [
+                {
+                    "name": "--name",
+                    "repeats_at_most": 64,
+                    "required": false,
+                    "requires": [],
+                    "value": {
+                        "type": "text"
+                    }
+                },
+                {
+                    "name": "--machine",
+                    "required": false,
+                    "requires": [],
+                    "value": {
+                        "type": "text"
+                    }
+                },
+                {
+                    "name": "--json",
+                    "required": false,
+                    "requires": [],
+                    "value": null
+                }
+            ],
+            "refusals": [
+                "machine_unknown",
+                "store_not_found",
+                "store_invalid",
+                "store_busy",
+                "store_unavailable",
+                "store_refused",
+                "store_declined",
+                "store_unanswered"
+            ],
+            "repeats_at_most": null,
+            "rest": null
+        },
+        {
+            "answers": [
+                "store_changed"
+            ],
+            "arguments": [
+                {
+                    "name": "name",
+                    "value": {
+                        "type": "text"
+                    }
+                }
+            ],
+            "command": "skill update",
+            "options": [
+                {
+                    "name": "--machine",
+                    "required": false,
+                    "requires": [],
+                    "value": {
+                        "type": "text"
+                    }
+                },
+                {
+                    "name": "--json",
+                    "required": false,
+                    "requires": [],
+                    "value": null
+                }
+            ],
+            "refusals": [
+                "machine_unknown",
+                "store_not_found",
+                "store_invalid",
+                "store_busy",
+                "store_unavailable",
+                "store_refused",
+                "store_declined",
+                "store_unanswered"
+            ],
+            "repeats_at_most": null,
+            "rest": null
+        },
+        {
+            "answers": [
+                "store_changed"
+            ],
+            "arguments": [
+                {
+                    "name": "name",
+                    "value": {
+                        "type": "text"
+                    }
+                }
+            ],
+            "command": "skill on",
+            "options": [
+                {
+                    "name": "--agent",
+                    "required": false,
+                    "requires": [],
+                    "value": {
+                        "type": "text"
+                    }
+                },
+                {
+                    "name": "--machine",
+                    "required": false,
+                    "requires": [],
+                    "value": {
+                        "type": "text"
+                    }
+                },
+                {
+                    "name": "--json",
+                    "required": false,
+                    "requires": [],
+                    "value": null
+                }
+            ],
+            "refusals": [
+                "machine_unknown",
+                "store_not_found",
+                "store_invalid",
+                "store_busy",
+                "store_unavailable",
+                "store_refused"
+            ],
+            "repeats_at_most": null,
+            "rest": null
+        },
+        {
+            "answers": [
+                "store_changed"
+            ],
+            "arguments": [
+                {
+                    "name": "name",
+                    "value": {
+                        "type": "text"
+                    }
+                }
+            ],
+            "command": "skill off",
+            "options": [
+                {
+                    "name": "--agent",
+                    "required": false,
+                    "requires": [],
+                    "value": {
+                        "type": "text"
+                    }
+                },
+                {
+                    "name": "--machine",
+                    "required": false,
+                    "requires": [],
+                    "value": {
+                        "type": "text"
+                    }
+                },
+                {
+                    "name": "--json",
+                    "required": false,
+                    "requires": [],
+                    "value": null
+                }
+            ],
+            "refusals": [
+                "machine_unknown",
+                "store_not_found",
+                "store_invalid",
+                "store_busy",
+                "store_unavailable",
+                "store_refused"
+            ],
+            "repeats_at_most": null,
+            "rest": null
+        },
+        {
+            "answers": [
+                "store_changed"
+            ],
+            "arguments": [
+                {
+                    "name": "name",
+                    "value": {
+                        "type": "text"
+                    }
+                }
+            ],
+            "command": "skill remove",
+            "options": [
+                {
+                    "name": "--machine",
+                    "required": false,
+                    "requires": [],
+                    "value": {
+                        "type": "text"
+                    }
+                },
+                {
+                    "name": "--json",
+                    "required": false,
+                    "requires": [],
+                    "value": null
+                }
+            ],
+            "refusals": [
+                "machine_unknown",
+                "store_not_found",
+                "store_invalid",
+                "store_busy",
+                "store_unavailable",
+                "store_refused"
+            ],
+            "repeats_at_most": null,
+            "rest": null
+        },
+        {
+            "answers": [
+                "store_list"
+            ],
+            "arguments": [],
+            "command": "mcp list",
+            "options": [
+                {
+                    "name": "--machine",
+                    "required": false,
+                    "requires": [],
+                    "value": {
+                        "type": "text"
+                    }
+                },
+                {
+                    "name": "--json",
+                    "required": false,
+                    "requires": [],
+                    "value": null
+                }
+            ],
+            "refusals": [
+                "machine_unknown",
+                "store_not_found",
+                "store_invalid",
+                "store_busy",
+                "store_unavailable",
+                "store_refused"
+            ],
+            "repeats_at_most": null,
+            "rest": null
+        },
+        {
+            "answers": [
+                "store_item"
+            ],
+            "arguments": [
+                {
+                    "name": "name",
+                    "value": {
+                        "type": "text"
+                    }
+                }
+            ],
+            "command": "mcp show",
+            "options": [
+                {
+                    "name": "--machine",
+                    "required": false,
+                    "requires": [],
+                    "value": {
+                        "type": "text"
+                    }
+                },
+                {
+                    "name": "--json",
+                    "required": false,
+                    "requires": [],
+                    "value": null
+                }
+            ],
+            "refusals": [
+                "machine_unknown",
+                "store_not_found",
+                "store_invalid",
+                "store_busy",
+                "store_unavailable",
+                "store_refused"
+            ],
+            "repeats_at_most": null,
+            "rest": null
+        },
+        {
+            "answers": [
+                "store_changed"
+            ],
+            "arguments": [
+                {
+                    "name": "name",
+                    "value": {
+                        "type": "text"
+                    }
+                }
+            ],
+            "command": "mcp add",
+            "options": [
+                {
+                    "conflicts": [
+                        "--env",
+                        "--"
+                    ],
+                    "name": "--url",
+                    "required": false,
+                    "requires": [],
+                    "value": {
+                        "type": "text"
+                    }
+                },
+                {
+                    "conflicts": [
+                        "--env",
+                        "--"
+                    ],
+                    "name": "--sse",
+                    "required": false,
+                    "requires": [
+                        "--url"
+                    ],
+                    "value": null
+                },
+                {
+                    "conflicts": [
+                        "--env",
+                        "--"
+                    ],
+                    "name": "--header",
+                    "repeats_at_most": 64,
+                    "required": false,
+                    "requires": [
+                        "--url"
+                    ],
+                    "value": {
+                        "type": "text"
+                    }
+                },
+                {
+                    "conflicts": [
+                        "--url",
+                        "--sse",
+                        "--header"
+                    ],
+                    "name": "--env",
+                    "repeats_at_most": 64,
+                    "required": false,
+                    "requires": [],
+                    "value": {
+                        "type": "text"
+                    }
+                },
+                {
+                    "name": "--machine",
+                    "required": false,
+                    "requires": [],
+                    "value": {
+                        "type": "text"
+                    }
+                },
+                {
+                    "name": "--json",
+                    "required": false,
+                    "requires": [],
+                    "value": null
+                }
+            ],
+            "refusals": [
+                "machine_unknown",
+                "store_not_found",
+                "store_invalid",
+                "store_busy",
+                "store_unavailable",
+                "store_refused",
+                "store_declined",
+                "store_unanswered"
+            ],
+            "repeats_at_most": null,
+            "rest": "a local server's command and its arguments, which --url replaces"
+        },
+        {
+            "answers": [
+                "store_changed"
+            ],
+            "arguments": [
+                {
+                    "name": "name",
+                    "value": {
+                        "type": "text"
+                    }
+                }
+            ],
+            "command": "mcp update",
+            "options": [
+                {
+                    "conflicts": [
+                        "--env",
+                        "--"
+                    ],
+                    "name": "--url",
+                    "required": false,
+                    "requires": [],
+                    "value": {
+                        "type": "text"
+                    }
+                },
+                {
+                    "conflicts": [
+                        "--env",
+                        "--"
+                    ],
+                    "name": "--sse",
+                    "required": false,
+                    "requires": [
+                        "--url"
+                    ],
+                    "value": null
+                },
+                {
+                    "conflicts": [
+                        "--env",
+                        "--"
+                    ],
+                    "name": "--header",
+                    "repeats_at_most": 64,
+                    "required": false,
+                    "requires": [
+                        "--url"
+                    ],
+                    "value": {
+                        "type": "text"
+                    }
+                },
+                {
+                    "conflicts": [
+                        "--url",
+                        "--sse",
+                        "--header"
+                    ],
+                    "name": "--env",
+                    "repeats_at_most": 64,
+                    "required": false,
+                    "requires": [],
+                    "value": {
+                        "type": "text"
+                    }
+                },
+                {
+                    "name": "--machine",
+                    "required": false,
+                    "requires": [],
+                    "value": {
+                        "type": "text"
+                    }
+                },
+                {
+                    "name": "--json",
+                    "required": false,
+                    "requires": [],
+                    "value": null
+                }
+            ],
+            "refusals": [
+                "machine_unknown",
+                "store_not_found",
+                "store_invalid",
+                "store_busy",
+                "store_unavailable",
+                "store_refused",
+                "store_declined",
+                "store_unanswered"
+            ],
+            "repeats_at_most": null,
+            "rest": "a local server's command and its arguments, which --url replaces"
+        },
+        {
+            "answers": [
+                "store_changed"
+            ],
+            "arguments": [
+                {
+                    "name": "name",
+                    "value": {
+                        "type": "text"
+                    }
+                }
+            ],
+            "command": "mcp on",
+            "options": [
+                {
+                    "name": "--agent",
+                    "required": false,
+                    "requires": [],
+                    "value": {
+                        "type": "text"
+                    }
+                },
+                {
+                    "name": "--machine",
+                    "required": false,
+                    "requires": [],
+                    "value": {
+                        "type": "text"
+                    }
+                },
+                {
+                    "name": "--json",
+                    "required": false,
+                    "requires": [],
+                    "value": null
+                }
+            ],
+            "refusals": [
+                "machine_unknown",
+                "store_not_found",
+                "store_invalid",
+                "store_busy",
+                "store_unavailable",
+                "store_refused"
+            ],
+            "repeats_at_most": null,
+            "rest": null
+        },
+        {
+            "answers": [
+                "store_changed"
+            ],
+            "arguments": [
+                {
+                    "name": "name",
+                    "value": {
+                        "type": "text"
+                    }
+                }
+            ],
+            "command": "mcp off",
+            "options": [
+                {
+                    "name": "--agent",
+                    "required": false,
+                    "requires": [],
+                    "value": {
+                        "type": "text"
+                    }
+                },
+                {
+                    "name": "--machine",
+                    "required": false,
+                    "requires": [],
+                    "value": {
+                        "type": "text"
+                    }
+                },
+                {
+                    "name": "--json",
+                    "required": false,
+                    "requires": [],
+                    "value": null
+                }
+            ],
+            "refusals": [
+                "machine_unknown",
+                "store_not_found",
+                "store_invalid",
+                "store_busy",
+                "store_unavailable",
+                "store_refused"
+            ],
+            "repeats_at_most": null,
+            "rest": null
+        },
+        {
+            "answers": [
+                "store_changed"
+            ],
+            "arguments": [
+                {
+                    "name": "name",
+                    "value": {
+                        "type": "text"
+                    }
+                }
+            ],
+            "command": "mcp remove",
+            "options": [
+                {
+                    "name": "--machine",
+                    "required": false,
+                    "requires": [],
+                    "value": {
+                        "type": "text"
+                    }
+                },
+                {
+                    "name": "--json",
+                    "required": false,
+                    "requires": [],
+                    "value": null
+                }
+            ],
+            "refusals": [
+                "machine_unknown",
+                "store_not_found",
+                "store_invalid",
+                "store_busy",
+                "store_unavailable",
+                "store_refused"
+            ],
+            "repeats_at_most": null,
+            "rest": null
+        },
+        {
+            "answers": [
+                "agent_profiles"
+            ],
+            "arguments": [],
+            "command": "agent profile list",
+            "options": [
+                {
+                    "name": "--kind",
+                    "required": false,
+                    "requires": [],
+                    "value": {
+                        "type": "text"
+                    }
+                },
+                {
+                    "name": "--machine",
+                    "required": false,
+                    "requires": [],
+                    "value": {
+                        "type": "text"
+                    }
+                },
+                {
+                    "name": "--json",
+                    "required": false,
+                    "requires": [],
+                    "value": null
+                }
+            ],
+            "refusals": [
+                "profile_refused",
+                "profile_in_use",
+                "profile_gone",
+                "profile_builtin",
+                "profiles_unsupported",
+                "profiles_unread",
+                "profile_unanswered",
+                "profile_invalid",
+                "profile_busy",
+                "machine_unknown",
+                "machine_unavailable"
+            ],
+            "repeats_at_most": null,
+            "rest": null
+        },
+        {
+            "answers": [
+                "agent_profile"
+            ],
+            "arguments": [
+                {
+                    "name": "kind",
+                    "value": {
+                        "type": "text"
+                    }
+                },
+                {
+                    "name": "name",
+                    "value": {
+                        "type": "text"
+                    }
+                }
+            ],
+            "command": "agent profile add",
+            "options": [
+                {
+                    "name": "--account",
+                    "required": false,
+                    "requires": [],
+                    "value": {
+                        "type": "text"
+                    }
+                },
+                {
+                    "name": "--program",
+                    "required": false,
+                    "requires": [],
+                    "value": {
+                        "type": "text"
+                    }
+                },
+                {
+                    "name": "--env",
+                    "repeats_at_most": 64,
+                    "required": false,
+                    "requires": [],
+                    "value": {
+                        "type": "text"
+                    }
+                },
+                {
+                    "name": "--default",
+                    "required": false,
+                    "requires": [],
+                    "value": null
+                },
+                {
+                    "name": "--machine",
+                    "required": false,
+                    "requires": [],
+                    "value": {
+                        "type": "text"
+                    }
+                },
+                {
+                    "name": "--json",
+                    "required": false,
+                    "requires": [],
+                    "value": null
+                }
+            ],
+            "refusals": [
+                "profile_refused",
+                "profile_in_use",
+                "profile_gone",
+                "profile_builtin",
+                "profiles_unsupported",
+                "profiles_unread",
+                "profile_unanswered",
+                "profile_invalid",
+                "profile_busy",
+                "machine_unknown",
+                "machine_unavailable"
+            ],
+            "repeats_at_most": null,
+            "rest": null
+        },
+        {
+            "answers": [
+                "agent_profile"
+            ],
+            "arguments": [
+                {
+                    "name": "kind",
+                    "value": {
+                        "type": "text"
+                    }
+                },
+                {
+                    "name": "name",
+                    "value": {
+                        "type": "text"
+                    }
+                }
+            ],
+            "command": "agent profile edit",
+            "options": [
+                {
+                    "name": "--rename",
+                    "required": false,
+                    "requires": [],
+                    "value": {
+                        "type": "text"
+                    }
+                },
+                {
+                    "conflicts": [
+                        "--no-program"
+                    ],
+                    "name": "--program",
+                    "required": false,
+                    "requires": [],
+                    "value": {
+                        "type": "text"
+                    }
+                },
+                {
+                    "conflicts": [
+                        "--program"
+                    ],
+                    "name": "--no-program",
+                    "required": false,
+                    "requires": [],
+                    "value": null
+                },
+                {
+                    "name": "--env",
+                    "repeats_at_most": 64,
+                    "required": false,
+                    "requires": [],
+                    "value": {
+                        "type": "text"
+                    }
+                },
+                {
+                    "name": "--unset-env",
+                    "repeats_at_most": 64,
+                    "required": false,
+                    "requires": [],
+                    "value": {
+                        "type": "text"
+                    }
+                },
+                {
+                    "name": "--machine",
+                    "required": false,
+                    "requires": [],
+                    "value": {
+                        "type": "text"
+                    }
+                },
+                {
+                    "name": "--json",
+                    "required": false,
+                    "requires": [],
+                    "value": null
+                }
+            ],
+            "refusals": [
+                "profile_refused",
+                "profile_in_use",
+                "profile_gone",
+                "profile_builtin",
+                "profiles_unsupported",
+                "profiles_unread",
+                "profile_unanswered",
+                "profile_invalid",
+                "profile_busy",
+                "machine_unknown",
+                "machine_unavailable"
+            ],
+            "repeats_at_most": null,
+            "rest": null
+        },
+        {
+            "answers": [
+                "agent_profile"
+            ],
+            "arguments": [
+                {
+                    "name": "kind",
+                    "value": {
+                        "type": "text"
+                    }
+                },
+                {
+                    "name": "name",
+                    "value": {
+                        "type": "text"
+                    }
+                }
+            ],
+            "command": "agent profile default",
+            "options": [
+                {
+                    "name": "--machine",
+                    "required": false,
+                    "requires": [],
+                    "value": {
+                        "type": "text"
+                    }
+                },
+                {
+                    "name": "--json",
+                    "required": false,
+                    "requires": [],
+                    "value": null
+                }
+            ],
+            "refusals": [
+                "profile_refused",
+                "profile_in_use",
+                "profile_gone",
+                "profile_builtin",
+                "profiles_unsupported",
+                "profiles_unread",
+                "profile_unanswered",
+                "profile_invalid",
+                "profile_busy",
+                "machine_unknown",
+                "machine_unavailable"
+            ],
+            "repeats_at_most": null,
+            "rest": null
+        },
+        {
+            "answers": [
+                "agent_profile_removed"
+            ],
+            "arguments": [
+                {
+                    "name": "kind",
+                    "value": {
+                        "type": "text"
+                    }
+                },
+                {
+                    "name": "name",
+                    "value": {
+                        "type": "text"
+                    }
+                }
+            ],
+            "command": "agent profile remove",
+            "options": [
+                {
+                    "name": "--machine",
+                    "required": false,
+                    "requires": [],
+                    "value": {
+                        "type": "text"
+                    }
+                },
+                {
+                    "name": "--json",
+                    "required": false,
+                    "requires": [],
+                    "value": null
+                }
+            ],
+            "refusals": [
+                "profile_refused",
+                "profile_in_use",
+                "profile_gone",
+                "profile_builtin",
+                "profiles_unsupported",
+                "profiles_unread",
+                "profile_unanswered",
+                "profile_invalid",
+                "profile_busy",
+                "machine_unknown",
+                "machine_unavailable"
+            ],
+            "repeats_at_most": null,
+            "rest": null
+        },
+        {
+            "answers": [
+                "agent_profile"
+            ],
+            "arguments": [
+                {
+                    "name": "kind",
+                    "value": {
+                        "type": "text"
+                    }
+                },
+                {
+                    "name": "name",
+                    "value": {
+                        "type": "text"
+                    }
+                }
+            ],
+            "command": "agent profile reinstall",
+            "options": [
+                {
+                    "name": "--machine",
+                    "required": false,
+                    "requires": [],
+                    "value": {
+                        "type": "text"
+                    }
+                },
+                {
+                    "name": "--json",
+                    "required": false,
+                    "requires": [],
+                    "value": null
+                }
+            ],
+            "refusals": [
+                "profile_refused",
+                "profile_in_use",
+                "profile_gone",
+                "profile_builtin",
+                "profiles_unsupported",
+                "profiles_unread",
+                "profile_unanswered",
+                "profile_invalid",
+                "profile_busy",
+                "machine_unknown",
+                "machine_unavailable"
+            ],
+            "repeats_at_most": null,
+            "rest": null
+        },
         {
             "answers": [
                 "agent",
@@ -2973,6 +5669,12 @@
             "command": "agent list",
             "options": [
                 {
+                    "name": "--live",
+                    "required": false,
+                    "requires": [],
+                    "value": null
+                },
+                {
                     "name": "--json",
                     "required": false,
                     "requires": [],
@@ -3005,7 +5707,8 @@
                 }
             ],
             "refusals": [
-                "agent_unavailable"
+                "agent_unavailable",
+                "target_ambiguous"
             ],
             "repeats_at_most": null,
             "rest": null
@@ -3028,6 +5731,7 @@
                 "agent_pane_required",
                 "caller_identity_conflict",
                 "participant_unavailable",
+                "participant_registering",
                 "participant_ended",
                 "participant_session_changed",
                 "ambiguous_participant"
@@ -3037,7 +5741,114 @@
         },
         {
             "answers": [
-                "agent"
+                "ask_human"
+            ],
+            "arguments": [
+                {
+                    "name": "kind",
+                    "value": {
+                        "type": "text"
+                    }
+                },
+                {
+                    "name": "where",
+                    "value": {
+                        "type": "text"
+                    }
+                }
+            ],
+            "command": "agent ask-human",
+            "options": [
+                {
+                    "name": "--json",
+                    "required": false,
+                    "requires": [],
+                    "value": null
+                }
+            ],
+            "refusals": [
+                "human_kind_unknown",
+                "human_place_required",
+                "human_place_too_long",
+                "agent_pane_required",
+                "participant_unavailable",
+                "participant_registering",
+                "participant_ended",
+                "participant_session_changed",
+                "ambiguous_participant"
+            ],
+            "repeats_at_most": null,
+            "rest": null
+        },
+        {
+            "answers": [
+                "ask_human"
+            ],
+            "arguments": [],
+            "command": "agent ask-human --clear",
+            "options": [
+                {
+                    "name": "--json",
+                    "required": false,
+                    "requires": [],
+                    "value": null
+                }
+            ],
+            "refusals": [
+                "agent_pane_required",
+                "participant_unavailable",
+                "participant_registering",
+                "participant_ended",
+                "participant_session_changed",
+                "ambiguous_participant"
+            ],
+            "repeats_at_most": null,
+            "rest": null
+        },
+        {
+            "answers": [
+                "fold_ask"
+            ],
+            "arguments": [
+                {
+                    "name": "id",
+                    "value": {
+                        "type": "key"
+                    }
+                }
+            ],
+            "command": "session fold-ask",
+            "options": [
+                {
+                    "name": "--reason",
+                    "required": true,
+                    "requires": [],
+                    "value": {
+                        "type": "text"
+                    }
+                },
+                {
+                    "name": "--json",
+                    "required": false,
+                    "requires": [],
+                    "value": null
+                }
+            ],
+            "refusals": [
+                "ask_unknown",
+                "ask_reopened",
+                "ask_reason_invalid",
+                "ask_session_unknown",
+                "ask_unavailable",
+                "agent_pane_required",
+                "caller_context_changed"
+            ],
+            "repeats_at_most": null,
+            "rest": null
+        },
+        {
+            "answers": [
+                "agent_end"
             ],
             "arguments": [
                 {
@@ -3058,11 +5869,24 @@
                     }
                 },
                 {
+                    "name": "--keep-pane",
+                    "required": false,
+                    "requires": [],
+                    "value": null
+                },
+                {
                     "name": "--json",
                     "required": false,
                     "requires": [],
                     "value": null
                 }
+            ],
+            "refusals": [
+                "agent_unavailable",
+                "parent_authority_required",
+                "actor_identity_conflict",
+                "machine_unavailable",
+                "pane_close_failed"
             ],
             "repeats_at_most": null,
             "rest": null
@@ -3103,7 +5927,6 @@
                 "parent_authority_required",
                 "actor_identity_conflict",
                 "agent_sleep_unsupported",
-                "agent_sleep_device",
                 "agent_sleep_core_machine_only",
                 "agent_sleep_working",
                 "agent_sleep_waiting_for_you",
@@ -3237,7 +6060,7 @@
                 },
                 {
                     "name": "--repo",
-                    "required": true,
+                    "required": false,
                     "requires": [],
                     "value": {
                         "type": "text"
@@ -3245,14 +6068,26 @@
                 },
                 {
                     "name": "--branch",
-                    "required": true,
-                    "requires": [],
+                    "required": false,
+                    "requires": [
+                        "--repo"
+                    ],
                     "value": {
                         "type": "text"
                     }
                 },
                 {
                     "name": "--path",
+                    "required": false,
+                    "requires": [
+                        "--branch"
+                    ],
+                    "value": {
+                        "type": "text"
+                    }
+                },
+                {
+                    "name": "--profile",
                     "required": false,
                     "requires": [],
                     "value": {
@@ -3312,14 +6147,25 @@
             ],
             "refusals": [
                 "spawn_busy",
+                "workspace_closing",
                 "machine_unknown",
                 "machine_not_permitted",
                 "machine_unavailable",
                 "repository_unavailable",
+                "spawn_repo_required",
+                "spawn_project_loading",
+                "spawn_folder_unreadable",
                 "agent_not_installed",
+                "agent_hook_off",
+                "agent_not_set_up",
+                "agent_hook_untrusted",
+                "agent_hook_missing",
+                "agent_hook_unconfirmed",
+                "agent_hook_unchecked",
                 "intent_conflict",
                 "invalid_launch_choice",
                 "shell_starting",
+                "holder_cap",
                 "pane_busy",
                 "agent_not_started",
                 "worktree_unconfirmed",
@@ -3328,15 +6174,20 @@
                 "session_too_long",
                 "codex_capability_unknown",
                 "invalid_brief",
+                "invalid_agent_name",
                 "brief_not_submitted",
                 "mission_brief_missing",
+                "mission_node_held",
+                "mission_gate_before_start",
                 "mission_machine_node_refused",
+                "mission_other_repository",
                 "mission_machine_unavailable",
                 "mission_projects_loading",
                 "mission_machine_no_repository",
                 "beside_other_checkout",
                 "beside_other_machine",
                 "beside_needs_agent_pane",
+                "beside_with_parent",
                 "beside_pane_unavailable",
                 "plan_missing",
                 "plan_node_unknown",
@@ -3348,7 +6199,13 @@
                 "plan_delegate_full",
                 "plan_delegate_not_permitted",
                 "plan_unavailable",
-                "plan_session_unknown"
+                "plan_session_unknown",
+                "profile_gone",
+                "profiles_unsupported",
+                "profile_refused",
+                "profile_unanswered",
+                "profile_unconfirmed",
+                "launch_records_full"
             ],
             "repeats_at_most": null,
             "rest": "the agent's own arguments"
@@ -3388,6 +6245,117 @@
         },
         {
             "answers": [
+                "access_standing"
+            ],
+            "arguments": [],
+            "command": "access request",
+            "options": [
+                {
+                    "name": "--name",
+                    "required": true,
+                    "requires": [],
+                    "value": {
+                        "type": "key"
+                    }
+                },
+                {
+                    "name": "--no-wait",
+                    "required": false,
+                    "requires": [],
+                    "value": null
+                },
+                {
+                    "name": "--json",
+                    "required": false,
+                    "requires": [],
+                    "value": null
+                }
+            ],
+            "refusals": [
+                "access_from_pane",
+                "access_refused",
+                "access_request_expired",
+                "access_revoked",
+                "access_limit",
+                "access_name_taken",
+                "access_key_unreadable"
+            ],
+            "repeats_at_most": null,
+            "rest": null
+        },
+        {
+            "answers": [
+                "access_standing"
+            ],
+            "arguments": [],
+            "command": "access status",
+            "options": [
+                {
+                    "name": "--json",
+                    "required": false,
+                    "requires": [],
+                    "value": null
+                }
+            ],
+            "refusals": [
+                "access_from_pane",
+                "access_ambiguous",
+                "access_refused",
+                "access_request_expired",
+                "access_revoked",
+                "access_key_unreadable"
+            ],
+            "repeats_at_most": null,
+            "rest": null
+        },
+        {
+            "answers": [
+                "access_left"
+            ],
+            "arguments": [],
+            "command": "access leave",
+            "options": [
+                {
+                    "name": "--json",
+                    "required": false,
+                    "requires": [],
+                    "value": null
+                }
+            ],
+            "refusals": [
+                "access_from_pane",
+                "access_ambiguous",
+                "access_not_connected",
+                "access_key_unreadable"
+            ],
+            "repeats_at_most": null,
+            "rest": null
+        },
+        {
+            "answers": [
+                "access_list"
+            ],
+            "arguments": [],
+            "command": "access list",
+            "options": [
+                {
+                    "name": "--json",
+                    "required": false,
+                    "requires": [],
+                    "value": null
+                }
+            ],
+            "refusals": [
+                "access_not_connected",
+                "access_ambiguous",
+                "access_revoked",
+                "access_key_unreadable"
+            ],
+            "repeats_at_most": null,
+            "rest": null
+        },
+        {
+            "answers": [
                 "device_list"
             ],
             "arguments": [],
@@ -3408,13 +6376,38 @@
         },
         {
             "answers": [
-                "device_added"
+                "device_shared"
+            ],
+            "arguments": [],
+            "command": "device share",
+            "hidden": true,
+            "options": [
+                {
+                    "name": "--json",
+                    "required": false,
+                    "requires": [],
+                    "value": null
+                }
+            ],
+            "refusals": [
+                "device_from_pane",
+                "peer_unavailable",
+                "pairing_ended"
+            ],
+            "repeats_at_most": null,
+            "rest": null
+        },
+        {
+            "answers": [
+                "device_added",
+                "device_joined",
+                "device_paired"
             ],
             "arguments": [
                 {
-                    "name": "ssh_alias",
+                    "name": "link_or_ssh_alias",
                     "value": {
-                        "type": "key"
+                        "type": "link_or_key"
                     }
                 }
             ],
@@ -3422,14 +6415,6 @@
             "options": [
                 {
                     "name": "--name",
-                    "required": false,
-                    "requires": [],
-                    "value": {
-                        "type": "text"
-                    }
-                },
-                {
-                    "name": "--socket",
                     "required": false,
                     "requires": [],
                     "value": {
@@ -3446,18 +6431,182 @@
             "refusals": [
                 "machine_not_permitted",
                 "device_invalid",
-                "device_duplicate"
+                "device_duplicate",
+                "device_from_pane",
+                "link_invalid",
+                "link_newer",
+                "link_own",
+                "device_already_connected",
+                "pairing_no_offer",
+                "pairing_declined",
+                "pairing_host_full",
+                "pairing_full",
+                "pairing_unanswered",
+                "pairing_unreachable",
+                "pairing_update_needed",
+                "pairing_ended",
+                "ssh_hide_absent",
+                "ssh_update_there",
+                "ssh_hide_not_running",
+                "ssh_not_reached",
+                "ssh_busy",
+                "device_own",
+                "device_limit",
+                "peer_unavailable"
             ],
             "repeats_at_most": null,
             "rest": null
         },
         {
             "answers": [
+                "device_allowed"
+            ],
+            "arguments": [],
+            "command": "device allow",
+            "hidden": true,
+            "options": [
+                {
+                    "name": "--json",
+                    "required": false,
+                    "requires": [],
+                    "value": null
+                }
+            ],
+            "refusals": [
+                "device_from_pane"
+            ],
+            "repeats_at_most": null,
+            "rest": null
+        },
+        {
+            "answers": [
+                "device_changed"
+            ],
+            "arguments": [
+                {
+                    "name": "device",
+                    "value": {
+                        "type": "key"
+                    }
+                }
+            ],
+            "command": "device pause",
+            "hidden": true,
+            "options": [
+                {
+                    "conflicts": [
+                        "--incoming",
+                        "--both"
+                    ],
+                    "name": "--outgoing",
+                    "required": false,
+                    "requires": [],
+                    "value": null
+                },
+                {
+                    "conflicts": [
+                        "--outgoing",
+                        "--both"
+                    ],
+                    "name": "--incoming",
+                    "required": false,
+                    "requires": [],
+                    "value": null
+                },
+                {
+                    "conflicts": [
+                        "--outgoing",
+                        "--incoming"
+                    ],
+                    "name": "--both",
+                    "required": false,
+                    "requires": [],
+                    "value": null
+                },
+                {
+                    "name": "--json",
+                    "required": false,
+                    "requires": [],
+                    "value": null
+                }
+            ],
+            "refusals": [
+                "device_unknown",
+                "device_ambiguous",
+                "device_direction_needed"
+            ],
+            "repeats_at_most": null,
+            "rest": null
+        },
+        {
+            "answers": [
+                "device_changed"
+            ],
+            "arguments": [
+                {
+                    "name": "device",
+                    "value": {
+                        "type": "key"
+                    }
+                }
+            ],
+            "command": "device resume",
+            "hidden": true,
+            "options": [
+                {
+                    "conflicts": [
+                        "--incoming",
+                        "--both"
+                    ],
+                    "name": "--outgoing",
+                    "required": false,
+                    "requires": [],
+                    "value": null
+                },
+                {
+                    "conflicts": [
+                        "--outgoing",
+                        "--both"
+                    ],
+                    "name": "--incoming",
+                    "required": false,
+                    "requires": [],
+                    "value": null
+                },
+                {
+                    "conflicts": [
+                        "--outgoing",
+                        "--incoming"
+                    ],
+                    "name": "--both",
+                    "required": false,
+                    "requires": [],
+                    "value": null
+                },
+                {
+                    "name": "--json",
+                    "required": false,
+                    "requires": [],
+                    "value": null
+                }
+            ],
+            "refusals": [
+                "device_from_pane",
+                "device_unknown",
+                "device_ambiguous",
+                "device_direction_needed"
+            ],
+            "repeats_at_most": null,
+            "rest": null
+        },
+        {
+            "answers": [
+                "device_changed",
                 "device_removed"
             ],
             "arguments": [
                 {
-                    "name": "device_id",
+                    "name": "device",
                     "value": {
                         "type": "key"
                     }
@@ -3465,6 +6614,36 @@
             ],
             "command": "device remove",
             "options": [
+                {
+                    "conflicts": [
+                        "--incoming",
+                        "--both"
+                    ],
+                    "name": "--outgoing",
+                    "required": false,
+                    "requires": [],
+                    "value": null
+                },
+                {
+                    "conflicts": [
+                        "--outgoing",
+                        "--both"
+                    ],
+                    "name": "--incoming",
+                    "required": false,
+                    "requires": [],
+                    "value": null
+                },
+                {
+                    "conflicts": [
+                        "--outgoing",
+                        "--incoming"
+                    ],
+                    "name": "--both",
+                    "required": false,
+                    "requires": [],
+                    "value": null
+                },
                 {
                     "name": "--json",
                     "required": false,
@@ -3475,6 +6654,8 @@
             "refusals": [
                 "machine_not_permitted",
                 "device_unknown",
+                "device_ambiguous",
+                "device_direction_needed",
                 "device_local_remove_denied",
                 "device_files_open"
             ],
@@ -3483,11 +6664,81 @@
         },
         {
             "answers": [
+                "device_changed"
+            ],
+            "arguments": [
+                {
+                    "name": "device",
+                    "value": {
+                        "type": "key"
+                    }
+                }
+            ],
+            "command": "device request",
+            "hidden": true,
+            "options": [
+                {
+                    "name": "--json",
+                    "required": false,
+                    "requires": [],
+                    "value": null
+                }
+            ],
+            "refusals": [
+                "device_from_pane",
+                "device_unknown",
+                "device_ambiguous",
+                "device_not_a_guest",
+                "device_already_connected",
+                "request_waiting"
+            ],
+            "repeats_at_most": null,
+            "rest": null
+        },
+        {
+            "answers": [
+                "device_changed"
+            ],
+            "arguments": [
+                {
+                    "name": "device",
+                    "value": {
+                        "type": "key"
+                    }
+                },
+                {
+                    "name": "address",
+                    "value": {
+                        "type": "address"
+                    }
+                }
+            ],
+            "command": "device address",
+            "hidden": true,
+            "options": [
+                {
+                    "name": "--json",
+                    "required": false,
+                    "requires": [],
+                    "value": null
+                }
+            ],
+            "refusals": [
+                "device_from_pane",
+                "device_unknown",
+                "device_ambiguous"
+            ],
+            "repeats_at_most": null,
+            "rest": null
+        },
+        {
+            "answers": [
+                "device_changed",
                 "device_retried"
             ],
             "arguments": [
                 {
-                    "name": "device_id",
+                    "name": "device",
                     "value": {
                         "type": "key"
                     }
@@ -3511,8 +6762,164 @@
             "refusals": [
                 "machine_not_permitted",
                 "device_unknown",
+                "device_ambiguous",
                 "device_dials_in",
                 "device_wait_timeout"
+            ],
+            "repeats_at_most": null,
+            "rest": null
+        },
+        {
+            "answers": [
+                "device_switched"
+            ],
+            "arguments": [
+                {
+                    "name": "device",
+                    "value": {
+                        "type": "key"
+                    }
+                }
+            ],
+            "command": "device switch",
+            "hidden": true,
+            "options": [
+                {
+                    "name": "--install",
+                    "required": false,
+                    "requires": [],
+                    "value": null
+                },
+                {
+                    "name": "--own-folder",
+                    "required": false,
+                    "requires": [],
+                    "value": null
+                },
+                {
+                    "name": "--json",
+                    "required": false,
+                    "requires": [],
+                    "value": null
+                }
+            ],
+            "refusals": [
+                "device_from_pane",
+                "device_unknown",
+                "switch_unsupported",
+                "switch_running",
+                "switch_not_connected",
+                "ssh_core_not_started",
+                "ssh_not_reached",
+                "ssh_busy",
+                "ssh_mac_from_mac_only",
+                "ssh_mac_signed_out",
+                "ssh_update_there",
+                "ssh_hide_not_running",
+                "device_already_connected"
+            ],
+            "repeats_at_most": null,
+            "rest": null
+        },
+        {
+            "answers": [
+                "device_looked"
+            ],
+            "arguments": [],
+            "command": "device look-ssh",
+            "hidden": true,
+            "options": [],
+            "refusals": [
+                "hide_unavailable",
+                "request_timeout"
+            ],
+            "repeats_at_most": null,
+            "rest": null
+        },
+        {
+            "answers": [
+                "device_accepted"
+            ],
+            "arguments": [],
+            "command": "device accept-ssh",
+            "hidden": true,
+            "options": [
+                {
+                    "name": "--request",
+                    "required": true,
+                    "requires": [],
+                    "value": {
+                        "type": "key"
+                    }
+                },
+                {
+                    "name": "--key",
+                    "required": true,
+                    "requires": [],
+                    "value": {
+                        "type": "key"
+                    }
+                },
+                {
+                    "name": "--device",
+                    "required": true,
+                    "requires": [],
+                    "value": {
+                        "type": "key"
+                    }
+                },
+                {
+                    "name": "--name",
+                    "required": true,
+                    "requires": [],
+                    "value": {
+                        "type": "text"
+                    }
+                },
+                {
+                    "name": "--wsl",
+                    "required": false,
+                    "requires": [],
+                    "value": null
+                },
+                {
+                    "name": "--helper",
+                    "required": false,
+                    "requires": [],
+                    "value": {
+                        "type": "text"
+                    }
+                }
+            ],
+            "refusals": [
+                "device_from_pane",
+                "invalid_request",
+                "device_already_connected",
+                "device_limit"
+            ],
+            "repeats_at_most": null,
+            "rest": null
+        },
+        {
+            "answers": [
+                "device_projects_listed"
+            ],
+            "arguments": [],
+            "command": "device projects-ssh",
+            "hidden": true,
+            "needs_one_of": [
+                "--project"
+            ],
+            "options": [
+                {
+                    "name": "--project",
+                    "repeats_at_most": 32,
+                    "required": false,
+                    "requires": [],
+                    "value": {
+                        "type": "text"
+                    }
+                }
             ],
             "repeats_at_most": null,
             "rest": null
@@ -3532,11 +6939,47 @@
             "command": "pane read",
             "options": [
                 {
+                    "conflicts": [
+                        "--source",
+                        "--format"
+                    ],
                     "name": "--lines",
                     "required": false,
                     "requires": [],
                     "value": {
                         "type": "unsigned"
+                    }
+                },
+                {
+                    "conflicts": [
+                        "--lines"
+                    ],
+                    "name": "--source",
+                    "required": false,
+                    "requires": [
+                        "--format"
+                    ],
+                    "value": {
+                        "type": "one_of",
+                        "values": [
+                            "visible"
+                        ]
+                    }
+                },
+                {
+                    "conflicts": [
+                        "--lines"
+                    ],
+                    "name": "--format",
+                    "required": false,
+                    "requires": [
+                        "--source"
+                    ],
+                    "value": {
+                        "type": "one_of",
+                        "values": [
+                            "ansi"
+                        ]
                     }
                 },
                 {
@@ -3549,7 +6992,8 @@
             "refusals": [
                 "pane_required",
                 "lines_out_of_range",
-                "pane_unavailable"
+                "pane_unavailable",
+                "guest_pane_read"
             ],
             "repeats_at_most": null,
             "rest": null
@@ -3632,7 +7076,8 @@
                 "composer_not_empty",
                 "keys_not_sent",
                 "send_unconfirmed",
-                "operator_typing"
+                "operator_typing",
+                "guest_pane_keys"
             ],
             "repeats_at_most": null,
             "rest": null
@@ -3724,7 +7169,8 @@
                 "pane_required",
                 "purpose_invalid",
                 "purpose_too_long",
-                "purpose_no_workspace"
+                "purpose_no_workspace",
+                "purpose_checkout_unlisted"
             ],
             "repeats_at_most": null,
             "rest": null
@@ -3780,7 +7226,8 @@
         },
         {
             "answers": [
-                "letter"
+                "letter",
+                "queued"
             ],
             "arguments": [
                 {
@@ -3844,7 +7291,11 @@
             "refusals": [
                 "composer_not_empty",
                 "composer_unconfirmed",
-                "force_target_asleep"
+                "force_target_asleep",
+                "no_parent",
+                "outbox_full",
+                "outbox_unavailable",
+                "participant_registering"
             ],
             "repeats_at_most": null,
             "rest": null
@@ -4266,11 +7717,22 @@
                 "mission_node_in_progress",
                 "mission_dependency_unknown",
                 "mission_dependency_cycle",
+                "mission_dependency_line_unknown",
+                "mission_dependency_stack_split",
+                "mission_merge_order_stack",
                 "mission_criteria_missing",
                 "mission_criteria_too_many",
+                "mission_steps_invalid",
                 "mission_checkers_invalid",
                 "mission_external_invalid",
-                "mission_machine_node_refused"
+                "mission_destination_invalid",
+                "mission_needs_git",
+                "mission_operator_merge_invalid",
+                "mission_preset_invalid",
+                "mission_gate_node_started",
+                "mission_machine_node_refused",
+                "mission_profile_unknown",
+                "mission_candidate_refused"
             ],
             "repeats_at_most": null,
             "rest": null
@@ -4537,11 +7999,51 @@
                     "value": {
                         "type": "key"
                     }
+                },
+                {
+                    "conflicts": [
+                        "--no-hold"
+                    ],
+                    "name": "--hold",
+                    "required": false,
+                    "requires": [
+                        "--for"
+                    ],
+                    "value": {
+                        "type": "text"
+                    }
+                },
+                {
+                    "conflicts": [
+                        "--no-hold"
+                    ],
+                    "name": "--for",
+                    "required": false,
+                    "requires": [
+                        "--hold"
+                    ],
+                    "value": {
+                        "type": "span"
+                    }
+                },
+                {
+                    "conflicts": [
+                        "--hold",
+                        "--for"
+                    ],
+                    "name": "--no-hold",
+                    "required": false,
+                    "requires": [],
+                    "value": null
                 }
             ],
             "refusals": [
+                "mission_node_held",
+                "mission_node_started",
+                "mission_gate_before_start",
                 "mission_node_unknown",
                 "mission_not_conductor",
+                "mission_ambiguous",
                 "mission_closed",
                 "mission_criteria_unmet",
                 "mission_checker_is_worker",
@@ -4636,6 +8138,11 @@
                 "mission_node_unknown",
                 "mission_criterion_unknown",
                 "mission_criterion_not_yours",
+                "participant_session_changed",
+                "participant_registering",
+                "participant_unavailable",
+                "ledger_unavailable",
+                "mission_ambiguous",
                 "mission_commit_required",
                 "mission_rerun_spent",
                 "mission_evidence_missing",
@@ -4695,6 +8202,7 @@
                 "mission_not_conductor",
                 "mission_node_unknown",
                 "mission_criterion_unknown",
+                "mission_ambiguous",
                 "mission_skip_reason_missing",
                 "mission_criteria_protected"
             ],
@@ -4753,6 +8261,95 @@
             "answers": [
                 "mission"
             ],
+            "arguments": [
+                {
+                    "name": "node",
+                    "value": {
+                        "type": "key"
+                    }
+                }
+            ],
+            "command": "mission gate",
+            "needs_one_of": [
+                "--pass",
+                "--fix",
+                "--show"
+            ],
+            "options": [
+                {
+                    "name": "--mission",
+                    "required": false,
+                    "requires": [],
+                    "value": {
+                        "type": "key"
+                    }
+                },
+                {
+                    "conflicts": [
+                        "--fix",
+                        "--show"
+                    ],
+                    "name": "--pass",
+                    "required": false,
+                    "requires": [
+                        "--said"
+                    ],
+                    "value": null
+                },
+                {
+                    "conflicts": [
+                        "--pass",
+                        "--show"
+                    ],
+                    "name": "--fix",
+                    "required": false,
+                    "requires": [
+                        "--said"
+                    ],
+                    "value": null
+                },
+                {
+                    "conflicts": [
+                        "--show"
+                    ],
+                    "name": "--said",
+                    "required": false,
+                    "requires": [],
+                    "value": {
+                        "type": "text"
+                    }
+                },
+                {
+                    "conflicts": [
+                        "--pass",
+                        "--fix",
+                        "--said"
+                    ],
+                    "name": "--show",
+                    "repeats_at_most": 16,
+                    "required": false,
+                    "requires": [],
+                    "value": {
+                        "type": "text"
+                    }
+                }
+            ],
+            "refusals": [
+                "mission_not_conductor",
+                "mission_node_unknown",
+                "mission_gate_none",
+                "mission_gate_not_open",
+                "mission_gate_passed",
+                "mission_gate_words_missing",
+                "mission_closed"
+            ],
+            "repeats_at_most": null,
+            "rest": null
+        },
+        {
+            "answers": [
+                "mission"
+            ],
             "arguments": [],
             "command": "mission start",
             "options": [
@@ -4796,7 +8393,8 @@
                 },
                 {
                     "conflicts": [
-                        "--line"
+                        "--line",
+                        "--show"
                     ],
                     "name": "--clear",
                     "required": false,
@@ -4834,6 +8432,14 @@
                     "value": {
                         "type": "key"
                     }
+                },
+                {
+                    "name": "--show",
+                    "required": false,
+                    "requires": [],
+                    "value": {
+                        "type": "text"
+                    }
                 }
             ],
             "repeats_at_most": null,
@@ -4867,7 +8473,19 @@
                 },
                 {
                     "conflicts": [
-                        "--line"
+                        "--clear"
+                    ],
+                    "name": "--for",
+                    "required": false,
+                    "requires": [],
+                    "value": {
+                        "type": "span"
+                    }
+                },
+                {
+                    "conflicts": [
+                        "--line",
+                        "--for"
                     ],
                     "name": "--clear",
                     "required": false,
@@ -4990,9 +8608,18 @@
         },
         {
             "answers": [
-                "mission"
+                "mission",
+                "mission_node"
             ],
-            "arguments": [],
+            "arguments": [
+                {
+                    "name": "node",
+                    "required": false,
+                    "value": {
+                        "type": "key"
+                    }
+                }
+            ],
             "command": "mission show",
             "options": [
                 {
@@ -5002,7 +8629,17 @@
                     "value": {
                         "type": "key"
                     }
+                },
+                {
+                    "name": "--json",
+                    "required": false,
+                    "requires": [],
+                    "value": null
                 }
+            ],
+            "refusals": [
+                "mission_node_unknown",
+                "mission_ambiguous"
             ],
             "repeats_at_most": null,
             "rest": null
@@ -5029,10 +8666,424 @@
         },
         {
             "answers": [
+                "automation"
+            ],
+            "arguments": [],
+            "command": "automation add",
+            "options": [
+                {
+                    "name": "--name",
+                    "required": true,
+                    "requires": [],
+                    "value": {
+                        "type": "text"
+                    }
+                },
+                {
+                    "name": "--task",
+                    "required": true,
+                    "requires": [],
+                    "value": {
+                        "type": "body"
+                    }
+                },
+                {
+                    "name": "--schedule",
+                    "required": true,
+                    "requires": [],
+                    "value": {
+                        "type": "text"
+                    }
+                },
+                {
+                    "name": "--kind",
+                    "required": true,
+                    "requires": [],
+                    "value": {
+                        "type": "text"
+                    }
+                },
+                {
+                    "name": "--profile",
+                    "required": false,
+                    "requires": [
+                        "--kind"
+                    ],
+                    "value": {
+                        "type": "text"
+                    }
+                },
+                {
+                    "name": "--model",
+                    "required": false,
+                    "requires": [
+                        "--kind"
+                    ],
+                    "value": {
+                        "type": "text"
+                    }
+                },
+                {
+                    "name": "--effort",
+                    "required": false,
+                    "requires": [
+                        "--kind"
+                    ],
+                    "value": {
+                        "type": "text"
+                    }
+                },
+                {
+                    "name": "--folder",
+                    "required": false,
+                    "requires": [],
+                    "value": {
+                        "type": "text"
+                    }
+                },
+                {
+                    "name": "--worktree",
+                    "required": false,
+                    "requires": [
+                        "--folder"
+                    ],
+                    "value": null
+                },
+                {
+                    "name": "--run-now",
+                    "required": false,
+                    "requires": [],
+                    "value": null
+                }
+            ],
+            "refusals": [
+                "schedule_unreadable",
+                "schedule_too_often",
+                "schedule_minutes_out_of_range",
+                "schedule_cron_invalid",
+                "schedule_never",
+                "schedule_time_invalid",
+                "schedule_days_missing",
+                "schedule_hours_out_of_range",
+                "automation_unknown",
+                "automation_name_missing",
+                "automation_name_invalid",
+                "automation_name_taken",
+                "automation_task_missing",
+                "automation_task_too_long",
+                "automation_agent_unknown",
+                "automation_folder_unknown",
+                "automation_folder_on_device",
+                "automation_worktree_needs_git",
+                "automation_home_unknown",
+                "automation_cap",
+                "automation_running",
+                "automation_changed_unread"
+            ],
+            "repeats_at_most": null,
+            "rest": null
+        },
+        {
+            "answers": [
+                "automation_list"
+            ],
+            "arguments": [],
+            "command": "automation list",
+            "options": [],
+            "repeats_at_most": null,
+            "rest": null
+        },
+        {
+            "answers": [
+                "automation"
+            ],
+            "arguments": [
+                {
+                    "name": "automation",
+                    "value": {
+                        "type": "key"
+                    }
+                }
+            ],
+            "command": "automation show",
+            "options": [],
+            "refusals": [
+                "automation_unknown"
+            ],
+            "repeats_at_most": null,
+            "rest": null
+        },
+        {
+            "answers": [
+                "automation"
+            ],
+            "arguments": [
+                {
+                    "name": "automation",
+                    "value": {
+                        "type": "key"
+                    }
+                }
+            ],
+            "command": "automation run",
+            "options": [],
+            "refusals": [
+                "automation_unknown",
+                "automation_running",
+                "automation_changed_unread"
+            ],
+            "repeats_at_most": null,
+            "rest": null
+        },
+        {
+            "answers": [
+                "automation"
+            ],
+            "arguments": [
+                {
+                    "name": "automation",
+                    "value": {
+                        "type": "key"
+                    }
+                }
+            ],
+            "command": "automation pause",
+            "options": [],
+            "refusals": [
+                "automation_unknown",
+                "automation_changed_unread"
+            ],
+            "repeats_at_most": null,
+            "rest": null
+        },
+        {
+            "answers": [
+                "automation"
+            ],
+            "arguments": [
+                {
+                    "name": "automation",
+                    "value": {
+                        "type": "key"
+                    }
+                }
+            ],
+            "command": "automation resume",
+            "options": [],
+            "refusals": [
+                "automation_unknown",
+                "automation_changed_unread"
+            ],
+            "repeats_at_most": null,
+            "rest": null
+        },
+        {
+            "answers": [
+                "automation"
+            ],
+            "arguments": [
+                {
+                    "name": "automation",
+                    "value": {
+                        "type": "key"
+                    }
+                }
+            ],
+            "command": "automation edit",
+            "needs_one_of": [
+                "--name",
+                "--task",
+                "--schedule",
+                "--kind",
+                "--folder",
+                "--own-folder",
+                "--worktree",
+                "--no-worktree"
+            ],
+            "options": [
+                {
+                    "name": "--name",
+                    "required": false,
+                    "requires": [],
+                    "value": {
+                        "type": "text"
+                    }
+                },
+                {
+                    "name": "--task",
+                    "required": false,
+                    "requires": [],
+                    "value": {
+                        "type": "body"
+                    }
+                },
+                {
+                    "name": "--schedule",
+                    "required": false,
+                    "requires": [],
+                    "value": {
+                        "type": "text"
+                    }
+                },
+                {
+                    "name": "--kind",
+                    "required": false,
+                    "requires": [],
+                    "value": {
+                        "type": "text"
+                    }
+                },
+                {
+                    "name": "--profile",
+                    "required": false,
+                    "requires": [
+                        "--kind"
+                    ],
+                    "value": {
+                        "type": "text"
+                    }
+                },
+                {
+                    "name": "--model",
+                    "required": false,
+                    "requires": [
+                        "--kind"
+                    ],
+                    "value": {
+                        "type": "text"
+                    }
+                },
+                {
+                    "name": "--effort",
+                    "required": false,
+                    "requires": [
+                        "--kind"
+                    ],
+                    "value": {
+                        "type": "text"
+                    }
+                },
+                {
+                    "conflicts": [
+                        "--own-folder"
+                    ],
+                    "name": "--folder",
+                    "required": false,
+                    "requires": [],
+                    "value": {
+                        "type": "text"
+                    }
+                },
+                {
+                    "conflicts": [
+                        "--folder"
+                    ],
+                    "name": "--own-folder",
+                    "required": false,
+                    "requires": [],
+                    "value": null
+                },
+                {
+                    "conflicts": [
+                        "--no-worktree"
+                    ],
+                    "name": "--worktree",
+                    "required": false,
+                    "requires": [],
+                    "value": null
+                },
+                {
+                    "conflicts": [
+                        "--worktree"
+                    ],
+                    "name": "--no-worktree",
+                    "required": false,
+                    "requires": [],
+                    "value": null
+                }
+            ],
+            "refusals": [
+                "schedule_unreadable",
+                "schedule_too_often",
+                "schedule_minutes_out_of_range",
+                "schedule_cron_invalid",
+                "schedule_never",
+                "schedule_time_invalid",
+                "schedule_days_missing",
+                "schedule_hours_out_of_range",
+                "automation_unknown",
+                "automation_name_missing",
+                "automation_name_invalid",
+                "automation_name_taken",
+                "automation_task_missing",
+                "automation_task_too_long",
+                "automation_agent_unknown",
+                "automation_folder_unknown",
+                "automation_folder_on_device",
+                "automation_worktree_needs_git",
+                "automation_home_unknown",
+                "automation_cap",
+                "automation_running",
+                "automation_changed_unread"
+            ],
+            "repeats_at_most": null,
+            "rest": null
+        },
+        {
+            "answers": [
+                "automation_removed"
+            ],
+            "arguments": [
+                {
+                    "name": "automation",
+                    "value": {
+                        "type": "key"
+                    }
+                }
+            ],
+            "command": "automation remove",
+            "options": [],
+            "refusals": [
+                "automation_unknown"
+            ],
+            "repeats_at_most": null,
+            "rest": null
+        },
+        {
+            "answers": [
+                "automation_preview"
+            ],
+            "arguments": [],
+            "command": "automation preview",
+            "options": [
+                {
+                    "name": "--schedule",
+                    "required": true,
+                    "requires": [],
+                    "value": {
+                        "type": "text"
+                    }
+                }
+            ],
+            "refusals": [
+                "schedule_unreadable",
+                "schedule_too_often",
+                "schedule_minutes_out_of_range",
+                "schedule_cron_invalid",
+                "schedule_never",
+                "schedule_time_invalid",
+                "schedule_days_missing",
+                "schedule_hours_out_of_range"
+            ],
+            "repeats_at_most": null,
+            "rest": null
+        },
+        {
+            "answers": [
                 "plan"
             ],
             "arguments": [],
-            "command": "plan set",
+            "command": "task set",
             "options": [
                 {
                     "conflicts": [
@@ -5101,7 +9152,7 @@
                     }
                 }
             ],
-            "command": "plan node",
+            "command": "task node",
             "options": [
                 {
                     "name": "--status",
@@ -5168,7 +9219,7 @@
                 "plan"
             ],
             "arguments": [],
-            "command": "plan approve",
+            "command": "task approve",
             "options": [],
             "refusals": [
                 "plan_missing",
@@ -5183,7 +9234,7 @@
                 "plan"
             ],
             "arguments": [],
-            "command": "plan drop",
+            "command": "task drop",
             "options": [],
             "refusals": [
                 "plan_not_yours",
@@ -5197,7 +9248,7 @@
                 "plan"
             ],
             "arguments": [],
-            "command": "plan show",
+            "command": "task show",
             "options": [],
             "refusals": [
                 "plan_agent_unknown"
@@ -5206,9 +9257,19 @@
             "rest": null
         }
     ],
-    "digest": "sha256:e17d435b7f4754fc8ae369e8f60100e120a4518a38b403b9304813b6386151db",
+    "digest": "sha256:b789620df8c066dc4d232d14377a00066c8973c8d98396a6b34e0ee26ea6fae4",
     "envelopes": {
+        "access": {
+            "answer": "value",
+            "code": "error.code",
+            "ok": "ok"
+        },
         "agent": {
+            "answer": "value",
+            "code": "error.code",
+            "ok": "ok"
+        },
+        "automation": {
             "answer": "value",
             "code": "error.code",
             "ok": "ok"
@@ -5221,6 +9282,11 @@
         "inbox": {
             "answer": "result",
             "code": "reason",
+            "ok": "ok"
+        },
+        "mcp": {
+            "answer": "value",
+            "code": "error.code",
             "ok": "ok"
         },
         "mission": {
@@ -5248,6 +9314,11 @@
             "code": "reason",
             "ok": "ok"
         },
+        "skill": {
+            "answer": "value",
+            "code": "error.code",
+            "ok": "ok"
+        },
         "watch": {
             "answer": "result",
             "code": "reason",
@@ -5264,12 +9335,13 @@
         "approval": "not blank, at most 256 bytes, no control characters",
         "body": "not blank, at most 16384 bytes",
         "commit": "7 to 64 hexadecimal digits",
-        "json": "a JSON document of the shape hide mission help or hide plan help shows",
+        "json": "a JSON document of the shape hide mission help or hide task help shows",
         "key": "non-empty, at most 256 bytes, no control characters, does not start with -",
         "one_of": "one of the listed values",
         "paste_text": "non-empty, at most 16384 bytes, no control characters but line breaks (LF, CR) and tabs",
         "ratio": "two decimal integers as <passed>/<total>, such as 6/6",
         "session": "non-empty, at most 4096 bytes, no control characters, does not start with -",
+        "span": "whole minutes or hours, such as 30m or 2h",
         "text": "non-empty, no control characters, does not start with --",
         "unsigned": "a decimal integer from 0 to 18446744073709551615"
     }

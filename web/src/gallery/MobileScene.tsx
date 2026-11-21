@@ -6,6 +6,7 @@ import type { MobileState } from "../mobileSettings";
 import { TooltipProvider } from "../components/ui/tooltip";
 import { InterfaceLanguageBoundary } from "../i18n/client";
 import { useShellStore } from "../store";
+import { MobilePhoneScene, PHONE_SCENES, type PhoneSceneState } from "./MobilePhoneScene";
 
 function fixture(state: string): MobileState {
   const now = Date.now();
@@ -19,11 +20,19 @@ function fixture(state: string): MobileState {
     foreign_target: null, failure: state === "cleanup" ? {step:"remove",message:"Tailscale CLI unavailable"} : null, url: "https://app.withhide.dev/", qr: state === "qr" ? qr : null,
     code_expires_at_ms: state === "qr" ? now + 300_000 : null,
     phones: state === "phones" ? [{id:"gallery-phone",name:"iPhone",last_seen_ms:now,connected:true,notifications:"on",revoke_at_ms:now+604800000}] : [],
-    max_phones:4, push_mode:"off", now_ms:now,
+    max_phones:4, push_mode:"app_closed", now_ms:now,
   };
 }
+/** Settings > Mobile on the desktop, and beside it the phone's own screens (`state=phone-list`, `phone-list-cut`, `phone-devices`, `phone-missions`, `phone-missions-cut`, `phone-mission`, `phone-mission-views`, `phone-prs`, `phone-pr`, `phone-pr-agent`, `phone-pr-merge`, `phone-pr-delegate`, `phone-looks` and the `phone-look-*` viewers; `offline=1` dims the 볼 것 ones). */
 export function MobileScene({ params }: { params: URLSearchParams }) {
   const state = params.get("state") ?? "connected";
+  if (PHONE_SCENES.includes(state)) {
+    return <MobilePhoneScene state={state as PhoneSceneState} language={params.get("lang") ?? "ko"} theme={params.get("theme") ?? "dark"} scale={params.get("scale") === "large" ? 17 / 13 : 1} offline={params.get("offline") === "1"} />;
+  }
+  return <MobileSettingsScene params={params} state={state} />;
+}
+
+function MobileSettingsScene({ params, state }: { params: URLSearchParams; state: string }) {
   const language = params.get("lang") ?? "ko";
   const theme = params.get("theme") ?? "dark";
   const scale = params.get("scale") === "large" ? 17 / 13 : 1;

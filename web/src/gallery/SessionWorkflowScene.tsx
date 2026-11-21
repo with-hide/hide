@@ -1,5 +1,5 @@
 // Production components over fixed, invented wire values. These examples
-// compare typography and geometry; runtime policy is tested in herdr-core.
+// compare typography and geometry; runtime policy is tested in hide-core.
 import { useLayoutEffect, useMemo } from "react";
 import { createActions } from "../actions";
 import { TaskLens } from "../TaskLens";
@@ -7,8 +7,9 @@ import { TooltipProvider } from "../components/ui/tooltip";
 import type { TaskState } from "../agentScope";
 import { PaneView } from "../PaneView";
 import type { AgentRow, AgentState, AgentWait, Mission, PaneConnection, PaneHeader, PrState, RaisedAsk, SessionGroup, SessionPull } from "../snapshot";
-import type { RowMark, StatusTone, RequestVerb } from "../snapshot";
+import type { RowMark, StatusTone, RequestVerb, SubagentRow } from "../snapshot";
 import { useShellStore } from "../store";
+import { TurnCardCases } from "./TurnCardCases";
 import { listedPull, REFERENCE_FOLDS, sidebarScene } from "./sceneData";
 import type { SceneParams } from "./SidebarScene";
 
@@ -26,7 +27,7 @@ const EXAMPLES: Example[] = [
   { title: "쉬는 세션", group: "idle", line: null },
   { title: "완료한 검토", group: "resolved", line: null, pr: "merged" },
   // needs-you-cleanup: a Conductor resting on its mission's decision, a question the operator read, and two waits that name their cause.
-  { title: "사이드바 정리 미션", group: "needs_you", line: null, ask: { verb: "answer", what: null, more: 0, subject: { cause: "mission_decision", line: "뼈대의 check 줄을 건너뛸까요?" } } },
+  { title: "사이드바 정리 미션", group: "needs_you", line: null, ask: { verb: "answer", what: null, more: 0, subject: { cause: "mission_decision", line: "뼈대의 check 줄을 건너뛸까요?", views: 2 } } },
   { title: "배포 환경 선택", group: "needs_you", line: null, ask: { verb: "answer", what: "staging부터 올릴까요?", more: 0 }, read: true },
   { title: "검토 나눠 맡기기", group: "working", line: null, wait: "children" },
   { title: "PR 체크 기다리기", group: "working", line: null, wait: "checks", pull: 1846 },
@@ -36,6 +37,19 @@ const EXAMPLES: Example[] = [
 const RAISED: RaisedAsk = { verb: "approval", what: "검증 명령 실행 권한이 필요합니다", raised_pane_id: "a1c1", origin_title: "한국어 입력 경계 검토", pane_id: "a1c1", title: "한국어 입력 경계 검토", agent_kind: "codex", open_pane_id: "a1c1", since_unix_ms: null, path: ["입력과 세션 복귀 흐름 검토", "한국어 입력 경계 검토"], checkout: "prd/session-ui", human_notice: true };
 const PANE_RAISED: RaisedAsk = { ...RAISED, raised_pane_id: "pane-raised-child", origin_title: "UI 검증", pane_id: "pane-raised-child", open_pane_id: "pane-raised-child", title: "UI 검증", what: "권한 승인을 기다리고 있어요", path: ["Group tab 기능 설계", "UI 검증"] };
 const NO_NOTICE = { notice: null, band: null };
+/** Questions a session put to the operator that still wait (`open_asks`): drawn as `질문 N` in the pane head and listed in the turn card, never on a row (status-model.md, A question still waiting). */
+const openAsks = (session: string, texts: string[]): NonNullable<AgentRow["open_asks"]> => ({
+  session: { device_id: "local", agent: "claude", session_id: session },
+  items: texts.map((text, index) => ({ id: `${session}-${index}`, text, at_unix_ms: Date.now() - 86_400_000 + index * 60_000 })),
+});
+/** The rows and panes that keep questions: a working row asked one, a resting row and the pane head's progress case keep two, the narrow pane three. */
+const OPEN_ASKS: Record<string, NonNullable<AgentRow["open_asks"]>> = {
+  s4: openAsks("gallery-s4", ["실패한 검증을 이 PR에서 고칠까요?"]),
+  s6: openAsks("gallery-s6", ["(a)로 별도 PR로 할지", "설정 탭에 행을 넣을지"]),
+  progress: openAsks("gallery-progress", ["(a)로 별도 PR로 할지", "설정 탭에 행을 넣을지"]),
+  "turn-working": openAsks("gallery-turn-working", ["종합 뷰를 별도 탭으로 둘까요?"]),
+  "turn-narrow": openAsks("gallery-turn-narrow", ["1~3번을 한 PR로 묶을지", "캡처를 갱신할지", "설정 탭에 행을 넣을지"]),
+};
 const TURN_REQUEST = { text: "제안대로 진행 + 애매한 상태 더 점검", images: 0 };
 /** The turn card's facts for the request cases: the raw request, its summary and two earlier turns. */
 const TURN_VIEW = {
@@ -86,8 +100,26 @@ const PANE_HEADER_CASES: [string, string, Omit<PaneHeader, "working">][] = [
   // A child pane's header leads with its parent's name, and drops it below the pane breakpoint (state=child).
   ["child-wide", "20 · 자식 pane · 부모 이름", { ...NO_NOTICE, progress: "상황별 헤더 시안을 정리하고 있어요" }],
   ["child-narrow", "21 · 좁은 자식 pane · 화살표만", { ...NO_NOTICE, progress: "상황별 헤더 시안을 정리하고 있어요" }],
+  // The subagents a session runs inside itself (state=subagents; operator decision 2026-11-14).
+  ["sub-working", "22 · 서브에이전트 3개와 작업 중", { ...NO_NOTICE, request: { text: "로그인 버그 조사", images: 0 }, progress: "세션 저장 경로 읽는 중" }],
+  ["sub-waiting", "23 · 쉬는 중 · 서브에이전트 기다림", { ...NO_NOTICE, request: { text: "결제 모듈 정리", images: 0 }, waiting_on_subagents: 2 }],
+  ["sub-both", "24 · 자식과 서브에이전트 기다림", { ...NO_NOTICE, request: { text: "Hide 미션 기능 계획", images: 0 }, waiting_on_children: 1, waiting_on_subagents: 2 }],
 ];
+/** Each subagent case's running subagents. */
+const SUBAGENT_CASES: Record<string, number> = { "sub-working": 3, "sub-waiting": 2, "sub-both": 2 };
+/** The first `count` of the subagents a gallery session runs, oldest first as Claude Code's hook names them: invented kinds and tasks, started minutes ago. */
+function subagentRows(count: number | undefined, now: number): SubagentRow[] | undefined {
+  if (!count) return undefined;
+  return [
+    { id: "sa-1", kind: "Explore", task: "로그인 처리 코드 찾기", started_unix_ms: now - 4 * 60_000 },
+    { id: "sa-2", kind: "Plan", task: "고칠 방법 정리", started_unix_ms: now - 2 * 60_000 },
+    { id: "sa-3", kind: "general-purpose", task: "실패 로그 모으기", started_unix_ms: now - 60_000 },
+  ].slice(0, count);
+}
 const CHILD_CASES = ["child-wide", "child-narrow"];
+/** state=widths: a wide head, then one width inside each fold of the pane head (`--size-pane-head-narrow` and `--size-pane-head-tight`). */
+const HEAD_WIDTHS = [640, 420, 340, 280, 200, 140];
+const widthPane = (headWidth: number) => `narrow-${headWidth}`;
 const TURN_CASES = ["turn-question", "turn-working", "turn-finished", "turn-narrow", "turn-image", "turn-children", "turn-request-only"];
 
 // Frozen visual examples, not a second implementation of core judgments.
@@ -111,6 +143,12 @@ export function SessionWorkflowScene({ scene: kind, theme, content, scale, width
       return {
         ...seed, status_code: example.read ? "question" : seed.status_code, id: `s${index}`, pane_id: `s${index}`, mark, agent_kind: index % 2 ? "codex" : "claude",
         identity_label: content === "long" ? `${example.title} - 긴 한국어 제목과 변경 사항을 좁은 화면에서 확인하는 작업` : example.title,
+        // Subagents its session runs: the working root with children three; the root waiting on two children two more, its line counting both; the finished turn one still running (operator decision 2026-11-14).
+        subagents: index === 5 ? 3 : index === 11 ? 2 : index === 3 ? 1 : undefined,
+        subagent_rows: subagentRows(index === 5 ? 3 : index === 11 ? 2 : index === 3 ? 1 : undefined, Date.now()),
+        subagents_left: index === 3 ? 1 : undefined,
+        wait_count: example.wait === "children" ? 2 : undefined,
+        wait_subagents: index === 11 ? 2 : undefined,
         lineage_child_pane_ids: index === 5 ? ["a1c1", "a1c2"] : [],
         // One Working root is a fork of the row beside it (PRD fork-operator-root B8).
         forked_from: index === 4 ? { pane_id: "s5", label: EXAMPLES[5]!.title } : null,
@@ -123,6 +161,7 @@ export function SessionWorkflowScene({ scene: kind, theme, content, scale, width
         resolved: example.group === "resolved" ? { at_unix_ms: Date.now(), source: "operator" } : null,
         // A quiet task starred to revisit, and a working one that keeps its group with a ★ (PRD revisit-group B6, B7).
         revisit: index === 6 || index === 4 ? { starred: true, read_ask: false, since_unix_ms: Date.now() - 600_000 } : example.read ? { starred: false, read_ask: true, since_unix_ms: Date.now() - 900_000 } : null,
+        open_asks: OPEN_ASKS[`s${index}`],
       };
     });
     // state=scroll gives each status section enough rows to review its pinned head.
@@ -151,8 +190,9 @@ export function SessionWorkflowScene({ scene: kind, theme, content, scale, width
     base.rest.navigator!.workspaces = [project];
     base.rest.navigator!.focused_checkout_id = checkout.id;
     base.rest.navigator!.focused_workspace_id = project.id;
-    // The panel's tree opens on the row with children, so a child's columns are compared with its root's.
-    base.rest.ui_state = { ...base.rest.ui_state!, sessions_expanded_agent_pane_ids: ["s5"] };
+    // The panel's tree opens on the row with children, so a child's columns are compared with its root's, and on the
+    // root that waits on children and subagents, so its subagent lines follow its children.
+    base.rest.ui_state = { ...base.rest.ui_state!, sessions_expanded_agent_pane_ids: ["s5", "s11"] };
     // A has a different-checkout child, a same-checkout child, and a folded
     // grandchild with a PR. The parent's count includes all three.
     const children = base.agents.filter((row) => ["a1c1", "a1c2", "a1g1"].includes(row.pane_id)).map((child, index): AgentRow => {
@@ -176,7 +216,7 @@ export function SessionWorkflowScene({ scene: kind, theme, content, scale, width
     const childPanes = children.map((child) => ({ ...pane, id: child.pane_id, identity_label: child.identity_label }));
     feature.tabs[0]!.panes.push(childPanes[0]!);
     checkout.tabs[0]!.panes.push(...childPanes.slice(1));
-    const headers = Object.fromEntries([...HEADERS.map(([id, header]) => [id, { ...header, working: id === "working", band: header.band && { ...header.band, since_unix_ms: Date.now() - 180_000 } }]), ...PANE_HEADER_CASES.map(([id, , header]) => [id, { ...header, progress: id === "narrow" && content === "long" ? "헤더 상태별 표시와 요청 우선순위를 검토하고 다음 단계의 배치와 접근성까지 다시 확인하고 있어요" : header.progress, working: ["progress", "solo", "popover", "narrow", "turn-working", "turn-image", "turn-request-only"].includes(id), band: header.band && { ...header.band, since_unix_ms: Date.now() - 180_000 } }])]);
+    const headers = Object.fromEntries([...HEADERS.map(([id, header]) => [id, { ...header, working: id === "working", band: header.band && { ...header.band, since_unix_ms: Date.now() - 180_000 } }]), ...PANE_HEADER_CASES.map(([id, , header]) => [id, { ...header, progress: id === "narrow" && content === "long" ? "헤더 상태별 표시와 요청 우선순위를 검토하고 다음 단계의 배치와 접근성까지 다시 확인하고 있어요" : header.progress, working: ["progress", "solo", "popover", "narrow", "turn-working", "turn-image", "turn-request-only", "sub-working"].includes(id), band: header.band && { ...header.band, since_unix_ms: Date.now() - 180_000 } }])]);
     // The fix and merge panes own one PR each: their header's PR chip is all
     // that says it, with no second row (B21, B22).
     const ownPr = (id: string): Pick<AgentRow, "pulls" | "request"> => {
@@ -201,7 +241,7 @@ export function SessionWorkflowScene({ scene: kind, theme, content, scale, width
       const id = `pane-narrow-child-${index}`;
       return { ...childExamples[0]!, id, pane_id: id, identity_label: `자식 ${index + 1}`, lineage_parent_pane_id: "narrow", lineage_path_pane_ids: ["narrow", id], lineage_child_pane_ids: [], state: { ...childExamples[0]!.state, tree_rank: index + 1 } };
     });
-    const headerAgents = [...HEADERS.map(([id]) => id), ...PANE_HEADER_CASES.map(([id]) => id)].map((id) => ({ ...seed, id, pane_id: id,
+    const headerAgents = [...HEADERS.map(([id]) => id), ...PANE_HEADER_CASES.map(([id]) => id)].map((id) => ({ ...seed, id, pane_id: id, subagents: SUBAGENT_CASES[id], subagent_rows: subagentRows(SUBAGENT_CASES[id], Date.now()),
       identity_label: PANE_HEADER_CASES.some(([caseId]) => caseId === id) ? "Group tab 기능 설계" : seed.identity_label,
       device_id: id === "device" ? "mini" : seed.device_id,
       lineage_path_pane_ids: [id],
@@ -210,15 +250,26 @@ export function SessionWorkflowScene({ scene: kind, theme, content, scale, width
       // A childless approval and merge show the row only for the ask, and none for a PR.
       lineage_child_pane_ids: ["idle", "approval", "merge", "solo", "empty", "turn-question", "turn-working", "turn-finished", "turn-image", ...CHILD_CASES].includes(id) ? [] : id === "raised-case" ? [raisedChild.pane_id, ...childExamples.slice(1, 3).map((child) => child.pane_id)] : id === "popover" ? popoverChildren.map((child) => child.pane_id) : id === "narrow" ? narrowChildren.map((child) => child.pane_id) : ["children", "progress", "question", "approval-case", "blocked-case", "stopped", "tree-only", "finished", "turn-narrow", "turn-children"].includes(id) ? childExamples.slice(0, 3).map((child) => child.pane_id) : id === "unknown" ? ["b2-unknown"] : ["a1c1", "a1c2"],
       pulls: headerPulls(id),
+      open_asks: OPEN_ASKS[id],
       direct_child_counts: id === "narrow" ? { error: 0, approval: 0, question: 0, working: 12, done: 0 } : ["children", "progress", "question", "approval-case", "blocked-case", "raised-case", "stopped", "tree-only", "finished", "popover", "turn-narrow"].includes(id) ? { error: 0, approval: 0, question: 1, working: 1, done: 1 } : id === "unknown" ? { error: 0, approval: 0, question: 0, working: 0, done: 0 } : { error: 0, approval: 0, question: 0, working: 1, done: 0 },
       ...(id === "fix" || id === "merge" ? ownPr(id) : {}),
       ...(TURN_CASES.includes(id) ? { session_id: `turn-${id}`, pulls: null, request: { verb: "answer" as const, verb_since_unix_ms: Date.now(), line: "1~3번을 한 PR로 묶어 진행할지 답해 주세요.", end: "question" as const, pull_requests: [], ...TURN_VIEW } } : {}) }));
     base.rest.terminal = { headers };
     // The Conductor row's mission, its open decision the row asks (needs-you-cleanup B1, B5).
     const conductor = agents[9]!;
-    base.rest.missions = { items: [{ id: "m-gallery", title: "사이드바 정리", workspace_id: project.id, project: "/repo", checkout_path: "/repo", device_id: conductor.device_id, status: "running", scope: "pr", cap: 4, exempt: false, strength: null, other_vendor: null, conductor: { pane_id: conductor.pane_id, name: conductor.identity_label, agent_kind: "claude", session: null, present: true, takes_answers: true }, nodes: Array.from({ length: 8 }, (_, index) => ({ key: `n${index}`, title: `n${index}`, kind: "change", depends_on: [], status: "planned" })), merge_order: [], check: null, github: null, decision: "뼈대의 check 줄을 건너뛸까요?", question: null, answer: null, answer_failed: null, delay: null, report: null, created_at_unix_ms: 1, started_at_unix_ms: 1, closed_at_unix_ms: null, running: 0, stale: false, github_stale: false, github_read_at_unix_ms: null } as unknown as Mission] } as typeof base.rest.missions;
-    base.rest.status = { ...base.rest.status, remote: [{ target_id: "mini", state: "not_connected", message: "Mac mini 연결되지 않음", herdr_version: null, session: null }] };
-    return { ...base, agents: [...agents, ...children, ...childExamples, raisedChild, ...popoverChildren, ...narrowChildren, ...headerAgents], pane };
+    base.rest.missions = { items: [{ id: "m-gallery", title: "사이드바 정리", workspace_id: project.id, project: "/repo", checkout_path: "/repo", device_id: conductor.device_id, status: "running", scope: "pr", cap: 4, exempt: false, strength: null, conductor: { pane_id: conductor.pane_id, name: conductor.identity_label, agent_kind: "claude", session: null, present: true, takes_answers: true }, nodes: Array.from({ length: 8 }, (_, index) => ({ key: `n${index}`, title: `n${index}`, kind: "change", depends_on: [], status: "planned" })), merge_order: [], check: null, github: null, decision: "뼈대의 check 줄을 건너뛸까요?", question: null, answer: null, answer_failed: null, delay: null, report: null, created_at_unix_ms: 1, started_at_unix_ms: 1, closed_at_unix_ms: null, running: 0, stale: false, github_stale: false, github_read_at_unix_ms: null } as unknown as Mission] } as typeof base.rest.missions;
+    // state=widths: copies of the narrow case, one pane each, that conduct a finished mission, so the head carries the widest chip it can.
+    const widthAgents = state === "widths" ? HEAD_WIDTHS.map((headWidth) => ({ ...headerAgents.find((agent) => agent.pane_id === "narrow")!, id: widthPane(headWidth), pane_id: widthPane(headWidth) })) : [];
+    if (state === "widths") {
+      const missions = base.rest.missions!;
+      const mission = missions.items[0]!;
+      for (const headWidth of HEAD_WIDTHS) {
+        headers[widthPane(headWidth)] = headers.narrow!;
+        missions.items.push({ ...mission, id: `m-${widthPane(headWidth)}`, title: "헤더 정리", status: "done", decision: null, conductor: { ...mission.conductor, pane_id: widthPane(headWidth), name: "Group tab 기능 설계" }, nodes: Array.from({ length: 3 }, (_, index) => ({ key: `w${index}`, title: `w${index}`, kind: "change", depends_on: [], status: "done" })), closed_at_unix_ms: 2 } as unknown as Mission);
+      }
+    }
+    base.rest.status = { ...base.rest.status, remote: [{ target_id: "mini", state: "not_connected", message: "Mac mini 연결되지 않음", session: null }] };
+    return { ...base, agents: [...agents, ...children, ...childExamples, raisedChild, ...popoverChildren, ...narrowChildren, ...headerAgents, ...widthAgents], pane };
   }, [content, state]);
   // `turn-two-lines` and `turn-off` draw the turn cases in the View menu's other modes.
   const turnRow = state === "turn-two-lines" ? "two_lines" : state === "turn-off" ? "off" : "one_line";
@@ -229,6 +280,12 @@ export function SessionWorkflowScene({ scene: kind, theme, content, scale, width
     document.documentElement.classList.toggle("light", theme === "light");
     document.documentElement.style.setProperty("--interface-scale", String(scale));
   }, [fixture, theme, scale, turnRow]);
+  // state=turn-card: the turn card opened on three sessions' facts (docs/UI_BEHAVIOR.md, the turn card).
+  if (kind === "pane-header" && state === "turn-card") return <TurnCardCases seed={fixture.agents[0]!} />;
+  // state=widths: one head, its PR, children and finished mission, at each width its chips fold at (docs/UI_BEHAVIOR.md, Agent panes).
+  if (kind === "pane-header" && state === "widths") {
+    return <TooltipProvider><div className="flex flex-col gap-lg bg-background p-xl text-foreground" data-gallery-scene={kind} data-gallery-state={state}>{HEAD_WIDTHS.map((headWidth) => <div key={headWidth} data-pane-header-case={widthPane(headWidth)} style={{ width: headWidth }} className="max-w-full min-w-0"><div className="pb-xs text-micro text-muted-foreground">{headWidth}px</div><div className="h-[var(--size-pane-state-example)] min-w-0 border border-border"><PaneView pane={{ ...fixture.pane, id: widthPane(headWidth), identity_label: content === "long" ? "긴 한국어 제목과 변경 사항을 좁은 화면에서 확인하는 작업" : "Group tab 기능 설계" }} transport={undefined} focused={false} scale={1} actions={actions} agentKind="claude" markSymbol="quiet" markTone="text-muted-foreground" paneCount={2} zoomed={false} /></div></div>)}</div></TooltipProvider>;
+  }
   // state=connection: a copy too old for Hide wears the Update needed badge, a session started before the update
   // put the piece in says to restart, and a session Hide cannot read says its letters wait; the other headers keep
   // the integration icon (docs/UI_BEHAVIOR.md).
@@ -241,5 +298,5 @@ export function SessionWorkflowScene({ scene: kind, theme, content, scale, width
     ];
     return <TooltipProvider><div style={{ width: width ?? undefined }} className="flex flex-col gap-lg bg-background p-xl text-foreground" data-gallery-scene={kind} data-gallery-state={state}>{cases.map(([id, label, agentKind, connection]) => <div key={id} data-pane-header-case={id} className="min-w-0"><div className="pb-xs text-micro text-muted-foreground">{label}</div><div className="h-[var(--size-pane-state-example)] min-w-0 border border-border"><PaneView pane={header(id, connection)} transport={undefined} focused={false} scale={1} actions={actions} agentKind={agentKind} markSymbol="quiet" markTone="text-muted-foreground" paneCount={2} zoomed={false} /></div></div>)}</div></TooltipProvider>;
   }
-  return <TooltipProvider>{kind === "session-panel" ? <div className="flex h-full bg-sidebar text-foreground" data-gallery-scene={kind} data-gallery-state={state}><TaskLens actions={actions} /></div> : <div style={{ width: width ?? undefined }} className="flex flex-col gap-lg bg-background p-xl text-foreground" data-gallery-scene={kind} data-gallery-state={state}>{(state === "child" ? PANE_HEADER_CASES.filter(([id]) => CHILD_CASES.includes(id)) : PANE_HEADER_CASES.slice(turn ? 12 : state === "edge" ? 6 : 0, turn ? 12 + TURN_CASES.length : state === "edge" ? 12 : 6)).map(([id, label]) => <div key={id} data-pane-header-case={id} className={id === "narrow" || id === "turn-narrow" || id === "child-narrow" ? "w-(--size-pane-narrow-example) max-w-full min-w-0" : "min-w-0"}><div className="pb-xs text-micro text-muted-foreground">{label}</div><div className="h-[var(--size-pane-state-example)] min-w-0 border border-border"><PaneView pane={{ ...fixture.pane, id, identity_label: CHILD_CASES.includes(id) ? "UI 검증" : content === "long" ? "긴 한국어 제목과 변경 사항을 좁은 화면에서 확인하는 작업" : "Group tab 기능 설계", lineage_path: CHILD_CASES.includes(id) ? [{ pane_id: "progress", label: content === "long" ? "긴 한국어 부모 작업 이름을 좁은 화면에서 확인하는 작업" : "Group tab 기능 설계", siblings: [] }, { pane_id: id, label: "UI 검증", siblings: [] }] : undefined }} transport={undefined} focused={false} scale={1} actions={actions} agentKind="codex" markSymbol={id === "finished" ? "done" : "quiet"} markTone={id === "finished" ? "text-success" : "text-muted-foreground"} paneCount={2} zoomed={false} /></div></div>)}</div>}</TooltipProvider>;
+  return <TooltipProvider>{kind === "session-panel" ? <div className="flex h-full bg-sidebar text-foreground" data-gallery-scene={kind} data-gallery-state={state}><TaskLens actions={actions} /></div> : <div style={{ width: width ?? undefined }} className="flex flex-col gap-lg bg-background p-xl text-foreground" data-gallery-scene={kind} data-gallery-state={state}>{(state === "child" ? PANE_HEADER_CASES.filter(([id]) => CHILD_CASES.includes(id)) : state === "subagents" ? PANE_HEADER_CASES.filter(([id]) => id in SUBAGENT_CASES) : PANE_HEADER_CASES.slice(turn ? 12 : state === "edge" ? 6 : 0, turn ? 12 + TURN_CASES.length : state === "edge" ? 12 : 6)).map(([id, label]) => <div key={id} data-pane-header-case={id} className={id === "narrow" || id === "turn-narrow" || id === "child-narrow" ? "w-(--size-pane-narrow-example) max-w-full min-w-0" : "min-w-0"}><div className="pb-xs text-micro text-muted-foreground">{label}</div><div className="h-[var(--size-pane-state-example)] min-w-0 border border-border"><PaneView pane={{ ...fixture.pane, id, identity_label: CHILD_CASES.includes(id) ? "UI 검증" : content === "long" ? "긴 한국어 제목과 변경 사항을 좁은 화면에서 확인하는 작업" : "Group tab 기능 설계", lineage_path: CHILD_CASES.includes(id) ? [{ pane_id: "progress", label: content === "long" ? "긴 한국어 부모 작업 이름을 좁은 화면에서 확인하는 작업" : "Group tab 기능 설계", siblings: [] }, { pane_id: id, label: "UI 검증", siblings: [] }] : undefined }} transport={undefined} focused={false} scale={1} actions={actions} agentKind="codex" markSymbol={id === "finished" ? "done" : id === "sub-working" ? "going" : id === "sub-waiting" || id === "sub-both" ? "waiting" : "quiet"} markTone={id === "finished" ? "text-success" : "text-muted-foreground"} paneCount={2} zoomed={false} /></div></div>)}</div>}</TooltipProvider>;
 }

@@ -45,7 +45,8 @@ afterEach(async () => {
 it("with no project, says what to do with Add project and its chord in the middle of Home, and the button opens Add project (B27)", async () => {
   const container = await scene("home-no-project");
   const home = container.querySelector('[data-main-empty-home="no_project"]')!;
-  expect(home.querySelector("p")?.textContent).toBe(english["firstRun.home.noProject"]);
+  expect(home.querySelector("h2")?.textContent).toBe(english["firstRun.home.noProjectTitle"]);
+  expect(home.querySelector("p")?.textContent).toBe(english["firstRun.home.noProjectDetail"]);
   const button = home.querySelector('[data-main-empty-home-action="new_workspace"]') as HTMLButtonElement;
   expect(button.textContent).toBe(english["firstRun.home.addProject"]);
   expect(button.nextElementSibling?.textContent).toBe("⇧⌘N");

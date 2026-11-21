@@ -21,8 +21,7 @@ const browserCanvas = vi.hoisted(() => {
 afterAll(() => browserCanvas.restore());
 
 const view: WorkspaceView = {
-  device_id: "local", path: "/projects/studio", open: false, documents: false, tool: null, pinned: false,
-  document_width: null, detail_width: null, explorer_width: null, panel_width: null, lane_called: 0, lane_calls: 0, lane_called_side: "view",
+  device_id: "local", path: "/projects/studio", open: false, tray: { tab_id: "t1", shown: false, count: 0 }, tool: null, document_width: null, explorer_width: null, panel_width: null, lane_called: 0, lane_calls: 0, lane_called_side: "view",
 };
 function checkout(servers: { host: string; port: number }[]): Checkout {
   return { agent_scope: emptyScope(),
@@ -32,7 +31,7 @@ function checkout(servers: { host: string; port: number }[]): Checkout {
     tabs: [{
       id: "tab:studio", workspace_id: "project:studio", checkout_id: "checkout:studio", label: "1", empty: false, delegated: false,
       panes: [{
-        id: "pane:studio", device_id: "studio", device_pane_id: "pane:studio", herdr_label: null, terminal_title: null, cwd: view.path,
+        id: "pane:studio", device_id: "studio", device_pane_id: "pane:studio", engine_label: null, terminal_title: null, cwd: view.path,
         status_code: "unknown", requires_close_confirmation: false, requires_close_status_check: false,
         identity_label: null, servers,
       }],

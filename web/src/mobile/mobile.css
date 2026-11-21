@@ -8,6 +8,8 @@
 html,
 body,
 #root {
+  /* What the keyboard leaves of the screen (viewport.ts); the full height where the browser has no visual viewport. */
+  height: var(--phone-viewport-height, 100%);
   overscroll-behavior-y: none;
   -webkit-tap-highlight-color: transparent;
   -webkit-text-size-adjust: 100%;
@@ -17,8 +19,30 @@ body,
   padding-top: env(safe-area-inset-top);
 }
 
+/* A demo's bar takes the top inset, so the screen under it does not take it a second time. */
+.phone-demo-bar {
+  padding-top: env(safe-area-inset-top);
+}
+
+html[data-phone-demo] .phone-safe-top {
+  padding-top: 0;
+}
+
 .phone-safe-bottom {
   padding-bottom: env(safe-area-inset-bottom);
+}
+
+/*
+ * The browser scanner's frame, where the app's scanner draws it (HideScannerPlugin.swift): a square of the screen's width less
+ * 96 points, at most 240, centred at 44% of the height, with the camera around it dimmed.
+ */
+.phone-scan-frame {
+  --phone-scan-side: min(calc(100vw - 2 * var(--size-mobile-scan-margin)), var(--size-mobile-scan-frame));
+  left: calc(50% - var(--phone-scan-side) / 2);
+  top: calc(44% - var(--phone-scan-side) / 2);
+  width: var(--phone-scan-side);
+  height: var(--phone-scan-side);
+  box-shadow: 0 0 0 100vmax color-mix(in srgb, var(--background) 55%, transparent);
 }
 
 .phone-ansi .ansi-black-fg { color: var(--terminal-black); }
@@ -53,3 +77,20 @@ body,
 .phone-ansi .ansi-bright-magenta-bg { background-color: var(--terminal-bright-magenta); }
 .phone-ansi .ansi-bright-cyan-bg { background-color: var(--terminal-bright-cyan); }
 .phone-ansi .ansi-bright-white-bg { background-color: var(--terminal-bright-white); }
+
+/*
+ * Inside the iOS app (appHost.ts sets the attribute): a control is pressed, never selected, and a long press on it shows
+ * no callout. Text a person may want to copy, a conversation or a terminal line, stays selectable.
+ */
+html[data-app-host] button,
+html[data-app-host] a,
+html[data-app-host] nav,
+html[data-app-host] label,
+html[data-app-host] summary,
+html[data-app-host] [role="button"],
+html[data-app-host] [role="tab"],
+html[data-app-host] [role="radio"] {
+  -webkit-user-select: none;
+  user-select: none;
+  -webkit-touch-callout: none;
+}

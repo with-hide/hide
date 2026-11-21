@@ -2,6 +2,7 @@
 // calls replaced at their external boundaries. No native process is started.
 import { afterEach, beforeEach, expect, test, vi } from "vitest";
 import { ChildProcess, spawnSync } from "node:child_process";
+import * as childProcess from "node:child_process";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -46,7 +47,7 @@ vi.mock("../../web/e2e/shims/build", () => ({
   copyFixtureShim: vi.fn((name: string, executable: string) => {
     const privateRoot = path.dirname(path.dirname(executable));
     if (name !== "noop" || path.basename(executable) !== "hide-open.exe" || path.basename(path.dirname(executable)) !== "bin"
-      || !path.basename(privateRoot).startsWith("hide-desktop-")) {
+      || !path.basename(privateRoot).startsWith("hdd-")) {
       throw new Error(`unexpected fixture program copy: ${name} -> ${executable}`);
     }
     fs.writeFileSync(executable, Buffer.alloc(0), { flag: "wx" });
@@ -90,7 +91,7 @@ afterEach(() => {
 });
 
 function privateHome(label: string): Isolated {
-  const run = isolate({ bin: "/unused/herdr", socket: path.join(root, "unused.sock") }, label);
+  const run = isolate({}, label);
   runs.push(run);
   return run;
 }
@@ -204,6 +205,48 @@ test("manual cleanup rejects a live candidate before stopping any private servic
   expect(fs.existsSync(run.root)).toBe(false);
 });
 
+test("a failed daemon log read still ends the stopped daemon's holders and retains the failure", async ({ skip }) => {
+  if (process.platform === "win32") skip();
+  const run = isolate({}, "log-read-failure");
+  runs.push(run);
+  const state = run.env.HIDE_STATE_DIR!;
+  const record = path.join(state, "holders", "records", "pane.json");
+  const log = path.join(state, "Logs", "core.jsonl");
+  fs.mkdirSync(path.dirname(record), { recursive: true });
+  fs.mkdirSync(path.dirname(log), { recursive: true });
+  fs.writeFileSync(record, JSON.stringify({ holder: { pid: 424242 } }));
+  fs.writeFileSync(log, "{}\n");
+  vi.mocked(spawnSync).mockReturnValue({ status: 0, signal: null, pid: 1, output: [], stdout: Buffer.alloc(0), stderr: Buffer.alloc(0) });
+  // The process-table and signal boundary models one owned holder. No signal
+  // can reach the machine: an unexpected PID or command fails this test.
+  let alive = true;
+  vi.spyOn(childProcess, "execFileSync").mockImplementation(((command: string, args: string[]) => {
+    if (command !== "ps") throw new Error(`unexpected command: ${command}`);
+    if (args.join(" ") === "-o command= -p 424242") return alive ? `hide-holder ${record}` : "";
+    if (args.join(" ") === "-Ao pid=,command=") return alive ? `424242 hide-holder ${record}` : "";
+    throw new Error(`unexpected process lookup: ${args}`);
+  }) as typeof childProcess.execFileSync);
+  vi.spyOn(process, "kill").mockImplementation((pid, signal) => {
+    if (pid !== 424242) throw new Error(`unexpected PID: ${pid}`);
+    if (signal === "SIGTERM") { alive = false; return true; }
+    if (!alive) throw Object.assign(new Error("exited"), { code: "ESRCH" });
+    return true;
+  });
+  const open = fs.openSync;
+  const failure = new Error("injected daemon log read failure");
+  const opening = vi.spyOn(fs, "openSync").mockImplementation((file, flags, mode) => {
+    if (file === log) throw failure;
+    return open(file, flags, mode);
+  });
+  const error = await teardown(async () => {});
+  expect(error?.errors.some((item: AggregateError) => item.errors?.includes(failure))).toBe(true);
+  expect(alive).toBe(false);
+  expect(fs.existsSync(run.root)).toBe(true);
+  opening.mockRestore();
+  run.cleanup();
+  expect(fs.existsSync(run.root)).toBe(false);
+});
+
 test("pending launches retain HOME and the seventeenth candidate is refused before launch", async () => {
   const complete: (() => void)[] = [];
   boundary.launch.mockImplementation(() => new Promise((resolve) => {
@@ -226,18 +269,6 @@ test("pending launches retain HOME and the seventeenth candidate is refused befo
     }
   });
   expect(error).toBeUndefined();
-  expect(fs.existsSync(run.root)).toBe(false);
-});
-
-test("a Herdr that is still running removes the root after it stops on Windows, and at once elsewhere", () => {
-  const queued: (() => void)[] = [];
-  const run = isolate({ bin: "/unused/herdr", socket: path.join(root, "unused.sock"), afterStop: (remove) => { queued.push(remove); } }, "after-stop");
-  runs.push(run);
-  run.cleanup();
-  // A registered project's folder is held by the Herdr server's panes on Windows until it is gone.
-  expect(queued).toHaveLength(process.platform === "win32" ? 1 : 0);
-  expect(fs.existsSync(run.root)).toBe(process.platform === "win32");
-  for (const remove of queued) remove();
   expect(fs.existsSync(run.root)).toBe(false);
 });
 

@@ -8,7 +8,7 @@ import { expect, type ElectronApplication, type Page } from "@playwright/test";
 import { execFileSync } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
-import { startHerdr } from "../../web/e2e/herdr-fixture";
+import { startEngine } from "../../web/e2e/engine-fixture";
 import { chord } from "../../web/e2e/chords";
 import { toPage } from "../src/main/wirePath";
 import { sendEvent, THIS_MACHINE } from "../../web/e2e/wire";
@@ -16,6 +16,9 @@ import { isolate, launch, nodeOf, test } from "./fixture";
 import { compositorPresents } from "../../web/e2e/wait";
 
 type Pick = { canceled: boolean; filePaths: string[] };
+
+// These tests start from a home with no project registered (the dialog's first-run wording and its
+// default parent folder depend on it), so each runs on an empty engine and the app starts its own daemon.
 
 /** Replaces the picker with `answers`, one per call; returns how many calls it has had. */
 async function stubPicker(app: ElectronApplication, answers: Pick[]): Promise<void> {
@@ -36,8 +39,8 @@ const pickCalls = (app: ElectronApplication) => app.evaluate(() => (globalThis a
 
 // @platform: The picker answers a native path, which the host spells for the wire (`wirePath.ts`: `/` on every system, a drive path on Windows).
 test("Add a project picks a folder with the native picker, and a cancel or a refusal keeps the dialog", { tag: "@platform" }, async () => {
-  const herdr = await startHerdr();
-  const run = isolate(herdr, "add-project");
+  const engine = await startEngine();
+  const run = isolate(engine, "add-project");
   let app: ElectronApplication | undefined;
   try {
     const home = run.env.HOME!;
@@ -98,16 +101,6 @@ test("Add a project picks a folder with the native picker, and a cancel or a ref
     await expect(dialog).toHaveCount(0, { timeout: 20_000 });
     await expect(page.locator("[data-project-list]")).toContainText("alpha", { timeout: 20_000 });
 
-    // ⌘⇧N opens it again; the same folder is refused by the shell before anything is sent.
-    await page.keyboard.press(chord("new_workspace", "electron"));
-    await expect(dialog).toBeVisible();
-    await stubPicker(app, [{ canceled: false, filePaths: [alpha] }]);
-    await page.keyboard.press("Enter");
-    await expect(alert).toHaveAttribute("data-registration-reason", "already_registered");
-    await expect(alert).toContainText(toPage(alpha));
-    await page.keyboard.press("Escape");
-    await expect(dialog).toHaveCount(0);
-
     // Over All projects, the page a first run stays on, with a project listed, the Projects title's + still opens the same dialog, and its × closes it.
     await expect(page.locator("[data-overview-page]")).toBeVisible();
     await expect(page.locator("[data-main-add-project]")).toHaveCount(0);
@@ -117,38 +110,43 @@ test("Add a project picks a folder with the native picker, and a cancel or a ref
     await dialog.getByRole("button", { name: "Close" }).click();
     await expect(dialog).toHaveCount(0);
 
-    // A device's folders are not this Mac's to browse: its Host gets a ~/ field,
-    // and what the device path answers (here: no connection) stays in the dialog.
+    // A device that is not connected is listed but cannot be chosen: its node can neither list, clone
+    // nor create (PRD device-add-project B31); its folder list is web/e2e's and the web tests'.
     const state = JSON.parse(fs.readFileSync(path.join(run.env.HIDE_STATE_DIR!, "hided.json"), "utf8")) as { token: string };
     await sendEvent(page, { origin: new URL(page.url()).origin, token: state.token }, "register_device", {
-      id: "ssh-none", label: "Offline box", ssh_alias: "hide-e2e-no-such-host.invalid", host_consent: false,
+      label: "Offline box", ssh_alias: "hide-e2e-no-such-host.invalid", host_consent: false,
     });
     await page.keyboard.press(chord("new_workspace", "electron"));
     await dialog.locator("[data-add-project-host]").click();
-    await page.locator('[data-host-option="ssh-none"]').click();
-    await expect(dialog).toHaveAttribute("data-add-project", "ssh-none");
-    await expect(browse).toHaveCount(0);
-    const field = dialog.getByLabel("Folder on Offline box");
-    await expect(field).toBeFocused();
-    await expect(field).toHaveValue("~/");
-    await field.fill("~/projects/app");
-    await field.press("Enter");
-    await expect(alert).toHaveAttribute("data-registration-reason", "workspace.create_unavailable");
-    await expect(alert).toHaveAttribute("data-registration-path", "~/projects/app");
-    await expect(alert).toContainText("This device is not connected");
+    // A device that never connected keeps the id its alias makes.
+    const offline = page.locator('[data-host-option="hide-e2e-no-such-host-invalid"]');
+    await expect(offline).toHaveAttribute("data-host-offline", "true");
+    await expect(offline).toHaveAttribute("data-disabled", "");
+    await expect(offline).toContainText("Offline box · Not connected");
     await captureWindow(app, page, "add-project-device");
     await page.keyboard.press("Escape");
+    await expect(dialog).toHaveAttribute("data-add-project", nodeOf(run.env));
+    await page.keyboard.press("Escape");
     await expect(dialog).toHaveCount(0);
+
+    // The same folder is already a project, so the dialog closes and goes to it, adding nothing.
+    await page.keyboard.press(chord("new_workspace", "electron"));
+    await expect(dialog).toBeVisible();
+    await stubPicker(app, [{ canceled: false, filePaths: [alpha] }]);
+    await page.keyboard.press("Enter");
+    await expect(dialog).toHaveCount(0, { timeout: 20_000 });
+    await expect(page.locator("[data-project]", { hasText: "alpha" })).toHaveCount(1);
+    await expect(page.locator("[data-workspace-screen]")).toBeVisible();
   } finally {
     await app?.close();
     run.cleanup();
-    herdr.stop();
+    engine.stop();
   }
 });
 
 test("Create new project makes a Git repository and adds it; a name already taken is refused before anything is sent", async () => {
-  const herdr = await startHerdr();
-  const run = isolate(herdr, "create-project");
+  const engine = await startEngine();
+  const run = isolate(engine, "create-project");
   let app: ElectronApplication | undefined;
   try {
     const home = run.env.HOME!;
@@ -167,10 +165,10 @@ test("Create new project makes a Git repository and adds it; a name already take
     const problem = view.locator("[data-create-project-problem]");
     const submit = view.locator("[data-create-project-submit]");
 
-    // Under Browse folder, Create new project opens its own view with the name field focused;
+    // Beside Browse folder, Create new project opens its own view with the name field focused;
     // with no project yet the folder goes in home.
     await page.keyboard.press(chord("new_workspace", "electron"));
-    await expect(dialog.locator("[data-add-project-other-ways]")).toContainText("Other ways to add");
+    await expect(dialog.locator("[data-add-project-other-ways]")).toContainText("Create new project");
     await dialog.locator('[data-add-project-way="create"]').click();
     await expect(view.getByRole("heading", { name: "Create a new project" })).toBeVisible();
     await expect(name).toBeFocused();
@@ -219,13 +217,13 @@ test("Create new project makes a Git repository and adds it; a name already take
   } finally {
     await app?.close();
     run.cleanup();
-    herdr.stop();
+    engine.stop();
   }
 });
 
 test("Clone from URL clones a repository into a folder under home and adds it as a project", async () => {
-  const herdr = await startHerdr();
-  const run = isolate(herdr, "clone-project");
+  const engine = await startEngine();
+  const run = isolate(engine, "clone-project");
   let app: ElectronApplication | undefined;
   try {
     const home = run.env.HOME!;
@@ -252,7 +250,7 @@ test("Clone from URL clones a repository into a folder under home and adds it as
     const dialog = page.locator("[data-add-project]");
     // With no project registered the Projects title keeps its + (B51).
     await page.locator("[data-sidebar-new-workspace]").click();
-    await expect(dialog.locator("[data-add-project-other-ways]")).toContainText("Other ways to add");
+    await expect(dialog.locator("[data-add-project-other-ways]")).toContainText("Create new project");
     await dialog.locator('[data-add-project-way="clone"]').click();
 
     // The sub-view: Back, its own title, the URL field holding the keyboard, and home as the parent.
@@ -304,7 +302,7 @@ test("Clone from URL clones a repository into a folder under home and adds it as
   } finally {
     await app?.close();
     run.cleanup();
-    herdr.stop();
+    engine.stop();
   }
 });
 

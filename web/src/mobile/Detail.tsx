@@ -10,7 +10,7 @@ import { OfflineText } from "./OfflineText";
 // reply are on every detail, whatever its group.
 
 import { AnsiUp } from "ansi_up";
-import { ArrowLeftIcon, CircleAlertIcon, MoonIcon } from "lucide-react";
+import { ArrowLeftIcon, CircleAlertIcon, ImageIcon, MoonIcon, FlagIcon } from "lucide-react";
 import { memo, useEffect, useLayoutEffect, useMemo, useRef, useState, type UIEvent } from "react";
 import { Elapsed } from "../components/elapsed";
 import { useInterfaceTranslation } from "../i18n/translator";
@@ -20,8 +20,9 @@ import { Tabs, TabsList, TabsTrigger } from "../components/ui/tabs";
 import { wakeFailureReason, wakingLine } from "../sleep";
 import type { AgentSleep } from "../snapshot";
 import { renderMarkdown } from "./markdown";
-import { AgentHead, DETAIL_INSET, Place } from "./parts";
-import { loadMore, loadOlder, onReplyResult, sendKey, sendReply, setView, wakeAgent } from "./connection";
+import { AgentHead, DETAIL_INSET, PhoneHumanTurn, Place } from "./parts";
+import { closeDetail, closeLook, loadMore, loadOlder, onReplyResult, openPrPage, sendKey, sendReply, setTab, wakeAgent } from "./connection";
+import { LookViewer, LooksList, useKindWord } from "./Looks";
 import {
   MAX_MESSAGES,
   MAX_REPLY_CHARS,
@@ -34,10 +35,17 @@ import {
   type Conversation,
   type ConversationMessage,
   sleepTarget,
+  replyAbout,
   type AgentKey,
-  type DetailView,
+  type DetailTab,
+  type LookKind,
 } from "./protocol";
-import { agentOf, usePhone } from "./store";
+import { agentOf, openMission, usePhone } from "./store";
+import { agentLinks, progress } from "./missionModel";
+import { TONE_TEXT } from "../components/mission-tone";
+import { missionStalled, missionToneOf } from "../missions";
+import { PR_LOOK } from "../prMark";
+import { cn } from "../lib/utils";
 
 const PULL_EDGE = 48;
 
@@ -57,6 +65,13 @@ function ansiRows(text: string): AnsiRow[] {
   });
 }
 
+/** The tab on screen: 볼 것 only while the agent has Views (or hided has not listed them yet) or one is open; else the half hided reads. */
+function shownTab(detail: NonNullable<ReturnType<typeof usePhone.getState>["detail"]>, hasConversation: boolean): DetailTab {
+  const empty = detail.looks !== null && detail.looks.rows.length === 0 && !detail.look;
+  const tab = detail.tab === "looks" && empty ? detail.view : detail.tab;
+  return tab === "conversation" && !hasConversation ? "terminal" : tab;
+}
+
 export function Detail({ onBack }: { onBack: () => void }) {
   const { t } = useInterfaceTranslation();
   const detail = usePhone((s) => s.detail);
@@ -67,33 +82,50 @@ export function Detail({ onBack }: { onBack: () => void }) {
   const rows = detail?.rows ?? null;
   const conversation = detail?.conversation ?? null;
   const hasConversation = conversation !== null && conversation !== "none";
-  const showsConversation = detail?.view === "conversation" && conversation !== "none";
+  const hasLooks = (detail?.looks?.rows.length ?? 0) > 0;
+  const unseen = detail?.looks?.rows.filter((row) => row.unseen).length ?? 0;
+  const tab = detail ? shownTab(detail, hasConversation) : "conversation";
+  const viewing = tab === "looks" ? (detail?.look ?? null) : null;
+  const showsConversation = tab === "conversation" && conversation !== "none";
   // A pane that left the list is gone for the reply bar too (B28).
   const gone = rows?.state === "gone" || (groups !== null && !agent);
   // The shell under a sleeping agent is not who the operator was talking to: its state stands in the terminal's place and nothing can be sent.
   const sleep = agent?.sleep ?? null;
-  const rowsNote = !showsConversation && rows ? rowsProblem(rows.state) : null;
-  const note = rowsNote ?? (gone && (showsConversation || !rows) ? rowsProblem("gone") : null);
+  const rowsNote = tab !== "looks" && !showsConversation && rows ? rowsProblem(rows.state) : null;
+  const note = rowsNote ?? (gone && (showsConversation || !rows || tab === "looks") ? rowsProblem("gone") : null);
+  const offline = unreachable && !connected;
   return (
     <main className="flex h-full flex-col" data-phone-detail={detail ? `${detail.key.device_id}|${detail.key.pane_id}` : ""}>
       <header className="phone-safe-top shrink-0 border-b border-border bg-background px-lg pb-md">
         {/* Keep each label's width; wrap when the phone cannot fit all three items. */}
         <div className="flex flex-wrap items-center gap-sm pt-sm">
           <div className="flex min-w-max flex-1 basis-0">
-            <Button variant="ghost" onClick={onBack} className="-ml-sm flex min-h-(--size-touch-target) items-center gap-xs px-sm text-body text-foreground" data-phone-back="true">
+            <Button variant="ghost" onClick={viewing ? closeLook : onBack} className="-ml-sm flex min-h-(--size-touch-target) items-center gap-xs px-sm text-body text-foreground" data-phone-back={viewing ? "looks" : "true"}>
               <ArrowLeftIcon aria-hidden="true" className="size-(--size-icon-lg)" />
-              {t("mobile.list")}
+              {viewing ? t("mobile.tab.looks") : t("mobile.list")}
             </Button>
           </div>
-          {hasConversation && detail && !sleep ? (
-            <Tabs value={detail.view} onValueChange={(value) => setView(value as DetailView)} className="shrink-0">
+          {!viewing && (hasConversation || hasLooks) && detail && !sleep ? (
+            <Tabs value={tab} onValueChange={(value) => setTab(value as DetailTab)} className="shrink-0">
               <TabsList>
-                <TabsTrigger value="conversation" className="h-(--size-touch-target) px-sm text-body" data-phone-view="conversation">
-                  {t("mobile.tab.conversation")}
-                </TabsTrigger>
+                {hasConversation ? (
+                  <TabsTrigger value="conversation" className="h-(--size-touch-target) px-sm text-body" data-phone-view="conversation">
+                    {t("mobile.tab.conversation")}
+                  </TabsTrigger>
+                ) : null}
                 <TabsTrigger value="terminal" className="h-(--size-touch-target) px-sm text-body" data-phone-view="terminal">
                   {t("mobile.tab.terminal")}
                 </TabsTrigger>
+                {hasLooks ? (
+                  <TabsTrigger value="looks" className="h-(--size-touch-target) gap-xs px-sm text-body" data-phone-view="looks">
+                    {t("mobile.tab.looks")}
+                    {unseen > 0 ? (
+                      <span className="inline-flex h-(--size-badge-height) min-w-(--size-badge-height) items-center justify-center rounded-full bg-warning px-xs font-mono text-micro text-status-foreground" data-phone-looks-unseen={unseen}>
+                        {unseen}
+                      </span>
+                    ) : null}
+                  </TabsTrigger>
+                ) : null}
               </TabsList>
             </Tabs>
           ) : null}
@@ -101,14 +133,18 @@ export function Detail({ onBack }: { onBack: () => void }) {
             <Elapsed since={agent?.changed_at_unix_ms} />
           </span>
         </div>
-        {agent ? (
+        {viewing ? (
+          <ViewingHead row={viewing.row} opener={agent?.title ?? ""} />
+        ) : agent ? (
           <div className="mt-xs flex flex-col gap-xs">
             <AgentHead agent={agent} large />
+            {detail ? <DetailLinks agentKey={detail.key} /> : null}
             <Place agent={agent} inset={DETAIL_INSET} />
+            <PhoneHumanTurn agent={agent} inset={DETAIL_INSET} />
           </div>
         ) : null}
       </header>
-      {unreachable && !connected ? (
+      {offline ? (
         <div role="status" className="shrink-0 bg-secondary px-lg py-sm text-subhead text-subtle-foreground" data-phone-unreachable="true">
           <OfflineText />
         </div>
@@ -120,8 +156,13 @@ export function Detail({ onBack }: { onBack: () => void }) {
       ) : null}
       {sleep && detail ? (
         <SleepState sleep={sleep} agentKey={detail.key} />
+      ) : tab === "looks" && detail ? (
+        // The last list and the last content stay under the unreachable line, dimmed (B45).
+        <div className={`flex min-h-0 flex-1 flex-col ${offline ? "opacity-(--opacity-dimmed)" : ""}`} aria-busy={offline}>
+          {viewing ? <LookViewer row={viewing.row} content={viewing.content} refreshing={viewing.refreshing} /> : <LooksList looks={detail.looks} />}
+        </div>
       ) : !showsConversation ? (
-        <Scrollback text={rows?.text ?? ""} more={rows?.more ?? false} lines={rows?.lines ?? 0} loading={!rows} />
+        <Scrollback text={rows?.text ?? ""} more={rows?.more ?? false} lines={rows?.lines ?? 0} loading={!rows} alternateScreen={rows?.alternateScreen ?? false} conversation={hasConversation} />
       ) : conversation ? (
         <ConversationLog conversation={conversation} />
       ) : (
@@ -129,8 +170,78 @@ export function Detail({ onBack }: { onBack: () => void }) {
           <p className="text-body text-muted-foreground">{t("mobile.loading")}</p>
         </div>
       )}
-      <ReplyBar disabled={gone || !connected || sleep !== null} />
+      <ReplyBar disabled={gone || !connected || sleep !== null} about={viewing?.row.name ?? null} keys={tab !== "looks"} />
     </main>
+  );
+}
+
+/**
+ * The missions and pull requests this agent belongs to, one chip each under its title: a mission's title with `n/m` for its
+ * Conductor or the step's title for a worker, a pull request's state mark and `#number`. A chip closes the detail and opens that
+ * page on its tab, whose back goes to that tab's list.
+ */
+function DetailLinks({ agentKey }: { agentKey: AgentKey }) {
+  const { t } = useInterfaceTranslation();
+  const missions = usePhone((s) => s.missions);
+  const prs = usePhone((s) => s.prs?.items ?? null);
+  const links = useMemo(() => agentLinks(agentKey, missions, prs), [agentKey, missions, prs]);
+  if (links.missions.length === 0 && links.prs.length === 0) return null;
+  // Each chip is a small pill inside a press area of a touch target's height, so a row of them stays light.
+  const chip = "h-auto min-h-(--size-touch-target) max-w-full px-none py-none font-normal hover:bg-transparent";
+  const pill = "flex min-w-0 items-center gap-xs rounded-full border border-border bg-secondary px-sm py-xxs text-body text-foreground";
+  return (
+    <div className={`-my-sm flex flex-wrap gap-x-sm ${DETAIL_INSET}`} data-phone-detail-links="true">
+      {links.missions.map(({ mission, node, turn }) => {
+        const { done, total } = progress(mission);
+        return (
+          <Button key={mission.id} variant="ghost" className={chip} data-phone-detail-mission={mission.id}
+            aria-label={`${t("mobile.tab.missions")} · ${mission.title}`} onClick={() => { closeDetail(); openMission(mission.id); }}>
+            <span className={pill}>
+              <FlagIcon aria-hidden="true" className={cn("size-(--size-icon) shrink-0", TONE_TEXT[missionToneOf(mission.status, turn, missionStalled(mission))])} />
+              <span className="min-w-0 truncate">{mission.title}</span>
+              <span aria-hidden="true" className="shrink-0 text-muted-foreground">·</span>
+              {node ? <span className="min-w-0 truncate text-subtle-foreground">{node.title}</span>
+                : <span className="shrink-0 font-mono text-subtle-foreground">{done}/{total}</span>}
+            </span>
+          </Button>
+        );
+      })}
+      {links.prs.map((pr) => {
+        const { icon: Icon, tone } = PR_LOOK[pr.state];
+        return (
+          <Button key={pr.key} variant="ghost" className={chip} data-phone-detail-pr={pr.key}
+            aria-label={`#${pr.number} ${pr.title}`} onClick={() => { closeDetail(); openPrPage(pr.key); }}>
+            <span className={pill}>
+              <Icon aria-hidden="true" className={cn("size-(--size-pr-icon) shrink-0", tone)} />
+              <span className="font-mono">#{pr.number}</span>
+            </span>
+          </Button>
+        );
+      })}
+    </div>
+  );
+}
+
+/** The head of a View on screen: its name, its kind, who opened it and how long ago (B13). */
+function ViewingHead({ row, opener }: { row: { name: string; kind: LookKind; at: number }; opener: string }) {
+  const { t } = useInterfaceTranslation();
+  const word = useKindWord()(row.kind);
+  return (
+    <div className="mt-xs flex flex-col gap-xs" data-phone-viewing={row.name}>
+      <h1 className="break-all text-title font-medium text-foreground">{row.name}</h1>
+      <p className="flex min-w-0 flex-wrap items-center gap-x-sm text-body text-muted-foreground">
+        {row.kind === "image" ? <ImageIcon aria-hidden="true" className="size-(--size-icon) shrink-0" /> : null}
+        <span>{word}</span>
+        {opener ? (
+          <>
+            <span aria-hidden="true">·</span>
+            <span className="min-w-0 break-keep wrap-anywhere">{t("mobile.look.openedBy", { name: opener })}</span>
+          </>
+        ) : null}
+        <span aria-hidden="true">·</span>
+        <Elapsed since={row.at} className="font-mono" />
+      </p>
+    </div>
   );
 }
 
@@ -195,7 +306,9 @@ function SleepState({ sleep, agentKey }: { sleep: AgentSleep; agentKey: AgentKey
 }
 
 /**
- * Keeps the newest line in view while the reader is at the bottom; when older
+ * Keeps the newest line in view while the reader is at the bottom, when lines
+ * arrive and when the view itself grows or shrinks (the keyboard coming up
+ * over the reply bar); a reader scrolled up stays where they were. When older
  * lines arrive on top (`top` changes), keeps the line they were on where it
  * was (B24, B25). A scroll near the top calls `onTop`.
  */
@@ -212,6 +325,16 @@ function usePinnedScroll(content: unknown, top: number, onTop: () => void) {
     heightBefore.current = element.scrollHeight;
     topBefore.current = top;
   }, [content, top]);
+  useEffect(() => {
+    const element = scroller.current;
+    if (!element || typeof ResizeObserver === "undefined") return;
+    const observer = new ResizeObserver(() => {
+      if (pinned.current) element.scrollTop = element.scrollHeight;
+      heightBefore.current = element.scrollHeight;
+    });
+    observer.observe(element);
+    return () => observer.disconnect();
+  }, []);
   const onScroll = (event: UIEvent<HTMLDivElement>) => {
     const element = event.currentTarget;
     pinned.current = element.scrollHeight - element.scrollTop - element.clientHeight < PULL_EDGE;
@@ -221,7 +344,7 @@ function usePinnedScroll(content: unknown, top: number, onTop: () => void) {
   return { scroller, onScroll };
 }
 
-function Scrollback({ text, more, lines, loading }: { text: string; more: boolean; lines: number; loading: boolean }) {
+function Scrollback({ text, more, lines, loading, alternateScreen, conversation }: { text: string; more: boolean; lines: number; loading: boolean; alternateScreen: boolean; conversation: boolean }) {
   const { t } = useInterfaceTranslation();
   const rows = useMemo(() => ansiRows(text), [text]);
   const { scroller, onScroll } = usePinnedScroll(rows, lines, () => {
@@ -230,8 +353,15 @@ function Scrollback({ text, more, lines, loading }: { text: string; more: boolea
   return (
     <div ref={scroller} className="min-h-0 flex-1 overflow-auto overscroll-contain bg-background px-lg py-md" data-phone-scrollback={lines} onScroll={onScroll}>
       {more ? <p className="pb-sm text-center text-body text-muted-foreground">{t("mobile.pullOlder")}</p> : null}
+      {alternateScreen && !more ? (
+        conversation ? (
+          <Button variant="text" size="inline" className="mb-sm min-h-(--size-touch-target) w-full whitespace-normal break-keep wrap-anywhere text-left text-body text-muted-foreground" data-phone-screen-history onClick={() => setTab("conversation")}>
+            {t("mobile.screenHistory")}
+          </Button>
+        ) : <p className="pb-sm break-keep wrap-anywhere text-body text-muted-foreground" data-phone-screen-history>{t("mobile.screenHistory")}</p>
+      ) : null}
       {loading ? <p className="text-body text-muted-foreground">{t("mobile.loading")}</p> : null}
-      <pre aria-label={t("mobile.recentOutput")} className="phone-ansi m-none font-mono text-body leading-normal text-foreground">
+      <pre aria-label={t("mobile.recentOutput")} className="phone-ansi m-none font-mono text-caption leading-normal text-foreground">
         {rows.map((row, index) => (
           <span
             key={index}
@@ -291,7 +421,7 @@ const MessageItem = memo(function MessageItem({ message, timed }: { message: Con
           <span aria-hidden="true" className="text-muted-foreground">
             ❯
           </span>
-          <span className="min-w-0 whitespace-pre-wrap wrap-anywhere">{message.text}</span>
+          <span className="min-w-0 whitespace-pre-wrap break-keep wrap-anywhere">{message.text}</span>
         </p>
         {time}
       </li>
@@ -305,7 +435,7 @@ function AgentMessage({ message, time }: { message: ConversationMessage; time: R
   const body = useMemo(() => renderMarkdown(message.text), [message.text]);
   return (
     <li data-phone-message="agent">
-      <div className="space-y-sm wrap-anywhere text-body leading-normal text-foreground">
+      <div className="space-y-sm break-keep wrap-anywhere text-body leading-normal text-foreground">
         {body}
         {message.truncated ? <p className="text-muted-foreground">{t("mobile.truncated")}</p> : null}
       </div>
@@ -314,7 +444,11 @@ function AgentMessage({ message, time }: { message: ConversationMessage; time: R
   );
 }
 
-function ReplyBar({ disabled }: { disabled: boolean }) {
+/**
+ * `about` is the name of the View on screen: the reply leaves with it in front, in brackets (B30). `keys` is false on 볼 것, where
+ * the quick keys answer nothing the operator is looking at.
+ */
+function ReplyBar({ disabled, about, keys }: { disabled: boolean; about: string | null; keys: boolean }) {
   const { t } = useInterfaceTranslation();
   const [text, setText] = useState("");
   const pending = usePhone((s) => s.pendingInput);
@@ -331,6 +465,7 @@ function ReplyBar({ disabled }: { disabled: boolean }) {
   const shown = tooLong ? inputFailure("too_long") : error;
   return (
     <footer className="phone-safe-bottom shrink-0 border-t border-border bg-background px-lg pt-xs">
+      {keys ? (
       <div className="grid grid-cols-5 gap-sm" role="group" aria-label={t("mobile.quickKeys")}>
         {QUICK_KEYS.map((quick) => (
           <Button
@@ -346,17 +481,18 @@ function ReplyBar({ disabled }: { disabled: boolean }) {
           </Button>
         ))}
       </div>
+      ) : null}
       <form
-        className="mt-sm flex gap-sm pb-md"
+        className={`${keys ? "mt-sm" : "mt-xs"} flex gap-sm pb-md`}
         onSubmit={(event) => {
           event.preventDefault();
-          sendReply(text);
+          sendReply(about ? replyAbout(about, text) : text);
         }}
       >
         <Input
           value={text}
           onChange={(event) => setText(event.target.value)}
-          placeholder={t("mobile.replyPlaceholder")}
+          placeholder={about ? t("mobile.look.replyAbout", { name: about }) : t("mobile.replyPlaceholder")}
           aria-label={t("mobile.reply")}
           disabled={disabled}
           enterKeyHint="send"

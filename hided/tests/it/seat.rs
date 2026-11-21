@@ -16,10 +16,6 @@ use tokio::io::{AsyncReadExt, AsyncWriteExt};
 fn env(dir: &std::path::Path) -> Env {
     Env {
         home: dir.to_path_buf(),
-        herdr_socket_path: None,
-        herdr_bin_path: None,
-        own_engine: false,
-        login_shell: None,
         state_dir: dir.to_path_buf(),
         legacy_state_dir: None,
         account_state_folder: false,
@@ -33,8 +29,12 @@ fn env(dir: &std::path::Path) -> Env {
         host_helper_root: None,
         host_cli_dir: None,
         pane_id: None,
+        install: None,
+        access: None,
         tailscale_bin: Some(dir.join("no-tailscale")),
         relay_url: "ws://127.0.0.1:9/ws".to_owned(),
+        peer_direct: None,
+        device_connect: false,
         search_path: None,
     }
 }
@@ -82,6 +82,11 @@ async fn a_role_change_keeps_the_port_and_token_and_health_answers_throughout() 
     let (status, first) = health(seat.port).await.expect("the core answers");
     assert_eq!(status, 200);
     assert_eq!(first["instance"], 1);
+    assert_eq!(
+        first["listeners"],
+        serde_json::json!({"pane_bootstrap": "accepting", "node_attach": "accepting"}),
+        "{first}"
+    );
 
     let stop = Arc::new(AtomicBool::new(false));
     let missed = Arc::new(AtomicUsize::new(0));

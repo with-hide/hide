@@ -10,15 +10,16 @@ composer cell, which reads the pane's screen only to judge it.
 import base64
 import json
 import os
-from pathlib import Path
 import secrets
+import sqlite3
 import time
 
-from agent_live_check.processes import ProcessError
+from agent_live_check.processes import Cancelled, ProcessError
 from agent_live_check.protection import write_private
-from agent_live_check.system import WINDOWS, git, same_path
+from agent_live_check.system import git, same_path
 
-from . import cells, composer, fork, kit, memory, provider_limit, stop_observer, title, usage
+from . import (cells, composer, failure, fork, hook_records, kit, memory, provider_limit, scene, stop_observer, title,
+               usage)
 from .requests import model_requests
 
 SPAWN_SECONDS = 150
@@ -29,7 +30,7 @@ WAKE_SECONDS = 150
 ATTACH_SECONDS = 30
 TURN_POLL_SECONDS = 1
 # The moments a turn's trace keeps: each change of the row's activity, up to
-# this many, with the screen and Herdr's reading at that change.
+# this many, with the screen and the engine's reading at that change.
 TURN_TRACE_CAP = 8
 # The grid the journey's one view of a pane draws at.
 VIEW_COLS, VIEW_ROWS = 120, 40
@@ -54,25 +55,19 @@ LETTER_PROMPT = "Reply with exactly the token on the second line of the letter a
 HELD_PROMPT = "Reply with exactly {} (journey-hold)"
 # How long a held turn takes to read working on the row.
 WORKING_SECONDS = 30
-# How long a picker stays open after the letter is sent, so the bell's rung
-# meets it open.
-PICKER_SECONDS = 10
-# The picker the operator opens with a slash command, in every agent the
-# menu cell is declared for.
-PICKER_COMMAND = "/model"
-# How long the menu cell waits for Hide to have checked the agent's composer
-# before it opens the picker: the core checks a version once the pane has
+# How long a scene cell waits for Hide to have checked the agent's composer
+# before it opens its scene: the core checks a version once the pane has
 # rested `INPUT_QUIET_MS` (30 s) after a turn its prompt hook saw, on a pass
-# at most every 5 s (herdr-core/src/delivery/composer.rs). Without that
+# at most every 5 s (hide-core/src/delivery/composer.rs). Without that
 # check a letter held on the closed picker has nothing to release it until
 # the next turn.
 COMPOSER_CHECK_SECONDS = 60
 # The cells each measured by a module of its own, judging what Hide shows.
-MEASURES = {module.CELL: module.measure for module in (kit, memory, composer, fork, title, usage)}
+MEASURES = {module.CELL: module.measure for module in (kit, memory, composer, fork, title, usage, scene)}
 # The steps of one agent's journey in order, each from the state the last
 # left: the cells that only read what Hide shows come where that state is,
 # the fork before Sleep so its source still runs the session it copies.
-STEPS = ("start", "integration", "guidance_memory", "letter", "letter_busy", "letter_menu", "composer", "fork", "sleep_wake", "resume", "title", "usage")
+STEPS = ("start", "integration", "guidance_memory", "letter", "letter_busy", scene.CELL, "composer", "fork", "sleep_wake", "resume", "title", "usage")
 
 
 def created_branch(runtime, repository, branch, worktree):
@@ -87,8 +82,38 @@ def git_env(runtime):
     return {**runtime.env, "GIT_CONFIG_NOSYSTEM": "1", "GIT_CONFIG_GLOBAL": os.devnull}
 
 
+def ledger_spawns(state):
+    """The spawn records of the candidate's delivery ledger: its store,
+    `delivery.sqlite3`, read without writing beside it, or, for a build from
+    before the store, `delivery-ledger.json`. Empty while neither reads."""
+    store = state / "delivery.sqlite3"
+    if store.exists():
+        try:
+            connection = sqlite3.connect(store.as_uri() + "?mode=ro", uri=True, timeout=2)
+            try:
+                rows = connection.execute("SELECT body FROM spawns ORDER BY seq").fetchall()
+            finally:
+                connection.close()
+            return [json.loads(body) for (body,) in rows]
+        except (sqlite3.Error, ValueError):
+            return []
+    try:
+        return json.loads((state / "delivery-ledger.json").read_text(encoding="utf-8")).get("spawns") or []
+    except (OSError, ValueError):
+        return []
+
+
 def token():
     return "JOURNEY-" + secrets.token_hex(4).upper()
+
+
+def refused_pane(answer):
+    """The pane a refused spawn still names in its refusal, which is the one
+    the hook that could not report ran in; None when it names none."""
+    error = answer.get("error") if isinstance(answer, dict) else None
+    spawn = error.get("spawn") if isinstance(error, dict) else None
+    pane = spawn.get("pane") if isinstance(spawn, dict) else None
+    return pane if isinstance(pane, str) and pane else None
 
 
 def prompt(value):
@@ -112,17 +137,8 @@ def brief(value):
     return f"# Journey brief\n\n## Notes\n{BRIEF_NOTES}\n\n## Request\n{prompt(value)}\n"
 
 
-# A brief's cap in bytes (herdr-core `delivery::BODY_LIMIT`, `invalid_brief`).
+# A brief's cap in bytes (hide-core `delivery::BODY_LIMIT`, `invalid_brief`).
 BRIEF_CAP = 16 * 1024
-
-
-def rides_start():
-    """Whether Hide carries a brief as the start's prompt on this system. On
-    Windows the journey starts every CLI through a .cmd launcher
-    (agent_live_check.system.launcher), as npm's shim of a CLI is, and a start
-    through cmd.exe carries no prompt (herdr-core `start_prompt`), so the
-    brief is typed there."""
-    return not WINDOWS
 
 
 def long_brief(value):
@@ -155,7 +171,8 @@ def at_brief(value):
 
 class Journey:
     def __init__(self, runtime, daemon, controller, table, contract_row, repository, record, reader, *,
-                 branch, created, sessions, route, composer_judge, model=None, brief_start=True):
+                 branch, created, sessions, route, composer_judge, failure_logs, model=None,
+                 brief_start=True, profile=None, scene_mode=scene.CHECK, scene_repetitions=None):
         self.runtime, self.daemon, self.controller = runtime, daemon, controller
         # The real CLIs start on Hide's brief, which their own record has to
         # confirm; the stand-ins imitate only the agent's prompt argument.
@@ -163,6 +180,9 @@ class Journey:
         # Only a real CLI proves the input rungs its agent declares; a
         # stand-in imitates the prompt without proving the CLI's intake.
         self.own_rungs = brief_start
+        # How the scene cells run (scene.py): `check` or `survey`, and how
+        # many repetitions a survey makes (None: the mode's own count).
+        self.scene_mode, self.scene_repetitions = scene_mode, scene_repetitions
         self.table, self.row, self.repository = table, contract_row, repository
         self.record, self.reader = record, reader
         # `journey_composer`, which judges a screen by the adapter's composer declaration.
@@ -177,23 +197,39 @@ class Journey:
         # The branch this run makes in the measured repository, and where the
         # run keeps what it created there for the cleanup (PRD D-22).
         self.branch, self.created = branch, created
-        self.id, self.kind = contract_row["id"], contract_row["herdr_kind"]
+        self.id, self.kind = contract_row["id"], contract_row["agent_cli"]
+        # The profile this journey starts its agent with and the account it
+        # runs in (profiles.prepare), for the `profile` cell; None for the
+        # agent's default account. Its spawns, letters and evidence carry
+        # their own names, so they never meet the default journey's.
+        self.profile = profile
+        self.name = self.id + "-profile" if profile else self.id
         self.run = runtime.run
         self.pane = self.agent = self.session = self.reference = self.checkout = None
         # Every pane this journey's spawns and fork opened, which close() ends.
         self.opened = []
         self.model = model
+        # The candidate's own explanation of the first start refused on the
+        # agent's session (hook_records.identity_cause), which the agent's
+        # later starts keep rather than each meeting the same refusal.
+        self.identity_refusal = None
         # Where the agent's provider log stood when the running step began:
         # what was logged before it is another step's, and never settles
         # this one's cell (provider_limit.cursor).
         self.provider_mark = None
+        # hided's output, a failed cell keeps what of it its step saw
+        # (failure.py); and the running step's times with where that output
+        # stood when it began.
+        self.failure_logs = failure_logs
+        self.running = None
         observer_path = contract_row.get("stop_observer")
-        self.stop_observer = (stop_observer.Observer(runtime.home, runtime.probe, observer_path) if observer_path else None)
+        self.stop_observer = (stop_observer.Observer(runtime.home, runtime.probe, observer_path)
+                              if observer_path and not profile else None)
 
     # Evidence -----------------------------------------------------------
 
     def evidence(self, name, value):
-        path = self.run / f"{self.id}-{name}.json"
+        path = self.run / f"{self.name}-{name}.json"
         path.unlink(missing_ok=True)
         write_private(path, (json.dumps(value, indent=2, ensure_ascii=False, default=str) + "\n").encode())
         return path.name
@@ -205,14 +241,24 @@ class Journey:
         if not pane:
             return None
         try:
-            _, text, _ = self.runtime.command(["pane", "read", pane, "--source", "recent-unwrapped",
-                                               "--lines", "200"], check=False)
+            text = self.controller.read_pane(pane, lines=200)
         except ProcessError:
             return None
-        path = self.run / f"{self.id}-{name}-pane.txt"
+        path = self.run / f"{self.name}-{name}-pane.txt"
         path.unlink(missing_ok=True)
-        write_private(path, text.encode())
+        write_private(path, failure.scrub(text).encode())
         return path.name
+
+    def daemon_log(self, name):
+        """What hided wrote while the running step ran, kept only for a
+        failed cell, at its failure (failure.py)."""
+        if not self.running:
+            return None
+        step, mark = self.running
+        kept, limit = self.failure_logs.keep(self.run / f"{self.name}-{name}-hided.log", mark, step, name)
+        if limit:
+            self.record.setdefault("hided_logs_cut", []).append({"cell": name, "file": kept, "limit": limit})
+        return kept
 
     def settle(self, name, verdict, evidence=None, pane=None):
         """`pane` the pane the cell measured when it is not the agent's own,
@@ -230,7 +276,7 @@ class Journey:
             return False
         if status == cells.FAIL:
             screen = self.capture(name, pane)
-            evidence = ", ".join(value for value in (evidence, screen) if value) or None
+            evidence = ", ".join(value for value in (evidence, screen, self.daemon_log(name)) if value) or None
         cells.settle(self.table, self.id, name, status, reason, evidence)
         return status == cells.PASS
 
@@ -264,19 +310,19 @@ class Journey:
 
     # Facts Hide reports ---------------------------------------------------
 
-    def herdr_agent(self):
+    def engine_agent(self):
         return self.runtime.agent(self.pane)
 
     def turn_moment(self, activity):
-        """The row's `activity` as it changed, with Herdr's reading of the
+        """The row's `activity` as it changed, with the engine's reading of the
         agent and the pane's visible screen at that moment: a row that never
         reads idle again says, from these, whether the agent still showed a
-        turn or Herdr kept reading one on an idle screen (with-hide/hide-private#309)."""
+        turn or the engine kept reading one on an idle screen (with-hide/hide-private#309)."""
         moment = {"at_ms": int(time.time() * 1000), "activity": activity}
         try:
-            agent = self.herdr_agent() or {}
-            moment["herdr"] = {key: agent.get(key) for key in ("agent_status", "interactive_ready", "launch_pending")}
-            _, moment["screen"], _ = self.runtime.command(["pane", "read", self.pane, "--source", "visible"], check=False)
+            agent = self.engine_agent() or {}
+            moment["engine"] = {key: agent.get(key) for key in ("agent_status", "interactive_ready", "launch_pending")}
+            moment["screen"] = self.controller.read_pane(self.pane, visible=True)
         except ProcessError as error:
             moment["unreadable"] = str(error)
         return moment
@@ -288,8 +334,9 @@ class Journey:
         value = reference.get("value")
         if not value:
             return {"error": "Herdr reported no native session reference"}
+        account = [self.profile["reader"]] if self.profile else []
         code, out, err = self.runtime.owner.run(
-            [str(self.reader), str(self.sessions), self.kind, kind, value, str(self.checkout)],
+            [str(self.reader), str(self.sessions), self.kind, kind, value, str(self.checkout), *account],
             env={**self.runtime.env}, check=False, seconds=15)
         if code:
             return {"error": err.strip()[:300] or f"reader exit {code}"}
@@ -303,7 +350,7 @@ class Journey:
         if answer["path"] not in self.paths:
             self.paths.append(answer["path"])
         # A path session is the journey's own when it named one, else the
-        # one Herdr reported in the pane, as a fork's is.
+        # one reported in the pane, as a fork's is.
         return {"session": (self.session or value) if kind == "path" else value, "path": answer["path"],
                 "events": answer["events"]}
 
@@ -314,12 +361,12 @@ class Journey:
         daemon's frames carried since `since`, so a turn that ended before
         this wait began is still read. Returns (verdict, read, observed).
         A `trace` list gets, at each change of the row's activity, what the
-        pane showed and what Herdr read then (`turn_moment`)."""
+        pane showed and what the engine read then (`turn_moment`)."""
         end = time.monotonic() + seconds
         last = None
         while True:
             if not self.reference:
-                self.reference = (self.herdr_agent() or {}).get("agent_session")
+                self.reference = (self.engine_agent() or {}).get("agent_session")
             read = self.conversation()
             observed = self.daemon.activities(self.pane, since)
             if trace is not None and observed and observed[-1][0] != last and len(trace) < TURN_TRACE_CAP:
@@ -331,32 +378,72 @@ class Journey:
                 events = read.get("events", [])
                 verdict = cells.turn_verdict(observed, events, value, after(events))
             if verdict[0] == cells.PASS or time.monotonic() > end:
-                return verdict, read, observed
+                # A turn that never reads idle is a turn whose record never
+                # moved, and a hook whose record write was refused wrote down
+                # for this pane why: the cell says it rather than only that the
+                # row stayed working (hook_records.py).
+                cause = None if verdict[0] == cells.PASS else hook_records.pane_cause(self.runtime, self.pane)
+                return (cells.Verdict(verdict[0], verdict[1] + "; " + cause, cells.kind(verdict))
+                        if cause else verdict), read, observed
             if self.runtime.owner.cancelled.wait(TURN_POLL_SECONDS):
-                raise ProcessError("run_cancelled")
+                raise Cancelled("run_cancelled")
 
     # Cells ----------------------------------------------------------------
 
     STEP_CELLS = {"start": ("start", "reply"), "letter": ("letter",), "sleep_wake": ("sleep_wake",),
-                  "resume": ("resume",), "untrusted": ("start_untrusted",)}
+                  "resume": ("resume",), "untrusted": ("start_untrusted",), "profile_cell": ("profile",),
+                  scene.CELL: cells.SCENE_CELLS}
     # A step whose cell is named by the step, as `launch_brief`'s, needs no entry.
 
     def step(self, name, *args):
         """Runs one step; a transport failure or a bound it reached fails the
         step's open cell with that reason, and cancellation stops the run."""
         self.provider_mark = self.mark_provider()
+        # The step's times, in the report whatever its cells read.
+        times = {"step": name, "started_ms": failure.now_ms()}
+        self.record.setdefault("steps", []).append(times)
+        self.running = (times, self.failure_logs.mark())
         try:
             if name in MEASURES:
                 MEASURES[name](self, *args)
             else:
                 getattr(self, name)(*args)
         except ProcessError as error:
-            if self.runtime.owner.cancelled.is_set():
-                raise
             for cell in self.STEP_CELLS.get(name, (name,)):
                 if self.table[self.id][cell]["status"] == cells.PENDING:
                     self.settle(cell, (cells.FAIL, str(error)))
                     break
+        finally:
+            times["ended_ms"] = failure.now_ms()
+            self.running = None
+
+    def spawn_verdict(self, answer, pane=None):
+        """The spawn's verdict, explained from the candidate's hook records when
+        the refusal is the agent's missing session: the hook's own record says
+        which outcome left Hide without an identity (hook_records.py), so the
+        cell names the cause rather than the same unclear sentence. A product
+        that refused a start still names the pane it opened, which is the one
+        the hook recorded."""
+        cause = None
+        if cells.refusal(answer)[0] == "native_identity_unavailable":
+            cause = hook_records.identity_cause(self.runtime, pane or refused_pane(answer))
+            # The first outcome stands for the agent: every start of it runs
+            # the same hook, so a later start cannot be measured either, and
+            # the journey keeps this one rather than repeating an unclear
+            # refusal per cell.
+            self.identity_refusal = self.identity_refusal or cause
+        return cells.spawn_verdict(answer, cause)
+
+    def identity_refused(self, name):
+        """Whether an earlier start of this agent already met the identity
+        refusal, settling the cell `name` still open as not measured with that
+        first outcome. A cell already settled, by a reason of its own, keeps
+        it: the start is skipped either way."""
+        if self.identity_refusal is None:
+            return False
+        cells.settle(self.table, self.id, name, cells.NOT_MEASURED,
+                     "not measured: the identity refusal of an earlier start stands: " + self.identity_refusal)
+        return True
 
     def spawn(self, name, repository, branch, path, prompt_text, brief=False):
         """`hide agent spawn` from the controller; a local request_timeout is the
@@ -371,6 +458,8 @@ class Journey:
         # native arguments after -- reach only this first start.
         if self.model:
             args.extend(["--model", self.model])
+        if self.profile:
+            args.extend(["--profile", self.profile["name"]])
         if brief:
             args.extend(["--brief", prompt_text])
         else:
@@ -385,13 +474,13 @@ class Journey:
             if time.monotonic() > end:
                 break
             if self.runtime.owner.cancelled.wait(2):
-                raise ProcessError("run_cancelled")
+                raise Cancelled("run_cancelled")
         return args, answer, attempts
 
     def start(self):
         """start, then reply: the spawn, the turn its first prompt opened, the emitter, the reply."""
         first = token()
-        worktree = self.runtime.probe / "worktrees" / self.id
+        worktree = self.runtime.probe / "worktrees" / self.name
         # Named before the spawn, so a spawn that raises or is stopped still leaves its branch to the cleanup.
         entry = {"branch": self.branch, "start": None, "worktree": str(worktree)}
         self.created.append(entry)
@@ -399,36 +488,40 @@ class Journey:
         # record has to confirm: as the start's prompt argument where the
         # agent declares that, as long as a start carries, and typed
         # otherwise; the untrusted start keeps the agent's prompt argument.
-        launched = self.own_rungs and self.launches() and rides_start()
+        launched = self.own_rungs and self.launches()
         sent = long_brief(first) if launched else brief(first)
-        args, answer, attempts = self.spawn("journey-" + self.id, self.repository, self.branch, worktree,
+        args, answer, attempts = self.spawn("journey-" + self.name, self.repository, self.branch, worktree,
                                             sent if self.brief_start else prompt(first),
                                             brief=self.brief_start)
         entry.update(created_branch(self.runtime, self.repository, self.branch, worktree))
         self.record["spawn"] = {"argv": ["hide", *args], "route": self.route,
                                 "answers": attempts}
-        spawned = cells.spawn_verdict(answer)
+        spawned = self.spawn_verdict(answer)
         view = answer.get("value") or {}
         self.pane, self.agent, self.session = view.get("pane"), view.get("id"), view.get("session")
+        if spawned[0] != cells.PASS:
+            self.pane = self.pane or self.pane_of(answer)
+        # A refused spawn's pane closes with the rest too: one left open held
+        # OpenCode's 293 MB until the guardian's 2 GiB cap ended the run's
+        # daemon (Windows, run 42586901056).
         self.opened.append(self.pane)
         self.checkout = worktree.resolve()
         evidence = self.evidence("spawn", self.record["spawn"])
         if spawned[0] != cells.PASS:
-            self.pane = self.pane or self.pane_of(answer)
-            self.record["spawn"]["herdr"] = self.herdr_view(worktree)
+            self.record["spawn"]["engine"] = self.engine_view(worktree)
             if self.pane:
                 self.record["spawn"]["shell_children"] = self.shell_children(self.pane)
             evidence = self.evidence("spawn", self.record["spawn"])
             self.settle("start", spawned, evidence)
             return
         turn, read, observed = self.wait_turn(0, first)
-        native = self.herdr_agent() or {}
+        native = self.engine_agent() or {}
         self.reference = native.get("agent_session") or self.reference
-        self.record["start"] = {"activities": observed, "turn": turn, "herdr_agent": native,
+        self.record["start"] = {"activities": observed, "turn": turn, "engine_agent": native,
                                 "row": self.daemon.row(self.pane)}
-        checks = [spawned, turn, cells.emitter_verdict(self.reference, self.row["herdr_source"])]
+        checks = [spawned, turn, cells.emitter_verdict(self.reference)]
         if self.brief_start:
-            spawn_record = self.spawn_record("journey-" + self.id)
+            spawn_record = self.spawn_record("journey-" + self.name)
             self.record["start"]["brief_input"] = (spawn_record or {}).get("brief_input")
             checks.append(cells.brief_verdict(spawn_record, launched))
             if launched:
@@ -447,9 +540,9 @@ class Journey:
     def launch_brief(self, repository):
         """A brief that starts with `@` naming a missing file, in a start of
         its own in a worktree of a repository the account never trusted: the
-        start carries it once, past any screen of the agent's, or on Windows
-        it is typed once (`rides_start`), and the agent records it exactly."""
-        if not cells.measurable(self.table, self.id, "launch_brief"):
+        start carries it once, past any screen of the agent's, and the agent
+        records it exactly."""
+        if not cells.measurable(self.table, self.id, "launch_brief") or self.identity_refused("launch_brief"):
             return
         value = token()
         name = "journey-launch-" + self.id
@@ -458,7 +551,7 @@ class Journey:
         args, answer, attempts = self.spawn(name, repository, name, worktree, sent, brief=True)
         record = {"argv": ["hide", *args], "answers": attempts}
         self.record["launch_brief"] = record
-        spawned = cells.spawn_verdict(answer)
+        spawned = self.spawn_verdict(answer)
         saved_pane, saved = self.pane, (self.agent, self.session, self.reference, self.checkout)
         self.pane = (answer.get("value") or {}).get("pane") or self.pane_of(answer)
         self.opened.append(self.pane)
@@ -471,13 +564,9 @@ class Journey:
             turn, read, record["activities"] = self.wait_turn(0, value)
             spawn_record = self.spawn_record(name)
             record["brief_input"], record["read"] = (spawn_record or {}).get("brief_input"), read
-            # A launched brief is the agent's own record line for line; a
-            # typed one is confirmed by Hide's canonical rule, which an agent's
-            # screen may reflow (Grok on Windows drops its line breaks, omp
-            # draws a tab as three spaces).
-            checks = [spawned, turn, cells.brief_verdict(spawn_record, rides_start())]
-            if rides_start():
-                checks.append(cells.record_verdict(read, sent, value))
+            # A launched brief is the agent's own record line for line.
+            checks = [spawned, turn, cells.brief_verdict(spawn_record, True),
+                      cells.record_verdict(read, sent, value)]
             self.settle("launch_brief", cells.start_verdict(*checks),
                         self.evidence("launch-brief", record))
         finally:
@@ -489,19 +578,15 @@ class Journey:
         is confirmed, or as it stands after BRIEF_RECORD_SECONDS. The record is
         posted to the ledger's worker as the agent's hook or session read
         arrives and saved by its save thread, so it can trail the turn."""
-        path = self.runtime.state / "delivery-ledger.json"
         end = time.monotonic() + BRIEF_RECORD_SECONDS
         found = None
         while True:
-            try:
-                spawns = json.loads(path.read_text(encoding="utf-8")).get("spawns") or []
-            except (OSError, ValueError):
-                spawns = []
+            spawns = ledger_spawns(self.runtime.state)
             found = next((spawn for spawn in spawns if spawn.get("intent") == intent), None)
             if (found or {}).get("brief_input", {}).get("confirmed_at_unix_ms") is not None or time.monotonic() > end:
                 return found
             if self.runtime.owner.cancelled.wait(1):
-                raise ProcessError("run_cancelled")
+                raise Cancelled("run_cancelled")
 
     def letter(self):
         """The letter's path at rest is the agent's own, as the contract
@@ -518,7 +603,7 @@ class Journey:
         value = token()
         since = self.daemon.mark(self.pane)
         log = self.log_mark()
-        sent = self.controller.hide(["request", "send", self.agent, "--intent", "journey-letter-" + self.id,
+        sent = self.controller.hide(["request", "send", self.agent, "--intent", "journey-letter-" + self.name,
                                      "--kind", "report", "--body", LETTER_BODY + value])
         record = {"form": form, "token": value, "sent": sent, "shown": []}
         self.record["letter"] = record
@@ -598,7 +683,7 @@ class Journey:
             if check is not None or time.monotonic() >= end:
                 return check
             if self.runtime.owner.cancelled.wait(2):
-                raise ProcessError("run_cancelled")
+                raise Cancelled("run_cancelled")
 
     def send_now(self, intent, value, record):
         """`hide request send --now` of a letter whose second line is `value`;
@@ -642,7 +727,7 @@ class Journey:
                             self.evidence("letter_busy", record))
                 return
             if self.runtime.owner.cancelled.wait(TURN_POLL_SECONDS):
-                raise ProcessError("run_cancelled")
+                raise Cancelled("run_cancelled")
         log = self.log_mark()
         letter = self.send_now("journey-letter-busy-" + self.id, value, record)
         if letter is None:
@@ -670,57 +755,6 @@ class Journey:
             rungs=record["rungs"], responses=record["responses"], sent_at=record["sent_at_ms"],
             stops=record["stops"], observed_at=record["observed_at_ms"]), turn)
         self.settle("letter_busy", verdict, self.evidence("letter_busy", record))
-
-    def letter_menu(self):
-        """A letter sent with --now while the agent's own picker is open:
-        the picker takes nothing of it, and once the operator closes the
-        picker (Esc) the letter is delivered once and answered."""
-        if not cells.measurable(self.table, self.id, "letter_menu"):
-            return
-        record = {"shown": []}
-        self.record["letter_menu"] = record
-        # A letter held on the picker is released when Hide reads the
-        # composer empty after it closes, which Hide does only for a version
-        # whose composer it has checked; the cell starts from that settled
-        # pane, never from whatever moment the cell before it ended on.
-        record["composer_check"] = self.composer_checked()
-        if record["composer_check"] is None:
-            self.settle("letter_menu", (cells.FAIL, "Hide had not checked this version's composer within "
-                                        f"{COMPOSER_CHECK_SECONDS} s at rest, so no letter held on the picker "
-                                        "could be released"), self.evidence("letter_menu", record))
-            return
-        value = record["token"] = token()
-        before = len(self.conversation().get("events", []))
-        since = self.daemon.mark(self.pane)
-        if not self.type_prompt(record, PICKER_COMMAND):
-            self.settle("letter_menu", (cells.FAIL, "the pane's terminal never took this screen's keys (transport "
-                                        + " -> ".join(map(str, record["terminal"])) + ")"),
-                        self.evidence("letter_menu", record))
-            return
-        self.runtime.owner.cancelled.wait(3)
-        _, record["picker"], _ = self.runtime.command(["pane", "read", self.pane, "--source", "visible"], check=False)
-        log = self.log_mark()
-        letter = self.send_now("journey-letter-menu-" + self.id, value, record)
-        if letter is None:
-            self.settle("letter_menu", (cells.FAIL, "hide request send refused: "
-                                        + ": ".join(filter(None, cells.refusal(record["sent"])))),
-                        self.evidence("letter_menu", record))
-            return
-        if self.runtime.owner.cancelled.wait(PICKER_SECONDS):
-            raise ProcessError("run_cancelled")
-        _, record["picker_after"], _ = self.runtime.command(["pane", "read", self.pane, "--source", "visible"],
-                                                            check=False)
-        self.daemon.dispatch("key", {"pane_id": self.pane, "bytes_base64": base64.b64encode(b"\x1b").decode()})
-        turn, read, record["activities"] = self.wait_turn(since, value, lambda _events: before, seconds=LETTER_SECONDS)
-        record["turn"] = turn
-        shown = self.shown(letter, record, lambda shown: shown.get("state") == "delivered", CONFIRM_SECONDS)
-        record["read"] = {**read, "events": read.get("events", [])[before:]} if "events" in read else read
-        record["rungs"] = self.rungs_since(log)
-        if shown.get("state") != "delivered":
-            # A letter left pending would ring into the cells after this one.
-            record["cancelled"] = self.controller.hide(["request", "cancel", letter])
-        verdict = cells.with_turn(cells.menu_letter_verdict(shown, read, self.session, value, before), turn)
-        self.settle("letter_menu", self.with_rung(verdict, record["rungs"]), self.evidence("letter_menu", record))
 
     def prompt_letter(self, letter, record, before, since, value):
         """The letter rides the next prompt, as it would the operator's: it
@@ -750,7 +784,7 @@ class Journey:
             if done(shown):
                 break
             if self.runtime.owner.cancelled.wait(3):
-                raise ProcessError("run_cancelled")
+                raise Cancelled("run_cancelled")
         return shown
 
     def sleep_wake(self):
@@ -758,8 +792,13 @@ class Journey:
             return
         record = {"form": self.row["wake"], "asleep": [], "awake": []}
         self.record["sleep_wake"] = record
-        before = (self.herdr_agent() or {}).get("agent_session") or {}
+        before = (self.engine_agent() or {}).get("agent_session") or {}
         record["session_before"] = before
+        # Hide ends an agent only while the engine reads it idle or done, and
+        # a Sleep it refused is not asked again for an hour: the turn the
+        # last cell waited for ended on the agent's hook, which the engine's
+        # own reading of the screen can trail.
+        self.wait_at_rest()
         # The operator has looked at the pane before they choose Sleep from its menu.
         self.daemon.dispatch("pane_visit", {"pane_id": self.pane})
         self.daemon.dispatch("agent_sleep", {"pane_id": self.pane})
@@ -776,8 +815,6 @@ class Journey:
         try:
             self.daemon.wait(asleep, SLEEP_SECONDS, "the row to read asleep")
         except ProcessError as error:
-            if self.runtime.owner.cancelled.is_set():
-                raise
             record["sleep_wait"] = str(error)
             record["errors"] = list(self.daemon.errors)
             self.settle("sleep_wake", cells.sleep_verdict(record["asleep"], False), self.evidence("sleep-wake", record))
@@ -797,8 +834,6 @@ class Journey:
         try:
             self.daemon.wait(awake, WAKE_SECONDS, "the agent to run again")
         except ProcessError as error:
-            if self.runtime.owner.cancelled.is_set():
-                raise
             woke = False
             record["wake_wait"] = str(error)
         self.settle("sleep_wake", cells.sleep_verdict(record["asleep"], woke), self.evidence("sleep-wake", record))
@@ -808,7 +843,7 @@ class Journey:
         which the operator's Wake opens in a new pane
         (`wake_sleeping_session`); the registration moves to that pane, which
         the resume then types into."""
-        checkouts = [path for path in (self.checkout, self.runtime.probe / "worktrees" / self.id) if path]
+        checkouts = [path for path in (self.checkout, self.runtime.probe / "worktrees" / self.name) if path]
 
         def sleeping(rest):
             return (rest.get("navigator") or {}).get("sleeping_sessions") or []
@@ -826,8 +861,6 @@ class Journey:
                                           (self.daemon.rest.get("navigator") or {}).get("workspaces", [])
                                           for checkout in project.get("checkouts") or []][:64]
         except ProcessError as error:
-            if self.runtime.owner.cancelled.is_set():
-                raise
             record["sleep_wait"] = str(error)
             record["errors"] = list(self.daemon.errors)
             self.settle("sleep_wake", cells.sleep_verdict(record["asleep"], False), self.evidence("sleep-wake", record))
@@ -861,8 +894,7 @@ class Journey:
             return {"gone": True}
 
         def registered():
-            listing = self.controller.hide(["agent", "list"])
-            item = next((item for item in (listing.get("value") or {}).get("items") or []
+            item = next((item for item in self.controller.list_agents()
                          if item.get("id") == self.agent), None)
             pane = (item or {}).get("pane")
             return pane if pane and pane != old else None
@@ -880,17 +912,15 @@ class Journey:
             woke = self.daemon.wait(woken, WAKE_SECONDS, "the sleeping session to wake")
             if "failed" not in woke:
                 try:
-                    # Outside the snapshot lock: the listing is a command the controller runs.
+                    # Outside the snapshot lock, without waking the controller on each poll.
                     record["registered_pane"] = self.runtime.wait(registered, max(1, end - time.monotonic()))
                 except ProcessError as error:
-                    if self.runtime.owner.cancelled.is_set():
+                    if str(error) != "scene_timeout":
                         raise
                     raise ProcessError(f"timeout after {WAKE_SECONDS:.0f}s waiting for Hide's registration of "
                                        f"{self.agent} to name a pane other than {old}") from error
                 woke = self.daemon.wait(running, max(1, end - time.monotonic()), "the woken session's pane")
         except ProcessError as error:
-            if self.runtime.owner.cancelled.is_set():
-                raise
             record["wake_wait"] = str(error)
             record["errors"] = list(self.daemon.errors)
             self.settle("sleep_wake", cells.sleep_verdict(record["asleep"], False, str(error)),
@@ -928,7 +958,7 @@ class Journey:
             return
         turn, read, record["activities"] = self.wait_turn(since, value, lambda _events: events)
         record["turn"] = turn
-        native = self.herdr_agent() or {}
+        native = self.engine_agent() or {}
         after = (native.get("agent_session") or {}).get("value")
         record["session_after"] = after
         if not before or before != after:
@@ -937,6 +967,33 @@ class Journey:
         record["read"] = read
         reply = cells.with_turn(cells.reply_verdict(read, self.session, value, events), turn)
         self.settle("resume", cells.resume_verdict(before, after, reply), self.evidence("resume", record))
+
+    def profile_cell(self, account):
+        """profile: the agent started with the profile `account` names
+        (profiles.prepare), its first reply, a letter and Sleep, Wake and the
+        turn after it, run as the default account's cells run in a journey of
+        their own, each read from that account alone
+        (cells.profile_verdict)."""
+        if not cells.measurable(self.table, self.id, "profile"):
+            return
+        if account is None:
+            self.settle("profile", (cells.FAIL, "the run made no profile for this agent"))
+            return
+        table = cells.plan([self.row], [self.id], fake_model=True)
+        record = self.record["profile"] = {"account": account, "cells": table[self.id]}
+        journey = Journey(self.runtime, self.daemon, self.controller, table, self.row, self.repository, record,
+                          self.reader, branch=self.branch + "-profile", created=self.created, sessions=self.sessions,
+                          route=self.route, composer_judge=self.composer_judge, failure_logs=self.failure_logs,
+                          model=self.model, brief_start=self.brief_start, profile=account)
+        try:
+            for step in ("start", "letter", "sleep_wake", "resume"):
+                journey.step(step)
+        finally:
+            journey.close()
+            self.paths.extend(path for path in journey.paths if path not in self.paths)
+        record["paths"] = journey.paths
+        self.settle("profile", cells.profile_verdict(table[self.id], journey.paths, account["folder"]),
+                    self.evidence("profile", record), pane=journey.pane)
 
     def take_keys(self, record):
         """Opens the agent as the operator does: opening it puts its tab on
@@ -960,8 +1017,6 @@ class Journey:
         try:
             self.daemon.wait(controlling, ATTACH_SECONDS, "the pane's terminal to take this screen's keys")
         except ProcessError as error:
-            if self.runtime.owner.cancelled.is_set():
-                raise
             record["attach_wait"] = str(error)
             return False
         self.wait_ready()
@@ -998,22 +1053,28 @@ class Journey:
         finally:
             self.pane, self.session, self.reference = saved
 
-    def wait_ready(self):
-        """Herdr reads the woken agent ready for input."""
+    def wait_at_rest(self):
+        """The engine reads the agent idle or done, the state Sleep needs."""
         try:
-            self.runtime.wait(lambda: (agent := self.herdr_agent()) and agent.get("interactive_ready", True)
+            self.runtime.wait(lambda: (self.engine_agent() or {}).get("agent_status") in ("idle", "done"), 60)
+        except ProcessError as error:
+            raise ProcessError(f"agent_not_at_rest: engine reads {(self.engine_agent() or {}).get('agent_status')}"
+                               ) from error
+
+    def wait_ready(self):
+        """The engine reads the woken agent ready for input."""
+        try:
+            self.runtime.wait(lambda: (agent := self.engine_agent()) and agent.get("interactive_ready", True)
                               and agent.get("agent_status") in ("idle", "done") and not agent.get("launch_pending"), 60)
         except ProcessError as error:
-            if self.runtime.owner.cancelled.is_set():
-                raise
-            agent = self.herdr_agent() or {}
-            raise ProcessError(f"agent_not_ready_for_input: Herdr reads {agent.get('agent_status')}, "
+            agent = self.engine_agent() or {}
+            raise ProcessError(f"agent_not_ready_for_input: engine reads {agent.get('agent_status')}, "
                                f"interactive_ready {agent.get('interactive_ready')}, "
                                f"launch_pending {agent.get('launch_pending')}") from error
 
     def untrusted(self, repository):
         """A start in a repository the account never trusted, with no preparation."""
-        if not cells.measurable(self.table, self.id, "start_untrusted"):
+        if not cells.measurable(self.table, self.id, "start_untrusted") or self.identity_refused("start_untrusted"):
             return
         value = token()
         worktree = self.runtime.probe / "worktrees-untrusted" / self.id
@@ -1021,7 +1082,7 @@ class Journey:
                                             worktree, prompt(value))
         record = {"argv": ["hide", *args], "answers": attempts}
         self.record["start_untrusted"] = record
-        spawned = cells.spawn_verdict(answer)
+        spawned = self.spawn_verdict(answer)
         saved_pane, saved = self.pane, (self.agent, self.session, self.reference, self.checkout)
         self.pane = (answer.get("value") or {}).get("pane") or self.pane_of(answer)
         self.opened.append(self.pane)
@@ -1032,10 +1093,10 @@ class Journey:
             self.agent, self.session, self.checkout = answer["value"]["id"], answer["value"]["session"], worktree.resolve()
             self.reference = None
             turn, read, record["activities"] = self.wait_turn(0, value)
-            native = self.herdr_agent() or {}
-            record["herdr_agent"], record["turn"], record["read"] = native, turn, read
+            native = self.engine_agent() or {}
+            record["engine_agent"], record["turn"], record["read"] = native, turn, read
             self.settle("start_untrusted", cells.start_verdict(spawned, turn,
-                                                               cells.emitter_verdict(native.get("agent_session"), self.row["herdr_source"]),
+                                                               cells.emitter_verdict(native.get("agent_session")),
                                                                cells.reply_verdict(read, self.session, value)),
                         self.evidence("start-untrusted", record))
         finally:
@@ -1055,10 +1116,8 @@ class Journey:
         closed = self.record.setdefault("closed", {})
         for pane in dict.fromkeys(pane for pane in self.opened if pane and pane != keep and pane not in closed):
             try:
-                code, _, err = self.runtime.command(["pane", "close", pane], check=False)
+                code, err = self.runtime.close_pane(pane)
             except ProcessError as error:
-                if self.runtime.owner.cancelled.is_set():
-                    raise
                 code, err = 1, str(error)
             closed[pane] = "closed" if not code else err.strip()[:300] or f"exit {code}"
 
@@ -1066,16 +1125,12 @@ class Journey:
         """Model requests the run's sessions of this agent made."""
         return model_requests(self.kind, self.paths, self.sessions)
 
-    def herdr_view(self, worktree):
-        """What Herdr holds for a refused spawn: its workspaces and the
-        repository's worktrees, as diagnostic evidence."""
-        view = {}
-        for name, args in (("workspaces", ["workspace", "list"]),
-                           ("worktrees", ["worktree", "list", "--cwd", str(self.repository)])):
-            code, out, err = self.runtime.command(args, check=False)
-            view[name] = out[:20000] if not code else {"exit": code, "stderr": err[:500], "stdout": out[:2000]}
-        view["worktree_exists"] = worktree.exists()
-        return view
+    def engine_view(self, worktree):
+        """What the core holds for a refused spawn: its workspaces and whether
+        the worktree exists, as diagnostic evidence."""
+        rest = self.daemon.snapshot() or {}
+        return {"workspaces": (rest.get("navigator") or {}).get("workspaces", []),
+                "worktree_exists": worktree.exists()}
 
     def shell_children(self, pane):
         """The processes under a refused spawn's pane shell, by pid, parent
@@ -1083,8 +1138,7 @@ class Journey:
         has any child, and its `pane.process_info` names none that is not an
         agent, so this is the one record of what held the pane."""
         try:
-            info = self.runtime.json(["pane", "process-info", pane])["process_info"]
-            shell = int(info["shell_pid"])
+            shell = self.runtime.shell_pid(pane)
         except (ProcessError, KeyError, TypeError, ValueError) as error:
             return {"error": str(error)[:200]}
         if os.name == "nt":
@@ -1115,9 +1169,9 @@ class Journey:
         is neither the controller's nor one this journey already knows, for the
         failure capture only."""
         try:
-            snapshot = self.runtime.json(["api", "snapshot"])["snapshot"]
+            present = self.runtime.pane_ids()
         except (ProcessError, KeyError, ValueError):
             return None
         known = {self.pane, self.controller.pane, *self.record.get("panes", [])}
-        panes = [pane["pane_id"] for pane in snapshot.get("panes", []) if pane["pane_id"] not in known]
+        panes = sorted(pane for pane in present if pane not in known)
         return panes[-1] if panes else None

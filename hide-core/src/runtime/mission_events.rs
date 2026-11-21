@@ -1,0 +1,1055 @@
+//! A mission's events and the operator's answer from the banner (PRD
+//! mission-plan-visibility D-13, D-15, D-20, D-22, D-30): which change of
+//! the record is an event, the decision a `decide` asks, the answer the
+//! banner sends, and the events of the mission shown, on the mission
+//! screen or in the front Agent tab's 보기 slot.
+//!
+//! An answer is typed into the Conductor's conversation as the operator's
+//! own input by the doorbell's thread, under the doorbell's rules: at rest,
+//! or after it has worked for as long as a letter waits, never over a draft,
+//! a menu or a question of its own (`delivery::doorbell::judge`).
+
+use std::sync::Arc;
+
+use serde::{Deserialize, Serialize};
+use serde_json::json;
+
+use super::Runtime;
+use super::missions::AnswerHold;
+use crate::delivery::Actor;
+use crate::mission_events::{AnswerSource, EventKind, History, MissionEvent};
+use crate::missions::{
+    Answer, AnswerFailure, Mission, MissionEnd, MissionNode, MissionStatus, Question, WakeEvent,
+    answer_text,
+};
+use crate::model::DetailItem;
+
+/// The events of the mission open in the 보기 slot (B18-B21, B31): sent
+/// only for that one, so a mission's history never rides every frame. The
+/// list is the core's own, shared: publishing it copies a pointer, and it
+/// is encoded off the lock with the rest of the frame.
+#[derive(Clone, Debug, Default, Eq, PartialEq, Serialize)]
+pub struct MissionEventsSnapshot {
+    pub mission: Option<String>,
+    #[serde(serialize_with = "shared_events")]
+    pub events: Arc<Vec<Arc<MissionEvent>>>,
+    /// Events dropped past the limit before the first of these (B21).
+    pub dropped: u64,
+}
+
+fn shared_events<S: serde::Serializer>(
+    events: &Arc<Vec<Arc<MissionEvent>>>,
+    serializer: S,
+) -> Result<S::Ok, S::Error> {
+    serializer.collect_seq(events.iter().map(|event| event.as_ref()))
+}
+
+/// One answer for the doorbell to type: made under the lock, typed off it.
+pub(crate) struct AnswerWork {
+    pub mission: String,
+    pub key: u64,
+    pub conductor: Actor,
+    pub at_unix_ms: u64,
+    pub line: String,
+    /// The operator pressed `지금 보내기` for it: it is judged as a forced
+    /// letter is, and typed once the composer reads empty.
+    pub forced: bool,
+}
+
+/// Why the doorbell could not confirm what it types, a letter's bell or a
+/// mission's answer: it failed before the text was typed, or after the engine was
+/// asked to type it, when the text may already be in the conversation.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum SendFailure {
+    NotTyped(&'static str),
+    MaybeTyped(&'static str),
+}
+
+/// The events one plan makes of the plan before it: the first plan, or a
+/// replan that changed nodes, with the reason one of them was given (B31),
+/// then a change of the verification strength with `why`.
+pub(crate) fn plan_events(
+    before: &Mission,
+    after: &Mission,
+    why: Option<&str>,
+    now: u64,
+) -> Vec<MissionEvent> {
+    let mut out = node_plan_events(before, after, now);
+    if let Some(strength) = after.strength
+        && after.strength != before.strength
+    {
+        let mut event = MissionEvent::new(now, EventKind::Strength).line(why);
+        event.strength = Some(strength);
+        out.push(event);
+    }
+    out
+}
+
+fn node_plan_events(before: &Mission, after: &Mission, now: u64) -> Vec<MissionEvent> {
+    if before.nodes.is_empty() {
+        if after.nodes.is_empty() {
+            return Vec::new();
+        }
+        let mut event = MissionEvent::new(now, EventKind::Planned);
+        event.count = u32::try_from(after.nodes.len()).ok();
+        return vec![event];
+    }
+    let same = |a: &MissionNode, b: &MissionNode| {
+        a.title == b.title
+            && a.kind == b.kind
+            && a.depends_on == b.depends_on
+            && a.delivery == b.delivery
+            && a.worker == b.worker
+            && a.criteria == b.criteria
+    };
+    let changed = after
+        .nodes
+        .iter()
+        .filter(|node| before.node(&node.key).is_none_or(|old| !same(old, node)))
+        .count()
+        + before
+            .nodes
+            .iter()
+            .filter(|node| after.node(&node.key).is_none())
+            .count();
+    if changed == 0 {
+        return Vec::new();
+    }
+    let reason = after.nodes.iter().find_map(|node| {
+        node.change.as_deref().filter(|change| {
+            before.node(&node.key).and_then(|old| old.change.as_deref()) != Some(change)
+        })
+    });
+    let mut event = MissionEvent::new(now, EventKind::Replanned).line(reason);
+    event.count = u32::try_from(changed).ok();
+    vec![event]
+}
+
+/// The events one node change makes (B31): its new status, a further
+/// attempt, a pull request it names for the first time, and its commit on
+/// main. The same change again makes none.
+pub(crate) fn node_events(
+    before: &MissionNode,
+    after: &MissionNode,
+    now: u64,
+) -> Vec<MissionEvent> {
+    let mut out = Vec::new();
+    if after.attempts > before.attempts && after.attempts >= 2 {
+        let mut event = MissionEvent::new(now, EventKind::Retried).node(&after.key);
+        event.count = Some(u32::from(after.attempts));
+        out.push(event);
+    }
+    if after.status != before.status {
+        let mut event = MissionEvent::new(now, EventKind::Node)
+            .node(&after.key)
+            .line(after.line.as_deref());
+        event.status = Some(after.status);
+        out.push(event);
+    }
+    for number in after.prs.iter().filter(|pr| !before.prs.contains(pr)) {
+        let mut event = MissionEvent::new(now, EventKind::PrOpened).node(&after.key);
+        event.pr = Some(*number);
+        out.push(event);
+    }
+    if after.commit.is_some() && after.commit != before.commit {
+        out.push(
+            MissionEvent::new(now, EventKind::Landed)
+                .node(&after.key)
+                .line(after.commit.as_deref()),
+        );
+    }
+    out
+}
+
+impl AnswerWork {
+    /// An answer waits for a working Conductor as a letter does, from when
+    /// the operator gave it (PRD letters-to-busy-agents D-04).
+    pub(crate) fn patience(&self) -> crate::delivery::doorbell::Patience {
+        crate::delivery::doorbell::Patience {
+            arrived_at_unix_ms: self.at_unix_ms,
+            now: self.forced,
+            forced: self.forced,
+        }
+    }
+}
+
+/// The line the doorbell types for an answer: the question it answers, so
+/// the Conductor reads which decision it is (B26), then the answer.
+fn answer_line(question: &str, answer: &str, language: crate::model::InterfaceLanguage) -> String {
+    let question = crate::display_text::one_line(question, 200).unwrap_or_default();
+    match language {
+        crate::model::InterfaceLanguage::Korean => format!("[판단 답] {question} → {answer}"),
+        crate::model::InterfaceLanguage::Japanese => {
+            format!("[判断への回答] {question} → {answer}")
+        }
+        crate::model::InterfaceLanguage::SimplifiedChinese => {
+            format!("[决定的回答] {question} → {answer}")
+        }
+        crate::model::InterfaceLanguage::English => {
+            format!("[Decision answer] {question} → {answer}")
+        }
+    }
+}
+
+/// `mission_shown`: the mission the page's mission screen shows in its
+/// detail, or `None` once the detail closes or the page leaves the screen.
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(super) struct MissionShownPayload {
+    pub mission: Option<String>,
+}
+
+/// What a decision asks beside its line: why, its options, the recommended
+/// one, the node it stopped and the other nodes it is about.
+type Asked = (
+    Option<String>,
+    Vec<String>,
+    Option<u8>,
+    Option<String>,
+    Vec<String>,
+);
+
+impl Runtime {
+    pub(crate) fn install_mission_events(
+        &mut self,
+        store: crate::mission_events::MissionEventStore,
+        logs: std::collections::HashMap<String, History>,
+    ) {
+        self.missions.events = logs;
+        self.missions.event_store = Some(store);
+        self.missions.events_edit = self.missions.events_edit.wrapping_add(1);
+    }
+
+    /// Adds `events` to `mission`'s history (`stage_mission_events`), then
+    /// saves the book with the change they record, so the writer has the
+    /// history before the book (B27). Every change is saved here, events or
+    /// none.
+    pub(crate) fn record_mission_events(&mut self, mission: &str, events: Vec<MissionEvent>) {
+        self.stage_mission_events(mission, events);
+        self.save_missions();
+    }
+
+    /// Adds `events` to `mission`'s history and hands them to the store. An
+    /// event Hide's own evaluation made carries a key from the facts it
+    /// stands on (`MissionEvent::id`), and one the history already holds is
+    /// left out, so the same facts evaluated again after a restart or a
+    /// failed save write it once (B27, engineering #11). A full history
+    /// drops its oldest and logs it; recording never refuses the change it
+    /// records (B21).
+    pub(crate) fn stage_mission_events(&mut self, mission: &str, events: Vec<MissionEvent>) {
+        if events.is_empty() {
+            return;
+        }
+        let log = self.missions.events.entry(mission.to_owned()).or_default();
+        let mut fresh: Vec<Arc<MissionEvent>> = Vec::new();
+        for event in events {
+            let held = event.id.as_deref().is_some_and(|id| {
+                log.holds(id) || fresh.iter().any(|new| new.id.as_deref() == Some(id))
+            });
+            if !held {
+                fresh.push(Arc::new(event));
+            }
+        }
+        if fresh.is_empty() {
+            return;
+        }
+        let before = log.dropped;
+        for event in &fresh {
+            log.push(Arc::clone(event));
+        }
+        // The first drop and each hundredth after it, so a full log does not
+        // write a line per event.
+        if log.dropped != before && (before == 0 || log.dropped / 100 != before / 100) {
+            crate::diagnostic!(json!({
+                "component": "missions", "kind": "mission_events.dropped",
+                "mission": mission, "dropped": log.dropped,
+            }));
+        }
+        self.missions.events_edit = self.missions.events_edit.wrapping_add(1);
+        if self.missions.unreadable.is_none()
+            && let Some(store) = &self.missions.event_store
+        {
+            store.append(mission, &fresh);
+        }
+    }
+
+    /// Deletes the events of missions that are gone (D-22).
+    pub(crate) fn forget_mission_events(&mut self, missions: &[String]) {
+        for id in missions {
+            self.missions.events.remove(id);
+            if let Some(store) = &self.missions.event_store {
+                store.remove(id);
+            }
+        }
+        self.missions.events_edit = self.missions.events_edit.wrapping_add(1);
+    }
+
+    /// `hide mission decide`: sets, changes or clears the decision (B17,
+    /// B29, B32). A new question gets a new key, so an answer to the one
+    /// before it is refused; an answer from the banner not yet typed is
+    /// dropped with it, and a question cleared without one is answered in
+    /// the conversation.
+    pub(super) fn decide_mission(
+        &mut self,
+        id: &str,
+        line: Option<String>,
+        asked: Asked,
+        shown: Option<(&crate::delivery::Actor, &[String])>,
+        now: u64,
+    ) -> Result<bool, String> {
+        let (why, options, recommend, node, nodes) = asked;
+        let mission = self.missions.book.get(id).ok_or("mission_unknown")?;
+        crate::missions::check_question(
+            mission,
+            line.as_deref(),
+            why.as_deref(),
+            &options,
+            recommend,
+            node.as_deref(),
+            &nodes,
+        )?;
+        if line.is_none() && shown.is_some_and(|(_, show)| !show.is_empty()) {
+            return Err("mission_question_without_line".into());
+        }
+        // A gate's decision is the operator's to answer (PRD
+        // mission-human-gate D-12): the Conductor's clear would read as their
+        // answer, so it is refused; a question of its own takes the decision,
+        // and the gate asks again once it is free.
+        let gate = crate::missions::gate_asked(mission).map(|node| node.key.clone());
+        if line.is_none()
+            && let Some(node) = &gate
+        {
+            return Err(crate::coordination::refusal(
+                "mission_gate_operator_only",
+                node,
+            ));
+        }
+        let current = mission.question.as_ref();
+        let same = mission.decision == line
+            && current.is_some_and(|question| {
+                question.why == why
+                    && question.options == options
+                    && question.recommend == recommend
+                    && question.node == node
+                    && question.nodes == nodes
+            })
+            // A decision from before questions keeps its key while its line
+            // stays and nothing is added beside it.
+            || (mission.decision == line
+                && current.is_none()
+                && why.is_none()
+                && options.is_empty()
+                && recommend.is_none()
+                && node.is_none()
+                && nodes.is_empty());
+        if same {
+            // The same question again may name more Views to show with it.
+            let Some((actor, show)) = shown.filter(|(_, show)| !show.is_empty()) else {
+                return Ok(false);
+            };
+            if current.is_none() {
+                return Ok(false);
+            }
+            let links = self.question_view_links(id, actor, show, None, false)?;
+            let target = self.missions.book.get_mut(id).ok_or("mission_unknown")?;
+            let question = target.question.as_mut().ok_or("mission_unknown")?;
+            // Named ones lead the list; past the cap the oldest opened goes.
+            let named: Vec<_> = links
+                .into_iter()
+                .filter(|link| !question.views.iter().any(|known| known.same_view(link)))
+                .collect();
+            if named.is_empty() {
+                return Ok(false);
+            }
+            let mut views = named;
+            views.append(&mut question.views);
+            views.truncate(crate::missions::VIEW_LINK_LIMIT);
+            question.views = views;
+            self.save_missions();
+            return Ok(true);
+        }
+        // A new question takes the Views `--show` names, the ones the
+        // Conductor opened since the question before and the ones the
+        // stopped node's worker opened in its attempt; a cleared one leaves
+        // the Conductor's for the next.
+        let views = match (&line, shown) {
+            (Some(_), Some((actor, show))) => {
+                self.question_view_links(id, actor, show, node.as_deref(), true)?
+            }
+            _ => Vec::new(),
+        };
+        let mission = self.missions.book.get(id).ok_or("mission_unknown")?;
+        let mut events = Vec::new();
+        let key_before = mission.question.as_ref().map_or(0, |question| question.key);
+        let asked = mission
+            .question
+            .as_ref()
+            .and_then(|question| question.node.clone());
+        if let Some(answer) = mission
+            .answer
+            .as_ref()
+            .filter(|answer| answer.key == key_before)
+        {
+            if !answer.unconfirmed {
+                // The Conductor changed its question before reading this.
+                let mut event =
+                    MissionEvent::new(now, EventKind::AnswerUndelivered).line(Some(&answer.text));
+                event.node.clone_from(&asked);
+                events.push(event);
+            }
+        } else if line.is_none() && mission.decision.is_some() {
+            let mut event = MissionEvent::new(now, EventKind::Answered);
+            event.source = Some(AnswerSource::Conversation);
+            event.node.clone_from(&asked);
+            events.push(event);
+        }
+        let cleared_after_answer = line.is_none() && mission.decision.is_some();
+        let target = self.missions.book.get_mut(id).ok_or("mission_unknown")?;
+        if let Some(line) = gate
+            .and_then(|key| target.nodes.iter_mut().find(|node| node.key == key))
+            .and_then(|node| {
+                node.criteria
+                    .iter_mut()
+                    .find(|line| line.kind == crate::mission_criteria::CriterionKind::Human)
+            })
+        {
+            line.asked = None;
+        }
+        // Clearing a decision is the Conductor saying the operator answered
+        // it (PRD mission-map-git-criteria B12).
+        if cleared_after_answer {
+            super::mission_criteria::note_decided(target, key_before, asked.as_deref());
+        }
+        target.decision.clone_from(&line);
+        target.answer = None;
+        target.answer_failed = None;
+        target.question = match &line {
+            Some(question) => {
+                target.question_seq += 1;
+                let mut event = MissionEvent::new(now, EventKind::Asked).line(Some(question));
+                event.node.clone_from(&node);
+                event.options.clone_from(&options);
+                events.push(event);
+                Some(Question {
+                    key: target.question_seq,
+                    why,
+                    options,
+                    recommend,
+                    node,
+                    nodes,
+                    asked_at_unix_ms: now,
+                    views,
+                    material_asked: false,
+                })
+            }
+            None => None,
+        };
+        target.updated_at_unix_ms = now;
+        self.missions.answers_held.remove(id);
+        self.record_mission_events(id, events);
+        Ok(true)
+    }
+
+    /// The operator's answer from the banner (B26-B28): the choice it
+    /// pressed, counted from 1, or what it wrote. Refused when the
+    /// Conductor has since changed its question, when no Conductor or no
+    /// device is there to read it; the same question answered again keeps
+    /// the first answer.
+    #[cfg(test)]
+    pub(super) fn answer_mission(
+        &mut self,
+        id: &str,
+        key: u64,
+        option: Option<u8>,
+        text: Option<String>,
+        resend: bool,
+    ) -> Result<bool, String> {
+        self.answer_mission_from(
+            id,
+            key,
+            (option, text, resend),
+            crate::mission_criteria::GateVia::Card,
+        )
+    }
+
+    /// `answer_mission` from the card or, with `via` the phone, from a
+    /// phone: a gate's decision goes to the one entry that settles a gate
+    /// (`settle_gate`, PRD mission-human-gate D-21), with no Conductor
+    /// needed to read it; every other decision's answer as before.
+    pub(super) fn answer_mission_from(
+        &mut self,
+        id: &str,
+        key: u64,
+        (option, text, resend): (Option<u8>, Option<String>, bool),
+        via: crate::mission_criteria::GateVia,
+    ) -> Result<bool, String> {
+        let now = super::memory::now_ms();
+        let mission = self.missions.book.get(id).ok_or("mission_unknown")?;
+        if !mission.status.open() || mission.decision.is_none() {
+            return Err("mission_decision_changed".into());
+        }
+        let current = mission.question.as_ref().map_or(0, |question| question.key);
+        if current != key {
+            return Err("mission_decision_changed".into());
+        }
+        if let Some(node) = crate::missions::gate_asked(mission).map(|node| node.key.clone()) {
+            if resend {
+                return Ok(false);
+            }
+            if self.mission_stale(mission) {
+                return Err("mission_device_disconnected".into());
+            }
+            return self.answer_gate(id, &node, (option, text), via);
+        }
+        let answered = mission.answer.as_ref().filter(|answer| answer.key == key);
+        // Sending again is the operator's own choice for an answer typed
+        // without confirmation, and once: a second press finds it sending
+        // (engineering principle 11).
+        if resend && (option.is_some() || text.is_some()) {
+            return Err("mission_answer_invalid".into());
+        }
+        // An answer whose prompt is in flight is already sending again.
+        if resend
+            && (!answered.is_some_and(|answer| answer.unconfirmed)
+                || self.missions.answers_typing.contains(id))
+        {
+            return Ok(false);
+        }
+        if answered.is_some() && !resend {
+            return Ok(false);
+        }
+        // The doorbell types only into an agent it rings; nothing would ever
+        // take this answer, and the banner offers none for it.
+        if !crate::delivery::doorbell::bell_target(&mission.conductor.actor.kind) {
+            return Err("mission_answer_unsupported".into());
+        }
+        if !self.conductor_present(&mission.conductor.actor) {
+            return Err("mission_conductor_gone".into());
+        }
+        if self.mission_stale(mission) {
+            return Err("mission_device_disconnected".into());
+        }
+        if resend {
+            let target = self.missions.book.get_mut(id).ok_or("mission_unknown")?;
+            if let Some(answer) = target.answer.as_mut() {
+                answer.unconfirmed = false;
+            }
+            target.answer_failed = None;
+            crate::diagnostic!(json!({
+                "component": "missions", "kind": "mission.answer_resent",
+                "mission": id, "key": key,
+            }));
+            self.save_missions();
+            return Ok(true);
+        }
+        let text = match (option, text) {
+            (Some(choice), None) => mission
+                .question
+                .as_ref()
+                .and_then(|question| question.options.get(usize::from(choice).checked_sub(1)?))
+                .cloned()
+                .ok_or("mission_answer_invalid")?,
+            (None, Some(text)) => answer_text(&text).ok_or("mission_answer_invalid")?,
+            _ => return Err("mission_answer_invalid".into()),
+        };
+        let node = mission
+            .question
+            .as_ref()
+            .and_then(|question| question.node.clone());
+        let target = self.missions.book.get_mut(id).ok_or("mission_unknown")?;
+        super::mission_criteria::note_decided(target, key, node.as_deref());
+        target.answer = Some(Answer {
+            key,
+            text,
+            option,
+            at_unix_ms: now,
+            delivered: false,
+            unconfirmed: false,
+        });
+        target.answer_failed = None;
+        crate::diagnostic!(json!({
+            "component": "missions", "kind": "mission.answer_accepted",
+            "mission": id, "key": key,
+        }));
+        self.save_missions();
+        Ok(true)
+    }
+
+    /// The operator's `지금 보내기` for the answer it gave: the doorbell
+    /// judges it as a forced letter from its next pass, typing it past the
+    /// Conductor's work, the quiet period and a draft that reads empty, and
+    /// never over text on its screen. Only an answer the doorbell holds can
+    /// be pressed, and a second press finds it forced; whether anything
+    /// changed.
+    pub(super) fn mission_answer_now(&mut self, id: &str, key: u64) -> bool {
+        let waiting = self.missions.book.get(id).is_some_and(|mission| {
+            mission.status.open()
+                && mission
+                    .answer
+                    .as_ref()
+                    .is_some_and(|answer| answer.key == key && !answer.unconfirmed)
+        }) && self.missions.answers_held.contains_key(id)
+            && !self.missions.answers_typing.contains(id);
+        if !waiting || self.missions.answers_forced.insert(id.to_owned(), key) == Some(key) {
+            crate::diagnostic!(json!({
+                "component": "missions", "kind": "mission.answer_now_refused",
+                "mission": id, "key": key, "reason": if waiting { "already_forced" } else { "not_waiting" },
+            }));
+            return false;
+        }
+        crate::diagnostic!(json!({
+            "component": "missions", "kind": "mission.answer_now",
+            "mission": id, "key": key,
+        }));
+        self.missions.book_edit = self.missions.book_edit.wrapping_add(1);
+        self.announce_missions();
+        true
+    }
+
+    /// A forced answer whose composer did not read empty goes back to
+    /// waiting as an ordinary one, as a forced letter does (`defer`), so the
+    /// doorbell does not read the screen again every few seconds.
+    pub(crate) fn mission_answer_unforced(&mut self, id: &str) {
+        if self.missions.answers_forced.remove(id).is_some() {
+            self.missions.book_edit = self.missions.book_edit.wrapping_add(1);
+            self.announce_missions();
+        }
+    }
+
+    /// The banner's answer as one event: a refusal the operator can act on
+    /// stays beside the question as its reason; one whose question changed
+    /// draws the new question instead, and goes only to the log.
+    #[cfg(test)]
+    pub(super) fn mission_answer_event(
+        &mut self,
+        mission: &str,
+        key: u64,
+        option: Option<u8>,
+        text: Option<String>,
+        resend: bool,
+    ) -> bool {
+        self.mission_answer_event_from(
+            mission,
+            key,
+            (option, text, resend),
+            crate::mission_criteria::GateVia::Card,
+        )
+    }
+
+    /// `mission_answer_event` from the card, or from a phone.
+    pub(super) fn mission_answer_event_from(
+        &mut self,
+        mission: &str,
+        key: u64,
+        (option, text, resend): (Option<u8>, Option<String>, bool),
+        via: crate::mission_criteria::GateVia,
+    ) -> bool {
+        match self.answer_mission_from(mission, key, (option, text, resend), via) {
+            Ok(changed) => changed,
+            Err(code) => {
+                crate::diagnostic!(json!({
+                    "component": "missions", "kind": "mission.answer_refused",
+                    "mission": mission, "key": key, "code": code,
+                }));
+                let shown = match code.as_str() {
+                    "mission_conductor_gone" => Some(AnswerFailure::ConductorGone),
+                    "mission_device_disconnected" => Some(AnswerFailure::DeviceDisconnected),
+                    _ => None,
+                };
+                match (self.missions.book.get_mut(mission), shown) {
+                    (Some(target), Some(failure)) => {
+                        target.answer_failed = Some(failure);
+                        self.save_missions();
+                        true
+                    }
+                    _ => false,
+                }
+            }
+        }
+    }
+
+    /// The operator's `미션 종료` from the map: a Conductor that holds the
+    /// mission is asked to end it, by an `end_asked` wake, once until it
+    /// closes, so it still asks about the open pull requests; a mission no
+    /// Conductor holds is cancelled at once, its pull requests, branches
+    /// and workers left as they are. A mission whose device does not answer,
+    /// or one already closed, changes nothing and goes to the log.
+    pub(super) fn end_mission(&mut self, id: &str) -> Result<bool, String> {
+        let now = super::memory::now_ms();
+        let mission = self.missions.book.get(id).ok_or("mission_unknown")?;
+        if !mission.status.open() {
+            return Err("mission_closed".into());
+        }
+        if self.mission_stale(mission) {
+            return Err("mission_device_disconnected".into());
+        }
+        if !self.conductor_present(&mission.conductor.actor) {
+            return self.close_mission(id, MissionEnd::Cancelled, None, "operator", now);
+        }
+        if mission.end_asked_at_unix_ms.is_some() {
+            return Ok(false);
+        }
+        let target = self.missions.book.get_mut(id).ok_or("mission_unknown")?;
+        target.end_asked_at_unix_ms = Some(now);
+        target.updated_at_unix_ms = now;
+        let intent = super::missions::record_wake(
+            target,
+            String::new(),
+            None,
+            WakeEvent::EndAsked,
+            None,
+            None,
+        );
+        crate::diagnostic!(json!({
+            "component": "missions", "kind": "mission.end_asked",
+            "mission": id, "intent": intent,
+        }));
+        self.save_missions();
+        Ok(true)
+    }
+
+    pub(super) fn mission_end_event(&mut self, id: &str) -> bool {
+        self.end_mission(id).unwrap_or_else(|code| {
+            crate::diagnostic!(json!({
+                "component": "missions", "kind": "mission.end_refused",
+                "mission": id, "code": code,
+            }));
+            false
+        })
+    }
+
+    /// The answers the doorbell is to type now. An answer whose Conductor
+    /// has been gone for `ABSENT_GRACE_MS` is dropped here: the banner goes
+    /// back to before it was sent and the history says it was not delivered
+    /// (D-30, B39). A shorter absence, such as the panes not yet read after
+    /// a restart or an engine reconnect, only waits, as a letter does.
+    pub(crate) fn mission_answers_due(&mut self) -> Vec<AnswerWork> {
+        let now = super::memory::now_ms();
+        let language = self.interface_language();
+        let mut due = Vec::new();
+        let mut gone = Vec::new();
+        let mut absent = Vec::new();
+        for mission in &self.missions.book.missions {
+            // An answer that may already be in the conversation waits for
+            // the operator to send it again; nothing types it on its own.
+            let Some(answer) = mission.answer.as_ref().filter(|answer| !answer.unconfirmed) else {
+                continue;
+            };
+            let asked = mission
+                .question
+                .as_ref()
+                .and_then(|question| question.node.clone());
+            if !mission.status.open() {
+                gone.push((mission.id.clone(), answer.text.clone(), asked));
+                continue;
+            }
+            if !self.conductor_present(&mission.conductor.actor) {
+                let since = self
+                    .missions
+                    .answer_absent_since
+                    .get(&mission.id)
+                    .copied()
+                    .unwrap_or(now);
+                if now.saturating_sub(since) >= ABSENT_GRACE_MS {
+                    gone.push((mission.id.clone(), answer.text.clone(), asked));
+                } else {
+                    absent.push((mission.id.clone(), since));
+                }
+                continue;
+            }
+            due.push(AnswerWork {
+                mission: mission.id.clone(),
+                key: answer.key,
+                conductor: mission.conductor.actor.clone(),
+                at_unix_ms: answer.at_unix_ms,
+                forced: self.missions.answers_forced.get(&mission.id) == Some(&answer.key),
+                line: answer_line(
+                    mission.decision.as_deref().unwrap_or_default(),
+                    &answer.text,
+                    language,
+                ),
+            });
+        }
+        // Only the missions still waiting on an absent Conductor keep the
+        // time it went, so the map stays bounded by the open answers.
+        self.missions.answer_absent_since = absent.into_iter().collect();
+        self.missions.answers_forced.retain(|id, key| {
+            due.iter()
+                .any(|work| &work.mission == id && &work.key == key)
+        });
+        for (id, text, asked) in gone {
+            if let Some(mission) = self.missions.book.get_mut(&id) {
+                mission.answer = None;
+                mission.answer_failed = Some(AnswerFailure::ConductorGone);
+            }
+            self.missions.answers_held.remove(&id);
+            crate::diagnostic!(json!({
+                "component": "missions", "kind": "mission.answer_undelivered",
+                "mission": id, "reason": "conductor_gone",
+            }));
+            let mut event = MissionEvent::new(now, EventKind::AnswerUndelivered).line(Some(&text));
+            event.node = asked;
+            self.record_mission_events(&id, vec![event]);
+            self.announce_missions();
+        }
+        due
+    }
+
+    /// The final guard before the doorbell types an answer: the pane has not
+    /// moved since its verdict and the answer still waits (`delivery_bell_current`).
+    pub(crate) fn mission_answer_current(
+        &self,
+        work: &AnswerWork,
+        observed: &crate::runtime::delivery::Observation,
+    ) -> Result<(), crate::delivery::doorbell::Hold> {
+        use crate::delivery::doorbell::{Hold, judge};
+        let current = self.delivery_pane_unmoved(observed)?;
+        let waiting = self
+            .missions
+            .book
+            .get(&work.mission)
+            .is_some_and(|mission| {
+                mission.status.open()
+                    && mission
+                        .answer
+                        .as_ref()
+                        .is_some_and(|answer| answer.key == work.key && !answer.unconfirmed)
+            });
+        if !waiting {
+            return Err(Hold::Letter);
+        }
+        judge(current, work.patience(), super::memory::now_ms())
+    }
+
+    /// The doorbell is about to ask the engine to type the answer: from here it
+    /// may reach the conversation, so the book holds it as unconfirmed
+    /// before the prompt, and a stop before the reply leaves it for the
+    /// operator to send again rather than typing it twice (B26).
+    pub(crate) fn mission_answer_typing(&mut self, mission: &str, key: u64) {
+        let Some(answer) = self
+            .missions
+            .book
+            .get_mut(mission)
+            .and_then(|mission| mission.answer.as_mut())
+            .filter(|answer| answer.key == key)
+        else {
+            return;
+        };
+        answer.unconfirmed = true;
+        self.missions.answers_typing.insert(mission.to_owned());
+        self.save_missions();
+    }
+
+    /// The doorbell held an answer: the banner shows it waits for the
+    /// Conductor's turn (B28).
+    pub(crate) fn mission_answer_held(&mut self, mission: &str, hold: AnswerHold) -> bool {
+        let waiting = self.missions.book.get(mission).is_some_and(|mission| {
+            mission.status.open()
+                && mission
+                    .answer
+                    .as_ref()
+                    .is_some_and(|answer| !answer.unconfirmed)
+        });
+        if !waiting || self.missions.answers_held.insert(mission.to_owned(), hold) == Some(hold) {
+            return false;
+        }
+        self.missions.book_edit = self.missions.book_edit.wrapping_add(1);
+        self.announce_missions();
+        true
+    }
+
+    /// The doorbell's thread changed what a mission shows; a command's
+    /// change is announced by the event that made it.
+    pub(super) fn announce_missions(&self) {
+        if let Some(context) = &self.worker_context {
+            context.notifier.notify();
+        }
+    }
+
+    /// The doorbell typed the answer, or failed to: a typed answer is in the
+    /// history as the operator's, from the banner, and takes the decision
+    /// away with it (B29); one that failed before
+    /// it was typed goes back with its reason so the operator can answer
+    /// again (B28); one the engine took without confirming it is kept as
+    /// unconfirmed, and only the operator sends it again (B26).
+    pub(crate) fn mission_answer_sent(
+        &mut self,
+        id: &str,
+        key: u64,
+        result: Result<(), SendFailure>,
+    ) {
+        let now = super::memory::now_ms();
+        // A typed or uncertain answer reports for the prompt the doorbell
+        // asked, once; a failure before it, for an answer still to type.
+        let typing = self.missions.answers_typing.remove(id);
+        if typing == matches!(result, Err(SendFailure::NotTyped(_))) {
+            return;
+        }
+        let Some(mission) = self.missions.book.get_mut(id) else {
+            return;
+        };
+        let Some(answer) = mission
+            .answer
+            .as_mut()
+            .filter(|answer| answer.key == key && (typing || !answer.unconfirmed))
+        else {
+            return;
+        };
+        self.missions.answers_held.remove(id);
+        let asked = mission
+            .question
+            .as_ref()
+            .and_then(|question| question.node.clone());
+        let mut event = match result {
+            Ok(()) => {
+                // The answer is in the conversation: the question is settled
+                // as the Conductor's `decide --clear` would settle it, so the
+                // banner does not wait on the Conductor remembering to.
+                let mut event =
+                    MissionEvent::new(now, EventKind::Answered).line(Some(&answer.text));
+                event.source = Some(AnswerSource::Banner);
+                settle_answered(mission, now);
+                event
+            }
+            Err(SendFailure::NotTyped(code)) => {
+                let text = answer.text.clone();
+                mission.answer = None;
+                mission.answer_failed = Some(AnswerFailure::SendFailed);
+                crate::diagnostic!(json!({
+                    "component": "missions", "kind": "mission.answer_failed",
+                    "mission": id, "key": key, "code": code,
+                }));
+                MissionEvent::new(now, EventKind::AnswerUndelivered).line(Some(&text))
+            }
+            Err(SendFailure::MaybeTyped(code)) => {
+                // Held as unconfirmed since the prompt was asked; set again so
+                // nothing in between makes it due.
+                answer.unconfirmed = true;
+                crate::diagnostic!(json!({
+                    "component": "missions", "kind": "mission.answer_unconfirmed",
+                    "mission": id, "key": key, "code": code,
+                }));
+                MissionEvent::new(now, EventKind::AnswerUnconfirmed).line(Some(&answer.text))
+            }
+        };
+        event.node = asked;
+        self.record_mission_events(id, vec![event]);
+        self.announce_missions();
+    }
+
+    /// `mission_shown`: the mission the page's mission screen shows in its
+    /// detail, or none (PRD mission-screen D-16). Whether it changed. Only a
+    /// mission the book holds is kept, so the value is bounded by the book: a
+    /// page naming one just deleted reads as showing none.
+    pub(super) fn mission_shown(&mut self, payload: MissionShownPayload) -> bool {
+        let shown = payload
+            .mission
+            .filter(|id| self.missions.book.get(id).is_some());
+        if self.missions.shown == shown {
+            return false;
+        }
+        self.missions.shown = shown;
+        true
+    }
+
+    /// Makes the published events those of the mission shown, when it or its
+    /// events moved: the mission screen's detail while the page names one,
+    /// else the mission card in front of the tray the front Workspace draws
+    /// (PRD lane-desk-pair-view D-13). The tray is the core's, so its card
+    /// needs no page round trip; the screen is the page's, so it names its
+    /// detail (PRD mission-screen D-16).
+    pub(super) fn refresh_mission_events(&mut self) {
+        let open = self
+            .missions
+            .shown
+            .clone()
+            .or_else(|| match self.shown_card() {
+                Some(DetailItem::Mission { mission }) => Some(mission.clone()),
+                _ => None,
+            });
+        if self.missions.events_made == (open.clone(), self.missions.events_edit) {
+            return;
+        }
+        // A pointer to the core's own list: nothing of the events is copied here.
+        let log = open
+            .as_ref()
+            .and_then(|id| self.missions.events.get(id))
+            .cloned()
+            .unwrap_or_default();
+        let next = MissionEventsSnapshot {
+            mission: open.clone(),
+            events: log.events,
+            dropped: log.dropped,
+        };
+        if self.snapshot.mission_events != next {
+            self.snapshot.mission_events = next;
+        }
+        self.missions.events_made = (open, self.missions.events_edit);
+    }
+}
+
+/// What a closed mission adds to its history: its report and, for a
+/// cancelled one, the cancel (B24, B31).
+pub(crate) fn close_events(before: &Mission, after: &Mission, now: u64) -> Vec<MissionEvent> {
+    let mut out = Vec::new();
+    if after.report.is_some() && after.report != before.report {
+        let first = after
+            .report
+            .as_deref()
+            .and_then(|report| report.lines().find(|line| !line.trim().is_empty()));
+        out.push(MissionEvent::new(now, EventKind::Reported).line(first));
+    }
+    if after.status == MissionStatus::Cancelled && before.status != MissionStatus::Cancelled {
+        out.push(MissionEvent::new(now, EventKind::Cancelled));
+    }
+    out
+}
+
+/// How long a Conductor may be missing before an answer waiting for it is
+/// dropped as not delivered: longer than a restart takes to read the panes
+/// again, or an engine reconnect.
+const ABSENT_GRACE_MS: u64 = 30_000;
+
+/// Ends a mission's decision with the mission (B29, D-30): clears the
+/// question, the answer and why one failed, and records an answer not yet
+/// typed as not delivered.
+pub(crate) fn end_decision(mission: &mut Mission, now: u64) -> Vec<MissionEvent> {
+    let asked = mission
+        .question
+        .as_ref()
+        .and_then(|question| question.node.clone());
+    // An unconfirmed answer is already in the history as such.
+    let undelivered = mission
+        .answer
+        .take()
+        .filter(|answer| !answer.unconfirmed)
+        .map(|answer| {
+            let mut event =
+                MissionEvent::new(now, EventKind::AnswerUndelivered).line(Some(&answer.text));
+            event.node = asked;
+            event
+        });
+    mission.decision = None;
+    mission.question = None;
+    mission.answer_failed = None;
+    mission.delay = None;
+    undelivered.into_iter().collect()
+}
+
+/// Takes away a decision whose answer reached the Conductor's conversation
+/// (B29): the question, its answer and why one failed. The answer itself
+/// stays in the history as `answered`.
+pub(crate) fn settle_answered(mission: &mut Mission, now: u64) {
+    mission.decision = None;
+    mission.question = None;
+    mission.answer = None;
+    mission.answer_failed = None;
+    mission.updated_at_unix_ms = now;
+}
+
+/// A node's pull request merged, as GitHub answered (B31).
+pub(crate) fn merged_event(node: &MissionNode, number: u32, now: u64) -> MissionEvent {
+    let mut event = MissionEvent::new(now, EventKind::PrMerged).node(&node.key);
+    event.pr = Some(number);
+    event
+}

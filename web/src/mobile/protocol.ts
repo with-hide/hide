@@ -8,7 +8,10 @@
 
 import type { TFunction } from "i18next";
 import type { MessageKey } from "../i18n/catalogs";
-import type { AgentSleep, AgentStatusCode, AskSubject, AgentWait, LineMode, RowMark, SleepingSession } from "../snapshot";
+import type { PrGroupId, PrReason } from "../agentScope";
+import type { WorkerEscalation } from "../missions";
+import type { Automation, AutomationRecord, AutomationRun, AutomationSchedule, SubagentRow } from "../snapshot";
+import type { AgentSleep, AgentStatusCode, AskSubject, AgentWait, ViewReopen, GithubStatus, HumanTurnLead, LineMode, MissionAnswer, MissionAnswerFailure, MissionBrief, MissionDelivery, MissionNodeBrief, PrCard, PrState, PrFeedback, PrMergeMethod, PullRequest, RowMark, SleepingSession } from "../snapshot";
 
 export type PhoneAgent = {
   device_id: string;
@@ -25,6 +28,22 @@ export type PhoneAgent = {
   descendants_working: number;
   /** The background tasks a finished turn left running (status-marks D-19); absent when none. */
   background_left?: number;
+  /** The descendants still working under a finished turn not read yet, which its line ends with; absent when none. */
+  children_left?: number;
+  /** The subagents still running under a finished turn not read yet, which its line ends with; absent when none. */
+  subagents_left?: number;
+  /** How many subagents its agent runs inside its own session, which its children toggle counts beside its children; absent for none, for a count Hide cannot read, and from a Mac that predates it. */
+  subagents?: number;
+  /** The first five of them, oldest first, with what its agent named of each, listed after its children (docs/UI_BEHAVIOR.md, Subagents); absent when it names none. */
+  subagent_rows?: SubagentRow[];
+  /** How many things its `wait` waits on, which its line counts; absent for running checks and when it waits for nothing. */
+  wait_count?: number;
+  /** How many of its own subagents its wait waits on too, which a children wait's line adds; absent when none. */
+  wait_subagents?: number;
+  /** The operator's ★ to revisit it, drawn where the desktop row draws it; absent without one, and from a Mac that predates it. */
+  starred?: true;
+  /** The external tool whose work the row is, by name, leading its second line as on the desktop's sidebar row (PRD hide-external-control B46); absent on the operator's own rows, and from a Mac that predates it. */
+  tool?: string;
   agent_kind: string;
   title: string;
   place: string | null;
@@ -39,7 +58,19 @@ export type PhoneAgent = {
   sleep?: AgentSleep;
   emphasized: boolean;
   holds_notification: boolean;
+  /** Its live descendants by state, for a parent's pills; absent when it has none. */
+  descendants?: Descendants;
+  /** The person's turn the row leads with, its own or a descendant's, which the phone draws with Done (PRD ask-human B19); absent when none stands. */
+  human_turn?: HumanTurnLead;
+  /** The children listed under it in the sidebar's order (two levels, five to a parent), and the ones behind its "더 보기". */
+  children?: PhoneAgent[];
+  more_children?: PhoneAgent[];
+  /** The core opens its children until this phone chooses otherwise: a descendant waits for the operator. */
+  children_open?: true;
 };
+
+/** What a parent's descendants are doing: asking the operator, working, finished. */
+export type Descendants = { asking: number; working: number; done: number };
 
 export type GroupId = "needs_you" | "done" | "revisit" | "working" | "seen";
 
@@ -57,16 +88,201 @@ export type PhoneSleepingSession = {
   attention: boolean;
 };
 
-export type AgentGroup = { group: GroupId; count: number; agents: PhoneAgent[]; sleeping_sessions?: PhoneSleepingSession[] };
+/** A top row of a group: an agent with its tree, or a sleeping conversation. */
+export type GroupRow = ({ kind: "agent" } & PhoneAgent) | ({ kind: "sleeping" } & PhoneSleepingSession);
+
+/**
+ * `count` is every top row of the group, the folded ones too; `rows` are the first few in recency order across the Mac and its devices,
+ * `more` the rest behind the group's "더 보기", `more_asleep` how many of those sleep.
+ */
+export type AgentGroup = { group: GroupId; count: number; rows: GroupRow[]; more?: GroupRow[]; more_asleep?: number };
+
+/** The paired Mac (`local`) and each device it reaches, with the counts of their top rows. */
+export type PhoneDevice = { device_id: string; label: string | null; local?: true; connected: boolean; needs_you: number; working: number };
+
+/** Every agent the list holds, a parent before its children, shown or folded. */
+export function listedAgents(groups: readonly AgentGroup[]): PhoneAgent[] {
+  const all: PhoneAgent[] = [];
+  const add = (agent: PhoneAgent) => {
+    all.push(agent);
+    for (const child of agent.children ?? []) add(child);
+    for (const child of agent.more_children ?? []) add(child);
+  };
+  for (const group of groups) {
+    for (const row of [...group.rows, ...(group.more ?? [])]) if (row.kind === "agent") add(row);
+  }
+  return all;
+}
+
+/**
+ * One step of a mission as the phone receives it (`hided/src/mobile/missions.rs`): what the shared mission rules read (`MissionNodeBrief`), the
+ * worker's kind and row, and the escalation the core raised for its worker. Nothing else of the core's node reaches the phone.
+ */
+export type PhoneMissionNode = MissionNodeBrief & {
+  delivery: MissionDelivery | null;
+  base_pr: number | null;
+  /** The branch its current pull request merges into, as GitHub last answered; absent until it answered and from a Mac before it. */
+  pr_base?: string;
+  /** How many pull requests it holds besides its current one, the `+N` beside its pull request's number; absent at zero and from a Mac before it. */
+  pr_more?: number;
+  /** The pull request an outside step watches; absent for one that watches a branch and from a Mac before it. */
+  external_pr?: number;
+  /** The branch an outside step watches, which its line names; absent otherwise and from a Mac before it. */
+  external_branch?: string;
+  /** Where an outside step's work goes, its pull request's base or the default branch its branch is judged against; absent until read and from a Mac before it. */
+  external_base?: string;
+  /** An outside step's pull request state as GitHub last answered; absent for a branch, until read and from a Mac before it. */
+  external_state?: PrState;
+  stage: number | null;
+  worker_agent: string | null;
+  /** The worker's row in the phone's list; null when the list does not hold it, so there is nothing to open. */
+  agent: AgentKey | null;
+  escalation: WorkerEscalation | null;
+};
+
+/**
+ * A step as the frame carries it (PRD node-presets D-11): a general step of the `research` or `verify` preset keeps that preset's
+ * name as its kind, so a bundle from before general steps names it as before, and a Hide from before them sends only those names.
+ */
+export type PhoneMissionNodeOnWire = Omit<PhoneMissionNode, "kind"> & { kind: PhoneMissionNode["kind"] | "research" | "verify" };
+export type PhoneMissionOnWire = Omit<PhoneMission, "nodes"> & { nodes: PhoneMissionNodeOnWire[] };
+
+/** The frame's missions with every step read as this bundle names it: an old kind name is a general step of that preset. */
+export function missionsOnWire(items: readonly PhoneMissionOnWire[]): PhoneMission[] {
+  return items.map((mission) => ({
+    ...mission,
+    nodes: mission.nodes.map((node) => (node.kind === "research" || node.kind === "verify" ? { ...node, kind: "general", preset: node.kind } : { ...node, kind: node.kind })),
+  }));
+}
+
+/** A View linked to a mission's open decision (`PhoneDecisionView`). */
+export type PhoneDecisionView = { device_id: string; display_id: string; view: string; kind: string; label: string; unseen?: boolean; closed?: boolean; by: "conductor" | "worker"; pane_id?: string; reopens?: ViewReopen[] };
+
+/** A mission as the phone receives it: the shared rules' `MissionBrief`, with what the two screens draw. */
+export type PhoneMission = MissionBrief<PhoneMissionNode> & {
+  title: string;
+  device_id: string;
+  /** The branch the mission's results go to, as the Mac's map names it; absent when the Mac cannot read one, and from a Mac before destinations, so the phone names no branch. */
+  destination?: string;
+  /** The device a mission away from the paired Mac runs on; null on the Mac. */
+  device_label: string | null;
+  answer: MissionAnswer | null;
+  answer_failed: MissionAnswerFailure | null;
+  /** The Views linked to the open decision; absent when none. Each opens the 볼 것 of the agent that opened it. */
+  decision_views?: PhoneDecisionView[];
+  conductor: { present: boolean; takes_answers: boolean; name: string; agent_kind: string; agent: AgentKey | null };
+  started_at_unix_ms: number | null;
+  stale: boolean;
+  /** A finished mission's steps hided left out to keep the frame within one relay message; `nodes` is empty then. */
+  nodes_omitted?: number;
+};
+
+/** One run as the phone gets it (`hide-core` phone `PhoneRun`): no pane, branch, conversation or answer. */
+export type PhoneAutomationRun = Pick<AutomationRun, "number" | "trigger" | "started_at_unix_ms" | "ended_at_unix_ms" | "state" | "attempt" | "reason" | "seen" | "spend">;
+
+export type PhoneAutomationRecord = ({ kind: "run" } & PhoneAutomationRun) | Exclude<AutomationRecord, { kind: "run" }>;
+
+/**
+ * One automation as the phone gets it (`hide-core` phone `PhoneAutomation`): no folder, task or agent. `schedule` is the choice it
+ * reads as, `records` the newest first with `records_omitted` older ones left on the desktop.
+ */
+export type PhoneAutomation = Pick<Automation, "id" | "name" | "next_run_at_unix_ms" | "running" | "unseen" | "paused"> & {
+  schedule: AutomationSchedule;
+  records: PhoneAutomationRecord[];
+  records_omitted?: number;
+};
+
+/** The phone's own presses on an automation (PRD automations B34); making, editing and removing stay with an agent. */
+export type AutomationAction = "run" | "pause" | "resume";
+
+/** One project the PR tab lists pull requests of, with how its GitHub reads stand (`hided/src/mobile/prs.rs`, `PhoneProject`). */
+export type PhonePrProject = {
+  id: string;
+  label: string;
+  device_id: string;
+  /** The device's name for a project away from the paired Mac; null on the Mac. */
+  device_label: string | null;
+  github: GithubStatus[];
+};
+
+/** What a card read beyond the list, as the phone gets it: no body and no threads. */
+export type PhonePrCard = Pick<PrCard, "reading" | "head" | "files" | "files_total" | "merge" | "failed" | "write">;
+
+/**
+ * One listed pull request: the desktop list's value (`PullRequest`) with the board's group and reason, the agents it names on rows
+ * the phone lists, whether a checkout of its branch exists, and the card the core read. `key` is `<project id>#<number>`.
+ */
+export type PhonePr = PullRequest & {
+  key: string;
+  project: string;
+  group: PrGroupId;
+  reason: PrReason;
+  agents: AgentKey[];
+  checkout: boolean;
+  card: PhonePrCard | null;
+};
+
+/** The one feedback read the core holds, which a hand-over's prompt is built from. */
+export type PhonePrFeedback = Pick<PrFeedback, "request_id" | "pr_number" | "phase" | "failed_checks" | "change_requests" | "failure">;
 
 export type Notifications = "on" | "off" | "unasked";
 
-export type PushMode = "off" | "app_closed" | "always";
-
 export type RowsState = "ok" | "gone" | "device_unreachable" | "unavailable";
 
-/** Which half of a detail the phone shows. */
+/** Which half of a detail hided reads for the phone. */
 export type DetailView = "conversation" | "terminal";
+
+/**
+ * What a detail shows: one of the two halves, or the agent's Views. 볼 것 is the phone's own choice: hided sends the Views with
+ * the detail and is never told which tab is up (PRD mobile-companion-ui D-06).
+ */
+export type DetailTab = DetailView | "looks";
+
+/** What a View is on the phone: hided names it by what the phone can show of it (hided/src/mobile/looks.rs `Shown`). */
+/** `html` is an HTML file of a checkout, which the phone draws itself in a sandboxed frame. */
+export type LookKind = "changes" | "page" | "html" | "doc" | "image" | "other";
+
+/** One row of the 볼 것 list: a View the agent opened that is open now. It carries no path; the phone asks for its content by `id` alone (D-16). */
+export type LookRow = {
+  id: string;
+  kind: LookKind;
+  name: string;
+  unseen: boolean;
+  /** When the agent opened it while unseen, else when it was last looked at (epoch ms). */
+  at: number;
+  /** A page's address. */
+  url?: string;
+};
+
+export type LookFileStatus = "modified" | "added" | "deleted" | "untracked" | "renamed" | "conflict";
+
+/**
+ * One changed file: its path under the checkout and its line counts. The counts are null for a file git cannot count
+ * (`binary`) and for a file Git does not track yet, which the desktop's list shows no number for either.
+ */
+export type LookFile = { path: string; status: LookFileStatus; added: number | null; removed: number | null; binary: boolean };
+
+/** The answer states of `look_result`: everything that is not content. */
+export type LookResultState = "page" | "other" | "too_large" | "closed" | "failed" | "gone" | "refused" | "unavailable" | "device_unreachable";
+
+/**
+ * What a text, an image or a page's screenshot sends first (hided/src/mobile/looks.rs `chunks`). A page's (`mode: "page"`,
+ * an image of the desktop app's page now) also names the address, when it was taken (ms) and the device that took it.
+ * An HTML file's (`mode: "html"`) is one document with the files of its checkout it names already folded in.
+ */
+export type LookHead = {
+  type: "look_head";
+  request_id: string;
+  view_id: string;
+  mode: "text" | "markdown" | "image" | "page" | "html";
+  size: number;
+  total: number;
+  truncated: boolean;
+  chunks: number;
+  url?: string;
+  taken_at?: number;
+  taken_by?: string;
+};
 
 /** One message of an agent's conversation (hided/src/mobile/conversation.rs). */
 export type ConversationMessage = {
@@ -83,11 +299,11 @@ export type StartKind = string;
 
 /** One place a start can go; the folder it names never reaches the phone. */
 export type StartTarget = {
-  /** `home:<device_id>` for a device's Home, else the checkout's id. */
+  /** The checkout's id. */
   id: string;
   device_id: string;
-  /** The place on the device; null is the device's Home. */
-  place: string | null;
+  /** The place on the device: `project · branch`, or a folder's name. */
+  place: string;
   /** The device's name; null is the core's own machine, named from the catalog's `core_platform`. */
   device_label: string | null;
   connected: boolean;
@@ -108,13 +324,28 @@ export type StartCatalog = {
 export type ServerFrame =
   | { type: "paired"; credential: string; phone_id: string; name: string }
   | { type: "hello"; mac_name: string | null; phone_id: string; name: string | null; vapid_public_key: string; notifications: Notifications }
-  | { type: "meta"; push_mode: PushMode; other_phones: number }
+  // Older computers still send off; new phone settings do not use this global mode.
+  | { type: "meta"; push_mode: "off" | "app_closed" | "always"; other_phones: number }
   /**
    * `interface_language` is the core's explicit choice as stored (en, ko, zh-CN, ja), or null while the phone follows its own language.
    * `color_theme` is the operator's palette (`hide`, `neutral`); the phone keeps its own light or dark.
    */
-  | { type: "agents"; groups: AgentGroup[]; interface_language: string | null; color_theme: string | null }
-  | { type: "rows"; device_id: string; pane_id: string; state: RowsState; text?: string; lines?: number; more?: boolean }
+  /** `omitted` counts the agents hided left out to keep the frame within one relay message. */
+  | { type: "agents"; groups: AgentGroup[]; omitted?: number; devices: PhoneDevice[]; interface_language: string | null; color_theme: string | null }
+  /** The missions this Mac holds, newest first in each state; `failed` when the record could not be read; `omitted` counts the ones past the frame's caps. */
+  | { type: "missions"; items: PhoneMissionOnWire[]; failed: boolean; omitted?: number }
+  /** hided's answer to `answer_mission`, `ask_mission_material` and `reopen_mission_view`; what the core does with it comes back on the mission itself. */
+  | { type: "mission_result"; request_id?: string; mission?: string | null; ok: boolean; reason: string | null }
+  /** The open pull requests this Mac lists, the cards it read and its one feedback read; `omitted` counts the ones past the frame's cap. */
+  | { type: "prs"; projects: PhonePrProject[]; items: PhonePr[]; feedback: PhonePrFeedback | null; omitted?: number }
+  /** The automations this computer's core runs, in its order; `omitted` counts the ones past the frame's caps; `zone` is the IANA zone their times are read in. */
+  | { type: "automations"; items: PhoneAutomation[]; omitted?: number; zone?: string | null; asks?: string[]; unreadable?: boolean }
+  /** hided's answer to an `automation` press: whether it sent the core's event; what the core did comes back on the automation. */
+  | { type: "automation_result"; request_id?: string; action: AutomationAction | null; id?: string | null; ok: boolean; reason: string | null }
+  /** hided's answer to a read or a merge: whether it sent the core's request; what GitHub did comes back on the card. */
+  | { type: "pr_result"; request_id?: string; action: "read_pr" | "merge_pr" | "read_pr_feedback"; pr?: string | null; ok: boolean; reason: string | null }
+  /** The holder watch's last screen mode; absent on older computers means false. */
+  | { type: "rows"; device_id: string; pane_id: string; state: RowsState; text?: string; lines?: number; more?: boolean; alternate_screen?: boolean }
   | {
       type: "conversation";
       device_id: string;
@@ -126,7 +357,15 @@ export type ServerFrame =
       /** The cursor for the page before the oldest message; null at the start. */
       before?: number | null;
     }
+  /** The agent's open Views, newest first; sent again only when they change. `omitted` counts the ones past hided's cap. */
+  | { type: "looks"; device_id: string; pane_id: string; views: LookRow[]; omitted: number }
+  | { type: "look_result"; request_id: string; view_id: string; state: LookResultState; url?: string }
+  | { type: "look_changes"; request_id: string; view_id: string; files: LookFile[]; count: number; added: number; removed: number }
+  | LookHead
+  | { type: "look_chunk"; request_id: string; seq: number; data: string }
+  | { type: "look_end"; request_id: string; view_id: string }
   | { type: "input_result"; request_id?: string; ok: boolean; reason: string | null }
+  | { type: "human_turn_result"; request_id?: string; ok: boolean; reason: string | null }
   /** Accepted for dispatch; progress and refusal remain on the core-owned row. A pane's wake answers with `sleepTarget` of its key as `sleep_id`. */
   | { type: "sleep_result"; request_id?: string; sleep_id: string; ok: boolean; reason: string | null }
   | ({ type: "start_catalog" } & StartCatalog)
@@ -144,13 +383,38 @@ export type PhoneMessage =
   | { type: "older"; before: number }
   | { type: "more" }
   | { type: "close" }
+  /** Content of one View by its id, only while it is open; hided refuses anything else and logs it (D-16). */
+  | { type: "look_open"; request_id: string; device_id: string; pane_id: string; view_id: string }
+  /** The chunks up to `seq` arrived; hided sends a window of four ahead of the last one confirmed. */
+  | { type: "look_ack"; request_id: string; seq: number }
+  /** The View's content was shown: it is seen, here and on the desktop (D-15). */
+  | { type: "look_seen"; device_id: string; pane_id: string; view_id: string }
   | { type: "wake_sleeping_session" | "check_sleeping_session"; request_id: string; sleep_id: string }
   | { type: "wake_agent"; request_id: string; device_id: string; pane_id: string; fresh?: boolean }
+  | { type: "human_turn_done"; request_id: string; device_id: string; pane_id: string; declaration: string }
   | ({ type: "input"; request_id: string; device_id: string; pane_id: string } & ({ text: string } | { key: QuickKey }))
+  /** `option` counts from 1; one of `option`, `text` or `resend` (the desktop banner's own three). */
+  | { type: "answer_mission"; request_id: string; mission: string; key: number; option?: number; text?: string; resend?: boolean }
+  /** The decision card's `자료 요청` for the question `key` names; the core asks the Conductor once per question. */
+  | { type: "ask_mission_material"; request_id: string; mission: string; key: number }
+  /** A closed View of the decision opened again on the Mac first; the row's `reopens` says what became of it. */
+  | { type: "reopen_mission_view"; request_id: string; mission: string; key: number; view: string }
+  /** The PR tab's own requests: `pr` is the list's key (`PhonePr.key`), `head` the card's head commit the merge was confirmed for. */
+  | { type: "read_pr"; request_id: string; pr: string; look_again?: boolean }
+  | { type: "merge_pr"; request_id: string; pr: string; head: string; method?: PrMergeMethod }
+  | { type: "read_pr_feedback"; request_id: string; pr: string }
+  /** [지금 실행], [멈춤] or [다시 켜기] on a listed automation, answered by an `automation_result`. */
+  | { type: "automation"; request_id: string; action: AutomationAction; id: string }
+  /** Answered by a `start_result`, like `start_agent`; the agent starts where the desktop would start it and the desktop's screen stays. */
+  | { type: "delegate_pr"; request_id: string; pr: string; prompt: string; kind: StartKind; model?: string }
   | { type: "start_sheet"; open: boolean }
   | { type: "start_agent"; request_id: string; text: string; target: string; kind: StartKind; model?: string }
   | { type: "push_subscription"; subscription: { endpoint: string; keys: { p256dh: string; auth: string } } }
   | { type: "push_permission"; state: "denied" | "default" }
+  /** The iOS app's notifications: Apple's token for this install and the key this computer encrypts each notice with. */
+  | { type: "apns_registration"; token: string; environment: "sandbox" | "production"; key: { p256dh: string; auth: string } }
+  /** The Android app's notifications: Google's FCM token for this install and the same per-computer key; FCM has one host, so no environment. */
+  | { type: "fcm_registration"; token: string; key: { p256dh: string; auth: string } }
   /** Asks whether hided still answers; the phone gives up the socket when nothing comes back. */
   | { type: "ping"; id: number };
 
@@ -169,7 +433,7 @@ export function sameKey(a: AgentKey | null, b: AgentKey | null): boolean {
 type LimitKey = "mobile.input.tooLong" | "mobile.start.tooLong" | "mobile.refusal.phoneLimit";
 
 /** The other input, refusal, row and start sentences carry no value. */
-type PlainKey = Exclude<Extract<MessageKey, `mobile.input.${string}` | `mobile.refusal.${string}` | `mobile.rows.${string}` | `mobile.start.${string}`>, LimitKey>;
+type PlainKey = Exclude<Extract<MessageKey, `mobile.input.${string}` | `mobile.refusal.${string}` | `mobile.rows.${string}` | `mobile.start.${string}` | `mobile.mission.answer.${string}` | `mobile.mission.material.${string}` | `mobile.mission.reopen.${string}` | `mobile.prs.refusal.${string}` | `mobile.automations.refusal.${string}`>, LimitKey>;
 
 /** A sentence the phone shows, kept as its catalog key so it follows a language change. */
 export type Notice = { key: PlainKey } | { key: LimitKey; limit: number };
@@ -187,7 +451,7 @@ export const GROUP_TITLE: Record<GroupId, MessageKey> = {
 };
 
 
-/** The five quick keys (B26, B38): what hided sends Herdr, the keycap, and the accessible name. */
+/** The five quick keys (B26, B38): what hided sends the engine, the keycap, and the accessible name. */
 export type QuickKey = "enter" | "escape" | "up" | "down" | "ctrl_c";
 
 export const QUICK_KEYS: readonly { key: QuickKey; label: string; name: MessageKey }[] = [
@@ -233,6 +497,79 @@ export function inputFailure(reason: string | null): Notice {
       return { key: "mobile.input.offline" };
     default:
       return { key: "mobile.input.failed" };
+  }
+}
+
+/** The line under a mission's answer for one hided refused or the connection lost (B35); a changed question, a missing Conductor and a lost device come back on the mission, in the desktop's words. */
+/** Why a `자료 요청` did not reach the core, in the phone's words. */
+export function missionMaterialFailure(reason: string | null): Notice {
+  switch (reason) {
+    case "gone":
+      return { key: "mobile.mission.material.gone" };
+    case "offline":
+      return { key: "mobile.mission.material.offline" };
+    default:
+      return { key: "mobile.mission.material.failed" };
+  }
+}
+
+/** Why a closed decision View did not open again, in the phone's words: the question moved on, the Mac was out of reach, or it opened nothing. */
+export function missionReopenFailure(reason: string | null): Notice {
+  switch (reason) {
+    case "gone":
+      return { key: "mobile.mission.reopen.gone" };
+    case "offline":
+      return { key: "mobile.mission.reopen.offline" };
+    default:
+      return { key: "mobile.mission.reopen.failed" };
+  }
+}
+
+export function missionAnswerFailure(reason: string | null): Notice {
+  switch (reason) {
+    case "in_flight":
+      return { key: "mobile.mission.answer.inFlight" };
+    case "gone":
+      return { key: "mobile.mission.answer.gone" };
+    case "offline":
+      return { key: "mobile.mission.answer.offline" };
+    default:
+      return { key: "mobile.mission.answer.failed" };
+  }
+}
+
+/** The line under a pull request's buttons for a read or merge hided refused or the connection lost (B42, B43). */
+export function prFailure(reason: string | null): Notice {
+  switch (reason) {
+    case "head_moved":
+      return { key: "mobile.prs.refusal.headMoved" };
+    case "gone":
+    case "settled":
+      return { key: "mobile.prs.refusal.gone" };
+    case "unread":
+      return { key: "mobile.prs.refusal.unread" };
+    case "in_flight":
+      return { key: "mobile.prs.refusal.inFlight" };
+    case "offline":
+      return { key: "mobile.prs.refusal.offline" };
+    default:
+      return { key: "mobile.prs.refusal.failed" };
+  }
+}
+
+/** The line under an automation's buttons for a press hided refused or the connection lost. */
+export function automationFailure(reason: string | null): Notice {
+  switch (reason) {
+    case "running":
+      return { key: "mobile.automations.refusal.running" };
+    case "gone":
+      return { key: "mobile.automations.refusal.gone" };
+    case "in_flight":
+      return { key: "mobile.automations.refusal.inFlight" };
+    case "offline":
+      return { key: "mobile.automations.refusal.offline" };
+    default:
+      return { key: "mobile.automations.refusal.failed" };
   }
 }
 
@@ -391,41 +728,48 @@ export function macNameOf(endpoint: string): string {
   }
 }
 
+/** The Mac's name with the names of the devices it reaches that are connected: `MacBook Pro + Mac mini` (PRD mobile-companion-ui B8). */
+/** The name the phone shows for the device `id`: the paired Mac's own name for this Mac, the label of a connected device otherwise. */
+export function deviceNameOf(devices: readonly PhoneDevice[], id: string, macName: string): string {
+  const device = devices.find((candidate) => candidate.device_id === id);
+  return device && !device.local && device.label ? device.label : macName;
+}
+
+export function machinesName(macName: string, devices: readonly PhoneDevice[]): string {
+  const names = devices.filter((device) => !device.local && device.connected && device.label).map((device) => device.label);
+  return names.length > 0 ? `${macName} + ${names.join(", ")}` : macName;
+}
+
 /** The list header's second line (B19). */
-export function headerLine(t: TFunction<"translation">, macName: string, otherPhones: number): string {
-  return otherPhones > 0 ? t("mobile.otherPhones", { name: macName, count: otherPhones }) : macName;
+export function headerLine(t: TFunction<"translation">, macName: string, otherPhones: number, devices: readonly PhoneDevice[] = []): string {
+  const name = machinesName(macName, devices);
+  return otherPhones > 0 ? t("mobile.otherPhones", { name, count: otherPhones }) : name;
 }
 
 /** Tags whose notifications the open app closes (D-21): agents no longer waiting or done. */
 export function staleTags(tags: readonly string[], groups: readonly AgentGroup[]): string[] {
   const live = new Set<string>();
-  for (const group of groups) {
-    for (const agent of group.agents) {
-      if (agent.holds_notification) live.add(keyTag({ device_id: agent.device_id, pane_id: agent.root_pane_id }));
-    }
+  for (const agent of listedAgents(groups)) {
+    if (agent.holds_notification) live.add(keyTag({ device_id: agent.device_id, pane_id: agent.root_pane_id }));
   }
   return tags.filter((tag) => !live.has(tag));
 }
 
-/** The notification row on the list (B30), or null when it has nothing to say. */
-export type NotificationRow = "enable" | "install_first" | "denied" | null;
+/** The unseen Views first and then the seen ones, each in hided's order (newest first): what the 볼 것 list draws (B12). */
+export function splitLooks(rows: readonly LookRow[]): { unseen: LookRow[]; seen: LookRow[] } {
+  return { unseen: rows.filter((row) => row.unseen), seen: rows.filter((row) => !row.unseen) };
+}
 
-export function notificationRow({
-  pushMode,
-  notifications,
-  permission,
-  supported,
-}: {
-  pushMode: PushMode;
-  notifications: Notifications;
-  permission: NotificationPermission | "unsupported";
-  /** Whether this page can subscribe at all: a Safari tab on iOS cannot, a Home Screen app can. */
-  supported: boolean;
-}): NotificationRow {
-  if (pushMode === "off") return null;
-  if (permission === "denied" || (notifications === "off" && permission !== "granted")) return "denied";
-  if (notifications === "on" && permission === "granted") return null;
-  // iOS offers push only to a Home Screen app; a Safari tab has no PushManager.
-  if (!supported) return "install_first";
-  return "enable";
+/** The most characters of a View's name a reply carries in front of it. */
+const ABOUT_CHARS = 60;
+
+/**
+ * A reply sent while looking at a View begins with its name in brackets, so the agent knows which result the words are about (B30).
+ * A control character in a name would make the reply refused, so it becomes a space.
+ */
+export function replyAbout(name: string, text: string): string {
+  // eslint-disable-next-line no-control-regex
+  const clean = name.replace(/[\u0000-\u001f\u007f-\u009f]+/g, " ").replace(/[[\]]/g, "").trim();
+  const shown = [...clean].slice(0, ABOUT_CHARS).join("");
+  return shown ? `[${shown}] ${text}` : text;
 }

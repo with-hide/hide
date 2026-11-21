@@ -10,6 +10,7 @@ use std::time::{Duration, Instant};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 
+use crate::account::Accounts;
 use crate::source::frame::{Forward, Frame, Framer};
 use crate::{Agent, SESSION_INCREMENT_READ_LIMIT_BYTES, SESSION_LINE_LIMIT_BYTES};
 
@@ -173,28 +174,53 @@ pub struct Step {
     pub skipped: BTreeMap<String, u64>,
 }
 
-fn roots(home: &Path, agent: Agent) -> Result<Vec<PathBuf>, Refusal> {
+/// The folders `agent`'s usage is read from, in every account the node
+/// registered: its sessions, and for Codex the archived sessions beside
+/// them; OpenCode's database of each account.
+fn roots(accounts: &Accounts, agent: Agent) -> Result<Vec<PathBuf>, Refusal> {
     match agent {
         Agent::Cursor => Err(Refusal::Unsupported),
-        Agent::OpenCode => Ok(vec![
-            crate::opencode::database_path(home).map_err(|_| Refusal::Environment)?,
-        ]),
-        Agent::Codex => Ok(vec![
-            home.join(crate::CODEX_SESSIONS),
-            home.join(".codex/archived_sessions"),
-        ]),
-        _ => Ok(vec![
-            crate::session_root(home, agent).ok_or(Refusal::Unsupported)?,
-        ]),
+        Agent::OpenCode => {
+            let databases = accounts
+                .each(agent)
+                .iter()
+                .filter_map(|(_, accounts)| crate::opencode::database_path(accounts).ok())
+                .collect::<Vec<_>>();
+            if databases.is_empty() {
+                Err(Refusal::Environment)
+            } else {
+                Ok(databases)
+            }
+        }
+        // Codex moves a session it archives out of its sessions folder.
+        Agent::Codex => Ok(crate::session_roots(accounts, agent)
+            .into_iter()
+            .chain(
+                accounts
+                    .places(agent, hide_agent_adapter::AccountPath::Usage)
+                    .map(Path::to_path_buf),
+            )
+            .collect()),
+        _ => {
+            let roots = crate::session_roots(accounts, agent);
+            if roots.is_empty() {
+                Err(Refusal::Unsupported)
+            } else {
+                Ok(roots)
+            }
+        }
     }
 }
 
 /// Lists native candidates without reading conversation bodies or following
 /// directory links. The discovery work and the retained candidates are capped
 /// independently, including folders containing no session files.
-pub fn list(home: &Path, agent: Agent, since_ms: u64) -> Result<Candidates, Refusal> {
+pub fn list(accounts: &Accounts, agent: Agent, since_ms: u64) -> Result<Candidates, Refusal> {
     let mut out = Candidates::default();
-    let mut pending: Vec<_> = roots(home, agent)?.into_iter().map(|p| (p, 0)).collect();
+    let mut pending: Vec<_> = roots(accounts, agent)?
+        .into_iter()
+        .map(|p| (p, 0))
+        .collect();
     let mut visited = 0;
     while let Some((path, depth)) = pending.pop() {
         visited += 1;
@@ -233,7 +259,10 @@ pub fn list(home: &Path, agent: Agent, since_ms: u64) -> Result<Candidates, Refu
                     // agy keeps tool output and artifacts beside each
                     // transcript; only the transcript is a candidate.
                     Ok(entry) if agent == Agent::Antigravity && depth == 0 => pending.push((
-                        crate::antigravity::transcript(home, &entry.file_name().to_string_lossy()),
+                        crate::antigravity::transcript(
+                            accounts.home(),
+                            &entry.file_name().to_string_lossy(),
+                        ),
                         depth + 1,
                     )),
                     Ok(entry) => pending.push((entry.path(), depth + 1)),
@@ -278,10 +307,10 @@ pub fn list(home: &Path, agent: Agent, since_ms: u64) -> Result<Candidates, Refu
     Ok(out)
 }
 
-fn checked_path(home: &Path, agent: Agent, path: &Path) -> Result<PathBuf, Refusal> {
+fn checked_path(accounts: &Accounts, agent: Agent, path: &Path) -> Result<PathBuf, Refusal> {
     let canonical =
         hide_platform::fs::identity::canonical(path).map_err(|_| Refusal::Unreadable)?;
-    let allowed = roots(home, agent)?.into_iter().any(|root| {
+    let allowed = roots(accounts, agent)?.into_iter().any(|root| {
         hide_platform::fs::identity::canonical(&root).is_ok_and(|root| {
             if agent == Agent::OpenCode {
                 canonical == root
@@ -296,8 +325,8 @@ fn checked_path(home: &Path, agent: Agent, path: &Path) -> Result<PathBuf, Refus
     Ok(canonical)
 }
 
-fn checked_file(home: &Path, agent: Agent, path: &Path) -> Result<fs::File, Refusal> {
-    let canonical = checked_path(home, agent, path)?;
+fn checked_file(accounts: &Accounts, agent: Agent, path: &Path) -> Result<fs::File, Refusal> {
+    let canonical = checked_path(accounts, agent, path)?;
     let file = crate::source::open_nofollow(path).map_err(|_| Refusal::Unreadable)?;
     // Check the opened descriptor too, so a parent link swapped after the
     // canonical check cannot redirect this read outside the allowed root.
@@ -312,7 +341,7 @@ fn checked_file(home: &Path, agent: Agent, path: &Path) -> Result<fs::File, Refu
 /// Reads at most one MiB. Partial lines are re-read on the next step, and
 /// skipped oversized lines advance without ever persisting their bytes.
 pub fn read(
-    home: &Path,
+    accounts: &Accounts,
     agent: Agent,
     path: &Path,
     saved: Option<Checkpoint>,
@@ -321,17 +350,28 @@ pub fn read(
     if agent == Agent::OpenCode {
         // The shared OpenCode guard owns every open/close of its database.
         // A preliminary File here would release a peer's POSIX SQLite lock.
-        checked_path(home, agent, path)?;
-        return opencode::read(home, saved);
+        let database = checked_path(accounts, agent, path)?;
+        let account = accounts
+            .each(agent)
+            .into_iter()
+            .map(|(_, accounts)| accounts)
+            .find(|accounts| {
+                crate::opencode::database_path(accounts).is_ok_and(|named| {
+                    hide_platform::fs::identity::canonical(&named)
+                        .is_ok_and(|named| named == database)
+                })
+            })
+            .ok_or(Refusal::OutsideRoot)?;
+        return opencode::read(&account, saved);
     }
     if agent == Agent::Cursor {
         return Err(Refusal::Unsupported);
     }
-    let file = checked_file(home, agent, path)?;
+    let file = checked_file(accounts, agent, path)?;
     let identity = crate::source::file::incarnation(&file).map_err(|_| Refusal::Unreadable)?;
     let size = file.metadata().map_err(|_| Refusal::Unreadable)?.len();
     let summary = if agent == Agent::Grok {
-        Some(grok::summary(home, path)?)
+        Some(grok::summary(accounts, path)?)
     } else {
         None
     };
@@ -365,7 +405,7 @@ pub fn read(
         // not place yet is still counted, under no project until it does. An
         // index that cannot be read now (agy holding it) refuses the read,
         // which the next pass repeats, rather than losing the project.
-        let cwd = crate::antigravity::checkout(home, id)
+        let cwd = crate::antigravity::checkout(accounts.home(), id)
             .map_err(|crate::antigravity::IndexBusy| Refusal::Database)?
             .and_then(|cwd| cwd.to_str().map(str::to_owned));
         records::antigravity_context(&mut checkpoint.context, id, cwd);

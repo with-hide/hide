@@ -1,9 +1,9 @@
 # The Electron desktop app end to end on one system: the debug build of the
-# host, starting its own hided through the `hide` CLI built here, against an
-# isolated pinned Herdr for that system. `pr.yml` calls it for the macOS
-# suite (`desktop-e2e`) and for the Windows `@platform` tests
+# host, starting its own hided through the `hide` CLI built here, whose
+# panes run in the `hide-holder` built beside it. `pr.yml` calls it for the
+# macOS suite (`desktop-e2e`) and for the Windows `@platform` tests
 # (`windows-desktop`), and `nightly.yml` for all three systems; each caller
-# names the runner, the Herdr asset and which tests run.
+# names the runner and which tests run.
 #
 # The window the tests draw is kept as the run's artifact when the caller asks
 # for it (`keep-screenshots`), so a reviewer can see what the app drew on a
@@ -17,6 +17,7 @@
 # `desktop/e2e/shard-durations.json` (`scripts/e2e-shard.py`). Each shard
 # builds in place: a `build` job would be one more macOS job ahead of two, for
 # about two minutes of cargo it saves each.
+
 name: desktop e2e lane
 
 on:
@@ -28,10 +29,6 @@ on:
         required: true
       runner:
         description: The GitHub-hosted runner label.
-        type: string
-        required: true
-      herdr-platform:
-        description: The pinned Herdr asset to run, as `fetch-herdr-runtime.sh --platform` names it.
         type: string
         required: true
       shards:
@@ -88,6 +85,12 @@ jobs:
           node-version: 22
           cache: pnpm
           cache-dependency-path: pnpm-lock.yaml
+      # hide-vt's prepared inputs and Zig's caches, saved on main by the vt lane,
+      # so this job reaches no package host (#2631).
+      - uses: ./.github/actions/vt-cache
+        timeout-minutes: 5
+        with:
+          save: false
       # macOS's one saver of the workspace set: the one macOS lane of every main
       # push that builds the daemon (docs/BUILD.md, "CI's Rust caches"). The
       # shards build the same thing; the first saves it. Windows's saver is
@@ -98,14 +101,33 @@ jobs:
           save: ${{ github.ref == 'refs/heads/main' && matrix.shard == 1 && runner.os == 'macOS' }}
       - name: Install zsh and the virtual display on Linux
         if: runner.os == 'Linux'
-        timeout-minutes: 5
-        run: sudo apt-get install -y --no-install-recommends zsh xvfb
+        timeout-minutes: 6
+        uses: ./.github/actions/apt-install
+        with:
+          packages: zsh xvfb
+          minutes: 3
       - name: Build the desktop app's daemon and kit binaries
         # hide-agent-hooks too, which the fixture's app bundle links beside
         # them: the home-layout spec stages every binary the packaged app
         # carries, and a device runs hided itself as its node.
         timeout-minutes: 20
         run: bash scripts/verify-cargo.sh cli
+      - name: Build the pane holder
+        # The daemon starts each pane's holder from the `hide-holder` beside
+        # it, which the fixture's app bundle links too.
+        timeout-minutes: 10
+        run: bash scripts/verify-cargo.sh build -p hide-holder --bin hide-holder
+      - name: Fetch the pane holder's pinned ConPTY runtime
+        # On Windows a node loads the holder's ConPTY from `holder-conpty`
+        # beside its own program (`hide_kit::holders::CONPTY_SOURCE`); the
+        # debug daemon runs from target/debug.
+        if: runner.os == 'Windows'
+        timeout-minutes: 5
+        run: python scripts/fetch-conpty.py --out target/debug/holder-conpty
+      # The relay WebAssembly's binding tool, restored never saved here (`.github/actions/relay-tools`).
+      - uses: ./.github/actions/relay-tools
+        with:
+          save: false
       - name: Install dependencies
         timeout-minutes: 5
         run: bash scripts/verify-web.sh install
@@ -124,20 +146,9 @@ jobs:
         # The browser spec opens a page in Chromium beside the Electron app.
         timeout-minutes: 5
         run: bash scripts/verify-web.sh desktop playwright-install
-      - name: Fetch the pinned Herdr runtime
-        id: herdr
-        timeout-minutes: 5
-        env:
-          HERDR_PLATFORM: ${{ inputs.herdr-platform }}
-        run: |
-          if [ "$RUNNER_OS" = Windows ]; then
-            bin=$(pwsh -NoProfile -File scripts/fetch-herdr-runtime.ps1 | tr -d '\r')
-          else
-            bin=$(zsh scripts/fetch-herdr-runtime.sh --platform "$HERDR_PLATFORM")
-          fi
-          echo "bin=$bin" >> "$GITHUB_OUTPUT"
-      - name: Compare the binary schema and version with the pin
-        run: python3 scripts/check-herdr-schema.py --herdr-bin "${{ steps.herdr.outputs.bin }}"
+      - name: Put the isolated fixture programs on the Windows pane PATH
+        if: runner.os == 'Windows'
+        uses: ./.github/actions/windows-fixture-path
       - name: Desktop app end-to-end
         id: suite
         # A cap, not a target: a shard that plans more than 720 s of tests
@@ -145,7 +156,6 @@ jobs:
         # another shard (docs/TESTING.md, "Balancing the e2e shards").
         timeout-minutes: 20
         env:
-          HIDE_E2E_HERDR_BIN: ${{ steps.herdr.outputs.bin }}
           HIDE_E2E_SCREENSHOT_DIR: ${{ runner.temp }}/hide-e2e
           GREP: ${{ inputs.grep }}
           SHARD: ${{ matrix.shard }}/${{ inputs.shards }}
@@ -181,8 +191,8 @@ jobs:
             bash scripts/verify-web.sh desktop e2e "${args[@]}"
           fi
       - name: Mint the development issues token
-        # Development issues live in with-hide/hide-private (docs/TESTING.md,
-        # Flaky tests); one App token reads this run here and files there. A run
+        # Development issues live in this repository (docs/TESTING.md,
+        # Flaky tests); the App's token reads this run and files them. A run
         # without the App's key, such as a fork's, files nothing and stays green.
         id: issues-token
         if: ${{ !cancelled() }}
@@ -193,7 +203,7 @@ jobs:
           client-id: ${{ vars.HIDE_ISSUES_APP_CLIENT_ID }}
           private-key: ${{ secrets.HIDE_ISSUES_APP_KEY }}
           owner: with-hide
-          repositories: hide,hide-private
+          repositories: hide
       - name: Report flaky and failed tests
         # A failed test is retried once; see web-e2e.yml. One report per
         # step: the step's annotations are its failed tests, and GitHub keeps

@@ -139,6 +139,11 @@ pub struct AppState {
     pub daemon_info: Arc<Value>,
     /// Settings > Mobile and the phones it pairs (`mobile/`).
     pub mobile: Arc<crate::mobile::Mobile>,
+    /// This machine's endpoint for other Hides (`peer_host`).
+    pub peers: Arc<crate::peer_host::PeerHost>,
+    /// Pairing this machine with other Hides, for Settings > Devices
+    /// (`pairing`).
+    pub pairing: Arc<crate::pairing::Pairing>,
     /// The desktop windows' agent notifications (`desktop_notices.rs`).
     pub desktop_notices: Arc<crate::desktop_notices::DesktopNotices>,
     /// The grants this core handed linked nodes' screen relays (`relay`).
@@ -147,6 +152,9 @@ pub struct AppState {
     pub own_screens: Arc<Mutex<usize>>,
     /// Which screen each pane's terminal size follows (`pane_sizes`).
     pub pane_sizes: Arc<crate::pane_sizes::PaneSizes>,
+    /// What the pane bootstrap's and the node attach socket's accept threads
+    /// do, for `/health`.
+    pub listeners: Arc<crate::accepting::CoreListeners>,
     /// A `hide <path>` that brought a project in front asks this machine's
     /// windows to come forward too, showing it (`project_open`): each sends
     /// its screen a `window_call` frame with this payload.
@@ -346,7 +354,7 @@ async fn hide_ai_wake(
         return StatusCode::BAD_REQUEST.into_response();
     }
     let event = json!({
-        "schema_version": herdr_core::SCHEMA_VERSION,
+        "schema_version": hide_core::SCHEMA_VERSION,
         "kind": "hide_ai_wake",
         "payload": {"cause": request.cause},
     });
@@ -435,7 +443,7 @@ async fn run_browser_action(
     + Send
     + 'static,
 ) -> Response {
-    use herdr_core::workspace_control::{ActionPreparation, Query};
+    use hide_core::workspace_control::{ActionPreparation, Query};
     if !request.valid() {
         return StatusCode::BAD_REQUEST.into_response();
     }
@@ -524,6 +532,7 @@ async fn health(State(state): State<AppState>) -> impl IntoResponse {
         "open_handlers_in_flight": state.opener.in_flight(),
         "idle_remaining_secs": idle_remaining_secs(&state),
         "instance": state.seat.instance(),
+        "listeners": state.listeners.report(),
     }))
 }
 
@@ -970,6 +979,23 @@ async fn screen_loop(
             return;
         }
     }
+    // Settings > Devices reads the pairings under way from one `pairing`
+    // frame. It carries a link that lets a machine in and the words two
+    // people compare, so only this machine's own windows get it: never a
+    // phone, and never a screen another machine shows of this one.
+    let mut pairing_frames = state.pairing.subscribe_frame();
+    if renderer && relay.is_none() {
+        let frame =
+            json!({"type": "pairing", "payload": pairing_frames.borrow_and_update().as_ref()});
+        if socket
+            .send(Message::Text(frame.to_string().into()))
+            .await
+            .is_err()
+        {
+            client_gone(&state, connection, renderer, desktop);
+            return;
+        }
+    }
     let Ok(first) = send_snapshot(&mut socket, &state, &mut have_revision, granular).await else {
         client_gone(&state, connection, renderer, desktop);
         return;
@@ -1043,6 +1069,18 @@ async fn screen_loop(
                 {
                     break;
                 }
+                // Only a window writes a program's copy to its clipboard.
+                let copies = terminals.take_clipboard();
+                let mut gone = false;
+                for copied in copies.iter().filter(|_| renderer) {
+                    if socket.send(Message::Text(copied.as_ref().into())).await.is_err() {
+                        gone = true;
+                        break;
+                    }
+                }
+                if gone {
+                    break;
+                }
             }
             changed = directory_changes.recv() => {
                 match changed {
@@ -1111,7 +1149,7 @@ async fn screen_loop(
                     // A window that fell behind misses those notifications;
                     // the next change is announced as usual.
                     Err(tokio::sync::broadcast::error::RecvError::Lagged(missed)) => {
-                        herdr_core::diagnostic!(json!({
+                        hide_core::diagnostic!(json!({
                             "component": "desktop_notices", "kind": "agent_notice.lagged",
                             "connection": connection, "missed": missed,
                         }));
@@ -1124,6 +1162,15 @@ async fn screen_loop(
                     break;
                 }
                 let frame = json!({"type": "mobile", "payload": mobile_frames.borrow_and_update().as_ref()});
+                if socket.send(Message::Text(frame.to_string().into())).await.is_err() {
+                    break;
+                }
+            }
+            changed = pairing_frames.changed(), if renderer && relay.is_none() => {
+                if changed.is_err() {
+                    break;
+                }
+                let frame = json!({"type": "pairing", "payload": pairing_frames.borrow_and_update().as_ref()});
                 if socket.send(Message::Text(frame.to_string().into())).await.is_err() {
                     break;
                 }
@@ -1182,6 +1229,18 @@ async fn screen_loop(
                                 } else if send_file_bytes(&mut socket, &state.boundary, &state.roots, &event).await.is_err() {
                                     break;
                                 }
+                            }
+                            Ok(ClientAction::Pairing(event)) => {
+                                // Answered off this loop, which keeps the
+                                // terminals moving while a share waits for
+                                // the relay; the answer is this client's.
+                                let pairing = Arc::clone(&state.pairing);
+                                let answers = device_frames_tx.clone();
+                                let own = renderer && relay.is_none();
+                                tokio::spawn(async move {
+                                    let answer = pairing.window_event(&event, own).await;
+                                    let _ = answers.send(answer.to_string()).await;
+                                });
                             }
                             Ok(ClientAction::CoreMove(event)) => {
                                 // A node's window moves the core from its own
@@ -1244,6 +1303,19 @@ async fn screen_loop(
                                 }
                                 spawn_device_listing(&state, event, device_frames_tx.clone(), slot.flatten());
                             }
+                            Ok(ClientAction::NodeAsk(event)) => {
+                                let slot = relay.as_ref().map(RelayScreen::slot);
+                                if matches!(slot, Some(None)) {
+                                    if socket.send(relay_busy()).await.is_err() {
+                                        break;
+                                    }
+                                    continue;
+                                }
+                                spawn_node_ask(&state, event, device_frames_tx.clone(), slot.flatten());
+                            }
+                            Ok(ClientAction::Automation(event)) => {
+                                crate::automation_screen::spawn(&state.core, event, device_frames_tx.clone());
+                            }
                             Ok(ClientAction::Feedback(event)) => {
                                 let job = FeedbackJob { event, png: None };
                                 if let Some(refusal) = queue_feedback(&state, &mut feedback, job, &device_frames_tx)
@@ -1296,29 +1368,75 @@ async fn screen_loop(
     client_gone(&state, connection, renderer, desktop);
 }
 
+/// `invalid_agent_name`'s next action, naming the engine's limit
+/// (`hide_core::AGENT_NAME_LIMIT`).
+static INVALID_AGENT_NAME: std::sync::LazyLock<String> = std::sync::LazyLock::new(|| {
+    format!(
+        "The --name was refused: an agent name is 1 to {} characters of lowercase letters, digits, - and _, starting with a lowercase letter; spawn again with a name that fits",
+        hide_core::AGENT_NAME_LIMIT
+    )
+});
+
 /// What a refused delivery or agent command asks of its caller.
 pub(crate) fn delivery_next_action(code: &str) -> &'static str {
-    match herdr_core::coordination::split_refusal(code).0 {
+    match hide_core::coordination::split_refusal(code).0 {
         // A spawn that hands a plan step, or a letter that would wake a
         // plan's sleeping child, is refused as the plan words it (PRD
         // hide-plan-delegate B5, B6).
-        code if code.starts_with("plan_") => herdr_core::plans::next_action(code),
+        code if code.starts_with("plan_") => hide_core::plans::next_action(code),
+        // A spawn under a mission node that may not start yet (PRD
+        // node-presets D-06), or of an item none of the mission's candidates
+        // admits, is refused as the mission words it for a plan too.
+        code
+        @ ("mission_node_held" | "mission_gate_before_start" | "mission_candidate_refused") => {
+            hide_core::missions::next_action(code)
+        }
         "agent_pane_required" => {
             "Run the command inside a pane where the agent is running; an agent on Codex's shared daemon needs a session started with --no-daemon"
         }
         "machine_unknown" => {
             "Use the device id from hide workspace info or hide agent list with --machine, then retry"
         }
+        // `hide agent ask-human` (PRD ask-human B2, B3).
+        "human_kind_unknown" => {
+            "hide agent ask-human takes auth (a sign-in, a re-authentication, an unlock) or permission (an app connection, an OS permission); for a decision or anything else, send your parent a letter with hide request send"
+        }
+        "human_place_required" => {
+            "Name where the person acts: the page's address (github.com/login), the app (1Password) or the setting (System Settings > Privacy & Security > Camera)"
+        }
+        "human_place_too_long" => {
+            "Name the place in at most 300 characters: the page's address, the app or the setting"
+        }
         "machine_unavailable" => {
             "Check that the device is connected in Settings > Devices and its helper is allowed, then run the same command again"
         }
         "repository_unavailable" => {
-            "Pass --repo as the repository's path on that device, then run the command again"
+            "Pass --repo as the path of a Git repository on that device, with --branch, then run the command again; a plain folder, not a Git repository, takes no --branch once it is added as a project on that device"
+        }
+        // A spawn with no branch works in a plain folder itself
+        // (with-hide/hide#2479).
+        "spawn_repo_required" => {
+            "This is a Git project, or a folder no project of that machine holds: for a Git repository pass --repo <its path> and --branch <a branch>, and the agent works in its own worktree on that branch; a plain folder, not a Git repository, is added as a project first, and then an agent starts in it without --branch"
+        }
+        "spawn_project_loading" => {
+            "Hide is still reading that project's folder; run the same command again in a few seconds"
+        }
+        "spawn_folder_unreadable" => {
+            "Hide could not read that project's folder: it is gone, or the Git repository it points at cannot be read. Check the folder; for a Git repository pass --repo and --branch, and for a plain folder that moved, add it as a project again"
         }
         "agent_not_installed" => {
             "Install the agent CLI on the device so it is on the device's PATH, then run the command again"
         }
         "spawn_busy" => "The first request is still running; wait, then run the same command again",
+        "workspace_closing" => {
+            "The folder's last terminal is still closing; wait a moment, then run the same command again with the same intent"
+        }
+        "holder_cap" => {
+            "That machine already runs the most panes Hide keeps open there (the detail names the machine and the count); end finished agents on it with hide agent end <id>, which closes their panes, then run the same command again with the same intent"
+        }
+        "pane_close_failed" => {
+            "The registration ended, but the engine did not close its pane; run the same command again to close it"
+        }
         "composer_not_empty" => {
             "Someone is typing in the recipient's input, so nothing was typed or recorded; send it again without --force, and it is delivered once they submit"
         }
@@ -1331,8 +1449,14 @@ pub(crate) fn delivery_next_action(code: &str) -> &'static str {
         "machine_not_permitted" => {
             "Run the command from an agent on the machine that runs Hide, or leave out --machine"
         }
+        // A letter neither sent by the caller nor to it (nor one its mission
+        // node lets it read), or one gone from the ledger: the same refusal
+        // as for an id that never was, so it says no more than that.
+        "letter_unavailable" => {
+            "No letter with that id was sent by you or to you, or it has left the ledger; ask the agent that named it to send you its body in a letter of its own"
+        }
         "intent_conflict" => {
-            "Use a new intent, or repeat the request this intent was first used for"
+            "Use a new --intent for each new spawn; spawn again with this intent only to repeat the same spawn"
         }
         "desk_spawn_args" => {
             "Desk passes no words to an agent's own CLI after `--`; choose the model and effort with --model and --effort and run the spawn again without `--`, or ask the operator to start that session themselves"
@@ -1341,13 +1465,13 @@ pub(crate) fn delivery_next_action(code: &str) -> &'static str {
             "Pass a --model that is a model name, and an --effort the agent's CLI takes (Claude Code: low, medium, high, xhigh, max; Codex: minimal, low, medium, high, xhigh), then run the command again"
         }
         "worktree_unconfirmed" => {
-            "Herdr had not confirmed the new worktree in time and may still finish it; run the same command again with the same intent"
+            "The engine had not confirmed the new worktree in time and may still finish it; run the same command again with the same intent"
         }
         "agent_not_started" => {
             "The agent's start ended in its pane without the agent and was not typed again; check that pane for why, then spawn with a new intent"
         }
         "shell_starting" => {
-            "The new pane's shell had not finished starting; answer what its startup files ask in that pane, then spawn with a new intent"
+            "The new pane's shell had not finished starting while the spawn could wait, so nothing was typed and Hide closed the tab it opened; find what the account's shell startup files wait on (start a login shell in a terminal of your own), then run the same command again with the same intent"
         }
         "pane_busy" => {
             "The new pane's shell kept another program running for the start's 30 s wait, so nothing was typed; let that program finish or end it in that pane, then run the same command again with the same intent"
@@ -1362,10 +1486,23 @@ pub(crate) fn delivery_next_action(code: &str) -> &'static str {
             "The agent names its session by a file path longer than 4096 bytes; spawn it with a new intent in a checkout with a shorter path"
         }
         "target_ambiguous" => {
-            "More than one agent answers to that name, on different machines; send to its registration ID from hide agent list (agent-N), or to the pane's full address remote:<device>:pane:<id>"
+            "More than one agent answers to that name, on different machines; name it by its registration ID from hide agent list (agent-N), or by the pane's full address remote:<device>:pane:<id>"
+        }
+        // `hide agent show` and `hide agent end` named no registration and
+        // no spawn: the same key answers the same until it names one.
+        "agent_unavailable" => {
+            "Hide knows no agent by that: take its id from hide agent list (agent-N); hide agent show also takes a spawn's id (spawn-N), the agent's name or its pane"
         }
         "target_unavailable" => {
             "No agent answers to that; a bare pane ID names a pane on your own machine. Find the recipient in hide agent list and send to its name or registration ID"
+        }
+        "no_parent" => {
+            "You have no parent: no agent answers for you, so your work is the operator's to read; send to a named agent from hide agent list instead"
+        }
+        // The spawn that started the caller has not bound it yet and is
+        // still within its answer time (`coordination::registering`).
+        "participant_registering" => {
+            "Hide is still registering you from the spawn that started you, which takes a few seconds; run the same command again shortly with the same intent"
         }
         "mission_cap_reached" => {
             "The mission's workers are at its cap; wait for one to finish and end it with hide agent end <id>, then run the same command again with the same intent"
@@ -1374,14 +1511,18 @@ pub(crate) fn delivery_next_action(code: &str) -> &'static str {
             "A mission node's worker starts on its brief: spawn again with --brief-file <path> (or --brief <text>) holding what the node is to do"
         }
         "invalid_brief" => "The brief must be text of at most 16 KiB that is not blank",
+        "invalid_agent_name" => INVALID_AGENT_NAME.as_str(),
         "brief_not_submitted" => {
-            "The agent started but did not take its brief within 30 seconds; look at its pane, then run the same command again with the same intent, which submits the brief without starting the agent again"
+            "The agent started but did not take its brief within 30 seconds, and nothing was typed; error.spawn.cause says why: question (its screen asks a question; answer it in its pane), not_ready, unread, or agent_ended. Then run the same command again with the same intent, which submits the brief, starting the agent once more only if it ended"
         }
         "mission_not_started" => {
             "The operator has not approved the mission's plan; show it to them and run hide mission start once they approve"
         }
         "mission_machine_node_refused" => {
             "On another machine than the project's, a mission runs only a pull-request change node's worker and its checkers; leave out --machine, or name the project's machine, for this node's worker"
+        }
+        "mission_other_repository" => {
+            "A mission node's worker works in the mission's project only, and --repo names another repository (the detail names both); spawn again with --repo naming the mission's project folder or a worktree of it"
         }
         "mission_machine_unavailable" => {
             "That machine is not connected; reconnect it in Settings > Devices and run the same command again, or leave out --machine to start the worker on the project's machine"
@@ -1392,8 +1533,26 @@ pub(crate) fn delivery_next_action(code: &str) -> &'static str {
         "mission_machine_no_repository" => {
             "Hide knows no project of the mission's GitHub repository on that machine: register a checkout of it there as a project, or wait while GitHub is still being read for that project or for the mission's own (its pull requests show once it is), then run the same command again with --repo naming it; or leave out --machine"
         }
-        "mission_candidate_refused" => {
-            "The worker is none of the operator's candidates in Settings > Mission; run hide mission settings and start it as one of them (its agent, its fixed model or the CLI's default, its fixed effort)"
+        // A spawn whose agent would start without Hide's hook on its
+        // machine (`runtime::start_hook`): nothing was made or typed, and the
+        // same command continues once the operator has done this.
+        "agent_hook_off" => {
+            "The agent is switched off for that machine; ask the operator to switch it on in Settings > Agents for that machine, then run the same command again with the same intent"
+        }
+        "agent_not_set_up" => {
+            "The agent has not made its own folder on that machine yet, so Hide cannot put its hook in; ask the operator to start the agent there once and sign in, then run the same command again with the same intent"
+        }
+        "agent_hook_untrusted" => {
+            "Codex on that machine has not trusted Hide's hooks; ask the operator to start codex there once and choose Trust all and continue on its Hooks need review screen, then run the same command again with the same intent"
+        }
+        "agent_hook_missing" => {
+            "Hide's hook for the agent is not in place on that machine; ask the operator to press Reinstall for that machine in Settings > Devices (This Mac for this machine), then run the same command again with the same intent"
+        }
+        "agent_hook_unconfirmed" => {
+            "Hide's check of the agent's hook on that machine did not finish in time; run the same command again with the same intent"
+        }
+        "agent_hook_unchecked" => {
+            "Hide could not check the agent's hook on that machine; ask the operator to open Settings > Devices for that machine (This Mac for this machine), which says what stopped the check and offers Try again or Check again, then run the same command again with the same intent"
         }
         "codex_capability_unknown" => {
             "Hide has not read whether that machine's Codex runs a shared server; ask the operator to press Check again in Settings > Agents for that machine, then run the same command again with the same intent"
@@ -1407,25 +1566,58 @@ pub(crate) fn delivery_next_action(code: &str) -> &'static str {
         "beside_needs_agent_pane" => {
             "--beside opens the agent beside the pane that calls it; run the command from an agent pane Hide knows, or without --beside to open it in a new tab"
         }
+        "beside_with_parent" => {
+            "An agent opened with --beside is the operator's to watch and has no parent; leave out --parent to open it beside you, or leave out --beside to supervise it in a new tab"
+        }
+        // A spawn's agent profile (docs/ARCHITECTURE.md, Starting an agent
+        // with a profile): only an unanswered machine is worth the same
+        // intent again as it is.
+        "profile_gone" => {
+            "That machine no longer has the profile; spawn with another --profile, or without --profile for the agent's default there"
+        }
+        "profiles_unsupported" => {
+            "That machine's Hide predates agent profiles; update Hide there, or spawn without --profile"
+        }
+        "profile_refused" => {
+            "The profile cannot start its program on that machine (the detail says why); fix that program or the profile, or spawn with another --profile, since the same intent fails the same way until then"
+        }
+        "profile_unanswered" => {
+            "That machine did not answer for the profile; check that it is connected, then run the same command again with the same intent"
+        }
+        "profile_unconfirmed" => {
+            "The agent's start was typed but Hide could not confirm its program runs; look at the agent's pane before starting it again, since it may be running"
+        }
+        "launch_records_full" => {
+            "Hide keeps as many records of how its agents started as it can, so an agent with a profile does not start; close agents you no longer need, then run the same command again"
+        }
         "beside_pane_unavailable" => {
-            "Herdr could not split your pane (it closed, or Herdr refused the split), so nothing was opened; run the same command again from your agent pane, or with a new intent without --beside to open it in a new tab"
+            "The engine could not split your pane (it closed, or the engine refused the split), so nothing was opened; run the same command again from your agent pane, or with a new intent without --beside to open it in a new tab"
         }
         _ => "Check the current agent pane and retry the same intent",
     }
 }
 
+/// Whether a page command, the CLI's or a phone's picture
+/// (`mobile/page_shot.rs`), may act on `view`. A View on a desk does only as
+/// its area's selected View, so one behind another tab is refused before
+/// anything is sent; a page on no desk is on no screen for an action to be
+/// drawn over, so every one of them does (PRD lane-desk-pair-view B32).
+pub(crate) fn takes_input(view: &hide_core::workspace_control::View) -> bool {
+    view.selected || view.area_id == hide_core::workspace_views::SHELF_AREA
+}
+
 /// What the core knows of a display a `hide browser` command relays to:
-/// whether it is its area's selected View (the only one shown, so the CLI
-/// refuses input to any other before sending it) and `source_url`, the
-/// address the core keeps for it. A device's page loads from a loopback route
-/// on this machine, so the page reports that address and the CLI names this
-/// one instead. `None` when the checkout has no such display.
+/// whether it takes input (`takes_input`), and `source_url`, the address the
+/// core keeps for it. A device's page loads from a loopback route on this
+/// machine, so the page reports that address and the CLI names this one
+/// instead. `None` when the caller's checkout, whose Views alone `views`
+/// lists, has no such display.
 pub(crate) fn relay_facts(
-    views: &[herdr_core::workspace_control::View],
+    views: &[hide_core::workspace_control::View],
     display_id: &str,
 ) -> Option<Value> {
     let view = views.iter().find(|view| view.view_id == display_id)?;
-    Some(json!({"selected": view.selected, "source_url": view.target}))
+    Some(json!({"selected": takes_input(view), "source_url": view.target}))
 }
 
 /// The relay's answer to the CLI: `relay_facts` under the display's id.
@@ -1437,12 +1629,23 @@ pub(crate) fn relay_ready(display_id: &str, facts: &Value) -> Value {
 /// devices the caller could have used says so in its next action, and its
 /// reason stays the code.
 fn refusal_answer(reason: String, next_action: &'static str) -> (String, String) {
-    match herdr_core::coordination::split_refusal(&reason) {
-        (code @ "shell_starting", Some(screen)) if !screen.is_empty() => (
-            code.to_owned(),
-            format!("{next_action}. Its screen ends with: {screen}"),
-        ),
-        (code @ "shell_starting", _) => (code.to_owned(), next_action.to_owned()),
+    // An external tool's refusal says what the tool does next, whichever
+    // owner refused it (PRD hide-external-control B20-B23).
+    if let Some(next_action) = crate::access::next_action(&reason) {
+        return (reason, next_action.to_owned());
+    }
+    match hide_core::coordination::split_refusal(&reason) {
+        (code @ "shell_starting", detail) => {
+            let (seconds, screen) =
+                hide_core::coordination::shell_starting_detail(detail.unwrap_or_default());
+            let waited = seconds.map_or_else(String::new, |seconds| {
+                format!(". The shell was waited for {seconds} s")
+            });
+            let screen = screen.map_or_else(String::new, |screen| {
+                format!(". Its screen ends with: {screen}")
+            });
+            (code.to_owned(), format!("{next_action}{waited}{screen}"))
+        }
         (code @ "mission_cap_reached", Some(cap)) => (
             code.to_owned(),
             format!("{next_action}; the mission runs at most {cap} workers at once"),
@@ -1478,10 +1681,10 @@ fn refusal_answer(reason: String, next_action: &'static str) -> (String, String)
 /// answer: a spawn's `spawn` (`{"id","pane"}`) and a pane send's `sent`
 /// (`{"text_sent","keys_sent","enter_sent"}`).
 fn refusal_field(reason: &str) -> Option<(&'static str, Value)> {
-    let (code, detail) = herdr_core::coordination::split_refusal(reason);
-    let name = if herdr_core::coordination::INCOMPLETE_SPAWN.contains(&code) {
+    let (code, detail) = hide_core::coordination::split_refusal(reason);
+    let name = if hide_core::coordination::INCOMPLETE_SPAWN.contains(&code) {
         "spawn"
-    } else if herdr_core::pane_command::PARTIAL.contains(&code) {
+    } else if hide_core::pane_command::PARTIAL.contains(&code) {
         "sent"
     } else {
         return None;
@@ -1499,30 +1702,44 @@ fn valid_caller_hint(value: &serde_json::Value) -> bool {
 }
 
 enum ScopedRequest {
-    Query(herdr_core::workspace_control::Query),
-    Action(herdr_core::workspace_control::Action),
+    Query(hide_core::workspace_control::Query),
+    Action(hide_core::workspace_control::Action),
     BrowserConnect(Option<String>),
     /// `hide browser` page commands: the same checks as a display
     /// connection, then this socket carries the CDP frames.
     BrowserRelay(String),
-    Delivery(Box<herdr_core::delivery::Command>, Option<String>),
+    Delivery(Box<hide_core::delivery::Command>, Option<String>),
     /// `hide links`: a read of the link record, which needs no shell.
-    Links(herdr_core::links::query::LinksQuery),
+    Links(hide_core::links::query::LinksQuery),
     /// `hide session list|record|read`: a read of the Project's sessions,
     /// which needs no shell.
-    Session(herdr_core::links::session_command::SessionCommand),
+    Session(hide_core::links::session_command::SessionCommand),
     /// `hide memory`: Project Memory's own store, which needs no shell.
-    Memory(herdr_core::memory_command::MemoryCommand),
+    Memory(hide_core::memory_command::MemoryCommand),
     /// `hide workspace memory`: a hook's Project Memory, which needs no
     /// shell.
-    MemoryHook(herdr_core::memory_hook::Ask),
+    MemoryHook(hide_core::memory_hook::Ask),
     /// `hide mission`: a Conductor's mission record, the core's own.
-    Mission(Box<herdr_core::missions::MissionCommand>),
-    /// `hide plan`: the caller's session's own plan, the core's record.
-    Plan(herdr_core::plans::PlanCommand),
+    Mission(Box<hide_core::missions::MissionCommand>),
+    /// `hide task`: the caller's session's own plan, the core's record.
+    Plan(hide_core::plans::PlanCommand),
+    /// `hide automation`: the operator's automations, the core's book
+    /// (`automation_cli`).
+    Automation(Box<hide_core::automations::Call>),
+    /// `hide session fold-ask`: one of the caller's session's open questions,
+    /// folded with its reason in the link record.
+    FoldAsk {
+        id: String,
+        reason: String,
+    },
     /// `hide agent catalog`: what a machine's agents take, read from the
     /// core's own reports.
     AgentCatalog(Option<String>),
+    /// `hide agent profile`: planned on the owner thread, run off it.
+    AgentProfile(hide_core::agent_profiles::ProfileCommand),
+    /// `hide skill` / `hide mcp`: planned on the owner thread, waited on off
+    /// it, an install or an update until the operator answers its confirm.
+    Store(hide_core::store_command::StoreCommand),
     /// `hide ps [--all]`: the live panes and agents, read from the core's
     /// own state.
     Ps {
@@ -1541,16 +1758,19 @@ enum ScopedRequest {
         actor: Option<String>,
     },
     /// `hide device`: the core's own device registrations.
-    Device(herdr_core::device_command::DeviceCommand),
+    Device(hide_core::device_command::DeviceCommand),
     /// `hide pane`, `hide agent read` and `hide workspace purpose`: run
     /// through the core's engine, which needs no shell.
-    Pane(herdr_core::pane_command::PaneCommand),
+    Pane(hide_core::pane_command::PaneCommand),
     /// `hide <path>`: a folder of the caller's machine opened as a project
     /// (`project_open`).
     ProjectOpen(String),
     /// `hide workspace remove`: the delete dialog's removal of a worktree,
     /// run by the core, which needs no shell.
-    WorktreeRemove(herdr_core::worktree_command::WorktreeRemove),
+    WorktreeRemove(hide_core::worktree_command::WorktreeRemove),
+    /// `hide access list`: an external tool reads the tools connected and
+    /// the requests waiting (PRD hide-external-control B17).
+    AccessList,
 }
 
 impl ScopedRequest {
@@ -1566,7 +1786,11 @@ impl ScopedRequest {
                 | Self::MemoryHook(..)
                 | Self::Mission(..)
                 | Self::Plan(..)
+                | Self::Automation(..)
+                | Self::FoldAsk { .. }
                 | Self::AgentCatalog(..)
+                | Self::AgentProfile(..)
+                | Self::Store(..)
                 | Self::Ps { .. }
                 | Self::AgentSleep { .. }
                 | Self::AgentArchive { .. }
@@ -1574,7 +1798,48 @@ impl ScopedRequest {
                 | Self::Pane(..)
                 | Self::ProjectOpen(..)
                 | Self::WorktreeRemove(..)
+                | Self::AccessList
         )
+    }
+
+    /// What an external tool's level must allow for this command (PRD
+    /// hide-external-control B20-B23). A command family the core also runs
+    /// for a tool takes its need from the core's one table
+    /// (`hide_core::access`), which the core judges again; the rest are
+    /// this boundary's alone.
+    fn access_need(&self) -> hide_core::access::Need {
+        use hide_core::access::{self, Need};
+        match self {
+            Self::Delivery(command, _) => access::delivery_need(command),
+            Self::Pane(command) => access::pane_need(command),
+            Self::Mission(command) => access::mission_need(command),
+            Self::Device(command) => access::device_need(command),
+            Self::Ps { .. } | Self::AccessList => Need::View,
+            Self::Store(command) => match command {
+                hide_core::store_command::StoreCommand::List { .. }
+                | hide_core::store_command::StoreCommand::Show { .. } => Need::View,
+                _ => Need::Act,
+            },
+            // Reading the automations is a view; a change starts agents
+            // later with no one present.
+            Self::Automation(call) if crate::automation_cli::reads(call) => Need::View,
+            Self::Automation(..) => Need::Act,
+            Self::Plan(..) | Self::FoldAsk { .. } | Self::Memory(..) | Self::MemoryHook(..) => {
+                Need::Agent
+            }
+            Self::AgentSleep { .. }
+            | Self::AgentArchive { .. }
+            | Self::Query(..)
+            | Self::Action(..)
+            | Self::BrowserConnect(..)
+            | Self::BrowserRelay(..)
+            | Self::Links(..)
+            | Self::Session(..)
+            | Self::AgentCatalog(..)
+            | Self::AgentProfile(..)
+            | Self::ProjectOpen(..)
+            | Self::WorktreeRemove(..) => Need::Act,
+        }
     }
 }
 
@@ -1613,10 +1878,10 @@ async fn scoped_client_loop(
                     let command = match value["type"].as_str() {
                         Some("workspace_query") => match value["query"].as_str() {
                             Some("info") => Some(ScopedRequest::Query(
-                                herdr_core::workspace_control::Query::Info,
+                                hide_core::workspace_control::Query::Info,
                             )),
                             Some("view_list") => Some(ScopedRequest::Query(
-                                herdr_core::workspace_control::Query::ViewList,
+                                hide_core::workspace_control::Query::ViewList,
                             )),
                             Some("browser_connect") => match value.get("display_id") {
                                 None | Some(Value::Null) => {
@@ -1636,25 +1901,25 @@ async fn scoped_client_loop(
                             _ => None,
                         },
                         Some("workspace_action") => {
-                            serde_json::from_value::<herdr_core::workspace_control::Action>(
+                            serde_json::from_value::<hide_core::workspace_control::Action>(
                                 value["command"].clone(),
                             )
                             .ok()
                             .map(ScopedRequest::Action)
                         }
                         Some("links") => serde_json::from_value::<
-                            herdr_core::links::query::LinksQuery,
+                            hide_core::links::query::LinksQuery,
                         >(value["query"].clone())
                         .ok()
                         .filter(|query| query.target.valid())
                         .map(ScopedRequest::Links),
                         Some("session") => serde_json::from_value::<
-                            herdr_core::links::session_command::SessionCommand,
+                            hide_core::links::session_command::SessionCommand,
                         >(value["command"].clone())
                         .ok()
                         .map(ScopedRequest::Session),
                         Some("delivery") => {
-                            herdr_core::delivery::Command::from_wire(value["command"].clone())
+                            hide_core::delivery::Command::from_wire(value["command"].clone())
                                 .ok()
                                 .filter(|_| valid_caller_hint(&value))
                                 .map(|command| {
@@ -1665,25 +1930,52 @@ async fn scoped_client_loop(
                                 })
                         }
                         Some("memory") => serde_json::from_value::<
-                            herdr_core::memory_command::MemoryCommand,
+                            hide_core::memory_command::MemoryCommand,
                         >(value["command"].clone())
                         .ok()
-                        .filter(herdr_core::memory_command::MemoryCommand::valid)
+                        .filter(hide_core::memory_command::MemoryCommand::valid)
                         .map(ScopedRequest::Memory),
-                        Some("memory_hook") => herdr_core::memory_hook::Ask::from_wire(&value)
+                        Some("memory_hook") => hide_core::memory_hook::Ask::from_wire(&value)
                             .map(ScopedRequest::MemoryHook),
                         Some("mission") => serde_json::from_value::<
-                            herdr_core::missions::MissionCommand,
+                            hide_core::missions::MissionCommand,
                         >(value["command"].clone())
                         .ok()
-                        .filter(herdr_core::missions::MissionCommand::valid)
+                        .filter(hide_core::missions::MissionCommand::valid)
                         .map(|command| ScopedRequest::Mission(Box::new(command))),
-                        Some("plan") => serde_json::from_value::<herdr_core::plans::PlanCommand>(
+                        Some("plan") => serde_json::from_value::<hide_core::plans::PlanCommand>(
                             value["command"].clone(),
                         )
                         .ok()
-                        .filter(herdr_core::plans::PlanCommand::valid)
+                        .filter(hide_core::plans::PlanCommand::valid)
                         .map(ScopedRequest::Plan),
+                        Some("automation") => crate::automation_cli::from_wire(&value["call"])
+                            .map(|call| ScopedRequest::Automation(Box::new(call))),
+                        Some("fold_ask") => {
+                            match (value["id"].as_str(), value["reason"].as_str()) {
+                                (Some(id), Some(reason))
+                                    if id.len() <= 64 && reason.len() <= 1024 =>
+                                {
+                                    Some(ScopedRequest::FoldAsk {
+                                        id: id.to_owned(),
+                                        reason: reason.to_owned(),
+                                    })
+                                }
+                                _ => None,
+                            }
+                        }
+                        Some("agent_profile") => serde_json::from_value::<
+                            hide_core::agent_profiles::ProfileCommand,
+                        >(value["command"].clone())
+                        .ok()
+                        .filter(hide_core::agent_profiles::ProfileCommand::valid)
+                        .map(ScopedRequest::AgentProfile),
+                        Some("store") => serde_json::from_value::<
+                            hide_core::store_command::StoreCommand,
+                        >(value["command"].clone())
+                        .ok()
+                        .filter(hide_core::store_command::StoreCommand::valid)
+                        .map(ScopedRequest::Store),
                         Some("agent_catalog") => match value.get("machine") {
                             None | Some(Value::Null) => Some(ScopedRequest::AgentCatalog(None)),
                             Some(Value::String(id)) if !id.is_empty() && id.len() <= 256 => {
@@ -1725,36 +2017,39 @@ async fn scoped_client_loop(
                             })
                         }
                         Some("device") => serde_json::from_value::<
-                            herdr_core::device_command::DeviceCommand,
+                            hide_core::device_command::DeviceCommand,
                         >(value["command"].clone())
                         .ok()
-                        .filter(herdr_core::device_command::DeviceCommand::valid)
+                        .filter(hide_core::device_command::DeviceCommand::valid)
                         .map(ScopedRequest::Device),
                         Some("pane") => serde_json::from_value::<
-                            herdr_core::pane_command::PaneCommand,
+                            hide_core::pane_command::PaneCommand,
                         >(value["command"].clone())
                         .ok()
                         .map(ScopedRequest::Pane),
                         Some("worktree_remove") => {
-                            serde_json::from_value::<herdr_core::worktree_command::WorktreeRemove>(
+                            serde_json::from_value::<hide_core::worktree_command::WorktreeRemove>(
                                 value["command"].clone(),
                             )
                             .ok()
-                            .filter(herdr_core::worktree_command::WorktreeRemove::valid)
+                            .filter(hide_core::worktree_command::WorktreeRemove::valid)
                             .map(ScopedRequest::WorktreeRemove)
                         }
                         Some("project_open") => value["path"]
                             .as_str()
-                            .filter(|path| herdr_core::project_open::valid_path(path))
+                            .filter(|path| hide_core::project_open::valid_path(path))
                             .map(|path| ScopedRequest::ProjectOpen(path.to_owned())),
+                        Some("access_list") => Some(ScopedRequest::AccessList),
                         _ => None,
                     };
-                    // A plan carries its whole node list, so a mission
-                    // command may use the frame's full size like a letter.
+                    // A plan carries its whole node list, and an automation
+                    // its task, so a mission, plan or automation command may
+                    // use the frame's full size like a letter.
                     if command.is_none()
                         || (value["type"] != "delivery"
                             && value["type"] != "mission"
                             && value["type"] != "plan"
+                            && value["type"] != "automation"
                             && value["type"] != "pane"
                             && text.len() > 16 * 1024)
                         || request_id.is_empty()
@@ -1792,8 +2087,15 @@ async fn scoped_client_loop(
                             Ok(Err(((*reason).to_owned(), *next_action)))
                         } else {
                             tokio::task::spawn_blocking(move || {
-                            let cap = registry.validate(&query_token, core.engine(), &core, attested.as_deref())
+                            let cap = registry.validate(&query_token, Some(core.engine()), &core, attested.as_deref())
                                 .map_err(|reason| (reason.to_owned(), crate::pane_auth::refusal_next_action(reason)))?;
+                            // An external tool runs what its level allows,
+                            // judged here for every command (B20-B23).
+                            if let Some(level) = cap.access_level() {
+                                hide_core::access::admit(level, command.access_need()).map_err(|reason| {
+                                    (reason.to_owned(), crate::pane_auth::refusal_next_action(reason))
+                                })?;
+                            }
                             if command.needs_renderer() && renderers.load(Ordering::SeqCst) == 0 {
                                 return Err((
                                     "renderer_unavailable".to_owned(),
@@ -1806,7 +2108,7 @@ async fn scoped_client_loop(
                                         return Err(("browser_unsupported".to_owned(), "Open the Hide desktop app and retry"));
                                     }
                                     let result = core.workspace_query(&cap.context.device_id, &cap.pane_id,
-                                        herdr_core::workspace_control::Query::ViewList)
+                                        hide_core::workspace_control::Query::ViewList)
                                         .map_err(|refusal| (refusal.reason.to_owned(), refusal.next_action))?;
                                     if result.context != cap.context {
                                         let (reason, next_action) = cap.changed_refusal();
@@ -1820,7 +2122,7 @@ async fn scoped_client_loop(
                                         return Err(("browser_unsupported".to_owned(), "Open the Hide desktop app and retry"));
                                     }
                                     let result = core.workspace_query(&cap.context.device_id, &cap.pane_id,
-                                        herdr_core::workspace_control::Query::ViewList)
+                                        hide_core::workspace_control::Query::ViewList)
                                         .map_err(|refusal| (refusal.reason.to_owned(), refusal.next_action))?;
                                     if result.context != cap.context {
                                         let (reason, next_action) = cap.changed_refusal();
@@ -1835,8 +2137,31 @@ async fn scoped_client_loop(
                                 ScopedRequest::Delivery(command, hint) => {
                                     crate::hook_request::delivery(&core, &cap, *command, hint)?
                                 }
+                                ScopedRequest::AccessList => {
+                                    if cap.access_level().is_none() {
+                                        return Err((
+                                            "access_not_connected".to_owned(),
+                                            crate::pane_auth::refusal_next_action("access_not_connected"),
+                                        ));
+                                    }
+                                    core.access(hide_core::access::Call::List).map_err(|code| {
+                                        let next = crate::pane_auth::refusal_next_action(&code);
+                                        (code, next)
+                                    })?
+                                }
                                 ScopedRequest::MemoryHook(ask) => {
                                     crate::hook_request::memory(&core, &cap, &ask)?
+                                }
+                                // A tool outside every checkout has none to
+                                // read: it asks from inside one (B25).
+                                ScopedRequest::Links(_) | ScopedRequest::Session(_)
+                                    if cap.access_level().is_some()
+                                        && cap.context.checkout_path.is_empty() =>
+                                {
+                                    return Err((
+                                        "checkout_not_registered".to_owned(),
+                                        crate::pane_auth::CHECKOUT_NEXT_ACTION,
+                                    ));
                                 }
                                 ScopedRequest::Links(query) => {
                                     let scope = core.links_scope(&cap.context).ok_or((
@@ -1847,7 +2172,7 @@ async fn scoped_client_loop(
                                         "links_unavailable".to_owned(),
                                         "Retry; the reason is in Hide's diagnostic log",
                                     ))?;
-                                    herdr_core::links::query::run(&scope, &query, own.as_ref())
+                                    hide_core::links::query::run(&scope, &query, own.as_ref())
                                         .map_err(|(reason, next_action)| (reason.to_owned(), next_action))?
                                 }
                                 ScopedRequest::Session(command) => {
@@ -1855,21 +2180,36 @@ async fn scoped_client_loop(
                                         "links_unavailable".to_owned(),
                                         "Retry; the reason is in Hide's diagnostic log",
                                     ))?;
-                                    herdr_core::links::session_command::run(&scope, &command, core.as_ref())?
+                                    hide_core::links::session_command::run(&scope, &command, core.as_ref())?
                                 }
                                 ScopedRequest::Memory(command) => {
                                     core.prepare_memory(&cap.context.device_id, &cap.pane_id, &cap.context, command)
-                                        .and_then(herdr_core::memory_command::PreparedMemory::run)
+                                        .and_then(hide_core::memory_command::PreparedMemory::run)
                                         .map_err(|code| {
-                                            let next = herdr_core::memory_command::next_action(&code);
+                                            let next = hide_core::memory_command::next_action(&code);
                                             (code, next)
                                         })?
                                 }
                                 ScopedRequest::Mission(command) => {
+                                    // A take hands the former Conductor's
+                                    // children to the caller's registration,
+                                    // so the caller has one first (B43).
+                                    if matches!(*command, hide_core::missions::MissionCommand::Take { .. }) {
+                                        crate::hook_request::delivery(
+                                            &core,
+                                            &cap,
+                                            hide_core::delivery::Command::Agents {
+                                                command: hide_core::coordination::Command::RegisterSelf {
+                                                    project: Some(cap.context.checkout_path.clone()),
+                                                },
+                                            },
+                                            None,
+                                        )?;
+                                    }
                                     core.mission(&cap.context.device_id, &cap.pane_id, &cap.context, *command)
                                         .map_err(|code| {
-                                            let next = herdr_core::missions::next_action(
-                                                herdr_core::coordination::split_refusal(&code).0,
+                                            let next = hide_core::missions::next_action(
+                                                hide_core::coordination::split_refusal(&code).0,
                                             );
                                             (code, next)
                                         })?
@@ -1877,8 +2217,40 @@ async fn scoped_client_loop(
                                 ScopedRequest::Plan(command) => {
                                     core.plan(&cap.context.device_id, &cap.pane_id, &cap.context, command)
                                         .map_err(|code| {
-                                            let next = herdr_core::plans::next_action(
-                                                herdr_core::coordination::split_refusal(&code).0,
+                                            let next = hide_core::plans::next_action(
+                                                hide_core::coordination::split_refusal(&code).0,
+                                            );
+                                            (code, next)
+                                        })?
+                                }
+                                ScopedRequest::Automation(call) => {
+                                    let from_device = cap.context.device_id != core.node().as_str();
+                                    crate::automation_cli::answer(&core, *call, from_device)?
+                                }
+                                ScopedRequest::FoldAsk { id, reason } => {
+                                    core.fold_ask_scope(&cap.context.device_id, &cap.pane_id, &cap.context)
+                                        .and_then(|scope| scope.run(&id, &reason))
+                                        .map_err(|code| {
+                                            let next = hide_core::links::agent_asks::next_action(&code);
+                                            (code, next)
+                                        })?
+                                }
+                                ScopedRequest::AgentProfile(command) => {
+                                    core.prepare_agent_profile(&cap.context.device_id, command)
+                                        .and_then(hide_core::agent_profiles::Prepared::run)
+                                        .map_err(|code| {
+                                            let next = hide_core::agent_profiles::next_action(
+                                                hide_core::coordination::split_refusal(&code).0,
+                                            );
+                                            (code, next)
+                                        })?
+                                }
+                                ScopedRequest::Store(command) => {
+                                    core.prepare_store(&cap.context.device_id, &cap.pane_id, command)
+                                        .and_then(hide_core::store_command::Prepared::run)
+                                        .map_err(|code| {
+                                            let next = hide_core::store_command::next_action(
+                                                hide_core::coordination::split_refusal(&code).0,
                                             );
                                             (code, next)
                                         })?
@@ -1900,14 +2272,14 @@ async fn scoped_client_loop(
                                 ScopedRequest::AgentSleep { id, actor } => {
                                     core.agent_sleep(&cap.context.device_id, &cap.pane_id, &cap.context, id, actor)
                                         .map_err(|code| {
-                                            let next = herdr_core::coordination::sleep_next_action(&code);
+                                            let next = hide_core::coordination::sleep_next_action(&code);
                                             (code, next)
                                         })?
                                 }
                                 ScopedRequest::AgentArchive { id, actor } => {
                                     core.agent_archive(&cap.context.device_id, &cap.pane_id, &cap.context, id, actor)
                                         .map_err(|code| {
-                                            let next = herdr_core::coordination::archive_next_action(&code);
+                                            let next = hide_core::coordination::archive_next_action(&code);
                                             (code, next)
                                         })?
                                 }
@@ -1923,27 +2295,27 @@ async fn scoped_client_loop(
                                 ScopedRequest::WorktreeRemove(command) => {
                                     core.worktree_remove(&cap.context.device_id, &cap.pane_id, &cap.context, command)
                                         .map_err(|reason| {
-                                            let code = herdr_core::coordination::split_refusal(&reason).0;
-                                            let next = herdr_core::worktree_command::next_action(code)
+                                            let code = hide_core::coordination::split_refusal(&reason).0;
+                                            let next = hide_core::worktree_command::next_action(code)
                                                 .unwrap_or_else(|| crate::server::delivery_next_action(code));
                                             (reason, next)
                                         })?
                                 }
                                 ScopedRequest::Pane(command) => {
                                     let refusal = |reason: String| {
-                                        let code = herdr_core::coordination::split_refusal(&reason).0;
-                                        let next = herdr_core::pane_command::next_action(code)
+                                        let code = hide_core::coordination::split_refusal(&reason).0;
+                                        let next = hide_core::pane_command::next_action(code)
                                             .unwrap_or_else(|| crate::server::delivery_next_action(code));
                                         (reason, next)
                                     };
                                     core.prepare_pane(&cap.context.device_id, &cap.pane_id, &cap.context, command)
-                                        .and_then(herdr_core::pane_command::Prepared::run)
+                                        .and_then(hide_core::pane_command::Prepared::run)
                                         .map_err(refusal)?
                                 }
                                 ScopedRequest::Device(command) => {
                                     core.device_command(&cap.context.device_id, command)
                                         .map_err(|code| {
-                                            let next = herdr_core::device_command::next_action(&code);
+                                            let next = hide_core::device_command::next_action(&code);
                                             (code, next)
                                         })?
                                 }
@@ -2000,7 +2372,7 @@ async fn scoped_client_loop(
                                         }
                                         None => action,
                                     };
-                                    if matches!(action, herdr_core::workspace_control::Action::OpenBrowser { .. }) && desktop_renderers.load(Ordering::SeqCst) == 0 {
+                                    if matches!(action, hide_core::workspace_control::Action::OpenBrowser { .. }) && desktop_renderers.load(Ordering::SeqCst) == 0 {
                                         return Err(("browser_unsupported".to_owned(), "Open the Hide desktop app and retry"));
                                     }
                                     let preparation = core
@@ -2013,14 +2385,14 @@ async fn scoped_client_loop(
                                         )
                                         .map_err(|refusal| (refusal.reason.to_owned(), refusal.next_action))?;
                                     let material = match preparation {
-                                        herdr_core::workspace_control::ActionPreparation::Cached(result) => {
+                                        hide_core::workspace_control::ActionPreparation::Cached(result) => {
                                             let result = result.map_err(|refusal| (refusal.reason.to_owned(), refusal.next_action))?;
                                             return serde_json::to_value(result).map_err(|_| {
                                                 ("result_encoding_failed".to_owned(), "Reconnect Hide and retry")
                                             });
                                         }
-                                        herdr_core::workspace_control::ActionPreparation::Ready => Ok(None),
-                                        herdr_core::workspace_control::ActionPreparation::Read(source) => {
+                                        hide_core::workspace_control::ActionPreparation::Ready => Ok(None),
+                                        hide_core::workspace_control::ActionPreparation::Read(source) => {
                                             source.read().map(Some)
                                         }
                                     };
@@ -2243,8 +2615,19 @@ enum ClientAction {
     FileBytes(Value),
     /// A move of the core, which this process's supervisor takes.
     CoreMove(Value),
+    /// Something the operator does about pairing (`pairing_*`), which the
+    /// daemon's pairing answers for this client alone.
+    Pairing(Value),
     /// A `file_list` for a checkout on an SSH device, answered by its helper.
     DeviceListing(Value),
+    /// Add a project's question for a machine's node: a folder under its
+    /// home (`home_folder_list`), the projects worth adding there
+    /// (`importable_projects`), or where a clone or a new project would
+    /// land on a device (`clone_target`, `project_target`).
+    NodeAsk(Value),
+    /// A window's call on the automations that waits for the core's answer
+    /// (`automation_screen`).
+    Automation(Value),
     /// Comment mode on a browser View, answered when its page is ready.
     BrowserComment(Value),
     /// The operator's comment or Send, which the screen's feedback queue
@@ -2259,8 +2642,9 @@ enum ClientAction {
 /// finds the checkout and its device in its own catalog, and the helper
 /// confines the path to the checkout root it opened, or, for a registration,
 /// to that device's own home (`hide_host::register`).
-const DEVICE_FILE_EVENTS: [&str; 11] = [
+const DEVICE_FILE_EVENTS: [&str; 12] = [
     "create_workspace",
+    "clone_repository",
     "file_list",
     "file_open",
     "reveal_path",
@@ -2305,6 +2689,15 @@ fn handle_client_text(
         return Ok(ClientAction::Replies(handle_file_index(state, &event)));
     }
     match event.get("kind").and_then(Value::as_str) {
+        Some("home_folder_list" | "importable_projects") => {
+            return Ok(ClientAction::NodeAsk(event));
+        }
+        Some(crate::automation_screen::KIND) => return Ok(ClientAction::Automation(event)),
+        Some("project_target" | "clone_target")
+            if event_device(&state.boundary, &event).is_some() =>
+        {
+            return Ok(ClientAction::NodeAsk(event));
+        }
         Some("project_target") => {
             return Ok(ClientAction::Replies(vec![Message::Text(
                 project_target(&state.boundary, &event).to_string().into(),
@@ -2352,7 +2745,7 @@ fn handle_client_text(
             state.core.terminals.key(target, bytes, unix_ms_now());
             return Ok(ClientAction::Replies(Vec::new()));
         }
-        Some("terminal_click") => {
+        Some("terminal_mouse") => {
             screen_input(state, connection, &payload_str(&event, "pane_id"));
         }
         // A screen's grid goes on to the core only while the pane follows
@@ -2371,6 +2764,21 @@ fn handle_client_text(
         }
         // A desktop window says whether its notifications are on; the daemon
         // judges agent changes for it only then (`desktop_notices.rs`).
+        Some("desktop_activity") => {
+            if !desktop {
+                return Err("desktop_activity is a desktop window's".to_owned());
+            }
+            #[derive(serde::Deserialize)]
+            #[serde(deny_unknown_fields)]
+            struct Activity {
+                in_use: bool,
+            }
+            let activity: Activity = serde_json::from_value(event["payload"].clone())
+                .map_err(|_| "desktop_activity.in_use must be a boolean".to_owned())?;
+            state.desktop_notices.activity(connection, activity.in_use);
+            state.mobile.wake_follower();
+            return Ok(ClientAction::Replies(Vec::new()));
+        }
         Some("desktop_notices") => {
             if !desktop {
                 return Err("desktop_notices is a desktop window's".to_owned());
@@ -2382,9 +2790,20 @@ fn handle_client_text(
             else {
                 return Err("desktop_notices.wanted must be a boolean".to_owned());
             };
-            if state.desktop_notices.set(connection, wanted) {
-                state.mobile.wake_follower();
-            }
+            let waiting = event["payload"]
+                .get("needs_you")
+                .map(|value| {
+                    value
+                        .as_bool()
+                        .ok_or("desktop_notices.needs_you must be a boolean")
+                })
+                .transpose()?
+                .unwrap_or(wanted);
+            state
+                .desktop_notices
+                .set_waiting(connection, wanted && waiting);
+            state.desktop_notices.set(connection, wanted);
+            state.mobile.wake_follower();
             return Ok(ClientAction::Replies(Vec::new()));
         }
         // An item's origin is read for each window that shows it and closed
@@ -2450,9 +2869,29 @@ fn handle_client_text(
             }
             return Ok(ClientAction::BrowserComment(event));
         }
+        // Approving, refusing, changing the level of and disconnecting an
+        // external tool are the operator's, in a window's Settings (PRD
+        // hide-external-control B8): no `hide` command and no pane sends them.
+        Some(kind) if kind.starts_with("access_") && !renderer => {
+            return Err("External tools are approved in an operator window".to_owned());
+        }
         // The daemon owns this flag from its renderer count; a window that
         // sent it would pause the readers every other window draws.
         Some("ui_attached") => return Err("ui_attached is sent by the daemon only".to_owned()),
+        // The paired machines are what the daemon's pairing settled; a
+        // client that named them would draw machines nobody allowed.
+        Some("peer_machines") => {
+            return Err("peer_machines is sent by the daemon only".to_owned());
+        }
+        // A device's switch is the daemon's own pairing with its machine; a
+        // client that named a step would hand the device to a key nobody
+        // paired.
+        Some("device_switch") => {
+            return Err("device_switch is sent by the daemon only".to_owned());
+        }
+        Some(kind) if kind.starts_with("pairing_") => {
+            return Ok(ClientAction::Pairing(event));
+        }
         Some(kind) if kind.starts_with("mobile_") => {
             state.mobile.handle_event(connection, &event)?;
             return Ok(ClientAction::Replies(Vec::new()));
@@ -2632,7 +3071,7 @@ fn stage_page_shot(
 ) {
     match attachments.stage_view_shot(png) {
         Ok(name) => event["payload"]["shot"] = json!({"node": node, "name": name}),
-        Err(error) => herdr_core::diagnostic!(json!({
+        Err(error) => hide_core::diagnostic!(json!({
             "component": "browser_comment",
             "kind": "shot.stage_failed",
             "display_id": event.pointer("/payload/display_id"),
@@ -2734,8 +3173,8 @@ fn device_listing(
         Ok(channel) => channel,
         Err(message) => return unavailable("not_ready", None, message),
     };
-    use herdr_core::node_access::LinkError;
-    match herdr_core::node_access::list_folder(channel.as_ref(), &root, &relative) {
+    use hide_core::node_access::LinkError;
+    match hide_core::node_access::list_folder(channel.as_ref(), &root, &relative) {
         Ok(listing) => {
             let base = folder.trim_end_matches('/');
             let entries: Vec<Value> = listing
@@ -2760,6 +3199,191 @@ fn device_listing(
         Err(LinkError::Unknown(message)) => unavailable("unknown", None, message),
         Err(LinkError::Refused(error)) => {
             unavailable("refused", Some(error.code.as_str()), error.message)
+        }
+    }
+}
+
+/// The reason a node ask's frame carries for a refusal: the node's own code
+/// for a path it judged, `busy` for a link already full, and `disconnected`
+/// for a machine that cannot be reached (`contracts/hided-ws.schema.json`,
+/// `nodeAskReason`).
+fn node_ask_reason(error: &hide_node_link::LinkError) -> &'static str {
+    match error {
+        hide_node_link::LinkError::Refused(refused) => match refused.code {
+            hide_node_link::ErrorCode::OutsideRoot => "outside_home",
+            hide_node_link::ErrorCode::NotFound => "not_found",
+            hide_node_link::ErrorCode::NotADirectory => "not_a_directory",
+            hide_node_link::ErrorCode::InvalidPath => "invalid_path",
+            hide_node_link::ErrorCode::AlreadyExists => "already_exists",
+            _ => "unreadable",
+        },
+        hide_node_link::LinkError::Busy => "busy",
+        _ => "disconnected",
+    }
+}
+
+/// Asks a machine's node Add a project's question on a blocking task and
+/// hands the answer to the client's socket loop; a client gone by then drops
+/// it. The answer is never forwarded to the core and changes nothing on disk.
+fn spawn_node_ask(
+    state: &AppState,
+    event: Value,
+    frames: tokio::sync::mpsc::Sender<String>,
+    slot: Option<crate::relay::RelaySlot>,
+) {
+    let core = Arc::clone(&state.core);
+    let boundary = Arc::clone(&state.boundary);
+    tokio::spawn(async move {
+        let _slot = slot;
+        let frame = tokio::task::spawn_blocking(move || node_ask(&core, &boundary, &event))
+            .await
+            .unwrap_or_else(|error| {
+                json!({"type": "error", "payload": {}, "message": format!("node ask failed: {error}")})
+            });
+        let _ = frames.send(frame.to_string()).await;
+    });
+}
+
+/// How long a node may take to list a folder or judge a new folder's place.
+const NODE_ASK_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(15);
+
+/// How long a node may take to find the projects worth adding: it walks up
+/// to `SESSION_DISCOVERY_LIMIT` session entries and judges up to
+/// `JUDGED_FOLDER_CAP` folders, and answers by `IMPORTABLE_SEARCH_BUDGET`,
+/// which this leaves room above for the link.
+const IMPORTABLE_ASK_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(30);
+
+/// Add a project's question for a machine's node, answered as the frame the
+/// dialog reads (PRD device-add-project D-03, D-07, D-08):
+///
+/// - `home_folder_list` {device_id, path}: one folder under that machine's
+///   home (`Call::HomeList`), this machine's included, answered as a
+///   `home_folder_list` frame carrying `listing` or `reason`;
+/// - `importable_projects` {device_id}: the projects worth adding on that
+///   machine (`Call::ImportableProjects`), its registrations left out,
+///   answered as an `importable_projects` frame carrying `projects` or
+///   `reason`, each source the node could not read logged as
+///   `add_project.import_source_dropped`;
+/// - a device's `clone_target` and `project_target`: where the clone or new
+///   project would land under that device's home (`Call::NewFolderTarget`),
+///   answered in the same frames this machine's `$HOME` line answers with.
+///
+/// `reason` is a code the dialog words: the node's refusal (`outside_home`,
+/// `not_found`, `not_a_directory`, `invalid_path`, `already_exists`,
+/// `unreadable`), or `disconnected` when the machine cannot be asked; the
+/// node's sentence goes to the log.
+fn node_ask(core: &CoreHandle, boundary: &Boundary, event: &Value) -> Value {
+    use hide_core::node_access::LinkError;
+    let kind = event.get("kind").and_then(Value::as_str).unwrap_or("");
+    let device = Some(payload_str(event, "device_id"))
+        .filter(|device| !boundary.names_this_node(Some(device)))
+        .unwrap_or_else(|| boundary.node().as_str().to_owned());
+    let reason = |error: LinkError| -> &'static str {
+        let (code, message) = match &error {
+            LinkError::Refused(refused) => (Some(refused.code), refused.message.clone()),
+            other => (None, other.to_string()),
+        };
+        eprintln!(
+            "{}",
+            json!({
+                "component": "hided", "kind": "add_project.node_refused", "event": kind,
+                "device": device, "code": code.map(|code| code.as_str()), "message": message,
+            })
+        );
+        node_ask_reason(&error)
+    };
+    let link = core.node_link(&device);
+    match kind {
+        "home_folder_list" => {
+            let request = payload_str(event, "path");
+            let answer = link.map_err(LinkError::NotConnected).and_then(|link| {
+                hide_core::node_access::call_as::<hide_node_link::browse::HomeListing>(
+                    link.as_ref(),
+                    hide_node_link::protocol::Call::HomeList {
+                        path: request.clone(),
+                    },
+                    NODE_ASK_TIMEOUT,
+                )
+            });
+            let (listing, refused) = match answer {
+                Ok(listing) => (Some(listing), None),
+                Err(error) => (None, Some(reason(error))),
+            };
+            json!({"type": "home_folder_list", "payload": {
+                "device_id": device, "request": request, "listing": listing, "reason": refused,
+            }})
+        }
+        "importable_projects" => {
+            let answer = link.map_err(LinkError::NotConnected).and_then(|link| {
+                // The core's registrations there are left out before the
+                // node keeps its newest twenty.
+                let exclude = core
+                    .registered_paths(&device)
+                    .map_err(LinkError::NotConnected)?;
+                hide_core::node_access::call_as::<hide_node_link::importable::ImportableProjects>(
+                    link.as_ref(),
+                    hide_node_link::protocol::Call::ImportableProjects { exclude },
+                    IMPORTABLE_ASK_TIMEOUT,
+                )
+            });
+            let (projects, refused) = match answer {
+                Ok(found) => {
+                    // A source the node could not read is the log's, never
+                    // the screen's (PRD device-add-project D-12, B27).
+                    for dropped in &found.dropped {
+                        eprintln!(
+                            "{}",
+                            json!({
+                                "component": "hided", "kind": "add_project.import_source_dropped",
+                                "device": device, "source": dropped.source, "reason": dropped.reason,
+                            })
+                        );
+                    }
+                    (Some(found.projects), None)
+                }
+                Err(error) => (None, Some(reason(error))),
+            };
+            json!({"type": "importable_projects", "payload": {
+                "device_id": device, "projects": projects, "reason": refused,
+            }})
+        }
+        _ => {
+            let parent = payload_str(event, "parent");
+            let name = payload_str(event, "name");
+            let project = kind == "project_target";
+            let answer = link.map_err(LinkError::NotConnected).and_then(|link| {
+                hide_core::node_access::call_as::<hide_node_link::browse::NewFolderTarget>(
+                    link.as_ref(),
+                    hide_node_link::protocol::Call::NewFolderTarget {
+                        parent: parent.clone(),
+                        name: name.clone(),
+                        kind: if project {
+                            hide_node_link::browse::NewFolderKind::Project
+                        } else {
+                            hide_node_link::browse::NewFolderKind::Clone
+                        },
+                    },
+                    NODE_ASK_TIMEOUT,
+                )
+            });
+            let (target, refused) = match answer {
+                Ok(target) => (Some(target), None),
+                Err(error) => (None, Some(reason(error))),
+            };
+            let path = target.as_ref().and_then(|target| target.path.clone());
+            if project {
+                json!({"type": "project_target", "payload": {
+                    "device_id": device, "parent": parent, "name": name,
+                    "parent_path": target.as_ref().map(|target| target.parent.clone()),
+                    "parent_label": target.as_ref().map(|target| target.parent_label.clone()),
+                    "path": path, "leftover": target.as_ref().is_some_and(|target| target.leftover),
+                    "reason": refused,
+                }})
+            } else {
+                json!({"type": "clone_target", "payload": {
+                    "device_id": device, "parent": parent, "name": name, "path": path, "reason": refused,
+                }})
+            }
         }
     }
 }
@@ -2839,7 +3463,7 @@ impl Demand {
 fn close_backlog_origin(
     core: &CoreHandle,
     connection: u64,
-    owner: &herdr_core::links::ledger::BacklogOriginIdentity,
+    owner: &hide_core::links::ledger::BacklogOriginIdentity,
 ) {
     let event = json!({
         "schema_version": SCHEMA_VERSION,
@@ -2856,8 +3480,8 @@ fn close_backlog_origin(
 
 fn origin_identity(
     event: &Value,
-) -> Result<herdr_core::links::ledger::BacklogOriginIdentity, String> {
-    let owner: herdr_core::links::ledger::BacklogOriginIdentity = serde_json::from_value(
+) -> Result<hide_core::links::ledger::BacklogOriginIdentity, String> {
+    let owner: hide_core::links::ledger::BacklogOriginIdentity = serde_json::from_value(
         event
             .get("payload")
             .cloned()
@@ -3467,14 +4091,29 @@ fn handle_file_index(state: &AppState, event: &Value) -> Vec<Message> {
     };
     let root_path = hide_platform::path::to_wire_lossy(&known);
     let walk_root = known.clone();
+    let (core, node, home) = (
+        Arc::clone(&state.core),
+        state.boundary.node().as_str().to_owned(),
+        state.boundary.home().to_path_buf(),
+    );
     let answer = state.index.query(
         state.boundary.node().as_str(),
         &root_path,
         &query,
         move || {
+            // The other projects of this machine, which the home project's
+            // walk leaves to their own (PRD home-folder-project D-05); asked
+            // here, on the walk's worker, once per walk.
+            let others: Vec<PathBuf> = core
+                .registered_paths(&node)?
+                .iter()
+                .filter_map(|path| hide_host::root::native_absolute(path))
+                .collect();
             Ok(hide_host::index::walk(
                 &cap_std::fs::Dir::from_std_file(opened),
                 &walk_root,
+                Some(&home),
+                &others,
             ))
         },
     );
@@ -3562,9 +4201,12 @@ fn device_file_index(state: &AppState, device: &str, root: &str, query: &str) ->
         let channel = core
             .node_link(&walk_device)
             .map_err(|message| log("link.not_connected", message))?;
-        herdr_core::node_access::index_root(channel.as_ref(), &walk_root).map_err(|error| {
+        let others = core
+            .registered_paths(&walk_device)
+            .map_err(|message| log("core.unavailable", message))?;
+        hide_core::node_access::index_root(channel.as_ref(), &walk_root, others).map_err(|error| {
             log(
-                &herdr_core::node_access::link_failure_code(&error),
+                &hide_core::node_access::link_failure_code(&error),
                 error.to_string(),
             )
         })
@@ -3591,6 +4233,14 @@ fn bytes_frame(header: &Value, bytes: &[u8]) -> Vec<u8> {
     out.extend_from_slice(json.as_bytes());
     out.extend_from_slice(bytes);
     out
+}
+
+/// Splits a binary frame `bytes_frame` made into its header and its bytes;
+/// `None` when it is not one.
+pub(crate) fn split_bytes_frame(frame: &[u8]) -> Option<(Value, &[u8])> {
+    let length = u32::from_be_bytes(frame.get(..4)?.try_into().ok()?) as usize;
+    let header = serde_json::from_slice(frame.get(4..4 + length)?).ok()?;
+    Some((header, &frame[4 + length..]))
 }
 
 /// A read the daemon could not serve as bytes: the file is past the read cap,
@@ -3626,7 +4276,7 @@ fn file_bytes_error(request_id: &str, path: &str, reason: &str) -> Message {
 /// in its own task and hands its frames to the client loop through a bounded
 /// channel: the socket keeps carrying typing and snapshots meanwhile, and a
 /// full channel holds the read back instead of buffering it.
-async fn stream_device_file_bytes(
+pub(crate) async fn stream_device_file_bytes(
     frames: tokio::sync::mpsc::Sender<Message>,
     core: Arc<CoreHandle>,
     boundary: Arc<Boundary>,
@@ -3677,7 +4327,7 @@ async fn stream_device_file_bytes(
             (device.to_owned(), root.clone(), relative.clone());
         let range = tokio::task::spawn_blocking(move || {
             let channel = core.node_link(&read_device)?;
-            herdr_core::node_access::read_bytes(
+            hide_core::node_access::read_bytes(
                 channel.as_ref(),
                 &read_root,
                 &read_relative,
@@ -3793,11 +4443,34 @@ impl AskedRange {
     }
 }
 
+/// Where the frames of a `file_bytes` read go: a client's socket, or the
+/// channel a phone's read collects them from (`mobile::looks`), so one reader
+/// of a file answers both and the phone's reads confine a path by the same
+/// boundary as the desktop's.
+pub(crate) trait FrameSink: Send {
+    fn deliver(
+        &mut self,
+        message: Message,
+    ) -> impl std::future::Future<Output = Result<(), ()>> + Send;
+}
+
+impl FrameSink for WebSocket {
+    async fn deliver(&mut self, message: Message) -> Result<(), ()> {
+        self.send(message).await.map_err(|_| ())
+    }
+}
+
+impl FrameSink for tokio::sync::mpsc::Sender<Message> {
+    async fn deliver(&mut self, message: Message) -> Result<(), ()> {
+        self.send(message).await.map_err(|_| ())
+    }
+}
+
 /// A `file_bytes` read keeps only one bounded chunk in memory. Sending each
 /// frame before reading the next gives the socket backpressure even when all
 /// eight authenticated clients ask for the maximum range together.
-async fn send_file_bytes(
-    socket: &mut WebSocket,
+pub(crate) async fn send_file_bytes(
+    socket: &mut impl FrameSink,
     boundary: &Boundary,
     roots: &crate::RootFollower,
     event: &Value,
@@ -3817,7 +4490,7 @@ pub(crate) type OpenedFile = Result<(PathBuf, std::fs::File, u64), Refusal>;
 /// Answers a `file_bytes` event with the file `opened` gave for its path, or
 /// with the refusal: the same frames whichever daemon read the file.
 pub(crate) async fn send_opened_file_bytes(
-    socket: &mut WebSocket,
+    socket: &mut impl FrameSink,
     event: &Value,
     opened: OpenedFile,
 ) -> Result<(), ()> {
@@ -3832,27 +4505,24 @@ pub(crate) async fn send_opened_file_bytes(
         Ok(source) => source,
         Err(refusal) => {
             return socket
-                .send(Message::Text(
+                .deliver(Message::Text(
                     refused("file_bytes", &path, refusal).to_string().into(),
                 ))
-                .await
-                .map_err(|_| ());
+                .await;
         }
     };
     let wanted = length.unwrap_or_else(|| total.saturating_sub(offset.min(total)));
     if wanted > boundary::MAX_FILE_BYTES {
         return socket
-            .send(file_bytes_error(&request_id, &path, "too_large"))
-            .await
-            .map_err(|_| ());
+            .deliver(file_bytes_error(&request_id, &path, "too_large"))
+            .await;
     }
     let mut file = tokio::fs::File::from_std(file);
     let start = offset.min(total);
     if start > 0 && file.seek(std::io::SeekFrom::Start(start)).await.is_err() {
         return socket
-            .send(file_bytes_error(&request_id, &path, "read_failed"))
-            .await
-            .map_err(|_| ());
+            .deliver(file_bytes_error(&request_id, &path, "read_failed"))
+            .await;
     }
     let end = start.saturating_add(wanted).min(total);
     let displayed = hide_platform::path::to_wire_lossy(&real);
@@ -3864,9 +4534,8 @@ pub(crate) async fn send_opened_file_bytes(
             Ok(read) => read,
             Err(_) => {
                 return socket
-                    .send(file_bytes_error(&request_id, &path, "read_failed"))
-                    .await
-                    .map_err(|_| ());
+                    .deliver(file_bytes_error(&request_id, &path, "read_failed"))
+                    .await;
             }
         };
         buffer.truncate(read);
@@ -3882,9 +4551,8 @@ pub(crate) async fn send_opened_file_bytes(
             "eof": eof,
         });
         socket
-            .send(Message::Binary(bytes_frame(&header, &buffer).into()))
-            .await
-            .map_err(|_| ())?;
+            .deliver(Message::Binary(bytes_frame(&header, &buffer).into()))
+            .await?;
         cursor += read as u64;
         if eof {
             return Ok(());
@@ -3927,7 +4595,17 @@ fn apply_boundary(boundary: &Boundary, event: &mut Value) -> Option<Value> {
         "create_workspace" if event.pointer("/payload/new_folder") == Some(&Value::Bool(true)) => {
             new_project(boundary, event, &kind)
         }
-        "create_workspace" => register(boundary, event, &kind),
+        "create_workspace" => register(boundary, event, &kind).map(|mut frame| {
+            // An add sent by request id reads its refusal by that id, as it
+            // reads the core's (`create_workspace.request_id`).
+            if let (Some(id), Some(payload)) = (
+                event.pointer("/payload/request_id").and_then(Value::as_str),
+                frame.get_mut("payload").and_then(Value::as_object_mut),
+            ) {
+                payload.insert("request_id".to_owned(), Value::from(id));
+            }
+            frame
+        }),
         "clone_repository" => clone_admit(boundary, event, &kind),
         "file_list" => explorer_listing(boundary, event, &kind),
         "file_open" | "reveal_path" => explorer_open(boundary, event, &kind),
@@ -3957,7 +4635,7 @@ fn apply_boundary(boundary: &Boundary, event: &mut Value) -> Option<Value> {
 /// Runs the boundary on a client event. The roots follow the core on their own
 /// reads, so an event can name a checkout this client read in a snapshot the
 /// boundary has not applied yet: after a launch, a checkout the core learns
-/// from Herdr's first sync reaches both on separate reads. A refusal as
+/// from the engine's first sync reaches both on separate reads. A refusal as
 /// outside every checkout therefore brings the roots current (`catch_up`) and
 /// runs the check once more before it is answered. The first check's
 /// `path.refused` line stays in the log, followed by `boundary.roots_caught_up`
@@ -4007,7 +4685,7 @@ pub(crate) fn roots_current(roots: &crate::RootFollower) -> bool {
 
 /// Whether `root` is a checkout the core's catalog carries for `device`,
 /// bringing the roots current once before saying no (see `admit_event`).
-fn device_root_known(
+pub(crate) fn device_root_known(
     boundary: &Boundary,
     roots: &crate::RootFollower,
     device: &str,
@@ -4109,7 +4787,7 @@ fn send_grid(state: &AppState, pane: &str, size: GridSize) {
         "payload": {"pane_id": pane, "cols": size.cols, "rows": size.rows},
     });
     if let Err(error) = state.core.dispatch(event.to_string().into_bytes()) {
-        herdr_core::diagnostic!(json!({
+        hide_core::diagnostic!(json!({
             "component": "pane_sizes",
             "kind": "pane_sizes.dispatch_failed",
             "pane_id": pane,
@@ -4185,6 +4863,11 @@ fn register(boundary: &Boundary, event: &mut Value, kind: &str) -> Option<Value>
             frame["payload"]["confirm"] = Value::String(hide_platform::path::to_wire_lossy(&root));
             Some(frame)
         }
+        Err(Unregistrable::ConfirmHome) => {
+            let mut frame = refused(kind, &raw, Refusal::NeedsConfirmation);
+            frame["payload"]["home"] = Value::Bool(true);
+            Some(frame)
+        }
     }
 }
 
@@ -4235,6 +4918,7 @@ fn clone_target(boundary: &Boundary, event: &Value) -> Value {
     json!({
         "type": "clone_target",
         "payload": {
+            "device_id": boundary.node().as_str(),
             "parent": parent,
             "name": name,
             "path": answer.as_ref().ok().map(|real| hide_platform::path::to_wire_lossy(&real.join(&name))),
@@ -4266,7 +4950,7 @@ fn project_target(boundary: &Boundary, event: &Value) -> Value {
     let parent = payload_str(event, "parent");
     let name = payload_str(event, "name");
     let mut payload = json!({
-        "parent": parent, "name": name,
+        "device_id": boundary.node().as_str(), "parent": parent, "name": name,
         "parent_path": null, "parent_label": null, "path": null, "leftover": false, "reason": null,
     });
     let real_parent = match boundary.resolve_dir(&parent) {
@@ -4483,7 +5167,7 @@ pub fn classify_frame(have_revision: u64, payload_revision: Option<u64>) -> Opti
 async fn read_delta(
     state: &AppState,
     have_revision: u64,
-) -> Result<herdr_core::SnapshotDeltaPayload, ()> {
+) -> Result<hide_core::SnapshotDeltaPayload, ()> {
     let core = Arc::clone(&state.core);
     tokio::task::spawn_blocking(move || core.snapshot(have_revision))
         .await
@@ -4527,7 +5211,7 @@ async fn send_snapshot(
         struct Envelope<'a> {
             #[serde(rename = "type")]
             kind: &'static str,
-            payload: herdr_core::SnapshotDeltaWire<'a>,
+            payload: hide_core::SnapshotDeltaWire<'a>,
         }
         serde_json::to_string(&Envelope {
             kind: match kind {
@@ -4535,9 +5219,9 @@ async fn send_snapshot(
                 FrameKind::Delta => "delta",
             },
             payload: if granular {
-                herdr_core::SnapshotDeltaWire::granular(&payload)
+                hide_core::SnapshotDeltaWire::granular(&payload)
             } else {
-                herdr_core::SnapshotDeltaWire::borrow(&payload)
+                hide_core::SnapshotDeltaWire::borrow(&payload)
             },
         })
     })
@@ -4641,6 +5325,7 @@ pub(crate) fn client_gone(state: &AppState, connection: u64, renderer: bool, des
     state.browser_comments.release(connection);
     state.mobile.release(connection);
     state.desktop_notices.release(connection);
+    state.mobile.wake_follower();
     for (pane, size) in state.pane_sizes.left(connection) {
         send_grid(state, &pane, size);
     }
@@ -4713,6 +5398,7 @@ fn log_refusal(reason: CloseReason, extra: Option<usize>) {
 pub fn mount(seat: &crate::seat::SeatParts, state: AppState) -> tokio::task::JoinHandle<()> {
     let shutdown = state.shutdown.clone();
     let mobile = Arc::clone(&state.mobile);
+    let core = Arc::clone(&state.core);
     let idle_task = watch_idle(
         Idle {
             idle_secs: state.idle_secs,
@@ -4723,17 +5409,21 @@ pub fn mount(seat: &crate::seat::SeatParts, state: AppState) -> tokio::task::Joi
             // The core's own engine is this process's, so it answers while
             // the daemon runs and keeps nothing alive; its panes do (PRD
             // engine-bundle-3-core-owns D-10).
-            herdr: state
-                .core
-                .engine()
-                .filter(|engine| engine.own_scope().is_none())
-                .cloned(),
-            panes: state.core.pane_holders().cloned(),
+            live_work: {
+                let holders = Arc::clone(state.core.pane_holders());
+                let state_dir = state.core.state_dir().to_path_buf();
+                let device_connect = state.peers.device_connect();
+                Arc::new(move || {
+                    let paired = crate::always_on::paired(&state_dir, device_connect)?;
+                    Ok(holders.live_panes()? + usize::from(paired))
+                })
+            },
         },
         // Mobile on with a phone paired: the phone may come back at any
-        // time and push has to keep going (PRD D-10). The idle clock starts
-        // over when that ends.
-        move || mobile.keep_alive(),
+        // time and push has to keep going (PRD D-10), and an automation on
+        // has to run at its time (PRD automations D-19). The idle clock
+        // starts over when both end.
+        move || mobile.keep_alive() || core.automations_on(),
     );
     seat.mount(router(state));
     idle_task
@@ -4746,16 +5436,16 @@ pub(crate) struct Idle {
     pub clients: Arc<AtomicUsize>,
     pub last_client_gone: Arc<Mutex<Instant>>,
     pub shutdown: crate::ending::Ending,
-    /// This machine's engine; `None` when the daemon runs without one.
-    pub herdr: Option<herdr_core::engine::EngineHandle>,
-    /// The pane holders of the core's own engine, whose panes keep the
-    /// daemon alive while one may still run; `None` for Herdr.
-    pub panes: Option<Arc<hide_node::terminal::holder::Holders>>,
+    /// How many things that keep the daemon may still run: this machine's
+    /// holder panes (`hide_kit::panes::Panes::live`), and for a core, its
+    /// pairing with another machine (`always_on::paired`), whose peers reach
+    /// it with no window open (PRD device-connect-iroh D-41).
+    pub live_work: Arc<dyn Fn() -> Result<usize, String> + Send + Sync>,
 }
 
 /// Ends the daemon once it had no screen for `idle_secs` while `held` was
-/// false, its Herdr server could not be reached and no pane of the core's
-/// own engine could still run; never with `keep_alive`. Aborted by its
+/// false and no pane of this machine's holders could still run; never with
+/// `keep_alive`. Aborted by its
 /// owner when the daemon stops another way.
 pub(crate) fn watch_idle(
     idle: Idle,
@@ -4765,8 +5455,6 @@ pub(crate) fn watch_idle(
         if idle.keep_alive {
             return;
         }
-        let mut herdr_probed: Option<Instant> = None;
-        let mut herdr_up = false;
         let mut panes_probed: Option<Instant> = None;
         let mut panes_live = false;
         loop {
@@ -4778,36 +5466,20 @@ pub(crate) fn watch_idle(
                 *idle.last_client_gone.lock().expect("client timestamp") = Instant::now();
                 continue;
             }
-            // The daemon lives as long as its Herdr server: labels keep
-            // being made with no window open (PRD labels-in-hided D-18), and
-            // a screen machine's agents keep reaching their core through its
-            // node (PRD core-host-node-remote-core D-08). The idle clock runs
-            // only while the server is unreachable, so a restart or a live
-            // handoff, which brings it back within the idle window, never
-            // ends the daemon.
-            if let Some(engine) = idle.herdr.clone()
-                && herdr_probed.is_none_or(|at| at.elapsed() >= HERDR_PROBE_INTERVAL)
-            {
-                herdr_probed = Some(Instant::now());
-                herdr_up = tokio::task::spawn_blocking(move || herdr_reachable(&engine))
-                    .await
-                    .unwrap_or(false);
-            }
             // The core's own engine's panes run in holders that outlive the
             // daemon, and the daemon is what keeps their letters and states
             // going, so it lives while one may still run. A record that
             // cannot be read is counted as running (`Panes::live`), and a
             // failed count keeps the daemon: ending it would leave panes
             // with no core.
-            if let Some(panes) = idle.panes.clone()
-                && panes_probed.is_none_or(|at| at.elapsed() >= PANES_PROBE_INTERVAL)
-            {
+            if panes_probed.is_none_or(|at| at.elapsed() >= PANES_PROBE_INTERVAL) {
                 panes_probed = Some(Instant::now());
-                panes_live = tokio::task::spawn_blocking(move || panes_running(&panes))
+                let live = Arc::clone(&idle.live_work);
+                panes_live = tokio::task::spawn_blocking(move || panes_running(&*live))
                     .await
                     .unwrap_or(true);
             }
-            if herdr_up || panes_live {
+            if panes_live {
                 *idle.last_client_gone.lock().expect("client timestamp") = Instant::now();
                 continue;
             }
@@ -4820,16 +5492,12 @@ pub(crate) fn watch_idle(
     })
 }
 
-/// How often an idle daemon asks whether its Herdr server is still there.
-const HERDR_PROBE_INTERVAL: Duration = Duration::from_secs(30);
-const HERDR_PROBE_TIMEOUT: Duration = Duration::from_secs(2);
-
-/// How often an idle daemon of the core's own engine counts its panes.
+/// How often an idle daemon counts its holder panes.
 const PANES_PROBE_INTERVAL: Duration = Duration::from_secs(5);
 
-/// Whether a pane of the core's own engine may still run.
-fn panes_running(panes: &hide_node::terminal::holder::Holders) -> bool {
-    match panes.live_panes() {
+/// Whether a holder pane of this machine may still run.
+fn panes_running(live: &(dyn Fn() -> Result<usize, String> + Send + Sync)) -> bool {
+    match live() {
         Ok(count) => count > 0,
         Err(message) => {
             eprintln!(
@@ -4842,14 +5510,6 @@ fn panes_running(panes: &hide_node::terminal::holder::Holders) -> bool {
             );
             true
         }
-    }
-}
-
-/// Whether the engine answers; a refusal is an answer.
-pub(crate) fn herdr_reachable(engine: &herdr_core::engine::EngineHandle) -> bool {
-    match engine.ping(HERDR_PROBE_TIMEOUT) {
-        Ok(_) => true,
-        Err(error) => error.answered(),
     }
 }
 
@@ -4889,6 +5549,79 @@ pub fn allowed_origins(port: u16, vite: Option<&str>) -> HashSet<String> {
 
 #[cfg(test)]
 mod tests {
+    /// PRD lane-desk-pair-view B32: every page on no desk takes an agent's
+    /// input, a desk page behind another tab of its area does not, and a
+    /// display outside the caller's checkout, whose Views the list never
+    /// holds, is missing rather than driven.
+    #[test]
+    fn a_page_on_no_desk_takes_input_and_another_checkouts_page_is_missing() {
+        let view = |area: &str, id: &str, selected: bool| hide_core::workspace_control::View {
+            area_id: area.into(),
+            view_id: id.into(),
+            kind: "browser",
+            target: format!("https://{id}.test/"),
+            selected,
+            active_area: false,
+            page: None,
+            openers: Vec::new(),
+            operator: false,
+            unseen: true,
+        };
+        let shelf = hide_core::workspace_views::SHELF_AREA;
+        let views = vec![
+            view(shelf, "front-of-shelf", true),
+            view(shelf, "behind-on-shelf", false),
+            view("a1", "on-desk", true),
+            view("a1", "behind-on-desk", false),
+        ];
+        let takes_input =
+            |id: &str| super::relay_facts(&views, id).map(|facts| facts["selected"] == true);
+        assert_eq!(takes_input("front-of-shelf"), Some(true));
+        assert_eq!(takes_input("behind-on-shelf"), Some(true));
+        assert_eq!(takes_input("on-desk"), Some(true));
+        assert_eq!(takes_input("behind-on-desk"), Some(false));
+        assert_eq!(takes_input("another-checkouts-page"), None);
+    }
+
+    /// A daemon with no screen and `live` holder panes, ending after one
+    /// idle second.
+    fn idle(live: Result<usize, String>) -> crate::ending::Ending {
+        let shutdown = crate::ending::Ending::new();
+        super::watch_idle(
+            super::Idle {
+                idle_secs: 1,
+                keep_alive: false,
+                clients: Arc::new(AtomicUsize::new(0)),
+                last_client_gone: Arc::new(Mutex::new(Instant::now())),
+                shutdown: shutdown.clone(),
+                live_work: Arc::new(move || live.clone()),
+            },
+            || false,
+        );
+        shutdown
+    }
+
+    #[tokio::test]
+    async fn a_daemon_outlives_the_idle_window_while_a_holder_pane_may_run() {
+        let running = idle(Ok(1));
+        let uncounted = idle(Err("the engine folder was unreadable".to_owned()));
+        tokio::time::sleep(Duration::from_secs(3)).await;
+        assert!(!running.has_ended());
+        assert!(!uncounted.has_ended(), "a count that failed keeps it alive");
+    }
+
+    #[tokio::test]
+    async fn a_daemon_with_no_screen_and_no_pane_ends_after_the_idle_window() {
+        let ended = idle(Ok(0));
+        tokio::time::timeout(Duration::from_secs(5), async {
+            while !ended.has_ended() {
+                tokio::time::sleep(Duration::from_millis(100)).await;
+            }
+        })
+        .await
+        .expect("the daemon ends");
+    }
+
     #[test]
     fn a_screens_feedback_keeps_its_order_and_holds_at_most_four_screenshots() {
         let (queue, mut jobs) = super::FeedbackQueue::new();
@@ -4974,11 +5707,28 @@ mod tests {
             refusal_field(&partial),
             Some(("sent", serde_json::from_str(sent).unwrap()))
         );
-        let next = herdr_core::pane_command::next_action("operator_typing").unwrap();
+        let next = hide_core::pane_command::next_action("operator_typing").unwrap();
         assert_eq!(
             refusal_answer(partial, next),
             ("operator_typing".to_owned(), next.to_owned())
         );
+    }
+
+    /// A spawn under a mission node held or behind its start gate says what
+    /// the mission owes, not to retry the same spawn (PRD node-presets D-06),
+    /// and a spawn none of the mission's candidates admits is told what a
+    /// plan naming that item is told.
+    #[test]
+    fn a_spawn_the_mission_refuses_says_what_the_mission_owes() {
+        for code in [
+            "mission_node_held",
+            "mission_gate_before_start",
+            "mission_candidate_refused",
+        ] {
+            let next = delivery_next_action(&format!("{code}\u{1f}ship"));
+            assert_eq!(next, hide_core::missions::next_action(code));
+            assert!(!next.contains("retry the same intent"), "{next}");
+        }
     }
 
     /// A refusal that lists the devices the caller could have named answers
@@ -4995,19 +5745,31 @@ mod tests {
         );
         assert!(none.contains("No other device is connected"), "{none}");
         let (code, next) = refusal_answer(
-            "shell_starting\u{1f}[oh-my-zsh] Would you like to update? [Y/n]".to_owned(),
+            "shell_starting\u{1f}30\u{1f}[oh-my-zsh] Would you like to update? [Y/n]".to_owned(),
             delivery_next_action("shell_starting"),
         );
         assert_eq!(code, "shell_starting");
         assert!(
-            next.ends_with("[oh-my-zsh] Would you like to update? [Y/n]"),
+            next.ends_with(
+                "The shell was waited for 30 s. Its screen ends with: [oh-my-zsh] Would you like to update? [Y/n]"
+            ),
             "{next}"
         );
+        // A shell that showed nothing still says how long it was waited for.
+        let (_, blank) = refusal_answer(
+            "shell_starting\u{1f}30\u{1f}".to_owned(),
+            delivery_next_action("shell_starting"),
+        );
+        assert!(blank.ends_with("The shell was waited for 30 s"), "{blank}");
         for code in [
             "spawn_busy",
+            "workspace_closing",
             "machine_not_permitted",
             "machine_unavailable",
             "repository_unavailable",
+            "spawn_repo_required",
+            "spawn_project_loading",
+            "spawn_folder_unreadable",
             "agent_not_installed",
             "intent_conflict",
             "agent_not_started",
@@ -5019,10 +5781,19 @@ mod tests {
             "session_too_long",
             "target_ambiguous",
             "target_unavailable",
+            "no_parent",
+            "participant_registering",
             "codex_capability_unknown",
+            "agent_hook_off",
+            "agent_not_set_up",
+            "agent_hook_untrusted",
+            "agent_hook_missing",
+            "agent_hook_unconfirmed",
+            "agent_hook_unchecked",
             "beside_other_checkout",
             "beside_other_machine",
             "beside_needs_agent_pane",
+            "beside_with_parent",
             "beside_pane_unavailable",
         ] {
             let (reason, next) = refusal_answer(code.to_owned(), delivery_next_action(code));
@@ -5032,7 +5803,7 @@ mod tests {
     }
 
     /// A plan's refusal answers as the plan words it, with the step, field or
-    /// evidence it names, from `hide plan` and from a spawn or a letter
+    /// evidence it names, from `hide task` and from a spawn or a letter
     /// alike, never as a device list (PRD hide-plan-delegate B5, B10, B24).
     #[test]
     fn a_plan_refusal_answers_the_plans_next_action_and_what_it_names() {
@@ -5055,13 +5826,17 @@ mod tests {
                 "Finish or drop",
             ),
             ("plan_node_finished\u{1f}web", "already done or dropped"),
-            ("plan_node_unknown\u{1f}nope", "hide plan show"),
+            ("plan_node_unknown\u{1f}nope", "hide task show"),
             ("plan_delegate_full\u{1f}3", "do this step yourself"),
+            (
+                "plan_candidate_refused\u{1f}Codex · team",
+                "worker candidates",
+            ),
         ] {
-            let (code, detail) = herdr_core::coordination::split_refusal(reason);
+            let (code, detail) = hide_core::coordination::split_refusal(reason);
             let detail = detail.unwrap();
             for next in [
-                herdr_core::plans::next_action(code),
+                hide_core::plans::next_action(code),
                 delivery_next_action(reason),
             ] {
                 let (answered, text) = refusal_answer(reason.to_owned(), next);
@@ -5076,29 +5851,49 @@ mod tests {
             "plan_missing",
             "plan_review_pending",
             "plan_delegate_needs_parent",
-            "plan_candidate_refused",
             "plan_delegate_not_permitted",
             "plan_unavailable",
             "plan_session_unknown",
         ] {
             let (answered, text) = refusal_answer(code.to_owned(), delivery_next_action(code));
             assert_eq!(answered, code);
-            assert_eq!(text, herdr_core::plans::next_action(code));
-            assert_ne!(text, herdr_core::plans::next_action("other"), "{code}");
+            assert_eq!(text, hide_core::plans::next_action(code));
+            assert_ne!(text, hide_core::plans::next_action("other"), "{code}");
         }
     }
 
     /// A caller refused for lacking an agent pane is told where to run the
-    /// command; every other delivery refusal keeps the retry advice.
+    /// command, and one that named no agent how agents are named; every
+    /// other delivery refusal keeps the retry advice.
     #[test]
     fn a_missing_agent_pane_names_where_to_run_the_command() {
         let next = delivery_next_action("agent_pane_required");
         assert!(next.contains("pane where the agent is running"), "{next}");
         assert!(next.contains("--no-daemon"), "{next}");
+        // Asking again about a key that names no agent answers the same
+        // (with-hide/hide#2299).
+        assert_eq!(
+            delivery_next_action("agent_unavailable"),
+            "Hide knows no agent by that: take its id from hide agent list (agent-N); hide agent show also takes a spawn's id (spawn-N), the agent's name or its pane"
+        );
         assert_eq!(
             delivery_next_action("caller_identity_conflict"),
             "Check the current agent pane and retry the same intent"
         );
+    }
+
+    /// with-hide/hide#2634: a spawn refused for its agent name says the name
+    /// is the problem and the limit it broke, so the caller shortens the name
+    /// instead of retrying the same one.
+    #[test]
+    fn a_spawn_refused_for_its_name_names_the_name_and_its_limit() {
+        let next = delivery_next_action("invalid_agent_name");
+        assert!(next.contains("--name"), "{next}");
+        assert!(
+            next.contains(&format!("1 to {} characters", hide_core::AGENT_NAME_LIMIT)),
+            "{next}"
+        );
+        assert!(!next.contains("retry the same intent"), "{next}");
     }
 
     /// A device range is accepted only as the range asked for: same offset
@@ -5291,29 +6086,57 @@ mod tests {
     /// with no shell open; every Workspace command still needs one.
     #[test]
     fn only_the_daemons_own_reads_answer_without_a_shell() {
-        use herdr_core::links::query::{LinksQuery, QueryTarget};
+        use hide_core::links::query::{LinksQuery, QueryTarget};
         let links = ScopedRequest::Links(LinksQuery {
             target: QueryTarget::Pr { number: 1 },
             all_projects: false,
         });
         assert!(!links.needs_renderer());
         assert!(
-            !ScopedRequest::Session(herdr_core::links::session_command::SessionCommand::Record {
+            !ScopedRequest::Session(hide_core::links::session_command::SessionCommand::Record {
                 id: "s-1".into()
             })
             .needs_renderer()
         );
         assert!(
-            !ScopedRequest::Memory(herdr_core::memory_command::MemoryCommand::Show { number: 1 })
+            !ScopedRequest::Memory(hide_core::memory_command::MemoryCommand::Show { number: 1 })
                 .needs_renderer()
         );
-        let hook = herdr_core::memory_hook::Ask::from_wire(&json!({
+        let hook = hide_core::memory_hook::Ask::from_wire(&json!({
             "event": "SessionStart", "runtime": "codex", "session": "s-1",
         }))
         .unwrap();
         assert!(!ScopedRequest::MemoryHook(hook).needs_renderer());
-        assert!(ScopedRequest::Query(herdr_core::workspace_control::Query::Info).needs_renderer());
+        assert!(ScopedRequest::Query(hide_core::workspace_control::Query::Info).needs_renderer());
         assert!(ScopedRequest::BrowserConnect(None).needs_renderer());
+        // C25: the rest of the daemon's own answers, a tool's list among them.
+        for request in [
+            ScopedRequest::Ps { all: false },
+            ScopedRequest::AccessList,
+            ScopedRequest::AgentCatalog(None),
+            ScopedRequest::AgentSleep {
+                id: "agent-1".into(),
+                actor: None,
+            },
+            ScopedRequest::AgentArchive {
+                id: "agent-1".into(),
+                actor: None,
+            },
+            ScopedRequest::Device(hide_core::device_command::DeviceCommand::List),
+            ScopedRequest::ProjectOpen("/srv/project".into()),
+            ScopedRequest::Pane(hide_core::pane_command::PaneCommand::Read {
+                pane: "w1:p1".into(),
+                lines: 10,
+            }),
+        ] {
+            assert!(!request.needs_renderer());
+        }
+        assert!(
+            ScopedRequest::Action(hide_core::workspace_control::Action::OpenFile {
+                path: "/srv/a".into(),
+            })
+            .needs_renderer()
+        );
     }
 
     #[test]
@@ -5324,7 +6147,7 @@ mod tests {
         assert!(!token_matches("", "abc"));
     }
 
-    /// After a launch, a checkout the core learns from Herdr's first sync
+    /// After a launch, a checkout the core learns from the engine's first sync
     /// reaches a client's snapshot and the boundary on separate reads. A
     /// listing that names it before the boundary applied it is answered once
     /// the roots are current, instead of leaving the Explorer empty on
@@ -5689,6 +6512,25 @@ mod tests {
         );
     }
 
+    /// PRD device-add-project B25: a refused add that named a request id
+    /// carries it back, so the importable list reads the refusal as that
+    /// row's own; one that named none carries none.
+    #[test]
+    fn a_refused_add_carries_the_request_id_it_was_sent_with() {
+        let home = tempfile::tempdir().unwrap();
+        let boundary = Boundary::new(home.path()).unwrap();
+        let gone = home.path().join("gone").display().to_string();
+        let mut event = json!({"schema_version": 2, "kind": "create_workspace",
+            "payload": {"path": gone, "label": "gone", "initialize_git": false, "request_id": "import:7"}});
+        let answer = apply_boundary(&boundary, &mut event).expect("refused");
+        assert_eq!(answer["type"], "path_refused", "{answer}");
+        assert_eq!(answer["payload"]["request_id"], "import:7");
+        let mut event = json!({"schema_version": 2, "kind": "create_workspace",
+            "payload": {"path": gone, "label": "gone", "initialize_git": false}});
+        let answer = apply_boundary(&boundary, &mut event).expect("refused");
+        assert_eq!(answer["payload"].get("request_id"), None);
+    }
+
     /// PRD wsl-device B15, B18: a folder outside home reaches the core only
     /// when the event carries the operator's confirmation of that path; the
     /// refusal before it says so and reads nothing there.
@@ -5748,6 +6590,31 @@ mod tests {
             hide_platform::path::to_wire_lossy(
                 &hide_platform::fs::identity::canonical(&app).unwrap()
             )
+        );
+    }
+
+    /// Add a project's folder list words a node's refusal by the code the
+    /// node judged with, and a machine it cannot reach as disconnected, so a
+    /// device's `outside_home` reads as this machine's does (PRD
+    /// device-add-project B12, B31).
+    #[test]
+    fn a_node_ask_refusal_carries_the_reason_the_dialog_reads() {
+        use hide_node_link::{ErrorCode, HostError, LinkError};
+        let refused = |code| node_ask_reason(&LinkError::Refused(HostError::new(code, "refused")));
+        assert_eq!(refused(ErrorCode::OutsideRoot), "outside_home");
+        assert_eq!(refused(ErrorCode::NotFound), "not_found");
+        assert_eq!(refused(ErrorCode::NotADirectory), "not_a_directory");
+        assert_eq!(refused(ErrorCode::InvalidPath), "invalid_path");
+        assert_eq!(refused(ErrorCode::AlreadyExists), "already_exists");
+        assert_eq!(refused(ErrorCode::Io), "unreadable");
+        assert_eq!(node_ask_reason(&LinkError::Busy), "busy");
+        assert_eq!(
+            node_ask_reason(&LinkError::NotConnected("gone".into())),
+            "disconnected"
+        );
+        assert_eq!(
+            node_ask_reason(&LinkError::Unknown("lost".into())),
+            "disconnected"
         );
     }
 }

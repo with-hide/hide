@@ -14,7 +14,6 @@ pub struct DaemonState {
     pub pid: u32,
     pub port: u16,
     pub token: String,
-    pub socket: Option<String>,
     pub started_at: String,
     /// When the daemon's process started, as the platform layer reports it,
     /// written with the pid so a later reader can tell the daemon from
@@ -75,7 +74,7 @@ fn create_private_dir(dir: &Path) -> io::Result<()> {
     if own_folder {
         record_in(dir, record);
     } else {
-        herdr_core::diagnostic!(record);
+        hide_core::diagnostic!(record);
     }
     Err(error)
 }
@@ -83,8 +82,8 @@ fn create_private_dir(dir: &Path) -> io::Result<()> {
 /// Writes `record` to the state folder's log at once: this runs before the
 /// daemon's log is open, and a refused daemon never opens it.
 fn record_in(dir: &Path, record: serde_json::Value) {
-    let core_state = dir.join(herdr_core::node_migration::CORE_STATE);
-    if let Err(error) = herdr_core::diagnostics::record_now(&core_state, record) {
+    let core_state = dir.join(hide_core::node_migration::CORE_STATE);
+    if let Err(error) = hide_core::diagnostics::record_now(&core_state, record) {
         eprintln!("the state folder's record could not be logged: {error}");
     }
 }
@@ -250,7 +249,6 @@ mod tests {
                 pid: 1,
                 port: 9,
                 token: "aa".into(),
-                socket: None,
                 started_at: "now".into(),
                 pid_started: None,
             },

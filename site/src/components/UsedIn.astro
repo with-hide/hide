@@ -1,0 +1,10 @@
+---
+// A feature page's "Used in guides" list, read from the guides' `features:` headers
+// (`src/generated/used-in.json`, written by `scripts/docs/check-features.mjs --write`); never typed.
+import used from "../generated/used-in.json";
+const { id } = Astro.props;
+const list: { id: string; title: string }[] = (used as Record<string, { id: string; title: string }[]>)[id] ?? [];
+---
+<ul class="used-in">
+  {list.map((guide) => <li><a href={`/docs/guides/${guide.id}/`}>{guide.title}</a></li>)}
+</ul>

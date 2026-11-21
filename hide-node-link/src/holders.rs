@@ -6,8 +6,7 @@
 //! programs. The core's engine asks the node through [`PaneHolders`] and
 //! never names a holder record, socket or protocol. This machine's node
 //! answers it in the daemon's own process; a device's node answers it once
-//! its link carries the calls (the device bundle). Nothing here runs unless
-//! the development switch `HIDE_DEV_PANE_HOLDER` is on.
+//! its link carries the calls (the device bundle).
 
 /// The variable a pane's processes name their pane by, which the node sets
 /// in every pane it starts and the CLI, the hook helper and the agent
@@ -15,6 +14,29 @@
 pub use hide_agent_hooks::pane::HIDE_PANE_ID as PANE_ID_VARIABLE;
 
 use serde::{Deserialize, Serialize};
+
+/// The code a node refuses a pane's start with while its state folder holds
+/// the most pane holders it keeps (`hide_kit::panes::HOLDER_CAP`); the core
+/// answers a spawn refused this way with the same code.
+pub const HOLDER_CAP_REFUSAL: &str = "holder_cap";
+
+/// [`PaneHolders::proof`]'s refusal of a pane whose holder has not yet
+/// written that its program runs: the same ask succeeds once it has.
+pub const PANE_STARTING: &str = "pane_starting";
+
+/// [`PaneHolders::proof`]'s refusal of a pane whose program no longer runs,
+/// or is closing.
+pub const PANE_NOT_RUNNING: &str = "pane_not_running";
+
+/// How long a process that runs in a pane and asks for it waits for that
+/// pane's start to settle ([`PaneHolders::proof_once_started`]). The holder
+/// writes that its program runs right after starting it, so the window a
+/// program that calls `hide` at once can meet is far shorter. Every hook
+/// asks through this proof, so the wait stays well under the shortest budget
+/// a hook gives its call (`hide-agent-hooks`' `MEMORY_BUDGET`, 1.25 s): a
+/// pane whose holder never writes that its program runs costs a call this
+/// much, not the start's own limit.
+pub const PROOF_START_WAIT: std::time::Duration = std::time::Duration::from_millis(500);
 
 /// One pane to start, under the id the core chose for it.
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
@@ -75,6 +97,54 @@ pub struct HolderReservation {
     pub incarnation: u64,
 }
 
+/// What [`PaneHolders::renew`] found and did to a pane's holder
+/// (with-hide/hide-private#646), each answer one the pane can be used on:
+/// a holder its record names runs it, and which one is said. An outcome
+/// after which no holder runs it, or nobody knows which, is an error
+/// ([`RENEWAL_PANE_CLOSED`], [`RENEWAL_BUSY`], [`RENEWAL_LOST`],
+/// [`RENEWAL_UNSETTLED`], or the node's answer lost on the way), and
+/// nothing is typed into the pane on it.
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(tag = "renewal", rename_all = "snake_case")]
+pub enum HolderRenewal {
+    /// The pane's holder already runs from this build's version folder.
+    Current,
+    /// The pane's holder, its shell alone in it, was ended and the pane
+    /// started again under its own id from this build's folder, replacing
+    /// the earlier start's incarnation.
+    Renewed {
+        /// The version folder the earlier holder ran from.
+        from: String,
+        /// The version folder the pane runs from now.
+        to: String,
+    },
+    /// The pane was not renewed and the earlier holder its record names
+    /// runs it, untouched. `code` says why (`pane_busy` while anything but
+    /// its shell runs in it, `pane_awake` while its agent is not asleep).
+    Kept { code: String, message: String },
+}
+
+/// The refusal [`PaneHolders::renew`] answers when the pane's record is
+/// closed or gone by the time its turn comes: nothing runs it to wake in.
+pub const RENEWAL_PANE_CLOSED: &str = "holder_renewal_pane_closed";
+
+/// The refusal [`PaneHolders::renew`] answers when another change of the
+/// pane's holder kept its turn past the renewal's wait: what runs the pane
+/// is not known to this call.
+pub const RENEWAL_BUSY: &str = "holder_renewal_busy";
+
+/// The refusal [`PaneHolders::renew`] answers when the earlier holder ended
+/// and the pane's new one did not start: no holder runs the pane, as a pane
+/// a restore could not start.
+pub const RENEWAL_LOST: &str = "holder_renewal_lost";
+
+/// The refusal [`PaneHolders::renew`] answers when the earlier holder was
+/// asked to end and what runs the pane then is not known (the close did not
+/// finish, or the new holder's start could not be confirmed): the node's
+/// next reconcile settles its record, and the pane is used as one a restore
+/// could not start, nothing typed into it.
+pub const RENEWAL_UNSETTLED: &str = "holder_renewal_unsettled";
+
 /// An interrupted existence record whose original process is gone. The
 /// replacement must consume this exact incarnation under the same pane ID.
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
@@ -111,7 +181,7 @@ pub struct HolderRecovery {
 }
 
 /// Where a pane's screen is in its scrollback, in rows above the bottom
-/// (Herdr's `pane.get` scroll metrics).
+/// (the scroll metrics a client reads).
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]
 pub struct HolderScroll {
     pub offset_from_bottom: u64,
@@ -132,6 +202,25 @@ pub struct HolderForeground {
     pub group: u32,
     /// Each member's pid and name, in the order the holder listed them.
     pub members: Vec<(u32, String)>,
+    /// The folders the members other than the pane's shell work in, as the
+    /// pane's machine observes them (`hide_platform::process::observed_cwd_of`),
+    /// in the wire spelling, each once; `None` when it could not say for one
+    /// of them, or the node predates this field, which a caller guarding a
+    /// folder takes as unknown, never as no folder.
+    #[serde(default)]
+    pub folders: Option<Vec<String>>,
+}
+
+/// One process in a pane as its machine's kernel says it is now, read
+/// afresh for the call ([`PaneHolders::process`]): when it started, the
+/// process that started it, and its arguments, the program first, bounded
+/// as a [`ForegroundProgram`]'s are and empty when the system cannot read
+/// them.
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+pub struct HolderProcess {
+    pub started: u64,
+    pub parent: Option<u32>,
+    pub argv: Vec<String>,
 }
 
 /// A key the engine presses by name, which the pane's holder encodes for
@@ -170,6 +259,10 @@ pub struct HolderProof {
 /// shows is followed as one that is shown.
 #[derive(Clone, Debug, Default, Eq, PartialEq, Serialize, Deserialize)]
 pub struct PaneFacts {
+    /// The holder's last screen-mode fact, false for a holder or node
+    /// built before the negotiated alternate-screen extension.
+    #[serde(default)]
+    pub alternate_screen: bool,
     /// The folder the pane's shell last reported (OSC 7, or OSC 9;9 from
     /// Windows PowerShell's prompt), in the wire spelling; `None` until it
     /// reported one.
@@ -184,13 +277,26 @@ pub struct PaneFacts {
     /// startup files are done.
     pub prompts: u64,
     /// Whether the program has bracketed paste on (mode 2004), so a text
-    /// typed for it as one paste is wrapped as Herdr's `agent.prompt` wraps
-    /// it.
+    /// typed for it as one paste is wrapped in its start and end marks.
     pub bracketed_paste: bool,
+    /// Whether the terminal edits input a line at a time before its program
+    /// reads it (canonical mode), as the holder read it: a program reads
+    /// keys only once it turns that off, and until then an Enter typed for
+    /// it arrives as a line break. `None` where the holder cannot say (a
+    /// Windows console its helper could not read) or the holder or node was
+    /// built before it.
+    #[serde(default)]
+    pub line_editing: Option<bool>,
     /// The program in the terminal's foreground other than the pane's own
     /// program, `None` while the pane's program holds the terminal or the
-    /// system cannot say.
+    /// system cannot say ([`Self::foreground_unread`]).
     pub foreground: Option<ForegroundProgram>,
+    /// Whether the system could not say what holds the terminal, so a
+    /// `None` foreground is no evidence that the pane's own program holds
+    /// it. False from a holder or node built before it, which read such a
+    /// terminal as the shell's.
+    #[serde(default)]
+    pub foreground_unread: bool,
     /// What the pane's screen rules read on its screen.
     pub screen: ScreenRead,
 }
@@ -202,12 +308,15 @@ pub struct ForegroundProgram {
     pub pid: u32,
     /// The program's name without its folder or `.exe`; for a runtime that
     /// runs a script (node, bun, deno, python), the script's name without
-    /// its folder or extension, as Herdr recognizes a wrapped agent.
+    /// its folder or extension, so a wrapped agent is recognized.
     pub name: String,
-    /// Its arguments, the program first, where the system says them
-    /// (macOS and Linux); empty where it does not. At most
+    /// The installed package, when the holder can identify it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub package: Option<String>,
+    /// Its arguments, the program first; empty when the system cannot
+    /// read them. At most
     /// [`MAX_FOREGROUND_ARGS`] of at most [`MAX_FOREGROUND_ARGV_BYTES`] in
-    /// all, as Herdr bounds a resume's arguments.
+    /// all, the bounds on a resume's arguments.
     pub argv: Vec<String>,
 }
 
@@ -279,16 +388,15 @@ pub struct RuleSet {
 }
 
 /// A read of a pane's screen with its styling kept, as escape sequences
-/// ([`PaneHolders::read_styled`]), as Herdr's `pane.read --format ansi`
-/// answers it.
+/// ([`PaneHolders::read_styled`]).
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "read", content = "rows", rename_all = "snake_case")]
 pub enum StyledRead {
-    /// The rows the screen shows now (Herdr's `visible` source), which an
+    /// The rows the screen shows now which an
     /// agent's composer is judged on.
     Screen,
-    /// The last rows of the screen and its scrollback as the terminal drew
-    /// them, soft wraps kept (Herdr's `recent` source), at most this many.
+    /// The last rows of the screen and its scrollback, soft wraps joined
+    /// (a holder built before that keeps them), at most this many.
     Rows(u16),
 }
 
@@ -367,6 +475,27 @@ pub trait PaneHolders: Send + Sync {
     fn cancel(&self, _intent: &HolderIntent, _request: HolderRequest) -> Result<(), HolderError> {
         Err(reservation_unsupported())
     }
+    /// Brings the pane `start` names to this node's build (with-hide/hide-private#646):
+    /// when its holder runs from another build's version folder and its
+    /// shell runs alone, ends that holder and starts the pane again under the
+    /// same id from `start` (a shell, in `start.cwd`), replacing the earlier
+    /// incarnation, and attaches its screen again. A pane already on this
+    /// build is [`HolderRenewal::Current`], and one it does not renew,
+    /// nothing of it ended, [`HolderRenewal::Kept`]. A node that cannot
+    /// renew keeps every pane.
+    /// The caller issues `request` from the same numbering as new panes and
+    /// retires it once the outcome is definite. An unknown replacement keeps
+    /// its pending number and reservation until connection-owner turnover.
+    fn renew(
+        &self,
+        _start: &HolderStart,
+        _request: HolderRequest,
+    ) -> Result<HolderRenewal, HolderError> {
+        Ok(HolderRenewal::Kept {
+            code: "holder_renewal_unsupported".to_owned(),
+            message: "this node cannot renew a pane's holder".to_owned(),
+        })
+    }
     /// How a pane started with no program runs its shell, when it runs one
     /// with Hide's shell integration, which marks its first prompt on its
     /// screen: what a start into such a pane waits for. `None` for a shell
@@ -385,37 +514,80 @@ pub trait PaneHolders: Send + Sync {
     /// [`UNSUPPORTED_HOLDER`].
     fn read_styled(&self, pane: &str, read: StyledRead) -> Result<(String, bool), HolderError>;
     /// The rows the pane's screen shows now, wherever it is scrolled to,
-    /// as text with soft wraps joined (Herdr's `visible` read); a holder
+    /// as text with soft wraps joined; a holder
     /// built before visible reads is refused [`UNSUPPORTED_HOLDER`].
     fn read_visible(&self, pane: &str) -> Result<String, HolderError>;
     /// Where the pane's screen is in its scrollback, after moving it to
-    /// `to` rows above the bottom when asked (Herdr's `pane.get` and
-    /// `pane.scroll`); the connection that holds the screen is sent the
+    /// `to` rows above the bottom when asked; the connection that holds the screen is sent the
     /// moved screen. A holder built before scroll asks is refused
     /// [`UNSUPPORTED_HOLDER`].
     fn scroll(&self, pane: &str, to: Option<u64>) -> Result<HolderScroll, HolderError>;
-    /// The pane's program and its terminal's foreground processes.
-    fn processes(&self, pane: &str) -> Result<HolderProcesses, HolderError>;
+    /// The pane's program and its terminal's foreground processes, waiting
+    /// at most `within` for them, so a caller that reads many panes shares
+    /// one deadline among them.
+    fn processes(
+        &self,
+        pane: &str,
+        within: std::time::Duration,
+    ) -> Result<HolderProcesses, HolderError>;
+    /// The process `pid` as the kernel of the pane's machine says it is
+    /// now, read afresh and never from what the pane's watch last said;
+    /// `None` when no such process runs under the pane's program, waiting at
+    /// most `within` for the pane's program. What a start with a profile
+    /// is decided by (`hide agent exec`); a node that predates the ask
+    /// refuses it, which leaves that start's result unknown.
+    fn process(
+        &self,
+        pane: &str,
+        pid: u32,
+        within: std::time::Duration,
+    ) -> Result<Option<HolderProcess>, HolderError>;
     /// Which start of the pane runs now and the program it runs, as the
     /// pane's record says (PRD engine-bundle-3-core-owns D-9): what a
     /// process that names the pane is proved against. Read from the record
     /// alone, never from the holder, so a holder that does not answer cannot
-    /// vouch for anything; a pane whose program has not started or has ended
-    /// is refused `pane_not_running`.
+    /// vouch for anything; a pane whose holder is still starting its program
+    /// is refused [`PANE_STARTING`], one whose program has ended
+    /// [`PANE_NOT_RUNNING`].
     fn proof(&self, pane: &str) -> Result<HolderProof, HolderError>;
+    /// [`Self::proof`] for a process that runs in the pane and asks for it:
+    /// the holder starts the program before its record names it, so a
+    /// program that calls `hide` at once can find its pane still starting
+    /// (with-hide/hide-private#719). A start under way is waited for, by its
+    /// settling rather than a time, until `within`, and a pane still
+    /// starting then is refused [`PANE_STARTING`].
+    fn proof_once_started(
+        &self,
+        pane: &str,
+        _within: std::time::Duration,
+    ) -> Result<HolderProof, HolderError> {
+        self.proof(pane)
+    }
     /// Types `input` into the pane through the connection that holds its
     /// screen, in order with every other key typed there; a pane whose
     /// screen was let go is attached again for it. It is the engine's
     /// typing, never reported as the operator's.
     fn input(&self, pane: &str, input: PaneInput) -> Result<(), HolderError>;
-    /// Types a letter: `body`, then `submit` once `gap` has passed, holding
+    /// [`PaneHolders::input`] as the sleep of the pane's agent types it: the
+    /// keys that end the agent and the line that wakes it, the only input a
+    /// pane whose agent is asleep takes. Any other input to such a pane is
+    /// refused `pane_asleep`, and what was waiting to be written when it
+    /// went to sleep is cancelled, so nothing typed for its agent reaches the
+    /// shell under it. A node that keeps no such distinction takes it as
+    /// [`PaneHolders::input`].
+    fn sleeper_input(&self, pane: &str, input: PaneInput) -> Result<(), HolderError> {
+        self.input(pane, input)
+    }
+    /// Types a letter: `text`'s parts in order, at most
+    /// `hide_holder_protocol::MAX_SUBMIT_PARTS`, then `submit` once `gap`
+    /// has passed, as one submission, holding
     /// the operator's keys typed into the pane meanwhile and writing them
     /// after the submit in the order typed (PRD engine-bundle-3-core-owns
     /// D-13). Returns once the submit was handed over.
     fn letter(
         &self,
         pane: &str,
-        body: PaneInput,
+        text: Vec<PaneInput>,
         submit: PaneInput,
         gap: std::time::Duration,
     ) -> Result<(), HolderError>;
@@ -425,7 +597,7 @@ pub trait PaneHolders: Send + Sync {
     fn recovered(&self, timeout: std::time::Duration) -> Result<HolderRecovery, HolderError>;
     /// Tells `ended`, from now on, the id of each pane whose program exits
     /// on its own while the node holds its screen, so the engine closes it
-    /// as Herdr closes a pane whose program ends. A pane ended by
+    /// when its program ends. A pane ended by
     /// [`PaneHolders::terminate`] is not told.
     fn watch_ends(&self, ended: PaneEnded);
     /// Tells `sink`, from now on, each pane's facts whenever they change,
@@ -464,6 +636,11 @@ pub enum PaneCall {
     Retire {
         request: HolderRequest,
     },
+    /// [`PaneHolders::renew`]; answers a [`HolderRenewal`].
+    Renew {
+        start: HolderStart,
+        request: HolderRequest,
+    },
     /// [`PaneHolders::shell_launch`]; answers an optional
     /// [`crate::protocol::ShellLaunch`].
     ShellLaunch,
@@ -494,6 +671,11 @@ pub enum PaneCall {
     Processes {
         pane: String,
     },
+    /// [`PaneHolders::process`]; answers an optional [`HolderProcess`].
+    Process {
+        pane: String,
+        pid: u32,
+    },
     /// [`PaneHolders::proof`]; answers a [`HolderProof`].
     Proof {
         pane: String,
@@ -503,11 +685,16 @@ pub enum PaneCall {
         pane: String,
         input: PaneInput,
     },
+    /// [`PaneHolders::sleeper_input`]; answers nothing.
+    SleeperInput {
+        pane: String,
+        input: PaneInput,
+    },
     /// [`PaneHolders::letter`]; answers nothing once the submit was handed
     /// over.
     Letter {
         pane: String,
-        body: PaneInput,
+        text: Vec<PaneInput>,
         submit: PaneInput,
         gap_ms: u64,
     },

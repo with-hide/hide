@@ -1,10 +1,9 @@
-import { skipOwnWindowsAgentStart } from "./own-windows-agent-start";
-// S3 Explorer and editor flows on an isolated pinned Herdr (PRD
+// S3 Explorer and editor flows on an isolated engine (PRD
 // web-shell-pivot-s3 B1, B3, B4, B5): a real git checkout listed lazily in the
 // Explorer, a folder expanded through the core's ui state, a file opened into
 // the checkout's preview tab, then edited, saved, and saved again after the
 // disk changed underneath it. Every command runs against a private server; the
-// operator's Herdr is never touched.
+// operator's engine is never touched.
 
 import { expect, test, type Page } from "@playwright/test";
 import { execFileSync } from "node:child_process";
@@ -91,7 +90,7 @@ function gitFixture(dir: string): void {
 }
 
 type Fixture = {
-  herdr: AgentFixture;
+  engine: AgentFixture;
   daemon: Daemon;
   /** The resolved checkout root in the core's wire spelling. */
   repo: string;
@@ -106,10 +105,10 @@ async function openCheckout(
   beforeLoad?: (page: Page) => Promise<void>,
   extraFiles: Record<string, string> = {},
 ): Promise<Fixture> {
-  const herdr = await startFixture();
+  const engine = await startFixture();
   let daemon: Daemon | null = null;
   try {
-    const repoDir = path.join(herdr.root, "repo");
+    const repoDir = path.join(engine.root, "repo");
     fs.mkdirSync(path.join(repoDir, "src"), { recursive: true });
     fs.writeFileSync(path.join(repoDir, "src", "main.ts"), SOURCE);
     fs.writeFileSync(path.join(repoDir, "README.md"), "# repo\n");
@@ -138,7 +137,7 @@ async function openCheckout(
     fs.truncateSync(path.join(repoDir, "huge.txt"), 17 * 1024 * 1024);
     const repo = toPage(fs.realpathSync(repoDir));
 
-    daemon = await startHided(herdr, "s3");
+    daemon = await startHided(engine, "s3");
     await withControl(daemon, (control) => openProject(control, repoDir, "repo"));
     const lastSent = new Map<string, Record<string, unknown>>();
     const sent = countSent(page, lastSent);
@@ -159,10 +158,10 @@ async function openCheckout(
     await expect(page.locator(`[data-explorer-row="${repo}/src/main.ts"]`)).toBeVisible();
     await page.locator(`[data-explorer-row="${repo}/src/main.ts"]`).click();
     await expect(page.locator('[data-editor-codemirror] .cm-content')).toContainText("export const answer = 41;");
-    return { herdr, daemon, repo, file: `${repo}/src/main.ts`, sent, lastSent };
+    return { engine, daemon, repo, file: `${repo}/src/main.ts`, sent, lastSent };
   } catch (error) {
     daemon?.stop();
-    herdr.stop();
+    engine.stop();
     throw error;
   }
 }
@@ -222,7 +221,7 @@ async function storedDrafts(page: Page): Promise<DraftRow[]> {
 
 function close(fixture: Fixture): void {
   fixture.daemon.stop();
-  fixture.herdr.stop();
+  fixture.engine.stop();
 }
 
 test.describe.configure({ timeout: 90_000 });
@@ -541,7 +540,6 @@ test("the Explorer filter keeps matches under their folders and Escape restores 
 
 // @platform: A save and a change on disk, on the platform's filesystem.
 test("editing a document marks it dirty, saves it, and a disk change asks how to resolve", { tag: "@platform" }, async ({ page }) => {
-  skipOwnWindowsAgentStart();
   const fixture = await openCheckout(page);
   const { file, sent, lastSent } = fixture;
   try {
@@ -1081,7 +1079,6 @@ async function dragRow(page: Page, from: string, to: string): Promise<void> {
 
 // @platform: Trash is a system call on macOS.
 test("the Explorer creates, renames, moves and trashes entries", { tag: "@platform" }, async ({ page }) => {
-  skipOwnWindowsAgentStart();
   const fixture = await openCheckout(page);
   const { repo, sent, lastSent } = fixture;
   try {
@@ -1270,7 +1267,6 @@ test("a preview-only document closes without a save", async ({ page }) => {
 
 // @platform: File watching is FSEvents on macOS and inotify on Linux.
 test("a change in an expanded folder refreshes the tree without a reload", { tag: "@platform" }, async ({ page }) => {
-  skipOwnWindowsAgentStart();
   const fixture = await openCheckout(page);
   const { repo } = fixture;
   try {
@@ -1296,7 +1292,6 @@ test("a change in an expanded folder refreshes the tree without a reload", { tag
 
 // @platform: ⌘ chords, the command key of the system hide ships on.
 test("⌘P opens a file by name and ⌘K switches checkout", { tag: "@platform" }, async ({ page }) => {
-  skipOwnWindowsAgentStart();
   const fixture = await openCheckout(page);
   const { repo, sent } = fixture;
   try {
@@ -1346,11 +1341,10 @@ test("⌘P opens a file by name and ⌘K switches checkout", { tag: "@platform" 
 });
 
 test("Explorer files paste paths and images attach to the receiving terminal", { tag: "@platform" }, async ({ page }) => {
-  skipOwnWindowsAgentStart();
   const fixture = await openCheckout(page);
-  const { herdr, sent } = fixture;
+  const { engine, sent } = fixture;
   try {
-    const folder = path.join(herdr.root, "fixture");
+    const folder = path.join(engine.root, "fixture");
     const name = "한글 ' $HOME 파일.txt";
     const file = path.join(folder, name);
     fs.writeFileSync(file, "original file");
@@ -1363,10 +1357,10 @@ test("Explorer files paste paths and images attach to the receiving terminal", {
     const image = toPage(fs.realpathSync(path.join(folder, "drag-image.png")));
     await expect(page.locator(`[data-explorer-row="${source}"]`)).toBeVisible();
     await expect(page.locator(`[data-explorer-row="${image}"]`)).toBeVisible();
-    const [target] = herdr.panes;
+    const [target] = engine.panes;
     await expect(page.locator(`[data-pane-view="${target}"]`)).toBeVisible();
     await page.context().grantPermissions(["clipboard-read", "clipboard-write"], { origin: new URL(page.url()).origin });
-    const [log] = herdr.inputLogs;
+    const [log] = engine.inputLogs;
     const read = () => fs.existsSync(log) ? fs.readFileSync(log, "utf8") : "";
     const before = read().length;
     const dragToTerminal = (from: string) => page.evaluate(({ from, target }) => {
@@ -1419,7 +1413,7 @@ test("Explorer files paste paths and images attach to the receiving terminal", {
 
 test("a dropped file reaches the terminal as an attachment", async ({ page }) => {
   const fixture = await openCheckout(page);
-  const { herdr, sent } = fixture;
+  const { engine, sent } = fixture;
   try {
     // The fixture checkout's panes run the shim that logs every PTY byte, so
     // the pasted token is observable there; openCheckout focused the repository.
@@ -1427,7 +1421,7 @@ test("a dropped file reaches the terminal as an attachment", async ({ page }) =>
     // click, so the drop waits for the fixture's own first pane, by its id.
     const project = page.locator("[data-project]", { hasText: "fixture" });
     await project.locator("[data-checkout]").first().click();
-    const [target] = herdr.panes;
+    const [target] = engine.panes;
     await expect(page.locator(`[data-pane-view="${target}"]`)).toBeVisible();
 
     // A file drop is bytes the browser can read but cannot name; the shell
@@ -1447,7 +1441,7 @@ test("a dropped file reaches the terminal as an attachment", async ({ page }) =>
 
     // The shim logs every byte its PTY received, so the pasted token shows up
     // in the log of the pane it was dropped on (`inputLogs` follows `panes`).
-    const [log] = herdr.inputLogs;
+    const [log] = engine.inputLogs;
     const read = () => (fs.existsSync(log) ? fs.readFileSync(log, "utf8") : "");
     // The drop's paste reaches the shim's PTY only through the core: if it never shows, what the shim
     // log holds, what the pane runs and what the page sent say which hop dropped it.
@@ -1762,7 +1756,10 @@ test("a View tab a daemon restart restores takes its unsaved draft back (S6 B19)
   const { file } = fixture;
   const original = fs.readFileSync(file, "utf8");
   try {
-    fs.chmodSync(file, 0o444);
+    // Saving atomically needs a writable parent, but reopening the file
+    // must still yield an editable document. Making the file itself read-only
+    // prevents draft restoration once the restarted node reads its metadata.
+    fs.chmodSync(path.dirname(file), 0o555);
     const content = page.locator('[data-editor-codemirror] .cm-content');
     await content.click();
     await page.keyboard.press("ControlOrMeta+KeyA");
@@ -1781,7 +1778,7 @@ test("a View tab a daemon restart restores takes its unsaved draft back (S6 B19)
     await expect(page.locator("[data-draft-recovery]")).toHaveCount(0);
     expect(fs.readFileSync(file, "utf8")).toBe(original);
   } finally {
-    fs.chmodSync(file, 0o644);
+    fs.chmodSync(path.dirname(file), 0o755);
     close(fixture);
   }
 });

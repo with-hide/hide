@@ -3,7 +3,8 @@ import { cn } from "../../lib/utils";
 
 // The ring is drawn inside: a row meets the edges of a scrolling list, which
 // would clip a ring drawn outside it.
-const row = "rounded-xs outline-none transition-colors focus-visible:ring-1 focus-visible:ring-inset focus-visible:ring-ring disabled:pointer-events-none disabled:opacity-(--opacity-disabled)";
+// A selected row already reads by its fill, so its focus ring steps back to a quieter line.
+const row = "rounded-xs outline-none transition-colors focus-visible:ring-1 focus-visible:ring-inset focus-visible:ring-ring data-[selected=true]:focus-visible:ring-ring/40 aria-[current=true]:focus-visible:ring-ring/40 disabled:pointer-events-none disabled:opacity-(--opacity-disabled)";
 
 /**
  * A whole row that is one action (open, pick, expand): it spans its line,

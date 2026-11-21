@@ -7,8 +7,12 @@
 // must sit in the bundle's Contents/MacOS, since NSBundle finds its bundle
 // by walking up from the executable, and it carries the app's identifier in
 // an embedded Info.plist, since macOS keys notification settings to it
-// (`desktop/scripts/package.mjs` builds and signs it). The approach follows
-// Orca's notification-status helper.
+// (`desktop/scripts/package.mjs` builds and signs it).
+//
+// Derived from Orca's native/notification-status-macos/main.swift (MIT; see
+// NOTICE). Hide took the authorization switch, its values, the three-second
+// wait and the JSON line; it dropped the alert setting and exits with an error
+// when macOS does not answer instead of printing "unknown".
 import Foundation
 import UserNotifications
 

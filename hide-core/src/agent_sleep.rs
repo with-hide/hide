@@ -1,0 +1,1720 @@
+//! Agent sleep: ending an agent that has sat untouched, and keeping its
+//! conversation to resume in the same pane (PRD agent-sleep).
+//!
+//! This module decides and remembers; it makes no engine call and ends no
+//! process. `agent_sleep_engine.rs` is the one boundary that does, so when
+//! the engine offers a hibernate of its own only that file changes (D-20).
+//!
+//! The engine forgets an agent whose process ended: it drops it from
+//! `agent.list` together with its session ref. The record kept here is
+//! therefore the only holder of the provider, the conversation id and the
+//! row's name while the agent sleeps, and the sleeping row is drawn from it
+//! (B10). Nothing here clears or rewrites anything the engine keeps (B9).
+
+use std::collections::{BTreeMap, HashMap, HashSet};
+
+use serde::{Deserialize, Serialize};
+
+use crate::model::{
+    AgentActionRefusal, AgentSleepActionSnapshot, AgentSleepSnapshot, AgentStatusCode,
+    SidebarAgentSnapshot,
+};
+use crate::sidebar::{
+    AgentLabel, SessionAgentPayload, SessionAgentSessionPayload, SessionSnapshotPayload,
+};
+
+mod dormant;
+#[cfg(test)]
+pub(crate) use dormant::fixture_record;
+pub use dormant::{
+    DormantOwner, DormantPhase, DormantRecord, DormantRegistration, SleepId,
+    SleepingSessionSnapshot,
+};
+
+/// The Settings choices besides Off, in hours.
+pub const SLEEP_AFTER_CHOICES_HOURS: [u32; 5] = [1, 2, 4, 12, 24];
+/// The choice of a store that has none, and of one written while 24 hours
+/// was the default, which could not tell that default from a 24 the
+/// operator chose.
+pub const DEFAULT_SLEEP_AFTER_HOURS: u32 = 12;
+/// How `core-state.json` writes an Off the operator chose, under
+/// `agent_sleep_hours`. No earlier build reads that key, so one run after a
+/// downgrade sleeps after its own default, 24 hours, in place of Off.
+const STORED_OFF: u32 = 0;
+/// The decision runs at most this often; the coordinator tick is 250 ms.
+pub const DECISION_INTERVAL_MS: u64 = 60_000;
+/// A pane whose agent would not end is not tried again for this long,
+/// unless its state changes first (B8).
+pub const SLEEP_RETRY_BACKOFF_MS: u64 = 60 * 60 * 1000;
+
+/// Under memory pressure only an agent idle at least this long is put to
+/// sleep, however short the chosen hours or the machine's memory.
+pub const PRESSURE_MIN_IDLE_MS: u64 = 30 * 60 * 1000;
+
+/// What keeps an agent awake whatever its idle time, read once for a minute
+/// decision: every automatic sleep (the hours, memory pressure, a finished
+/// mission node or report) asks it.
+#[derive(Clone, Copy, Debug)]
+pub struct Awake<'a> {
+    /// The panes on the operator's screen.
+    pub on_screen: &'a HashSet<String>,
+    /// The panes whose agent would not end, until when (B8).
+    pub backoff_until: &'a HashMap<String, u64>,
+    /// The agents a letter waits to be delivered to.
+    pub letters: &'a LetterWaits,
+}
+
+impl Awake<'_> {
+    /// Whether anything here keeps `agent` awake at `now_unix_ms`.
+    pub(crate) fn holds(&self, agent: &SidebarAgentSnapshot, now_unix_ms: u64) -> bool {
+        self.on_screen.contains(&agent.pane_id)
+            || self
+                .backoff_until
+                .get(&agent.pane_id)
+                .is_some_and(|until| now_unix_ms < *until)
+            || self.letters.holds(agent)
+    }
+}
+
+/// The agents a letter has yet to reach, each by its pane and the session the
+/// letter addresses (the digest `delivery::Actor` keeps), so an agent started
+/// in the pane since is not held by a letter to the one before. No automatic
+/// sleep takes one: a letter wakes its recipient once, so one that woke it
+/// would wait for a wake that never comes (with-hide/hide#2627). The hold
+/// ends when a bell names the letter in the conversation (its own, or one
+/// typed for that recipient after it was queued), a prompt hook is handed
+/// it, or it is taken in, expires or is cancelled
+/// (`delivery::ledger::Ledger::unannounced`). The pane id alone names the
+/// machine, as the sleep records' keys do: another machine's panes are
+/// address-scoped (`crate::address`), so no device id is kept beside it.
+#[derive(Clone, Debug, Default)]
+pub struct LetterWaits(HashMap<String, HashSet<Option<String>>>);
+
+impl LetterWaits {
+    /// The waits `ledger` holds: each letter no bell has named to its
+    /// recipient yet, by its recipient.
+    pub(crate) fn of(ledger: &crate::delivery::ledger::Ledger) -> Self {
+        ledger
+            .unannounced()
+            .map(|letter| {
+                (
+                    letter.recipient.pane_id.as_str(),
+                    letter.recipient.session.as_deref(),
+                )
+            })
+            .collect()
+    }
+
+    /// Whether a letter waits for the agent in its row's pane and session.
+    pub fn holds(&self, agent: &SidebarAgentSnapshot) -> bool {
+        self.0.get(&agent.pane_id).is_some_and(|sessions| {
+            sessions.contains(
+                &agent
+                    .session_id
+                    .as_deref()
+                    .and_then(crate::engine::tokens::session_digest),
+            )
+        })
+    }
+}
+
+impl<'a> FromIterator<(&'a str, Option<&'a str>)> for LetterWaits {
+    fn from_iter<I: IntoIterator<Item = (&'a str, Option<&'a str>)>>(waits: I) -> Self {
+        let mut map: HashMap<String, HashSet<Option<String>>> = HashMap::new();
+        for (pane_id, session) in waits {
+            map.entry(pane_id.to_owned())
+                .or_default()
+                .insert(session.map(str::to_owned));
+        }
+        Self(map)
+    }
+}
+
+/// Why an agent was put to sleep, kept only where its row says it
+/// (`contracts/snapshot-wire-enums.json`: `sleep_cause`).
+#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum SleepCause {
+    /// Its machine reported memory pressure, and it had rested longest there.
+    MemoryPressure,
+}
+
+/// The machine an agent runs on, as sleep sees it. Every machine sleeps by
+/// the same rules (PRD core-host-node-remote-core B13): an in-pane sleep ends
+/// and wakes the agent on its own machine's engine and node, whichever way
+/// the link between the core and that machine was made.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum SleepMachine {
+    Core,
+    /// Another machine: a node that dials this core or a device it dials.
+    /// Only a sleep that closes the pane is the core's machine's alone.
+    Node,
+}
+
+/// The panes of one machine's session: the core's own, or a device's under
+/// its device-scoped ids (`crate::address`). A device session carries the engine's
+/// own pane ids, which the store keeps scoped to the device.
+#[derive(Clone, Copy, Debug)]
+pub enum SleepScope<'a> {
+    Core,
+    Device(&'a str),
+}
+
+impl SleepScope<'_> {
+    fn holds(self, pane_id: &str) -> bool {
+        match self {
+            Self::Core => !crate::address::is_device_scoped(pane_id),
+            Self::Device(device) => crate::address::is_pane_of(pane_id, device),
+        }
+    }
+
+    /// The pane id the machine's session names `pane_id` by.
+    fn session_id(self, pane_id: &str) -> &str {
+        match self {
+            Self::Core => pane_id,
+            Self::Device(device) => crate::address::pane_of(pane_id, device).unwrap_or(pane_id),
+        }
+    }
+}
+
+pub fn valid_after_hours(hours: Option<u32>) -> bool {
+    hours.is_none_or(|hours| SLEEP_AFTER_CHOICES_HOURS.contains(&hours))
+}
+
+/// The choice as `core-state.json` stores it under `agent_sleep_hours`,
+/// `None` (Off) as zero.
+pub(crate) fn stored_after_hours(hours: Option<u32>) -> u32 {
+    hours.unwrap_or(STORED_OFF)
+}
+
+/// The choice a store loads as. `stored` is `agent_sleep_hours`, written
+/// since the choices became 1 to 24 hours: zero is Off, a choice is itself,
+/// and a value this build does not offer is the default. A store without it
+/// moves `earlier`, the `agent_sleep_after_hours` an earlier build wrote,
+/// once: zero stays Off, 48 and 72 hours, which are gone, become 24, and no
+/// value, 12 or 24 (that build's default, which nobody had to choose) load
+/// as the default.
+pub(crate) fn loaded_after_hours(stored: Option<u32>, earlier: Option<u32>) -> Option<u32> {
+    match (stored, earlier) {
+        (Some(STORED_OFF), _) | (None, Some(STORED_OFF)) => None,
+        (Some(hours), _) if valid_after_hours(Some(hours)) => Some(hours),
+        (None, Some(48 | 72)) => Some(24),
+        _ => Some(DEFAULT_SLEEP_AFTER_HOURS),
+    }
+}
+
+/// Everything agent sleep keeps between launches, in `core-state.json`.
+#[derive(Clone, Debug, Default, Deserialize, Eq, PartialEq, Serialize)]
+pub struct AgentSleepStore {
+    /// Each local agent pane's last state change and last look.
+    #[serde(default)]
+    pub stamps: BTreeMap<String, PaneStamps>,
+    /// The agents Hide ended and holds to resume, by pane.
+    #[serde(default)]
+    pub records: BTreeMap<String, SleepRecord>,
+    /// Sessions whose pane is intentionally closed, addressed by sleep id.
+    #[serde(default, deserialize_with = "dormant::deserialize_records")]
+    pub dormant: BTreeMap<SleepId, DormantRecord>,
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+pub struct PaneStamps {
+    /// When the engine last reported this agent's state change, or when it
+    /// appeared (D-04).
+    pub changed_at_unix_ms: u64,
+    /// When the operator last had this pane on screen, or its agent came
+    /// back from a sleep, which counts as a look (`came_back`); zero for never.
+    #[serde(default)]
+    pub seen_at_unix_ms: u64,
+    /// The state the change stamp describes; a different one is a change.
+    pub state: StampedState,
+}
+
+impl PaneStamps {
+    /// When the agent was last talked to or looked at. The conversation's
+    /// own time is the clock once a session read proves it: a relaunch can
+    /// report a state for a moment and move the change
+    /// stamp, but adds no line to the conversation. The change stamp counts
+    /// only until that read lands.
+    fn idle_since(&self, agent: &SidebarAgentSnapshot) -> u64 {
+        agent
+            .last_conversation_at_unix_ms
+            .unwrap_or(self.changed_at_unix_ms)
+            .max(self.seen_at_unix_ms)
+    }
+}
+
+/// The default is no state stamped yet: an agent that came back before any
+/// stamp described it, whose next stamp reads its state as a change.
+#[derive(Clone, Debug, Default, Deserialize, Eq, PartialEq, Serialize)]
+pub struct StampedState {
+    pub demand: String,
+    pub activity: String,
+    pub completed: bool,
+}
+
+impl StampedState {
+    fn of(agent: &SidebarAgentSnapshot) -> Self {
+        Self {
+            demand: agent.demand.clone(),
+            activity: agent.activity.clone(),
+            completed: agent.completed,
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum SleepPhase {
+    /// The end is in flight; the agent is still awake and drawn so (B8).
+    Ending,
+    Sleeping,
+    Waking,
+    /// The last wake failed; the pane says why and offers Retry (B14).
+    Failed,
+}
+
+/// How a wake starts the agent again.
+#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum WakeMode {
+    /// The same conversation, through the provider's own resume.
+    Resume,
+    /// Start new session: the same provider with no arguments (B14).
+    Fresh,
+}
+
+/// One sleeping agent, as much of its row as it takes to draw it again.
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+pub struct SleepRecord {
+    pub phase: SleepPhase,
+    pub kind: String,
+    /// The conversation a wake resumes; none for an agent that slept before
+    /// it reported one (`sleeps_without_session`), which wakes as a new one.
+    pub session_id: Option<String>,
+    /// The agent's engine name, when it had one: orchestrators address agents
+    /// by name, so a wake restarts it under the same one.
+    #[serde(default)]
+    pub agent_name: Option<String>,
+    pub identity_label: String,
+    /// Captured only from a current, guarded core row. Older sleep records
+    /// have no label provenance and cannot bring a label back.
+    #[serde(default)]
+    pub label_owner: Option<String>,
+    #[serde(default)]
+    pub progress: Option<String>,
+    /// The row's ordering key when it slept, so it keeps its place (B10);
+    /// thirteen digits are the core's state change time, which the row's
+    /// elapsed time is counted from.
+    pub last_activity: String,
+    /// The state change sequence of the turn the row showed when the agent
+    /// was put to sleep, which the sleeping row carries: what the operator
+    /// read of that turn stays read, so a sleep alone is never news. None for
+    /// an agent kept asleep at a restore, which no engine of this run listed.
+    #[serde(default)]
+    pub state_change_seq: Option<u64>,
+    /// The engine's state change sequence of the ended agent, as the end read
+    /// it just before ending it (`agent_sleep_engine::end_agent`). A listed
+    /// agent on the pane with this sequence and server mark is that agent
+    /// still being reported; another engine can reuse the sequence (B18).
+    /// The end reads the engine itself, so it can be ahead of the turn the
+    /// row showed (`state_change_seq`), which is why the two are kept apart.
+    /// None until the end lands, and for an agent kept asleep at a restore,
+    /// so any agent listed there is a new one.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub ended_seq: Option<u64>,
+    /// The existing read-axis engine mark that scopes `ended_seq`.
+    /// Older records have none and cannot identify a newly listed agent as
+    /// the ended one on this engine.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub server_mark: Option<String>,
+    #[serde(default)]
+    pub completed: bool,
+    #[serde(default)]
+    pub parent_pane_id: Option<String>,
+    /// The parent's session digest the declaration was written for. A record
+    /// from before it was kept has none, and its row is a root until the agent
+    /// wakes, because a declaration with no session cannot be proven.
+    #[serde(default)]
+    pub parent_session: Option<String>,
+    /// The source a sleeping fork was forked from and the digest of the
+    /// session it hosted (`SidebarAgentSnapshot::declared_fork`), so the row
+    /// keeps its fork mark while the engine lists no agent there.
+    #[serde(default)]
+    pub fork_source: Option<(String, Option<String>)>,
+    pub workspace_label: String,
+    #[serde(default)]
+    pub cwd: Option<String>,
+    pub since_unix_ms: u64,
+    /// Why the last wake failed, in the operator's words.
+    #[serde(default)]
+    pub reason: Option<String>,
+    /// A wake asked for while the end was still in flight; it runs as soon
+    /// as the end lands, because a wake wins over a sleep (B13).
+    #[serde(default)]
+    pub pending_wake: Option<WakeMode>,
+    /// The model and effort the agent was started with, which its wake
+    /// starts it with again, a new session as much as a resumed one. A
+    /// record from before it was kept has none and wakes on the CLI's
+    /// defaults, as it did.
+    #[serde(
+        default,
+        skip_serializing_if = "hide_agent_adapter::LaunchChoice::is_default"
+    )]
+    pub launch: hide_agent_adapter::LaunchChoice,
+    /// The profile the agent runs with, which its wake starts it with again
+    /// (PRD agent-profiles D-27); none, as in a record from before profiles,
+    /// for the built-in default.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub profile: Option<crate::launch::LaunchProfile>,
+    /// Why it was put to sleep, when its row says so; none for a sleep the
+    /// hours, a finish, a report or a person asked for.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub cause: Option<SleepCause>,
+}
+
+impl SleepRecord {
+    /// The record a decision starts, taken from the row it decided on.
+    pub fn ending(
+        agent: &SidebarAgentSnapshot,
+        cwd: Option<String>,
+        since_unix_ms: u64,
+    ) -> Option<Self> {
+        if agent.session_id.is_none() && !sleeps_without_session(&agent.agent_kind) {
+            return None;
+        }
+        let session_id = agent.session_id.clone();
+        let label_owner = session_id.as_deref().and_then(|session_id| {
+            hide_session::label_reference_token(&agent.agent_kind, "id", session_id)
+        });
+        Some(Self {
+            phase: SleepPhase::Ending,
+            kind: agent.agent_kind.clone(),
+            session_id,
+            // A device row's id is the core's own scoped one, never a name;
+            // its engine name, when someone gave one, is `given_name`.
+            agent_name: agent.given_name.clone().or_else(|| {
+                (!crate::address::is_device_scoped(&agent.pane_id)
+                    && agent.id != agent.pane_id
+                    && !agent.id.trim().is_empty())
+                .then(|| agent.id.clone())
+            }),
+            identity_label: agent.identity_label.clone(),
+            label_owner,
+            progress: agent.progress.clone(),
+            last_activity: agent.last_activity.clone(),
+            state_change_seq: agent.state_change_seq,
+            ended_seq: None,
+            server_mark: agent.server_mark.clone(),
+            completed: agent.completed,
+            parent_pane_id: agent.spawned_from_pane_id.clone(),
+            parent_session: agent.declared_parent_session.clone(),
+            fork_source: agent.declared_fork.clone(),
+            workspace_label: agent.workspace_label.clone(),
+            cwd,
+            since_unix_ms,
+            reason: None,
+            pending_wake: None,
+            launch: Default::default(),
+            profile: None,
+            cause: None,
+        })
+    }
+
+    /// What the row and the pane draw; nothing while the end is in flight.
+    pub fn snapshot(&self) -> Option<AgentSleepSnapshot> {
+        let state = match self.phase {
+            SleepPhase::Ending => return None,
+            SleepPhase::Sleeping => "sleeping",
+            SleepPhase::Waking => "waking",
+            SleepPhase::Failed => "failed",
+        };
+        Some(AgentSleepSnapshot {
+            state: state.to_owned(),
+            reason: (self.phase == SleepPhase::Failed)
+                .then(|| self.reason.clone())
+                .flatten(),
+            since_unix_ms: self.since_unix_ms,
+            progress: self.label_owner.as_ref().and(self.progress.clone()),
+            cause: self.cause,
+        })
+    }
+
+    /// The agent row the engine no longer sends, drawn from what the record kept.
+    fn payload(
+        &self,
+        pane_id: &str,
+        workspace_label: Option<String>,
+        scope: SleepScope<'_>,
+    ) -> SessionAgentPayload {
+        // Only a label the core had proven for this session comes back.
+        let label = self.label_owner.as_ref().map(|_| AgentLabel {
+            task: Some(self.identity_label.clone()),
+            progress: self.progress.clone(),
+            expected_reply: None,
+            question: false,
+            blocked: false,
+        });
+        // Any other key is the engine's padded sequence, which the sequence below
+        // reproduces.
+        let changed_at_unix_ms = (self.last_activity.len() == 13)
+            .then(|| self.last_activity.parse().ok())
+            .flatten();
+        SessionAgentPayload {
+            record: None,
+            hook: None,
+            hook_refused: None,
+            hook_question: false,
+            telemetry_stale: false,
+            terminal_failed: false,
+            launch_pending: false,
+            start_unshown: false,
+            id: Some(
+                self.agent_name
+                    .clone()
+                    .unwrap_or_else(|| pane_id.to_owned()),
+            ),
+            name: self.agent_name.clone(),
+            pane_id: Some(pane_id.to_owned()),
+            workspace_label: workspace_label.or_else(|| Some(self.workspace_label.clone())),
+            cwd: self.cwd.clone(),
+            agent: Some(self.kind.clone()),
+            agent_status: Some(if self.completed { "done" } else { "idle" }.to_owned()),
+            agent_session: self
+                .session_id
+                .clone()
+                .map(|value| SessionAgentSessionPayload {
+                    kind: "id".to_owned(),
+                    value,
+                }),
+            spawned_from_pane_id: self
+                .parent_pane_id
+                .as_deref()
+                .map(|parent| scope.session_id(parent).to_owned()),
+            spawned_from_machine_id: None,
+            declared_parent_session: self.parent_session.clone(),
+            lineage_session: self
+                .session_id
+                .as_deref()
+                .and_then(crate::engine::tokens::session_digest),
+            completion_seq: None,
+            state_change_seq: self.state_change_seq,
+            tokens: self
+                .fork_source
+                .as_ref()
+                .map(|(source, source_session)| {
+                    crate::engine::tokens::fork_tokens(
+                        scope.session_id(source),
+                        self.session_id
+                            .as_deref()
+                            .and_then(crate::engine::tokens::session_digest)
+                            .as_deref(),
+                        source_session.as_deref(),
+                    )
+                })
+                .unwrap_or_default(),
+            label,
+            changed_at_unix_ms,
+            facts: None,
+            notification_pending: false,
+            notification_finalized: false,
+        }
+    }
+}
+
+/// The status a sleeping row carries in place of its own (B10).
+pub fn status_code(sleep: &AgentSleepSnapshot) -> AgentStatusCode {
+    match sleep.state.as_str() {
+        "waking" => AgentStatusCode::Waking,
+        "failed" => AgentStatusCode::SleepFailed,
+        _ => AgentStatusCode::Sleeping,
+    }
+}
+
+/// What happened to a record while a session update was settled.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub enum Settled {
+    /// A new agent is running in the pane (a wake, the operator, a restore).
+    Woke { pane_id: String, phase: SleepPhase },
+    /// The pane is gone, and the record with it (B17).
+    Closed { pane_id: String },
+}
+
+impl AgentSleepStore {
+    /// A store read back at launch. An end that was in flight when the
+    /// process stopped cannot be known to have happened, so its record goes
+    /// and the pane is read as the engine reports it; a wake in flight is asleep
+    /// until an agent shows up in the pane.
+    pub fn after_load(&mut self) {
+        for record in self.dormant.values_mut() {
+            record.after_load();
+        }
+        self.records
+            .retain(|_, record| record.phase != SleepPhase::Ending);
+        for record in self.records.values_mut() {
+            if record.phase == SleepPhase::Waking {
+                record.phase = SleepPhase::Sleeping;
+            }
+            record.pending_wake = None;
+            // An earlier build kept the end's sequence in place of the
+            // turn's: it still names the ended agent.
+            if record.ended_seq.is_none() {
+                record.ended_seq = record.state_change_seq;
+            }
+        }
+    }
+
+    /// Reconciles the records of one machine with its session and adds a row
+    /// for each sleeping agent the engine no longer lists. `payload` is that
+    /// machine's whole topology, so a record of the machine whose pane it
+    /// does not hold is a closed pane; another machine's records stay.
+    pub fn settle_payload(
+        &mut self,
+        payload: &mut SessionSnapshotPayload,
+        scope: SleepScope<'_>,
+        connection_mark: Option<&str>,
+    ) -> Vec<Settled> {
+        let live = payload
+            .layouts
+            .iter()
+            .flat_map(|layout| {
+                layout
+                    .panes
+                    .iter()
+                    .map(move |pane| (pane.pane_id.as_str(), layout))
+            })
+            .collect::<HashMap<_, _>>();
+        let mut settled = Vec::new();
+        self.records.retain(|pane_id, record| {
+            if !scope.holds(pane_id) {
+                return true;
+            }
+            let session_pane_id = scope.session_id(pane_id);
+            if !live.contains_key(session_pane_id) {
+                settled.push(Settled::Closed {
+                    pane_id: pane_id.clone(),
+                });
+                return false;
+            }
+            if record.phase == SleepPhase::Ending {
+                return true;
+            }
+            if payload
+                .panes
+                .iter()
+                .any(|pane| pane.pane_id == session_pane_id && pane.failed_terminal_id.is_some())
+            {
+                return true;
+            }
+            // Only an entry that names a provider and carries another state
+            // sequence or engine mark is a new agent. Sequences restart with
+            // the engine; a pane without a mark uses its read connection's,
+            // as the read axis does. The ended agent can stay listed a
+            // moment with its old sequence, and a pane whose metadata a
+            // plugin reports stays listed with no provider at all. A start
+            // the engine typed and whose program has not shown is not one
+            // yet: the wake's own start is listed so before its input is
+            // even delivered, and a refused or failed start must find the
+            // record still there to say why. A program that shows is one,
+            // whatever its start still waits on (a question it asks keeps
+            // `launch_pending`), so the operator's keys reach it.
+            let new_agent = payload.agents.iter().any(|agent| {
+                agent.pane_id.as_deref().or(agent.id.as_deref()) == Some(session_pane_id)
+                    && agent
+                        .agent
+                        .as_deref()
+                        .is_some_and(|kind| !kind.trim().is_empty())
+                    && !agent.start_unshown
+                    && (agent.state_change_seq != record.ended_seq
+                        || crate::engine::tokens::server_mark(&agent.tokens)
+                            .as_deref()
+                            .or(connection_mark)
+                            != record.server_mark.as_deref())
+            });
+            if new_agent {
+                settled.push(Settled::Woke {
+                    pane_id: pane_id.clone(),
+                    phase: record.phase,
+                });
+                return false;
+            }
+            true
+        });
+        self.stamps.retain(|pane_id, _| {
+            !scope.holds(pane_id) || live.contains_key(scope.session_id(pane_id))
+        });
+        let workspace_labels = payload
+            .workspaces
+            .iter()
+            .map(|workspace| (workspace.workspace_id.as_str(), workspace.label.clone()))
+            .collect::<HashMap<_, _>>();
+        // A sleeping pane's row is drawn from its record alone, whatever
+        // the engine still lists for the pane.
+        let mut rows = Vec::new();
+        for (pane_id, record) in &self.records {
+            if record.phase == SleepPhase::Ending || !scope.holds(pane_id) {
+                continue;
+            }
+            let pane_id = scope.session_id(pane_id);
+            payload
+                .agents
+                .retain(|agent| agent.pane_id.as_deref().or(agent.id.as_deref()) != Some(pane_id));
+            let workspace_label = live
+                .get(pane_id)
+                .and_then(|layout| workspace_labels.get(layout.workspace_id.as_str()))
+                .filter(|label| !label.trim().is_empty())
+                .cloned();
+            rows.push(record.payload(pane_id, workspace_label, scope));
+        }
+        payload.agents.extend(rows);
+        settled
+    }
+
+    /// Marks each sleeping row so the projection draws the moon (B10).
+    pub fn annotate(&self, agents: &mut [SidebarAgentSnapshot]) {
+        for agent in agents {
+            agent.sleep = self
+                .records
+                .get(&agent.pane_id)
+                .and_then(SleepRecord::snapshot);
+        }
+    }
+
+    /// Moves each awake agent's change stamp on one machine when its state
+    /// changed or it appeared, and drops the stamps of that machine's panes
+    /// the engine's topology says are gone. Returns whether anything moved.
+    ///
+    /// A pane that holds no agent now keeps its stamp, and with it its last
+    /// look: a restarted engine lists an agent only once its program shows
+    /// again, so the agent list is empty or incomplete for a while and is
+    /// never an eviction source (as for the read records,
+    /// `agent_state::prune_read_records`). `live_pane_ids` is the topology
+    /// of the same read; none keeps every stamp.
+    pub fn stamp(
+        &mut self,
+        agents: &[SidebarAgentSnapshot],
+        scope: SleepScope<'_>,
+        live_pane_ids: Option<&HashSet<String>>,
+        now_unix_ms: u64,
+    ) -> bool {
+        let mut changed = false;
+        let mut present = HashSet::new();
+        for agent in agents {
+            if !scope.holds(&agent.pane_id) {
+                continue;
+            }
+            present.insert(agent.pane_id.as_str());
+            if self.records.contains_key(&agent.pane_id) {
+                continue;
+            }
+            let state = StampedState::of(agent);
+            match self.stamps.get_mut(&agent.pane_id) {
+                Some(stamps) if stamps.state == state => {}
+                Some(stamps) => {
+                    stamps.state = state;
+                    stamps.changed_at_unix_ms = now_unix_ms;
+                    changed = true;
+                }
+                None => {
+                    self.stamps.insert(
+                        agent.pane_id.clone(),
+                        PaneStamps {
+                            changed_at_unix_ms: now_unix_ms,
+                            seen_at_unix_ms: 0,
+                            state,
+                        },
+                    );
+                    changed = true;
+                }
+            }
+        }
+        let before = self.stamps.len();
+        self.stamps.retain(|pane_id, _| {
+            !scope.holds(pane_id)
+                || present.contains(pane_id.as_str())
+                || self.records.contains_key(pane_id)
+                || live_pane_ids.is_none_or(|live| live.contains(pane_id))
+        });
+        changed | (self.stamps.len() != before)
+    }
+
+    /// Starts the idle clock of the agent that came back in `pane_id` from a
+    /// sleep, in its pane or in the one its wake opened, again at
+    /// `now_unix_ms` (B16): its coming back counts as a look, because the
+    /// conversation it resumes is as old as the sleep, and counted from its
+    /// last line the agent would be due again at once (with-hide/hide#2627).
+    pub fn came_back(&mut self, pane_id: &str, now_unix_ms: u64) {
+        let stamps = self
+            .stamps
+            .entry(pane_id.to_owned())
+            .or_insert_with(|| PaneStamps {
+                changed_at_unix_ms: now_unix_ms,
+                seen_at_unix_ms: now_unix_ms,
+                state: StampedState::default(),
+            });
+        stamps.changed_at_unix_ms = now_unix_ms;
+        stamps.seen_at_unix_ms = stamps.seen_at_unix_ms.max(now_unix_ms);
+    }
+
+    /// Records that the operator had these panes on screen now (B4).
+    pub fn mark_seen<'a>(
+        &mut self,
+        pane_ids: impl IntoIterator<Item = &'a str>,
+        now_unix_ms: u64,
+    ) -> bool {
+        let mut changed = false;
+        for pane_id in pane_ids {
+            if let Some(stamps) = self.stamps.get_mut(pane_id)
+                && stamps.seen_at_unix_ms < now_unix_ms
+            {
+                stamps.seen_at_unix_ms = now_unix_ms;
+                changed = true;
+            }
+        }
+        changed
+    }
+
+    /// The panes whose agent the decision puts to sleep now (B4, B5, B6).
+    pub fn due(
+        &self,
+        agents: &[SidebarAgentSnapshot],
+        machine: SleepMachine,
+        awake: &Awake<'_>,
+        after_hours: Option<u32>,
+        now_unix_ms: u64,
+    ) -> Vec<String> {
+        let Some(hours) = after_hours else {
+            return Vec::new();
+        };
+        let after_ms = u64::from(hours) * 60 * 60 * 1000;
+        self.sleepable(agents, machine, awake, now_unix_ms)
+            .filter(|(_, idle_since)| idle_since.saturating_add(after_ms) <= now_unix_ms)
+            .map(|(agent, _)| agent.pane_id.clone())
+            .collect()
+    }
+
+    /// The panes memory pressure may put to sleep this minute, longest idle
+    /// first, with when each agent went idle: the agents the hours rule would
+    /// sleep but for the hours, idle at least [`PRESSURE_MIN_IDLE_MS`] and not
+    /// `taken` already. One of them sleeps, the first whose end starts. Sleep
+    /// set to Never is the caller's to check.
+    pub fn pressure_candidates(
+        &self,
+        agents: &[SidebarAgentSnapshot],
+        machine: SleepMachine,
+        awake: &Awake<'_>,
+        taken: &[String],
+        now_unix_ms: u64,
+    ) -> Vec<(String, u64)> {
+        let mut candidates = self
+            .sleepable(agents, machine, awake, now_unix_ms)
+            .filter(|(agent, _)| !taken.contains(&agent.pane_id))
+            .filter(|(_, idle_since)| {
+                idle_since.saturating_add(PRESSURE_MIN_IDLE_MS) <= now_unix_ms
+            })
+            .map(|(agent, idle_since)| (agent.pane_id.clone(), idle_since))
+            .collect::<Vec<_>>();
+        candidates
+            .sort_by(|(a, a_since), (b, b_since)| a_since.cmp(b_since).then_with(|| a.cmp(b)));
+        candidates
+    }
+
+    /// The agents an automatic sleep may end, with when each went idle:
+    /// seen, resting and of a kind that sleeps here, not asleep already and
+    /// kept awake by nothing in `awake`. The time is each rule's.
+    fn sleepable<'a>(
+        &'a self,
+        agents: &'a [SidebarAgentSnapshot],
+        machine: SleepMachine,
+        awake: &'a Awake<'a>,
+        now_unix_ms: u64,
+    ) -> impl Iterator<Item = (&'a SidebarAgentSnapshot, u64)> + 'a {
+        agents
+            .iter()
+            .filter(move |agent| sleep_refusal(agent, machine).is_none())
+            .filter(|agent| crate::agent_state::is_seen(agent))
+            .filter(|agent| !self.records.contains_key(&agent.pane_id))
+            .filter(move |agent| !awake.holds(agent, now_unix_ms))
+            .filter_map(|agent| {
+                let stamps = self.stamps.get(&agent.pane_id)?;
+                Some((agent, stamps.idle_since(agent)))
+            })
+    }
+}
+
+/// Whether Hide can put an agent of this engine kind to sleep and wake it:
+/// the kinds whose adapter declares a sleep.
+pub(crate) fn sleeps_kind(kind: &str) -> bool {
+    hide_agent_adapter::adapter(kind).is_some_and(|row| row.sleep.is_some())
+}
+
+/// Whether this kind can sleep before it has reported a conversation.
+pub(crate) fn sleeps_without_session(kind: &str) -> bool {
+    hide_agent_adapter::adapter(kind)
+        .and_then(|adapter| adapter.sleep)
+        .is_some_and(hide_agent_adapter::LaunchDialect::sleeps_without_session)
+}
+
+/// Whether this kind sleeps by closing its pane (Pi's dormant sleep).
+pub(crate) fn closes_pane_when_sleeping(kind: &str) -> bool {
+    hide_agent_adapter::adapter(kind)
+        .and_then(|adapter| adapter.sleep)
+        .is_some_and(|dialect| dialect.closes_pane_when_sleeping())
+}
+
+/// Why this agent cannot be put to sleep now, or `None` when it can (B5,
+/// B15). The time and the screen are the automatic decision's alone; a
+/// person asking from the pane menu has already looked.
+pub fn sleep_refusal(
+    agent: &SidebarAgentSnapshot,
+    machine: SleepMachine,
+) -> Option<AgentActionRefusal> {
+    if !sleeps_kind(&agent.agent_kind) {
+        return Some(AgentActionRefusal::Unsupported);
+    }
+    // A sleep that closes the pane reopens it from the core's own catalog,
+    // which holds only the core machine's folders.
+    if machine == SleepMachine::Node && closes_pane_when_sleeping(&agent.agent_kind) {
+        return Some(AgentActionRefusal::CoreMachineOnly);
+    }
+    if agent.sleep.is_some() {
+        return Some(AgentActionRefusal::Asleep);
+    }
+    if let Some(reason) = crate::agent_state::rest_refusal(agent) {
+        return Some(reason);
+    }
+    if agent.session_id.is_none() && !sleeps_without_session(&agent.agent_kind) {
+        return Some(AgentActionRefusal::NoConversation);
+    }
+    None
+}
+
+/// The pane menu's Sleep agent item for an awake agent.
+pub fn sleep_action(
+    agent: &SidebarAgentSnapshot,
+    machine: SleepMachine,
+) -> Option<AgentSleepActionSnapshot> {
+    if agent.sleep.is_some() {
+        return None;
+    }
+    let reason = sleep_refusal(agent, machine);
+    Some(AgentSleepActionSnapshot {
+        available: reason.is_none(),
+        reason,
+    })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    const HOUR: u64 = 60 * 60 * 1000;
+
+    fn agent(pane_id: &str) -> SidebarAgentSnapshot {
+        SidebarAgentSnapshot {
+            profile: None,
+            device_id: Default::default(),
+            device_pane_id: Default::default(),
+            record_connection: None,
+            record_summary: None,
+            record_metadata: None,
+            telemetry_stale: false,
+            start: Default::default(),
+            close_session: None,
+            state: Default::default(),
+            resolved: None,
+            resolved_recent: false,
+            revisit: None,
+            escalation: None,
+            letters_waiting: None,
+            raised: Vec::new(),
+            human_below: Vec::new(),
+            declared_human_turn: None,
+            pulls: None,
+            descendant_mark: None,
+            descendant_line: None,
+            id: pane_id.to_owned(),
+            given_name: None,
+            started_name: None,
+            declared_fork: None,
+            forked_from: None,
+            pane_id: pane_id.to_owned(),
+            workspace_label: "Fixture".to_owned(),
+            identity_label: "Refactor the parser".to_owned(),
+            checkout_label: None,
+            agent_kind: "claude".to_owned(),
+            demand: "none".to_owned(),
+            activity: "stopped".to_owned(),
+            completed: false,
+            unread: false,
+            blocked: false,
+            group: "seen".to_owned(),
+            mark: Default::default(),
+            emphasized: false,
+            status_code: AgentStatusCode::Idle,
+            requires_close_confirmation: false,
+            requires_close_status_check: false,
+            progress: Some("Split the lexer".to_owned()),
+            expected_reply: None,
+            detail: None,
+            message: None,
+            user_turn: None,
+            ask_subject: None,
+            laid_since_unix_ms: None,
+            blocked_since_unix_ms: None,
+            laid_more: 0,
+            laid_asks: std::collections::BTreeSet::new(),
+            open_asks: None,
+            human_turn: None,
+            status_word_visible: true,
+            changed_at_unix_ms: Some(1_788_871_000_000),
+            last_prompt_at_unix_ms: None,
+            last_conversation_at_unix_ms: None,
+            last_activity: "1788871000000".to_owned(),
+            state_change_seq: Some(4),
+            session_id: Some("session-a".to_owned()),
+            own_find: true,
+            spawned_from_pane_id: None,
+            declared_parent_pane_id: None,
+            spawned_from_machine_id: None,
+            declared_parent_session: None,
+            lineage_session: None,
+            refused: None,
+            server_mark: None,
+            delegated: false,
+            descendant_counts: crate::model::DescendantCountsSnapshot::default(),
+            direct_child_counts: crate::model::DescendantCountsSnapshot::default(),
+            wait: None,
+            checks_wait: None,
+            background_left: 0,
+            children_left: 0,
+            subagents: 0,
+            subagent_rows: Vec::new(),
+            subagents_left: 0,
+            wait_count: 0,
+            wait_subagents: 0,
+            replies_in_progress: 0,
+            children_moving: false,
+            own_wait: None,
+            own_unread: false,
+            checks_ended: None,
+            descendant_signals: std::collections::BTreeSet::new(),
+            lineage_parent_pane_id: None,
+            lineage_path_pane_ids: Vec::new(),
+            lineage_sibling_pane_ids: Vec::new(),
+            lineage_depth: 0,
+            lineage_child_pane_ids: Vec::new(),
+            close_descendant_pane_ids: Vec::new(),
+            lineage_root_checkout_id: None,
+            lineage_worktree_badge: None,
+            lineage_orphan: false,
+            lineage_hint: None,
+            raised_hint: None,
+            spawn_origin_pane_id: None,
+            lineage_collapsed: false,
+            sleep: None,
+            row_facts: None,
+            notification_pending: false,
+            notification_finalized: false,
+            awaited_replies: Vec::new(),
+            hide_ai: None,
+            tool: None,
+            unlisted: false,
+            request: None,
+            unseen_views: Vec::new(),
+            look: None,
+        }
+    }
+
+    /// A store that first saw `agents` at time zero.
+    fn stamped(agents: &[SidebarAgentSnapshot]) -> AgentSleepStore {
+        let mut store = AgentSleepStore::default();
+        store.stamp(agents, SleepScope::Core, None, 0);
+        store
+    }
+
+    fn due_at(store: &AgentSleepStore, agents: &[SidebarAgentSnapshot], now: u64) -> Vec<String> {
+        due_with(store, agents, &LetterWaits::default(), now)
+    }
+
+    /// The panes the hours rule, set to 24, sleeps at `now` while `letters`
+    /// wait, with nothing on screen and no backoff.
+    fn due_with(
+        store: &AgentSleepStore,
+        agents: &[SidebarAgentSnapshot],
+        letters: &LetterWaits,
+        now: u64,
+    ) -> Vec<String> {
+        let (on_screen, backoff_until) = (HashSet::new(), HashMap::new());
+        let awake = Awake {
+            on_screen: &on_screen,
+            backoff_until: &backoff_until,
+            letters,
+        };
+        store.due(agents, SleepMachine::Core, &awake, Some(24), now)
+    }
+
+    /// The panes memory pressure may sleep at `now` while `letters` wait,
+    /// with nothing on screen, no backoff and none taken.
+    fn pressure_at(
+        store: &AgentSleepStore,
+        agents: &[SidebarAgentSnapshot],
+        letters: &LetterWaits,
+        now: u64,
+    ) -> Vec<String> {
+        let (on_screen, backoff_until) = (HashSet::new(), HashMap::new());
+        let awake = Awake {
+            on_screen: &on_screen,
+            backoff_until: &backoff_until,
+            letters,
+        };
+        store
+            .pressure_candidates(agents, SleepMachine::Core, &awake, &[], now)
+            .into_iter()
+            .map(|(pane, _)| pane)
+            .collect()
+    }
+
+    fn payload(agents: serde_json::Value, panes: &[&str]) -> SessionSnapshotPayload {
+        serde_json::from_value(serde_json::json!({
+            "agents": agents,
+            "workspaces": [{"workspace_id": "w1", "label": "Alpha"}],
+            "layouts": [{"workspace_id": "w1", "tab_id": "w1:t1", "zoomed": false,
+                "area": {"x": 0, "y": 0, "width": 80, "height": 24}, "focused_pane_id": panes[0],
+                "panes": panes.iter().map(|pane| serde_json::json!({"pane_id": pane,
+                    "rect": {"x": 0, "y": 0, "width": 80, "height": 24}})).collect::<Vec<_>>(),
+                "splits": []}]
+        }))
+        .unwrap()
+    }
+
+    fn asleep(store: &mut AgentSleepStore, agent: &SidebarAgentSnapshot) {
+        let mut record = SleepRecord::ending(agent, Some("/tmp".into()), 5).unwrap();
+        record.phase = SleepPhase::Sleeping;
+        record.ended_seq = agent.state_change_seq;
+        store.records.insert(agent.pane_id.clone(), record);
+    }
+
+    /// The stored choice loads as itself under its own key, and a store
+    /// without it moves an earlier build's value once.
+    #[test]
+    fn a_stored_choice_loads_as_itself_and_an_earlier_one_moves_once() {
+        for hours in SLEEP_AFTER_CHOICES_HOURS {
+            assert_eq!(loaded_after_hours(Some(hours), Some(72)), Some(hours));
+            assert_eq!(
+                loaded_after_hours(Some(stored_after_hours(Some(hours))), None),
+                Some(hours)
+            );
+        }
+        assert_eq!(
+            loaded_after_hours(Some(stored_after_hours(None)), Some(24)),
+            None
+        );
+        assert_eq!(loaded_after_hours(Some(48), None), Some(12), "not a choice");
+        let earlier = [
+            None,
+            Some(24),
+            Some(12),
+            Some(48),
+            Some(72),
+            Some(0),
+            Some(5),
+        ]
+        .map(|earlier| loaded_after_hours(None, earlier));
+        assert_eq!(
+            earlier,
+            [
+                Some(12),
+                Some(12),
+                Some(12),
+                Some(24),
+                Some(24),
+                None,
+                Some(12)
+            ]
+        );
+    }
+
+    #[test]
+    fn an_agent_sleeps_once_the_chosen_hours_pass_after_its_later_change_or_look() {
+        let agents = [agent("w1:p1")];
+        let mut store = stamped(&agents);
+        assert!(due_at(&store, &agents, 24 * HOUR - 1).is_empty());
+        assert_eq!(due_at(&store, &agents, 24 * HOUR), ["w1:p1"]);
+        store.mark_seen(["w1:p1"], 10 * HOUR);
+        assert!(due_at(&store, &agents, 24 * HOUR).is_empty());
+        assert_eq!(due_at(&store, &agents, 34 * HOUR), ["w1:p1"]);
+        let (on_screen, backoff_until) = (HashSet::new(), HashMap::new());
+        let awake = Awake {
+            on_screen: &on_screen,
+            backoff_until: &backoff_until,
+            letters: &LetterWaits::default(),
+        };
+        assert!(
+            store
+                .due(&agents, SleepMachine::Core, &awake, None, 100 * HOUR)
+                .is_empty(),
+            "Never sleeps nothing"
+        );
+    }
+
+    #[test]
+    fn the_last_conversation_line_is_the_clock_once_a_session_read_proves_one() {
+        let mut agents = [agent("w1:p1")];
+        agents[0].last_conversation_at_unix_ms = Some(HOUR);
+        let mut store = stamped(&agents);
+        // A relaunch reports a state for a moment.
+        agents[0].activity = "unknown".to_owned();
+        assert!(store.stamp(&agents, SleepScope::Core, None, 20 * HOUR));
+        agents[0].activity = "stopped".to_owned();
+        assert!(store.stamp(&agents, SleepScope::Core, None, 20 * HOUR));
+        assert!(due_at(&store, &agents, 25 * HOUR - 1).is_empty());
+        assert_eq!(due_at(&store, &agents, 25 * HOUR), ["w1:p1"]);
+
+        agents[0].last_conversation_at_unix_ms = Some(30 * HOUR);
+        assert!(due_at(&store, &agents, 53 * HOUR).is_empty());
+        assert_eq!(due_at(&store, &agents, 54 * HOUR), ["w1:p1"]);
+        store.mark_seen(["w1:p1"], 40 * HOUR);
+        assert!(due_at(&store, &agents, 54 * HOUR).is_empty());
+        assert_eq!(due_at(&store, &agents, 64 * HOUR), ["w1:p1"]);
+    }
+
+    #[test]
+    fn a_pane_without_an_agent_keeps_its_last_look_until_the_pane_itself_is_gone() {
+        let mut agents = [agent("w1:p1")];
+        agents[0].last_conversation_at_unix_ms = Some(HOUR);
+        let mut store = stamped(&agents);
+        store.mark_seen(["w1:p1"], 10 * HOUR);
+        let live = HashSet::from(["w1:p1".to_owned()]);
+
+        // A restarted engine lists an agent only once its program shows again.
+        assert!(!store.stamp(&[], SleepScope::Core, Some(&live), 11 * HOUR));
+        agents[0].activity = "unknown".to_owned();
+        assert!(store.stamp(&agents, SleepScope::Core, Some(&live), 12 * HOUR));
+        agents[0].activity = "stopped".to_owned();
+        assert!(store.stamp(&agents, SleepScope::Core, Some(&live), 13 * HOUR));
+        assert!(due_at(&store, &agents, 34 * HOUR - 1).is_empty());
+        assert_eq!(due_at(&store, &agents, 34 * HOUR), ["w1:p1"]);
+
+        // No topology to judge by evicts nothing; one that lacks the pane does.
+        assert!(!store.stamp(&[], SleepScope::Core, None, 14 * HOUR));
+        assert!(store.stamps.contains_key("w1:p1"));
+        assert!(store.stamp(&[], SleepScope::Core, Some(&HashSet::new()), 15 * HOUR));
+        assert!(store.stamps.is_empty());
+    }
+
+    #[test]
+    fn without_a_conversation_read_a_state_change_restarts_the_clock() {
+        let mut agents = [agent("w1:p1")];
+        let mut store = stamped(&agents);
+        agents[0].completed = true;
+        assert!(store.stamp(&agents, SleepScope::Core, None, 20 * HOUR));
+        assert!(due_at(&store, &agents, 24 * HOUR).is_empty());
+        assert_eq!(due_at(&store, &agents, 44 * HOUR), ["w1:p1"]);
+    }
+
+    #[test]
+    fn only_a_quiet_seen_local_resumable_agent_with_a_conversation_off_screen_sleeps() {
+        let quiet = agent("w1:p1");
+        let mut working = agent("w1:p2");
+        working.activity = "working".into();
+        working.group = "working".into();
+        let mut asking = agent("w1:p3");
+        asking.demand = "question".into();
+        asking.group = "needs_you".into();
+        let mut unread_done = agent("w1:p4");
+        unread_done.completed = true;
+        unread_done.unread = true;
+        unread_done.group = "done".into();
+        let mut unknown = agent("w1:p5");
+        unknown.activity = "unknown".into();
+        let mut no_session = agent("w1:p6");
+        no_session.session_id = None;
+        let mut pi = agent("w1:p7");
+        pi.agent_kind = "pi".into();
+        let mut omp = agent("w1:p11");
+        omp.agent_kind = "omp".into();
+        let mut grok = agent("w1:p12");
+        grok.agent_kind = "grok".into();
+        let mut other = agent("w1:p13");
+        other.agent_kind = "cursor".into();
+        let mut remote = agent("remote:mini:w1:p1");
+        remote.pane_id = "remote:mini:w1:p1".into();
+        let on_screen = agent("w1:p8");
+        let backing_off = agent("w1:p9");
+        let mut child = agent("w1:p10");
+        child.spawned_from_pane_id = Some("w1:p1".into());
+        child.delegated = true;
+        let agents = [
+            quiet,
+            working,
+            asking,
+            unread_done,
+            unknown,
+            no_session,
+            pi,
+            omp,
+            grok,
+            other,
+            remote,
+            on_screen,
+            backing_off,
+            child,
+        ];
+        let store = stamped(&agents);
+        let (on_screen, backoff_until) = (
+            HashSet::from(["w1:p8".to_owned()]),
+            HashMap::from([("w1:p9".to_owned(), 13 * HOUR)]),
+        );
+        let awake = Awake {
+            on_screen: &on_screen,
+            backoff_until: &backoff_until,
+            letters: &LetterWaits::default(),
+        };
+        let due = store.due(&agents, SleepMachine::Core, &awake, Some(12), 12 * HOUR);
+        assert_eq!(due, ["w1:p1", "w1:p7", "w1:p11", "w1:p12", "w1:p10"]);
+    }
+
+    /// with-hide/hide#2627: an agent that comes back from a sleep is idle
+    /// from then, though the conversation it resumes ended long before, so
+    /// memory pressure takes it only half an hour after it came back, and
+    /// the hours rule only its hours after.
+    #[test]
+    fn the_idle_clock_of_an_agent_that_came_back_starts_at_its_wake() {
+        const MINUTE: u64 = 60 * 1000;
+        let mut agents = [agent("w1:p1")];
+        agents[0].last_conversation_at_unix_ms = Some(HOUR);
+        let mut store = stamped(&agents);
+        let none = LetterWaits::default();
+        let slept = 2 * HOUR;
+        assert_eq!(pressure_at(&store, &agents, &none, slept), ["w1:p1"]);
+        asleep(&mut store, &agents[0]);
+
+        // A letter wakes it 35 minutes on: its conversation's last line is
+        // older still, and the pane's look from before the sleep older.
+        let woke = slept + 35 * MINUTE;
+        store.records.remove("w1:p1");
+        store.came_back("w1:p1", woke);
+        store.stamp(&agents, SleepScope::Core, None, woke + 1_000);
+        assert!(pressure_at(&store, &agents, &none, woke + 10_000).is_empty());
+        assert!(pressure_at(&store, &agents, &none, woke + PRESSURE_MIN_IDLE_MS - 1).is_empty());
+        assert_eq!(
+            pressure_at(&store, &agents, &none, woke + PRESSURE_MIN_IDLE_MS),
+            ["w1:p1"]
+        );
+        assert!(due_at(&store, &agents, woke + 24 * HOUR - 1).is_empty());
+        assert_eq!(due_at(&store, &agents, woke + 24 * HOUR), ["w1:p1"]);
+
+        // A pane its wake opened, with no stamp before, starts the same way.
+        let mut opened = [agent("w1:p2")];
+        opened[0].last_conversation_at_unix_ms = Some(HOUR);
+        let mut store = AgentSleepStore::default();
+        store.came_back("w1:p2", woke);
+        store.stamp(&opened, SleepScope::Core, None, woke + 1_000);
+        assert!(pressure_at(&store, &opened, &none, woke + 10_000).is_empty());
+        assert_eq!(
+            pressure_at(&store, &opened, &none, woke + PRESSURE_MIN_IDLE_MS),
+            ["w1:p2"]
+        );
+    }
+
+    /// with-hide/hide#2627: while a letter waits to be delivered to an
+    /// agent, neither memory pressure nor the hours put it to sleep, however
+    /// long it rested; a letter to an earlier session of its pane holds
+    /// nothing, and once no letter waits the agent sleeps as before.
+    #[test]
+    fn no_automatic_sleep_takes_an_agent_a_letter_waits_for() {
+        let agents = [agent("w1:p1"), agent("w1:p2")];
+        let store = stamped(&agents);
+        let session = agents[0]
+            .session_id
+            .as_deref()
+            .and_then(crate::engine::tokens::session_digest);
+        let waits = [("w1:p1", session.as_deref())]
+            .into_iter()
+            .collect::<LetterWaits>();
+        let now = 48 * HOUR;
+        assert_eq!(pressure_at(&store, &agents, &waits, now), ["w1:p2"]);
+        assert_eq!(due_with(&store, &agents, &waits, now), ["w1:p2"]);
+
+        let earlier = crate::engine::tokens::session_digest("an-earlier-session");
+        let stale = [("w1:p1", earlier.as_deref())]
+            .into_iter()
+            .collect::<LetterWaits>();
+        assert_eq!(
+            pressure_at(&store, &agents, &stale, now),
+            ["w1:p1", "w1:p2"]
+        );
+
+        let none = LetterWaits::default();
+        assert_eq!(pressure_at(&store, &agents, &none, now), ["w1:p1", "w1:p2"]);
+        assert_eq!(due_with(&store, &agents, &none, now), ["w1:p1", "w1:p2"]);
+    }
+
+    /// The sleeping row is drawn from the record, so the record has to carry
+    /// what proves its parent: the session the declaration was written for.
+    #[test]
+    fn a_sleeping_child_stays_under_its_parent_only_while_its_record_can_prove_it() {
+        let parent_session = crate::engine::tokens::session_digest("session-parent");
+        let mut parent = agent("w1:p1");
+        parent.lineage_session = parent_session.clone();
+        let mut child = agent("w1:p2");
+        child.spawned_from_pane_id = Some("w1:p1".into());
+        child.declared_parent_session = parent_session;
+
+        let lineage_of = |child: &SidebarAgentSnapshot| {
+            let mut store = AgentSleepStore::default();
+            asleep(&mut store, child);
+            let mut session = payload(serde_json::json!([]), &["w1:p1", "w1:p2"]);
+            assert!(
+                store
+                    .settle_payload(&mut session, SleepScope::Core, None)
+                    .is_empty()
+            );
+            let mut rows = vec![parent.clone()];
+            rows.extend(crate::sidebar::project_agents(session).agents);
+            crate::agent_state::apply_lineage(&mut rows, &[], &[]);
+            rows.remove(1).lineage_parent_pane_id
+        };
+        assert_eq!(lineage_of(&child).as_deref(), Some("w1:p1"));
+
+        // A record written before the parent's session was kept proves nothing.
+        child.declared_parent_session = None;
+        assert_eq!(lineage_of(&child), None);
+    }
+
+    #[test]
+    fn a_sleeping_agent_the_engine_stopped_listing_keeps_its_row() {
+        let mut parent = agent("w1:p2");
+        parent.id = "reviewer".into();
+        parent.spawned_from_pane_id = Some("w1:p1".into());
+        let mut store = AgentSleepStore::default();
+        asleep(&mut store, &parent);
+        let mut session = payload(serde_json::json!([]), &["w1:p1", "w1:p2"]);
+        assert!(
+            store
+                .settle_payload(&mut session, SleepScope::Core, None)
+                .is_empty()
+        );
+        let rows = crate::sidebar::project_agents(session).agents;
+        let mut rows = rows;
+        store.annotate(&mut rows);
+        for row in &mut rows {
+            crate::agent_state::rederive(row);
+        }
+        let row = &rows[0];
+        assert_eq!(
+            (
+                row.id.as_str(),
+                row.given_name.as_deref(),
+                row.pane_id.as_str(),
+                row.identity_label.as_str(),
+                row.session_id.as_deref(),
+                row.spawned_from_pane_id.as_deref(),
+                row.mark,
+                row.status_code,
+            ),
+            (
+                "reviewer",
+                Some("reviewer"),
+                "w1:p2",
+                "Refactor the parser",
+                Some("session-a"),
+                Some("w1:p1"),
+                crate::agent_state::RowMark::Asleep,
+                AgentStatusCode::Sleeping,
+            )
+        );
+        assert_eq!(
+            row.sleep.as_ref().map(|sleep| sleep.state.as_str()),
+            Some("sleeping")
+        );
+    }
+
+    #[test]
+    fn a_new_agent_in_the_pane_wakes_the_record_and_a_closed_pane_drops_it() {
+        let mut store = AgentSleepStore::default();
+        asleep(&mut store, &agent("w1:p1"));
+        asleep(&mut store, &agent("w1:p2"));
+        let stale = serde_json::json!([{"pane_id": "w1:p1", "agent": "claude",
+            "agent_status": "idle", "state_change_seq": 4}]);
+        let mut session = payload(stale, &["w1:p1", "w1:p2"]);
+        assert!(
+            store
+                .settle_payload(&mut session, SleepScope::Core, None)
+                .is_empty(),
+            "the ended agent still reported"
+        );
+        assert_eq!(session.agents.len(), 2, "both drawn from their records");
+        assert!(
+            session
+                .agents
+                .iter()
+                .all(|agent| agent.agent.as_deref() == Some("claude"))
+        );
+
+        // A plugin's labels keep the pane listed with no provider.
+        let labelled = serde_json::json!([{"pane_id": "w1:p1", "agent_status": "unknown",
+            "state_change_seq": 7, "tokens": {"task": "Refactor the parser"}}]);
+        let mut session = payload(labelled, &["w1:p1", "w1:p2"]);
+        assert!(
+            store
+                .settle_payload(&mut session, SleepScope::Core, None)
+                .is_empty()
+        );
+        assert_eq!(session.agents.len(), 2);
+        assert!(
+            session
+                .agents
+                .iter()
+                .all(|agent| agent.agent.as_deref() == Some("claude"))
+        );
+
+        // The wake's own start, typed and not shown yet, is no new agent.
+        let starting = serde_json::json!([{"pane_id": "w1:p1", "agent": "claude",
+            "agent_status": "unknown", "state_change_seq": 0, "launch_pending": true,
+            "start_unshown": true}]);
+        let mut session = payload(starting, &["w1:p1", "w1:p2"]);
+        assert!(
+            store
+                .settle_payload(&mut session, SleepScope::Core, None)
+                .is_empty(),
+            "a start whose program has not shown wakes nothing"
+        );
+        assert_eq!(store.records.len(), 2);
+
+        // A program that showed is the new agent even while its start waits
+        // on a question it asks (folder trust), so the operator can answer.
+        let asking = serde_json::json!([{"pane_id": "w1:p2", "agent": "claude",
+            "agent_status": "blocked", "state_change_seq": 8, "launch_pending": true}]);
+        let mut session = payload(asking, &["w1:p1", "w1:p2"]);
+        assert_eq!(
+            store.settle_payload(&mut session, SleepScope::Core, None),
+            [Settled::Woke {
+                pane_id: "w1:p2".into(),
+                phase: SleepPhase::Sleeping
+            }]
+        );
+        asleep(&mut store, &agent("w1:p2"));
+
+        let fresh = serde_json::json!([{"pane_id": "w1:p1", "agent": "claude",
+            "agent_status": "idle", "state_change_seq": 9}]);
+        let mut session = payload(fresh, &["w1:p1"]);
+        assert_eq!(
+            store.settle_payload(&mut session, SleepScope::Core, None),
+            [
+                Settled::Woke {
+                    pane_id: "w1:p1".into(),
+                    phase: SleepPhase::Sleeping
+                },
+                Settled::Closed {
+                    pane_id: "w1:p2".into()
+                },
+            ]
+        );
+        assert!(store.records.is_empty());
+        assert_eq!(session.agents.len(), 1, "the new agent alone");
+    }
+
+    /// A record an earlier build saved kept the end's sequence in place of
+    /// the turn's, and still names the ended agent after a launch.
+    #[test]
+    fn a_record_an_earlier_build_saved_still_names_its_ended_agent() {
+        let mut store: AgentSleepStore = serde_json::from_value(serde_json::json!({
+            "records": {"w1:p1": {
+                "phase": "sleeping", "kind": "claude", "session_id": "session-a",
+                "identity_label": "Refactor the parser", "last_activity": "0",
+                "state_change_seq": 7, "workspace_label": "hide", "since_unix_ms": 5
+            }}
+        }))
+        .unwrap();
+        store.after_load();
+        let stale = serde_json::json!([{"pane_id": "w1:p1", "agent": "claude",
+            "agent_status": "idle", "state_change_seq": 7}]);
+        let mut session = payload(stale, &["w1:p1"]);
+        assert!(
+            store
+                .settle_payload(&mut session, SleepScope::Core, None)
+                .is_empty(),
+            "the ended agent still reported"
+        );
+    }
+
+    #[test]
+    fn a_restarted_engine_wakes_an_agent_even_when_its_sequence_is_reused() {
+        let mut store = AgentSleepStore::default();
+        let mut ended = agent("w1:p1");
+        ended.agent_kind = "codex".into();
+        ended.state_change_seq = Some(7);
+        ended.server_mark = Some("before-restart".into());
+        asleep(&mut store, &ended);
+
+        // Reconnecting to the same engine does not change the pane's mark.
+        let mut stale = payload(
+            serde_json::json!([{"pane_id": "w1:p1", "agent": "codex",
+                "agent_status": "idle", "state_change_seq": 7,
+                "tokens": {"hide_server": "before-restart"}}]),
+            &["w1:p1"],
+        );
+        assert!(
+            store
+                .settle_payload(&mut stale, SleepScope::Core, Some("new-connection"))
+                .is_empty(),
+            "the pane's engine mark takes precedence over its connection's"
+        );
+
+        let mut session = payload(
+            serde_json::json!([{"pane_id": "w1:p1", "agent": "codex",
+                "agent_status": "idle", "state_change_seq": 7,
+                "tokens": {"hide_server": "after-restart"}}]),
+            &["w1:p1"],
+        );
+        session.agents[0].start_unshown = true;
+        assert!(
+            store
+                .settle_payload(&mut session, SleepScope::Core, None)
+                .is_empty(),
+            "a different engine does not prove the start's program has shown"
+        );
+        session.agents[0].start_unshown = false;
+        assert_eq!(
+            store.settle_payload(&mut session, SleepScope::Core, None),
+            [Settled::Woke {
+                pane_id: "w1:p1".into(),
+                phase: SleepPhase::Sleeping,
+            }],
+            "state sequences are only comparable within the engine that issued them"
+        );
+        assert!(store.records.is_empty());
+    }
+
+    #[test]
+    fn a_relaunch_forgets_an_end_in_flight_and_puts_a_wake_in_flight_back_to_sleep() {
+        let mut store = AgentSleepStore::default();
+        store.records.insert(
+            "w1:p1".into(),
+            SleepRecord::ending(&agent("w1:p1"), None, 1).unwrap(),
+        );
+        asleep(&mut store, &agent("w1:p2"));
+        store.records.get_mut("w1:p2").unwrap().phase = SleepPhase::Waking;
+        store.after_load();
+        assert_eq!(
+            store
+                .records
+                .iter()
+                .map(|(pane, record)| (pane.as_str(), record.phase))
+                .collect::<Vec<_>>(),
+            [("w1:p2", SleepPhase::Sleeping)]
+        );
+    }
+
+    #[test]
+    fn a_nodes_sleeping_pane_is_settled_by_its_own_session_and_no_other() {
+        const NODE: &str = "screen";
+        let mut store = AgentSleepStore::default();
+        let mut sleeper = agent("remote:screen:pane:w1:p1");
+        sleeper.spawned_from_pane_id = Some("remote:screen:pane:w1:p9".into());
+        asleep(&mut store, &sleeper);
+
+        let mut core = payload(serde_json::json!([]), &["w1:p1"]);
+        assert!(
+            store
+                .settle_payload(&mut core, SleepScope::Core, None)
+                .is_empty()
+        );
+        assert!(
+            core.agents.is_empty(),
+            "the core's own w1:p1 is another pane"
+        );
+
+        let mut node = payload(serde_json::json!([]), &["w1:p1"]);
+        assert!(
+            store
+                .settle_payload(&mut node, SleepScope::Device(NODE), None)
+                .is_empty()
+        );
+        assert_eq!(
+            node.agents
+                .iter()
+                .map(|row| (row.pane_id.as_deref(), row.spawned_from_pane_id.as_deref()))
+                .collect::<Vec<_>>(),
+            [(Some("w1:p1"), Some("w1:p9"))],
+            "the row names the pane as the node's engine does"
+        );
+
+        let mut gone = payload(serde_json::json!([]), &["w1:p2"]);
+        assert_eq!(
+            store.settle_payload(&mut gone, SleepScope::Device(NODE), None),
+            [Settled::Closed {
+                pane_id: "remote:screen:pane:w1:p1".into()
+            }]
+        );
+    }
+
+    #[test]
+    fn the_pane_menu_says_why_an_agent_cannot_sleep() {
+        let mut working = agent("w1:p1");
+        working.activity = "working".into();
+        assert_eq!(
+            sleep_action(&working, SleepMachine::Core),
+            Some(AgentSleepActionSnapshot {
+                available: false,
+                reason: Some(AgentActionRefusal::Working),
+            })
+        );
+        assert_eq!(
+            sleep_action(&agent("w1:p2"), SleepMachine::Core),
+            Some(AgentSleepActionSnapshot {
+                available: true,
+                reason: None
+            })
+        );
+        // Another machine's pane: a node that dials the core or a device it
+        // dials, which sleep alike.
+        let mut remote = agent("remote:mini:pane:w1:p1");
+        remote.pane_id = "remote:mini:pane:w1:p1".into();
+        assert_eq!(
+            sleep_action(&remote, SleepMachine::Node),
+            Some(AgentSleepActionSnapshot {
+                available: true,
+                reason: None
+            })
+        );
+        for kind in ["pi", "omp", "grok", "opencode"] {
+            let mut closes = remote.clone();
+            closes.agent_kind = kind.into();
+            assert_eq!(
+                sleep_action(&closes, SleepMachine::Node),
+                Some(AgentSleepActionSnapshot {
+                    available: false,
+                    reason: Some(AgentActionRefusal::CoreMachineOnly),
+                }),
+                "{kind} closes its pane, which reopens from the core's catalog"
+            );
+            assert_eq!(
+                sleep_action(&closes, SleepMachine::Core),
+                Some(AgentSleepActionSnapshot {
+                    available: true,
+                    reason: None
+                }),
+                "{kind} sleeps on the core's machine"
+            );
+        }
+    }
+
+    #[test]
+    fn agy_sleeps_before_its_first_prompt_and_wakes_as_a_new_conversation() {
+        let mut fresh = agent("w1:p1");
+        fresh.session_id = None;
+        assert_eq!(
+            sleep_refusal(&fresh, SleepMachine::Core),
+            Some(AgentActionRefusal::NoConversation)
+        );
+        assert_eq!(SleepRecord::ending(&fresh, None, 1), None);
+        fresh.agent_kind = "antigravity".into();
+        assert_eq!(sleep_refusal(&fresh, SleepMachine::Core), None);
+        let record = SleepRecord::ending(&fresh, None, 1).unwrap();
+        assert_eq!(record.session_id, None);
+        assert_eq!(record.label_owner, None);
+    }
+}

@@ -1,0 +1,1776 @@
+//! Starting an agent in a pane, the one way every Hide start reaches the engine.
+//!
+//! The engine's `agent.start` types the agent's command into the pane
+//! only while the pane's shell alone holds the terminal: the foreground
+//! process group is the shell's own and has no other member. It does not wait for that state, it
+//! refuses with `agent_pane_busy`, and no event announces the moment the
+//! state is reached. A pane Hide has just made, a new worktree's, a fork's
+//! split or a restored tab, is still running its shell's startup files then,
+//! so a start reads that state through `pane.process_info` and sends
+//! `agent.start` only once the shell holds the terminal. The wait is bounded;
+//! a shell that never reaches its prompt is a start that did not happen, with
+//! nothing typed into the pane.
+//!
+//! The shell alone holds the terminal between its startup files' commands
+//! too, before its line editor runs, and until then the terminal is in
+//! canonical mode: the kernel keeps an unfinished typed line and drops what
+//! passes its limit (1,024 bytes on macOS), Enter included, so a long start
+//! line (a first prompt) would be cut and never run. A start whose line could
+//! be cut therefore also waits, inside the same bound, until the pane's node
+//! reads the shell's terminal taking keys rather than lines (`line_input`),
+//! which is the line editor reading. A line shorter than every supported
+//! terminal's limit reaches the shell whole either way and asks no node.
+//!
+//! A start that puts an agent back under the name of the one just ended in
+//! the same pane (a wake, a Reopen) also meets `agent_name_taken` until
+//! the engine has forgotten the ended agent; [`start_at_shell_reusing_name`] sends
+//! that start again on exactly that refusal, inside a bounded wait. The other
+//! starts take that refusal as the answer, since their name is someone else's.
+//!
+//! The shell holding the terminal does not say its startup files are done:
+//! a startup file that asks a question (oh-my-zsh's `[Y/n]` update prompt
+//! reads one key with `read -k 1`) leaves the shell alone in the foreground
+//! too, and a start typed then answers the question with the command's first
+//! letter and runs the rest. A pane Hide makes for a start therefore runs
+//! the account's shell from Hide's own command (`hide_host::shell_integration`,
+//! through the engine's `layout.apply`), which marks the shell's first prompt on
+//! the pane once the user's own startup files are done, and a start in such
+//! a pane ([`ShellStart::Integrated`]) waits for that mark too. A shell that
+//! never shows it within the bound, stopped at a question, is a start that
+//! did not happen, and the screen's last line says what it waits for. A
+//! shell the integration does not reach (sh, nu, cmd, or one a startup file
+//! replaced the launched shell with), or a pane made another way (a split),
+//! is started on the shell holding the terminal, and
+//! the start is confirmed after it was typed, by its spawn
+//! (`coordination::executor`).
+//!
+//! Every call here runs on a worker thread, never under `Mutex<Runtime>`.
+
+use std::thread;
+use std::time::{Duration, Instant};
+
+use hide_node_link::process::LineInput;
+use hide_node_link::protocol::{Call, ShellLaunch};
+
+use crate::engine::{Engine, EngineError, PaneProcessGroup, PreparedStart, StartedAgent, Wait};
+use crate::node_access::NodeLink;
+
+/// How long a pane's shell gets to reach its prompt: the engine's
+/// default wait for an agent's readiness.
+pub(crate) const SHELL_WAIT: Duration = Duration::from_secs(30);
+/// How long the engine waits for the agent of a start it typed (`timeout_ms`), and
+/// so how long it holds the start's name while no agent shows. Long, because
+/// typing a long first prompt into a slow shell takes most of it.
+pub(crate) const AGENT_START_DEADLINE: Duration = Duration::from_secs(120);
+pub(crate) const POLL_INTERVAL: Duration = Duration::from_millis(100);
+const READ_TIMEOUT: Duration = Duration::from_secs(5);
+
+/// A typed start is not proof that its program exists. Keep the fork's node
+/// holder until the engine observes this named agent ready in the created pane.
+/// This determines only input release, never whether the fork succeeded.
+/// Reads also settle the engine's pending start; nothing is typed again.
+/// Runs on the existing fork worker, with no Runtime lock or new timer.
+#[allow(clippy::disallowed_methods)] // bounded production polling, not a test sleep
+pub(crate) fn confirm_fork_started(
+    engine: &dyn Engine,
+    pane: &str,
+    name: &str,
+    kind: &str,
+    current: &dyn Fn() -> Result<(), String>,
+    deadline: Instant,
+) -> Result<(), String> {
+    let mut last_read_error = None;
+    loop {
+        current()?;
+        let remaining = deadline.saturating_duration_since(Instant::now());
+        if remaining.is_zero() {
+            return Err(match last_read_error {
+                Some(error) => format!("The fork's input readiness deadline elapsed: {error}"),
+                None => "The fork's input readiness deadline elapsed.".into(),
+            });
+        }
+        let agent = match engine.delivery_agent(Wait::Each(remaining.min(READ_TIMEOUT)), name) {
+            Err(EngineError::Request(message)) => return Err(message),
+            agent => agent.map_err(|error| error.within("The fork's agent could not be confirmed")),
+        };
+        // A transient read failure proves neither readiness nor a closed
+        // pane. Keep refusing input until a positive answer or the deadline.
+        if let Ok(agent) = agent {
+            last_read_error = None;
+            if agent.pane_id != pane || agent.name != name {
+                return Err("The fork's agent identity changed.".into());
+            }
+            if let Some(observed) = agent.kind {
+                if hide_agent_adapter::canonical_kind(&observed)
+                    != hide_agent_adapter::canonical_kind(kind)
+                {
+                    return Err("The fork's agent kind changed.".into());
+                }
+                if agent.readiness.accepts_input() {
+                    return current();
+                }
+            }
+        } else {
+            last_read_error = agent.err();
+        }
+        thread::sleep(
+            deadline
+                .saturating_duration_since(Instant::now())
+                .min(POLL_INTERVAL),
+        );
+    }
+}
+pub(crate) const PANE_BUSY: &str = "agent_pane_busy";
+const NAME_TAKEN: &str = "agent_name_taken";
+const AGENT_NOT_FOUND: &str = "agent_not_found";
+/// The fewest bytes of an unfinished line a supported system's terminal
+/// keeps before the shell reads it: macOS's `MAX_INPUT` (Linux keeps 4,096,
+/// and a Windows console cuts nothing). A start line shorter than this
+/// reaches the shell whole once the shell holds the terminal.
+const SHORTEST_LINE_LIMIT: usize = 1024;
+/// How long the engine gets to let go of the name of an agent that was just
+/// ended: it forgets the agent a moment after its process is gone, and
+/// refuses `agent.start` under that name until it has.
+pub(crate) const NAME_RELEASE_WAIT: Duration = Duration::from_secs(10);
+
+/// The refusal of a start whose shell had not finished starting: the code,
+/// then the screen's last line after [`crate::coordination::DETAIL`] when it
+/// could be read.
+pub(crate) const SHELL_STARTING: &str = "shell_starting";
+/// The pane token the integration's first prompt reports
+/// (`hide_host::shell_integration::PROMPT_TOKEN`).
+pub(crate) const PROMPT_TOKEN: &str = "hide_prompt";
+/// The most of a screen line a refusal carries.
+const SCREEN_LINE_CHARS: usize = 120;
+
+/// What says a pane's shell has finished starting.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) enum ShellStart {
+    /// The caller made the pane run Hide's [`ShellLaunch`] of the shell
+    /// `program`, which marks its first prompt, and the start waits for that
+    /// mark while that shell holds the terminal.
+    Integrated { program: String },
+    /// No mark is coming (a pane made before, by someone else, or where the
+    /// integration could not be written): the shell holding the terminal is
+    /// the only sign.
+    Plain,
+}
+
+impl ShellStart {
+    /// How the shell of a tab says it has finished starting: by its mark
+    /// when the tab runs `launch`, else by holding the terminal.
+    pub(crate) fn of_tab(launched: bool, launch: Option<&ShellLaunch>) -> Self {
+        match launch.and_then(|launch| launch.command.first()) {
+            Some(shell)
+                if launched
+                    && launch.is_some_and(|launch| {
+                        launch.readiness == hide_node_link::protocol::ShellReadiness::Integrated
+                    }) =>
+            {
+                Self::Integrated {
+                    program: program_name(shell),
+                }
+            }
+            _ => Self::Plain,
+        }
+    }
+
+    /// How the shell of a pane recorded as launched in `program` says it has
+    /// finished starting.
+    pub(crate) fn launched(program: Option<String>) -> Self {
+        program.map_or(Self::Plain, |program| Self::Integrated { program })
+    }
+
+    /// The shell this start waits on for a mark, if any.
+    pub(crate) fn program(&self) -> Option<&str> {
+        match self {
+            Self::Integrated { program } => Some(program),
+            Self::Plain => None,
+        }
+    }
+}
+
+/// Characters that change how text around them reads without showing
+/// themselves: zero-width ones, bidirectional overrides and isolates.
+fn is_format_char(c: char) -> bool {
+    matches!(
+        c,
+        '\u{200B}'..='\u{200F}' | '\u{202A}'..='\u{202E}' | '\u{2060}'..='\u{2069}' | '\u{FEFF}'
+    )
+}
+
+/// A shell's program name as a pane's process list shows it: the last part
+/// of its path, without a login shell's leading `-` or Windows' `.exe`,
+/// lower case.
+fn program_name(shell: &str) -> String {
+    let name = shell
+        .rsplit(['/', '\\'])
+        .next()
+        .unwrap_or(shell)
+        .trim_start_matches('-')
+        .to_ascii_lowercase();
+    match name.strip_suffix(".exe") {
+        Some(name) => name.to_owned(),
+        None => name,
+    }
+}
+
+/// Why a start did not settle with the engine's answer to `agent.start`.
+#[derive(Debug)]
+pub(crate) enum StartError {
+    /// Nothing was typed into the pane: its shell never held the terminal in
+    /// time, or its state could not be read. `reason` is the code a start
+    /// surface words (`agent_start.shell_*`, or a session check's own code);
+    /// `detail` the sentence the log, a wake's record and the CLI keep.
+    NotStarted { reason: String, detail: String },
+    /// Nothing was typed into the pane: its shell had not finished starting
+    /// within the wait (`waited`), stopped in its startup files (a question
+    /// waiting for a key). Carries the screen's last line, if any.
+    ShellStarting {
+        waited: Duration,
+        screen: Option<String>,
+    },
+    /// The engine's own answer to `agent.start`: a refusal, no answer at all, or
+    /// an answer in a shape the start does not promise (`Answer`).
+    Engine(EngineError),
+}
+
+/// Records, on the node that will run it, that `kind` may work in `path`, a
+/// worktree Hide made, before Hide starts it there (the agent's own folder
+/// trust: docs/agent-hooks.md, Folder trust for the worktrees Hide makes).
+/// Nothing is asked for a kind that never asks; a trust that cannot be
+/// recorded refuses the start with its reason, so no agent waits unseen on
+/// its trust question (PRD antigravity-first-class B20).
+/// `profile` is the profile the start runs with, whose account the node
+/// writes the trust in (docs/agent-hooks.md, Profile accounts).
+pub(crate) fn trust_worktree(
+    node: Option<&dyn crate::node_access::NodeLink>,
+    kind: &str,
+    path: &str,
+    profile: Option<&hide_agent_adapter::ProfileId>,
+) -> Result<(), TrustRefusal> {
+    let Some((adapter, agent)) = hide_agent_adapter::adapter(kind).and_then(|adapter| {
+        let agent = hide_agent_hooks::folder_trust::Agent::of(adapter.start?)?;
+        Some((adapter, agent))
+    }) else {
+        return Ok(());
+    };
+    let node = node.ok_or_else(|| TrustRefusal {
+        code: "agent_trust_unavailable",
+        detail: "the machine that runs the worktree's pane cannot be reached.".to_owned(),
+    })?;
+    crate::node_access::call_as::<()>(
+        node,
+        hide_node_link::protocol::Call::AgentTrust {
+            agent: adapter.id.to_owned(),
+            path: path.to_owned(),
+            trusted: true,
+            profile: profile.cloned(),
+        },
+        // The node may wait for another start's change of the same agent's
+        // trust before its own (a Codex app-server each), and the link
+        // carries the answer back.
+        agent.longest_change() + Duration::from_secs(5),
+    )
+    .map_err(|error| TrustRefusal {
+        code: "agent_trust_failed",
+        detail: format!(
+            "{}'s trust of {path} could not be recorded ({error})",
+            adapter.label
+        ),
+    })
+}
+
+/// A worktree's folder trust that could not be recorded: `code` is what a
+/// start surface words, `detail` the sentence with the path for the log, and
+/// the two together (`code: detail`) the refusal a spawn answers its caller.
+#[derive(Debug)]
+pub(crate) struct TrustRefusal {
+    pub code: &'static str,
+    pub detail: String,
+}
+
+impl From<TrustRefusal> for String {
+    fn from(refusal: TrustRefusal) -> Self {
+        format!("{}: {}", refusal.code, refusal.detail)
+    }
+}
+
+/// How a pane Hide makes for a start runs the account's shell so that it
+/// marks its first prompt, written by `node`, the node of the machine that
+/// will run the pane. The node supplies an explicit Plain recipe when it
+/// cannot install prompt integration. `None`, logged, means the node or its
+/// normal shell cannot be confirmed; group starts refuse before creation.
+pub(crate) fn shell_launch(
+    node: Option<&dyn NodeLink>,
+    correlation_id: &str,
+) -> Option<ShellLaunch> {
+    let answer = match node {
+        Some(node) => crate::node_access::call_as::<Option<ShellLaunch>>(
+            node,
+            Call::ShellIntegration,
+            READ_TIMEOUT,
+        )
+        .map_err(|error| error.to_string()),
+        None => Err("the machine that runs the pane cannot be reached".to_owned()),
+    };
+    answer
+        .inspect_err(|reason| {
+            crate::diagnostic!(serde_json::json!({
+                "component": "agent_start",
+                "kind": "shell_integration.unavailable",
+                "request": correlation_id,
+                "reason": reason,
+            }));
+        })
+        .ok()
+        .flatten()
+}
+
+impl StartError {
+    /// A start its own check refused before anything was typed; the check
+    /// answers a code (`session_route_unconfirmed`, `agent_start.*`).
+    pub(crate) fn refused(reason: String) -> Self {
+        Self::NotStarted {
+            detail: reason.clone(),
+            reason,
+        }
+    }
+}
+
+/// A start whose pane's shell could not be read: nothing was typed.
+/// The code of a start whose pane's shell could not be read.
+pub(crate) const SHELL_UNREADABLE: &str = "agent_start.shell_unreadable";
+
+fn shell_unreadable(message: String) -> StartError {
+    StartError::NotStarted {
+        reason: SHELL_UNREADABLE.into(),
+        detail: format!(
+            "The pane's shell could not be read, so the agent was not started: {message}"
+        ),
+    }
+}
+
+/// The code a start surface words a start whose shell had not finished
+/// starting by; the screen's last line goes beside it, never into a sentence.
+pub(crate) const SHELL_STARTING_REASON: &str = "agent_start.shell_starting";
+
+/// What an operator reads for a start whose shell had not finished starting
+/// after `waited`, with the screen's last line when there was one.
+pub(crate) fn shell_starting_message(waited: Duration, screen: Option<&str>) -> String {
+    let seconds = whole_seconds(waited);
+    match screen {
+        Some(line) => format!(
+            "The pane's shell had not finished starting after {seconds} s, so the agent was not started. Its screen ends with \"{line}\": answer what it asks in that pane, then retry."
+        ),
+        None => format!(
+            "The pane's shell had not finished starting after {seconds} s, so the agent was not started. Check what its startup files wait for in that pane, then retry."
+        ),
+    }
+}
+
+/// `wait` in whole seconds, as an operator reads it.
+pub(crate) fn whole_seconds(wait: Duration) -> u64 {
+    (wait.as_millis() as u64).div_ceil(1000)
+}
+
+/// Action proof after shell readiness, repeated before every actual start
+/// attempt. No proof is cached across startup waits or a busy-pane refusal.
+/// `node` is the node that runs the pane, asked how its shell's terminal
+/// takes input when the start line could be cut; none when that node cannot
+/// be reached, which only a start with such a line minds.
+#[allow(clippy::too_many_arguments)] // one start: its pane, how its shell says it is ready, and its effect admission
+pub(crate) fn start_at_shell_checked(
+    engine: &dyn Engine,
+    node: Option<&dyn NodeLink>,
+    correlation_id: &str,
+    shell: ShellStart,
+    start: &PreparedStart,
+    check: &dyn Fn() -> Result<(), String>,
+) -> Result<StartedAgent, StartError> {
+    start_at_shell_within(
+        engine,
+        node,
+        correlation_id,
+        shell,
+        start,
+        SHELL_WAIT,
+        check,
+    )
+}
+
+/// [`start_at_shell_checked`] whose shell gets `shell_wait`, at most
+/// [`SHELL_WAIT`], to finish starting: a spawn's start ends its wait inside
+/// the time the spawn has to answer its caller
+/// (`coordination::SPAWN_ANSWER_WAIT`), so the caller hears why rather than
+/// a timeout.
+#[allow(clippy::too_many_arguments)] // one start: its pane, how its shell says it is ready, and its effect admission
+pub(crate) fn start_at_shell_within(
+    engine: &dyn Engine,
+    node: Option<&dyn NodeLink>,
+    correlation_id: &str,
+    shell: ShellStart,
+    start: &PreparedStart,
+    shell_wait: Duration,
+    check: &dyn Fn() -> Result<(), String>,
+) -> Result<StartedAgent, StartError> {
+    start_within(
+        engine,
+        node,
+        correlation_id,
+        shell,
+        start,
+        shell_wait.min(SHELL_WAIT),
+        Duration::ZERO,
+        check,
+    )
+}
+
+/// A start for an agent that goes back under the name of the one
+/// just ended in this pane: `agent_name_taken` is answered by sending the
+/// start again until the engine has released the name, within [`NAME_RELEASE_WAIT`].
+/// `check` is the action proof [`start_at_shell_checked`] repeats before every
+/// attempt.
+#[allow(clippy::too_many_arguments)] // one start: its pane, how its shell says it is ready, and its effect admission
+pub(crate) fn start_at_shell_reusing_name(
+    engine: &dyn Engine,
+    node: Option<&dyn NodeLink>,
+    correlation_id: &str,
+    shell: ShellStart,
+    start: &PreparedStart,
+    check: &dyn Fn() -> Result<(), String>,
+) -> Result<StartedAgent, StartError> {
+    start_within(
+        engine,
+        node,
+        correlation_id,
+        shell,
+        start,
+        SHELL_WAIT,
+        NAME_RELEASE_WAIT,
+        check,
+    )
+}
+
+/// [`start_at_shell_reusing_name`] with its waits named: `wait` for the
+/// pane's shell and the engine's restore before it, `name_release_wait` for
+/// a name an ended agent still holds.
+#[allow(clippy::disallowed_methods)] // a production wait, not test code
+#[allow(clippy::too_many_arguments)] // one bounded start with shell/name waits and effect admission
+pub(crate) fn start_within(
+    engine: &dyn Engine,
+    node: Option<&dyn NodeLink>,
+    correlation_id: &str,
+    shell_start: ShellStart,
+    start: &PreparedStart,
+    wait: Duration,
+    name_release_wait: Duration,
+    check: &dyn Fn() -> Result<(), String>,
+) -> Result<StartedAgent, StartError> {
+    let finish = start.launch().launch.finish();
+    let started = Instant::now();
+    let deadline = started + wait;
+    let name_deadline = started + name_release_wait;
+    let pane_id = start.launch().pane_id.as_str();
+    let shell = Shell::new(
+        engine,
+        node,
+        correlation_id,
+        pane_id,
+        start.line(),
+        shell_start,
+    );
+    // A pane drawn from the saved session before the engine has taken its
+    // holder back (a start right after the daemon or a device link started)
+    // would be refused as unreadable (`pane_owner_unavailable`): the start
+    // waits for that restore inside its shell's wait, as a call that makes a
+    // pane does.
+    engine
+        .wait_restored(deadline.saturating_duration_since(Instant::now()))
+        .map_err(StartError::Engine)?;
+    let mut settled = false;
+    let mut busy = 0_u32;
+    loop {
+        shell.wait(started, deadline)?;
+        check().map_err(StartError::refused)?;
+        // The engine's start ends by the caller's own deadline: a start with a
+        // profile waits within it for what came of its attempt.
+        finish.submitted(start.launch());
+        match engine.start_agent(Wait::By(deadline), start) {
+            // The engine refused before typing anything: something besides the
+            // shell runs in the pane. A prompt hook can take the terminal
+            // between the read and the start, and on Windows the engine refuses a
+            // shell with any child process while `pane.process_info` names
+            // the shell alone unless the child is an agent, so the read above
+            // cannot see this state end. The engine's next answer is the only
+            // reading of it: the same start is asked again one poll later,
+            // inside the same deadline, never at once (Windows CI,
+            // 2026-10-22: 5,613 refusals in 30 s held the spawn lock and
+            // slowed every other engine call).
+            Err(EngineError::Refused { code, message }) if code == PANE_BUSY => {
+                finish.not_started();
+                busy += 1;
+                let now = Instant::now();
+                if now >= deadline {
+                    crate::diagnostic!(serde_json::json!({
+                        "component": "agent_start",
+                        "kind": "pane_busy.timeout",
+                        "request": correlation_id,
+                        "pane_id": pane_id,
+                        "refusals": busy,
+                        "waited_ms": started.elapsed().as_millis() as u64,
+                    }));
+                    return Err(StartError::Engine(EngineError::Refused { code, message }));
+                }
+                thread::sleep(POLL_INTERVAL.min(deadline - now));
+            }
+            // The engine has not yet forgotten the agent this start replaces. It
+            // refused before typing anything, so the same start is sent again
+            // until it has, inside the name wait.
+            Err(EngineError::Refused { code, .. })
+                if code == NAME_TAKEN && Instant::now() < name_deadline =>
+            {
+                finish.not_started();
+                thread::sleep(POLL_INTERVAL);
+            }
+            // The engine may still hold the name for an earlier start whose agent
+            // never showed and whose deadline has passed, which it settles
+            // only when the name is read: read it once, and send the start
+            // again when that let it go.
+            Err(EngineError::Refused { code, message }) if code == NAME_TAKEN && !settled => {
+                finish.not_started();
+                settled = true;
+                if !shell.settle_name(&start.launch().name) {
+                    return Err(StartError::Engine(EngineError::Refused { code, message }));
+                }
+            }
+            answer => {
+                // A start that may have run keeps its hold on the profile
+                // until the runtime sees what came of it; one refused
+                // before it ran, or whose attempt failed, lets it go with
+                // its values (`launch::holds`).
+                let ran_nothing = matches!(
+                    &answer,
+                    Err(EngineError::Refused { code, .. })
+                        if code != crate::launch::PROFILE_UNCONFIRMED
+                );
+                if ran_nothing {
+                    finish.not_started();
+                }
+                return answer.map_err(StartError::Engine);
+            }
+        }
+    }
+}
+
+/// The pane a start waits on, how many bytes its start line types, whether
+/// its first prompt's mark is still awaited, and from which shell.
+struct Shell<'a> {
+    engine: &'a dyn Engine,
+    node: Option<&'a dyn NodeLink>,
+    correlation_id: &'a str,
+    pane_id: &'a str,
+    line: usize,
+    awaits_mark: std::cell::Cell<bool>,
+    program: Option<String>,
+}
+
+/// What a start still waited for when its wait ran out.
+enum Waiting {
+    /// The shell to hold the terminal.
+    Terminal,
+    /// The shell's first prompt, marked by the integration.
+    Prompt,
+    /// The shell's line editor, while the terminal keeps only this many bytes.
+    LineEditor(usize),
+}
+
+/// Returns once `pane`'s shell has finished starting as `shell` says and
+/// would take a line of `line` bytes whole, within [`SHELL_WAIT`]: the wait
+/// every start into a shell takes, which a resume the core's own engine
+/// types after a restore takes too, so a shell is judged ready in one place.
+pub(crate) fn wait_for_shell(
+    engine: &dyn Engine,
+    node: Option<&dyn NodeLink>,
+    correlation_id: &str,
+    pane: &str,
+    shell: ShellStart,
+    line: usize,
+) -> Result<(), StartError> {
+    let started = Instant::now();
+    Shell::new(engine, node, correlation_id, pane, line, shell).wait(started, started + SHELL_WAIT)
+}
+
+impl<'a> Shell<'a> {
+    fn new(
+        engine: &'a dyn Engine,
+        node: Option<&'a dyn NodeLink>,
+        correlation_id: &'a str,
+        pane_id: &'a str,
+        line: usize,
+        shell: ShellStart,
+    ) -> Self {
+        Self {
+            engine,
+            node,
+            correlation_id,
+            pane_id,
+            line,
+            awaits_mark: std::cell::Cell::new(matches!(shell, ShellStart::Integrated { .. })),
+            program: match shell {
+                ShellStart::Integrated { program } => Some(program),
+                ShellStart::Plain => None,
+            },
+        }
+    }
+}
+
+impl Shell<'_> {
+    /// Returns once the shell alone holds the terminal, has marked its first
+    /// prompt when it was started to, and its terminal would hand the start
+    /// line over whole.
+    #[allow(clippy::disallowed_methods)] // a production wait, not test code
+    fn wait(&self, started: Instant, deadline: Instant) -> Result<(), StartError> {
+        loop {
+            let group = self
+                .engine
+                .pane_processes(Wait::Each(READ_TIMEOUT), self.pane_id)
+                .map_err(|error| shell_unreadable(error.within("pane.process_info failed")))?;
+            // An unmarked shell is still starting whoever else holds the
+            // terminal with it (a startup file's own program, or fish's
+            // completion generator beside a question); the limit of a
+            // terminal that still holds lines is read only while the shell
+            // holds it alone.
+            let waiting = match group.shell_pid {
+                Some(_) if self.awaits_prompt(&group)? => Waiting::Prompt,
+                Some(shell) if group.shell_holds_terminal() => match self.line_cut_at(shell)? {
+                    None => return Ok(()),
+                    Some(limit) => Waiting::LineEditor(limit),
+                },
+                _ => Waiting::Terminal,
+            };
+            if Instant::now() >= deadline {
+                let held = match waiting {
+                    Waiting::LineEditor(limit) => Some(limit),
+                    _ => None,
+                };
+                crate::diagnostic!(serde_json::json!({
+                    "component": "agent_start",
+                    "kind": "shell_wait.timeout",
+                    "request": self.correlation_id,
+                    "pane_id": self.pane_id,
+                    "waited_ms": started.elapsed().as_millis() as u64,
+                    "shell_pid": group.shell_pid,
+                    "foreground_process_group_id": group.foreground_process_group_id,
+                    "foreground_pids": group.foreground_pids,
+                    "line_bytes": self.line,
+                    "line_limit": held,
+                    "prompt_unmarked": matches!(waiting, Waiting::Prompt),
+                }));
+                // Whichever of the three it waited on (its first prompt, the
+                // terminal, a line editor that would cut the line), the shell
+                // had not finished starting; the diagnostic above keeps which.
+                // The refusal names the wait the shell was given, which is
+                // what the operator can act on (a 30 s wait reads 30 s), not
+                // the clock past it: a poll that slept on or a stalled runner
+                // makes the elapsed time a different, unrepeatable number.
+                return Err(StartError::ShellStarting {
+                    waited: deadline.saturating_duration_since(started),
+                    screen: self.last_screen_line(),
+                });
+            }
+            thread::sleep(POLL_INTERVAL);
+        }
+    }
+
+    /// Whether the start still waits for the first prompt's mark: only for a
+    /// shell the integration reaches, and only until the mark is seen once.
+    fn awaits_prompt(&self, group: &PaneProcessGroup) -> Result<bool, StartError> {
+        if !self.awaits_mark.get() {
+            return Ok(false);
+        }
+        // A shell other than the one launched (a startup file that runs
+        // `exec fish`) marks nothing, so nothing is waited for; its start is
+        // confirmed after it was typed. Its name is read only while it is in
+        // the foreground, so until then it is waited for.
+        if let Some(name) = group
+            .shell_name()
+            .map(program_name)
+            .filter(|name| Some(name) != self.program.as_ref())
+        {
+            crate::diagnostic!(serde_json::json!({
+                "component": "agent_start",
+                "kind": "shell_wait.other_shell",
+                "request": self.correlation_id,
+                "pane_id": self.pane_id,
+                "launched": self.program,
+                "shell": name,
+            }));
+            self.awaits_mark.set(false);
+            return Ok(false);
+        }
+        let marked = self
+            .engine
+            .pane_token(Wait::Each(READ_TIMEOUT), self.pane_id, PROMPT_TOKEN)
+            .map_err(|error| shell_unreadable(error.within("pane.get failed")))?
+            .is_some();
+        self.awaits_mark.set(!marked);
+        Ok(!marked)
+    }
+
+    /// The last line the pane's screen shows, at most [`SCREEN_LINE_CHARS`]
+    /// characters: what a shell stopped in its startup files is asking.
+    /// `None` when the screen could not be read or shows nothing.
+    fn last_screen_line(&self) -> Option<String> {
+        let text = self
+            .engine
+            .read_pane(Wait::Each(READ_TIMEOUT), self.pane_id, "visible", 40)
+            .ok()?
+            .text;
+        let line = text
+            .lines()
+            .rev()
+            .map(str::trim)
+            .find(|line| !line.is_empty())?;
+        // The line is the operator's terminal output, shown on a card, kept
+        // with the attempt and told to the agent that asked: a credential a
+        // startup file printed is removed, and so is what reorders or hides
+        // text.
+        // Redacted whole before it is cut, so a cut never splits a
+        // credential into a piece too short to be recognised.
+        let line: String = line
+            .chars()
+            .filter(|c| !c.is_control() && !is_format_char(*c))
+            .collect();
+        Some(
+            hide_memory::redact(&line)
+                .text
+                .chars()
+                .take(SCREEN_LINE_CHARS)
+                .collect(),
+        )
+    }
+
+    /// Whether the engine lets go of the start's name once asked about it.
+    /// The engine holds a name from its `agent.start` until that agent shows or
+    /// the start's own deadline passes, but a server with no screen settles
+    /// a passed deadline only when the agent is next read: `agent.get` is that
+    /// read, and an answer that the name names no agent any more means the
+    /// start can be sent again. A name still held is an agent's, or a start
+    /// that may still show one, and the engine's refusal is the answer.
+    fn settle_name(&self, name: &str) -> bool {
+        let read = self.engine.delivery_agent(Wait::Each(READ_TIMEOUT), name);
+        let released =
+            matches!(&read, Err(EngineError::Refused { code, .. }) if code == AGENT_NOT_FOUND);
+        crate::diagnostic!(serde_json::json!({
+            "component": "agent_start",
+            "kind": "held_name.read",
+            "request": self.correlation_id,
+            "pane_id": self.pane_id,
+            "released": released,
+            "reason": read.err().filter(|_| !released).map(|error| error.to_string()),
+        }));
+        released
+    }
+
+    /// `None` when the start line reaches `shell` whole now; the limit of a
+    /// terminal that would cut it, while the shell's line editor is not
+    /// reading yet.
+    fn line_cut_at(&self, shell: u32) -> Result<Option<usize>, StartError> {
+        if self.line < SHORTEST_LINE_LIMIT {
+            return Ok(None);
+        }
+        let refused = |reason: String| StartError::NotStarted {
+            reason: "agent_start.line_unchecked".into(),
+            detail: format!(
+                "The agent was not started: its start line is up to {} bytes, more than a terminal keeps before the shell's line editor reads it, and {reason}.",
+                self.line
+            ),
+        };
+        let node = self.node.ok_or_else(|| {
+            refused(
+                "the machine that runs the pane cannot be asked whether its shell is reading"
+                    .into(),
+            )
+        })?;
+        match crate::node_access::call_as::<LineInput>(
+            node,
+            Call::LineInput { pid: shell },
+            READ_TIMEOUT,
+        ) {
+            Ok(LineInput::Keys | LineInput::Console) => Ok(None),
+            Ok(LineInput::Lines { limit }) if self.line < limit as usize => Ok(None),
+            Ok(LineInput::Lines { limit }) => Ok(Some(limit as usize)),
+            Err(error) => Err(refused(format!(
+                "the pane shell's terminal could not be read ({error})"
+            ))),
+        }
+    }
+}
+
+#[cfg(test)]
+mod real_agent_trust_tests;
+
+#[cfg(test)]
+mod tests {
+    use std::sync::Arc;
+    use std::sync::atomic::{AtomicUsize, Ordering};
+
+    use serde_json::{Value, json};
+
+    use super::*;
+
+    /// A start as the core prepares it, from the parameters a test names.
+    fn prepared(params: Value) -> PreparedStart {
+        let text = |key: &str, default: &str| params[key].as_str().unwrap_or(default).to_owned();
+        crate::engine::fake::FakeEngine::absent()
+            .prepare_start(crate::engine::AgentLaunch {
+                pane_id: text("pane_id", "w1:p1"),
+                name: text("name", "agent"),
+                launch: crate::launch::Launch::default_of(&text("kind", "claude")),
+                args: params["args"]
+                    .as_array()
+                    .map(|args| {
+                        args.iter()
+                            .map(|arg| arg.as_str().unwrap().to_owned())
+                            .collect()
+                    })
+                    .unwrap_or_default(),
+                codex_daemon: crate::codex_launch::CodexDaemon::Unsupported,
+                wakes: false,
+                program: None,
+            })
+            .unwrap()
+    }
+    use crate::engine::PaneText;
+    use crate::engine::fake::{FakeEngine, Reply, delivery_agent, processes, refused, reply};
+
+    type Fake = Arc<FakeEngine<'static>>;
+
+    const SHELL: u32 = 4100;
+
+    #[test]
+    fn every_fork_kind_uses_delivery_readiness_and_checks_its_owner_after_the_read() {
+        use crate::fork::ForkableAgent::*;
+        for agent in [Claude, Codex, Grok, Pi, Omp, OpenCode, Antigravity] {
+            for reported in [true, false] {
+                for owner_ends in [true, false] {
+                    let reads = Arc::new(AtomicUsize::new(0));
+                    let observed = reads.clone();
+                    let fake = FakeEngine::start(move |method, _| {
+                        assert_eq!(method, "delivery_agent");
+                        observed.fetch_add(1, Ordering::SeqCst);
+                        let mut read = json!({
+                            "pane_id":"w1:p1", "name":"fork-one", "agent":agent.kind(),
+                            "launch_pending":false, "agent_status":"idle"
+                        });
+                        if reported {
+                            read["interactive_ready"] = json!(true);
+                        }
+                        reply(delivery_agent(&read))
+                    });
+                    let result = confirm_fork_started(
+                        fake.engine().as_ref(),
+                        "w1:p1",
+                        "fork-one",
+                        agent.kind(),
+                        &|| {
+                            if owner_ends && reads.load(Ordering::SeqCst) > 0 {
+                                Err("daemon ended".into())
+                            } else {
+                                Ok(())
+                            }
+                        },
+                        Instant::now() + Duration::from_secs(5),
+                    );
+                    assert_eq!(
+                        result.is_ok(),
+                        !owner_ends,
+                        "{agent:?}, reported={reported}"
+                    );
+                    assert_eq!(reads.load(Ordering::SeqCst), 1);
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn a_still_pending_fork_reaches_its_deadline_without_typing() {
+        let fake = FakeEngine::start(|method, _| {
+            assert_eq!(method, "delivery_agent", "input never reaches the shell");
+            reply(delivery_agent(&json!({
+                "pane_id":"w1:p1", "terminal_id":"terminal-one", "workspace_id":"w1", "tab_id":"w1:t1",
+                "name":"fork-one", "agent":"claude", "launch_pending":true,
+                "interactive_ready":false, "focused":false, "agent_status":"idle", "revision":1
+            })))
+        });
+        let result = confirm_fork_started(
+            fake.engine().as_ref(),
+            "w1:p1",
+            "fork-one",
+            "claude",
+            &|| Ok(()),
+            Instant::now() + Duration::from_millis(200),
+        );
+        assert!(result.unwrap_err().contains("deadline elapsed"));
+        assert!(!fake.methods().is_empty());
+    }
+
+    #[test]
+    fn a_fork_waits_for_its_named_agent_instead_of_releasing_keys_to_a_shell() {
+        let reads = Arc::new(AtomicUsize::new(0));
+        let observed = reads.clone();
+        let fake = FakeEngine::start(move |method, params| {
+            assert_eq!(method, "delivery_agent");
+            assert_eq!(params["target"], "fork-one");
+            let read = observed.fetch_add(1, Ordering::SeqCst);
+            reply(delivery_agent(&json!({
+                "pane_id":"w1:p1", "terminal_id":"terminal-one", "workspace_id":"w1", "tab_id":"w1:t1",
+                "name":"fork-one", "agent":if read == 0 { Value::Null } else { json!("claude") },
+                "launch_pending":read < 2, "interactive_ready":read >= 2,
+                "focused":false, "agent_status":"idle", "revision":1
+            })))
+        });
+        confirm_fork_started(
+            fake.engine().as_ref(),
+            "w1:p1",
+            "fork-one",
+            "claude",
+            &|| Ok(()),
+            Instant::now() + Duration::from_secs(5),
+        )
+        .unwrap();
+        assert_eq!(
+            reads.load(Ordering::SeqCst),
+            3,
+            "a reserved name and a still-starting process are not ready"
+        );
+    }
+
+    #[test]
+    fn a_fork_with_no_confirmed_agent_refuses_input() {
+        for case in [
+            "gone",
+            "pane-changed",
+            "name-changed",
+            "kind-changed",
+            "shell",
+            "owner-ended",
+            "deadline",
+        ] {
+            let reads = Arc::new(AtomicUsize::new(0));
+            let observed = reads.clone();
+            let fake = FakeEngine::start(move |method, _| {
+                assert_eq!(method, "delivery_agent", "confirmation never types keys");
+                let read = observed.fetch_add(1, Ordering::SeqCst);
+                if case == "gone" || read > 0 {
+                    return refused("agent_not_found", "start failed");
+                }
+                let agent = json!({
+                    "pane_id":if case == "pane-changed" { "w1:p2" } else { "w1:p1" },
+                    "name":if case == "name-changed" { "replacement" } else { "fork-one" },
+                    "agent":if case == "kind-changed" { json!("pi") } else if case == "shell" { Value::Null } else { json!("claude") },
+                    "terminal_id":"terminal-one", "workspace_id":"w1", "tab_id":"w1:t1",
+                    "interactive_ready":true, "focused":false, "agent_status":"idle", "revision":1
+                });
+                reply(delivery_agent(&agent))
+            });
+            let deadline = Instant::now()
+                + if case == "deadline" {
+                    Duration::ZERO
+                } else {
+                    Duration::from_millis(200)
+                };
+            let result = confirm_fork_started(
+                fake.engine().as_ref(),
+                "w1:p1",
+                "fork-one",
+                "claude",
+                &|| {
+                    if case == "owner-ended" {
+                        Err("fork ended".into())
+                    } else {
+                        Ok(())
+                    }
+                },
+                deadline,
+            );
+            assert!(result.is_err(), "{case}");
+            if matches!(case, "owner-ended" | "deadline") {
+                assert_eq!(reads.load(Ordering::SeqCst), 0);
+            }
+        }
+    }
+
+    fn process_info(foreground: u32, pids: &[u32]) -> Reply {
+        let foreground_processes: Vec<Value> = pids
+            .iter()
+            .map(|pid| json!({"pid": pid, "name": if *pid == SHELL { "zsh" } else { "direnv" }}))
+            .collect();
+        reply(processes(&json!({
+            "shell_pid": SHELL, "foreground_process_group_id": foreground,
+            "foreground_processes": foreground_processes
+        })))
+    }
+
+    fn started() -> Reply {
+        reply(StartedAgent {
+            pane_id: "w1:p1".into(),
+            terminal_id: Some("term_1".into()),
+        })
+    }
+
+    fn start(fake: &Fake, wait: Duration) -> Result<StartedAgent, StartError> {
+        start_within(
+            fake.engine().as_ref(),
+            None,
+            "test:start",
+            ShellStart::Plain,
+            &prepared(json!({"pane_id": "w1:p1"})),
+            wait,
+            Duration::ZERO,
+            &|| Ok(()),
+        )
+    }
+
+    fn start_reusing_name(fake: &Fake, name_wait: Duration) -> Result<StartedAgent, StartError> {
+        start_within(
+            fake.engine().as_ref(),
+            None,
+            "test:start",
+            ShellStart::Plain,
+            &prepared(json!({"pane_id": "w1:p1"})),
+            Duration::from_secs(5),
+            name_wait,
+            &|| Ok(()),
+        )
+    }
+
+    #[test]
+    fn the_start_waits_until_the_shell_alone_holds_the_terminal() {
+        let reads = Arc::new(AtomicUsize::new(0));
+        let seen = Arc::clone(&reads);
+        let fake = FakeEngine::start(move |method, _| match method {
+            // Startup files first run a command in their own group, then one
+            // in the shell's group, and only then leave the shell alone.
+            "pane_processes" => match seen.fetch_add(1, Ordering::SeqCst) {
+                0 => process_info(4200, &[4200]),
+                1 => process_info(SHELL, &[SHELL, 4201]),
+                _ => process_info(SHELL, &[SHELL]),
+            },
+            "start_agent" => started(),
+            other => panic!("unexpected {other}"),
+        });
+        assert!(start(&fake, Duration::from_secs(5)).is_ok());
+        assert_eq!(
+            fake.methods(),
+            [
+                "pane_processes",
+                "pane_processes",
+                "pane_processes",
+                "start_agent"
+            ]
+        );
+    }
+
+    #[test]
+    fn a_start_refused_as_busy_waits_for_the_shell_and_is_sent_again() {
+        let starts = Arc::new(AtomicUsize::new(0));
+        let seen = Arc::clone(&starts);
+        let fake = FakeEngine::start(move |method, _| match method {
+            "pane_processes" => process_info(SHELL, &[SHELL]),
+            "start_agent" if seen.fetch_add(1, Ordering::SeqCst) == 0 => refused(
+                PANE_BUSY,
+                "agent target pane w1:p1 is not an available shell",
+            ),
+            "start_agent" => started(),
+            other => panic!("unexpected {other}"),
+        });
+        assert!(start(&fake, Duration::from_secs(5)).is_ok());
+        assert_eq!(
+            fake.methods(),
+            [
+                "pane_processes",
+                "start_agent",
+                "pane_processes",
+                "start_agent"
+            ]
+        );
+    }
+
+    /// On Windows the engine refuses a shell with any child process, while
+    /// `pane.process_info` names the shell alone unless that child is an
+    /// agent: the read keeps saying ready and only the engine's answer can change.
+    /// The start asks once a poll until its deadline, then gives the engine's
+    /// refusal, and never asks in a burst.
+    #[test]
+    fn a_pane_the_engine_keeps_refusing_as_busy_is_asked_once_a_poll_until_the_deadline() {
+        let fake = FakeEngine::start(|method, _| match method {
+            "pane_processes" => process_info(SHELL, &[SHELL]),
+            "start_agent" => refused(
+                PANE_BUSY,
+                "agent target pane w1:p1 is not an available shell",
+            ),
+            other => panic!("unexpected {other}"),
+        });
+        let wait = Duration::from_millis(600);
+        let Err(StartError::Engine(EngineError::Refused { code, .. })) = start(&fake, wait) else {
+            panic!("a pane the engine never frees is not a start");
+        };
+        assert_eq!(code, PANE_BUSY);
+        let asked = fake
+            .methods()
+            .iter()
+            .filter(|method| **method == "start_agent")
+            .count();
+        let polls = (wait.as_millis() / POLL_INTERVAL.as_millis()) as usize;
+        assert!(
+            (2..=polls + 1).contains(&asked),
+            "agent.start asked {asked} times"
+        );
+    }
+
+    #[test]
+    fn a_changed_session_after_readiness_or_a_busy_refusal_never_types_another_start() {
+        for previously_admitted in [false, true] {
+            let fake = FakeEngine::start(|method, _| match method {
+                "pane_processes" => process_info(SHELL, &[SHELL]),
+                "start_agent" => refused(PANE_BUSY, "busy before typing"),
+                other => panic!("unexpected {other}"),
+            });
+            let checks = std::cell::Cell::new(0);
+            let answer = start_within(
+                fake.engine().as_ref(),
+                None,
+                "checked",
+                ShellStart::Plain,
+                &prepared(json!({"pane_id":"w1:p1"})),
+                Duration::from_secs(5),
+                Duration::ZERO,
+                &|| {
+                    let count = checks.get();
+                    checks.set(count + 1);
+                    if previously_admitted && count == 0 {
+                        Ok(())
+                    } else {
+                        Err("session_route_unconfirmed".into())
+                    }
+                },
+            );
+            assert!(
+                matches!(answer, Err(StartError::NotStarted { reason, .. }) if reason == "session_route_unconfirmed")
+            );
+            let typed_attempts = fake
+                .methods()
+                .iter()
+                .filter(|method| **method == "start_agent")
+                .count();
+            assert_eq!(typed_attempts, usize::from(previously_admitted));
+        }
+    }
+
+    #[test]
+    fn a_shell_that_never_reaches_its_prompt_types_nothing_and_says_so() {
+        let fake = FakeEngine::start(|method, _| match method {
+            "pane_processes" => process_info(4200, &[4200]),
+            "read_pane" => reply(PaneText {
+                text: "Last login: today\n".into(),
+                truncated: false,
+            }),
+            other => panic!("unexpected {other}"),
+        });
+        let Err(StartError::ShellStarting { waited, screen }) =
+            start(&fake, Duration::from_millis(300))
+        else {
+            panic!("a shell that never holds the terminal is not a start");
+        };
+        assert_eq!(screen.as_deref(), Some("Last login: today"));
+        assert_eq!(
+            waited,
+            Duration::from_millis(300),
+            "the wait the shell was given"
+        );
+        assert!(!fake.methods().contains(&"start_agent"));
+    }
+
+    #[test]
+    fn another_refusal_is_the_engine_s_answer_at_once() {
+        let fake = FakeEngine::start(|method, _| match method {
+            "pane_processes" => process_info(SHELL, &[SHELL]),
+            "start_agent" => refused("agent_name_taken", "agent name one is already used"),
+            "delivery_agent" => reply(delivery_agent(&json!({
+                "pane_id": "w1:p2", "terminal_id": "term_2", "workspace_id": "w1",
+                "tab_id": "w1:t2", "name": "agent", "focused": false,
+                "agent_status": "unknown", "revision": 0, "launch_pending": false}))),
+            other => panic!("unexpected {other}"),
+        });
+        let Err(StartError::Engine(EngineError::Refused { code, .. })) =
+            start(&fake, Duration::from_secs(5))
+        else {
+            panic!("a refusal other than a busy pane is not retried");
+        };
+        assert_eq!(code, "agent_name_taken");
+        assert_eq!(
+            fake.methods(),
+            ["pane_processes", "start_agent", "delivery_agent"]
+        );
+    }
+
+    /// The engine forgets an ended agent a moment after its process is gone, so a
+    /// start under the same name is refused until then and must be sent
+    /// again, once the refusal is gone, and not before.
+    #[test]
+    fn a_start_under_the_ended_agents_name_is_sent_again_until_the_engine_lets_go() {
+        let starts = Arc::new(AtomicUsize::new(0));
+        let seen = Arc::clone(&starts);
+        let fake = FakeEngine::start(move |method, _| match method {
+            "pane_processes" => process_info(SHELL, &[SHELL]),
+            "start_agent" if seen.fetch_add(1, Ordering::SeqCst) < 2 => {
+                refused(NAME_TAKEN, "agent name two is already used")
+            }
+            "start_agent" => started(),
+            other => panic!("unexpected {other}"),
+        });
+        assert!(start_reusing_name(&fake, Duration::from_secs(5)).is_ok());
+        assert_eq!(starts.load(Ordering::SeqCst), 3);
+    }
+
+    fn start_named(fake: &Fake) -> Result<StartedAgent, StartError> {
+        start_within(
+            fake.engine().as_ref(),
+            None,
+            "test:start",
+            ShellStart::Plain,
+            &prepared(json!({"pane_id": "w1:p1", "name": "factory-hide-t1", "kind": "claude"})),
+            Duration::from_secs(5),
+            Duration::ZERO,
+            &|| Ok(()),
+        )
+    }
+
+    /// The engine holds a name for a start whose agent never showed (its line
+    /// was cut, or its program exited at once) until that start's deadline,
+    /// and a server with no screen lets go only when the name is read. A
+    /// start refused under it reads the name once and, when the engine let go,
+    /// starts rather than being refused for good.
+    #[test]
+    fn a_name_the_engine_lets_go_when_read_is_started_again() {
+        let starts = Arc::new(AtomicUsize::new(0));
+        let seen = Arc::clone(&starts);
+        let fake = FakeEngine::start(move |method, _| match method {
+            "pane_processes" => process_info(SHELL, &[SHELL]),
+            "start_agent" if seen.fetch_add(1, Ordering::SeqCst) == 0 => {
+                refused(NAME_TAKEN, "agent name factory-hide-t1 is already used")
+            }
+            "start_agent" => started(),
+            "delivery_agent" => refused(AGENT_NOT_FOUND, "agent target factory-hide-t1 not found"),
+            other => panic!("unexpected {other}"),
+        });
+        assert!(start_named(&fake).is_ok());
+        let calls = fake.calls();
+        let (_, read) = calls
+            .iter()
+            .find(|(method, _)| *method == "delivery_agent")
+            .expect("the held name is read");
+        assert_eq!(read["target"], "factory-hide-t1");
+        assert_eq!(starts.load(Ordering::SeqCst), 2);
+    }
+
+    /// A name the engine still holds after the read is an agent's, or a start
+    /// that may still show one: the refusal is the answer.
+    #[test]
+    fn a_name_still_held_after_the_read_is_the_engine_s_refusal() {
+        let fake = FakeEngine::start(move |method, _| match method {
+            "pane_processes" => process_info(SHELL, &[SHELL]),
+            "start_agent" => refused(NAME_TAKEN, "agent name factory-hide-t1 is already used"),
+            "delivery_agent" => reply(delivery_agent(&json!({
+                    "pane_id": "w1:p2", "terminal_id": "term_2", "workspace_id": "w1",
+                    "tab_id": "w1:t2", "name": "factory-hide-t1", "focused": false,
+                    "agent_status": "unknown", "revision": 0, "launch_pending": true}))),
+            other => panic!("unexpected {other}"),
+        });
+        let Err(StartError::Engine(EngineError::Refused { code, .. })) = start_named(&fake) else {
+            panic!("a name someone else holds is refused");
+        };
+        assert_eq!(code, NAME_TAKEN);
+        assert_eq!(
+            fake.methods(),
+            ["pane_processes", "start_agent", "delivery_agent"]
+        );
+    }
+
+    /// The wait is bounded, and an ordinary start never waits for a name: it
+    /// belongs to someone else.
+    #[test]
+    fn a_name_that_is_never_released_is_the_engine_s_answer_and_an_ordinary_start_does_not_wait() {
+        let fake = FakeEngine::start(|method, _| match method {
+            "pane_processes" => process_info(SHELL, &[SHELL]),
+            "start_agent" => refused(NAME_TAKEN, "agent name two is already used"),
+            "delivery_agent" => reply(delivery_agent(&json!({
+                    "pane_id": "w1:p2", "terminal_id": "term_2", "workspace_id": "w1",
+                    "tab_id": "w1:t2", "name": "agent", "focused": false,
+                    "agent_status": "unknown", "revision": 0, "launch_pending": false}))),
+            other => panic!("unexpected {other}"),
+        });
+        let Err(StartError::Engine(EngineError::Refused { code, .. })) =
+            start_reusing_name(&fake, Duration::from_millis(300))
+        else {
+            panic!("a name that is never released is refused");
+        };
+        assert_eq!(code, NAME_TAKEN);
+        let before = fake.methods().len();
+        let Err(StartError::Engine(EngineError::Refused { code, .. })) =
+            start(&fake, Duration::from_secs(5))
+        else {
+            panic!("an ordinary start takes the refusal as the answer");
+        };
+        assert_eq!(code, NAME_TAKEN);
+        assert_eq!(
+            fake.methods().len() - before,
+            3,
+            "one process read, one start and one read of the held name, nothing sent again"
+        );
+    }
+
+    /// The pane's node, answering how the shell's terminal takes input with
+    /// the next of `answers` (the last one repeats), and counting the reads.
+    struct Terminal {
+        answers: Vec<Result<LineInput, String>>,
+        reads: AtomicUsize,
+    }
+
+    impl Terminal {
+        fn answering(answers: Vec<Result<LineInput, String>>) -> Self {
+            Self {
+                answers,
+                reads: AtomicUsize::new(0),
+            }
+        }
+    }
+
+    impl NodeLink for Terminal {
+        fn call(
+            &self,
+            call: Call,
+            _: Duration,
+        ) -> Result<crate::node_access::LinkAnswer, crate::node_access::LinkError> {
+            let Call::LineInput { pid } = call else {
+                panic!("a start asks its node only how the shell's terminal reads");
+            };
+            assert_eq!(pid, SHELL, "the shell the engine named is the one read");
+            let read = self.reads.fetch_add(1, Ordering::SeqCst);
+            match &self.answers[read.min(self.answers.len() - 1)] {
+                Ok(input) => Ok(crate::node_access::LinkAnswer::Parsed(
+                    serde_json::to_value(input).unwrap(),
+                )),
+                Err(reason) => Err(crate::node_access::LinkError::NotConnected(reason.clone())),
+            }
+        }
+    }
+
+    fn shell_alone(_name: &str) -> Fake {
+        FakeEngine::start(|method, _| match method {
+            "pane_processes" => process_info(SHELL, &[SHELL]),
+            "read_pane" => reply(PaneText {
+                text: String::new(),
+                truncated: false,
+            }),
+            "start_agent" => started(),
+            other => panic!("unexpected {other}"),
+        })
+    }
+
+    /// A first prompt of `bytes` bytes, the argument the engine types last.
+    fn start_with_prompt(
+        fake: &Fake,
+        node: Option<&dyn NodeLink>,
+        bytes: usize,
+        wait: Duration,
+    ) -> Result<StartedAgent, StartError> {
+        start_within(
+            fake.engine().as_ref(),
+            node,
+            "test:start",
+            ShellStart::Plain,
+            &prepared(json!({"pane_id": "w1:p1", "args": ["--", "가".repeat(bytes / 3)]})),
+            wait,
+            Duration::ZERO,
+            &|| Ok(()),
+        )
+    }
+
+    fn typed(fake: &Fake) -> usize {
+        fake.methods()
+            .iter()
+            .filter(|method| **method == "start_agent")
+            .count()
+    }
+
+    /// A shell that holds the terminal while its startup files still run
+    /// keeps a typed line in canonical mode, where macOS drops what passes
+    /// 1,024 bytes; the start waits until the line editor reads keys.
+    #[test]
+    fn a_long_start_line_waits_for_the_shells_line_editor() {
+        let fake = shell_alone("agent-start-editor");
+        let terminal = Terminal::answering(vec![
+            Ok(LineInput::Lines { limit: 1024 }),
+            Ok(LineInput::Lines { limit: 1024 }),
+            Ok(LineInput::Keys),
+        ]);
+        assert!(start_with_prompt(&fake, Some(&terminal), 4800, Duration::from_secs(5)).is_ok());
+        assert_eq!(terminal.reads.load(Ordering::SeqCst), 3);
+        assert_eq!(typed(&fake), 1);
+        assert_eq!(fake.methods().last().copied(), Some("start_agent"));
+    }
+
+    /// A line that fits the terminal's own limit reaches the shell whole
+    /// even before the line editor reads (a Linux terminal keeps 4,096
+    /// bytes), and a console cuts no line.
+    #[test]
+    fn a_long_line_the_terminal_keeps_whole_starts_without_waiting() {
+        for input in [LineInput::Lines { limit: 4096 }, LineInput::Console] {
+            let fake = shell_alone("agent-start-fits");
+            let terminal = Terminal::answering(vec![Ok(input)]);
+            assert!(
+                start_with_prompt(&fake, Some(&terminal), 2400, Duration::from_secs(5)).is_ok()
+            );
+            assert_eq!(terminal.reads.load(Ordering::SeqCst), 1);
+            assert_eq!(typed(&fake), 1);
+        }
+    }
+
+    /// A line shorter than every terminal's limit is typed as soon as the
+    /// shell holds the terminal, with no node to ask: a shell that has no
+    /// line editor still starts a plain command.
+    #[test]
+    fn a_short_start_line_asks_no_node() {
+        let fake = shell_alone("agent-start-short");
+        let terminal = Terminal::answering(vec![Ok(LineInput::Lines { limit: 1024 })]);
+        assert!(start_with_prompt(&fake, Some(&terminal), 600, Duration::from_secs(5)).is_ok());
+        assert_eq!(terminal.reads.load(Ordering::SeqCst), 0);
+        assert!(start_with_prompt(&fake, None, 600, Duration::from_secs(5)).is_ok());
+        assert_eq!(typed(&fake), 2);
+    }
+
+    /// The wait is the shell wait: past it a terminal still holding lines
+    /// gets nothing typed, never a cut line, and the reason names the limit.
+    #[test]
+    fn a_terminal_that_never_leaves_line_mode_gets_nothing_typed() {
+        let fake = shell_alone("agent-start-canonical");
+        let terminal = Terminal::answering(vec![Ok(LineInput::Lines { limit: 1024 })]);
+        let (refused, records) = crate::diagnostics::capture(|| {
+            start_with_prompt(&fake, Some(&terminal), 4800, Duration::from_millis(300))
+        });
+        let Err(StartError::ShellStarting { .. }) = refused else {
+            panic!("a line the terminal would cut is not typed");
+        };
+        assert!(
+            records.iter().any(
+                |record| record["kind"] == "shell_wait.timeout" && record["line_limit"] == 1024
+            ),
+            "{records:?}"
+        );
+        assert_eq!(typed(&fake), 0);
+    }
+
+    /// Without a node to ask, or with one that cannot read the terminal, a
+    /// long line is not typed on a guess.
+    #[test]
+    fn a_long_line_whose_terminal_cannot_be_read_gets_nothing_typed() {
+        let fake = shell_alone("agent-start-unread");
+        let Err(StartError::NotStarted { reason, detail }) =
+            start_with_prompt(&fake, None, 4800, Duration::from_secs(5))
+        else {
+            panic!("no node, no long line");
+        };
+        assert_eq!(reason, "agent_start.line_unchecked");
+        assert!(detail.contains("cannot be asked"), "{detail}");
+        let terminal = Terminal::answering(vec![Err("the helper is gone".into())]);
+        let Err(StartError::NotStarted { detail, .. }) =
+            start_with_prompt(&fake, Some(&terminal), 4800, Duration::from_secs(5))
+        else {
+            panic!("an unread terminal is not a reading one");
+        };
+        assert!(detail.contains("the helper is gone"), "{detail}");
+        assert_eq!(typed(&fake), 0);
+    }
+
+    /// The pane's prompt mark, once its shell marked its first prompt.
+    fn pane_with(tokens: Value) -> Reply {
+        reply(tokens[PROMPT_TOKEN].as_str().map(str::to_owned))
+    }
+
+    fn start_integrated(fake: &Fake, wait: Duration) -> Result<StartedAgent, StartError> {
+        start_within(
+            fake.engine().as_ref(),
+            None,
+            "test:start",
+            ShellStart::Integrated {
+                program: "zsh".into(),
+            },
+            &prepared(json!({"pane_id": "w1:p1"})),
+            wait,
+            Duration::ZERO,
+            &|| Ok(()),
+        )
+    }
+
+    /// A startup question holds the terminal with the shell alone in the
+    /// foreground, which the engine reads as a shell ready for the command; the
+    /// first prompt's mark is what says the startup files are done.
+    #[test]
+    fn an_integrated_shell_is_typed_into_only_after_its_first_prompt_is_marked() {
+        let reads = Arc::new(AtomicUsize::new(0));
+        let seen = Arc::clone(&reads);
+        let fake = FakeEngine::start(move |method, _| match method {
+            "pane_processes" => process_info(SHELL, &[SHELL]),
+            "pane_token" if seen.fetch_add(1, Ordering::SeqCst) < 2 => pane_with(json!({})),
+            "pane_token" => pane_with(json!({PROMPT_TOKEN: "1"})),
+            "start_agent" => started(),
+            other => panic!("unexpected {other}"),
+        });
+        assert!(start_integrated(&fake, Duration::from_secs(5)).is_ok());
+        let methods = fake.methods();
+        assert_eq!(methods.iter().filter(|m| **m == "pane_token").count(), 3);
+        assert_eq!(methods.last().copied(), Some("start_agent"));
+    }
+
+    /// The question holds the terminal with the shell alone, or with a
+    /// program of the shell's own beside it (fish starts its completion
+    /// generator when the question reads): either way the shell is starting.
+    #[test]
+    fn a_shell_held_by_a_startup_question_gets_nothing_typed_and_names_the_question() {
+        for foreground in [&[SHELL][..], &[SHELL, SHELL + 1]] {
+            let foreground = foreground.to_vec();
+            let fake = FakeEngine::start(move |method, _| match method {
+                "pane_processes" => process_info(SHELL, &foreground),
+                "pane_token" => pane_with(json!({})),
+                "read_pane" => reply(PaneText {
+                    text: ("Last login: today\n[oh-my-zsh] Would you like to update? [Y/n] \n\n")
+                        .to_owned(),
+                    truncated: false,
+                }),
+                other => panic!("unexpected {other}"),
+            });
+            let Err(StartError::ShellStarting { screen: line, .. }) =
+                start_integrated(&fake, Duration::from_millis(300))
+            else {
+                panic!("an unmarked shell is not a start");
+            };
+            assert_eq!(
+                line.as_deref(),
+                Some("[oh-my-zsh] Would you like to update? [Y/n]")
+            );
+            assert!(!fake.methods().contains(&"start_agent"));
+        }
+    }
+
+    /// The question line is the operator's terminal output: a credential a
+    /// startup file printed, and characters that hide or reorder text, never
+    /// leave the pane with it.
+    #[test]
+    fn a_question_line_carries_no_credential_and_no_hidden_characters() {
+        let fake = FakeEngine::start(move |method, _| match method {
+            "pane_processes" => process_info(SHELL, &[SHELL]),
+            "pane_token" => pane_with(json!({})),
+            "read_pane" => reply(PaneText {
+                text: ("export api_key=abcd1234efgh5678\u{202E}\u{200B} Continue? [y/N]\n")
+                    .to_owned(),
+                truncated: false,
+            }),
+            other => panic!("unexpected {other}"),
+        });
+        let Err(StartError::ShellStarting {
+            screen: Some(line), ..
+        }) = start_integrated(&fake, Duration::from_millis(300))
+        else {
+            panic!("an unmarked shell is not a start");
+        };
+        assert_eq!(line, "export [REDACTED] Continue? [y/N]");
+    }
+
+    /// A credential that runs past the most of a line a refusal carries is
+    /// still recognised, so no piece of it is left.
+    #[test]
+    fn a_credential_at_the_end_of_a_long_question_line_leaves_no_piece() {
+        let text = format!("{} sk-{} [y/N]\n", "x".repeat(105), "A".repeat(30));
+        let fake = FakeEngine::start(move |method, _| match method {
+            "pane_processes" => process_info(SHELL, &[SHELL]),
+            "pane_token" => pane_with(json!({})),
+            "read_pane" => reply(PaneText {
+                text: (text).to_owned(),
+                truncated: false,
+            }),
+            other => panic!("unexpected {other}"),
+        });
+        let Err(StartError::ShellStarting {
+            screen: Some(line), ..
+        }) = start_integrated(&fake, Duration::from_millis(300))
+        else {
+            panic!("an unmarked shell is not a start");
+        };
+        assert!(!line.contains("sk-"), "{line}");
+        assert_eq!(line.chars().count(), SCREEN_LINE_CHARS);
+    }
+
+    /// The engine names a Windows shell by its full path: the launched Windows
+    /// PowerShell is still the shell whose mark is waited for.
+    #[test]
+    fn a_windows_shell_named_by_its_full_path_is_the_launched_one() {
+        let fake = FakeEngine::start(|method, _| match method {
+            "pane_processes" => reply(processes(
+                &json!({"type": "pane_process_info", "process_info": {
+                "pane_id": "w1:p1", "shell_pid": SHELL, "foreground_process_group_id": SHELL,
+                "foreground_processes": [{"pid": SHELL, "name": "powershell.exe",
+                    "argv0": "C:\\Windows\\System32\\WindowsPowerShell\\v1.0\\powershell.exe"}]}}),
+            )),
+            "pane_token" => pane_with(json!({})),
+            "read_pane" => reply(PaneText {
+                text: ("Update the framework now? [Y/n]\n").to_owned(),
+                truncated: false,
+            }),
+            other => panic!("unexpected {other}"),
+        });
+        let answer = start_within(
+            fake.engine().as_ref(),
+            None,
+            "test:start",
+            ShellStart::Integrated {
+                program: "powershell".into(),
+            },
+            &prepared(json!({"pane_id": "w1:p1"})),
+            Duration::from_millis(300),
+            Duration::ZERO,
+            &|| Ok(()),
+        );
+        assert!(
+            matches!(answer, Err(StartError::ShellStarting { .. })),
+            "{answer:?}"
+        );
+        assert!(!fake.methods().contains(&"start_agent"));
+    }
+
+    /// A startup file that replaces the launched shell with another one
+    /// (`exec fish` in a `.zshrc`) leaves a shell that never marks a prompt,
+    /// so nothing waits for one.
+    #[test]
+    fn a_shell_other_than_the_launched_one_is_started_without_waiting_for_a_mark() {
+        let fake = FakeEngine::start(|method, _| match method {
+            "pane_processes" => reply(processes(
+                &json!({"type": "pane_process_info", "process_info": {
+                "pane_id": "w1:p1", "shell_pid": SHELL, "foreground_process_group_id": SHELL,
+                "foreground_processes": [{"pid": SHELL, "name": "-fish"}]}}),
+            )),
+            "start_agent" => started(),
+            other => panic!("unexpected {other}"),
+        });
+        assert!(start_integrated(&fake, Duration::from_secs(5)).is_ok());
+        assert_eq!(fake.methods(), ["pane_processes", "start_agent"]);
+    }
+
+    #[test]
+    fn a_launched_shell_is_named_as_its_pane_lists_it() {
+        let launch = |shell: &str| ShellLaunch {
+            command: vec![shell.into(), "-l".into()],
+            readiness: hide_node_link::protocol::ShellReadiness::Integrated,
+            env: Default::default(),
+        };
+        for (shell, program) in [
+            ("/bin/zsh", "zsh"),
+            ("/opt/homebrew/bin/fish", "fish"),
+            (
+                r"C:\Windows\System32\WindowsPowerShell\v1.0\powershell.exe",
+                "powershell",
+            ),
+            ("powershell.exe", "powershell"),
+        ] {
+            assert_eq!(
+                ShellStart::of_tab(true, Some(&launch(shell))),
+                ShellStart::Integrated {
+                    program: program.into()
+                }
+            );
+        }
+        assert_eq!(
+            ShellStart::of_tab(false, Some(&launch("/bin/zsh"))),
+            ShellStart::Plain
+        );
+        assert_eq!(ShellStart::of_tab(true, None), ShellStart::Plain);
+    }
+
+    #[test]
+    fn claude_agy_and_grok_have_a_worktree_trusted_on_its_node_before_they_start() {
+        let home = tempfile::tempdir().unwrap();
+        let agy = home.path().join(".gemini/antigravity-cli/settings.json");
+        let claude = home.path().join(".claude.json");
+        std::fs::create_dir_all(agy.parent().unwrap()).unwrap();
+        let node = hide_node::Local::new(Some(home.path().to_path_buf()));
+        // The core names the worktree in its wire spelling; each agent's
+        // settings hold the native one, resolved.
+        let tree = |name: &str| home.path().join(name);
+        let wire = |name: &str| hide_platform::path::to_wire(&tree(name)).unwrap();
+        let resolved = |name: &str| {
+            hide_platform::fs::identity::canonical(&tree(name))
+                .unwrap()
+                .to_str()
+                .unwrap()
+                .to_owned()
+        };
+        for name in ["tree-1", "tree-2"] {
+            std::fs::create_dir_all(tree(name).join(".git")).unwrap();
+            std::fs::write(tree(name).join(".git/HEAD"), "ref: refs/heads/main\n").unwrap();
+        }
+        std::fs::create_dir_all(tree("plain")).unwrap();
+        // Grok keeps a worktree's trust under its repository's main checkout,
+        // which `tree-1` is itself.
+        trust_worktree(Some(&node), "grok", &wire("tree-1"), None).unwrap();
+        // Its format and spelling are `folder_trust`'s tests'.
+        let grok = std::fs::read_to_string(home.path().join(".grok/trusted_folders.toml")).unwrap();
+        assert!(
+            grok.contains("tree-1") && grok.contains("trusted = true"),
+            "{grok}"
+        );
+        assert!(!agy.exists() && !claude.exists());
+        trust_worktree(Some(&node), "antigravity", &wire("tree-1"), None).unwrap();
+        let written: serde_json::Value =
+            serde_json::from_slice(&std::fs::read(&agy).unwrap()).unwrap();
+        assert_eq!(
+            written["trustedWorkspaces"],
+            serde_json::json!([resolved("tree-1")])
+        );
+        trust_worktree(Some(&node), "claude", &wire("tree-1"), None).unwrap();
+        let written: serde_json::Value =
+            serde_json::from_slice(&std::fs::read(&claude).unwrap()).unwrap();
+        let key = if cfg!(windows) {
+            resolved("tree-1").replace('\\', "/")
+        } else {
+            resolved("tree-1")
+        };
+        assert_eq!(
+            written["projects"][key.as_str()]["hasTrustDialogAccepted"],
+            true
+        );
+        // A folder that is not a worktree is never trusted.
+        for kind in ["antigravity", "claude", "grok"] {
+            let refused =
+                String::from(trust_worktree(Some(&node), kind, &wire("plain"), None).unwrap_err());
+            assert!(refused.starts_with("agent_trust_failed"), "{refused}");
+        }
+        // A trust that cannot be recorded stops the start with its reason,
+        // naming the agent.
+        std::fs::write(&agy, "{ not json").unwrap();
+        let refused = String::from(
+            trust_worktree(Some(&node), "antigravity", &wire("tree-2"), None).unwrap_err(),
+        );
+        assert!(
+            refused.starts_with("agent_trust_failed: Antigravity's trust of"),
+            "{refused}"
+        );
+        assert!(
+            trust_worktree(None, "claude", &wire("tree-2"), None)
+                .unwrap_err()
+                .code
+                == "agent_trust_unavailable"
+        );
+    }
+}

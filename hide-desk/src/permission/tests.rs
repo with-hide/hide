@@ -82,7 +82,7 @@ fn the_prd_s_hide_lines_run_without_a_card_by_default() {
         "hide agent list | jq -r '.value.items[] | select(.runtime!=\"ended\") | [.id, .name] | @tsv'",
         "hide ps | head -c 3000",
         "hide agent read agent-18238 --lines 80 2>&1 | tail -60",
-        "hide plan show agent-18399",
+        "hide task show agent-18399",
         "hide agent list; echo ---; hide ps",
         "hide agent list && hide ps | sort | grep -v ended",
         "hide mission show mission-1",
@@ -90,7 +90,7 @@ fn the_prd_s_hide_lines_run_without_a_card_by_default() {
         &format!("{HIDE} inbox"),
         "hide request send a --intent i --body \"$(cat notes.md)\"",
         "hide request send a --intent i --body-file - <<'EOF'\nrun `cargo test` first\nEOF",
-        "hide request send a --intent i --body 'use `hide plan` here'",
+        "hide request send a --intent i --body 'use `hide task` here'",
     ] {
         assert_eq!(reading(line).row, Row::Hide, "{line}");
         assert_eq!(asks(line), [], "{line}");

@@ -58,6 +58,15 @@
  * from a hovered row's neutral accent. Inline, so it follows Settings >
  * Appearance's accent and theme where the row is drawn.
  */
+/*
+ * The working ring (StatusMark, MissionNodeMark) turns once every
+ * --motion-working-turn seconds, slower than Tailwind's one-second spin so a
+ * list of working agents reads as busy rather than hurried.
+ */
+@theme inline {
+  --animate-working-turn: spin calc(var(--motion-working-turn) * 1s) linear infinite;
+}
+
 @theme inline {
   --color-selected: color-mix(in oklab, var(--primary) calc(var(--opacity-selected-fill) * 100%), transparent);
 }
@@ -255,6 +264,33 @@ html[data-view-drag="row-resize"] * {
 }
 
 /*
+ * The ready-update ↑ beside Help (`components/update-ready.tsx`): a faint
+ * primary ring while it stands, and when it appears the ring spreads out
+ * three times and stops, so it is noticed once and then stays still.
+ * `prefers-reduced-motion` keeps the still ring alone. The ring is a box
+ * shadow, as the focus ring is, so it steps aside while the button has focus.
+ */
+.update-ready-ring:not(:focus-visible) {
+  box-shadow: 0 0 0 var(--size-update-ring) color-mix(in oklab, var(--primary) 20%, transparent);
+}
+@media (prefers-reduced-motion: no-preference) {
+  .update-ready-ring:not(:focus-visible) {
+    animation: update-ready-pulse calc(var(--motion-update-pulse) * 1s) ease-out 3;
+  }
+}
+@keyframes update-ready-pulse {
+  0% {
+    box-shadow: 0 0 0 0 color-mix(in oklab, var(--primary) 60%, transparent);
+  }
+  70% {
+    box-shadow: 0 0 0 calc(var(--size-update-ring) * 3) transparent;
+  }
+  100% {
+    box-shadow: 0 0 0 var(--size-update-ring) color-mix(in oklab, var(--primary) 20%, transparent);
+  }
+}
+
+/*
  * The window's top row is where the desktop app's window is dragged from
  * (PRD sidebar-titlebar-refresh B19): the row is a drag region and every
  * control inside it is not, so a press on the path, an icon or the device
@@ -285,4 +321,66 @@ html[data-view-drag="row-resize"] * {
  */
 [data-project-list] {
   scroll-padding-top: var(--size-sidebar-section-header);
+}
+
+/* A container tinted with a status colour: the secondary and outline buttons
+   inside it take a fill of that colour instead of grey, and lose their
+   stroke, so the container's own edge is the only line (DESIGN_GUIDE.md,
+   Tinted containers). */
+@utility tone-hold { --tone: var(--mission-hold); @apply tone-fill; }
+@utility tone-warning { --tone: var(--warning); @apply tone-fill; }
+@utility tone-success { --tone: var(--success); @apply tone-fill; }
+@utility tone-destructive { --tone: var(--destructive); @apply tone-fill; }
+@utility tone-fill {
+  --secondary: color-mix(in srgb, var(--tone) calc(var(--opacity-selected-fill) * 100%), transparent);
+  --accent: color-mix(in srgb, var(--tone) calc(var(--opacity-emphasis-fill) * 100%), transparent);
+  & :is([data-variant="secondary"], [data-variant="outline"]):not(.border-dashed) { border-color: transparent; }
+}
+
+/* The chosen item of a segmented control: lifted white in Light; in Dark a shadow reads as a stroke and the raised gray sits too close to the track, so it is a stronger foreground tint with no shadow. */
+@utility segment-on {
+  &, &:hover {
+    background-color: var(--raised);
+    color: var(--foreground);
+    box-shadow: var(--shadow-raised);
+  }
+  .dark &, .dark &:hover {
+    background-color: color-mix(in srgb, var(--foreground) calc(var(--opacity-emphasis-fill) * 100%), transparent);
+    box-shadow: none;
+  }
+}
+
+/* A status mark beside a count: sized to the count's letters rather than to a row's title, so the mark does not outweigh its number. */
+@utility mark-with-count {
+  --size-agent-mark: 0.85em;
+}
+
+/* A line icon drawn filled outweighs the outline icons around it at the same size, so it shrinks a little about its centre inside the same box. */
+@layer components {
+  svg.lucide.fill-current { scale: 0.85; }
+}
+
+/*
+ * An info notice's countdown (`components/ui/toast.tsx`): the bar along its
+ * foot shrinks to nothing over the notice's time and the notice leaves when it
+ * is gone; the component pauses it while the notice is held. With reduced
+ * motion the bar stands still and the notice still leaves on time.
+ */
+.toast-countdown {
+  animation-name: toast-countdown;
+  animation-timing-function: linear;
+  animation-fill-mode: forwards;
+}
+@keyframes toast-countdown {
+  from {
+    transform: scaleX(1);
+  }
+  to {
+    transform: scaleX(0);
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  .toast-countdown {
+    animation-name: none;
+  }
 }

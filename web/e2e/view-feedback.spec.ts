@@ -5,7 +5,7 @@ import { agentPane } from "./agent-pane";
 import { focusPane, withControl } from "./daemon-actions";
 import { startFixture } from "./engine-fixture";
 import { startHided, type Daemon } from "./hided-fixture";
-import { enterWorkspace, screenshot, setLanePinned, showExplorer } from "./wire";
+import { enterWorkspace, screenshot, showExplorer } from "./wire";
 
 // View openers and the operator's comments (PRD view-opener-feedback): an
 // agent's `hide file open` marks the View it opened, the operator comments on
@@ -39,16 +39,16 @@ async function noteOnLine(page: Page, line: number, note: string): Promise<void>
 
 test("an agent's View wears its mark, and the operator's line comment reaches that agent as one letter", async ({ page }) => {
   await page.setViewportSize({ width: 1920, height: 1080 });
-  const herdr = await startFixture({ agents: false });
+  const engine = await startFixture({ agents: false });
   let daemon: Daemon | null = null;
   try {
-    const fixture = path.join(herdr.root, "fixture");
+    const fixture = path.join(engine.root, "fixture");
     fs.writeFileSync(path.join(fixture, "notes.md"), ["# Notes", "", "The first line.", "The second line, long enough to wrap onto more rows of the View than one. ".repeat(8).trim(), "The end."].join("\n") + "\n");
-    daemon = await startHided(herdr, "view-feedback");
-    const pane = herdr.panes[0]!;
+    daemon = await startHided(engine, "view-feedback");
+    const pane = engine.panes[0]!;
     // Only the agent in the pane the operator is in changes what the Workspace in front shows.
     await withControl(daemon, (control) => focusPane(control, pane));
-    const agent = await agentPane(herdr, daemon.stateDir, pane);
+    const agent = await agentPane(engine, daemon.stateDir, pane);
     const hide = async (args: string[]) => {
       const answer = await agent(args);
       expect(answer.status, answer.out).toBe(0);
@@ -57,7 +57,6 @@ test("an agent's View wears its mark, and the operator's line comment reaches th
     await page.goto(`${daemon.origin}/?probe=1#token=${daemon.token}`);
     await enterWorkspace(page, "fixture");
     await showExplorer(page);
-    await setLanePinned(page, true);
 
     // B1, B5: the agent's open marks the View with its logo; the mark says who and leads to its pane.
     await hide(["file", "open", "notes.md"]);
@@ -117,22 +116,21 @@ test("an agent's View wears its mark, and the operator's line comment reaches th
     expect(inbox).not.toContain("Throwaway.");
   } finally {
     daemon?.stop();
-    herdr.stop();
+    engine.stop();
   }
 });
 
 test("an area dragged on an image reaches its agent with a screenshot of that area", async ({ page }) => {
   await page.setViewportSize({ width: 1920, height: 1080 });
-  const herdr = await startFixture({ agents: false });
+  const engine = await startFixture({ agents: false });
   let daemon: Daemon | null = null;
   try {
-    // Both suites run from their package folder, one below the repository.
-    fs.copyFileSync(path.resolve("..", "assets", "pet-theme", "default", "assets", "sleeping.png"), path.join(herdr.root, "fixture", "mock.png"));
-    daemon = await startHided(herdr, "view-feedback-image");
-    const pane = herdr.panes[0]!;
+    fs.copyFileSync(path.resolve("e2e/fixtures/image.png"), path.join(engine.root, "fixture", "mock.png"));
+    daemon = await startHided(engine, "view-feedback-image");
+    const pane = engine.panes[0]!;
     // Only the agent in the pane the operator is in changes what the Workspace in front shows.
     await withControl(daemon, (control) => focusPane(control, pane));
-    const agent = await agentPane(herdr, daemon.stateDir, pane);
+    const agent = await agentPane(engine, daemon.stateDir, pane);
     const hide = async (args: string[]) => {
       const answer = await agent(args);
       expect(answer.status, answer.out).toBe(0);
@@ -141,7 +139,6 @@ test("an area dragged on an image reaches its agent with a screenshot of that ar
     await page.goto(`${daemon.origin}/?probe=1#token=${daemon.token}`);
     await enterWorkspace(page, "fixture");
     await showExplorer(page);
-    await setLanePinned(page, true);
     await hide(["file", "open", "mock.png"]);
     await expect(page.locator("[data-document-header] [data-view-opener]")).toHaveAttribute("data-view-opener", pane);
 
@@ -158,7 +155,7 @@ test("an area dragged on an image reaches its agent with a screenshot of that ar
     // The picked area stays outlined while its note is open.
     await screenshot(page, "comment-image-area-note-open");
     await expect(sheet.locator("[data-view-area-outline]")).toHaveCount(1);
-    await field.fill("Crop the owl tighter.");
+    await field.fill("Crop the corner tighter.");
     await page.keyboard.press("ControlOrMeta+Enter");
     await expect(page.locator('[data-view-region-pin="1"]')).toBeVisible();
     await expect(front(page).locator("[data-view-comments]")).toHaveText("1");
@@ -169,12 +166,12 @@ test("an area dragged on an image reaches its agent with a screenshot of that ar
     await expect(row).toHaveAttribute("data-view-feedback-state", "sent");
     const inbox = await hide(["inbox"]);
     expect(inbox).toContain("mock.png");
-    expect(inbox).toContain("Crop the owl tighter.");
+    expect(inbox).toContain("Crop the corner tighter.");
     const shot = /Screenshot: (\S+\.png)/.exec(inbox)?.[1];
     expect(shot, inbox).toBeTruthy();
     expect(fs.readFileSync(shot!).subarray(0, 8).toString("hex")).toBe("89504e470d0a1a0a");
   } finally {
     daemon?.stop();
-    herdr.stop();
+    engine.stop();
   }
 });

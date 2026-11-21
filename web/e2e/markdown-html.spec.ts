@@ -78,7 +78,7 @@ test("the repository README opens as drawn HTML and shows a block source under t
   const stack = await openStack(page, {
     "README.md": fs.readFileSync(path.join(root, "README.md")),
     "design/brand/hide-icon-blinking.svg": fs.readFileSync(path.join(root, "design/brand/hide-icon-blinking.svg")),
-    "site/assets/video/kick-conductor.gif": fs.readFileSync(path.join(root, "site/assets/video/kick-conductor.gif")),
+    "site/public/assets/video/kick-conductor.gif": fs.readFileSync(path.join(root, "site/public/assets/video/kick-conductor.gif")),
   });
   const appRequests: string[] = [];
   page.on("request", (request) => {
@@ -97,10 +97,10 @@ test("the repository README opens as drawn HTML and shows a block source under t
     await expect.poll(() => logo.evaluate((image: HTMLImageElement) => image.complete && image.naturalWidth > 0)).toBe(true);
     await expect(logo).toHaveAttribute("src", /^blob:/);
     // The file opens at its first line, with the logo in view, once it and the badges have loaded.
-    await expect(page.locator('.cm-md-html img[alt="Built on Herdr"]')).toHaveJSProperty("complete", true);
+    await expect(page.locator('.cm-md-html img[alt="macOS, Windows and Linux"]')).toHaveJSProperty("complete", true);
     expect(await page.locator(".cm-scroller").first().evaluate((element) => element.scrollTop)).toBe(0);
     await expect(logo).toBeInViewport();
-    await expect(page.locator(".cm-content")).toContainText("Run more agents. Hold less.");
+    await expect(page.locator(".cm-content")).toContainText("The ADE for humans.");
     await expect(page.locator(".cm-content")).not.toContainText('<p align="center">');
     // Nothing was fetched from the app's own address for a relative image.
     expect(appRequests.filter((pathname) => pathname.includes("/design/") || pathname.includes("/site/"))).toEqual([]);
@@ -119,7 +119,7 @@ test("the repository README opens as drawn HTML and shows a block source under t
     await blocks.filter({ has: page.locator('img[alt^="A Conductor plans"]') }).click();
     await expect(hero).toHaveCount(0);
     await expect(logo).toBeVisible();
-    await expect(page.locator(".cm-content")).toContainText('<img src="site/assets/video/kick-conductor.gif"');
+    await expect(page.locator(".cm-content")).toContainText('<img src="site/public/assets/video/kick-conductor.gif"');
     await screenshot(page, "markdown-html-hero-source");
   } finally {
     close(stack);
@@ -159,14 +159,14 @@ test("a badge that cannot be reached ends in its alt text and the logo still dra
   const stack = await openStack(page, {
     "README.md": fs.readFileSync(path.join(root, "README.md")),
     "design/brand/hide-icon-blinking.svg": fs.readFileSync(path.join(root, "design/brand/hide-icon-blinking.svg")),
-    "site/assets/video/kick-conductor.gif": fs.readFileSync(path.join(root, "site/assets/video/kick-conductor.gif")),
+    "site/public/assets/video/kick-conductor.gif": fs.readFileSync(path.join(root, "site/public/assets/video/kick-conductor.gif")),
   });
   // One badge host refuses at once (offline), the other never answers.
   await page.route("https://img.shields.io/badge/**", (route) => route.abort("internetdisconnected"));
   await page.route("https://img.shields.io/github/**", () => {});
   try {
     await page.locator(`[data-explorer-row="${stack.repo}/README.md"]`).click();
-    for (const alt of ["Latest release", "Functional Source License 1.1", "macOS, Windows and Linux", "Built on Herdr"]) {
+    for (const alt of ["Latest release", "Functional Source License 1.1", "macOS, Windows and Linux"]) {
       await expect(page.locator(".cm-md-alt[data-state='failed']", { hasText: alt })).toBeVisible({ timeout: 30_000 });
     }
     const logo = page.locator('.cm-md-html img[alt="hide owl app icon"]');
@@ -192,6 +192,119 @@ test("a Markdown link opens on modifier-click only, and a plain click places the
     const opened = context.waitForEvent("page");
     await link.click({ modifiers: ["ControlOrMeta"] });
     expect((await opened).url()).toContain("example.com");
+  } finally {
+    close(stack);
+  }
+});
+
+const DIAGRAMS = [
+  "intro",
+  "",
+  "```mermaid",
+  "flowchart LR",
+  "  E[설정 앱] --> L[로컬 수신 엔진]",
+  '  L --> X["<img src=x onerror=window.pwned=3>"]',
+  "```",
+  "",
+  "middle",
+  "",
+  "```mermaid",
+  "flowchart LR",
+  "  A -->",
+  "```",
+  "",
+  "end",
+  "",
+].join("\n");
+
+test("a mermaid fence draws as its diagram, a broken one stays code under its reason, and a caret shows the source", async ({ page }) => {
+  const stack = await openStack(page, { "diagram.md": DIAGRAMS });
+  const asked: string[] = [];
+  page.on("request", (request) => asked.push(new URL(request.url()).pathname));
+  try {
+    await page.locator(`[data-explorer-row="${stack.repo}/diagram.md"]`).click();
+    const drawn = page.locator(".cm-md-mermaid[data-state='drawn']");
+    await expect(drawn.locator("svg")).toBeVisible({ timeout: 30_000 });
+    await expect(drawn).toContainText("로컬 수신 엔진");
+    await expect(drawn.locator("script, img, image, a, [onerror]")).toHaveCount(0);
+    const failed = page.locator(".cm-md-mermaid[data-state='failed']");
+    await expect(failed.locator(".cm-md-alt")).toBeVisible();
+    await expect(failed.locator(".cm-md-mermaid-source")).toHaveText("flowchart LR\n  A -->");
+    expect(await page.evaluate(() => (window as unknown as { pwned?: unknown }).pwned)).toBeUndefined();
+    expect(asked.filter((pathname) => pathname.endsWith("/x"))).toEqual([]);
+    // The diagram never runs wider than the column it sits in.
+    const widths = await drawn.evaluate((element) => [element.querySelector("svg")!.getBoundingClientRect().width, element.getBoundingClientRect().width]);
+    expect(widths[0]).toBeLessThanOrEqual(widths[1] + 1);
+    await screenshot(page, "markdown-mermaid-live");
+
+    await drawn.click();
+    await expect(drawn).toHaveCount(0);
+    await expect(page.locator(".cm-content")).toContainText("```mermaid");
+    await expect(page.locator(".cm-content")).toContainText("E[설정 앱] --> L[로컬 수신 엔진]");
+  } finally {
+    close(stack);
+  }
+});
+
+const LONG = "흩어져 있던 이유와 모이는 이유가 한 논리여야 하고, 그 논리가 70년이라는 길이와 일곱이라는 수를 함께 설명해야 한다.";
+
+const TABLES = [
+  "intro",
+  "",
+  "| 장치 | 관객이 품는 질문 | 답이 회수해야 할 지점 |",
+  "|---|:---:|---|",
+  "| 70년 | 왜 하필 [지금](https://example.com/now)? | 70이라는 길이에 이유가 있어야 한다. [노트](notes.md) |",
+  `| 7체 | 왜 일곱이고, 왜 **흩어져** 있었나? | ${LONG} \`${"a1b2c3d4".repeat(8)}\` https://example.com/${"long/".repeat(16)}end |`,
+  "",
+  "below the table",
+  "",
+].join("\n");
+
+test("a table draws as a header row and wrapping cells inside the column, its links open on modifier-click, a press shows its source, and the gutter under it holds", async ({ page, context }) => {
+  const stack = await openStack(page, { "table.md": TABLES, "notes.md": "# Notes\n" });
+  try {
+    await page.locator(`[data-explorer-row="${stack.repo}/table.md"]`).click();
+    const block = page.locator(".cm-md-table");
+    const table = block.locator("table");
+    await expect(table).toBeVisible({ timeout: 20_000 }); // wait-ok: the Markdown language pack loading before the first Live draw
+    await expect(table.locator("th")).toHaveText(["장치", "관객이 품는 질문", "답이 회수해야 할 지점"]);
+    await expect(table.locator("th").nth(1)).toHaveCSS("text-align", "center");
+    await expect(table.locator("tbody td").nth(4).locator("strong")).toHaveText("흩어져");
+    await expect(page.locator(".cm-content")).not.toContainText("|---|");
+    // The long cell wraps inside its own column, its hash and address too; the table stays inside the text column and the page never scrolls sideways.
+    const oneLine = (await table.locator("th").first().boundingBox())!.height;
+    expect((await table.locator("tbody td").nth(5).boundingBox())!.height).toBeGreaterThan(2 * oneLine);
+    expect((await table.boundingBox())!.width).toBeLessThanOrEqual((await block.boundingBox())!.width + 1);
+    expect(await page.locator(".cm-scroller").first().evaluate((element) => element.scrollWidth - element.clientWidth)).toBeLessThanOrEqual(0);
+    await screenshot(page, "markdown-table-live");
+
+    // The `+` of the line under the table sits on that line, so the table's drawn height reached the editor.
+    const below = page.locator(".cm-content > .cm-line", { hasText: "below the table" });
+    const row = (await below.boundingBox())!;
+    const gutter = (await page.locator(".cm-view-comment-gutter").boundingBox())!;
+    await page.mouse.move(gutter.x + gutter.width / 2, row.y + 4);
+    const plus = (await page.locator('[data-view-comment-add="8"]').boundingBox())!;
+    expect(plus.y).toBeGreaterThanOrEqual(row.y - 1);
+    expect(plus.y + plus.height).toBeLessThanOrEqual(row.y + row.height + 1);
+
+    // A link in a cell opens on modifier-click only and the table stays drawn: a web address in the browser, a relative file as a tab.
+    const link = table.locator("a", { hasText: "지금" });
+    const opened = context.waitForEvent("page");
+    await link.click({ modifiers: ["ControlOrMeta"] });
+    expect((await opened).url()).toContain("example.com/now");
+    await table.locator("a", { hasText: "노트" }).click({ modifiers: ["ControlOrMeta"] });
+    await expect(page.locator('[data-view-tab-bar] [role="tab"][aria-selected="true"]')).toHaveAttribute("aria-label", /\/notes\.md/);
+    await page.locator(`[data-explorer-row="${stack.repo}/table.md"]`).click();
+    await expect(table).toBeVisible();
+    // A plain press, on the link too, shows its source and opens nothing, to the end of the test.
+    const later: string[] = [];
+    context.on("page", (opened) => later.push(opened.url()));
+    await link.click();
+    await expect(block).toHaveCount(0);
+    await expect(page.locator(".cm-content")).toContainText("|---|:---:|---|");
+    await below.click();
+    await expect(table).toBeVisible();
+    expect(later).toEqual([]);
   } finally {
     close(stack);
   }

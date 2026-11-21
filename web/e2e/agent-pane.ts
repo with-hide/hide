@@ -1,9 +1,8 @@
 // A pane that runs a listed Claude Code agent whose `hide` commands come
-// from inside the agent's own process, as a real agent's do, on either
-// engine: the fixture `claude` execs the spawn-provider shim, which reports
-// its native session the way the pane's engine learns one (Herdr's
-// integration report on Herdr, Hide's SessionStart hook on the core's own
-// engine) and, on each `!` typed into the pane, runs a small driver that
+// from inside the agent's own process, as a real agent's do: the fixture
+// `claude` execs the spawn-provider shim, which reports its native session
+// the way the pane's engine learns one (Hide's SessionStart hook) and, on
+// each `!` typed into the pane, runs a small driver that
 // reads the next command from a file. Hide binds such a command to the
 // agent's pane, so what it opens carries that agent as its opener.
 
@@ -11,11 +10,11 @@ import { expect } from "@playwright/test";
 import fs from "node:fs";
 import path from "node:path";
 import type { EngineServer } from "./engine-fixture";
-import { connectStateDir } from "./hided-control.mjs";
+import { connectStateDir, useControl } from "./hided-control.mjs";
 import { fixtureExecutable } from "./platform-fixture";
 import { copyFixtureShim } from "./shims/build";
 import { configureSpawnProvider, writeSessionReporter } from "./spawn-provider";
-import { agentIn, focusPane, restoreFocusAfterInput, waitForInputGate } from "./daemon-actions";
+import { focusPane, restoreFocusAfterInput, startedAgentIn, waitForInputGate } from "./daemon-actions";
 
 /** One `hide` command's exit status and standard output. */
 export type HideAnswer = { status: number; out: string };
@@ -27,17 +26,14 @@ export type HideAnswer = { status: number; out: string };
  */
 export type AgentRun = { program?: string; input?: string; env?: Record<string, string>; hook?: boolean };
 
-/** What a pane's agent runner needs of its fixture: its root, and on Herdr the CLI a session is reported with; the own engine has none. */
+/** What a pane's agent runner needs of its fixture: its root; the own engine needs no CLI to report a session with. */
 export type AgentPaneFixture = Pick<EngineServer, "root"> & { bin?: string };
 
 /** Types `text` into `pane` as the operator's keys, through the daemon whose state folder is `stateDir`. */
 export async function typeInto(stateDir: string, pane: string, text: string): Promise<void> {
-  const control = await connectStateDir(stateDir);
-  try {
+  await useControl(await connectStateDir(stateDir), async (control) => {
     control.send("key", { pane_id: pane, bytes_base64: Buffer.from(text, "utf8").toString("base64") });
-  } finally {
-    control.close();
-  }
+  });
 }
 
 /**
@@ -48,17 +44,14 @@ export async function typeInto(stateDir: string, pane: string, text: string): Pr
  */
 export async function agentPane(fixture: AgentPaneFixture, stateDir: string, pane: string): Promise<(args: string[], run?: AgentRun) => Promise<HideAnswer>> {
   const run = agentRunner(fixture, stateDir, pane);
-  const control = await connectStateDir(stateDir);
-  try {
+  await useControl(await connectStateDir(stateDir), async (control) => {
     await focusPane(control, pane);
     await typeInto(stateDir, pane, "claude\r");
     const marker = reportedMarker(fixture.root, pane);
     await expect.poll(() => fs.existsSync(marker), { message: `${pane} ran its session reporter`, timeout: 20_000 }).toBe(true);
     const session = fs.readFileSync(marker, "utf8");
-    await control.until((rest) => agentIn(rest, pane)?.session_id === session || undefined, `${pane} on its reported native session`, 20_000);
-  } finally {
-    control.close();
-  }
+    await control.until((rest) => startedAgentIn(rest, pane)?.session_id === session || undefined, `${pane} on its reported native session, started`, 20_000);
+  });
   return run;
 }
 
@@ -67,12 +60,27 @@ export function reportedMarker(root: string, pane: string): string {
   return path.join(root, `session-reported-${pane.replaceAll(":", "-")}`);
 }
 
+const inputMarker = (root: string, pane: string) => path.join(root, `terminal-ready-${pane.replaceAll(":", "-")}`);
+
+/** Before starting another program in the same pane, retire its previous program's readiness. */
+export function prepareAgentInput(root: string, pane: string): void {
+  fs.rmSync(inputMarker(root, pane), { force: true });
+}
+
+/** The current native stand-in has configured its terminal and can consume keys. */
+export async function waitForAgentInput(root: string, pane: string): Promise<void> {
+  const marker = inputMarker(root, pane);
+  await expect.poll(() => fs.existsSync(marker), { message: `the agent in ${pane} reading its terminal`, timeout: 30_000 }).toBe(true);
+}
+
 /**
  * Makes every fixture `claude` started from now on run as such an agent, as a
  * Reopen's resumed one does, and returns the way to run `hide` as the agent
- * in `pane` once one runs there.
+ * in `pane` once one runs there. Call before starting or reopening it: the
+ * previous program's input readiness is retired here.
  */
 export function agentRunner(fixture: AgentPaneFixture, stateDir: string, pane: string, kind: "claude" | "grok" = "claude"): (args: string[], run?: AgentRun) => Promise<HideAnswer> {
+  prepareAgentInput(fixture.root, pane);
   return installAgentRunner(fixture, stateDir, kind)(pane);
 }
 
@@ -87,7 +95,10 @@ export function installAgentRunner(fixture: AgentPaneFixture, stateDir: string, 
   // An engine reads the agent from the program in the pane's foreground, so the runner takes the agent's name.
   const runner = path.join(root, "worker-bin", fixtureExecutable(kind));
   fs.mkdirSync(path.dirname(runner), { recursive: true });
-  copyFixtureShim("spawn-provider", runner);
+  // Binding another pane reuses this run's immutable program. Rewriting an
+  // executable already running can invalidate its code signature on macOS
+  // or fail with a sharing violation on Windows.
+  if (!fs.existsSync(runner)) copyFixtureShim("spawn-provider", runner);
   fs.writeFileSync(path.join(root, "agent-pane-runner.config"), runner);
   const command = path.join(root, "agent-pane-command.json");
   const output = path.join(root, "agent-pane-output.json");
@@ -111,6 +122,7 @@ fs.writeFileSync(${JSON.stringify(output)}, JSON.stringify({ status: ran.status 
 `);
   configureSpawnProvider(root, { reporter: writeSessionReporter(fixture), completed, command: [process.execPath, driver] });
   return (pane) => async (args, run = {}) => {
+    await waitForAgentInput(root, pane);
     fs.writeFileSync(command, JSON.stringify({ args, ...run }));
     fs.rmSync(completed, { force: true });
     fs.rmSync(output, { force: true });
@@ -119,13 +131,10 @@ fs.writeFileSync(${JSON.stringify(output)}, JSON.stringify({ status: ran.status 
     // Read by the stand-in (`spawn-provider.c`, `ran_as_hook`) once the command has run.
     if (run.hook) fs.writeFileSync(`${completed}.hook`, "");
     else fs.rmSync(`${completed}.hook`, { force: true });
-    const control = await connectStateDir(stateDir);
-    try {
+    await useControl(await connectStateDir(stateDir), async (control) => {
       await restoreFocusAfterInput(control, pane, () => typeInto(stateDir, pane, "!"), arrived);
       fs.writeFileSync(gate, "");
-    } finally {
-      control.close();
-    }
+    });
     await expect.poll(() => (fs.existsSync(completed) ? fs.readFileSync(completed, "utf8").trim() : null),
       { message: `hide ${args.join(" ")} ran in ${pane}`, timeout: 40_000 }).toBe("0");
     return JSON.parse(fs.readFileSync(output, "utf8")) as HideAnswer;

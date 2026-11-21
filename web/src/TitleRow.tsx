@@ -36,7 +36,7 @@ export function TitleRow({ actions }: { actions: Actions }) {
     <header className="window-drag flex h-(--size-tab-strip) shrink-0 border-b border-border bg-sidebar" style={columns} data-title-row="true" data-traffic-lights={lights ? "true" : "false"}>
       {/* One box in both states, so the switch keeps its place and its keyboard focus when it hides the sidebar. */}
       <div
-        className={cn("flex shrink-0 items-center gap-xs", sidebar && "w-(--sidebar-total) border-r border-border pr-xs")}
+        className={cn("flex shrink-0 items-center gap-xs", sidebar && "w-(--sidebar-total) border-r border-input pr-xs")}
         style={{ paddingLeft: start }}
         data-sidebar-title={sidebar ? "true" : undefined}
       >

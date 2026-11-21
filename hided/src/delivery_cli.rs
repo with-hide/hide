@@ -1,6 +1,6 @@
 //! Small typed command surface for the core-owned durable mailbox.
 
-use herdr_core::delivery::{BODY_LIMIT, BUNDLE_LETTERS, Command};
+use hide_core::delivery::{BODY_LIMIT, BUNDLE_LETTERS, Command};
 
 use crate::env::Env;
 
@@ -30,7 +30,7 @@ pub fn parse<'a>(
                             prompt_digest = Some(
                                 args.next()
                                     .filter(|digest| {
-                                        herdr_core::delivery::valid_prompt_digest(digest)
+                                        hide_core::delivery::valid_prompt_digest(digest)
                                     })
                                     .ok_or(USAGE)?
                                     .clone(),
@@ -39,7 +39,7 @@ pub fn parse<'a>(
                         "--session" if session.is_none() => {
                             session = Some(
                                 args.next()
-                                    .filter(|id| herdr_core::delivery::valid_session(id))
+                                    .filter(|id| hide_core::delivery::valid_session(id))
                                     .ok_or(USAGE)?
                                     .clone(),
                             );
@@ -92,7 +92,7 @@ pub fn parse<'a>(
                 "--approval"
                     if approval.is_none()
                         && verb == Some("assign")
-                        && herdr_core::delivery::watch::valid_approval(value) =>
+                        && hide_core::delivery::watch::valid_approval(value) =>
                 {
                     approval = Some(value.clone());
                 }
@@ -179,6 +179,7 @@ pub fn parse<'a>(
                     id: subject,
                     intent,
                     body,
+                    now: false,
                 })
             }
         }
@@ -199,6 +200,12 @@ fn key(value: &str) -> bool {
 }
 
 pub fn run(env: &Env, command: Command) -> Result<(), String> {
+    // A letter sent from a pane of another Hide's work here, while that
+    // Hide is away, is kept by the pane's node and answered `queued` (PRD
+    // device-connect-iroh B12).
+    let letter = matches!(command, Command::Send { .. })
+        .then(|| serde_json::to_value(&command).ok())
+        .flatten();
     let result = (|| {
         if let Command::Pull {
             prompt_digest,
@@ -221,6 +228,22 @@ pub fn run(env: &Env, command: Command) -> Result<(), String> {
         let hint = env.pane_id.clone();
         crate::workspace_cli::request_delivery(&mut credential, command, hint.as_deref())
     })();
+    let result = match (result, letter) {
+        (Err(code), Some(letter)) if code == crate::guest_node::away::OWNER_OFFLINE => {
+            crate::guest_node::away::ask(&env.state_dir, env.pane_id.as_deref(), Some(&letter))
+                .map(|mut answer| {
+                    if let Some(next) = answer["reason"]
+                        .as_str()
+                        .and_then(crate::guest_node::away::next_action)
+                    {
+                        answer["next_action"] = next.into();
+                    }
+                    answer
+                })
+                .ok_or(code)
+        }
+        (result, _) => result,
+    };
     match result {
         Ok(answer) => {
             println!("{answer}");
@@ -257,7 +280,7 @@ mod tests {
             Command::Inbox { bundle: true }
         );
         assert!(parse_line(&["inbox", "wait"]).is_err());
-        let digest = herdr_core::delivery::prompt_digest("prompt");
+        let digest = hide_core::delivery::prompt_digest("prompt");
         assert_eq!(
             parse_line(&["inbox", "--hook"]).unwrap(),
             Command::Pull {
@@ -468,7 +491,7 @@ mod tests {
             ])
             .is_err()
         );
-        assert!(!herdr_core::delivery::watch::valid_approval(
+        assert!(!hide_core::delivery::watch::valid_approval(
             &"x".repeat(257)
         ));
     }

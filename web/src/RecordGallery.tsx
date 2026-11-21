@@ -1,4 +1,4 @@
-import { GlobeIcon, PackageIcon } from "lucide-react";
+import { CircleDotIcon, GlobeIcon } from "lucide-react";
 import { useEffect, useState } from "react";
 import type { Actions } from "./actions";
 import { browserStillOf, addressShown } from "./browserViews";
@@ -19,8 +19,8 @@ const ROW = "flex w-full min-w-0 items-center gap-xs rounded-xs px-xxs py-xxs te
  * The 결과물 section (PRD session-docs-and-assistant D-40): the items with a
  * real picture as a strip of three-column thumbnails, every other one as a
  * compact row, the first `FIRST_PICTURES` and `FIRST_ROWS` until `+N` shows
- * the rest. Pressing a View brings it forward where the record's lane is; an
- * output its turns only named opens nothing.
+ * the rest. Pressing a View brings it forward where the record's lane is;
+ * pressing an issue opens its page.
  */
 export function RecordGallery({ tiles, omitted, actions }: { tiles: readonly GalleryTile[]; omitted: number; actions: Actions }) {
   const { t } = useInterfaceTranslation();
@@ -48,19 +48,21 @@ export function RecordGallery({ tiles, omitted, actions }: { tiles: readonly Gal
 }
 
 function keyOf(tile: GalleryTile): string {
-  return tile.kind === "view" ? `view:${tile.view.device_id}:${tile.view.checkout_path}:${tile.view.display_id}` : `artifact:${tile.name}`;
+  return tile.kind === "view" ? `view:${tile.view.device_id}:${tile.view.checkout_path}:${tile.view.display_id}` : `issue:${tile.issue.repository}#${tile.issue.number}`;
 }
 
-/** An item with no picture: its kind's mark, its name and one short muted detail. */
+/** An item with no picture: its kind's mark, its name and one short muted detail; a closed issue is dimmed. */
 function Row({ tile, actions }: { tile: GalleryTile; actions: Actions }) {
   const detail = rowDetail(tile);
-  const words = <>
-    <span className="min-w-0 shrink truncate text-subtle-foreground" data-record-view-label={tile.kind === "view" ? "true" : undefined} data-record-artifact={tile.kind === "artifact" ? tile.name : undefined}>{tile.kind === "view" ? tile.view.label : tile.name}</span>
+  const view = tile.kind === "view" ? tile.view : null;
+  const issue = tile.kind === "issue" ? tile.issue : null;
+  const name = view ? view.label : issue!.title;
+  const open = () => (view ? actions.openRecordView(view) : actions.openLink(issue!.url, false));
+  return <button type="button" className={cn(ROW, "hover:bg-accent", issue?.state === "closed" && "opacity-(--opacity-dimmed)")} title={[name, view ? view.url ?? view.path : issue!.url].filter(Boolean).join("\n")} onClick={open}
+    data-record-view={view?.display_id} data-record-view-thumb={view ? "row" : undefined} data-record-issue={issue?.number} data-issue-closed={issue?.state === "closed" || undefined}>
+    {view ? <Mark view={view} /> : <CircleDotIcon aria-hidden="true" className="size-(--size-icon-sm) shrink-0 text-muted-foreground" />}
+    <span className="min-w-0 shrink truncate text-subtle-foreground" data-record-view-label={view ? "true" : undefined}>{name}</span>
     {detail ? <span className="min-w-0 flex-1 truncate text-micro text-muted-foreground" data-record-view-detail="true">{detail}</span> : null}
-  </>;
-  if (tile.kind === "artifact") return <div className={ROW} title={tile.name}><PackageIcon aria-hidden="true" className="size-(--size-icon-sm) shrink-0 text-muted-foreground" />{words}</div>;
-  return <button type="button" className={cn(ROW, "hover:bg-accent")} title={[tile.view.label, tile.view.url ?? tile.view.path].filter(Boolean).join("\n")} onClick={() => actions.openRecordView(tile.view)} data-record-view={tile.view.display_id} data-record-view-thumb="row">
-    <Mark view={tile.view} />{words}
   </button>;
 }
 

@@ -25,7 +25,7 @@ import { startEngine, startFixture } from "./engine-fixture";
 import { startAgentInProject } from "./fixture-agents";
 import { startHided, type Daemon } from "./hided-fixture";
 import { fixtureProgram } from "./platform-fixture";
-import { countSent, enterWorkspace, registerFolder, screenshot } from "./wire";
+import { countSent, enterWorkspace, otherCheckoutRow, registerFolder, screenshot } from "./wire";
 import { chord, field, label, SYSTEM } from "./chords";
 import { fieldChord } from "../src/shortcuts";
 import { initGithubRepository } from "./github-remote";
@@ -50,11 +50,11 @@ async function focusAgent(page: Page, pane: string): Promise<void> {
 
 test("⌘K lists what is connected to the agent in front, goes to an agent by name, keeps only Start an agent…, and asks GitHub nothing", async ({ page }) => {
   await page.setViewportSize({ width: 1440, height: 900 });
-  const herdr = await startFixture();
+  const engine = await startFixture();
   let daemon: Daemon | null = null;
   try {
-    daemon = await startHided(herdr, "cmdk-names");
-    const [one, two] = herdr.panes;
+    daemon = await startHided(engine, "cmdk-names");
+    const [one, two] = engine.panes;
     const last = new Map<string, Record<string, unknown>>();
     const sent = countSent(page, last);
     await page.goto(`${daemon.origin}/#token=${daemon.token}`);
@@ -118,7 +118,7 @@ test("⌘K lists what is connected to the agent in front, goes to an agent by na
     expect(sent.get("github_search") ?? 0).toBe(0);
   } finally {
     daemon?.stop();
-    herdr.stop();
+    engine.stop();
   }
 });
 
@@ -146,6 +146,7 @@ function fakeGh(root: string): { bin: string; log: string } {
     title,
     statusCheckRollup: passing,
     headRefName: branch,
+    headRefOid: number.toString(16).padStart(40, "0"),
     baseRefName: "main",
     state: "OPEN",
     reviewDecision: "REVIEW_REQUIRED",
@@ -172,6 +173,7 @@ const done = (text) => { console.log(text); process.exit(0); };
 if (key === "auth status") process.exit(0);
 if (key === "api user") done("example-user");
 if (process.argv.slice(2).join(" ").includes("review-requested:@me")) done("[]");
+if (process.argv.slice(2).join(" ").includes("HideHeadRuns")) { const repository = {}; for (let i = 0; i < process.argv.slice(2).join(" ").split("object(oid:").length - 1; i++) repository["c" + i] = { checkSuites: { totalCount: 0, nodes: [] } }; console.log(JSON.stringify({ data: { repository } })); process.exit(0); }
 if (process.argv.slice(2).join(" ").includes("HidePrFacts")) done('{"data":{"repository":{"pullRequests":{"nodes":[]}}}}');
 if (key === "repo view") done('{"nameWithOwner":"acme/repo"}');
 if (key === "issue list") done(${JSON.stringify(JSON.stringify(issues))});
@@ -208,28 +210,28 @@ async function titledAgents(fixture: Awaited<ReturnType<typeof startEngine>>, da
 
 test("⌘K relates the agent in front to its issue and pull request, finds them by #number, and searches GitHub only from its own row", async ({ page, context }) => {
   await page.setViewportSize({ width: 1440, height: 900 });
-  const herdr = await startEngine();
+  const engine = await startEngine();
   let daemon: Daemon | null = null;
   try {
-    const repo = path.join(herdr.root, "repo");
+    const repo = path.join(engine.root, "repo");
     fs.mkdirSync(repo);
     initGithubRepository(repo);
     fs.writeFileSync(path.join(repo, "README.md"), "# repo\n");
     git(repo, ["add", "README.md"]);
     git(repo, ["commit", "-m", "initial"]);
-    const worktree = path.join(herdr.root, "repo-nav");
+    const worktree = path.join(engine.root, "repo-nav");
     git(repo, ["worktree", "add", "-b", BRANCH, worktree]);
     git(worktree, ["commit", "--allow-empty", "-m", "navigation"]);
 
-    const gh = fakeGh(herdr.root);
-    daemon = await startHided(herdr, "cmdk-github", undefined, { PATH: `${gh.bin}${path.delimiter}${herdr.fixturePath}` });
+    const gh = fakeGh(engine.root);
+    daemon = await startHided(engine, "cmdk-github", undefined, { PATH: `${gh.bin}${path.delimiter}${engine.fixturePath}` });
     const last = new Map<string, Record<string, unknown>>();
     const sent = countSent(page, last);
     // The page connects first: the core lists a linked worktree of a project while a page shows it.
     await page.goto(`${daemon.origin}/#token=${daemon.token}`);
     await expect(page.locator("[data-main-screen]")).toBeVisible({ timeout: 20_000 });
-    const agent = await titledAgents(herdr, daemon, repo, worktree);
-    await page.locator(`[data-checkout][aria-label^="${BRANCH}"]`).first().click();
+    const agent = await titledAgents(engine, daemon, repo, worktree);
+    await (await otherCheckoutRow(page, page.locator("[data-project]").filter({ has: page.locator("[data-project-row]", { hasText: /^repo/ }) }), BRANCH)).click();
     await expect(page.locator("[data-workspace-screen]")).toBeVisible();
     await focusAgent(page, agent);
 
@@ -266,13 +268,13 @@ test("⌘K relates the agent in front to its issue and pull request, finds them 
     await page.keyboard.type("#273");
     await expect.poll(() => rowIds(page)).toEqual([expect.stringMatching(/^issue:.*273$/), expect.stringMatching(/^pr:.*:273$/), expect.stringMatching(/^pr:.*:274$/), "github-search"]);
     await expect(page.locator('[data-palette="Search"] [cmdk-group-heading]')).toHaveText(["Issues", "Pull requests"]);
-    // B20: Enter on the pull request opens its card in the lane's 보기 slot (PRD sidebar-task-lens B50).
+    // B20: Enter on the pull request opens its card as a desk tab (PRD sidebar-task-lens B50; lane-desk-pair-view D-13).
     await page.keyboard.press("ArrowDown");
     await expect(rows(page).nth(1)).toHaveAttribute("aria-selected", "true");
     await expect(page.locator('[data-palette-detail-pane="pr"]')).toContainText("번호로 찾는 PR");
     await page.keyboard.press("Enter");
     await expect(input(page)).toHaveCount(0);
-    await expect(page.locator('aside[data-lane="detail"][data-detail="pull_request"] [data-pr-card="273"]')).toBeVisible({ timeout: 30_000 });
+    await expect(page.locator('[data-card="pull_request"] [data-pr-card="273"]')).toBeVisible({ timeout: 30_000 });
 
     // B16: a query nothing holds says so, and the last row offers the GitHub
     // search. Typing called GitHub no more than reading the project did.
@@ -331,23 +333,23 @@ test("⌘K relates the agent in front to its issue and pull request, finds them 
     await page.keyboard.press("Escape");
   } finally {
     daemon?.stop();
-    herdr.stop();
+    engine.stop();
   }
 });
 
 test("⌘P then ⌘↵ opens the highlighted file beside the area in use, and ↵ alone opens it in the preview", async ({ page }) => {
   await page.setViewportSize({ width: 1920, height: 1080 });
-  const herdr = await startFixture({ agents: false });
+  const engine = await startFixture({ agents: false });
   let daemon: Daemon | null = null;
   try {
-    const root = path.join(herdr.root, "fixture");
-    const git = (...args: string[]) => execFileSync("git", ["-C", root, ...args], { env: { ...process.env, HOME: path.join(herdr.root, "home") } });
+    const root = path.join(engine.root, "fixture");
+    const git = (...args: string[]) => execFileSync("git", ["-C", root, ...args], { env: { ...process.env, HOME: path.join(engine.root, "home") } });
     fs.writeFileSync(path.join(root, "first.txt"), "first\n");
     fs.writeFileSync(path.join(root, "second.txt"), "second\n");
     git("init", "-q");
     git("add", ".");
     git("-c", "user.name=Test", "-c", "user.email=test@example.com", "commit", "-qm", "Initial files");
-    daemon = await startHided(herdr, "cmdk-beside");
+    daemon = await startHided(engine, "cmdk-beside");
     const last = new Map<string, Record<string, unknown>>();
     const sent = countSent(page, last);
     await page.goto(`${daemon.origin}/#token=${daemon.token}`);
@@ -381,16 +383,16 @@ test("⌘P then ⌘↵ opens the highlighted file beside the area in use, and �
     await expect(page.locator('[data-view-tab-bar] [role="tab"]')).toHaveCount(2);
   } finally {
     daemon?.stop();
-    herdr.stop();
+    engine.stop();
   }
 });
 
 test("⌘K lists the checkouts last brought to the front under Recent, keeps them across a restart, shows them alone on Settings, and goes back to one", async ({ page }) => {
   await page.setViewportSize({ width: 1440, height: 900 });
-  const herdr = await startFixture();
+  const engine = await startFixture();
   let daemon: Daemon | null = null;
   try {
-    daemon = await startHided(herdr, "cmdk-recent");
+    daemon = await startHided(engine, "cmdk-recent");
     await page.goto(`${daemon.origin}/#token=${daemon.token}`);
     await enterWorkspace(page, "fixture");
     const fixtureLocator = page.locator("[data-project] [data-checkout]").first();
@@ -470,15 +472,15 @@ test("⌘K lists the checkouts last brought to the front under Recent, keeps the
     await expect(page.locator(`[data-checkout="${fixture}"]`)).toBeVisible();
   } finally {
     daemon?.stop();
-    herdr.stop();
+    engine.stop();
   }
 });
 
 test("⌘K lists a typed URL as unavailable in a browser tab, and opens it as a browser display in the active View area in the desktop app", async ({ page }) => {
-  const herdr = await startFixture({ agents: false });
+  const engine = await startFixture({ agents: false });
   let daemon: Daemon | null = null;
   try {
-    daemon = await startHided(herdr, "cmdk-open-url");
+    daemon = await startHided(engine, "cmdk-open-url");
     const url = `${daemon.origin}/#token=${daemon.token}`;
     await page.goto(url);
     await enterWorkspace(page, "fixture");
@@ -536,6 +538,6 @@ test("⌘K lists a typed URL as unavailable in a browser tab, and opens it as a 
     await screenshot(page, "cmdk-open-url-opened");
   } finally {
     daemon?.stop();
-    herdr.stop();
+    engine.stop();
   }
 });

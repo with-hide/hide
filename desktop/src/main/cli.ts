@@ -56,7 +56,7 @@ export type Locations = Pick<DesktopEnv, "home" | "localAppData" | "appData" | "
 /**
  * The folders installers put the programs Hide runs in, searched last for
  * `hide` and appended to every child's PATH, so a daemon started from Finder
- * or the Start menu finds `git`, `gh`, the agent CLIs and Herdr. On macOS and
+ * or the Start menu finds `git`, `gh` and the agent CLIs. On macOS and
  * Linux those are `~/.local/bin`, Homebrew's and `/usr/local/bin`. On Windows
  * each comes from that program's own installer, and a folder whose variable is
  * unset is left out and named rather than guessed:
@@ -64,9 +64,8 @@ export type Locations = Pick<DesktopEnv, "home" | "localAppData" | "appData" | "
  * - `~\.local\bin`: Claude Code's installer puts `claude.exe` there. Hide's
  *   kit links `hide` there too, but without the `.exe` Windows needs, so the
  *   search does not find it yet.
- * - `%LOCALAPPDATA%\Programs\OpenAI\Codex\bin` and
- *   `%LOCALAPPDATA%\Programs\Herdr\bin`: the Codex and Herdr installers'
- *   default folders (`install.ps1`'s visible bin folder in each).
+ * - `%LOCALAPPDATA%\Programs\OpenAI\Codex\bin`: the Codex installer's
+ *   default folder (`install.ps1`'s visible bin folder).
  * - `%LOCALAPPDATA%\Programs\Git\cmd` and `%ProgramFiles%\Git\cmd`: Git for
  *   Windows, installed for the account or for the machine (`{userpf}` and
  *   `{commonpf}` in its installer), whose `cmd` folder is what it puts on PATH.
@@ -87,7 +86,7 @@ export function wellKnownDirs(at: Locations): Folders {
   };
   const dirs = [
     path.join(at.home, ".local", "bin"),
-    ...under("LOCALAPPDATA", at.localAppData, ["Programs", "OpenAI", "Codex", "bin"], ["Programs", "Herdr", "bin"], ["Programs", "Git", "cmd"]),
+    ...under("LOCALAPPDATA", at.localAppData, ["Programs", "OpenAI", "Codex", "bin"], ["Programs", "Git", "cmd"]),
     ...under("APPDATA", at.appData, ["npm"]),
     ...under("ProgramFiles", at.programFiles, ["Git", "cmd"], ["GitHub CLI"], ["nodejs"]),
   ];
@@ -267,8 +266,7 @@ function unreadable(result: ChildResult): string {
 /**
  * The records a `hide` verb wrote on standard error, one JSON object with a
  * `kind` per line, for the host log: what `hide connect` did on its way (a
- * daemon of another build replaced, a Herdr server handed to this app's
- * Herdr) is lost with the child otherwise. Only flat values are kept.
+ * daemon of another build replaced) is lost with the child otherwise. Only flat values are kept.
  */
 export function cliRecords(stderr: string): { event: string; fields: Record<string, string | number | boolean | null> }[] {
   const records: { event: string; fields: Record<string, string | number | boolean | null> }[] = [];

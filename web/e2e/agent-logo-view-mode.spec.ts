@@ -30,13 +30,13 @@ async function choose(page: Page, mode: "shown" | "hidden") {
 }
 
 test("hidden by default, a menu that checks the core's value, and logos that return in the sidebar, the tab and the 태스크 list", async ({ page }) => {
-  const herdr = await startFixture();
-  const daemon = await startHided(herdr, "agent-logo-menu");
+  const engine = await startFixture();
+  const daemon = await startHided(engine, "agent-logo-menu");
   const sent = countSent(page);
-  const row = page.locator(`[data-sidebar] li[data-pane="${herdr.panes[0]}"]`);
+  const row = page.locator(`[data-sidebar] li[data-pane="${engine.panes[0]}"]`);
   try {
     // B17 compares logo modes on the same resting agent, not Starting vs Quiet.
-    for (const pane of herdr.panes) await setAgentState(daemon, pane, "idle");
+    for (const pane of engine.panes) await setAgentState(daemon, pane, "idle");
     await open(page, daemon);
     await expect(row).toBeVisible();
     // B4: nothing draws a logo until it is chosen.
@@ -86,12 +86,12 @@ test("hidden by default, a menu that checks the core's value, and logos that ret
     await expect(marks(page)).toHaveCount(0);
     await page.locator('[data-sidebar-lens-option="projects"]').click();
     expect((await box(row)).height).toBe(hiddenRow.height);
-  } finally { daemon.stop(); herdr.stop(); }
+  } finally { daemon.stop(); engine.stop(); }
 });
 
 test("the choice follows a second window at once and survives a daemon restart", async ({ page, browser }) => {
-  const herdr = await startFixture();
-  let daemon = await startHided(herdr, "agent-logo-persist");
+  const engine = await startFixture();
+  let daemon = await startHided(engine, "agent-logo-persist");
   const other = await (await browser.newContext()).newPage();
   try {
     await open(page, daemon);
@@ -104,5 +104,5 @@ test("the choice follows a second window at once and survives a daemon restart",
     await expect(sidebarRow(page).locator("[data-agent-mark]")).toHaveCount(1);
     await trigger(page).click();
     await expect(item(page, "shown")).toHaveAttribute("aria-checked", "true");
-  } finally { daemon.stop(); herdr.stop(); }
+  } finally { daemon.stop(); engine.stop(); }
 });

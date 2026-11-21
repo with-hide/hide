@@ -14,12 +14,12 @@
 use std::ffi::OsString;
 use std::path::{Path, PathBuf};
 
-use herdr_core::node_migration::copy;
+use hide_core::node_migration::copy;
 use serde_json::json;
 
 use super::answer::{Inspection, StepAnswer, StepLine};
 use super::handover::{self, Handover, HandoverState};
-use super::starter::CoreStarter;
+use crate::core_install::starter::CoreStarter;
 
 struct Args {
     step: String,
@@ -42,7 +42,7 @@ const RELEASED_WITHIN: std::time::Duration = std::time::Duration::from_secs(30);
 fn parse(args: &[OsString]) -> Result<Args, String> {
     let (step, rest) = args.split_first().ok_or(USAGE)?;
     let step = step.to_str().ok_or(USAGE)?.to_owned();
-    let flags = super::flags::parse(
+    let flags = crate::core_install::flags::parse(
         rest,
         &[
             "--state-dir",
@@ -106,7 +106,7 @@ pub fn run(args: &[OsString]) -> Result<(), String> {
         build: crate::build_id::of_current_exe()?,
         answer: answered.unwrap_or_else(|refused| refused),
     };
-    herdr_core::diagnostic!(json!({
+    hide_core::diagnostic!(json!({
         "component": "core_move",
         "kind": "target.step",
         "step": args.step,
@@ -134,11 +134,11 @@ pub(super) fn manifest_path(state_dir: &Path, intent: &str) -> PathBuf {
 /// Where this account keeps Hide AI's settings, which move with the core.
 fn ai_settings() -> Result<PathBuf, StepAnswer> {
     hide_platform::host::home_dir()
-        .map(|home| herdr_core::hide_ai_settings_path(&home))
+        .map(|home| hide_core::hide_ai_settings_path(&home))
         .map_err(|error| plain(error.to_string()))
 }
 
-fn refusal(error: herdr_core::node_migration::Refusal) -> StepAnswer {
+fn refusal(error: hide_core::node_migration::Refusal) -> StepAnswer {
     StepAnswer::Refused {
         file: Some(error.file.display().to_string()),
         reason: error.reason,
@@ -168,23 +168,17 @@ fn hold(state_dir: &Path) -> Result<handover::Held, StepAnswer> {
 /// checks that fails here (`preflight`), Hide AI's agents in `ai` among
 /// them.
 fn inspect(state_dir: &Path, ai: Option<&str>) -> Answered {
-    let node = herdr_core::node::NodeId::of_this_machine().map_err(plain)?;
+    let node = hide_core::node::NodeId::of_this_machine().map_err(plain)?;
     let Folder {
         reachable,
         refused,
         handover,
     } = Folder::look_at(state_dir).map_err(plain)?;
-    // The Herdr this machine's core would own, as its daemon resolves it.
     let env = crate::env::load()
         .map_err(|errors| plain(format!("{} environment errors", errors.len())))?;
-    let herdr_bin = env.herdr_program();
     let failed = super::preflight::failing(
         &env.home,
         state_dir,
-        &super::preflight::Herdr {
-            bin: herdr_bin.as_deref(),
-            socket: env.herdr_socket_path.as_deref(),
-        },
         ai,
         &super::preflight::Programs::for_this_machine().map_err(plain)?,
     );
@@ -194,8 +188,8 @@ fn inspect(state_dir: &Path, ai: Option<&str>) -> Answered {
             .map_err(|error| plain(error.to_string()))?,
         brain: copy::brain_present(state_dir),
         handover,
-        herdr_socket: env.herdr_socket_path,
-        ai: herdr_core::stored_hide_ai_settings(&env.home),
+        engine_scope: super::preflight::movable_scope(),
+        ai: hide_core::stored_hide_ai_settings(&env.home),
         failed,
         path_refused: refused,
     })))
@@ -329,7 +323,7 @@ fn check(ai: Option<&str>, answer: &Path) -> Answered {
 /// Refuses unless this machine is `target`, the node the move's copy was
 /// made for.
 fn this_node_is(target: &str) -> Result<(), StepAnswer> {
-    let node = herdr_core::node::NodeId::of_this_machine().map_err(plain)?;
+    let node = hide_core::node::NodeId::of_this_machine().map_err(plain)?;
     if node.as_str() != target {
         return Err(plain(format!(
             "the move is for node {target}, and this machine is node {node}"
@@ -429,7 +423,7 @@ fn start(state_dir: &Path, intent: &str) -> Answered {
     };
     let home = hide_platform::host::home_dir().map_err(|error| plain(error.to_string()))?;
     let starter = CoreStarter::for_account(&home).map_err(plain)?;
-    let program = super::starter::this_program().map_err(plain)?;
+    let program = crate::core_install::starter::this_program().map_err(plain)?;
     let pid = starter
         .start_within(state_dir, &program, within)
         .map_err(plain)?;
@@ -658,7 +652,7 @@ fn release(state_dir: &Path, intent: &str, target: &str) -> Answered {
     };
     let _instance = acquire_instance(state_dir)?;
     let export = super::back::read_export(state_dir, intent).map_err(plain)?;
-    let staging = herdr_core::node_migration::staging_dir(state_dir, intent);
+    let staging = hide_core::node_migration::staging_dir(state_dir, intent);
     copy::stage(state_dir, &staging, &ai_settings()?).map_err(refusal)?;
     super::driver::carry_labels(&staging, target, &export.labels).map_err(plain)?;
     let manifest = copy::digest(&staging).map_err(refusal)?;
@@ -718,7 +712,9 @@ fn resume(state_dir: &Path, intent: &str) -> Answered {
     }
     let home = hide_platform::host::home_dir().map_err(|error| plain(error.to_string()))?;
     let pid = CoreStarter::for_account(&home)
-        .and_then(|starter| starter.start(state_dir, &super::starter::this_program()?))
+        .and_then(|starter| {
+            starter.start(state_dir, &crate::core_install::starter::this_program()?)
+        })
         .map_err(plain)?;
     Ok(StepAnswer::Running { pid, leftover })
 }
@@ -910,6 +906,7 @@ mod tests {
                     environment: &[],
                     log: &home.path().join("core.log"),
                 },
+                &hide_kit::layout::keep_alive(&state),
                 home.path(),
                 &std::sync::atomic::AtomicBool::new(false),
             )
@@ -936,7 +933,7 @@ mod tests {
     /// sets aside what is left without stopping anything again.
     #[test]
     fn a_retirement_that_cannot_set_the_folder_aside_still_answers_retired() {
-        use herdr_core::node_migration::MARKER_FILE;
+        use hide_core::node_migration::MARKER_FILE;
         let home = tempfile::tempdir().unwrap();
         let state = home.path().join("state");
         std::fs::create_dir_all(&state).unwrap();

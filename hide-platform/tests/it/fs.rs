@@ -15,6 +15,8 @@ use std::thread;
 use std::time::{Duration, Instant};
 
 use hide_platform::fs::Access;
+
+use crate::widen::widen;
 use hide_platform::fs::atomic::{self, DurableAccess, EXCHANGE_IS_ATOMIC};
 use hide_platform::fs::identity::{self, FileId};
 use hide_platform::fs::link;
@@ -505,38 +507,6 @@ fn names(folder: &Path) -> Vec<String> {
     names
 }
 
-/// Gives everyone read access (`write` false) or write access to `path`,
-/// the way an operator or another program might.
-fn widen(path: &Path, write: bool) {
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::PermissionsExt;
-        let directory = fs::metadata(path).unwrap().is_dir();
-        let mode = match (write, directory) {
-            (true, true) => 0o777,
-            (true, false) => 0o666,
-            (false, true) => 0o755,
-            (false, false) => 0o644,
-        };
-        fs::set_permissions(path, fs::Permissions::from_mode(mode)).unwrap();
-    }
-    #[cfg(windows)]
-    {
-        let grant = if write {
-            "Everyone:(M)"
-        } else {
-            "Everyone:(R)"
-        };
-        let status = Command::new("icacls")
-            .arg(path)
-            .args(["/grant", grant])
-            .stdout(Stdio::null())
-            .status()
-            .unwrap();
-        assert!(status.success());
-    }
-}
-
 // ---- private ------------------------------------------------------------
 
 #[test]
@@ -680,6 +650,29 @@ fn inspection_lets_others_add_to_a_system_folder_but_not_delete_from_it() {
             access_list(&own)
         );
     }
+}
+
+/// Python's private folder on Windows (`tempfile.mkdtemp`, CPython 3.12.4
+/// and later) grants the system, the administrators and OWNER RIGHTS, which
+/// is whoever owns the folder: the current account's own folder, safe to
+/// inspect, while the same grant on a folder another account owns is not.
+#[cfg(windows)]
+#[test]
+fn an_owner_rights_grant_on_an_owned_folder_is_the_owners_own() {
+    let outer = folder();
+    let python = outer.path().join("python");
+    fs::create_dir(&python).unwrap();
+    set_access(
+        &python,
+        "D:P(A;OICI;FA;;;SY)(A;OICI;FA;;;BA)(A;OICI;FA;;;OW)",
+    );
+    assert_eq!(
+        private::inspect_directory_entry(&python).unwrap(),
+        private::InspectionDirectory::Real,
+        "{}",
+        access_list(&python)
+    );
+    assert!(!private::others_can_modify(&python).unwrap());
 }
 
 #[test]
@@ -994,6 +987,23 @@ fn a_file_made_private_is_readable_by_its_owner_and_runs_when_asked_to() {
     assert!(!permissions::is_executable(&notes).unwrap());
     assert!(private::is_private(&notes).unwrap());
     assert_eq!(read(&script), "echo");
+}
+
+#[test]
+fn a_file_marked_executable_runs_where_the_system_reads_a_bit_and_keeps_its_bytes() {
+    let outer = folder();
+    let script = outer.path().join("run.cmd");
+    std::fs::write(&script, b"echo").unwrap();
+    permissions::mark_executable(&script).unwrap();
+    // A `.cmd` runs on Windows by its extension and now on Unix by its bit.
+    assert!(permissions::is_executable(&script).unwrap());
+    assert_eq!(read(&script), "echo");
+    assert_eq!(
+        permissions::mark_executable(&outer.path().join("missing"))
+            .unwrap_err()
+            .kind(),
+        ErrorKind::NotFound
+    );
 }
 
 #[test]
@@ -1425,6 +1435,55 @@ fn a_durable_program_replaces_a_shared_file_with_a_private_one() {
     )
     .unwrap();
 
+    assert_eq!(read(&program), "private program");
+    assert_eq!(identity::file_id(&program).unwrap(), installed);
+    assert!(private::is_private(&program).unwrap());
+    #[cfg(unix)]
+    assert_eq!(
+        Permissions::of(&File::open(&program).unwrap())
+            .unwrap()
+            .unix_mode(),
+        Some(0o700)
+    );
+    assert_eq!(names(outer.path()), ["program"]);
+}
+
+/// A file whose bytes arrive in pieces takes its name only once its writer
+/// said they are all there: a refusal leaves the old file and nothing beside
+/// it, and what a writer that was killed left under the part's one name is
+/// replaced by the next.
+#[test]
+fn a_durable_write_from_pieces_installs_only_what_its_writer_accepted() {
+    use std::io::Write;
+    let outer = folder();
+    let program = outer.path().join("program");
+    fs::write(&program, b"old").unwrap();
+    // A writer that was killed part way.
+    fs::write(outer.path().join("program.part"), b"half of an earlier one").unwrap();
+
+    let refused =
+        atomic::write_file_durable_from(&program, DurableAccess::PrivateExecutable, |file| {
+            file.write_all(b"not the bytes")?;
+            Err(ErrorKind::InvalidData.into())
+        })
+        .unwrap_err();
+    assert!(
+        matches!(
+            &refused,
+            atomic::DurableWriteError::BeforeReplace { source, cleanup }
+                if source.kind() == ErrorKind::InvalidData && cleanup.is_none()
+        ),
+        "{refused:?}"
+    );
+    assert_eq!(read(&program), "old");
+    assert_eq!(names(outer.path()), ["program"]);
+
+    let installed =
+        atomic::write_file_durable_from(&program, DurableAccess::PrivateExecutable, |file| {
+            file.write_all(b"private ")?;
+            file.write_all(b"program")
+        })
+        .unwrap();
     assert_eq!(read(&program), "private program");
     assert_eq!(identity::file_id(&program).unwrap(), installed);
     assert!(private::is_private(&program).unwrap());
@@ -2237,6 +2296,73 @@ fn until_free(folder: &Path) {
     }
 }
 
+/// A running program is replaced by name on every system, and it runs on
+/// from the file it started from: Windows refuses to replace its image, so
+/// the program is set aside under another name, which goes once the
+/// program has ended. macOS and Linux set nothing aside.
+#[test]
+fn a_running_program_is_replaced_and_its_set_aside_copy_goes_once_it_ends() {
+    let sandbox = folder();
+    let program = sandbox
+        .path()
+        .join(format!("program{}", std::env::consts::EXE_SUFFIX));
+    fs::copy(std::env::current_exe().unwrap(), &program).unwrap();
+    #[cfg(windows)]
+    until_free(sandbox.path());
+    let mut running = Killed(
+        Command::new(&program)
+            .args([
+                "--exact",
+                "fs::idle_role",
+                "--nocapture",
+                "--test-threads=1",
+            ])
+            .env(ROLE, "idle")
+            .stdout(Stdio::piped())
+            .spawn()
+            .unwrap(),
+    );
+    let stdout = running.0.stdout.take().unwrap();
+    let ready = BufReader::new(stdout)
+        .lines()
+        .map_while(Result::ok)
+        .any(|line| line.contains("READY"));
+    assert!(ready, "the program never started");
+
+    let new = sandbox.path().join("new");
+    fs::write(&new, "the next build").unwrap();
+    atomic::replace_program(&new, &program).unwrap();
+    assert_eq!(read(&program), "the next build");
+    assert!(!new.exists());
+    assert_eq!(
+        running.0.try_wait().unwrap(),
+        None,
+        "the old program runs on"
+    );
+    let set_aside = names(sandbox.path()).len() - 1;
+    assert_eq!(
+        set_aside,
+        usize::from(cfg!(windows)),
+        "{:?}",
+        names(sandbox.path())
+    );
+    assert_eq!(atomic::remove_set_aside(&program).unwrap(), set_aside);
+
+    drop(running);
+    #[cfg(windows)]
+    until_free(sandbox.path());
+    assert_eq!(atomic::remove_set_aside(&program).unwrap(), 0);
+    assert_eq!(
+        names(sandbox.path()),
+        vec![program.file_name().unwrap().to_string_lossy().into_owned()]
+    );
+    // Nothing runs it now, so the next replacement takes the name in one step.
+    fs::write(&new, "a third build").unwrap();
+    atomic::replace_program(&new, &program).unwrap();
+    assert_eq!(read(&program), "a third build");
+    assert_eq!(names(sandbox.path()).len(), 1);
+}
+
 /// A folder whose files nothing holds is free to remove, on every system.
 #[test]
 fn a_folder_nothing_holds_is_not_in_use() {
@@ -2415,4 +2541,97 @@ fn a_network_share_is_not_a_local_volume() {
             "{path}"
         );
     }
+}
+
+/// A dotted name is hidden everywhere, an ordinary one nowhere, and the
+/// system's own mark (macOS's hidden flag, Windows' hidden attribute) hides
+/// a folder whatever its name.
+#[test]
+fn a_dotted_name_and_the_systems_hidden_mark_hide_an_entry() {
+    let dir = folder();
+    let plain = dir.path().join("work");
+    let dotted = dir.path().join(".ssh");
+    let marked = dir.path().join("Library");
+    for path in [&plain, &dotted, &marked] {
+        fs::create_dir(path).unwrap();
+    }
+    assert!(!hide_platform::fs::hidden(&plain));
+    assert!(hide_platform::fs::hidden(&dotted));
+    assert!(hide_platform::fs::hidden(&dir.path().join(".missing")));
+    assert!(!hide_platform::fs::hidden(&dir.path().join("missing")));
+    #[cfg(target_os = "macos")]
+    {
+        let status = Command::new("/usr/bin/chflags")
+            .arg("hidden")
+            .arg(&marked)
+            .status()
+            .unwrap();
+        assert!(status.success());
+        assert!(hide_platform::fs::hidden(&marked));
+    }
+    #[cfg(windows)]
+    {
+        let status = Command::new("attrib")
+            .arg("+h")
+            .arg(&marked)
+            .status()
+            .unwrap();
+        assert!(status.success());
+        assert!(hide_platform::fs::hidden(&marked));
+    }
+    #[cfg(not(any(target_os = "macos", windows)))]
+    assert!(!hide_platform::fs::hidden(&marked));
+}
+
+/// A program started in a held folder runs in the folder that was held: on
+/// Unix even after its path was moved away and another folder took the name,
+/// and on Windows the path cannot be moved while the folder is held. This is
+/// what keeps a `git init` or a clone in the folder a node checked under
+/// home when the path is swapped between the check and the start.
+#[test]
+fn a_program_started_in_a_held_folder_runs_in_the_folder_that_was_held() {
+    let dir = folder();
+    let base = identity::canonical(dir.path()).unwrap();
+    let path = base.join("held");
+    fs::create_dir(&path).unwrap();
+    fs::write(path.join("marker"), "held").unwrap();
+    let handle = open_folder(&path);
+    let held = hide_platform::fs::held::HeldFolder::new(&handle, path.clone(), &base).unwrap();
+    let moved = fs::rename(&path, base.join("moved"));
+    if cfg!(windows) {
+        assert!(moved.is_err(), "a held folder cannot be renamed on Windows");
+    } else {
+        moved.unwrap();
+        fs::create_dir(&path).unwrap();
+        fs::write(path.join("marker"), "swapped").unwrap();
+    }
+    let mut command = if cfg!(windows) {
+        let mut command = Command::new("cmd");
+        command.args(["/C", "type", "marker"]);
+        command
+    } else {
+        let mut command = Command::new("cat");
+        command.arg("marker");
+        command
+    };
+    held.start_in(&mut command);
+    let output = command.output().unwrap();
+    assert!(output.status.success(), "{output:?}");
+    assert_eq!(String::from_utf8_lossy(&output.stdout).trim(), "held");
+}
+
+/// A folder opened as a handle, as `cap-std` and the node hold one.
+fn open_folder(path: &Path) -> File {
+    #[cfg(windows)]
+    {
+        use std::os::windows::fs::OpenOptionsExt;
+        // FILE_FLAG_BACKUP_SEMANTICS opens a folder.
+        fs::OpenOptions::new()
+            .read(true)
+            .custom_flags(0x0200_0000)
+            .open(path)
+            .unwrap()
+    }
+    #[cfg(not(windows))]
+    File::open(path).unwrap()
 }

@@ -18,12 +18,12 @@ export const STRAYS_SHOWN = 5;
 /** The tasks the panel lists as the costliest (B25). */
 export const COSTLY_SHOWN = 3;
 
-/** The Project of the checkout in front, or null at Home or in a device's Home folder. */
+/** The Project of the checkout in front, or null when none is. */
 export function frontProject(rest: SnapshotRest | null): Workspace | null {
   const front = frontCheckout(rest);
   if (!front) return null;
   const project = catalogWorkspaces(rest).find((row) => row.id === front.workspace_id && row.checkouts.some((checkout) => checkout.id === front.id));
-  return project && !project.is_home ? project : null;
+  return project ?? null;
 }
 
 /** The 흘린 것 rows drawn (B8): five until `open`, and how many the core sent past them or left past its cap. */
@@ -70,6 +70,16 @@ export function projectCost(node: Pick<NodeUsage, "projects" | "projects_failed"
 /** Millionths of a dollar as money, to the cent. */
 export function usd(micro: number, language: InterfaceLanguage): string {
   return new Intl.NumberFormat(language, { style: "currency", currency: "USD", currencyDisplay: "narrowSymbol", maximumFractionDigits: 2 }).format(micro / 1_000_000);
+}
+
+/**
+ * What some calls cost when others had no price: `≥ $0.42`, a lower bound, or
+ * `$0.42` when every call had one; null when none had, so a screen says that
+ * its own way (`가격 없음`, or the tokens alone) rather than `≥ $0.00`.
+ */
+export function pricedUsd(cost: { micro_usd: number; unpriced: boolean }, language: InterfaceLanguage): string | null {
+  if (cost.unpriced && cost.micro_usd === 0) return null;
+  return `${cost.unpriced ? "≥ " : ""}${usd(cost.micro_usd, language)}`;
 }
 
 /** An amount the core said is a lower bound reads `≥`; an exact conversion reads `≈` (`UsageCost`). */

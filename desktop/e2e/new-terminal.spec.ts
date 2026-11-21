@@ -1,17 +1,16 @@
 import { expect, type ElectronApplication } from "@playwright/test";
-import { startHerdr } from "../../web/e2e/herdr-fixture";
-import { enterWorkspace } from "../../web/e2e/wire";
 import { executeTerminalCheck } from "../../web/e2e/group-start-helper";
+import { enterWorkspace } from "../../web/e2e/wire";
 import { captureElectronWindow } from "./electron-window";
-import { fitWindow, isolate, launch, test } from "./fixture";
+import { fitWindow, launchShell, startStack, test } from "./fixture";
 
 // Operator request: New tab immediately opens a usable terminal, without a task form.
 test("New tab button and native menu open terminals directly in the selected group", { tag: "@platform" }, async () => {
-  const herdr = await startHerdr({ agents: false });
-  const run = isolate(herdr, "new-terminal");
+  const stack = await startStack("new-terminal", { agents: false });
+  const { fixture } = stack;
   let app: ElectronApplication | null = null;
   try {
-    const launched = await launch(run.env);
+    const launched = await launchShell(stack.run.env);
     app = launched.app;
     const page = launched.page;
     await fitWindow(app, { width: 1440, height: 900 });
@@ -32,19 +31,18 @@ test("New tab button and native menu open terminals directly in the selected gro
     await expect(tabs).toHaveCount(1);
     await expect(page.locator("[data-agent-tab-start]")).toHaveCount(0);
     const first = (await page.locator("[data-pane-view]").getAttribute("data-pane-view"))!;
-    expect(herdr.panes).not.toContain(first);
-    await executeTerminalCheck(page, herdr, first, 15_000);
+    expect(fixture.panes).not.toContain(first);
+    await executeTerminalCheck(page, fixture, first, 15_000);
     await app.evaluate(({ Menu }) => Menu.getApplicationMenu()!.getMenuItemById("new_tab")!.click());
     await expect(tabs).toHaveCount(2);
     await expect(page.locator("[data-agent-tab-start]")).toHaveCount(0);
     const second = (await page.locator("[data-pane-view]").getAttribute("data-pane-view"))!;
     expect(second).not.toBe(first);
-    await executeTerminalCheck(page, herdr, second, 15_000);
+    await executeTerminalCheck(page, fixture, second, 15_000);
     await expect(page.locator("[data-agent-group-selector]")).toContainText("터미널 작업");
     await captureElectronWindow(app, "new-tab-terminal", { first, second, group: "터미널 작업" });
   } finally {
     await app?.close().catch(() => undefined);
-    run.cleanup();
-    herdr.stop();
+    stack.stop();
   }
 });

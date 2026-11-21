@@ -1,9 +1,8 @@
 // Settings' list and its General, GitHub and About pages on an isolated
-// pinned Herdr and hided (PRD settings-cleanup B1-B6, B23, B24;
+// engine and hided (PRD settings-cleanup B1-B6, B23, B24;
 // settings-left-nav B2-B5, B8, B9, B12, B13): the list in its groups, General's
-// Appearance, separate Privacy, the GitHub row, About with its closed Details, the real
-// Herdr version and protocol of a healthy connection, and the settings that
-// moved into Agents and Hide AI.
+// Appearance, separate Privacy, the GitHub row, About with its closed Details, and the
+// settings that moved into Agents and Hide AI.
 
 import { expect, test } from "@playwright/test";
 import { startFixture } from "./engine-fixture";
@@ -14,10 +13,10 @@ test.describe.configure({ timeout: 120_000 });
 
 test("Settings lists its pages in two groups with About apart", async ({ page }) => {
   await page.setViewportSize({ width: 1200, height: 900 });
-  const herdr = await startFixture();
+  const engine = await startFixture();
   let daemon: Daemon | null = null;
   try {
-    daemon = await startHided(herdr, "settings-general");
+    daemon = await startHided(engine, "settings-general");
     await page.goto(`${daemon.origin}/#token=${daemon.token}`);
     await enterWorkspace(page, "fixture");
     await page.locator("[data-open-settings]").click();
@@ -28,8 +27,8 @@ test("Settings lists its pages in two groups with About apart", async ({ page })
     await expect(sheet.locator('[data-settings-nav-group="app"]')).toHaveText(/^App/);
     await expect(sheet.locator('[data-settings-nav-group="app"] [data-settings-tab]')).toHaveText(["General", "Notifications", "Usage", "Devices", "Shortcuts"]);
     await expect(sheet.locator('[data-settings-nav-group="machine"]')).toHaveText(/^This (Mac|PC|computer)/);
-    await expect(sheet.locator('[data-settings-nav-group="machine"] [data-settings-tab]')).toHaveText(["Agents", "Hide AI", "Desk", "Mission", "Mobile", "GitHub"]);
-    await expect(sheet.locator("[data-settings-tab]")).toHaveText(["General", "Notifications", "Usage", "Devices", "Shortcuts", "Agents", "Hide AI", "Desk", "Mission", "Mobile", "GitHub", "About", "Privacy"]);
+    await expect(sheet.locator('[data-settings-nav-group="machine"] [data-settings-tab]')).toHaveText(["Agents", "Skills & MCP", "Hide AI", "Mission", "Mobile", "External tools", "GitHub", "Labs"]);
+    await expect(sheet.locator("[data-settings-tab]")).toHaveText(["General", "Notifications", "Usage", "Devices", "Shortcuts", "Agents", "Skills & MCP", "Hide AI", "Mission", "Mobile", "External tools", "GitHub", "Labs", "About", "Privacy"]);
     const tabs = sheet.locator("[data-settings-tab]");
     const githubBox = (await sheet.locator('[data-settings-tab="github"]').boundingBox())!;
     const aboutBox = (await sheet.locator('[data-settings-tab="about"]').boundingBox())!;
@@ -52,6 +51,11 @@ test("Settings lists its pages in two groups with About apart", async ({ page })
     await page.keyboard.press("ArrowUp");
     await expect(sheet.locator('[data-settings-tab="shortcuts"]')).toBeFocused();
     await expect(sheet.locator("[data-settings-page-title]")).toHaveText("Shortcuts");
+
+    // hide-task is folded into hide-mission, so the Mission page's title stands alone: no `?` teaches mission against task.
+    await sheet.locator('[data-settings-tab="conductor"]').click();
+    await expect(sheet.locator("[data-settings-page-title]")).toHaveText("Mission");
+    await expect(sheet.locator("[data-kind-help]")).toHaveCount(0);
     await sheet.locator('[data-settings-tab="general"]').click();
 
     // General keeps Appearance; the usage switch has its own Privacy page.
@@ -90,51 +94,16 @@ test("Settings lists its pages in two groups with About apart", async ({ page })
     await expect(github).not.toContainText("Always available");
   } finally {
     daemon?.stop();
-    herdr.stop();
-  }
-});
-
-// Herdr only: About's Details are the facts of the Herdr server Hide is connected to, which the core's own engine has none of.
-test("About shows the real Herdr values behind a closed Details @herdr", async ({ page }) => {
-  await page.setViewportSize({ width: 1200, height: 900 });
-  const herdr = await startFixture();
-  let daemon: Daemon | null = null;
-  try {
-    daemon = await startHided(herdr, "settings-about");
-    await page.goto(`${daemon.origin}/#token=${daemon.token}`);
-    await enterWorkspace(page, "fixture");
-    await page.locator("[data-open-settings]").click();
-    const sheet = page.locator('[data-settings="true"]');
-    await expect(sheet).toBeVisible();
-
-    // B9: About's Details is closed until opened, and then holds the runtime facts.
-    await sheet.locator('[data-settings-tab="about"]').click();
-    await expect(sheet.locator("[data-settings-page-title]")).toHaveText("About");
-    const details = sheet.locator("[data-settings-details]");
-    await expect(details).not.toHaveAttribute("open", "");
-    await expect(details.getByText("Protocol")).toBeHidden();
-    await details.locator("summary").click();
-    await expect(details).toHaveAttribute("open", "");
-    for (const label of ["Process", "State file", "Socket", "Binary", "Recent"]) await expect(details.getByText(label, { exact: true })).toBeVisible();
-
-    // A healthy Herdr shows its real version and protocol, never "unavailable".
-    await expect(details.locator("[data-herdr-version]")).toHaveText(/^\d+\.\d+\.\d+/);
-    await expect(details.locator("[data-herdr-protocol]")).toHaveAttribute("data-herdr-protocol", "matches");
-    await expect(details.locator("[data-herdr-protocol]")).toHaveText(/^\d+$/);
-    await expect(sheet.locator('[data-settings-group="about"] [data-herdr-state="connected"]')).toContainText(/Connected · \d+\.\d+\.\d+/);
-    await screenshot(page, "settings-about-dark");
-  } finally {
-    daemon?.stop();
-    herdr.stop();
+    engine.stop();
   }
 });
 
 test("Sleep after, the issue link and the worktree names live in Agents and Hide AI with their stored values", async ({ page }) => {
   await page.setViewportSize({ width: 1200, height: 900 });
-  const herdr = await startFixture();
+  const engine = await startFixture();
   let daemon: Daemon | null = null;
   try {
-    daemon = await startHided(herdr, "settings-moved");
+    daemon = await startHided(engine, "settings-moved");
     await page.goto(`${daemon.origin}/#token=${daemon.token}`);
     await enterWorkspace(page, "fixture");
     await page.locator("[data-open-settings]").click();
@@ -142,11 +111,12 @@ test("Sleep after, the issue link and the worktree names live in Agents and Hide
     // B23: the idle choice and its sentence, the same value the Performance tab held.
     await page.locator('[data-settings-tab="agents"]').click();
     const idle = page.locator('[data-settings-group="idle-agents"]');
-    await expect(idle.locator("[data-agent-sleep-after]")).toHaveAttribute("data-agent-sleep-after", "never");
-    await expect(idle).toContainText("0 sleeping now. Working, unread and on-screen agents never sleep.");
-    await idle.locator("[data-agent-sleep-after]").click();
-    await page.locator('[data-agent-sleep-option="12"]').click();
+    // A Mac that never chose sleeps idle agents after 12 hours.
     await expect(idle.locator("[data-agent-sleep-after]")).toHaveAttribute("data-agent-sleep-after", "12");
+    await expect(idle).toContainText("0 sleeping now. A child agent sleeps as soon as it reports to its parent. Working and on-screen agents never sleep, and unread ones wait until you read them.");
+    await idle.locator("[data-agent-sleep-after]").click();
+    await page.locator('[data-agent-sleep-option="4"]').click();
+    await expect(idle.locator("[data-agent-sleep-after]")).toHaveAttribute("data-agent-sleep-after", "4");
 
     // B24: the pull request link switch, on by default as the Issues tab had it.
     const starting = page.locator('[data-settings-group="issue-start"]');
@@ -166,17 +136,17 @@ test("Sleep after, the issue link and the worktree names live in Agents and Hide
     await expect(features.locator("[data-ai-agent-summary]")).toBeVisible();
   } finally {
     daemon?.stop();
-    herdr.stop();
+    engine.stop();
   }
 });
 
 test("General and About read without sideways scrolling in Korean and English, light and dark, on the smallest window", async ({ page }) => {
   // B65, settings-left-nav B13: the sheet shrinks with its window to the smallest one, the list beside the page; every row has to wrap, not clip.
   await page.setViewportSize({ width: 720, height: 480 });
-  const herdr = await startFixture();
+  const engine = await startFixture();
   let daemon: Daemon | null = null;
   try {
-    daemon = await startHided(herdr, "settings-narrow");
+    daemon = await startHided(engine, "settings-narrow");
     await page.goto(`${daemon.origin}/#token=${daemon.token}`);
     await enterWorkspace(page, "fixture");
     await page.locator("[data-open-settings]").click();
@@ -258,7 +228,7 @@ test("General and About read without sideways scrolling in Korean and English, l
       const pages = sheet.locator("[data-settings-page-list]");
       expect(await pages.evaluate(node => node.scrollHeight - node.clientHeight)).toBeGreaterThan(0);
       await sheet.locator('[data-settings-tab="general"]').focus();
-      for (const name of ["general", "notifications", "usage", "devices", "shortcuts", "agents", "hideAi", "desk", "conductor", "mobile", "github", "about", "privacy"]) {
+      for (const name of ["general", "notifications", "usage", "devices", "shortcuts", "agents", "skills", "hideAi", "conductor", "mobile", "externalTools", "github", "labs", "about", "privacy"]) {
         const tab = sheet.locator(`[data-settings-tab="${name}"]`);
         await expect(tab).toBeFocused();
         await expect(tab).toBeInViewport({ ratio: 1 });
@@ -283,6 +253,6 @@ test("General and About read without sideways scrolling in Korean and English, l
     }
   } finally {
     daemon?.stop();
-    herdr.stop();
+    engine.stop();
   }
 });

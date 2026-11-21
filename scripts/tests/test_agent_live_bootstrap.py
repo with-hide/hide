@@ -72,35 +72,41 @@ sys.exit(answer["code"])
 ''')
         self.hide = self.fixture
 
-    def command(self, args, **kwargs):
-        if args[:2] == ["workspace", "create"]:
-            return 0, json.dumps({"result": {"workspace": {"workspace_id": "w1"},
-                                             "root_pane": {"pane_id": "w1:p1"}}}), ""
-        if args[:2] == ["pane", "read"]:
-            return 0, READY, ""
-        if args[:2] == ["pane", "run"]:
-            # Only the external CLI executable is substituted. Production
-            # quoting, redirection, status, parsing and retry all run intact.
-            import shlex
-            line = args[-1]
-            if WINDOWS:
-                line = line.replace('"' + str(self.fixture) + '"',
-                                    '"' + sys.executable + '" "' + str(self.fixture) + '"')
-                command = f'"{os.environ["ComSpec"]}" /d /s /c "{line}"'
-            else:
-                line = line.replace(shlex.quote(str(self.fixture)),
-                                    shlex.quote(sys.executable) + " " + shlex.quote(str(self.fixture)))
-                command = ["/bin/zsh", "-f", "-c", line]
-            ran = subprocess.run(command, capture_output=True, timeout=30)
-            self.clock.now += self.elapsed
-            return ran.returncode, ran.stdout.decode(), ran.stderr.decode()
-        raise AssertionError(args)
+    def open_workspace(self, cwd, environment):
+        return "w1", "w1:p1"
+
+    def wait_shell(self, pane):
+        pass
+
+    def pane_at_shell(self, pane, deadline):
+        return True
+
+    def close_workspace(self, workspace):
+        pass
+
+    def stop_panes(self):
+        pass
+
+    def send(self, pane, text, *, deadline=None):
+        # Only the external CLI executable is substituted. Production
+        # quoting, redirection, status, parsing and retry all run intact.
+        import shlex
+        if WINDOWS:
+            line = text.replace('"' + str(self.fixture) + '"',
+                                '"' + sys.executable + '" "' + str(self.fixture) + '"')
+            command = f'"{os.environ["ComSpec"]}" /d /s /c "{line}"'
+        else:
+            line = text.replace(shlex.quote(str(self.fixture)),
+                                shlex.quote(sys.executable) + " " + shlex.quote(str(self.fixture)))
+            command = ["/bin/zsh", "-f", "-c", line]
+        subprocess.run(command, capture_output=True, timeout=30)
+        self.clock.now += self.elapsed
 
 
 class Bootstrap(unittest.TestCase):
     def run_workspace(self, root, replies, **options):
         runtime = PaneTransport(root, replies, **options)
-        result = {"mode": "fixture", "herdr": {}, "table": {}, "systems": {}, "agents": [], "failures": []}
+        result = {"mode": "fixture", "holders": {}, "table": {}, "systems": {}, "agents": [], "failures": []}
         with patch("time.monotonic", lambda: runtime.clock.now):
             try:
                 runtime.new_workspace({"id": "controller"}, "journey", root, root / "wrapper", {"env": {}})

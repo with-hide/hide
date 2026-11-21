@@ -13,11 +13,13 @@
 pub mod ai;
 pub mod attachments;
 pub mod branch_merge;
+pub mod browse;
 pub mod bytes;
 pub mod catalog;
 pub mod cleanup;
 pub mod clone;
 pub mod copy;
+mod credentials;
 pub mod disk;
 pub mod disk_layers;
 pub mod document;
@@ -29,18 +31,23 @@ pub mod git;
 pub mod git_command;
 pub mod git_run;
 pub mod git_watch;
+pub mod herdr_save;
 pub mod home;
+pub mod importable;
 pub mod index;
 pub mod kit;
 pub mod label_lock;
 pub mod link_bridge;
 pub mod list;
+mod login;
+pub mod memory;
 pub mod mutate;
 pub mod opencode_fork;
 pub mod pane_holders;
 pub mod pane_peer;
 pub mod panes;
 pub mod ports;
+pub mod profiles;
 pub mod project;
 pub mod register;
 pub mod reporting;
@@ -51,6 +58,10 @@ pub mod sessions;
 pub mod shell_integration;
 pub mod usage;
 pub mod worktrees;
+// Opening a folder to everyone in a test, on every system.
+#[cfg(test)]
+#[path = "../../hide-platform/tests/it/widen.rs"]
+mod widen;
 
 pub use hide_node_link::{ErrorCode, HostError, HostResult};
 pub use hide_node_link::{error, protocol};

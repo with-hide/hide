@@ -27,6 +27,9 @@ const EVENT_LIMIT: usize = 200;
 const SQL_STEPS: usize = 1_000_000;
 const ANCESTOR_LIMIT: usize = 64;
 
+/// Why a store is refused for a folder it names that cannot be confirmed.
+pub(crate) const CWD_UNCONFIRMED: &str = "cursor_cwd_unconfirmed";
+
 fn invalid(reason: &'static str) -> SessionError {
     SessionError::Checkpoint(reason.to_owned())
 }
@@ -91,12 +94,12 @@ pub(crate) fn directory(cwd: &Path) -> Result<String> {
         .to_str()
         .filter(|value| !value.chars().any(char::is_control))
         .filter(|_| cwd.is_absolute())
-        .ok_or_else(|| invalid("cursor_cwd_unconfirmed"))?;
+        .ok_or_else(|| invalid(CWD_UNCONFIRMED))?;
     Ok(format!("{:x}", md5::compute(spelling.as_bytes())))
 }
 
 pub(crate) fn checked_path(home: &Path, path: &Path) -> Result<PathBuf> {
-    let checked = crate::native_file::checked_path_under(home, SESSIONS, path)
+    let checked = crate::native_file::checked_path_under(home, Path::new(SESSIONS), path)
         .map_err(|_| invalid("cursor_path_unconfirmed"))?;
     let root = hide_platform::fs::identity::canonical(&home.join(SESSIONS))
         .map_err(|_| invalid("cursor_path_unconfirmed"))?;
@@ -183,7 +186,7 @@ fn marks(home: &Path, path: &Path) -> Result<Vec<Option<FileMark>>> {
     ] {
         match std::fs::symlink_metadata(&candidate) {
             Ok(_) => {
-                crate::native_file::checked_path_under(home, SESSIONS, &candidate)
+                crate::native_file::checked_path_under(home, Path::new(SESSIONS), &candidate)
                     .map_err(|_| invalid("cursor_source_linked"))?;
                 result.push(Some(mark(&candidate)?));
             }
@@ -371,12 +374,12 @@ impl Database {
             return Err(invalid("cursor_session_identity_mismatch"));
         }
         let actual = hide_platform::fs::identity::canonical(&sidecar.cwd)
-            .map_err(|_| invalid("cursor_cwd_unconfirmed"))?;
-        let cwd_identity = hide_platform::fs::identity::file_id(&actual)
-            .map_err(|_| invalid("cursor_cwd_unconfirmed"))?;
+            .map_err(|_| invalid(CWD_UNCONFIRMED))?;
+        let cwd_identity =
+            hide_platform::fs::identity::file_id(&actual).map_err(|_| invalid(CWD_UNCONFIRMED))?;
         if let Some((expected_id, expected_cwd)) = scope {
             let expected = hide_platform::fs::identity::canonical(Path::new(expected_cwd))
-                .map_err(|_| invalid("cursor_cwd_unconfirmed"))?;
+                .map_err(|_| invalid(CWD_UNCONFIRMED))?;
             if expected_id != id || actual != expected {
                 return Err(invalid("cursor_scope_mismatch"));
             }
@@ -1079,8 +1082,7 @@ pub(crate) fn confirm_route(home: &Path, path: &Path, id: &str, cwd: &Path) -> R
         home,
         &route,
         Some(id),
-        cwd.to_str()
-            .ok_or_else(|| invalid("cursor_cwd_unconfirmed"))?,
+        cwd.to_str().ok_or_else(|| invalid(CWD_UNCONFIRMED))?,
     )?;
     confirm_known_roots(home, id)?;
     Ok(())
@@ -1144,7 +1146,7 @@ fn root_contains(root: &Path, id: &str, budget: &mut crate::DiscoveryBudget) -> 
                  budget: &mut crate::DiscoveryBudget|
      -> Result<()> {
         budget.directory()?;
-        crate::native_file::checked_path_under(root, "", path)
+        crate::native_file::checked_path_under(root, Path::new(""), path)
             .map_err(|_| invalid("cursor_launch_root_unconfirmed"))?;
         let folder = hide_platform::fs::open_dir_nofollow(path)
             .map_err(|_| invalid("cursor_launch_root_unconfirmed"))?;

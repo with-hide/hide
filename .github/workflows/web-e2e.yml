@@ -1,28 +1,39 @@
 # The web end-to-end suite as one reusable lane, so the pull request's Linux
 # shards, its macOS and Windows `@platform` jobs and all three nightly OS lanes build, fetch and
 # run the suite the same way and differ only in what they are asked here: the
-# runner, which Herdr asset to run, how many shards deal the tests out, and
-# which tests (`grep`) to keep.
+# runner, how many shards deal the tests out, and which tests (`grep`) to keep.
 #
 # CI retries a failed test once (web/playwright.config.ts). A test that passes
 # the retry is flaky: the lane passes and `Report flaky and failed tests` files
 # it as an issue (scripts/ci-flaky-report.py); a test that fails twice fails
 # the lane, and the same step annotates it for the nightly report.
 #
-# Each spec starts its own Herdr, hided and Chromium, so one worker per runner
+# Each spec starts its own hided, pane holders and Chromium, so one worker per runner
 # keeps timing assertions honest; the shards are the parallelism. A shard runs
-# the tests `scripts/e2e-shard.py` deals it from the durations in
-# web/e2e/shard-durations.json, so the shards take about the same time.
+# the tests `scripts/e2e-shard.py` deals it from the durations in this system's
+# table (`table`), so the shards take about the same time. A system records its
+# own table because per-test costs differ by it (symlinks, process and terminal
+# tests), so the Linux lane reads `web/e2e/shard-durations.json` and the Windows
+# lane `web/e2e/shard-durations-windows.json`.
 #
 # With more than one shard the daemon and web shell each build once, in
 # parallel jobs, and every shard waits for both and downloads their output
 # to `target/debug` and `web/dist`.
 # A single shard builds in place: a second job would only add its own setup.
-# On Linux the `build` job also downloads the zsh packages the shards install.
+# On Linux every shard installs zsh from the cached packages of `.github/actions/apt-install`.
+#
+# `specs` turns the lane into the repeat lane's web leg (`repeat.yml`): the
+# named spec files run `repeat` times each with no retry, so one failed run
+# fails the job. It is one shard that builds in place, and it files no flaky
+# issue: a retry is what classifies a test as flaky, and this run has none.
 name: web e2e lane
 
 on:
   workflow_call:
+    outputs:
+      completed:
+        description: Actual completed test runs from the single-shard repeat report.
+        value: ${{ jobs.e2e.outputs.completed }}
     inputs:
       lane:
         description: Names the lane in job names and artifact names.
@@ -32,33 +43,69 @@ on:
         description: The GitHub-hosted runner label.
         type: string
         required: true
-      herdr-platform:
-        description: The pinned Herdr asset to run, as `fetch-herdr-runtime.sh --platform` names it.
-        type: string
-        required: true
       shards:
         description: How many shards deal the tests out.
         type: number
         required: true
-      own-engine:
-        description: >-
-          Also runs every test not tagged `@herdr` on the core's own engine
-          (HIDE_E2E_ENGINE=own, PRD engine-bundle-3-core-owns D-14, D-24): the
-          same number of shards again, each a daemon with HIDE_DEV_PANE_HOLDER
-          on over the built `hide-holder` and no Herdr fetched at all.
-        type: boolean
-        required: false
-        default: false
       grep:
         description: Playwright `--grep` filter; empty runs every test.
         type: string
         required: false
         default: ""
+      specs:
+        description: Space-separated spec paths to repeat; empty is the lane as the suites run it.
+        type: string
+        required: false
+        default: ""
+      repeat:
+        description: With `specs`, how many times each test runs (`--repeat-each`), with no retry.
+        type: string
+        required: false
+        default: ""
+      table:
+        description: The suite's duration table for this system's runner; a system records its own.
+        type: string
+        required: false
+        default: web/e2e/shard-durations.json
     # The development issues App's key (docs/TESTING.md, Flaky tests). A run
     # without it, such as a fork's, files no issue and passes as before.
     secrets:
       HIDE_ISSUES_APP_KEY:
         required: false
+  # A hand run on a branch checks a change to this lane before it merges:
+  # `gh workflow run web-e2e.yml --ref <branch> -f lane=windows -f runner=windows-latest -f shards=3 -f grep=@platform -f table=web/e2e/shard-durations-windows.json`.
+  # `pr.yml` and the nightly call it through `workflow_call`, so a lane that
+  # only exists to be called has no way to be measured on a branch.
+  workflow_dispatch:
+    inputs:
+      lane:
+        description: Names the lane in job names and artifact names.
+        type: string
+        default: windows
+      runner:
+        description: The GitHub-hosted runner label.
+        type: string
+        default: windows-latest
+      shards:
+        description: How many shards deal the tests out.
+        type: number
+        default: 3
+      grep:
+        description: Playwright `--grep` filter; empty runs every test.
+        type: string
+        default: "@platform"
+      specs:
+        description: Space-separated spec paths to repeat; empty is the lane as the suites run it.
+        type: string
+        default: ""
+      repeat:
+        description: With `specs`, how many times each test runs (`--repeat-each`), with no retry.
+        type: string
+        default: ""
+      table:
+        description: The suite's duration table for this system's runner.
+        type: string
+        default: web/e2e/shard-durations-windows.json
 
 permissions:
   contents: read
@@ -67,15 +114,6 @@ jobs:
   # One cargo build for the whole lane. The debug `hided` reads `web/dist` from
   # disk at run time, so the shell is a separate artifact; the
   # `hide` CLI comes from the same package and `workspace-cli.spec.ts` runs it.
-  #
-  # On Linux it also hands the shards the zsh packages. The Ubuntu mirror serves
-  # one connection at about 60 kB/s when many runners ask at once (2026-10-01:
-  # 5 MB of zsh took 88 s in every shard that asked), and a shard that stalled
-  # on it held its slot until the job timeout. The packages are cached under
-  # the runner image's version, so the mirror is asked only after the image
-  # changes, once, here and not in a shard; that download runs before the build
-  # so a stalled mirror fails the lane at once, retries, gives up on a silent
-  # connection after 30 s, and fails with its own step name after 5 minutes.
   build:
     name: build hided ${{ inputs.lane }}
     if: ${{ inputs.shards > 1 }}
@@ -89,48 +127,24 @@ jobs:
         run: git config --global core.autocrlf false
       - uses: actions/checkout@v7
         timeout-minutes: 5
+      # hide-vt's prepared inputs and Zig's caches, saved on main by the vt lane,
+      # so this job reaches no package host (#2631).
+      - uses: ./.github/actions/vt-cache
+        timeout-minutes: 5
+        with:
+          save: false
       # Reads the workspace set another lane saves (docs/BUILD.md, "CI's Rust caches").
       - uses: ./.github/actions/rust-cache
         timeout-minutes: 5
         with:
           set: workspace
           save: false
-      - name: Name the runner image for the zsh cache
-        id: image
-        if: runner.os == 'Linux'
-        # ImageVersion is a runner variable, not a workflow `env` value.
-        run: echo "version=$ImageVersion" >> "$GITHUB_OUTPUT"
-      - name: Look for the zsh packages in the cache
-        id: zsh-cache
-        if: runner.os == 'Linux'
-        uses: actions/cache@v6
-        timeout-minutes: 5
-        with:
-          path: zsh-debs
-          key: zsh-debs-${{ steps.image.outputs.version }}
-      - name: Download the zsh packages
-        if: runner.os == 'Linux' && steps.zsh-cache.outputs.cache-hit != 'true'
-        timeout-minutes: 5
-        run: |
-          printf 'Acquire::Retries "3";\nAcquire::http::Timeout "30";\nAcquire::https::Timeout "30";\n' \
-            | sudo tee /etc/apt/apt.conf.d/99-ci-timeouts >/dev/null
-          mkdir zsh-debs
-          cd zsh-debs
-          apt-get download zsh zsh-common
-      - uses: actions/upload-artifact@v7
-        if: runner.os == 'Linux'
-        timeout-minutes: 5
-        with:
-          name: zsh-debs-${{ inputs.lane }}
-          path: zsh-debs
-          if-no-files-found: error
-          retention-days: 1
       - name: Build hided for Playwright
         timeout-minutes: 20
         # The first-run choice spec runs the kit from a copy laid out as an installed app,
         # which needs the agent hooks beside `hided`.
-        # The own engine's daemon starts each pane's holder from the `hide-holder` beside it.
-        run: bash scripts/verify-cargo.sh build -p hided -p hide-agent-hooks${{ inputs.own-engine && ' -p hide-holder' || '' }}
+        # The daemon starts each pane's holder from the `hide-holder` beside it.
+        run: bash scripts/verify-cargo.sh build -p hided -p hide-agent-hooks -p hide-holder
       - name: Keep the binaries for the shards
         uses: actions/upload-artifact@v7
         timeout-minutes: 5
@@ -140,7 +154,7 @@ jobs:
             target/debug/hided${{ runner.os == 'Windows' && '.exe' || '' }}
             target/debug/hide${{ runner.os == 'Windows' && '.exe' || '' }}
             target/debug/hide-agent-hooks${{ runner.os == 'Windows' && '.exe' || '' }}
-            ${{ inputs.own-engine && format('target/debug/hide-holder{0}', runner.os == 'Windows' && '.exe' || '') || '' }}
+            target/debug/hide-holder${{ runner.os == 'Windows' && '.exe' || '' }}
           if-no-files-found: error
           retention-days: 1
 
@@ -171,6 +185,10 @@ jobs:
       - name: Install web dependencies
         timeout-minutes: 5
         run: bash scripts/verify-web.sh install
+      # The Linux saver of the binding tool on main (`.github/actions/relay-tools`).
+      - uses: ./.github/actions/relay-tools
+        with:
+          save: ${{ github.ref == 'refs/heads/main' }}
       # Install the locked binding tool outside the shell's five-minute build
       # budget. Shards also need the ABI for their phone relay fixture.
       - name: Prepare the relay WebAssembly
@@ -189,13 +207,17 @@ jobs:
           retention-days: 1
 
   e2e:
-    name: web e2e ${{ inputs.lane }}${{ matrix.engine == 'own' && ' own engine' || '' }} ${{ matrix.shard }}/${{ inputs.shards }}
+    name: web e2e ${{ inputs.lane }} ${{ matrix.shard }}/${{ inputs.shards }}
     needs: [build, build-web]
     # Both builds are skipped for a single shard; a failure or cancellation
     # in either still stops the shards, and the lane reports the failure.
     if: ${{ !cancelled() && contains(fromJSON('["success","skipped"]'), needs.build.result) && contains(fromJSON('["success","skipped"]'), needs.build-web.result) }}
     runs-on: ${{ inputs.runner }}
-    timeout-minutes: 40
+    # A repetition is bounded by the repeat lane's budget of test runs, not by
+    # the suite, and a Windows runner is the slowest.
+    timeout-minutes: ${{ inputs.specs != '' && 150 || 40 }}
+    outputs:
+      completed: ${{ steps.repeat-report.outputs.completed }}
     defaults:
       run:
         shell: bash
@@ -206,9 +228,6 @@ jobs:
         # shard count outside 1 to 8 has an entry, and a matrix without values
         # fails the lane.
         shard: ${{ fromJSON('[[], [1], [1,2], [1,2,3], [1,2,3,4], [1,2,3,4,5], [1,2,3,4,5,6], [1,2,3,4,5,6,7], [1,2,3,4,5,6,7,8]]')[inputs.shards] }}
-        # The own engine deals the same tests out over as many shards again,
-        # so the lane's wall-clock time stays the Herdr shards'.
-        engine: ${{ fromJSON(inputs.own-engine && '["herdr","own"]' || '["herdr"]') }}
     steps:
       - name: Keep line endings as committed
         run: git config --global core.autocrlf false
@@ -228,6 +247,12 @@ jobs:
           node-version: 22
           cache: pnpm
           cache-dependency-path: pnpm-lock.yaml
+      # hide-vt's prepared inputs and Zig's caches, saved on main by the vt lane,
+      # so this job reaches no package host (#2631).
+      - uses: ./.github/actions/vt-cache
+        timeout-minutes: 5
+        with:
+          save: false
       - uses: ./.github/actions/rust-cache
         timeout-minutes: 5
         if: ${{ inputs.shards == 1 }}
@@ -237,7 +262,7 @@ jobs:
       - name: Build hided for Playwright
         if: ${{ inputs.shards == 1 }}
         timeout-minutes: 20
-        run: bash scripts/verify-cargo.sh build -p hided -p hide-agent-hooks${{ inputs.own-engine && ' -p hide-holder' || '' }}
+        run: bash scripts/verify-cargo.sh build -p hided -p hide-agent-hooks -p hide-holder
       - name: Fetch hided from the build job
         if: ${{ inputs.shards > 1 }}
         uses: actions/download-artifact@v8
@@ -248,10 +273,14 @@ jobs:
       - name: Mark the binaries executable
         if: ${{ inputs.shards > 1 && runner.os != 'Windows' }}
         # An artifact does not keep the executable bit.
-        run: chmod +x target/debug/hided target/debug/hide target/debug/hide-agent-hooks${{ inputs.own-engine && ' target/debug/hide-holder' || '' }}
+        run: chmod +x target/debug/hided target/debug/hide target/debug/hide-agent-hooks target/debug/hide-holder
       - name: Install web dependencies
         timeout-minutes: 5
         run: bash scripts/verify-web.sh install
+      # A single-shard lane builds for itself and is its system's saver on main.
+      - uses: ./.github/actions/relay-tools
+        with:
+          save: ${{ github.ref == 'refs/heads/main' && inputs.shards == 1 }}
       # Install the locked binding tool outside the shell's five-minute build
       # budget. Shards also need the ABI for their phone relay fixture.
       - name: Prepare the relay WebAssembly
@@ -268,31 +297,19 @@ jobs:
         with:
           name: web-dist-${{ inputs.lane }}
           path: web/dist
-      - name: Fetch zsh from the build job
-        if: runner.os == 'Linux' && inputs.shards > 1
-        uses: actions/download-artifact@v8
-        timeout-minutes: 5
-        with:
-          name: zsh-debs-${{ inputs.lane }}
-          path: zsh-debs
       - name: Install zsh
         if: runner.os == 'Linux'
-        timeout-minutes: 3
-        # Herdr starts each pane's shell from SHELL, and the fixture names zsh
+        # A pane's shell starts from SHELL, and the fixture names zsh
         # so its private .zshrc sets the prompt the tests wait for. macOS has it.
-        # With shards the packages come from the `build` job, so no shard asks
-        # the mirror; a single shard is the only one to ask, with the build
-        # job's retries and timeouts.
-        env:
-          SHARDS: ${{ inputs.shards }}
-        run: |
-          if [ "$SHARDS" -gt 1 ]; then
-            sudo dpkg -i zsh-debs/*.deb
-          else
-            printf 'Acquire::Retries "3";\nAcquire::http::Timeout "30";\nAcquire::https::Timeout "30";\n' \
-              | sudo tee /etc/apt/apt.conf.d/99-ci-timeouts >/dev/null
-            sudo apt-get install -y --no-install-recommends zsh
-          fi
+        # The Ubuntu mirror serves one connection at about 60 kB/s when many
+        # runners ask at once (2026-10-01: 5 MB of zsh took 88 s in every
+        # shard that asked), so the packages are cached and a shard that must
+        # fetch them gives up inside 3 minutes (.github/actions/apt-install).
+        timeout-minutes: 6
+        uses: ./.github/actions/apt-install
+        with:
+          packages: zsh
+          minutes: 3
       - name: Install Playwright Chromium
         timeout-minutes: 5
         # No `--with-deps`: it runs apt, which stalled on the mirror, and the
@@ -305,57 +322,41 @@ jobs:
         # On Windows a node loads the holder's ConPTY from `holder-conpty`
         # beside its own program (`hide_kit::holders::CONPTY_SOURCE`), where
         # the app package puts it; the debug daemon runs from target/debug.
-        if: matrix.engine == 'own' && runner.os == 'Windows'
+        if: runner.os == 'Windows'
         timeout-minutes: 5
         run: python scripts/fetch-conpty.py --out target/debug/holder-conpty
-      - name: Fetch the pinned Herdr runtime
-        id: herdr
-        # The own engine's job runs with no Herdr on the runner.
-        if: matrix.engine == 'herdr'
-        timeout-minutes: 5
-        # The click-flow e2e attaches hided to an isolated real Herdr; the
-        # fixture refuses any binary whose version is not the pin.
-        env:
-          HERDR_PLATFORM: ${{ inputs.herdr-platform }}
-        run: |
-          if [ "$RUNNER_OS" = Windows ]; then
-            bin=$(pwsh -NoProfile -File scripts/fetch-herdr-runtime.ps1 | tr -d '\r')
-          else
-            bin=$(zsh scripts/fetch-herdr-runtime.sh --platform "$HERDR_PLATFORM")
-          fi
-          echo "bin=$bin" >> "$GITHUB_OUTPUT"
       - name: Put the isolated fixture programs on the Windows pane PATH
         if: runner.os == 'Windows'
-        shell: pwsh
-        run: |
-          if ($env:GITHUB_ACTIONS -ne 'true') { throw 'Registry fixture setup is only for a disposable GitHub runner' }
-          # Each test installs its stand-ins in its own root. A pane's PTY
-          # expands REG_EXPAND_SZ in that daemon's environment, so it finds
-          # this test's programs without a shared shim or a product override.
-          $key = [Microsoft.Win32.Registry]::CurrentUser.CreateSubKey('Environment')
-          try {
-            $before = $key.GetValue('Path', '', [Microsoft.Win32.RegistryValueOptions]::DoNotExpandEnvironmentNames)
-            $entry = '%HIDE_E2E_ROOT%\bin'
-            $parts = @($before -split ';' | Where-Object { $_ -and $_ -ne $entry })
-            $key.SetValue('Path', (@($entry) + $parts) -join ';', [Microsoft.Win32.RegistryValueKind]::ExpandString)
-          } finally { $key.Dispose() }
+        uses: ./.github/actions/windows-fixture-path
       - name: End-to-end
-        timeout-minutes: 20
+        timeout-minutes: ${{ inputs.specs != '' && 120 || 20 }}
         env:
-          HIDE_E2E_HERDR_BIN: ${{ steps.herdr.outputs.bin }}
-          HIDE_E2E_ENGINE: ${{ matrix.engine }}
           HIDE_E2E_SCREENSHOT_DIR: ${{ runner.temp }}/hide-e2e
           HIDE_E2E_TRACE: "1"
           GREP: ${{ inputs.grep }}
-          # A test that looks at Herdr itself is tagged `@herdr` and runs on Herdr alone (docs/TESTING.md).
-          GREP_INVERT: ${{ matrix.engine == 'own' && '@herdr' || '' }}
+          SPECS: ${{ inputs.specs }}
+          REPEAT: ${{ inputs.repeat }}
           SHARD: ${{ format('{0}/{1}', matrix.shard, inputs.shards) }}
+          TABLE: ${{ inputs.table }}
         run: |
           mkdir -p "$HIDE_E2E_SCREENSHOT_DIR"
+          # The caller names this system's table; the default is the Linux
+          # suite's, which is also what a step run without the input reads.
+          table="${TABLE:-web/e2e/shard-durations.json}"
           args=()
           if [ -n "$GREP" ]; then args+=(--grep "$GREP"); fi
-          if [ -n "$GREP_INVERT" ]; then args+=(--grep-invert "$GREP_INVERT"); fi
-          if [ "${SHARD#*/}" -gt 1 ]; then
+          if [ -n "$SPECS" ]; then
+            # The repeat lane: these spec files, `REPEAT` times each, no retry
+            # (the config retries once under CI), so one failed run fails the
+            # step. Each spec is a file filter that matches that path alone.
+            [ "${SHARD#*/}" = 1 ] || { echo "a repeat run is one shard, not $SHARD" >&2; exit 1; }
+            case "$REPEAT" in ''|*[!0-9]*|0) echo "repeat must be a positive number, not '$REPEAT'" >&2; exit 1 ;; esac
+            # shellcheck disable=SC2086 # the spec paths hold no space or glob character
+            python3 scripts/ci-repeat.py spec-patterns $SPECS > "$RUNNER_TEMP/web-e2e-specs.txt"
+            while IFS= read -r pattern; do args+=("$pattern"); done < "$RUNNER_TEMP/web-e2e-specs.txt"
+            echo "repeat: $REPEAT x $SPECS" | tee -a "$GITHUB_STEP_SUMMARY"
+            bash scripts/verify-web.sh web e2e --retries=0 --repeat-each="$REPEAT" "${args[@]}"
+          elif [ "${SHARD#*/}" -gt 1 ]; then
             # The shard's tests are dealt by their recorded durations, not by
             # Playwright's equal counts. Playwright counts a `--test-list` that
             # matches nothing as a pass, so `check` fails the step unless it
@@ -368,22 +369,29 @@ jobs:
             # `--budget`: a shard that plans more than 720 s (60 % of this
             # step's cap) warns on the first shard, and the answer is another
             # shard (docs/TESTING.md, "Balancing the e2e shards").
-            python3 scripts/e2e-shard.py split --table web/e2e/shard-durations.json --budget 720 --shard "$SHARD" "$list" > "$shard_file"
+            python3 scripts/e2e-shard.py split --table "$table" --budget 720 --shard "$SHARD" "$list" > "$shard_file"
             if [ ! -s "$shard_file" ]; then
               echo "shard $SHARD is dealt no test: fewer tests than shards"
               exit 0
             fi
             bash scripts/verify-web.sh web e2e-list --reporter=list --test-list "$shard_file" "${args[@]}" > "$RUNNER_TEMP/web-e2e-shard-list.txt"
-            python3 scripts/e2e-shard.py check --table web/e2e/shard-durations.json --shard "$SHARD" "$list" "$RUNNER_TEMP/web-e2e-shard-list.txt"
+            python3 scripts/e2e-shard.py check --table "$table" --shard "$SHARD" "$list" "$RUNNER_TEMP/web-e2e-shard-list.txt"
             args+=(--test-list "$shard_file")
+            bash scripts/verify-web.sh web e2e "${args[@]}"
+          else
+            bash scripts/verify-web.sh web e2e "${args[@]}"
           fi
-          bash scripts/verify-web.sh web e2e "${args[@]}"
+      - name: Report completed repeat runs
+        id: repeat-report
+        if: inputs.specs != ''
+        timeout-minutes: 2
+        run: python3 scripts/ci-repeat.py report --playwright web/e2e-report.json
       - name: Mint the development issues token
-        # Development issues live in with-hide/hide-private (docs/TESTING.md,
-        # Flaky tests); one App token reads this run here and files there. A run
+        # Development issues live in this repository (docs/TESTING.md,
+        # Flaky tests); the App's token reads this run and files them. A run
         # without the App's key, such as a fork's, files nothing and stays green.
         id: issues-token
-        if: ${{ !cancelled() }}
+        if: ${{ !cancelled() && inputs.specs == '' }}
         continue-on-error: true
         timeout-minutes: 2
         uses: actions/create-github-app-token@v3
@@ -391,13 +399,13 @@ jobs:
           client-id: ${{ vars.HIDE_ISSUES_APP_CLIENT_ID }}
           private-key: ${{ secrets.HIDE_ISSUES_APP_KEY }}
           owner: with-hide
-          repositories: hide,hide-private
+          repositories: hide
       - name: Report flaky and failed tests
         # A test that failed and passed its retry becomes an issue with a
         # seven-day deadline, or a comment on the issue that tracks it. A
         # report that fails to file is a warning, not a failed lane.
         id: flaky
-        if: ${{ !cancelled() }}
+        if: ${{ !cancelled() && inputs.specs == '' }}
         continue-on-error: true
         timeout-minutes: 5
         env:
@@ -405,19 +413,19 @@ jobs:
         run: |
           python3 scripts/ci-flaky-report.py --suite web --playwright web/e2e-report.json \
             --history-record agents/runs/ci-test-history \
-            --job-name "web e2e ${{ inputs.lane }}${{ matrix.engine == 'own' && ' own engine' || '' }} ${{ matrix.shard }}/${{ inputs.shards }}"
+            --job-name "web e2e ${{ inputs.lane }} ${{ matrix.shard }}/${{ inputs.shards }}"
       - name: Keep this job attempt's test report
         continue-on-error: true
         timeout-minutes: 2
-        if: ${{ !cancelled() }}
+        if: ${{ !cancelled() && inputs.specs == '' }}
         uses: actions/upload-artifact@v7
         with:
-          name: ci-test-history-web-${{ inputs.lane }}-${{ matrix.engine }}-${{ matrix.shard }}-attempt-${{ github.run_attempt }}
+          name: ci-test-history-web-${{ inputs.lane }}-${{ matrix.shard }}-attempt-${{ github.run_attempt }}
           path: agents/runs/ci-test-history/
           if-no-files-found: error
           retention-days: 7
       - name: Keep the e2e run's logs
-        # The daemon, Herdr server and PTY input logs behind a failed flow
+        # The daemon and PTY input logs behind a failed flow
         # (with the screenshots the specs take, under the same directory),
         # and Playwright's own test-results: with no screenshot or trace
         # option set that is the error-context page snapshot. The wire trace
@@ -427,7 +435,7 @@ jobs:
         if: ${{ failure() || steps.flaky.outputs.flaky == 'true' }}
         uses: actions/upload-artifact@v7
         with:
-          name: hide-web-e2e-logs-${{ inputs.lane }}-${{ matrix.engine }}-${{ matrix.shard }}-attempt-${{ github.run_attempt }}
+          name: hide-web-e2e-logs-${{ inputs.lane }}-${{ matrix.shard }}-attempt-${{ github.run_attempt }}
           path: |
             ${{ runner.temp }}/hide-e2e
             web/test-results

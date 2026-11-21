@@ -1,15 +1,17 @@
 // The text a drag selection copies.
 //
-// Herdr's terminal frames redraw every row in place and padded to the full
-// width (`CSI row;1H` then `width` cells), so xterm.js never soft-wraps a row
-// itself: every padding space is a written cell its own `getSelection()`
-// keeps, and no row is ever `isWrapped`. The frame record (`terminal.frame`:
-// seq, encoding, width, height, full, bytes) carries no continuation flag
-// either, so the copy is assembled here the way a native terminal would:
+// A pane holder's frames redraw every row in place and padded to the full
+// width (`CSI row;1H` then `width` cells, autowrap off), so xterm.js never
+// soft-wraps a row itself: every padding space is a written cell its own
+// `getSelection()` keeps, and no row is ever `isWrapped`. The copy is
+// therefore assembled here the way a native terminal would:
 // trailing whitespace trimmed from every row, and a row whose last cell is
 // non-blank read as continuing onto the next row, joined with no break.
-// A hard line that exactly fills the width is joined too; that is the gap a
-// wrap flag in the frame would close. The copy is then dedented: the
+// Where the pane's holder said a row does not run on (`paneRowWraps` in
+// `terminalWrap.ts`, the same answer a link's join reads: a line break in a
+// pane with no agent, or a link that ends at the row's edge), a full row is
+// kept apart; where nothing was said, as for an agent's own line break, a
+// hard line that exactly fills the width is joined too. The copy is then dedented: the
 // leading whitespace every non-blank line shares is a margin the program
 // drew, not text, while the indentation lines have relative to one another
 // is kept (user: "그 줄 앞에 공백있으면 앞에서 trim까지 해줘"). A single line
@@ -48,7 +50,7 @@ function rowText(cells: CellRow, from: number, to: number): string {
   return text.trimEnd();
 }
 
-/** Whether the row's content reaches its last column, so the next row continues it. */
+/** Whether the row's content reaches its last column, so the next row may continue it. */
 export function rowContinues(cells: CellRow): boolean {
   for (let column = cells.length - 1; column >= 0; column -= 1) {
     const chars = cells[column];
@@ -61,15 +63,17 @@ export function rowContinues(cells: CellRow): boolean {
 /**
  * The copied text for `rows`, the selected rows top to bottom, taking the
  * first row from `startColumn` and the last row up to `endColumn`
- * (exclusive); a row between is taken whole. A rectangular selection is
- * not represented.
+ * (exclusive); a row between is taken whole. `wraps`, beside `rows`, says
+ * whether each runs on into the next (null for a row, or for all of them,
+ * where the last-column rule holds). A rectangular selection is not
+ * represented.
  */
-export function selectionToText(rows: CellRow[], startColumn: number, endColumn: number): string {
+export function selectionToText(rows: CellRow[], startColumn: number, endColumn: number, wraps: (boolean | null)[] | null = null): string {
   let text = "";
   rows.forEach((cells, index) => {
     const from = index === 0 ? startColumn : 0;
     const to = index === rows.length - 1 ? endColumn : cells.length;
-    if (index > 0 && !rowContinues(rows[index - 1] ?? [])) text += "\n";
+    if (index > 0 && !(rowContinues(rows[index - 1] ?? []) && wraps?.[index - 1] !== false)) text += "\n";
     text += rowText(cells, from, to);
   });
   return dedent(text, startColumn > 0);
@@ -112,63 +116,49 @@ export function dedent(text: string, firstLinePartial = false): string {
 }
 
 /**
- * How far the viewport's rows moved under a selection. `selected` is the
- * text of the selection's rows (trailing whitespace trimmed) when it was
- * made, `first` the screen row of the first, `screen` every row's text now,
- * `expected` the shift the wheel asked for (positive moves text down). The
- * answer is the shift whose rows still on screen all read as they did,
- * nearest `expected` first and never against its direction, so repeated rows
- * resolve to the shift the wheel asked for. A selection with text needs a row of text to overlap: blank
- * rows alone match anywhere. Null when none of it is on screen any more or
- * no shift reads the same.
+ * A point between cells in a pane's history: the history row, counted from
+ * the oldest row the pane's holder keeps (`terminalView.ts`), and the column
+ * boundary it stands before, 0 to the width. A drag selects the text between
+ * its press and its pointer, in reading order.
  */
-export function followScroll(selected: string[], first: number, screen: string[], expected: number): number | null {
-  const reach = screen.length + selected.length;
-  const shifts: number[] = [];
-  for (let shift = -reach; shift <= reach; shift += 1) shifts.push(shift);
-  shifts.sort((a, b) => Math.abs(a - expected) - Math.abs(b - expected) || Math.abs(a) - Math.abs(b));
-  const hasText = selected.some((text) => text !== "");
-  for (const shift of shifts) {
-    // Text moves the way the wheel turned; a repeated row never says otherwise.
-    if (expected !== 0 && Math.sign(shift) === -Math.sign(expected)) continue;
-    let overlap = 0;
-    let overlapText = 0;
-    let same = true;
-    for (const [index, text] of selected.entries()) {
-      const row = first + shift + index;
-      if (row < 0 || row >= screen.length) continue;
-      overlap += 1;
-      if (text !== "") overlapText += 1;
-      if (screen[row] !== text) {
-        same = false;
-        break;
-      }
-    }
-    if (same && overlap > 0 && (!hasText || overlapText > 0)) return shift;
-  }
-  return null;
+export type HistoryPoint = { row: number; column: number };
+
+/** The two points in reading order. */
+export function orderPoints(a: HistoryPoint, b: HistoryPoint): [HistoryPoint, HistoryPoint] {
+  return a.row < b.row || (a.row === b.row && a.column <= b.column) ? [a, b] : [b, a];
 }
 
 /**
- * The `select(column, row, length)` arguments for a selection from `start` to
- * `end` (exclusive) moved down by `shift` rows on a screen of `rows` x
- * `cols`: the part still on screen, a cut top starting at column 0 and a cut
- * bottom running to the last column. Null when none of it is on screen.
+ * The `select(column, row, length)` arguments that draw the part of the
+ * selection from `start` to `end` (exclusive) shown on a screen of `rows` x
+ * `cols` whose top row is history row `top`: a top cut off starts at column 0
+ * and a bottom cut off runs to the last column. Null when none of it shows.
  */
-export function movedSelection(
-  start: { x: number; y: number },
-  end: { x: number; y: number },
-  shift: number,
+export function drawnSelection(
+  start: HistoryPoint,
+  end: HistoryPoint,
+  top: number,
   rows: number,
   cols: number,
 ): { column: number; row: number; length: number } | null {
-  const first = start.y + shift;
-  const last = end.y + shift;
+  const first = start.row - top;
+  const last = end.row - top;
   if (last < 0 || first > rows - 1) return null;
-  const top = Math.max(first, 0);
-  const bottom = Math.min(last, rows - 1);
-  const startX = first < 0 ? 0 : start.x;
-  const endX = last > rows - 1 ? cols : end.x;
-  const length = (bottom - top) * cols + endX - startX;
-  return length > 0 ? { column: startX, row: top, length } : null;
+  const from = Math.max(first, 0);
+  const to = Math.min(last, rows - 1);
+  const startX = first < 0 ? 0 : start.column;
+  const endX = last > rows - 1 ? cols : end.column;
+  const length = (to - from) * cols + endX - startX;
+  return length > 0 ? { column: startX, row: from, length } : null;
+}
+
+/**
+ * The rows one autoscroll step moves for a pointer `distance` pixels past the
+ * screen's edge: one, and one more for every row of distance, so a pointer
+ * held far away moves quickly, never more than a screen less a row, so no
+ * row passes unseen.
+ */
+export function autoscrollRows(distance: number, rowHeight: number, rows: number): number {
+  const far = rowHeight > 0 ? Math.floor(distance / rowHeight) : 0;
+  return Math.max(1, Math.min(1 + far, rows - 1));
 }

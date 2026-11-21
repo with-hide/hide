@@ -4,6 +4,7 @@ use std::io::Read;
 use std::path::{Path, PathBuf};
 use std::time::Duration;
 
+use hide_agent_adapter::{Account, AccountKey, AccountPath};
 use hide_ai::{CancelToken, ClaudeCliBackend, ClaudeConfig};
 use hide_node_link::usage::{
     FailureDisposition, LimitFailure, LimitFetch, LimitSource, SessionLimits,
@@ -13,26 +14,58 @@ use serde_json::{Value, json};
 
 const CODEX_TAIL_BYTES: u64 = 2 * 1024 * 1024;
 const BODY_LIMIT: u64 = 256 * 1024;
-const AUTH_LIMIT: u64 = 64 * 1024;
 const CODEX_USAGE_URL: &str = "https://chatgpt.com/backend-api/wham/usage";
+const CLAUDE_USAGE_URL: &str = "https://api.anthropic.com/api/oauth/usage";
 const CLAUDE_BINARY: &str = hide_agent_adapter::AgentId::ClaudeCode
     .adapter()
     .executables[0];
+const CREDENTIALS_UNREADABLE: &str = "credentials_unreadable";
+const CODEX_BINARY: &str = hide_agent_adapter::AgentId::Codex.adapter().executables[0];
+/// The keychain item Claude Code keeps its login in, under the login
+/// account's name, for its default configuration folder.
+#[cfg_attr(not(target_os = "macos"), allow(dead_code))]
+const CLAUDE_KEYCHAIN_SERVICE: &str = "Claude Code-credentials";
+/// Scopes per-model rows; the endpoint names at most a handful today.
+const CLAUDE_SCOPED_LIMIT: usize = 16;
+/// A label or reset time the core accepts is at most 64 bytes; a longer
+/// string never leaves the node.
+const CLAUDE_TEXT_LIMIT: usize = 64;
 
-/// One read per declared source, regardless of how many windows it serves.
-pub fn fetch(source: LimitSource, root: &Path, report: &mut dyn FnMut() -> bool) -> LimitFetch {
+/// One read per declared source and account, regardless of how many
+/// windows it serves. `account` is a profile's own account, as this node
+/// resolved it from its profile file (PRD agent-profiles B23); `None` reads
+/// the agent's default account, `root` being Claude's working folder or the
+/// default Codex home the core named.
+pub fn fetch(
+    source: LimitSource,
+    root: &Path,
+    account: Option<&Account>,
+    report: &mut dyn FnMut() -> bool,
+) -> LimitFetch {
     match source {
-        LimitSource::ClaudeUsageText => LimitFetch {
-            result: claude_usage_text(root, report),
+        LimitSource::ClaudeUsage => LimitFetch {
+            result: claude_usage(
+                || claude_usage_api(account),
+                || claude_usage_text(root, account, report),
+            ),
             fallback: None,
         },
         LimitSource::CodexUsage => {
-            let result = codex_usage(root);
+            // A profile's Codex home is its account's own state folder.
+            let home = account
+                .and_then(|account| account.path(AccountPath::State))
+                .unwrap_or(root);
+            let result = codex_usage(home).map_err(|failure| {
+                codex_missing_or(failure, || {
+                    let search = hide_platform::programs::account_path()?;
+                    Some(hide_platform::programs::Program::find(&search, CODEX_BINARY).is_some())
+                })
+            });
             let fallback = result
                 .as_ref()
                 .err()
                 .filter(|failure| failure.disposition != FailureDisposition::Schema)
-                .and_then(|_| codex_session_usage(root));
+                .and_then(|_| codex_session_usage(home));
             LimitFetch { result, fallback }
         }
         LimitSource::AntigravityUsage => LimitFetch {
@@ -70,51 +103,80 @@ struct CodexCredentials {
     account_id: String,
 }
 
+/// A login file of at most `credentials::LIMIT`; a missing or larger one is
+/// a login this node cannot read.
+fn read_credentials(path: &Path) -> Result<Vec<u8>, LimitFailure> {
+    crate::credentials::read(path)
+        .ok()
+        .flatten()
+        .ok_or_else(|| {
+            LimitFailure::new(FailureDisposition::Authentication, CREDENTIALS_UNREADABLE)
+        })
+}
+
 fn codex_credentials(home: &Path) -> Result<CodexCredentials, LimitFailure> {
-    let failure =
-        || LimitFailure::new(FailureDisposition::Authentication, "credentials_unreadable");
-    let mut bytes = Vec::new();
-    std::fs::File::open(home.join("auth.json"))
-        .map_err(|_| failure())?
-        .take(AUTH_LIMIT + 1)
-        .read_to_end(&mut bytes)
-        .map_err(|_| failure())?;
-    if bytes.len() as u64 > AUTH_LIMIT {
-        return Err(failure());
-    }
-    let value: Value = serde_json::from_slice(&bytes).map_err(|_| failure())?;
-    let token = |name: &str| {
-        value
-            .get("tokens")
-            .and_then(|v| v.get(name))
-            .and_then(Value::as_str)
-            .filter(|v| !v.trim().is_empty())
-            .map(str::to_owned)
-            .ok_or_else(failure)
-    };
+    let failure = || LimitFailure::new(FailureDisposition::Authentication, CREDENTIALS_UNREADABLE);
+    let bytes = read_credentials(&home.join("auth.json"))?;
+    let auth = crate::credentials::object(&bytes).map_err(|_| failure())?;
+    let (access_token, account_id) =
+        crate::credentials::codex::usage_login(&auth).ok_or_else(failure)?;
     Ok(CodexCredentials {
-        access_token: token("access_token")?,
-        account_id: token("account_id")?,
+        access_token: access_token.to_owned(),
+        account_id: account_id.to_owned(),
     })
+}
+
+/// A Codex CLI login this node cannot read, where the account's search
+/// finds no `codex` either, is a Codex CLI that is not there, as a Claude
+/// Code login read through a CLI that is missing is
+/// (`UsageError::NotInstalled`): what asks then says the agent is missing,
+/// not signed out. `installed` is `None` when the account's search could not
+/// be read, which proves nothing, so the failure stands; a login the server
+/// refused is signed out whether or not the program is there.
+fn codex_missing_or(
+    failure: LimitFailure,
+    installed: impl FnOnce() -> Option<bool>,
+) -> LimitFailure {
+    if failure.disposition == FailureDisposition::Authentication
+        && failure.kind == CREDENTIALS_UNREADABLE
+        && installed() == Some(false)
+    {
+        return LimitFailure::cli(hide_ai::UsageError::NotInstalled);
+    }
+    failure
 }
 
 fn codex_usage(home: &Path) -> Result<String, LimitFailure> {
     let credentials = codex_credentials(home)?;
+    let value = get_json(
+        CODEX_USAGE_URL,
+        &[
+            (
+                "Authorization",
+                &format!("Bearer {}", credentials.access_token),
+            ),
+            ("ChatGPT-Account-Id", &credentials.account_id),
+            ("User-Agent", "codex-cli"),
+            ("OpenAI-Beta", "codex-1"),
+            ("originator", "Codex Desktop"),
+        ],
+    )?;
+    Ok(safe_codex_body(&value, false))
+}
+
+/// One bounded GET of a usage endpoint. A refusal carries only its status,
+/// a fixed code and a bounded Retry-After, never the server's text.
+fn get_json(url: &str, headers: &[(&str, &str)]) -> Result<Value, LimitFailure> {
     let config = ureq::Agent::config_builder()
         .timeout_global(Some(Duration::from_secs(10)))
         .http_status_as_error(false)
         .build();
     let agent: ureq::Agent = config.into();
-    let mut response = agent
-        .get(CODEX_USAGE_URL)
-        .header(
-            "Authorization",
-            &format!("Bearer {}", credentials.access_token),
-        )
-        .header("ChatGPT-Account-Id", &credentials.account_id)
-        .header("User-Agent", "codex-cli")
-        .header("OpenAI-Beta", "codex-1")
-        .header("originator", "Codex Desktop")
+    let mut request = agent.get(url);
+    for (name, value) in headers {
+        request = request.header(*name, *value);
+    }
+    let mut response = request
         .call()
         .map_err(|_| LimitFailure::new(FailureDisposition::Offline, "transport"))?;
     let status = response.status().as_u16();
@@ -154,9 +216,8 @@ fn codex_usage(home: &Path) -> Result<String, LimitFailure> {
     if bytes.len() as u64 > BODY_LIMIT {
         return Err(LimitFailure::new(FailureDisposition::Schema, "body_limit"));
     }
-    let value: Value = serde_json::from_slice(&bytes)
-        .map_err(|_| LimitFailure::new(FailureDisposition::Schema, "response_json"))?;
-    Ok(safe_codex_body(&value, false))
+    serde_json::from_slice(&bytes)
+        .map_err(|_| LimitFailure::new(FailureDisposition::Schema, "response_json"))
 }
 
 /// Copy only numeric window fields. Unknown fields, account IDs, server
@@ -228,17 +289,223 @@ fn parse_latest_session_limits<'a>(
     })
 }
 
-fn claude_usage_text(cwd: &Path, report: &mut dyn FnMut() -> bool) -> Result<String, LimitFailure> {
+/// Claude Code's windows from the account's usage endpoint, with the login
+/// Claude Code keeps; when that read fails for any reason, from the text
+/// Claude Code's own `/usage` prints, which is slower and starts the CLI.
+/// The answer says which one it is, because the core reads them differently.
+fn claude_usage(
+    api: impl FnOnce() -> Result<Value, LimitFailure>,
+    text: impl FnOnce() -> Result<String, LimitFailure>,
+) -> Result<String, LimitFailure> {
+    match api() {
+        Ok(windows) => Ok(json!({ "usage_api": windows }).to_string()),
+        Err(failure) => {
+            eprintln!(
+                "{}",
+                json!({
+                    "component": "usage",
+                    "kind": "claude_usage_api_failed",
+                    "reason": failure.kind,
+                    "status": failure.status,
+                })
+            );
+            text().map(|text| json!({ "usage_text": text }).to_string())
+        }
+    }
+}
+
+/// Deliberately private and not serializable or printable.
+struct ClaudeToken(String);
+
+fn claude_usage_api(account: Option<&Account>) -> Result<Value, LimitFailure> {
+    let now_ms = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map_or(0, |since| since.as_millis() as u64);
+    let token = claude_token(&claude_login(account)?, now_ms)?;
+    let value = get_json(
+        CLAUDE_USAGE_URL,
+        &[
+            ("Authorization", &format!("Bearer {}", token.0)),
+            ("anthropic-beta", "oauth-2025-04-20"),
+            ("Accept", "application/json"),
+            ("User-Agent", "hide"),
+        ],
+    )?;
+    safe_claude_body(&value)
+}
+
+/// The bytes of Claude Code's login in `account` (the default one for
+/// `None`): on macOS the keychain item it keeps, and otherwise, or on macOS
+/// when there is no such item, the `.credentials.json` Claude Code writes in
+/// the account's folder (`AccountPath::Usage`).
+fn claude_login(account: Option<&Account>) -> Result<Vec<u8>, LimitFailure> {
+    #[cfg(target_os = "macos")]
+    {
+        let key = account.map_or(AccountKey::Default, |account| account.key.clone());
+        if let Some(bytes) = claude_keychain_item(&claude_keychain_service(&key), true)? {
+            return Ok(bytes);
+        }
+    }
+    let file = match account {
+        Some(account) => account.path(AccountPath::Usage).map(Path::to_path_buf),
+        None => hide_platform::host::home_dir().ok().map(|home| {
+            hide_agent_adapter::AgentId::ClaudeCode
+                .adapter()
+                .place_in(&home, AccountPath::Usage)
+        }),
+    }
+    .ok_or_else(|| LimitFailure::new(FailureDisposition::Authentication, "home_unknown"))?;
+    read_credentials(&file)
+}
+
+/// The keychain item Claude Code keeps an account's login in: the bare
+/// service name for its default folder, and for a folder set in
+/// `CLAUDE_CONFIG_DIR` that name with the first eight hex digits of the
+/// SHA-256 of the folder exactly as set, a final `/` included, as Claude
+/// Code 2.1.319 names it. Claude Code names the item's account by `USER`.
+#[cfg_attr(not(target_os = "macos"), allow(dead_code))]
+pub(crate) fn claude_keychain_service(account: &AccountKey) -> String {
+    use sha2::Digest;
+    match account {
+        AccountKey::Folder(folder) => {
+            let digest = sha2::Sha256::digest(folder.as_bytes());
+            let hex: String = digest[..4].iter().map(|b| format!("{b:02x}")).collect();
+            format!("{CLAUDE_KEYCHAIN_SERVICE}-{hex}")
+        }
+        _ => CLAUDE_KEYCHAIN_SERVICE.to_owned(),
+    }
+}
+
+/// Claude Code's keychain item `service` for the login account, read
+/// through `/usr/bin/security`: Claude Code writes the item with that
+/// program, and its access list lets only that program read it without
+/// asking, so the read never shows a prompt that names Hide, whatever
+/// Hide's own signature. With `secret` false only whether the item is
+/// there is asked, and its password is never read. `None` when there is no
+/// such item, or no `USER` to name its account by.
+#[cfg(target_os = "macos")]
+pub(crate) fn claude_keychain_item(
+    service: &str,
+    secret: bool,
+) -> Result<Option<Vec<u8>>, LimitFailure> {
+    /// `security`'s exit status for a missing item (`errSecItemNotFound`).
+    const ITEM_NOT_FOUND: i32 = 44;
+    let Some(account) = std::env::var_os("USER").filter(|account| !account.is_empty()) else {
+        return Ok(None);
+    };
+    let mut command = std::process::Command::new("/usr/bin/security");
+    command
+        .args(["find-generic-password", "-s", service, "-a"])
+        .arg(account);
+    if secret {
+        command.arg("-w");
+    }
+    let stop = std::sync::atomic::AtomicBool::new(false);
+    match hide_platform::process::run_to_end(&mut command, Duration::from_secs(5), &stop) {
+        Ok(finished) if finished.succeeded() => Ok(Some(if secret {
+            finished.stdout.into_bytes()
+        } else {
+            Vec::new()
+        })),
+        Ok(finished) if finished.code == Some(ITEM_NOT_FOUND) => Ok(None),
+        _ => Err(LimitFailure::new(
+            FailureDisposition::Offline,
+            "keychain_unreadable",
+        )),
+    }
+}
+
+/// The access token in Claude Code's login. An expired one is not a
+/// signed-out account: Claude Code renews it the next time it runs.
+fn claude_token(bytes: &[u8], now_ms: u64) -> Result<ClaudeToken, LimitFailure> {
+    let unreadable =
+        || LimitFailure::new(FailureDisposition::Authentication, CREDENTIALS_UNREADABLE);
+    let login = crate::credentials::object(bytes).map_err(|_| unreadable())?;
+    let (token, expires_at) =
+        crate::credentials::claude::access_token(&login).ok_or_else(unreadable)?;
+    if expires_at.is_some_and(|expires_at| expires_at <= now_ms) {
+        return Err(LimitFailure::new(
+            FailureDisposition::Offline,
+            "token_expired",
+        ));
+    }
+    Ok(ClaudeToken(token.to_owned()))
+}
+
+/// Copy only each window's percent and reset time, and a model window's
+/// model name, which `/usage` prints too. Spend, credits, account fields and
+/// server text never leave the node; a malformed field stays null for the
+/// core to read as unreadable. An answer with neither account window is not
+/// this endpoint's.
+fn safe_claude_body(value: &Value) -> Result<Value, LimitFailure> {
+    if value.get("five_hour").is_none() && value.get("seven_day").is_none() {
+        return Err(LimitFailure::new(
+            FailureDisposition::Schema,
+            "response_shape",
+        ));
+    }
+    let short = |text: Option<&Value>| {
+        text.and_then(Value::as_str)
+            .filter(|text| text.len() <= CLAUDE_TEXT_LIMIT)
+            .map_or(Value::Null, Value::from)
+    };
+    let window = |window: &Value, percent: &str| {
+        json!({
+            "used_percent": window.get(percent).filter(|p| p.is_number()),
+            "resets_at": short(window.get("resets_at")),
+        })
+    };
+    let account = |name: &str| {
+        value
+            .get(name)
+            .filter(|window| window.is_object())
+            .map_or(Value::Null, |w| window(w, "utilization"))
+    };
+    let scoped: Vec<Value> = value
+        .get("limits")
+        .and_then(Value::as_array)
+        .into_iter()
+        .flatten()
+        .filter(|limit| limit.get("kind").and_then(Value::as_str) == Some("weekly_scoped"))
+        .take(CLAUDE_SCOPED_LIMIT)
+        .map(|limit| {
+            let mut scoped = window(limit, "percent");
+            scoped["label"] = short(limit.pointer("/scope/model/display_name"));
+            scoped
+        })
+        .collect();
+    Ok(json!({
+        "five_hour": account("five_hour"),
+        "seven_day": account("seven_day"),
+        "scoped": scoped,
+    }))
+}
+
+fn claude_usage_text(
+    cwd: &Path,
+    account: Option<&Account>,
+    report: &mut dyn FnMut() -> bool,
+) -> Result<String, LimitFailure> {
     let backend = ClaudeCliBackend::new(ClaudeConfig {
         binary: PathBuf::from(CLAUDE_BINARY),
         cwd: cwd.to_path_buf(),
         ..ClaudeConfig::default()
     });
+    // The account's own variables, set on the CLI alone.
+    let set: Vec<(String, String)> = account
+        .map(|account| account.env.clone())
+        .unwrap_or_default();
     let cancel = CancelToken::new();
     let running = cancel.clone();
     crate::reporting::run_reporting(
         "hide-node-claude-usage",
-        move || backend.usage_text(&running),
+        move || {
+            let set: Vec<(&str, String)> = set
+                .iter()
+                .map(|(key, value)| (key.as_str(), value.clone()))
+                .collect();
+            backend.usage_text_in(&set, &running)
+        },
         &|| cancel.cancel(),
         report,
     )
@@ -282,6 +549,136 @@ fn antigravity_usage(cwd: &Path, report: &mut dyn FnMut() -> bool) -> Result<Str
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn only_window_fields_of_the_claude_endpoint_leave_the_node() {
+        let answer: Value = serde_json::from_str(include_str!(
+            "../tests/fixtures/claude-oauth-usage-2026-11-06.json"
+        ))
+        .unwrap();
+        assert_eq!(
+            safe_claude_body(&answer).unwrap(),
+            json!({
+                "five_hour": null,
+                "seven_day": {"used_percent": 67.0, "resets_at": "2026-11-11T17:00:00.104969+00:00"},
+                "scoped": [{"used_percent": 19, "resets_at": "2026-11-11T17:00:00.105141+00:00", "label": "Fable"}],
+            })
+        );
+        let odd = json!({
+            "five_hour": {"utilization": "12", "resets_at": 5, "account": "private"},
+            "seven_day": {"utilization": 3, "resets_at": "x".repeat(65)},
+            "limits": [{"kind": "weekly_scoped", "percent": 1, "resets_at": "2026-11-11T17:00:00Z", "scope": {"model": null, "surface": "cowork"}}],
+        });
+        assert_eq!(
+            safe_claude_body(&odd).unwrap(),
+            json!({
+                "five_hour": {"used_percent": null, "resets_at": null},
+                "seven_day": {"used_percent": 3, "resets_at": null},
+                "scoped": [{"used_percent": 1, "resets_at": "2026-11-11T17:00:00Z", "label": null}],
+            })
+        );
+        let refused = safe_claude_body(&json!({"type": "error", "error": {"message": "private"}}));
+        assert_eq!(
+            refused.map_err(|f| (f.disposition, f.kind)),
+            Err((FailureDisposition::Schema, "response_shape".to_owned()))
+        );
+    }
+    /// A Codex whose login cannot be read and whose program is not found
+    /// reads as not there, as a missing Claude CLI does; one with its
+    /// program reads as signed out, and a login the server refused stays
+    /// signed out either way.
+    #[test]
+    fn an_unreadable_codex_login_without_its_program_reads_as_not_installed() {
+        let read = |home: &Path, installed: Option<bool>| {
+            codex_usage(home)
+                .map_err(|failure| codex_missing_or(failure, || installed))
+                .map_err(|failure| (failure.disposition, failure.kind))
+        };
+        let home = tempfile::tempdir().unwrap();
+        assert_eq!(
+            read(home.path(), Some(false)),
+            Err((FailureDisposition::NotInstalled, "not_installed".to_owned()))
+        );
+        for found_or_unknown in [Some(true), None] {
+            assert_eq!(
+                read(home.path(), found_or_unknown),
+                Err((
+                    FailureDisposition::Authentication,
+                    CREDENTIALS_UNREADABLE.to_owned()
+                ))
+            );
+        }
+        let refused = LimitFailure {
+            status: Some(401),
+            ..LimitFailure::new(FailureDisposition::Authentication, "http")
+        };
+        assert_eq!(
+            codex_missing_or(refused, || Some(false)).disposition,
+            FailureDisposition::Authentication
+        );
+    }
+    #[test]
+    fn a_claude_account_keeps_its_login_under_the_digest_of_its_folder_as_set() {
+        assert_eq!(
+            claude_keychain_service(&AccountKey::Default),
+            "Claude Code-credentials"
+        );
+        // The final `/` is part of the name Claude Code hashes.
+        assert_eq!(
+            claude_keychain_service(&AccountKey::Folder("/accounts/claude-a/".into())),
+            "Claude Code-credentials-2599e4eb"
+        );
+        assert_eq!(
+            claude_keychain_service(&AccountKey::Folder("/accounts/claude-a".into())),
+            "Claude Code-credentials-994fdcb4"
+        );
+    }
+    #[test]
+    fn a_claude_login_without_a_live_token_is_never_sent() {
+        let login = |token: &str, expires_at: u64| {
+            json!({"claudeAiOauth": {"accessToken": token, "expiresAt": expires_at}, "mcpOAuth": {}})
+                .to_string()
+        };
+        let now_ms = 1_793_959_945_000;
+        let read = |bytes: String| {
+            claude_token(bytes.as_bytes(), now_ms)
+                .map(|token| token.0)
+                .map_err(|f| (f.disposition, f.kind))
+        };
+        assert_eq!(read(login("live", now_ms + 1)), Ok("live".to_owned()));
+        assert_eq!(
+            read(login("old", now_ms)),
+            Err((FailureDisposition::Offline, "token_expired".to_owned()))
+        );
+        // Claude Code leaves items like this behind under other account names.
+        let unreadable = Err((
+            FailureDisposition::Authentication,
+            CREDENTIALS_UNREADABLE.to_owned(),
+        ));
+        assert_eq!(read(login("", 0)), unreadable);
+        assert_eq!(read(json!({"mcpOAuth": {}}).to_string()), unreadable);
+        assert_eq!(read("not json".to_owned()), unreadable);
+    }
+    #[test]
+    fn claude_usage_starts_the_cli_only_when_the_endpoint_read_failed() {
+        let windows = json!({"five_hour": null, "seven_day": null, "scoped": []});
+        assert_eq!(
+            claude_usage(|| Ok(windows.clone()), || panic!("the CLI started")),
+            Ok(json!({"usage_api": windows}).to_string())
+        );
+        let offline = || Err(LimitFailure::new(FailureDisposition::Offline, "transport"));
+        assert_eq!(
+            claude_usage(offline, || Ok(
+                "Current week (all models): 1% used".to_owned()
+            )),
+            Ok(json!({"usage_text": "Current week (all models): 1% used"}).to_string())
+        );
+        assert_eq!(
+            claude_usage(offline, || Err(LimitFailure::cli(
+                hide_ai::UsageError::Timeout
+            ))),
+            Err(LimitFailure::new(FailureDisposition::Offline, "timeout"))
+        );
+    }
     #[test]
     fn session_fallback_preserves_both_windows_and_requires_a_source_time() {
         let frame = json!({"timestamp":"2026-09-14T12:01:00Z", "type":"event_msg", "payload": {
@@ -361,6 +758,7 @@ mod tests {
             let call = hide_node_link::protocol::Call::UsageLimitFetch {
                 source,
                 root: "/fixture".into(),
+                profile: None,
             };
             assert!(!call.answered_by_device());
         }

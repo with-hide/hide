@@ -1,4 +1,4 @@
-// Chapter 0's world: one job carried from the learner's request to the report,
+// The mission flow's world: one job carried from the learner's request to the report,
 // as a mission (`hide-mission`), at the pace an agent works. The job is moving
 // sign-in to email links: a survey, a token table, the API on it, the sign-in
 // screen and the mail in parallel, checked together at the end, two workers at
@@ -14,24 +14,20 @@
 // words said to the Conductor answer it, and the answer changes the plan:
 // keeping it gives the screen both ways, dropping it adds a part that takes
 // password sign-in out. The rest runs, the check passes, the Conductor
-// reports, the Project's Memory keeps what was decided, and the Explorer
-// marks the files the parts changed, any of which opens beside it. Every word the
+// reports, and the Project's Memory keeps what was decided. Every word the
 // world shows is in the learner's language (`practice.mission.world.*`), since
-// this is the chapter a newcomer meets first.
+// this is the flow a newcomer meets first.
 
 import type { ProjectTasksScope } from "../../agentScope";
 import type { MessageKey } from "../../i18n/catalogs";
 import { clientI18n } from "../../i18n/translator";
-import { nextSidebarLens, type AgentChip, type AgentRow, type AgentState, type ChangesSnapshot, type DetailItem, type EditorDocumentSnapshot, type EditorTabSnapshot, type MemorySection, type Mission, type MissionNode, type PaneFocusRequest, type PaneHeader, type SidebarLens, type ViewDisplaySnapshot } from "../../snapshot";
-import type { DirectoryList } from "../../store";
+import { nextSidebarLens, type AgentChip, type AgentRow, type AgentState, type MemorySection, type Mission, type MissionNode, type PaneFocusRequest, type PaneHeader, type SidebarLens, type DetailItem } from "../../snapshot";
 import type { CoreEvent, PracticeWorld, WorldSnapshot } from "../world";
-import { agent, applyDesk, counted, deskSnapshot, focusedPane, hideAiOn, keyText, shellScreen, typed, withLineage, withTasks, type DeskModel, type PracticePlace } from "./kit";
+import { agent, applyDesk, cardDesk, closedCard, counted, deskSnapshot, focusedPane, hideAiOn, keyText, shellScreen, typed, withLineage, withTasks, type DeskModel, type PracticePlace } from "./kit";
 
 const PLACE: PracticePlace = { project: "hide-practice", label: "hide-practice", branch: "main" };
 /** The checkout's folder, as the kit draws it. */
 const ROOT = `/work/${PLACE.project}`;
-/** The sign-in screen the screen worker made, the file chapter 0 opens from the Explorer. */
-export const SIGN_IN_FILE = `${ROOT}/web/src/pages/SignIn.tsx`;
 
 /** The Conductor's pane. */
 export const CONDUCTOR = "cd";
@@ -60,7 +56,7 @@ const BEAT = "practice_beat";
 
 type Part = "survey" | "db" | "screen" | "api" | "mail" | "drop" | "verify";
 
-/** One part of the plan: its kind, who does it in which pane, when it starts and ends, its PR, what it waits on, and the file it touches. */
+/** One part of the plan: its kind, who does it in which pane, when it starts and ends, its PR, what it waits on, and the file it touches (which its terminal shows). */
 type PartSpec = {
   key: Part; kind: "change" | "research" | "verify"; pane: string; agent: "claude" | "codex"; model: string; effort: "low" | "medium" | "high";
   start: MissionStage; end: MissionStage; pr: number | null; deps: Part[]; file: string;
@@ -96,19 +92,14 @@ export type MissionModel = {
   noted: string[];
   /** Whether the answer drops password sign-in, which adds the part that takes it out. */
   drop: boolean;
-  /** The 보기 slot: what it opened, oldest first, and whether the lane draws it. */
-  detail: DetailItem[];
-  detailShown: boolean;
-  /** The core's count of lane calls; an open in the 보기 slot is one, which brings an unpinned lane up. */
+  /** Whether the mission's card is a tab on the Conductor tab's desk, as `detail_open` puts it there and its tab's ✕ takes it away. */
+  card: boolean;
+  /** How many times the lane was called to the desk, as the core numbers a lane call. */
   laneCalls: number;
   /** Which list the sidebar shows (`sidebar_lens_set`). */
   lens: SidebarLens;
-  /** The lane's tool beside the 보기 slot: the Project's Memory or the Explorer. */
-  tool: "memory" | "explorer" | null;
-  /** The Explorer's open folders. */
-  expanded: string[];
-  /** The file opened from the Explorer, in the lane's View. */
-  opened: string | null;
+  /** The lane's tool: the Project's Memory. */
+  tool: "memory" | null;
   /** Whether the learner opened the Conductor while it asked, from 내 차례 or anywhere else. */
   looked: boolean;
   /** The core's receipt for the last focus asked by relationship. */
@@ -117,19 +108,15 @@ export type MissionModel = {
 
 /** Whether the lane shows the Memory tool. */
 export const showsMemory = (model: MissionModel) => model.tool === "memory";
-/** Whether the lane shows the Explorer. */
-export const showsExplorer = (model: MissionModel) => model.tool === "explorer";
-/** The file open in the lane's View. */
-export const openedFile = (model: MissionModel) => model.opened;
 
 /** The pane holding the keyboard. */
 export const focusedOn = (model: MissionModel) => focusedPane(model.desk);
 
-/** Whether the 보기 slot shows this chapter's mission map in front. */
-export function missionInSlot(model: MissionModel): boolean {
-  const top = model.detail.at(-1);
-  return model.detailShown && top?.kind === "mission" && top.mission === MISSION_ID;
-}
+/** Whether a desk shows this chapter's mission as a card beside the pane. */
+export const missionShown = (model: MissionModel) => model.card;
+
+/** Whether the mission's card was put away again. */
+export const missionLeft = (model: MissionModel) => !model.card;
 
 const since = (model: MissionModel, stage: MissionStage) => model.times[stage] ?? Date.now();
 
@@ -231,7 +218,7 @@ function initial(): MissionModel {
     operations: [],
   };
   // The sidebar starts on its 태스크 list, where a question lands in 내 차례.
-  return { desk, stage: 0, times: { 0: Date.now() }, draft: "", said: [], noted: [], drop: false, detail: [], detailShown: false, laneCalls: 0, lens: "tasks", tool: null, expanded: [`${ROOT}/web`, `${ROOT}/web/src`, `${ROOT}/web/src/pages`], opened: null, looked: false, focus: null };
+  return { desk, stage: 0, times: { 0: Date.now() }, draft: "", said: [], noted: [], drop: false, card: false, laneCalls: 0, lens: "tasks", tool: null, looked: false, focus: null };
 }
 
 /** The desk with a tab for each worker that has started and has none yet. */
@@ -263,14 +250,14 @@ const MINUTE = 60_000;
 const NODE: Omit<MissionNode, "key" | "title" | "status" | "worker" | "kind" | "depends_on" | "delivery"> = {
   blocked: null, agent_id: null, pane_id: null, machine: null,
   pr: null, base_pr: null, branch: null, pr_state: null, pr_url: null, stage: null, attempts: 1,
-  line: null, change: null, review: null, criteria: [], criteria_met: 0, criteria_skipped: 0, external: null, unread: false, reopened: 0, started_at_unix_ms: null, finished_at_unix_ms: null, commit: null, landing: null, verdict: null, checks: null, plan: null, prs: [], attention: null, hide: null,
+  line: null, change: null, review: null, criteria: [], criteria_met: 0, criteria_skipped: 0, steps: [], brief_bytes: null, external: null, unread: false, reopened: 0, started_at_unix_ms: null, finished_at_unix_ms: null, commit: null, landing: null, verdict: null, checks: null, plan: null, prs: [], attention: null, hide: null,
 };
 
 /** A part as the record holds it at the model's stage. */
 function node(model: MissionModel, part: PartSpec): MissionNode {
   const at = model.stage === 2 ? "waiting" : phase(part, model.stage);
   const base: MissionNode = {
-    ...NODE, key: part.key, title: say(`node.${part.key}`), kind: part.kind, depends_on: part.deps, delivery: part.kind === "change" ? "pr" : null,
+    ...NODE, key: part.key, title: say(`node.${part.key}`), kind: part.kind === "change" ? "change" : "general", preset: part.kind === "change" ? null : part.kind, depends_on: part.deps, delivery: part.kind === "change" ? "pr" : null,
     status: at === "waiting" ? "planned" : at === "working" ? "working" : "done",
     worker: { agent: part.agent, model: part.model, effort: part.effort },
   };
@@ -295,7 +282,7 @@ function mission(model: MissionModel): Mission | null {
   const landed = plan.filter((part) => part.pr !== null && model.stage >= part.end).map((part) => part.key);
   return {
     id: MISSION_ID, title: title(), workspace_id: PLACE.project, project: PLACE.label, checkout_path: `/work/${PLACE.project}`, device_id: "local",
-    status, scope: "pr", cap: 2, exempt: false, strength: "normal", other_vendor: true,
+    status, scope: "pr", cap: 2, exempt: false, strength: "normal",
     // No session: this practice keeps no record to open.
     conductor: { pane_id: CONDUCTOR, name: title(), agent_kind: "claude", session: null, present: true, takes_answers: true },
     nodes: plan.map((part) => node(model, part)), merge_order: plan.filter((part) => part.pr !== null).sort((a, b) => a.pr! - b.pr!).map((part) => part.key), landing_order: landed, stack_waiting: 0, check: "pnpm test:e2e", github: "practice-bot",
@@ -361,13 +348,13 @@ function later(model: MissionModel): { at: number; event: CoreEvent } | null {
 
 // --- The events --------------------------------------------------------------------------
 
-/** A focus moved, by a click, a key, a 내 차례 row or a relationship; opening the Conductor while it asks is looking at the question, and coming back from a worker by its head is not. */
+/** A focus moved, by a click, a key, a 내 차례 row or a relationship; opening the Conductor while it asks, by any of them, is looking at the question, as the core reads it. */
 function focused(model: MissionModel, event: CoreEvent): MissionModel | null {
   const desk = applyDesk(model.desk, event);
   const paneId = String(event.payload.pane_id);
   const requestId = event.payload.request_id;
   const focus: PaneFocusRequest | null = typeof requestId === "string" ? { request_id: requestId, target_pane_id: paneId, phase: "succeeded", message: null, retryable: false } : model.focus;
-  const looked = model.looked || (model.stage === ASKING && paneId === CONDUCTOR && typeof requestId !== "string");
+  const looked = model.looked || (model.stage === ASKING && paneId === CONDUCTOR);
   if (!desk && looked === model.looked && focus === model.focus) return null;
   return { ...model, desk: desk ?? model.desk, focus, looked };
 }
@@ -386,18 +373,14 @@ function apply(model: MissionModel, event: CoreEvent): MissionModel | null {
     }
     case "focus_pane":
       return focused(model, event);
-    // The map opens in the 보기 slot as a lane call, the way the core numbers one; a record or a card this world keeps none of.
+    // The mission's card on the desk, opened as a lane call the way the core numbers one; a card of anything else this world keeps none of.
     case "detail_open": {
       const item = p.item as DetailItem;
-      if (item.kind !== "mission" || item.mission !== MISSION_ID || model.stage < 2) return null;
-      return { ...model, detail: [...model.detail.filter((one) => one.kind !== "mission"), item], detailShown: true, laneCalls: model.laneCalls + 1 };
+      return item.kind === "mission" && item.mission === MISSION_ID ? { ...model, card: true, laneCalls: model.laneCalls + 1 } : null;
     }
-    case "detail_back":
-      return model.detail.length > 1 ? { ...model, detail: model.detail.slice(0, -1) } : null;
-    case "detail_close":
-      return model.detail.length ? { ...model, detail: [], detailShown: false } : null;
-    case "detail_show":
-      return model.detail.length ? { ...model, detailShown: p.shown === true } : null;
+    // The card tab's ✕ takes it off the desk.
+    case "view_layout":
+      return model.card && closedCard(event) === 0 ? { ...model, card: false } : null;
     case "sidebar_lens_set": {
       const lens = (p.lens as SidebarLens | undefined) ?? nextSidebarLens(model.lens);
       return lens === model.lens ? null : { ...model, lens };
@@ -405,26 +388,13 @@ function apply(model: MissionModel, event: CoreEvent): MissionModel | null {
     // The Memory tool shown, by ⇧⌘L, its rail icon or from elsewhere.
     case "project_memory_navigate":
       return p.workspace_id === PLACE.project && model.tool !== "memory" ? { ...model, tool: "memory" } : null;
-    // A tool shown or taken down, a path revealed in the Explorer, or the lane put away with what it showed.
+    // The Memory tool shown or taken down, or the lane put away with what it showed, the mission's card too.
     case "workspace_view": {
       let tool = model.tool;
-      if ("tool" in p) tool = p.tool === "memory" || p.tool === "explorer" ? p.tool : null;
-      if (typeof p.reveal === "string") tool = "explorer";
-      const opened = p.open === false ? null : model.opened;
+      if ("tool" in p) tool = p.tool === "memory" ? p.tool : null;
+      const card = p.open === false ? false : model.card;
       if (p.open === false) tool = null;
-      return tool === model.tool && opened === model.opened ? null : { ...model, tool, opened };
-    }
-    // The Explorer folds a folder through the core's ui state.
-    case "ui_state_update": {
-      if (!Array.isArray(p.expanded_paths)) return null;
-      const expanded = p.expanded_paths.filter((path): path is string => typeof path === "string");
-      return expanded.join("\n") === model.expanded.join("\n") ? null : { ...model, expanded };
-    }
-    // A file of the checkout opened in the lane's View, as a lane call; the map steps aside for it.
-    case "file_open": {
-      const path = String(p.path);
-      if (p.workspace_id !== PLACE.project || !FILES.includes(path.slice(ROOT.length + 1))) return null;
-      return path === model.opened ? null : { ...model, opened: path, detailShown: false, laneCalls: model.laneCalls + 1 };
+      return tool === model.tool && card === model.card ? null : { ...model, tool, card };
     }
     default: {
       const desk = applyDesk(model.desk, event);
@@ -475,114 +445,30 @@ function snapshot(model: MissionModel, nowMs: number): WorldSnapshot {
     ...workspace,
     checkouts: workspace.checkouts.map((checkout) => ({ ...checkout, tabs: checkout.tabs.map((row) => ({ ...row, panes: row.panes.map((one) => ({ ...one, lineage_path: lineagePath(one.id) })) })) })),
   }));
-  const shown = model.detailShown && model.detail.length > 0;
   const current = mission(model);
   const headers: Record<string, PaneHeader> = { [CONDUCTOR]: conductorHeader(model) };
   for (const worker of workers) headers[worker.pane_id] = { working: worker.state.working, notice: null, band: null };
-  const agents = desk.panes.flatMap((pane) => (pane.agent ? [pane.agent] : []));
   return {
     ...drawn,
     rest: {
       ...base,
       navigator: { ...navigator, workspaces, changes_root_path: ROOT },
       missions: { items: current ? [current] : [] },
-      // Opening the 보기 slot opens the lane, as the core does on `detail_open`; the tool stands beside it, and an opened file fills the View.
-      workspace_view: viewOf(model, base.workspace_view!),
-      ui_state: { ...base.ui_state!, sidebar_lens: model.lens, detail: { items: model.detail, shown }, expanded_paths: model.expanded },
+      workspace_view: cardDesk(viewOf(model, base.workspace_view!), model.card ? [{ kind: "mission", mission: MISSION_ID }] : []),
+      ui_state: { ...base.ui_state!, sidebar_lens: model.lens },
       terminal: { headers },
       // Hide AI on, so the Memory tool reads as it does for an operator who keeps one; the relationship focus answered.
       status: { ...base.status, pane_focus_request: model.focus, background_ai: { enabled: true, provider: "claude", chosen: true, agent_summary: true, providers: [], unavailable_reason: null } },
-      // The core's proof of each agent's session, which draws each one on the Overview's map.
-      overview_graph: {
-        available: true, limit: 2000, retained_count: 0, truncated: false, retention_ms: 30 * 24 * 60 * MINUTE, letters: [],
-        sessions: agents.flatMap((row) => (row.session_id ? [{ device_id: "local", pane_id: row.pane_id, session_digest: row.session_id, launch_model: null, launch_effort: null }] : [])),
-      },
     },
-    frames: { memory: memory(model, nowMs), suggestions: hideAiOn(PLACE.project), listings: listings(), changes: changes(model), ...opened(model) },
+    frames: { memory: memory(model, nowMs), suggestions: hideAiOn(PLACE.project) },
   };
 }
 
-// --- The checkout's files ------------------------------------------------------------------
+// --- The lane ------------------------------------------------------------------------------
 
-/** Every file of the checkout, relative to it: the code each part reads or changes, and a few more. */
-const FILES = ["README.md", "package.json", "db/migrations/0041_sessions.sql", "e2e/sign-in.spec.ts", "mail/templates/sign-in.html", "src/auth/magicLink.ts", "src/auth/password.ts", "src/auth/session.ts", "web/src/pages/Home.tsx", "web/src/pages/SignIn.tsx"].concat(PARTS.map((part) => part.file)).filter((file, at, all) => all.indexOf(file) === at);
-
-/** Each folder's listing as the core answers it, folders first. */
-function listings(): Record<string, DirectoryList> {
-  const present = FILES;
-  const folders = new Set([""]);
-  for (const file of present) file.split("/").slice(0, -1).forEach((_, at, parts) => folders.add(parts.slice(0, at + 1).join("/")));
-  return Object.fromEntries([...folders].map((folder) => {
-    const path = folder ? `${ROOT}/${folder}` : ROOT;
-    const inside = (name: string) => (folder ? name.startsWith(`${folder}/`) : true);
-    const subfolders = [...folders].filter((one) => one && inside(one) && one.split("/").length === (folder ? folder.split("/").length + 1 : 1));
-    const files = present.filter((file) => inside(file) && file.split("/").length === (folder ? folder.split("/").length + 1 : 1));
-    const entries = [...subfolders.sort().map((one) => ({ name: one.split("/").at(-1)!, path: `${ROOT}/${one}`, is_directory: true })), ...files.sort().map((one) => ({ name: one.split("/").at(-1)!, path: `${ROOT}/${one}`, is_directory: false }))];
-    return [path, { kind: "file_list" as const, root_path: path, entries, truncated: false }];
-  }));
-}
-
-/** The lines each part adds and removes, and whether its file is new. */
-const CHANGED: Partial<Record<Part, { added: number; removed: number; fresh: boolean }>> = {
-  db: { added: 24, removed: 0, fresh: true }, screen: { added: 38, removed: 21, fresh: false }, api: { added: 57, removed: 0, fresh: true },
-  mail: { added: 19, removed: 0, fresh: false }, drop: { added: 3, removed: 64, fresh: false },
-};
-
-/** What the finished parts changed, uncommitted here, since the practice keeps every worker in this one checkout. */
-function changes(model: MissionModel): ChangesSnapshot {
-  const done = parts(model).filter((part) => part.kind === "change" && phase(part, model.stage) === "done");
-  return {
-    root_path: ROOT,
-    entries: done.map((part) => ({ path: `${ROOT}/${part.file}`, relative_path: part.file, previous_relative_path: null, status: CHANGED[part.key]!.fresh ? "untracked" as const : "modified" as const, added_lines: CHANGED[part.key]!.added, removed_lines: CHANGED[part.key]!.removed })),
-    committed: [], base_branch: "main", selected_path: null, selected_committed: false, diff: null, unavailable_reason: null,
-  };
-}
-
-const EDITOR_TAB = "file1";
-
-/** The lane as the core draws it: the 보기 slot, the tool beside it, and the opened file as the View's one display. */
+/** The lane as the core draws it: open on the mission's card while the desk holds it, and on the Project's Memory once the learner asks for it. */
 function viewOf(model: MissionModel, view: NonNullable<WorldSnapshot["rest"]["workspace_view"]>): NonNullable<WorldSnapshot["rest"]["workspace_view"]> {
-  const shown = model.detailShown && model.detail.length > 0;
-  const lane = { ...view, open: shown || model.tool !== null || model.opened !== null, tool: model.tool, lane_called: model.laneCalls, lane_calls: model.laneCalls, lane_called_side: "view" as const };
-  if (!model.opened) return lane;
-  const display: ViewDisplaySnapshot = { id: "view1", tab_id: EDITOR_TAB, path: model.opened, label: model.opened.split("/").at(-1)!, kind: "file", committed: null, preview: true, state: "open", reason: null };
-  return { ...lane, documents: true, layout: { root: { area: { id: "v1", active: display.id, displays: [display] } }, active_area: "v1", display_count: 1, limits: { areas: 4, depth: 3, displays: 32 } } };
-}
-
-/** The opened file's editor tab and its contents. */
-function opened(model: MissionModel): { editor?: { tabs: EditorTabSnapshot[]; active_tab_id: string }; documents?: Record<string, EditorDocumentSnapshot> } {
-  const path = model.opened;
-  if (!path) return {};
-  const relative = path.slice(ROOT.length + 1);
-  const label = relative.split("/").at(-1)!;
-  const tab: EditorTabSnapshot = { id: EDITOR_TAB, device_id: "local", workspace_id: PLACE.project, checkout_id: `${PLACE.project}:${PLACE.branch}`, path, label, kind: "file", diff_committed: null, markdown_live: true, wrap: false, dirty: false, preview: true };
-  const language = relative.endsWith(".md") ? "markdown" : relative.endsWith(".sql") ? "sql" : relative.endsWith(".html") ? "html" : "typescript";
-  const document: EditorDocumentSnapshot = { path, language, document_kind: relative.endsWith(".md") ? "markdown" : "text", contents_utf8: contents(model, relative), revision: "sha256:0", dirty: false, readonly_reason: null, conflict: null, save: null };
-  return { editor: { tabs: [tab], active_tab_id: EDITOR_TAB }, documents: { [EDITOR_TAB]: document } };
-}
-
-/** What a file holds: the sign-in screen as the screen worker left it, both ways or the link alone; any other file a line saying what it is. */
-function contents(model: MissionModel, relative: string): string {
-  if (relative !== "web/src/pages/SignIn.tsx") return `// ${relative}\n`;
-  const finished = model.stage >= 7;
-  return [
-    'import { useState } from "react";',
-    'import { requestLink } from "../api/magicLink";',
-    "",
-    "export function SignIn() {",
-    '  const [email, setEmail] = useState("");',
-    "  const [sent, setSent] = useState(false);",
-    '  if (sent) return <p>Check your inbox for a sign-in link.</p>;',
-    "  return (",
-    "    <form onSubmit={async (event) => { event.preventDefault(); await requestLink(email); setSent(true); }}>",
-    '      <input type="email" value={email} onChange={(event) => setEmail(event.target.value)} />',
-    '      <button type="submit">Email me a link</button>',
-    ...(finished && !model.drop ? ['      <a href="/sign-in/password">Use a password instead</a>'] : []),
-    "    </form>",
-    "  );",
-    "}",
-    "",
-  ].join("\n");
+  return { ...view, open: model.card || model.tool !== null, tool: model.tool, lane_called: model.laneCalls, lane_calls: model.laneCalls, lane_called_side: "view" };
 }
 
 // --- The Project's Memory ------------------------------------------------------------------
@@ -650,7 +536,7 @@ function stageLines(model: MissionModel, stage: MissionStage): string[] {
     case ASKING:
       return [...done, ...spawn, "", `● ${YELLOW}${say("decideHead")}${RESET} ${say("decideWhy")}`, `  ${decision()}`, ...ran("hide mission decide --option … --recommend 1 --node screen", say("asked"))];
     case 6:
-      return [...ran("hide mission plan --file plan.json", say(model.drop ? "foldedDrop" : "foldedKeep")), ...ran("hide mission decide --clear", say("cleared")), ...ran("hide request send ui …", say("toldScreen"))];
+      return [...ran("hide mission plan --file plan.json", say(model.drop ? "foldedDrop" : "foldedKeep")), ...ran("hide request send ui …", say("toldScreen"))];
     case DONE:
       return [...done, "", ...ran("hide mission report …", say("reported")), `● ${GREEN}${say("report", { count: plan.filter((part) => part.pr !== null).length })}${RESET}`];
     default:

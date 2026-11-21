@@ -30,6 +30,7 @@ fn backend() -> ClaudeCliBackend {
         model: "haiku".to_owned(),
         cwd: std::env::temp_dir(),
         search_path: None,
+        run: hide_ai::ItemRun::default(),
     })
 }
 
@@ -82,6 +83,22 @@ fn a_completed_turn_returns_structured_output_with_usage() {
         let backend = backend();
         assert_eq!(backend.availability(), Availability::Ready);
         let response = backend
+            .execute(&request(Duration::from_secs(30)), &CancelToken::new())
+            .unwrap();
+        assert_eq!(response.value["summary"], "fixture");
+        assert_eq!(response.usage.input_tokens, Some(1188));
+        assert_eq!(response.usage.output_tokens, Some(468));
+    });
+}
+
+/// A user config with verbose on makes the CLI print every event of the run as
+/// one array instead of the result object. The turn completed all the same, so
+/// its answer and usage are read from the array's result frame, not reported
+/// as `no_result_frame` (with-hide/hide#1942).
+#[test]
+fn a_verbose_accounts_array_of_events_still_returns_the_answer() {
+    with_mode("verbose_array", || {
+        let response = backend()
             .execute(&request(Duration::from_secs(30)), &CancelToken::new())
             .unwrap();
         assert_eq!(response.value["summary"], "fixture");
@@ -278,6 +295,38 @@ fn a_model_turn_runs_with_thinking_off_whatever_the_shell_exports() {
     });
 }
 
+/// A model turn writes its prompt cache for five minutes, not the hour a
+/// subscription would choose: the transcript it writes is never read again.
+/// That holds with thinking on (a picked effort) as with it off, and over a
+/// lifetime the operator's shell exports.
+#[test]
+fn a_model_turn_writes_its_prompt_cache_for_five_minutes_whatever_the_shell_exports() {
+    let efforts = [Vec::new(), vec![(ProviderId::CLAUDE, "low".to_owned())]];
+    for provider_efforts in efforts {
+        with_mode("ok", || {
+            let folder = tempfile::tempdir().unwrap();
+            let ttl_file = folder.path().join("cache-ttl.txt");
+            unsafe {
+                std::env::set_var("FAKE_CACHE_TTL_FILE", &ttl_file);
+                std::env::set_var("CLAUDE_CODE_PROMPT_CACHE_TTL", "1h");
+            }
+            let request = AiRequest {
+                provider_efforts: provider_efforts.clone(),
+                ..request(Duration::from_secs(30))
+            };
+            let result = backend().execute(&request, &CancelToken::new());
+            unsafe {
+                std::env::remove_var("FAKE_CACHE_TTL_FILE");
+                std::env::remove_var("CLAUDE_CODE_PROMPT_CACHE_TTL");
+            }
+
+            result.unwrap();
+            let received = std::fs::read_to_string(&ttl_file).unwrap();
+            assert_eq!(received, "5m", "{provider_efforts:?}");
+        });
+    }
+}
+
 /// `result` carries the same JSON the schema bound, and it is still not the
 /// answer: without `structured_output` nothing validated the shape.
 #[test]
@@ -322,7 +371,7 @@ fn a_completion_unknown_outcome_is_never_retried_or_moved() {
         let router = AiRouter::new(
             vec![std::sync::Arc::new(backend())],
             RouterConfig {
-                priority: vec![ProviderId::CLAUDE],
+                priority: vec![ProviderId::CLAUDE.into()],
                 ..RouterConfig::default()
             },
             std::sync::Arc::new(NoopLogSink),
@@ -335,7 +384,7 @@ fn a_completion_unknown_outcome_is_never_retried_or_moved() {
         assert!(matches!(error, AiError::CompletionUnknown(_)), "{error:?}");
         // The provider was not parked by it: the next intent is new.
         let state = router.provider_state().unwrap();
-        assert_eq!(state.active, Some(ProviderId::CLAUDE));
+        assert_eq!(state.active, Some(ProviderId::CLAUDE.into()));
         assert_eq!(state.degraded, None);
     });
 }
@@ -501,6 +550,7 @@ mod usage {
             model: "haiku".to_owned(),
             cwd: cwd.to_path_buf(),
             search_path: None,
+            run: hide_ai::ItemRun::default(),
         })
     }
 
@@ -520,6 +570,21 @@ mod usage {
             .usage_text(&CancelToken::new())
             .unwrap();
         assert!(text.starts_with("Total cost:"), "{text}");
+    }
+
+    /// An account whose config has verbose on gets every event of the run in
+    /// one array; the weekly figures are the same text in its last frame
+    /// (with-hide/hide#1942).
+    #[test]
+    fn a_verbose_accounts_array_of_events_gives_the_same_text() {
+        let dir = usage_dir("verbose_array");
+        let text = usage_backend(dir.path())
+            .usage_text(&CancelToken::new())
+            .unwrap();
+        assert!(
+            text.contains("Current week (all models): 1% used"),
+            "{text}"
+        );
     }
 
     #[test]
@@ -665,7 +730,7 @@ fn the_model_list_is_asked_of_the_cli_without_a_model_turn_and_leaks_no_account(
         assert!(request.contains(r#""subtype":"initialize""#), "{request}");
         assert_eq!(
             catalog,
-            hide_ai::ModelCatalog::Offered(vec!["opus".to_owned(), "sonnet".to_owned()]),
+            hide_ai::ModelCatalog::plain(["opus", "sonnet"]),
             "the account's models, without the CLI's own 'default'"
         );
         assert!(
@@ -673,6 +738,89 @@ fn the_model_list_is_asked_of_the_cli_without_a_model_turn_and_leaks_no_account(
             "no account field reaches the answer"
         );
     });
+}
+
+/// The stand-in of an operator's gateway wrapper: a shell script, or on
+/// Windows its batch file.
+fn wrapper() -> PathBuf {
+    let name = if cfg!(windows) {
+        "wrap-claude.cmd"
+    } else {
+        "wrap-claude.sh"
+    };
+    PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .join("tests/fixtures")
+        .join(name)
+}
+
+/// One read of the model list of the item `run`, and the account and
+/// gateway variables its child received.
+fn models_of(run: hide_ai::ItemRun) -> (hide_ai::ModelCatalog, Value) {
+    let _guard = crate::FAKE_ENV.lock().unwrap_or_else(|e| e.into_inner());
+    let seen = tempfile::tempdir().unwrap();
+    let env_file = seen.path().join("env.json");
+    // SAFETY: FAKE_ENV serialises every writer of a FAKE_* variable.
+    unsafe { std::env::set_var("FAKE_ENV_FILE", &env_file) };
+    let catalog = ClaudeCliBackend::new(ClaudeConfig {
+        binary: fixture(),
+        model: "haiku".to_owned(),
+        cwd: std::env::temp_dir(),
+        // The wrapper runs with the account's search, which a test gives as
+        // its own `PATH` rather than asking the login shell.
+        search_path: std::env::var_os("PATH"),
+        run,
+    })
+    .models();
+    unsafe { std::env::remove_var("FAKE_ENV_FILE") };
+    let env = serde_json::from_slice(&std::fs::read(&env_file).unwrap()).unwrap();
+    (catalog, env)
+}
+
+/// PRD agent-profiles-phase2 B8, D-09: an item's list is the one the CLI
+/// gives in that item's account and variables, run through its wrapper, and
+/// a gateway's models show their names once while a start passes the value.
+#[test]
+fn an_items_model_list_is_read_in_its_own_account_and_through_its_wrapper() {
+    let inherited = |name: &str| std::env::var(name).map_or(Value::Null, Value::from);
+    let (default, seen) = models_of(hide_ai::ItemRun::default());
+    assert_eq!(default, hide_ai::ModelCatalog::plain(["opus", "sonnet"]));
+    for name in ["CLAUDE_CONFIG_DIR", "ANTHROPIC_BASE_URL", "FAKE_WRAPPED"] {
+        assert_eq!(
+            seen[name],
+            inherited(name),
+            "the default read adds no {name}"
+        );
+    }
+
+    let account = tempfile::tempdir().unwrap();
+    let account = format!("{}/", account.path().display());
+    let (profiled, seen) = models_of(hide_ai::ItemRun {
+        env: vec![
+            ("CLAUDE_CONFIG_DIR".to_owned(), account.clone()),
+            (
+                "ANTHROPIC_BASE_URL".to_owned(),
+                "https://gw.example".to_owned(),
+            ),
+        ],
+        program: Some(hide_ai::Wrapper {
+            file: wrapper(),
+            leading: Vec::new(),
+        }),
+    });
+    assert_eq!(
+        profiled,
+        hide_ai::ModelCatalog::Offered(vec![
+            hide_ai::Model {
+                id: "opus".to_owned(),
+                label: Some("glm-4.6".to_owned()),
+            },
+            hide_ai::Model::plain("deepseek-reasoner"),
+        ]),
+        "sonnet shows the same gateway model as opus and is listed once"
+    );
+    assert_eq!(seen["CLAUDE_CONFIG_DIR"], Value::from(account));
+    assert_eq!(seen["ANTHROPIC_BASE_URL"], "https://gw.example");
+    assert_eq!(seen["FAKE_WRAPPED"], "1", "the wrapper ran the read");
 }
 
 #[test]
@@ -710,12 +858,12 @@ fn real_claude_lists_its_models_and_answers_one_request() {
         hide_ai::ModelCatalog::Offered(models) => models.clone(),
         other => panic!("the live model list was not offered: {other:?}"),
     };
-    assert!(!models.is_empty() && !models.iter().any(|model| model == "default"));
+    assert!(!models.is_empty() && !models.iter().any(|model| model.id == "default"));
 
     let router = AiRouter::new(
         vec![backend.clone()],
         RouterConfig {
-            priority: vec![ProviderId::CLAUDE],
+            priority: vec![ProviderId::CLAUDE.into()],
             ..RouterConfig::default()
         },
         std::sync::Arc::new(NoopLogSink),
@@ -732,7 +880,7 @@ fn real_claude_lists_its_models_and_answers_one_request() {
         .iter()
         .map(|status| {
             json!({
-                "provider": status.provider.as_str(),
+                "provider": status.item.provider.as_str(),
                 "selectable": status.selectable,
             })
         })
@@ -742,11 +890,52 @@ fn real_claude_lists_its_models_and_answers_one_request() {
         serde_json::to_string_pretty(&json!({
             "models": models,
             "request_outcome": class,
-            "answered_by": router.last_answered().map(|provider| provider.as_str()),
+            "answered_by": router.last_answered().map(|item| item.provider.as_str()),
             "statuses": statuses,
         }))
         .unwrap(),
     )
     .unwrap();
     assert_eq!(class, "ok", "{outcome:?}");
+}
+
+/// Inventory I-4.2: a backend holds the list it read for ten minutes, so a
+/// menu opening again starts no second child; another item's backend reads
+/// its own.
+#[test]
+fn a_read_list_is_held_and_a_second_ask_starts_no_child() {
+    let _guard = crate::FAKE_ENV.lock().unwrap_or_else(|e| e.into_inner());
+    let seen = tempfile::tempdir().unwrap();
+    let env_file = seen.path().join("env.json");
+    // SAFETY: FAKE_ENV serialises every writer of a FAKE_* variable.
+    unsafe { std::env::set_var("FAKE_ENV_FILE", &env_file) };
+    let backend = |run: hide_ai::ItemRun| {
+        ClaudeCliBackend::new(ClaudeConfig {
+            binary: fixture(),
+            model: "haiku".to_owned(),
+            cwd: std::env::temp_dir(),
+            search_path: std::env::var_os("PATH"),
+            run,
+        })
+    };
+    let default = backend(hide_ai::ItemRun::default());
+    let first = default.models();
+    assert!(env_file.exists(), "the first ask starts the CLI");
+    std::fs::remove_file(&env_file).unwrap();
+    assert_eq!(default.models(), first);
+    assert!(!env_file.exists(), "the held list answers the second ask");
+
+    let gateway = backend(hide_ai::ItemRun {
+        env: vec![(
+            "ANTHROPIC_BASE_URL".to_owned(),
+            "https://gw.example".to_owned(),
+        )],
+        program: None,
+    });
+    gateway.models();
+    assert!(
+        env_file.exists(),
+        "another item's backend reads its own list"
+    );
+    unsafe { std::env::remove_var("FAKE_ENV_FILE") };
 }

@@ -1,0 +1,13 @@
+# The site is its own pnpm root, apart from the repository's web, desktop and mobile
+# workspace: Astro and Starlight stay out of every frozen install those lanes run,
+# and `pnpm install --frozen-lockfile` here reads `site/pnpm-lock.yaml` alone.
+packages:
+  - "."
+# sharp (Astro's image service) and esbuild download their native binary in a build script.
+onlyBuiltDependencies:
+  - esbuild
+  - sharp
+# The same list for pnpm 11 and later, which replaced the key above with this map.
+allowBuilds:
+  esbuild: true
+  sharp: true

@@ -7,7 +7,7 @@
 // checkout is only revealed, a path the terminal
 // wrapped is one link, a program's own OSC 8 link opens without xterm's
 // confirm dialog, a drag across a link selects rather than opens, and no link
-// click reaches the program as a mouse click. Everything runs on a private Herdr server, hided and Electron
+// click reaches the program as a mouse click. Everything runs on a private engine, hided and Electron
 // profile (see `fixture.ts`); macOS's own handlers are replaced with
 // recorders, so nothing opens outside the test.
 
@@ -21,17 +21,20 @@ import os from "node:os";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
 import { linkCandidates } from "../../web/src/terminalLinks";
+import { holderSoftWraps, nativeWindowCapture, revealMenuLabel } from "../../web/e2e/platform-fixture";
 import { toPage } from "../src/main/wirePath";
-import { startHerdr, type HerdrFixture } from "../../web/e2e/herdr-fixture";
-import { countSent, enterWorkspace, setLanePinned, showExplorer } from "../../web/e2e/wire";
-import { fitWindow, hostLog, isolate, launch, screenshot, shellPage, test, type Isolated } from "./fixture";
+import { focusTab, openProject, withControl } from "../../web/e2e/daemon-actions";
+import type { AgentFixture } from "../../web/e2e/engine-fixture";
+import { countSent, enterWorkspace, showExplorer } from "../../web/e2e/wire";
+import { fitWindow, hostLog, launchShell, screenshot, shellPage, startStack, test, type Isolated, type Stack } from "./fixture";
 import { measureFor, quietFor } from "../../web/e2e/wait";
 import { cellOf, cellPoint, hoverLink, pointOf, printInPane, withProbe, type Probe } from "./terminal-probe";
 
 test.describe.configure({ timeout: 240_000 });
 test.use({ actionTimeout: 15_000 });
 
-let herdr: HerdrFixture;
+let stack: Stack;
+let fixture: AgentFixture;
 let run: Isolated;
 /** A folder the test made outside every checkout, removed however the test ends. */
 let scratch: string | null = null;
@@ -40,7 +43,6 @@ let server: http.Server;
 let origin: string;
 
 test.beforeAll(async () => {
-  herdr = await startHerdr({ agents: false });
   server = http.createServer((request, response) => {
     const title = { "/a.html": "Page A", "/b.html": "Page B" }[request.url ?? ""];
     response.writeHead(title ? 200 : 404, { "content-type": "text/html; charset=utf-8" });
@@ -51,12 +53,13 @@ test.beforeAll(async () => {
 });
 
 test.afterAll(async () => {
-  herdr?.stop();
   await new Promise((resolve) => server?.close(resolve));
 });
 
-test.beforeEach(() => {
-  run = isolate(herdr, "terminal-links");
+test.beforeEach(async () => {
+  stack = await startStack("terminal-links", { agents: false });
+  fixture = stack.fixture;
+  run = stack.run;
 });
 
 test.afterEach(async () => {
@@ -64,14 +67,14 @@ test.afterEach(async () => {
   if (info.status !== info.expectedStatus) console.log(hostLog(run.env).map((line) => JSON.stringify(line)).join("\n"));
   await app?.close().catch(() => undefined);
   app = null;
-  run.cleanup();
+  stack.stop();
   if (scratch) fs.rmSync(scratch, { recursive: true, force: true });
   scratch = null;
 });
 
 /** Prints `lines` in the fixture pane through a program, using the pane's shell. */
 function print(page: Page, paneId: string, lines: string[], last: string): Promise<void> {
-  return printInPane(herdr, page, paneId, lines, last);
+  return printInPane(fixture, stack.daemon, page, paneId, lines, last);
 }
 
 /** A click with ⌘ held; the mouse carries no modifiers of its own. */
@@ -82,37 +85,18 @@ async function metaClick(page: Page, point: { x: number; y: number }): Promise<v
 }
 
 /**
- * Pins the files tool so it docks, and waits for the pane's grid to settle.
- * A docked lane narrows Agent Views once (PRD right-lane B5) and stays
- * through the terminal clicks below; past the first open, which brings the
- * documents beside the Explorer, a link that opens a file or page moves
- * nothing and the printed rows stay where the probe reads them.
+ * Shows the files tool, so the lane is up over Agent Views (PRD
+ * lane-desk-pair-view B16): it resizes no terminal, and past the first open,
+ * which brings the documents beside the Explorer, a link that opens a file or
+ * page moves nothing and the printed rows stay where the probe reads them.
  */
-async function dockFiles(page: Page, paneId: string): Promise<void> {
-  const before = await paneCols(page, paneId);
+async function showFiles(page: Page): Promise<void> {
   await showExplorer(page);
-  await setLanePinned(page, true);
-  await expect(page.locator("[data-workspace-screen]")).toHaveAttribute("data-lane-mode", "docked");
-  await narrowed(page, paneId, before);
+  await expect(page.locator("[data-workspace-screen]")).toHaveAttribute("data-lane-mode", "overlay");
 }
 
 function paneCols(page: Page, paneId: string): Promise<number> {
   return page.evaluate((id) => (window as unknown as { __hideProbe: Probe }).__hideProbe.paneGrid(id)?.cols ?? 0, paneId);
-}
-
-/** Waits for the pane to narrow from `before`, then to hold its new width across two reads. */
-async function narrowed(page: Page, paneId: string, before: number): Promise<void> {
-  const cols = () => paneCols(page, paneId);
-  await expect.poll(cols, { timeout: 10_000 }).toBeLessThan(before);
-  let seen = -1;
-  await expect
-    .poll(async () => {
-      const now = await cols();
-      const settled = now === seen;
-      seen = now;
-      return settled;
-    }, { intervals: [300], timeout: 10_000 })
-    .toBe(true);
 }
 
 /** A View tab by what its label carries. */
@@ -143,7 +127,7 @@ function opened(): Promise<{ how: string; target: string }[]> {
 }
 
 test("links: a pane's URLs and paths open in the Workspace on a click and in macOS on ⌘-click, with no confirm dialog and no click for the program", async () => {
-  const checkout = path.join(fs.realpathSync(herdr.root), "fixture");
+  const checkout = path.join(fs.realpathSync(fixture.root), "fixture");
   fs.mkdirSync(path.join(checkout, "src"), { recursive: true });
   fs.writeFileSync(path.join(checkout, "src", "linked.ts"), Array.from({ length: 60 }, (_, index) => `// line ${index + 1}`).join("\n"));
   // Short, so its line never wraps; macOS keeps /tmp at /private/tmp.
@@ -153,7 +137,7 @@ test("links: a pane's URLs and paths open in the Workspace on a click and in mac
   fs.writeFileSync(program, new Uint8Array([0xcf, 0xfa, 0xed, 0xfe, 0, 0, 0, 0]), { mode: 0o755 });
   test.info().attach("scratch", { body: scratch });
 
-  ({ app } = await launch(run.env));
+  ({ app } = await launchShell(run.env));
   // The window is the size a CI screen allows (macOS keeps it within the
   // screen), and the shell is zoomed out so its body is wide enough to dock
   // the lane beside the pane, with its tree once the first link opens, and
@@ -173,7 +157,7 @@ test("links: a pane's URLs and paths open in the Workspace on a click and in mac
   });
   await recordMacOS();
   const paneId = await page.evaluate(() => (window as unknown as { __hideProbe: Probe }).__hideProbe.paneId()!);
-  await dockFiles(page, paneId);
+  await showFiles(page);
   const grid = await page.evaluate((id) => (window as unknown as { __hideProbe: Probe }).__hideProbe.paneGrid(id)!, paneId);
 
   // A path longer than the pane is wide, so the terminal wraps it.
@@ -201,17 +185,15 @@ test("links: a pane's URLs and paths open in the Workspace on a click and in mac
 
   // A URL opens as a browser display in the Workspace, and the program hears
   // no click. It opens in the viewing column beside the Explorer, which stays
-  // in its column, so the docked lane widens by it and the pane rewraps once
-  // (PRD lane-two-columns B5, B7).
-  const clicksBefore = sent.get("terminal_click") ?? 0;
+  // in its column (PRD lane-two-columns B5, B7).
+  const clicksBefore = sent.get("terminal_mouse.press") ?? 0;
   let point = await pointOf(page, paneId, `${origin}/a.html`, { offset: 4 });
   await hoverLink(page, paneId, point);
   await page.mouse.click(point.x, point.y);
   await expect(viewTab(page, "Page A")).toBeVisible({ timeout: 20_000 });
   await expect(page.locator('[data-lane="explorer"]')).toBeVisible();
   await expect(page.locator("[data-workspace-screen]")).toHaveAttribute("data-lane-view", "documents");
-  await narrowed(page, paneId, grid.cols);
-  expect(sent.get("terminal_click") ?? 0).toBe(clicksBefore);
+  expect(sent.get("terminal_mouse.press") ?? 0).toBe(clicksBefore);
   expect(dialogs).toEqual([]);
 
   // A path that exists opens its file in View at the line; one that does not is no link.
@@ -271,7 +253,7 @@ test("links: a pane's URLs and paths open in the Workspace on a click and in mac
   await hoverLink(page, paneId, point);
   await page.mouse.click(point.x, point.y);
   await expect(viewTab(page, "wrapped.md")).toBeVisible({ timeout: 20_000 });
-  expect(sent.get("terminal_click") ?? 0).toBe(clicksBefore);
+  expect(sent.get("terminal_mouse.press") ?? 0).toBe(clicksBefore);
   await screenshot(page, "terminal-link-wrapped");
   expect(sent.get("reveal_path")).toBe(4);
 
@@ -285,13 +267,15 @@ test("links: a pane's URLs and paths open in the Workspace on a click and in mac
   await quietFor(page, 500, "the drag selection holds");
   expect(sent.get("reveal_path")).toBe(4);
   expect(await opened()).toHaveLength(3);
-  expect(sent.get("terminal_click") ?? 0).toBe(clicksBefore);
+  expect(sent.get("terminal_mouse.press") ?? 0).toBe(clicksBefore);
 
-  // A click on plain text is still the program's, so the counts above heard the wire.
+  // A click on plain text is still the program's: one `terminal_mouse` press
+  // and release, which its holder reports only to a program that tracks the
+  // mouse. So the counts above heard the wire.
   point = await pointOf(page, paneId, "end-of-links", { offset: 1 });
   await page.mouse.move(point.x, point.y);
   await page.mouse.click(point.x, point.y);
-  await expect.poll(() => sent.get("terminal_click") ?? 0).toBe(clicksBefore + 1);
+  await expect.poll(() => sent.get("terminal_mouse.press") ?? 0).toBe(clicksBefore + 1);
   expect(hostLog(run.env).filter((line) => line.event.startsWith("probe_paths.refused"))).toEqual([]);
 });
 
@@ -300,17 +284,17 @@ test("links: a pane's URLs and paths open in the Workspace on a click and in mac
 // that printed the link; a folder a link reveals opens nothing to type in,
 // so the keyboard stays in the pane.
 test("a file a terminal link opens takes the keyboard, so Command W closes the file and the pane stays", async () => {
-  const checkout = path.join(fs.realpathSync(herdr.root), "fixture");
+  const checkout = path.join(fs.realpathSync(fixture.root), "fixture");
   fs.mkdirSync(path.join(checkout, "src"), { recursive: true });
   fs.writeFileSync(path.join(checkout, "src", "focus.ts"), "// the keyboard follows the open");
-  ({ app } = await launch(run.env));
+  ({ app } = await launchShell(run.env));
   await fitWindow(app, { width: 1024, height: 681 });
   const page = await shellPage(app);
   await withProbe(page);
   await app.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()[0]!.webContents.setZoomFactor(0.4));
   await enterWorkspace(page, "fixture");
   const paneId = await page.evaluate(() => (window as unknown as { __hideProbe: Probe }).__hideProbe.paneId()!);
-  await dockFiles(page, paneId);
+  await showFiles(page);
   await print(page, paneId, ["folder ./src", "file src/focus.ts", "FOCUS-END"], "FOCUS-END");
 
   const folder = await pointOf(page, paneId, "./src", { offset: 1 });
@@ -350,10 +334,10 @@ async function recordPageFocus(): Promise<() => Promise<string[]>> {
 // answered with. Whether macOS then hands that page the keys is the host's,
 // which needs the window in front (close-policy.spec.ts, @needs-focus).
 test("a page a terminal link opens, a URL's or an HTML file's, is the one the keyboard is handed to", async () => {
-  const checkout = path.join(fs.realpathSync(herdr.root), "fixture");
+  const checkout = path.join(fs.realpathSync(fixture.root), "fixture");
   fs.mkdirSync(path.join(checkout, "src"), { recursive: true });
   fs.writeFileSync(path.join(checkout, "src", "page.html"), "<!doctype html><title>Linked HTML</title><h1>Linked HTML</h1>\n");
-  ({ app } = await launch(run.env));
+  ({ app } = await launchShell(run.env));
   await fitWindow(app, { width: 1024, height: 681 });
   const page = await shellPage(app);
   await withProbe(page);
@@ -361,7 +345,7 @@ test("a page a terminal link opens, a URL's or an HTML file's, is the one the ke
   await enterWorkspace(page, "fixture");
   const focused = await recordPageFocus();
   const paneId = await page.evaluate(() => (window as unknown as { __hideProbe: Probe }).__hideProbe.paneId()!);
-  await dockFiles(page, paneId);
+  await showFiles(page);
   await print(page, paneId, [`url ${origin}/a.html`, "html src/page.html", "PAGES-END"], "PAGES-END");
 
   for (const [text, title] of [[`${origin}/a.html`, "Page A"], ["src/page.html", "Linked HTML"]] as const) {
@@ -377,52 +361,50 @@ test("a page a terminal link opens, a URL's or an HTML file's, is the one the ke
 // Its own spec because the links journey is at its size ceiling: a file of
 // another checkout is one contract, the routing that keeps the screen where it is.
 test("an image of another checkout opens in the Workspace in front and its checkout stays where it is", async () => {
-  // A second checkout, a Herdr workspace of its own beside the fixture's,
+  // A second checkout, a project of its own beside the fixture's,
   // holding a screenshot an agent there saved.
-  const elsewhere = path.join(fs.realpathSync(herdr.root), "elsewhere");
+  const elsewhere = path.join(fs.realpathSync(fixture.root), "elsewhere");
   fs.mkdirSync(elsewhere, { recursive: true });
   const pixel = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg==";
   fs.writeFileSync(path.join(elsewhere, "shot.png"), Buffer.from(pixel, "base64"));
-  const second = herdr.run(["workspace", "create", "--cwd", elsewhere, "--label", "elsewhere", "--env", `PATH=${herdr.fixturePath}`, "--no-focus"]) as {
-    result: { workspace: { workspace_id: string } };
-  };
-  try {
-    ({ app } = await launch(run.env));
-    await fitWindow(app, { width: 1024, height: 681 });
-    const page = await shellPage(app);
-    const sent = countSent(page);
-    await withProbe(page);
-    await app.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()[0]!.webContents.setZoomFactor(0.4));
-    await enterWorkspace(page, "fixture");
-    const paneId = await page.evaluate(() => (window as unknown as { __hideProbe: Probe }).__hideProbe.paneId()!);
-    await dockFiles(page, paneId);
-    // A program's own link, so the long temporary path never wraps.
-    await print(page, paneId, [`osc8 \u001b]8;;file://${elsewhere}/shot.png\u001b\\Elsewhere shot\u001b]8;;\u001b\\`, "ELSEWHERE-END"], "ELSEWHERE-END");
+  // It is made without being shown, so the fixture's stays in front.
+  await withControl(stack.daemon, async (control) => {
+    await openProject(control, elsewhere, "elsewhere");
+    await focusTab(control, fixture, fixture.tab);
+  });
+  ({ app } = await launchShell(run.env));
+  await fitWindow(app, { width: 1024, height: 681 });
+  const page = await shellPage(app);
+  const sent = countSent(page);
+  await withProbe(page);
+  await app.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()[0]!.webContents.setZoomFactor(0.4));
+  await enterWorkspace(page, "fixture");
+  const paneId = await page.evaluate(() => (window as unknown as { __hideProbe: Probe }).__hideProbe.paneId()!);
+  await showFiles(page);
+  // A program's own link, so the long temporary path never wraps.
+  await print(page, paneId, [`osc8 \u001b]8;;file://${elsewhere}/shot.png\u001b\\Elsewhere shot\u001b]8;;\u001b\\`, "ELSEWHERE-END"], "ELSEWHERE-END");
 
-    const point = await pointOf(page, paneId, "Elsewhere shot", { offset: 1 });
-    await hoverLink(page, paneId, point);
-    await page.mouse.click(point.x, point.y);
-    await expect(viewTab(page, "shot.png")).toBeVisible({ timeout: 20_000 });
-    await expect(page.locator('[data-viewer="image"] img')).toBeVisible();
-    // The keyboard goes with the image into the Workspace in front.
-    await expect(viewTab(page, "shot.png")).toBeFocused();
-    // The pane that printed the link is still the one on screen.
-    await expect(page.locator(`[data-pane-view="${paneId}"]`)).toBeVisible();
-    expect(sent.get("file_open")).toBe(1);
-    expect(sent.get("reveal_path") ?? 0).toBe(0);
-    await screenshot(page, "terminal-link-other-checkout");
-  } finally {
-    herdr.run(["workspace", "close", second.result.workspace.workspace_id]);
-  }
+  const point = await pointOf(page, paneId, "Elsewhere shot", { offset: 1 });
+  await hoverLink(page, paneId, point);
+  await page.mouse.click(point.x, point.y);
+  await expect(viewTab(page, "shot.png")).toBeVisible({ timeout: 20_000 });
+  await expect(page.locator('[data-viewer="image"] img')).toBeVisible();
+  // The keyboard goes with the image into the Workspace in front.
+  await expect(viewTab(page, "shot.png")).toBeFocused();
+  // The pane that printed the link is still the one on screen.
+  await expect(page.locator(`[data-pane-view="${paneId}"]`)).toBeVisible();
+  expect(sent.get("file_open")).toBe(1);
+  expect(sent.get("reveal_path") ?? 0).toBe(0);
+  await screenshot(page, "terminal-link-other-checkout");
 });
 
 // @platform: File URLs, physical paths and the file-manager reveal label follow the host OS.
 test("terminal HTML opens a rendered page and right-click offers actions for the exact link or path", { tag: "@platform" }, async () => {
-  const checkout = path.join(fs.realpathSync(herdr.root), "fixture");
+  const checkout = path.join(fs.realpathSync(fixture.root), "fixture");
   fs.mkdirSync(path.join(checkout, "src"), { recursive: true });
   const html = path.join(checkout, "src", "report.HTML");
   fs.writeFileSync(html, "<!doctype html><title>Terminal HTML</title>\n<h1>Rendered terminal report</h1>\n");
-  ({ app } = await launch(run.env));
+  ({ app } = await launchShell(run.env));
   await fitWindow(app, { width: 1024, height: 681 });
   const page = await shellPage(app);
   const sent = countSent(page);
@@ -437,23 +419,22 @@ test("terminal HTML opens a rendered page and right-click offers actions for the
   } }));
   const copied = () => page.evaluate(() => (window as unknown as { copied?: string }).copied);
   const paneId = await page.evaluate(() => (window as unknown as { __hideProbe: Probe }).__hideProbe.paneId()!);
-  await dockFiles(page, paneId);
-  // The page this HTML link opens widens the lane until Agent Views keep
-  // their 480px (UI_BEHAVIOR.md, lane widths), about 31 columns on macOS
-  // and 29 on Linux here, so the address goes on a line of its own that
-  // still fits. Herdr's frames carry no wrap flag, so an address that ends
-  // at the terminal's edge reads as running on into a next row that starts
-  // with a word (`terminalLinks.ts`); the blank row after it keeps the
-  // address whole at any width the font gives.
+  await showFiles(page);
+  // This menu scenario addresses whole, unwrapped links. Give the fixture's
+  // split pane the full lane so opening Agent Views cannot wrap the URL.
+  await zoomPane(page, paneId);
+  await expect.poll(() => page.evaluate((id) => (window as unknown as { __hideProbe: Probe }).__hideProbe.paneGrid(id)?.cols ?? 0, paneId)).toBeGreaterThan(`${origin}/a.html`.length);
+  // Where the holder says no soft wraps, a blank row keeps the URL apart
+  // from the next word should it reach the grid's right edge.
   await print(page, paneId, [
     "html src/report.HTML:2",
     `${origin}/a.html`,
-    "",
+    ...(holderSoftWraps ? [] : [""]),
     `osc8 \u001b]8;;${pathToFileURL(html).href}#L2\u001b\\HTML source label\u001b]8;;\u001b\\`,
     "folder ./src",
     "plain MENU-END",
   ], "MENU-END");
-  const clicks = sent.get("terminal_click") ?? 0;
+  const clicks = sent.get("terminal_mouse.press") ?? 0;
   let point = await pointOf(page, paneId, "src/report.HTML:2", { offset: 2 });
   await hoverLink(page, paneId, point);
   await page.mouse.click(point.x, point.y);
@@ -463,7 +444,7 @@ test("terminal HTML opens a rendered page and right-click offers actions for the
     .filter((child) => "webContents" in child)
     .some((child) => (child as Electron.WebContentsView).webContents.getTitle() === "Terminal HTML"))).toBe(true);
   await screenshot(page, "terminal-html-rendered");
-  if (process.platform === "darwin") await nativeCapture("terminal-html-rendered-native");
+  await nativeCapture("terminal-html-rendered-native");
 
   await page.mouse.click(point.x, point.y, { button: "right" });
   await expect(page.getByRole("menuitem", { name: "Open in browser", exact: true })).toBeVisible();
@@ -473,7 +454,7 @@ test("terminal HTML opens a rendered page and right-click offers actions for the
   await expect(page.locator('[data-view-tab-bar] [role="tab"][data-tab-kind="file"][aria-label*="report.HTML"]')).toBeVisible();
   await expect(page.locator(".cm-activeLine").first()).toHaveText("<h1>Rendered terminal report</h1>");
   await screenshot(page, "terminal-html-source");
-  if (process.platform === "darwin") await nativeCapture("terminal-html-source-native");
+  await nativeCapture("terminal-html-source-native");
 
   point = await pointOf(page, paneId, "HTML source label", { offset: 2 });
   await hoverLink(page, paneId, point);
@@ -482,8 +463,7 @@ test("terminal HTML opens a rendered page and right-click offers actions for the
   await expect.poll(copied).toBe(toPage(fs.realpathSync(html)));
   point = await pointOf(page, paneId, "src/report.HTML:2", { offset: 2 });
   await page.mouse.click(point.x, point.y, { button: "right" });
-  const reveal = process.platform === "darwin" ? "Reveal in Finder" : process.platform === "win32" ? "Reveal in File Explorer" : "Open Containing Folder";
-  await page.getByRole("menuitem", { name: reveal, exact: true }).click();
+  await page.getByRole("menuitem", { name: revealMenuLabel, exact: true }).click();
   expect(await opened()).toEqual([{ how: "reveal", target: fs.realpathSync(html) }]);
 
   point = await pointOf(page, paneId, `${origin}/a.html`, { offset: 3 });
@@ -508,7 +488,7 @@ test("terminal HTML opens a rendered page and right-click offers actions for the
   await expect(page.getByRole("menuitem", { name: "Copy link", exact: true })).toHaveCount(0);
   await expect(page.getByRole("menuitem", { name: "Copy path", exact: true })).toHaveCount(0);
   await page.keyboard.press("Escape");
-  expect(sent.get("terminal_click") ?? 0).toBe(clicks);
+  expect(sent.get("terminal_mouse.press") ?? 0).toBe(clicks);
   // Only Open source revealed and only the first click opened a page: a
   // right-click opens nothing, also on Windows, where the menu comes after
   // the button's release (with-hide/hide-private#252).
@@ -516,10 +496,79 @@ test("terminal HTML opens a rendered page and right-click offers actions for the
   expect(sent.get("browser_open")).toBe(1);
 });
 
-/** A current native frame of this exact candidate, without activating any app. */
+// hide-private issue 312: a URL exactly as wide as the pane that ends
+// with a line break stays one link when the next line starts with a word,
+// and a URL the terminal carried onto the next row is still one link. The
+// pane runs a shell, not an agent, so the holder's soft-wrap rows decide
+// for a plain URL; where the holder says none (`holderSoftWraps`), the
+// full-width URL still joins the next word. A URL its program marked
+// (OSC 8, as Claude Code and Codex mark theirs, issue 591) ends where its
+// mark ends on every system, which the holder says itself. A drag copy
+// reads the same rows.
+test("a URL that fills its row is not joined to the next line, and one that wraps is one link", { tag: "@platform" }, async () => {
+  ({ app } = await launchShell(run.env));
+  await fitWindow(app, { width: 1024, height: 681 });
+  const page = await shellPage(app);
+  await withProbe(page);
+  await enterWorkspace(page, "fixture");
+  await page.evaluate(() => Object.defineProperty(navigator, "clipboard", { configurable: true, value: {
+    writeText: async (text: string) => { (window as unknown as { copied: string }).copied = text; },
+  } }));
+  const copied = () => page.evaluate(() => (window as unknown as { copied?: string }).copied);
+  const paneId = await page.evaluate(() => (window as unknown as { __hideProbe: Probe }).__hideProbe.paneId()!);
+  const cols = await paneCols(page, paneId);
+  const fills = `${origin}/a.html?pad=`.padEnd(cols, "x");
+  const marked = `${origin}/c.html?pad=`.padEnd(cols, "z");
+  // One full row, then the rest on the next row alone.
+  const wraps = `${`${origin}/b.html?pad=`.padEnd(cols, "y")}TAILEND`;
+  expect(fills.length).toBe(cols);
+  await print(page, paneId, [fills, "osc8 label", `\u001b]8;;${marked}\u001b\\${marked}\u001b]8;;\u001b\\`, "marked word", wraps, "WRAP-END"], "WRAP-END");
+  // The rows below are read at the width they were printed at.
+  expect(await paneCols(page, paneId)).toBe(cols);
+
+  let point = await pointOf(page, paneId, fills, { offset: 3 });
+  await hoverLink(page, paneId, point);
+  await page.mouse.click(point.x, point.y, { button: "right" });
+  await page.getByRole("menuitem", { name: "Copy link", exact: true }).click();
+  await expect.poll(copied).toBe(holderSoftWraps ? fills : `${fills}osc8`);
+  point = await pointOf(page, paneId, "marked word", { offset: 1 });
+  await page.mouse.move(point.x, point.y);
+  await quietFor(page, 500, "the word after a full-width marked URL is no link");
+  await expect(page.locator(`[data-terminal="${paneId}"] .xterm-screen`)).not.toHaveClass(/xterm-cursor-pointer/);
+  if (holderSoftWraps) {
+    point = await pointOf(page, paneId, "osc8 label", { offset: 1 });
+    await page.mouse.move(point.x, point.y);
+    await quietFor(page, 500, "the word after a full-width URL is no link");
+    await expect(page.locator(`[data-terminal="${paneId}"] .xterm-screen`)).not.toHaveClass(/xterm-cursor-pointer/);
+  }
+
+  // A drag from past the marked word back to before the first URL copies
+  // the rows apart where they end. The pane's first column is under the
+  // resize grab, so the press starts at the other end.
+  const pressAt = await pointOf(page, paneId, "marked word", { offset: 11 });
+  const first = await cellPoint(page, paneId, { row: (await cellOf(page, paneId, fills)).row, column: 0 });
+  const cell = (await page.locator(`[data-terminal="${paneId}"] .xterm-screen`).boundingBox())!.width / cols;
+  await page.mouse.move(pressAt.x, pressAt.y);
+  await page.mouse.down();
+  await page.mouse.move(first.x - cell, first.y, { steps: 8 });
+  await page.mouse.up();
+  const ended = holderSoftWraps ? "\n" : "";
+  await expect.poll(() => page.evaluate((id) => (window as unknown as { __hideProbe: Probe }).__hideProbe.paneSelection(id), paneId))
+    .toBe(`${fills}${ended}osc8 label\n${marked}\nmarked word`);
+  await page.mouse.click(pressAt.x, pressAt.y);
+
+  point = await pointOf(page, paneId, "TAILEND", { offset: 2 });
+  await hoverLink(page, paneId, point);
+  await page.mouse.click(point.x, point.y, { button: "right" });
+  await page.getByRole("menuitem", { name: "Copy link", exact: true }).click();
+  await expect.poll(copied).toBe(wraps);
+  await screenshot(page, "terminal-url-wrap");
+});
+
+/** A current native frame of this exact candidate, without activating any app, where the system can take one. */
 async function nativeCapture(name: string): Promise<void> {
   const dir = process.env.HIDE_E2E_SCREENSHOT_DIR;
-  if (!dir) return;
+  if (!dir || !nativeWindowCapture) return;
   fs.mkdirSync(dir, { recursive: true });
   const pid = app!.process().pid!;
   const script = 'ObjC.import("CoreGraphics"); JSON.stringify(ObjC.deepUnwrap(ObjC.castRefToObject($.CGWindowListCopyWindowInfo($.kCGWindowListOptionOnScreenOnly | $.kCGWindowListExcludeDesktopElements, 0))).filter(w => w.kCGWindowLayer === 0 && w.kCGWindowOwnerPID === ' + pid + ').map(w => ({id:w.kCGWindowNumber,pid:w.kCGWindowOwnerPID})))';
@@ -527,23 +576,23 @@ async function nativeCapture(name: string): Promise<void> {
   expect(listed.status, listed.stderr).toBe(0);
   const windows = JSON.parse(listed.stdout) as { id: number; pid: number }[];
   expect(windows).toHaveLength(1);
-  fs.writeFileSync(path.join(dir, name + ".json"), JSON.stringify({ candidate: "worktree desktop/dist/main.js", ...windows[0], daemonPid: run.daemonPid(), socket: herdr.socket }, null, 2));
+  fs.writeFileSync(path.join(dir, name + ".json"), JSON.stringify({ candidate: "worktree desktop/dist/main.js", ...windows[0], daemonPid: run.daemonPid() }, null, 2));
   const captured = spawnSync("screencapture", ["-x", "-o", "-l", String(windows[0]!.id), path.join(dir, name + ".png")], { encoding: "utf8", timeout: 10_000 });
   expect(captured.status, captured.stderr).toBe(0);
 }
 
 test("Korean prose links only the real path and opens that file", async () => {
-  const checkout = path.join(fs.realpathSync(herdr.root), "fixture");
+  const checkout = path.join(fs.realpathSync(fixture.root), "fixture");
   fs.mkdirSync(path.join(checkout, "docs"), { recursive: true });
   fs.writeFileSync(path.join(checkout, "docs/README.md"), "# issue 271 exact file");
-  ({ app } = await launch(run.env));
+  ({ app } = await launchShell(run.env));
   await fitWindow(app, { width: 1024, height: 681 });
   const page = await shellPage(app);
   await withProbe(page);
   await app.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()[0]!.webContents.setZoomFactor(0.4));
   await enterWorkspace(page, "fixture");
   const paneId = await page.evaluate(() => (window as unknown as { __hideProbe: Probe }).__hideProbe.paneId()!);
-  await dockFiles(page, paneId);
+  await showFiles(page);
   await print(page, paneId, ["보드 보기 (docs/README.md)에 C안을 추가했습니다.", "KOREAN-END"], "KOREAN-END");
   const lines = await page.evaluate((id) => (window as unknown as { __hideProbe: Probe }).__hideProbe.paneText(id).split("\n"), paneId);
   const row = lines.findIndex((line) => line.startsWith("보드 보기"));
@@ -678,24 +727,24 @@ test("Korean prose links only the real path and opens that file", async () => {
 });
 
 
-/** The shared fixture has two splits; give an unwrapped dense row one whole pane. */
-async function zoomDensePane(page: Page, paneId: string): Promise<void> {
+/** The shared fixture has two splits; give unwrapped links one whole pane. */
+async function zoomPane(page: Page, paneId: string): Promise<void> {
   await page.locator(`[data-terminal="${paneId}"]`).click({ button: "right" });
   await page.locator('[data-menu-item="toggle_zoom"]').click();
 }
 
 test("prose written straight against a bracket links only the path or address inside it", async () => {
-  const checkout = path.join(fs.realpathSync(herdr.root), "fixture");
+  const checkout = path.join(fs.realpathSync(fixture.root), "fixture");
   fs.mkdirSync(path.join(checkout, "docs"), { recursive: true });
   fs.writeFileSync(path.join(checkout, "docs/README.md"), "# glued prose");
-  ({ app } = await launch(run.env));
+  ({ app } = await launchShell(run.env));
   await fitWindow(app, { width: 1024, height: 681 });
   const page = await shellPage(app);
   await withProbe(page);
   await app.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()[0]!.webContents.setZoomFactor(0.4));
   await enterWorkspace(page, "fixture");
   const paneId = await page.evaluate(() => (window as unknown as { __hideProbe: Probe }).__hideProbe.paneId()!);
-  await dockFiles(page, paneId);
+  await showFiles(page);
   // Agents write Korean with no space before a bracket: only the path or the
   // address is the link, never the word before it or the marks around it.
   for (const [written, link] of [["캡처는(docs/README.md).", "docs/README.md"], [`열어뒀어요(${origin}/a.html). 이전에는`, `${origin}/a.html`], ["「docs/README.md」를", "docs/README.md"]] as const) {
@@ -717,7 +766,7 @@ test("prose written straight against a bracket links only the path or address in
 });
 
 test("dense terminal path hover measures cold and warm native work", async () => {
-  const checkout = path.join(fs.realpathSync(herdr.root), "fixture");
+  const checkout = path.join(fs.realpathSync(fixture.root), "fixture");
   fs.mkdirSync(path.join(checkout, "dense"), { recursive: true });
   // Half the row carries punctuation, prose and a location around its path;
   // the first plain path stays hoverable on the original baseline.
@@ -728,14 +777,14 @@ test("dense terminal path hover measures cold and warm native work", async () =>
   for (let index = 0; index < tokens.length; index += 1) {
     fs.writeFileSync(path.join(checkout, "dense/f" + String(index).padStart(2, "0") + ".md"), "# dense file " + index);
   }
-  ({ app } = await launch(run.env));
+  ({ app } = await launchShell(run.env));
   await fitWindow(app, { width: 1024, height: 681 });
   const page = await shellPage(app);
   await withProbe(page);
   await app.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()[0]!.webContents.setZoomFactor(0.3));
   await enterWorkspace(page, "fixture");
   const paneId = await page.evaluate(() => (window as unknown as { __hideProbe: Probe }).__hideProbe.paneId()!);
-  await zoomDensePane(page, paneId);
+  await zoomPane(page, paneId);
   await expect.poll(() => page.evaluate((id) => (window as unknown as { __hideProbe: Probe }).__hideProbe.paneGrid(id)?.cols ?? 0, paneId)).toBeGreaterThan(tokens.join(" ").length + 12);
   const grid = await page.evaluate((id) => (window as unknown as { __hideProbe: Probe }).__hideProbe.paneGrid(id)!, paneId);
   await print(page, paneId, [tokens.join(" "), "DENSE-END"], "DENSE-END");

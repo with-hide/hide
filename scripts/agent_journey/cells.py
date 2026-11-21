@@ -9,6 +9,7 @@ gave the screens (`journey_composer`).
 """
 
 import hashlib
+import os.path
 
 PASS, FAIL, NOT_MEASURED, NA, EXCLUDED, PENDING = "pass", "fail", "not measured", "N/A", "excluded", "pending"
 # A failed turn the agent never answered at all, after its prompt: the one
@@ -35,13 +36,32 @@ def assistant_after(events, after=0):
     """Whether the agent said anything from `after` on."""
     return any(event.get("role") == "assistant" for event in events[after:])
 
+# Every scene of the contract in the order of `Scene::ALL` (hide-agent-adapter
+# `scene.rs`, which owns the list; the contract test pins this copy to it).
+ALL_SCENES = ("rest", "rest_draft", "working", "interrupted", "session_picker", "model_picker", "popup",
+              "tool_approval", "question", "plan_approval", "trust_dialog", "hooks_review", "first_run",
+              "update_notice")
+# The two scenes `letter` and `letter_busy` prove, which have no cell of their own.
+PROVEN_BY_CELL = ("rest", "working")
+# One cell for each other scene: the ones the journey opens itself (scene.py).
+SCENE_CELLS = tuple("scene_" + name for name in ALL_SCENES if name not in PROVEN_BY_CELL)
 # The contract's cell names in table order (contracts/agent-journey.json).
 CELLS = ("start", "start_untrusted", "launch_brief", "reply", "integration", "guidance_memory", "letter",
-         "letter_busy", "letter_menu", "composer", "sleep_wake", "resume", "fork", "title", "usage")
+         "letter_busy", *SCENE_CELLS, "composer", "sleep_wake", "resume", "fork", "title", "usage", "profile")
 # A cell that cannot be measured until another one passed: a fork, a title
 # and usage need a conversation with an answer in it.
 PREREQUISITE = {"reply": "start", "integration": "start", "guidance_memory": "start", "letter": "start",
-                "letter_busy": "letter", "letter_menu": "letter", "composer": "start", "sleep_wake": "start", "resume": "sleep_wake", "fork": "reply", "title": "reply", "usage": "reply"}
+                "letter_busy": "letter", **{name: "letter" for name in SCENE_CELLS}, "composer": "start", "sleep_wake": "start", "resume": "sleep_wake", "fork": "reply", "title": "reply", "usage": "reply",
+                "profile": "start"}
+# The cells a profile's journey runs again in the profile's account (the
+# `profile` cell): its start and first reply, a letter, and Sleep, Wake and
+# the turn after it, each as the default account's runs.
+PROFILE_CELLS = ("start", "reply", "letter", "sleep_wake", "resume")
+# A real login is the operator's own account's, and a profile's account would
+# need one of its own: a signed-in run leaves the profile cell to the fake
+# model, whose files the run writes in the profile's account.
+REAL_LOGIN_PROFILE = ("a profile's account would need a login of its own; the run never signs in, "
+                      "and the fake model lane measures it")
 
 # Agents the operator took out of the journey (PRD D-45): every cell reads
 # excluded with the reason, never fail or not measured, and counts nowhere.
@@ -49,18 +69,33 @@ EXCLUDED_AGENTS = {"cursor": "operator decision 2026-10-17"}
 INTERRUPTED = "interrupted"
 
 
+def excluded_agents(fake_model=False):
+    """The rows taken out of the journey, shared by the run plan and CI verdict."""
+    return dict(EXCLUDED_AGENTS)
+
+
+def excluded_cells(fake_model=False):
+    """The excluded cells, for both planning and CI: every cell of an excluded row.
+
+    A row exclusion still prevents its CLI from starting.
+    """
+    return {(agent, name): reason for agent, reason in excluded_agents(fake_model).items()
+            for name in CELLS}
+
+
 def cell(status, reason, evidence=None):
     return {"status": status, "reason": reason, "evidence": evidence}
 
 
-def plan(contract, selected):
+def plan(contract, selected, *, fake_model=False):
     """Every registered adapter participates; undeclared and unselected cells are final."""
     table = {}
+    excluded = excluded_cells(fake_model)
     for row in contract:
         cells = {}
         for name in CELLS:
-            if row["id"] in EXCLUDED_AGENTS:
-                cells[name] = cell(EXCLUDED, EXCLUDED_AGENTS[row["id"]])
+            if (row["id"], name) in excluded:
+                cells[name] = cell(EXCLUDED, excluded[row["id"], name])
             elif not row["cells"][name]:
                 cells[name] = cell(NA, "not declared by the adapter")
             elif row["id"] not in selected:
@@ -152,11 +187,19 @@ def refusal(answer):
             error.get("message") or answer.get("message"))
 
 
-def spawn_verdict(answer):
-    """What `hide agent spawn` answered: registered, running, connected, with a native session."""
+def spawn_verdict(answer, cause=None):
+    """What `hide agent spawn` answered: registered, running, connected, with a native session.
+
+    A refusal on the agent's session (`native_identity_unavailable`) is the
+    one the journey can explain from the candidate's own hook records, which
+    `cause` carries: it is named after the product's own sentence, so the
+    cell says which hook outcome left Hide without an identity rather than
+    only that the start was refused (engineering rules 4 and 10).
+    """
     if not isinstance(answer, dict) or answer.get("ok") is not True:
         code, message = refusal(answer)
-        return FAIL, f"spawn refused: {code}" + (f": {message}" if message else "")
+        named = f"; {cause}" if cause and code == "native_identity_unavailable" else ""
+        return FAIL, f"spawn refused: {code}" + (f": {message}" if message else "") + named
     view = answer.get("value") or {}
     missing = [what for what, ok in (("registered", view.get("registered") is True),
                                      ("running", view.get("runtime") == "running"),
@@ -220,7 +263,7 @@ def record_verdict(read, brief, token):
     return PASS, f"the agent recorded the brief once and exactly, {len(brief.encode())} bytes"
 
 
-# The core's log lines for a rung of the input ladder (herdr-core/src/delivery/ladder.rs).
+# The core's log lines for a rung of the input ladder (hide-core/src/delivery/ladder.rs).
 RUNG_KINDS = ("input.rung", "input.rung_unavailable", "input.rung_lost")
 
 
@@ -339,7 +382,7 @@ def composer_check(records, agent):
 
 
 def menu_letter_verdict(shown, read, session, token, after):
-    """A letter sent while a picker of the agent's own was open is delivered
+    """A letter sent while a scene of the agent's own was open is delivered
     after one bell and answered from `after` on: a bell line the picker took
     as its choice starts no turn, so it would ring again or never answer."""
     if not isinstance(shown, dict):
@@ -397,13 +440,12 @@ def with_turn(verdict, turn):
     return PASS, verdict[1] + "; " + turn[1]
 
 
-def emitter_verdict(session, expected):
-    """Herdr's own integration reported the pane's session under `expected`,
-    the contract's `herdr_source`."""
-    source = (session or {}).get("source")
-    if source == expected:
-        return PASS, "Herdr integration reported the session as " + source
-    return FAIL, f"Herdr integration did not report the session (source {source}, not {expected})"
+def emitter_verdict(session):
+    """Hide's registration ledger names the pane's native session."""
+    if ((session or {}).get("observation") == "hide.agent.list" and session.get("kind") in ("id", "path")
+            and isinstance(session.get("value"), str) and session["value"]):
+        return PASS, "Hide's registration ledger names the native session checked by the conversation reader"
+    return FAIL, "Hide's registration ledger did not name a native session"
 
 
 def start_verdict(*verdicts):
@@ -521,3 +563,36 @@ def resume_verdict(before, after, reply):
     if not before or before != after:
         return FAIL, f"native session changed across Wake ({before} -> {after})"
     return (PASS, "same session " + before + "; " + reply[1]) if reply[0] == PASS else reply
+
+
+def profile_verdict(measured, paths, folder):
+    """The profile cell: every cell of PROFILE_CELLS the adapter declares
+    passed in the profile's journey (`measured`, its table row), and each
+    session file Hide's reader read for it lies in the profile's account
+    `folder`. OpenCode's sessions are rows of the account's database, which
+    the reader reads in that account alone, and have no path to compare."""
+    for name in PROFILE_CELLS:
+        current = measured[name]
+        if current["status"] in (PASS, NA):
+            continue
+        status = FAIL if current["status"] == FAIL else NOT_MEASURED
+        return status, f"the profile's {name}: {current['status']}: {current['reason']}"
+    files = [path for path in paths if not path.startswith(OPENCODE_SESSION)]
+    if not paths:
+        return FAIL, "Hide's reader read no session of the profile"
+    outside = [path for path in files if not inside(path, folder)]
+    if outside:
+        return FAIL, f"Hide read the profile's session {outside[0]} outside its account {folder}"
+    return PASS, f"started, answered a letter and woke in {folder}"
+
+
+# How Hide's reader names an OpenCode session (hide_session::links::OPENCODE_PREFIX).
+OPENCODE_SESSION = "opencode/"
+
+
+def inside(path, folder):
+    """Whether `path` lies in `folder`, every link resolved, as the system
+    compares names (without case on Windows and macOS's default volume, so
+    by the resolved names)."""
+    path, folder = os.path.realpath(path), os.path.realpath(folder)
+    return os.path.commonpath([os.path.normcase(path), os.path.normcase(folder)]) == os.path.normcase(folder)

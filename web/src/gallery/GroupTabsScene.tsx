@@ -43,7 +43,7 @@ export function GroupTabsScene({ params }: { params: URLSearchParams }) {
     // The second tab has one physical agent inside a named collection.
     // Its row stands alone, as the ungrouped fourth tab already does.
     if (state === "single") checkout.tabs[1]!.sidebar = { number: 2, manual_name: null, named_by_operator: false };
-    checkout.strip = checkout.tabs.map(tab => ({ id: `strip:${tabId(tab)}`, kind: "herdr", source_id: tabId(tab), label: tab.sidebar?.manual_name ?? `탭 ${tab.sidebar?.number}`, preview: false }));
+    checkout.strip = checkout.tabs.map(tab => ({ id: `strip:${tabId(tab)}`, kind: "engine", source_id: tabId(tab), label: tab.sidebar?.manual_name ?? `탭 ${tab.sidebar?.number}`, preview: false }));
     if (!plain) groups.push({ id: "login", name: content === "long" ? "로그인 개편과 여러 작업의 진행 상황을 함께 확인하는 긴 그룹 이름" : "로그인 개편", tabs: checkout.tabs.slice(0, 3).map(tabId) }, { id: "release", name: "릴리스 준비", tabs: [] });
     const selected = plain ? null : empty ? "release" : "login";
     const selectedGroup = groups.find(group => group.id === selected)!;
@@ -60,8 +60,7 @@ export function GroupTabsScene({ params }: { params: URLSearchParams }) {
     fixture.rest.ui_state = { ...fixture.rest.ui_state, sidebar_width: width ?? 264, device_rail_visible: false, left_sidebar_visible: true, agent_start: { kind: "claude", models: {} } };
     fixture.rest.pane_layouts = checkout.tabs.map(tab => ({ workspace_id: project.id, tab_id: tabId(tab), focused_pane_id: tab.panes[0]!.id, zoomed: false, root: tab.panes.length === 1 ? { type: "pane", pane_id: tab.panes[0]!.id } : { type: "split", direction: "right", ratio: 0.5, first: { type: "pane", pane_id: tab.panes[0]!.id }, second: { type: "pane", pane_id: tab.panes[1]!.id } } }));
     fixture.rest.workspace_view = {
-      device_id: "local", path: checkout.path, open: false, documents: false, tool: null, pinned: false,
-      document_width: null, detail_width: null, explorer_width: null, panel_width: null, lane_called: 0, lane_calls: 0, lane_called_side: "view",
+      device_id: "local", path: checkout.path, open: false, tray: { tab_id: "t1", shown: false, count: 0 }, tool: null, document_width: null, explorer_width: null, panel_width: null, lane_called: 0, lane_calls: 0, lane_called_side: "view",
       layout: { root: { area: { id: "v1", active: null, displays: [] } }, active_area: "v1", display_count: 0, limits: { areas: 4, depth: 3, displays: 32 } },
       agent_layout: { root: { area: { id: "a1", active, displays: selectedGroup.tabs.map(id => ({ id })) } }, active_area: "a1", display_count: selectedGroup.tabs.length, limits: { areas: 6, depth: 3, displays: 64 }, canvases: {}, group_id: selected, groups, drafts, can_undo_group: false },
     };

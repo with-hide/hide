@@ -11,6 +11,7 @@ import { Sidebar } from "./sidebar";
 import type { AgentRow, GithubStatus, PrState, PullRequest, SessionPull, SnapshotRest, Workspace } from "./snapshot";
 import { useShellStore } from "./store";
 import { useUiStore } from "./ui";
+import type { DispatchFn } from "./ws";
 
 // PRD project-tree-pr-family: a 프로젝트 root row's PR mark draws the core's
 // list of its own and every descendant's PRs as its 태스크 row does (B1, B3,
@@ -59,7 +60,7 @@ function catalog(agents: AgentRow[], drawn?: [string, number][], github?: Github
       tabs: [{ id: "tab:alpha", label: "main", panes: agents.map((row) => ({ id: row.pane_id })) }],
     }],
   } as unknown as Workspace;
-  const navigator = { devices: [LOCAL], workspaces: [project], agents, focused_device_id: "local", focused_checkout_id: "checkout:alpha-main" };
+  const navigator = { siblings_shown: 5, devices: [LOCAL], workspaces: [project], agents, focused_device_id: "local", focused_checkout_id: "checkout:alpha-main" };
   const rest = legacyRest({ navigator } as unknown as SnapshotRest, agents);
   if (drawn) {
     const tree = rest.navigator!.workspaces![0]!.checkouts[0]!.agent_scope.sidebar_tree;
@@ -69,6 +70,9 @@ function catalog(agents: AgentRow[], drawn?: [string, number][], github?: Github
 }
 
 let cleanup: (() => Promise<void>) | null = null;
+/** What the rendered sidebar sent the core, in order. */
+let events: Parameters<DispatchFn>[0][] = [];
+const sent = (kind: string) => events.filter((event) => event.kind === kind).map((event) => event.payload);
 afterEach(async () => {
   await cleanup?.();
   cleanup = null;
@@ -88,7 +92,9 @@ async function render(agents: AgentRow[], drawn?: [string, number][], github?: G
   const container = document.createElement("div");
   document.body.append(container);
   const root = createRoot(container);
-  await act(async () => root.render(<TooltipProvider><Sidebar actions={createActions(() => true)} /></TooltipProvider>));
+  events = [];
+  const actions = createActions((event) => { events.push(event); return true; });
+  await act(async () => root.render(<TooltipProvider><Sidebar actions={actions} /></TooltipProvider>));
   cleanup = async () => {
     await act(async () => root.unmount());
     container.remove();
@@ -146,7 +152,7 @@ it("draws the ask instead of a PR mark on a raised root row, whatever its descen
     agent("pane:root", "루트", [{ repo: "app", number: 9, state: "pending", holders: ["자식"] }], { lineage_child_pane_ids: ["pane:child"], group: "needs_you", demand: "question", mark: "turn" }),
     agent("pane:child", "자식", [{ repo: "app", number: 9, state: "pending" }], { delegated: true, lineage_parent_pane_id: "pane:root" }),
   ]);
-  const raised = container.querySelector('[data-raised-list] [data-pane="pane:root"]');
+  const raised = container.querySelector('[data-raised-group="needs_you"] [data-pane="pane:root"]');
   expect(raised).not.toBeNull();
   expect(raised?.querySelector("[data-agent-pr]")).toBeNull();
 });
@@ -179,4 +185,42 @@ it("dims a root's gathered mark while GitHub cannot be read and says when it las
   expect(root?.getAttribute("aria-label")).toMatch(new RegExp("^#" + "1073 CI running or review pending · GitHub last read .+ · cannot read now$"));
   await hover(container, "pane:root");
   expect(document.querySelector('[data-pr-list="pane:root"]')?.textContent).toMatch(/GitHub last read .+ · cannot read now/);
+});
+
+// Operator decision 2026-11-09 (docs/UI_BEHAVIOR.md, A card opens where it
+// was pressed): a PR pressed on a 프로젝트 row, a parent's or a child's, opens
+// its card in the slot of that row's pane as one pr_open, never a page; the
+// browser modifier still opens it on GitHub.
+const MERGEABLE: PullRequest = { ...PULL, number: 1080, title: "루트 정리", url: "https://github.com/acme/app/pull/1080", state: "mergeable", checks: "passing", head_branch: "feat/tidy" };
+const family = () => [
+  agent("pane:root", "루트", [{ repo: "app", number: 1073, state: "pending", holders: ["자식"] }, { repo: "app", number: 1080, state: "mergeable", holders: ["루트"] }], { lineage_child_pane_ids: ["pane:child"], lineage_collapsed: false }),
+  agent("pane:child", "자식", [{ repo: "app", number: 1073, state: "pending" }], { delegated: true, lineage_parent_pane_id: "pane:root" }),
+];
+
+it("opens a child's PR pressed in a parent's 프로젝트 row list in the parent's pane slot", async () => {
+  const container = await render(family(), [["pane:root", 0], ["pane:child", 1]], { pulls: [PULL, MERGEABLE], status: READ });
+  await hover(container, "pane:root");
+  const item = document.querySelector<HTMLElement>('[data-pr-list="pane:root"] [data-pr-list-item="1073"]')!;
+  await act(async () => item.click());
+  expect(sent("pr_open")).toHaveLength(1);
+  expect(sent("pr_open")[0]).toMatchObject({ workspace_id: "workspace:alpha", pr_number: 1073, at: { pane: "pane:root" } });
+  expect(sent("browser_open")).toEqual([]);
+});
+
+it("opens a child row's own PR from its card in the child's pane slot, and on GitHub with the browser modifier", async () => {
+  const open = vi.spyOn(window, "open").mockReturnValue(null);
+  const container = await render(family(), [["pane:root", 0], ["pane:child", 1]], { pulls: [PULL, MERGEABLE], status: READ });
+  await hover(container, "pane:child");
+  const press = document.querySelector<HTMLElement>('[data-checkout-card-open="1073"]')!;
+  await act(async () => press.click());
+  expect(sent("pr_open")).toHaveLength(1);
+  expect(sent("pr_open")[0]).toMatchObject({ workspace_id: "workspace:alpha", pr_number: 1073, at: { pane: "pane:child" } });
+
+  await hover(container, "pane:child");
+  const again = document.querySelector<HTMLElement>('[data-checkout-card-open="1073"]')!;
+  await act(async () => again.dispatchEvent(new MouseEvent("click", { bubbles: true, metaKey: true, ctrlKey: true })));
+  expect(open).toHaveBeenCalledWith(PULL.url, "_blank", "noopener,noreferrer");
+  expect(sent("pr_open")).toHaveLength(1);
+  expect(sent("browser_open")).toEqual([]);
+  open.mockRestore();
 });

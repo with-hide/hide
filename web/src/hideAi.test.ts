@@ -1,26 +1,31 @@
 import { describe, expect, it } from "vitest";
 import {
   CLI_DEFAULT,
-  addableProviders,
+  addableItems,
+  fallbackItems,
   firstEnabledAgent,
   firstRunAgent,
   hideAiCanAnswer,
   modelChoices,
   modelsFailed,
+  itemKey,
   nobodySignedIn,
-  parseRowKey,
-  providerById,
+  orderItem,
+  parseItemKey,
   providerReason,
   resetTime,
-  rowKey,
   runsOnChoices,
-  unusableProviders,
+  runsOnItem,
+  unusableItems,
   usageLimitChoices,
   usageLimitOf,
   usageLimitToValue,
   valueToUsageLimit,
 } from "./hideAi";
-import type { AiProvider, BackgroundAi, KitAgent } from "./snapshot";
+import type { AiProfileModels, AiProvider, BackgroundAi, KitAgent, MachineAgentProfiles } from "./snapshot";
+
+/** A machine that keeps no profiles: every item is an agent's built-in default (B1). */
+const none = () => null;
 
 function provider(id: string, over: Partial<AiProvider> = {}): AiProvider {
   return {
@@ -87,21 +92,21 @@ describe("who can be chosen (B34, B35, B38)", () => {
   ];
 
   it("lists only agents the core would accept in Runs on", () => {
-    expect(runsOnChoices(ai(rows)).map((row) => row.id)).toEqual(["claude", "codex"]);
+    expect(runsOnChoices(ai(rows), none).map((row) => row.id)).toEqual(["claude", "codex"]);
   });
 
   it("keeps the chosen agent in the list with its problem instead of dropping it", () => {
     const broken = rows.map((row) => (row.id === "claude" ? provider("claude", { state: "usage_limited", selectable: false }) : row));
-    expect(runsOnChoices(ai(broken)).map((row) => row.id)).toEqual(["claude", "codex"]);
+    expect(runsOnChoices(ai(broken), none).map((row) => row.id)).toEqual(["claude", "codex"]);
   });
 
   it("adds only selectable agents that are neither Runs on nor already listed", () => {
-    expect(addableProviders(ai(rows)).map((row) => row.id)).toEqual(["codex"]);
-    expect(addableProviders(ai(rows, { fallback: [{ provider: "codex", model: "" }] }))).toEqual([]);
+    expect(addableItems(ai(rows), none).map((row) => row.id)).toEqual(["codex"]);
+    expect(addableItems(ai(rows, { fallback: [{ provider: "codex", model: "" }] }), none)).toEqual([]);
   });
 
   it("dims the installed agents it cannot use, and leaves out the uninstalled and the unread", () => {
-    expect(unusableProviders(ai(rows)).map((row) => row.id)).toEqual(["antigravity", "opencode"]);
+    expect(unusableItems(ai(rows), none).map((row) => row.id)).toEqual(["antigravity", "opencode"]);
   });
 
   it("says nobody is signed in only after every row has been read", () => {
@@ -117,28 +122,68 @@ describe("an agent on a connected device (PRD wsl-device B11)", () => {
 
   it("finds the row on the machine the order runs each agent on", () => {
     const placed = ai(rows, { provider: "codex", device: "wsl", fallback: [{ provider: "claude", model: "" }] });
-    expect(providerById(placed, "codex")?.device_id).toBe("wsl");
-    expect(providerById(placed, "claude")?.device_id ?? null).toBeNull();
+    expect(runsOnItem(placed, none)?.device_id).toBe("wsl");
+    expect(orderItem(placed, none, "claude")?.device_id ?? null).toBeNull();
   });
 
   it("offers each machine's signed-in agent in Runs on and keeps the chosen row even when it cannot answer", () => {
-    expect(runsOnChoices(ai(rows)).map(rowKey)).toEqual(["claude", "codex@wsl", "claude@wsl"]);
+    expect(runsOnChoices(ai(rows), none).map(itemKey)).toEqual(["claude", "codex@wsl", "claude@wsl"]);
     const away = ai([provider("claude"), provider("codex", { device_id: "wsl", state: "unavailable", selectable: false })], { provider: "codex", device: "wsl" });
-    expect(runsOnChoices(away).map(rowKey)).toEqual(["claude", "codex@wsl"]);
+    expect(runsOnChoices(away, none).map(itemKey)).toEqual(["claude", "codex@wsl"]);
   });
 
   it("adds no other machine's row of an agent already in the order", () => {
-    expect(addableProviders(ai(rows)).map(rowKey)).toEqual(["codex@wsl"]);
+    expect(addableItems(ai(rows), none).map(itemKey)).toEqual(["codex@wsl"]);
   });
 
-  it("round-trips a row's select value", () => {
-    expect(parseRowKey(rowKey(provider("codex", { device_id: "wsl" })))).toEqual({ provider: "codex", device: "wsl" });
-    expect(parseRowKey("codex")).toEqual({ provider: "codex", device: null });
+  it("round-trips an item's select value", () => {
+    expect(parseItemKey(itemKey({ provider: "codex", profile: null, device: "wsl" }))).toEqual({ provider: "codex", profile: null, device: "wsl" });
+    expect(parseItemKey(itemKey({ provider: "claude", profile: "p-work", device: "wsl" }))).toEqual({ provider: "claude", profile: "p-work", device: "wsl" });
+    expect(parseItemKey("codex")).toEqual({ provider: "codex", profile: null, device: null });
   });
 
   it("answers the first-run rule from this machine's rows only", () => {
     const deviceOnly = [provider("codex", { state: "needs_login", selectable: false }), provider("codex", { device_id: "wsl" })];
     expect(firstRunAgent(ai(deviceOnly), new Set(["codex"]))).toBeNull();
+  });
+});
+
+describe("an agent's profiles as items (PRD agent-profiles-phase2 D-07, B16, B21)", () => {
+  const profile = (id: string, name: string, version = 1) => ({ id, kind: "claude-code", name, account: null, program: null, env_keys: [], version, install: null, folder: null, hook: null, skill: null });
+  const machine = { state: "listed", version: 3, profiles: [profile("p-work", "work"), profile("p-gw", "opengateway", 2)], defaults: {} } as unknown as MachineAgentProfiles;
+  const lists = (device: string | null) => (device === null ? machine : null);
+  const read = (id: string, version: number, over: Partial<AiProfileModels> = {}): AiProfileModels => ({ profile: id, version, models: ["opus"], model_labels: { opus: "glm-4.6" }, models_fixed: false, models_unavailable_reason: null, state: "ready", message: null, selectable: true, ...over });
+  const claude = provider("claude", { label: "Claude Code", models: ["sonnet"], profile_models: [read("p-work", 1, { models: [] }), read("p-gw", 2)] });
+
+  it("offers each profile beside its agent with the profile's own list, the agent's where its read failed", () => {
+    const items = runsOnChoices(ai([claude, provider("codex")]), lists);
+    expect(items.map(itemKey)).toEqual(["claude", "claude#p-work", "claude#p-gw", "codex"]);
+    expect(items[1]?.models).toEqual(["sonnet"]);
+    expect(items[2]?.models).toEqual(["opus"]);
+    expect(items[2]?.model_labels).toEqual({ opus: "glm-4.6" });
+  });
+
+  it("reads a profile's list only at its version now, and calls it unread before", () => {
+    const stale = provider("claude", { profile_models: [read("p-gw", 1)] });
+    expect(addableItems(ai([stale], { provider: "codex" }), lists).map(itemKey)).toEqual(["claude"]);
+  });
+
+  it("lists another item of the Runs on agent as a fallback, never the same item", () => {
+    const order = ai([claude], { profile: "p-work", fallback: [{ provider: "claude", profile: "p-gw", model: "opus" }] });
+    expect(runsOnItem(order, lists)?.profileName).toBe("work");
+    expect(fallbackItems(order, lists).map((entry) => itemKey(entry.item))).toEqual(["claude#p-gw"]);
+    expect(addableItems(order, lists).map(itemKey)).toEqual(["claude"]);
+  });
+
+  it("keeps an item whose profile is gone in the order as missing, never offered and never answering", () => {
+    const gone = ai([claude], { profile: "p-old", profile_missing: true, fallback: [{ provider: "claude", profile: "p-older", profile_missing: true, model: "" }] });
+    const chosen = runsOnItem(gone, lists);
+    expect(chosen?.missing).toBe(true);
+    expect(chosen?.selectable).toBe(false);
+    expect(runsOnChoices(gone, lists).map(itemKey).at(-1)).toBe("claude#p-old");
+    expect(fallbackItems(gone, lists)[0]?.item.missing).toBe(true);
+    expect(hideAiCanAnswer(gone)).toBe(false);
+    expect(hideAiCanAnswer(ai([claude], { profile: "p-old", profile_missing: true, fallback: [{ provider: "claude", profile: "p-gw", model: "" }] }))).toBe(true);
   });
 });
 

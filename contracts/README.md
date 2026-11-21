@@ -1,34 +1,8 @@
-# Herdr API contract
-
-`herdr-api.schema.json` is what the pinned Herdr binary answers to `herdr api schema --json`, written by `scripts/bump-herdr.sh` in the same run that moves the pin recorded in `contracts/herdr-bundle.json`.
-Herdr owns the schema and the protocol revision; `herdr-core/build.rs` derives `HERDR_PROTOCOL_REVISION` from this file, so no protocol number is maintained by hand anywhere in this repository.
-
-<!-- herdr-provenance:start -->
-hide distributes the [upstream Herdr release v0.9.5](https://github.com/herdrdev/herdr/releases/tag/v0.9.5).
-The bundled binary's code is not modified by hide; a macOS release replaces only its ad-hoc signature with hide's Developer ID one, which notarization requires.
-`herdr-update.yml` proposes an upstream stable release with `--repo herdrdev/herdr` only when run by hand, since the pin holds while Hide moves to its own engine; updates must pass contract and runtime checks.
-<!-- herdr-provenance:end -->
-
-Never edit this file directly.
-Move the pin and the contract together:
-
-```sh
-./scripts/bump-herdr.sh <release-tag>
-```
-
-Re-running the script for the tag already pinned rewrites the contract only when it drifted from what the binary reports, and is otherwise a no-op.
-
-Before launching the IDE against a local runtime, verify that the contract, the CLI, and the running server agree:
-
-```sh
-./scripts/check-herdr-contract.sh --herdr-bin <path to the pinned binary>
-```
-
 # Snapshot wire enums
 
 `snapshot-wire-enums.json` lists, for every string enum the core serializes into the shell snapshot, the exact values it emits.
 The core is the writer of those strings.
-`herdr-core/src/model.rs`'s `wire_enum_tests` pins the writing side: it fails to compile until a new variant is matched there, and then fails the test until that variant is added to this file.
+`hide-core/src/model.rs`'s `wire_enum_tests` pins the writing side: it fails to compile until a new variant is matched there, and then fails the test until that variant is added to this file.
 
 Nothing in this repository checks an incoming wire value against this file from the reading side.
 The web shell (`web/src/snapshot.ts`) types these fields with TypeScript, which is a compile-time check only and does not reject an unrecognized value at runtime; a field the core stops emitting, or emits a new value for, is not caught by a test today.
@@ -40,7 +14,7 @@ List an enum here, with a Rust-side pin and a reading-side check for it, in the 
 
 # Agent adapters
 
-`agent-adapters.json` is the web projection of `hide-agent-adapter`'s static declarations: support order, canonical ids and aliases, labels, Herdr kinds, Docs and Install links, logo ids and start/resume eligibility.
+`agent-adapters.json` is the web projection of `hide-agent-adapter`'s static declarations: support order, canonical ids and aliases, labels, `agent_cli` names, Docs and Install links, logo ids and start/resume eligibility.
 `web/src/agentAdapters.ts` is the shell's normalized reader; Settings, onboarding, desktop and phone pickers, resume requests and logo lookup derive their answers from it.
 The Rust contract test compares the committed file with the current projection and checks its source links, logo manifest entries and support fixtures.
 Do not maintain another web support table or edit this generated file by hand.
@@ -53,7 +27,7 @@ target/debug/examples/export_web_contract > contracts/agent-adapters.json
 
 # Agent journey
 
-`agent-journey.json` is the agent journey's projection of the same declarations ([docs/VERIFICATION.md](../docs/VERIFICATION.md#agent-journey)): for each adapter its Herdr kind, the source Herdr's own integration reports its session under (`herdr_source`, named by the integration target: `herdr:antigravity_cli` for agy), its own folder in its HOME (`home_folder`, which the kit reads as the agent being set up), the flag that separates a spawn's first prompt, the model flag, the name a row shows for it while it has no task title (`untitled`), which journey cells it declares (`composer` for an agent whose adapter declares a composer, which the journey reads with `journey_composer`), how a letter reaches it (`letter`: `bell` wakes the pane, `next_prompt` rides the next prompt's hook, `tool` waits until the agent reads its inbox), how it wakes from sleep (`wake`: `pane` wakes the pane it sleeps in, `sleeping_session` reopens a closed session in a new pane), where the native title its `title` cell reads comes from (`title`: `automatic` when the agent titles its session itself, `{"named": "/name"}` when only the name the operator gives it with that command is one, as Pi's), the most model requests a signed-in CI run may make for it (`request_budget`, three per turn the declared cells start, four for Grok, whose CLI makes four for every turn), and the oldest CLI version Hide puts its hook, plugin or extension in place for (`minimum_version`, [agent-hooks.md](../docs/agent-hooks.md#the-oldest-version-of-each-agent)), which every pin in `agent-clis.json` must meet (`scripts/tests/test_agent_journey_contract.py`).
+`agent-journey.json` is the agent journey's projection of the same declarations ([docs/VERIFICATION.md](../docs/VERIFICATION.md#agent-journey)): for each adapter its `agent_cli`, its own folder in its HOME (`home_folder`, which the kit reads as the agent being set up), the flag that separates a spawn's first prompt, the model flag, the name a row shows for it while it has no task title (`untitled`), which journey cells it declares (`composer` for an agent whose adapter declares a composer, which the journey reads with `journey_composer`; `profile` for an agent a profile moves to an account of its own; one `scene_<name>` for each scene it has through a door the journey opens itself), all fourteen scenes of its declaration with their door and finding (`scenes`, [VERIFICATION.md](../docs/VERIFICATION.md#agent-scenes)), the variables a start with a profile sets to name its account (`account_vars`, which the journey's wrapper keeps as the start set them), how a letter reaches it (`letter`: `bell` wakes the pane, `next_prompt` rides the next prompt's hook, `tool` waits until the agent reads its inbox), how it wakes from sleep (`wake`: `pane` wakes the pane it sleeps in, `sleeping_session` reopens a closed session in a new pane), where the native title its `title` cell reads comes from (`title`: `automatic` when the agent titles its session itself, `{"named": "/name"}` when only the name the operator gives it with that command is one, as Pi's), the most model requests a signed-in CI run may make for it (`request_budget`, three per turn the declared cells start, four for Grok, whose CLI makes four for every turn), and the oldest CLI version Hide puts its hook, plugin or extension in place for (`minimum_version`, [agent-hooks.md](../docs/agent-hooks.md#the-oldest-version-of-each-agent)), which every pin in `agent-clis.json` must meet (`scripts/tests/test_agent_journey_contract.py`).
 `scripts/agent_journey` reads only this file for what an agent supports, so a cell an adapter does not declare reads N/A rather than a failure.
 The `fake_home` declaration also carries a private-HOME API-key route and auto-update disable policy with its source evidence, or a named exception.
 These policies are for the keyless journey only and never authorize changing HOME for a real login.
@@ -66,10 +40,17 @@ target/debug/examples/export_journey_contract > contracts/agent-journey.json
 
 # Agent CLI pins
 
-`agent-clis.json` is the one place a CI agent CLI version is written: for each agent, by its Herdr kind, the version every CI lane installs, the installer (`npm` with its package, the vendor's own installer for Grok, or the release files of omp and agy), for an npm package whose program is not its `.bin` shim the program's path in the package, and for an npm package that needs its install scripts why (`install_scripts`; every other package installs with `--ignore-scripts`).
+`agent-clis.json` is the one place a CI agent CLI version is written: for each agent, by its `agent_cli`, the version every CI lane installs, the installer (`npm` with its package, the vendor's own installer for Grok, or the release files of omp and agy), for an npm package whose program is not its `.bin` shim the program's path in the package, and for an npm package that needs its install scripts why (`install_scripts`; every other package installs with `--ignore-scripts`).
 `scripts/install-agent-clis.py` reads it to install each CLI on a runner and fails when a CLI answers another version, and the agent journey reads it to say in its report whether the CLI it measured answered that version, which fails its lane otherwise.
 omp's binary is checked against its release's `SHA256SUMS.txt`, and Grok's vendor installer publishes no checksum, so only the version it answers is checked.
 agy's installer serves only its latest release, so agy's row also records, for each system CI installs it on (`darwin-arm64`, `linux-x64`, `windows-x64`), the `url` and `sha512` of that release's file from agy's manifest, and the install downloads that file and checks it; a test refuses a row without both for each system.
+Every file the install downloads - omp's and agy's release files and Grok's installer - comes through one helper that runs curl to the file it is wanted at.
+curl is what knows which failures are worth another ask: it asks again on a 408, a 429, a 5xx and a timeout, never on a 403 or a 404.
+A body that ended short of its declared length (exit 18), an empty reply (52) and a reset mid-transfer (56) are not among those, so the helper asks again itself for those three exits; `--retry-all-errors` is not used, because it would also ask again on a 403, a 404 and a certificate that will answer the same way.
+One deadline in Python bounds the whole download: no curl run starts without time left, each is given `--max-time` of the time left, and Python kills it at that same second.
+`--retry-max-time` is not used, since curl's manual says a request started before it ends may run on past it.
+A failed download ends the step with curl's exit code and its last error, and what the file must be is still checked in Python: a file that does not match its pin is refused there, since no retry can repair it.
+Grok's installer is downloaded to a file and run from that file, so a failed download ends the step with the download's own error rather than as a missing program later.
 Move agy's pin by copying agy's row from the table `python3 scripts/agent-cli-latest.py <out.json>` writes: it reads the same manifests the daily agent canary installs agy's latest release from.
 Move a pin in a pull request: a change to this file or an installer plans the `agent CLIs` lane, which installs every pinned CLI on Linux and Windows; no workflow restates a version.
 The daily agent canary measures each CLI's latest release in place of these pins and keeps the result in the "Agent CLI support record" issue ([VERIFICATION.md: The agent canary](../docs/VERIFICATION.md#the-agent-canary)); a pin moves when a change needs it, such as the fix for a release the canary found failing.
@@ -78,8 +59,34 @@ The daily agent canary measures each CLI's latest release in place of these pins
 
 `hide-cli.json` is what `hide contract --json` exports: the commands other tools call (`hide agent`, `request`, `inbox`, `watch`), their options, and the JSON Schema of each answer ([docs/delivery.md](../docs/delivery.md#the-contract-a-calling-tool-checks)).
 The build is the writer; `hided/src/cli_contract.rs`'s `the_committed_contract_is_the_exported_one` fails until this file matches what it exports.
+A command marked `"hidden": true` is one the CLI admits but does not offer yet, such as the `hide device` verbs that pair two Hides, which `hide --help` lists only where `HIDE_DEVICE_CONNECT=1`; a calling tool does not offer it either.
 Regenerate it after a change to those commands, and review the diff as the change callers see:
 
 ```sh
 target/debug/hide contract --json | python3 -m json.tool > contracts/hide-cli.json
+```
+
+# Device kits
+
+`device-kits.json` names every platform a device kit is made for, and is the only place those platforms are named ([docs/BUILD.md](../docs/BUILD.md#device-helper-release-bundles)).
+It gives the release manifest's format and name, the archive name, the four programs every kit carries, and for each platform its Rust target, the job that produces it, its program suffix, the executable header its programs must have and any runtime files beside them (`true` for an executable one); `refused` gives the reason a device of a platform Hide does not ship for is turned away.
+It is written by hand, and its readers are the core, which compiles it in (`hide-node/src/ssh/kit/contract.rs`), and the packaging scripts (`desktop/scripts/device-helpers.mjs`), each with its own tests over it.
+`scripts/check-device-kits-single-source.py` fails when a platform name appears anywhere else in that code.
+A new platform is one entry here, a runner that builds it, and its row in [docs/INSTALL.md](../docs/INSTALL.md#what-each-system-supports); raising `format` makes every core of an earlier build refuse the new manifest by its number.
+
+# Peer link
+
+`peer-link.json` is what two machines that each run Hide say to each other on their one connection ([docs/ARCHITECTURE.md](../docs/ARCHITECTURE.md#the-peer-connection)): the ALPN, the spelling of a key, the hello and the link versions this build speaks, every stream kind with its tag, its priority and whether it needs a grant, the close codes, the pairing, revoke and management messages, the event a core hands another and the limits of the box that keeps it, a guest node's launch contract (its arguments, its folder and socket names with the longest socket tail they make, its ready and idle lines and exit codes, how many guests a host has at work at once, and how a guest's installation is named in the host account's agent settings, where the guest's build writes its hook entries and the host's build takes them out), the tap's frames and its cap, and the list of panes a guest keeps.
+`hide-peer-protocol` is the writer: `contract::shape` builds the file's content from the crate's own constants and types, and its test `the_committed_contract_is_what_the_code_speaks` fails until this file matches.
+The crate also includes the file in its source, and a build that is not a release sends the file's hash in its hello, so two development builds of different contracts refuse each other instead of misreading one another.
+A change to it is a change to what a peer of another build reads: add a field or a message type an older reader skips, and raise the link version (`hello::NEWEST_LINK`) for anything an older reader would misread.
+`fixtures/peer-link/event-box.jsonl` is a guest node's box as recorded: its first line as this build writes one, its second with fields a later build of the same guest might add.
+A `letter` event's body is the guest's own build's on both ends (`pane`, the `terminal` the node proved its sender in, and the `command`), so the peer contract names only the line around it.
+The node's tests read it as the box an earlier node left (`hided/src/guest_node/event_box.rs`, `hided/tests/it/guest_node.rs`): every line goes to the guest's core as it was written, and this build's own line matches the first field for field, so the build before and the build after read the same box.
+Add a line when a build starts writing a field; never change a recorded one.
+Regenerate `peer-link.json` from that crate alone, so the keys come out in one order whatever else the build selects, and never edit it by hand:
+
+```sh
+bash scripts/verify-cargo.sh build -p hide-peer-protocol --example export_contract
+target/debug/examples/export_contract > contracts/peer-link.json
 ```

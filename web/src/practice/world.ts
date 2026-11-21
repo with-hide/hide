@@ -1,6 +1,6 @@
 // What a practice chapter plays in: a world the real shell draws, and the core
 // events it answers, applied here the way the core would apply them. Nothing
-// leaves the page: no daemon, no Herdr, no agent.
+// leaves the page: no daemon, no engine, no agent.
 
 import type { NodeUsage } from "../generated/hided-ws";
 import type { AgentRow, ChangesSnapshot, EditorSnapshot, LinkPanel, MemorySection, SessionRecordSection, SessionWorkSearch, SnapshotRest, SuggestionsSection } from "../snapshot";
@@ -27,7 +27,7 @@ export const PRACTICE_OUTSIDE = "practice_outside";
 /**
  * What the core sends beside the snapshot: the ⌘P index's answer, the open
  * editor tabs and their documents, ⌘K's session search, the record and link
- * record the lane's 보기 slot shows, the Explorer's folder listings (keyed by
+ * record a desk's card tab shows, the Explorer's folder listings (keyed by
  * folder path) and the checkout's Git changes, and the Memory tool's Project
  * with the Hide AI tool's 제안 section it is drawn under.
  */

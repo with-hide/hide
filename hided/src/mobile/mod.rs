@@ -13,10 +13,14 @@
 //! change; what it asks is one of the `mobile_*` events.
 
 pub mod conversation;
+pub mod html_look;
+pub mod looks;
+pub mod page_shot;
 pub mod pane;
 pub mod phone;
 pub mod phones;
 pub mod projection;
+pub mod prs;
 pub mod push;
 pub mod relay;
 pub mod start;
@@ -25,7 +29,6 @@ pub mod tailscale;
 
 use std::collections::{BTreeSet, HashMap, HashSet, VecDeque};
 use std::path::PathBuf;
-use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex, RwLock};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
@@ -35,13 +38,14 @@ use serde_json::{Value, json};
 use tokio::sync::{Notify, watch};
 
 use crate::core::CoreHandle;
-use herdr_core::delivery::worker::{HumanNotice, HumanNoticeKind};
-use herdr_core::engine::EngineHandle;
+use hide_core::delivery::worker::{HumanNotice, HumanNoticeKind};
+use hide_core::engine::EngineHandle;
+use hide_relay_protocol::admission::PushOutcome;
 use phones::{PairRefusal, Phones};
-use projection::{AgentKey, Projection};
+use projection::{AgentKey, PhoneAutomations, PhoneMissions, PhonePrs, Projection};
 use store::{
-    Method, MobileSettings, Notifications, PhoneOrigin, PhoneRecord, PushMode, PushSubscription,
-    ServeRecord,
+    ApnsRegistration, FcmRegistration, Method, MobileSettings, Notifications, PhoneOrigin,
+    PhoneRecord, PushMode, PushSubscription, ServeRecord,
 };
 use tailscale::{Checklist, CliSource, CommandFailure, Ownership, StepState};
 
@@ -50,6 +54,21 @@ fn projection_failed(stage: &str, message: &str) {
         "{}",
         json!({"component": "hided", "kind": "mobile.projection_failed", "stage": stage, "message": message})
     );
+}
+
+/// The automations the core counts as the operator's turn, oldest pause
+/// first (`navigator.agent_scope.automation_asks`, PRD automations D-12); the
+/// core leaves the field out while there are none.
+fn automation_asks(rest: &Value) -> Vec<String> {
+    rest.pointer("/navigator/agent_scope/automation_asks")
+        .and_then(Value::as_array)
+        .map(|asks| {
+            asks.iter()
+                .filter_map(Value::as_str)
+                .map(str::to_owned)
+                .collect()
+        })
+        .unwrap_or_default()
 }
 
 /// How often the checklist is read again while Settings > Mobile is open.
@@ -94,6 +113,127 @@ enum Exposure {
     },
 }
 
+/// Where a phone's notices go: its Web Push subscription, or the relay for an
+/// app (Apple for the iOS app, Google's FCM for the Android app), whose
+/// registration is read again at send.
+#[derive(Clone)]
+enum Route {
+    Web(PushSubscription),
+    App,
+}
+
+/// An app phone's registration, read at send: one of the two a record holds.
+enum AppRegistration {
+    Apns(ApnsRegistration),
+    Fcm(FcmRegistration),
+}
+
+impl Route {
+    fn of(phone: &PhoneRecord) -> Option<Self> {
+        match &phone.push {
+            Some(subscription) => Some(Self::Web(subscription.clone())),
+            None if phone.apns.is_some() || phone.fcm.is_some() => Some(Self::App),
+            None => None,
+        }
+    }
+}
+
+/// How many notices wait for the relay link per phone, and how long one stays worth sending.
+/// A notice is about what an agent is doing now; past a minute it is old news.
+const HELD_PER_PHONE: usize = 8;
+const HELD_MAX_AGE: Duration = Duration::from_secs(60);
+
+/// A notice that found no relay link. The follower's first pass runs before the relay socket is admitted, so without
+/// this the notice is dropped. At most one waits per agent tag (a newer notice for the tag replaces it, as it replaces
+/// the older one on the phone), and the link's coming up sends each once.
+struct Held {
+    payload: Value,
+    /// A waiting root's notice's serial (`LiveNotices`); `None` for a human delivery notice.
+    generation: Option<u64>,
+    at: std::time::Instant,
+}
+
+/// Puts a notice at the end of a phone's held queue: it replaces the one held for the same agent tag, and the oldest
+/// go past `HELD_PER_PHONE`.
+fn hold_in(
+    held: &mut VecDeque<Held>,
+    payload: Value,
+    generation: Option<u64>,
+    at: std::time::Instant,
+) {
+    let tag = payload.get("tag").cloned();
+    held.retain(|older| older.payload.get("tag") != tag.as_ref());
+    held.push_back(Held {
+        payload,
+        generation,
+        at,
+    });
+    while held.len() > HELD_PER_PHONE {
+        held.pop_front();
+    }
+}
+
+/// Which notice of a waiting root is current, by tag. Each notice handed to delivery takes the next serial of this
+/// Mobile's life, and closing the root's notice takes its tag out, so a job or held notice is sent or held only while
+/// its serial is the tag's current one: a notice closed before it went out is never sent, and one of an earlier wait
+/// never rides on a later one. A human delivery notice carries no serial and is never withdrawn. One entry per root
+/// with a notice out, taken out by its close or by `clear` when the follower stops tracking.
+#[derive(Default)]
+struct LiveNotices {
+    current: HashMap<String, u64>,
+    serial: u64,
+}
+
+impl LiveNotices {
+    fn stamp(&mut self, tag: String) -> u64 {
+        self.serial += 1;
+        self.current.insert(tag, self.serial);
+        self.serial
+    }
+
+    fn close(&mut self, tag: &str) {
+        self.current.remove(tag);
+    }
+
+    fn is_current(&self, payload: &Value, generation: Option<u64>) -> bool {
+        generation.is_none_or(|generation| {
+            payload
+                .get("tag")
+                .and_then(Value::as_str)
+                .and_then(|tag| self.current.get(tag))
+                == Some(&generation)
+        })
+    }
+}
+
+/// What became of a waiting notice at the moment it was to be sent or held.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum Handoff {
+    /// Its root stopped waiting first: nothing was sent.
+    Withdrawn,
+    /// Older than `HELD_MAX_AGE`: nothing was sent.
+    Expired,
+    /// Handed to the push path, whatever it answered.
+    Tried,
+}
+
+/// One notice for one phone, and its serial (`LiveNotices`).
+type Job = (String, Route, Value, u64);
+
+/// Withdraws the waiting notices a follower handed out when it ends, on every path (`Mobile::withdraw_waiting`).
+struct WithdrawOnExit(Arc<Mobile>);
+
+impl Drop for WithdrawOnExit {
+    fn drop(&mut self) {
+        self.0.withdraw_waiting();
+    }
+}
+
+/// A held notice waits at most `HELD_MAX_AGE`: a flush after that drops it instead of sending a stale question.
+fn held_expired(at: std::time::Instant, now: std::time::Instant) -> bool {
+    now.saturating_duration_since(at) > HELD_MAX_AGE
+}
+
 struct Inner {
     settings: MobileSettings,
     phones: Phones,
@@ -101,16 +241,51 @@ struct Inner {
     checklist: Option<Checklist>,
     relay_state: relay::State,
     relay_keys: Option<Arc<relay::Keys>>,
+    /// The running relay socket's push path, while it runs; the only way an
+    /// iOS app phone's notice reaches Apple (`docs/RELAY_PROTOCOL.md`).
+    relay_link: Option<relay::Link>,
     relay_cleanup_failure: Option<String>,
     /// Renderer connections with Settings > Mobile open.
     observers: HashSet<u64>,
-    /// Tags of agents made Seen since each phone's last push (PRD D-21).
+    /// Closes owned by each phone until transport preparation succeeds (PRD D-21).
     pending_clear: HashMap<String, BTreeSet<AgentKey>>,
+    /// Notices for an iOS app phone that found no relay link, kept until one is up (`Held`).
+    held: HashMap<String, VecDeque<Held>>,
+    /// Which waiting root's notice is current (`LiveNotices`).
+    live: LiveNotices,
+    phone_notices: push::PhoneNotices,
     /// Input request ids each phone sent, and how each ended (PRD B27).
     inputs: HashMap<String, VecDeque<(String, InputState)>>,
     /// An exposed Mobile's last pass could not read Tailscale; one such miss
     /// keeps the exposure, the next one in a row drops it.
     missed_check: bool,
+    /// Whether a pass is owed for a change no pass has read yet.
+    reconcile_owed: PassOwed,
+}
+
+/// A change of hide's own settings, or the start, that no pass has read yet.
+/// A pass takes it when it reads the settings, so two changes that arrive
+/// before a pass starts cost one pass, and a pass never repeats what an
+/// earlier one already read.
+#[derive(Clone, Copy, Debug)]
+struct PassOwed(bool);
+
+impl PassOwed {
+    fn owe(&mut self) {
+        self.0 = true;
+    }
+
+    /// Whether a pass that reads the settings now should run, and the debt it
+    /// settles by running. A forced pass (the observation clock, Settings
+    /// opening) runs whatever is owed, because it asks Tailscale again rather
+    /// than act on a change of ours.
+    fn take(&mut self, forced: bool) -> bool {
+        let run = forced || self.0;
+        if run {
+            self.0 = false;
+        }
+        run
+    }
 }
 
 impl Inner {
@@ -127,9 +302,9 @@ impl Inner {
 pub enum InputState {
     /// Being written now; a repeat must not write it again.
     InFlight,
-    /// Herdr took it.
+    /// The engine took it.
     Written,
-    /// Herdr did not answer in time: it may or may not have landed, so a
+    /// The engine did not answer in time: it may or may not have landed, so a
     /// repeat of this id is never written again.
     Uncertain,
 }
@@ -170,9 +345,7 @@ pub struct Config {
     pub core: Arc<CoreHandle>,
     /// Asked at every write to a pane, so a reply never lands in the shell
     /// under an agent that is ending, asleep or waking.
-    pub input_gate: Arc<herdr_core::input_gate::PaneInputGate>,
-    /// Shell windows (desktop and web) on this daemon: "the app is open".
-    pub renderers: Arc<AtomicUsize>,
+    pub input_gate: Arc<hide_core::input_gate::PaneInputGate>,
     /// Which connections show a start surface; a phone's open start sheet is one.
     pub start_demand: Arc<crate::demand::ObservationDemand>,
     /// Whether the core may act outside this machine: a core on a move's
@@ -182,17 +355,32 @@ pub struct Config {
     /// The desktop windows' notifications, judged on the projection this
     /// follower reads (`desktop_notices.rs`).
     pub desktop: Arc<crate::desktop_notices::DesktopNotices>,
+    /// The boundary and the roots a phone's file read is confined by: the
+    /// ones the desktop's `file_bytes` uses (`looks.rs`).
+    pub boundary: Arc<crate::boundary::Boundary>,
+    pub roots: Arc<crate::RootFollower>,
+    /// The desktop windows' gateways, which a page View's screenshot goes
+    /// through (`page_shot.rs`).
+    pub browser_control: Arc<crate::browser_control::BrowserControl>,
 }
 
 pub struct Mobile {
     config: Config,
     inner: Mutex<Inner>,
     /// One reconcile at a time, so a double toggle or two startup passes
-    /// converge on one serve entry.
+    /// converge on one serve entry (`Inner::reconcile_owed` keeps the second
+    /// from running at all when the first has read the settings it was asked
+    /// about).
     reconcile_lock: tokio::sync::Mutex<()>,
     origin: RwLock<Option<String>>,
     frame: watch::Sender<Arc<Value>>,
     projection: watch::Sender<Arc<Projection>>,
+    /// The missions a phone lists, built from the same inputs as `projection`.
+    missions: watch::Sender<Arc<PhoneMissions>>,
+    /// The pull requests a phone lists, built from the same inputs as `projection`.
+    prs: watch::Sender<Arc<PhonePrs>>,
+    /// The automations a phone lists, built from the core's own section.
+    automations: watch::Sender<Arc<PhoneAutomations>>,
     /// What the start sheet lists, republished when it changes.
     catalog: watch::Sender<Arc<start::Catalog>>,
     /// The core's answers to start requests, for the requests waiting on them.
@@ -200,6 +388,10 @@ pub struct Mobile {
     starts: start::Desk,
     meta: watch::Sender<PhoneMeta>,
     live: Mutex<HashMap<u64, LivePhone>>,
+    /// The agents the core was last told the phones have open
+    /// (`announce_viewing`); held while the core is told, so two changes
+    /// reach it in the order they happened.
+    viewing_announced: Mutex<BTreeSet<String>>,
     vapid: Option<push::Vapid>,
     wake: Notify,
     stopping: watch::Sender<bool>,
@@ -208,7 +400,7 @@ pub struct Mobile {
 }
 
 fn record_transport_failure(failure: &CommandFailure, step: &str) {
-    herdr_core::diagnostic!(json!({
+    hide_core::diagnostic!(json!({
         "component": "mobile_transport",
         "kind": "serve.failed",
         "step": step,
@@ -220,7 +412,7 @@ fn record_transport_failure(failure: &CommandFailure, step: &str) {
 
 impl Mobile {
     /// The core's own machine, whose agents the navigator lists.
-    pub fn node(&self) -> &herdr_core::node::NodeId {
+    pub fn node(&self) -> &hide_core::node::NodeId {
         self.config.core.node()
     }
 
@@ -244,7 +436,7 @@ impl Mobile {
                     Some(vapid)
                 }
                 Err(message) => {
-                    herdr_core::diagnostic!(json!({
+                    hide_core::diagnostic!(json!({
                         "component": "mobile_push", "kind": "vapid.unavailable", "message": message,
                     }));
                     None
@@ -264,6 +456,10 @@ impl Mobile {
             Exposure::Off
         };
         let push_mode = settings.push_mode;
+        let starts = start::Desk::new({
+            let desktop = Arc::clone(&config.desktop);
+            move || desktop.phone_input(std::time::Instant::now())
+        });
         let mobile = Arc::new(Self {
             inner: Mutex::new(Inner {
                 settings,
@@ -272,32 +468,46 @@ impl Mobile {
                 checklist: None,
                 relay_state: relay::State::Off,
                 relay_keys: None,
+                relay_link: None,
                 relay_cleanup_failure: None,
                 observers: HashSet::new(),
                 pending_clear: HashMap::new(),
+                held: HashMap::new(),
+                live: LiveNotices::default(),
+                phone_notices: push::PhoneNotices::default(),
                 inputs: HashMap::new(),
                 missed_check: false,
+                reconcile_owed: PassOwed(true),
             }),
             config,
             reconcile_lock: tokio::sync::Mutex::new(()),
             origin: RwLock::new(None),
             frame: watch::channel(Arc::new(Value::Null)).0,
             projection: watch::channel(Arc::new(Projection::default())).0,
+            missions: watch::channel(Arc::new(PhoneMissions::default())).0,
+            prs: watch::channel(Arc::new(PhonePrs::default())).0,
+            automations: watch::channel(Arc::new(PhoneAutomations::default())).0,
             catalog: watch::channel(Arc::new(start::Catalog::default())).0,
             answers: watch::channel(Arc::new(Vec::new())).0,
-            starts: start::Desk::default(),
+            starts,
             meta: watch::channel(PhoneMeta {
                 push_mode,
                 live_phones: 0,
             })
             .0,
             live: Mutex::new(HashMap::new()),
+            viewing_announced: Mutex::new(BTreeSet::new()),
             vapid,
             wake: Notify::new(),
             stopping: watch::channel(false).0,
             relay_change: watch::channel(0).0,
             relay_task: Mutex::new(None),
         });
+        // A notice for an app phone carries the relay room, which comes from these keys. The
+        // supervisor's first pass makes them too, but a notice can be delivered before that pass
+        // runs (`push_payload`), and one that finds no keys is dropped with its closes; making
+        // them here means the first delivery reads the same pair as every later one.
+        mobile.prepare_relay_keys();
         *mobile
             .relay_task
             .lock()
@@ -317,7 +527,7 @@ impl Mobile {
             }
             tokio::spawn(Arc::clone(&startup).observe_loop());
             tokio::spawn(Arc::clone(&startup).follow());
-            startup.reconcile().await;
+            startup.reconcile_if_owed().await;
         });
         tokio::spawn(Arc::clone(&mobile).sweep_loop());
         mobile
@@ -340,6 +550,25 @@ impl Mobile {
             &store::settings_path(&self.config.state_dir),
             &inner.settings,
         );
+    }
+
+    /// Makes the relay keys before anything needs them, while the relay is on: a notice's room, a
+    /// pairing QR and the relay link all read the one pair. Called wherever Mobile starts using the
+    /// relay (a start, the switch, the method), so no delivery is the first caller to make the pair.
+    fn prepare_relay_keys(&self) {
+        let inner = self.lock();
+        if !inner.settings.enabled || inner.settings.method() != Method::Relay {
+            return;
+        }
+        drop(inner);
+        // A pair that cannot be made leaves no room for a notice, so the relay line says so
+        // (`key_unavailable`, with its retry) instead of a notice failing later on its own.
+        if self.relay_keys().is_err() {
+            hide_core::diagnostic!(json!({
+                "component": "mobile_relay", "kind": "relay.keys_unprepared",
+            }));
+            self.relay_state(relay::State::KeyUnavailable);
+        }
     }
 
     fn relay_keys(&self) -> Result<Arc<relay::Keys>, ()> {
@@ -428,6 +657,27 @@ impl Mobile {
         self.keep_alive() || self.config.desktop.wanted()
     }
 
+    /// Republishes the phone's automations when they changed, and records
+    /// when the list first goes over its caps, not on every change while it
+    /// stays over (the count is in the frame).
+    fn publish_automations(&self, automations: PhoneAutomations) {
+        self.automations.send_if_modified(|current| {
+            if **current == automations {
+                return false;
+            }
+            if automations.omitted > 0 && current.omitted == 0 {
+                hide_core::diagnostic!(json!({
+                    "component": "mobile_phone", "kind": "automations.capped",
+                    "omitted": automations.omitted,
+                    "cap": hide_core::agent_state::phone::MAX_AUTOMATIONS,
+                    "budget": hide_core::agent_state::phone::LIST_BUDGET,
+                }));
+            }
+            *current = Arc::new(automations);
+            true
+        });
+    }
+
     /// A desktop window turned its notifications on: the follower starts if
     /// it was resting, or seeds the windows' transitions on its next pass.
     pub fn wake_follower(&self) {
@@ -440,6 +690,33 @@ impl Mobile {
 
     pub fn subscribe_projection(&self) -> watch::Receiver<Arc<Projection>> {
         self.projection.subscribe()
+    }
+
+    pub fn subscribe_missions(&self) -> watch::Receiver<Arc<PhoneMissions>> {
+        self.missions.subscribe()
+    }
+
+    /// The missions a phone may name in a request now.
+    pub fn missions(&self) -> Arc<PhoneMissions> {
+        Arc::clone(&self.missions.borrow())
+    }
+
+    pub fn subscribe_prs(&self) -> watch::Receiver<Arc<PhonePrs>> {
+        self.prs.subscribe()
+    }
+
+    /// The pull requests a phone may name in a request now.
+    pub fn prs(&self) -> Arc<PhonePrs> {
+        Arc::clone(&self.prs.borrow())
+    }
+
+    pub fn subscribe_automations(&self) -> watch::Receiver<Arc<PhoneAutomations>> {
+        self.automations.subscribe()
+    }
+
+    /// The automations a phone may name in a request now.
+    pub fn automations(&self) -> Arc<PhoneAutomations> {
+        Arc::clone(&self.automations.borrow())
     }
 
     pub fn subscribe_catalog(&self) -> watch::Receiver<Arc<start::Catalog>> {
@@ -546,7 +823,7 @@ impl Mobile {
                     "name": phone.name,
                     "last_seen_ms": phone.last_seen_ms,
                     "connected": live.contains(&phone.id),
-                    "notifications": match (phone.notifications, phone.push.is_some()) {
+                    "notifications": match (phone.notifications, phone.reachable()) {
                         (_, true) => "on",
                         (Notifications::Off, false) => "off",
                         _ => "unasked",
@@ -599,6 +876,22 @@ impl Mobile {
     /// on, the Mac's three checks pass and port 443 holds hide's own entry
     /// for this port; off, hide's recorded entry is gone. Runs one at a time.
     pub async fn reconcile(&self) {
+        self.pass(true).await;
+    }
+
+    /// A change of this daemon's own settings asks for a pass: it runs one
+    /// unless a pass that read those settings already ran.
+    fn owe_pass(self: &Arc<Self>) {
+        self.lock().reconcile_owed.owe();
+        let mobile = Arc::clone(self);
+        tokio::spawn(async move { mobile.reconcile_if_owed().await });
+    }
+
+    async fn reconcile_if_owed(&self) {
+        self.pass(false).await;
+    }
+
+    async fn pass(&self, forced: bool) {
         let _running = self.reconcile_lock.lock().await;
         // Once the daemon is stopping, shutdown owns the serve entry; a
         // pending core touches none.
@@ -606,7 +899,10 @@ impl Mobile {
             return;
         }
         let (enabled, method, record) = {
-            let inner = self.lock();
+            let mut inner = self.lock();
+            if !inner.reconcile_owed.take(forced) {
+                return;
+            }
             (
                 inner.settings.enabled,
                 inner.settings.method(),
@@ -711,7 +1007,7 @@ impl Mobile {
             if let Some(record) = record
                 && let Err((step, message)) = self.remove_recorded(&program, &record).await
             {
-                herdr_core::diagnostic!(json!({
+                hide_core::diagnostic!(json!({
                     "component": "mobile_transport", "kind": "serve.funnel_withdraw_failed",
                     "step": step, "message": message,
                 }));
@@ -785,7 +1081,7 @@ impl Mobile {
             Ok(Ownership::Ours { .. }) | Ok(Ownership::Foreign { ours_too: true, .. }) => {
                 match tailscale::serve_remove(program).await {
                     Ok(()) => {
-                        herdr_core::diagnostic!(json!({
+                        hide_core::diagnostic!(json!({
                             "component": "mobile_transport", "kind": "serve.removed",
                             "dns_name": record.dns_name, "port": record.port,
                         }));
@@ -804,7 +1100,7 @@ impl Mobile {
                 Ok(())
             }
             Err(message) => {
-                herdr_core::diagnostic!(json!({
+                hide_core::diagnostic!(json!({
                     "component": "mobile_transport", "kind": "serve.unreadable", "message": message,
                 }));
                 Err(("check", message))
@@ -831,7 +1127,7 @@ impl Mobile {
         let funnel = |serve: &Value| {
             let on = tailscale::funnel_on(serve, dns_name);
             if on {
-                herdr_core::diagnostic!(json!({
+                hide_core::diagnostic!(json!({
                     "component": "mobile_transport", "kind": "serve.funnel_on", "dns_name": dns_name,
                 }));
             }
@@ -859,7 +1155,7 @@ impl Mobile {
                         Err(failure) => record_transport_failure(&failure, "remove"),
                     }
                 }
-                herdr_core::diagnostic!(json!({
+                hide_core::diagnostic!(json!({
                     "component": "mobile_transport", "kind": "serve.foreign", "target": target,
                 }));
                 return Err(Exposure::Foreign { target });
@@ -940,7 +1236,7 @@ impl Mobile {
             }
             return Err(failure);
         }
-        herdr_core::diagnostic!(json!({
+        hide_core::diagnostic!(json!({
             "component": "mobile_transport", "kind": "serve.added", "dns_name": dns_name, "port": port,
         }));
         Ok(())
@@ -1058,7 +1354,7 @@ impl Mobile {
         {
             Ok(notices) => notices,
             Err(code) => {
-                herdr_core::diagnostic!(
+                hide_core::diagnostic!(
                     json!({"component":"delivery","kind":"human.claim_failed","code":code})
                 );
                 return;
@@ -1068,40 +1364,18 @@ impl Mobile {
             if *self.stopping.borrow() {
                 return;
             }
-            let push = match self.push_delivery(&notice) {
-                Ok(()) => continue,
-                Err(reason) => reason,
+            let Err(push) = self.push_delivery(&notice) else {
+                continue;
             };
             if *self.stopping.borrow() {
                 return;
             }
-            // The toast goes to the Herdr of the machine the operator works
-            // at: a screen machine linked to this core, through its link,
-            // and otherwise this machine's (PRD core-host-node-remote-core
-            // D-18). Herdr is skipped only when that machine has no socket
-            // for it; its toast setting is not readable, so every other case
-            // is tried.
-            let machine = self
-                .config
-                .core
-                .linked_nodes()
-                .ok()
-                .and_then(|nodes| nodes.into_iter().next())
-                .unwrap_or_else(|| self.node().as_str().to_owned());
-            let herdr = match self.engine(&machine) {
-                Ok(engine) => match notice.notify_herdr(&engine) {
-                    Ok(()) => continue,
-                    Err(reason) => reason,
-                },
-                Err(_) => "no_socket",
-            };
-            // Its ledger claim remains consumed even when both channels
-            // fail. A restart never becomes an external resend. The record
-            // names the notice and the reason per channel, never its text.
-            herdr_core::diagnostic!(json!({
+            // Its ledger claim remains consumed when the phone could not be
+            // reached. A restart never becomes an external resend. The record
+            // names the notice and the reason, never its text.
+            hide_core::diagnostic!(json!({
                 "component": "delivery", "kind": "human.channels_failed",
-                "notice": notice.kind.code(), "letter_id": notice.id,
-                "push": push, "herdr": herdr, "herdr_node": machine,
+                "notice": notice.kind.code(), "letter_id": notice.id, "push": push,
             }));
         }
     }
@@ -1115,33 +1389,39 @@ impl Mobile {
         clear: &BTreeSet<AgentKey>,
     ) -> Result<Value, &'static str> {
         let mut payload = push::payload(notice, clear);
-        let inner = self.lock();
-        if inner.settings.method() == Method::Relay {
-            let keys = inner.relay_keys.as_ref().ok_or("relay_key_unavailable")?;
+        // One lock and one clone on the path every notice takes: the pair is made when the relay
+        // is turned on (`prepare_relay_keys`), and this reads what that left. A delivery that still
+        // finds none makes it rather than dropping the notice over its room, because the notice
+        // carries the closes: a start whose key write failed, or a method change racing a delivery,
+        // would otherwise lose both. That one write is the price of not losing the notice, and
+        // only a daemon that never made its pair pays it.
+        let prepared = {
+            let inner = self.lock();
+            (inner.settings.method() == Method::Relay).then(|| inner.relay_keys.clone())
+        };
+        if let Some(prepared) = prepared {
+            let keys = match prepared {
+                Some(keys) => keys,
+                None => self.relay_keys().map_err(|()| "relay_key_unavailable")?,
+            };
             payload["room"] = json!(keys.room());
         }
         Ok(payload)
     }
 
     fn push_delivery(&self, notice: &HumanNotice) -> Result<(), &'static str> {
-        let (vapid, targets, subject) = {
+        let (targets, subject) = {
             let inner = self.lock();
             let targets = inner
                 .phones
                 .current()
-                .filter_map(|phone| {
-                    phone
-                        .push
-                        .clone()
-                        .map(|subscription| (phone.id.clone(), subscription))
-                })
+                .filter_map(|phone| Route::of(phone).map(|route| (phone.id.clone(), route)))
                 .take(4)
                 .collect::<Vec<_>>();
-            let vapid = push::notice_route(
-                self.vapid.as_ref(),
+            push::notice_route(
                 inner.settings.push_mode,
                 inner.settings.enabled,
-                self.config.renderers.load(Ordering::SeqCst),
+                self.config.desktop.rests_phone(),
                 targets.len(),
             )?;
             let subject = inner
@@ -1150,7 +1430,7 @@ impl Mobile {
                 .as_ref()
                 .map(|serve| format!("https://{}", serve.dns_name))
                 .unwrap_or_else(|| "mailto:hide@localhost".into());
-            (vapid, targets, subject)
+            (targets, subject)
         };
         let payload = self.push_payload(
             &push::Notice {
@@ -1169,23 +1449,36 @@ impl Mobile {
                 subject: None,
                 state: match notice.kind {
                     HumanNoticeKind::ObserverUnconfirmed => push::NoticeState::ObserverUnconfirmed,
-                    HumanNoticeKind::LetterUndelivered => push::NoticeState::LetterUndelivered,
                     HumanNoticeKind::MissionAttention => push::NoticeState::NeedsYou,
                 },
                 place: match notice.kind {
                     HumanNoticeKind::ObserverUnconfirmed => notice.about.clone(),
-                    HumanNoticeKind::LetterUndelivered => notice.id.clone(),
                     HumanNoticeKind::MissionAttention => String::new(),
                 },
             },
             &BTreeSet::new(),
         )?;
         let (mut delivered, mut failed) = (false, false);
-        for (phone_id, subscription) in targets {
+        for (phone_id, route) in targets {
             if *self.stopping.borrow() {
                 return Err("stopping");
             }
-            match push::send(vapid, &subject, &subscription, &payload, now_ms() / 1000) {
+            let subscription = match route {
+                Route::Web(subscription) => subscription,
+                Route::App => {
+                    match self.push_to_app(&phone_id, &payload) {
+                        Ok(()) => delivered = true,
+                        Err("token_gone") => {}
+                        Err(_) => failed = true,
+                    }
+                    continue;
+                }
+            };
+            let Some(vapid) = self.vapid.as_ref() else {
+                failed = true;
+                continue;
+            };
+            match self.send_web(&phone_id, vapid, &subject, &subscription, &payload) {
                 push::SendOutcome::Delivered => delivered = true,
                 push::SendOutcome::Gone(_) => {
                     self.lock()
@@ -1222,11 +1515,14 @@ impl Mobile {
             .values()
             .map(|phone| phone.phone_id.clone())
             .collect();
-        let revoked = self.lock().phones.sweep(now_ms(), &connected);
+        let revoked = {
+            let mut inner = self.lock();
+            inner.phones.sweep(now_ms(), &connected)
+        };
         for phone in &revoked {
-            herdr_core::diagnostic!(json!({
+            hide_core::diagnostic!(json!({
                 "component": "mobile_phone", "kind": "phone.revoked", "phone_id": phone.id,
-                "reason": "inactive_7_days", "had_subscription": phone.push.is_some(),
+                "reason": "inactive_7_days", "had_subscription": phone.reachable(),
             }));
         }
         if !revoked.is_empty() {
@@ -1270,12 +1566,13 @@ impl Mobile {
                 if !enabled {
                     self.close_phones("mobile_off");
                 }
-                herdr_core::diagnostic!(json!({
+                // Switching the relay on means a notice can now need its room.
+                self.prepare_relay_keys();
+                hide_core::diagnostic!(json!({
                     "component": "mobile_transport", "kind": "mobile.switched", "enabled": enabled,
                 }));
                 self.publish();
-                let mobile = Arc::clone(self);
-                tokio::spawn(async move { mobile.reconcile().await });
+                self.owe_pass();
             }
             "mobile_method" => {
                 let method = match payload.get("method").and_then(Value::as_str) {
@@ -1312,12 +1609,13 @@ impl Mobile {
                     };
                     self.save_settings(&inner);
                 }
+                // The new method's first notice needs the room the relay keys name.
+                self.prepare_relay_keys();
                 self.set_origin(None);
                 self.close_phones("method_changed");
                 self.relay_changed();
                 self.publish();
-                let mobile = Arc::clone(self);
-                tokio::spawn(async move { mobile.reconcile().await });
+                self.owe_pass();
             }
             "mobile_retry" => {
                 if self.lock().relay_state != relay::State::Connected {
@@ -1377,13 +1675,14 @@ impl Mobile {
                     .get("mode")
                     .and_then(Value::as_str)
                     .and_then(PushMode::parse)
-                    .ok_or("mobile_push_mode.mode must be off, app_closed or always")?;
+                    .ok_or("mobile_push_mode.mode must be app_closed or always")?;
                 {
                     let mut inner = self.lock();
                     inner.settings.push_mode = mode;
                     self.save_settings(&inner);
                 }
                 self.publish();
+                self.wake.notify_one();
             }
             other => return Err(format!("unknown mobile event {other}")),
         }
@@ -1412,12 +1711,13 @@ impl Mobile {
             let mut inner = self.lock();
             inner.pending_clear.remove(phone_id);
             inner.inputs.remove(phone_id);
+            inner.held.remove(phone_id);
             inner.phones.revoke(phone_id)
         };
         if let Some(phone) = removed {
-            herdr_core::diagnostic!(json!({
+            hide_core::diagnostic!(json!({
                 "component": "mobile_phone", "kind": "phone.revoked", "phone_id": phone.id,
-                "reason": reason, "had_subscription": phone.push.is_some(),
+                "reason": reason, "had_subscription": phone.reachable(),
             }));
             for live in self
                 .live()
@@ -1434,7 +1734,7 @@ impl Mobile {
     fn close_phones(&self, reason: &str) {
         let live = self.live();
         if !live.is_empty() {
-            herdr_core::diagnostic!(json!({
+            hide_core::diagnostic!(json!({
                 "component": "mobile_phone", "kind": "phones.closed", "reason": reason, "count": live.len(),
             }));
         }
@@ -1446,23 +1746,33 @@ impl Mobile {
     /// Pairs a phone with the live code (the phone's `pair` handshake). A
     /// code exists only while Mobile is exposed.
     pub fn pair(&self, code: &str, user_agent: &str) -> Result<(PhoneRecord, String), PairRefusal> {
-        let result = {
+        let (result, route) = {
+            use hide_core::product_analytics::PhoneRoute;
             let mut inner = self.lock();
-            let admitted = inner.settings.enabled
-                && matches!(inner.exposure, Exposure::Exposed { .. } | Exposure::Relay);
-            let result = if admitted {
-                inner.phones.pair(code, user_agent, now_ms())
-            } else {
-                Err(PairRefusal::CodeExpired)
+            let route = match inner.exposure {
+                Exposure::Exposed { .. } => Some(PhoneRoute::Tailnet),
+                Exposure::Relay => Some(PhoneRoute::Relay),
+                _ => None,
+            };
+            let result = match route {
+                Some(_) if inner.settings.enabled => inner.phones.pair(code, user_agent, now_ms()),
+                _ => Err(PairRefusal::CodeExpired),
             };
             // The code is spent; the next phone needs `mobile_show_code`.
-            result
+            (result, route)
         };
         match &result {
-            Ok((phone, _)) => herdr_core::diagnostic!(json!({
-                "component": "mobile_pairing", "kind": "phone.paired", "phone_id": phone.id, "name": phone.name,
-            })),
-            Err(refusal) => herdr_core::diagnostic!(json!({
+            Ok((phone, _)) => {
+                hide_core::diagnostic!(json!({
+                    "component": "mobile_pairing", "kind": "phone.paired", "phone_id": phone.id, "name": phone.name,
+                }));
+                if let Some(route) = route {
+                    self.config.core.capture_product_event(
+                        hide_core::product_analytics::Event::PhonePaired { route },
+                    );
+                }
+            }
+            Err(refusal) => hide_core::diagnostic!(json!({
                 "component": "mobile_pairing", "kind": "pairing.refused", "reason": refusal.reason(),
             })),
         }
@@ -1506,7 +1816,7 @@ impl Mobile {
     pub fn admit_input(
         &self,
         pane_id: &str,
-    ) -> Result<herdr_core::input_gate::Admission, pane::PaneError> {
+    ) -> Result<hide_core::input_gate::Admission, pane::PaneError> {
         self.config
             .input_gate
             .admit(pane_id)
@@ -1559,7 +1869,7 @@ impl Mobile {
                 },
             );
         }
-        herdr_core::diagnostic!(json!({
+        hide_core::diagnostic!(json!({
             "component": "mobile_phone", "kind": "phone.connected", "phone_id": phone_id,
         }));
         self.publish();
@@ -1570,9 +1880,15 @@ impl Mobile {
     pub fn unregister(&self, connection: u64) {
         self.set_start_sheet(connection, false);
         let removed = self.live().remove(&connection);
+        if removed
+            .as_ref()
+            .is_some_and(|phone| phone.viewing.is_some())
+        {
+            self.announce_viewing();
+        }
         if let Some(phone) = removed {
             self.lock().phones.touch(&phone.phone_id, now_ms());
-            herdr_core::diagnostic!(json!({
+            hide_core::diagnostic!(json!({
                 "component": "mobile_phone", "kind": "phone.disconnected", "phone_id": phone.phone_id,
             }));
         }
@@ -1605,7 +1921,7 @@ impl Mobile {
             return json!({"type": "start_result", "ok": false, "reason": "invalid_request"});
         };
         if let Err(reason) = self.still_admitted(phone_id) {
-            herdr_core::diagnostic!(json!({
+            hide_core::diagnostic!(json!({
                 "component": "mobile_phone", "kind": "start.refused", "phone_id": phone_id, "reason": reason,
             }));
             return refused(reason);
@@ -1640,10 +1956,89 @@ impl Mobile {
             .await
     }
 
+    /// One `delegate_pr` frame (PRD mobile-companion-ui D-13, B44): the
+    /// desktop PR card's hand-over for a listed pull request that a checkout
+    /// holds, started through the same claim and answered the same way as a
+    /// start from the sheet.
+    pub async fn delegate_pr(&self, phone_id: &str, message: &Value) -> Value {
+        let Some(request_id) = message
+            .get("request_id")
+            .and_then(Value::as_str)
+            .filter(|id| start::request_id_valid(id))
+        else {
+            return json!({"type": "start_result", "ok": false, "reason": "invalid_request"});
+        };
+        if let Err(reason) = self.still_admitted(phone_id) {
+            hide_core::diagnostic!(json!({
+                "component": "mobile_phone", "kind": "start.refused", "phone_id": phone_id, "reason": reason,
+            }));
+            return json!({"type": "start_result", "request_id": request_id, "ok": false, "reason": reason});
+        }
+        let event = prs::delegate(message, &self.prs(), request_id);
+        if let Err(reason) = &event {
+            hide_core::diagnostic!(json!({
+                "component": "mobile_phone", "kind": "scope.refused", "phone_id": phone_id,
+                "request": format!("delegate_pr:{reason}"),
+            }));
+        }
+        let core = Arc::clone(&self.config.core);
+        self.starts
+            .start_event(
+                phone_id,
+                request_id,
+                event,
+                self.answers.subscribe(),
+                start::ANSWER_LIMIT,
+                move |event| core.dispatch(event),
+            )
+            .await
+    }
+
+    /// The agent this connection has open, or none. An agent a phone has
+    /// open is read on both surfaces, as the desktop's focus on its pane
+    /// reads it, for as long as it stays open (`announce_viewing`).
     pub fn set_viewing(&self, connection: u64, viewing: Option<AgentKey>) {
         if let Some(phone) = self.live().get_mut(&connection) {
             phone.viewing = viewing;
         }
+        self.announce_viewing();
+    }
+
+    /// Tells the core every agent the phones have open now, when that
+    /// changed (`phone_viewing`). The list is read and sent under
+    /// `viewing_announced`, so whichever change is told last tells the
+    /// latest list; a list the core did not take is told again with the
+    /// next change.
+    fn announce_viewing(&self) {
+        let mut announced = self
+            .viewing_announced
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        let viewing = self
+            .live()
+            .values()
+            .filter_map(|phone| phone.viewing.as_ref())
+            .map(|key| key.pane_id.clone())
+            .collect::<BTreeSet<_>>();
+        if *announced == viewing {
+            return;
+        }
+        let event = json!({
+            "schema_version": hide_core::SCHEMA_VERSION, "kind": "phone_viewing",
+            "payload": {"pane_ids": viewing},
+        });
+        match self.config.core.dispatch(event.to_string().into_bytes()) {
+            Ok(()) => *announced = viewing,
+            Err(error) => hide_core::diagnostic!(json!({
+                "component": "mobile_phone", "kind": "phone.viewing_unrecorded",
+                "message": error,
+            })),
+        }
+    }
+
+    #[cfg(test)]
+    fn viewing_announced(&self) -> BTreeSet<String> {
+        self.viewing_announced.lock().unwrap().clone()
     }
 
     /// Whether any phone has this root agent's detail open (no push then).
@@ -1657,6 +2052,18 @@ impl Mobile {
                         .find(viewing)
                         .is_some_and(|agent| &agent.root_key() == root)
             })
+    }
+
+    /// Where a request id stands, when this phone has sent it before; nothing is claimed. A repeat is answered from
+    /// this before anything else about the request is judged, because what the first write changed (the agent left
+    /// its question, its pane may have closed) must not turn the answer to the same intent into a refusal.
+    pub fn claimed_input(&self, phone_id: &str, request_id: &str) -> Option<InputState> {
+        self.lock()
+            .inputs
+            .get(phone_id)?
+            .iter()
+            .find(|(id, _)| id == request_id)
+            .map(|(_, state)| *state)
     }
 
     /// Claims an input request id before it is written, in one step, so a
@@ -1684,7 +2091,11 @@ impl Mobile {
         match state {
             Some(state) => {
                 if let Some(entry) = seen.iter_mut().find(|(id, _)| id == request_id) {
+                    let accepted = state == InputState::Written && entry.1 != InputState::Written;
                     entry.1 = state;
+                    if accepted {
+                        self.config.desktop.phone_input(std::time::Instant::now());
+                    }
                 }
             }
             None => seen.retain(|(id, _)| id != request_id),
@@ -1693,14 +2104,14 @@ impl Mobile {
 
     pub fn set_subscription(&self, phone_id: &str, push: PushSubscription) -> bool {
         if !push::subscription_valid(&push) {
-            herdr_core::diagnostic!(json!({
+            hide_core::diagnostic!(json!({
                 "component": "mobile_push", "kind": "subscription.refused", "phone_id": phone_id,
             }));
             return false;
         }
-        let changed = self.lock().phones.set_subscription(phone_id, Some(push));
+        let changed = self.lock().phones.set_way(phone_id, phones::Way::Web(push));
         if changed {
-            herdr_core::diagnostic!(json!({
+            hide_core::diagnostic!(json!({
                 "component": "mobile_push", "kind": "subscription.stored", "phone_id": phone_id,
             }));
             self.publish();
@@ -1708,18 +2119,321 @@ impl Mobile {
         true
     }
 
-    pub fn set_notifications(&self, phone_id: &str, notifications: Notifications) {
-        if self
+    /// Stores an iOS app phone's APNs registration, given inside its
+    /// encrypted session; `false` when its shape is wrong. Neither the token
+    /// nor the key reaches a log.
+    pub fn set_apns(&self, phone_id: &str, registration: ApnsRegistration) -> bool {
+        let valid = push::registration_valid(&registration);
+        self.set_app(phone_id, "apns", valid, phones::Way::Apns(registration))
+    }
+
+    /// Stores an Android app phone's FCM registration, as `set_apns` stores
+    /// an iOS app's.
+    pub fn set_fcm(&self, phone_id: &str, registration: FcmRegistration) -> bool {
+        let valid = push::fcm_registration_valid(&registration);
+        self.set_app(phone_id, "fcm", valid, phones::Way::Fcm(registration))
+    }
+
+    fn set_app(&self, phone_id: &str, service: &str, valid: bool, way: phones::Way) -> bool {
+        if !valid {
+            hide_core::diagnostic!(json!({
+                "component": "mobile_push", "kind": "registration.refused", "phone_id": phone_id,
+                "service": service,
+            }));
+            return false;
+        }
+        let changed = self.lock().phones.set_way(phone_id, way);
+        if changed {
+            hide_core::diagnostic!(json!({
+                "component": "mobile_push", "kind": "registration.stored", "phone_id": phone_id,
+                "service": service,
+            }));
+            self.publish();
+        }
+        true
+    }
+
+    /// Reserve a phone's closes only while preparing a transport request. Jobs
+    /// and holds own no closes. Crypto/signing runs outside the lock; failure
+    /// restores this subset alongside closes recorded by concurrent senders.
+    fn prepare_with_clear<T, E>(
+        &self,
+        phone_id: &str,
+        payload: &Value,
+        prepare: impl FnOnce(&Value) -> Result<T, E>,
+    ) -> Result<T, E> {
+        let clear = self
             .lock()
-            .phones
-            .set_notifications(phone_id, notifications)
-        {
+            .pending_clear
+            .remove(phone_id)
+            .unwrap_or_default();
+        if clear.is_empty() {
+            return prepare(payload);
+        }
+        let mut outgoing = payload.clone();
+        let mut tags = payload
+            .get("clear")
+            .and_then(Value::as_array)
+            .cloned()
+            .unwrap_or_default();
+        tags.extend(clear.iter().map(|key| json!(key.tag())));
+        outgoing["clear"] = json!(tags);
+        let prepared = prepare(&outgoing);
+        if prepared.is_err() {
+            let mut inner = self.lock();
+            // Revocation owns removal of the phone's state, even if it raced
+            // preparation. Do not resurrect it on a later failure.
+            if inner.phones.get(phone_id).is_some() {
+                inner
+                    .pending_clear
+                    .entry(phone_id.to_owned())
+                    .or_default()
+                    .extend(clear);
+            }
+        }
+        prepared
+    }
+
+    fn send_web(
+        &self,
+        phone_id: &str,
+        vapid: &push::Vapid,
+        subject: &str,
+        subscription: &PushSubscription,
+        payload: &Value,
+    ) -> push::SendOutcome {
+        match self.prepare_with_clear(phone_id, payload, |payload| {
+            push::prepare(vapid, subject, subscription, payload, now_ms() / 1000)
+        }) {
+            Ok(request) => request.send(),
+            Err(message) => push::SendOutcome::Failed(message),
+        }
+    }
+
+    /// Sends one notice to an app phone: encrypted for the key it registered,
+    /// handed to the relay over the running link as a `push_request` (the
+    /// iOS app, Apple) or an `fcm_request` (the Android app, Google), and
+    /// answered by the relay with the push service's outcome. Blocking, on a
+    /// thread where Web Push sends run. A token the service calls gone is
+    /// dropped (`token_gone`); every other `Err` names why nothing was
+    /// delivered, and none is retried (`docs/RELAY_PROTOCOL.md`, Push relay).
+    pub fn push_to_app(&self, phone_id: &str, payload: &Value) -> Result<(), &'static str> {
+        let (registration, link) = {
+            let inner = self.lock();
+            let phone = inner.phones.current().find(|phone| phone.id == phone_id);
+            let registration = phone
+                .and_then(|phone| {
+                    (phone.apns.clone().map(AppRegistration::Apns))
+                        .or_else(|| phone.fcm.clone().map(AppRegistration::Fcm))
+                })
+                .ok_or("no_registration")?;
+            let link = inner.relay_link.clone().ok_or("relay_unavailable")?;
+            (registration, link)
+        };
+        // The token the answer is about, the service for the diagnostic, and
+        // Apple's environment, which says which build a refused token is for.
+        let (token, service, environment) = match &registration {
+            AppRegistration::Apns(apns) => (apns.token.clone(), "apns", Some(apns.environment)),
+            AppRegistration::Fcm(fcm) => (fcm.token.clone(), "fcm", None),
+        };
+        let request =
+            self.prepare_with_clear(phone_id, payload, |payload| match &registration {
+                AppRegistration::Apns(apns) => {
+                    push::app_request(apns, payload).map(relay::AppRequest::Apns)
+                }
+                AppRegistration::Fcm(fcm) => {
+                    push::fcm_request(fcm, payload).map(relay::AppRequest::Fcm)
+                }
+            })?;
+        match link.push(request)? {
+            PushOutcome::Delivered => Ok(()),
+            PushOutcome::TokenGone => {
+                let dropped = self.lock().phones.drop_app(phone_id, &token);
+                if dropped {
+                    hide_core::diagnostic!(json!({
+                        "component": "mobile_push", "kind": "registration.dropped", "phone_id": phone_id,
+                        "service": service,
+                    }));
+                    self.publish();
+                }
+                Err("token_gone")
+            }
+            // The push service refuses the token itself: for Apple the build's environment or topic and the relay's
+            // do not agree, for Google the app's Firebase project and the relay's, or the token is malformed. That is
+            // a configuration problem to read in the log, not a gone install, so the registration stays: dropping it
+            // would only make the app register the same token again on the next connection and be refused again.
+            PushOutcome::TokenRejected => {
+                hide_core::diagnostic!(json!({
+                    "component": "mobile_push", "kind": "registration.rejected", "phone_id": phone_id,
+                    "service": service, "environment": environment,
+                }));
+                Err("token_rejected")
+            }
+            PushOutcome::RateLimited => Err("rate_limited"),
+            PushOutcome::Unavailable => Err("unavailable"),
+            PushOutcome::Failed => Err("failed"),
+        }
+    }
+
+    /// Sends one notice to an iOS app phone, or keeps it when the relay link is not up yet. Blocking, like
+    /// `push_to_app`; the outcome is a diagnostic naming the reason, never the notice. `generation` is a waiting
+    /// root's notice's serial (`LiveNotices`), which a hold checks; `None` is a notice no close withdraws.
+    pub fn push_or_hold(&self, phone_id: &str, payload: Value, generation: Option<u64>) {
+        match self.push_to_app(phone_id, &payload) {
+            Ok(()) => {
+                // A live send is newer than anything held for the tag.
+                self.forget_held(phone_id, &payload);
+                hide_core::diagnostic!(json!({
+                    "component": "mobile_push", "kind": "push.sent", "phone_id": phone_id,
+                    "route": "app", "tag": payload.get("tag"),
+                }));
+            }
+            Err("relay_unavailable") => {
+                let kind = if self.hold(phone_id, payload, generation) {
+                    "push.held"
+                } else {
+                    "push.withdrawn"
+                };
+                hide_core::diagnostic!(json!({
+                    "component": "mobile_push", "kind": kind, "phone_id": phone_id, "route": "app",
+                }));
+            }
+            Err(reason) => {
+                hide_core::diagnostic!(json!({
+                    "component": "mobile_push", "kind": "push.failed", "phone_id": phone_id,
+                    "route": "app", "reason": reason,
+                }));
+            }
+        }
+    }
+
+    /// Keeps a notice for `phone_id` until the relay link is up, replacing the one held for the same agent tag and
+    /// dropping the oldest past `HELD_PER_PHONE`; a waiting notice whose root stopped waiting is not kept (`false`).
+    fn hold(&self, phone_id: &str, payload: Value, generation: Option<u64>) -> bool {
+        let mut inner = self.lock();
+        if !inner.live.is_current(&payload, generation) {
+            return false;
+        }
+        let held = inner.held.entry(phone_id.to_owned()).or_default();
+        hold_in(held, payload, generation, std::time::Instant::now());
+        true
+    }
+
+    /// Whether a notice is still worth sending: always for a human delivery notice, and for a waiting root's only
+    /// while its serial is current. Asked right before each send, under the lock a close takes.
+    fn is_current(&self, payload: &Value, generation: Option<u64>) -> bool {
+        self.lock().live.is_current(payload, generation)
+    }
+
+    /// Closes waiting roots' notices: none of them is sent or held from now on, and what is held for them goes.
+    fn close_waiting(inner: &mut Inner, closed: &BTreeSet<AgentKey>) {
+        for key in closed {
+            inner.live.close(&key.tag());
+        }
+        let Inner { live, held, .. } = inner;
+        for queue in held.values_mut() {
+            queue.retain(|held| live.is_current(&held.payload, held.generation));
+        }
+    }
+
+    /// The follower stopped tracking the phones' notices (Mobile off, no phone, or the follower ended): no waiting
+    /// notice it handed out is sent or held any longer. Human delivery notices stay.
+    fn withdraw_waiting(&self) {
+        let mut inner = self.lock();
+        inner.live.current.clear();
+        inner.phone_notices.reset();
+        for queue in inner.held.values_mut() {
+            queue.retain(|held| held.generation.is_none());
+        }
+    }
+
+    /// Drops what is held for the tag of a notice that has just gone out live.
+    fn forget_held(&self, phone_id: &str, payload: &Value) {
+        let tag = payload.get("tag");
+        if let Some(held) = self.lock().held.get_mut(phone_id) {
+            held.retain(|older| older.payload.get("tag") != tag);
+        }
+    }
+
+    /// Sends what waited for the relay link, once each: the link is up, so a notice that fails now fails as any
+    /// other and is not held again. A notice older than `HELD_MAX_AGE` is dropped. Blocking work runs on a
+    /// blocking thread, like every other push.
+    pub(crate) fn flush_held(self: &Arc<Self>) -> Option<tokio::task::JoinHandle<Vec<Handoff>>> {
+        let waiting: Vec<(String, Held)> = {
+            let mut inner = self.lock();
+            std::mem::take(&mut inner.held)
+                .into_iter()
+                .flat_map(|(phone, held)| held.into_iter().map(move |held| (phone.clone(), held)))
+                .collect()
+        };
+        if waiting.is_empty() {
+            return None;
+        }
+        let mobile = Arc::clone(self);
+        Some(tokio::task::spawn_blocking(move || {
+            let mut outcomes = Vec::new();
+            for (phone_id, held) in waiting {
+                if *mobile.stopping.borrow() {
+                    break;
+                }
+                if held_expired(held.at, std::time::Instant::now()) {
+                    hide_core::diagnostic!(json!({
+                        "component": "mobile_push", "kind": "push.expired", "phone_id": phone_id,
+                    }));
+                    outcomes.push(Handoff::Expired);
+                    continue;
+                }
+                if !mobile.is_current(&held.payload, held.generation) {
+                    hide_core::diagnostic!(json!({
+                        "component": "mobile_push", "kind": "push.withdrawn", "phone_id": phone_id,
+                        "route": "app", "after": "held",
+                    }));
+                    outcomes.push(Handoff::Withdrawn);
+                    continue;
+                }
+                if held.generation.is_some() && mobile.rests_phone() {
+                    continue;
+                }
+                outcomes.push(Handoff::Tried);
+                let outcome = mobile.push_to_app(&phone_id, &held.payload);
+                match outcome {
+                    Ok(()) => hide_core::diagnostic!(json!({
+                        "component": "mobile_push", "kind": "push.sent", "phone_id": phone_id,
+                        "route": "app", "after": "held", "tag": held.payload.get("tag"),
+                    })),
+                    Err(reason) => hide_core::diagnostic!(json!({
+                        "component": "mobile_push", "kind": "push.failed", "phone_id": phone_id,
+                        "route": "app", "after": "held", "reason": reason,
+                    })),
+                }
+            }
+            outcomes
+        }))
+    }
+
+    pub fn set_notifications(&self, phone_id: &str, notifications: Notifications) {
+        let changed = {
+            let mut inner = self.lock();
+            let changed = inner.phones.set_notifications(phone_id, notifications);
+            if notifications == Notifications::Off {
+                inner.held.remove(phone_id);
+            }
+            changed
+        };
+        if changed {
             self.publish();
         }
     }
 
     pub fn home(&self) -> &std::path::Path {
         &self.config.home
+    }
+
+    /// The accounts this machine's node reads sessions in, its profiles'
+    /// included (`hide_host::profiles::session_accounts`): the phone reads
+    /// a conversation in one of them and nowhere else.
+    pub fn session_accounts(&self) -> std::sync::Arc<hide_session::Accounts> {
+        hide_host::profiles::session_accounts(Some(&self.config.state_dir), &self.config.home)
     }
 
     /// Tells the core the operator submitted a reply to `pane_id` from the
@@ -1732,7 +2446,7 @@ impl Mobile {
             "payload": {"pane_id": pane_id},
         });
         if let Err(message) = self.config.core.dispatch(event.to_string().into_bytes()) {
-            herdr_core::diagnostic!(json!({
+            hide_core::diagnostic!(json!({
                 "component": "mobile_phone", "kind": "input.submit_unrecorded", "message": message,
             }));
         }
@@ -1740,7 +2454,7 @@ impl Mobile {
 
     /// Tells the core a phone write to `pane_id` is about to be made, so the
     /// doorbell treats the pane as typed into. Sent before the write: one
-    /// Herdr then refuses still holds the pane until a prompt hook or a turn
+    /// the engine then refuses still holds the pane until a prompt hook or a turn
     /// clears it, which is safer than a window where the write lands unseen.
     pub fn note_input(&self, pane_id: &str) {
         let event = json!({
@@ -1749,8 +2463,36 @@ impl Mobile {
             "payload": {"pane_id": pane_id},
         });
         if let Err(message) = self.config.core.dispatch(event.to_string().into_bytes()) {
-            herdr_core::diagnostic!(json!({
+            hide_core::diagnostic!(json!({
                 "component": "mobile_phone", "kind": "input.sent_unrecorded", "message": message,
+            }));
+        }
+    }
+
+    pub fn core(&self) -> &Arc<CoreHandle> {
+        &self.config.core
+    }
+
+    pub fn boundary(&self) -> Arc<crate::boundary::Boundary> {
+        Arc::clone(&self.config.boundary)
+    }
+
+    pub fn roots(&self) -> Arc<crate::RootFollower> {
+        Arc::clone(&self.config.roots)
+    }
+
+    pub fn browser_control(&self) -> &Arc<crate::browser_control::BrowserControl> {
+        &self.config.browser_control
+    }
+
+    /// Marks a View the phone showed seen, with the event Desk sends when
+    /// its lane shows an output (PRD mobile-companion-ui D-15, B24). Seen is
+    /// the View's own state, so the desktop's eye and count follow at once.
+    pub fn mark_seen(&self, view: &hide_core::LookView) {
+        if let Err(message) = self.config.core.dispatch(looks::seen_event(view)) {
+            hide_core::diagnostic!(json!({
+                "component": "mobile_phone", "kind": "look.seen_unrecorded",
+                "view_id": view.display_id, "message": message,
             }));
         }
     }
@@ -1762,9 +2504,7 @@ impl Mobile {
     /// The engine that runs a pane on this Mac or a connected device.
     pub fn engine(&self, device_id: &str) -> Result<EngineHandle, pane::PaneError> {
         if self.node() == device_id {
-            return self.config.core.engine().cloned().ok_or_else(|| {
-                pane::PaneError::Unavailable("this Mac has no Herdr socket".to_owned())
-            });
+            return Ok(self.config.core.engine().clone());
         }
         match self.config.core.device_engine(device_id) {
             Ok(Some(engine)) => Ok(engine),
@@ -1783,7 +2523,12 @@ impl Mobile {
         let mut stopping = self.stopping.subscribe();
         let mut cursor = 0_u64;
         let mut rest = Value::Null;
-        let mut transitions = push::Transitions::default();
+        // The core's automations section as last sent and its asks as last
+        // read from `rest`: the list is projected again only when either moves.
+        let mut automations: Option<Arc<hide_core::automations::AutomationsSnapshot>> = None;
+        let mut asks: Vec<String> = Vec::new();
+        // Whatever ends the follower, no waiting notice it handed out is sent or held after it.
+        let _withdraw = WithdrawOnExit(Arc::clone(&self));
         loop {
             if *stopping.borrow() {
                 return;
@@ -1791,7 +2536,9 @@ impl Mobile {
             if !self.follower_active() {
                 cursor = 0;
                 rest = Value::Null;
-                transitions.reset();
+                automations = None;
+                asks.clear();
+                self.withdraw_waiting();
                 self.catalog
                     .send_replace(Arc::new(start::Catalog::default()));
                 self.answers.send_replace(Arc::new(Vec::new()));
@@ -1800,6 +2547,30 @@ impl Mobile {
                         false
                     } else {
                         *current = Arc::new(Projection::default());
+                        true
+                    }
+                });
+                self.missions.send_if_modified(|current| {
+                    if **current == PhoneMissions::default() {
+                        false
+                    } else {
+                        *current = Arc::new(PhoneMissions::default());
+                        true
+                    }
+                });
+                self.prs.send_if_modified(|current| {
+                    if **current == PhonePrs::default() {
+                        false
+                    } else {
+                        *current = Arc::new(PhonePrs::default());
+                        true
+                    }
+                });
+                self.automations.send_if_modified(|current| {
+                    if **current == PhoneAutomations::default() {
+                        false
+                    } else {
+                        *current = Arc::new(PhoneAutomations::default());
                         true
                     }
                 });
@@ -1821,8 +2592,24 @@ impl Mobile {
                 }
             };
             cursor = payload.revision;
-            match projection::update_inputs(&mut rest, &payload.current_rest, payload.have_revision)
-            {
+            // The core's own section comes only when it moved past the cursor;
+            // its asks are in `rest`, read again only when `rest` moved.
+            let section_moved = payload.automations.is_some();
+            if let Some(section) = &payload.automations {
+                automations = Some(Arc::clone(section));
+            }
+            let rest_moved =
+                projection::update_inputs(&mut rest, &payload.current_rest, payload.have_revision);
+            let asks_moved = matches!(rest_moved, Ok(true)) && {
+                let now = automation_asks(&rest);
+                let moved = now != asks;
+                asks = now;
+                moved
+            };
+            if section_moved || asks_moved {
+                self.publish_automations(PhoneAutomations::project(automations.as_deref(), &asks));
+            }
+            match rest_moved {
                 Err(error) => {
                     projection_failed("inputs", &error.to_string());
                     return;
@@ -1833,6 +2620,7 @@ impl Mobile {
                         if **current == catalog {
                             false
                         } else {
+                            catalog.report_cap(current);
                             *current = Arc::new(catalog);
                             true
                         }
@@ -1849,6 +2637,47 @@ impl Mobile {
                         changed
                     });
                     let next = projection::project(&rest, self.node().as_str());
+                    let missions = PhoneMissions::project(&rest, self.node().as_str(), &next);
+                    self.missions.send_if_modified(|current| {
+                        if **current == missions {
+                            return false;
+                        }
+                        // Recorded when the record first goes over a cap (the counts or
+                        // the frame's bytes), not on every change while it stays over
+                        // (the counts are in the frame).
+                        let left_out =
+                            |missions: &PhoneMissions| missions.omitted + missions.nodes_omitted();
+                        if left_out(&missions) > 0 && left_out(current) == 0 {
+                            hide_core::diagnostic!(json!({
+                                "component": "mobile_phone", "kind": "missions.capped",
+                                "omitted": missions.omitted,
+                                "steps_omitted": missions.nodes_omitted(),
+                                "open_cap": hide_core::agent_state::phone::MAX_OPEN,
+                                "closed_cap": hide_core::agent_state::phone::MAX_CLOSED,
+                                "budget": hide_core::agent_state::phone::LIST_BUDGET,
+                            }));
+                        }
+                        *current = Arc::new(missions);
+                        true
+                    });
+                    let prs = PhonePrs::project(&rest, self.node().as_str(), &next);
+                    self.prs.send_if_modified(|current| {
+                        if **current == prs {
+                            return false;
+                        }
+                        // Recorded when the list first goes over the cap, not on every
+                        // change while it stays over (the count is in the frame).
+                        if prs.omitted > 0 && current.omitted == 0 {
+                            hide_core::diagnostic!(json!({
+                                "component": "mobile_phone", "kind": "prs.capped",
+                                "omitted": prs.omitted,
+                                "open_cap": hide_core::agent_state::phone::MAX_PRS,
+                                "settled_cap": hide_core::agent_state::phone::MAX_SETTLED,
+                            }));
+                        }
+                        *current = Arc::new(prs);
+                        true
+                    });
                     changed = self.projection.send_if_modified(|current| {
                         if **current == next {
                             false
@@ -1861,38 +2690,73 @@ impl Mobile {
                 Ok(false) => {}
             }
             let current = Arc::clone(&self.projection.borrow());
-            if let Some((notices, seen)) = judge_pass(
-                &mut transitions,
-                self.keep_alive(),
-                &self.config.desktop,
-                &current,
-                changed,
-                cursor != 0,
-            ) {
+            let phone_on = self.keep_alive();
+            if !phone_on {
+                self.withdraw_waiting();
+            }
+            let judged = {
+                let mut inner = self.lock();
+                let phone_mode = phone_on.then_some(inner.settings.push_mode);
+                judge_pass(
+                    &mut inner.phone_notices,
+                    phone_mode,
+                    &self.config.desktop,
+                    &current,
+                    changed,
+                    cursor != 0,
+                    std::time::Instant::now(),
+                )
+            };
+            if let Some((notices, seen)) = judged {
                 self.deliver(notices, seen, &current);
             }
-            tokio::select! {
-                changed = changes.recv() => {
-                    if matches!(changed, Err(tokio::sync::broadcast::error::RecvError::Closed)) {
-                        return;
+            // A phone notice waiting out its moment wakes the follower when it
+            // is due. A change already there goes first, so the snapshot is
+            // read and judged before any deadline (whose notice that pass also
+            // sends); a deadline alone reads no core and runs the due pass on
+            // the projection this follower already holds.
+            loop {
+                let settle = self.lock().phone_notices.next_due();
+                tokio::select! {
+                    biased;
+                    _ = stopping.changed() => return,
+                    changed = changes.recv() => {
+                        if matches!(changed, Err(tokio::sync::broadcast::error::RecvError::Closed)) {
+                            return;
+                        }
+                        while changes.try_recv().is_ok() {}
+                        break;
                     }
-                    while changes.try_recv().is_ok() {}
+                    _ = self.wake.notified() => break,
+                    _ = tokio::time::sleep_until(tokio::time::Instant::from_std(
+                        settle.unwrap_or_else(std::time::Instant::now),
+                    )), if settle.is_some() => {
+                        if !self.keep_alive() {
+                            break;
+                        }
+                        let current = Arc::clone(&self.projection.borrow());
+                        let notices = self.lock().phone_notices.due(&current, std::time::Instant::now());
+                        if !notices.is_empty() {
+                            self.deliver(notices, BTreeSet::new(), &current);
+                        }
+                    }
                 }
-                _ = self.wake.notified() => {}
-                _ = stopping.changed() => return,
             }
         }
     }
 
     /// Sends each notice to every subscribed phone the mode allows, on a
     /// blocking thread: a push service's latency never holds the follower.
+    /// `seen` are the roots whose notices close: they ride as tags to close on
+    /// each phone's next push, and none of their notices is sent or held from
+    /// now on (`LiveNotices`).
     fn deliver(
         self: &Arc<Self>,
         notices: Vec<push::Notice>,
         seen: BTreeSet<AgentKey>,
         projection: &Projection,
     ) {
-        let (mode, targets, subject) = {
+        let (targets, subject) = {
             let mut inner = self.lock();
             let ids: Vec<String> = inner
                 .phones
@@ -1907,11 +2771,12 @@ impl Mobile {
                         .or_default()
                         .extend(seen.iter().cloned());
                 }
+                Self::close_waiting(&mut inner, &seen);
             }
-            let targets: Vec<(String, PushSubscription)> = inner
+            let targets: Vec<(String, Route)> = inner
                 .phones
                 .current()
-                .filter_map(|phone| phone.push.clone().map(|push| (phone.id.clone(), push)))
+                .filter_map(|phone| Route::of(phone).map(|route| (phone.id.clone(), route)))
                 .collect();
             let subject = inner
                 .settings
@@ -1919,70 +2784,104 @@ impl Mobile {
                 .as_ref()
                 .map(|serve| format!("https://{}", serve.dns_name))
                 .unwrap_or_else(|| "mailto:hide@localhost".to_owned());
-            (inner.settings.push_mode, targets, subject)
+            (targets, subject)
         };
-        let renderers = self.config.renderers.load(Ordering::SeqCst);
         let mut jobs = Vec::new();
         for notice in notices {
-            if !push::mode_allows(mode, renderers) {
-                herdr_core::diagnostic!(json!({
-                    "component": "mobile_push", "kind": "push.skipped", "reason": "mode",
-                    "mode": mode.as_str(), "renderers": renderers,
-                }));
-                continue;
-            }
             if self.viewed(&notice.key, projection) {
-                herdr_core::diagnostic!(json!({
+                hide_core::diagnostic!(json!({
                     "component": "mobile_push", "kind": "push.skipped", "reason": "viewing",
                 }));
                 continue;
             }
-            for (phone_id, subscription) in &targets {
-                let clear = self
-                    .lock()
-                    .pending_clear
-                    .remove(phone_id)
-                    .unwrap_or_default();
-                match self.push_payload(&notice, &clear) {
-                    Ok(payload) => jobs.push((phone_id.clone(), subscription.clone(), payload)),
-                    Err(reason) => herdr_core::diagnostic!(json!({
-                        "component":"mobile_push", "kind":"push.failed", "reason":reason,
-                    })),
+            let generation = self.lock().live.stamp(notice.key.tag());
+            for (phone_id, route) in &targets {
+                // A withdrawable job or held notice must never own a close.
+                match self.push_payload(&notice, &BTreeSet::new()) {
+                    Ok(mut payload) => {
+                        if let Some(agent) = projection.find(&notice.key) {
+                            push::with_ask(&mut payload, agent);
+                        }
+                        jobs.push((phone_id.clone(), route.clone(), payload, generation));
+                    }
+                    Err(reason) => {
+                        hide_core::diagnostic!(json!({
+                            "component":"mobile_push", "kind":"push.failed", "reason":reason,
+                        }));
+                    }
                 }
             }
         }
-        if jobs.is_empty() || self.vapid.is_none() {
+        if jobs.is_empty() {
             return;
         }
         let mobile = Arc::clone(self);
-        tokio::task::spawn_blocking(move || {
-            let Some(vapid) = mobile.vapid.as_ref() else {
-                return;
-            };
-            for (phone_id, subscription, payload) in jobs {
-                match push::send(vapid, &subject, &subscription, &payload, now_ms() / 1000) {
-                    push::SendOutcome::Delivered => herdr_core::diagnostic!(json!({
-                        "component": "mobile_push", "kind": "push.sent", "phone_id": phone_id,
-                        "tag": payload.get("tag"),
-                    })),
-                    push::SendOutcome::Gone(status) => {
-                        mobile
-                            .lock()
-                            .phones
-                            .drop_subscription(&phone_id, &subscription.endpoint);
-                        herdr_core::diagnostic!(json!({
-                            "component": "mobile_push", "kind": "subscription.dropped", "phone_id": phone_id,
-                            "status": status,
-                        }));
-                        mobile.publish();
-                    }
-                    push::SendOutcome::Failed(message) => herdr_core::diagnostic!(json!({
-                        "component": "mobile_push", "kind": "push.failed", "phone_id": phone_id,
-                        "message": message,
-                    })),
-                }
+        tokio::task::spawn_blocking(move || mobile.send_jobs(jobs, &subject));
+    }
+
+    /// Sends the jobs of one burst in order, on a blocking thread. Each is
+    /// checked right before it goes: one whose root stopped waiting since
+    /// `deliver` made it is withdrawn, not sent or held.
+    fn send_jobs(&self, jobs: Vec<Job>, subject: &str) -> Vec<Handoff> {
+        let mut outcomes = Vec::new();
+        for (phone_id, route, payload, generation) in jobs {
+            if !self.is_current(&payload, Some(generation)) {
+                hide_core::diagnostic!(json!({
+                    "component": "mobile_push", "kind": "push.withdrawn", "phone_id": phone_id,
+                }));
+                outcomes.push(Handoff::Withdrawn);
+                continue;
             }
-        });
+            if self.rests_phone() {
+                continue;
+            }
+            outcomes.push(Handoff::Tried);
+            let subscription = match route {
+                Route::Web(subscription) => subscription,
+                Route::App => {
+                    self.push_or_hold(&phone_id, payload, Some(generation));
+                    continue;
+                }
+            };
+            let Some(vapid) = self.vapid.as_ref() else {
+                hide_core::diagnostic!(json!({
+                    "component": "mobile_push", "kind": "push.failed", "phone_id": phone_id,
+                    "reason": "no_vapid",
+                }));
+                continue;
+            };
+            let outcome = self.send_web(&phone_id, vapid, subject, &subscription, &payload);
+            match outcome {
+                push::SendOutcome::Delivered => hide_core::diagnostic!(json!({
+                    "component": "mobile_push", "kind": "push.sent", "phone_id": phone_id,
+                    "tag": payload.get("tag"),
+                })),
+                push::SendOutcome::Gone(status) => {
+                    self.lock()
+                        .phones
+                        .drop_subscription(&phone_id, &subscription.endpoint);
+                    hide_core::diagnostic!(json!({
+                        "component": "mobile_push", "kind": "subscription.dropped", "phone_id": phone_id,
+                        "status": status,
+                    }));
+                    self.publish();
+                }
+                push::SendOutcome::Failed(message) => hide_core::diagnostic!(json!({
+                    "component": "mobile_push", "kind": "push.failed", "phone_id": phone_id,
+                    "message": message,
+                })),
+            }
+        }
+        outcomes
+    }
+
+    /// The existing transport gate discards a waiting notice if computer use
+    /// resumed after its follower pass. Nothing is retained for a later away.
+    fn rests_phone(&self) -> bool {
+        !push::mode_allows(
+            self.lock().settings.push_mode,
+            self.config.desktop.rests_phone(),
+        )
     }
 }
 
@@ -1992,18 +2891,22 @@ impl Mobile {
 /// projection that `changed` is observed by each side on; once `read`, a side
 /// that is on but unseeded is seeded from what this follower last read, so a
 /// wait that began while that side was off is never announced late (B33). The
-/// phones' notices to deliver are returned; the desktop's go out as a frame.
+/// phones' notices due `at` and the agents whose notices to close are
+/// returned; the desktop's go out as a frame.
 fn judge_pass(
-    phone: &mut push::Transitions,
-    phone_on: bool,
+    phone: &mut push::PhoneNotices,
+    phone_mode: Option<PushMode>,
     desktop: &crate::desktop_notices::DesktopNotices,
     current: &Projection,
     changed: bool,
     read: bool,
+    at: std::time::Instant,
 ) -> Option<(Vec<push::Notice>, BTreeSet<AgentKey>)> {
-    let mut delivered = None;
+    let phone_on = phone_mode.is_some();
+    let (mut notices, mut seen) = (Vec::new(), BTreeSet::new());
+    let resting = phone_mode.is_some_and(|mode| !push::mode_allows(mode, desktop.rests_phone()));
     if changed && phone_on {
-        delivered = Some(phone.observe(current));
+        (notices, seen) = phone.observe_with_rest(current, at, resting);
     }
     if changed && desktop.wanted() {
         desktop.observe(current);
@@ -2011,19 +2914,122 @@ fn judge_pass(
     if !phone_on {
         phone.reset();
     } else if read && !phone.seeded() {
-        phone.observe(current);
+        phone.seed(current, at);
     }
     if read && desktop.seed_pending() {
         desktop.observe(current);
     }
-    delivered.filter(|(notices, seen)| !notices.is_empty() || !seen.is_empty())
+    if phone_on {
+        notices.extend(phone.due(current, at));
+        if resting {
+            notices.clear();
+        }
+    }
+    (!notices.is_empty() || !seen.is_empty()).then_some((notices, seen))
+}
+
+/// A Mobile over a bare core in `directory`, for tests that drive it directly.
+#[cfg(test)]
+pub(super) fn test_mobile(
+    directory: &std::path::Path,
+    gate: &Arc<hide_core::input_gate::PaneInputGate>,
+) -> Arc<Mobile> {
+    let core = Arc::new(crate::core::CoreHandle::bare(directory));
+    let boundary = Arc::new(crate::boundary::Boundary::new(directory).unwrap());
+    Mobile::start(Config {
+        state_dir: directory.join("state"),
+        home: directory.to_path_buf(),
+        port: 0,
+        relay_url: crate::env::RELAY_URL.to_owned(),
+        cli: tailscale::CliSource {
+            pinned: None,
+            search_path: None,
+        },
+        host_name: None,
+        core: Arc::clone(&core),
+        input_gate: Arc::clone(gate),
+        start_demand: Arc::default(),
+        // These tests drive the phone boundary directly, never a network supervisor.
+        open: tokio::sync::watch::channel(false).1,
+        desktop: Arc::default(),
+        boundary: Arc::clone(&boundary),
+        roots: Arc::new(crate::RootFollower::new(
+            Arc::clone(&core),
+            boundary,
+            Arc::new(crate::watch::WatchService::new(Arc::clone(&core))),
+            Arc::new(crate::index::IndexService::new()),
+        )),
+        browser_control: Arc::default(),
+    })
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::desktop_notices::DesktopNotices;
-    use herdr_core::agent_state::phone::project;
+    use hide_core::agent_state::phone::project;
+
+    #[test]
+    fn a_phones_held_queue_keeps_one_per_agent_and_at_most_eight() {
+        let at = std::time::Instant::now();
+        let notice = |tag: &str, title: &str| json!({"tag": tag, "title": title});
+        let titles = |held: &VecDeque<Held>| -> Vec<String> {
+            held.iter()
+                .map(|held| held.payload["title"].as_str().unwrap().to_owned())
+                .collect()
+        };
+        let mut held = VecDeque::new();
+        hold_in(&mut held, notice("a", "first"), None, at);
+        hold_in(&mut held, notice("b", "other"), None, at);
+        hold_in(&mut held, notice("a", "newer"), None, at);
+        assert_eq!(
+            titles(&held),
+            ["other", "newer"],
+            "a newer notice replaces the tag's older one"
+        );
+        for number in 0..12 {
+            hold_in(
+                &mut held,
+                notice(&format!("t{number}"), &format!("n{number}")),
+                None,
+                at,
+            );
+        }
+        assert_eq!(held.len(), HELD_PER_PHONE, "past the cap the oldest go");
+        assert_eq!(
+            titles(&held),
+            ["n4", "n5", "n6", "n7", "n8", "n9", "n10", "n11"]
+        );
+    }
+
+    #[test]
+    fn a_held_notice_is_dropped_after_sixty_seconds_and_not_before() {
+        let at = std::time::Instant::now();
+        let second = Duration::from_secs(1);
+        assert!(!held_expired(at, at));
+        assert!(
+            !held_expired(at, at + HELD_MAX_AGE),
+            "exactly sixty seconds still goes out"
+        );
+        assert!(held_expired(at, at + HELD_MAX_AGE + second));
+        // A clock that did not move forward never expires one.
+        assert!(!held_expired(at + HELD_MAX_AGE * 2, at));
+    }
+
+    /// Two changes that arrive before a pass starts are one pass, a pass that
+    /// already read them leaves nothing for the next, and a forced pass runs
+    /// whatever is owed. A start owes the first pass.
+    #[test]
+    fn changes_before_a_pass_cost_one_pass_and_a_forced_pass_always_runs() {
+        let mut owed = PassOwed(true);
+        owed.owe();
+        assert!(owed.take(false), "the first pass runs");
+        assert!(!owed.take(false), "the second read nothing new");
+        assert!(owed.take(true), "a forced pass asks Tailscale again");
+        assert!(!owed.take(false), "a forced pass settles the debt it read");
+        owed.owe();
+        assert!(owed.take(false), "a change after a pass owes another");
+    }
 
     fn projected(group: &str, demand: &str) -> Projection {
         project(
@@ -2045,17 +3051,32 @@ mod tests {
         )
     }
 
-    /// What one pass hands each side: the phones' notice count, and whether
-    /// a desktop frame went out.
+    /// What one pass hands each side, the phones' after their notices'
+    /// moment is up: the phones' notice count, and whether a desktop frame
+    /// went out.
     fn pass(
-        phone: &mut push::Transitions,
+        phone: &mut push::PhoneNotices,
         phone_on: bool,
         desktop: &DesktopNotices,
         current: &Projection,
     ) -> (usize, bool) {
         let mut frames = desktop.subscribe();
-        let phones = judge_pass(phone, phone_on, desktop, current, true, true)
-            .map_or(0, |(notices, _)| notices.len());
+        let at = std::time::Instant::now();
+        let phones = [(true, at), (false, at + push::SETTLE)]
+            .into_iter()
+            .filter_map(|(changed, at)| {
+                judge_pass(
+                    phone,
+                    phone_on.then_some(PushMode::AppClosed),
+                    desktop,
+                    current,
+                    changed,
+                    true,
+                    at,
+                )
+            })
+            .map(|(notices, _)| notices.len())
+            .sum();
         (phones, frames.try_recv().is_ok())
     }
 
@@ -2066,7 +3087,7 @@ mod tests {
     fn each_side_announces_only_while_on_and_a_late_side_is_seeded_not_told() {
         for (phone_on, desktop_on) in [(true, true), (true, false), (false, true), (false, false)] {
             let label = format!("phone {phone_on}, desktop {desktop_on}");
-            let mut phone = push::Transitions::default();
+            let mut phone = push::PhoneNotices::default();
             let desktop = DesktopNotices::default();
             desktop.set(1, desktop_on);
             assert_eq!(
@@ -2093,7 +3114,7 @@ mod tests {
 
         // A side turned on while an agent already waits is seeded, not told,
         // and the other side keeps announcing as before.
-        let mut phone = push::Transitions::default();
+        let mut phone = push::PhoneNotices::default();
         let desktop = DesktopNotices::default();
         let waiting = projected("needs_you", "approval");
         assert_eq!(
@@ -2103,7 +3124,18 @@ mod tests {
         assert_eq!(pass(&mut phone, true, &desktop, &waiting), (1, false));
         desktop.set(1, true);
         let mut frames = desktop.subscribe();
-        assert!(judge_pass(&mut phone, true, &desktop, &waiting, false, true).is_none());
+        assert!(
+            judge_pass(
+                &mut phone,
+                Some(PushMode::AppClosed),
+                &desktop,
+                &waiting,
+                false,
+                true,
+                std::time::Instant::now()
+            )
+            .is_none()
+        );
         assert!(
             frames.try_recv().is_err(),
             "the desktop is seeded with the wait that was there"
@@ -2113,7 +3145,7 @@ mod tests {
             "and clears it once seen"
         );
 
-        let mut phone = push::Transitions::default();
+        let mut phone = push::PhoneNotices::default();
         let desktop = DesktopNotices::default();
         desktop.set(1, true);
         assert_eq!(
@@ -2122,7 +3154,16 @@ mod tests {
         );
         assert_eq!(pass(&mut phone, false, &desktop, &waiting), (0, true));
         assert!(
-            judge_pass(&mut phone, true, &desktop, &waiting, false, true).is_none(),
+            judge_pass(
+                &mut phone,
+                Some(PushMode::AppClosed),
+                &desktop,
+                &waiting,
+                false,
+                true,
+                std::time::Instant::now()
+            )
+            .is_none(),
             "Mobile turned on later is seeded with the wait, not told"
         );
         assert_eq!(
@@ -2131,4 +3172,88 @@ mod tests {
         );
         assert_eq!(pass(&mut phone, true, &desktop, &waiting), (1, true));
     }
+    fn tagged(tag: &str) -> Value {
+        json!({"tag": tag, "state": "needs_you", "title": tag})
+    }
+
+    fn closed(tag: &str) -> BTreeSet<AgentKey> {
+        let (device_id, pane_id) = tag.split_once('|').unwrap();
+        BTreeSet::from([AgentKey {
+            device_id: device_id.to_owned(),
+            pane_id: pane_id.to_owned(),
+        }])
+    }
+
+    /// The worker's own check: a job made before its root stopped waiting is
+    /// withdrawn when its turn to go comes, and the root's next wait, which
+    /// reuses the tag, is not taken for it.
+    #[tokio::test]
+    async fn a_job_of_a_closed_wait_is_withdrawn_and_the_next_wait_of_its_root_goes() {
+        let directory = tempfile::tempdir().unwrap();
+        let gate = Arc::new(hide_core::input_gate::PaneInputGate::default());
+        let mobile = test_mobile(directory.path(), &gate);
+        let tag = "node|w1:p1";
+        let first = mobile.lock().live.stamp(tag.to_owned());
+        Mobile::close_waiting(&mut mobile.lock(), &closed(tag));
+        let second = mobile.lock().live.stamp(tag.to_owned());
+        let job = |generation| ("phone".to_owned(), Route::App, tagged(tag), generation);
+        assert_eq!(
+            mobile.send_jobs(vec![job(first), job(second)], "mailto:hide@localhost"),
+            [Handoff::Withdrawn, Handoff::Tried]
+        );
+    }
+
+    /// A notice held for the relay link is neither kept nor sent once its
+    /// root stops waiting, whether the close comes before the hold, before
+    /// the flush, or after the flush took it; a human delivery notice for the
+    /// same tag carries no serial and stays through every close.
+    #[tokio::test]
+    async fn a_held_notice_of_a_closed_wait_is_never_sent_and_a_delivery_notice_stays() {
+        let directory = tempfile::tempdir().unwrap();
+        let gate = Arc::new(hide_core::input_gate::PaneInputGate::default());
+        let mobile = test_mobile(directory.path(), &gate);
+        let (kept, gone) = ("node|w1:p1", "node|w1:p2");
+        let kept_serial = mobile.lock().live.stamp(kept.to_owned());
+        let gone_serial = mobile.lock().live.stamp(gone.to_owned());
+        assert!(mobile.hold("phone", tagged(kept), Some(kept_serial)));
+        assert!(mobile.hold("phone", tagged(gone), Some(gone_serial)));
+        assert!(
+            mobile.hold("other", tagged(gone), None),
+            "a delivery notice"
+        );
+        // The flush has taken what is held when the root stops waiting.
+        mobile.lock().live.close(gone);
+        let mut flushed = mobile.flush_held().unwrap().await.unwrap();
+        flushed.sort_by_key(|handoff| format!("{handoff:?}"));
+        assert_eq!(
+            flushed,
+            [Handoff::Tried, Handoff::Tried, Handoff::Withdrawn],
+            "the waiting notice and the delivery notice tried, the closed one withdrawn"
+        );
+        // Closed before the hold: not kept.
+        assert!(!mobile.hold("phone", tagged(gone), Some(gone_serial)));
+        // Closed while held: what is held for it goes, the delivery notice stays.
+        let again = mobile.lock().live.stamp(gone.to_owned());
+        assert!(mobile.hold("phone", tagged(gone), Some(again)));
+        assert!(mobile.hold("other", tagged(gone), None));
+        Mobile::close_waiting(&mut mobile.lock(), &closed(gone));
+        let held = |phone: &str| -> Vec<Option<u64>> {
+            mobile
+                .lock()
+                .held
+                .get(phone)
+                .map_or_else(Vec::new, |queue| {
+                    queue.iter().map(|held| held.generation).collect()
+                })
+        };
+        assert_eq!((held("phone"), held("other")), (vec![], vec![None]));
+        // The follower ends: every waiting notice goes, a delivery notice stays.
+        let third = mobile.lock().live.stamp(kept.to_owned());
+        assert!(mobile.hold("phone", tagged(kept), Some(third)));
+        mobile.withdraw_waiting();
+        assert_eq!((held("phone"), held("other")), (vec![], vec![None]));
+    }
 }
+
+#[cfg(test)]
+mod clear_tests;

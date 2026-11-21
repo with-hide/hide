@@ -1,9 +1,9 @@
-// The device rail on an isolated pinned Herdr and hided (quick
+// The device rail on an isolated engine and hided (quick
 // device-rail-badges B1-B6 and quick device-rail-slack, replacing PRD
 // home-device-rail B1-B13): the rail is the sidebar's full-height left column,
 // shown with This Mac alone, and has no Inbox or footer device button, its
 // `+` opens Settings > Devices > Add device, and each device's sidebar is its
-// name, shared Overview and Projects | Agents, with Home in Projects. A right-click
+// name, shared Overview and Projects | Agents. A right-click
 // hides the rail, the name on the top line becomes the device menu, and the
 // choice survives a reload. Registering one device that cannot be reached (a
 // Host of the fixture's ssh config that never resolves) adds a dimmed monogram tile with a cross and no
@@ -48,10 +48,10 @@ async function closeAddDeviceDialog(page: Page): Promise<void> {
 
 test("the rail follows the registered devices; a device that cannot be reached is dimmed and offers Reconnect", async ({ page }) => {
   await page.setViewportSize({ width: 1280, height: 800 });
-  const herdr = await startFixture();
+  const engine = await startFixture();
   let daemon: Daemon | null = null;
   try {
-    daemon = await startHided(herdr, "device-rail");
+    daemon = await startHided(engine, "device-rail");
     writeSshHost(daemon, ALIAS);
     const sent = countSent(page);
     await page.goto(`${daemon.origin}/#token=${daemon.token}`);
@@ -117,7 +117,8 @@ test("the rail follows the registered devices; a device that cannot be reached i
     const contentBox = (await page.locator("[data-sidebar-content]").boundingBox())!;
     const sidebarBox = (await sidebar.boundingBox())!;
     expect(Math.round(railBox.width)).toBe(48);
-    expect(Math.round(contentBox.width)).toBe(292);
+    // The sidebar's right hairline is the column's own edge, inside the stored width.
+    expect(Math.round(contentBox.width)).toBe(292 - 1);
     expect(Math.round(sidebarBox.width)).toBe(48 + 292);
     expect(Math.round(railBox.x)).toBe(Math.round(sidebarBox.x));
     expect(Math.round(railBox.y)).toBe(Math.round(sidebarBox.y));
@@ -151,7 +152,7 @@ test("the rail follows the registered devices; a device that cannot be reached i
     await expect(tile).toHaveAttribute("aria-pressed", "true");
     await expect(rail.locator(`[data-rail-tile="${daemon.node}"]`)).toHaveAttribute("aria-pressed", "false");
 
-    // B8, B9: selected, the sidebar is the name, Not connected and Reconnect, with no tree.
+    // B8, B9: selected, the sidebar is the name and Not connected, with no tree; Reconnect is the center's, drawn once.
     const disconnected = page.locator("[data-device-disconnected]");
     await expect(disconnected).toBeVisible();
     await expect(disconnected).toContainText("Not connected");
@@ -160,8 +161,9 @@ test("the rail follows the registered devices; a device that cannot be reached i
     await expect(page.locator("[data-sidebar-mode]")).toHaveCount(0);
     await expect(page.locator("[data-sidebar-title-name]")).toContainText("연구실");
     await screenshot(page, "device-rail-not-connected");
+    await expect(disconnected.locator("[data-device-reconnect]")).toHaveCount(0);
     const retried = sent.get("retry_connect") ?? 0;
-    await disconnected.locator("[data-device-reconnect]").click();
+    await page.locator("[data-device-retry]").click();
     await expect.poll(() => (sent.get("retry_connect") ?? 0) - retried).toBe(1);
     await expect(disconnected).toBeVisible();
 
@@ -193,6 +195,6 @@ test("the rail follows the registered devices; a device that cannot be reached i
     await expect(page.locator(CENTER).first()).toBeVisible();
   } finally {
     daemon?.stop();
-    herdr.stop();
+    engine.stop();
   }
 });

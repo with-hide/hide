@@ -1,10 +1,9 @@
 import { expect, type ElectronApplication, type Page, type TestInfo } from "@playwright/test";
 import fs from "node:fs";
 import path from "node:path";
-import { startHerdr } from "../../web/e2e/herdr-fixture";
-import { enterWorkspace, pinState, setLanePinned, showExplorer } from "../../web/e2e/wire";
+import { enterWorkspace, showExplorer } from "../../web/e2e/wire";
 import { afterCleanup } from "../../web/e2e/worker-owned";
-import { fitWindow, isolate, launch, NEEDS_FOCUS, test } from "./fixture";
+import { fitWindow, focusPage, launchShell, NEEDS_FOCUS, startStack, test } from "./fixture";
 
 const TITLE = "New tab page";
 
@@ -23,7 +22,9 @@ async function enterPage(app: ElectronApplication, page: Page) {
     });
     return counted.pageFocus ?? 0;
   });
-  await expect.poll(() => focusPageTakingAppFocus(app)).toBe(true);
+  await expect.poll(() => app.evaluate(({ BrowserWindow }, title) => BrowserWindow.getAllWindows()[0]!.contentView.children.some((child) =>
+    (child as { webContents?: Electron.WebContents }).webContents?.getTitle() === title), TITLE), { message: "the page has loaded" }).toBe(true);
+  await focusPage(app, { title: TITLE });
   await expect.poll(() => page.evaluate(() => (window as unknown as Counted).pageFocus ?? 0), { message: "the shell hears the page take the keyboard" }).toBeGreaterThan(before);
 }
 
@@ -40,27 +41,6 @@ async function handBack(page: Page) {
     return element.closest("[data-pane-view]") !== null;
   });
   expect(inPane).toBe(true);
-}
-
-/**
- * TAKES THE APP'S FOCUS: a page holds the keyboard only in the key window, so
- * this steals it for the app where the machine grants that, and the menu
- * command then takes the host's real hand-back path. A click in the shell DOM
- * does not move the contents' focus, so the shell takes it first and the page
- * reports entering again. False until the page has loaded.
- */
-function focusPageTakingAppFocus(app: ElectronApplication): Promise<boolean> {
-  return app.evaluate(({ app: electron, BrowserWindow }, title) => {
-    const window = BrowserWindow.getAllWindows()[0]!;
-    const view = window.contentView.children.find((child) =>
-      (child as { webContents?: Electron.WebContents }).webContents?.getTitle() === title);
-    if (!view) return false;
-    electron.focus({ steal: true });
-    window.focus();
-    window.webContents.focus();
-    (view as unknown as { webContents: Electron.WebContents }).webContents.focus();
-    return true;
-  }, TITLE);
 }
 
 const menuClick = (app: ElectronApplication, id: string) =>
@@ -128,14 +108,14 @@ async function observeMenu(page: Page, info: TestInfo): Promise<() => Promise<vo
 
 // eslint-disable-next-line no-empty-pattern -- Playwright supplies TestInfo after the fixtures argument.
 test("Command T and Command W from a native page act on its View area, and after any other command on the terminal that has the keyboard", { tag: NEEDS_FOCUS }, async ({}, info) => {
-  const herdr = await startHerdr({ agents: false });
-  const run = isolate(herdr, "new-tab");
+  const stack = await startStack("new-tab", { agents: false });
+  const { fixture } = stack;
   let app: ElectronApplication | null = null;
   let stopObserving: (() => Promise<void>) | undefined;
   const failures: unknown[] = [];
   try {
-    fs.writeFileSync(path.join(herdr.root, "fixture", "page.html"), `<!doctype html><meta charset="utf-8"><title>${TITLE}</title><h1>Browser keyboard owner</h1>`);
-    const launched = await launch(run.env);
+    fs.writeFileSync(path.join(fixture.root, "fixture", "page.html"), `<!doctype html><meta charset="utf-8"><title>${TITLE}</title><h1>Browser keyboard owner</h1>`);
+    const launched = await launchShell(stack.run.env);
     app = launched.app;
     const page = launched.page;
     // D-07/B25 place a 1024px body in the 848..1115px step: Agent Views
@@ -160,15 +140,13 @@ test("Command T and Command W from a native page act on its View area, and after
     await page.locator('[data-explorer-row$="/page.html"]').click({ button: "right" });
     await page.locator('[data-explorer-menu] [data-menu-item="open-browser"]').click();
     await expect(page.locator("[data-browser-slot]")).toBeVisible();
-    // The page and the Explorer fit at their minimums beside 480px of
-    // agents, so the pin docks both columns, and the lane stays through a
-    // terminal click (PRD lane-two-columns B19).
-    await setLanePinned(page, true);
-    expect(await pinState(page)).toBe("on");
-    await expect(page.locator("[data-workspace-screen]")).toHaveAttribute("data-lane-mode", "docked");
+    // The page and the Explorer are up over the agents, and the lane stays
+    // through a click on the first pane, which it leaves uncovered (PRD
+    // lane-two-columns B19; lane-desk-pair-view B16).
+    await expect(page.locator("[data-workspace-screen]")).toHaveAttribute("data-lane-mode", "overlay");
 
     // Command T: the page's area gets the View strip's New tab.
-    await terminal(herdr.panes[0]);
+    await terminal(fixture.panes[0]);
     await enterPage(app, page);
     await handBack(page);
     await menuClick(app, "new_tab");
@@ -180,7 +158,7 @@ test("Command T and Command W from a native page act on its View area, and after
     // Command W: the page's display closes and every pane stays.
     await viewTabs.filter({ hasText: TITLE }).click();
     await expect(page.locator("[data-browser-slot]")).toBeVisible();
-    await terminal(herdr.panes[0]);
+    await terminal(fixture.panes[0]);
     await enterPage(app, page);
     await handBack(page);
     await menuClick(app, "close_tab");
@@ -188,31 +166,31 @@ test("Command T and Command W from a native page act on its View area, and after
     await expect(viewTabs.filter({ hasText: TITLE })).toHaveCount(0);
     await expect(panes).toHaveCount(2);
 
-    // Command E from the page closes the pinned lane and leaves the keyboard
+    // Command E from the page closes the lane and leaves the keyboard
     // with the terminal; the next Command E brings it back on Files, and one
     // more closes it. Command W must still close the pane, not the page (B20, B23).
     await showExplorer(page);
     await page.locator('[data-explorer-row$="/page.html"]').click({ button: "right" });
     await page.locator('[data-explorer-menu] [data-menu-item="open-browser"]').click();
     await expect(viewTabs.filter({ hasText: TITLE })).toHaveCount(1);
-    await terminal(herdr.panes[0]);
+    await terminal(fixture.panes[0]);
     await enterPage(app, page);
     await handBack(page);
     await menuClick(app, "toggle_lane");
     await expect(page.locator("[data-workspace-screen]")).toHaveAttribute("data-lane-mode", "closed");
-    await expect(page.locator(`[data-terminal-host="${herdr.panes[0]}"] textarea`)).toBeFocused();
+    await expect(page.locator(`[data-terminal-host="${fixture.panes[0]}"] textarea`)).toBeFocused();
     await menuClick(app, "toggle_lane");
     await expect(page.locator("[data-workspace-screen]")).toHaveAttribute("data-lane-view", "documents");
     await menuClick(app, "toggle_lane");
     await expect(page.locator("[data-workspace-screen]")).toHaveAttribute("data-lane-mode", "closed");
     await menuClick(app, "close_tab");
-    await expect(page.locator(`[data-pane-view="${herdr.panes[0]}"]`)).toHaveCount(0, { timeout: 15_000 });
+    await expect(page.locator(`[data-pane-view="${fixture.panes[0]}"]`)).toHaveCount(0, { timeout: 15_000 });
     await expect(panes).toHaveCount(1);
     await page.locator('[data-lane-tool="documents"]').click();
     await expect(viewTabs.filter({ hasText: TITLE })).toHaveCount(1);
 
     // A click back into a terminal is the operator's move: Command T is an agent tab again.
-    await terminal(herdr.panes[1]);
+    await terminal(fixture.panes[1]);
     await menuClick(app, "new_tab");
     await expect(agentTabs).toHaveCount(2);
   } catch (error) {
@@ -220,8 +198,7 @@ test("Command T and Command W from a native page act on its View area, and after
   } finally {
     try { await stopObserving?.(); } catch (error) { failures.push(error); }
     try { await app?.close(); } catch (error) { failures.push(new Error(`close menu candidate: ${String(error)}`, { cause: error })); }
-    try { run.cleanup(); } catch (error) { failures.push(new Error(`clean menu fixture: ${String(error)}`, { cause: error })); }
-    try { herdr.stop(); } catch (error) { failures.push(new Error(`stop private menu Herdr: ${String(error)}`, { cause: error })); }
+    try { stack.stop(); } catch (error) { failures.push(new Error(`clean menu fixture: ${String(error)}`, { cause: error })); }
   }
   if (failures.length) {
     let primary = failures[0];

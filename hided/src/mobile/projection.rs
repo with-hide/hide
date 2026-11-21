@@ -4,7 +4,9 @@
 //! from the core's snapshot `rest` section and carries no files, no paths and
 //! nothing else of the snapshot.
 
-pub use herdr_core::agent_state::phone::{AgentKey, PhoneAgent, Projection, project};
+pub use hide_core::agent_state::phone::{
+    AgentKey, PhoneAgent, PhoneAutomations, PhoneMissions, PhonePrs, Projection, project,
+};
 use serde_json::Value;
 
 /// Materialize only the phone/start projection's changed inputs. Immutable
@@ -12,11 +14,11 @@ use serde_json::Value;
 /// unrelated editor, layouts and terminal state never enter this follower.
 pub fn update_inputs(
     kept: &mut Value,
-    rest: &herdr_core::RestSections,
+    rest: &hide_core::RestSections,
     have: u64,
 ) -> Result<bool, serde_json::Error> {
     if have == 0 || !kept.is_object() {
-        *kept = serde_json::json!({"navigator": {}, "status": {}, "ui_state": {}});
+        *kept = serde_json::json!({"navigator": {}, "status": {}, "ui_state": {}, "missions": {}, "pr_work": {}});
     }
     let mut changed = false;
     macro_rules! field {
@@ -38,6 +40,18 @@ pub fn update_inputs(
     field!("status", "remote", rest.status.remote);
     field!("status", "background_ai", rest.status.background_ai);
     field!("status", "last_error", rest.status.last_error);
+    if rest.missions.revision > have {
+        kept["missions"] = serde_json::to_value(rest.missions.value.as_ref())?;
+        changed = true;
+    }
+    if rest.pr_work.revision > have {
+        // Only what the phone's pull requests read: the cards and the one feedback.
+        kept["pr_work"] = serde_json::json!({
+            "cards": serde_json::to_value(&rest.pr_work.value.cards)?,
+            "feedback": serde_json::to_value(&rest.pr_work.value.feedback)?,
+        });
+        changed = true;
+    }
     if rest.task_operation.revision > have {
         kept["task_operation"] = serde_json::to_value(rest.task_operation.value.as_ref())?;
         changed = true;
@@ -55,17 +69,25 @@ pub fn update_inputs(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use herdr_core::agent_state::phone::Line;
+    use hide_core::agent_state::phone::{Group, GroupRow, Line};
     use serde_json::json;
+
+    /// The agent at the top of a group at `at`, which is never a sleeping row.
+    fn top(group: &Group, at: usize) -> &PhoneAgent {
+        match &group.rows[at] {
+            GroupRow::Agent(agent) => agent,
+            GroupRow::Sleeping(_) => panic!("row {at} sleeps"),
+        }
+    }
 
     #[test]
     fn typed_projection_retains_omissions_and_reset_removes_old_phone_state() {
-        let options: herdr_core::CoreOptions = serde_json::from_value(json!({
+        let options: hide_core::CoreOptions = serde_json::from_value(json!({
             "schema_version": 2, "node_id": "test-node", "app_state_path": ""
         }))
         .unwrap();
-        let mut snapshot = herdr_core::Snapshot::initial(&options);
-        let first = herdr_core::RestSections::capture(&snapshot, None, 1);
+        let mut snapshot = hide_core::Snapshot::initial(&options);
+        let first = hide_core::RestSections::capture(&snapshot, None, 1);
         let mut fast = Value::Null;
         let mut slow = json!({"navigator": {"agents": [agent("old", "working", json!({}))]}});
         assert!(update_inputs(&mut fast, &first, 0).unwrap());
@@ -76,7 +98,7 @@ mod tests {
             project(&serde_json::to_value(&first).unwrap(), "local")
         );
         snapshot.zoomed = Some("fixture:p1".to_owned());
-        let selected = herdr_core::RestSections::capture(&snapshot, Some(&first), 2);
+        let selected = hide_core::RestSections::capture(&snapshot, Some(&first), 2);
         let retained = fast.clone();
         assert!(!update_inputs(&mut fast, &selected, 1).unwrap());
         assert_eq!(fast, retained);
@@ -109,7 +131,7 @@ mod tests {
         json!({
             "navigator": {
                 "agents": [
-                    agent("w1:p1", "working", json!({"activity": "working"})),
+                    agent("w1:p1", "working", json!({"activity": "working", "lineage_child_pane_ids": ["w1:p3"]})),
                     agent("w1:p2", "needs_you", json!({"demand": "approval", "mark": "turn", "state": {"line": line("Bash(cargo test) 실행을 허용할까요?", "request", "warning")}})),
                     agent("w1:p3", "working", json!({"lineage_parent_pane_id": "w1:p1", "delegated": true, "demand": "question"})),
                     agent("w1:p4", "seen", json!({"mark": "quiet", "state": {"line": line("quiet sentence", "quiet", "subtle")}})),
@@ -152,10 +174,10 @@ mod tests {
         assert_eq!(projection.groups[0].group, "seen");
         assert_eq!(projection.groups[0].count, 1);
         assert_eq!(projection.agents().count(), 0);
-        assert_eq!(
-            projection.groups[0].sleeping_sessions[0].title,
-            "Review parser"
-        );
+        let GroupRow::Sleeping(session) = &projection.groups[0].rows[0] else {
+            panic!("the group's one row is the sleeping conversation");
+        };
+        assert_eq!(session.title, "Review parser");
         let sent = serde_json::to_string(&projection).unwrap();
         for private in [
             "path",
@@ -182,9 +204,14 @@ mod tests {
             .collect();
         assert_eq!(
             order,
-            [("needs_you", 1), ("done", 1), ("working", 2), ("seen", 1)]
+            [("needs_you", 1), ("done", 1), ("working", 1), ("seen", 1)],
+            "a delegated child hangs under its parent and is no row of a group"
         );
-        let done = &projection.groups[1].agents[0];
+        let parent = top(&projection.groups[2], 0);
+        assert_eq!(parent.pane_id, "w1:p1");
+        assert_eq!(parent.children.len(), 1);
+        assert_eq!(parent.children[0].pane_id, "w1:p3");
+        let done = top(&projection.groups[1], 0);
         assert_eq!(done.device_id, "mini");
         assert_eq!(done.device_label.as_deref(), Some("mini"));
         assert_eq!(done.place.as_deref(), Some("contong · main"));
@@ -199,7 +226,7 @@ mod tests {
                 subject: None,
             })
         );
-        assert_eq!(done.key().herdr_pane_id(), "w2:p1");
+        assert_eq!(done.key().engine_pane_id(), "w2:p1");
         // The unreachable device lists nothing.
         assert!(projection.agents().all(|agent| agent.device_id != "gone"));
     }
@@ -210,8 +237,8 @@ mod tests {
     #[test]
     fn phone_rows_take_the_core_mark_and_line() {
         let input = json!({"navigator": {"agents": [
-            agent("root", "working", json!({"wait": "children", "mark": "waiting",
-                "descendant_counts": {"working": 2},
+            agent("root", "working", json!({"wait": "children", "mark": "waiting", "lineage_child_pane_ids": ["child"],
+                "descendant_counts": {"working": 2}, "wait_count": 2, "subagents": 3, "wait_subagents": 3,
                 "state": {"line": line("", "waiting", "subtle")}})),
             agent("read-question", "seen", json!({"demand": "question", "mark": "turn",
                 "state": {"line": line("  answer me  ", "request", "warning")}})),
@@ -250,16 +277,16 @@ mod tests {
                 ),
                 ("root", "root", "waiting", Some(("", "waiting", "subtle"))),
                 (
-                    "read-question",
-                    "read-question",
-                    "turn",
-                    Some(("answer me", "request", "warning"))
-                ),
-                (
                     "child",
                     "root",
                     "quiet",
                     Some(("failed", "request", "warning"))
+                ),
+                (
+                    "read-question",
+                    "read-question",
+                    "turn",
+                    Some(("answer me", "request", "warning"))
                 ),
                 (
                     "kept",
@@ -278,10 +305,13 @@ mod tests {
             (root.wait.as_deref(), root.descendants_working),
             (Some("children"), 2)
         );
+        // The counts its line says reach the phone (operator decision 2026-11-14).
+        assert_eq!((root.wait_count, root.wait_subagents), (2, 3));
     }
 
     /// The request view's words (the operator's request, its summary and
-    /// the earlier turns', the agent's reply) stay on the desktop: the
+    /// the earlier turns', the agent's reply, the turn card's answer, letters
+    /// and questions) stay on the desktop: the
     /// phone's rows carry none of them (PRD overview-request-view Risks,
     /// pane-last-request D-13).
     #[test]
@@ -294,6 +324,9 @@ mod tests {
             "recent_turns": [{"request": "secret earlier summary", "sender": {"kind": "operator"}, "end": "done", "line": "secret earlier line", "at_unix_ms": 0}],
             "reply": {"text": "secret reply words", "cut": false, "at_unix_ms": 2},
             "later_by": null, "pull_requests": [],
+            "answer": {"offset": 1, "end": "done", "line": "secret answer line", "head": "secret answer head", "whole": true, "at_unix_ms": 2},
+            "letters": {"total": 1, "progress": 0, "recent": [{"direction": "received", "peer": {"kind": "named", "name": "secret peer"}, "mark": "block", "line": "secret letter line", "at_unix_ms": 3}]},
+            "asked": [{"line": "secret question", "at_unix_ms": 4, "current": false}],
         });
         let projection = project(&rest, "local");
         let sent = serde_json::to_string(&projection.groups).unwrap();
@@ -303,17 +336,17 @@ mod tests {
     #[test]
     fn rows_carry_place_line_and_lineage_root() {
         let projection = project(&rest(), "local");
-        let asking = &projection.groups[0].agents[0];
+        let asking = top(&projection.groups[0], 0);
         assert_eq!(asking.place.as_deref(), Some("hide · prd/mobile-companion"));
         assert_eq!(asking.mark, "turn");
         assert_eq!(asking.line.as_ref().unwrap().tone, "warning");
-        assert_eq!(asking.key().herdr_pane_id(), "w1:p2");
+        assert_eq!(asking.key().engine_pane_id(), "w1:p2");
         let child = projection
             .agents()
             .find(|agent| agent.pane_id == "w1:p3")
             .unwrap();
         assert_eq!(child.root_pane_id, "w1:p1");
-        let seen = &projection.groups[3].agents[0];
+        let seen = top(&projection.groups[3], 0);
         assert_eq!(seen.place.as_deref(), Some("notes"));
         assert_eq!(seen.line, None, "a quiet sentence is not drawn");
         assert!(
@@ -351,18 +384,18 @@ mod tests {
 
     #[test]
     fn the_color_theme_reaches_the_phone_and_a_change_makes_the_projection_differ() {
-        let options: herdr_core::CoreOptions = serde_json::from_value(json!({
+        let options: hide_core::CoreOptions = serde_json::from_value(json!({
             "schema_version": 2, "node_id": "test-node", "app_state_path": ""
         }))
         .unwrap();
-        let mut snapshot = herdr_core::Snapshot::initial(&options);
-        let first = herdr_core::RestSections::capture(&snapshot, None, 1);
+        let mut snapshot = hide_core::Snapshot::initial(&options);
+        let first = hide_core::RestSections::capture(&snapshot, None, 1);
         let mut kept = Value::Null;
         assert!(update_inputs(&mut kept, &first, 0).unwrap());
         let hide = project(&kept, "local");
         assert_eq!(hide.color_theme.as_deref(), Some("hide"), "the default");
         snapshot.ui_state.color_theme = serde_json::from_value(json!("neutral")).unwrap();
-        let neutral = herdr_core::RestSections::capture(&snapshot, Some(&first), 2);
+        let neutral = hide_core::RestSections::capture(&snapshot, Some(&first), 2);
         assert!(update_inputs(&mut kept, &neutral, 1).unwrap());
         let projected = project(&kept, "local");
         assert_eq!(projected.color_theme.as_deref(), Some("neutral"));

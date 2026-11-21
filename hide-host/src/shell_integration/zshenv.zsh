@@ -2,8 +2,8 @@
 # naming this folder, so zsh reads its startup files from here. Each file here
 # reads the user's own file of the same name from where zsh would have, with
 # ZDOTDIR as the user has it, and the last one of the run gives ZDOTDIR back
-# for good. At the first prompt the shell tells Herdr it has finished
-# starting, which is when Hide may type.
+# for good. At the first prompt the shell marks it on the screen for the
+# pane's holder, which is when Hide may type.
 #
 # What the user had before Hide's value replaced it comes in
 # HIDE_SHELL_ZDOTDIR, absent when the user had none. A user's file is read at
@@ -49,26 +49,20 @@ __hide_restore() {
 }
 
 # Runs before the first prompt, after every startup file and anything they
-# asked: Herdr keeps the mark on the pane, where Hide reads it; outside a
-# Herdr pane the shell marks its prompt on the screen (OSC 133;A), which the
+# asked: the shell marks its prompt on the screen (OSC 133;A), which the
 # pane's holder counts, and says its folder there (OSC 7) now and at each
-# change, which Herdr reads from the process instead, with builtins and no
-# process.
+# change, with builtins and no process.
 __hide_first_prompt() {
   add-zsh-hook -d precmd __hide_first_prompt
   builtin unfunction __hide_first_prompt
-  if [[ -n ${HERDR_BIN_PATH-} && -n ${HERDR_PANE_ID-} ]]; then
-    "$HERDR_BIN_PATH" pane report-metadata "$HERDR_PANE_ID" --source hide:shell --token hide_prompt=1 >/dev/null 2>&1
-  else
-    # A folder with a control character in its name is not said: it would
-    # end the sequence early.
-    __hide_cwd() {
-      [[ $PWD == *[[:cntrl:]]* ]] || builtin printf '\033]7;file://%s\007' "${PWD//\%/%25}"
-    }
-    add-zsh-hook chpwd __hide_cwd
-    __hide_cwd
-    builtin printf '\033]133;A\007'
-  fi
+  # A folder with a control character in its name is not said: it would end
+  # the sequence early.
+  __hide_cwd() {
+    [[ $PWD == *[[:cntrl:]]* ]] || builtin printf '\033]7;file://%s\007' "${PWD//\%/%25}"
+  }
+  add-zsh-hook chpwd __hide_cwd
+  __hide_cwd
+  builtin printf '\033]133;A\007'
 }
 
 __hide_give

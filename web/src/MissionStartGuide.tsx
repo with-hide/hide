@@ -4,8 +4,8 @@ import { agentMarkOf } from "./agentLogos";
 import { useInterfaceTranslation } from "./i18n/client";
 import "./missionStartGuide.css";
 
-// How a mission starts, shown where there is none yet and under the Mission
-// tool's `+` (PRD mission-tool D-02, D-10, B3, B4, B8): a moving picture of a
+// How a mission starts, shown on the mission screen while the device has none
+// (PRD mission-tool D-02, B3, B4; PRD mission-screen B7): a moving picture of a
 // mission, one line of what it is, three coloured dots, the skill's call in
 // Claude Code and in Codex, and where the mission then shows. No field and no
 // example prompt: a mission starts in an agent's terminal.
@@ -15,17 +15,17 @@ export function MissionStartGuide() {
   return (
     <div className="flex min-w-0 flex-col items-center gap-sm" data-mission-start-guide="true">
       <MissionPicture />
-      <p className="break-keep text-center text-subhead font-semibold text-foreground">{t("missionTool.headline")}</p>
+      <p className="break-keep text-center text-subhead font-semibold text-foreground">{t("missionScreen.headline")}</p>
       <ul className="flex flex-wrap justify-center gap-x-md gap-y-xxs text-caption text-muted-foreground" data-mission-start-dots="true">
-        <Dot tone="bg-mission-working" text={t("missionTool.dot.parallel")} />
-        <Dot tone="bg-mission-review" text={t("missionTool.dot.verify")} />
-        <Dot tone="bg-mission-hold" text={t("missionTool.dot.decide")} />
+        <Dot tone="bg-mission-working" text={t("missionScreen.dot.parallel")} />
+        <Dot tone="bg-mission-review" text={t("missionScreen.dot.verify")} />
+        <Dot tone="bg-mission-hold" text={t("missionScreen.dot.decide")} />
       </ul>
       <div className="flex w-full min-w-0 flex-col gap-xxs rounded-md border border-border bg-background px-sm py-xs font-mono text-caption" data-mission-start-calls="true">
-        <Call kind="claude" call="/hide-mission" runtime={t("missionTool.claudeCode")} />
-        <Call kind="codex" call="$hide-mission" runtime={t("missionTool.codex")} />
+        <Call kind="claude" call="/hide-mission" runtime={t("missionScreen.claudeCode")} />
+        <Call kind="codex" call="$hide-mission" runtime={t("missionScreen.codex")} />
       </div>
-      <p className="break-keep text-center text-caption text-muted-foreground">{t("missionTool.where")}</p>
+      <p className="break-keep text-center text-caption text-muted-foreground">{t("missionScreen.where")}</p>
     </div>
   );
 }
@@ -76,9 +76,9 @@ function useOnScreen<T extends Element>(): [React.RefObject<T | null>, boolean] 
 
 /** Workers' boxes: where each stands, its agent and what it makes. */
 const WORKERS = [
-  { n: 1, x: 6, kind: "claude", label: "missionTool.node.screen" },
-  { n: 2, x: 104, kind: "codex", label: "missionTool.node.store" },
-  { n: 3, x: 202, kind: "claude", label: "missionTool.node.test" },
+  { n: 1, x: 6, kind: "claude", label: "missionScreen.node.screen" },
+  { n: 2, x: 104, kind: "codex", label: "missionScreen.node.store" },
+  { n: 3, x: 202, kind: "claude", label: "missionScreen.node.test" },
 ] as const;
 const WORKER_W = 64;
 const WORKER_Y = 62;
@@ -106,7 +106,7 @@ function MissionPicture() {
   const { t } = useInterfaceTranslation();
   const [ref, playing] = useOnScreen<SVGSVGElement>();
   return (
-    <svg ref={ref} viewBox="0 0 290 232" role="img" aria-label={t("missionTool.picture")} className="msg-picture w-full max-w-(--size-mission-popover)" data-playing={playing ? "true" : "false"} data-mission-start-picture="true">
+    <svg ref={ref} viewBox="0 0 290 232" role="img" aria-label={t("missionScreen.picture")} className="msg-picture w-full max-w-(--size-mission-popover)" data-playing={playing ? "true" : "false"} data-mission-start-picture="true">
       <path className="msg-edge msg-edge-top" d="M145 32 C145 48 38 46 38 62" />
       <path className="msg-edge msg-edge-top" d="M145 32 L136 62" />
       <path className="msg-edge msg-edge-top" d="M145 32 C145 48 234 46 234 62" />
@@ -117,12 +117,12 @@ function MissionPicture() {
       <g>
         <rect className="msg-box msg-conductor" x="89" y="6" width="112" height="26" rx="13" />
         <Mark kind="claude" x={103} y={13} />
-        <text className="msg-label" x="119" y="23" fontSize={LABEL}>{t("missionTool.node.conductor")}</text>
+        <text className="msg-label" x="119" y="23" fontSize={LABEL}>{t("missionScreen.node.conductor")}</text>
       </g>
       {WORKERS.map((worker) => (
         <Worker key={worker.n} n={worker.n} x={worker.x} y={WORKER_Y} width={WORKER_W} kind={worker.kind} label={t(worker.label)} />
       ))}
-      <Worker n={4} x={98} y={134} width={84} kind="claude" label={t("missionTool.node.demo")} />
+      <Worker n={4} x={98} y={134} width={84} kind="claude" label={t("missionScreen.node.demo")} />
       <g className="msg-ask" aria-hidden="true">
         <circle cx="203" cy="62" r="7" />
         <text x="203" y="66" textAnchor="middle" fontSize={LABEL}>!</text>
@@ -137,7 +137,7 @@ function MissionPicture() {
       ))}
       <g>
         <rect className="msg-box msg-main" x="110" y="198" width="70" height="24" rx="12" />
-        <text className="msg-label msg-main-label" x="145" y="214" textAnchor="middle" fontSize={LABEL}>⎇ {t("missionTool.node.main")}</text>
+        <text className="msg-label msg-main-label" x="145" y="214" textAnchor="middle" fontSize={LABEL}>⎇ {t("missionScreen.node.main")}</text>
       </g>
     </svg>
   );

@@ -8,6 +8,11 @@ use std::process::Command;
 use hide_host::ErrorCode;
 use hide_host::register::check;
 
+/// A path as an answer spells it (`hide_host::root::wire`).
+fn wire(path: &Path) -> String {
+    hide_platform::path::to_wire_lossy(path)
+}
+
 #[test]
 fn a_folder_inside_home_is_registered_as_its_project() {
     let home = tempfile::tempdir().unwrap();
@@ -26,22 +31,21 @@ fn a_folder_inside_home_is_registered_as_its_project() {
     );
 
     let plain = check(&folder, None, &home).unwrap();
-    assert_eq!(plain.root, folder.to_string_lossy());
+    assert_eq!(plain.root, wire(&folder));
     assert!(!plain.is_git);
     let inside = check(&repository.join("src"), None, &home).unwrap();
-    assert_eq!(inside.root, repository.to_string_lossy());
+    assert_eq!(inside.root, wire(&repository));
     assert!(inside.is_git);
 }
 
 #[test]
-fn home_itself_a_folder_outside_it_and_a_file_are_refused() {
+fn a_folder_outside_home_a_file_and_a_missing_folder_are_refused_or_asked_about() {
     let home = tempfile::tempdir().unwrap();
     let elsewhere = tempfile::tempdir().unwrap();
     let file = home.path().join("file.txt");
     std::fs::write(&file, "x").unwrap();
 
     let code = |path: &Path| check(path, None, home.path()).unwrap_err().code;
-    assert_eq!(code(home.path()), ErrorCode::OutsideRoot);
     assert_eq!(code(elsewhere.path()), ErrorCode::NeedsConfirmation);
     assert_eq!(code(&file), ErrorCode::NotADirectory);
     assert_eq!(code(&home.path().join("missing")), ErrorCode::NotFound);
@@ -85,14 +89,71 @@ fn a_folder_in_a_repository_holding_home_is_refused_as_that_repository() {
         check(&app, Some(&app), &home).unwrap_err().code,
         ErrorCode::ProjectHoldsHome
     );
-    assert_eq!(
-        check(&home, None, &home).unwrap_err().code,
-        ErrorCode::OutsideRoot
-    );
-    assert_eq!(
-        check(&own, None, &home).unwrap().root,
-        own.to_string_lossy()
-    );
+    // Home itself is the repository: still refused, confirmed or not.
+    for confirmed in [None, Some(home.as_path())] {
+        assert_eq!(
+            check(&home, confirmed, &home).unwrap_err().code,
+            ErrorCode::ProjectHoldsHome
+        );
+    }
+    assert_eq!(check(&own, None, &home).unwrap().root, wire(&own));
+}
+
+/// PRD home-folder-project D-01, D-02, D-08: home itself is registered as a
+/// plain folder only with the operator's confirmation of it, asked in its own
+/// words; a folder that holds home stays refused.
+#[test]
+fn home_itself_is_asked_about_once_and_registered_only_when_confirmed() {
+    let parent = tempfile::tempdir().unwrap();
+    let parent = parent.path().canonicalize().unwrap();
+    let home = parent.join("me");
+    std::fs::create_dir_all(home.join("projects")).unwrap();
+
+    let asked = check(&home, None, &home).unwrap_err();
+    assert_eq!(asked.code, ErrorCode::NeedsConfirmation);
+    assert!(asked.home, "{asked:?}");
+    assert_eq!(asked.confirm, None);
+    // A confirmation of another folder confirms nothing about home.
+    let other = home.join("projects");
+    let elsewhere = check(&home, Some(&other), &home).unwrap_err();
+    assert!(elsewhere.home);
+
+    let added = check(&home, Some(&home), &home).unwrap();
+    assert_eq!(added.root, wire(&home));
+    assert!(!added.is_git);
+
+    // A folder under home needs no question and is not home.
+    let inside = check(&other, None, &home).unwrap();
+    assert_eq!(inside.root, wire(&other));
+    let outside = tempfile::tempdir().unwrap();
+    assert!(!check(outside.path(), None, &home).unwrap_err().home);
+
+    // A folder holding home is never a project, confirmed or not.
+    for holder in [parent.as_path(), Path::new(std::path::MAIN_SEPARATOR_STR)] {
+        for confirmed in [None, Some(holder)] {
+            assert_eq!(
+                check(holder, confirmed, &home).unwrap_err().code,
+                ErrorCode::OutsideRoot,
+                "{holder:?} confirmed as {confirmed:?}"
+            );
+        }
+    }
+}
+
+/// A link to home is home: it is asked about as home, and what is registered
+/// is the real home.
+#[cfg(unix)]
+#[test]
+fn a_link_to_home_is_home() {
+    let parent = tempfile::tempdir().unwrap();
+    let parent = parent.path().canonicalize().unwrap();
+    let home = parent.join("me");
+    std::fs::create_dir(&home).unwrap();
+    let link = parent.join("shortcut");
+    std::os::unix::fs::symlink(&home, &link).unwrap();
+
+    assert!(check(&link, None, &home).unwrap_err().home);
+    assert_eq!(check(&link, Some(&link), &home).unwrap().root, wire(&home));
 }
 
 /// PRD wsl-device B15, B18, B20: a folder outside the host's home is
@@ -113,9 +174,7 @@ fn a_folder_outside_home_needs_its_own_confirmation() {
     let added = check(&app, Some(&app), home.path()).unwrap();
     assert_eq!(
         added.root,
-        hide_platform::fs::identity::canonical(&app)
-            .unwrap()
-            .to_string_lossy()
+        wire(&hide_platform::fs::identity::canonical(&app).unwrap())
     );
     assert!(!added.is_git);
     for (path, confirmed) in [
@@ -138,7 +197,7 @@ fn a_folder_outside_home_needs_its_own_confirmation() {
 }
 
 /// PRD wsl-device B18: a confirmation changes nothing about a symlink under
-/// home that leads out of it, or about home and the folders holding it.
+/// home that leads out of it, or about the folders holding home.
 #[cfg(unix)]
 #[test]
 fn a_confirmation_does_not_reach_past_home_s_own_refusals() {
@@ -151,7 +210,7 @@ fn a_confirmation_does_not_reach_past_home_s_own_refusals() {
     std::os::unix::fs::symlink(&elsewhere, &escape).unwrap();
     let code = |path: &Path| check(path, Some(path), &home).unwrap_err().code;
     assert_eq!(code(&escape), ErrorCode::OutsideRoot);
-    for holder in [home.as_path(), outer.path(), Path::new("/")] {
+    for holder in [outer.path(), Path::new("/")] {
         assert_eq!(code(holder), ErrorCode::OutsideRoot, "{holder:?}");
     }
     let up = elsewhere.join("up");
@@ -194,10 +253,7 @@ fn a_folder_in_a_project_outside_home_asks_about_the_project_it_adds() {
     repository_with_worktree(&repo, &linked);
     let public = repo.join("public");
     std::fs::create_dir(&public).unwrap();
-    let root = hide_platform::fs::identity::canonical(&repo)
-        .unwrap()
-        .to_string_lossy()
-        .into_owned();
+    let root = wire(&hide_platform::fs::identity::canonical(&repo).unwrap());
     let asked = |path: &Path, confirmed: Option<&Path>| {
         let error = check(path, confirmed, home.path()).unwrap_err();
         (error.code, error.confirm)
@@ -225,12 +281,9 @@ fn a_folder_in_a_project_outside_home_asks_about_the_project_it_adds() {
         asked(&inward, None),
         (
             ErrorCode::NeedsConfirmation,
-            Some(
-                hide_platform::fs::identity::canonical(&other)
-                    .unwrap()
-                    .to_string_lossy()
-                    .into_owned()
-            )
+            Some(wire(
+                &hide_platform::fs::identity::canonical(&other).unwrap()
+            ))
         )
     );
 }
@@ -276,21 +329,25 @@ fn another_spelling_of_home_is_home() {
         spelled.join("app").is_dir(),
         "{spelled:?} is the same folder"
     );
-    for holder in [spelled.as_path(), data] {
-        assert_eq!(
-            check(holder, Some(holder), &home).unwrap_err().code,
-            ErrorCode::OutsideRoot,
-            "{holder:?}"
-        );
-    }
+    assert_eq!(
+        check(data, Some(data), &home).unwrap_err().code,
+        ErrorCode::OutsideRoot
+    );
+    // The other spelling of home is home: asked about, then registered as
+    // the real home.
+    assert!(check(&spelled, None, &home).unwrap_err().home);
+    assert_eq!(
+        check(&spelled, Some(&spelled), &home).unwrap().root,
+        wire(&home)
+    );
     // Registered by the spelling the system gives the folder.
     let added = check(&spelled.join("app"), None, &home).unwrap();
-    assert_eq!(added.root, home.join("app").to_string_lossy());
+    assert_eq!(added.root, wire(&home.join("app")));
 }
 
 /// On a volume that ignores letter case, home written in another case is
-/// still home: a folder under it needs no confirmation, and a link under it
-/// that leads out stays refused.
+/// still home: a folder under it needs no confirmation, and home itself is
+/// asked about as home.
 #[test]
 fn home_in_another_letter_case_is_home_where_case_is_ignored() {
     let outer = tempfile::tempdir().unwrap();
@@ -301,9 +358,10 @@ fn home_in_another_letter_case_is_home_where_case_is_ignored() {
     }
     let shouted = outer.path().join("HOME");
     assert!(check(&shouted.join("app"), None, &home).is_ok());
+    assert!(check(&shouted, None, &home).unwrap_err().home);
     assert_eq!(
-        check(&shouted, Some(&shouted), &home).unwrap_err().code,
-        ErrorCode::OutsideRoot
+        check(&shouted, Some(&shouted), &home).unwrap().root,
+        wire(&hide_platform::fs::identity::canonical(&home).unwrap())
     );
 }
 
@@ -316,12 +374,7 @@ fn home_in_another_letter_case_is_home_where_case_is_ignored() {
 fn a_folder_whose_git_directory_lives_elsewhere_is_its_own_project() {
     let home = tempfile::tempdir().unwrap();
     let elsewhere = tempfile::tempdir().unwrap();
-    let canonical = |path: &Path| {
-        hide_platform::fs::identity::canonical(path)
-            .unwrap()
-            .to_string_lossy()
-            .into_owned()
-    };
+    let canonical = |path: &Path| wire(&hide_platform::fs::identity::canonical(path).unwrap());
     let submodule = |folder: &Path, git_dir: &Path| {
         std::fs::create_dir_all(git_dir).unwrap();
         std::fs::write(git_dir.join("HEAD"), "ref: refs/heads/main\n").unwrap();

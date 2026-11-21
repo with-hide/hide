@@ -45,10 +45,6 @@ async fn desktop_registration_requires_daemon_auth_and_local_origin() {
     let env = Env {
         home: dir.path().into(),
         state_dir: dir.path().into(),
-        herdr_socket_path: None,
-        herdr_bin_path: None,
-        own_engine: false,
-        login_shell: None,
         legacy_state_dir: None,
         account_state_folder: false,
         keep_alive: true,
@@ -61,8 +57,12 @@ async fn desktop_registration_requires_daemon_auth_and_local_origin() {
         host_helper_root: None,
         host_cli_dir: None,
         pane_id: None,
+        install: None,
+        access: None,
         tailscale_bin: Some(dir.path().join("missing-tailscale")),
         relay_url: "ws://127.0.0.1:9/ws".to_owned(),
+        peer_direct: None,
+        device_connect: false,
         search_path: None,
     };
     let running = hided::start_daemon(env).await.unwrap();

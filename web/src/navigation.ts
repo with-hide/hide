@@ -1,22 +1,21 @@
-import { scopeOccurrences, scopeRows, type AgentScope } from "./agentScope";
+import { scopeOccurrences, scopeRows, type AgentRef, type AgentScope } from "./agentScope";
 // All projects and Project Overview (PRD S6 D-02, B1-B3, B21): every registered
 // Project on every device, and one Project's Workspaces and agents, read from
 // the snapshot the core already publishes - the navigator for this machine,
-// each device's projected Herdr session, the registrations for a device that
+// each device's projected engine session, the registrations for a device that
 // has no session to show. Nothing here is counted that the snapshot does not
 // carry, and a device that cannot answer says so instead of showing zeros.
 
 import type { TFunction } from "i18next";
 import type { TreeRow } from "./agentRow";
 import type { MessageKey } from "./i18n/catalogs";
-import { thisMachineKey } from "./devices";
+import { deviceConnected, thisMachineKey } from "./devices";
 import { translate } from "./i18n/client";
-import { coreErrorText, herdrStateText, remoteStateText } from "./coreError";
+import { coreErrorText, engineStateText, remoteStateText } from "./coreError";
 import type { BoardProject } from "./projectBoard";
-import { projectsOf } from "./remote";
 import { machineName, windowDeviceId } from "./screenMachine";
-import { hideAiPlace } from "./hideAiOrigin";
-import { focusedRemoteDevice, frontCheckout, localDeviceId, type AgentRow, type Device, type HideAi, type RemoteStatus, type SnapshotRest, type Workspace, type WorkspaceRegistration } from "./snapshot";
+import { hideAiPlace, type AutomationNames } from "./hideAiOrigin";
+import { focusedRemoteDevice, frontCheckout, listedWorkspaces, localDeviceId, type AgentRow, type Device, type HideAi, type RemoteStatus, type SnapshotRest, type Workspace } from "./snapshot";
 import type { Tool } from "./workspace";
 import { startAnswer } from "./startAnswer";
 
@@ -48,23 +47,10 @@ export type DeviceAvailability =
   | { state: "loading"; text: string }
   | { state: "unavailable"; text: string; retry: AvailabilityRetry | null };
 
-export type ProjectEntry = {
-  id: string;
-  label: string;
-  path: string;
-  deviceId: string;
-  pinned: boolean;
-  /** The Project's catalog row, or null when its device has no session to show it from. */
-  workspace: Workspace | null;
-  workspaceCount: number | null;
-  counts: GroupCounts | null;
-};
-
 export type DeviceSection = {
   device: Device;
   local: boolean;
   availability: DeviceAvailability;
-  projects: ProjectEntry[];
 };
 
 /** The agents running in a Project, in the core's order. */
@@ -87,7 +73,8 @@ export function agentSections(scope: AgentScope, agents: AgentRow[]): AgentSecti
 }
 
 /** An agent row and, for a row on an SSH device, the device's name. */
-export type ListedAgent = { agent: AgentRow; device: string | null };
+/** `chip`: the name of the device a row stands on, drawn on it where the list is another device's (`elsewhereNeedsYou`). */
+export type ListedAgent = { agent: AgentRow; device: string | null; chip?: string };
 
 /**
  * Every current agent the snapshot carries (S6 B13, D-12): this machine's
@@ -110,6 +97,30 @@ export function deviceListedAgents(remote: RemoteStatus[] | undefined, devices: 
   return allAgents(remote, localAgents, devices?.find((d) => d.id === deviceId)?.agent_scope, devices);
 }
 
+/**
+ * The Needs You rows of every connected device but `frontId`, each named for
+ * its chip, in the devices' order and each device's raised order (operator
+ * decision 2026-11-08): the sidebar's Needs You lists every device's, while
+ * the rest of the list stays the front device's. `shown` and `more` keep
+ * each device's own cap.
+ */
+export function elsewhereNeedsYou(rest: SnapshotRest | null, localAgents: AgentRow[], frontId: string): { shown: ListedAgent[]; more: ListedAgent[] } {
+  const devices = rest?.navigator?.devices ?? [];
+  const shown: ListedAgent[] = [];
+  const more: ListedAgent[] = [];
+  for (const device of devices) {
+    if (device.id === frontId || !deviceConnected(rest, device.id)) continue;
+    const raised = device.agent_scope.raised.find((group) => group.group === "needs_you");
+    if (!raised) continue;
+    const listed = deviceListedAgents(rest?.status?.remote, devices, localAgents, device.id);
+    const chip = machineName(devices, device.id, translate);
+    const drawn = (refs: AgentRef[]) => scopeOccurrences(refs, listed.map((row) => row.agent)).map((agent) => ({ ...listed.find((row) => row.agent === agent)!, agent: { ...agent, lineage_collapsed: true }, chip }));
+    shown.push(...drawn(raised.shown));
+    more.push(...drawn(raised.more));
+  }
+  return { shown, more };
+}
+
 /** A device's rows' key in `agentPlaces`: the name `allAgents` gives them, so a node's own rows in its window find their places too. */
 function deviceLabel(devices: Device[] | undefined, targetId: string): string {
   return machineName(devices, targetId, translate);
@@ -120,7 +131,7 @@ function deviceLabel(devices: Device[] | undefined, targetId: string): string {
  * (PRD sidebar-readability B5): `project › checkout`, or the project alone for
  * a plain folder, which is one row in Projects. A pane is placed by the
  * checkout that holds it, on its own device: this machine's projects for a
- * local row, a connected device's Herdr workspaces for its rows. A pane no
+ * local row, a connected device's engine workspaces for its rows. A pane no
  * checkout holds has no place, and none is made up.
  */
 export function agentPlaces(
@@ -128,10 +139,11 @@ export function agentPlaces(
   remote: RemoteStatus[] | undefined,
   devices: Device[] | undefined,
   hideAi?: ReadonlyMap<string, HideAi>,
+  names?: AutomationNames,
 ): (device: string | null, paneId: string) => string | null {
-  const byDevice = new Map<string | null, Map<string, string>>([[null, checkoutPlaces(localWorkspaces ?? [], hideAi)]]);
+  const byDevice = new Map<string | null, Map<string, string>>([[null, checkoutPlaces(localWorkspaces ?? [], hideAi, names)]]);
   for (const status of remote ?? []) {
-    byDevice.set(deviceLabel(devices, status.target_id), checkoutPlaces((status.session?.workspaces ?? []).filter((p) => p.agent_scope.places_live), hideAi));
+    byDevice.set(deviceLabel(devices, status.target_id), checkoutPlaces((status.session?.workspaces ?? []).filter((p) => p.agent_scope.places_live), hideAi, names));
   }
   return (device, paneId) => byDevice.get(device)?.get(paneId) ?? null;
 }
@@ -139,16 +151,19 @@ export function agentPlaces(
 /**
  * Where each pane sits, as `project › branch` (Home, or the project alone for
  * a plain folder), keyed by pane id. A pane whose agent Hide AI started names
- * its task where the branch would stand (`project › Memory 반영하기 · m72`).
+ * its task where the branch would stand (`project › Memory 반영하기 · m72`);
+ * one in an automation's own folder, which is no project, has no place: its
+ * row names the automation it ran for instead (PRD automations B15, B30).
  */
-export function checkoutPlaces(workspaces: Workspace[], hideAi?: ReadonlyMap<string, HideAi>): Map<string, string> {
+export function checkoutPlaces(workspaces: Workspace[], hideAi?: ReadonlyMap<string, HideAi>, names?: AutomationNames): Map<string, string> {
   const places = new Map<string, string>();
   for (const workspace of workspaces) {
     for (const [pane, value] of Object.entries(workspace.agent_scope.places)) {
       const checkout = workspace.checkouts.find((c) => c.id === value.checkout_id);
       if (!checkout) throw new Error(`Missing place checkout: ${value.checkout_id}`);
       const started = hideAi?.get(pane);
-      places.set(pane, value.kind === "home" ? translate("common.home") : value.kind === "folder" ? workspace.label : started ? hideAiPlace(translate, workspace.label, started) : `${workspace.label} › ${checkout.branch ?? checkout.label}`);
+      if (workspace.unlisted) continue;
+      places.set(pane, value.kind === "folder" ? workspace.label : started ? hideAiPlace(translate, workspace.label, started, names) : `${workspace.label} › ${checkout.branch ?? checkout.label}`);
     }
   }
   return places;
@@ -163,25 +178,26 @@ export function liveDescendantCounts(scope: AgentScope): Map<string, number> {
 }
 
 /**
- * This machine's Projects count agents only while its Herdr answers: an
- * unreachable Herdr has no agents to list, and "No agents" would be a zero
+ * This machine's Projects count agents only while its engine answers: an
+ * unreachable engine has no agents to list, and "No agents" would be a zero
  * nobody measured (B3). The core reconnects on its own and has no event that
  * reconnects sooner, so there is no Retry.
  */
 function localAvailability(rest: SnapshotRest | null): DeviceAvailability {
-  const herdr = rest?.status?.herdr;
-  if (!herdr?.state || herdr.state === "connected") return { state: "ready" };
-  if (herdr.state === "not_connected") return { state: "loading", text: translate("overview.availability.connectingHerdr") };
-  // A Herdr on another protocol says so in the operator's language; the screen that holds Hide offers what to do (PRD herdr-takeover).
-  if (herdr.state === "protocol_mismatch") return { state: "unavailable", text: translate("herdrTakeover.mismatch.title"), retry: null };
-  // The state is worded here; Herdr's own sentence, with its socket path, is the About tab's and the log's.
-  return { state: "unavailable", text: translate("coreError.herdr.countsLater", { reason: herdrStateText(herdr.state, translate) }), retry: null };
+  const engine = rest?.status?.engine;
+  if (!engine?.state || engine.state === "connected") return { state: "ready" };
+  if (engine.state === "not_connected") return { state: "loading", text: translate("overview.availability.connectingEngine") };
+  // The state is worded here; the engine's own sentence, with its socket path, is the About tab's and the log's.
+  return { state: "unavailable", text: translate("coreError.engine.countsLater", { reason: engineStateText(engine.state, translate) }), retry: null };
 }
 
 /** `name`: the device as this window calls it (`machineName`). */
 function deviceAvailability(device: Device, status: RemoteStatus | undefined, name: string): DeviceAvailability {
   if (device.kind !== "remote") return { state: "ready" };
-  if (!status || status.state === "not_connected") return { state: "loading", text: translate("devices.state.connecting") };
+  if (!status) return { state: "loading", text: translate("devices.state.connecting") };
+  // `not_connected` is the device the sidebar and the title row already call 연결 안 됨, with 다시 연결:
+  // the Overview says the same instead of counting what it has not read.
+  if (status.state === "not_connected") return { state: "unavailable", text: translate("devices.rail.notConnected"), retry: "connect" };
   if (status.state !== "connected" && status.state !== "stale") {
     return { state: "unavailable", text: remoteStateText(status.state, name, translate), retry: status.state === "disabled" ? null : "connect" };
   }
@@ -194,80 +210,36 @@ function deviceAvailability(device: Device, status: RemoteStatus | undefined, na
   return { state: "ready" };
 }
 
-function entryOf(workspace: Workspace, _agents: AgentRow[], trusted: boolean, checkoutsTrusted = trusted): ProjectEntry {
-  return {
-    id: workspace.id,
-    label: workspace.label,
-    path: workspace.path,
-    deviceId: workspace.device_id,
-    pinned: workspace.pinned,
-    workspace,
-    workspaceCount: checkoutsTrusted ? workspace.checkouts.length : null,
-    counts: trusted ? workspace.agent_scope.groups : null,
-  };
-}
-
-function registrationEntry(registration: WorkspaceRegistration): ProjectEntry {
-  return {
-    id: registration.id,
-    label: registration.label,
-    path: registration.path,
-    deviceId: registration.device_id,
-    pinned: registration.pinned,
-    workspace: null,
-    workspaceCount: null,
-    counts: null,
-  };
-}
-
-function byPinThenLabel(left: ProjectEntry, right: ProjectEntry): number {
-  if (left.pinned !== right.pinned) return left.pinned ? -1 : 1;
-  return left.label.localeCompare(right.label);
-}
-
 /**
- * The Overview of a device's projects: one section per device, this machine
- * first, or the one `deviceId` names. A device with a session lists its
- * projected Projects; one without lists its registrations with no counts,
- * marked loading or unavailable, so nothing is guessed (B3, B21). The
- * device's Home is no project and is not listed.
+ * Each device Main can show, this machine first, or the one `deviceId`
+ * names, with how far its projects can be trusted right now (B3, B21). The
+ * projects themselves are `boardProjects`, in the core's order, so Main
+ * lists pinned projects in the order the sidebar does.
  */
-export function mainSections(rest: SnapshotRest | null, localAgents: AgentRow[], deviceId?: string): DeviceSection[] {
+export function mainSections(rest: SnapshotRest | null, deviceId?: string): DeviceSection[] {
   const devices = (rest?.navigator?.devices ?? []).filter((device) => deviceId === undefined || device.id === deviceId);
-  const registrations = (rest?.ui_state?.workspace_registrations ?? []).filter((row) => !row.home);
   const sections: DeviceSection[] = [];
   const local = devices.find((device) => device.kind !== "remote");
-  if (local) {
-    const availability = localAvailability(rest);
-    // The checkouts are this machine's own facts; only the agents need Herdr.
-    const projects = projectsOf(rest?.navigator?.workspaces ?? []).map((workspace) => entryOf(workspace, localAgents, availability.state === "ready", true));
-    sections.push({ device: local, local: true, availability, projects: [...projects].sort(byPinThenLabel) });
-  }
+  if (local) sections.push({ device: local, local: true, availability: localAvailability(rest) });
   for (const device of devices.filter((row) => row.kind === "remote")) {
     const status = rest?.status?.remote?.find((row) => row.target_id === device.id);
-    const availability = deviceAvailability(device, status, machineName(rest?.navigator?.devices, device.id, translate));
-    const session = status?.session ?? null;
-    const projects = session
-      ? projectsOf(session.workspaces).map((workspace) => entryOf(workspace, session.agents, availability.state === "ready"))
-      : registrations.filter((row) => row.device_id === device.id).map(registrationEntry);
-    sections.push({ device, local: false, availability, projects: [...projects].sort(byPinThenLabel) });
+    sections.push({ device, local: false, availability: deviceAvailability(device, status, machineName(rest?.navigator?.devices, device.id, translate)) });
   }
   return sections;
 }
 
 /**
- * How many Projects an Overview lists, counted the way `mainSections` lists
- * them: this machine's catalog, and each device's session or, before it
- * answers, its registrations, Home excluded. A number, so a caller reads it
- * without building the sections.
+ * How many Projects an Overview lists: this machine's catalog, and each
+ * device's session or, before it answers, its registrations.
+ * A number, so a caller reads it without building the list.
  */
 export function allProjectsCount(rest: SnapshotRest | null, deviceId?: string): number {
   const devices = (rest?.navigator?.devices ?? []).filter((device) => deviceId === undefined || device.id === deviceId);
-  const registrations = (rest?.ui_state?.workspace_registrations ?? []).filter((row) => !row.home);
-  let count = devices.some((device) => device.kind !== "remote") ? projectsOf(rest?.navigator?.workspaces ?? []).length : 0;
+  const registrations = rest?.ui_state?.workspace_registrations ?? [];
+  let count = devices.some((device) => device.kind !== "remote") ? listedWorkspaces(rest?.navigator?.workspaces ?? []).length : 0;
   for (const device of devices.filter((row) => row.kind === "remote")) {
     const session = rest?.status?.remote?.find((row) => row.target_id === device.id)?.session ?? null;
-    count += session ? projectsOf(session.workspaces).length : registrations.filter((row) => row.device_id === device.id).length;
+    count += session ? listedWorkspaces(session.workspaces).length : registrations.filter((row) => row.device_id === device.id).length;
   }
   return count;
 }
@@ -285,13 +257,13 @@ export function boardProjects(rest: SnapshotRest | null, localAgents: AgentRow[]
   const away = (id: string) => (id === windowDeviceId(devices) ? null : machineName(devices, id, translate));
   const projects: BoardProject[] =
     deviceId === undefined || deviceId === localId
-      ? projectsOf(rest?.navigator?.workspaces ?? []).map((workspace) => ({ workspace, agents: localAgents, device: away(localId) }))
+      ? listedWorkspaces(rest?.navigator?.workspaces ?? []).map((workspace) => ({ workspace, agents: localAgents, device: away(localId) }))
       : [];
   for (const status of rest?.status?.remote ?? []) {
     const session = status.session;
     if (!session || (deviceId !== undefined && status.target_id !== deviceId)) continue;
     const device = away(status.target_id);
-    for (const workspace of projectsOf(session.workspaces)) projects.push({ workspace, agents: session.agents, device });
+    for (const workspace of listedWorkspaces(session.workspaces)) projects.push({ workspace, agents: session.agents, device });
   }
   return projects;
 }
@@ -341,16 +313,16 @@ export function overviewProject(rest: SnapshotRest | null, localAgents: AgentRow
   return null;
 }
 
-/** Herdr states in which a catalog will not change on its own soon. */
-const SETTLED_HERDR = new Set(["connected", "unconfigured", "socket_missing", "unreachable", "stale", "incompatible"]);
-const FAILED_HERDR = new Set([...SETTLED_HERDR].filter(state => state !== "connected"));
+/** Engine states in which a catalog will not change on its own soon. */
+const SETTLED_ENGINE = new Set(["connected", "unconfigured", "socket_missing", "unreachable", "stale", "incompatible"]);
+const FAILED_ENGINE = new Set([...SETTLED_ENGINE].filter(state => state !== "connected"));
 
 /** Whether the local saved choice is pending, rather than failed or restored. */
 export function waitingForSavedWorkspace(rest: SnapshotRest | null): boolean {
-  // Herdr can connect before the asynchronous catalog and persisted View
+  // The engine can connect before the asynchronous catalog and persisted View
   // arrive. The core retains a saved choice until its path facts settle;
   // absence during that restore must not choose Main permanently.
-  return Boolean(rest && !focusedRemoteDevice(rest) && !FAILED_HERDR.has(rest.status?.herdr?.state ?? "") && rest.ui_state?.focused_checkout_id && !rest.workspace_view);
+  return Boolean(rest && !focusedRemoteDevice(rest) && !FAILED_ENGINE.has(rest.status?.engine?.state ?? "") && rest.ui_state?.focused_checkout_id && !rest.workspace_view);
 }
 
 /**
@@ -359,7 +331,7 @@ export function waitingForSavedWorkspace(rest: SnapshotRest | null): boolean {
  * All projects when it is not (a first run, or a last Workspace that is gone) or when the device in front
  * has settled without one, and null while that device is still being
  * reached. The device in front decides: a device Workspace is known only
- * once that device's session arrives, and this machine's Herdr settling
+ * once that device's session arrives, and this machine's engine settling
  * first says nothing about it.
  */
 export function startupScreen(rest: SnapshotRest | null, hasFront: boolean): "workspace" | "main" | null {
@@ -368,8 +340,8 @@ export function startupScreen(rest: SnapshotRest | null, hasFront: boolean): "wo
   if (waitingForSavedWorkspace(rest)) return null;
   if (hasFront) return rest.workspace_view?.resumed ? "workspace" : "main";
   if (!device) {
-    const state = rest.status?.herdr?.state;
-    return state && SETTLED_HERDR.has(state) ? "main" : null;
+    const state = rest.status?.engine?.state;
+    return state && SETTLED_ENGINE.has(state) ? "main" : null;
   }
   const status = rest.status?.remote?.find((row) => row.target_id === device.id);
   if (!status || status.state === "not_connected") return null;
@@ -407,7 +379,7 @@ export function openingLanded(rest: SnapshotRest | null, target: OpenTarget): bo
   }
   if (target.expanded !== undefined && !(rest?.ui_state?.session_collapsed_checkout_ids ?? []).includes(target.checkoutId) !== target.expanded) return false;
   if (front.id === target.checkoutId) return true;
-  // A device project with no Herdr workspace yet gets one at its folder, under a new id.
+  // A device project with no engine workspace yet gets one at its folder, under a new id.
   return target.path !== null && front.path === target.path && (rest?.navigator?.focused_device_id ?? localDeviceId(rest)) === target.deviceId;
 }
 

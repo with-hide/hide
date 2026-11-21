@@ -1,4 +1,4 @@
-// The approved Basic-chip journey against a private pinned Herdr and kit HOME.
+// The approved Basic-chip journey against a private engine and kit HOME.
 // Expected membership and words are independent of the production declaration.
 import { expect, test } from "@playwright/test";
 import fs from "node:fs";
@@ -12,14 +12,14 @@ test.skip(process.platform === "win32", "the kit installs POSIX hooks");
 
 test("Basic chips expose three accessible groups in all four languages and return keyboard focus", async ({ page }) => {
   test.setTimeout(180_000);
-  const herdr = await startFixture();
+  const engine = await startFixture();
   let daemon: Daemon | undefined;
   try {
-    const home = path.join(fs.mkdtempSync(path.join(herdr.root, "ad-")), "home");
+    const home = path.join(fs.mkdtempSync(path.join(engine.root, "ad-")), "home");
     for (const folder of [".claude", ".codex", ".grok", ".local/bin", ".hide/kit"]) fs.mkdirSync(path.join(home, folder), { recursive: true });
     for (const program of ["claude", "codex", "grok", "opencode", "pi", "omp", "agy"]) fs.writeFileSync(path.join(home, ".local/bin", program), "#!/bin/sh\n", { mode: 0o755 });
     fs.writeFileSync(path.join(home, ".hide/kit/installed.json"), JSON.stringify({ format: 1, installed: [] }));
-    daemon = await startHided(herdr, "adapter-groups", home, {}, true);
+    daemon = await startHided(engine, "adapter-groups", home, {}, true);
     await page.setViewportSize({ width: 560, height: 1000 });
     await page.goto(`${daemon.origin}/#token=${daemon.token}`);
     await enterWorkspace(page, "fixture");
@@ -33,10 +33,10 @@ test("Basic chips expose three accessible groups in all four languages and retur
     await expect(list.locator("[data-agent-partial]")).toHaveCount(1);
     for (const id of ["claude-code", "codex", "opencode", "pi", "omp", "antigravity"]) await expect(list.locator(`[data-agent-partial="${id}"]`)).toHaveCount(0);
     for (const [language, word, headings] of [
-      ["en", "Some features", ["Herdr basics", "Session reading", "Multi-agent collaboration"]],
-      ["ko", "일부 기능", ["Herdr 기본 기능", "세션 읽기", "여러 에이전트 협업"]],
-      ["zh-CN", "部分功能", ["Herdr 基础功能", "会话读取", "多智能体协作"]],
-      ["ja", "一部の機能", ["Herdr の基本機能", "セッションの読み取り", "複数エージェントの連携"]],
+      ["en", "Some features", ["Basics", "Session reading", "Multi-agent collaboration"]],
+      ["ko", "일부 기능", ["기본 기능", "세션 읽기", "여러 에이전트 협업"]],
+      ["zh-CN", "部分功能", ["基础功能", "会话读取", "多智能体协作"]],
+      ["ja", "一部の機能", ["基本機能", "セッションの読み取り", "複数エージェントの連携"]],
     ] as const) {
       for (const theme of ["light", "dark"] as const) {
         await page.locator('[data-settings-tab="general"]').click();
@@ -53,8 +53,8 @@ test("Basic chips expose three accessible groups in all four languages and retur
         const popover = page.locator('[data-agent-partial-popover="grok"]');
         await expect(popover).toBeVisible();
         await expect(popover.getByRole("heading")).toHaveText([...headings]);
-        await expect(popover.locator("[data-agent-feature]")).toHaveCount(11);
-        await expect(popover.locator('[data-agent-feature="herdr_integration:yes"]')).toContainText("✓");
+        await expect(popover.locator("[data-agent-feature]")).toHaveCount(9);
+        await expect(popover.locator('[data-agent-feature="start:yes"]')).toContainText("✓");
         await expect(popover.locator('[data-agent-feature="letters:no"]')).toContainText("–");
         await expect(popover.locator('[data-agent-feature="sleep:yes"]')).toContainText("✓");
         await expect(popover.locator('[data-agent-feature="fork:yes"]')).toContainText("✓");
@@ -77,8 +77,8 @@ test("Basic chips expose three accessible groups in all four languages and retur
       }
     }
   } catch (error) {
-    throw afterCleanup(afterCleanup(error, () => daemon?.stop()), () => herdr.stop());
+    throw afterCleanup(afterCleanup(error, () => daemon?.stop()), () => engine.stop());
   }
-  try { daemon?.stop(); } catch (error) { throw afterCleanup(error, () => herdr.stop()); }
-  herdr.stop();
+  try { daemon?.stop(); } catch (error) { throw afterCleanup(error, () => engine.stop()); }
+  engine.stop();
 });

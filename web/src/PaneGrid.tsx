@@ -3,13 +3,12 @@ import type { Actions } from "./actions";
 import { markTone } from "./agentRow";
 import { useInterfaceTranslation } from "./i18n/client";
 import { PaneView } from "./PaneView";
-import { contextAgents, frameStyle, type RemoteView } from "./remote";
-import { resizeStep } from "./resize";
+import { contextAgents, frameStyle, remoteTargetOfPane, type RemoteView } from "./remote";
+import { dividerPaneId, resizeStep } from "./resize";
 import { windowDeviceId } from "./screenMachine";
 import { cn } from "./lib/utils";
 import {
   type AgentRow,
-  dividerPaneId,
   focusedCheckout,
   layoutForTab,
   type LayoutNode,
@@ -20,13 +19,15 @@ import {
   type TerminalPane,
 } from "./snapshot";
 import { useShellStore } from "./store";
+import { drawnPair } from "./pairView";
+import { workspaceViewOf } from "./workspace";
 import type { DispatchFn } from "./ws";
 
 // The center draws the visible tab's projection tree as nested CSS grids
-// (PRD S2 B4): every split is a two-track grid sized by Herdr's ratio and
+// (PRD S2 B4): every split is a two-track grid sized by the engine's ratio and
 // every leaf is a pane with its own xterm instance. A zoomed tab draws only
 // the zoomed pane, over the whole canvas, so its fit follows the full
-// geometry Herdr gave the PTY (B19); the other panes' terminals stay alive
+// geometry the engine gave the PTY (B19); the other panes' terminals stay alive
 // and fed while parked (`toggle_zoom` decides, the shell only draws).
 
 type PaneProps = {
@@ -47,7 +48,7 @@ function useAgentsByPane(): Map<string, AgentRow> {
 }
 
 /** The header's agent facts as plain values, so a pane redraws only when they change. */
-function agentProps(agent: AgentRow | undefined) {
+export function agentProps(agent: AgentRow | undefined) {
   return { agentKind: agent?.agent_kind ?? null, markSymbol: agent?.mark ?? null, markStatus: agent?.status_code ?? null, markTone: agent ? markTone(agent) : "", lettersWaiting: agent?.letters_waiting ?? 0 };
 }
 
@@ -57,6 +58,11 @@ export function PaneCanvas({ actions, tab }: { actions: Actions; tab: Tab | null
   const layout = useShellStore((s) => layoutForTab(s.rest, tab?.id ?? null));
   const transportRows = useShellStore((s) => s.rest?.terminal?.panes);
   const scales = useShellStore((s) => s.rest?.ui_state?.pane_text_scales);
+  // A tab in pair view gives its pane to the pair layer and draws none of
+  // its panes meanwhile: their terminals park, alive and fed, at their size,
+  // as a zoom's hidden panes do (PRD lane-desk-pair-view B17, D-16, D-26).
+  const paired = useShellStore((s) => drawnPair(workspaceViewOf(s.rest))?.tab_id === tab?.id);
+  if (paired && tab) return <div className="relative min-h-0 min-w-0 flex-1" data-canvas={tab.id ?? ""} data-paired-canvas="true" />;
   if (!checkout || !tab || !layout) {
     return (
       <div className="flex min-h-0 flex-1 items-center justify-center text-caption text-muted-foreground" data-canvas="empty">
@@ -79,10 +85,42 @@ export function PaneCanvas({ actions, tab }: { actions: Actions; tab: Tab | null
 const EMPTY_TRANSPORTS: TerminalPane[] = [];
 
 /**
- * A selected SSH device's visible tab (PRD S5 B19). Herdr reports a remote
+ * Pair view's left half (PRD lane-desk-pair-view B17, D-26): the paired
+ * pane's own terminal, moved here from its tab's canvas, never a copy. Its
+ * head offers no zoom, since pair view leaves the tab's layout and zoom as
+ * they are (D-16).
+ */
+export function PairPaneCanvas({ paneId, actions }: { paneId: string; actions: Actions }) {
+  // A connected device's pane is found in that device's session (B31).
+  const tab = useShellStore((s) => [focusedCheckout(s.rest), ...(s.rest?.status?.remote ?? []).flatMap((row) => row.session?.workspaces.flatMap((workspace) => workspace.checkouts) ?? [])]
+    .flatMap((checkout) => checkout?.tabs ?? [])
+    .find((row) => row.panes.some((pane) => pane.id === paneId)) ?? null);
+  const local = useShellStore((s) => remoteTargetOfPane(s.rest, paneId) === null);
+  const transport = useShellStore((s) => s.rest?.terminal?.panes?.find((row) => row.pane_id === paneId));
+  const scale = useShellStore((s) => s.rest?.ui_state?.pane_text_scales?.[paneId] ?? 1);
+  const focused = useShellStore((s) => s.focusedPaneId === paneId);
+  const agents = useAgentsByPane();
+  const pane = tab?.panes.find((row) => row.id === paneId);
+  // The pane the layer opened with: a pane that took the left since did so while pair view was on screen, from a desk tab
+  // or the sidebar, and keeps the keys where the operator pressed if that was the desk (`PaneView`); an entry hands them over.
+  const entered = useRef(paneId);
+  return (
+    <div className="relative h-full w-full min-h-0 min-w-0" data-layout-pane={paneId} data-pair-pane={paneId}>
+      {/* Keyed by pane, so another pane taking the left mounts its own view and the keys follow it (B25), as on the tab's canvas. */}
+      {pane ? (
+        <PaneView key={paneId} pane={pane} transport={transport} focused={focused} scale={scale} actions={actions} {...agentProps(agents.get(paneId))} paneCount={1} zoomed={false} local={local} keysStayOnDesk={entered.current !== paneId} />
+      ) : (
+        <div className="h-full bg-background" data-pane-missing={paneId} />
+      )}
+    </div>
+  );
+}
+
+/**
+ * A selected SSH device's visible tab (PRD S5 B19). The device's engine reports a remote
  * tab's geometry as each pane's rectangle rather than the split tree, so the
  * panes are placed where it says. Hairlines mark internal edges, without a
- * resize handle: a remote pane's size is its host's. A zoomed tab draws the pane Herdr
+ * resize handle: a remote pane's size is its host's. A zoomed tab draws the pane the engine
  * zoomed, its focused one, over the whole canvas.
  */
 export function RemotePaneCanvas({
@@ -98,10 +136,13 @@ export function RemotePaneCanvas({
   const transportRows = useShellStore((s) => s.rest?.terminal?.panes ?? EMPTY_TRANSPORTS);
   const scales = useShellStore((s) => s.rest?.ui_state?.pane_text_scales ?? EMPTY_SCALES);
   const agents = useAgentsByPane();
+  // A device tab in pair view gives its pane to the pair layer, as this machine's does (B31).
+  const paired = useShellStore((s) => drawnPair(workspaceViewOf(s.rest))?.tab_id === view.tab?.id);
   // A device's panes wear its border, except a node's own drawn in its own window.
   const away = useShellStore((s) => view.workspace.device_id !== windowDeviceId(s.rest?.navigator?.devices));
   const { t } = useInterfaceTranslation();
   const { tab, layout } = view;
+  if (paired && tab) return <div className="relative min-h-0 min-w-0 flex-1" data-canvas={tab.id ?? ""} data-remote-canvas="true" data-paired-canvas="true" />;
   if (!tab || !layout) {
     return (
       <div className="flex min-h-0 flex-1 items-center justify-center text-caption text-muted-foreground" data-canvas="empty">
@@ -244,8 +285,9 @@ function PaneBoundary({ vertical }: { vertical: boolean }) {
 
 /**
  * The handle on a split boundary. While dragging only the guide line moves;
- * releasing sends one `resize_pane` for the first subtree's last pane, or
- * nothing when the change falls outside the core's range (PRD S2 B6).
+ * releasing sends one `resize_pane` for the pane beside it on the side it
+ * moved away from (`dividerPaneId`), or nothing when the change falls
+ * outside the core's range (PRD S2 B6).
  */
 function Divider({ node, dispatch }: { node: Extract<LayoutNode, { type: "split" }>; dispatch: DispatchFn }) {
   const { t } = useInterfaceTranslation();
@@ -284,10 +326,10 @@ function Divider({ node, dispatch }: { node: Extract<LayoutNode, { type: "split"
       dispatch({
         schema_version: 2,
         kind: "resize_pane",
-        payload: { pane_id: dividerPaneId(node.first), direction: step.direction, amount: step.amount },
+        payload: { pane_id: dividerPaneId(node, step.direction), direction: step.direction, amount: step.amount },
       });
     },
-    [travel, vertical, dispatch, node.first],
+    [travel, vertical, dispatch, node],
   );
   const onPointerCancel = useCallback(() => setTravel(null), []);
 
@@ -307,7 +349,7 @@ function Divider({ node, dispatch }: { node: Extract<LayoutNode, { type: "split"
         role="separator"
         aria-orientation={vertical ? "vertical" : "horizontal"}
         aria-label={vertical ? t("panes.divider.width") : t("panes.divider.height")}
-        data-divider={dividerPaneId(node.first)}
+        data-divider={dividerPaneId(node, vertical ? "right" : "down")}
         className={`absolute z-20 ${vertical ? "cursor-col-resize" : "cursor-row-resize"}`}
         style={grab}
         onPointerDown={onPointerDown}

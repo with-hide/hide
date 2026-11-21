@@ -14,7 +14,7 @@ import { git, ledgerOf } from "./hide-ai-fixture";
 import { openProject, openWorktree, tabOfPane, withControl } from "./daemon-actions";
 import { startEngine, type EngineServer } from "./engine-fixture";
 import { sessionIn, startAgentInProject } from "./fixture-agents";
-import { startHided, type Daemon } from "./hided-fixture";
+import { seedLedger, startHided, type Daemon } from "./hided-fixture";
 import { fixtureProgram } from "./platform-fixture";
 import { countSent, sendEvent, showProjectMemory, showProjectRow } from "./wire";
 
@@ -42,6 +42,7 @@ if (key === "repo view") { console.log('{"nameWithOwner":"acme/repo"}'); process
 if (key === "issue list") { console.log("[]"); process.exit(0); }
 // The signed-in login, the review asks and the merge-queue facts that the pull request read takes with the list (PRD work-tab-pr-lens D-25).
 if (key === "api user") { console.log("example-user"); process.exit(0); }
+if (process.argv.slice(2).join(" ").includes("HideHeadRuns")) { const repository = {}; for (let i = 0; i < process.argv.slice(2).join(" ").split("object(oid:").length - 1; i++) repository["c" + i] = { checkSuites: { totalCount: 0, nodes: [] } }; console.log(JSON.stringify({ data: { repository } })); process.exit(0); }
 if (key === "api graphql") { console.log('{"data":{"repository":{"pullRequests":{"nodes":[]}}}}'); process.exit(0); }
 if (key === "pr list") {
   if (args.join(" ").includes("review-requested:@me")) { console.log("[]"); process.exit(0); }
@@ -162,7 +163,7 @@ test("a promotion's agent is in Needs You only while its pull request waits for 
     const project = page.locator("[data-project]", { hasText: "scratch" });
     await expect(project.locator("[data-checkout-row]").first()).toBeVisible({ timeout: 20_000 });
     // Opening the Memory tab makes the Project's store; the card and its promotion are seeded into it while the core is down.
-    await (await showProjectRow(page, project.locator("[data-checkout]").first())).click();
+    await (await showProjectRow(page, project.locator("[data-checkout]").first())).click({ position: { x: 12, y: 8 } });
     await showProjectMemory(page);
     await page.locator('[data-lane="memory"] [data-hide-ai-tool-tab="memory"]').click();
     await expect(page.locator('[data-lane="memory"] [data-memory-switch="off"]')).toBeEnabled({ timeout: 20_000 });
@@ -172,20 +173,21 @@ test("a promotion's agent is in Needs You only while its pull request waits for 
     const session = await sessionIn(stack.daemon, stack.hideAiPane);
     stack.daemon = await stack.daemon.restart((dir) => {
       seedPromotion(path.join(dir, "project-memory.sqlite3"), "agent-2");
-      fs.writeFileSync(path.join(dir, "delivery-ledger.json"), ledgerOf(stack.daemon.node, [{ pane: stack.hideAiPane, session, path: stack.worktree, branch: BRANCH, task: { kind: "memory_promote", target: "m43" } }]), { mode: 0o600 });
+      seedLedger(dir, ledgerOf(stack.daemon.node, [{ pane: stack.hideAiPane, session, path: stack.worktree, branch: BRANCH, task: { kind: "memory_promote", target: "m43" } }]));
     });
     await open(page, stack.daemon);
 
     // B8: the pull request is open, ready and passing, so the operator's turn is the review.
-    const needsYou = page.locator('[data-raised-list] [data-raised-group="needs_you"]');
+    const needsYou = page.locator('[data-project-list] [data-raised-group="needs_you"]');
     const row = needsYou.locator(`[data-pane="${stack.hideAiPane}"]`);
     await expect(row).toHaveCount(1, { timeout: 60_000 });
-    await expect(row).toContainText("Promote Memory · m43");
+    await expect(row.locator("[data-agent-open]")).toHaveAttribute("aria-label", /Promote Memory · m43/);
     await expect(row.locator("[data-agent-home-turn]")).toHaveText(`PR ${"#"}${PR} review`);
     // B1: it is in no tree and no Sessions group of its own, so the one row is the raised one.
     await expect(page.locator(`nav[data-sidebar] [data-pane="${stack.hideAiPane}"]`)).toHaveCount(1);
     await expect(project.locator(`[data-pane="${stack.hideAiPane}"]`)).toHaveCount(0);
-    await needsYou.screenshot({ path: path.join(evidence(stack), "home-needs-you-pr-review.png") });
+    // The section is a `display: contents` item with no box of its own, so the list that holds it is captured.
+    await page.locator("[data-project-list]").screenshot({ path: path.join(evidence(stack), "home-needs-you-pr-review.png") });
 
     // B11 (hide-ai-suggestions): choosing it opens the Hide AI tool on its 제안 tab with the promotion's row m43 open, and does not go to its pane.
     await page.locator('[data-lane="memory"] [data-hide-ai-tool-tab="memory"]').click();
@@ -203,7 +205,7 @@ test("a promotion's agent is in Needs You only while its pull request waits for 
     move(stack, { state: "OPEN", checks: "FAILURE" });
     await untilRead(page, stack, workspace, async () => (await row.locator("[data-agent-home-turn]").textContent({ timeout: 1_000 }).catch(() => null)) === "CI failed");
     await expect(needsYou.locator(`[data-pane="${stack.hideAiPane}"]`)).toHaveCount(1);
-    await needsYou.screenshot({ path: path.join(evidence(stack), "home-needs-you-ci-failed.png") });
+    await page.locator("[data-project-list]").screenshot({ path: path.join(evidence(stack), "home-needs-you-ci-failed.png") });
 
     // B15, B17: the pull request merges, so the row leaves, the agent's pane closes, the clean worktree is removed and the branch stays.
     move(stack, { state: "MERGED", checks: "SUCCESS" });

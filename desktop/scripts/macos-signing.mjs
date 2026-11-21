@@ -9,13 +9,11 @@
 // each install of an ad-hoc build asks for the grants again; a signature from
 // a certificate keeps them. `developer-id` is what a
 // release's package.yml run asks for: every executable in the bundle (the
-// Electron helpers, the notification permission helper, the bundled CLIs and
-// Herdr) is signed with the Developer ID certificate under the hardened
+// Electron helpers, the notification permission helper and the bundled CLIs)
+// is signed with the Developer ID certificate under the hardened
 // runtime, Apple notarizes the app and its ticket is stapled (`notarizeApp`),
 // so a downloaded copy opens like any other app; the dmg around it is signed,
-// notarized and stapled the same way (`notarizeDiskImage`). Herdr ships with only the linker's ad-hoc
-// signature and notarization refuses an executable without a Developer ID one,
-// so hide's signature replaces it; Herdr's code is not changed.
+// notarized and stapled the same way (`notarizeDiskImage`).
 //
 // The keys below are the whole contract, read here and nowhere else. Every
 // missing or malformed one is reported at once, before the build starts.

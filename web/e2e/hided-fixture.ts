@@ -6,27 +6,34 @@ import { spawn, spawnSync, type ChildProcess } from "node:child_process";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { linkFixtureTranscripts, type HerdrFixture } from "./herdr-fixture";
+import { linkFixtureTranscripts } from "./pane-fixture";
 import { afterCleanup, ownUntilWorkerExit } from "./worker-owned";
 import { bundledExecutable, linkBundle } from "./bundled-app";
 import { endPaneHolders } from "./pane-holders.mjs";
+import { connectControl } from "./hided-control.mjs";
 import { endWindowsProcesses, fixtureExecutable, fixtureHomeEnv, fixtureLoginShellPath, fixtureOpenCommand, inheritedFixtureEnv, windowsProcessTree, type WindowsProcess } from "./platform-fixture";
 
 /**
- * What a fixture daemon runs its panes on: a private Herdr server (`socket`
- * and `bin`), or, with neither, the core's own engine over pane holders, the
- * development switch `HIDE_DEV_PANE_HOLDER` on (`engine-fixture.ts`).
+ * What a fixture daemon runs its panes on: the core's own engine over pane
+ * holders (`engine-fixture.ts`).
  * `daemonEnv` is laid over the daemon's environment before a spec's own.
  */
-export type DaemonEngine = Pick<HerdrFixture, "root" | "fixturePath" | "afterStop"> & {
-  socket?: string;
-  bin?: string;
+export type DaemonEngine = {
+  /** The fixture root; `fixture/` under it is the first workspace's cwd. */
+  root: string;
+  /** The controlled shim and system-tool PATH for the panes and daemon. */
+  fixturePath: string;
+  /** Runs `cleanup` once the fixture's panes are gone, or now when they already are. */
+  afterStop: (cleanup: () => void) => void;
   daemonEnv?: NodeJS.ProcessEnv;
   /** The HOME the daemon runs in when a spec names none: the own engine's panes are its children and read their shell's files there. */
   home?: string;
-  /** Makes what the fixture holds through its first daemon, once that daemon answers (`startFixture`). */
-  opened?: (daemon: Daemon) => Promise<void>;
+  /** Makes what the fixture holds through its first daemon, once that daemon answers (`startFixture`; the desktop fixture's `startStack`). */
+  opened?: (daemon: OpenedDaemon) => Promise<void>;
 };
+
+/** What a fixture reads of the daemon it makes its panes through. */
+export type OpenedDaemon = Pick<Daemon, "origin" | "token" | "stateDir">;
 
 /**
  * `restart` stops the daemon and starts it again on the same state directory
@@ -54,7 +61,7 @@ export type Daemon = {
  * when the worker ends however it ends: a SIGKILL or an OOM kill runs no exit
  * callback. Windows passes an owner as a job, which Node cannot make.
  */
-export function spawnDaemon(binary: string, env: NodeJS.ProcessEnv): ChildProcess {
+function spawnDaemon(binary: string, env: NodeJS.ProcessEnv): ChildProcess {
   if (env.HOME && env.PATH) fixtureLoginShellPath(env.HOME, env.PATH);
   if (process.platform === "win32") return spawn(binary, [], { env, stdio: ["ignore", "pipe", "pipe"] });
   return spawn(binary, [], { env: { ...env, HIDE_PROCESS_OWNER_FD: "3" }, stdio: ["ignore", "pipe", "pipe", "pipe"] });
@@ -67,7 +74,7 @@ export function spawnDaemon(binary: string, env: NodeJS.ProcessEnv): ChildProces
  * its state has nothing to save and is killed, and false says its exit is not
  * observed yet. Throws, naming `root` to keep, when the stop is not confirmed.
  */
-export function stopDaemon(child: ChildProcess, binary: string, env: NodeJS.ProcessEnv, root: string): boolean {
+function stopDaemon(child: ChildProcess, binary: string, env: NodeJS.ProcessEnv, root: string): boolean {
   if (child.pid === undefined || child.exitCode !== null || child.signalCode !== null) return true;
   if (process.platform !== "win32") child.kill("SIGCONT");
   if (!fs.existsSync(path.join(env.HIDE_STATE_DIR!, "hided.json"))) {
@@ -89,18 +96,16 @@ export function stopDaemon(child: ChildProcess, binary: string, env: NodeJS.Proc
  * the fixture's private HOME and nowhere else.
  * `seedHideAi: false` leaves Hide AI unchosen, as a Mac that has never been asked is, for a spec
  * about the first-run rule.
- * `bundledHerdr` runs a bundled daemon from the bundle that also carries the fixture's pinned Herdr, so the
- * kit installs and removes agents' Herdr integrations with it, as a packaged app does.
  */
-export async function startHided(herdr: DaemonEngine, label = "s2", homeOverride?: string, extraEnv: NodeJS.ProcessEnv = {}, bundled = false, options: { seedHideAi?: boolean; bundledHerdr?: boolean } = {}): Promise<Daemon> {
+export async function startHided(engine: DaemonEngine, label = "s2", homeOverride?: string, extraEnv: NodeJS.ProcessEnv = {}, bundled = false, options: { seedHideAi?: boolean } = {}): Promise<Daemon> {
   // The daemon places pane-bootstrap.sock below this directory. Keep the
   // fixture root short enough for macOS's Unix socket path limit.
   const dir = fs.realpathSync.native(fs.mkdtempSync(path.join(os.tmpdir(), "hde-")));
-  const home = homeOverride ?? herdr.home ?? path.join(dir, "home");
+  const home = homeOverride ?? engine.home ?? path.join(dir, "home");
   fs.mkdirSync(path.join(home, "projects", "alpha"), { recursive: true });
   fs.mkdirSync(path.join(home, "projects", ".hidden"), { recursive: true });
   fs.writeFileSync(path.join(home, "projects", "notes.txt"), "x");
-  linkFixtureTranscripts(herdr, home);
+  linkFixtureTranscripts(engine, home);
   // Hide AI asks no model until an agent is chosen (PRD settings-cleanup B47), and a fixture
   // Mac has no signed-in agent for the first-run rule to pick, so the operator here has
   // already chosen the `claude` fixture shim; a home that brought its own choice keeps it.
@@ -109,18 +114,26 @@ export async function startHided(herdr: DaemonEngine, label = "s2", homeOverride
     fs.mkdirSync(path.dirname(aiFile), { recursive: true });
     fs.writeFileSync(aiFile, JSON.stringify({ provider: "claude" }));
   }
-  if (options.bundledHerdr && !herdr.bin) throw new Error("a bundle with the pinned Herdr needs a Herdr fixture");
-  const bundle = options.bundledHerdr ? "herdr" : "plain";
-  if (bundled) linkBundle(bundle, options.bundledHerdr ? herdr.bin : undefined);
-  const daemon = await launch(herdr, label, dir, home, "0", extraEnv, bundled ? bundledExecutable("hided", bundle) : undefined);
-  if (herdr.opened) {
+  if (bundled) linkBundle();
+  const daemon = await launch(engine, label, dir, home, "0", extraEnv, bundled ? bundledExecutable("hided") : undefined);
+  if (engine.opened) {
     try {
-      await herdr.opened(daemon);
+      await engine.opened(daemon);
     } catch (error) {
       throw afterCleanup(error, daemon.stop);
     }
   }
   return daemon;
+}
+
+/**
+ * Where `daemon`'s hooks keep their records (`hide_agent_hooks::route::records_root`): the account's
+ * `~/.hide/agent-hooks` while the daemon runs on the account's own state folder, and `<state>/agent-hooks` for a daemon
+ * whose state folder is elsewhere, as a fixture's is (docs/agent-hooks.md, Where the hooks keep their records).
+ */
+export function hookRecords(daemon: Pick<Daemon, "home" | "stateDir">): string {
+  const account = path.join(daemon.home, ".hide", "agent-hooks");
+  return daemon.stateDir === path.join(daemon.home, ".hide", "state") ? account : path.join(daemon.stateDir, "agent-hooks");
 }
 
 /** Where the daemon keeps Hide AI's choice under a home: the platform's state folder, `hide/ai.json`. */
@@ -139,6 +152,16 @@ export async function asFirstRun(daemon: Daemon): Promise<Daemon> {
   });
 }
 
+/**
+ * Seeds the delivery ledger of a stopped daemon's `stateDir` with `ledger`, a ledger in the JSON shape of
+ * `delivery-ledger.json`: the file builds before the store kept it in, which the next start imports into a new
+ * `delivery.sqlite3` as an update's first start does (docs/delivery.md, Persistence, clocks and limits).
+ */
+export function seedLedger(stateDir: string, ledger: string): void {
+  for (const sidecar of ["", "-wal", "-shm"]) fs.rmSync(path.join(stateDir, `delivery.sqlite3${sidecar}`), { force: true });
+  fs.writeFileSync(path.join(stateDir, "delivery-ledger.json"), ledger, { mode: 0o600 });
+}
+
 export function aiSettingsFile(home: string): string {
   const stateUnderHome = process.platform === "darwin" ? path.join("Library", "Application Support") : process.platform === "win32" ? path.join("AppData", "Local") : path.join(".local", "state");
   return path.join(home, stateUnderHome, "hide", "ai.json");
@@ -147,7 +170,7 @@ export function aiSettingsFile(home: string): string {
 /** 100 ms ticks a started daemon is given to write its state file and answer /health: 30 s, three times the product's own bound. */
 const START_WAIT_TICKS = 300;
 
-async function launch(herdr: DaemonEngine, label: string, dir: string, home: string, port: string, extraEnv: NodeJS.ProcessEnv, bundledAt?: string): Promise<Daemon> {
+async function launch(engine: DaemonEngine, label: string, dir: string, home: string, port: string, extraEnv: NodeJS.ProcessEnv, bundledAt?: string): Promise<Daemon> {
   const env = inheritedFixtureEnv();
   const statePath = path.join(dir, "hide", "hided.json");
   fs.rmSync(statePath, { force: true });
@@ -159,15 +182,13 @@ async function launch(herdr: DaemonEngine, label: string, dir: string, home: str
     HIDE_KEEP_ALIVE: "1",
     HIDE_PORT: port,
     HIDED_UI_DIR: path.resolve("dist"),
-    // The core's own engine takes no Herdr: a socket beside its switch fails the daemon's start.
-    ...(herdr.socket ? { HERDR_SOCKET_PATH: herdr.socket, HERDR_BIN_PATH: herdr.bin } : { HIDE_DEV_PANE_HOLDER: "1" }),
     // Catalog discovery probes every provider on hided's PATH, so use the
-    // same controlled shim and system tools as the private Herdr server.
+    // same controlled shim and system tools as the engine fixture.
     // Specs adding a shim prepend it to this path through extraEnv.
-    PATH: herdr.fixturePath,
+    PATH: engine.fixturePath,
     // `open_external` must not launch a GUI application on the runner.
-    HIDE_OPEN_COMMAND: fixtureOpenCommand(herdr.root),
-    ...herdr.daemonEnv,
+    HIDE_OPEN_COMMAND: fixtureOpenCommand(engine.root),
+    ...engine.daemonEnv,
     ...extraEnv,
   };
   const child = spawnDaemon(binary, daemonEnv);
@@ -188,9 +209,9 @@ async function launch(herdr: DaemonEngine, label: string, dir: string, home: str
     child.once("close", () => log.end());
   }
   const exited = new Promise<void>((resolve) => child.once("exit", () => resolve()));
-  // Panes Herdr started under the home keep their working folders locked on
-  // Windows until its server's processes are gone, so the daemon's directory
-  // (the home is inside it) is removed by Herdr's stop, after them.
+  // Panes started under the home keep their working folders locked on
+  // Windows until their processes are gone, so the daemon's directory
+  // (the home is inside it) is removed by the engine fixture's stop, after them.
   const removeDir = () => {
     // The daemon may still be writing its state file (and, with S3, staged
     // files) as it dies; removing the directory under it fails with ENOTEMPTY.
@@ -207,7 +228,7 @@ async function launch(herdr: DaemonEngine, label: string, dir: string, home: str
     fs.rmSync(dir, { recursive: true, force: true });
   };
   // A killed daemon on Windows keeps the folders it holds open (the checkouts
-  // it watches) until it is gone, and Herdr's stop deletes the fixture root
+  // it watches) until it is gone, and the engine fixture's stop deletes the fixture root
   // next. So its tree is listed while it runs, then ended, and this returns
   // once none of it is left.
   const end = () => {
@@ -233,8 +254,8 @@ async function launch(herdr: DaemonEngine, label: string, dir: string, home: str
   // ends them, after the daemon and before its folders go.
   const { stop, disown } = ownUntilWorkerExit(() => {
     end();
-    if (!herdr.socket) endPaneHolders(path.join(dir, "hide"), process.platform === "win32" ? { endTree: (pid) => endWindowsProcesses(windowsProcessTree(pid)) } : {});
-    herdr.afterStop(removeDir);
+    endPaneHolders(path.join(dir, "hide"), process.platform === "win32" ? { endTree: (pid) => endWindowsProcesses(windowsProcessTree(pid)) } : {});
+    engine.afterStop(removeDir);
   });
   // The product itself gives a started daemon `HEALTHY_WITHIN` (10 s, `hided/src/cli.rs`) to answer
   // /health, and a loaded Windows runner needs most of it, so this waits at least that long. A daemon
@@ -268,7 +289,31 @@ async function launch(herdr: DaemonEngine, label: string, dir: string, home: str
             await beforeStart?.(path.join(dir, "hide"));
             // The next daemon takes over the directory and its removal.
             disown();
-            return launch(herdr, label, dir, home, String(state.port), extraEnv, bundledAt);
+            const restarted = await launch(engine, label, dir, home, String(state.port), extraEnv, bundledAt);
+            try {
+              // /health proves the listener is back, not that the core has
+              // adopted the holders and resolved its saved Workspace. Keep
+              // every restart caller behind the same snapshot boundary.
+              const control = await connectControl(restarted);
+              try {
+                await control.until((rest) => {
+                  // This fixture is also compiled by the desktop host's
+                  // non-JSX project; read just the wire fields needed here.
+                  const snapshot = rest as {
+                    status?: { engine?: { state: string } };
+                    ui_state?: { focused_checkout_id?: string | null };
+                    workspace_view?: unknown;
+                  };
+                  return snapshot.status?.engine?.state === "connected"
+                    && (!snapshot.ui_state?.focused_checkout_id || Boolean(snapshot.workspace_view));
+                }, "the restarted core's engine and saved Workspace");
+              } finally {
+                control.close();
+              }
+              return restarted;
+            } catch (error) {
+              throw afterCleanup(error, restarted.stop);
+            }
           };
           return { pid: child.pid!, origin, token: state.token, home: fs.realpathSync(home), stateDir: path.join(dir, "hide"), hostId, node, stop, restart };
         }

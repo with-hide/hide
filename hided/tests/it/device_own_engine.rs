@@ -4,7 +4,7 @@
 //! a pane whose node ended with its link runs on under its holder, so the
 //! next link's node finds it with the same process. A caller in one of its
 //! panes is proved by that pane's holder record, as a caller in a Herdr
-//! pane is by its Herdr (D-9), so `hide` works there with no Herdr.
+//! pane was by its Herdr (D-9), so `hide` works there with no Herdr.
 #![cfg(unix)]
 
 use std::path::PathBuf;
@@ -65,6 +65,7 @@ impl hide_node::ssh::PaneEvents for Events {
 struct Unseen;
 impl hide_node::terminal::device::DeviceSink for Unseen {
     fn output(&self, _: &str, _: &str, _: &[u8], _: bool) {}
+    fn clipboard(&self, _: &str, _: &str, _: &[u8]) {}
     fn report(&self, _: &str, _: hide_node_link::terminal::TerminalReport) {}
 }
 
@@ -111,24 +112,10 @@ impl Device {
         );
         // A holder's socket path is limited to about a hundred bytes.
         let root = tempfile::Builder::new().prefix("hdo-").tempdir_in("/tmp")?;
-        let absent = root.path().join("no-herdr");
         // The node binds its pane socket under its state folder, which must
         // stay short enough for a Unix socket path.
         let state = root.path().join("d");
-        let mut environment = Environment::new(
-            &root.path().join("r"),
-            &root.path().join("no-herdr.sock"),
-            &absent,
-            Some(&state),
-        )?;
-        for key in [
-            "HERDR_SOCKET_PATH",
-            "HERDR_BIN_PATH",
-            "HERDR_SESSION",
-            "HERDR_CONFIG_PATH",
-        ] {
-            environment.unset(key);
-        }
+        let environment = Environment::new(&root.path().join("r"), Some(&state))?;
         let packages = root.path().join("packages");
         std::fs::create_dir(&packages)?;
         shipped::place(
@@ -144,12 +131,11 @@ impl Device {
         let events = Arc::new(Events::default());
         let slot: hide_node::ssh::PaneEventsSlot = Arc::default();
         let _ = slot.set(Arc::clone(&events) as Arc<dyn hide_node::ssh::PaneEvents>);
-        let transport = hide_node::ssh::Connector::new(Some(packages))
-            .with_engine(hide_node::ssh::DeviceEngine::Holders)
+        let transport = hide_node::ssh::Connector::new(Some(packages), hided::cli::RELEASE)
             .with_askpass_program(PathBuf::from(env!("CARGO_BIN_EXE_hide")))
             .with_terminals(Arc::new(Unseen))
             .with_pane_events(slot)
-            .transport(&local, "own-device", "own-device", None)
+            .transport(&local, "own-device", "own-device")
             .map_err(|reason| anyhow::anyhow!("{reason}"))?;
         Ok(Self {
             _root: root,
@@ -275,17 +261,26 @@ fn a_device_of_the_own_engine_runs_no_herdr_and_its_pane_outlives_the_node() -> 
     let [socket] = &bridges[..] else {
         anyhow::bail!("the node's pane sockets: {bridges:?}");
     };
+    // The asker asks once, and a pane's record says it runs only after its
+    // program started: a program that asks at once is refused as a pane the
+    // node does not know yet (hide-holder `Holder::start`). So the program
+    // waits for the test, which releases it once the node answers that the
+    // pane runs (`start` returns the node's proof of it).
+    let gate = device.environment.home.join("asker-may-ask");
     let ask = format!(
-        "python3 -c 'import json,socket,sys; s=socket.socket(socket.AF_UNIX); s.connect(sys.argv[1]); s.sendall((json.dumps({{\"pane_id\": sys.argv[2], \"nonce\": \"a\"*32, \"one_shot\": False}})+chr(10)).encode()); print(\"answer\", json.loads(s.makefile().readline()).get(\"ok\"))' {} {ASKER}; exec sleep 600",
+        "while [ ! -e '{}' ]; do sleep 0.05; done; python3 -c 'import json,socket,sys; s=socket.socket(socket.AF_UNIX); s.connect(sys.argv[1]); s.sendall((json.dumps({{\"pane_id\": sys.argv[2], \"nonce\": \"a\"*32, \"one_shot\": False}})+chr(10)).encode()); print(\"answer\", json.loads(s.makefile().readline()).get(\"ok\"))' {} {ASKER}; exec sleep 600",
+        gate.display(),
         socket.display()
     );
     let asker = start(ASKER, ask)?;
     device.started.push(asker);
+    std::fs::write(&gate, "")?;
     wait_for("the asker's credential", || {
         Ok(Device::screen(&panes, ASKER)?
             .contains("answer True")
             .then_some(()))
-    })?;
+    })
+    .with_context(|| format!("the asker's screen: {:?}", Device::screen(&panes, ASKER)))?;
     let heard = device.events.heard.lock().unwrap().clone();
     ensure!(
         matches!(

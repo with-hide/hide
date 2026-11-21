@@ -1,5 +1,6 @@
 // The real PR list over invented pull requests in each review state (PRD
-// pr-review-status B1-B4, B9, B11, B15). No GitHub read or write leaves it.
+// pr-review-status B1-B4, B9, B11, B15), and with `gh=<refusal>` the line a
+// refusal of `gh` itself draws instead (B42). No GitHub read or write leaves it.
 import { useLayoutEffect, useMemo } from "react";
 import { createActions } from "../actions";
 import { PrList } from "../PrList";
@@ -7,7 +8,8 @@ import { TooltipProvider } from "../components/ui/tooltip";
 import { useFollowInterfaceLanguage } from "../i18n/translator";
 import { requireInterfaceLanguage } from "../i18n/locale";
 import { prListModel } from "../prWork";
-import type { PullRequest } from "../snapshot";
+import { isGhRefusal } from "../githubFailure";
+import type { GithubFailureCategory, PullRequest } from "../snapshot";
 import { useShellStore } from "../store";
 import { useUiStore } from "../ui";
 import { AT, applyReview, reviewPlace } from "./PrCardScene";
@@ -32,6 +34,11 @@ export function PrListScene({ params }: { params: URLSearchParams }) {
     const project = base.rest.navigator!.workspaces!.find((row) => row.id === "hide")!;
     const checkout = project.checkouts[0]!;
     checkout.github = { available: true, loading: false, stale: false, failure_category: null, last_success_at_unix_ms: AT, unread_queries: params.get("unread") === "reviews" ? ["merge_queue", "reviews"] : [] };
+    // A refusal of `gh` itself is the same for every checkout the core reads.
+    const refusal = params.get("gh") as GithubFailureCategory | null;
+    if (isGhRefusal(refusal)) {
+      for (const one of project.checkouts) one.github = { available: false, loading: false, stale: false, failure_category: refusal, last_success_at_unix_ms: null };
+    }
     const pulls: PullRequest[] = ROWS.map((row) => {
       const pr: PullRequest = {
         number: row.number, title: row.title, url: `https://github.com/example/hide/pull/${row.number}`, badge: "open", state: "pending", is_draft: row.draft === true, review: null, checks: "passing", head_branch: `feat/${row.number}`, base_branch: "main", closing_issues: [], created_at_unix_ms: AT - 86_400_000, updated_at_unix_ms: AT - 1_800_000,

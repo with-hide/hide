@@ -48,15 +48,27 @@ export type BrowserPlacement = {
 export type BrowserDevicePlacement = { width: number; mobile: boolean };
 
 /**
- * Every browser display of the front Workspace. The host closes a page of
- * that Workspace the list no longer names, hides the pages of any other,
- * and creates a page only once its display is on screen.
+ * Every browser display of the front Workspace, and every one the core
+ * retains. The host closes a page the retained list no longer names, hides
+ * every page not placed on screen, and loads a web page off screen when the
+ * core asks it to (PRD lane-desk-pair-view B32).
  */
 export type BrowserSync = {
   workspace: string | null;
   displays: BrowserPlacement[];
-  /** Core-owned inventory; a hidden native page absent here is closed. */
-  retained: { workspace: string; id: string; area_id: string }[];
+  /**
+   * Core-owned inventory; a hidden native page absent here is closed. A web
+   * page carries its address and the load the core last asked of it, which
+   * the host loads hidden when no slot shows it.
+   */
+  retained: { workspace: string; id: string; area_id: string; url?: string; load?: number }[];
+  /**
+   * Present once `retained` is the core's inventory. A shell's first sync
+   * goes before its snapshot does, with an empty list; the host takes the
+   * newest load of the first inventory it is sent as asked before this
+   * shell, so a relaunch or a reload loads none of the saved pages (B32).
+   */
+  inventoried?: true;
   /** Changes on controller mount or reconnect so the host replays actual attachment facts once. */
   attachment_epoch?: string;
   /** Positive core area authority, including empty areas; absent grants no debugger access. Incarnation changes on revoke/regrant. */
@@ -116,9 +128,6 @@ export type BrowserBridge = {
   onEvent(listener: (event: BrowserHostEvent) => void): () => void;
 };
 
-/** How a Herdr restart went: `stop_failed` changed nothing; `unavailable` is a host with no bundled Herdr. */
-export type HerdrRestart = "restarted" | "stop_failed" | "failed" | "unavailable" | "refused";
-
 /** A path on this computer as the host found it: its physical path in the wire spelling (`/` between names, `C:/...` on Windows) and whether it is a folder; null when it does not exist. */
 export type ProbedPath = { real: string; kind: "file" | "directory" } | null;
 
@@ -148,6 +157,8 @@ export type ExternalBridge = {
 
 export type HostBridge = {
   kind: "electron";
+  /** Replays system use once, then reports transitions only; absent on an older host. */
+  onComputerUse?(listener: (inUse: boolean) => void): () => void;
   /** The host's OS as Node names it (`process.platform`): what the OS file manager is called. */
   platform: string;
   /** Delivers each app-menu command id, a registry command's or `SETUP_COMMAND`; returns the unsubscribe. */
@@ -156,7 +167,7 @@ export type HostBridge = {
   reportBindings(bindings: Record<string, string>): void;
   /** Hands the host the core's explicit interface language (`ui_state.interface_language`, null for the system's) once a snapshot confirms it; the app menu and status page are drawn in it. */
   reportLanguage(language: string | null): void;
-  /** Hands the host whether Settings › Desk has Desk on (D-76): the app menu carries Desk's command only then. An app built before the switch has none, and keeps its menu as it was. */
+  /** Hands the host whether Settings › Labs › Desk has Desk on (D-76): the app menu carries Desk's command only then. An app built before the switch has none, and keeps its menu as it was. */
   reportDesk?(on: boolean): void;
   /** Shows a file or folder of this computer, named in the wire spelling, in the OS file manager, selected in its parent folder; nothing is opened. */
   revealPath(path: string): void;
@@ -184,6 +195,18 @@ export type HostBridge = {
   /** Opens Hide's page of the system's notification settings (macOS). */
   openNotificationSettings(): void;
   /**
+   * Whether the Windows firewall rules that let same-network machines reach
+   * this PC are in place (PRD device-connect-iroh B32); `not_used` outside
+   * Windows. Absent in an older host.
+   */
+  firewallState?(): Promise<FirewallState>;
+  /**
+   * Asks Windows once, through its permission prompt, for those rules: when
+   * the operator shares this PC, allows its first pairing, or presses
+   * [허용하기] on a device's details. Never at login.
+   */
+  allowFirewall?(): Promise<FirewallAnswer>;
+  /**
    * Hands the host how many root agents are in enabled notification groups, for the app icon
    * (the Dock badge, the Windows taskbar overlay); zero clears it. Reported
    * once the page holds a live snapshot, which is also when the host hands
@@ -205,15 +228,6 @@ export type HostBridge = {
    * window; the host logs the outcome without the path and shows nothing (B16).
    */
   openInEditor(path: string): void;
-  /**
-   * Restarts the operator's Herdr server on this app's Herdr where Herdr
-   * cannot hand it over live (PRD herdr-takeover B12), once the operator
-   * confirmed what ends; a second call while one runs answers with it.
-   * `failed` has already put the start failure on the window's status page.
-   */
-  restartHerdr(): Promise<HerdrRestart>;
-  /** Quits the app, as the app menu's Quit does; hided keeps running. */
-  quit(): void;
   /** Opens the practice window in `language`, on `chapter` when one is named, or brings the open one forward (`practice/channel.ts`). */
   openPractice(language: string, chapter?: string): void;
   browser: BrowserBridge;
@@ -247,6 +261,10 @@ export type UpdateStatus = {
   prerelease: boolean;
   /** Whether a ready update installs when the app quits; Linux asks for the system password, so only on Restart (D-18). */
   installOnQuit: boolean;
+  /** The ready version whose card the operator closed, kept across launches; a newer ready version shows the card again. */
+  dismissed: string | null;
+  /** Whether a release names a minimum version above this app (`<!-- hide-min-version: X.Y.Z -->`): the card stays open with no close until the restart. */
+  required: boolean;
 };
 
 export type UpdatesBridge = {
@@ -258,6 +276,8 @@ export type UpdatesBridge = {
   restart(): void;
   /** Takes preview releases from the next check on, or stops taking them; never installs a lower version (D-22). */
   setPrerelease(on: boolean): void;
+  /** Closes the ready card for `version`; Help's dot and line and About keep the update. */
+  dismiss(version: string): void;
 };
 
 /**
@@ -289,6 +309,11 @@ export const CHECK_UPDATES_COMMAND = "check_updates";
  * notification service, PRD first-run-onboarding D-24), `unknown` where macOS
  * has one Hide could not read.
  */
+/** Whether the Windows firewall rules for same-network machines are in place (`desktop/src/main/firewall.ts`). */
+export type FirewallState = "allowed" | "missing" | "no_port" | "not_used" | "unknown";
+/** What one ask of Windows for those rules came to. */
+export type FirewallAnswer = "allowed" | "declined" | "failed" | "not_used";
+
 export type NotificationPermission = "granted" | "denied" | "not_determined" | "unknown" | "unsupported" | "no_service";
 
 declare global {

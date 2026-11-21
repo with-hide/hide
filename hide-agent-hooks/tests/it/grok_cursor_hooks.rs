@@ -14,7 +14,7 @@ use std::io::Write;
 
 use serde_json::{Value, json};
 
-use super::spawn_guard::{Machine, PANE, START};
+use super::pre_tool::{Machine, OPENER, PANE};
 
 const GROK: &[(&str, &str)] = &[
     ("GROK_HOOK_EVENT", "pre_tool_use"),
@@ -101,12 +101,9 @@ fn grok_diagnoses_conflicting_session_ids_at_every_intake_point() {
         let run = machine.run_event("grok", event, &payload.to_string(), Some(PANE), GROK);
         assert!(run.status_ok && run.stdout.is_empty(), "{event}: {run:?}");
         assert!(machine.calls().is_empty(), "{event}: {:?}", machine.calls());
-        let diagnostic = std::fs::read_to_string(
-            machine
-                .home
-                .join(".hide/agent-hooks/delivery-diagnostics.json"),
-        )
-        .unwrap_or_default();
+        let diagnostic =
+            std::fs::read_to_string(machine.records().join("delivery-diagnostics.json"))
+                .unwrap_or_default();
         assert!(
             diagnostic.contains("session_conflict"),
             "{event}: {diagnostic:?} {run:?}"
@@ -150,22 +147,21 @@ fn cursor_shell(machine: &Machine, command: &str) -> String {
 const CURSOR: &[(&str, &str)] = &[("CURSOR_VERSION", "2026.10.01")];
 
 #[test]
-fn a_grok_launch_is_refused_with_the_reason_claude_code_gets_and_other_calls_run() {
+fn a_grok_opener_is_refused_with_the_reason_claude_code_gets_and_other_calls_run() {
     let machine = Machine::new("registered");
     let run = machine.run_event(
         "grok",
         "PreToolUse",
-        &grok_shell(&machine, START),
+        &grok_shell(&machine, OPENER),
         Some(PANE),
         GROK,
     );
     assert!(run.status_ok);
     let reason = machine.reason(&run);
     assert!(
-        reason.contains("hide agent spawn --parent here"),
+        reason.contains("browser open https://example.com/report"),
         "{reason}"
     );
-    assert!(reason.contains("--branch topic"), "{reason}");
     assert!(machine.guard_log().contains("\"runtime\":\"grok\""));
 
     let run = machine.run_event(
@@ -187,7 +183,7 @@ fn a_grok_event_that_starts_with_byte_order_marks_is_still_read() {
         let run = machine.run_event(
             "grok",
             "PreToolUse",
-            &format!("{marks}{}", grok_shell(&machine, START)),
+            &format!("{marks}{}", grok_shell(&machine, OPENER)),
             Some(PANE),
             GROK,
         );
@@ -195,22 +191,25 @@ fn a_grok_event_that_starts_with_byte_order_marks_is_still_read() {
         assert!(
             machine
                 .reason(&run)
-                .contains("hide agent spawn --parent here")
+                .contains("browser open https://example.com/report")
         );
     }
 }
 
 #[test]
-fn retired_cursor_entries_are_silent_for_launches_ordinary_and_unreadable_calls() {
+fn retired_cursor_entries_are_silent_for_openers_ordinary_and_unreadable_calls() {
     let machine = Machine::new("registered");
     for (payload, pane) in [
-        (cursor_shell(&machine, START), Some(PANE)),
+        (cursor_shell(&machine, OPENER), Some(PANE)),
         (cursor_shell(&machine, "npm install"), Some(PANE)),
-        (cursor_shell(&machine, START), None),
-        ("herdr agent start but not json".to_owned(), Some(PANE)),
+        (cursor_shell(&machine, OPENER), None),
+        (
+            "open https://example.com/report but not json".to_owned(),
+            Some(PANE),
+        ),
         (String::new(), Some(PANE)),
         (
-            format!("\u{feff}\u{feff}{}", cursor_shell(&machine, START)),
+            format!("\u{feff}\u{feff}{}", cursor_shell(&machine, OPENER)),
             Some(PANE),
         ),
     ] {
@@ -229,7 +228,7 @@ fn retired_cursor_entries_never_ask_an_unavailable_daemon() {
         let run = machine.run_event(
             "cursor",
             "PreToolUse",
-            &cursor_shell(&machine, START),
+            &cursor_shell(&machine, OPENER),
             Some(PANE),
             CURSOR,
         );
@@ -253,7 +252,7 @@ fn a_retired_cursor_hook_with_a_failed_owner_handshake_stays_silent() {
             .args(["--source", "hide-guidance@2"])
             .env_clear()
             .env("PATH", &machine.home)
-            .env("HERDR_PANE_ID", PANE)
+            .env("HIDE_PANE_ID", PANE)
             .env("HIDE_PROCESS_OWNER_JOB", "no-such-job")
             .env(hide_platform::host::HOME_VARIABLE, &machine.home)
             .stdin(std::process::Stdio::piped())
@@ -265,7 +264,7 @@ fn a_retired_cursor_hook_with_a_failed_owner_handshake_stays_silent() {
             .stdin
             .take()
             .unwrap()
-            .write_all(cursor_shell(&machine, START).as_bytes());
+            .write_all(cursor_shell(&machine, OPENER).as_bytes());
         let output = child.wait_with_output().unwrap();
         assert!(output.status.success(), "{event}: {:?}", output.status);
         assert!(output.stdout.is_empty(), "{event}: {output:?}");
@@ -280,7 +279,7 @@ fn inside_grok_the_claude_code_hook_and_cursors_entries_say_and_ask_nothing() {
     let machine = Machine::new("registered");
     let claude = json!({
         "session_id": "grok-session", "cwd": machine.checkout, "hook_event_name": "PreToolUse",
-        "tool_name": "Bash", "tool_input": { "command": START },
+        "tool_name": "Bash", "tool_input": { "command": OPENER },
     })
     .to_string();
     let run = machine.run_event("claude-code", "PreToolUse", &claude, Some(PANE), GROK);
@@ -293,7 +292,7 @@ fn inside_grok_the_claude_code_hook_and_cursors_entries_say_and_ask_nothing() {
         let run = machine.run_event(
             "cursor",
             event,
-            &cursor_shell(&machine, START),
+            &cursor_shell(&machine, OPENER),
             Some(PANE),
             GROK,
         );
@@ -307,11 +306,11 @@ fn inside_grok_the_claude_code_hook_and_cursors_entries_say_and_ask_nothing() {
     let run = machine.run_event(
         "grok",
         "PreToolUse",
-        &grok_shell(&machine, START),
+        &grok_shell(&machine, OPENER),
         Some(PANE),
         GROK,
     );
-    assert!(machine.reason(&run).contains("hide agent spawn"));
+    assert!(machine.reason(&run).contains("browser open"));
     assert_eq!(machine.calls().len(), 1);
 }
 
@@ -358,7 +357,7 @@ fn a_private_hook_is_admitted_without_changing_an_unsigned_source() {
 
 #[test]
 fn a_grok_question_tool_stays_native_without_a_question_guard() {
-    // Native question and plan approval tools never ask Hide's shell spawn guard.
+    // Native question and plan approval tools never ask Hide's shell guards.
     for tool in ["ask_user_question", "exit_plan_mode"] {
         let machine = Machine::new("registered");
         let payload = json!({
@@ -427,11 +426,11 @@ fn a_running_tool_receives_grok_letters_while_retired_cursor_takes_none() {
     let run = machine.run_event(
         "grok",
         "PreToolUse",
-        &grok_shell(&machine, START),
+        &grok_shell(&machine, OPENER),
         Some(PANE),
         GROK,
     );
-    assert!(machine.reason(&run).contains("hide agent spawn"));
+    assert!(machine.reason(&run).contains("browser open"));
     assert_eq!(machine.calls().len(), 3, "{:?}", machine.calls());
 
     // Outside a pane, and without a session, nothing is asked.
@@ -462,6 +461,37 @@ fn counts(machine: &Machine) -> Vec<(String, String)> {
 
 fn pair(working: u32, done: u32) -> (String, String) {
     (working.to_string(), done.to_string())
+}
+
+// Mission c3: a session start names the pane's session to the core before
+// the first turn, so letters and the inbox reach the agent from its start on
+// the core's own engine, where no Herdr integration names it.
+#[test]
+fn a_grok_session_start_reports_the_session_it_starts() {
+    let machine = Machine::new("registered");
+    let env = [
+        ("GROK_HOOK_EVENT", "session_start"),
+        ("GROK_SESSION_ID", "grok-session"),
+    ];
+    let run = machine.run_event(
+        "grok",
+        "SessionStart",
+        r#"{"sessionId":"grok-session"}"#,
+        Some(PANE),
+        &env,
+    );
+    assert!(run.status_ok, "{run:?}");
+    let reports = machine.status_reports();
+    let started: Vec<_> = reports
+        .iter()
+        .map(|report| {
+            (
+                report["session"].as_str(),
+                report["session_start"].as_bool(),
+            )
+        })
+        .collect();
+    assert_eq!(started, [(Some("grok-session"), Some(true))]);
 }
 
 #[test]

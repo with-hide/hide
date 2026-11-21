@@ -62,7 +62,6 @@ fn run(runtime: AgentRuntime, hook: &Value, shell: &str, home: &Path, cwd: &Path
     };
     let mut child = command
         .env(hide_platform::host::HOME_VARIABLE, home)
-        .env_remove("HERDR_PANE_ID")
         .env_remove("HIDE_CAP_REF")
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
@@ -89,6 +88,20 @@ fn run(runtime: AgentRuntime, hook: &Value, shell: &str, home: &Path, cwd: &Path
 /// stdin cross the shell.
 fn diagnostics(home: &Path) -> std::path::PathBuf {
     home.join(".hide/agent-hooks/delivery-diagnostics.json")
+}
+
+/// Whether `recorded` says the helper asked Memory for a session it read.
+///
+/// A hook asks Memory only for a valid session id, which comes from the
+/// conversation its payload named, so either recorded cause says the payload
+/// crossed the shell. Which one it is is the ask's own timing, not this
+/// test's subject: the budget is 1.25 s counted from the helper's start, and
+/// on a loaded Windows runner reading the payload and the transcript took
+/// past it, so the ask was never made and the cause is `memory_deadline`
+/// (with-hide/hide-private#852). This test is about the shell boundary, so
+/// it reads the fact that survives either timing.
+fn memory_asked(recorded: &Value) -> bool {
+    recorded["last"]["memory_unavailable"].is_u64() || recorded["last"]["memory_deadline"].is_u64()
 }
 
 #[test]
@@ -189,9 +202,14 @@ fn the_windows_entries_run_the_helper_through_powershell_only_while_it_is_there(
     // variable outside a literal.
     let helper = home.join("it's [1] $x here").join(HELPER_BINARY_NAME);
     for runtime in AgentRuntime::ALL {
-        hide_agent_hooks::install(runtime, &home, crate::hook_target(&helper)).unwrap();
+        hide_agent_hooks::install(
+            runtime,
+            &home,
+            crate::hook_target_at(&helper, &crate::state_of(&home)),
+        )
+        .unwrap();
         assert_eq!(
-            hide_agent_hooks::installed_helper_path(runtime, &home).as_deref(),
+            hide_agent_hooks::installed_helper_path(runtime, &home, None).as_deref(),
             helper.to_str(),
             "{runtime:?}: the path is read back from the PowerShell guard"
         );
@@ -246,7 +264,7 @@ fn the_windows_entries_run_the_helper_through_powershell_only_while_it_is_there(
                 serde_json::from_slice(&std::fs::read(diagnostics(&home)).unwrap_or_default())
                     .unwrap_or_default();
             assert!(
-                recorded["last"]["memory_unavailable"].is_u64(),
+                memory_asked(&recorded),
                 "{runtime:?} under {how}: the helper read the session from stdin: {recorded}"
             );
         }
@@ -267,7 +285,7 @@ fn run_grok(command: &str, shell: &str, home: &Path, payload: &str) -> Output {
     let mut child = Command::new(shell)
         .args(["-NoProfile", "-NonInteractive", "-Command", command])
         .env(hide_platform::host::HOME_VARIABLE, home)
-        .env("HERDR_PANE_ID", "w1:p2")
+        .env("HIDE_PANE_ID", "w1:p2")
         .env("GROK_HOOK_EVENT", "pre_tool_use")
         .env_remove("HIDE_CAP_REF")
         .stdin(Stdio::piped())
@@ -284,10 +302,10 @@ fn run_grok(command: &str, shell: &str, home: &Path, payload: &str) -> Output {
     child.wait_with_output().unwrap()
 }
 
-/// A launch the spawn guard reads from the event; with no `hide` to ask, the
-/// guard lets it run and writes one `daemon.unreachable` line, which only a
-/// helper that read the event on stdin can write.
-const LAUNCH: &str = "herdr agent start set-g --kind claude";
+/// An opening the opener guard reads from the event; with no `hide` to ask,
+/// the guard lets it run and writes one `daemon.unreachable` line, which only
+/// a helper that read the event on stdin can write.
+const OPENING: &str = "start report.html";
 
 fn guard_log(home: &Path) -> String {
     std::fs::read_to_string(
@@ -315,7 +333,7 @@ fn grok_runs_the_helper_through_the_powershell_it_starts_only_while_it_is_there(
         "sessionId": "grok-session",
         "cwd": cwd,
         "toolName": "run_terminal_command",
-        "toolInput": { "command": LAUNCH },
+        "toolInput": { "command": OPENING },
     })
     .to_string();
     let mut homes = 0;
@@ -324,17 +342,15 @@ fn grok_runs_the_helper_through_the_powershell_it_starts_only_while_it_is_there(
         let home = root.path().join(format!("home-{homes}"));
         let agent = GuidanceAgent::Grok;
         std::fs::create_dir_all(agent.home_directory(&home)).unwrap();
-        guidance::install(agent, &home, crate::hook_target(&helper)).unwrap();
+        let state = crate::state_of(&home);
+        let target = crate::hook_target_at(&helper, &state);
+        guidance::install(agent, &home, target).unwrap();
         assert_eq!(
-            guidance::installed_helper_path(agent, &home).as_deref(),
+            guidance::installed_helper_path(agent, &home, None).as_deref(),
             helper.to_str(),
             "the path is read back from the PowerShell guard"
         );
-        assert!(guidance::matches_install(
-            agent,
-            &home,
-            crate::hook_target(&helper)
-        ));
+        assert!(guidance::matches_install(agent, &home, target));
         home
     };
     let grok_command = |home: &Path| -> String {
@@ -419,12 +435,12 @@ fn retired_cursor_install_is_refused_and_removal_keeps_the_operators_hooks() {
         original,
         "refusal changes no existing bytes"
     );
-    let removed = guidance::remove(agent, &home).unwrap();
+    let removed = guidance::remove(agent, &home, None).unwrap();
     assert!(removed.changed);
     assert_eq!(removed.removed_entries, 2);
     let remaining: Value = serde_json::from_slice(&std::fs::read(&path).unwrap()).unwrap();
     assert_eq!(remaining, theirs);
-    assert!(!guidance::remove(agent, &home).unwrap().changed);
+    assert!(!guidance::remove(agent, &home, None).unwrap().changed);
 }
 
 /// agy's Go process launcher quotes its command argument for CommandLineToArgvW,
@@ -433,29 +449,17 @@ fn retired_cursor_install_is_refused_and_removal_keeps_the_operators_hooks() {
 ///
 /// The command starts Windows PowerShell. Its first start in a CI job, beside
 /// the other tests starting theirs, took from 2 s to past the 15 s these runs
-/// allow (issue 1497), so it is paid here, before a deadline starts.
-///
-/// The first start includes the first `Test-Path` the command calls: Windows
-/// PowerShell loads that cmdlet's module on first use, and on a fresh runner
-/// it first builds its cache of every installed module ("Preparing modules
-/// for first use", the `#< CLIXML` progress record a timed-out run left on
-/// stderr). A start that only ran `exit 0` left that to the command: four
-/// tests paying it together took 38 to 48 s, and the two that paid it inside
-/// their 15 s failed (issues 198 and 199). These tests check what the command
-/// does once PowerShell is warm; the installed command still pays that first
-/// use on an account with no module cache, which is hide-private issue 318.
+/// allow (issue 1497), so it is paid here, before a deadline starts. The
+/// command itself calls no cmdlet, so it loads no module and builds no
+/// module cache (with-hide/hide-private#318, proved by
+/// `a_windows_guard_with_an_empty_module_cache_answers_inside_its_hook_timeout`).
 fn agy_shell(command: &str) -> Command {
     use std::os::windows::process::CommandExt;
 
     crate::stand_ins::ready_with_args(
         &Path::new(&std::env::var_os("SystemRoot").unwrap())
             .join(r"System32\WindowsPowerShell\v1.0\powershell.exe"),
-        &[
-            "-NoProfile",
-            "-NonInteractive",
-            "-Command",
-            "$null = Test-Path -LiteralPath $env:SystemRoot -PathType Leaf; exit 0",
-        ],
+        &["-NoProfile", "-NonInteractive", "-Command", "exit 0"],
     );
     let mut shell = Command::new("cmd.exe");
     shell
@@ -511,7 +515,6 @@ fn agys_cmd_tool_command_leaves_the_call_to_agy_when_the_helper_is_gone_or_fails
             .unwrap();
         let mut child = agy_shell(command)
             .env(hide_platform::host::HOME_VARIABLE, &home)
-            .env_remove("HERDR_PANE_ID")
             .env_remove("HIDE_CAP_REF")
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
@@ -554,9 +557,14 @@ fn agys_windows_session_hook_reads_its_input_and_injects_guidance() {
     // A copied program's first start is paid before the deadline, as
     // `programs::hook` does for the build's own.
     crate::stand_ins::ready(&helper);
-    guidance::install(agent, &home, crate::hook_target(&helper)).unwrap();
+    guidance::install(
+        agent,
+        &home,
+        crate::hook_target_at(&helper, &crate::state_of(&home)),
+    )
+    .unwrap();
     assert_eq!(
-        guidance::installed_helper_path(agent, &home).as_deref(),
+        guidance::installed_helper_path(agent, &home, None).as_deref(),
         helper.to_str()
     );
     let document: Value =
@@ -567,7 +575,6 @@ fn agys_windows_session_hook_reads_its_input_and_injects_guidance() {
     let mut shell = agy_shell(command);
     shell
         .env(hide_platform::host::HOME_VARIABLE, &home)
-        .env_remove("HERDR_PANE_ID")
         .env_remove("HIDE_CAP_REF")
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
@@ -598,7 +605,7 @@ fn agys_windows_session_hook_reads_its_input_and_injects_guidance() {
         serde_json::from_slice(&std::fs::read(diagnostics(&home)).unwrap_or_default())
             .unwrap_or_default();
     assert!(
-        recorded["last"]["memory_unavailable"].is_u64(),
+        memory_asked(&recorded),
         "the helper read the conversation from stdin: {recorded}"
     );
 }
@@ -644,4 +651,355 @@ fn agys_windows_guard_preserves_korean_and_non_bmp_hook_answers() {
         received["injectSteps"][0]["systemMessage"]["systemMessage"],
         expected
     );
+}
+
+/// with-hide/hide-private#318: Windows PowerShell builds its cache of every
+/// installed module before a cmdlet's first use on an account that has none,
+/// which took past a hook's timeout on a fresh runner. Every Windows guard
+/// Hide installs checks for its helper with a .NET call instead, so on an
+/// empty cache (a private `PSModuleAnalysisCachePath`) it answers inside the
+/// hook's own timeout and leaves no cache behind. A `Test-Path` run on another
+/// empty cache shows that PowerShell honors that path, so its absence after a
+/// guard means something.
+#[test]
+fn a_windows_guard_with_an_empty_module_cache_answers_inside_its_hook_timeout() {
+    use hide_agent_hooks::guidance::{self, GuidanceAgent};
+    use hide_platform::process::OwnedChild;
+    use std::time::{Duration, Instant};
+
+    let powershell = Path::new(&std::env::var_os("SystemRoot").unwrap())
+        .join(r"System32\WindowsPowerShell\v1.0\powershell.exe");
+    crate::stand_ins::ready_with_args(
+        &powershell,
+        &["-NoProfile", "-NonInteractive", "-Command", "exit 0"],
+    );
+    let root = tempfile::tempdir().unwrap();
+    let home = root.path().join("home");
+    // The helper is gone, so the guard's own check is all that runs.
+    let helper = root.path().join("kit [1] $x").join(HELPER_BINARY_NAME);
+    for runtime in AgentRuntime::ALL {
+        std::fs::create_dir_all(runtime.home_directory(&home)).unwrap();
+        hide_agent_hooks::install(runtime, &home, crate::hook_target(&helper)).unwrap();
+    }
+    for agent in [GuidanceAgent::Grok, GuidanceAgent::Antigravity] {
+        std::fs::create_dir_all(agent.home_directory(&home)).unwrap();
+        guidance::install(agent, &home, crate::hook_target(&helper)).unwrap();
+    }
+    let read = |path: std::path::PathBuf| -> Value {
+        serde_json::from_str(&std::fs::read_to_string(path).unwrap()).unwrap()
+    };
+    let claude =
+        read(AgentRuntime::ClaudeCode.config_path(&home))["hooks"]["SessionStart"][0]["hooks"][0]
+            .clone();
+    let codex = read(AgentRuntime::Codex.config_path(&home))["hooks"]["SessionStart"][0]["hooks"]
+        [0]
+    .clone();
+    let grok = read(GuidanceAgent::Grok.config_path(&home))["hooks"]["SessionStart"][0]["hooks"][0]
+        .clone();
+    let agy = read(GuidanceAgent::Antigravity.config_path(&home))["hide"]["PreToolUse"][0]["hooks"]
+        [0]
+    .clone();
+
+    let mut runs: Vec<(&str, Command, u64)> = Vec::new();
+    let mut claude_run = Command::new(claude["command"].as_str().unwrap());
+    claude_run.args(
+        claude["args"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|argument| argument.as_str().unwrap()),
+    );
+    runs.push((
+        "claude-code",
+        claude_run,
+        claude["timeout"].as_u64().unwrap(),
+    ));
+    let mut codex_run = Command::new(&powershell);
+    codex_run.args(["-NoProfile", "-Command", codex["command"].as_str().unwrap()]);
+    runs.push(("codex", codex_run, codex["timeout"].as_u64().unwrap()));
+    let mut grok_run = Command::new(&powershell);
+    grok_run.args([
+        "-NoProfile",
+        "-NonInteractive",
+        "-Command",
+        grok["command"].as_str().unwrap(),
+    ]);
+    runs.push(("grok", grok_run, grok["timeout"].as_u64().unwrap()));
+    runs.push((
+        "agy",
+        agy_shell(agy["command"].as_str().unwrap()),
+        agy["timeout"].as_u64().unwrap(),
+    ));
+
+    for (at, (agent, mut command, timeout)) in runs.into_iter().enumerate() {
+        let cache = root.path().join(format!("module-cache-{at}"));
+        command
+            .env("PSModuleAnalysisCachePath", &cache)
+            .env(hide_platform::host::HOME_VARIABLE, &home)
+            .env_remove("HIDE_CAP_REF")
+            .stdin(Stdio::null())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped());
+        let mut child = OwnedChild::spawn(&mut command).unwrap();
+        // The bound is the product's: the timeout the entry gives its hook.
+        let output = child
+            .capture_until(Instant::now() + Duration::from_secs(timeout), 64 * 1024)
+            .unwrap_or_else(|failure| panic!("{agent}: past its {timeout} s timeout: {failure:?}"));
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        assert!(output.status.success(), "{agent}: {stderr}");
+        assert!(
+            !stderr.contains("CLIXML") && !stderr.contains("Preparing modules"),
+            "{agent}: {stderr}"
+        );
+        assert!(!cache.exists(), "{agent}: the guard built a module cache");
+    }
+
+    let cache = root.path().join("module-cache-control");
+    let mut control = Command::new(&powershell);
+    control
+        .args([
+            "-NoProfile",
+            "-NonInteractive",
+            "-Command",
+            "$null = Test-Path -LiteralPath $env:SystemRoot -PathType Leaf; exit 0",
+        ])
+        .env("PSModuleAnalysisCachePath", &cache)
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null());
+    // A hang guard only: this is the cost the guards no longer pay.
+    let status = OwnedChild::spawn(&mut control)
+        .unwrap()
+        .capture_until(Instant::now() + Duration::from_secs(100), 64 * 1024)
+        .unwrap()
+        .status;
+    assert!(status.success());
+    assert!(
+        cache.exists(),
+        "PowerShell honors PSModuleAnalysisCachePath"
+    );
+}
+
+/// with-hide/hide-private#663: Codex runs Hide's hooks through PowerShell
+/// and keeps a hook's answer only if its output ends inside the entry's
+/// timeout. A hook that started `hide`, to confirm the letters it had handed
+/// over or for the opener guard to ask whether the pane is registered,
+/// waited for that start, which on Windows took a second warm and 18 to 25
+/// seconds the first time a new copy ran, and Codex dropped the whole
+/// answer. No `hide` sits beside this helper, so every answer here came from
+/// the helper's own requests, and each run, timed as Codex times it, from
+/// the shell's start to the end of the hook's output, ends inside its
+/// entry's timeout.
+#[test]
+fn codexs_prompt_and_guard_hooks_ask_the_daemon_themselves_inside_their_timeout() {
+    use std::sync::{Arc, Mutex};
+    use std::time::{Duration, Instant};
+
+    use hide_platform::process::OwnedChild;
+    use serde_json::json;
+
+    use crate::stand_in_daemon::StandInDaemon;
+
+    let root = tempfile::tempdir().unwrap();
+    let home = root.path().join("home");
+    let project = root.path().join("project");
+    std::fs::create_dir_all(project.join(".git")).unwrap();
+    std::fs::write(project.join(".git").join("HEAD"), "ref: refs/heads/topic\n").unwrap();
+    // The guardrails policy the core writes at its start: no protection on.
+    let policy = home
+        .join(".hide")
+        .join("agent-hooks")
+        .join("guardrails.json");
+    std::fs::create_dir_all(policy.parent().unwrap()).unwrap();
+    std::fs::write(&policy, r#"{"version":1,"projects":[]}"#).unwrap();
+    let helper = root.path().join("kit [1] $x").join(HELPER_BINARY_NAME);
+    std::fs::create_dir_all(helper.parent().unwrap()).unwrap();
+    std::fs::copy(env!("CARGO_BIN_EXE_hide-agent-hooks"), &helper).unwrap();
+    assert_eq!(
+        std::fs::read_dir(helper.parent().unwrap()).unwrap().count(),
+        1,
+        "no `hide` beside the helper"
+    );
+    // The new file's first start, which Windows holds while it scans it, is
+    // paid before anything is timed (`stand_ins`).
+    crate::stand_ins::ready(&helper);
+    std::fs::create_dir_all(AgentRuntime::Codex.home_directory(&home)).unwrap();
+    hide_agent_hooks::install(AgentRuntime::Codex, &home, crate::hook_target(&helper)).unwrap();
+    let document: Value = serde_json::from_str(
+        &std::fs::read_to_string(AgentRuntime::Codex.config_path(&home)).unwrap(),
+    )
+    .unwrap();
+    let entry = |event: &str| -> Value {
+        document["hooks"][event]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|group| &group["hooks"][0])
+            .find(|hook| {
+                hook["command"]
+                    .as_str()
+                    .is_some_and(|command| command.contains(&format!("--event {event}")))
+            })
+            .unwrap_or_else(|| panic!("no {event} entry: {document}"))
+            .clone()
+    };
+
+    // The daemon hands one letter over until it is confirmed.
+    let asked = Arc::new(Mutex::new(Vec::<Value>::new()));
+    let confirmed = Arc::new(Mutex::new(false));
+    let (record, taken) = (Arc::clone(&asked), Arc::clone(&confirmed));
+    let daemon = StandInDaemon::serve_table(move |command| {
+        record.lock().unwrap().push(command.clone());
+        Some(match command["kind"].as_str()? {
+            "letter_pull" if *taken.lock().unwrap() => {
+                json!({"ok":true,"result":{"context":"","ids":[],"remaining":0}})
+            }
+            "letter_pull" => {
+                json!({"ok":true,"result":{"context":"LETTER-BODY","ids":["letter-1"],"remaining":0}})
+            }
+            "letter_confirm" => {
+                *taken.lock().unwrap() = true;
+                json!({"ok":true,"result":{"confirmed":command["ids"]}})
+            }
+            "registration" => json!({"ok":true,"result":{}}),
+            "status" => json!({"ok":true,"result":{"recorded":true}}),
+            _ => json!({"ok":false,"reason":"memory_unavailable"}),
+        })
+    });
+    let run = |shell: &str, event: &str, payload: Value| -> String {
+        let hook = entry(event);
+        let timeout = Duration::from_secs(hook["timeout"].as_u64().unwrap());
+        let mut command = Command::new(shell);
+        command.args(["-NoProfile", "-Command", hook["command"].as_str().unwrap()]);
+        for (key, _) in std::env::vars_os() {
+            let name = key.to_string_lossy();
+            if ["HERDR_", "HIDE_", "HCOORD_", "CODEX_"]
+                .iter()
+                .any(|prefix| name.starts_with(prefix))
+            {
+                command.env_remove(key);
+            }
+        }
+        command
+            .env(hide_platform::host::HOME_VARIABLE, &home)
+            .env("HIDE_PANE_ID", "w1:p2")
+            .current_dir(&project)
+            .stdin(Stdio::piped())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped());
+        daemon.route(&mut command);
+        let started = Instant::now();
+        let mut child = OwnedChild::spawn(&mut command).unwrap();
+        child
+            .take_stdin()
+            .unwrap()
+            .write_all(payload.to_string().as_bytes())
+            .unwrap();
+        let output = child
+            .capture_until(started + timeout, 64 * 1024)
+            .unwrap_or_else(|failure| {
+                panic!("{event} under {shell}: past its {timeout:?} timeout: {failure:?}")
+            });
+        let elapsed = started.elapsed();
+        eprintln!("{event} under {shell}: {elapsed:?} of {timeout:?}");
+        assert!(
+            output.status.success(),
+            "{event} under {shell}: {:?}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        assert!(elapsed < timeout, "{event} under {shell}: {elapsed:?}");
+        String::from_utf8(output.stdout).unwrap()
+    };
+    let kinds = |asked: &Mutex<Vec<Value>>| -> Vec<String> {
+        std::mem::take(&mut *asked.lock().unwrap())
+            .iter()
+            .map(|command| command["kind"].as_str().unwrap_or_default().to_owned())
+            .collect()
+    };
+
+    for shell in codex_shells() {
+        *confirmed.lock().unwrap() = false;
+        let stdout = run(
+            shell,
+            "UserPromptSubmit",
+            json!({"session_id":"codex-session","turn_id":"t1","cwd":project,
+                "hook_event_name":"UserPromptSubmit","prompt":"bell"}),
+        );
+        assert!(stdout.contains("LETTER-BODY"), "{shell}: {stdout}");
+        let prompt = kinds(&asked);
+        assert!(
+            prompt.contains(&"letter_pull".to_owned())
+                && prompt.contains(&"letter_confirm".to_owned()),
+            "{shell}: the letter it handed over is confirmed: {prompt:?}"
+        );
+
+        let stdout = run(
+            shell,
+            "PreToolUse",
+            json!({"session_id":"codex-session","cwd":project,"hook_event_name":"PreToolUse",
+                "tool_name":"Bash","tool_input":{"command":"Start-Process http://localhost:5173"}}),
+        );
+        let answer: Value = serde_json::from_str(stdout.trim())
+            .unwrap_or_else(|error| panic!("{shell}: {error}: {stdout}"));
+        assert_eq!(
+            answer["hookSpecificOutput"]["permissionDecision"], "deny",
+            "{shell}: {stdout}"
+        );
+        assert!(
+            answer["hookSpecificOutput"]["permissionDecisionReason"]
+                .as_str()
+                .unwrap()
+                .contains("browser open http://localhost:5173"),
+            "{shell}: {stdout}"
+        );
+        let guard = kinds(&asked);
+        assert!(
+            guard.contains(&"registration".to_owned()),
+            "{shell}: {guard:?}"
+        );
+    }
+}
+
+/// A guest's entries on its host's account, started the way each agent
+/// starts a hook here, in a pane the host's app started and in a terminal
+/// outside Hide: each says nothing and writes nothing, and what each start
+/// took is printed beside what the shell alone takes.
+/// `.config/nextest.toml` shows the lines on a passing run: they are what
+/// the guest cap was set from (`hide_peer_protocol::launch::MAX_GUEST_NODES`).
+#[test]
+fn a_guests_entries_say_nothing_and_cost_one_start_each() {
+    use crate::other_install::{Account, Place};
+    const RUNS: usize = 10;
+    let account = Account::with_a_guests_entries();
+    for place in [Place::AppPane, Place::Outside] {
+        let cost = account.tool_calls(AgentRuntime::ClaudeCode, &[], place, RUNS);
+        println!("hook cost, a guest's ClaudeCode entry, no shell, {place:?}: {cost}");
+    }
+    for shell in codex_shells() {
+        for place in [Place::AppPane, Place::Outside] {
+            let how = [shell, "-NoProfile", "-Command"];
+            let cost = account.tool_calls(AgentRuntime::Codex, &how, place, RUNS);
+            println!("hook cost, a guest's Codex entry through {shell}, {place:?}: {cost}");
+        }
+        let mut alone: Vec<std::time::Duration> = (0..RUNS)
+            .map(|_| {
+                let start = std::time::Instant::now();
+                let status = Command::new(shell)
+                    .args(["-NoProfile", "-Command", "exit 0"])
+                    .stdin(Stdio::null())
+                    .stdout(Stdio::null())
+                    .stderr(Stdio::null())
+                    .status()
+                    .unwrap();
+                assert!(status.success(), "{shell}: {status}");
+                start.elapsed()
+            })
+            .collect();
+        alone.sort();
+        println!(
+            "hook cost, {shell} alone: p50 {:.1} ms, max {:.1} ms over {RUNS} starts",
+            alone[alone.len() / 2].as_secs_f64() * 1000.0,
+            alone[alone.len() - 1].as_secs_f64() * 1000.0
+        );
+    }
 }

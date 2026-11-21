@@ -3,7 +3,7 @@
 // plus a playground row to press the keys Pen cannot show. It has no store and
 // no socket; a part that needed one would not be a System part.
 //
-// A state that opens a layer (menu, dialog, popover, select, toast) renders in
+// A state that opens a layer (menu, dialog, popover, select) renders in
 // its own frame document, because those layers are fixed-position and modal:
 // in the page they would cover and lock every other cell.
 
@@ -11,7 +11,6 @@ import { ArrowRightIcon, CopyIcon, FolderIcon, Loader2Icon, PlusIcon, SettingsIc
 import { Fragment, useEffect, useRef, useState, type ReactNode } from "react";
 import { DESK_SCENES } from "./DeskScene";
 import { DESK_THREAD_SCENES } from "./DeskThreadScene";
-import { toast } from "sonner";
 import { AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent, AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle } from "../components/ui/alert-dialog";
 import { Badge } from "../components/ui/badge";
 import { Button } from "../components/ui/button";
@@ -30,7 +29,7 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from ".
 import { Separator } from "../components/ui/separator";
 import { Sheet, SheetContent, SheetDescription, SheetHeader, SheetTitle } from "../components/ui/sheet";
 import { Slider } from "../components/ui/slider";
-import { Toaster } from "../components/ui/sonner";
+import { Toast, TOAST_INFO_MS } from "../components/ui/toast";
 import { Switch } from "../components/ui/switch";
 import { Tabs, TabsList, TabsTrigger } from "../components/ui/tabs";
 import { ToggleGroup, ToggleGroupItem } from "../components/ui/toggle-group";
@@ -50,7 +49,6 @@ const FRAMED: { [S in Section]?: readonly StateOf<S>[] } = {
   "Sheet": ["Right", "Left"],
   "Popover": ["Open"],
   "Tooltip": ["Open", "With Shortcut"],
-  "Sonner": ["Default", "With Description", "With Action"],
 };
 
 function framed(section: Section, state: string) {
@@ -77,15 +75,6 @@ function OpenContextMenu() {
     return () => window.clearTimeout(timer);
   }, []);
   return null;
-}
-
-function ShowToast({ kind }: { kind: "plain" | "description" | "action" }) {
-  useEffect(() => {
-    if (kind === "plain") toast("Diagnostics copied");
-    else if (kind === "description") toast("Hook installed", { description: "Claude Code reports to Hide from its next session." });
-    else toast("Worktree removed", { action: { label: "Undo", onClick: () => {} } });
-  }, [kind]);
-  return <Toaster position="top-center" expand visibleToasts={1} duration={Number.POSITIVE_INFINITY} />;
 }
 
 const MENU = (
@@ -127,6 +116,8 @@ const renderers: Renderers = {
     "Text Hover": () => <Button variant="text" size="inline" className="text-caption" data-gallery-state="hover">Show 3 more</Button>,
     "Text Link": () => <Button variant="text-link" size="inline" className="text-caption">Open the session</Button>,
     "Text Link Hover": () => <Button variant="text-link" size="inline" className="text-caption" data-gallery-state="hover">Open the session</Button>,
+    "Practice": () => <Button variant="practice">Start</Button>,
+    "Practice Hover": () => <Button variant="practice" data-gallery-state="hover">Start</Button>,
     "Small": () => <Button size="sm">Retry</Button>,
     "Large": () => <Button size="lg">Register project</Button>,
     "Icon": () => (
@@ -189,6 +180,8 @@ const renderers: Renderers = {
     "Disabled": () => <GallerySelect value="claude" disabled />,
     "Open": () => <GallerySelect value="claude" open />,
     "Open With Descriptions": () => <GallerySelect value="claude" open described />,
+    "Ghost": () => <GallerySelect value="claude" variant="ghost" />,
+    "Ghost Focus": () => <GallerySelect value="claude" variant="ghost" state="focus" />,
   },
   "Checkbox": {
     "Unchecked": () => <LabeledCheckbox />,
@@ -336,17 +329,37 @@ const renderers: Renderers = {
     "Filtered": () => <GalleryCommand search="set" />,
     "Empty": () => <GalleryCommand search="zzz" />,
   },
-  "Sonner": {
-    "Default": () => <ShowToast kind="plain" />,
-    "With Description": () => <ShowToast kind="description" />,
-    "With Action": () => <ShowToast kind="action" />,
+  "Toast": {
+    "Info": () => <GalleryToast level="info">Studio Mac is not connected, so Split down was not sent.</GalleryToast>,
+    "Important": () => <GalleryToast level="important">Reopening ended the agent but could not start it again. Its conversation is kept.</GalleryToast>,
+    "With Action": () => (
+      <GalleryToast level="important" actions={<Button variant="text" size="inline">Check status</Button>}>
+        Hide could not tell whether the close finished.
+      </GalleryToast>
+    ),
+    "Long Korean": () => (
+      <GalleryToast level="important" actions={<Button variant="text" size="inline" className="text-destructive">저장 안 함</Button>}>
+        notes-for-the-quarterly-planning-review.md 파일에 저장하지 않은 변경이 있어서 마지막 보기를 닫지 않았어요. 저장하거나 저장 안 함을 눌러 닫으세요.
+      </GalleryToast>
+    ),
   },
 };
 
-function GallerySelect({ value, open, disabled, state, described }: { value?: string; open?: boolean; disabled?: boolean; state?: "focus"; described?: boolean }) {
+/** A notice at the corner stack's width; its dismiss does nothing, so the gallery keeps it after its countdown. */
+function GalleryToast({ level, actions, children }: { level: "info" | "important"; actions?: ReactNode; children: ReactNode }) {
+  return (
+    <div className="w-(--size-toast-w)">
+      <Toast level={level} actions={actions} timeout={level === "info" ? TOAST_INFO_MS : undefined} onDismiss={() => {}} dismissLabel="Dismiss">
+        {children}
+      </Toast>
+    </div>
+  );
+}
+
+function GallerySelect({ value, open, disabled, state, described, variant }: { value?: string; open?: boolean; disabled?: boolean; state?: "focus"; described?: boolean; variant?: "ghost" }) {
   return (
     <Select defaultValue={value} open={open} disabled={disabled}>
-      <SelectTrigger aria-label="Agent" data-gallery-state={state}>
+      <SelectTrigger aria-label="Agent" data-gallery-state={state} variant={variant} className={variant ? "w-auto" : undefined}>
         <SelectValue placeholder="Choose an agent" />
       </SelectTrigger>
       <SelectContent>
@@ -637,12 +650,6 @@ function Playground({ section }: { section: Section }) {
             </Command>
           </CommandDialog>
         </>
-      );
-    case "Sonner":
-      return (
-        <Button variant="secondary" onClick={() => toast("Diagnostics copied")}>
-          Show toast
-        </Button>
       );
     case "Context Menu":
       return (

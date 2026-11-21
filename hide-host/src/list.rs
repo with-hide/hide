@@ -23,7 +23,51 @@ const GIT_DIR_NAME: &str = ".git";
 /// every absolute link target, so one whose resolution lies under
 /// `real_root` is followed as that relative path, through the same handle;
 /// the resolution only classifies the row and never opens anything.
-pub fn list(dir: &Dir, relative: &Path, real_root: &Path) -> HostResult<Listing> {
+///
+/// When the root is the account's home folder (`home`), its top level also
+/// leaves out the names [`home_clutter`] names, for tidiness and speed: a
+/// typed path or a link still opens them (PRD home-folder-project D-04).
+pub fn list(
+    dir: &Dir,
+    relative: &Path,
+    real_root: &Path,
+    home: Option<&Path>,
+) -> HostResult<Listing> {
+    let top_of_home = relative.as_os_str().is_empty()
+        && home.is_some_and(|home| crate::register::is_home(real_root, home));
+    list_where(dir, relative, real_root, |name| {
+        name == GIT_DIR_NAME || (top_of_home && home_clutter(name))
+    })
+}
+
+/// The name of the folder a system keeps an account's app data in, at the
+/// top of the home folder: macOS' `Library`, Windows' `AppData`; the other
+/// systems keep theirs in hidden folders, which [`home_clutter`] leaves out
+/// already.
+pub const APP_DATA_DIR: Option<&str> = if cfg!(target_os = "macos") {
+    Some("Library")
+} else if cfg!(windows) {
+    Some("AppData")
+} else {
+    None
+};
+
+/// Whether a top-level name of the home folder is left out of the Explorer's
+/// listing and the file index of a project that is the home folder: a hidden
+/// name (a leading dot) or the system's app-data folder.
+pub fn home_clutter(name: &str) -> bool {
+    name.starts_with('.') || APP_DATA_DIR == Some(name)
+}
+
+/// [`list`] with the caller's own names to leave out (`skip`), which are
+/// passed over before the cap counts them, so a folder of hidden names
+/// never fills a listing that shows none of them.
+pub fn list_where(
+    dir: &Dir,
+    relative: &Path,
+    real_root: &Path,
+    skip: impl Fn(&str) -> bool,
+) -> HostResult<Listing> {
     let folder = if relative.as_os_str().is_empty() {
         dir.try_clone()
             .map_err(|error| HostError::io(&error, "The folder could not be opened"))?
@@ -40,7 +84,7 @@ pub fn list(dir: &Dir, relative: &Path, real_root: &Path) -> HostResult<Listing>
         let Ok(item) = item else { continue };
         let name = item.file_name();
         let Some(name) = name.to_str() else { continue };
-        if name == GIT_DIR_NAME {
+        if skip(name) {
             continue;
         }
         let Ok(file_type) = item.file_type() else {
@@ -180,6 +224,30 @@ fn folder_stamp(metadata: &cap_std::fs::Metadata) -> Option<String> {
     {
         Some(modified.to_string())
     }
+}
+
+/// Opens `relative` under `dir` to read it as a regular file. The open
+/// itself never waits: a FIFO with no writer, or a device, opens at once on
+/// Unix (`O_NONBLOCK`, and no terminal becomes this process's), and the
+/// opened handle is refused unless it is a regular file, so a name swapped
+/// for another kind between a look and the open reads nothing either.
+/// Windows has no such files at a path.
+pub fn open_regular_file(dir: &Dir, relative: &Path) -> std::io::Result<std::fs::File> {
+    let mut options = cap_std::fs::OpenOptions::new();
+    options.read(true);
+    #[cfg(unix)]
+    {
+        use cap_std::fs::OpenOptionsExt;
+        options.custom_flags(libc::O_NONBLOCK | libc::O_NOCTTY);
+    }
+    let file = dir.open_with(relative, &options)?.into_std();
+    if !file.metadata()?.is_file() {
+        return Err(std::io::Error::new(
+            std::io::ErrorKind::InvalidInput,
+            format!("{} is not a regular file", relative.display()),
+        ));
+    }
+    Ok(file)
 }
 
 pub fn require_directory(dir: &Dir, relative: &Path) -> HostResult<()> {

@@ -1,5 +1,6 @@
-# Every pull request and every push to main runs this workflow, and nightly
-# calls it; the single `verify` job is what branch protection requires. Adding
+# Every pull request, every merge queue group and every push to main runs this
+# workflow, and nightly calls it; the single `verify` job is what branch
+# protection and the merge queue require. Adding
 # a lane means adding it to `scripts/ci-plan.py`'s LANES and to `verify`'s
 # `needs`; the protection rule never changes.
 #
@@ -30,14 +31,19 @@
 #
 # Each gate here has a local command in CONTRIBUTING.md under "CI gates".
 #
-# Runner placement is a capacity decision. This organization's plan runs 20
+# A merge queue group plans `policy`, `merge-rust` and `merge-web` and nothing
+# else, the checks where two changes that each passed fail together without a
+# conflict (`scripts/ci-plan.py`, MERGE_GROUP_LANES; CONTRIBUTING.md, Merging
+# into main). No other run plans the last two.
+#
+# Runner placement is a capacity decision. This organization's plan runs 60
 # jobs at once and five of them on macOS across every repository, and on
 # 2026-09-28 one run held all five for 26 minutes, so a second pull request
 # waited up to 70 minutes before its lanes started. A pull request therefore
 # takes a macOS runner only when it changes a macOS path (`scripts/ci-plan.py`,
 # MACOS_PATHS and MACOS_CODE: the macOS forms of `hide-platform` and the
 # desktop host, the packaged macOS app's scripts and resources, hide-vt's Zig
-# build, the Herdr pin and the CI that defines these jobs; operator decision
+# build and the CI that defines these jobs; operator decision
 # 2026-11-01, docs/TESTING.md, Where the macOS runners went). Such a pull
 # request runs the macOS jobs its paths plan: `desktop e2e`, `os
 # contract (macos)`, and the macOS legs of `vt`, `holder restart`, `omp SDK`
@@ -53,7 +59,8 @@
 # and the performance lane, which no `pr.yml` run starts.
 # Everything else runs on Linux: the Rust suite, the unit suites, the invariant
 # checks, the whole web end-to-end, dealt out to six shards by `web-e2e.yml`,
-# and the remote mailbox lane over private SSH (`remote-mailbox`).
+# and the remote mailbox lane over private SSH (`remote-mailbox`, and on a
+# Linux ARM64 runner `remote-mailbox-arm`).
 # `nightly.yml` runs the web end-to-end's `@platform` tests on macOS, and the
 # rest of the web end-to-end is the same code on every system, so the move of
 # the web end-to-end costs no macOS coverage, only its delay. On Windows, `windows check`
@@ -85,6 +92,7 @@ on:
     types: [opened, synchronize, reopened, ready_for_review, edited]
   push:
     branches: [main]
+  merge_group:
   # nightly.yml runs every lane once a day, with agent checks owned there.
   workflow_call:
     inputs:
@@ -126,11 +134,23 @@ jobs:
       lanes: ${{ steps.plan.outputs.lanes }}
       full: ${{ steps.plan.outputs.full }}
       rust-packages: ${{ steps.plan.outputs.rust-packages }}
+      # The tests this pull request adds or changes, for the `repeat` lane:
+      # the web specs, the packages' unit test files (JSON lists of paths) and
+      # the Rust test modules (a JSON list of `{package, test, module}`), all
+      # empty when it changes none.
+      repeat-web: ${{ steps.plan.outputs.repeat-web }}
+      repeat-units: ${{ steps.plan.outputs.repeat-units }}
+      repeat-rust: ${{ steps.plan.outputs.repeat-rust }}
       # Whether this run takes a macOS runner: `true` for main's push run, the
       # nightly and a pull request that changes a macOS path
       # (`scripts/ci-plan.py`, MACOS_PATHS); otherwise the plan leaves the
       # macOS-only lanes out and the lanes below run without their macOS leg.
       macos: ${{ steps.plan.outputs.macos }}
+      # Whether the Rust lane checks every crate's license and the advisory
+      # database: `true` for a pull request that changes the lockfile or what
+      # the check is held to, and for the nightly (`scripts/ci-plan.py`,
+      # DENY_PATHS).
+      deny: ${{ steps.plan.outputs.deny }}
       # Where `vt`, `omp SDK contract` and `compile (macos)` run their macOS
       # job: the repository variable HIDE_MACOS_CI_RUNNER, a JSON `runs-on`
       # value naming the Mac mini's CI runner (docs/BUILD.md, The CI runner
@@ -172,7 +192,9 @@ jobs:
     needs: plan
     if: contains(fromJSON(needs.plan.outputs.lanes), 'policy')
     runs-on: ubuntu-latest
-    timeout-minutes: 10
+    # About 4 minutes of checks plus the zsh install's 6-minute backstop,
+    # with a margin; a cache hit installs in seconds.
+    timeout-minutes: 12
     steps:
       - uses: actions/checkout@v7
         with:
@@ -184,8 +206,16 @@ jobs:
           node-version: 22
       - name: Install zsh
         # The invariant scripts are zsh; the image has bash.
-        run: sudo apt-get install -y --no-install-recommends zsh
+        timeout-minutes: 6
+        uses: ./.github/actions/apt-install
+        with:
+          packages: zsh
+          minutes: 3
+      # A merge group runs the structural checks below and not the script
+      # suite, which takes about two minutes and checks the scripts each pull
+      # request already ran it on; main's push run runs it on the merge.
       - name: Test the repository scripts, the lane plan included
+        if: github.event_name != 'merge_group'
         run: python3 -m unittest discover -s scripts/tests -p 'test_*.py'
       - name: Structural checks
         run: |
@@ -193,14 +223,17 @@ jobs:
           bash scripts/check-capability-readers-off-lock.sh
           bash scripts/check-no-workstation-identity.sh
           bash scripts/check-worktree-removal-boundary.sh
-          zsh scripts/check-herdr-pin-single-source.sh
           python3 scripts/check-core-touches-no-machine.py
-          python3 scripts/check-engine-boundary.py
+          python3 scripts/check-iroh-stays-behind-the-seam.py
+          python3 scripts/check-timed-waits.py --base HEAD^1
           python3 scripts/check-ai-prompt-language.py
           python3 scripts/check-agent-screen-rules.py
+          python3 scripts/check-device-kits-single-source.py
+          bash scripts/check-agent-folders.sh
+          python3 scripts/check-herdr-names.py
 
-      # Reads the pull request's body, which no merge result carries, so it is
-      # the one policy check `premerge-check.py` does not repeat.
+      # Reads the pull request's body, which no merge group carries, so a merge
+      # group's `policy` leaves it out.
       - name: A pull request that changes a screen shows it
         if: github.event_name == 'pull_request'
         env:
@@ -214,12 +247,17 @@ jobs:
     needs: plan
     if: contains(fromJSON(needs.plan.outputs.lanes), 'rust')
     runs-on: ubuntu-latest
-    timeout-minutes: 20
+    # The job's usual time (14 to 18 minutes, 17m47s on #2197) plus the
+    # shell install's 7-minute backstop, 25, with a minute of margin. The
+    # install ends inside its own 4 minutes on a slow mirror and takes seconds
+    # on a cache hit, so the mirror cannot take the job past this limit.
+    timeout-minutes: 26
     permissions:
       contents: read
     env:
       FULL: ${{ needs.plan.outputs.full }}
       PACKAGES: ${{ needs.plan.outputs.rust-packages }}
+      DENY: ${{ needs.plan.outputs.deny }}
     steps:
       - uses: actions/checkout@v7
       # hide-agent-hooks runs Hide's OpenCode plugin under Node in its tests
@@ -232,6 +270,17 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: 22
+      # The shells the real-shell tests below run in, installed first so a slow
+      # Ubuntu mirror fails here, by name and inside 4 minutes, before any
+      # test time is spent. The .deb files are cached, so a usual run does not
+      # ask the mirror (.github/actions/apt-install).
+      - name: Install the real shells
+        if: ${{ env.FULL == 'true' || contains(fromJSON(env.PACKAGES), 'hide-core') || contains(fromJSON(env.PACKAGES), 'hide-host') || contains(fromJSON(env.PACKAGES), 'hide-node') }}
+        timeout-minutes: 7
+        uses: ./.github/actions/apt-install
+        with:
+          packages: zsh fish tcsh csh
+          minutes: 4
       - name: Install the holder tests' xterm
         timeout-minutes: 3
         run: bash scripts/verify-web.sh install holder
@@ -260,6 +309,19 @@ jobs:
         # command that selects other members builds dependencies again
         # (docs/BUILD.md, "One feature set per dependency").
         run: bash scripts/verify-cargo.sh hakari
+      - name: Install cargo-deny
+        # The pinned release build, checked against its digest, so no compile.
+        if: env.DENY == 'true'
+        timeout-minutes: 3
+        run: bash scripts/install-cargo-deny.sh
+      - name: Check every crate's license and the advisory database
+        # For a pull request that changes the lockfile, and nightly: a crate
+        # under a license Hide does not ship, or with a known vulnerability,
+        # stops here (deny.toml; CONTRIBUTING.md, CI gates). It reads the
+        # advisory database from the network, which is why no other run does.
+        if: env.DENY == 'true'
+        timeout-minutes: 5
+        run: bash scripts/verify-cargo.sh deny
       - name: Check formatting and lint the planned crates
         run: |
           if [ "$FULL" = true ]; then
@@ -289,26 +351,35 @@ jobs:
       - name: Shell integration and agent start in real shells
         # hide-host/src/shell_integration/real_shell_tests.rs: zsh, bash and
         # fish read the user's files in their order, zsh gives ZDOTDIR back,
-        # and the mark comes after them. herdr-core's
-        # agent_start/real_herdr_tests.rs: zsh, bash and fish tabs on the
-        # pinned Herdr started with the integration, whose startup file asks
-        # a one-key question no start may answer. herdr-core's
+        # and the mark comes after them. hide-core's
         # engine/own/shell_line.rs: zsh, bash and fish run the resume line
-        # the core's own engine types after a reboot. herdr-core's
-        # engine/contract.rs: the pinned Herdr, and the core's own engine over
-        # pane holders started from the built holder, meet the engine contract.
-        if: ${{ !cancelled() && (env.FULL == 'true' || contains(fromJSON(env.PACKAGES), 'herdr-core') || contains(fromJSON(env.PACKAGES), 'hide-host')) }}
+        # the core's own engine types after a reboot. hide-core's
+        # engine/contract.rs: the core's own engine over pane holders started
+        # from the built holder meets the engine contract.
+        # hide-node's ssh/bootstrap_tests.rs: the one remote command a device's
+        # ssh runs starts the start script in zsh, bash, fish, tcsh and BSD csh
+        # login shells.
+        if: ${{ !cancelled() && (env.FULL == 'true' || contains(fromJSON(env.PACKAGES), 'hide-core') || contains(fromJSON(env.PACKAGES), 'hide-host') || contains(fromJSON(env.PACKAGES), 'hide-node')) }}
         timeout-minutes: 15
         run: |
-          sudo apt-get install -y --no-install-recommends zsh fish
-          export HIDE_TEST_ZSH_BIN=$(command -v zsh) HIDE_TEST_FISH_BIN=$(command -v fish) HIDE_TEST_BASH_BIN=$(command -v bash)
-          export HIDE_E2E_HERDR_BIN=$(zsh scripts/fetch-herdr-runtime.sh --platform linux-x86_64)
-          bash scripts/verify-cargo.sh build -p hide-holder --bin hide-holder
-          export HIDE_TEST_HOLDER_BIN=$PWD/target/debug/hide-holder
-          bash scripts/verify-cargo.sh nextest --profile ci -p hide-host -p herdr-core --lib -E 'test(/^shell_integration::real_shell_tests::/) | test(/^engine::own::shell_line::real_shell_tests::/) | test(/^agent_start::real_herdr_tests::/) | test(/^engine::contract::/)' --run-ignored only --no-capture
+          # What these ignored tests need, in the one script the repeat lane
+          # calls too (docs/TESTING.md, "The repeat lane").
+          . scripts/prepare-ignored-tests.sh
+          bash scripts/verify-cargo.sh nextest --profile ci -p hide-node --lib -E 'test(=ssh::host::bootstrap::tests::the_remote_command_starts_the_script_in_every_login_shell)' --run-ignored only --no-capture
+          bash scripts/verify-cargo.sh nextest --profile ci -p hide-host -p hide-core --lib -E 'test(/^shell_integration::real_shell_tests::/) | test(/^engine::own::shell_line::real_shell_tests::/) | test(/^engine::contract::/)' --run-ignored only --no-capture
+      - name: Every gh command line on the oldest gh Hide supports
+        # hide-host/src/gh.rs: each command line the node runs `gh` with
+        # parses on `MINIMUM_VERSION` (hide-node-link/src/gh.rs), which
+        # scripts/fetch-gh.sh downloads against its pinned digest; a proxy
+        # that refuses every connection keeps every line off GitHub.
+        if: ${{ !cancelled() && (env.FULL == 'true' || contains(fromJSON(env.PACKAGES), 'hide-host')) }}
+        timeout-minutes: 10
+        run: |
+          gh_bin=$(bash scripts/fetch-gh.sh "$RUNNER_TEMP/gh-minimum")
+          HIDE_TEST_GH_BIN=$gh_bin bash scripts/verify-cargo.sh nextest --profile ci -p hide-host --lib -E 'test(=gh::tests::every_command_line_parses_on_the_oldest_gh_hide_supports)' --run-ignored only --no-capture
       - name: Mint the development issues token
-        # Development issues live in with-hide/hide-private (docs/TESTING.md,
-        # Flaky tests); one App token reads this run here and files there. A run
+        # Development issues live in this repository (docs/TESTING.md,
+        # Flaky tests); the App's token reads this run and files them. A run
         # without the App's key, such as a fork's, files nothing and stays green.
         id: issues-token
         if: ${{ !cancelled() }}
@@ -319,7 +390,7 @@ jobs:
           client-id: ${{ vars.HIDE_ISSUES_APP_CLIENT_ID }}
           private-key: ${{ secrets.HIDE_ISSUES_APP_KEY }}
           owner: with-hide
-          repositories: hide,hide-private
+          repositories: hide
       - name: Report flaky and failed tests
         if: ${{ !cancelled() }}
         continue-on-error: true
@@ -344,6 +415,10 @@ jobs:
           node-version: 22
           cache: pnpm
           cache-dependency-path: pnpm-lock.yaml
+      # The relay WebAssembly's binding tool, which the web scripts build with.
+      - uses: ./.github/actions/relay-tools
+        with:
+          save: false
       - name: Install dependencies
         id: install
         run: bash scripts/verify-web.sh install
@@ -362,14 +437,99 @@ jobs:
           bash scripts/verify-web.sh desktop typecheck
           bash scripts/verify-web.sh desktop lint
           bash scripts/verify-web.sh desktop test
+      - name: iOS app host unit test
+        # The app bundle assembler: its digest and content-policy checks.
+        if: ${{ !cancelled() && steps.install.outcome == 'success' }}
+        run: bash scripts/verify-web.sh mobile test
+
+  # The Android app host (`mobile/android`, docs/BUILD.md, The Android app): its JVM unit
+  # tests and a debug build on the runner's own Android SDK. Its instrumented tests need an
+  # emulator and run where the app is built, through `mobile/scripts/build-android.sh build`.
+  android:
+    name: Android app
+    needs: plan
+    if: contains(fromJSON(needs.plan.outputs.lanes), 'android')
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v7
+      - uses: pnpm/action-setup@v6
+        with:
+          version: 10
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+          cache-dependency-path: pnpm-lock.yaml
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: 21
+          cache: gradle
+      # Gradle builds Capacitor's Android library from the installed package.
+      - name: Install dependencies
+        run: bash scripts/verify-web.sh install
+      - name: JVM unit tests and debug build
+        working-directory: mobile/android
+        run: ./gradlew --no-daemon --console=plain testDebugUnitTest assembleDebug
+
+  # The user docs, which share `site/` with the landing page (docs/TESTING.md, The user
+  # docs): the guides and the feature pages hold each other, the CLI reference is read
+  # from the `hide` this checkout builds and fails on a command with no note, and the
+  # site builds with the live parts it frames, made from the web shell's own components.
+  # It plans for `site/`, the web shell, `scripts/docs/`, the files that own `hide --help`'s
+  # text (`HELP_SOURCES` in scripts/ci-plan.py) and the CLI contract, and needs only `hide`, so its cargo build is the one binary.
+  docs:
+    name: user docs
+    needs: plan
+    if: contains(fromJSON(needs.plan.outputs.lanes), 'docs')
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v7
+      - uses: pnpm/action-setup@v6
+        with:
+          # site/package.json pins the same version
+          version: 10.34.9
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+          cache-dependency-path: |
+            pnpm-lock.yaml
+            site/pnpm-lock.yaml
+      - name: Install the live parts' packages and the site's
+        timeout-minutes: 5
+        run: bash scripts/verify-web.sh install docs
+      # Reads the workspace set another lane saves (docs/BUILD.md, "CI's Rust caches").
+      - uses: ./.github/actions/rust-cache
+        timeout-minutes: 5
+        with:
+          set: workspace
+          save: false
+      - name: Build the hide CLI whose help the reference reads
+        timeout-minutes: 15
+        run: bash scripts/verify-cargo.sh build -p hided --bin hide
+      # check-all loads every live part in Chromium (web/src/docs/check-still.mjs); the same step the web e2e lane
+      # uses, with no `--with-deps` for the reason its comment gives.
+      - name: Install Playwright Chromium
+        timeout-minutes: 5
+        run: bash scripts/verify-web.sh web playwright-install
+      - name: Check the guides, features and CLI reference, and build the site
+        timeout-minutes: 10
+        # The hide just built above, from this checkout, is the one authority on which
+        # commands exist; --ci makes a missing binary a failure before anything is generated.
+        run: node scripts/docs/check-all.mjs --ci --hide "$GITHUB_WORKSPACE/target/debug/hide"
 
   # What differs on Windows (issue #293), as a required lane: the whole
   # workspace compiles for Windows, hided's pane bootstrap and end-to-end
   # tests pass there, `hide connect` starts and `hide stop` ends the hided
   # beside it (what the desktop app does first), the agent hook entries run
-  # through PowerShell as Claude Code and Codex run them, hided drives the
-  # pinned Herdr for Windows (a pane opened through `/ws` and a typed line
-  # echoed back), and the web and desktop unit suites. Warm-cache jobs took
+  # through PowerShell as Claude Code and Codex run them, the core's own
+  # engine meets its contract in Windows PowerShell, and the web and desktop
+  # unit suites. Warm-cache jobs took
   # 4-8 minutes on 2026-10-03; a cold run compiles the workspace from
   # nothing. The browser `@platform` tests are `windows-e2e` below, so a change
   # that needs the compile does not also wait for a browser, and the reverse.
@@ -389,11 +549,12 @@ jobs:
       # picks its tests with `-E`, so cargo resolves features once and the
       # test binaries are built once, in `Build the Windows test binaries`.
       # When each step named only its own package, each resolved features
-      # differently and rebuilt the crates under it: herdr-core compiled three
+      # differently and rebuilt the crates under it: hide-core compiled three
       # times and compiling took about 6 of the job's 11 minutes (2026-10-05).
       TEST_TARGETS: >-
-        -p hided -p hide-host -p hide-node -p hide-kit -p hide-agent-hooks -p herdr-core -p hide-ai
-        -p hide-agent-adapter -p hide-desk
+        -p hided -p hide-host -p hide-node -p hide-kit -p hide-agent-hooks -p hide-core -p hide-ai
+        -p hide-agent-adapter -p hide-desk -p hide-shell -p hide-session
+        -p hide-peer -p hide-peer-protocol -p hide-peer-iroh
         --lib --bin hide-agent-hooks --test it
     steps:
       - name: Keep line endings as committed
@@ -426,22 +587,76 @@ jobs:
         if: ${{ !cancelled() }}
         timeout-minutes: 25
         run: bash scripts/verify-cargo.sh nextest --profile ci $TEST_TARGETS --no-run
-      - name: hided's pane bootstrap, file opener, root identity, the device node's pane service, the CLI's daemon start and end-to-end tests
+      - name: hided's pane bootstrap, external tools, file opener, root identity, its roles, a paired machine's login item, the device node's pane service, the CLI's daemon start, the core update journey and end-to-end tests
         if: ${{ !cancelled() && steps.tests.outcome == 'success' }}
         timeout-minutes: 25
         run: |
-          bash scripts/verify-cargo.sh nextest --profile ci $TEST_TARGETS -E 'package(hided) & kind(lib) & (test(pane_auth) | test(opener) | test(open_command) | test(workspace_cli) | test(root_identity_is_the_one_the_node_reads))'
+          bash scripts/verify-cargo.sh nextest --profile ci $TEST_TARGETS -E 'package(hided) & kind(lib) & (test(pane_auth) | test(/^access/) | test(opener) | test(open_command) | test(workspace_cli) | test(root_identity_is_the_one_the_node_reads) | test(/^role::/) | test(/^always_on::/) | test(/^login_item::/))'
+          bash scripts/verify-cargo.sh nextest --profile ci $TEST_TARGETS -E 'binary_id(hided::it) & test(/^always_on_update::/)'
+          bash scripts/verify-cargo.sh nextest --profile ci $TEST_TARGETS -E 'binary_id(hided::it) & test(/^access::/)'
+          bash scripts/verify-cargo.sh nextest --profile ci $TEST_TARGETS -E 'binary_id(hided::it) & test(/^arguments::/)'
           bash scripts/verify-cargo.sh nextest --profile ci $TEST_TARGETS -E 'package(hide-node) & kind(lib)'
           bash scripts/verify-cargo.sh nextest --profile ci $TEST_TARGETS -E 'binary_id(hided::it) & test(/^opener_lifecycle::/)'
           bash scripts/verify-cargo.sh nextest --profile ci $TEST_TARGETS -E 'binary_id(hided::it) & test(/^connect_stop::/)'
           bash scripts/verify-cargo.sh nextest --profile ci $TEST_TARGETS -E 'binary_id(hided::it) & test(/^handshake::/)'
           bash scripts/verify-cargo.sh nextest --profile ci $TEST_TARGETS -E 'binary_id(hided::it) & test(/^mobile_relay::/)'
-      - name: A device's Herdr copy a server runs is kept
-        # The kit judges a copy's use by the files a process holds in it on
-        # Windows, never by the image paths it could read (hide-host/src/kit.rs).
+          bash scripts/verify-cargo.sh nextest --profile ci $TEST_TARGETS -E 'binary_id(hided::it) & test(/^pairing::/)'
+          bash scripts/verify-cargo.sh nextest --profile ci $TEST_TARGETS -E 'binary_id(hided::it) & test(/^agent_exec::/)'
+      - name: Automations, their command and their daemon
+        # PRD automations D-23: the CLI's reading of a schedule and a folder,
+        # the core's schedules in the system's zone, its book and runs, and
+        # the built `hide automation` against a daemon and its screen section
+        # (docs/INSTALL.md, What each system supports: Automations).
+        if: ${{ !cancelled() && steps.tests.outcome == 'success' }}
+        timeout-minutes: 15
+        run: bash scripts/verify-cargo.sh nextest --profile ci $TEST_TARGETS -E '(package(hided) & kind(lib) & test(/^automation_cli::/)) | (binary_id(hided::it) & test(/^automations::/)) | (package(hide-core) & kind(lib) & test(/automations/))'
+      - name: The peer connection's key and grant files, its loopback transport and two iroh endpoints
+        # hide-peer saves the machine key, the grants and the event inbox
+        # through the platform layer's private files, and hide-peer-iroh
+        # binds real UDP sockets on loopback: what the Linux Rust lane proves
+        # of them it proves for Linux (docs/ARCHITECTURE.md, The peer
+        # connection). The link multiplexer's tests (`mux::`) stay out: it
+        # moved into hide-peer from hided, where this job never ran them, and
+        # four of them do not hold on Windows (#2655).
         if: ${{ !cancelled() && steps.tests.outcome == 'success' }}
         timeout-minutes: 10
-        run: bash scripts/verify-cargo.sh nextest --profile ci $TEST_TARGETS -E 'package(hide-host) & kind(lib) & test(=kit::tests::an_older_herdr_copy_stays_while_a_process_runs_it_and_goes_once_none_does)'
+        run: bash scripts/verify-cargo.sh nextest --profile ci $TEST_TARGETS -E '(package(hide-peer) & !test(/^mux::/)) | package(hide-peer-protocol) | package(hide-peer-iroh)'
+      - name: Every kit location follows the home the platform names
+        # The kit finds its home in USERPROFILE, never in the HOME OpenSSH sets
+        # beside it (hide-host/src/kit.rs).
+        if: ${{ !cancelled() && steps.tests.outcome == 'success' }}
+        timeout-minutes: 10
+        run: bash scripts/verify-cargo.sh nextest --profile ci $TEST_TARGETS -E 'package(hide-host) & kind(lib) & test(=kit::tests::every_kit_location_follows_the_home_the_platform_names)'
+      - name: Each agent's account folders, from its definition's [account]
+        # `resolve`'s contract (hide-agent-adapter/tests/it/account.rs): a
+        # folder is absolute only in Windows' forms, variable names compare
+        # regardless of case, and each place joins with Windows' separator.
+        if: ${{ !cancelled() && steps.tests.outcome == 'success' }}
+        timeout-minutes: 10
+        run: bash scripts/verify-cargo.sh nextest --profile ci $TEST_TARGETS -E 'binary_id(hide-agent-adapter::it) & test(/^account::/)'
+      - name: A profile's account folder is private
+        # PRD agent-profiles D-36: the node makes a profile's account folder
+        # private, which Windows judges by the folder's access list, not a
+        # mode (hide-host/src/profiles.rs), and reads a session only in an
+        # account it registered, a folder or one of omp's named profiles,
+        # spelled as Windows spells a path (hide-session/src/account.rs).
+        if: ${{ !cancelled() && steps.tests.outcome == 'success' }}
+        timeout-minutes: 10
+        run: bash scripts/verify-cargo.sh nextest --profile ci $TEST_TARGETS -E 'package(hide-host) & kind(lib) & test(/^profiles::tests::/)'
+      - name: A session is read only in registered accounts
+        # Run even when the separate folder check failed, so a failed host
+        # assertion cannot hide a session-reader portability gap.
+        if: ${{ !cancelled() && steps.tests.outcome == 'success' }}
+        timeout-minutes: 10
+        run: bash scripts/verify-cargo.sh nextest --profile ci $TEST_TARGETS -E '(binary_id(hide-session::it) & test(/^session_account::/)) | (package(hide-session) & kind(lib) & test(/^account::/))'
+      - name: Retiring Hide's old Home removes only what its marker lists
+        # An old Windows Home held no link (every process of an ssh session
+        # refuses a junction no administrator made), only the guide and the
+        # import file, which the retirement removes by their content
+        # (hide-host/src/home.rs).
+        if: ${{ !cancelled() && steps.tests.outcome == 'success' }}
+        timeout-minutes: 10
+        run: bash scripts/verify-cargo.sh nextest --profile ci $TEST_TARGETS -E 'package(hide-host) & kind(lib) & test(/^home::tests::/)'
       - name: The weekly usage child's environment
         # The `/usage` child is started with a restricted environment, which
         # on Windows has to carry what Node and the CLI need to start, and the
@@ -450,23 +665,67 @@ jobs:
         timeout-minutes: 10
         run: |
           bash scripts/verify-cargo.sh nextest --profile ci $TEST_TARGETS -E 'binary_id(hide-ai::it) & test(/^claude_cli::usage::/)'
-          bash scripts/verify-cargo.sh nextest --profile ci $TEST_TARGETS -E 'package(herdr-core) & kind(lib) & (test(zoneinfo::) | test(usage::tests))'
+          bash scripts/verify-cargo.sh nextest --profile ci $TEST_TARGETS -E 'package(hide-core) & kind(lib) & (test(zoneinfo::) | test(usage::tests))'
+      - name: Hide AI's Codex folder where a file link needs a privilege
+        # A Windows account without Developer Mode may not make the private
+        # folder's `auth.json` link (ERROR_PRIVILEGE_NOT_HELD), and runs Codex
+        # in its own folder instead (with-hide/hide#2531); the test takes
+        # whichever this runner's account may make.
+        if: ${{ !cancelled() && steps.tests.outcome == 'success' }}
+        timeout-minutes: 10
+        run: bash scripts/verify-cargo.sh nextest --profile ci $TEST_TARGETS -E 'package(hide-ai) & kind(lib) & test(/^codex_home::create_tests::/)'
       - name: Native session original repository paths
         # Windows agents record native separators; the owning node must
         # answer catalog-compatible paths without certifying old history.
         if: ${{ !cancelled() && steps.tests.outcome == 'success' }}
         timeout-minutes: 10
-        run: bash scripts/verify-cargo.sh nextest --profile ci $TEST_TARGETS -E 'package(herdr-core) & kind(lib) & test(=links::store::ledger::tests::native_node_paths_identify_fresh_original_work_but_not_history_or_a_sibling)'
+        run: bash scripts/verify-cargo.sh nextest --profile ci $TEST_TARGETS -E 'package(hide-core) & kind(lib) & test(=links::store::ledger::tests::native_node_paths_identify_fresh_original_work_but_not_history_or_a_sibling)'
+      - name: A mission worker starts at its destination however its folder is spelled
+        # A mission spawn's `--repo` is judged as the mission's project by the
+        # Git directory both read, so Windows' `C:\repo` for the `C:/repo`
+        # Hide lists still starts the worker at the destination, and the CLI
+        # sends the folder in the one spelling (with-hide/hide#2634).
+        if: ${{ !cancelled() && steps.tests.outcome == 'success' }}
+        timeout-minutes: 10
+        run: bash scripts/verify-cargo.sh nextest --profile ci $TEST_TARGETS -E '(package(hide-core) & kind(lib) & (test(=coordination::executor::tests::a_missions_spawn_takes_its_destination_in_any_checkout_of_its_project_only) | test(=runtime::tests::mission_worker_item::a_node_worker_starts_at_its_local_only_destination_in_any_spelling_of_the_project) | test(=worktree_control::tests::a_local_only_destination_starts_the_branch_while_the_folder_has_another_out))) | (package(hided) & kind(lib) & (test(=agent_cli::tests::a_spawn_sends_its_repo_and_path_as_this_machine_spells_the_folders) | test(=server::tests::a_spawn_refused_for_its_name_names_the_name_and_its_limit)))'
       - name: Letters and agent sleep on the state folder's durable files
         # The ledger opens from a real state folder, making a missing chain
         # through the platform's directory flushes, and a letter goes from
         # one registered agent to the other's inbox and back from disk; the
         # record of an agent the sleep closes saves through the same barrier.
-        # Windows refused both before hide-platform flushed folders there;
-        # `real_herdr` below checks the daemon itself.
+        # Windows refused both before hide-platform flushed folders there.
         if: ${{ !cancelled() && steps.tests.outcome == 'success' }}
         timeout-minutes: 5
-        run: bash scripts/verify-cargo.sh nextest --profile ci $TEST_TARGETS -E 'package(herdr-core) & kind(lib) & (test(=delivery::ledger::tests::validated_startup_reestablishes_the_installed_version_without_repairing_corruption) | test(=delivery::ledger::tests::startup_bootstraps_private_sibling_state_and_preserves_refused_or_corrupt_bytes) | test(=runtime::delivery::tests::agents_register_and_a_letter_reaches_the_inbox_through_the_saved_ledger) | test(=runtime::tests::agent_sleep::a_dormant_intent_is_saved_through_the_state_folders_barrier) | test(=persistence::tests::a_save_makes_its_folders_chain_durable_once_until_the_folder_is_replaced) | test(=persistence::tests::an_archived_session_saves_through_the_folders_barrier_and_loads_back))'
+        run: bash scripts/verify-cargo.sh nextest --profile ci $TEST_TARGETS -E 'package(hide-core) & kind(lib) & (test(=delivery::ledger::tests::validated_startup_reestablishes_the_installed_version_without_repairing_corruption) | test(=delivery::ledger::tests::startup_bootstraps_private_sibling_state_and_preserves_refused_or_corrupt_bytes) | test(=runtime::delivery::tests::agents_register_and_a_letter_reaches_the_inbox_through_the_saved_ledger) | test(=runtime::tests::agent_sleep::a_dormant_intent_is_saved_through_the_state_folders_barrier) | test(=persistence::tests::a_save_makes_its_folders_chain_durable_once_until_the_folder_is_replaced) | test(=persistence::tests::an_archived_session_saves_through_the_folders_barrier_and_loads_back))'
+      - name: A start upgrades the state folders released builds wrote
+        # hide-core/src/node_migration/upgrade_tests.rs: each folder under
+        # hide-core/tests/fixtures/release-state/ is copied private to the
+        # account, as a core writes it, and must convert, name its devices
+        # and load in every store; Windows judges privacy by the folder's
+        # access list, not a file mode.
+        if: ${{ !cancelled() && steps.tests.outcome == 'success' }}
+        timeout-minutes: 5
+        run: bash scripts/verify-cargo.sh nextest --profile ci $TEST_TARGETS -E 'package(hide-core) & kind(lib) & test(/^node_migration::upgrade_tests::/)'
+      - name: Ending an agent closes its pane, and a stuck shell is answered
+        # hide-core/src/coordination/end.rs (with-hide/hide-private#676): an
+        # end closes the agent's pane after saving its conversation to the
+        # state folder's archive, and takes it back when the close fails; a
+        # spawn whose new shell never finishes starting answers why and closes
+        # the tab it opened (with-hide/hide#2181).
+        if: ${{ !cancelled() && steps.tests.outcome == 'success' }}
+        timeout-minutes: 5
+        run: bash scripts/verify-cargo.sh nextest --profile ci $TEST_TARGETS -E 'package(hide-core) & kind(lib) & (test(/^runtime::tests::agent_end::/) | test(=runtime::tests::remote_spawn::a_spawn_whose_shell_never_finishes_starting_says_why_closes_its_tab_and_starts_again))'
+      - name: A device's agent versions reach the core
+        # A helper answers the hook diagnosis from its own account's program
+        # search, the same call on every system, and the core reads a pane on
+        # a device by the version that device reported, so a letter held on a
+        # possible draft there is released by a composer read like one on the
+        # core's own machine (with-hide/hide-private#654).
+        if: ${{ !cancelled() && steps.tests.outcome == 'success' }}
+        timeout-minutes: 5
+        run: |
+          bash scripts/verify-cargo.sh nextest --profile ci $TEST_TARGETS -E 'package(hide-host) & kind(lib) & test(=serve::tests::a_hook_diagnosis_answers_for_the_account_the_helper_runs_as)'
+          bash scripts/verify-cargo.sh nextest --profile ci $TEST_TARGETS -E 'package(hide-core) & kind(lib) & (test(=runtime::delivery::tests::a_device_pane_is_read_by_the_version_its_own_machine_reported) | test(=runtime::delivery::tests::a_device_s_agent_versions_go_with_the_device))'
       - name: Agent sleep ends the agent's process tree
         # Claude Code, Codex and Antigravity sleep (and Reopen) by ending the
         # pane's foreground job through the node, which Windows refused as
@@ -476,7 +735,18 @@ jobs:
         # pressed again only on what the agent shows (with-hide/hide-private#37).
         if: ${{ !cancelled() && steps.tests.outcome == 'success' }}
         timeout-minutes: 5
-        run: bash scripts/verify-cargo.sh nextest --profile ci $TEST_TARGETS -E 'package(herdr-core) & kind(lib) & (test(=agent_sleep_herdr::tests::an_agent_that_does_not_quit_on_its_keys_is_ended_with_what_it_started) | test(=agent_sleep_herdr::tests::an_agent_that_asks_for_its_quit_key_again_gets_a_second_press) | test(=agent_sleep_herdr::tests::an_agent_quitting_on_its_first_press_is_sent_no_second_one) | test(=agent_sleep_herdr::tests::a_press_that_clears_a_draft_is_followed_by_the_quit))'
+        run: bash scripts/verify-cargo.sh nextest --profile ci $TEST_TARGETS -E 'package(hide-core) & kind(lib) & (test(=agent_sleep_engine::tests::an_agent_that_does_not_quit_on_its_keys_is_ended_with_what_it_started) | test(=agent_sleep_engine::tests::an_agent_that_asks_for_its_quit_key_again_gets_a_second_press) | test(=agent_sleep_engine::tests::an_agent_quitting_on_its_first_press_is_sent_no_second_one) | test(=agent_sleep_engine::tests::a_press_that_clears_a_draft_is_followed_by_the_quit))'
+      - name: A letter wakes a sleeping agent through a refused wake
+        # A Windows device's Claude asleep off screen was never woken by a
+        # letter: its node could not hold the resume line for a pane no
+        # screen attached (`pane_input_cancelled`, fixed by attaching it for
+        # the input, the hide-node lib tests above), and the refused wake
+        # failed its letter at once. A wake that typed nothing is asked again,
+        # three wakes in all, before its letter fails and its sender is told
+        # (with-hide/hide-private#660, #675).
+        if: ${{ !cancelled() && steps.tests.outcome == 'success' }}
+        timeout-minutes: 5
+        run: bash scripts/verify-cargo.sh nextest --profile ci $TEST_TARGETS -E 'package(hide-core) & kind(lib) & (test(/^runtime::tests::mission_worker_sleep::a_letter_wake_/) | test(=agent_sleep_engine::tests::a_wake_whose_renewal_left_no_known_holder_fails_and_types_nothing) | test(=agent_sleep_engine::tests::only_a_refusal_that_passes_on_its_own_lets_a_wake_be_asked_again))'
       - name: Public repository read deadline
         # Execute the delayed native Git fixture, including Windows child
         # cleanup; compiling the public-boundary regression is not proof.
@@ -500,7 +770,7 @@ jobs:
         timeout-minutes: 5
         run: |
           bash scripts/verify-cargo.sh nextest --profile ci $TEST_TARGETS -E 'binary_id(hide-host::it) & test(/^branch_merge::.*(catch|upstream)/)'
-          bash scripts/verify-cargo.sh nextest --profile ci $TEST_TARGETS -E 'package(herdr-core) & kind(lib) & test(/worktree_control::tests::a_(new_branch_starts|local_base_with_unpushed)/)'
+          bash scripts/verify-cargo.sh nextest --profile ci $TEST_TARGETS -E 'package(hide-core) & kind(lib) & test(/worktree_control::tests::a_(new_branch_starts|local_base_with_unpushed)/)'
       - name: Agent folders from the one resolver and the callers that judge an override
         # hide_agent_adapter::AgentAdapter::home on Windows path forms (drive,
         # UNC and verbatim paths moving the folder; drive-relative and
@@ -509,57 +779,33 @@ jobs:
         # whatever the step above answered.
         if: ${{ !cancelled() && steps.tests.outcome == 'success' }}
         timeout-minutes: 10
-        run: bash scripts/verify-cargo.sh nextest --profile ci $TEST_TARGETS -E '(package(hide-agent-adapter) & kind(lib) & test(/^home::/)) | (package(herdr-core) & kind(lib) & test(/^environment::/)) | (package(hide-desk) & kind(lib) & test(/^codex::/))'
-      - name: Install kit and its Windows command shim
+        run: bash scripts/verify-cargo.sh nextest --profile ci $TEST_TARGETS -E '(package(hide-agent-adapter) & kind(lib) & test(/^home::/)) | (package(hide-core) & kind(lib) & test(/^environment::/)) | (package(hide-desk) & kind(lib) & test(/^codex::/))'
+      - name: Install kit, its Windows command shim and its pieces in profile accounts
+        # hide-kit/src/tests/profile_cases.rs runs here too: a profile
+        # account's folder made private, its hook, skills and trust put in
+        # and taken out, and a link in it followed nowhere outside it.
         if: ${{ !cancelled() && steps.tests.outcome == 'success' }}
         timeout-minutes: 10
         run: bash scripts/verify-cargo.sh nextest --profile ci $TEST_TARGETS -E 'package(hide-kit)'
       - name: Agent hooks, their Windows entries run through PowerShell
         # The hook file writer, the entries Claude Code, Codex, Grok and
         # Cursor run on Windows, OpenCode's plugin and Pi's and omp's
-        # extension run in Node, and the helper's stdin deadline. It stands
-        # on its own, so it runs whatever the step above answered.
+        # extension run in Node, the helper's stdin deadline, and how a
+        # PowerShell or POSIX call is read (`hide-shell`). It stands on its
+        # own, so it runs whatever the step above answered.
         if: ${{ !cancelled() && steps.tests.outcome == 'success' }}
         timeout-minutes: 15
-        run: bash scripts/verify-cargo.sh nextest --profile ci $TEST_TARGETS -E 'package(hide-agent-hooks) & (kind(lib) | kind(bin) | test(/^(hook_deadline|windows_hook_command|windows_scripts)::/))'
-      - name: Fetch the pinned Herdr runtime
-        id: herdr
-        # The proof below stands on its own, so it runs whatever the step
-        # above answered.
-        if: ${{ !cancelled() }}
-        # Assigned first, so a failed fetch fails this step rather than
-        # handing the next one an empty path.
-        run: |
-          bin=$(pwsh -NoProfile -File scripts/fetch-herdr-runtime.ps1 | tr -d '\r')
-          echo "bin=$bin" >> "$GITHUB_OUTPUT"
-      - name: Build the pane holder and fetch its pinned ConPTY runtime
-        # For the core's own engine below: its panes run in holders started
-        # from this build, on the ConPTY runtime contracts/conpty.json pins.
-        id: holder
+        run: bash scripts/verify-cargo.sh nextest --profile ci $TEST_TARGETS -E '(package(hide-agent-hooks) & (kind(lib) | kind(bin) | test(/^(hook_deadline|windows_hook_command|windows_scripts)::/))) | (package(hide-shell) & kind(lib))'
+      - name: The core's own engine in Windows PowerShell
+        # hide-core/src/engine/contract.rs: the core's own engine over pane
+        # holders meets the engine contract in Windows PowerShell.
         if: ${{ !cancelled() && steps.tests.outcome == 'success' }}
-        timeout-minutes: 15
+        timeout-minutes: 25
         run: |
-          bash scripts/verify-cargo.sh build -p hide-holder --bin hide-holder
-          python scripts/fetch-conpty.py --out "$RUNNER_TEMP/holder-conpty"
-      - name: Agent start in Windows PowerShell on the pinned Herdr
-        # herdr-core/src/agent_start/real_herdr_tests.rs: a Windows
-        # PowerShell tab Hide starts with its integration, whose profile
-        # asks a question no start may answer; engine/contract.rs: the
-        # pinned Herdr, and the core's own engine over pane holders, meet the
-        # engine contract in Windows PowerShell.
-        if: ${{ !cancelled() && steps.tests.outcome == 'success' && steps.herdr.outcome == 'success' && steps.holder.outcome == 'success' }}
-        timeout-minutes: 10
-        env:
-          HIDE_E2E_HERDR_BIN: ${{ steps.herdr.outputs.bin }}
-          HIDE_TEST_HOLDER_BIN: ${{ github.workspace }}\target\debug\hide-holder.exe
-          HIDE_HOLDER_CONPTY: ${{ runner.temp }}\holder-conpty
-        run: bash scripts/verify-cargo.sh nextest --profile ci $TEST_TARGETS -E 'package(herdr-core) & kind(lib) & (test(/^agent_start::real_herdr_tests::/) | test(/^engine::contract::/))' --run-ignored only --no-capture
-      - name: hided against the pinned Herdr
-        if: ${{ !cancelled() && steps.tests.outcome == 'success' && steps.herdr.outcome == 'success' }}
-        timeout-minutes: 10
-        env:
-          HIDE_E2E_HERDR_BIN: ${{ steps.herdr.outputs.bin }}
-        run: bash scripts/verify-cargo.sh nextest --profile ci $TEST_TARGETS -E 'binary_id(hided::it) & test(/^real_herdr::/)' --run-ignored only --no-capture
+          # The holder and its pinned ConPTY runtime, in the one script the
+          # repeat lane calls too (docs/TESTING.md, "The repeat lane").
+          . scripts/prepare-ignored-tests.sh
+          bash scripts/verify-cargo.sh nextest --profile ci $TEST_TARGETS -E 'package(hide-core) & kind(lib) & test(/^engine::contract::/)' --run-ignored only --no-capture
       - name: Windows' own OpenSSH asks through Hide's askpass
         # hided/tests/it/system_ssh.rs (PRD system-ssh-device-link, B34): the
         # inbox ssh-keygen.exe reads a key's passphrase through `hide` as its
@@ -568,13 +814,13 @@ jobs:
         timeout-minutes: 5
         run: bash scripts/verify-cargo.sh nextest --profile ci $TEST_TARGETS -E 'binary_id(hided::it) & test(=system_ssh::windows_inbox_openssh_asks_through_hides_askpass)' --run-ignored only --no-capture
       - name: A core's stop and a device's removal end a dial through Windows' own ssh
-        # herdr-core/src/handle.rs (with-hide/hide-private#75): ssh.exe dials a
+        # hide-core/src/handle.rs (with-hide/hide-private#75): ssh.exe dials a
         # loopback listener that never sends the SSH greeting, and the core
         # ends that ssh, which a job object owns on Windows, when it stops or
         # the device is removed.
         if: ${{ !cancelled() && steps.tests.outcome == 'success' }}
         timeout-minutes: 5
-        run: bash scripts/verify-cargo.sh nextest --profile ci $TEST_TARGETS -E 'package(herdr-core) & kind(lib) & (test(=handle::tests::a_stopping_core_ends_a_dial_to_a_device_that_never_greets) | test(=handle::tests::removing_a_device_ends_its_dial_that_waits_for_a_greeting))' --no-capture
+        run: bash scripts/verify-cargo.sh nextest --profile ci $TEST_TARGETS -E 'package(hide-core) & kind(lib) & (test(=handle::tests::a_stopping_core_ends_a_dial_to_a_device_that_never_greets) | test(=handle::tests::removing_a_device_ends_its_dial_that_waits_for_a_greeting))' --no-capture
       - name: Attribute a native listening port to its working directory
         # Cleanup must refuse an unreadable in-use check. This unchanged core
         # contract exposes the native read reason that a browser error lacks.
@@ -582,8 +828,8 @@ jobs:
         timeout-minutes: 5
         run: |
           status=0
-          bash scripts/verify-cargo.sh nextest --profile ci $TEST_TARGETS -E 'package(herdr-core) & kind(lib) & test(=ports::tests::a_real_listener_is_found_and_attributed_to_the_directory_it_runs_in)' --no-capture || status=$?
-          bash scripts/verify-cargo.sh nextest --profile ci $TEST_TARGETS -E 'package(herdr-core) & kind(lib) & test(=ports::tests::cleanup_keeps_a_checkout_in_use_when_a_listener_starts_through_another_spelling)' --no-capture || status=$?
+          bash scripts/verify-cargo.sh nextest --profile ci $TEST_TARGETS -E 'package(hide-core) & kind(lib) & test(=ports::tests::a_real_listener_is_found_and_attributed_to_the_directory_it_runs_in)' --no-capture || status=$?
+          bash scripts/verify-cargo.sh nextest --profile ci $TEST_TARGETS -E 'package(hide-core) & kind(lib) & test(=ports::tests::cleanup_keeps_a_checkout_in_use_when_a_listener_starts_through_another_spelling)' --no-capture || status=$?
           exit "$status"
       - uses: pnpm/action-setup@v6
         if: ${{ !cancelled() }}
@@ -599,6 +845,10 @@ jobs:
         id: web-deps
         if: ${{ !cancelled() }}
         run: bash scripts/verify-web.sh install --ignore-scripts
+      # The relay WebAssembly's binding tool, which the web scripts build with.
+      - uses: ./.github/actions/relay-tools
+        with:
+          save: false
       - name: Web shell unit suite
         if: ${{ !cancelled() && steps.web-deps.outcome == 'success' }}
         timeout-minutes: 10
@@ -610,8 +860,8 @@ jobs:
         timeout-minutes: 10
         run: bash scripts/verify-web.sh desktop test
       - name: Mint the development issues token
-        # Development issues live in with-hide/hide-private (docs/TESTING.md,
-        # Flaky tests); one App token reads this run here and files there. A run
+        # Development issues live in this repository (docs/TESTING.md,
+        # Flaky tests); the App's token reads this run and files them. A run
         # without the App's key, such as a fork's, files nothing and stays green.
         id: issues-token
         if: ${{ !cancelled() }}
@@ -622,7 +872,7 @@ jobs:
           client-id: ${{ vars.HIDE_ISSUES_APP_CLIENT_ID }}
           private-key: ${{ secrets.HIDE_ISSUES_APP_KEY }}
           owner: with-hide
-          repositories: hide,hide-private
+          repositories: hide
       - name: Report flaky and failed tests
         if: ${{ !cancelled() }}
         continue-on-error: true
@@ -632,10 +882,18 @@ jobs:
         run: python3 scripts/ci-flaky-report.py --suite rust --junit target/nextest/ci/junit*.xml
 
   # The browser `@platform` tests on Windows, the same set the macOS lane
-  # runs, against hided and the pinned Herdr for Windows, and once more on
-  # the core's own engine over the Windows pane holder (PRD
-  # engine-bundle-3-core-owns D-14: the same tests on both engines on every
-  # system).
+  # runs, against hided and the Windows pane holder. It runs in three shards,
+  # dealt from the Windows suite's own durations
+  # (`web/e2e/shard-durations-windows.json`): one job held all 88 tests, ran
+  # 13.8 minutes of them, and took 22.4 minutes at the median of 65 successful
+  # jobs, the longest job of a run.
+  # A shard waits on the daemon and shell builds before its own setup, and
+  # those fixed costs (288 s of build, 114 s of setup at the median) do not
+  # shrink with the count, so the lane is sized by when it finishes: two
+  # shards plan 383 s each and finish near 785 s, over the 720 s the lane
+  # targets, while three plan 255 s and finish near 657 s. Three is the
+  # fewest that does, and `scripts/tests/test_e2e_shard.py` holds the count to
+  # that measurement.
   windows-e2e:
     name: windows e2e
     needs: plan
@@ -648,14 +906,13 @@ jobs:
     with:
       lane: windows
       runner: windows-latest
-      herdr-platform: windows-x86_64
-      own-engine: true
-      shards: 1
+      shards: 3
       grep: "@platform"
+      table: web/e2e/shard-durations-windows.json
 
   # The web shell is the same code on every operating system, so the whole
   # suite runs once, on Linux, where runners are plentiful. What differs by
-  # system is the daemon and Herdr under it, and the `@platform` tests cover
+  # system is the daemon and the pane holders under it, and the `@platform` tests cover
   # that: they run in this suite on Linux, in `windows-e2e` on Windows and in
   # `nightly.yml` on macOS.
   web-e2e:
@@ -670,10 +927,6 @@ jobs:
     with:
       lane: linux
       runner: ubuntu-latest
-      herdr-platform: linux-x86_64
-      # Every test not tagged `@herdr` once more on the core's own engine, over
-      # as many shards again (PRD engine-bundle-3-core-owns D-14, D-24).
-      own-engine: true
       # Median per test from twenty successful main runs, 2026-10-26..28:
       # 385 Linux tests total 3851.3 s; five shards plan at most 770.3 s,
       # six at most 641.9 s. Six is the smallest count within 720 s.
@@ -703,7 +956,44 @@ jobs:
       contents: read
     with:
       runner: ubuntu-latest
-      herdr-platform: linux-x86_64
+
+  # The same lane on a Linux arm64 runner (with-hide/hide-private#501): a
+  # device whose kit a core of another platform takes from its release
+  # (`contracts/device-kits.json`) is often an arm64 Linux machine, and the
+  # core's own build connects to it here over the system ssh and runs its
+  # panes in its holders. Nothing on this runner's processor is cached, so it
+  # builds cold. It is planned for the device link's own crates, its device
+  # test and the contract (`ARM_DEVICE_CRATES` in scripts/ci-plan.py).
+  remote-mailbox-arm:
+    name: remote mailbox arm64
+    needs: plan
+    if: contains(fromJSON(needs.plan.outputs.lanes), 'remote-mailbox-arm')
+    uses: ./.github/workflows/remote-mailbox.yml
+    secrets:
+      HIDE_ISSUES_APP_KEY: ${{ secrets.HIDE_ISSUES_APP_KEY }}
+    permissions:
+      contents: read
+    with:
+      runner: ubuntu-24.04-arm
+
+  # Every test the pull request adds or changes, run many times with no retry
+  # (`repeat.yml`, docs/TESTING.md, "Flaky tests"): a new test that fails one
+  # run in ten passes its own pull request nine times in ten, and a failed run
+  # here fails `verify`. The plan names the tests (`scripts/ci-repeat.py`); on
+  # Linux, the web specs through `web-e2e.yml`, the packages' unit test files
+  # under Vitest, and the Rust modules under nextest. A hand run of
+  # `repeat.yml` is the way to another system.
+  repeat:
+    name: repeat changed tests
+    needs: plan
+    if: contains(fromJSON(needs.plan.outputs.lanes), 'repeat')
+    uses: ./.github/workflows/repeat.yml
+    permissions:
+      contents: read
+    with:
+      web: ${{ needs.plan.outputs.repeat-web }}
+      units: ${{ needs.plan.outputs.repeat-units }}
+      rust: ${{ needs.plan.outputs.repeat-rust }}
 
   # The OS contract's Linux and Windows legs (see os-contract.yml), for any
   # change to what differs by system.
@@ -835,7 +1125,6 @@ jobs:
     with:
       lane: macos
       runner: macos-15
-      herdr-platform: macos-aarch64
       # Two shards: the suite is about 17 minutes of tests (1008 s recorded,
       # 2026-10-17) and one job ran it in 1048 to 1166 s of its 20-minute
       # step cap. Two plan about 504 s each, under half the cap, for one more
@@ -861,7 +1150,6 @@ jobs:
     with:
       lane: windows
       runner: windows-latest
-      herdr-platform: windows-x86_64
       shards: 1
       grep: "@platform"
       keep-screenshots: true
@@ -898,6 +1186,64 @@ jobs:
       # and the nightly build what ships and save the release dependency set.
       quick-build: ${{ github.event_name == 'pull_request' }}
 
+  # A merge queue group's Rust check: formatting and Clippy over the whole
+  # workspace, without the tests the `rust` lane runs. It reads the workspace
+  # dependency set main's `rust` lane saves and saves nothing.
+  merge-rust:
+    name: merge check rust
+    needs: plan
+    if: contains(fromJSON(needs.plan.outputs.lanes), 'merge-rust')
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v7
+      - uses: ./.github/actions/rust-cache
+        with:
+          set: workspace
+          save: false
+      - uses: ./.github/actions/vt-cache
+        with:
+          save: false
+      - name: Check formatting and lint the workspace
+        run: bash scripts/verify-cargo.sh lint
+
+  # A merge queue group's web check: the web and desktop typecheck and the e2e
+  # test size budgets, without the lint, unit tests and build `checks` runs.
+  merge-web:
+    name: merge check web
+    needs: plan
+    if: contains(fromJSON(needs.plan.outputs.lanes), 'merge-web')
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v7
+      - uses: pnpm/action-setup@v6
+        with:
+          version: 10
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+          cache-dependency-path: pnpm-lock.yaml
+      # The relay WebAssembly's binding tool, which the web scripts build with.
+      - uses: ./.github/actions/relay-tools
+        with:
+          save: false
+      - name: Install dependencies
+        run: bash scripts/verify-web.sh install
+      - name: Web shell and desktop app typecheck
+        run: |
+          bash scripts/verify-web.sh web typecheck
+          bash scripts/verify-web.sh desktop typecheck
+      # Each package runs the web package's script from its own folder, where
+      # it resolves TypeScript, as its `lint` script does.
+      - name: Web end-to-end test size budget
+        working-directory: web
+        run: node ../web/scripts/check-e2e-test-size.mjs e2e
+      - name: Desktop end-to-end test size budget
+        working-directory: desktop
+        run: node ../web/scripts/check-e2e-test-size.mjs e2e
+
   relay-protocol:
     needs: plan
     if: contains(fromJSON(needs.plan.outputs.lanes), 'relay-protocol')
@@ -911,7 +1257,7 @@ jobs:
     permissions:
       contents: read
       actions: read
-    needs: [plan, policy, rust, checks, relay-protocol, os-contract, os-contract-macos, vt, holder-restart, agy-contract, omp-contract, agent-journey, agent-clis, windows-check, windows-e2e, windows-desktop, windows-wsl, web-e2e, remote-mailbox, desktop-e2e, package]
+    needs: [plan, policy, rust, checks, android, docs, relay-protocol, os-contract, os-contract-macos, vt, holder-restart, agy-contract, omp-contract, agent-journey, agent-clis, windows-check, windows-e2e, windows-desktop, windows-wsl, web-e2e, remote-mailbox, remote-mailbox-arm, repeat, desktop-e2e, package, merge-rust, merge-web]
     if: always()
     runs-on: ubuntu-latest
     timeout-minutes: 5
@@ -920,6 +1266,8 @@ jobs:
         with:
           sparse-checkout: |
             scripts/ci-plan.py
+            scripts/ci-repeat.py
+            scripts/rust_scan.py
             scripts/ci-flaky-report.py
           sparse-checkout-cone-mode: false
       - name: Every planned lane succeeded and every other lane was skipped
@@ -930,8 +1278,8 @@ jobs:
           NEEDS: ${{ toJSON(needs) }}
         run: python3 scripts/ci-plan.py aggregate
       - name: Mint the development issues token
-        # Development issues live in with-hide/hide-private (docs/TESTING.md,
-        # Flaky tests); one App token reads this run here and files there. A run
+        # Development issues live in this repository (docs/TESTING.md,
+        # Flaky tests); the App's token reads this run and files them. A run
         # without the App's key, such as a fork's, files nothing and stays green.
         id: issues-token
         if: ${{ !cancelled() }}
@@ -942,7 +1290,7 @@ jobs:
           client-id: ${{ vars.HIDE_ISSUES_APP_CLIENT_ID }}
           private-key: ${{ secrets.HIDE_ISSUES_APP_KEY }}
           owner: with-hide
-          repositories: hide,hide-private
+          repositories: hide
       - name: Connect test failures and passes across job reruns
         if: ${{ !cancelled() }}
         continue-on-error: true

@@ -11,7 +11,7 @@ import { focusPane, viewPane, withControl } from "./daemon-actions";
 import { startFixture } from "./engine-fixture";
 import { agentReading, setAgentState, spawnChild, spawnRoot } from "./fixture-agents";
 import { startHided, type Daemon } from "./hided-fixture";
-import { screenshot } from "./wire";
+import { openOtherCheckouts, screenshot } from "./wire";
 
 test.describe.configure({ timeout: 180_000 });
 
@@ -40,11 +40,11 @@ test("a worktree with only a delegated child draws no checkout line, and the roo
 
     const project = page.locator("[data-project]").filter({ has: page.locator("[data-project-row]", { hasText: /^fixture/ }) });
     const checkout = (branch: string) => project.locator(`[data-checkout][aria-label^="${branch}"]`);
+    // The operator's second worktree waits in the project's Checkouts fold; the child's has no line, in the fold or out of it.
+    await openOtherCheckouts(project);
     await expect(checkout("own")).toBeVisible({ timeout: 30_000 });
     await expect(project.locator(`[data-pane="${root}"]`).first()).toBeVisible();
     await expect(checkout("kid")).toHaveCount(0);
-    // Not moved into the agentless fold either: its agent is working.
-    await expect(project.getByRole("button", { name: /^Worktrees with no agents/ })).toHaveCount(0);
     await screenshot(page, "sidebar-root-only");
 
     // The way to the child is the root's tree.

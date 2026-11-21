@@ -6,6 +6,7 @@
 //! image is saved beside the transcript and named by its `file:` URI.
 
 use agent_client_protocol_schema::v1::ToolKind;
+use hide_agent_adapter::HookDialect;
 use serde_json::Value;
 
 use super::build::{Call, FileDiff, Origin, Outcome, Part, Thread};
@@ -77,7 +78,9 @@ fn tool_call(id: String, call: &Value) -> Call {
     let text = |key: &str| args[key].as_str().unwrap_or_default();
     let path = args["Path"].as_str().or(args["AbsolutePath"].as_str());
     let drawn = match name {
-        "run_command" => Call::new(id, name, ToolKind::Execute).title(text("CommandLine")),
+        "run_command" => Call::new(id, name, ToolKind::Execute)
+            .title(text("CommandLine"))
+            .shell(HookDialect::Antigravity),
         "read_file" | "view_file" => {
             Call::new(id, name, ToolKind::Read).title(format!("Read {}", path.unwrap_or_default()))
         }

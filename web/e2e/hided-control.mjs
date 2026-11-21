@@ -7,16 +7,27 @@
 // JavaScript so the measurement runs it with Node.
 import fs from "node:fs";
 import path from "node:path";
+import { stderr } from "node:process";
 import { clearTimeout, setTimeout } from "node:timers";
+
+// Names each connection this process opens, so a close that fails says which.
+let opened = 0;
+// How many of the latest event kinds a connection keeps to name in that failure.
+const NAMED_EVENTS = 16;
 
 /**
  * Opens the connection to the daemon at `origin` with its `token` and returns
  * once the daemon sent its first snapshot. `until` waits `ms` unless it names
- * its own bound.
+ * its own bound. `clientKind` names the connection as a window (`web`) for
+ * the events only an operator window sends; by default it names none.
  */
-export async function connectControl({ origin, token }, ms = 15_000, terminalEvidence) {
+export async function connectControl({ origin, token, clientKind }, ms = 15_000, terminalEvidence) {
   // The daemon accepts its own origin only; Node's WebSocket takes undici's headers.
   const ws = new globalThis.WebSocket(`${origin.replace(/^http/, "ws")}/ws`, { headers: { origin } });
+  const connection = `connection ${++opened} to ${origin}`;
+  // The kinds of the latest events sent, oldest first, and how many were sent in all.
+  const sentKinds = [];
+  let sentCount = 0;
   let rest = null;
   let closed = null;
   // Each `path_refused` frame the daemon answered, oldest first.
@@ -37,7 +48,7 @@ export async function connectControl({ origin, token }, ms = 15_000, terminalEvi
       reject(closed);
       failAll(closed);
     };
-    ws.onopen = () => ws.send(JSON.stringify({ token, schema_version: 2 }));
+    ws.onopen = () => ws.send(JSON.stringify({ token, schema_version: 2, ...(clientKind ? { client_kind: clientKind } : {}) }));
     ws.onmessage = (event) => {
       if (typeof event.data !== "string") return;
       const frame = JSON.parse(event.data);
@@ -60,6 +71,9 @@ export async function connectControl({ origin, token }, ms = 15_000, terminalEvi
     send: (kind, payload) => {
       if (closed) throw closed;
       ws.send(JSON.stringify({ schema_version: 2, kind, payload }));
+      sentCount += 1;
+      sentKinds.push(kind);
+      if (sentKinds.length > NAMED_EVENTS) sentKinds.shift();
     },
     until: (read, what, wait = ms) => new Promise((resolve, reject) => {
       if (closed) return reject(closed);
@@ -91,12 +105,59 @@ export async function connectControl({ origin, token }, ms = 15_000, terminalEvi
       waiters.add(waiter);
       settle();
     }),
+    // hided reads one connection's frames in order and applies each before it
+    // reads the next, and it closes the socket only once it has read the close
+    // that follows them. So the socket closing is the moment every event sent
+    // on it has been applied; returning before then let an event sent here
+    // reach the core after one sent next on another connection: a focus the
+    // fixture sent on a tab already shown, and so never waited for, landed
+    // after the next connection's focus and took the screen back without a
+    // record (with-hide/hide#2575).
     close: () => {
-      ws.onclose = null;
       failAll(new Error("the connection was closed"));
+      if (closed) return Promise.resolve();
+      const ended = new Promise((resolve, reject) => {
+        const timer = setTimeout(() => {
+          const earlier = sentCount - sentKinds.length;
+          const unapplied = sentCount === 0
+            ? "no events were sent on it"
+            : `the ${sentCount === 1 ? "event" : `${sentCount} events`} sent on it may not have been applied: ${earlier > 0 ? `${earlier} earlier, then ` : ""}${sentKinds.join(", ")}`;
+          reject(new Error(`the daemon did not close ${connection} within ${ms} ms; ${unapplied}`));
+        }, ms);
+        ws.onclose = () => {
+          clearTimeout(timer);
+          closed = new Error(`the connection to ${origin} closed`);
+          resolve();
+        };
+      });
+      // A teardown that ends the daemon next does not wait, and its close
+      // must not surface later as an unhandled rejection; a caller that
+      // waits still gets the failure.
+      ended.catch(() => undefined);
       ws.close();
+      return ended;
     },
   };
+}
+
+/**
+ * Runs `use` with `control` and then closes it, waiting until the daemon has
+ * applied everything `use` sent (`close`), so the next step's connection
+ * cannot overtake it. A failure of `use` stays the error; a close that fails
+ * after it is reported beside it, and one that fails alone is the error.
+ */
+export async function useControl(control, use) {
+  let result;
+  try {
+    result = await use(control);
+  } catch (error) {
+    await control.close().catch((closing) => {
+      stderr.write(`closing the daemon connection after a failed step also failed: ${closing instanceof Error ? closing.message : String(closing)}\n`);
+    });
+    throw error;
+  }
+  await control.close();
+  return result;
 }
 
 /** `connectControl` for the daemon whose state folder is `stateDir`, as its `hided.json` names it. */

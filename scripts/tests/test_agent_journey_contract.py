@@ -69,12 +69,6 @@ class Guides:
                         if cell.startswith("Letters to an agent while it works")} | set(systems)
 
 
-def integration_targets():
-    """The agents the pinned Herdr ships an integration for (`herdr integration install <target>`)."""
-    schema = json.loads((ROOT / "contracts/herdr-api.schema.json").read_text())
-    return set(schema["schemas"]["request"]["$defs"]["IntegrationTarget"]["enum"])
-
-
 def watched(home):
     """Whether the local keyless journey's operator watch sees the agent's folder in the operator's HOME."""
     folder = "/".join(home)
@@ -87,10 +81,10 @@ class Registration(unittest.TestCase):
         """One verdict per agent that names every piece it still lacks, each
         with the line of docs/agent-hooks.md, Adding an agent, that adds it."""
         labels = {row["id"]: row["label"] for row in json.loads((ROOT / "contracts/agent-adapters.json").read_text())}
-        guides, pins, targets = Guides(), clis.table(), integration_targets()
+        guides, pins = Guides(), clis.table()
         missing = {}
         for row in active_rows(load_contract(ROOT)):
-            kind, label, minimum = row["herdr_kind"], labels[row["id"]], row["minimum_version"]
+            kind, label, minimum = row["agent_cli"], labels[row["id"]], row["minimum_version"]
             pin = pins.get(kind)
             checks = [
                 (kind in local.ROUTES, "a local isolation route in scripts/agent_journey/local.py (ROUTES)"),
@@ -99,8 +93,6 @@ class Registration(unittest.TestCase):
                 (pin is not None, "a CLI pin in contracts/agent-clis.json"),
                 (pin is None or version(pin["version"]) >= version(minimum),
                  f"a CLI pin at or above its minimum {minimum} in contracts/agent-clis.json"),
-                (row["herdr_source"].removeprefix("herdr:") in targets,
-                 "a Herdr integration target the pinned Herdr lists (contracts/herdr-api.schema.json)"),
                 (watched(row["home_folder"]),
                  f"its folder {'/'.join(row['home_folder'])} in the operator watch of "
                  "scripts/agent_journey/fake_private.py (WATCH or CONFIGURATION)"),
@@ -126,7 +118,7 @@ class Registration(unittest.TestCase):
                                                        for agent, pieces in missing.items()))
 
     def test_the_installed_cli_set_matches_the_registered_agents(self):
-        self.assertEqual(set(clis.table()), {row["herdr_kind"] for row in active_rows(load_contract(ROOT))})
+        self.assertEqual(set(clis.table()), {row["agent_cli"] for row in active_rows(load_contract(ROOT))})
 
 
 class GeneratedContract(unittest.TestCase):

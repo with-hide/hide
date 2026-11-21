@@ -1,0 +1,1175 @@
+//! The runtime half of a node's finish lines (PRD mission-map-git-criteria
+//! D-12, D-13, D-16, D-21, D-23): who may record which line, the commit a
+//! check command is compared with, the gate on a node's done and on a
+//! mission's close, and the CI GitHub reports for a node's pull request.
+//!
+//! Everything here runs under the lock and reads only what the core holds:
+//! the ledger's registrations, the catalog's checkouts and the last GitHub
+//! answer. Nothing asks a machine or GitHub.
+
+use serde_json::{Value, json};
+
+use super::Runtime;
+use crate::delivery::Actor;
+use crate::mission_criteria::{CheckKind, CriterionKind, Recorded, Role};
+use crate::mission_events::{EventKind, MissionEvent};
+use crate::missions::{
+    DECIDED_LIMIT, Decided, Mission, MissionEnd, MissionNode, MissionStatus, NodeKind, NodePatch,
+    NodeStatus,
+};
+use crate::model::{
+    CheckoutSnapshot, CiEnd, GithubProjectSnapshot, PullRequestBadge, PullRequestSnapshot,
+};
+
+/// How an agent takes part in a mission (`Runtime::part_in`).
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(super) enum Part {
+    Conductor,
+    Worker,
+    Checker,
+}
+
+type Records<'a> = std::collections::HashMap<&'a str, &'a crate::coordination::AgentRecord>;
+
+/// The agent a mission command came from, with what the command reads of
+/// the ledger's retained agents, read in one pass for the whole command:
+/// the caller's own registrations,
+/// ended ones too, and those of every worker and checker the book names,
+/// which the command's answer draws (`Runtime::mission_view_for`).
+pub(super) struct Caller<'a> {
+    pub actor: &'a Actor,
+    pub ledger: Option<&'a crate::delivery::ledger::Ledger>,
+    registrations: Vec<&'a str>,
+    named: Records<'a>,
+}
+
+impl<'a> Caller<'a> {
+    pub(super) fn of(
+        actor: &'a Actor,
+        ledger: Option<&'a crate::delivery::ledger::Ledger>,
+        missions: &[Mission],
+    ) -> Self {
+        let wanted = super::missions::named_agents(missions.iter());
+        let mut registrations = Vec::new();
+        let mut named = Records::new();
+        for record in ledger.into_iter().flat_map(|ledger| &ledger.agents) {
+            if record.actor.same_identity(actor) {
+                registrations.push(record.id.as_str());
+            }
+            if wanted.contains(record.id.as_str()) {
+                named.insert(record.id.as_str(), record);
+            }
+        }
+        Self {
+            actor,
+            ledger,
+            registrations,
+            named,
+        }
+    }
+
+    /// Whether registration `id` is the caller's.
+    pub(super) fn owns(&self, id: Option<&str>) -> bool {
+        id.is_some_and(|id| self.registrations.contains(&id))
+    }
+
+    /// The registrations of `mission`'s workers and checkers, from those
+    /// read with the caller's.
+    pub(super) fn records_of(&self, mission: &Mission) -> Records<'a> {
+        super::missions::named_agents(std::iter::once(mission))
+            .into_iter()
+            .filter_map(|id| {
+                self.named
+                    .get_key_value(id)
+                    .map(|(id, record)| (*id, *record))
+            })
+            .collect()
+    }
+}
+
+const NOT_YOURS: &str = "mission_criterion_not_yours";
+
+/// Why `caller` may not record line `key` of `node` in `missions`, logged
+/// with what the judgment read (with-hide/hide#2433). The Conductor answers
+/// by its identity, not a registration, so it is told the line is not its
+/// own. Anyone else is judged by registrations: with no ledger to read them
+/// from, the refusal is `ledger_unavailable`, never "not yours"; a caller
+/// with no registration of its pane's session at all learns which of the
+/// ways it has none (`coordination::here`); one with a registration that is
+/// not the line's owner learns that the line is not its own.
+fn record_refused(
+    caller: &Caller<'_>,
+    missions: &[&Mission],
+    node: &str,
+    key: &str,
+    now: u64,
+) -> String {
+    let conductor = missions
+        .iter()
+        .any(|mission| mission.conductor.actor.same_identity(caller.actor));
+    let reason = match caller.ledger {
+        _ if conductor => NOT_YOURS,
+        None => "ledger_unavailable",
+        Some(ledger) => match crate::coordination::here(ledger, caller.actor, now) {
+            Err(reason) if caller.registrations.is_empty() => reason,
+            _ => NOT_YOURS,
+        },
+    };
+    log_record_refused(reason, caller, missions, node, key);
+    reason.into()
+}
+
+/// One diagnostic line for a refused record: the mission, node and line,
+/// the caller's pane, its session's digest and registrations, the live
+/// registrations on its pane whatever their session (none without a
+/// ledger), and the agents bound to that line in each mission that holds
+/// it. With the session digest and the pane's registrations side by side,
+/// the line tells whether the pane's observed session or its registration
+/// moved. Ids and digests only, never the evidence or summary.
+fn log_record_refused(
+    reason: &str,
+    caller: &Caller<'_>,
+    missions: &[&Mission],
+    node: &str,
+    key: &str,
+) {
+    let bound: Vec<Value> = missions
+        .iter()
+        .map(|mission| {
+            let row = mission.node(node);
+            let checkers: Vec<Option<&str>> = row
+                .and_then(|row| row.criteria.iter().find(|line| line.key == key))
+                .into_iter()
+                .flat_map(|line| &line.checkers)
+                .map(|checker| checker.agent_id.as_deref())
+                .collect();
+            json!({
+                "mission": mission.id,
+                "worker": row.and_then(|row| row.agent_id.as_deref()),
+                "checkers": checkers,
+            })
+        })
+        .collect();
+    let on_pane: Option<Vec<&str>> = caller.ledger.map(|ledger| {
+        ledger
+            .agents
+            .iter()
+            .filter(|record| {
+                !record.ended
+                    && record.actor.pane_id == caller.actor.pane_id
+                    && record.actor.device_id == caller.actor.device_id
+            })
+            .map(|record| record.id.as_str())
+            .collect()
+    });
+    crate::diagnostic!(json!({
+        "component": "missions", "kind": "mission.record_refused",
+        "reason": reason, "node": node, "line": key,
+        "pane": caller.actor.pane_id, "device": caller.actor.device_id,
+        "session": caller.actor.session, "registrations": caller.registrations,
+        "pane_registrations": on_pane, "bound": bound,
+    }));
+}
+
+/// Whether `pull` is merged, so its head is the work that reached main.
+fn merged(pull: &PullRequestSnapshot) -> bool {
+    pull.badge == PullRequestBadge::Merged
+}
+
+impl Runtime {
+    /// The pull request list of the mission's project as the last GitHub
+    /// read that was not stale has it.
+    pub(super) fn mission_pulls(&self, mission: &Mission) -> Option<&GithubProjectSnapshot> {
+        self.github_project_on(&mission.device_id, &mission.project)
+            .filter(|project| project.pulls_current())
+    }
+
+    /// The commit the node's work folder is on now (B7, D-16): the head the
+    /// catalog reads for the checkout its check command ran in, whoever
+    /// works the node now, or, once its pull request is merged, that pull
+    /// request's head, which is the work that reached main. None when Hide
+    /// cannot read it, its machine not answering included, and then no
+    /// check passes.
+    fn node_head(
+        &self,
+        mission: &Mission,
+        node: &MissionNode,
+        pulls: Option<&GithubProjectSnapshot>,
+    ) -> Option<String> {
+        if let Some(pull) = node.current_pr().and_then(|number| pull_in(pulls, number))
+            && merged(pull)
+        {
+            return pull.head_oid.clone();
+        }
+        // A finished node without a pull request is judged against the
+        // commit it finished on, not a folder that moves on after it.
+        if node.status == NodeStatus::Done
+            && node.current_pr().is_none()
+            && let Some(frozen) = &node.done_head
+        {
+            return Some(frozen.clone());
+        }
+        let (device, folder) = node.check_folder(&mission.device_id)?;
+        // A machine that does not answer shows its last session, whose head
+        // may be long gone: nothing passes on it until it answers again.
+        if !self.device_answers(device) {
+            return None;
+        }
+        self.catalog_workspaces()
+            .filter(|workspace| workspace.device_id == device)
+            .flat_map(|workspace| &workspace.checkouts)
+            .find(|checkout| checkout.path == folder)
+            .and_then(|checkout| checkout.head_sha().map(str::to_owned))
+    }
+
+    /// Freezes the commit a done node without a pull request finished on
+    /// (`MissionNode::done_head`), read from its work folder now: the gate
+    /// that let it be done judged that same head. None where Hide cannot
+    /// read it, and then nothing was met on it.
+    fn freeze_done_head(&self, mission: &Mission, node: &mut MissionNode) {
+        node.done_head = None;
+        if node.status == NodeStatus::Done && node.current_pr().is_none() {
+            node.done_head = self.node_head(mission, node, None);
+        }
+    }
+
+    /// The checkout whose tabs hold `pane` on `machine`.
+    fn pane_checkout(&self, machine: &str, pane: &str) -> Option<&CheckoutSnapshot> {
+        self.catalog_workspaces()
+            .filter(|workspace| workspace.device_id == machine)
+            .flat_map(|workspace| &workspace.checkouts)
+            .find(|checkout| {
+                checkout.tabs.iter().any(|tab| {
+                    tab.panes.iter().any(|row| {
+                        crate::address::same_pane(self.node.as_str(), machine, &row.id, pane)
+                    })
+                })
+            })
+    }
+
+    /// The keys of the lines that keep `node` from done (B9), with the
+    /// mission's last pull request list. A pull request whose CI GitHub has
+    /// not reported is not known to pass, so it counts as `ci` until a read
+    /// says it has none.
+    pub(super) fn node_unmet(&self, mission: &Mission, node: &MissionNode) -> Vec<String> {
+        self.node_unmet_in(mission, node, self.mission_pulls(mission))
+    }
+
+    /// Each node's lines as their owner shows them now, in the record's
+    /// order (`LinesNow`), read only for a node another names by a line, and
+    /// none for a mission that is closed or names no line: the one read
+    /// a dependency on a line takes (`Mission::dependency_met`).
+    pub(super) fn lines_now(&self, mission: &Mission) -> Vec<crate::missions::LinesNow> {
+        let names_a_line = mission.nodes.iter().any(|node| {
+            node.depends_on
+                .iter()
+                .any(|dependency| dependency.line.is_some())
+        });
+        if !mission.status.open() || !names_a_line {
+            return Vec::new();
+        }
+        let pulls = self.mission_pulls(mission);
+        mission
+            .nodes
+            .iter()
+            .map(|node| {
+                let named = mission.nodes.iter().any(|other| {
+                    other
+                        .depends_on
+                        .iter()
+                        .any(|dependency| dependency.line.is_some() && dependency.node == node.key)
+                });
+                if !named {
+                    return crate::missions::LinesNow::default();
+                }
+                crate::missions::LinesNow {
+                    unmet: self.node_unmet_in(mission, node, pulls),
+                    head_read: self.node_head(mission, node, pulls).is_some(),
+                }
+            })
+            .collect()
+    }
+
+    /// `node_unmet` against `pulls`, a list GitHub may have answered just
+    /// now.
+    fn node_unmet_in(
+        &self,
+        mission: &Mission,
+        node: &MissionNode,
+        pulls: Option<&GithubProjectSnapshot>,
+    ) -> Vec<String> {
+        let head = self.node_head(mission, node, pulls);
+        let heads = crate::mission_criteria::Heads {
+            work: head.as_deref(),
+            pull: pull_head(node, pulls),
+            landed: landed(node, pulls),
+        };
+        let mut out: Vec<String> = crate::mission_criteria::unmet(&node.criteria, heads)
+            .into_iter()
+            .map(str::to_owned)
+            .collect();
+        // A node an earlier build saved with its pull request and no ci line
+        // stands for checks not yet read until GitHub answers for it
+        // (`skip_criterion` makes the line it skips).
+        let has_ci = node
+            .criteria
+            .iter()
+            .any(|line| line.kind == CriterionKind::Ci);
+        if let Some(number) = node.current_pr()
+            && !has_ci
+        {
+            let known = pull_in(pulls, number).is_some_and(|pull| {
+                pull.ci_end() == CiEnd::NoChecks
+                    // A merged pull request's checks are no longer read.
+                    || (merged(pull) && pull.ci_end() == CiEnd::Unread)
+            });
+            if !known {
+                out.push("ci".into());
+            }
+        }
+        out
+    }
+
+    /// The node's view of each line now: a check command passed for another
+    /// commit, or for a folder Hide cannot read, shows open (B7, B32).
+    pub(super) fn shown_criteria(
+        &self,
+        mission: &Mission,
+        node: &MissionNode,
+    ) -> Vec<crate::mission_criteria::Criterion> {
+        let pulls = self.mission_pulls(mission);
+        let head = self.node_head(mission, node, pulls);
+        let heads = crate::mission_criteria::Heads {
+            work: head.as_deref(),
+            pull: pull_head(node, pulls),
+            landed: landed(node, pulls),
+        };
+        node.criteria
+            .iter()
+            .map(|line| {
+                let mut line = line.clone();
+                line.state = line.shown(heads);
+                // The Views shown for a gate reach the screen through its
+                // question (`Question::views`); the map and `hide mission
+                // show` carry no checkout path of them.
+                line.shown.clear();
+                line
+            })
+            .collect()
+    }
+
+    /// Whether the gate holds `node` (D-12): a mission made before criteria
+    /// and an external node, which Hide finishes itself, are not held.
+    fn gated(mission: &Mission, node: &MissionNode) -> bool {
+        !mission.exempt && node.kind != NodeKind::External
+    }
+
+    /// The gate on `node` as a command would leave it (D-12, B9): done only
+    /// with every line met, a node already done included, against the pull
+    /// request and worker the same command names.
+    pub(super) fn gate_node_done(
+        &self,
+        mission: &Mission,
+        node: &MissionNode,
+    ) -> Result<(), String> {
+        if node.status != NodeStatus::Done || !Self::gated(mission, node) {
+            return Ok(());
+        }
+        let unmet = self.node_unmet(mission, node);
+        if unmet.is_empty() {
+            return Ok(());
+        }
+        Err(crate::coordination::refusal(
+            "mission_criteria_unmet",
+            &format!("{}: {}", node.key, unmet.join(", ")),
+        ))
+    }
+
+    /// The lines that keep each done node of `mission` from being done
+    /// now, against `pulls` (B7, B9): a new commit, a changed check command
+    /// or a checker's new verdict after the node was done opens it again.
+    fn done_unmet(&self, mission: &Mission, pulls: Option<&GithubProjectSnapshot>) -> Vec<String> {
+        self.done_unmet_lines(mission, pulls)
+            .into_iter()
+            .map(|(index, unmet)| format!("{}: {}", mission.nodes[index].key, unmet.join(", ")))
+            .collect()
+    }
+
+    /// The done nodes of `mission` that are not met now, by index, each with
+    /// the keys of its open lines: what `done_unmet` words and what the
+    /// operator's close of a refused mission passes.
+    pub(super) fn unmet_done_nodes(&self, mission: &Mission) -> Vec<(usize, Vec<String>)> {
+        self.done_unmet_lines(mission, self.mission_pulls(mission))
+    }
+
+    fn done_unmet_lines(
+        &self,
+        mission: &Mission,
+        pulls: Option<&GithubProjectSnapshot>,
+    ) -> Vec<(usize, Vec<String>)> {
+        mission
+            .nodes
+            .iter()
+            .enumerate()
+            .filter(|(_, node)| node.status == NodeStatus::Done && Self::gated(mission, node))
+            .filter_map(|(index, node)| {
+                let unmet = self.node_unmet_in(mission, node, pulls);
+                (!unmet.is_empty()).then_some((index, unmet))
+            })
+            .collect()
+    }
+
+    /// What keeps `mission` from ending as done now, against `pulls` (B10):
+    /// a node neither done nor dropped, or a done node whose lines no longer
+    /// hold. The Conductor's close as done or merge_wait and both closes a
+    /// waiting mission makes by itself, on its pull requests merged (B41) or
+    /// its branches in main (B18), ask this one rule; a mission made before
+    /// criteria is not held (D-19).
+    pub(super) fn close_held(
+        &self,
+        mission: &Mission,
+        pulls: Option<&GithubProjectSnapshot>,
+    ) -> Option<String> {
+        if mission.exempt {
+            return None;
+        }
+        let open: Vec<&str> = mission
+            .nodes
+            .iter()
+            .filter(|node| !matches!(node.status, NodeStatus::Done | NodeStatus::Dropped))
+            .map(|node| node.key.as_str())
+            .collect();
+        if !open.is_empty() {
+            return Some(crate::coordination::refusal(
+                "mission_nodes_unfinished",
+                &open.join(", "),
+            ));
+        }
+        let unmet = self.done_unmet(mission, pulls);
+        (!unmet.is_empty())
+            .then(|| crate::coordination::refusal("mission_criteria_unmet", &unmet.join("; ")))
+    }
+
+    /// The gate on the Conductor's close: a cancel is never held.
+    pub(super) fn gate_close(&self, mission: &Mission, end: MissionEnd) -> Result<(), String> {
+        if end == MissionEnd::Cancelled {
+            return Ok(());
+        }
+        self.close_held(mission, self.mission_pulls(mission))
+            .map_or(Ok(()), Err)
+    }
+
+    /// The node `patch` would leave, with the lines that rest on what it
+    /// changes made current (B7, B8): a pull request named now takes its CI
+    /// from the last list, and another worker runs the check command again.
+    pub(super) fn prospective_node(
+        &self,
+        mission: &Mission,
+        node: &MissionNode,
+        patch: &NodePatch,
+        now: u64,
+    ) -> Result<MissionNode, String> {
+        let mut next = crate::missions::apply_patch(node, patch, now)?;
+        if mission.exempt {
+            return Ok(next);
+        }
+        if next.status == NodeStatus::Done && node.status != NodeStatus::Done {
+            self.freeze_done_head(mission, &mut next);
+        }
+        if next.current_pr() != node.current_pr() {
+            next.criteria.retain(|line| line.kind != CriterionKind::Ci);
+            next.ensure_ci_line();
+            if let Some(project) = self.mission_pulls(mission) {
+                read_node_ci(&mut next, project, now);
+            }
+        }
+        if let (Some(before), Some(after)) = (&node.agent_id, &next.agent_id)
+            && before != after
+        {
+            next.clear_check_folder();
+            for line in &mut next.criteria {
+                if line.kind == CriterionKind::Check && line.skip.is_none() {
+                    *line = crate::mission_criteria::Criterion::new(
+                        line.key.clone(),
+                        CriterionKind::Check,
+                    );
+                }
+            }
+        }
+        Ok(next)
+    }
+
+    /// How `caller` takes part in `mission` at its node `node`, or at any of
+    /// its nodes with none (B5, with-hide/hide#2302): as its Conductor, as
+    /// the node's worker, or as one of its checkers. The one rule every
+    /// command that names no mission finds a worker's or a checker's by.
+    pub(super) fn part_in(
+        mission: &Mission,
+        caller: &Caller<'_>,
+        node: Option<&str>,
+    ) -> Option<Part> {
+        if mission.conductor.actor.same_identity(caller.actor) {
+            return Some(Part::Conductor);
+        }
+        let mine = |id: Option<&str>| caller.owns(id);
+        let rows = || {
+            mission
+                .nodes
+                .iter()
+                .filter(|row| node.is_none_or(|key| row.key == key))
+        };
+        if rows().any(|row| mine(row.agent_id.as_deref())) {
+            return Some(Part::Worker);
+        }
+        rows()
+            .any(|row| {
+                row.criteria.iter().any(|line| {
+                    line.checkers
+                        .iter()
+                        .any(|checker| mine(checker.agent_id.as_deref()))
+                })
+            })
+            .then_some(Part::Checker)
+    }
+
+    /// The mission a command from `caller` that names none means, by one
+    /// rule for every such command (B5, with-hide/hide#2302): the open
+    /// mission it conducts; else the one open mission whose node it works
+    /// or checks (`part_in`), two of them being ambiguous
+    /// (`mission_ambiguous`); else the newest done mission it conducts,
+    /// which a change refuses as closed. None when it takes part in none.
+    pub(super) fn mission_meant(&self, caller: &Caller<'_>) -> Result<Option<&Mission>, String> {
+        if let Some(mission) = self.missions.book.conducted_open(caller.actor) {
+            return Ok(Some(mission));
+        }
+        let mut taken = self.missions.book.missions.iter().filter(|mission| {
+            mission.status.open() && Self::part_in(mission, caller, None).is_some()
+        });
+        if let Some(mission) = taken.next() {
+            if taken.next().is_some() {
+                return Err("mission_ambiguous".into());
+            }
+            return Ok(Some(mission));
+        }
+        Ok(self.missions.book.conducted(caller.actor))
+    }
+
+    /// The open missions with a node `node`, which a refused record that
+    /// found none of the caller's names in its diagnostic.
+    fn open_missions_holding(&self, node: &str) -> Vec<&Mission> {
+        self.missions
+            .book
+            .missions
+            .iter()
+            .filter(|mission| mission.status.open() && mission.node(node).is_some())
+            .collect()
+    }
+
+    /// The mission a line command from `caller` acts on (B5): the one it
+    /// names, or the one it means (`mission_meant`), where it conducts the
+    /// mission or works or checks its node `node`.
+    fn line_mission(
+        &self,
+        caller: &Caller<'_>,
+        named: Option<&str>,
+        node: &str,
+    ) -> Result<String, String> {
+        let concerns = |mission: &Mission| Self::part_in(mission, caller, Some(node)).is_some();
+        let open = || {
+            self.missions
+                .book
+                .missions
+                .iter()
+                .filter(|mission| mission.status.open())
+        };
+        let mission = match named {
+            Some(id) => self.missions.book.get(id).ok_or("mission_unknown")?,
+            None => match self.mission_meant(caller)? {
+                Some(mission) => mission,
+                // A node another agent owns is someone else's line.
+                None if open().any(|mission| mission.node(node).is_some()) => {
+                    return Err("mission_criterion_not_yours".into());
+                }
+                None => return Err("mission_none".into()),
+            },
+        };
+        match mission.status {
+            MissionStatus::Cancelled => return Err("mission_cancelled".into()),
+            MissionStatus::Done => return Err("mission_closed".into()),
+            _ => {}
+        }
+        if !concerns(mission) {
+            return Err("mission_criterion_not_yours".into());
+        }
+        Ok(mission.id.clone())
+    }
+
+    /// `hide mission record` (B5-B7, B13): the owner's result for one line.
+    #[allow(clippy::too_many_arguments)]
+    pub(super) fn record_criterion(
+        &mut self,
+        actor: &Actor,
+        named: Option<&str>,
+        node: &str,
+        key: &str,
+        result: (bool, String, Option<String>, Option<String>, bool),
+        now: u64,
+    ) -> Result<(Value, bool), String> {
+        let (pass, evidence, summary, commit, rerun) = result;
+        let evidence = evidence.trim().to_owned();
+        if evidence.is_empty() {
+            return Err("mission_evidence_missing".into());
+        }
+        let evidence = Some(evidence);
+        let summary = crate::missions::summary_line(summary)?;
+        // The Conductor's record on a node never worked needs no ledger; a
+        // refusal that needed one says so (`record_refused`).
+        let ledger = self.delivery_state().ok();
+        let caller = Caller::of(actor, ledger.as_deref(), &self.missions.book.missions);
+        let id = match self.line_mission(&caller, named, node) {
+            Ok(id) => id,
+            Err(reason) if reason == NOT_YOURS => {
+                let held = match named.and_then(|id| self.missions.book.get(id)) {
+                    Some(mission) => vec![mission],
+                    None => self.open_missions_holding(node),
+                };
+                return Err(record_refused(&caller, &held, node, key, now));
+            }
+            Err(reason) => return Err(reason),
+        };
+        let mission = self.missions.book.get(&id).ok_or("mission_unknown")?;
+        let index = mission
+            .nodes
+            .iter()
+            .position(|row| row.key == node)
+            .ok_or("mission_node_unknown")?;
+        let row = &mission.nodes[index];
+        let at = row
+            .criteria
+            .iter()
+            .position(|line| line.key == key)
+            .ok_or("mission_criterion_unknown")?;
+        let line = &row.criteria[at];
+        let conductor = mission.conductor.actor.same_identity(actor);
+        let worker = caller.owns(row.agent_id.as_deref());
+        // The Conductor certifies a node it works itself: one that never
+        // had a worker (D-23 as the mission's Conductor read it).
+        let never_worked = row.agent_id.is_none()
+            && !row
+                .criteria
+                .iter()
+                .any(|line| line.by.as_ref().is_some_and(|by| by.role == Role::Worker));
+        let by = |role: Role, agent_id: Option<String>| Recorded {
+            role,
+            name: actor.name.clone(),
+            agent_id,
+            at_unix_ms: now,
+        };
+        let mut next = row.clone();
+        let effect = match line.kind {
+            CriterionKind::Review | CriterionKind::Verify => {
+                let Some(slot) = line
+                    .checkers
+                    .iter()
+                    .position(|checker| caller.owns(checker.agent_id.as_deref()))
+                else {
+                    return Err(record_refused(&caller, &[mission], node, key, now));
+                };
+                let agent_id = line.checkers[slot].agent_id.clone();
+                // The head an answer is for is the one the checker names: a
+                // guess from the pull request's head when it is recorded would
+                // put a review of one head on the next.
+                if commit.is_none() && row.current_pr().is_some() {
+                    return Err("mission_commit_required".into());
+                }
+                let target = &mut next.criteria[at];
+                let changed = target.record_checker(
+                    slot,
+                    pass,
+                    crate::mission_criteria::Answer {
+                        evidence,
+                        summary,
+                        commit,
+                    },
+                    now,
+                )?;
+                if changed {
+                    target.by = Some(by(Role::Checker, agent_id));
+                }
+                crate::mission_criteria::Effect {
+                    changed,
+                    spent: false,
+                }
+            }
+            // Hide records the CI, whoever asks.
+            CriterionKind::Ci => {
+                log_record_refused(NOT_YOURS, &caller, &[mission], node, key);
+                return Err(NOT_YOURS.into());
+            }
+            // Only the operator's answer passes a gate (PRD mission-human-gate D-12).
+            CriterionKind::Human => return Err("mission_gate_operator_only".into()),
+            CriterionKind::Own | CriterionKind::Check | CriterionKind::Defect => {
+                let recorder = if worker {
+                    by(Role::Worker, row.agent_id.clone())
+                } else if conductor && never_worked {
+                    by(Role::Conductor, mission.conductor.agent_id.clone())
+                } else {
+                    return Err(record_refused(&caller, &[mission], node, key, now));
+                };
+                if line.kind == CriterionKind::Check {
+                    // The check is the folder it ran in, on the machine the
+                    // worker works on: its head later is what the line is
+                    // held against (D-16).
+                    let folder = self
+                        .pane_checkout(&actor.device_id, &actor.pane_id)
+                        .map(|checkout| checkout.path.clone())
+                        .ok_or("mission_checkout_unknown")?;
+                    let moved =
+                        next.set_check_folder(&mission.device_id, &actor.device_id, &folder);
+                    let mut effect = next.criteria[at]
+                        .record(pass, evidence, summary, commit, rerun, recorder)?;
+                    // A check recorded on a node already done is the proof
+                    // it finishes on from now, when the record is new: the
+                    // same result sent again changes nothing, so it leaves
+                    // the proof the node finished on as it is.
+                    if pass && effect.changed && next.status == NodeStatus::Done {
+                        self.freeze_done_head(mission, &mut next);
+                    }
+                    effect.changed |= moved || next.done_head != row.done_head;
+                    effect
+                } else {
+                    next.criteria[at].record(pass, evidence, summary, commit, rerun, recorder)?
+                }
+            }
+        };
+        if !effect.changed {
+            return Ok((
+                json!({"mission": self.mission_view_for(&id, &caller)}),
+                false,
+            ));
+        }
+        next.note_own_met(row.own_lines_met(), now);
+        let mut events = Vec::new();
+        // A check failing again on the commit its rerun was for sends the
+        // node back to work (B13).
+        if effect.spent && back_to_work(next.status) {
+            let before = next.clone();
+            next = crate::missions::apply_patch(
+                &next,
+                &NodePatch {
+                    status: Some(NodeStatus::Working),
+                    ..NodePatch::default()
+                },
+                now,
+            )?;
+            events.extend(super::mission_events::node_events(&before, &next, now));
+        }
+        let target = self.missions.book.get_mut(&id).ok_or("mission_unknown")?;
+        target.nodes[index] = next;
+        target.updated_at_unix_ms = now;
+        crate::diagnostic!(json!({
+            "component": "missions", "kind": "mission.criterion_recorded",
+            "mission": id, "node": node, "line": key, "pass": pass,
+        }));
+        self.record_mission_events(&id, events);
+        Ok((
+            json!({"mission": self.mission_view_for(&id, &caller)}),
+            true,
+        ))
+    }
+
+    /// `hide mission skip` (B11, B12): the Conductor goes past a line with
+    /// its reason; the check command and the CI only on an answered
+    /// decision that named the node.
+    pub(super) fn skip_criterion(
+        &mut self,
+        actor: &Actor,
+        named: Option<&str>,
+        node: &str,
+        key: &str,
+        (reason, decision): (String, Option<u64>),
+        now: u64,
+    ) -> Result<(Value, bool), String> {
+        let ledger = self.delivery_state().ok();
+        let caller = Caller::of(actor, ledger.as_deref(), &self.missions.book.missions);
+        let id = self.line_mission(&caller, named, node)?;
+        let mission = self.missions.book.get(&id).ok_or("mission_unknown")?;
+        if !mission.conductor.actor.same_identity(actor) {
+            return Err("mission_not_conductor".into());
+        }
+        let reason = reason.trim().to_owned();
+        if reason.is_empty() {
+            return Err("mission_skip_reason_missing".into());
+        }
+        if reason.chars().any(char::is_control) {
+            return Err("mission_text_invalid".into());
+        }
+        let index = mission
+            .nodes
+            .iter()
+            .position(|row| row.key == node)
+            .ok_or("mission_node_unknown")?;
+        // The ci line an earlier build never made for a pull request GitHub
+        // has not answered for is the line this skip goes past.
+        if key == "ci"
+            && !mission.exempt
+            && !mission.nodes[index]
+                .criteria
+                .iter()
+                .any(|line| line.kind == CriterionKind::Ci)
+            && self
+                .node_unmet(mission, &mission.nodes[index])
+                .iter()
+                .any(|line| line == "ci")
+        {
+            let made = self.missions.book.get_mut(&id).ok_or("mission_unknown")?;
+            made.nodes[index].ensure_ci_line();
+        }
+        let mission = self.missions.book.get(&id).ok_or("mission_unknown")?;
+        let at = mission.nodes[index]
+            .criteria
+            .iter()
+            .position(|line| line.key == key)
+            .ok_or("mission_criterion_unknown")?;
+        let line = &mission.nodes[index].criteria[at];
+        // A gate is the operator's to pass, on no decision of the
+        // Conductor's (PRD mission-human-gate D-12, B8).
+        if line.kind == CriterionKind::Human {
+            return Err(crate::coordination::refusal(
+                "mission_gate_operator_only",
+                &format!("{node}: {key}"),
+            ));
+        }
+        let answered = |key: u64| {
+            mission
+                .decided
+                .iter()
+                .any(|decided| decided.key == key && decided.node == node)
+        };
+        // A failed CI is judged as the line shows now: a new head opens it,
+        // and the Conductor may then skip it with its reason alone.
+        let protected = self
+            .shown_criteria(mission, &mission.nodes[index])
+            .iter()
+            .any(|shown| shown.key == key && shown.protected());
+        if protected && !decision.is_some_and(answered) {
+            return Err(crate::coordination::refusal(
+                "mission_criteria_protected",
+                &format!("{node}: {key}"),
+            ));
+        }
+        // A decision is kept only where it was needed, so the line says
+        // `operator 결정` only when it was one, and the lines skipped without
+        // one are the Conductor's own (`Conductor가 정한 것`).
+        let decision = decision.filter(|_| protected);
+        let by = Recorded {
+            role: Role::Conductor,
+            name: actor.name.clone(),
+            agent_id: mission.conductor.agent_id.clone(),
+            at_unix_ms: now,
+        };
+        let target = self.missions.book.get_mut(&id).ok_or("mission_unknown")?;
+        let was_met = target.nodes[index].own_lines_met();
+        let changed = target.nodes[index].criteria[at].skip(reason.clone(), decision, by);
+        target.nodes[index].note_own_met(was_met, now);
+        if !changed {
+            return Ok((
+                json!({"mission": self.mission_view_for(&id, &caller)}),
+                false,
+            ));
+        }
+        target.updated_at_unix_ms = now;
+        let mut event = MissionEvent::new(now, EventKind::Skipped)
+            .node(node)
+            .line(Some(&reason));
+        event.criterion = Some(key.to_owned());
+        self.record_mission_events(&id, vec![event]);
+        Ok((
+            json!({"mission": self.mission_view_for(&id, &caller)}),
+            true,
+        ))
+    }
+
+    /// `hide mission defect` (B21): a later node found a defect in `node`,
+    /// which works again with the defect as a line.
+    pub(super) fn add_mission_defect(
+        &mut self,
+        actor: &Actor,
+        id: &str,
+        node: &str,
+        (found_by, text): (String, String),
+        now: u64,
+    ) -> Result<(Value, bool), String> {
+        let mission = self.missions.book.get(id).ok_or("mission_unknown")?;
+        if mission.node(&found_by).is_none() || found_by == node {
+            return Err("mission_node_unknown".into());
+        }
+        let index = mission
+            .nodes
+            .iter()
+            .position(|row| row.key == node)
+            .ok_or("mission_node_unknown")?;
+        let row = &mission.nodes[index];
+        if row.kind == NodeKind::External {
+            return Err(crate::coordination::refusal(
+                "mission_external_invalid",
+                node,
+            ));
+        }
+        // The same defect from the same node while it is still open is the
+        // same command again.
+        if row.criteria.iter().any(|line| {
+            line.kind == CriterionKind::Defect
+                && line.text.as_deref() == Some(text.as_str())
+                && line.found_by.as_deref() == Some(found_by.as_str())
+                && line.state != crate::mission_criteria::CriterionState::Pass
+        }) {
+            return Ok((json!({"mission": self.mission_view_of(id)}), false));
+        }
+        let before = row.clone();
+        let mut next = row.clone();
+        crate::mission_criteria::add_defect(
+            &mut next.criteria,
+            text.clone(),
+            found_by.clone(),
+            Recorded {
+                role: Role::Conductor,
+                name: actor.name.clone(),
+                agent_id: mission.conductor.agent_id.clone(),
+                at_unix_ms: now,
+            },
+        )?;
+        next.reopened = next.reopened.saturating_add(1);
+        if next.status.finished() {
+            next.back_to_work(now);
+        }
+        if next.status != NodeStatus::Working {
+            next = crate::missions::apply_patch(
+                &next,
+                &NodePatch {
+                    status: Some(NodeStatus::Working),
+                    ..NodePatch::default()
+                },
+                now,
+            )?;
+        }
+        let mut event = MissionEvent::new(now, EventKind::Reopened)
+            .node(node)
+            .line(Some(&text));
+        event.count = Some(u32::from(next.reopened));
+        event.criterion = Some(found_by);
+        let mut events = vec![event];
+        events.extend(
+            super::mission_events::node_events(&before, &next, now)
+                .into_iter()
+                .filter(|event| event.kind != EventKind::Node || before.status != next.status),
+        );
+        let target = self.missions.book.get_mut(id).ok_or("mission_unknown")?;
+        target.nodes[index] = next;
+        target.updated_at_unix_ms = now;
+        self.record_mission_events(id, events);
+        Ok((json!({"mission": self.mission_view_of(id)}), true))
+    }
+
+    /// The node with registration `id` bound to its next free `kind`
+    /// checker of the same agent (B3, B4), else in the place of one the
+    /// mission reads as ended (`missions::worker_life`: its registration
+    /// ended or its pane closed) or whose registration is gone
+    /// (`Criterion::bind`); the node's own worker is never its checker.
+    pub(super) fn bind_checker(
+        &self,
+        node: &MissionNode,
+        kind: CheckKind,
+        id: &str,
+    ) -> Result<MissionNode, String> {
+        let ledger = self
+            .delivery_state()
+            .map_err(|_| "mission_checker_unknown")?;
+        let record = ledger
+            .agents
+            .iter()
+            .find(|record| record.id == id)
+            .ok_or("mission_checker_unknown")?;
+        let worker = node
+            .agent_id
+            .as_deref()
+            .and_then(|worker| ledger.agents.iter().find(|row| row.id == worker));
+        if node.agent_id.as_deref() == Some(id)
+            || worker.is_some_and(|worker| worker.actor.same_identity(&record.actor))
+        {
+            return Err(crate::coordination::refusal(
+                "mission_checker_is_worker",
+                &node.key,
+            ));
+        }
+        let mut next = node.clone();
+        next.criteria
+            .iter_mut()
+            .find(|line| line.kind == kind.kind())
+            .ok_or("mission_checker_unknown")?
+            .bind(
+                id,
+                hide_agent_adapter::canonical_kind(&record.actor.kind),
+                |bound| {
+                    ledger
+                        .agents
+                        .iter()
+                        .find(|row| row.id == bound)
+                        .is_none_or(|row| {
+                            let sleeping = self.sleeping_registrations(std::iter::once(row));
+                            matches!(
+                                super::missions::worker_life(row, &sleeping),
+                                crate::delivery::answer::Runtime::Ended
+                            )
+                        })
+                },
+            )?;
+        Ok(next)
+    }
+
+    /// Whether registration `id` checks one of `node`'s lines, so it cannot
+    /// become the node's worker (B4).
+    pub(super) fn checks_node(node: &MissionNode, id: &str) -> bool {
+        node.checker_agents().any(|checker| checker == id)
+    }
+}
+
+/// Whether a node whose check or CI spent its rerun goes back to work
+/// (B13): one not yet started; a node at work stays at work, and one done
+/// or dropped stays as it is.
+pub(super) fn back_to_work(status: NodeStatus) -> bool {
+    status == NodeStatus::Planned
+}
+
+fn pull_in(pulls: Option<&GithubProjectSnapshot>, number: u32) -> Option<&PullRequestSnapshot> {
+    pulls?
+        .pull_requests
+        .iter()
+        .find(|pull| pull.number == number)
+}
+
+/// Keeps a question the operator answered that named a node, so a skip of
+/// that node's check command or CI can rest on it (B12).
+pub(super) fn note_decided(mission: &mut Mission, key: u64, node: Option<&str>) {
+    let Some(node) = node.filter(|_| key != 0) else {
+        return;
+    };
+    if mission
+        .decided
+        .iter()
+        .any(|decided| decided.key == key && decided.node == node)
+    {
+        return;
+    }
+    mission.decided.push(Decided {
+        key,
+        node: node.to_owned(),
+    });
+    if mission.decided.len() > DECIDED_LIMIT {
+        let over = mission.decided.len() - DECIDED_LIMIT;
+        mission.decided.drain(..over);
+        crate::diagnostic!(json!({
+            "component": "missions", "kind": "mission.decided_dropped",
+            "mission": mission.id, "count": over, "cap": DECIDED_LIMIT,
+        }));
+    }
+}
+
+/// The CI GitHub reports for each node's pull request in `project` (B8,
+/// B13): a line where the pull request has checks, none where it has none,
+/// unchanged where the read does not say. Answers the nodes whose rerun
+/// failed again, which go back to work.
+pub(super) fn read_mission_ci(
+    mission: &mut Mission,
+    project: &crate::model::GithubProjectSnapshot,
+    now: u64,
+) -> (bool, Vec<usize>) {
+    if mission.exempt {
+        return (false, Vec::new());
+    }
+    let mut changed = false;
+    let mut spent = Vec::new();
+    for (at, node) in mission.nodes.iter_mut().enumerate() {
+        let effect = read_node_ci(node, project, now);
+        changed |= effect.changed;
+        if effect.spent {
+            spent.push(at);
+        }
+    }
+    (changed, spent)
+}
+
+/// The head of `node`'s pull request as `pulls` names it, which its CI line
+/// is judged against.
+fn pull_head<'a>(node: &MissionNode, pulls: Option<&'a GithubProjectSnapshot>) -> Option<&'a str> {
+    node.current_pr()
+        .and_then(|number| pull_in(pulls, number))
+        .and_then(|pull| pull.head_oid.as_deref())
+}
+
+/// Whether `node`'s pull request is merged with its CI line passed on the
+/// merged head: the work reached main proved there, so a check that passed
+/// on an earlier commit of it, before a merge of main moved the head, stands
+/// (`Criterion::shown`).
+fn landed(node: &MissionNode, pulls: Option<&GithubProjectSnapshot>) -> bool {
+    let Some(head) = node
+        .current_pr()
+        .and_then(|number| pull_in(pulls, number))
+        .filter(|pull| merged(pull))
+        .and_then(|pull| pull.head_oid.as_deref())
+    else {
+        return false;
+    };
+    node.criteria.iter().any(|line| {
+        line.kind == CriterionKind::Ci
+            && line.state == crate::mission_criteria::CriterionState::Pass
+            && line
+                .commit
+                .as_deref()
+                .is_some_and(|commit| crate::mission_criteria::same_commit(commit, head))
+    })
+}
+
+/// The CI `project` reports for `node`'s pull request: a line that follows
+/// its checks, open while they cannot be read, and none where the pull
+/// request has no checks, or is merged and its checks are no longer read
+/// (D-15, narrowed: checks not known keep the line open so the Conductor can
+/// skip it on the operator's answer).
+fn read_node_ci(
+    node: &mut MissionNode,
+    project: &GithubProjectSnapshot,
+    now: u64,
+) -> crate::mission_criteria::Effect {
+    let mut out = crate::mission_criteria::Effect::default();
+    let Some(number) = node.current_pr() else {
+        return out;
+    };
+    let pull = pull_in(Some(project), number);
+    let line = node
+        .criteria
+        .iter()
+        .position(|line| line.kind == CriterionKind::Ci);
+    let end = pull.map(PullRequestSnapshot::ci_end);
+    // A merged pull request's checks are no longer read, so a line that never
+    // read them is no question left.
+    let unread_merge = pull.is_some_and(merged)
+        && end == Some(CiEnd::Unread)
+        && line.is_some_and(|at| {
+            node.criteria[at].commit.is_none() && node.criteria[at].skip.is_none()
+        });
+    if end == Some(CiEnd::NoChecks) || unread_merge {
+        if let Some(line) = line {
+            node.criteria.remove(line);
+            out.changed = true;
+        }
+        return out;
+    }
+    let (line, made) = crate::mission_criteria::ensure_ci_line(&mut node.criteria);
+    out.changed |= made;
+    if let (Some(end), Some(head)) = (end, pull.and_then(|pull| pull.head_oid.as_deref())) {
+        let effect = node.criteria[line].read_ci(head, end, now);
+        out.changed |= effect.changed;
+        out.spent = effect.spent;
+    }
+    out
+}

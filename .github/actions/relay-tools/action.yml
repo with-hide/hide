@@ -1,0 +1,36 @@
+# The wasm-bindgen command line `scripts/build-relay-wasm.sh` installs into
+# target/relay-tools, for every job that builds the relay WebAssembly.
+# Installing it compiles it from source, about a minute on a Linux runner, and
+# every web job did that on every run. The key is the wasm-bindgen version
+# Cargo.lock pins, which the script requires the tool to match, and the
+# system; one job per system saves it, on main. docs/BUILD.md, "Mobile relay
+# WebAssembly", owns the build.
+name: Relay binding tool
+description: Restore, and on main save, the locked wasm-bindgen command line for this system.
+
+inputs:
+  save:
+    description: Whether this job saves the entry; true only for its one builder per system on main.
+    required: true
+
+runs:
+  using: composite
+  steps:
+    - name: Read the locked wasm-bindgen version
+      id: version
+      shell: bash
+      run: |
+        version=$(python3 -c 'import tomllib; print(next(p["version"] for p in tomllib.load(open("Cargo.lock", "rb"))["package"] if p["name"] == "wasm-bindgen"))')
+        echo "version=$version" >> "$GITHUB_OUTPUT"
+    - name: Restore the binding tool
+      if: inputs.save != 'true'
+      uses: actions/cache/restore@v4
+      with:
+        path: target/relay-tools
+        key: relay-tools-v1-${{ runner.os }}-${{ runner.arch }}-${{ steps.version.outputs.version }}
+    - name: Restore and save the binding tool
+      if: inputs.save == 'true'
+      uses: actions/cache@v4
+      with:
+        path: target/relay-tools
+        key: relay-tools-v1-${{ runner.os }}-${{ runner.arch }}-${{ steps.version.outputs.version }}

@@ -6,18 +6,23 @@
 
 import type { TFunction } from "i18next";
 import type { MessageKey } from "./i18n/catalogs";
-import { PROVIDER_KINDS, type ProviderKind } from "./agentPicker";
+import { catalogFor, modelLabel, PROVIDER_KINDS, takesModel, type ProviderKind } from "./agentPicker";
+import { agentAdapter } from "./agentAdapters";
+import { listedProfiles } from "./agentProfiles";
 import { agentsByPane } from "./paneAgents";
+import { planCells, planChecklist, stepOf } from "./plans";
 import { orderByDependencies } from "./projectBoard";
+import { humanTurnText } from "./humanTurn";
 import { resumeProvider } from "./linkPanel";
-import type { AgentRow, AgentStartChoice, Mission, MissionAttention, MissionAttentionReason, MissionChecker, MissionCriterion, MissionWorker, MissionEvent, MissionEventsSnapshot, MissionHideAction, MissionLandingAction, MissionNode, MissionNodePr, MissionOperatorAction, MissionVerdict, RowMark, SnapshotRest } from "./snapshot";
+import { lineNode, nodeKindWord, resultLine } from "./missionLine";
+import type { AgentRow, AgentStartChoice, BackgroundAi, Device, HumanKind, Mission, MissionAttention, MissionBrief, MissionSafetyNet, MissionSkip, MissionNodeBrief, MissionAttentionReason, MissionHeldCellReason, MissionChecker, MissionCriterion, MissionHeldLetters, MissionNodeWait, MissionTurn, MissionNodeWork, MissionStopCause, MissionWaitingOn, MissionWorker, MissionEvent, MissionEventsSnapshot, MissionGate, MissionHideAction, MissionLandingAction, MissionNode, MissionNodePr, MissionNodeWarning, MissionVerdict, PrState, PullRequest, RowMark, SnapshotRest } from "./snapshot";
 
 export function missionOf(rest: SnapshotRest | null | undefined, id: string): Mission | null {
   return rest?.missions?.items.find((mission) => mission.id === id) ?? null;
 }
 
 /** Whether a mission is still the Conductor's to carry: planned, running or waiting on a merge. */
-export function missionOpen(mission: Mission): boolean {
+export function missionOpen(mission: Pick<Mission, "status">): boolean {
   return mission.status === "planning" || mission.status === "running" || mission.status === "merge_wait";
 }
 
@@ -50,7 +55,7 @@ export function missionOfPane(rest: SnapshotRest | null | undefined, agents: Age
 }
 
 /** What the record counts (B21): done nodes of those still in the plan, and the ones dropped. */
-export function missionCounts(mission: Mission): { done: number; total: number; dropped: number } {
+export function missionCounts(mission: { nodes: readonly Pick<MissionNode, "status">[] }): { done: number; total: number; dropped: number } {
   const dropped = mission.nodes.filter((node) => node.status === "dropped").length;
   return { done: mission.nodes.filter((node) => node.status === "done").length, total: mission.nodes.length - dropped, dropped };
 }
@@ -60,12 +65,6 @@ export function stackWaiting(mission: Mission): number {
   return mission.stack_waiting;
 }
 
-const KIND_WORD: Record<MissionNode["kind"], MessageKey> = {
-  change: "mission.kind.change",
-  research: "mission.kind.research",
-  verify: "mission.kind.verify",
-  external: "mission.kind.external",
-};
 
 /** A node's own criteria in the Conductor's words, one after another; null when it names none. */
 export function ownCriteria(node: MissionNode): string | null {
@@ -73,9 +72,6 @@ export function ownCriteria(node: MissionNode): string | null {
   return own.length > 0 ? own.join(" · ") : null;
 }
 
-export function kindWord(kind: MissionNode["kind"]): MessageKey {
-  return KIND_WORD[kind];
-}
 
 /**
  * A node's line (B15, B51, B53): why it waits on a dropped node, else what
@@ -85,7 +81,7 @@ export function kindWord(kind: MissionNode["kind"]): MessageKey {
 export function nodeLine(node: MissionNode, t: TFunction<"translation">): string {
   if (node.blocked === "upstream_dropped") return t("mission.blocked.dropped");
   if (node.line) return node.line;
-  return t(kindWord(node.kind));
+  return t(nodeKindWord(node));
 }
 
 /** The launch Hide recorded for a pane (`overview_graph.sessions`), on its machine or the mission's; the store's own row, so a selector can return it. */
@@ -97,8 +93,8 @@ export function launchSession(rest: SnapshotRest | null | undefined, mission: Mi
 
 type LaunchSession = NonNullable<SnapshotRest["overview_graph"]>["sessions"][number];
 
-/** What runs in a pane or what the plan asked, and which of the two it is. */
-export type RunWords = { words: string; planned: boolean };
+/** What runs in a pane or what the plan asked, which of the two it is, and the profile's name of the one that speaks (null for the built-in default). */
+export type RunWords = { words: string; planned: boolean; profile: string | null };
 
 /**
  * A worker or a checker as the panel and a checker strip name it (B29),
@@ -110,23 +106,59 @@ export type RunWords = { words: string; planned: boolean };
  * model and effort are shown marked as planned (`자동` for an effort the
  * Conductor will choose), or nothing.
  */
-export function runWords(launch: Pick<LaunchSession, "launch_model" | "launch_effort"> | null, plan: MissionWorker | null | undefined, words: { auto: string; defaultModel: string }): RunWords | null {
-  if (launch && (launch.launch_model || launch.launch_effort)) return { words: [launch.launch_model ?? words.defaultModel, launch.launch_effort].filter(Boolean).join("·"), planned: false };
+export function runWords(launch: (Pick<LaunchSession, "launch_model" | "launch_effort"> & { profile?: string | null }) | null, plan: (Pick<MissionWorker, "model" | "effort" | "effort_auto"> & { profileName?: string | null }) | null | undefined, words: { auto: string; defaultModel: string }): RunWords | null {
+  if (launch && (launch.profile || launch.launch_model || launch.launch_effort)) {
+    // A profile's name leads, so the item reads before its model (PRD agent-profiles-phase2 B12); the built-in default names none.
+    const choice = [launch.launch_model ?? words.defaultModel, launch.launch_effort].filter(Boolean).join("·");
+    return { words: launch.profile ? `${launch.profile} · ${choice}` : choice, planned: false, profile: launch.profile ?? null };
+  }
   if (!plan) return null;
   const effort = plan.effort ?? (plan.effort_auto ? words.auto : null);
   const planned = [plan.model, effort].filter(Boolean).join("·");
-  return planned ? { words: planned, planned: true } : null;
+  // The planned item reads as a launched one does, its profile's name first (PRD agent-profiles-phase2 B12).
+  const shown = plan.profileName ? [plan.profileName, planned].filter(Boolean).join(" · ") : planned;
+  return shown ? { words: shown, planned: true, profile: plan.profileName ?? null } : null;
+}
+
+/** A run's profile as its record names it: by id (a node's plan or launch, with the name it started with), or by name alone (a pane's row). */
+export type RunProfile = { id?: string | null; name?: string | null };
+
+/** How a run's item reads: its profile's name, null for the built-in default, and each model by the name its agent shows. */
+export type ItemNames = { profile: string | null; model: (model: string) => string };
+
+/**
+ * How a run's item reads on `machine` (PRD agent-profiles-phase2 B12, B23):
+ * its profile by the name the machine lists for it now, so a rename shows,
+ * else the name it started with, else `gone` (a planned profile the machine
+ * no longer lists); none for the built-in default. Each model reads by the
+ * name the item's own list shows (`catalogFor`, the list Settings and the
+ * start panel show), and as passed while that list is not read, where it
+ * does not name the model, for a profile the machine no longer lists, and on
+ * another machine than this one, whose lists Hide AI does not read.
+ */
+export function itemNames(devices: readonly Device[] | undefined, ai: BackgroundAi | undefined, machine: string | null | undefined, agent: string | null | undefined, profile: RunProfile | null, gone: string): ItemNames {
+  const adapter = agent ? agentAdapter(agent) : undefined;
+  const device = devices?.find((row) => row.id === machine);
+  const named = profile?.id || profile?.name ? profile : null;
+  const listed = named ? listedProfiles(device)?.profiles.find((row) => (named.id ? row.id === named.id : row.kind === adapter?.id && row.name === named.name)) ?? null : null;
+  const kind = adapter?.can_start ? (adapter.agent_cli as ProviderKind) : null;
+  const local = device !== undefined && device.kind !== "remote";
+  const catalog = local && kind && takesModel(kind) && (!named || listed) ? catalogFor(ai, kind, listed ? { id: listed.id, version: listed.version } : null) : null;
+  return { profile: named ? (listed?.name ?? named.name ?? gone) : null, model: (model) => modelLabel(catalog, model) };
 }
 
 /** A change node's steps: work, PR or branch, review, merge or main (D-42 B, D-48). */
 export const STAGE_STEPS = 4;
+
+/** The fewest Views linked to a decision its card lists before `+N` folds the rest, on the desktop and the phone alike. */
+export const DECISION_VIEWS_SHOWN = 3;
 
 /**
  * The popover row's status mark (B15): its worker's own mark while its row is
  * listed, so a node reads as its agent does everywhere; else the node's
  * state, a node that waits on another dashed.
  */
-export function nodeMark(node: MissionNode, worker: RowMark | null): RowMark {
+export function nodeMark(node: Pick<MissionNode, "status" | "blocked" | "agent_runtime">, worker: RowMark | null): RowMark {
   // A working node whose worker Hide put to sleep is not at work, row or none.
   if (workerAsleep(node)) return "asleep";
   if (worker && node.status === "working") return worker;
@@ -143,7 +175,7 @@ export function nodeMark(node: MissionNode, worker: RowMark | null): RowMark {
 }
 
 /** The Conductor row's mark (B14): `미션 n/m` while it runs, its plan or its wait otherwise. */
-export function chipWords(mission: Mission): { key: MessageKey; counts: string | null } {
+export function chipWords(mission: MissionBrief): { key: MessageKey; counts: string | null } {
   const { done, total } = missionCounts(mission);
   switch (mission.status) {
     case "planning":
@@ -160,17 +192,37 @@ export function chipWords(mission: Mission): { key: MessageKey; counts: string |
 }
 
 /** The Conductor pane's chip (PRD mission-pane-chip B2): the state it reads as, its word and its count. */
-export type PaneChipState = "planning" | "running" | "decision" | "merge_wait" | "done" | "cancelled";
+export type PaneChipState = "planning" | "running" | "turn" | "merge_wait" | "done" | "cancelled";
+
+/** The chips read the same operator-turn reasons as the map and both lists. */
+export function missionTurn(mission: Mission): MissionTurn | null {
+  const [first] = turnItems(mission, () => null);
+  return first ? (first.kind === "decision" ? "decision" : "attention") : null;
+}
+
+/** The words a chip's name says for its `!`. */
+export const TURN_WORDS: Record<MissionTurn, MessageKey> = { decision: "mission.askDecision", attention: "mission.attention" };
+
+/** The delay an open mission is held by, which its chips and its list row mark with a grey pause; none while it runs or once it ended. */
+export function missionDelay(mission: Mission): string | null {
+  return missionOpen(mission) ? (mission.delay ?? null) : null;
+}
 
 /** Whether an open mission waits on the operator's decision: its chips keep their progress and add `!` in the decision colour (needs-you-cleanup D-02). */
+/** Whether a question is about node `key`: the node it stopped or one of the others it names (`Question::names`). */
+export function questionNames(question: { node: string | null; nodes?: string[] } | null | undefined, key: string): boolean {
+  return question != null && (question.node === key || (question.nodes ?? []).includes(key));
+}
+
 export function missionDeciding(mission: Mission): boolean {
   return Boolean(mission.decision) && missionOpen(mission);
 }
 
-/** The pane chip's words, its progress kept while a decision waits; the decision only colours it (`decision`) and marks it `!` (needs-you-cleanup B6). */
-export function paneChipWords(mission: Mission): { state: PaneChipState; key: MessageKey; counts: string | null } {
+/** The pane chip's words, its progress kept while the operator's turn waits; the turn only colours it (`turn`) and marks it `!` (needs-you-cleanup B6). */
+export function paneChipWords(mission: Mission): { state: PaneChipState; key: MessageKey; counts: string | null; turn: MissionTurn | null } {
   const words = paneStateWords(mission);
-  return missionDeciding(mission) ? { ...words, state: "decision" } : words;
+  const turn = missionTurn(mission);
+  return turn ? { ...words, state: "turn", turn } : { ...words, turn };
 }
 
 function paneStateWords(mission: Mission): { state: PaneChipState; key: MessageKey; counts: string | null } {
@@ -193,14 +245,15 @@ function paneStateWords(mission: Mission): { state: PaneChipState; key: MessageK
 
 /**
  * A node's state as the head's and the chip's cells colour it (PRD
- * mission-node-simple D-01, D-02, B5): waiting, in progress, done, and a
- * node someone has to look at in the decision colour (`hold`). A node that
- * cannot start yet waits; once the mission is cancelled, a node it never
- * finished is cancelled, and a dropped node left the plan, so it has no cell.
+ * mission-node-simple D-01, D-02, B5): waiting, in progress, stopped (in
+ * progress with no one moving it, `nodePace`), done, and a node someone has
+ * to look at in the decision colour (`hold`). A node that cannot start yet
+ * waits; once the mission is cancelled, a node it never finished is
+ * cancelled, and a dropped node left the plan, so it has no cell.
  */
-export type NodeTone = "done" | "working" | "hold" | "waiting" | "cancelled" | "dropped";
+export type NodeTone = "done" | "working" | "stopped" | "hold" | "waiting" | "cancelled" | "dropped";
 
-export function nodeTone(mission: Mission, node: MissionNode): NodeTone {
+export function nodeTone(mission: Pick<Mission, "status">, node: MissionNodeBrief): NodeTone {
   if (node.status === "dropped") return "dropped";
   if (mission.status === "cancelled" && node.status !== "done") return "cancelled";
   if (openAttention(mission, node)) return "hold";
@@ -209,7 +262,7 @@ export function nodeTone(mission: Mission, node: MissionNode): NodeTone {
     case "done":
       return "done";
     case "working":
-      return "working";
+      return nodePace(mission, node) === "stopped" ? "stopped" : "working";
     case "planned":
       return "waiting";
   }
@@ -221,13 +274,24 @@ export function nodeTone(mission: Mission, node: MissionNode): NodeTone {
  */
 export type CellTone = Exclude<NodeTone, "dropped"> | "review";
 
+/** One `depends_on` entry as the plan wrote it (`missions::Dependency`): another node, or one finish line of it, `<node>:<line>`; a node key has no `:`. */
+export function missionDependency(entry: string): { node: string; line: string | null } {
+  const at = entry.indexOf(":");
+  return at < 0 ? { node: entry, line: null } : { node: entry.slice(0, at), line: entry.slice(at + 1) };
+}
+
+/** The keys of the nodes a node waits on, once each, whether on the node or on one of its lines. */
+export function dependencyNodes(node: Pick<MissionNodeBrief, "depends_on">): string[] {
+  return [...new Set(node.depends_on.map((entry) => missionDependency(entry).node))];
+}
+
 /** The nodes top down by what they wait on, a dropped node where it stood (B17). */
-export function orderedNodes(mission: Mission): MissionNode[] {
-  return orderByDependencies(mission.nodes, (node) => node.key, (node) => node.depends_on).map(({ item }) => item);
+export function orderedNodes<N extends MissionNodeBrief>(mission: { nodes: readonly N[] }): N[] {
+  return orderByDependencies(mission.nodes, (node) => node.key, dependencyNodes).map(({ item }) => item);
 }
 
 /** The chip's and the head's bar (B8, B24): one cell per node in the plan, in order. */
-export function missionCells(mission: Mission): CellTone[] {
+export function missionCells(mission: MissionBrief): CellTone[] {
   return orderedNodes(mission).flatMap((node) => {
     const tone = nodeTone(mission, node);
     return tone === "dropped" ? [] : [tone];
@@ -239,28 +303,40 @@ export function missionCells(mission: Mission): CellTone[] {
  * someone has to look at in the decision colour (PRD mission-node-simple B5);
  * dropped nodes have none.
  */
-export type HeadCell = Exclude<NodeLook, "dropped"> | "attention";
+export type HeadCell = Exclude<NodeLook, "dropped"> | "attention" | "stopped";
 export function missionHeadCells(mission: Mission): HeadCell[] {
   return orderedNodes(mission).flatMap((node): HeadCell[] => {
     const look = nodeLook(mission, node);
     if (look === "dropped") return [];
-    return [openAttention(mission, node) ? "attention" : look];
+    return [openAttention(mission, node) ? "attention" : nodePace(mission, node) === "stopped" ? "stopped" : look];
   });
 }
 
-/** The colour a mission's own chip wears on the sidebar row and the Overview (B35): its decision, else its state. */
+/** The colour a mission's own chip wears on the sidebar row, the Overview and its Conductor's pane (B35): the operator's turn, else its state. */
 export function missionTone(mission: Mission): CellTone {
-  return missionToneOf(mission.status, missionDeciding(mission));
+  return missionToneOf(mission.status, missionTurn(mission) !== null, missionStalled(mission));
 }
 
-/** A mission chip's colour from its status and whether a decision waits: the one rule every mission chip, the sidebar's and Desk's, follows. */
-export function missionToneOf(status: Mission["status"], deciding: boolean): CellTone {
-  if (deciding) return "hold";
+/**
+ * Whether no one moves a mission's work: a node stopped (`nodePace`) and none
+ * at work, so its chips turn from the working colour to the stopped one
+ * (operator decision 2026-11-20). A node waiting on CI or a review still
+ * counts as at work, and a mission between steps with nothing stopped is not
+ * stalled.
+ */
+export function missionStalled(mission: MissionBrief): boolean {
+  const cells = missionCells(mission);
+  return cells.includes("stopped") && !cells.includes("working");
+}
+
+/** A mission chip's colour from its status, whether the operator's turn waits and whether it stalled: the one rule every mission chip follows. */
+export function missionToneOf(status: Mission["status"], turn: boolean, stalled: boolean): CellTone {
+  if (turn) return "hold";
   switch (status) {
     case "planning":
       return "waiting";
     case "running":
-      return "working";
+      return stalled ? "stopped" : "working";
     case "merge_wait":
       return "review";
     case "done":
@@ -271,23 +347,49 @@ export function missionToneOf(status: Mission["status"], deciding: boolean): Cel
 }
 
 /** The nodes a worker is at now, in order (B9, B10); one whose worker sleeps is not. */
-export function liveNodes(mission: Mission): MissionNode[] {
+export function liveNodes<N extends MissionNodeBrief>(mission: { nodes: readonly N[] }): N[] {
   return orderedNodes(mission).filter((node) => node.status === "working" && !workerAsleep(node));
 }
 
 /**
- * The summary's groups in the map's order (PRD mission-node-simple B5): the
- * nodes someone has to look at, those in progress, and those done; a node
- * that waits on someone is in the first group only, and a node not started
- * or dropped is in none.
+ * Why a step waits on someone, in the order a step is read: a node raised
+ * to the operator or the Conductor (`! 나`, `! Conductor`), a working step
+ * whose worker the core raised past its parent (one of the escalation
+ * causes; a person's turn says what and where, PRD ask-human B25), or the working step the open
+ * decision stopped. Null for a step nobody has to look at.
  */
-export function summaryGroups(mission: Mission): { attention: MissionNode[]; working: MissionNode[]; done: MissionNode[] } {
+export type HoldReason = { kind: "attention"; attention: Omit<MissionAttention, "choices"> } | { kind: "worker"; escalation: WorkerEscalation } | { kind: "decision" };
+
+/** What `holdReason` reads of a mission: its state, and the decision with the node it stopped. */
+export type HoldMission = Pick<Mission, "status" | "decision"> & { question?: Pick<NonNullable<Mission["question"]>, "node" | "nodes"> | null; conductor_letters?: MissionHeldLetters | null };
+
+export function holdReason<N extends MissionNodeBrief>(mission: HoldMission, node: N, escalationOf: (node: N) => WorkerEscalation | null): HoldReason | null {
+  const attention = openAttention(mission, node);
+  if (attention) return { kind: "attention", attention };
+  if (node.status !== "working") return null;
+  const escalation = shownEscalation(mission, escalationOf(node));
+  if (escalation) return { kind: "worker", escalation };
+  return mission.decision && questionNames(mission.question, node.key) ? { kind: "decision" } : null;
+}
+
+/**
+ * The summary's groups in the map's order (PRD mission-node-simple B5; PRD
+ * mobile-companion-ui B33, B36): the steps that wait on someone
+ * (`holdReason`), raised nodes first and then the working steps a raised
+ * worker or the decision holds, those in progress, and those done; a step
+ * that waits is in the first group only, so none reads as working on the
+ * desktop's summary or the phone's 지금, and a node not started or dropped
+ * is in none. `escalationOf` answers for a node's worker: the desktop reads
+ * its row, the phone the escalation its core sent with the node.
+ */
+export function summaryGroups<N extends MissionNodeBrief>(mission: HoldMission & { nodes: readonly N[] }, escalationOf: (node: N) => WorkerEscalation | null): { attention: N[]; working: N[]; done: N[] } {
   const nodes = orderedNodes(mission).filter((node) => node.status !== "dropped");
-  const raised = (node: MissionNode) => openAttention(mission, node) !== null;
+  const raised = (node: N) => openAttention(mission, node) !== null;
+  const held = (node: N) => holdReason(mission, node, escalationOf) !== null;
   return {
-    attention: nodes.filter(raised),
-    working: nodes.filter((node) => !raised(node) && node.status === "working"),
-    done: nodes.filter((node) => !raised(node) && node.status === "done"),
+    attention: [...nodes.filter(raised), ...nodes.filter((node) => !raised(node) && held(node))],
+    working: nodes.filter((node) => !held(node) && node.status === "working"),
+    done: nodes.filter((node) => !held(node) && node.status === "done"),
   };
 }
 
@@ -314,29 +416,27 @@ export function missionWorkLine(mission: Mission, t: TFunction<"translation">): 
 const PR_STAGES: readonly MessageKey[] = ["mission.stage.code", "mission.stage.pr", "mission.stage.review", "mission.stage.merge"];
 const DIRECT_STAGES: readonly MessageKey[] = ["mission.stage.code", "mission.stage.check", "mission.stage.review", "mission.stage.main"];
 
-/** Where a node's work is, named (B10): a change node's step of four, else its kind's one word. */
-export function stageWord(node: MissionNode): MessageKey {
-  if (node.kind === "research") return "mission.stage.research";
-  if (node.kind === "verify") return "mission.stage.verify";
+/** Where a node's work is, named (B10): a change node's step of four, else its kind's one word, a general node's being its preset's name (PRD node-presets D-10). */
+export function stageWord(node: Pick<MissionNode, "kind" | "preset" | "delivery" | "stage">): MessageKey {
+  if (node.kind !== "change") return nodeKindWord(node);
   const stages = node.delivery === "direct" ? DIRECT_STAGES : PR_STAGES;
   return stages[Math.min(Math.max(node.stage ?? 1, 1), STAGE_STEPS) - 1]!;
 }
 
 /**
  * What a node left behind, by its kind (B22, D-14): its pull request, a
- * direct change's commit on main or else its branch, a research node's
- * conclusion, a verify node's recorded verdict or else its line. A research
- * or verify node's line is a result only once the node is done; while it
- * runs the line is its progress. Null when the record holds none, so
+ * direct change's commit on main or else its branch, and for a general node
+ * what its card's result line shows once it is done, its verdict, whatever
+ * its preset, or else its line (PRD node-presets D-04, D-08); while it runs
+ * the line is its progress. Null when the record holds none, so
  * nothing is drawn for it.
  */
 export type NodeResult =
   | { kind: "pr"; number: number; state: MissionNode["pr_state"] }
   | { kind: "commit"; commit: string }
   | { kind: "branch"; branch: string }
-  | { kind: "conclusion"; line: string }
   | { kind: "verdict"; verdict: MissionVerdict; checks: { passed: number; total: number } | null }
-  | { kind: "verify"; line: string };
+  | { kind: "line"; line: string };
 
 export function nodeResult(node: MissionNode): NodeResult | null {
   if (node.pr != null) return { kind: "pr", number: node.pr, state: node.pr_state };
@@ -344,10 +444,10 @@ export function nodeResult(node: MissionNode): NodeResult | null {
     const commit = mainCommit(node);
     return commit ? { kind: "commit", commit } : node.branch ? { kind: "branch", branch: node.branch } : null;
   }
-  if (node.kind === "verify" && node.verdict) return { kind: "verdict", verdict: node.verdict, checks: node.checks };
-  if (!node.line) return null;
-  if (node.kind === "research") return node.status === "done" ? { kind: "conclusion", line: node.line } : null;
-  return node.status === "done" ? { kind: "verify", line: node.line } : null;
+  // A general node's result is its card's result line, the one computation the card, the panel and the phone read.
+  const result = resultLine(lineNode(node));
+  if (result?.shows === "verdict") return { kind: "verdict", verdict: result.verdict, checks: result.checks };
+  return result?.shows === "line" ? { kind: "line", line: result.line } : null;
 }
 
 /**
@@ -364,10 +464,10 @@ export function shortCommit(commit: string): string {
   return commit.slice(0, 7);
 }
 
-/** A finished or cancelled mission's results (B11, B23, B24): each done node that left something, and a verify node with its verdict, in order. */
+/** A finished or cancelled mission's results (B11, B23, B24): each done node that left something, in order. */
 export function missionResults(mission: Mission): { node: MissionNode; result: NodeResult }[] {
   return orderedNodes(mission).flatMap((node) => {
-    const result = node.status === "done" || (node.kind === "verify" && node.verdict) ? nodeResult(node) : null;
+    const result = node.status === "done" ? nodeResult(node) : null;
     return result ? [{ node, result }] : [];
   });
 }
@@ -389,11 +489,11 @@ export type NodeLook = "waiting" | "working" | "done" | "external" | "cancelled"
  * answer of an agent's life (`agent_runtime`, as `hide agent show` gives
  * it): nothing works it until a letter wakes it.
  */
-export function workerAsleep(node: MissionNode): boolean {
+export function workerAsleep(node: Pick<MissionNode, "status" | "agent_runtime">): boolean {
   return node.status === "working" && node.agent_runtime === "asleep";
 }
 
-export function nodeLook(mission: Mission, node: MissionNode): NodeLook {
+export function nodeLook<N extends Pick<MissionNode, "status" | "kind" | "blocked">>(mission: Pick<Mission, "status">, node: N): NodeLook {
   if (node.status === "dropped") return "dropped";
   if (node.status === "done") return "done";
   if (mission.status === "cancelled") return "cancelled";
@@ -401,6 +501,30 @@ export function nodeLook(mission: Mission, node: MissionNode): NodeLook {
   if (node.blocked || node.status === "planned") return "waiting";
   // A worker Hide put to sleep leaves its node in progress (PRD mission-node-simple D-01, B1): its sleep is the panel's and the mark's hover words.
   return "working";
+}
+
+/**
+ * How a node in progress moves now, which its ring, its card's frame, its
+ * current step's cell, its head cell and its edges draw alike, on the desktop
+ * and the phone (operator decision 2026-11-13): `working` while its worker
+ * works or Hide cannot read its row, `waiting` while its worker rests on
+ * someone or sleeps, `stopped` while its worker stopped with nothing to wait
+ * on or no worker stands for it. Null for a node not in progress.
+ */
+export type NodePace = "working" | "waiting" | "stopped";
+export function nodePace(mission: Pick<Mission, "status">, node: Pick<MissionNodeBrief, "status" | "kind" | "blocked" | "agent_runtime" | "work">): NodePace | null {
+  if (nodeLook(mission, node) !== "working") return null;
+  const state = node.work?.state;
+  if (state === "stopped" || state === "no_worker") return "stopped";
+  if (state === "waiting" || state === "asleep" || workerAsleep(node)) return "waiting";
+  return "working";
+}
+
+/** When a stopped node stopped: its worker's stop, or when no worker stood for it; null while the core has not timed it. */
+export function stoppedSince(work: MissionNodeWork | null | undefined): number | null {
+  if (work?.state === "stopped") return work.since_unix_ms;
+  if (work?.state === "no_worker") return work.since_unix_ms ?? null;
+  return null;
 }
 
 /** Whether the core found a node's work in main (B17, B19). */
@@ -445,6 +569,7 @@ export function criterionName(line: MissionCriterion, t: TFunction<"translation"
   switch (line.kind) {
     case "own":
     case "defect":
+    case "human":
       return line.text ?? line.key;
     case "check":
       return t("mission.line.check");
@@ -458,17 +583,16 @@ export function criterionName(line: MissionCriterion, t: TFunction<"translation"
   }
 }
 
+/** A line the Conductor skipped on its own as `Conductor가 정한 것` names it (`<line> 넘김`): a line the plan wrote by its words, the rest by its kind's short name (`검사 넘김`). */
+export function skipWords(skip: MissionSkip, t: TFunction<"translation">): string {
+  const line = skip.kind === "own" || skip.kind === "defect" || skip.kind === "human" ? (skip.text ?? skip.line) : t(`mission.line.short.${skip.kind}`);
+  return t("mission.decided.skip", { line });
+}
+
 /** A line in one word for `남음: 리뷰, CI` (B28): a criterion by its number, the rest by kind. */
 export function criterionShort(line: MissionCriterion, t: TFunction<"translation">): string {
   if (line.kind === "own") return t("mission.line.short.own", { number: line.key.replace(/^\D+/, "") || line.key });
   return t(`mission.line.short.${line.kind}`);
-}
-
-/** Of several checkers, how many passed (`2/3 통과`, B6); none for one checker or a line without them. */
-export function checkerTally(line: MissionCriterion): { passed: number; total: number } | null {
-  const checkers = line.checkers ?? [];
-  if (checkers.length < 2) return null;
-  return { passed: checkers.filter((checker) => checker.state === "pass").length, total: checkers.length };
 }
 
 /** One checker on its strip (B29): its answer, else at work once the Conductor bound an agent to it, else still to start. */
@@ -487,8 +611,7 @@ export function criterionNote(line: MissionCriterion, mission: Mission, t: TFunc
   if (line.state === "skipped" && line.skip) return line.skip.decision != null ? t("mission.line.operator", { reason: line.skip.reason }) : line.skip.reason;
   if (line.rerunning) return t("mission.line.rerunning");
   if (line.state === "pass" && line.reruns) return t("mission.line.reruns", { count: line.reruns });
-  const tally = checkerTally(line);
-  if (tally && line.state === "open") return t("mission.line.passedOf", { passed: String(tally.passed), total: String(tally.total) });
+  if (line.tally && line.state === "open") return t("mission.line.passedOf", { passed: String(line.tally.passed), total: String(line.tally.total) });
   if (line.kind === "defect" && line.found_by) {
     const finder = mission.nodes.find((node) => node.key === line.found_by);
     return t("mission.line.foundBy", { node: finder?.title ?? line.found_by });
@@ -510,6 +633,31 @@ export function nodeTimes(node: MissionNode, events: readonly MissionEvent[], en
   const running = last.status !== "done" && last.status !== "dropped";
   const stop = running ? end : last.at_unix_ms;
   return { took: start ? Math.max(0, stop - start.at_unix_ms) : null, running };
+}
+
+/**
+ * Where a node's time went (mission-82), as `hide mission show` splits it:
+ * `work` from when it last went to work (its start, or back from a finish)
+ * until its worker's lines stood met, `review` from then until it finished,
+ * and `wait` from when it could have started until it did; a span still
+ * running counts to `end`. A part the record cannot say (no start yet, a
+ * book from before the stamps) is null, and so is a wait under a minute.
+ * Null when neither work nor review can be said of a node that started, so
+ * a wait alone never stands in for its total.
+ */
+export function nodeSpans(node: MissionNode, end: number): { work: number | null; review: number | null; wait: number | null } | null {
+  const started = node.started_at_unix_ms;
+  const from = node.worked_at_unix_ms ?? started;
+  const finished = node.finished_at_unix_ms;
+  const met = node.own_met_at_unix_ms ?? null;
+  const span = (since: number, to: number) => Math.max(0, to - since);
+  const work = from == null ? null : met != null ? span(from, met) : finished == null ? span(from, end) : null;
+  const review = met == null ? null : span(met, finished ?? end);
+  const ready = node.ready_at_unix_ms ?? null;
+  const waited = ready == null ? null : started != null ? span(ready, started) : node.status === "planned" ? span(ready, end) : null;
+  const wait = waited != null && waited >= 60_000 ? waited : null;
+  if (work == null && review == null && (started != null || wait == null)) return null;
+  return { work, review, wait };
 }
 
 /**
@@ -560,13 +708,26 @@ export function cardLine(mission: Mission, node: MissionNode, planLine: string |
     return text ? { text, attention: false } : null;
   }
   if (node.blocked) return { text: nodeLine(node, t), attention: true };
-  const before = waitingFor(mission, node).map((dep) => (dep.pr != null ? `#${dep.pr}` : dep.title));
-  if (before.length > 0) return { text: t("mission.line.waitsFor", { names: before.join(" ") }), attention: false };
+  const wait = plannedWait(mission, node, t);
+  if (wait) return { text: wait, attention: false };
   return node.line ? { text: node.line, attention: false } : null;
 }
 
+/**
+ * What a planned node waits on before its start, in the words its card and
+ * line say it: the nodes before it by pull request or title, a finish line
+ * after its node (`#11 c1`), or, free to start on a line of another, where it
+ * stacks (`출발 가능 · Core 위에 쌓기`); null when it waits on nothing named.
+ */
+export function plannedWait(mission: Mission, node: MissionNode, t: TFunction<"translation">): string | null {
+  const before = waitingFor(mission, node).map(({ node: dep, line }) => [dep.pr != null ? `#${dep.pr}` : dep.title, line].filter(Boolean).join(" "));
+  if (before.length > 0) return t("mission.line.waitsFor", { names: before.join(" ") });
+  const below = node.stack && node.waiting_on?.kind === "start" ? mission.nodes.find((other) => other.key === node.stack!.on) : undefined;
+  return below ? t("mission.line.stackOn", { name: below.title }) : null;
+}
+
 /** The changes left to merge or join, in the order the core gives them (B18, B25). */
-export function landingOrder(mission: Mission): MissionNode[] {
+export function landingOrder<N extends MissionNodeBrief>(mission: { nodes: readonly N[]; landing_order: readonly string[] }): N[] {
   const byKey = new Map(mission.nodes.map((node) => [node.key, node]));
   return mission.landing_order.flatMap((key) => {
     const node = byKey.get(key);
@@ -574,48 +735,213 @@ export function landingOrder(mission: Mission): MissionNode[] {
   });
 }
 
-/** Why a worker's row was raised to the operator (`AgentRow.escalation`, docs/status-model.md, Delegated escalation). */
+/** Why a worker's row was raised to the operator (`AgentRow.escalation`, with-hide/hide-private docs/task-identity.md, Delegated escalation). */
 export type EscalationCause = NonNullable<AgentRow["escalation"]>["cause"];
 
 /**
- * What only the operator can do now (B25; PRD mission-node-simple B14): answer
- * the decision, take over a mission no Conductor holds, settle a node the
- * core raised to the operator (`! 나`), clear a worker the core raised past
- * its parent (one of the seven escalation causes), and merge or join what
- * waits for main. What waits on the Conductor stays on its card, and a
- * finished or cancelled mission has nothing here.
+ * What only the operator can do now (B25; PRD mission-node-simple B14; the
+ * principle of 2026-11-11 in hide-private docs/missions.md): answer the
+ * decision, take over a mission no Conductor holds (naming the nodes its
+ * safety net holds), go to a Conductor that left its raises unsettled 20
+ * minutes (`safety_net`, one item however many nodes), settle a raise only
+ * the operator settles (the Conductor's failure, or a gate reached with no
+ * Conductor that no decision asks yet), clear a worker the core raised past its
+ * parent (one of the escalation causes), take a step only a person can take
+ * that a worker declared (`human_turn`, what and where, settled with Done
+ * here as in Needs You; operator decision 2026-11-13), merge or join what a waiting
+ * mission left, and, while the mission runs, merge a ready pull request its
+ * plan gave the operator (`due`, PRD mission-destination D-11; a scope `pr`
+ * mission's ready pull request is never one, D-35). A node raised to the
+ * Conductor is never here, and a finished or cancelled mission has nothing
+ * here.
  */
-export type TurnItem =
+export type TurnItem<N extends MissionNodeBrief = MissionNode> =
   | { kind: "decision" }
-  | { kind: "takeover" }
-  | { kind: "attention"; node: MissionNode; attention: MissionAttention }
-  | { kind: "worker_blocked"; node: MissionNode; cause: EscalationCause; line: string | null }
-  | { kind: "landing"; nodes: MissionNode[]; git: boolean };
+  | { kind: "takeover"; net: MissionSafetyNet | null }
+  | { kind: "safety_net"; net: MissionSafetyNet }
+  | { kind: "letters"; letters: MissionHeldLetters }
+  | { kind: "attention"; node: N; attention: NonNullable<N["attention"]> }
+  | { kind: "worker_blocked"; node: N; cause: EscalationCause; line: string | null }
+  | { kind: "human_turn"; node: N; human: WorkerHuman }
+  | { kind: "landing"; nodes: N[]; git: boolean; due: boolean };
 
-export function turnItems(mission: Mission, workerRow: (node: MissionNode) => AgentRow | null): TurnItem[] {
+/** A worker row the core raised past its parent: the cause, the line its blocked turn left, and for a person's turn what and where (PRD ask-human B25). */
+export type WorkerEscalation = { cause: EscalationCause; line: string | null; human?: WorkerHuman | null };
+
+/** A worker's person's turn as the mission says it: what kind of step and where it is taken. */
+export type WorkerHuman = { kind: HumanKind; place: string };
+
+/** The escalation of a node's worker row, as the `내 차례` rule reads it; none for a row that was not raised. */
+export function workerEscalation(row: Pick<AgentRow, "escalation" | "request" | "human_turn"> | null | undefined): WorkerEscalation | null {
+  if (!row?.escalation) return null;
+  const request = row.request;
+  const human = row.escalation.cause === "human_turn" && row.human_turn ? { kind: row.human_turn.kind, place: row.human_turn.place } : null;
+  return { cause: row.escalation.cause, line: request?.end === "blocked" && request.line ? request.line : null, human };
+}
+
+/** Why a raised worker waits, as a step says it: a person's turn's kind and place, else its blocked turn's line, else its cause. */
+export function escalationWhy(escalation: WorkerEscalation, t: TFunction<"translation">): string {
+  if (escalation.human) return humanTurnText(t, escalation.human);
+  return escalation.line ?? t(`mission.turn.cause.${escalation.cause}`);
+}
+
+/** The escalations a held letter to the parent raises. */
+const LETTER_CAUSES: ReadonlySet<EscalationCause> = new Set<EscalationCause>(["draft", "parent_blocked"]);
+
+/**
+ * A node worker's escalation as the mission shows it, the one rule 내 차례
+ * (`turnItems`) and the summary's 확인 필요 (`holdReason`) read: none for a
+ * worker raised only because its own letter to the Conductor is held while
+ * the mission shows the Conductor's held letters, since that line already
+ * says the cause and what to do; any other cause stays.
+ */
+export function shownEscalation(mission: { conductor_letters?: MissionHeldLetters | null }, escalation: WorkerEscalation | null): WorkerEscalation | null {
+  return escalation && mission.conductor_letters && LETTER_CAUSES.has(escalation.cause) ? null : escalation;
+}
+
+/** The safety net in one line, as a mission's row and a Needs You row say it: the held count with what is missing, a Conductor that has not settled them or no Conductor at all. */
+export function safetyNetLine(net: MissionSafetyNet, t: TFunction<"translation">): string {
+  const count = net.nodes.length;
+  return net.conductor_present ? t("mission.net.line", { count }) : t("mission.net.noConductor", { count });
+}
+
+/** `escalationOf` answers for a node's worker: the desktop reads its row, the phone the escalation its core sent with the node. */
+export function turnItems<N extends MissionNodeBrief>(mission: MissionBrief<N>, escalationOf: (node: N) => WorkerEscalation | null): TurnItem<N>[] {
   if (!missionOpen(mission)) return [];
-  const items: TurnItem[] = [];
+  const items: TurnItem<N>[] = [];
+  const net = mission.safety_net ?? null;
   if (mission.decision) items.push({ kind: "decision" });
-  else if (!mission.conductor.present) items.push({ kind: "takeover" });
+  else if (!mission.conductor.present) items.push({ kind: "takeover", net });
+  else if (net) items.push({ kind: "safety_net", net });
+  // Letters the Conductor has not got stop the mission as surely as a decision (hide-private issue 678); the core counts only what the operator can lift.
+  if (mission.conductor_letters) items.push({ kind: "letters", letters: mission.conductor_letters });
+  // A gate the decision asks now is answered on its card, never as an item of its own too (PRD mission-human-gate D-25); one no decision asks says what to look at here (D-23).
+  const asked = mission.question?.key ?? null;
   for (const node of orderedNodes(mission)) {
     const attention = openAttention(mission, node);
-    if (attention?.to === "operator") items.push({ kind: "attention", node, attention });
+    const gateOnCard = attention?.reason === "human_gate" && asked !== null && node.gate?.state === "open" && node.gate.ask === asked;
+    if (attention?.to === "operator" && !gateOnCard) items.push({ kind: "attention", node, attention });
   }
   for (const node of orderedNodes(mission)) {
-    const escalation = node.status === "working" ? workerRow(node)?.escalation : null;
-    if (escalation) {
-      const request = workerRow(node)?.request;
-      items.push({ kind: "worker_blocked", node, cause: escalation.cause, line: request?.end === "blocked" && request.line ? request.line : null });
-    }
+    const escalation = node.status === "working" ? shownEscalation(mission, escalationOf(node)) : null;
+    if (!escalation) continue;
+    // A worker's person's turn stands here too, as it does on the Conductor's row in Needs You, so the mission says what the operator does (operator decision 2026-11-13, replacing PRD ask-human D-18).
+    if (escalation.cause !== "human_turn") items.push({ kind: "worker_blocked", node, cause: escalation.cause, line: escalation.line });
+    else if (escalation.human) items.push({ kind: "human_turn", node, human: escalation.human });
   }
   if (mission.status === "merge_wait") {
     const nodes = landingOrder(mission);
-    if (nodes.length > 0) items.push({ kind: "landing", nodes, git: nodes.every((node) => node.pr == null) });
+    if (nodes.length > 0) items.push({ kind: "landing", nodes, git: nodes.every((node) => node.pr == null), due: false });
+  } else if (mission.nodes.some((node) => node.merge?.state === "due")) {
+    // A node whose own plan gives the operator its merge is theirs once its pull request is ready, while the rest still runs; a scope `pr` mission's ready pull request is never due (PRD mission-destination D-11, D-35).
+    const nodes = landingOrder(mission).filter((node) => node.merge?.state === "due");
+    if (nodes.length > 0) items.push({ kind: "landing", nodes, git: false, due: true });
   }
   return items;
 }
 
-/** The events the core sends for `missionId`, which it does only for the mission open in the 보기 slot (D-22). */
+/**
+ * A mission's short number, `M39` for `mission-39`, the one name the Mission
+ * tool's rows, the map's head and a Conductor pane's chip call it by: read
+ * from the core's id only, never made up, and null for an id of another shape.
+ * The `M` keeps it apart from a pull request's `#`.
+ */
+export function missionNumber(id: string): string | null {
+  const found = /^mission-(\d+)$/.exec(id);
+  return found ? `M${found[1]}` : null;
+}
+
+/** `Conductor에게 편지 N통 대기 · <what to do>`: the Conductor's held letters as 내 차례 and the Mission tool's row say them. */
+export function heldLettersText(letters: MissionHeldLetters, t: TFunction<"translation">): string {
+  return `${t("mission.letters.waiting", { count: letters.count })} · ${t(`mission.letters.reason.${letters.reason}`)}`;
+}
+
+/**
+ * Whether a node in progress is worked now, as its card and mark say it
+ * (hide-private issue 680): the core's `work`, only while the card reads in
+ * progress; null leaves the card as it was, the ring turning.
+ */
+export function nodeWork(mission: Mission, node: MissionNode): MissionNodeWork | null {
+  return nodeLook(mission, node) === "working" ? (node.work ?? null) : null;
+}
+
+/** A node's work in words: `작업 중`, `기다리는 중 · 리뷰`, `일꾼 잠듦`, `멈춤 · API 오류`, `멈춤 · 일꾼 없음`; a stop's age is the card's worker row's (`멈춘 지 n분`). */
+export function nodeWorkWords(work: MissionNodeWork, t: TFunction<"translation">): string {
+  switch (work.state) {
+    case "working":
+      return t("mission.work.working");
+    case "no_worker":
+      return t("mission.work.stopped", { why: t("mission.work.stop.noWorker") });
+    case "waiting":
+      return t("mission.work.waiting", { on: waitingOnWord(work.on, t) });
+    case "asleep":
+      return t("mission.worker.asleep");
+    case "stopped":
+      return t("mission.work.stopped", { why: stopCauseWords(work.cause, t) });
+  }
+}
+
+/**
+ * Why a node's worker stopped, in the words its card and warning say it:
+ * a usage limit with the agent's own line (its reset time when it gave
+ * one), an API error, or no report. The line is the agent's as it wrote it;
+ * an API error's line is in `full` only, since its first words say the same.
+ */
+export function stopCauseWords(cause: MissionStopCause | null | undefined, t: TFunction<"translation">, full = false): string {
+  if (!cause) return t("mission.work.stop.none");
+  if (cause.kind === "limit") return t("mission.work.stop.limit", { line: cause.line });
+  return full ? t("mission.work.stop.errorLine", { line: cause.line }) : t("mission.work.stop.error");
+}
+
+/** What a resting worker's node waits on, in one or two words. */
+function waitingOnWord(on: MissionWaitingOn, t: TFunction<"translation">): string {
+  switch (on.kind) {
+    case "attention":
+      return t(`mission.attention.to.${on.to}`);
+    case "nodes":
+      return on.keys.join(", ");
+    case "below":
+      return t("mission.work.on.below", { node: on.node });
+    default:
+      return t(`mission.work.on.${on.kind}`);
+  }
+}
+
+/** A step's state on the map: finished, being worked, stopped at (its node's pace is `stopped`), or only planned (the worker has not reached it). */
+export type StepTone = "done" | "working" | "stopped" | "plan";
+
+/** A node's step cells as its pace draws them: the step being worked turns the stopped colour while no one moves the node. */
+export function pacedSteps(steps: readonly NodeStep[], pace: NodePace | null): StepTone[] {
+  return steps.map((step) => (pace === "stopped" && step.tone === "working" ? "stopped" : step.tone));
+}
+
+/** A step of a node as the card's bar draws it. */
+export type NodeStep = { title: string; tone: StepTone };
+
+/**
+ * How a node's work goes, from the one source that is true now: the worker's
+ * own plan once it exists (`worker`), else the steps the Conductor planned
+ * (`plan`), never both as two lists. `now` is the worker's current step.
+ * Null when the node has neither. Which worker step differs from the
+ * Conductor's is the checklist's to mark (`PlanChecklist`'s `planned`).
+ */
+export function nodeSteps(node: MissionNode): { source: "worker" | "plan"; steps: NodeStep[]; now: string | null } | null {
+  const plan = node.plan;
+  if (plan) {
+    // `planCells` lists the plan's steps in this order, a dropped step left out.
+    const rows = planChecklist(plan).filter(({ step }) => step.status !== "dropped");
+    const cells = planCells(plan);
+    const steps = rows.map(({ step }, index): NodeStep => ({
+      title: step.title,
+      tone: cells[index] === "done" ? "done" : cells[index] === "working" || cells[index] === "hold" ? "working" : "plan",
+    }));
+    if (steps.length > 0) return { source: "worker", steps, now: plan.progress.finished ? null : (stepOf(plan, plan.progress.current)?.title ?? null) };
+  }
+  if (node.steps.length === 0) return null;
+  return { source: "plan", steps: node.steps.map((title) => ({ title, tone: "plan" })), now: null };
+}
+
+/** The events the core sends for `missionId`, which it does only for the mission open as a card tab on a desk (D-22). */
 export function missionEventsOf(rest: SnapshotRest | null | undefined, missionId: string): MissionEventsSnapshot | null {
   const events = rest?.mission_events;
   return events && events.mission === missionId ? events : null;
@@ -675,6 +1001,39 @@ export function eventWords(event: MissionEvent, t: TFunction<"translation">): { 
 }
 
 /**
+ * The nodes whose gate the plan still has the operator look at later (PRD
+ * mission-human-gate D-18, B9): `ahead` on an open mission, a dropped node
+ * left out. They are never the operator's turn: only the eye strip, the plan's
+ * `내가 볼 곳 N` and the list row's grey eye count show them.
+ */
+export function gatesAhead<N extends { status: MissionNode["status"]; gate?: MissionGate | null }>(mission: { status: Mission["status"]; nodes: readonly N[] }): N[] {
+  if (!missionOpen(mission)) return [];
+  return mission.nodes.filter((node) => node.gate?.state === "ahead" && node.status !== "dropped");
+}
+
+/** The gate a card draws (PRD node-presets D-09): a start gate once passed has done its work before the node began, so only the panel keeps it; any other gate as it stands. */
+export function cardGate<G extends Pick<MissionGate, "state" | "when">>(gate: G | null | undefined): G | null {
+  return gate && !(gate.state === "passed" && gate.when === "start") ? gate : null;
+}
+
+/** Whether a general node ended on a failed verdict (PRD node-presets D-08), which its card's mark says in red. */
+export function failedVerdict(node: Pick<MissionNode, "kind" | "status" | "verdict">): boolean {
+  return node.kind === "general" && node.status === "done" && node.verdict === "fail";
+}
+
+/** Whether a reached gate has waited long (`오래 기다림`, D-22, B22): the core gives the moment, the screen compares it with its own clock. */
+export function gateWaitedLong(gate: Pick<MissionGate, "state" | "long_wait_at_unix_ms"> | null | undefined, now: number): boolean {
+  return gate?.state === "open" && gate.long_wait_at_unix_ms != null && now >= gate.long_wait_at_unix_ms;
+}
+
+/** The node whose gate the open decision asks now (D-04), or none. */
+export function gateAsked(mission: Pick<Mission, "nodes" | "question">): MissionNode | null {
+  const key = mission.question?.key;
+  if (key == null) return null;
+  return mission.nodes.find((node) => node.gate?.state === "open" && node.gate.ask === key) ?? null;
+}
+
+/**
  * The question the decision asks of a node (B16, B25): the mission's open
  * decision on the node it names; a decision naming no node holds none.
  */
@@ -689,7 +1048,9 @@ function prWords(pr: number | null, t: TFunction<"translation">): string {
 }
 
 /** Why a node waits on someone to look, in one line (PRD mission-node-simple B2): its hover, its panel and its 내 차례 item say the same. */
-export function attentionReasonText(reason: MissionAttentionReason, pr: number | null, t: TFunction<"translation">): string {
+export function attentionReasonText(reason: MissionAttentionReason | MissionHeldCellReason, pr: number | null, t: TFunction<"translation">, unmet = 0): string {
+  // A refused close says how many finished nodes have a line empty when the core counted them.
+  if (reason === "close_refused" && unmet > 0) return t("mission.attention.reason.close_refused_unmet", { count: unmet });
   return t(`mission.attention.reason.${reason}`, { pr: prWords(pr, t) });
 }
 
@@ -698,7 +1059,7 @@ export function attentionReasonText(reason: MissionAttentionReason, pr: number |
  * none for a dropped node or in a cancelled mission, whose work stays as it
  * was left.
  */
-export function openAttention(mission: Mission, node: MissionNode): MissionAttention | null {
+export function openAttention<A extends Omit<MissionAttention, "choices">>(mission: Pick<Mission, "status">, node: Pick<MissionNode, "status"> & { attention: A | null }): A | null {
   return mission.status === "cancelled" || node.status === "dropped" ? null : node.attention;
 }
 
@@ -708,28 +1069,65 @@ export function openAttention(mission: Mission, node: MissionNode): MissionAtten
  * node stands, so the mission itself is the item, its oldest such node first
  * and `more` for the rest.
  */
-export type MissionAsk = { mission: Mission; node: MissionNode; attention: MissionAttention; more: number };
+/**
+ * A mission that is its own Needs You item: a raise only the operator settles
+ * that no row carries (`node`), with `more` the other things it waits on, or
+ * else its safety net (`net`), one item however many nodes it holds.
+ * `since_unix_ms` is how long it has waited.
+ */
+export type MissionAsk = { mission: Mission; since_unix_ms: number; more: number } & ({ kind: "node"; node: MissionNode; attention: MissionAttention } | { kind: "merge"; node: MissionNode } | { kind: "net"; net: MissionSafetyNet });
+
+/** The last still-open held PR and the other open PRs, from the core's
+ * merge reading. Older cores omit `prs` and keep their previous PR display. */
+export function mergePull(node: Pick<MissionNode, "merge" | "pr" | "pr_state"> & { prs?: readonly MissionNodePr[] }): { number: number | null; state: PrState | null; more: number } {
+  const open = node.merge?.prs;
+  const number = open === undefined ? node.pr : (open.at(-1) ?? null);
+  const state = number === node.pr ? node.pr_state : (node.prs?.find((pr) => pr.number === number)?.state ?? null);
+  return { number, state, more: Math.max(0, (open?.length ?? 1) - 1) };
+}
+
+/**
+ * Since when a node's merge has been the operator's turn (`merge.state` `due`,
+ * PRD mission-destination D-11): from its finish, as the core counts it in
+ * `mission_asks`; null for a node whose merge is not due.
+ */
+export function mergeDueSince(node: Pick<MissionNode, "merge" | "finished_at_unix_ms">): number | null {
+  return node.merge?.state === "due" ? (node.finished_at_unix_ms ?? 0) : null;
+}
 
 /**
  * The missions a device's scope names as its own Needs You items
  * (`agent_scope.mission_asks`, oldest first), each with its oldest node that
- * waits on the operator and no row carries (`on_row`). The scope counts the
- * same missions in its Needs You number, so a list drawn from this agrees
- * with the Overview and the device rail.
+ * waits on the operator and no row carries (`on_row`), else its safety net.
+ * The scope counts the same missions in its Needs You number, so a list drawn
+ * from this agrees with the Overview and the device rail.
  */
 export function missionAsks(missions: readonly Mission[], ids: readonly string[]): MissionAsk[] {
   const byId = new Map(missions.map((mission) => [mission.id, mission]));
-  return ids.flatMap((id) => {
+  return ids.flatMap((id): MissionAsk[] => {
     const mission = byId.get(id);
     if (!mission) return [];
-    // The core decides which raises the mission itself carries (`item`), the
-    // same rule its count reads.
-    const waiting = mission.nodes
-      .flatMap((node) => (node.attention?.item ? [{ node, attention: node.attention }] : []))
-      .sort((a, b) => a.attention.since_unix_ms - b.attention.since_unix_ms);
+    // The core decides which raises the mission itself carries (`item`) and
+    // which merges are the operator's now (`due`), the same rule its count reads.
+    type Waiting = { since: number; ask: { kind: "node"; node: MissionNode; attention: MissionAttention } | { kind: "merge"; node: MissionNode } };
+    const waiting: Waiting[] = mission.nodes.flatMap((node): Waiting[] => {
+      const out: Waiting[] = [];
+      if (node.attention?.item) out.push({ since: node.attention.since_unix_ms, ask: { kind: "node", node, attention: node.attention } });
+      const due = mergeDueSince(node);
+      if (due !== null) out.push({ since: due, ask: { kind: "merge", node } });
+      return out;
+    });
+    waiting.sort((a, b) => a.since - b.since);
+    const net = mission.safety_net ?? null;
     const first = waiting[0];
-    return first ? [{ mission, node: first.node, attention: first.attention, more: waiting.length - 1 }] : [];
+    if (first) return [{ ...first.ask, mission, since_unix_ms: first.since, more: waiting.length - 1 + (net ? 1 : 0) }];
+    return net ? [{ kind: "net", mission, net, since_unix_ms: net.since_unix_ms, more: 0 }] : [];
   });
+}
+
+/** What a mission's Needs You item is about in a few words, for its accessible name: the node, or the safety net's line. */
+export function missionAskWhat(ask: MissionAsk, t: TFunction<"translation">): string {
+  return ask.kind === "net" ? safetyNetLine(ask.net, t) : ask.node.title;
 }
 
 /** The asks of the missions of project `projectId` (a workspace id), or every ask when no project is chosen. */
@@ -741,7 +1139,53 @@ export function projectAsks(asks: readonly MissionAsk[], projectId: string | nul
 export function attentionWords(node: MissionNode, t: TFunction<"translation">): { who: string; why: string } | null {
   const attention = node.attention;
   if (!attention) return null;
-  return { who: t(`mission.attention.to.${attention.to}`), why: attentionReasonText(attention.reason, attention.pr, t) };
+  return { who: t(`mission.attention.to.${attention.to}`), why: attentionReasonText(attention.reason, attention.pr, t, attention.unmet_nodes) };
+}
+
+/**
+ * What a node waits on that its Conductor set, as the core decides it
+ * (`Mission::wait_of`): its own hold or the mission's delay, the card's grey
+ * pause line `기다리는 중 · <why> · <time>`. None while nothing holds it; the
+ * core lifts an expired wait within a minute.
+ */
+export function nodeWait(node: MissionNode): MissionNodeWait | null {
+  return node.wait ?? null;
+}
+
+/** How many of a mission's nodes its Conductor holds back on their own now (the list's `보류 N`); a mission's delay is its pill's to say. */
+export function heldNodes(mission: Mission): number {
+  return mission.nodes.filter((node) => node.wait != null && !node.wait.mission).length;
+}
+
+/**
+ * A node's warnings as its card says them (hide-private issue 552): the
+ * short word the card shows, the first warning's with `+n` for the rest,
+ * and each warning in full for its hover and accessible name, said as told
+ * to the Conductor once its letter was queued and as the Conductor's turn to
+ * be told before. Null with no
+ * warning, and for a dropped node or a cancelled mission, which warn of
+ * nothing.
+ */
+export function warningWords(mission: Mission, node: MissionNode, t: TFunction<"translation">): { short: string; full: string[] } | null {
+  // An older core's review warning carries no rounds (a connected device of an earlier build): it says nothing rather than `0/0`.
+  const rounds = node.review_rounds;
+  const warnings = mission.status === "cancelled" || node.status === "dropped" ? [] : (node.warnings ?? []).filter((warning) => warning.kind !== "review_fails" || rounds != null);
+  const first = warnings[0];
+  if (!first) return null;
+  const minutes = (warning: MissionNodeWarning) => String(Math.floor((warning.since_unix_ms - warning.from_unix_ms) / 60_000));
+  const words = (warning: MissionNodeWarning, form: "short" | "full") => {
+    switch (warning.kind) {
+      case "review_fails":
+        return t(`mission.warning.review_fails.${form}`, { rounds: rounds!.rounds, limit: rounds!.limit });
+      case "stopped":
+        return form === "short" ? t("mission.warning.stopped.short") : t("mission.warning.stopped.full", { minutes: minutes(warning), why: stopCauseWords(warning.cause, t, true) });
+    }
+  };
+  const more = warnings.length - 1;
+  return {
+    short: more > 0 ? `${words(first, "short")} +${more}` : words(first, "short"),
+    full: warnings.map((warning) => t(warning.told_unix_ms != null ? "mission.warning" : "mission.warning.untold", { what: words(warning, "full") })),
+  };
 }
 
 /**
@@ -777,46 +1221,15 @@ export function lineOutrun(node: MissionNode, events: readonly MissionEvent[] | 
 }
 
 /**
- * The operator's choices for a node that waits on someone to look, by why
- * (PRD mission-node-simple B15, B26): each is one `mission_attention`
- * event. A mission no
- * Conductor holds, or whose Conductor left a raise unanswered for ten
- * minutes (`conductorUnanswered`), offers 이어받기 on its Conductor row just
- * above.
+ * The pull request a raise is about, for the words beside its choices: the
+ * raise's own, else the node's current one or the outside one it follows,
+ * with its state as the project's list reads it, else as the node keeps it.
  */
-export type AttentionChoice = MissionOperatorAction;
-
-/** The reasons only the operator settles, which reach them at once rather than after the Conductor's ten minutes (D-05, B26). */
-const OPERATOR_FIRST: readonly MissionAttentionReason[] = ["conductor_failed"];
-
-/**
- * Whether a Conductor that holds the mission let a raise reach the operator
- * (PRD mission-node-simple D-05, B15): a node's `!` the Conductor was asked
- * first now says `! 나`, so it stood ten minutes unanswered and the operator
- * may take the mission over.
- */
-export function conductorUnanswered(mission: Mission): boolean {
-  if (!missionOpen(mission) || !mission.conductor.present) return false;
-  return mission.nodes.some((node) => {
-    const attention = openAttention(mission, node);
-    return attention?.to === "operator" && !OPERATOR_FIRST.includes(attention.reason);
-  });
-}
-
-export function attentionChoices(reason: MissionAttentionReason): AttentionChoice[] {
-  switch (reason) {
-    case "merged_unproven":
-      return ["done"];
-    case "worker_ended":
-    case "pr_closed":
-    case "wake_refused":
-    case "close_refused":
-      return ["drop"];
-    case "unplanned_pr":
-      return ["attach", "leave"];
-    case "conductor_failed":
-      return ["resume", "drop"];
-  }
+export function attentionPr(node: MissionNode, attention: MissionAttention, pulls: readonly PullRequest[] | null | undefined): { number: number; state: PrState | null } | null {
+  const number = attention.pr ?? node.pr ?? (node.external && "pr" in node.external ? node.external.pr : null);
+  if (number == null) return null;
+  const pull = pulls?.find((row) => row.number === number) ?? null;
+  return { number, state: pull?.state ?? (number === node.pr ? (node.pr_state ?? null) : null) };
 }
 
 /** Whether the operator can set a done or dropped node to work again (B16): not in a cancelled mission, which does not reopen. */
@@ -873,9 +1286,8 @@ export function conductorResume(mission: Mission): { provider: ProviderKind; ses
  * come from an issue someone else wrote, and the new agent reads it with
  * `hide mission show` as the record's data rather than as its instructions.
  */
-export function takeOverPrompt(mission: Mission, handover?: string): string {
-  const take = handover ? `hide mission take ${mission.id} --handover ${handover}` : `hide mission take ${mission.id}`;
-  return `Read \`hide mission help\` and follow it as this mission's Conductor: take over mission ${mission.id}. Run \`${take}\`, then \`hide mission show\` and \`hide inbox\`, read each worker's state, and go on from there.`;
+export function takeOverPrompt(mission: Mission): string {
+  return `Read \`hide mission help\` and follow it as this mission's Conductor: take over mission ${mission.id}. Run \`hide mission take ${mission.id}\`, then \`hide mission show\` and \`hide inbox\`, read each worker's state, and go on from there.`;
 }
 
 /**
@@ -952,10 +1364,12 @@ export function reportLine(plain: string, title: string): string | null {
   return first === title.trim() && second !== undefined ? second : first;
 }
 
-/** The nodes a waiting node still waits for (B28): those not finished or dropped, which its line names by pull request or title. */
-export function waitingFor(mission: Mission, node: MissionNode): MissionNode[] {
-  return node.depends_on.flatMap((key) => {
-    const dep = mission.nodes.find((other) => other.key === key);
-    return dep && dep.status !== "done" && dep.status !== "dropped" ? [dep] : [];
+/** What the core says a planned node still waits for (`waiting_on`, B28): each node, with the finish line of it the node waits on when it waits on one. */
+export function waitingFor(mission: Mission, node: MissionNode): { node: MissionNode; line: string | null }[] {
+  if (node.waiting_on?.kind !== "nodes") return [];
+  return node.waiting_on.keys.flatMap((key) => {
+    const { node: wanted, line } = missionDependency(key);
+    const found = mission.nodes.find((other) => other.key === wanted);
+    return found ? [{ node: found, line }] : [];
   });
 }

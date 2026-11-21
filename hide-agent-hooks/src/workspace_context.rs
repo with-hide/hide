@@ -1,32 +1,42 @@
-//! A SessionStart capability probe through the same scoped CLI the agent will
-//! use. The hook never reads bearer bytes or trusts a pane ID on its own, and
-//! it needs no pane id at all: the daemon binds a caller in a pane to that
-//! pane and any other local caller to the registered checkout holding its cwd,
-//! so the guidance names the checkout the daemon answered with.
+//! A SessionStart capability probe, the hook request `hide workspace info
+//! --hook` sends, asked by the hook itself. The hook never reads bearer bytes
+//! or trusts a pane ID on its own: it asks only a session that runs in a Hide
+//! pane (its environment names one), and the daemon proves that name before
+//! it answers, so the guidance names the checkout of the pane it answered
+//! for. A session started outside Hide, in another terminal app on a
+//! checkout Hide knows, is given no guidance: its commands would open views
+//! in a window its operator is not looking at.
 
 use std::ffi::OsString;
-use std::io::Read;
 use std::path::{Path, PathBuf};
-use std::process::{Command, Stdio};
-use std::thread;
 use std::time::{Duration, Instant};
 
-use hide_platform::process::OwnedChild;
 use serde_json::Value;
 
 const CLI_TIMEOUT: Duration = Duration::from_secs(2);
-const OUTPUT_LIMIT: u64 = 16 * 1024;
 
 pub fn live_context() -> Option<String> {
-    let program = cli_program()?;
-    let answer = run_cli(&program, &["workspace", "info", "--hook"])?;
-    if answer["ok"] != true {
+    live_context_for(hide_agent_hooks::pane::from_env().is_some())
+}
+
+fn live_context_for(in_hide_pane: bool) -> Option<String> {
+    if !in_hide_pane {
         return None;
     }
+    let program = cli_program()?;
+    let (answer, _) = hide_agent_hooks::delivery::ask_answer(
+        hide_agent_hooks::hook_request::HookCommand::WorkspaceInfo {},
+        Instant::now() + CLI_TIMEOUT,
+    );
+    // A failed probe leaves the session without the guidance; Memory and the
+    // report beside it record why the daemon could not be asked.
+    let answer = answer.ok()?;
     let reference = PathBuf::from(answer["reference"].as_str()?);
     format_context(&program, &reference, &answer)
 }
 
+/// The `hide` the guidance tells the agent to run: the one beside this
+/// helper, else the one on `PATH`.
 pub fn cli_program() -> Option<OsString> {
     let sibling = std::env::current_exe()
         .ok()?
@@ -38,51 +48,6 @@ pub fn cli_program() -> Option<OsString> {
         // An independently installed remote helper can use the CLI on PATH.
         Some(OsString::from("hide"))
     }
-}
-
-#[allow(clippy::disallowed_methods)] // a production wait, not test code
-fn run_cli(program: &OsString, arguments: &[&str]) -> Option<Value> {
-    let mut command = Command::new(program);
-    if let Err(cause) = hide_agent_hooks::route::apply(&mut command) {
-        if let Some(home) = std::env::var_os("HOME").or_else(|| std::env::var_os("USERPROFILE")) {
-            hide_agent_hooks::delivery::diagnose(Path::new(&home), cause);
-        }
-        return None;
-    }
-    command
-        .args(arguments)
-        .stdin(Stdio::null())
-        .stdout(Stdio::piped())
-        .stderr(Stdio::null());
-    let mut child = OwnedChild::spawn(&mut command).ok()?;
-    let deadline = Instant::now() + CLI_TIMEOUT;
-    let status = loop {
-        match child.try_wait() {
-            Ok(Some(status)) => break status,
-            Ok(None) => {}
-            Err(_) => {
-                let _ = child.kill_tree();
-                let _ = child.wait();
-                return None;
-            }
-        }
-        if Instant::now() >= deadline {
-            let _ = child.kill_tree();
-            let _ = child.wait();
-            return None;
-        }
-        thread::sleep(Duration::from_millis(10));
-    };
-    if !status.success() {
-        return None;
-    }
-    let mut output = Vec::new();
-    child
-        .take_stdout()?
-        .take(OUTPUT_LIMIT)
-        .read_to_end(&mut output)
-        .ok()?;
-    serde_json::from_slice(&output).ok()
 }
 
 fn format_context(program: &OsString, reference: &Path, answer: &Value) -> Option<String> {
@@ -99,7 +64,7 @@ fn format_context(program: &OsString, reference: &Path, answer: &Value) -> Optio
     let mut commands = vec!["workspace info"];
     if has("request.send") {
         commands.push(
-            "request send <target> --intent <key> --body <text> [--kind request|block|report|progress] [--now] (report says the work is finished and ends your parent's watch on you; progress is an interim report such as a plan and ends nothing; a recipient that is working reads a letter after five minutes of its work, and --now at its next tool call instead)",
+            "request send <target> --intent <key> --body <text> [--kind request|block|report|progress] [--now] (`parent` names your parent; report says the work is finished and ends your parent's watch on you; progress is an interim report such as a plan and ends nothing; a recipient that is working reads a letter after five minutes of its work, and --now at its next tool call instead)",
         );
     }
     if has("inbox") {
@@ -155,7 +120,7 @@ fn format_context(program: &OsString, reference: &Path, answer: &Value) -> Optio
         shell_quote(&reference.to_string_lossy()),
     );
     Some(format!(
-        "Hide Workspace control is available for this session's checkout `{checkout_path}`. Workspace commands affect only that checkout; there is no Workspace override. Delivery commands use the current agent pane and native session, including on a connected device.{letters} Prefix each command with `{command_prefix}`. Available commands: {}. Run `{command_prefix} workspace info` to refresh capabilities and `{quoted} --help` for syntax. While the operator is looking at this checkout from another pane, an open or select joins its Files list behind what they see, so tell them what you opened. A failed command returns a reason and next action; recheck before retrying a timed-out action. Run `{quoted} guide` for how to work in Hide: letters, starting agents, the operator's screen and Project Memory; `{quoted} browser help` covers a browser display and `{quoted} mission help` running a mission of agents as its Conductor.",
+        "Hide Workspace control is available for this session's checkout `{checkout_path}`. Workspace commands affect only that checkout; there is no Workspace override. Delivery commands use the current agent pane and native session, including on a connected device.{letters} Prefix each command with `{command_prefix}`. Available commands: {}. Run `{command_prefix} workspace info` to refresh capabilities and `{quoted} --help` for syntax. An open or select reaches the operator's screen only from the pane they watch; from any other pane it waits in your pane's Views list, so tell them what you opened. A failed command returns a reason and next action; recheck before retrying a timed-out action. Run `{quoted} guide` for how to work in Hide: letters, starting agents, the operator's screen and Project Memory; `{quoted} browser help` covers a browser display and `{quoted} mission help` running a mission of agents as its Conductor.",
         commands.join(", "),
     ))
 }
@@ -168,6 +133,11 @@ fn shell_quote(value: &str) -> String {
 mod tests {
     use super::*;
     use serde_json::json;
+
+    #[test]
+    fn a_session_outside_a_hide_pane_is_not_asked() {
+        assert!(live_context_for(false).is_none());
+    }
 
     #[test]
     fn guidance_names_the_checkout_the_daemon_bound_the_caller_to() {

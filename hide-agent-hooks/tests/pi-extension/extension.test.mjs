@@ -16,6 +16,7 @@ import { homedir } from "node:os";
 import path from "node:path";
 import { test } from "node:test";
 import { pathToFileURL } from "node:url";
+import { writeAnswers } from "../stand-in-answers.mjs";
 
 const AGENT = process.env.HIDE_EXTENSION_AGENT;
 const FIXTURE = AGENT === "pi" ? "pi-1.0.4.json" : "omp-18.7.0.json";
@@ -23,7 +24,7 @@ const SAMPLES = JSON.parse(readFileSync(new URL(`../fixtures/pi-extension/${FIXT
 const LOG = process.env.HIDE_EXTENSION_HELPER_LOG;
 const ANSWERS = process.env.HIDE_EXTENSION_HELPER_ANSWERS;
 
-const HERDR = { HERDR_ENV: "1", HERDR_PANE_ID: "w1:p1", HERDR_SOCKET_PATH: "/tmp/herdr-fixture.sock" };
+const PANE = { HIDE_PANE_ID: "w1:p1" };
 const NESTED = ["OMPCODE", "PI_SESSION_ID"];
 const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 // The global instruction guard's corpus, which the helper's guard is run on too (`src/global_guard.rs`), with
@@ -46,14 +47,14 @@ function policy(rules) {
 policy({});
 const sample = (name) => structuredClone(SAMPLES[name]);
 // The shell call `settled` runs to order the helper calls before it.
-const BARRIER = "herdr --barrier";
+const BARRIER = "open barrier.html";
 
 let answers = {};
 
 /** Sets the stand-in's answers for the operations `update` names; the others keep theirs until the next load. */
 function answer(update) {
   answers = { ...answers, ...update };
-  writeFileSync(ANSWERS, JSON.stringify(answers));
+  writeAnswers(ANSWERS, answers);
 }
 
 function calls() {
@@ -134,12 +135,12 @@ function bind(module) {
   };
 }
 
-/** Loads the extension as the host does, in a process whose environment is `env` for Herdr's variables. */
-async function extension(env = HERDR) {
+/** Loads the extension as the host does, in a process whose environment is `env` for the pane's variable. */
+async function extension(env = PANE) {
   rmSync(LOG, { force: true });
   answers = {};
   answer({});
-  for (const key of [...Object.keys(HERDR), ...NESTED]) delete process.env[key];
+  for (const key of [...Object.keys(PANE), ...NESTED]) delete process.env[key];
   Object.assign(process.env, env);
   // A fresh module per test: omp shares the module between its sessions, and a test must not.
   loads += 1;
@@ -158,36 +159,20 @@ function prompt(host, text = "Fix the failing parser test", ctx = context("befor
   return host.emit("before_agent_start", event, ctx);
 }
 
-test("shell post observation uses the actual native session and preserves content and errors", async () => {
-  const host = await extension();
-  answer({ observation: {} });
-  const ctx = context("tool_result.bash");
-  const event = { ...sample("tool_result.bash").event, input: { command: "herdr agent prompt worker hi" },
-    content: [{ type: "text", text: "RAW HERDR RESULT" }], isError: true };
-  const original = structuredClone(event);
-  assert.equal(await host.emit("tool_result", event, ctx), undefined);
-  assert.deepEqual(event, original);
-  const [observed] = await until("observation");
-  assert.equal(observed.input.session_id, ctx.sessionManager.getSessionId());
-  assert.equal(observed.input.observation.call_id, event.toolCallId);
-  assert.equal(observed.input.observation.failed, true);
-  assert.deepEqual(observed.input.observation.result.content, original.content);
-});
-
 /** The host writing `message` and then the reply after it. */
 async function written(host, message) {
   await host.emit("message_end", { type: "message_end", message: { role: "custom", ...message } }, context("message_end.custom"));
   await host.emit("message_end", sample("message_end.assistant").event, context("message_end.assistant"));
 }
 
-test("outside a Herdr pane or in another agent's shell the extension only guards, and with its helper gone it registers nothing", async () => {
+test("outside a pane or in another agent's shell the extension only guards, and with its helper gone it registers nothing", async () => {
   answer({});
-  const outside = [{}, { HERDR_ENV: "1" }, { ...HERDR, HERDR_ENV: "0" }, { ...HERDR, OMPCODE: "1" }, { ...HERDR, PI_SESSION_ID: "abc" }];
+  const outside = [{}, { HIDE_PANE_ID: "" }, { ...PANE, OMPCODE: "1" }, { ...PANE, PI_SESSION_ID: "abc" }];
   for (const env of outside) {
     const host = await extension(env);
     assert.deepEqual(host.names, ["tool_call", "session_shutdown"], JSON.stringify(env));
-    // No protection on: nothing starts, not even for a launch through Herdr.
-    const launch = { ...sample("tool_call.bash").event, input: { command: "herdr agent start x --kind claude" } };
+    // No protection on: nothing starts, not even for a result handed to the system opener.
+    const launch = { ...sample("tool_call.bash").event, input: { command: "open out/index.html" } };
     assert.equal(await host.emit("tool_call", launch, context("tool_call.bash")), undefined);
   }
   // A missing or unreadable policy starts no helper outside a pane either.
@@ -269,10 +254,10 @@ test("a new session's first prompt carries the guidance and the letters in one h
   const { sessionFile: file, sessionId: id } = sample("before_agent_start").ctx;
   assert.equal(call.agent, AGENT);
   // `lost` counts calls an earlier budget gave up on; a loaded machine may add it. Letters know the session by its
-  // file, as Herdr does; Memory by the host's own id, which its session reader keys a receipt by.
+  // file, as Herdr did; Memory by the host's own id, which its session reader keys a receipt by.
   const { lost: _lost, ...input } = call.input;
-  assert.deepEqual(input, { session_id: file, native_session: id, prompt: "Fix the failing parser test", cwd: "/checkouts/fixture", first: true, memory_first: true, version: 13 });
-  assert.equal(call.env.HERDR_PANE_ID, "w1:p1");
+  assert.deepEqual(input, { session_id: file, native_session: id, prompt: "Fix the failing parser test", cwd: "/checkouts/fixture", first: true, memory_first: true, version: 16 });
+  assert.equal(call.env.HIDE_PANE_ID, "w1:p1");
 
   // Once the host wrote it, the session's guidance is given.
   await written(host, result.message);
@@ -337,7 +322,7 @@ test("a tool result while the pane's agent works carries the letters due, confir
   const [ask] = await until("letters");
   assert.equal(ask.input.session_id, sample("tool_result.bash").ctx.sessionFile);
   assert.equal(ask.input.native_session, sample("tool_result.bash").ctx.sessionId);
-  assert.equal(ask.env.HERDR_PANE_ID, "w1:p1");
+  assert.equal(ask.env.HIDE_PANE_ID, "w1:p1");
   assert.deepEqual(Object.keys(result), ["content"]);
   assert.equal(result.content.length, 2);
   assert.deepEqual(result.content[0], { type: "text", text: "RESULT" });
@@ -435,6 +420,20 @@ test("a confirmation Hide did not take is made again when the letter rides the n
   await written(host, again.message);
   const [, second] = await until("confirm", 2);
   assert.deepEqual(second.input.letters, ["letter-1"]);
+});
+
+// Mission c3: on the core's own engine nothing but the extension names the pane's session, so it reports it when
+// the session starts and when the operator switches to another, before the first prompt.
+test("a session start and a switch report the pane's session before its first prompt", async () => {
+  const host = await extension();
+  answer({ session: { reported: true } });
+  await host.emit("session_start", sample("session_start").event, context("session_start"));
+  const file = context("session_start").sessionManager.getSessionFile();
+  await until("session", 1, (input) => input.session_id === file);
+  const other = "/fixture-home/.pi/agent/sessions/-fixture-home-work-/switched.jsonl";
+  await host.emit("session_switch", sample("session_start").event, context("session_start", { sessionFile: other }));
+  await until("session", 1, (input) => input.session_id === other);
+  assert.equal(made("prompt").length, 0);
 });
 
 test("the pane's session reports its turn: working from a run's start, done once it settles, idle after an abort", async () => {
@@ -591,19 +590,19 @@ test("no handler throws or rejects whatever the host hands it", async () => {
   }
 });
 
-test("a shell call that starts an agent through Herdr is refused with the helper's reason, and others never ask", async () => {
+test("a shell call that hands a result to the system opener is refused with the helper's reason, and others never ask", async () => {
   const host = await extension();
   await started(host, "");
-  answer({ tool: { deny: "Use hide agent spawn --parent here" } });
-  const launch = { ...sample("tool_call.bash").event, input: { command: "herdr agent start helper --kind claude" } };
-  assert.deepEqual(await host.emit("tool_call", launch, context("tool_call.bash")), { block: true, reason: "Use hide agent spawn --parent here" });
+  answer({ tool: { deny: "Use hide file open" } });
+  const launch = { ...sample("tool_call.bash").event, input: { command: "open out/index.html" } };
+  assert.deepEqual(await host.emit("tool_call", launch, context("tool_call.bash")), { block: true, reason: "Use hide file open" });
   const [call] = await until("tool");
   const { lost: _lost, ...input } = call.input;
-  assert.deepEqual(input, { tool: "bash", command: "herdr agent start helper --kind claude", cwd: "/checkouts/fixture", version: 13 });
+  assert.deepEqual(input, { tool: "bash", command: "open out/index.html", cwd: "/checkouts/fixture", version: 16 });
 
-  // A call that can hand a result to the system opener asks the helper too.
+  // Another opener, Windows's, asks the helper too.
   const opener = { ...sample("tool_call.bash").event, input: { command: "Start-Process report.pdf" } };
-  assert.deepEqual(await host.emit("tool_call", opener, context("tool_call.bash")), { block: true, reason: "Use hide agent spawn --parent here" });
+  assert.deepEqual(await host.emit("tool_call", opener, context("tool_call.bash")), { block: true, reason: "Use hide file open" });
   const [, opened] = await until("tool", 2);
   assert.equal(opened.input.command, "Start-Process report.pdf");
 
@@ -624,7 +623,7 @@ test("while a project has a protection on, file and shell calls ask the helper w
     const shell = { ...sample("tool_call.bash").event, input: { command: "cat .env" } };
     assert.deepEqual(await host.emit("tool_call", shell, context("tool_call.bash")), { block: true, reason: "Not run: Guard files is on" });
     const sent = (await until("tool", 2)).map(({ input: { lost: _lost, ...input } }) => input);
-    assert.deepEqual(sent[0], { tool: "write", args: { path: "/checkouts/fixture/.env" }, cwd: "/checkouts/fixture", version: 13 });
+    assert.deepEqual(sent[0], { tool: "write", args: { path: "/checkouts/fixture/.env" }, cwd: "/checkouts/fixture", version: 16 });
     assert.equal(sent[1].command, "cat .env");
 
     // Every protection off again: no file or shell call starts the helper (B27).
@@ -645,7 +644,7 @@ test("a helper that fails or is late lets the shell call run, as Claude Code's g
   for (const reply of [{ exit: 1 }, { delay_ms: 15000, deny: "late" }]) {
     const host = await extension();
     answer({ tool: reply });
-    const launch = { ...sample("tool_call.bash").event, input: { command: "herdr agent start helper --kind claude" } };
+    const launch = { ...sample("tool_call.bash").event, input: { command: "open out/index.html" } };
     const begun = Date.now();
     assert.equal(await host.emit("tool_call", launch, context("tool_call.bash")), undefined);
     assert.ok(Date.now() - begun < 8000, `the call waited ${Date.now() - begun} ms`);
@@ -672,20 +671,29 @@ if (AGENT === "omp") {
     const counts = () => calls().filter((call) => call.operation === "subagents").map((call) => `${call.input.working}/${call.input.done}`);
     await until("subagents", 1, (input) => input.working === 0 && input.done === 0);
 
+    // The main agent's `task` call asks for the subagent; its spawn names neither its task nor the call's agent.
+    await host.emit("tool_call", sample("tool_call.task").event, context("tool_call.task"));
     await host.emit("before_subagent_spawn", sample("before_subagent_spawn").event, context("before_subagent_spawn"));
-    await until("subagents", 1, (input) => input.working === 1);
+    const [spawned] = await until("subagents", 1, (input) => input.working === 1);
+    // The spawn key names it; omp's general `task` agent is no kind a row could show.
+    const [running] = spawned.input.running;
+    assert.equal(typeof running.started_unix_ms, "number");
+    assert.deepEqual([running.id, running.kind, running.task], ["MassMoth", undefined, undefined]);
 
     const binding = host.session();
     const sub = context("sub.session_start");
     await binding.emit("session_start", sample("sub.session_start").event, sub);
     await binding.emit("agent_start", sample("sub.agent_start").event, sub);
     answer({ prompt: { context: "LETTER", letters: ["letter-1"] }, subagents: { reported: true } });
-    assert.equal(await prompt(binding, "Say ok.", context("sub.before_agent_start")), undefined, "a subagent's prompt carries no letters");
+    assert.equal(await binding.emit("before_agent_start", sample("sub.before_agent_start").event, context("sub.before_agent_start")), undefined, "a subagent's prompt carries no letters");
+    // Its first prompt carries the asked task's words: the subagent takes that ask's description and agent.
+    const [named] = await until("subagents", 1, (input) => input.running?.[0]?.task !== undefined);
+    assert.deepEqual([named.input.running[0].id, named.input.running[0].kind, named.input.running[0].task], ["MassMoth", "explore", "look"]);
     await binding.emit("agent_end", sample("sub.agent_end").event, sub);
     await until("subagents", 1, (input) => input.working === 0 && input.done === 1);
     assert.equal(calls().filter((call) => call.operation === "prompt").length, 0);
 
-    // The main session's turn end reports again, so a Herdr that lost the counts gets them back.
+    // The main session's turn end reports again, so a core that lost the counts gets them back.
     const before = counts().length;
     await host.emit("agent_end", sample("agent_end").event, context("agent_end"));
     await until("subagents", before + 1);
@@ -699,6 +707,7 @@ if (AGENT === "omp") {
     assert.equal(await host.emit("tool_call", { type: "tool_call", toolName: "ask", toolCallId: "a", input: {} }, context("tool_call.bash")), undefined);
     await host.emit("agent_end", sample("agent_end").event, context("agent_end"));
     await settled(host);
-    assert.deepEqual(calls().map((call) => call.operation), ["start", "tool"]);
+    // The session report and the guidance read start together, in either order.
+    assert.deepEqual(calls().map((call) => call.operation).sort(), ["session", "start", "tool"]);
   });
 }

@@ -1,19 +1,13 @@
 #!/usr/bin/env python3
-"""The pane holder's path against Herdr's session path, measured at the node
-(PRD engine-bundle-2-pane-holder D-17, B15, B21; docs/PERFORMANCE_TESTING.md,
-The pane holder's path).
+"""The pane holder's path, measured at the node (PRD
+engine-bundle-2-pane-holder D-17, B15, B21; docs/PERFORMANCE_TESTING.md, The
+pane holder's path).
 
-Measurement only, macOS only. One round measures one path at one pane count:
-
-- `herdr`: a private Herdr server of the pinned build (HOME, every XDG folder,
-  HERDR_SESSION, HERDR_CONFIG_PATH and HERDR_SOCKET_PATH its own) with N
-  panes, attached through the node's Herdr sessions (`herdr terminal session`
-  clients), the development switch off, as hided runs today;
-- `holder`: the same node with the switch on and N pane holders.
+Measurement only, macOS only. One round measures N pane holders.
 
 The node is `hide-node/examples/holder_node`, started the way hided starts its
-terminal service (`Holders::start_local`); both paths' panes run `/bin/sh` at
-120x40 and take the same keys through the node's `key`. Each round:
+terminal service (`Holders::start_local`); its panes run `/bin/sh` at 120x40
+and take keys through the node's `key`. Each round:
 
 1. idle with no screen attached, then with min(N, 64) attached: CPU (user and
    system), memory (`phys_footprint`) and wakeups (interrupt and idle-exit
@@ -30,31 +24,27 @@ terminal service (`Holders::start_local`); both paths' panes run `/bin/sh` at
    duplication and order on the input side; a token never drawn is a loss on
    the screen side.
 
-The path's processes are the Herdr server and the node's Herdr session
-clients, or the holders; the panes' shells are the same on both and left out.
+The path's processes are the holders; the panes' shells are left out.
 Each round records the load average and the cargo and rustc processes running,
 so a reader can drop a round taken under a build.
 
-A slow consumer is one pane's connection read slowly and nothing else: on the
-holder path, the holder's socket moved aside behind a proxy that passes the
-node's messages at once and reads the holder's for 10 ms of every 40 ms, so
-the holder's own backpressure and its fragment cap run; on Herdr's, that
-pane's `herdr terminal session` client stopped (SIGSTOP) for 30 ms of every
-40 ms. The node's sink is never slowed.
+A slow consumer is one pane's connection read slowly and nothing else: the
+holder's socket moved aside behind a proxy that passes the node's messages at
+once and reads the holder's for 10 ms of every 40 ms, so the holder's own
+backpressure and its fragment cap run. The node's sink is never slowed.
 
 With `--load N` the round first starts N busy processes of its own (a
 Python loop each), the gate's load L (PRD engine-bundle-3-core-owns D-15:
-28), so both paths are measured under the same standing load and not under
+28), so the path is measured under a known standing load and not under
 whatever else the machine runs; they are not the path's processes, and the
 result names how many ran (`load_busy`).
 
-Everything a round starts (the node, the holders, the Herdr server and its
-panes, the busy processes) is ended by pid and start time on every path, a
+Everything a round starts (the node, the holders, the busy processes) is ended by pid and start time on every path, a
 stop signal included (`holder_owned.Owned`); a round that leaves any of it
 running fails.
 
-Usage: holder-perf.py --bin <folder with holder_node and hide-holder> --herdr <pinned herdr>
-       --path herdr|holder --panes N --out <file.json> [--idle-seconds S] [--keys K]
+Usage: holder-perf.py --bin <folder with holder_node and hide-holder>
+       --panes N --out <file.json> [--idle-seconds S] [--keys K]
        [--phases all|slow_consumer|flood_unattached] [--load N]
 """
 
@@ -151,14 +141,10 @@ def conditions():
 # --- the node ---------------------------------------------------------------
 
 class Node:
-    def __init__(self, program, home, state, switch, herdr, socket, log, owned):
+    def __init__(self, program, home, state, log, owned):
         env = {key: value for key, value in os.environ.items() if not key.startswith(("HERDR_", "HIDE_"))}
         env.update(HOME=str(home), SHELL="/bin/sh", TERM="xterm-256color")
-        if switch:
-            env["HIDE_DEV_PANE_HOLDER"] = "1"
-        argv = [str(program), "node", "--home", str(home), "--state", str(state), "--herdr-bin", str(herdr)]
-        if socket:
-            argv += ["--herdr-socket", str(socket)]
+        argv = [str(program), "node", "--home", str(home), "--state", str(state)]
         self.started = time.monotonic()
         with open(log, "ab") as stderr:
             self.process = owned.spawn(argv, stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=stderr,
@@ -207,182 +193,10 @@ class Node:
 
 # --- the paths --------------------------------------------------------------
 
-class HerdrPath:
-    switch = False
-
-    def __init__(self, herdr, root, panes, owned):
-        self.herdr = herdr
-        self.env = {key: value for key, value in os.environ.items() if not key.startswith(("HERDR_", "HIDE_"))}
-        for name in ("HOME", "XDG_CONFIG_HOME", "XDG_STATE_HOME", "XDG_DATA_HOME", "XDG_CACHE_HOME"):
-            folder = root / ("herdr-" + name.lower())
-            folder.mkdir()
-            self.env[name] = str(folder)
-        # In the round's folder, which is short enough for a socket's path:
-        # Herdr leaves files beside it, removed with the folder.
-        self.socket = root / "herdr.sock"
-        self.env.update(HERDR_SESSION=f"holder-perf-{os.getpid()}", HERDR_CONFIG_PATH=str(root / "herdr.toml"),
-                        HERDR_SOCKET_PATH=str(self.socket), SHELL="/bin/sh", TERM="xterm-256color")
-        # A server left running keeps its panes' terminals, and enough of
-        # them exhaust the machine's (macOS allows 511): its Owned ends it
-        # and every pane under it.
-        with open(root / "herdr-server.out", "w") as log:
-            self.server = owned.spawn([str(herdr), "server"], env=self.env, stdin=subprocess.DEVNULL, stdout=log,
-                                      stderr=subprocess.STDOUT, start_new_session=True)
-        self.node = None
-        self._populate(root, panes)
-
-    def _populate(self, root, panes):
-        deadline = time.monotonic() + 30
-        while not self.socket.exists():
-            if time.monotonic() > deadline:
-                raise SystemExit("the private Herdr server never listened")
-            time.sleep(0.05)
-        listed = self.cli("workspace", "list")
-        assert not listed.get("result", {}).get("workspaces"), f"the private server holds workspaces: {listed}"
-        workspace = self.cli("workspace", "create", "--cwd", str(root), "--no-focus")["result"]["workspace"]["workspace_id"]
-        for _ in range(panes - 1):
-            self.cli("tab", "create", "--workspace", workspace, "--cwd", str(root), "--no-focus")
-        found = self.cli("pane", "list")["result"]["panes"]
-        self.panes = [pane["pane_id"] for pane in found]
-        assert len(self.panes) == panes, f"{len(self.panes)} panes for {panes}"
-
-    def cli(self, *args):
-        done = subprocess.run([str(self.herdr), *args], env=self.env, capture_output=True, text=True, timeout=60)
-        if done.returncode:
-            raise SystemExit(f"herdr {' '.join(args)}: {done.stderr.strip()}")
-        return json.loads(done.stdout) if done.stdout.strip().startswith("{") else {}
-
-    def start(self, node):
-        self.node = node
-
-    def attach(self, panes):
-        for pane in panes:
-            self.node.ask("attach_herdr", pane=pane, rows=ROWS, cols=COLS)
-
-    def reattach(self, panes):
-        self.attach(panes)
-
-    def processes(self):
-        return [self.server.pid, *self.node.children()]
-
-    def wait_done(self, pane, marker, seconds):
-        self.cli("pane", "wait-output", pane, "--match", marker, "--source", "visible",
-                 "--timeout", str(int(seconds * 1000)))
-
-    def slow(self, pane):
-        """The pane's session client, stopped for most of every period."""
-        for pid in self.node.children():
-            command = subprocess.run(["ps", "-o", "args=", "-p", str(pid)], capture_output=True,
-                                     text=True).stdout.split()
-            if pane in command:
-                return StoppedClient(pid)
-        raise SystemExit(f"no Herdr session client of {pane} under the node")
-
-    def close(self):
-        pass
-
-
-class StoppedClient:
-    """A process stopped for all but SLOW_READ of every SLOW_PERIOD, so it
-    reads its server slowly; continued for good on `close`."""
-
-    def __init__(self, pid):
-        self.pid = pid
-        self.birth = holder_owned.started(pid)
-        self.done = threading.Event()
-        self.thread = threading.Thread(target=self._run, daemon=True)
-        self.thread.start()
-
-    def _signal(self, signum):
-        if holder_owned.runs(self.pid, self.birth):
-            os.kill(self.pid, signum)
-
-    def _run(self):
-        while not self.done.is_set():
-            self._signal(signal.SIGSTOP)
-            self.done.wait(SLOW_PERIOD - SLOW_READ)
-            self._signal(signal.SIGCONT)
-            self.done.wait(SLOW_READ)
-
-    def close(self):
-        self.done.set()
-        self.thread.join(5)
-        self._signal(signal.SIGCONT)
-
-
-class SlowLink:
-    """One holder's connection read slowly: its socket moved aside, and a
-    proxy at its path that passes the node's messages at once and reads the
-    holder's for SLOW_READ of every SLOW_PERIOD. The holder keeps listening on
-    the moved socket; `close` puts it back."""
-
-    def __init__(self, path):
-        self.path = path
-        self.moved = path.with_name(path.name + ".slow")
-        os.rename(path, self.moved)
-        self.listener = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
-        self.listener.bind(str(path))
-        self.listener.listen(1)
-        self.done = threading.Event()
-        self.sockets = [self.listener]
-        threading.Thread(target=self._accept, daemon=True).start()
-
-    def _accept(self):
-        while not self.done.is_set():
-            try:
-                node, _ = self.listener.accept()
-            except OSError:
-                return
-            holder = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
-            holder.connect(str(self.moved))
-            self.sockets += [node, holder]
-            threading.Thread(target=self._pass, args=(node, holder, False), daemon=True).start()
-            threading.Thread(target=self._pass, args=(holder, node, True), daemon=True).start()
-
-    def _pass(self, source, sink, slow):
-        try:
-            while not self.done.is_set():
-                if slow:
-                    until = time.monotonic() + SLOW_READ
-                    while (left := until - time.monotonic()) > 0:
-                        source.settimeout(left)
-                        try:
-                            data = source.recv(65536)
-                        except TimeoutError:
-                            break
-                        if not data:
-                            return
-                        sink.sendall(data)
-                    time.sleep(SLOW_PERIOD - SLOW_READ)
-                else:
-                    data = source.recv(65536)
-                    if not data:
-                        return
-                    sink.sendall(data)
-        except OSError:
-            return
-        finally:
-            for end in (source, sink):
-                try:
-                    end.shutdown(socket.SHUT_RDWR)
-                except OSError:
-                    pass
-
-    def close(self):
-        self.done.set()
-        for end in self.sockets:
-            end.close()
-        self.path.unlink(missing_ok=True)
-        os.rename(self.moved, self.path)
-
-
 class HolderPath:
-    switch = True
-
-    def __init__(self, herdr, root, panes, owned):
+    def __init__(self, root, panes, owned):
         self.root = root
         self.panes = [f"p{index:03d}" for index in range(panes)]
-        self.socket = None
         self.node = None
         self.holders = []
         self.owned = owned
@@ -481,8 +295,7 @@ class Round:
             for _ in range(args.load):
                 self.owned.spawn([sys.executable, "-c", "while True: pass"], stdin=subprocess.DEVNULL,
                                  stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-            self.path = (HerdrPath if args.path == "herdr" else HolderPath)(args.herdr, self.root, args.panes,
-                                                                             self.owned)
+            self.path = HolderPath(self.root, args.panes, self.owned)
             self.path.state = self.state
             self.node = self.new_node()
         except BaseException:
@@ -492,12 +305,11 @@ class Round:
             if left:
                 print(LEFT + "; ".join(left), file=sys.stderr)
             raise
-        self.result = {"path": args.path, "panes": args.panes, "rows": ROWS, "cols": COLS, "load_busy": args.load,
+        self.result = {"path": "holder", "panes": args.panes, "rows": ROWS, "cols": COLS, "load_busy": args.load,
                        "conditions_start": conditions(), "phases": {}}
 
     def new_node(self):
-        node = Node(self.args.bin / "holder_node", self.home, self.state, self.path.switch, self.args.herdr,
-                    self.path.socket, self.root / "node.log", self.owned)
+        node = Node(self.args.bin / "holder_node", self.home, self.state, self.root / "node.log", self.owned)
         self.path.start(node)
         return node
 
@@ -589,13 +401,11 @@ class Round:
                 phases["flood_eight"] = self.flood("eight", others[:8], args.flood_bytes // 4)
             phases["slow_consumer"] = self.flood("slow", others[:1], args.flood_bytes // 4, slow=True)
             phases["slow_consumer"]["slow"] = {"read_seconds": SLOW_READ, "period_seconds": SLOW_PERIOD,
-                                               "consumer": "holder connection proxy" if path.switch
-                                               else "Herdr session client (SIGSTOP)"}
+                                               "consumer": "holder connection proxy"}
         # The node killed outright and a new one attached again.
         self.node.kill()
         started = time.monotonic()
-        self.node = Node(self.args.bin / "holder_node", self.home, self.state, path.switch, args.herdr, path.socket,
-                         self.root / "node.log", self.owned)
+        self.node = Node(self.args.bin / "holder_node", self.home, self.state, self.root / "node.log", self.owned)
         path.node = self.node
         path.reattach(attached)
         drawn = self.node.ask("wait_drawn", panes=attached, timeout_ms=300_000)
@@ -654,8 +464,6 @@ class Round:
 def main():
     parser = argparse.ArgumentParser(description=__doc__.split("\n\n")[0])
     parser.add_argument("--bin", type=Path, required=True)
-    parser.add_argument("--herdr", type=Path, required=True)
-    parser.add_argument("--path", choices=("herdr", "holder"), required=True)
     parser.add_argument("--panes", type=int, required=True)
     parser.add_argument("--out", type=Path, required=True)
     parser.add_argument("--idle-seconds", type=float, default=20)

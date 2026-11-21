@@ -25,6 +25,7 @@ import { bufferRow, type CellRow } from "./selection";
 import { catalogWorkspaces, localDeviceId, type Checkout, type SnapshotRest } from "./snapshot";
 import { useShellStore } from "./store";
 import { absolutePathRoot, JOIN_ROWS, linkCandidates, osc8Target, type LinkCandidate, type LinkTarget } from "./terminalLinks";
+import { paneRowWraps } from "./terminalWrap";
 
 /** A path the host found: its physical spelling and kind. */
 export type FoundPath = NonNullable<ProbedPath>;
@@ -259,7 +260,7 @@ async function linksOnRow(term: Terminal, paneId: string, y: number) {
   const bottom = Math.min(buffer.length, y + JOIN_ROWS);
   const rows: CellRow[] = [];
   for (let line = top; line <= bottom; line += 1) rows.push(bufferRow(buffer.getLine(line - 1), term.cols));
-  const groups = linkCandidates(rows, y - top);
+  const groups = linkCandidates(rows, y - top, paneRowWraps(term, paneId, top - 1, bottom - 1));
   if (groups.length === 0) return [];
   const rest = useShellStore.getState().rest;
   const bridge = hostBridge();

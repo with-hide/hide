@@ -147,7 +147,7 @@ static int fit_schema(char *label, int argc, char **argv) {
   if (strstr(schema, "\"end\"")) {
     /* A marker with no work judgment answers the empty one END requires. */
     if (strstr(schema, "\"work\"") && !strstr(label, ",\"work\":")) {
-      const char *work = ",\"work\":{\"missed\":[],\"resolved\":[],\"artifacts\":[]}}";
+      const char *work = ",\"work\":{\"missed\":[],\"resolved\":[]}}";
       size_t length = strlen(label);
       size_t capacity = sizeof prompt - (size_t)(label - prompt);
       if (!length || label[length - 1] != '}' || length - 1 + strlen(work) >= capacity) return 0;
@@ -249,9 +249,9 @@ static int models(void) {
        "{\"value\":\"sonnet\",\"resolvedModel\":\"claude-sonnet-5-5\"}]}}}");
   return 0;
 }
-// Specs copy this shim as `codex`. The pinned Herdr's `agent start --kind
-// codex` succeeds only once the screen shows Codex's startup composer, so the
-// copy draws that line.
+// Specs copy this shim as `codex`. An `agent start --kind codex` succeeds
+// only once the screen shows Codex's startup composer, so the copy draws that
+// line.
 static int run_as_codex(const char *argv0) {
   const char *base = argv0;
   for (const char *at = argv0; *at; at++) {
@@ -326,7 +326,7 @@ static int copy_seed(const char *seed, const char *destination) {
 
 /* Appends the arguments after the program as one JSON array line, so a spec
    reads exactly what the program received after the pane's shell read the
-   line Herdr typed. */
+   line the pane's shell read. */
 static int append_argv(const char *path, int argc, char **argv) {
   FILE *file = fopen(path, "ab");
   if (!file) return 1;
@@ -342,6 +342,42 @@ static int append_argv(const char *path, int argc, char **argv) {
   }
   fputs("]\n", file);
   return fclose(file) != 0;
+}
+
+/* The session a native-file stand-in has written or resumed, reported as the
+   agent's own Hide integration reports it, from inside the pane: on the core's
+   own engine nothing else names a pane's session. The spec writes
+   `<kind>-session-report.config` (`web/e2e/session-reader-fixture.ts`): the
+   command line to run, then a newline, then what that command reads on its
+   standard input. Each integration's input is the spec's knowledge, not this
+   program's. With no such file (the own engine, whose own report the spec
+   makes) nothing is reported. */
+static int report_session(const char *root, const char *kind) {
+  static char report[8192];
+  char filename[4096];
+  if (snprintf(filename, sizeof filename, "%s/%s-session-report.config", root, kind) >= (int)sizeof filename) return 1;
+  FILE *file = fopen(filename, "rb");
+  if (!file) return errno == ENOENT ? 0 : 1;
+  size_t count = fread(report, 1, sizeof report - 1, file);
+  int complete = !ferror(file) && feof(file);
+  fclose(file);
+  report[count] = 0;
+  char *input = strchr(report, '\n');
+  if (!complete || !count || !input) return 1;
+  *input++ = 0;
+#ifdef _WIN32
+  FILE *command = _popen(report, "w");
+#else
+  FILE *command = popen(report, "w");
+#endif
+  if (!command) return 1;
+  int wrote = fputs(input, command) >= 0;
+#ifdef _WIN32
+  int status = _pclose(command);
+#else
+  int status = pclose(command);
+#endif
+  return !wrote || status != 0;
 }
 
 /* The native-file fixture writes its own session, rather than having
@@ -393,6 +429,8 @@ static int native_session(int argc, char **argv) {
     }
   }
   if (append_argv(launches, argc, argv)) return 1;
+  /* A resume is a session start too: the real integrations report again. */
+  if (report_session(root, kind)) return 1;
   printf("%s fixture ready\n", kind);
   return 0;
 }
@@ -403,7 +441,7 @@ static int native_session(int argc, char **argv) {
    that session, from inside the pane, so the daemon proves it as the pane's
    own report (`engine-fixture.ts`, `setAgentSession`). Returns 1 when `bytes`
    was such a request, which is then not echoed. */
-static int session_request(const char *bytes, size_t size) {
+static int session_request(const char *bytes, size_t size, int codex) {
   static const char prefix[] = "\x1b]7770;session=";
   const size_t length = sizeof prefix - 1;
   if (size <= length + 1 || memcmp(bytes, prefix, length) != 0 || bytes[size - 1] != '\a') return 0;
@@ -417,15 +455,15 @@ static int session_request(const char *bytes, size_t size) {
 #ifdef _WIN32
   if (!_getcwd(cwd, sizeof cwd)) return 1;
   for (char *at = cwd; *at; at++) if (*at == '\\') *at = '/';
-  if (snprintf(command, sizeof command, "\"\"%s\" hook --runtime claude-code --event SessionStart >NUL 2>&1\"", hooks) >= (int)sizeof command) return 1;
+  if (snprintf(command, sizeof command, "\"\"%s\" hook --runtime %s --event SessionStart >NUL 2>&1\"", hooks, codex ? "codex" : "claude-code") >= (int)sizeof command) return 1;
   FILE *hook = _popen(command, "w");
 #else
   if (!getcwd(cwd, sizeof cwd)) return 1;
-  if (snprintf(command, sizeof command, "'%s' hook --runtime claude-code --event SessionStart >/dev/null 2>&1", hooks) >= (int)sizeof command) return 1;
+  if (snprintf(command, sizeof command, "'%s' hook --runtime %s --event SessionStart >/dev/null 2>&1", hooks, codex ? "codex" : "claude-code") >= (int)sizeof command) return 1;
   FILE *hook = popen(command, "w");
 #endif
   if (!hook) return 1;
-  fprintf(hook, "{\"session_id\":\"%s\",\"hook_event_name\":\"SessionStart\",\"source\":\"clear\",\"cwd\":\"%s\"}", session, cwd);
+  fprintf(hook, "{\"session_id\":\"%s\",\"hook_event_name\":\"SessionStart\",\"source\":\"%s\",\"cwd\":\"%s\"}", session, codex ? "startup" : "clear", cwd);
 #ifdef _WIN32
   _pclose(hook);
 #else
@@ -458,7 +496,6 @@ int main(int argc, char **argv) {
      the pane names itself as `hide_agent_hooks::pane` reads it. */
   char pane_log[4096];
   const char *pane_root = getenv("HIDE_E2E_ROOT"), *pane = getenv("HIDE_PANE_ID");
-  if (!pane || !*pane) pane = getenv("HERDR_PANE_ID");
   if (!log_path && pane_root && pane && *pane) {
     if (snprintf(pane_log, sizeof pane_log, "%s/input-%s.log", pane_root, pane) >= (int)sizeof pane_log) return 1;
     for (char *at = pane_log + strlen(pane_root); *at; at++) if (*at == ':') *at = '-';
@@ -492,6 +529,13 @@ int main(int argc, char **argv) {
   // exec, so a silent stand-in leaves output-driven detection seeing the shell.
   static const char ready[] = "claude fixture ready\r\n";
   if (terminal_write(ready, sizeof ready - 1) != (fixture_count_t)(sizeof ready - 1)) return 1;
+  if (pane_root && pane && *pane) {
+    char marker[4096];
+    if (snprintf(marker, sizeof marker, "%s/terminal-ready-%s", pane_root, pane) >= (int)sizeof marker) return 1;
+    for (char *at = marker + strlen(pane_root); *at; at++) if (*at == ':') *at = '-';
+    FILE *file = fopen(marker, "wb");
+    if (!file || fclose(file) != 0) return 1;
+  }
 #ifdef _WIN32
   char b[16384];
 #else
@@ -504,11 +548,11 @@ int main(int argc, char **argv) {
        and what comes before it is input like any other. */
     static const char request[] = "\x1b]7770;session=";
     for (fixture_count_t at = 1; at + (fixture_count_t)(sizeof request - 1) < n; at++) {
-      if (memcmp(b + at, request, sizeof request - 1) != 0 || !session_request(b + at, (size_t)(n - at))) continue;
+      if (memcmp(b + at, request, sizeof request - 1) != 0 || !session_request(b + at, (size_t)(n - at), run_as_codex(argv[0]))) continue;
       n = at;
       break;
     }
-    if (session_request(b, (size_t)n)) continue;
+    if (session_request(b, (size_t)n, run_as_codex(argv[0]))) continue;
     if (log >= 0 && write(log, b, (size_t)n) < 0) return 1;
 #ifdef _WIN32
     // A Unix tty turns Enter's CR into LF on input and LF into CRLF on

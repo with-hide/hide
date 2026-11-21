@@ -6,7 +6,7 @@ import { createActions } from "./actions";
 import { TooltipProvider } from "./components/ui/tooltip";
 import { initializeInterfaceI18n } from "./i18n/instance";
 import { RELATION_ANSWER_TIMEOUT_MS } from "./lineage";
-import { PaneAskMark, PaneHeadChildren, PaneHeaderBand, PanePrChip, PaneRecordButton } from "./PaneHeaderBand";
+import { PaneAskMark, PaneHeadChildren, PaneHeaderBand, PaneOpenAsksMark, PanePrChip, PaneRecordButton } from "./PaneHeaderBand";
 import type { AgentRow, PaneBand, PaneHeader, PaneFocusRequest, SessionPull, SnapshotRest, Workspace } from "./snapshot";
 import { localDeviceId } from "./snapshot";
 import { LOCAL } from "../test/legacyAgentRow";
@@ -40,7 +40,9 @@ async function mount(value = header, agents: AgentRow[] = [], options: { rest?: 
   Element.prototype.scrollIntoView = () => {};
   initializeInterfaceI18n("en");
   useUiStore.setState({relation: null});
-  const rest = options.rest ?? {status: {pane_focus_request: null}} as SnapshotRest;
+  const given = options.rest ?? {status: {pane_focus_request: null}} as SnapshotRest;
+  // The core names the sibling cap on every snapshot's navigator.
+  const rest = {...given, navigator: {siblings_shown: 5, ...given.navigator}} as SnapshotRest;
   // The core names every row's machine; a fixture row that names none is this one's.
   for (const agent of agents) if (agent.device_id === LOCAL) agent.device_id = localDeviceId(rest);
   useShellStore.setState({agents, rest});
@@ -51,7 +53,7 @@ async function mount(value = header, agents: AgentRow[] = [], options: { rest?: 
   const root = createRoot(container);
   await act(async () => root.render(<TooltipProvider><header><PaneHeadChildren paneId={options.paneId ?? "parent"} actions={actions}/></header><PaneHeaderBand paneId={options.paneId ?? "parent"} header={value} actions={actions}/></TooltipProvider>));
   const answer = async (outcome: PaneFocusRequest) => {
-    await act(async () => useShellStore.setState({rest: {status: {pane_focus_request: outcome}} as SnapshotRest}));
+    await act(async () => useShellStore.setState({rest: {...useShellStore.getState().rest!, status: {pane_focus_request: outcome}} as SnapshotRest}));
   };
   return {container, actions, events, answer, unmount: async () => { await act(async () => root.unmount()); }};
 }
@@ -100,17 +102,16 @@ function childrenFixture(): AgentRow[] {
 }
 
 // PRD B1-B2: the resting row names no child; the tree button shows the first
-// children's marks in tree order, `+N` for the rest, and keeps its full counts.
-it("puts the tree and the first children's marks first while keeping state counts accessible", async () => {
+// child's mark in tree order and how many children there are, and keeps its full counts.
+it("puts the tree and the first child's mark first while keeping state counts accessible", async () => {
   const agents = childrenFixture().map((row) => row.pane_id === "result" ? { ...row, mark: "done" as const } : row.pane_id === "idle" ? { ...row, mark: "quiet" as const } : row);
   const { container, unmount } = await mount({ working: true, notice: null, band: null }, agents);
   try {
     const row = container.querySelector('[data-pane-header-band="children"]')!;
     const trigger = row.querySelector<HTMLButtonElement>("[data-pane-tree]")!;
     expect(trigger.getAttribute("aria-label")).toBe("Child agents 5 · Child requests: 1 · Working: 1 · Reported results: 1 · Unknown state: 1 · Resting: 1");
-    expect([...trigger.querySelectorAll("[data-pane-tree-mark]")].map((mark) => [mark.getAttribute("data-pane-tree-mark"), mark.getAttribute("data-mark")])).toEqual([["question", "quiet"], ["working", "going"], ["result", "done"]]);
-    // The unknown child draws no mark, so it is counted with the rest.
-    expect(trigger.textContent).toBe("+2");
+    expect([...trigger.querySelectorAll("[data-pane-tree-mark]")].map((mark) => [mark.getAttribute("data-pane-tree-mark"), mark.getAttribute("data-mark")])).toEqual([["question", "quiet"]]);
+    expect(trigger.textContent).toBe("5");
     expect(row.firstElementChild?.firstElementChild).toBe(trigger);
     // An ordinary child's question is its parent's to answer: no raised count.
     expect(trigger.querySelector('[data-mark="turn"]')).toBeNull();
@@ -136,11 +137,11 @@ it("puts the pane's own approval after the tree and keeps raised counts in its n
   try {
     const row = container.querySelector('[data-pane-header-band="approval"]')!;
     expect(row.firstElementChild?.firstElementChild?.getAttribute("data-pane-tree")).toBe("parent");
-    expect(row.querySelector("[data-verb]")?.getAttribute("data-verb")).toBe("approval");
+    expect(row.querySelector("[data-verb]")).toBeNull();
     expect(row.querySelector("[data-pane-band-who]")).toBeNull();
     expect(row.querySelector("[data-pane-child-names]")).toBeNull();
     const trigger = row.querySelector<HTMLButtonElement>("[data-pane-tree]")!;
-    expect(trigger.textContent).toBe("+2");
+    expect(trigger.textContent).toBe("5");
     expect(trigger.getAttribute("aria-label")).toContain("Descendant requests needing you: 2");
     expect(row.textContent).toContain("Run the verification command");
     expect(container.querySelector("[data-pane-band-more]")).toBeNull();
@@ -175,12 +176,13 @@ it("never counts a core unknown child as resting or a result when the wire omits
 });
 
 it("skips a child of unknown state and marks the next known one", async () => {
-  const agents = childrenFixture().map((row) => row.pane_id === "unknown" ? { ...row, state: { ...row.state, tree_rank: 1 } } : row.pane_id === "working" ? { ...row, state: { ...row.state, tree_rank: 2 } } : row);
+  const rank: Record<string, number> = { unknown: 0, working: 1, question: 2 };
+  const agents = childrenFixture().map((row) => row.pane_id in rank ? { ...row, state: { ...row.state, tree_rank: rank[row.pane_id]! } } : row);
   const { container, unmount } = await mount({ working: false, notice: null, band: null }, agents);
   try {
     const trigger = container.querySelector<HTMLButtonElement>("[data-pane-tree]")!;
-    expect([...trigger.querySelectorAll("[data-pane-tree-mark]")].map((mark) => mark.getAttribute("data-pane-tree-mark"))).toEqual(["question", "working", "result"]);
-    expect(trigger.textContent).toBe("+2");
+    expect([...trigger.querySelectorAll("[data-pane-tree-mark]")].map((mark) => mark.getAttribute("data-pane-tree-mark"))).toEqual(["working"]);
+    expect(trigger.textContent).toBe("5");
   } finally { await unmount(); }
 });
 
@@ -188,9 +190,9 @@ it("says the parent waits on its working children after the request, in the side
   const { container, unmount } = await mount({ working: false, notice: null, band: null, request: { text: "Find the missing requests", images: 0 }, waiting_on_children: 2 }, childrenFixture());
   try {
     const row = container.querySelector('[data-pane-header-band="waiting"]')!;
-    expect(row.firstElementChild?.firstElementChild?.getAttribute("data-pane-tree")).toBe("parent");
+    expect(row.querySelector('[data-pane-turn-part="request"]')?.firstElementChild?.getAttribute("data-pane-tree")).toBe("parent");
     expect(row.querySelector("[data-pane-turn-request-text]")?.textContent).toBe("Find the missing requests");
-    expect(row.querySelector("[data-pane-children-wait]")?.textContent).toBe("Waiting on children · 2 working");
+    expect(row.querySelector("[data-pane-children-wait]")?.textContent).toBe("Waiting on 2 children");
     expect(row.querySelector("[data-pane-own-progress]")).toBeNull();
   } finally { await unmount(); }
 });
@@ -343,7 +345,7 @@ it("turns a missing core answer into a retryable timeout beside the move", async
   } finally { await unmount(); }
 });
 
-it("leads a raised ask with its verb, then the child name and request", async () => {
+it("leads a raised ask with the child name, then the request, and no verb", async () => {
   const {container, unmount} = await mount();
   try {
     const band = container.querySelector("[data-pane-header-band=raised]")!;
@@ -351,9 +353,7 @@ it("leads a raised ask with its verb, then the child name and request", async ()
     expect(who.getAttribute("data-pane-band-who")).toBe("child");
     expect(who.textContent).toBe("자식 검증(child)");
     expect(who.querySelector('[data-mark="turn"]')).toBeNull();
-    const verb = band.querySelector("[data-verb=approval]")!;
-    expect(verb.textContent).toBe("Approval");
-    expect(verb.compareDocumentPosition(who) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    expect(band.querySelector("[data-verb]")).toBeNull();
     expect(band.textContent).toContain("하위 검증 권한이 필요합니다");
     expect(band.querySelector("[data-pane-band-more]")).toBeNull();
   } finally { await unmount(); }
@@ -364,7 +364,7 @@ it("names the raised descendant while a draft opens its holder", async () => {
   const {container, unmount} = await mount({ ...header, band: { ...header.band!, action: { pane_id: "middle", label: "Middle" }, raised } }, [], {paneId: "root"});
   try {
     const band = container.querySelector("[data-pane-header-band=raised]")!;
-    expect(band.querySelector("[data-verb=draft]")?.textContent).toBe("Draft");
+    expect(band.querySelector("[data-verb]")).toBeNull();
     expect(band.querySelector("[data-pane-band-who=leaf]")?.textContent).toBe("Leaf(descendant)");
     expect(band.textContent).toContain("My draft keeps the question from going through");
     await act(async () => container.querySelector<HTMLButtonElement>("[data-pane-band-open]")!.click());
@@ -386,7 +386,7 @@ it("blocks Open on a raised descendant whose device is not connected and says wh
   const band = header.band!;
   const {container, unmount} = await mount({ ...header, band: { ...band, action: {pane_id: pane, label: "자식 검증"}, raised: { ...band.raised!, raised_pane_id: pane, pane_id: pane, open_pane_id: pane, open_device_id: "mini" } } });
   try {
-    await act(async () => useShellStore.setState({rest: {status: {pane_focus_request: null, remote: [{target_id: "mini", state: "unreachable", message: "ssh: connect to host mini port 22: Connection refused"}]}} as unknown as SnapshotRest}));
+    await act(async () => useShellStore.setState({rest: {...useShellStore.getState().rest!, status: {pane_focus_request: null, remote: [{target_id: "mini", state: "unreachable", message: "ssh: connect to host mini port 22: Connection refused"}]}} as unknown as SnapshotRest}));
     expect(container.querySelector<HTMLButtonElement>("[data-pane-band-open]")!.disabled).toBe(true);
     expect(container.querySelector("[data-pane-band-unreachable]")?.textContent).toBe("Hide cannot reach mini");
   } finally { await unmount(); }
@@ -396,13 +396,13 @@ it("opens the card of the displayed repository even when another project has the
   const {actions, events, unmount} = await mount();
   const url = "https://github.com/acme/other/pull/7";
   try {
-    await act(async () => useShellStore.setState({rest: {navigator: {focused_device_id: "local", devices: [{id: "local", kind: "local"}], workspaces: [
+    await act(async () => useShellStore.setState({rest: {navigator: {siblings_shown: 5, focused_device_id: "local", devices: [{id: "local", kind: "local"}], workspaces: [
       {id: "here", device_id: "local", pull_requests: [{number: 7, url: "https://github.com/acme/here/pull/7"}], checkouts: []},
       {id: "other", device_id: "local", pull_requests: [{number: 7, url}], checkouts: []},
     ] as unknown as Workspace[]}} as SnapshotRest}));
     await act(async () => actions.openSessionPullRequest({workspace_id: "here", number: 7, url}));
     // One event opens the card; the fixture has no Workspace in front, so the core opens the PR's (PRD sidebar-task-lens B17).
-    expect(events.filter((event) => event.kind === "pr_open")).toEqual([{schema_version: 2, kind: "pr_open", payload: {workspace_id: "other", pr_number: 7, open_workspace: true}}]);
+    expect(events.filter((event) => event.kind === "pr_open")).toEqual([{schema_version: 2, kind: "pr_open", payload: {workspace_id: "other", pr_number: 7, open_workspace: true, at: "owner"}}]);
     const open = vi.spyOn(window, "open").mockReturnValue(null);
     actions.openSessionPullRequest({workspace_id: "here", number: 7, url: "https://github.com/acme/absent/pull/7"});
     expect(open).toHaveBeenCalledWith("https://github.com/acme/absent/pull/7", "_blank", "noopener,noreferrer");
@@ -465,7 +465,7 @@ it("leaves a header alone when a snapshot section it does not draw moves, and re
   vi.stubGlobal("IS_REACT_ACT_ENVIRONMENT", true);
   vi.stubGlobal("ResizeObserver", class { observe() {} unobserve() {} disconnect() {} });
   initializeInterfaceI18n("en");
-  const rest = { navigator: { devices: [{ id: "local", kind: "local" }], workspaces: [] }, ui_state: { theme: "dark" }, status: { pane_focus_request: null, remote: [] } } as unknown as SnapshotRest;
+  const rest = { navigator: { siblings_shown: 5, devices: [{ id: "local", kind: "local" }], workspaces: [] }, ui_state: { theme: "dark" }, status: { pane_focus_request: null, remote: [] } } as unknown as SnapshotRest;
   useShellStore.setState({ agents, rest });
   const draws: Record<string, number> = { shell: 0, parent: 0 };
   const container = document.body.appendChild(document.createElement("div"));
@@ -527,8 +527,8 @@ it.each([["hq3mini", "a dialed device"], ["b06a260a-6c14-5287-9caf-672044350d94"
   // The core names the row's device on the row itself.
   const agent = legacyAgentRow({ id: "a", pane_id: pane, device_id: target, device_pane_id: "w1:p4", identity_label: "Fix the login", agent_kind: "claude", session_id: "s-1" });
   useShellStore.getState().applyFrame({ type: "snapshot", payload: { revision: 1, rest: {
-    navigator: { devices: [{ id: core, kind: "local" }, { id: target, kind: "remote" }] },
-    status: { pane_focus_request: null, remote: [{ target_id: target, state: "connected", message: null, herdr_version: null, session: { agents: [agent] } }] },
+    navigator: { siblings_shown: 5, devices: [{ id: core, kind: "local" }, { id: target, kind: "remote" }] },
+    status: { pane_focus_request: null, remote: [{ target_id: target, state: "connected", message: null, session: { agents: [agent] } }] },
   } as unknown as SnapshotRest } });
   const container = document.createElement("div");
   document.body.append(container);
@@ -557,14 +557,14 @@ it("says a waiting pane's mark words on its record button, the words its tab and
   } finally { await act(async () => root.unmount()); }
 });
 
-// docs/UI_BEHAVIOR.md, Agent panes and the Agents explorer: the pane's own ask starts with
-// its verb and says what is asked; one the operator has looked at dims and
-// stays until it is answered.
-it("words the pane's own ask by its verb and dims it once it is read", async () => {
+// docs/UI_BEHAVIOR.md, Agent panes and the Agents explorer: the pane's own
+// question or approval says only what is asked, a block or a stop leads with
+// its word; one the operator has looked at dims and stays until it is answered.
+it("words the pane's own ask with no verb, a block by its word, and dims it once it is read", async () => {
   const own = (kind: PaneBand["kind"], reason: string | null, read = false): PaneHeader => ({ working: false, notice: null, band: { kind, reason, since_unix_ms: null, read, action: null, more: 0 } });
   const cases: [PaneHeader, string][] = [
-    [own("approval", null), "ApprovalStopped at a permission request"],
-    [own("answer", "Deploy to staging first?"), "QuestionDeploy to staging first?"],
+    [own("approval", null), "Stopped at a permission request"],
+    [own("answer", "Deploy to staging first?"), "Deploy to staging first?"],
     [own("blocked", "gh login expired"), "Blockedgh login expired"],
     [own("stopped", "Three tests left"), "UnfinishedThree tests left"],
   ];
@@ -578,12 +578,14 @@ it("words the pane's own ask by its verb and dims it once it is read", async () 
       // Only what the operator answers is drawn in the warning colour; work left is not an ask.
       const asks = value.band!.kind !== "stopped";
       expect(row.className.includes("border-warning")).toBe(asks);
-      expect(row.querySelector("[data-verb]")!.className.includes("text-warning")).toBe(asks);
+      const verb = row.querySelector("[data-verb]");
+      if (value.band!.kind === "approval" || value.band!.kind === "answer") expect(verb).toBeNull();
+      else expect(verb!.className.includes("text-warning")).toBe(asks);
     } finally { await unmount(); }
   }
   const { container, unmount } = await mount(own("answer", "Deploy to staging first?", true), [], { paneId: "solo" });
   try {
-    expect(container.querySelector('[data-pane-header-band="answer"] [data-pane-band-read="true"]')?.textContent).toBe("QuestionDeploy to staging first?");
+    expect(container.querySelector('[data-pane-header-band="answer"] [data-pane-band-read="true"]')?.textContent).toBe("Deploy to staging first?");
   } finally { await unmount(); }
 });
 
@@ -601,7 +603,7 @@ it("leads the row with the turn's request before its ask, progress or result", a
   const request = { text: "Proceed as proposed + check unclear states", images: 0 };
   const ask: PaneBand = { kind: "answer", reason: "Bundle questions 1-3 into one PR?", since_unix_ms: null, read: false, action: null, more: 0 };
   const cases: [PaneHeader, string, string][] = [
-    [{ working: false, notice: null, band: ask, request }, "answer", "Proceed as proposed + check unclear states→QuestionBundle questions 1-3 into one PR?"],
+    [{ working: false, notice: null, band: ask, request }, "answer", "Proceed as proposed + check unclear states→Bundle questions 1-3 into one PR?"],
     [{ working: true, notice: null, band: null, progress: "Reading the status model", request }, "progress", "Proceed as proposed + check unclear states→Reading the status model"],
     [{ working: true, notice: null, band: null, request }, "request", "Proceed as proposed + check unclear states"],
     [{ working: false, notice: null, band: null, progress: "Remote reads every 3 s, PR merged", finished: true, request }, "finished", "Proceed as proposed + check unclear states→DoneRemote reads every 3 s, PR merged"],
@@ -680,6 +682,159 @@ it("opens the turn card from the request on a press, not on hover, until Esc", a
   } finally { await unmount(); }
 });
 
+// The whole `<request> → <answer>` is the card's one trigger: a single
+// button behind the row, the keyboard's one stop, while a control in the
+// answer keeps its own press and opens no card.
+it("makes the whole turn one trigger behind the row, its own controls keeping their press", async () => {
+  const value: PaneHeader = { ...header, request: { text: "Review the child's work", images: 0 } };
+  const { container, events, unmount } = await mount(value, [{ ...turnAgent(), pane_id: "parent" }], { rest: { status: { pane_focus_request: null }, terminal: { headers: { parent: value } } } as SnapshotRest });
+  try {
+    const row = container.querySelector<HTMLElement>("[data-pane-turn=parent]")!;
+    const trigger = row.querySelector<HTMLButtonElement>("[data-pane-turn-request=parent]")!;
+    expect(trigger.textContent, "the words lie over it, not in it").toBe("");
+    expect(trigger.getAttribute("aria-label")).toBe("Request: Review the child's work");
+    expect([...row.querySelectorAll("button")].filter((button) => button.contains(row.querySelector("[data-pane-turn-request-text]")))).toHaveLength(0);
+    await act(async () => row.querySelector<HTMLButtonElement>("[data-pane-band-open=parent]")!.click());
+    expect(events, "Open sends its move").toHaveLength(1);
+    expect(document.querySelector("[data-pane-turn-card=parent]"), "Open moves to the child and opens no card").toBeNull();
+    await act(async () => trigger.click());
+    expect(document.querySelector("[data-pane-turn-card=parent]")).not.toBeNull();
+  } finally { await unmount(); }
+});
+
+// The card's answer that stands for now says what a waiting agent waits for,
+// in the sidebar's words, and `Waiting` alone with no proven cause; a turn
+// before keeps its own end, whose cause was never kept.
+it("says what a waiting turn waits for on the card, in the sidebar's words", async () => {
+  const value: PaneHeader = { working: false, notice: null, band: null, request: { text: "Find the missing requests", images: 0 } };
+  const waiting = (wait: AgentRow["wait"]): AgentRow => {
+    const agent = turnAgent();
+    agent.wait = wait;
+    agent.request = { ...agent.request!, end: "waiting", line: "Two reviewers still checking", later_by: null, recent_turns: [{ request: "Older ask", end: "waiting", line: null, at_unix_ms: 1 }], answer: { offset: 3, end: "waiting", line: "Handed review to two children", whole: false, at_unix_ms: 2 } };
+    return agent;
+  };
+  for (const [wait, word] of [["children", "Waiting on children"], ["checks", "Waiting on CI"], [undefined, "Waiting"]] as const) {
+    const { container, unmount } = await mount(value, [waiting(wait)], { paneId: "solo", rest: { status: { pane_focus_request: null }, terminal: { headers: { solo: value } } } as SnapshotRest });
+    try {
+      await act(async () => container.querySelector<HTMLButtonElement>("[data-pane-turn-request=solo]")!.click());
+      const card = document.querySelector<HTMLElement>("[data-pane-turn-card=solo]")!;
+      expect(card.querySelector("[data-turn-card-answer] p")?.textContent?.startsWith(word)).toBe(true);
+      expect(card.querySelector("[data-turn-card-answer] p")?.textContent?.startsWith(`${word} `)).toBe(false);
+      expect(card.querySelector("[data-turn-card-response]"), "the answer stands for now, so no second line repeats it").toBeNull();
+      expect(card.querySelector("[data-turn-card-earlier-item]")?.textContent).toBe("Older askWaiting");
+    } finally { await unmount(); }
+  }
+});
+
+// docs/UI_BEHAVIOR.md, the pane head: the questions still waiting ride after
+// the title as plain words, `질문 N` (`Questions N`), whose press opens the turn
+// card that lists them; a pane with none draws nothing there.
+it("counts a pane's waiting questions in words that open the turn card, and draws nothing without them", async () => {
+  vi.stubGlobal("IS_REACT_ACT_ENVIRONMENT", true);
+  vi.stubGlobal("ResizeObserver", class { observe() {} unobserve() {} disconnect() {} });
+  Element.prototype.scrollIntoView = () => {};
+  initializeInterfaceI18n("en");
+  const agent = turnAgent();
+  agent.device_id = "";
+  agent.open_asks = { session: { device_id: "local", agent: "claude", session_id: "s1" }, items: [{ id: "m1", text: "Decide the closed tab defect", at_unix_ms: 2_500 }, { id: "m2", text: "Merge now or wait for CI", at_unix_ms: 2_600 }] };
+  const quiet = legacyAgentRow({ id: "q", pane_id: "quiet", identity_label: "Quiet", agent_kind: "claude", device_id: "" });
+  useShellStore.setState({ agents: [agent, quiet], rest: { status: { pane_focus_request: null }, terminal: { headers: { solo: { working: true, notice: null, band: null } } } } as unknown as SnapshotRest });
+  const actions = createActions(() => true);
+  const container = document.createElement("div");
+  document.body.append(container);
+  const root = createRoot(container);
+  await act(async () => root.render(<TooltipProvider><PaneOpenAsksMark paneId="solo" actions={actions} /><span data-quiet-head="true"><PaneOpenAsksMark paneId="quiet" actions={actions} /></span></TooltipProvider>));
+  try {
+    const mark = container.querySelector<HTMLButtonElement>("[data-pane-open-asks=solo]")!;
+    expect(mark.textContent).toBe("Questions 2");
+    expect(container.querySelector("[data-quiet-head]")?.childElementCount).toBe(0);
+    await act(async () => mark.click());
+    expect(mark.getAttribute("aria-expanded")).toBe("true");
+    expect(document.querySelector("[data-pane-turn-card=solo] [data-turn-card-asks]")?.querySelectorAll("[data-record-ask]")).toHaveLength(2);
+  } finally {
+    await act(async () => root.unmount());
+    container.remove();
+  }
+});
+
+// The card's later half (docs/UI_BEHAVIOR.md, the turn card): the answer to
+// the request in bold over its first lines, the questions to the operator that
+// still wait right under it (the session record's 나를 기다리는 것), a line per
+// agent it worked with that opens into the letters in time order with the
+// folded reports, and the whole answer read only when opened.
+it("draws the answer, the questions still waiting and the letters since the request", async () => {
+  const value: PaneHeader = { working: true, notice: null, band: null, progress: "Waiting on Windows CI", request: { text: "Can a profile exist without the default folder?", images: 0 } };
+  const agent = turnAgent();
+  agent.request = {
+    ...agent.request!,
+    later_by: { kind: "named", name: "review" },
+    recent_turns: [],
+    answer: { offset: 7, end: "done", line: "Yes, rarely: a profile-only machine", head: "Yes, it can happen.\nNot common though.", whole: true, at_unix_ms: 1_000 },
+    letters: {
+      total: 3, progress: 10,
+      recent: [
+        { direction: "sent", peer: { kind: "named", name: "windows-x" }, mark: "waiting_answer", line: "Reviewer FAIL forwarded", at_unix_ms: 2_000 },
+        { direction: "received", peer: { kind: "named", name: "impl" }, mark: "block", line: "Plugin contract needed", at_unix_ms: 3_000 },
+      ],
+      letters: 13,
+      peers: [
+        { peer: { kind: "named", name: "impl" }, mark: "report", line: "Fixed and pushed", at_unix_ms: 3_500, blocks: 1 },
+        { peer: { kind: "named", name: "windows-x" }, mark: "waiting_answer", line: "Reviewer FAIL forwarded", at_unix_ms: 2_000, started: true },
+      ],
+      more_peers: 2,
+    },
+  };
+  const session = { device_id: "local", agent: "claude", session_id: "s1" };
+  agent.open_asks = { session, items: [{ id: "m1", text: "Decide the closed tab defect", at_unix_ms: 2_500 }, { id: "m2", text: "Merge now or wait for CI", at_unix_ms: 2_600 }] };
+  const rest = { status: { pane_focus_request: null }, terminal: { headers: { solo: value } }, turn_answer: { pane_id: "solo", offset: 7, phase: "failed", text: null } } as unknown as SnapshotRest;
+  const { container, events, unmount } = await mount(value, [agent], { paneId: "solo", rest });
+  const card = () => document.querySelector<HTMLElement>("[data-pane-turn-card=solo]")!;
+  try {
+    await act(async () => container.querySelector<HTMLButtonElement>("[data-pane-turn-request=solo]")!.click());
+    expect(card().querySelector("[data-turn-card-answer-line]")?.textContent).toBe("Yes, rarely: a profile-only machine");
+    expect(card().querySelector("[data-turn-card-answer-head]")?.textContent).toBe("Yes, it can happen.\nNot common though.");
+    expect(card().querySelector("[data-turn-card-letters-head]")?.textContent).toBe("4 agents · 13 letters");
+    // The questions still waiting sit between the answer and the letters, oldest first, under a grey head that counts them.
+    const order = [...card().querySelectorAll("[data-turn-card-answer], [data-turn-card-asks], [data-turn-card-letters]")].map((part) => (part.hasAttribute("data-turn-card-asks") ? "asks" : part.hasAttribute("data-turn-card-answer") ? "answer" : "letters"));
+    expect(order).toEqual(["answer", "asks", "letters"]);
+    const asks = () => [...card().querySelectorAll<HTMLElement>("[data-turn-card-asks] [data-record-ask]")];
+    expect(asks().map((ask) => ask.textContent?.includes("Decide the closed tab defect") || ask.textContent?.includes("Merge now or wait for CI"))).toEqual([true, true]);
+    expect(card().querySelector("[data-turn-card-asks] h3")?.textContent).toBe("Waiting on you · Questions 2");
+    // 무시하기 puts the question away in the session's record, and the line stays to undo while the card is open.
+    await act(async () => card().querySelector<HTMLButtonElement>("[data-record-ask-dismiss=m1]")!.click());
+    expect(events.filter((event) => event.kind === "session_missed_status").map((event) => event.payload)).toEqual([{ session, id: "m1", status: "dismissed" }]);
+    expect(card().querySelector("[data-record-ask=m1]")?.getAttribute("data-dismissed")).toBe("true");
+    // A line per agent, the latest first; each named for assistive technology.
+    const lines = () => [...card().querySelectorAll("[data-turn-card-peer], [data-turn-card-letter]")].map((line) => line.getAttribute("aria-label"));
+    expect(lines()).toEqual([
+      "impl · Report · Fixed and pushed · Blocked 1×",
+      "windows-x · Awaiting reply · Reviewer FAIL forwarded",
+    ]);
+    expect(card().querySelector("[data-turn-card-more-peers]")?.textContent).toBe("2 more");
+    // Show all opens the letters in time order in the same place, and Collapse closes them.
+    const letters = () => card().querySelector<HTMLButtonElement>("[data-turn-card-letters-whole]")!;
+    await act(async () => letters().click());
+    expect(card().querySelector("[data-turn-card-letters-before]")?.textContent).toBe("Older items not shown: 1");
+    expect(card().querySelector("[data-turn-card-progress]")?.textContent).toBe("10 progress reports folded");
+    expect(lines()).toEqual([
+      "Sent to windows-x · Awaiting reply · Reviewer FAIL forwarded",
+      "From impl · Blocked · Plugin contract needed",
+    ]);
+    await act(async () => letters().click());
+    expect(letters().getAttribute("data-turn-card-letters-whole")).toBe("closed");
+    expect(card().querySelectorAll("[data-turn-card-peer]")).toHaveLength(2);
+    // The agent still works on a later turn, so how it stands now stays its own line.
+    expect(card().querySelector("[data-turn-card-response]")?.textContent).toBe("WorkingWaiting on Windows CI");
+    const whole = () => card().querySelector<HTMLButtonElement>("[data-turn-card-whole]")!;
+    await act(async () => whole().click());
+    expect(events.filter((event) => event.kind === "turn_answer_read").map((event) => event.payload)).toEqual([{ pane_id: "solo", offset: 7 }]);
+    expect(card().querySelector("[data-turn-card-answer-failed]")?.textContent).toBe("Couldn't read the whole answer");
+    await act(async () => whole().click());
+    expect(whole().getAttribute("data-turn-card-whole")).toBe("closed");
+    expect(events.filter((event) => event.kind === "turn_answer_read")).toHaveLength(1);
+  } finally { await unmount(); }
+});
+
 // PRD pane-last-request B6, B9: the keyboard reaches the card's 기록 열기
 // with Tab from the focused request, the card stays open while focus is in
 // it, Shift+Tab goes back, Tab past its end closes it on the request, and
@@ -750,7 +905,7 @@ it("draws one row in one line, stacks two lines and draws no row when off, keepi
   try {
     const row = one.container.querySelector('[data-pane-header-band="answer"]')!;
     expect(row.classList.contains("flex-col")).toBe(false);
-    expect(row.textContent).toBe("Proceed as proposed→QuestionBundle into one PR?");
+    expect(row.textContent).toBe("Proceed as proposed→Bundle into one PR?");
     expect(one.container.querySelector("header [data-pane-tree]")).toBeNull();
   } finally { await one.unmount(); }
 
@@ -758,7 +913,7 @@ it("draws one row in one line, stacks two lines and draws no row when off, keepi
   try {
     const row = two.container.querySelector('[data-pane-header-band="answer"]')!;
     expect(row.classList.contains("flex-col")).toBe(true);
-    expect(row.textContent).toBe("Proceed as proposed→QuestionBundle into one PR?");
+    expect(row.textContent).toBe("Proceed as proposed→Bundle into one PR?");
   } finally { await two.unmount(); }
 
   // A parent with no turn to show keeps one line: the children button, no empty answer under it.
@@ -808,7 +963,7 @@ it("puts the pane's own ask on its head only while the turn row is off", async (
 it("says a Conductor's waiting decision on its second line, else the nodes at work, and nothing when no node runs (PRD mission-plan-visibility B9)", async () => {
   const conductor = legacyAgentRow({ pane_id: "parent", agent_kind: "claude", session_id: "s-c", device_id: "mac", identity_label: "root", group: "working", activity: "working", status_code: "working" } as Partial<AgentRow>);
   const node = (key: string, status: string) => ({ key, title: `${key} title`, kind: "change", depends_on: [], status, blocked: null, delivery: "pr", worker: null, agent_id: null, pane_id: null, machine: null, pr: null, base_pr: null, branch: null, pr_state: null, pr_url: null, stage: null, attempts: 0, line: null, change: null, review: null, criteria: [], criteria_met: 0, criteria_skipped: 0, external: null, unread: false, reopened: 0, started_at_unix_ms: null, finished_at_unix_ms: null });
-  const mission = (decision: string | null, nodes = [node("api", "working"), node("ui", "working"), node("docs", "planned")]) => ({ id: "m", title: "Ship", workspace_id: "w", project: "/repo", checkout_path: "/repo", device_id: "mac", status: "running", scope: "pr", cap: 4, exempt: false, strength: null, other_vendor: null, conductor: { pane_id: "parent", name: "c", agent_kind: "claude", session: null, present: true }, nodes, merge_order: [], check: null, github: null, decision, delay: null, report: null, created_at_unix_ms: 1, started_at_unix_ms: 1, closed_at_unix_ms: null, running: 2, stale: false, github_stale: false, github_read_at_unix_ms: null });
+  const mission = (decision: string | null, nodes = [node("api", "working"), node("ui", "working"), node("docs", "planned")]) => ({ id: "m", title: "Ship", workspace_id: "w", project: "/repo", checkout_path: "/repo", device_id: "mac", status: "running", scope: "pr", cap: 4, exempt: false, strength: null, conductor: { pane_id: "parent", name: "c", agent_kind: "claude", session: null, present: true }, nodes, merge_order: [], check: null, github: null, decision, delay: null, report: null, created_at_unix_ms: 1, started_at_unix_ms: 1, closed_at_unix_ms: null, running: 2, stale: false, github_stale: false, github_read_at_unix_ms: null });
   const rest = (decision: string | null, nodes?: ReturnType<typeof node>[]) => ({ status: { pane_focus_request: null }, missions: { items: [mission(decision, nodes)] } }) as unknown as SnapshotRest;
   const running = await mount({ working: true, notice: null, band: null, progress: "Reading the inbox" }, [conductor], { rest: rest(null) });
   try {

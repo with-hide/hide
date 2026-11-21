@@ -5,7 +5,7 @@
 // shows as pending until the snapshot says it landed. The sheet is the shell:
 // each page is its own module under `settings/`.
 
-import { BellIcon, GaugeIcon, BotIcon, DiamondIcon, ListTreeIcon, InfoIcon, KeyboardIcon, MonitorSmartphoneIcon, ShieldIcon, SlidersHorizontalIcon, SmartphoneIcon, SparklesIcon, XIcon, type LucideIcon } from "lucide-react";
+import { BellIcon, BlocksIcon, GaugeIcon, BotIcon, FlaskConicalIcon, ListTreeIcon, InfoIcon, KeyboardIcon, MonitorSmartphoneIcon, PlugIcon, ShieldIcon, SlidersHorizontalIcon, SmartphoneIcon, SparklesIcon, XIcon, type LucideIcon } from "lucide-react";
 import { GithubIcon } from "./components/github-icon";
 import { useState } from "react";
 import type { Actions } from "./actions";
@@ -15,16 +15,18 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from "./components/ui/tabs";
 import { Hint } from "./components/ui/tooltip";
 import { useInterfaceTranslation } from "./i18n/client";
 import { MobileTab } from "./MobileTab";
-import { awayDevice, coreMachineName, machineName } from "./screenMachine";
+import { ExternalToolsTab } from "./settings/ExternalToolsTab";
+import { SkillsTab } from "./settings/SkillsTab";
+import { awayDevice, coreMachineName, machineName, windowDeviceId } from "./screenMachine";
 import { SETTINGS_GROUPS, type SettingsTab } from "./settings";
 import { AboutTab } from "./settings/AboutTab";
 import { AgentsTab } from "./settings/AgentsTab";
 import { ConductorTab } from "./settings/ConductorTab";
-import { DeskSettingsPage } from "./DeskScreen";
 import { DevicesTab } from "./settings/DevicesTab";
 import { GeneralTab } from "./settings/GeneralTab";
 import { GithubTab } from "./settings/GithubTab";
 import { HideAiTab } from "./settings/HideAiTab";
+import { LabsTab } from "./settings/LabsTab";
 import { UsageTab } from "./settings/UsageTab";
 import { NotificationsTab } from "./settings/NotificationsTab";
 import { ShortcutsTab } from "./settings/ShortcutsTab";
@@ -46,11 +48,13 @@ const TAB_ICONS: Record<SettingsTab, LucideIcon> = {
   devices: MonitorSmartphoneIcon,
   shortcuts: KeyboardIcon,
   agents: BotIcon,
+  skills: BlocksIcon,
   hideAi: SparklesIcon,
-  desk: DiamondIcon,
   conductor: ListTreeIcon,
   mobile: SmartphoneIcon,
+  externalTools: PlugIcon,
   github: GithubIcon,
+  labs: FlaskConicalIcon,
   about: InfoIcon,
   privacy: ShieldIcon,
 };
@@ -63,6 +67,8 @@ function SettingsSheet({ actions }: { actions: Actions }) {
   const selectedId = useShellStore((s) => awayDevice(s.rest)?.id ?? null);
   const selectedName = useShellStore((s) => (selectedId ? machineName(s.rest?.navigator?.devices, selectedId, t) : ""));
   const selected = selectedId ? { id: selectedId, name: selectedName } : null;
+  // The computer this window runs on, named as its system does: This Mac, This PC.
+  const ownName = useShellStore((s) => machineName(s.rest?.navigator?.devices, windowDeviceId(s.rest?.navigator?.devices), t));
   // Hide AI, Mobile and GitHub are the core's machine's, which a window on another machine names by its name.
   const machineGroup = useShellStore((s) => coreMachineName(s.rest?.navigator?.devices, t));
   const groupName = (id: (typeof SETTINGS_GROUPS)[number]["id"]) => (id === "app" ? t("settings.groups.app") : machineGroup);
@@ -82,8 +88,9 @@ function SettingsSheet({ actions }: { actions: Actions }) {
             move through the list and show each page, Tab enters the page (B3). */}
         <Tabs value={tab} onValueChange={(value) => setTab(value as SettingsTab)} orientation="vertical" className="min-h-0 flex-1 flex-row gap-none">
           <nav className="flex min-h-0 w-(--size-settings-nav-w) shrink-0 flex-col overflow-hidden border-r border-border bg-sidebar px-sm pb-md pt-sm">
-            <DialogTitle className="shrink-0 px-sm pb-xs text-title font-semibold">{t("common.settings")}</DialogTitle>
-            <TabsList aria-label={t("settings.section")} className="min-h-0 w-full flex-1 flex-col items-stretch gap-xxs rounded-none bg-transparent p-none">
+            {/* Settings are one computer's, so the title says whose (operator decision 2026-11-19). */}
+            <DialogTitle className="shrink-0 truncate px-sm pb-xs text-title font-semibold" data-settings-title="true">{t("settings.titleOf", { machine: ownName })}</DialogTitle>
+            <TabsList variant="nav" aria-label={t("settings.section")} className="min-h-0 w-full flex-1 flex-col items-stretch gap-xxs rounded-none bg-transparent p-none">
               <div className="flex min-h-0 flex-1 scroll-py-xxs flex-col gap-xxs overflow-y-auto pb-xxs" data-settings-page-list="true">
                 {SETTINGS_GROUPS.map((group) => (
                   <div key={group.id} className="flex shrink-0 flex-col gap-xxs" data-settings-nav-group={group.id}>
@@ -127,11 +134,13 @@ function SettingsSheet({ actions }: { actions: Actions }) {
               {tab === "devices" ? <DevicesTab actions={actions} /> : null}
               {tab === "shortcuts" ? <ShortcutsTab actions={actions} /> : null}
               {tab === "agents" ? <AgentsTab actions={actions} /> : null}
+              {tab === "skills" ? <SkillsTab actions={actions} /> : null}
               {tab === "hideAi" ? <HideAiTab actions={actions} /> : null}
-              {tab === "desk" ? <DeskSettingsPage actions={actions} /> : null}
               {tab === "conductor" ? <ConductorTab actions={actions} /> : null}
               {tab === "mobile" ? <MobileTab actions={actions} /> : null}
+              {tab === "externalTools" ? <ExternalToolsTab actions={actions} /> : null}
               {tab === "github" ? <GithubTab actions={actions} /> : null}
+              {tab === "labs" ? <LabsTab actions={actions} /> : null}
               {tab === "about" ? <AboutTab actions={actions} /> : null}
               {tab === "privacy" ? <PrivacyTab actions={actions} /> : null}
             </TabsContent>

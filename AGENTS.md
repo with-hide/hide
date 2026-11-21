@@ -11,34 +11,42 @@ Before writing or changing a test, read `docs/TESTING.md` for which layer to tes
 
 ## Repository Layout
 
-- `hided/` - the product daemon and `hide` CLI. It links `herdr-core` on an owner thread, serves loopback HTTP (`/`, `/assets`, `/health`) and a token-gated WebSocket for dispatch and snapshot deltas.
+- `hided/` - the product daemon and `hide` CLI. It links `hide-core` on an owner thread, serves loopback HTTP (`/`, `/assets`, `/health`) and a token-gated WebSocket for dispatch and snapshot deltas.
 - `web/` - the React web shell (Vite, zustand, xterm.js). Build output is `web/dist/` inside this worktree and is gitignored.
-- `desktop/` - the Electron desktop host and the only shipped app: the web shell hided serves, in its own macOS window, attached through `hide connect`. The packaged `hide.app` carries `hided`, `hide`, `hide-agent-hooks`, the device helper and the pinned Herdr flat in `Contents/Resources`, ad-hoc signed by `pnpm --dir desktop package` and, for a release, signed with the Developer ID certificate and notarized (`docs/BUILD.md`); quitting the host leaves hided running, while the bundled `hide connect` replaces a healthy daemon of another build in the same state folder and an unbundled `hide` refuses that mismatch. Build output is `desktop/dist/` and the app and archive under `desktop/out/`, all gitignored; see `docs/ARCHITECTURE.md`, The desktop host.
-- `herdr-core/` - platform-neutral Rust runtime, an rlib whose owner-thread handle (`herdr-core/src/handle.rs`) `hided` drives. It projects Herdr-owned pane topology and owns Hide's UI state; the shell owns neither.
+- `desktop/` - the Electron desktop host and the only shipped app: the web shell hided serves, in its own macOS window, attached through `hide connect`. The packaged `hide.app` carries `hided`, `hide`, `hide-agent-hooks`, `hide-holder` and the device helper flat in `Contents/Resources`, ad-hoc signed by `pnpm --dir desktop package` and, for a release, signed with the Developer ID certificate and notarized (`docs/BUILD.md`); quitting the host leaves hided running, while the bundled `hide connect` replaces a healthy daemon of another build in the same state folder and an unbundled `hide` refuses that mismatch. Build output is `desktop/dist/` and the app and archive under `desktop/out/`, all gitignored; see `docs/ARCHITECTURE.md`, The desktop host.
+- `mobile/` - the Capacitor host of the iOS and the Android app: the phone web app (`web/src/mobile/`) served from the app's own origin with every supported protocol bundle inside it, the Swift package and the Android project (`mobile/android/`) that close the bridge to frames, and the scripts that build them on the Mac mini; see `docs/ARCHITECTURE.md`, The iOS app host and The Android app host, and `docs/BUILD.md`, The iOS app and The Android app.
+- `hide-core/` - platform-neutral Rust runtime, an rlib whose owner-thread handle (`hide-core/src/handle.rs`) `hided` drives. It projects the engine's pane topology and owns Hide's UI state; the shell owns neither.
 - `hide-kit/` - the install kit and `hide_kit::layout`, the one place every hide-owned path under `~/.hide` is named; see `docs/INSTALL.md`, Where Hide keeps its files.
 - `hide-agent-hooks/` - the only code that writes a configuration file the operator owns (each agent runtime's hook file). A separate crate because a `settings.json` write must never sit behind the render lock; see `docs/agent-hooks.md`.
-- `hide-platform/` - the operating-system layer under every other crate: what differs between macOS, Linux and Windows is written here once and checked by contract tests that run on all three; today the local stream (`ipc`) the Herdr client uses, the processes (`process`: the one child-start helper and what the kernel says about a pid), the files (`fs`: private files and folders, locks, atomic replacement, links, file identity), and how a path is spelled between machines (`path`: `/` between names on every system, converted to a native path only on the machine that owns it). It has no hide dependencies and keeps no state of a caller's; the one thing it remembers is the login shell's `PATH` (`programs`), a fact about the account keyed by the shell and home it was read for, so the kit, Hide AI and a device helper share one answer instead of each starting the operator's shell; see `docs/ARCHITECTURE.md`, The platform layer.
+- `hide-platform/` - the operating-system layer under every other crate: what differs between macOS, Linux and Windows is written here once and checked by contract tests that run on all three; today the local stream (`ipc`) that nodes, holders and hooks talk over, the processes (`process`: the one child-start helper and what the kernel says about a pid), the files (`fs`: private files and folders, locks, atomic replacement, links, file identity), and how a path is spelled between machines (`path`: `/` between names on every system, converted to a native path only on the machine that owns it). It has no hide dependencies and keeps no state of a caller's; the things it remembers are the login shell's `PATH` (`programs`), a fact about the account keyed by the shell and home it was read for, so the kit, Hide AI and a device helper share one answer instead of each starting the operator's shell, and the open-file limit the process started with before it raised its own (`process`), which a resident child starts with; see `docs/ARCHITECTURE.md`, The platform layer.
 - `hide-ai/` - the provider boundary for background AI features, backed by the user's own logged-in CLIs; see `docs/AI_PROVIDERS.md`.
 - `workspace-hack/` - no code: kept by `cargo hakari`, it turns on the union of every member's features for each third-party crate, so every cargo command builds a dependency once; see `docs/BUILD.md`, One feature set per dependency.
-- `hide-shell/` - how a shell reads one command line (words, quotes, lists, redirections, heredoc bodies), shared by the hooks, which read a call before it runs, and `hide-session`, which reads the calls a session file recorded; it reads text only.
+- `hide-shell/` - how a shell reads one command line (words, quotes, lists, redirections, heredoc bodies), in the syntax of a POSIX shell or of PowerShell (`Syntax`, the one type that names a shell's kind), shared by the hooks, which read a call before it runs, and `hide-session`, which reads the calls a session file recorded; it reads text only.
 - `hide-screen-rules/` - how an agent's state is read from its screen: Herdr's agent detection rule grammar, limits, compiler and evaluator, over rules a caller hands in (an agent definition's `[screen]`), never a download; the agent definition files themselves are `hide-agent-adapter/agents/*.toml`, read by `hide_agent_adapter::definition`. See `docs/ARCHITECTURE.md`, Agent definition files.
 - `hide-vt/` - the terminal parser the pane holder links: Herdr's libghostty-vt binding, renamed, built by Zig from inputs `scripts/prepare-vt-inputs.py` downloads once and checks against `hide-vt/build-inputs.json`. See `docs/BUILD.md`, The terminal parser and Zig, and `hide-vt/PATCHES.md`.
-- `hide-holder/` - a pane's holder: one resident program per pane that keeps its PTY, program and parsed terminal and serves one node connection at a time; `hide-holder-protocol/` is what a node and a holder say to each other, and the only holder crate a node links. The PTY comes from `vendor/portable-pty` (Herdr's patched copy plus Hide's changes, `PATCHES.md`); the version folders a holder runs from are `hide_kit::holders`. No shipped path starts a holder: every package carries `hide-holder` (and on Windows its pinned ConPTY runtime in `holder-conpty`), but a node starts and adopts them only with the development switch `HIDE_DEV_PANE_HOLDER=1` (`hide-node/src/terminal/holder.rs`), which also gives the core its own engine (`herdr-core/src/engine/own/`) in place of Herdr. See `docs/ARCHITECTURE.md`, The pane holder and The core's own engine.
+- `hide-holder/` - a pane's holder: one resident program per pane that keeps its PTY, program and parsed terminal and serves one node connection at a time; `hide-holder-protocol/` is what a node and a holder say to each other, and the only holder crate a node links. The PTY comes from `vendor/portable-pty` (Herdr's patched copy plus Hide's changes, `PATCHES.md`); the version folders a holder runs from are `hide_kit::holders`. Every pane runs in one: every package carries `hide-holder` (and on Windows its pinned ConPTY runtime in `holder-conpty`), and every node starts and adopts them (`hide-node/src/terminal/holder.rs`) for the core's own engine (`hide-core/src/engine/own/`), the engine every daemon runs. See `docs/ARCHITECTURE.md`, The pane holder and The core's own engine.
 - `hide-relay-protocol/` - the shared mobile relay routing, device admission, Noise NK sessions and QR v2 contract, linked by native Rust and compiled to WASM for the phone; see `docs/RELAY_PROTOCOL.md`.
+- `hide-peer-protocol/` - what two machines that each run Hide say to each other on their one connection: the hello and its versions, the stream kinds and their priorities, the pairing, revoke and management messages, the events one core hands another, a guest node's launch contract with its folder and socket names, and the tap; `contracts/peer-link.json` is written from it and a test holds the two equal. `hide-peer/` is that connection above any transport: the machine key, the grant and known-host stores (saved before they take effect), each direction's generation gate, the dial rule, the event inbox, a loopback transport for tests, and the link multiplexer (`mux`) the SSH and WSL links run. `hide-peer-iroh/` is the only crate that links iroh and noq, an endpoint behind `hide_peer`'s `PeerTransport` that the core role opens in `hided/src/peer_host.rs` only on a machine that is paired, sharing itself or adding a machine; `scripts/check-iroh-stays-behind-the-seam.py` keeps every other member off them. See `docs/ARCHITECTURE.md`, The peer connection.
 - `hide-session/` - shared local Claude, Codex and OpenCode session location, incremental and backwards page reading, and conversation parsing used by the core's label worker, the core usage fallback and the phone's conversation, and every supported agent's session read as ACP session updates (`thread`); `tests/it/adapters.rs` is each agent reader's contract and `tests/it/thread.rs` each thread converter's.
-Agent registration, spawning and lineage are owned by the core, in `herdr-core/src/coordination/`; see `docs/delivery.md` and `docs/status-model.md`.
-Agent labels are made by the core, in `herdr-core/src/labels/`; see `docs/status-model.md`, Task identity.
+Agent registration, spawning and lineage are owned by the core, in `hide-core/src/coordination/`; see `docs/delivery.md` and `docs/status-model.md`.
+Agent labels are made by the core, in `hide-core/src/labels/`; see `docs/task-identity.md` in with-hide/hide-private.
 
 ## Every Agent And Feature On Every System
 
 Every agent Hide supports and every feature works on macOS, Windows and Linux; design and deliver the Windows and Linux forms with the macOS one, not after it.
+It works the same on a pane of a connected device as on one of this machine, so design and check a feature's device form with it too: a pane's screen, input, selection and clipboard cross the device link, and what reaches the program, or leaves it, on the device is not what reaches the operator's machine.
 A system-specific difference is written once in its layer (`hide-platform` for the Rust side, `desktop/src/main/` for the desktop host) and proved on that system's CI lane, not assumed from macOS.
-A gap is allowed only as a cell in `docs/INSTALL.md`, What each system supports, with its reason and what would close it, changed in the same pull request as the behavior.
+A gap, on a system or on a device, is allowed only as a cell in `docs/INSTALL.md`, What each system supports, with its reason and what would close it, changed in the same pull request as the behavior.
 
 ## Explaining To The Operator
 
 When you tell the operator about a problem and its fix, in a reply, a letter or a pull request's `Summary`, say in plain words what is wrong and what changes, core first and short.
-Leave out the technical detail and the comparison of alternatives unless the operator asks for them; a pull request keeps the files to watch and the proof in `Review` and `Evidence`.
+Leave out the technical detail and the comparison of alternatives unless the operator asks for them; a pull request keeps the files to watch and the proof in its folded `Risky files` and `Evidence` blocks.
+
+## Private Design Documents
+
+The core design of missions and of the main services is owned by documents in with-hide/hide-private's `docs/` folder: missions (`missions.md`), session plans (`plans.md`), task identity and delegated escalation (`task-identity.md`), Project Memory (`project-sessions-and-memory.md`), Desk (`desk.md`), the Hide AI tool (`hide-ai-tool.md`), the 태스크 list, 보기 slot and PR list (`tasks-and-pr-list.md`), the suggestion investigation (`suggestion-investigation.md`), the measured performance figures (`performance-results.md`), how a Conductor runs a mission (`mission-operations.md`) and the security and ownership specification of the connection between two Hides (`device-connection-security.md`); [docs/README.md](docs/README.md) maps each to the public section that points at it.
+A public pull request that changes behavior one of them owns comes with a paired with-hide/hide-private pull request that updates it, and the two name each other; a public file may name a private path and section, never restate its content.
 
 ## Working Beside Open Pull Requests
 
@@ -47,29 +55,29 @@ Do these three things, at these three moments, on every task; `python3 scripts/m
 
 1. Before the first line of code: start on an open pull request's branch, and open yours with `--base <that branch>`, only when the work needs what that pull request adds (an API, state, schema or contract); work that only might touch the same files starts from main, like work that does not.
 2. After the first push: run `python3 scripts/merge-order.py <number>` (or `--branch <name>` before the pull request exists) and act on its `Do:` line and nothing else; `Stay as you are` is the usual answer, and a stack is only ever joined by merging the layer below, never by rebasing and never by merging main into an upper layer.
-3. Before a merge, the lead only, and this includes a merge `/ship` is about to make: run `python3 scripts/merge-order.py` with no argument first and take the green pull requests in the order it prints, each through `python3 scripts/premerge-check.py <number>` and the merge command that prints; a delegated session never merges.
-   [`.claude/skills/merge-green/SKILL.md`](.claude/skills/merge-green/SKILL.md) is that procedure step by step, for any agent runtime: the check runs under the machine's shared lock (`lockf -k /tmp/hide-premerge.lock …`), a pass merges without asking the operator again, and the merged branch's worktree is removed.
+3. Before a merge, the lead only, and this includes a merge `/ship` is about to make: run `python3 scripts/merge-order.py` with no argument first and add the green pull requests to the merge queue in the order it prints (`gh pr merge <number> --match-head-commit <head>`); a delegated session never merges.
+   [`.claude/skills/merge-green/SKILL.md`](.claude/skills/merge-green/SKILL.md) is that procedure step by step, for any agent runtime: the queue checks each one on main with the ones ahead of it and merges it, without asking the operator again, and the merged branch's worktree is removed.
 
 A documents-only overlap (`*.md`, `*.pen`, `site/`) never stacks; it is resolved once, by merging main right before the merge.
 
 ## Issues
 
-Development issues (flaky tests, nightly failures, the agent canary, the Herdr preview notice, follow-ups) live in the private with-hide/hide-private, where CI files its own ([docs/TESTING.md](docs/TESTING.md#flaky-tests)).
-The public with-hide/hide takes only user bug reports and feature requests through its issue forms; an agent opens a development issue in with-hide/hide-private (`gh issue create --repo with-hide/hide-private`, and the `issue` skill with that repository as its target).
-A pull request that ends one names it across repositories, `Closes with-hide/hide-private#N`.
+Every issue about Hide's code lives in the public with-hide/hide, so a contributor reads the same issues a maintainer does: user bug reports and feature requests through their forms, and development issues (flaky tests, nightly failures, the agent canary, follow-ups) beside them.
+CI files its own under the `quarantine`, `nightly-failure` and `agent-canary` labels ([docs/TESTING.md](docs/TESTING.md#flaky-tests)); an agent opens one with the Development issue form's headings and the `development` label (`gh issue create --repo with-hide/hide --label development`, or the `issue` skill, which reads that form).
+A pull request that ends one names it, `Closes #N`.
 
 ## Before Opening A Pull Request
 
 `main` takes pull-request merges only, and the `verify` workflow has to pass; this repository currently uses merge commits, and no one, maintainer included, can push around branch protection.
-A green pull request does not need the latest main to merge: `python3 scripts/premerge-check.py <number>` decides against main as it is now and prints the merge command.
+A green pull request does not need the latest main to merge: the merge queue checks it on main as it is then, with the pull requests queued ahead of it.
 When main's push run fails, follow `CONTRIBUTING.md`, When main's push run fails: it owns the merge freeze, the narrow exception for unrelated development changes during an existing Windows-only failure, the rule that a failure only in macOS jobs does not freeze merges, and the full verification required before release.
 `CONTRIBUTING.md` lists every gate with its local command; run the lanes the diff touches before opening the pull request, and change a gate that is wrong in the same pull request with the reason in the description.
 While you wait for CI, keep a background watch on the run and act when it ends; `CONTRIBUTING.md`, Waiting for CI, owns the commands.
 Commit subjects and pull request titles take the form `<type>: <imperative sentence>` in English, such as `fix: keep a named tab when its last agent closes`, even when the operator writes in Korean; `CONTRIBUTING.md`, Commit messages and attribution, owns the types and the rule.
-Write the template in the order a reviewer reads it: `Summary` with screenshots, `Review` (what needs judgment, which files to watch and why, questions), `Evidence` (what was and was not confirmed), then `Breaking change` only when something breaks; answer from the diff, not from intent, and delete the lines that do not apply rather than filling them with "N/A".
-A pull request whose diff touches a screen (`web/src`, `site/`, `design/`) shows it: crop the candidate's panel, upload it with `node ~/.claude/skills/ship/scripts/prd_ship.js screenshots --no-run --file <png> --caption "<one line>"` (a PRD run drops `--no-run`), and put the image line it prints under `Summary`; when there is a reason to show nothing, write it as one line `스크린샷 없음: <reason>` for the reviewer to judge.
+Write the template in English, in the order a reviewer reads it: above the fold `Summary` (`Problem`, then a `Before → After` table of what the user gets, the screen and the flow), `Decide`, `Hard to undo` and `Not verified`, plus `Accountability` from a contributor outside the maintainers; below it the folded `Evidence`, `Tests` (`Layer`, `Catches`, `Repeat`, `Waits`, only when the diff adds or changes a test), `Risky files` and `Verification record` blocks; answer from the diff, not from intent, and delete the lines that do not apply rather than filling them with "N/A".
+A pull request whose diff touches a screen (`web/src`, `site/`, `design/`) shows it: crop the candidate's panel, upload it with `node ~/.claude/skills/ship/scripts/prd_ship.js screenshots --no-run --file <png> --caption "<one line>"` (a PRD run drops `--no-run`), and put the image it prints in the `Screen` row of the `Before → After` table; when there is a reason to show nothing, write it as one line `No screenshot: <reason>` for the reviewer to judge.
 `scripts/check-pr-screenshots.py` runs in `verify` and refuses the silent omission, and a body edit reruns it; `CONTRIBUTING.md`, CI gates, owns the rule.
-The reasons this repository has been burned by stay behind `Review`'s file list (runtime mutex, snapshot wire, ownership, Herdr contract, failure path, high-frequency path); machine facts such as SHAs, suite output and evidence hashes go in the folded `Verification record` block at the end, which `/ship` fills.
+The reasons this repository has been burned by stay behind the folded `Risky files` list (runtime mutex, snapshot wire, ownership, engine contract, failure path, high-frequency path); machine facts such as SHAs, suite output and evidence hashes go in the folded `Verification record` block at the end, which `/ship` fills.
 
 ## Evidence Belongs Outside The Repository
 
@@ -77,7 +85,7 @@ Screenshots, traces, sample output, run logs, browser profiles, and verification
 They once did: an evidence tree reached 123 MB and carried a browser profile with cookies and screenshots showing the workstation's home directory, and it is still reachable from `origin/main`, so treat everything that was in it as public.
 
 - Write run artifacts under `agents/runs/<slug>/`, which is local-only, so nothing there can reach a commit by accident.
-- Never add a path under `docs/verification/`, `docs/screenshots/`, or `spikes/*/evidence/`; `check-no-workstation-identity.sh` refuses them even past a `git add -f`, and refuses a browser profile file by shape.
+- Never add a path under `docs/verification/` or `docs/screenshots/`; `check-no-workstation-identity.sh` refuses them even past a `git add -f`, and refuses a browser profile file by shape.
 - When a document needs to cite evidence, state the finding and how it was measured; do not commit the artifact so a path can be linked.
   A verification claim is proven to the person reading the run, in the receipt and the run directory, not to the repository.
 
@@ -94,7 +102,7 @@ They once did: an evidence tree reached 123 MB and carried a browser profile wit
 - `[profile.dev] incremental = false` is deliberate: an agent worktree is built a few times and discarded, which never repays an incremental cache.
 - A debug build stays small (`docs/BUILD.md`, A debug build is kept small): the dev profile carries no debug info, a dependency or feature change is followed by `cargo hakari generate` and `cargo hakari manage-deps --yes`, no member feature exists only for tests, and a crate's integration tests are modules of its one `tests/it` binary.
 - Removing the worktree takes the cache with the work; a worktree kept alive after its branch lands keeps its cache alive too.
-  Remove a checkout Hide shows with `hide workspace remove <path>`, which closes its Herdr workspace and panes first; a raw `git worktree remove` leaves them open on a folder that is gone (`docs/delivery.md`, Removing a worktree).
+  Remove a checkout Hide shows with `hide workspace remove <path>`, which closes its workspace and panes first; a raw `git worktree remove` leaves them open on a folder that is gone (`docs/delivery.md`, Removing a worktree).
 - The root checkout stays on `main`; every branch is worked on in its own sibling worktree directory.
   `scripts/hooks/root-worktree-main-only.sh` is a `PreToolUse` hook (registered for Claude Code in `.claude/settings.json`, for Codex in `~/.codex/hooks.json`) that refuses a `git checkout`/`git switch` off `main` in the root worktree and answers with the `git worktree add` form to use instead.
 
@@ -106,47 +114,31 @@ On 2026-09-27 one session replaced it with a build that predated a merged fix, d
 - Replace `/Applications/hide.app` only when the operator asked for it in the session doing the replacing; another session's approval, a PRD, or a verification plan is not that authority.
 - Keep the bundle you replace as `/Applications/hide-previous-<version>.app.bak`, and never delete a `.bak` another session left; the version is `CFBundleShortVersionString` in its `Contents/Info.plist`.
 - Before a live check, read the installed `Contents/Info.plist` version and `hide --help` from its `Contents/Resources`, and say in the run record which build answered.
-- Launch it with the `HERDR_*` and `HIDE_*` variables stripped from the launching shell (`env -u HERDR_BIN_PATH -u HERDR_SOCKET_PATH … open /Applications/hide.app`): a Herdr pane carries the socket, identity and binary path of the Herdr that opened it, and the app would attach to that pane's server rather than the one a Dock launch finds.
+- Launch it with the `HIDE_*` variables stripped from the launching shell (`env -u HIDE_STATE_DIR … open /Applications/hide.app`): a shell that set one, such as `HIDE_STATE_DIR` for an isolated run, points the app at that state folder rather than the one a Dock launch finds.
 - Package without `HIDE_VERSION`: the script names a local build `<newest release>-main.<commit>`, such as `0.4.0-main.f77c2a43`, and only a release sets `HIDE_VERSION` (`docs/BUILD.md`).
 
 ## Runtime Architecture
 
-Read `docs/ARCHITECTURE.md` in full before changing anything under `herdr-core/`, `hided/` or `desktop/`; it owns the reasons behind these boundaries.
+Read `docs/ARCHITECTURE.md` in full before changing anything under `hide-core/`, `hided/` or `desktop/`; it owns the reasons behind these boundaries.
 
 - The core owns all state behind one `Mutex<Runtime>`; the shell dispatches typed events in and pulls one snapshot out when the notifier announces, and holds no authority of its own.
-- Herdr owns pane existence, split geometry, zoom, cwd, agent lifecycle and the PTY; the core owns each checkout's visible tab, the keyboard focus pane, panel visibility and text scale, and changes those on the event that asked for it, telling Herdr afterwards.
-  While that notification is pending, Herdr's move is read as confirmation; with nothing pending, a move Herdr makes on its own is followed and a diagnostic records it; a refusal or a timeout keeps the core's value and records a diagnostic.
-  A zoom, split, resize, pane close or new tab Hide asked for is drawn before Herdr's layout confirms it, and Herdr's layout replaces the drawing; each terminal's grid follows the rectangle drawn for it at once, because the PTY size is the controller client's and never Herdr's layout's (`docs/ARCHITECTURE.md`, Drawn ahead of Herdr).
+- The engine (the core's own, `hide-core/src/engine/own/`, over each pane's holder) owns pane existence, split geometry, zoom, cwd, agent lifecycle and the PTY; the core owns each checkout's visible tab, the keyboard focus pane, panel visibility and text scale, and changes those on the event that asked for it, telling the engine afterwards.
+  While that notification is pending, the engine's move is read as confirmation; with nothing pending, a move the engine makes on its own is followed and a diagnostic records it; a refusal or a timeout keeps the core's value and records a diagnostic.
+  A zoom, split, resize, pane close or new tab Hide asked for is drawn before the engine's layout confirms it, and the engine's layout replaces the drawing; each terminal's grid follows the rectangle drawn for it at once, because the PTY size is the controller client's and never the engine layout's (`docs/ARCHITECTURE.md`, Drawn ahead of the engine).
   Each tab runs one geometry operation at a time with at most eight waiting, and a refusal drops the line behind it; keys typed before a new pane exists are held by the node that holds the pane up to 64 KiB per holder and 3 s per key; fork input waits until the fork ends for up to 30 s and reported cap failures.
-- The notifier announces once per burst, and `herdr_core_snapshot` clears its latch **before** it takes the lock; clearing it after the read would swallow a change that landed during the read.
+- The notifier announces once per burst, and `Core::snapshot_delta_payload` (`hide-core/src/handle.rs`) clears its latch **before** it takes the lock; clearing it after the read would swallow a change that landed during the read.
   Launch creates the core once, after the runtime resolution has finished, and never replaces it.
 - A user action is one event, not a sequence: dispatch is fire-and-forget, so four events would arrive as four frames and a refusal partway would leave the screen half moved.
 - A path outside every registered checkout never reaches the core; the shell hands it to macOS and reveals rather than opens anything executable.
-- A delegated child pane is moved to its own tab, never split into the operator's pane, unless its spawn asked to open it beside its caller (`hide agent spawn --beside`, `docs/delivery.md`), and an ordinary delegated row can only be Working or Seen, with the seven core-owned escalation causes in `docs/status-model.md` as the explicit exception; a descendant's demand or completion turns its ancestors unread and nothing else on the parent moves; `docs/status-model.md` owns the ownership axis, the descendant badge and that rule.
+- A delegated child pane is moved to its own tab, never split into the operator's pane; an agent spawned beside its caller (`hide agent spawn --beside`, `docs/delivery.md`) is the operator's root, never a delegated child, and an ordinary delegated row can only be Working or Seen, with the six core-owned escalation causes in `docs/task-identity.md` in with-hide/hide-private as the explicit exception; a descendant's demand or completion turns its ancestors unread and nothing else on the parent moves; `docs/status-model.md` owns the ownership axis, the descendant badge and that rule.
 - An attach lives only while its tab is among the last five shown (`ATTACHED_TAB_LIMIT`); a released pane keeps its projection entry as `released`, because a missing entry reads as a failure.
 - Design principle #13 governs what reaches the screen: a failure the operator cannot act on goes to the diagnostic log, and an alert, a banner, or a sheet is a PRD decision, not a default.
 
-## Herdr API Contract
+## Herdr Source
 
-Before changing, debugging, or reviewing any Herdr integration, read both official references in full for the Herdr this repository pins: the [CLI reference](https://herdr.dev/docs/cli-reference/) and the [Socket API](https://herdr.dev/docs/socket-api/).
-The CLI is a wrapper over the same local socket API: use CLI wrappers for shell scripts, orchestration, debugging and portable plugin commands, and the raw socket only for custom-client control or long-lived subscriptions.
-
-- Do not guess method names, parameters, response fields, or protocol compatibility from existing call sites.
-  Check the target binary with `herdr --version` and `herdr api schema --json`, then compare with `contracts/herdr-api.schema.json` through `scripts/check-herdr-contract.sh`.
-- The pin lives only in `contracts/herdr-bundle.json`, and the contract is what that exact binary answers, never a copy from a Herdr checkout; `check-herdr-pin-single-source.sh` fails when anything restates it.
-  Move it with `scripts/bump-herdr.sh <release-tag>`.
-- The core and hided speak to Herdr only through the engine boundary, `herdr-core/src/engine/`: the `Engine` trait inside the core and `EngineHandle` off its owner thread; its Herdr implementation (`engine/herdr.rs`) is the only code that holds a Herdr connection or reads its wire (`docs/ARCHITECTURE.md`, The core, the shell and Herdr).
-  `scripts/check-engine-boundary.py` fails a Herdr connection, wire type, `hide-herdr-client` use or Herdr launch outside it, except the files its allow-list names with the bundle that deletes each.
-- The generated wire types live in a private module of `herdr-core/src/engine/herdr/wire.rs` (built by `herdr-core/build.rs`), so only that file can name them and an import anywhere else fails to compile; `wire.rs` is itself private to the engine's Herdr implementation.
-  Another crate reaches Herdr through `EngineHandle`, or, where it cannot depend on the core (`hide-kit`), through the typed helpers of `hide-herdr-client` (transport plus the plugin registry entry); never through a generated type.
-  Do not write wire deserialization in `session_sync/{projection,replica}.rs`.
-  `docs/ARCHITECTURE.md` lists the schema gaps the boundary still handwrites and the tests that demand migration when the schema closes them.
-
-<!-- herdr-provenance:start -->
-hide distributes the [upstream Herdr release v0.9.5](https://github.com/herdrdev/herdr/releases/tag/v0.9.5).
-The bundled binary's code is not modified by hide; a macOS release replaces only its ad-hoc signature with hide's Developer ID one, which notarization requires.
-`herdr-update.yml` proposes an upstream stable release with `--repo herdrdev/herdr` only when run by hand, since the pin holds while Hide moves to its own engine; updates must pass contract and runtime checks.
-<!-- herdr-provenance:end -->
+Hide no longer runs Herdr: the core's own engine (`hide-core/src/engine/own/`, over each pane's holder) runs every pane.
+When the own engine is stuck, or behaves differently from what Herdr did, read Herdr's source at its last pinned release ([herdrdev/herdr](https://github.com/herdrdev/herdr), tag `v0.9.5`) before designing a fix, and follow it where it fits; a pull request that goes another way asks for that call in `Decide`.
+Read it with `gh api` or a shallow clone under your own `agents/runs/`, and delete the clone when done.
 
 ## Performance Guide
 
@@ -154,11 +146,11 @@ Before diagnosing, changing, reviewing, or verifying terminal responsiveness, re
 It owns the reproduction procedure, the isolation checklist, the measurement boundaries, the invariants a fix has to preserve, and the regression ownership table; historical run measurements are not acceptance thresholds.
 
 - Explain the added work per input, the notification fan-out, and the pending-work bound before adding anything to a high-frequency path; publish only actual state transitions, and never drop input to do so.
-- The session-sync thread that applies Herdr's events never blocks: a socket read that opens its own connection, a subprocess, an HTTP request or an fsync runs on a worker or a save thread, and a publish whose catalog inputs did not move repeats no catalog build, purpose sync or path resolution.
+- The session-sync thread that applies the engine's events never blocks: a socket read that opens its own connection, a subprocess, an HTTP request or an fsync runs on a worker or a save thread, and a publish whose catalog inputs did not move repeats no catalog build, purpose sync or path resolution.
 - No subprocesses, blocking I/O, or large serialization under `Mutex<Runtime>`: `snapshot_delta_payload` takes owned data under the lock and `serialize_snapshot_delta` serializes outside it, and `ChangeNotifier` announces once per burst.
   No per-tick or per-tab git forks: the catalog reads repository facts from what the core's own node answers about its paths (`Call::PathFacts`, read from the repository's own files there, never from a `git` process), asked off the lock.
 - Report idle and driven measurements separately, with the load and workload recorded for each.
-- Native verification targets one precisely identified candidate PID/window and an isolated Herdr server; the operator app may remain running. Never quit, restart, focus, or manipulate the operator's app, panes, or server for QA without explicit coordination. Prefer background exact-window capture; see `docs/PERFORMANCE_TESTING.md` for isolation and foreground-interaction boundaries.
+- Native verification targets one precisely identified candidate PID/window and an isolated state folder (`HIDE_STATE_DIR`); the operator app may remain running. Never quit, restart, focus, or manipulate the operator's app, panes, or server for QA without explicit coordination. Prefer background exact-window capture; see `docs/PERFORMANCE_TESTING.md` for isolation and foreground-interaction boundaries.
 
 <!-- harness:agents-namespace:start -->
 ## Harness Namespace (`agents/`)

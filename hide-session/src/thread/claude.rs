@@ -3,6 +3,7 @@
 //! id. Tool titles and kinds follow claude-agent-acp's reporters (D-04).
 
 use agent_client_protocol_schema::v1::{PlanEntryStatus, ToolKind};
+use hide_agent_adapter::HookDialect;
 use serde_json::Value;
 
 use super::Lines;
@@ -100,7 +101,9 @@ fn tool_use(block: &Value, cwd: &str, thread: &mut Thread) {
             thread.plan(todos(input));
             return;
         }
-        "Bash" => Call::new(id, name, ToolKind::Execute).title(text("command")),
+        "Bash" | "PowerShell" => Call::new(id, name, ToolKind::Execute)
+            .title(text("command"))
+            .shell(HookDialect::ClaudeCode),
         "Read" => {
             let path = text("file_path");
             Call::new(id, name, ToolKind::Read)

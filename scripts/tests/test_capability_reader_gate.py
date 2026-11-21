@@ -13,7 +13,7 @@ class CapabilityReaderGate(unittest.TestCase):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
             (root / 'scripts').mkdir()
-            sources = root / 'herdr-core' / 'src'
+            sources = root / 'hide-core' / 'src'
             sources.mkdir(parents=True)
             runtime_modules = sources / 'runtime'
             runtime_modules.mkdir()
@@ -45,14 +45,14 @@ class CapabilityReaderGate(unittest.TestCase):
         result = self.run_gate('fn dispatch() { let reader = changes::ChangesReader::new(); }\n'
                                '#[cfg(test)]\nmod tests {}\n')
         self.assertNotEqual(result.returncode, 0)
-        self.assertIn('herdr-core/src/runtime.rs', result.stderr)
+        self.assertIn('hide-core/src/runtime.rs', result.stderr)
         self.assertIn('driven from outside', result.stderr)
 
     def test_changes_reader_driven_by_the_coordinator_is_rejected(self):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
             (root / 'scripts').mkdir()
-            sources = root / 'herdr-core' / 'src'
+            sources = root / 'hide-core' / 'src'
             (sources / 'runtime').mkdir(parents=True)
             (sources / 'session_sync').mkdir()
             shutil.copy2(ROOT / 'scripts/check-capability-readers-off-lock.sh', root / 'scripts')
@@ -77,7 +77,7 @@ class CapabilityReaderGate(unittest.TestCase):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
             (root / 'scripts').mkdir()
-            sources = root / 'herdr-core' / 'src'
+            sources = root / 'hide-core' / 'src'
             sources.mkdir(parents=True)
             (sources / 'runtime').mkdir()
             (sources / 'session_sync').mkdir()
@@ -99,7 +99,7 @@ class CapabilityReaderGate(unittest.TestCase):
             result = subprocess.run(['bash', 'scripts/check-capability-readers-off-lock.sh'],
                                     cwd=root, capture_output=True, text=True)
         self.assertNotEqual(result.returncode, 0)
-        self.assertIn('herdr-core/src/runtime/projects.rs', result.stderr)
+        self.assertIn('hide-core/src/runtime/projects.rs', result.stderr)
 
     def test_test_only_runtime_support_file_is_exempt(self):
         result = self.run_gate(

@@ -1,7 +1,4 @@
 {
-  "web/src/AddProjectDialog.tsx": {
-    "button": 2
-  },
   "web/src/AgentGroupControls.tsx": {
     "button": 1
   },
@@ -26,13 +23,7 @@
   "web/src/CheckoutGitHeader.tsx": {
     "button": 2
   },
-  "web/src/CreateProjectView.tsx": {
-    "button": 1
-  },
   "web/src/DiskCleanupSheet.tsx": {
-    "button": 1
-  },
-  "web/src/DraftRecovery.tsx": {
     "button": 1
   },
   "web/src/FirstRunWizard.tsx": {
@@ -58,7 +49,7 @@
     "button": 1
   },
   "web/src/MissionMap.tsx": {
-    "button": 2
+    "button": 1
   },
   "web/src/MissionNodePanel.tsx": {
     "button": 2
@@ -81,13 +72,13 @@
     "button": 2
   },
   "web/src/PaneHeaderBand.tsx": {
-    "button": 6
+    "button": 5
   },
   "web/src/PaneMissionChip.tsx": {
     "button": 2
   },
   "web/src/PanePlanChip.tsx": {
-    "button": 2
+    "button": 1
   },
   "web/src/PaneRelations.tsx": {
     "button": 1
@@ -134,7 +125,6 @@
     "button": 3
   },
   "web/src/StartPanel.tsx": {
-    "input": 1,
     "layer": 1
   },
   "web/src/SuggestionsTab.tsx": {
@@ -144,14 +134,11 @@
     "button": 3
   },
   "web/src/Tools.tsx": {
-    "button": 3
+    "button": 2
   },
   "web/src/ViewComments.tsx": {
     "button": 3,
     "textarea": 1
-  },
-  "web/src/WorkspaceDialogs.tsx": {
-    "button": 3
   },
   "web/src/WorkspaceScreen.tsx": {
     "button": 1
@@ -201,18 +188,18 @@
   "web/src/gallery/AreaFocusScene.tsx": {
     "textarea": 1
   },
+  "web/src/mobile/AgentChoice.tsx": {
+    "select": 2
+  },
   "web/src/mobile/App.tsx": {
-    "button": 2
+    "button": 1
   },
   "web/src/mobile/StartSheet.tsx": {
-    "select": 3,
+    "select": 1,
     "textarea": 1
   },
   "web/src/overviewGraphNodes.tsx": {
     "button": 4
-  },
-  "web/src/practice/PracticeApp.tsx": {
-    "button": 3
   },
   "web/src/practice/PracticeCoach.tsx": {
     "button": 11

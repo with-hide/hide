@@ -15,7 +15,7 @@ use std::time::Duration;
 use serde_json::Value;
 
 /// `hide` with the account's places moved under `home`; on Windows the home
-/// and the folders Herdr's default pipe and the folder locks resolve from.
+/// and the folders the default pipe and the folder locks resolve from.
 fn isolated(home: &Path, state: &Path) -> Command {
     // The daemon `hide connect` starts is the `hided` beside it, and its start
     // has 10 s to show progress. A Windows job's first starts of that new

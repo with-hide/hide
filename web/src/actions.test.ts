@@ -4,6 +4,9 @@ import { createActions } from "./actions";
 import { clearProbeCache } from "./terminalLinkProvider";
 import { useShellStore } from "./store";
 import { useUiStore } from "./ui";
+import { frontDeviceId } from "./devices";
+import { overviewDeviceOf } from "./overviewTasks";
+import { frontTool } from "./toolCells";
 import { workspaceKey } from "./viewLayout";
 import type { DispatchFn } from "./ws";
 import { FindBar } from "./Overlays";
@@ -45,12 +48,12 @@ it.each([
   scope.closes["p"] = { decision: { action: "close" }, subtree: null, subtree_all: null, stop_work: { rows: [], unknown: null } };
   const checkout: Checkout = {
     id: "c", workspace_id: "w", path: "/repo", label: "repo", branch: null, purpose: null, is_worktree: false, exists: true, has_panes: true, pull_request: null, agent_scope: scope, next_tab_label: "Tab 2",
-    tabs: [{ id: "t", workspace_id: "w", checkout_id: "c", label: "Tab 1", empty: false, delegated: false, panes: [{ id: "p", device_id: "local", device_pane_id: "p", cwd: "/repo", herdr_label: null, terminal_title: null, identity_label: null, status_code: "idle", requires_close_confirmation: false, requires_close_status_check: false }] }], active_tab_id: "t", strip: [],
+    tabs: [{ id: "t", workspace_id: "w", checkout_id: "c", label: "Tab 1", empty: false, delegated: false, panes: [{ id: "p", device_id: "local", device_pane_id: "p", cwd: "/repo", engine_label: null, terminal_title: null, identity_label: null, status_code: "idle", requires_close_confirmation: false, requires_close_status_check: false }] }], active_tab_id: "t", strip: [],
   };
   const rest: SnapshotRest = {
     navigator: { focused_device_id: "local", focused_checkout_id: "c", focused_workspace_id: "w", agent_scope: scope, devices: [], workspaces: [{ id: "w", label: "repo", device_id: "local", path: "/repo", registered: true, temporary: false, pinned: false, inactive_checkouts: { expanded: false, checkout_ids: [] }, agent_scope: scope, checkouts: [checkout] }] },
-    workspace_view: { ...workspace, open: true, documents: true, tool: folded ? "explorer" : null, pinned: true, document_width: null, detail_width: null, explorer_width: null, panel_width: null, lane_called: 0, lane_calls: 0, lane_called_side: "view", layout: { active_area: "a1", limits: { areas: 8, depth: 4, displays: 32 }, display_count: 1, root: { area: { id: "a1", active: "b", displays: [{ id: "b", tab_id: null, path: "", committed: null, preview: false, reason: null, kind: "browser", state: "open", label: "page", url: "https://page.test/" }] } } } },
-    ui_state: { detail: { items: [], shown: false } },
+    workspace_view: { ...workspace, open: true, tray: { tab_id: "t1", shown: true, count: 0 }, tool: folded ? "explorer" : null, document_width: null, explorer_width: null, panel_width: null, lane_called: 0, lane_calls: 0, lane_called_side: "view", layout: { active_area: "a1", limits: { areas: 8, depth: 4, displays: 32 }, display_count: 1, root: { area: { id: "a1", active: "b", displays: [{ id: "b", tab_id: null, path: "", committed: null, preview: false, reason: null, kind: "browser", state: "open", label: "page", url: "https://page.test/" }] } } } },
+    ui_state: {},
   };
   vi.stubGlobal("IS_REACT_ACT_ENVIRONMENT", true);
   vi.stubGlobal("ResizeObserver", class { observe() {} disconnect() {} });
@@ -86,7 +89,7 @@ it.each([
     expect(keyboardCommandOwner()).toMatchObject({ kind: arrival === "after" ? "view" : "pane", workspace: "c" });
     const destination = input === "terminal" ? terminal : document.querySelector<HTMLInputElement>(input === "tool" ? "[data-live-tool]" : "[data-popup]")!;
     if (input !== "terminal") act(() => destination.focus());
-    await act(async () => useShellStore.setState({ rest: { ...rest, workspace_view: { ...rest.workspace_view!, ...(folded ? { documents: false } : { open: false }) } } }));
+    await act(async () => useShellStore.setState({ rest: { ...rest, workspace_view: { ...rest.workspace_view!, ...(folded ? { tray: { ...rest.workspace_view!.tray, shown: false } } : { open: false }) } } }));
     // The terminal remained the shell's active element throughout native
     // focus. Returning it cannot depend on another DOM focus event.
     expect(document.activeElement).toBe(destination);
@@ -279,7 +282,7 @@ describe("a terminal link to a file outside every checkout", () => {
 
 describe("input after a confirmed View close", () => {
   const workspace = { device_id: "local", path: "/repo" };
-  const frame = (ids: string[], selected: string) => ({ ...workspace, open: true, documents: true, tool: "explorer", layout: { active_area: "a1", display_count: ids.length, root: { area: { id: "a1", active: selected, displays: ids.map((id) => ({ id, kind: "browser", state: "open", label: id, url: "", tab_id: null })) } } } });
+  const frame = (ids: string[], selected: string) => ({ ...workspace, open: true, tray: { tab_id: "t1", shown: true, count: 0 }, tool: "explorer", layout: { active_area: "a1", display_count: ids.length, root: { area: { id: "a1", active: selected, displays: ids.map((id) => ({ id, kind: "browser", state: "open", label: id, url: "", tab_id: null })) } } } });
   const setup = async () => {
     vi.stubGlobal("CSS", { escape: (value: string) => value });
     const { installKeyboardOwner } = await import("./viewFocus");
@@ -343,7 +346,7 @@ describe("input after a confirmed View close", () => {
     header.dataset.browserToolbar = "";
     header.innerHTML = "<input />";
     content.parentElement!.append(header);
-    useUiStore.setState({ screen: { kind: "workspace" }, drawnLane: { mode: "docked", view: "documents", tool: null, stacked: false } });
+    useUiStore.setState({ screen: { kind: "workspace" }, drawnLane: { mode: "overlay", view: "documents", tool: null, stacked: false } });
     noteDrawnViews({ workspace, layout: frame(["d1", "d2"], "d1").layout } as never);
     try {
       header.querySelector("input")!.focus();
@@ -363,7 +366,7 @@ describe("input after a confirmed View close", () => {
     let command: (id: string) => void = () => {};
     const previousHost = window.hideHost;
     Object.assign(window, { hideHost: { kind: "electron", platform: "darwin", onCommand: (listener: typeof command) => { command = listener; return () => {}; }, reportBindings: vi.fn(), reportLanguage: vi.fn(), reportDesk: vi.fn() } });
-    useUiStore.setState({ screen: { kind: "workspace" }, drawnLane: { mode: "docked", view: "documents", tool: null, stacked: false } });
+    useUiStore.setState({ screen: { kind: "workspace" }, drawnLane: { mode: "overlay", view: "documents", tool: null, stacked: false } });
     useShellStore.setState({ editor: { active_tab_id: "d1" } as never });
     noteDrawnViews({ workspace, layout: frame(["d1", "d2"], "d1").layout, geometry: { areas: [{ id: "a1" }] } } as never);
     const stopKeyboard = installKeyboard(actions);
@@ -436,5 +439,115 @@ describe("input after a confirmed View close", () => {
       frames.forEach((callback) => callback(0));
       expect(document.activeElement).toBe(content);
     } finally { remove(); }
+  });
+});
+
+// PRD hide-external-control B44: a tool's cell stands over this window's own
+// machine, which the window shows again once the cell goes (disconnect, leave
+// or View only), whether the window is a node's or the Overview showed another device.
+describe("selecting a tool's cell", () => {
+  const TOOL = "c0ffee00c0ffee00";
+  afterEach(() => {
+    window.location.hash = "";
+    useShellStore.setState({ rest: null });
+    useUiStore.setState({ screen: null, overviewOpen: false });
+  });
+  // The tool whose cell is in front, read from what the center shows.
+  const cellInFront = () => frontTool(useShellStore.getState().rest, useUiStore.getState().screen)?.connection ?? null;
+  // `named` is the device a main page names, as a rail tile or a device's Overview opened as the page leaves it.
+  const select = (hash: string, front: string, overview: string | null = null, named?: string) => {
+    window.location.hash = hash;
+    useShellStore.setState({ rest: { navigator: { focused_device_id: front, devices: [{ id: "core", kind: "local" }, { id: "node-window", kind: "remote" }, { id: "mini", kind: "remote" }], workspaces: [], tools: [{ connection: TOOL, name: "nightly", turn: 0, devices: [] }] }, status: { remote: [] } } as never });
+    useUiStore.setState({ screen: { kind: "main", deviceId: named } } as never);
+    useUiStore.getState().setOverview({ deviceId: overview });
+    const sent: Parameters<DispatchFn>[0][] = [];
+    createActions((event) => { sent.push(event); return true; }).focusTool(TOOL);
+    return { focus: sent.filter((event) => event.kind === "focus_device").map((event) => (event.payload as { device_id: string }).device_id), overview: useUiStore.getState().overview.deviceId, cell: cellInFront() };
+  };
+  // The machine the Overview shows, as `useOverviewDevice` reads it, beside the one the rail and the sidebar show once no cell stands.
+  const shown = () => {
+    const { overview, screen } = useUiStore.getState();
+    const now = useShellStore.getState().rest;
+    return { overview: overviewDeviceOf(now, overview.deviceId, screen?.kind === "main" ? screen.deviceId : undefined), rail: frontDeviceId(now) };
+  };
+  // The core takes the focus the window asked for, then the tool leaves Act (a disconnect, a leave, View only) and its cell goes.
+  const cellGoes = (focused: string) => {
+    const now = useShellStore.getState().rest!;
+    useShellStore.setState({ rest: { ...now, navigator: { ...now.navigator!, focused_device_id: focused, tools: [] } } });
+  };
+
+  it("brings this window's own machine to the front under the cell, never the core's from a node's window", () => {
+    expect(select("#node=node-window", "core"), "a node's window").toEqual({ focus: ["node-window"], overview: null, cell: TOOL });
+    expect(select("#node=node-window", "node-window"), "already in front").toEqual({ focus: [], overview: null, cell: TOOL });
+    expect(select("", "mini", "mini"), "the core's window on a device's Overview").toEqual({ focus: ["core"], overview: null, cell: TOOL });
+  });
+
+  it("leaves the Overview on the machine the rail and the sidebar show once the cell goes, from a device's Overview page", () => {
+    for (const [hash, own] of [["", "core"], ["#node=node-window", "node-window"]] as const) {
+      expect(select(hash, "mini", null, "mini").focus, hash).toEqual([own]);
+      cellGoes(own);
+      expect(cellInFront(), hash).toBeNull();
+      expect(useUiStore.getState().screen, hash).toEqual({ kind: "main" });
+      expect(shown(), hash).toEqual({ overview: own, rail: own });
+    }
+  });
+
+  it("names this window's own machine for the Overview under the cell, before the core answers the focus", () => {
+    select("#node=node-window", "mini", null, "mini");
+    expect(shown().overview).toBe("node-window");
+  });
+
+  it("drops a device the Overview named while the cell stood once the cell goes", () => {
+    select("", "core");
+    useUiStore.getState().setOverview({ deviceId: "mini" });
+    cellGoes("core");
+    expect(shown()).toEqual({ overview: "core", rail: "core" });
+  });
+
+  // PRD hide-external-control D-54, B47: the tile shows the tool's Overview as the center's page, never as a layer over
+  // the Workspace or as This Mac's panes left in place; a device tile gives the center back.
+  it("shows the tool's Overview as the center's page, from a Workspace and from its Overview layer, and a device tile takes the center back", () => {
+    for (const layer of [false, true]) {
+      select("", "core");
+      useUiStore.setState({ screen: { kind: "workspace" }, overviewOpen: layer });
+      createActions(() => true).focusTool(TOOL);
+      const { screen, overviewOpen } = useUiStore.getState();
+      expect({ screen: screen?.kind, overviewOpen, cell: cellInFront() }, `layer ${layer}`).toEqual({ screen: "main", overviewOpen: false, cell: TOOL });
+    }
+    // This Mac's Workspace, an operator's pane in front, is where the center goes back to.
+    const now = useShellStore.getState().rest!;
+    const checkout = { id: "c", workspace_id: "w", path: "/fixture", label: "fixture", tabs: [{ id: "t", panes: [{ id: "mine" }] }], agent_scope: emptyScope() };
+    useShellStore.setState({ rest: { ...now, navigator: { ...now.navigator!, focused_checkout_id: "c", workspaces: [{ id: "w", device_id: "core", checkouts: [checkout] }] }, focused: { pane_id: "mine" }, workspace_view: { device_id: "core", path: "/fixture" } } as never });
+    const sent: Parameters<DispatchFn>[0][] = [];
+    createActions((event) => { sent.push(event); return true; }).focusDevice("core");
+    expect({ screen: useUiStore.getState().screen?.kind, cell: cellInFront() }).toEqual({ screen: "workspace", cell: null });
+    expect(sent).toEqual([]);
+  });
+
+  it("opens on the tool's Overview page its own session's record in its own panel, and another's on the device's Overview", () => {
+    const actions = createActions(() => true);
+    select("", "core");
+    const now = useShellStore.getState().rest!;
+    const cell = { connection: TOOL, name: "nightly", turn: 0, devices: [{ device_id: "core", tasks: { cards: [], needs_you: 0, recency: "" }, members: [{ pane_id: "tool-pane", project_id: "w", checkout_id: "c" }] }] };
+    useShellStore.setState({ rest: { ...now, navigator: { ...now.navigator!, tools: [cell] } } as never, agents: [{ pane_id: "tool-pane", session_id: "s-tool" }, { pane_id: "mine", session_id: "s-mine" }] as never });
+    actions.openSessionRecord({ device_id: "core", agent: "claude", session_id: "s-tool" });
+    expect({ screen: useUiStore.getState().screen, panel: useUiStore.getState().overview.panel?.kind, cell: cellInFront() }).toEqual({ screen: { kind: "main", deviceId: "core", tool: TOOL }, panel: "record", cell: TOOL });
+    actions.openSessionRecord({ device_id: "core", agent: "claude", session_id: "s-mine" });
+    expect({ screen: useUiStore.getState().screen, cell: cellInFront() }).toEqual({ screen: { kind: "main", deviceId: "core" }, cell: null });
+  });
+
+  it("opens the 개요 and 미션 rows of a tool's cell on the tool's own pages, from the page and from a pane it keeps", () => {
+    const actions = createActions(() => true);
+    select("", "core");
+    actions.openMissions();
+    expect(useUiStore.getState().screen).toEqual({ kind: "missions", tool: TOOL });
+    actions.toggleOverview();
+    expect(useUiStore.getState().screen).toEqual({ kind: "main", tool: TOOL });
+    // A device's tile from the tool's mission screen shows the device's missions.
+    actions.openMissions();
+    actions.focusDevice("core");
+    expect({ screen: useUiStore.getState().screen, cell: cellInFront() }).toEqual({ screen: { kind: "missions" }, cell: null });
+    actions.openMissions();
+    expect(useUiStore.getState().screen).toEqual({ kind: "missions" });
   });
 });

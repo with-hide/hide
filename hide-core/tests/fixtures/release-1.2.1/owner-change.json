@@ -1,0 +1,15 @@
+{
+  "old_owner": "node-old-owner",
+  "old_owner_as": "node-old-owner",
+  "new_owner": "node-new-owner",
+  "new_owner_was": "device-mini",
+  "old_owner_registration": {
+    "id": "node-old-owner",
+    "label": "MacBook",
+    "ssh_alias": null,
+    "host_consent": null,
+    "inbound": true
+  },
+  "old_owner_herdr_socket": "/Users/alice/.config/herdr/herdr.sock",
+  "new_owner_herdr_socket": "/Users/remote/.config/herdr/herdr.sock"
+}

@@ -9,6 +9,7 @@
 use std::path::Path;
 
 use agent_client_protocol_schema::v1::{PlanEntryStatus, ToolKind};
+use hide_agent_adapter::HookDialect;
 use serde_json::Value;
 
 use super::build::{Call, FileDiff, Origin, Outcome, Part, Step, Thread};
@@ -118,7 +119,8 @@ fn tool_call(block: &Value, cwd: &str, thread: &mut Thread) {
         // The to-do list's result draws the plan (B5).
         "todo" => return,
         "bash" => Call::new(id, name, ToolKind::Execute)
-            .title(arguments["command"].as_str().unwrap_or_default()),
+            .title(arguments["command"].as_str().unwrap_or_default())
+            .shell(HookDialect::Pi),
         "read" => Call::new(id, name, ToolKind::Read).title(format!("Read {shown}")),
         "write" => {
             let mut call = Call::new(id, name, ToolKind::Edit).title(format!("Write {shown}"));

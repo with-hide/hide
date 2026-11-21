@@ -22,9 +22,10 @@ from pathlib import Path
 import sys
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
-from agent_journey.cells import CELLS  # noqa: E402
+from agent_journey.cells import CELLS, excluded_cells  # noqa: E402
 from agent_journey.ci import FIXTURE_AGENTS, FIXTURE_CELLS  # noqa: E402
 from agent_journey.contract import active_rows, load_contract  # noqa: E402
+from agent_journey.scene import lane_status  # noqa: E402
 from agent_live_check.protection import ProtectionError  # noqa: E402
 
 LANES = {"fixture": "fixture", "fake": "fake_model"}
@@ -86,6 +87,7 @@ def judge(report, lane, contract=None, agents=None):
             return False, [annotation("error", "agent journey", f"--agents names no active adapter: {', '.join(unknown)}")]
         rows = [row for row in rows if row["id"] in agents]
     required = [row for row in rows if lane != "fixture" or row["id"] in FIXTURE_AGENTS]
+    excluded = excluded_cells(lane == "fake")
     for row in required:
         agent = row["id"]
         if agent not in table:
@@ -95,7 +97,14 @@ def judge(report, lane, contract=None, agents=None):
         cells = table[agent]
         for name in FIXTURE_CELLS if lane == "fixture" else CELLS:
             cell = cells.get(name, {"status": "absent", "reason": ""})
-            expected = "pass" if row["cells"][name] else "N/A"
+            if (agent, name) in excluded:
+                reason = excluded[agent, name]
+                if cell.get("status") != "excluded" or cell.get("reason") != reason:
+                    passed = False
+                    notes.append(annotation("error", f"agent journey {agent}",
+                                            f"{name} must explicitly record excluded: {reason}"))
+                continue
+            expected = lane_status(row, name)
             status = cell.get("status")
             if status != expected:
                 passed = False

@@ -1,13 +1,12 @@
 # Background AI providers
 
 `hide-ai/` is the one boundary through which a Hide feature asks a language model for something in the background.
-Its consumers are the core's agent label analyzer (`herdr-core/src/labels/analyzer.rs`), Project Memory extraction under `hide-memory/`, the Start dialog's worktree name, and the suggestion investigation (`herdr-core/src/suggestions/investigation/`); later features reuse the same boundary rather than a provider client of their own.
+Its consumers are the core's agent label analyzer (`hide-core/src/labels/analyzer.rs`), Project Memory extraction under `hide-memory/`, the Start dialog's worktree name, and the suggestion investigation (`hide-core/src/suggestions/investigation/`); later features reuse the same boundary rather than a provider client of their own.
 This guide owns the boundary's rules; the code under `hide-ai/src/` and the tests under `hide-ai/tests/` are its executable authority.
 
 ## Ownership split
 
-Optional product statistics count each backend invocation through a content-free `AiUsageSink::started` callback, separately from local token and cost accounting.
-Only the `hide_ai_called` event, random installation ID, time, app version and operating system leave through that channel; [product usage statistics](ARCHITECTURE.md#product-usage-statistics) owns its complete privacy and opt-out contract.
+Product usage statistics do not count Hide AI calls; [product usage statistics](ARCHITECTURE.md#product-usage-statistics) owns what they send.
 
 A feature owns its prompt, its output schema, and the parsing of the answer into its own type.
 It submits an `AiRequest` (feature id, caller-made request id, subject id, system prompt, input, schema, deadline, schema version, output language) and receives an `AiResult`: a `serde_json::Value` already validated against that schema, and the provider that produced it.
@@ -20,7 +19,7 @@ What Hide AI writes for a person is in the operator's language (PRD ai-output-la
 `AiRequest::system_prompt()` is the prompt every provider is given: the feature's own, then one sentence asking for every text a person reads in that language whatever the input's language, keeping code, commands, paths, identifiers, names and quoted text as they are; none adds nothing.
 No feature's prompt names a language of its own, and `scripts/check-ai-prompt-language.py` fails on one that holds Korean, Chinese or Japanese text or a fixed language instruction.
 The language is part of the duplicate key, so a request made after the language changed never joins one from before it and is never handed an answer in the old language.
-The core decides it in one place, `Runtime::output_language` (`herdr-core/src/runtime/output_language.rs`): the explicit interface language (`ui_state.interface_language`, English for a stored value that is invalid), else this machine's primary language as a shell resolves it ([LOCALIZATION.md](LOCALIZATION.md)), else English, with `language.system_fallback` in the diagnostic log.
+The core decides it in one place, `Runtime::output_language` (`hide-core/src/runtime/output_language.rs`): the explicit interface language (`ui_state.interface_language`, English for a stored value that is invalid), else this machine's primary language as a shell resolves it ([LOCALIZATION.md](LOCALIZATION.md)), else English, with `language.system_fallback` in the diagnostic log.
 The machine's language is read once per daemon before the runtime exists, because macOS answers it through a child process; a request that runs on a connected device carries the core's language, never the device's.
 Labels with their missed work, pull request summaries, Memory's extraction, re-verification and promotion check, the Memory promotion agent's reasons ask in that language; the Start dialog's worktree name asks in none, because a Git name is lowercase ASCII whatever the operator reads.
 A text already written stays in the language it was written in, and only what is asked after a change follows the new language.
@@ -29,18 +28,24 @@ The answer is checked against its schema only: an answer in another language is 
 `hide-ai` owns everything about providers: which are installed and logged in, the child process and its protocol, timeouts and cancellation, the retry policy, fallback between providers, duplicate suppression, and the structured error a caller branches on.
 No feature type lives in the crate, and no provider detail leaks out of it.
 
-The session label requests use `context_label.v25`, retaining nullable goals at both boundaries, with the goal and line lengths of the request's language (8 to 30 and 40 characters in Korean, Simplified Chinese and Japanese, 8 to 60 and 80 in English).
+The session label requests use `context_label.v29`, retaining nullable goals at both boundaries, with the goal and line lengths of the request's language (8 to 30 and 40 characters in Korean, Simplified Chinese and Japanese, 8 to 60 and 80 in English).
 Both boundaries also return `goal_update` (`keep`, `refine` or `replace`; a replace opens a new goal flow when what is being made changes, PRD session-record-goal-flow D-09) and `requests`, a one-line summary for each request the input lists as unsummarized, each with the request it `answers` when it replies to the agent, at most eight per call, the turn's own request always among them, and `closed_result`, with a `replace` one line saying how the flow it closes ended and otherwise empty (PRD session-record-fact-status D-02); they add output tokens to calls already made and no call.
-The END request adds a work judgment: at most three short missed items (a problem found outside the assigned work, a proposed follow-up nobody has taken, or a question or decision that waits on the operator), resolved item ids and up to three outputs other than pull requests (`artifacts`).
+The END request adds a work judgment: at most three short missed items (a problem found outside the assigned work, a proposed follow-up nobody has taken, or a question or decision that waits on the operator), and resolved item ids.
+It names no outputs: since `context_label.v29` a session record's `결과물` are the Views the session opened and the GitHub issues it made, facts Hide reads itself, because a name Hide AI wrote opened nothing.
+The END input opens with `<session-role>`, `root` for the operator's own session and `delegated` for one a parent agent started, whose `you` is that parent.
+Each missed item carries `quote`, `ask_type` and `addressed_to`: a new question quotes the sentence of the turn's answer that asks it, `ask_type` is `human_only` for a step that needs a person's authority, account or hands (an OK of a merge, release, send or deletion, a sign-in, a permission, a form in an external site, a check only the operator can reach) and `decision` otherwise, and `addressed_to` is `operator`, or `parent` when the parent agent, the Conductor or a reviewer can answer it.
+The prompt's definition of a question is strict (the agent's own notes, next steps, offers and decisions are not one) and comes with two real turns as examples; measured over 92 real turns it cut wrong questions from about 28% to 6% while keeping as many real ones.
+The core then checks each new question (`JudgedWork::checked` in `hide-core/src/labels/context_label.rs`): one whose quote, read without Markdown marks, quotation marks or line breaks, is not in the turn's own assistant messages is dropped, one for the parent that is not `human_only` is kept folded ([status-model.md: A question still waiting](status-model.md#a-question-still-waiting)), and past three new lines the rest are dropped, the operator's first, rather than the judgment refused; each turn end that listed a new question logs the counts (`analysis.asks_checked`: listed, unquoted, to_parent, over_limit), never the words.
+Each resolved id carries a `reason`: empty for an item handled or answered in the turn, and for a question the turn's events settled with no answer in it, one line naming what settled it, which folds the question rather than closing it ([status-model.md: A question still waiting](status-model.md#a-question-still-waiting)); the core, not the model, decides which questions may fold: every one but a question the operator opened again, the operator's own step included, which the prompt asks the model to list only when the turn shows it taken or no longer needed.
 It also returns `improvements` for Hide AI 제안 (PRD hide-ai-suggestions D-54, D-55): at most three points where the turn lost time though nothing stayed failed, each a kind (`no_doc`, `searched_again`, `wrong_guess` or `tool_friction`) and at most 200 characters in the operator's language, only what a document, rule or setting change would have prevented, and an empty list when nothing slowed the agent.
-The schema names the field but neither requires nor checks it, so the router accepts an answer without it: a provider that leaves it out, or an item that is not one, loses only that item and never the label; the core masks each text (secrets, email addresses, home accounts, then Memory's credential patterns), cuts, de-duplicates and caps the list itself and logs how many it dropped (`improvements_kept` in `herdr-core/src/labels/context_label.rs`).
+The schema names the field but neither requires nor checks it, so the router accepts an answer without it: a provider that leaves it out, or an item that is not one, loses only that item and never the label; the core masks each text (secrets, email addresses, home accounts, then Memory's credential patterns), cuts, de-duplicates and caps the list itself and logs how many it dropped (`improvements_kept` in `hide-core/src/labels/context_label.rs`).
 For it the END input adds `<tool-use>`, Hide's own count of the turn's tool calls read from the session's tool events without a model (calls, distinct files read, saying `128+` past the 128 it remembers, how many times each search run more than once ran, failed calls; `hide_session::tools::ToolSummary`; a path and a search pattern are kept only as hashes, so no pattern leaves the reader, and every command a batched script runs is counted), absent for an agent whose session files record no tool calls (Antigravity), and a turn longer than the context keeps its first 1,000 characters from its request on, with a line saying how many characters were cut, beside the tail it always kept (D-56).
 The START request and the END's tail are unchanged, so a label reads the same turn it read before.
 The fixed instructions consolidate repeated goal, line, stop-state and work-judgment rules; the model effort and request boundaries are unchanged, and the context limit is too but for that head of a long turn at END.
 There is no additional call per turn, and requests from periods with summaries Off or failed judgments are never backfilled by the provider.
 END waits for a known ledger context instead of treating missing parent authority or open work as empty.
 
-The Start dialog of the Overview uses feature id `worktree_name` (`herdr-core/src/ai.rs::suggest_worktree_name`): it sends the issue's title and at most 2,000 characters of its body, asks for `{slug}` against a schema, and the core keeps only lowercase ASCII words joined by hyphens, at most 48 characters, behind the issue-number prefix the dialog passed; the deadline is 30 seconds, a failure leaves the dialog's own name in place, and Settings › Issues turns the feature off.
+The Start dialog of the Overview uses feature id `worktree_name` (`hide-core/src/ai.rs::suggest_worktree_name`): it sends the issue's title and at most 2,000 characters of its body, asks for `{slug}` against a schema, and the core keeps only lowercase ASCII words joined by hyphens, at most 48 characters, behind the issue-number prefix the dialog passed; the deadline is 30 seconds, a failure leaves the dialog's own name in place, and Settings › Issues turns the feature off.
 
 A pull request's card asks Hide AI nothing: the `pr_summary` feature was retired (PRD pr-card-and-session-record-redesign D-19), and a `pr_summary` field an older Hide left in the settings file is read past and not written back.
 
@@ -81,67 +86,13 @@ An unresolved disagreement needs an operator answer.
 
 ## The suggestion investigation
 
-Hide AI 제안 (PRD hide-ai-suggestions) finds recurring problems with feature id `suggestions_investigation`, the one feature that asks over several turns (`herdr-core/src/suggestions/investigation/`).
-It is the core's analysis that edits a Project's notebook: its input is the record index and the notebook, its output the edits it writes, and nothing else in the suggestion area depends on how it works inside.
-The turns are `hide_ai::run_turns` (`hide-ai/src/turns.rs`): each turn is one `AiRouter::execute`, so provider selection and fallback, the usage limit, duplicate suppression, cancellation, process ownership and usage counting are the router's, and every turn is a call.
-No provider keeps a conversation between turns: each turn's request carries everything the model needs, so Claude, Codex, Grok, Pi, omp and Antigravity take part the same way through the one-shot surfaces below, and Codex's thread stays ephemeral per turn.
-OpenCode answers `Unsupported` as it does for any request, so no investigation runs on it.
-
-A Project's daily run is the investigation while Hide AI can take it: Hide AI on, an agent chosen, and that agent not OpenCode (B19, D-39).
-Otherwise it is the deterministic grouping by signal and tag, which asks no one.
-The choice is made when the run starts (`runtime/suggestions.rs`, `analysis_factory`), from what the runtime lock holds; an investigation whose usage limit is near does not start, and the day waits for a later wake (D-36).
-The router is Memory's (`crate::ai::memory_router`), with the usage limit.
-
-A turn sends, within the 64 KiB request input (every number is in `herdr-core/src/suggestions/policy.rs`):
-
-- the turn's number, the turns left and its phase;
-- the notebook: each line's number, stage, discomfort, cause, fix or a document fix's title, path and draft, and outcome, who struck it and why, how many records it has and its newest record numbers, open lines first, at most 20 KiB;
-- the fresh records grouped by signal and tag: their numbers, how many sessions, the pull request numbers and how many days ago, never the words around them, at most 12 KiB;
-- the model's own notes from the turn before (at most 1,000 characters), the outcome of each edit it made, and the results of the reads it asked for, at most 24 KiB together and 8 KiB each.
-
-The model answers one JSON object (`PlainJson`, schema `suggestions_investigation.v3`): at most eight notebook edits, applied in order and each saved before the next is taken, at most four reads for the next turn, its notes, and whether it is done.
-It runs nothing itself.
-A line the grouping by tag made, before anyone looked, is a key and not yet a problem: the prompt asks the model to check it, to split a CI check's records by the cause its log shows, and to pass or strike what is only a check's name or a shell command's head from exploring (`cat`, `rg`, `sed` and the like).
-A struck line still takes the sightings of its problem: Hide, not the model, decides whether a line the operator skipped comes back (D-43), so the prompt tells the model an operator's skip is not a finding.
-A fix has to be one the person can act on without opening the records again: for a pull request `write_cause` carries the result as a title (at most 80 characters), the repository-relative path of the one file it changes and the draft of the words it writes there (at most 600 characters), and a pull request line is offered only once it has all three; for an issue its fix says what was seen (the check, the error line, how often) and what to look at first.
-A read is a request Hide fulfils with its own fixed tools on the node that holds the Project, on the investigation's worker, off the runtime lock and off the session-sync thread.
-The Project's folder is found the first time a read needs it: of the catalog Projects on this machine and on linked devices, the one whose node names this Project, the folder that is its root asked first (`ProjectReads`).
-A Project no linked node names answers every read `project_unreachable`, and the run goes on with the records alone.
-
-| Read | What Hide runs | Bound |
-| --- | --- | --- |
-| `session` | the session a record happened in, through the session readers (`Call::SessionConversation`), around the record or from an event number; the window is `herdr-core/src/session_excerpt.rs`, which `hide session read` shares ([ARCHITECTURE.md: The link record](ARCHITECTURE.md#the-link-record)) | 16 events, at most 40, 2,000 characters an event |
-| `ci_log` | the failed check's page from the pull request's checks (`gh pr view`), then `gh run view --job <id> --log-failed`, which the node cuts to its last 256 KiB | the last 200 lines; a check not on GitHub Actions is refused |
-| `file` | the file's first 256 KiB (`Call::Bytes`), as numbered lines | 120 lines, at most 200 |
-| `search` | `git grep` of tracked text files for a fixed text, case ignored (`GitCommand::Grep`) | 5 lines a file, 40 shown, 64 KiB from the node |
-| `git_log` | `git log` of the repository or of one path (`GitCommand::Log`) | 10 commits, at most 20 |
-
-Every result passes the Memory redactor (`hide_memory::redact`, through `session_excerpt::mask`) before it is put in a request, and is cut to its bound; a session window past the reader's byte bound answers `session_read_bound`, not the events it did reach.
-A path with a credential file anywhere in it (the rule Memory's checks use: `.env*`, keys and certificates, names containing `secret` or `credential`) or Git's own folder, whose configuration can hold a token, is refused before anything is read, and a search hit in such a file is not shown.
-Each line a result keeps is at most 400 characters.
-
-A run has 30 turns and 20 minutes (`RUN_TURNS`, `RUN_SPAN_MS`), and one turn is given at most two minutes.
-The four turns before the last ask the model to wrap up.
-The last turn, at the turn limit or once less than a turn's time is left, offers no read and asks for the final edits; a turn that got no usable answer (an answer the schema refused twice, a timeout, a lost completion) is followed by that last turn.
-Every turn is admitted against Memory's machine-wide daily call cap, in Memory's store, before it is asked, and the usage ledger counts the turns with Memory's calls (`memory`), since both are the Hide AI tool.
-The run's stop (the Project turned off, or the core stopping) is the provider call's cancel token, so it ends a turn in flight, and it is checked again before each edit and each read.
-
-The run's end is what the core's analysis boundary reads:
-
-- `done`: the model said so.
-- `turn_limit` or `time_limit`: the last turn was answered; records it did not reach stay fresh for the next run.
-- `usage_paused`: the usage limit or the daily call cap; nothing more is asked, and the run resumes later.
-- `failed`: no agent could answer (not signed in, unavailable, a cap of the router), or no turn got a usable answer; a run with no usable answer wrote nothing; the core then groups what it left unread by tag and raises nothing that day, and the tab says `조사 못 함` (`not_investigated`, `docs/ARCHITECTURE.md`).
-- `stopped`: the notebook could not be saved, the Project was turned off or the core is stopping.
-
-None of it reaches the screen (design principle 13).
-The diagnostic log's `suggestions` `investigation.finished` carries the Project, the run, the end and its cause class, the turns asked and answered, the reads by tool and those refused, the edits by kind and those refused, the fresh records and the duration; never a prompt, a record's words, a file, a path or an answer.
+Moved to a private document: `docs/suggestion-investigation.md` in with-hide/hide-private.
 
 ## Providers
 
 The user's installed and logged-in CLIs are the only credentials for background AI requests.
-Hide's integration code reads no token file: the codex backend references the user's `auth.json` only through a symlink in the private `CODEX_HOME` it sets, and OMP delegates credential discovery and use to its public SDK (see [Oh My Pi](#oh-my-pi)).
-It sets two environment variables: that `CODEX_HOME`, pointing the app-server at the private directory, and `MAX_THINKING_TOKENS=0` on a claude model turn (see the claude bullet).
+Hide's integration code reads no token file: the codex backend references the user's `auth.json` only through a symlink in the private `CODEX_HOME` it sets, or, where the account may not make that link, by running the app-server in the account's own Codex folder, and OMP delegates credential discovery and use to its public SDK (see [Oh My Pi](#oh-my-pi)).
+It sets three environment variables: that `CODEX_HOME`, pointing the app-server at the private directory or the account's folder, and `MAX_THINKING_TOKENS=0` and `CLAUDE_CODE_PROMPT_CACHE_TTL=5m` on a claude model turn (see the claude bullet and [Where the tokens go](#where-the-tokens-go)).
 `hide-ai` is also the only code that starts a background AI child of any agent: the Weekly Usage reader below asks the same `ClaudeCliBackend` for its `/usage` text rather than running the CLI itself.
 
 Which agents are providers is each agent's declaration (`hide_agent_adapter::AgentAdapter::ai`): a provider id, or the reason the agent is not one, as retired Cursor's is.
@@ -156,10 +107,11 @@ That covers every child, the availability and model-list probes and the Weekly U
 A backend's config can carry a `search_path` of its own, which is how a test gives a stand-in script an interpreter only that value reaches without starting the developer's login shell (`hide-ai/tests/it/search_path.rs`); a CLI named by file with no `search_path` is run with the process's `PATH`, since nothing searched for it.
 The tests that need a missing CLI name an absolute path that does not exist, because a bare name is looked up on the account's search, which asks the login shell.
 A new agent is its declaration's `ai` row, one binding and one backend; the router, the settings and the core iterate `PROVIDERS` and name no provider.
-The backends run on a node, never inside the core: the core's routers hold a `NodeBackend` per provider (`herdr-core/src/ai.rs`), which carries each probe, model list, request and measurement to the node of the machine the agent runs on as a call and reads the answer back.
+The backends run on a node, never inside the core: the core's routers hold a `NodeBackend` per provider (`hide-core/src/ai.rs`), which carries each probe, model list, request and measurement to the node of the machine the agent runs on as a call and reads the answer back.
 That machine is the core's own unless the operator placed the agent on a connected device (`AiMachines`, PRD wsl-device B11), whose node answers the same calls with the device's own logins, so no credential is copied between machines and usage counts on the device's account.
 A device's link is looked up each time its agent is asked (`Runtime::linked_node`, which never wakes a device): a device that is not connected answers `Unavailable` and is not woken, and once it connects again the same backend asks it through its next link (B13).
-A router holds what an agent answered for its availability window (30 s), so the label analyzer, which keeps its router across jobs, builds it again when the link of a device its agents are placed on changes, told by the link's host generation rather than by whether one is up (`AiMachines::reach`), so a drop and a reconnect between two jobs rebuild it too: the next label after the device is back runs there; suggestions and Memory build a router for each run.
+A router holds what an agent answered for its availability window (30 s), so the label analyzer, which keeps its router across jobs, builds it again when the link of a device its agents are placed on changes, told by the link's host generation rather than by whether one is up (`AiMachines::facts`), so a drop and a reconnect between two jobs rebuild it too: the next label after the device is back runs there; suggestions and Memory build a router for each run.
+The same facts carry the version of each profile item the order asks, as its machine lists it: when one is deleted or edited, the runtime tells the analyzer, which lets its router go at once on its own thread, even with no job to come (word that waits is not sent again, and the thread reads the profiles as they are when it takes it, so edits during a long request queue one word, not one each), so the old backends are released off the runtime's lock, and the next job asks the profile as it is now; a Memory pass that asks it stops, as a settings change stops it, and a profile no router asks changes nothing (B21).
 The release goes to the link the backend last asked, without a lookup, because a router can be dropped under the runtime's lock.
 The node keeps one real backend per core instance in a registry capped at 64 per link (a few routers, each with one backend per registered provider) (`hide-host/src/ai.rs`), refuses the next, and drops an instance when the core's `NodeBackend` is dropped or the link that asked for it ends, so a router rebuilt for a changed model choice ends the old child.
 GitHub reads stay on the core's own node: a device still refuses `Gh` and the usage reads (PRD wsl-device D-18).
@@ -171,16 +123,28 @@ A request reports progress once a second while it runs, and a cancel in the core
   `codex exec` is not used.
 
   `hide-ai` owns this process (see [Process ownership and budgets](#process-ownership-and-budgets)).
-  It runs the app-server under a private, owner-only (`0700`) `CODEX_HOME` in a temporary directory (`$TMPDIR/hide-ai-codex-home-<pid>-<nanos>`) that is created holding nothing but a symlink to the user's `auth.json` (in Codex's own folder as the one resolver of agent folders reads it, `hide_agent_adapter::AgentAdapter::home`: a set `CODEX_HOME`, else `~/.codex`; an empty one is unset, as Codex reads it, and a relative one leaves the provider unavailable), and no `config.toml`.
+  It runs the app-server under a private, owner-only (`0700`) `CODEX_HOME` in a temporary directory (`$TMPDIR/hide-ai-codex-home-<pid>-<nanos>`) that is created holding nothing but a symlink to the user's `auth.json` (in Codex's own folder as its default account reads it, `hide_agent_adapter::resolve` with the process's `CODEX_HOME`: a set `CODEX_HOME`, else `~/.codex`; an empty one is unset, as Codex reads it, and a relative one leaves the provider unavailable), and no `config.toml`.
   The app-server then writes its own state beside the symlink (`installation_id`, `models_cache.json`, its sqlite databases, `shell_snapshots/`, `skills/`, `tmp/`; 2 to 5 MB a session, measured 2026-09-20), but no `sessions/` rollout, so the ephemeral thread leaves no transcript.
   With no config the app-server starts none of the MCP servers the user's real config declares, which measurement (2026-09-17) showed `-c mcp_servers={}` and a per-thread `config` override both failed to prevent.
-  The directory is removed when the session ends; if it or the symlink cannot be created the request fails with `ProviderUnavailable(codex_home_unavailable:<stage>:<kind>)` rather than falling back to `~/.codex`.
+  The directory is removed when the session ends; if the account's folder cannot be named, the directory cannot be made, or the symlink fails for any reason but a missing privilege, the request fails with `ProviderUnavailable(codex_home_unavailable:<stage>:<kind>)` (stage `account`, `mkdir` or `symlink`) rather than falling back to `~/.codex`.
   An owner that ends without running `Drop` (a `kill -9`, or a process exit while a session is open) leaves its directory behind, so every `CodexAppServerBackend` sweeps them when it is built, on a thread of its own (`hide-ai/src/codex_home.rs`).
   The sweep removes a `hide-ai-codex-home-<pid>-<nanos>` directory under `$TMPDIR` only when it is a plain directory the current user owns and no process has that pid; a pid that is alive keeps its directories even if it was reused by an unrelated process, because a dead owner's leftover costs disk while deleting a live owner's breaks its app-server.
   A name that does not parse is never touched, symlinks are never followed, so the user's `auth.json` stays, and one sweep removes at most 32 directories so a backlog (344 dead owners' homes on one machine on 2026-09-28, counted by checking each name's pid with `kill -0`) is cleared over several starts.
   A sweep that removed, failed to remove or could not read anything logs `ai.codex_home.swept` with `removed`, `bytes`, `failed`, `unreadable` and `capped`, plus `first_error=<kind>` when a removal or the directory listing failed (a listing error ends the sweep early); a temporary directory it could not read, or a sweep thread that could not be started, logs `ai.codex_home.sweep_failed` with the stage and the error kind.
   The credential file is referenced through the symlink and never read.
-  codex's own token refresh writes through it to the real file: the default `file` credential store opens `CODEX_HOME/auth.json` for truncating write, no temp file and no rename, so the symlink is followed and survives (read from `codex-rs/login/src/auth/storage.rs` at `rust-v0.155.1`).
+  codex's own token refresh writes through it to the real file: from `rust-v0.167.2` the default `file` credential store resolves the link chain to the real file and renames a temporary file over it, holding the lock `auth.lock` in that real folder, and `rust-v0.155.1` opens `CODEX_HOME/auth.json` for truncating write; either way the symlink is followed and survives, and the refreshed token lands in the user's file (read from `codex-rs/login/src/auth/storage.rs` at both tags).
+  A copy of `auth.json` is no alternative: a refresh token is good for one use (`refresh_token_reused`), so a copy that refreshed and could not write back would sign the user's own Codex out.
+
+  An account that may not make a file link (Windows without Developer Mode or the link privilege, `ERROR_PRIVILEGE_NOT_HELD`, with-hide/hide#2531) runs the app-server in its own Codex folder instead, decided by that failure, not by the system's name (`hide_platform::fs::link::needs_privilege`); the empty private directory is removed, and `ai.codex_home.account` is logged with the app-server's pid.
+  The folder holds the user's `config.toml`, so what it would add is switched off, each measured on codex-cli 0.155.1 and 0.167.2 on macOS (2026-11-13) and on 0.166.0 on Windows through `codex.cmd` (2026-11-14):
+  every MCP server it declares, thread by thread, because Codex reads `config.toml` again at every `thread/start`, starts a thread's servers there and not at its own start, and merges an override into the user's table name by name, with no switch that turns every server off (`codex app-server` loads with no loader overrides, so `ignore_user_config` cannot be reached); so each request reads the declared servers with `config/read` from the thread's folder, project layers included, right before its `thread/start`, and switches each off in that thread's own `config`, `{"mcp_servers":{"<name>":{"enabled":false},…}}`, which keeps a name holding a `.` or a `"` whole; `config/read` lists the configuration's servers, not a plugin's, which the app-server does not start under `--disable plugins` (measured on Windows, codex-cli 0.166.0);
+  every hook, Hide's own included (`--disable hooks`, also passed in the private home); its `notify` command (`-c notify=[]`); its developer instructions (`-c developer_instructions=""`); its skills catalog (`-c skills.include_instructions=false`); and its provider (`-c model_provider="openai"`), so the request goes to OpenAI on the user's sign-in on both paths.
+  A turn whose request names no effort is sent the model's default effort, read once per session from `model/list` (`defaultReasoningEffort`), because the folder's `model_reasoning_effort` would apply otherwise.
+  The thread is ephemeral there too, so the request leaves no rollout in `sessions/`, no line in `history.jsonl` or `session_index.jsonl`, and no entry in the conversation list (`thread/list`); the folder's sqlite databases, `models_cache.json` and `shell_snapshots/` are written as a Codex start writes them.
+  A name the configuration no longer holds makes Codex refuse the thread (`invalid transport`), so a refused `thread/start` reads the servers again and, when they changed, is tried once more; a configuration `config/read` cannot answer refuses the request before any thread starts, since then no server could be switched off.
+  One window stays open: a server the user adds between that `config/read` and the thread's own read of the file starts for that thread, a gap of 5 to 32 ms measured on macOS (codex-cli 0.155.1 and 0.167.2, 2026-11-14); closing it needs Codex to read a sign-in from outside its folder or a switch that turns every MCP server off, and [INSTALL.md](INSTALL.md#what-each-system-supports) records it.
+  Two things the private home keeps out reach a request there, with no switch to stop them: the folder's `AGENTS.md`, which Codex reads from its folder on every turn (`CodexHomeUserInstructionsProvider`, read at `rust-v0.167.2`), and a `config.toml` Codex cannot load, which fails every request while `model/list` still answers; [INSTALL.md](INSTALL.md#what-each-system-supports) records both.
+  Every key the start does not override reaches the request, so this path follows Codex's config keys as a deny-list; the settings Hide passes on both paths keep the two requests alike everywhere else.
   A `keyring` or `auto` credential store keys the entry by the canonical `CODEX_HOME` path, so a private home has no entry and the provider reports `needs_login`; that mode is not supported here.
   Shutdown is one graceful path on every exit (`Session::drop`, a session swap, an over-budget restart): close stdin (its EOF is the app-server's own shutdown signal and ends the whole tree), then SIGTERM, then SIGKILL, each after a three-second grace.
   After ten idle minutes with no completed request the app-server is shut down and `ai.app_server.idle_exit` is logged; the next request starts a fresh one.
@@ -192,6 +156,8 @@ A request reports progress once a second while it runs, and a cancel in the core
   In `Schema` mode the answer is the result frame's `structured_output`, the field the CLI validated against the feature's `--json-schema`, and the `result` string is never parsed.
   In `PlainJson` mode (see below) the `result` text is parsed, which print mode prints as the object inside a fenced code block or plain, and the router's check against the feature's schema is what stands in for the CLI's.
   The prompt body travels on stdin, so no transcript reaches an argument vector or a process listing.
+  Whatever the account's config says, the result frame is found in stdout as one object or as an array of events: with `verbose` on in `~/.claude.json` (the `/config` "Verbose output" toggle, which `--setting-sources ''` does not drop and no flag turns off) `--output-format json` prints `system/init`, the messages and then `result` as one array, and only the last `result` element is read (`result_frame` in `hide-ai/src/claude.rs`).
+  Reading the object alone ended every request of such an account as `claude_no_result_frame:exit=0` and every `/usage` read as `no_result_frame` (with-hide/hide#1942); stdout with no `result` frame at all is still that failure.
 
   The child's argument vector is not a preference.
   Measured on claude 2.1.267, a bare `claude -p` carries the whole agent harness into the system prompt, 32,903 cached input tokens, and answers the wrong question: it reviews the transcript instead of classifying it.
@@ -199,6 +165,7 @@ A request reports progress once a second while it runs, and a cancel in the core
   Dropping any of those three is not a cost regression, it is a wrong answer, so `hide-ai/tests/it/claude_cli.rs` asserts the vector the child actually received.
 
   A model turn runs with thinking off where the model honours it: the child gets `MAX_THINKING_TOKENS=0` whatever the operator's environment says, and the same test file asserts the value the child received.
+  Every model turn, with thinking on or off, also gets `CLAUDE_CODE_PROMPT_CACHE_TTL=5m` whatever the operator's environment says, which writes its prompt cache for five minutes instead of an hour (see [Where the tokens go](#where-the-tokens-go)); the same test file asserts that value too.
   Print mode thinks by default, and a background answer is a short JSON object; on 2026-10-02 the context label spent a median 2,656 output tokens (at most 9,425) to return about 100, which put its median at 28 seconds and 43 of 252 requests past the 60-second deadline.
   No flag turns it off: `--settings '{"alwaysThinkingEnabled":false}'` left the thinking in place, and the variable removed it.
   Measured on claude 2.1.287 with the same label-style prompt, haiku with thinking answered in 56 to 81 seconds, haiku without it in 5 to 8 seconds but broke the prompt's rules (step verbs, listed items), and sonnet without it in 3.6 to 7 seconds with about 165 output tokens and the best answers, which is why `sonnet` is the default.
@@ -229,7 +196,8 @@ A request reports progress once a second while it runs, and a cancel in the core
 
   The model list is the CLI's own.
   `ClaudeCliBackend::models()` starts `claude -p --input-format stream-json --output-format stream-json --verbose --no-session-persistence --tools '' --setting-sources '' --strict-mcp-config --disable-slash-commands` with the same neutral directory, writes one `initialize` control request to stdin, reads the `control_response`, and ends the child; no model turn is made.
-  Only `response.response.models[].value` is read, and `default` is left out because it is the empty choice every menu already has.
+  Each entry of `response.response.models[]` gives its `value`, the model a start passes, and its `displayName`, the name a menu shows where it differs from the value: a gateway's `ANTHROPIC_DEFAULT_OPUS_MODEL` leaves the value `opus` and names the gateway's model (`Model::label`).
+  Entries that show one name are one choice, so the first is kept; `default` is left out because it is the empty choice every menu already has.
   The same response carries the logged-in account, which the parser never reads and nothing logs, stores or snapshots.
   The list is held for ten minutes (a menu opening is not a child start) and the child is bounded at twenty seconds; a list the CLI could not give is `ModelCatalog::Unknown` with `claude_models_unreadable:<stage>`, never a guess.
   The shape was observed on 2026-10-06 against the installed, logged-in CLI; the observed values (`opus`, `fable`, `sonnet`, `haiku` and full names) are the account's, not a contract, which is why they are read each time.
@@ -280,7 +248,9 @@ Missing SDK/runtime, package identity, mismatched dependency versions, inaccessi
 It imports the installation's public `@oh-my-pi/pi-ai`, `@oh-my-pi/pi-ai/auth-broker/discover`, `@oh-my-pi/pi-catalog/models` and `@oh-my-pi/pi-utils/{logger,env,dirs}` exports after checking their package identities and matching versions.
 It never imports the coding-agent harness, a user model module, settings loader or extension registry.
 `discoverAuthStorage` and `storage.keys.getWithCredential` own login discovery, refresh and authorization; Hide does not parse, export, copy or log credentials.
-The child receives the platform's restricted login environment, so this boundary supports OMP's default profile and stored login, not inherited API-key or custom-profile environment variables.
+The child receives the platform's restricted login environment and the variables of the agent item it reads for, so a profile's `OMP_PROFILE` selects that omp profile's own stored login; inherited API-key variables are not logins to it.
+The model list is omp's bundled providers that have a stored login there, never a `models.yml` provider ([INSTALL.md](INSTALL.md#what-each-system-supports)).
+A profile that runs omp through a wrapper is refused before anything starts, its list, availability and requests alike, with `omp_wrapper_not_supported`: the SDK runs no program, so the environment the wrapper makes would not reach it, and a list read without it would be another account's.
 Auth config values beginning with `!` are refused rather than executed; custom credential commands, model aliases, extension providers and `models.yml` overrides are outside this contract.
 The public SDK's native addon loader remains part of the trusted user installation, not an operating-system sandbox.
 Compiled-mode and native-directory dotenv overrides are refused before the eager native root import; normal official native loading and its platform cache remain SDK-owned.
@@ -352,7 +322,7 @@ Grok's `--tools ""` giving a tool-free run, where the validated object sits in G
 
 Which agent answers, and which of its models, is a setting.
 It lives in `~/Library/Application Support/hide/ai.json`, a sibling of Hide's own `state.json`, and `hide-ai/src/settings.rs` owns the path, the schema and the rule that turns a choice into a `RouterConfig`.
-The file belongs to the machine that runs the core: a core move carries it in its copy and places it where the machine taking the core keeps it, keeping that machine's own file when it chooses the same and refusing one that chooses otherwise, and once the move commits the file the core left is set aside in `moved-out/<intent>` with the rest of its state (`herdr-core/src/node_migration/copy.rs`; `ARCHITECTURE.md`, Moving the core).
+The file belongs to the machine that runs the core: a core move carries it in its copy and places it where the machine taking the core keeps it, keeping that machine's own file when it chooses the same and refusing one that chooses otherwise, and once the move commits the file the core left is set aside in `moved-out/<intent>` with the rest of its state (`hide-core/src/node_migration/copy.rs`; `ARCHITECTURE.md`, Moving the core).
 
 Hide writes it: the Settings Hide AI tab (`web/src/settings/HideAiTab.tsx`, rules in `web/src/hideAi.ts`) dispatches one `ai_settings` event per intent, the core applies it to the snapshot at once and queues the write, and the session-sync coordinator performs the write off the runtime mutex.
 The core reads the file once, when this Mac's session-sync coordinator starts, and from then on holds the choice in the runtime, so a file edited by hand while `hided` runs is read at the next start.
@@ -375,9 +345,39 @@ The file names a provider, a model per provider, whether Hide AI is on, an order
 `usage_limit` is a percent from 1 to 100 or `"none"`, written only when it is not the default 90; a file without it reads 90, and any other value makes the file malformed, which is reported and not guessed around.
 
 `machines` maps an agent's id to the connected device it runs on, such as `{ "claude": "wsl-ubuntu" }` (PRD wsl-device B11); an agent with no entry runs on the core's own machine, and the field is written only when an agent runs on a device, so an older file runs everything on the core's machine.
-One agent runs on one machine, so Runs on and a fallback entry never name the same agent twice; `set_provider` keeps the place of an agent that moves from the fallback list to Runs on, and `place` sets or clears it.
-`routes_like` compares the places too, so moving an agent to another machine rebuilds a held router.
-An agent placed on a device is left out of the move's Hide AI check (`hide_ai_asks`), since it answers on the device's logins wherever the core runs.
+One item runs on one machine, so Runs on and a fallback entry never name the same item twice; `set_runs_on` keeps the place of an item that moves from the fallback list to Runs on, and `place` sets or clears it.
+`routes_like` compares the places too, so moving an item to another machine rebuilds a held router.
+An item placed on a device is left out of the move's Hide AI check (`hide_ai_asks`), since it answers on the device's logins wherever the core runs.
+
+### Agent items
+
+Runs on and each fallback entry name an item, an agent and the profile it runs as (`hide_ai::Item`, PRD agent-profiles-phase2 D-07), so two profiles of one agent are two places a request can go.
+The built-in default profile is the agent alone, and it is what every file written before profiles reads as.
+A profile item is written as its agent with a `profile` field beside it, and its model and machine go in maps keyed by agent, then profile:
+
+```json
+{
+  "provider": "claude",
+  "profile": "p-work",
+  "models": { "claude": "sonnet" },
+  "profile_models": { "claude": { "p-work": "opus" } },
+  "fallback": [{ "provider": "claude", "profile": "p-gw", "model": "glm-4.6" }, { "provider": "codex" }]
+}
+```
+
+A file of default items alone is written byte for byte as before: `profile`, `profile_models` and `profile_machines` are left out when empty.
+A Hide that predates items ignores those fields, so it reads Runs on as its agent's default and drops a fallback entry of the Runs on agent or of an agent already listed, and its next write drops the profiles; [INSTALL.md](INSTALL.md#what-each-system-supports) records that limit.
+A profile item with no model of its own takes its agent's registry default, never the default item's choice, because a profile can run another provider's models.
+Another item of the Runs on agent may be a fallback; `add_fallback` refuses only the Runs on item itself and an item already listed.
+`models_by_item()` and `machines_by_item()` are what backends are built with: every agent's default item, and each profile item of the order.
+
+A profile item runs on its machine as that profile: the core builds its `NodeBackend` with the profile in `BackendSpec::profile`, and the node resolves it as a start would (see [A profile's model list](#a-profiles-model-list)), so the request goes to that profile's account.
+Codex keeps Hide's private `CODEX_HOME` and links the `auth.json` of the item's account, or runs in that account's folder where the link needs a privilege the account lacks (see the codex bullet under [Providers](#providers)), so the request is that account's and never appears in its conversation list (B19).
+A profile item is asked only while its machine lists the profile (`ItemProfiles`, what each machine's profile list says, kept by the runtime): one its machine no longer lists, or a machine that lists no profiles, as an older node that would read no profile field and run the agent's default account, is answered `profile_missing` without asking the machine, and a delete that lands between the list and the call is refused by the node with `NotFound`, which the core reads the same way: the item cannot answer, the router passes over it, and the refusal says so (B6, B21).
+Any other refusal keeps the machine's own sentence, as a node at its cap of backends (`Unsupported`): the profile is there and the node is full.
+Such an item stays in the file and in the snapshot with `profile_missing`, dimmed on the screen as a missing profile, until the operator removes it; Hide never takes it out of the file.
+A core move asks the machine taking the core for a profile item as its agent with its model, once per pair, and refuses nothing for the profile itself: profiles stay with the machine they were made on, and one the new machine does not list is passed over there.
+Each connected device's items are its own profiles, read with its own logins; a device whose Hide keeps no profiles offers its agents' default items alone (B6).
 
 `enabled` is the Settings › Hide AI switch and is on when the field is absent.
 Off, `AiRouter::execute` returns `AiError::Disabled` at once and asks no provider anything, and a feature treats it as nothing to do, never as a failure.
@@ -385,7 +385,7 @@ Off, `AiRouter::execute` returns `AiError::Disabled` at once and asks no provide
 A provider the registry does not know is ignored wherever it appears, so a file written by a newer Hide still reads, and `models` keeps the keys it does not know.
 This includes retired `gemini-cli`, `gemini` and `cursor` ids: a saved retired choice becomes unchosen, with the internal default `claude` but request routing disabled until a supported agent is selected through the existing first-run or operator choice.
 Retired fallback entries are ignored, their raw per-provider model entries survive rewrites, and neither their program nor a replacement provider is asked a model request before that selection.
-`AiSettings` is the one owner of the rules: `set_provider` removes the chosen provider from `fallback` and adopts the model it had there, `add_fallback` refuses the chosen provider and a duplicate (`FallbackRefusal`), `remove_fallback` and `set_fallback_model` edit one entry, and `models_by_provider()` is the model of every provider for building backends.
+`AiSettings` is the one owner of the rules: `set_runs_on` removes the chosen item from `fallback` and adopts the model it had there, `add_fallback` refuses the chosen item and a duplicate (`FallbackRefusal`), `remove_fallback` and `set_fallback_model` edit one entry, and `models_by_item()` is the model of every item for building backends.
 
 `agent_summary` is the Settings › Hide AI › Features Agent summaries switch (PRD overview-request-view D-11), on when the field is absent.
 Off, the label analyzer asks nothing and cancels the request it is running, and no surface shows a label; worktree naming and Project Memory keep their own switches.
@@ -408,11 +408,12 @@ A session with no home directory to write to reports that on the tab for the sam
 Choosing a provider changes which provider is asked first and nothing else.
 Every feature, Project Memory included, asks the chosen provider and then the fallback list under the policy below, while the router's retry, cooldown, cancellation, duplicate-suppression, process, and budget rules apply to all of them.
 
-The Hide AI tab reads `status.background_ai`, one section the core publishes (`herdr-core/src/model.rs`, `BackgroundAiSnapshot`): `enabled`, `provider` (null until one is chosen) and its `device` (null on the core's own machine), `chosen`, `agent_summary`, one `providers` row per registered agent in the fixed order (`agent` is the shared agent adapter id; `state` one of `ready`, `needs_login`, `usage_limited`, `not_installed`, `unavailable`, `unsupported`, `unread`, `installed`, `login_checked`, `selectable`, `retry_at_ms`, `model`, `models`, `models_fixed`, `cli_default`, and `models_unavailable_reason`), then the rows of each connected device's agents with its `device_id`, the ordered `fallback` list with each entry's `device`, and `refusal`.
+The Hide AI tab reads `status.background_ai`, one section the core publishes (`hide-core/src/model.rs`, `BackgroundAiSnapshot`): `enabled`, `provider` (null until one is chosen) with its `profile`, `profile_missing`, `model` and `device` (null on the core's own machine), `chosen`, `agent_summary`, one `providers` row per registered agent in the fixed order (`agent` is the shared agent adapter id; `state` one of `ready`, `needs_login`, `usage_limited`, `not_installed`, `unavailable`, `unsupported`, `unread`, `installed`, `login_checked`, `selectable`, `retry_at_ms`, `model`, `models`, `models_fixed`, `cli_default`, and `models_unavailable_reason`), then the rows of each connected device's agents with its `device_id`, the ordered `fallback` list with each entry's `profile`, `profile_missing` and `device`, and `refusal`.
+A row's `profile_models` carry each profile item's own `state`, `message`, `selectable`, `weekly` and `past_limit` beside its list, read with the profile's account, which is what Runs on and Add agent offer.
 An agent placed on a device that is not connected keeps a row whose state is `unavailable` with the code `device_not_connected`, and is not selectable until its device is back; a device's rows carry no weekly figure, since the usage reads are this machine's accounts.
 Every reason in it is a code the shell turns into words, never prose, an account, a path or a conversation, and the cause of a failed model-list read stays in the diagnostic log (B68) as an `ai.models.unavailable` record with the agent and a `reason=` code, written when the reason first appears or changes and not on every read.
-`ai_settings` carries `enabled`, `provider` (Runs on), `model` (for Runs on, or for an agent in the fallback list, which keeps its own), `fallback_add`, `fallback_remove`, `device` (the connected device the `provider` or `fallback_add` agent runs on, absent or null for the core's own machine), `agent_summary` and the two observation hints; the core refuses an agent that the last read did not find selectable on that machine, or on a device that is not connected (`ai_settings.provider_not_selectable`), an unknown one (`ai_settings.unknown_provider`), a device Hide does not know (`ai_settings.unknown_device`), the Runs on agent as its own fallback (`ai_settings.fallback_is_runs_on`) and a listed one twice (`ai_settings.fallback_listed`).
-`refusal` is how the label analyzer last found the chosen agent (`AiStanding`, written on the analyzer's thread after each job): its reason class, the end of a usage limit when the agent said, and the listed agent a request made now would run on (`using`), or none when no listed agent can answer, which is the Runs on row's reason (B41, B42).
+`ai_settings` carries `enabled`, `provider` (Runs on), `model` (for Runs on, or for an item in the fallback list, which keeps its own), `fallback_add`, `fallback_remove`, `profile` (the profile of whichever item the event names, absent for the built-in default), `device` (the connected device the `provider` or `fallback_add` agent runs on, absent or null for the core's own machine), `agent_summary` and the two observation hints; the core refuses an agent that the last read did not find selectable on that machine, or on a device that is not connected (`ai_settings.provider_not_selectable`), an unknown one (`ai_settings.unknown_provider`), a device Hide does not know (`ai_settings.unknown_device`), the Runs on agent as its own fallback (`ai_settings.fallback_is_runs_on`) and a listed one twice (`ai_settings.fallback_listed`).
+`refusal` is how the label analyzer last found the chosen item (`AiStanding`, written on the analyzer's thread after each job): its `profile`, its reason class (`profile_missing` among them), the end of a usage limit when the agent said, and the listed item a request made now would run on (`using` with `using_profile`), or none when no listed item can answer, which is the Runs on row's reason (B41, B42; PRD agent-profiles-phase2 B18).
 It is absent while the chosen agent answers and while Hide AI is off.
 
 With Hide AI off or no agent chosen, the label analyzer answers every job as stopped without asking anything and the runtime says `agent_summary()` is false, so rows show the session's own text and a turn is made once it is on again; worktree naming returns the dialog's own name; Project Memory analysis waits (the project stays enabled, its saved Memory and Sessions keep working).
@@ -429,7 +430,29 @@ Both come from asking the provider, so no model list is written into the core or
 An agent that is installed and not selectable is shown with that reason, never hidden.
 Asking costs child processes, so the probe is a capability reader like the project panel's: the session-sync coordinator drives it, the work runs on a worker thread, the runtime mutex is never held across it, and it asks nothing at all while the group is off screen.
 In the web shell the daemon holds that flag for every connected page: each page reports only its own demand, and a page that closes or disconnects releases it (`hided/src/demand.rs`).
+With no window attached, or no engine to read for, the coordinator asks the probe for nothing on every wake (`provider_probe_reads` in `hide-core/src/session_sync/coordinator.rs`), so its worker drops every router and profile backend and their app-servers end with the window, not at the ten-minute idle exit; that answer is not published, so `hide agent catalog` keeps the lists the last window read.
+A read under way when the window leaves stops at the next profile or device it would start: those are not asked.
+The agents' own availability and model lists it is already asking, for this machine or for a device, are asked to the end, each call within its own limit; the next read then releases every backend.
 `scripts/check-capability-readers-off-lock.sh` asserts that structurally, by name.
+
+### A profile's model list
+
+An agent's profiles (PRD agent-profiles-phase2 D-09) each have a model list of their own, read the way a start of the profile runs, because a profile's account, variables or wrapper can point the agent at another provider: a gateway wrapper around Claude Code names the gateway's models.
+The core asks for it beside its agent's list, while a screen reads model lists (Settings, a start surface, or a drawn mission map, which names each worker's model by its item's list), for every profile of the machine a start may take (`AiRequest::items`, `Runtime::ai_items`).
+Each profile is read on a backend of its own (`NodeBackend` with the profile's id in `BackendSpec::profile`), kept per machine and profile while the screen reads and built again when the profile's version moves, at most 16 a machine; past that a list is answered `model_reads_full`, never with another backend.
+The node resolves the profile from its own profile file as a start would (`hide_host::profiles::ai_run`): the account's variables, then the profile's own, and its wrapper, found on the account's search; the core never names an account's folder.
+A profile the node cannot run is refused before it takes a backend's place.
+Every backend reads with that `ItemRun` (`hide-ai/src/program.rs`): a child gets its variables on top of its usual environment, and a wrapper is started in the agent's program's place with the agent's own arguments, a Windows batch file through `cmd.exe` as any found batch program.
+Codex still runs under Hide's private `CODEX_HOME`, linking the `auth.json` of the profile's own account, so a profile's `config.toml` is not read there, except on an account that may not make that link, where it runs in the profile's folder with that file's servers, hooks and instructions switched off (see the codex bullet under [Providers](#providers)); omp refuses a profile with a wrapper (see [Oh My Pi](#oh-my-pi)).
+A read starts the agent's CLI, so the state that CLI updates on its own at every start may change: Claude Code's `.claude.json`, its plugin cache and its telemetry queue in the account's folder.
+What the operator edits (`settings.json`, the sign-in, `CLAUDE.md`, the hooks) and the conversations do not.
+A list that cannot be read is answered with its reason, which the core logs once per change (`ai.models.unavailable` with the provider, profile and machine), and the screens and `hide agent catalog` offer the agent's own list in its place (`models_from_default`); nothing is shown as a banner.
+What was logged of an item goes with it: when the screen closes, the profile is removed or its device is gone; a profile past the cap stays logged once while it is asked.
+Each list says the profile version it was read for, and a list counts only at the profile's version now: after an edit, the list read before is no list of it until the next read lands.
+Which agents list a custom or gateway model a profile configures is the support table's ([INSTALL.md](INSTALL.md#what-each-system-supports)).
+The snapshot carries each list beside its agent's row (`BackgroundAiProviderSnapshot::profile_models`, with `model_labels` for the names Claude Code shows), and the web shell reads an item's list with `catalogFor(ai, kind, { id, version })` of the chosen machine's profile.
+The web shell keeps no profile's list of its own: the snapshot keeps the last read until the next lands, and only an agent's own list is kept for the page's life.
+The connection protocol moved to 94 with `BackendSpec::profile`, so a device helper that predates it never answers a profile's read as the default account: a device's helper is replaced by this build's on its next connection.
 
 ### What leaves the machine
 
@@ -492,28 +515,37 @@ The table is generated by `export_usage_coverage --markdown`; the adapter contra
 
 ## Usage limits
 
-The sidebar footer's Usage chips and popover ([UI_BEHAVIOR.md: Usage](UI_BEHAVIOR.md#usage)) show a separate read-only capability owned by `herdr-core/src/usage.rs`.
+The sidebar footer's Usage chips and popover ([UI_BEHAVIOR.md: Usage](UI_BEHAVIOR.md#usage)) show a separate read-only capability owned by `hide-core/src/usage.rs`.
 It uses the user's existing CLI logins to read each declared provider's five-hour and seven-day account windows, and it never routes a model request through `hide-ai`.
 
-For Claude Code, the core's own node runs `claude -p "/usage" --output-format json --no-session-persistence --setting-sources ''` through `ClaudeCliBackend::usage_text` (`hide-host/src/usage.rs`, the `UsageLimitFetch` call, which reports once a second so the reader's cancel ends the child) and the core parses the `result` text the CLI prints.
+For Claude Code, the core's own node asks the account's usage endpoint (`GET https://api.anthropic.com/api/oauth/usage`, with `anthropic-beta: oauth-2025-04-20`) with the access token of Claude Code's own login, and only when that read fails does it run Claude Code's `/usage` (`hide-host/src/usage.rs`, `claude_usage`).
+The endpoint answers in about half a second; `/usage` in Claude Code 2.1.318 took about two minutes on a machine with 549 sessions in the week (2026-11-06), because it first reads every local session to explain the usage, so it outlived its 30-second limit on every read and the Claude row stayed unavailable.
+The node sends the core either the endpoint's windows (`usage_api`) or the `/usage` text (`usage_text`), and the core reads each one by its tag (`hide-core/src/usage/limits/claude.rs`).
+Every failure of the endpoint read, from a missing login to a refused answer, falls back to `/usage`, and the node writes the endpoint's fixed failure code (`claude_usage_api_failed`) to its error stream.
 The core asks its own node for `UsageLimitFetch { source, root }`; a device refuses this call.
 Codex's `auth.json` read, HTTPS request and session-file fallback all run on that node; the core keeps the schedule, parsing and rows.
 The credential type is private to `hide-host` and cannot be serialized.
 The node bounds credential reads at 64 KiB and HTTP bodies at 256 KiB, returns only numeric window fields from Codex, and reads at most 2 MiB from each candidate session tail.
 The transport timeout is ten seconds; HTTP errors carry only a fixed diagnostic code, status and bounded Retry-After header.
+On macOS the login is the keychain item Claude Code writes, `Claude Code-credentials` under the account `USER` names, read through `/usr/bin/security find-generic-password -w`; elsewhere, and on macOS when that item does not exist, it is `~/.claude/.credentials.json`.
+The item's access list names `/usr/bin/security` as the one program that reads it without asking (read with `security dump-keychain -a` on 2026-11-06, Claude Code 2.1.319), so the read never shows a prompt that names Hide, whatever Hide's own signature is.
+Hide once read the item itself through the Security framework, and macOS asked again after every rebuild of an ad hoc signed build, because each had a new code identity; that is why the read goes through Claude Code's own program.
+Claude Code can leave other items of the same service behind under other account names with an empty token, so the node asks for the `USER` account only.
+An empty or unreadable token is an authentication failure and an expired one (`expiresAt` at or before now) is a transient one, since Claude Code renews it the next time it runs; neither is sent.
+Only each window's percent and reset time, and a model window's model name, leave the node; spend, credits, the account and any server text stay there.
 `/usage` is a local command: the CLI authenticates against its own keychain item, makes no model turn (`duration_api_ms` 0, cost 0), and with `--no-session-persistence` leaves nothing under `~/.claude/projects/`, in `claude --resume`, or in Hide's Agent Conversation list.
-Hide holds no Claude token at any point and never opens the keychain itself; the earlier direct keychain read is gone because an ad hoc signed dev build has a new code identity on every rebuild, so macOS revoked "always allow" and the row fell to a three-second timeout.
 The child receives exactly the variables `hide_platform::process::LOGIN_CHILD_VARIABLES` names (`hide_ai::USAGE_ENVIRONMENT`): `HOME`, `PATH`, `USER`, `LOGNAME` and `TMPDIR` on macOS and Linux, and `PATH`, `PATHEXT`, `SystemRoot`, `USERPROFILE`, `USERNAME`, `TEMP`, `TMP`, `APPDATA`, `LOCALAPPDATA`, `ComSpec`, `windir`, `SystemDrive`, `ProgramFiles`, `ProgramFiles(x86)`, `ProgramData`, `HOMEDRIVE`, `HOMEPATH` and `CLAUDE_CODE_GIT_BASH_PATH` on Windows, where Node reads its home from `USERPROFILE` and does not start without `SystemRoot`, and the Claude CLI needs Git Bash, which it finds through `CLAUDE_CODE_GIT_BASH_PATH` or `ProgramFiles`.
 It runs in Hide's state directory (`~/.hide/state` by default).
 `USER` is what lets the CLI find its keychain account; without it the CLI prints `/cost` text as if logged out.
-`HERDR_*` and `CLAUDECODE` are withheld on purpose, so even a hook that did run would see no Herdr pane.
+`HIDE_PANE_ID`, `HERDR_*` and `CLAUDECODE` are withheld on purpose, so even a hook that did run would see no pane of Hide's.
 `--setting-sources ''` reads none of the operator's settings, so none of their hooks or plugins runs for the read: a session-start hook may leave a folder in `~/.claude/session-env/` for every session, which Claude Code never removes, and on 2026-10-18 (claude 2.1.302) the read with the settings left one every five minutes and without them none, with the same windows in the answer.
 The read reaches no network: with every outbound connection denied (`sandbox-exec`, 2026-10-18) it answered the same windows, so a proxy or certificate the operator sets only in `settings.json`'s `env` block is not needed for it.
 A Hide AI request reads no settings either and does reach the network, so for it such a proxy has to be in the environment Hide is started with.
 `--bare` cannot be used, because it never reads the keychain.
-`CLAUDE_CONFIG_DIR` is no longer an environment key Hide reads: the child does not receive it, so the CLI uses its default configuration directory.
+`CLAUDE_CONFIG_DIR` is no longer an environment key Hide reads: the login read uses the default configuration's keychain item and file, and the child does not receive it, so the CLI uses its default configuration directory.
 
-The pure parser (`herdr-core/src/usage/limits/`) reads `Current session` as five hours and `Current week (all models)` as seven days; other weekly scopes become model rows.
+The pure parser (`hide-core/src/usage/limits/`) reads the endpoint's `five_hour` and `seven_day` as the account's two windows and each `weekly_scoped` limit naming a model as that model's weekly row; a null `five_hour` is `NotOffered`, because that window depends on the plan.
+From `/usage` text it reads `Current session` as five hours and `Current week (all models)` as seven days; other weekly scopes become model rows, and a missing `Current session` line is `NotOffered` too.
 Percentages may say `used` or `left`; the latter is converted to used percent.
 A zero session line without a reset is `NotStarted`, never a displayed zero; another missing or malformed reset is `Unreadable` for that window alone.
 A reset that passed becomes `Expired` and carries no percent.
@@ -522,18 +554,18 @@ A whole response with no recognized window fails as `FormatChanged`, immediately
 Readers cap the result at sixteen windows and a model label at 64 bytes.
 
 Claude reset times use the printed year and IANA zone, or the next wall-clock match when the year is absent; a match that passed within the last window is the reset that just passed.
-`herdr-core/src/zoneinfo.rs` uses `jiff`, with system zoneinfo on macOS and Linux and its bundled database on Windows.
-The observed 2.1.274 output is fixed as a scrubbed fixture under `herdr-core/tests/fixtures/claude-usage/`.
+`hide-core/src/zoneinfo.rs` uses `jiff`, with system zoneinfo on macOS and Linux and its bundled database on Windows.
+The observed 2.1.274 `/usage` output and the endpoint's windows from 2026-11-06 are fixed as fixtures under `hide-core/tests/fixtures/claude-usage/`, and the endpoint's whole answer under `hide-host/tests/fixtures/`.
 Only English output is parsed; an unrecognized response is unavailable.
-A `/cost` response with no `Current` line means signed out; transport failures and timeouts retain a recent success for up to fifteen minutes.
+Only the summary a CLI with no subscription sign-in prints (its `Total duration (API):` line, fixed as `cost-2.1.274.json` and `cost-2.1.329.json`) means signed out; any other text with no `Current` line, an empty one included, is a changed format, and the core logs its length and line count, never its words (`usage.claude_usage_text_unrecognized`); transport failures and timeouts retain a recent success for up to fifteen minutes.
 The snapshot carries cause codes, not screen wording: the web gives a sign-in action only for an authentication failure and keeps network diagnostics out of the screen.
 
 For Antigravity, the core's own node runs `agy --log-file <log> -p /usage --output-format json` through `AntigravityCliBackend::usage_text`, with the same environment as a request and no model turn (`hide-host/src/usage.rs`).
 Each read starts agy's whole runtime, its language server included, and takes about 5.5 s (measured 2026-10-18 on agy 1.4.0); its log goes to `usage.log` as described under [Antigravity](#antigravity).
-The parser (`herdr-core/src/usage/limits/antigravity.rs`) reads `/command/data/groups`: each group of models shares weekly buckets that say what fraction is left and when it refills, the `gemini-weekly` bucket is the account's weekly window, and every other group's weekly bucket is a window scoped to that group's models; agy has no five-hour or monthly window.
+The parser (`hide-core/src/usage/limits/antigravity.rs`) reads `/command/data/groups`: each group of models shares weekly buckets that say what fraction is left and when it refills, the `gemini-weekly` bucket is the account's weekly window, and every other group's weekly bucket is a window scoped to that group's models; agy has no five-hour or monthly window.
 A sign-in answer is `NotAuthenticated`, and a frame with no groups is `FormatChanged`.
 
-The child runs on a `BackgroundRead` worker, so the coordinator thread that applies every Herdr pane event never waits on it; one child runs at a time, and dropping the reader cancels a child still running at shutdown.
+The child runs on a `BackgroundRead` worker, so the coordinator thread that applies the engine's session events never waits on it; one child runs at a time, and dropping the reader cancels a child still running at shutdown.
 The failure event carries the provider and the failure kind only; no terminal text, token, or account identifier is logged or placed in a snapshot.
 
 For Codex, the core's own node reads `auth.json` under Codex's folder from the same resolver (`CODEX_HOME`, or `~/.codex` when it is unset or empty); a relative `CODEX_HOME`, which Codex reads against its own working folder, disables that read instead of falling back to `HOME`.
@@ -658,11 +690,23 @@ Measured from the usage ledger (`ai_daily`) on 2026-10-15 and 2026-10-16, per ca
 A new `claude -p` process reads the previous call's cache when the tools, the system prompt and the messages before the changing part are identical and the model is the same, so the fixed prefix (the system prompt and, in `Schema` mode, the schema) is read and the part that differs per call is written and not read again.
 Subscription turns are written with a one-hour lifetime, which prices a write at twice the input rate, so at the list prices the writes of the changing part are the larger share of a call's cost: about two thirds of an agent summary's and about nine tenths of a Memory call's, with the output second.
 The share is a statement about prices; how the subscription's limit counts a cache write or read is not documented.
-Setting `CLAUDE_CODE_PROMPT_CACHE_TTL=5m` is documented to write at 1.25 times instead, and has not been tried on a call whose input differs, so it is not used.
+So every model turn's child gets `CLAUDE_CODE_PROMPT_CACHE_TTL=5m`, which Claude Code documents as the lifetime of the main conversation's cache writes, `-p` runs included ([Prompt caching](https://code.claude.com/docs/en/prompt-caching)), and which the API prices at 1.25 times the input rate instead of 2 ([Anthropic's prompt caching prices](https://platform.claude.com/docs/en/build-with-claude/prompt-caching)).
+Measured 2026-11-11 on claude 2.1.322 with `claude-haiku-5-5`, the child's own argument vector and working directory, and two different transcripts of about 8 KB after the same system prompt:
+
+| Call | Cache read | Cache write |
+| --- | --- | --- |
+| first | 0 | 5,788 (the 2,281-token prefix and the transcript) |
+| second, another transcript | 2,281 | 3,472 (the transcript) |
+
+Without the variable both writes were one-hour writes; with it set, the second call read the same prefix and wrote its transcript as five-minute writes (`usage.cache_creation.ephemeral_5m_input_tokens`).
+So the variable moves exactly the part that is never read again to the cheaper write, and the prefix stays read while calls arrive within five minutes of each other.
+At the ledger's per-call counts of 2026-11-11 (agent summaries read 4,037 and wrote 1,984, Project Memory read 3,552 and wrote 11,744) the variable takes the input side of a call down by about a third at the list prices: 4,374 to 2,886 input-token equivalents for an agent summary and 23,846 to 15,038 for a Memory call.
+`DISABLE_PROMPT_CACHING=1` was not chosen: measured, it sends every token as plain input, which at the same counts costs an agent summary 6,023, more than today, because its read prefix is the larger part.
 
 ## Selection and fallback
 
-A request is asked of the chosen provider and then of each provider in the `fallback` list, in that order, once each, and of nothing else (`RouterConfig::priority` is exactly that list).
+A request is asked of the chosen item and then of each item in the `fallback` list, in that order, once each, and of nothing else (`RouterConfig::priority` is exactly that list of items).
+Everything the router keeps about who answered (availability, cooldown, the usage limit's readings, the degraded record, the last answer) is keyed by item, so another item of the same agent can answer when one cannot; a log record names a profile item's profile beside its agent.
 A provider that is registered and not on it is inspected for Settings and never asked, so a login the operator never meant to use is not spent.
 While nobody has chosen, the internal default is `claude` and request routing is disabled until the existing selection rule or the operator chooses a supported provider.
 
@@ -690,6 +734,7 @@ A text-mode CLI's failure it cannot classify is `CompletionUnknown` and ends the
 
 That move is sticky, so the reason outlives the request that found it.
 A provider under an account-wide cooldown is not asked for an answer and is not asked whether it is logged in either: the cooldown already answers, and probing a provider that cannot answer for hours is the poke stickiness exists to stop.
+A cooldown is the account's: items whose profiles run in one account on one machine share it (`RouterConfig::accounts`, a `SharedAccount` of the machine and the account, filled from each machine's profile list through `ItemProfiles`), since an account folder or name says which account only on the machine that keeps it, so the same path on two machines is two accounts; an item whose profile is in its agent's default account, which a wrapper or variables alone may point at another provider, is parked alone.
 An outage or a missing login is remembered by the availability cache for its window instead.
 When the cooldown expires the router drops that provider's cached availability with it, asks the provider once, and returns to it when it can answer; nobody has to tell the router the limit reset.
 Because a sticky failover has no second provider to try, `ai.fallback` never fires again, so entering and leaving failover each get their own event: `ai.provider.degraded` names the selected provider, its reason and the provider now active, and `ai.provider.recovered` names the return.
@@ -708,6 +753,7 @@ The routers for what the operator waits on (worktree names, issue intake review)
 `statuses()` and `availability()` stay ungated, so Settings still lists a past-limit agent as signed in; only `active` in `provider_state()` skips it.
 
 The figures are the weekly rows the toolbar's usage read already produces (`usage` through `weekly_reading()`, the seven-day account window with a percent and a future reset); no new read command exists.
+Each item is judged by its own account's figure: a default item by its agent's row, a profile item by its account's row (the same `profile_weekly` the catalog reads), and a profile in the agent's default account has no figure, so the limit never holds it back (PRD agent-profiles-phase2 D-07).
 Those rows are the core machine's accounts, so an agent placed on a device has no figure and is never held back by them: its usage counts on the device's account (PRD wsl-device B12).
 With no window attached the same reader also runs while a limit is set and Hide AI is on and either the order is paused (only a fresh figure can lift it) or an agent worked in the last 30 minutes, so labels are not judged by a figure that is days old; that is at most one read per agent every five minutes and none while nothing runs.
 Until the first read lands (one second after launch) an agent has no figure and is not limited.
@@ -735,7 +781,7 @@ The label worker parks a turn for good on a settled failure and asks again after
 ## Logging
 
 The suggestion investigation's own line is described under [The suggestion investigation](#the-suggestion-investigation).
-The router emits `ai.attempt`, `ai.request.finished`, `ai.request.joined`, `ai.fallback`, `ai.usage_limit`, `ai.provider.degraded`, `ai.provider.recovered`, `ai.budget.exceeded`, `ai.app_server.over_budget` and, once per UTC day, `ai.daily_rollup`; the codex backend emits `ai.app_server.idle_exit`, `ai.codex_home.swept` and `ai.codex_home.sweep_failed`.
+The router emits `ai.attempt`, `ai.request.finished`, `ai.request.joined`, `ai.fallback`, `ai.usage_limit`, `ai.provider.degraded`, `ai.provider.recovered`, `ai.budget.exceeded`, `ai.app_server.over_budget` and, once per UTC day, `ai.daily_rollup`; the codex backend emits `ai.app_server.idle_exit`, `ai.codex_home.account`, `ai.codex_home.swept` and `ai.codex_home.sweep_failed`.
 A line carries the request id, feature id, provider, outcome class, attempt, duration, input length, output tokens and schema version; an `ai.attempt` line also carries `thinking_tokens` when the provider reported some above zero, and `effort` when the attempt asked its provider for one.
 Every `ai.request.finished` of a provider that declares itself measurable (`AiBackend::measurable()`, today only codex, whose app-server is resident) also carries the app-server pid and the process measurement (`app_server_pid`, `descendants`, `rss_bytes`), or `measurement=unavailable` where the platform cannot measure it.
 It never carries the prompt, the input, the generated text, a token, a file path from a transcript, or a provider thread id.

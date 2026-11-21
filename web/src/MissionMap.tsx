@@ -1,18 +1,21 @@
-import { CogIcon, GitBranchIcon } from "lucide-react";
-import { useLayoutEffect, useMemo, useRef, useState, type KeyboardEvent, type MouseEvent, type ReactNode } from "react";
+import { CogIcon, KeyRoundIcon, TriangleAlertIcon } from "lucide-react";
+import { useEffect, useLayoutEffect, useMemo, useState } from "react";
 import type { Actions } from "./actions";
 import { AgentMark } from "./AgentMark";
-import { DependencyGraphView, type EdgeLook, type OverlayEdge } from "./DependencyGraph";
-import type { GraphEdge } from "./dependencyLayout";
 import { formatElapsed, useElapsed, useMinuteClock } from "./components/elapsed";
 import { ConductorRow } from "./components/mission-conductor-row";
+import { MapPage, MapSplit } from "./components/map-page";
 import { MissionEnd } from "./components/mission-end";
-import { MissionNodeMark } from "./components/mission-node-mark";
-import { MissionPrMark } from "./components/mission-pr";
+import { GatePlanList, OperatorBand } from "./components/mission-gate";
+import { DeviceChip } from "./components/device-chip";
+import { BranchLineView, ResultLineView, WaitingMark } from "./components/mission-line";
+import { MissionNodeHover } from "./components/mission-node-hover";
+import { MissionDestinationTag, MissionOptionsLine } from "./components/mission-options";
 import { PullList, ResultTiles } from "./components/mission-results";
 import { satelliteLines, Satellites } from "./components/mission-satellites";
 import { MissionSummary } from "./components/mission-summary";
-import { HEAD_FILL, ProgressCells, WorkPill } from "./components/mission-tone";
+import { HeldMark, NodeWaitLine, useDelayPill, useWaitWords } from "./components/mission-hold";
+import { HEAD_FILL, PILL_TONE, ProgressCells, STATE_PILL_TONE, STEP_FILL, WorkPill } from "./components/mission-tone";
 import { Button } from "./components/ui/button";
 import { Hint } from "./components/ui/tooltip";
 import { useInterfaceTranslation } from "./i18n/client";
@@ -20,14 +23,27 @@ import { requireInterfaceLanguage } from "./i18n/locale";
 import { cn } from "./lib/utils";
 import { MarkdownText } from "./MarkdownText";
 import { markdownPlainText } from "./markdownPlain";
+import { useMapPick } from "./mapPick";
+import { MissionGraph } from "./MissionGraph";
+import { MissionGraphCard, MissionGraphReport } from "./components/mission-graph-card";
 import { MissionMapCanvas } from "./MissionMapCanvas";
 import { MissionNodePanel } from "./MissionNodePanel";
 import { MissionTurn } from "./MissionTurn";
-import { markWord, MissionDevice, RunText, useMissionDeviceName, useNodeRun, useNodeTimes } from "./missionParts";
+import { markWord, MissionNumber, useMissionDeviceName, useNodeRun, useNodeTimes } from "./missionParts";
+import { branchLine, branchLineWords, lineNode, resultLine, resultLineWords } from "./missionLine";
+import { landsInDestination, missionOptions } from "./missionOptions";
+import { DEFAULT_CONDUCTOR } from "./conductorSettings";
+import { STATE_PILL } from "./missionList";
 import { planCount } from "./plans";
+import { humanTurnText } from "./humanTurn";
+import { useWorkerEscalation } from "./missionWorkers";
 import {
   attentionWords,
+  cardGate,
   defectEdges,
+  failedVerdict,
+  gatesAhead,
+  gateWaitedLong,
   openAttention,
   hideWords,
   missionHeadCells,
@@ -35,22 +51,27 @@ import {
   missionEventsOf,
   missionOf,
   missionOpen,
-  neighbours,
+  nodeWait,
   nodeLook,
-  nodeResult,
+  nodePace,
+  nodeSteps,
+  nodeWork,
+  nodeWorkWords,
+  pacedSteps,
+  plannedWait,
+  stopCauseWords,
+  stoppedSince,
   reportLine,
-  shortCommit,
   stackWaiting,
+  warningWords,
   type NodeLook,
 } from "./missions";
-import { layerDependencies } from "./projectBoard";
 import { machineName } from "./screenMachine";
-import type { Mission, MissionEvent, MissionNode, MissionStatus } from "./snapshot";
+import type { Mission, MissionEvent, MissionNode, MissionNodeWork } from "./snapshot";
 import { useShellStore } from "./store";
-import type { MessageKey } from "./i18n/catalogs";
-import type { TFunction } from "i18next";
+import { ToolMark } from "./components/tool-mark";
 
-// A mission's page in the lane's 보기 slot (PRD mission-map-git-criteria
+// A mission's page as a card tab on a desk (PRD mission-map-git-criteria
 // D-01-D-06, B24-B35; PRD mission-tool B12-B25): the head (state, time, a
 // cell per node, `n / m`); a finished mission's results, its pull requests
 // and its report's line; the Conductor row; what only the operator can do
@@ -60,8 +81,6 @@ import type { TFunction } from "i18next";
 // lit and dims the rest (B30). Every value is the core's (`MissionView`, its
 // events); this page words and draws it and edits nothing.
 
-/** The card that stands for the report every node ends in; a node key is letters, digits, `-`, `_` and `.`, so none is this. */
-const REPORT = "#report";
 
 /**
  * `onNode` hears a node card picked, so a page that holds the map beside a
@@ -83,88 +102,82 @@ function MapState({ text, tone, state }: { text: string; tone?: string; state: s
 
 function MissionBody({ mission, actions, onNode }: { mission: Mission; actions: Actions; onNode?: (node: MissionNode) => void }) {
   const { t } = useInterfaceTranslation();
-  const [picked, setPicked] = useState<string | null>(null);
-  const panel = useRef<HTMLDivElement>(null);
   const [root, rootRef] = useState<HTMLDivElement | null>(null);
   const [page, pageRef] = useState<HTMLDivElement | null>(null);
   const wide = useWide(root);
   const device = useShellStore((s) => (mission.stale ? machineName(s.rest?.navigator?.devices, mission.device_id, t) : null));
   const log = useShellStore((s) => missionEventsOf(s.rest, mission.id));
+  // The map names each item's model as the start panel's list does (PRD agent-profiles-phase2 B12): those lists are read while a screen
+  // reads them, so the map observes them while it is drawn, again after a reconnect drops hided's side of it.
+  const live = useShellStore((s) => s.connection === "live");
+  useEffect(() => (live ? actions.observeCatalog() : undefined), [actions, live]);
+  // Settings › Mission keeps which way every mission's map runs.
+  const flow = useShellStore((s) => s.rest?.ui_state?.conductor_settings?.map_flow) ?? "down";
   const open = missionOpen(mission);
   // The page's clock ticks by the minute; a closed mission's times end where it closed.
   const minute = useMinuteClock();
   const end = mission.closed_at_unix_ms ?? minute;
   // A pick whose node a replan took away is no pick.
-  const selected = picked && mission.nodes.some((node) => node.key === picked) ? picked : null;
+  const { selected, select, panel, onKeyDown, onMapClick } = useMapPick(
+    mission.nodes.map((one) => one.key),
+    "[data-mission-node], [data-node-satellites]",
+  );
   const node = selected ? mission.nodes.find((candidate) => candidate.key === selected)! : null;
-  const select = (key: string | null) => {
-    setPicked(key);
-    // Under a narrow map the panel may be out of view; it comes into it (B34).
-    if (key) requestAnimationFrame(() => panel.current?.scrollIntoView?.({ block: "nearest" }));
-  };
-  // Escape lets go of the pick before the lane answers it (B30).
-  const onKeyDown = (event: KeyboardEvent<HTMLDivElement>) => {
-    if (event.key !== "Escape" || event.defaultPrevented || !selected) return;
-    event.preventDefault();
-    setPicked(null);
-  };
   return (
-    <div ref={rootRef} className="@container/mission flex min-h-0 min-w-0 flex-1 flex-col" data-mission={mission.id} data-mission-status={mission.status} data-mission-stale={mission.stale || undefined} onKeyDown={onKeyDown}>
-      <div ref={pageRef} className="flex min-h-0 min-w-0 flex-1 flex-col overflow-auto mission-wide:overflow-hidden" data-mission-scroll="true">
-        <Head mission={mission} actions={actions} />
-        {/* A finished mission leads with what it left (B20); its report's line follows, then its Conductor. */}
-        {!open ? <ResultTiles mission={mission} /> : null}
-        {!open ? <PullList mission={mission} onSelect={select} /> : null}
-        {mission.report && !open ? <ReportLine mission={mission} /> : null}
-        <ConductorRow mission={mission} actions={actions} />
-        <MissionTurn mission={mission} device={device} actions={actions} onSelect={select} />
-        {mission.delay && open ? <p className="px-md pb-xs text-caption text-muted-foreground" data-mission-delay="true">{t("mission.delay", { line: mission.delay })}</p> : null}
-        {device ? <p className="px-md pb-xs text-caption text-muted-foreground" data-mission-stale-note="true">{t("mission.stale", { device })}</p> : null}
-        {mission.nodes.length === 0 ? (
-          <p className="px-md py-sm text-body text-muted-foreground" data-mission-planning="true">{t("mission.planning")}</p>
-        ) : (
-          <div className={cn("flex min-w-0 flex-col border-t border-border mission-wide:min-h-0 mission-wide:flex-1 mission-wide:flex-row", mission.stale && "opacity-(--opacity-dimmed)")} data-mission-values={mission.stale ? "stale" : "live"}>
-            <div
-              className="flex min-w-0 flex-col mission-wide:min-h-0 mission-wide:flex-1"
-              onClick={(event: MouseEvent<HTMLDivElement>) => {
-                // A press on the map outside every card and its checkers lets go of the pick (B30).
-                // A checker's popover is portalled out of the map, yet its presses bubble here through React.
-                if (!event.currentTarget.contains(event.target as Node)) return;
-                if (!(event.target as Element).closest("[data-mission-node], [data-node-satellites]")) setPicked(null);
-              }}
-              data-mission-map="true"
-            >
-              <MissionMapCanvas wide={wide} page={page}>
-                <Graph
-                  actions={actions}
-                  mission={mission}
-                  events={log?.events ?? null}
-                  end={end}
-                  selected={selected}
-                  onSelect={(key) => {
-                    select(selected === key ? null : key);
-                    const picked = selected === key ? undefined : mission.nodes.find((one) => one.key === key);
-                    if (picked) onNode?.(picked);
-                  }}
-                />
-              </MissionMapCanvas>
-            </div>
-            {/* The column beside the map: a pick's panel, else the mission's summary (B19, B30, B31). */}
-            <div
-              ref={panel}
-              className="flex min-w-0 flex-col border-t border-border mission-wide:min-h-0 mission-wide:w-(--size-mission-side) mission-wide:shrink-0 mission-wide:overflow-auto mission-wide:border-l mission-wide:border-t-0"
-              data-mission-panel={node?.key}
-            >
-              {node ? (
-                <MissionNodePanel mission={mission} node={node} events={log?.events ?? null} end={end} onSelect={select} onClose={() => setPicked(null)} actions={actions} />
-              ) : (
-                <MissionSummary mission={mission} onSelect={select} />
-              )}
-            </div>
-          </div>
-        )}
-      </div>
-    </div>
+    <MapPage
+      pageRef={rootRef}
+      scrollRef={pageRef}
+      data={{ "data-mission": mission.id, "data-mission-status": mission.status, "data-mission-stale": mission.stale || undefined }}
+      scrollData={{ "data-mission-scroll": "true" }}
+      onKeyDown={onKeyDown}
+    >
+      <Head mission={mission} actions={actions} />
+      {/* A finished mission leads with what it left (B20); its report's line follows, then its Conductor. */}
+      {!open ? <ResultTiles mission={mission} /> : null}
+      {!open ? <PullList mission={mission} onSelect={select} /> : null}
+      {mission.report && !open ? <ReportLine mission={mission} /> : null}
+      <ConductorRow mission={mission} actions={actions} />
+      <MissionTurn mission={mission} device={device} actions={actions} onSelect={select} />
+      <GatePlan mission={mission} onSelect={select} />
+      {device ? <p className="px-md pb-xs text-caption text-muted-foreground" data-mission-stale-note="true">{t("mission.stale", { device })}</p> : null}
+      {mission.nodes.length === 0 ? (
+        <p className="px-md py-sm text-body text-muted-foreground" data-mission-planning="true">{t("mission.planning")}</p>
+      ) : (
+        <MapSplit
+          dimmed={mission.stale}
+          data={{ "data-mission-values": mission.stale ? "stale" : "live" }}
+          onMapClick={onMapClick}
+          mapData={{ "data-mission-map": "true" }}
+          map={
+            <MissionMapCanvas wide={wide} page={page} flow={flow} onFlow={(next) => actions.setConductorSettings({ map_flow: next })}>
+              <MissionGraph
+                flow={flow}
+                mission={mission}
+                defects={defectEdges(mission)}
+                drawNode={(item, picked, dimmed, pick) => <NodeCard mission={mission} node={item} events={log?.events ?? null} end={end} actions={actions} selected={picked} dimmed={dimmed} onSelect={pick} />}
+                report={(dimmed) => <ReportCard mission={mission} dimmed={dimmed} />}
+                selected={selected}
+                onSelect={(key) => {
+                  select(selected === key ? null : key);
+                  const picked = selected === key ? undefined : mission.nodes.find((one) => one.key === key);
+                  if (picked) onNode?.(picked);
+                }}
+              />
+            </MissionMapCanvas>
+          }
+          sideRef={panel}
+          sideData={{ "data-mission-panel": node?.key }}
+          side={
+            /* The column beside the map: a pick's panel, else the mission's summary (B19, B30, B31). */
+            node ? (
+              <MissionNodePanel mission={mission} node={node} events={log?.events ?? null} end={end} onSelect={select} onClose={() => select(null)} actions={actions} />
+            ) : (
+              <MissionSummary mission={mission} onSelect={select} />
+            )
+          }
+        />
+      )}
+    </MapPage>
   );
 }
 
@@ -188,18 +201,20 @@ function useWide(root: HTMLElement | null): boolean {
   return wide;
 }
 
-/** The pill's words and colour: the operator's merge waits in the decision colour, a finished mission is grey (D-02). */
-export const PILL: Record<MissionStatus, { key: MessageKey; tone: string }> = {
-  planning: { key: "mission.pill.planning", tone: "bg-muted text-muted-foreground" },
-  running: { key: "mission.pill.running", tone: "bg-mission-working/15 text-mission-working" },
-  merge_wait: { key: "mission.pill.mergeWait", tone: "bg-mission-hold/15 text-mission-hold" },
-  done: { key: "mission.pill.done", tone: "bg-muted text-muted-foreground" },
-  cancelled: { key: "mission.pill.cancelled", tone: "bg-muted text-mission-cancelled" },
-};
+/**
+ * Where the operator will look, over a plan that waits for approval (PRD
+ * mission-human-gate D-08, B1). The rows above it are control-high, so their
+ * words carry slack under them that its caption head does not: `pt-xxs`
+ * puts its words as far below the Conductor's as those are below the head's.
+ */
+function GatePlan({ mission, onSelect }: { mission: Mission; onSelect: (key: string) => void }) {
+  return <GatePlanList nodes={mission.status === "planning" ? gatesAhead(mission) : []} onSelect={onSelect} className="px-md pt-xxs pb-sm" />;
+}
 
 /**
  * The head, one line (B24): the mission's state, its time, a cell per node,
- * `n / m` and its verification strength, which only the Conductor changes. A
+ * `n / m` and its verification strength, which only the Conductor changes;
+ * a plan waiting for approval says only how many steps it has. A
  * device that does not answer stops the running time, so no number moves
  * without the record (B35).
  */
@@ -208,16 +223,32 @@ function Head({ mission, actions }: { mission: Mission; actions: Actions }) {
   const language = requireInterfaceLanguage(i18n.language);
   const running = useElapsed(mission.status !== "done" && mission.status !== "cancelled" && !mission.stale ? mission.started_at_unix_ms : null);
   const { done, total } = missionCounts(mission);
+  const held = useDelayPill(mission);
   const took = mission.started_at_unix_ms != null && mission.closed_at_unix_ms != null ? formatElapsed(language, mission.closed_at_unix_ms - mission.started_at_unix_ms) : null;
+  const settings = useShellStore((s) => s.rest?.ui_state?.conductor_settings) ?? DEFAULT_CONDUCTOR;
+  const events = useShellStore((s) => missionEventsOf(s.rest, mission.id)?.events ?? null);
+  const options = useMemo(() => missionOptions(mission, settings, events, t), [mission, settings, events, t]);
   const time = took ? t("mission.elapsed.total", { elapsed: took }) : running ? t("mission.elapsed.running", { elapsed: running }) : null;
-  const pill = PILL[mission.status];
   return (
     <div className="flex min-w-0 flex-wrap items-center gap-x-md gap-y-xs px-md py-sm text-body" data-mission-summary="true">
-      <WorkPill tone={pill.tone} done={mission.status === "done"} data-mission-pill={mission.status}>
-        {t(pill.key)}
-      </WorkPill>
+      <MissionNumber mission={mission} className="text-caption" />
+      {held ? (
+        <WorkPill tone={PILL_TONE.quiet} data-mission-pill="held">
+          <HeldMark />
+          {held}
+        </WorkPill>
+      ) : (
+        <WorkPill tone={STATE_PILL_TONE[mission.status]} done={mission.status === "done"} data-mission-pill={mission.status}>
+          {t(STATE_PILL[mission.status])}
+        </WorkPill>
+      )}
       {time ? <span className="shrink-0 text-caption text-muted-foreground" data-mission-stat="time">{time}</span> : null}
-      {mission.nodes.length > 0 ? (
+      {/* A plan waiting for approval has nothing done yet, so it counts its steps as a plan under review does (PlanMap's `검토 · 8단계`). */}
+      {mission.nodes.length > 0 && mission.status === "planning" ? (
+        <span className="shrink-0 text-caption text-muted-foreground tabular-nums" data-mission-stat="steps">
+          {t("plan.steps", { count: total })}
+        </span>
+      ) : mission.nodes.length > 0 ? (
         <>
           <ProgressCells tones={missionHeadCells(mission)} fill={HEAD_FILL} size="head" className="max-w-(--size-pr-popover)" />
           <span className="shrink-0 text-caption text-muted-foreground tabular-nums" data-mission-stat="done">
@@ -225,11 +256,12 @@ function Head({ mission, actions }: { mission: Mission; actions: Actions }) {
           </span>
         </>
       ) : null}
-      {mission.strength ? (
-        <span className="shrink-0 text-caption text-muted-foreground" data-mission-stat="strength" data-mission-strength={mission.strength}>
-          {t("mission.head.strength", { strength: t(`mission.strength.${mission.strength}`) })}
-        </span>
-      ) : null}
+      {/* Where the results go and what the mission applies (PRD mission-destination D-18, D-50): a tag only while a node lands in the destination, the options in grey. */}
+      {mission.destination && landsInDestination(mission.nodes) ? <MissionDestinationTag branch={mission.destination} /> : null}
+      {/* The external tool whose agent conducts it (PRD hide-external-control B30, D-15), wherever the map is drawn: the mission screen, a detail panel, the Desk. */}
+      <ToolMark tool={mission.tool} className="max-w-2/5" />
+      {/* The head stays one line (B24): the options take what room is left and truncate, moving to a line of their own only when less than their least width is left. */}
+      <MissionOptionsLine options={options} className="min-w-(--size-mission-options-min) flex-1 basis-0" />
       {/* An end the Conductor was asked for says so until it closes the mission. */}
       {mission.end_asked && mission.conductor.present && missionOpen(mission) ? <span className="shrink-0 text-caption text-mission-hold" data-mission-end-asked="true">{t("mission.end.askedNote")}</span> : null}
       <span className="ml-auto flex shrink-0 items-center gap-xs">
@@ -275,182 +307,208 @@ function ReportLine({ mission }: { mission: Mission }) {
   );
 }
 
-type GraphCard = { key: string; node: MissionNode | null };
-
-function Graph({ mission, events, end, selected, onSelect, actions }: { mission: Mission; events: MissionEvent[] | null; end: number; selected: string | null; onSelect: (key: string) => void; actions: Actions }) {
-  const nodes = mission.nodes;
-  const graph = useMemo(() => {
-    const shown = new Set(nodes.map((node) => node.key));
-    const cards: GraphCard[] = [...nodes.map((node) => ({ key: node.key, node })), { key: REPORT, node: null }];
-    const byKey = new Map(cards.map((card) => [card.key, card]));
-    const depended = new Set(nodes.flatMap((node) => node.depends_on));
-    const blockers = (card: GraphCard): GraphCard[] => {
-      // Every node no other node waits on ends in the report.
-      if (!card.node) return nodes.filter((node) => !depended.has(node.key)).map((node) => byKey.get(node.key)!);
-      return card.node.depends_on.filter((key) => shown.has(key)).map((key) => byKey.get(key)!);
-    };
-    return layerDependencies(cards, (card) => card.key, blockers);
-  }, [nodes]);
-  const defects = useMemo(() => defectEdges(mission), [mission]);
-  const byKey = useMemo(() => new Map(nodes.map((node) => [node.key, node])), [nodes]);
-  // A pick keeps itself and every card one edge away lit, the defect edges included (B30).
-  const lit = selected ? neighbours([...graph.edges, ...defects], selected) : null;
-  const away = (edge: GraphEdge) => selected !== null && edge.from !== selected && edge.to !== selected;
-  const edgeLook = (edge: GraphEdge): EdgeLook => {
-    const from = byKey.get(edge.from);
-    const to = byKey.get(edge.to);
-    const dimmed = away(edge);
-    // A stack is the one purple dashed edge: the pull request below is the one above's base (B27).
-    if (from && to && to.base_pr != null && from.prs.some((pr) => pr.number === to.base_pr)) return { tone: "text-mission-review", dashed: true, dimmed };
-    // A line from a node at work is lit only while the mission is open; a cancelled mission's work stopped.
-    if (from && from.status === "working" && missionOpen(mission)) return { tone: "text-mission-working", dimmed };
-    return { tone: "text-border", dimmed };
-  };
-  // A defect a later node found is a red dashed edge back to the node it opened, until its line passes (B21).
-  const overlay: OverlayEdge[] = defects.map((edge) => ({ ...edge, look: { tone: "text-mission-failed", dashed: true, dimmed: away(edge) } }));
-  return (
-    <DependencyGraphView
-      graph={graph}
-      idOf={(card) => card.key}
-      flow="down"
-      gaps={{ layers: "--size-mission-layer-gap", nodes: "--size-mission-node-gap" }}
-      edgeLook={edgeLook}
-      overlay={overlay}
-      draw={(card) =>
-        card.node ? (
-          <NodeCard key={card.key} mission={mission} node={card.node} events={events} end={end} actions={actions} selected={selected === card.key} dimmed={lit !== null && !lit.has(card.key)} onSelect={() => onSelect(card.key)} />
-        ) : (
-          <ReportCard key={card.key} mission={mission} dimmed={lit !== null && !lit.has(REPORT)} />
-        )
-      }
-    />
-  );
-}
-
-/** A card's border and surface by its look (B26): finished work a faint green surface inside its plain border, never a green border, in main or not. */
-const LOOK_CARD: Record<NodeLook, string> = {
-  waiting: "border-dashed border-mission-waiting bg-transparent",
-  working: "border-mission-working ring-2 ring-mission-working/20",
-  done: "border-border bg-mission-done/10",
-  external: "border-dotted border-mission-waiting bg-transparent",
-  cancelled: "border-dashed border-mission-cancelled bg-transparent",
-  dropped: "border-dashed border-border bg-transparent",
-};
-
-/** A card someone has to look at wears the decision colour's border over its look (PRD mission-node-simple B2). */
-const ATTENTION_CARD = "border-mission-hold ring-2 ring-mission-hold/20";
-
 /**
- * A node on the map (PRD mission-node-simple D-07, B1-B3): its state's mark
- * and border, its title on one line that ends in an ellipsis (the whole
- * title on hover and in its accessible name) with Hide's mark when Hide
- * changed it last; a line holding its worker's agent mark, model and effort
- * as the panel's head draws them, how long it has taken and its worker's
- * plan as `n/m`; and a line
- * holding its pull requests' marks or a direct change's result, and after
- * them `! 나` or `! Conductor` when it waits on someone to look, its reason on
- * hover. A line with nothing to hold is not drawn. The Conductor's line shows
- * on hover only; its finish lines are the panel's. The
+ * A node on the map (PRD mission-node-simple D-07, B1-B3; PRD
+ * mission-destination D-51-D-55, B54-B60), five rows apart by one spacing
+ * token: its state's mark and its title on one line that ends in an ellipsis
+ * before anything else does, with Hide's mark when Hide changed it last; the
+ * band of what the operator does, its gate's `볼 것` and a merge that is
+ * theirs now; its worker's agent mark, model and how long it has taken, with
+ * its device when away as a tab standing on the card's top edge, never a
+ * cut chip in that row; a bar of one cell per step of how its work goes
+ * (done, being worked, or only planned) with the step being worked under it,
+ * or `계획 n단계 · 시작 전` before a worker starts; and under a hairline its
+ * bottom line: for a node that changes code where its branch goes, for one
+ * that does not its result, then `! 나` or `! Conductor` when it waits on
+ * someone to look, its reason on hover. A line with nothing to hold is not
+ * drawn. Hovering or focusing it shows the rest (`MissionNodeHover`); the
  * other agents checking it stand beside it as satellites tethered to its
  * right side. Pressing it picks it (B30).
  */
 function NodeCard({ mission, node, events, end, selected, dimmed, onSelect, actions }: { mission: Mission; node: MissionNode; events: MissionEvent[] | null; end: number; selected: boolean; dimmed: boolean; onSelect: () => void; actions: Actions }) {
   const { t } = useInterfaceTranslation();
   const look = nodeLook(mission, node);
-  const result = cardResult(node, mission.github_stale, t);
   const attention = openAttention(mission, node) ? attentionWords(node, t) : null;
+  // A place the plan has the operator look (PRD mission-human-gate D-06): ahead it is a tinted strip, reached it is the operator's turn, looked at it is grey with a check; a start gate once passed is the panel's alone (PRD node-presets D-09).
+  const gate = cardGate(node.gate);
+  // A merge the core says is the operator's now is the band's too (PRD mission-destination D-53); one ahead or done is the person on the branch line.
+  const mergeDue = node.merge?.state === "due";
+  const minute = useMinuteClock();
+  const long = gateWaitedLong(gate, minute);
+  // Only a card waiting on the operator is the operator's turn: a raised reason to them, an open gate, or a merge the core says is theirs now (PRD mission-destination B56); one waiting on the Conductor, or a gate or merge still ahead, reads as work in progress (B9).
+  const yours = (attention !== null && node.attention!.to === "operator") || gate?.state === "open" || mergeDue;
+  const warning = warningWords(mission, node, t);
   const hide = hideWords(mission, node, t);
   const satellites = satelliteLines(node.criteria);
   const word = markWord(node, look, t);
-  const worker = useNodeRun(node);
+  // What its worker does now (hide-private issue 680) and so how the card moves (`nodePace`): a resting worker cuts the ring into dashes and says what it waits on under the title, a sleeping one that it sleeps (B23); a stopped or absent one turns the card the stopped colour and says why; a working one needs no words.
+  const doing = nodeWork(mission, node);
+  const pace = nodePace(mission, node);
+  const doingLine = doing?.state === "waiting" || doing?.state === "asleep" ? nodeWorkWords(doing, t) : null;
+  const stopLine = useStopWords(doing);
+  const wait = nodeWait(node);
+  const waitLine = useWaitWords(wait);
+  // A worker's person's turn is the step's waiting reason, a key and what and where (PRD ask-human D-18, B25); the Conductor's row carries Done.
+  const escalationOf = useWorkerEscalation();
+  const human = node.status === "working" ? escalationOf(node)?.human ?? null : null;
+  const humanLine = human ? humanTurnText(t, human) : null;
+  const worker = useNodeRun(mission, node);
   const device = useMissionDeviceName(node.machine);
   const run = worker?.run ?? null;
-  const took = useNodeTimes(mission, node, events, end)?.took ?? null;
-  // The worker's plan is one number at the end of that line, never a line of its own.
-  const plan = run || took ? node.plan : null;
+  // How long it has been worked, `n째` while it runs and `n 걸림` once it ended (D-51, B58); a planned node has no time.
+  const times = useNodeTimes(mission, node, events, end);
+  // A stopped node counts how long it has stood since it stopped, not how long it ran (operator decision 2026-11-13).
+  const took = stopLine ? (stopLine.age ? t("mission.elapsed.stopped", { elapsed: stopLine.age }) : null) : times?.took ? t(times.running ? "mission.elapsed.running" : "mission.elapsed.total", { elapsed: times.took }) : null;
+  // How the node's work goes is one bar of cells under its title, from the worker's plan once it exists, else the Conductor's steps; its count is in the card's name, never a second number on the card.
+  const work = nodeSteps(node);
+  // Where its result goes (D-52), or for a node that changes no code what it found (D-54).
+  const branch = useMemo(() => branchLine(lineNode(node, mission.nodes), mission.destination ?? null), [node, mission.nodes, mission.destination]);
+  const result = branch ? null : resultLine(lineNode(node));
+  const waits = node.kind === "external";
+  const failed = failedVerdict(node);
   const titleText = (
-    <span className={cn("min-w-0 flex-1 truncate text-body font-semibold", (look === "external" || look === "cancelled" || look === "waiting") && "text-muted-foreground", look === "dropped" && "text-muted-foreground line-through")} title={node.line ? undefined : node.title}>
+    <span className={cn("min-w-0 flex-1 truncate text-body font-semibold", (look === "external" || look === "cancelled" || look === "waiting") && "text-muted-foreground", look === "dropped" && "text-muted-foreground line-through")} data-node-title="true">
       {node.title}
     </span>
   );
+  // The foot's right-end marks, one group: a warning, then the operator's turn or who a raised reason waits on. Short of
+  // room the warning's words give way, down to its icon, then a long wait's words; the tag's own word never does, and the
+  // group clips rather than cover the line's number. The card's name says each mark in full.
+  const marks = warning || gate?.state === "open" || attention ? (
+    <span className="flex min-w-0 items-center justify-end gap-x-xs overflow-hidden" data-node-foot-end="true">
+      {warning ? <NodeWarning words={warning} kinds={(node.warnings ?? []).map((item) => item.kind).join(" ")} /> : null}
+      {gate?.state === "open" && !attention ? (
+        <span className="flex items-center gap-x-xxs font-semibold text-mission-hold" data-node-gate-tag="open">
+          <span className="shrink-0">{t("agents.mark.turn")}</span>
+          {long ? <span className="min-w-0 shrink-[10] truncate font-normal text-muted-foreground" data-node-gate-long="true"> · {t("mission.gate.long")}</span> : null}
+        </span>
+      ) : null}
+      {attention ? (
+        <Hint label={attention.why}>
+          <span className={cn("flex items-center gap-x-xxs", yours ? "font-semibold text-mission-hold" : "text-muted-foreground")} data-node-attention-tag={node.attention!.reason}>
+            <span className="shrink-0">{yours ? t("agents.mark.turn") : attention.who}</span>
+            {long ? <span className="min-w-0 shrink-[10] truncate font-normal text-muted-foreground" data-node-gate-long="true"> · {t("mission.gate.long")}</span> : null}
+          </span>
+        </Hint>
+      ) : null}
+    </span>
+  ) : null;
   const card = (
-    <button
-      type="button"
-      onClick={onSelect}
+    <MissionGraphCard
+      node={node} look={look} word={word} yours={yours} selected={selected} dimmed={dimmed} onClick={onSelect} failed={failed}
+      pace={pace}
+      title={titleText}
+      accessory={hide ? <HideMark words={hide} /> : null}
+      tab={device ? <DeviceChip label={device} variant="remote" className="max-w-full rounded-b-none" /> : null}
+      data-node-attention={attention ? node.attention!.to : undefined}
       aria-label={[
         node.title,
         word,
         ...(node.kind === "external" && look !== "external" ? [t("mission.look.external")] : []),
         ...(run ? [run.text] : []),
         ...(device ? [device] : []),
-        ...(plan ? [t("plan.chip", { progress: planCount(plan) })] : []),
+        ...(took ? [took] : []),
+        ...(work ? [node.plan ? t("plan.chip", { progress: planCount(node.plan) }) : t("mission.steps.planned", { count: work.steps.length })] : []),
         ...node.prs.map((pr) => t("mission.attention.pr", { number: String(pr.number) })),
+        ...(branch ? [`${t("mission.foot.where")}: ${branchLineWords(branch, t)}`] : []),
+        ...(result ? [resultLineWords(result, t)] : []),
         ...(attention ? [`${t("mission.attention")} · ${attention.who} · ${attention.why}`] : []),
+        ...(gate ? [`${t("mission.gate.title")} · ${gate.look}${gate.state === "passed" ? ` · ${t("mission.gate.passed")}` : gate.state === "open" ? ` · ${t("agents.mark.turn")}` : ""}${long ? ` · ${t("mission.gate.long")}` : ""}`] : []),
+        ...(humanLine ? [`${t("agents.human.mark")} · ${humanLine}`] : []),
+        ...(stopLine ? [stopLine.full] : []),
+        ...(waitLine ? [waitLine.full] : []),
+        ...(warning ? warning.full : []),
         ...(hide ? [t("mission.hide.mark", { what: hide })] : []),
       ].join(" · ")}
-      aria-pressed={selected}
-      data-mission-node={node.key}
-      data-node-status={node.status}
-      data-node-look={look}
-      data-node-attention={attention ? node.attention!.to : undefined}
-      data-node-blocked={node.blocked ?? undefined}
-      data-node-dimmed={dimmed || undefined}
-      className={cn(
-        "flex w-(--size-mission-node) min-w-0 flex-col gap-xxs rounded-md border bg-card px-sm py-xs text-left outline-none transition-opacity hover:bg-accent focus-visible:ring-1 focus-visible:ring-ring",
-        attention ? ATTENTION_CARD : LOOK_CARD[look],
-        // Outside is the node's kind: the dotted border stays in whatever state it ends (B19).
-        node.kind === "external" && "border-dotted",
-        selected && "outline-2 outline-offset-2 outline-primary",
-        dimmed && "opacity-(--opacity-dimmed)",
-      )}
     >
-      <span className="flex min-w-0 items-center gap-xs">
-        <MissionNodeMark look={look} label={word} />
-        {/* The Conductor's last line is the title's hover, under the whole title, never a line of the card; on the title alone, so it never stacks on the `!` or Hide mark hints (operator decision 2026-11-02). */}
-        {node.line ? <Hint label={`${node.title}\n${node.line}`} reveals contentClassName="max-w-(--size-mission-node)">{titleText}</Hint> : titleText}
-        {hide ? <HideMark words={hide} /> : null}
-      </span>
-      {/* The worker and its device stay together; at a large text size a crowded row wraps time and progress below them. Results keep their own row. */}
-      {run || took || device ? (
-        <span className={cn("flex min-w-0 items-center gap-xxs text-caption text-muted-foreground", device && "flex-wrap")} data-node-run={run?.from ?? "none"}>
-          {run || device ? (
-            <span className="flex min-w-0 max-w-full items-center gap-xxs">
-              {worker?.agent ? <AgentMark kind={worker.agent} /> : null}
-              {run ? <RunText run={run} /> : null}
-              {device ? <>{run ? <span aria-hidden="true">·</span> : null}<MissionDevice name={device} className="max-w-[calc(var(--size-mission-node)/3)] shrink-0" /></> : null}
-            </span>
+      {device ? <span aria-hidden="true" className="absolute inset-y-xs left-0 w-xs rounded-r-xs bg-device-remote" data-node-remote="true" /> : null}
+      {/* What the operator does on this node, right under its title (D-51): the gate's strip and a merge that is theirs now, read without a hover. */}
+      <OperatorBand gate={gate} mergeDue={mergeDue} />
+      {/* Its worker: the agent's mark, the model and how long; effort, profile and the device's full name are the hover's (D-51), the device away the card's tab. A waiting node has no worker and says `⏳ 기다림` in its place (PRD node-presets D-13). */}
+      {waits || worker?.agent || worker?.model || took ? (
+        <span className="flex min-w-0 items-center gap-xxs text-caption text-muted-foreground" data-node-run={waits ? "waiting" : (run?.from ?? "none")}>
+          {waits ? <WaitingMark /> : null}
+          {worker?.agent ? <span className="flex shrink-0" aria-hidden="true" data-node-worker-mark="true"><AgentMark kind={worker.agent} profile={run?.profile} /></span> : null}
+          {worker?.model ? <span className="min-w-0 truncate text-subtle-foreground" data-node-model={run?.from}>{worker.model}</span> : null}
+          {run?.mark ? <span className="shrink-0" data-run-planned="true">{run.mark}</span> : null}
+          {took ? <span className="shrink-0 whitespace-nowrap" data-node-took={stopLine ? "stopped" : times?.running ? "running" : "total"}>{worker?.model || worker?.agent || waits ? "· " : ""}{took}</span> : null}
+        </span>
+      ) : null}
+      {doingLine ? (
+        <span className="min-w-0 truncate text-caption text-muted-foreground" data-node-work={doing?.state}>
+          {doingLine}
+        </span>
+      ) : null}
+      {/* A worker stopped with nothing to wait on, or no worker at all, says why in the stopped colour, cut when it runs long; how long ago is the worker row's (`멈춘 지 n분`). Its Conductor, not the operator, is told (operator decisions 2026-11-11, 2026-11-13). */}
+      {stopLine ? (
+        <span className="min-w-0 truncate text-caption text-mission-stopped" title={stopLine.full} data-node-work={doing?.state}>
+          {stopLine.why}
+        </span>
+      ) : null}
+      {/* A node its Conductor set waiting, by its own hold or the mission's delay, says why in grey, cut when it runs long, and keeps how long it still waits whole at the line's end (operator decision 2026-11-11; PRD letters-missions-simplify B21). */}
+      {wait && waitLine ? <NodeWaitLine wait={wait} words={waitLine} /> : null}
+      {humanLine ? (
+        <span className="flex min-w-0 items-center gap-xxs text-caption text-warning" title={humanLine} data-node-human-turn="true">
+          <KeyRoundIcon aria-hidden="true" className="size-(--size-icon-sm) shrink-0" />
+          <span className="min-w-0 truncate">{humanLine}</span>
+        </span>
+      ) : null}
+      {work ? (
+        <span className="flex min-w-0 flex-col gap-xxs" data-node-steps={work.source}>
+          <ProgressCells tones={pacedSteps(work.steps, pace)} fill={STEP_FILL} size="head" className="h-(--size-mission-step-h) flex-none" />
+          {work.now && node.status === "working" ? (
+            <span className="min-w-0 truncate text-caption text-subtle-foreground" data-node-steps-now={pace === "stopped" ? "stopped" : "true"}>{t(pace === "stopped" ? "mission.steps.stoppedAt" : "mission.steps.now")} <span className="font-medium text-foreground">{work.now}</span></span>
           ) : null}
-          {took || plan ? (
-            <span className="flex shrink-0 items-center gap-xxs">
-              {took ? <span data-node-took="true">{run || device ? "· " : ""}{took}</span> : null}
-              {plan ? <span className="font-mono tabular-nums" data-node-plan-count="true">{run || took || device ? "· " : ""}{planCount(plan)}</span> : null}
-            </span>
+          {work.source === "plan" && node.status === "planned" ? (
+            <span className="min-w-0 truncate text-caption text-muted-foreground" data-node-steps-waiting="true">{t("mission.steps.planned", { count: work.steps.length })} · {plannedWait(mission, node, t) ?? t("mission.steps.notStarted")}</span>
           ) : null}
         </span>
       ) : null}
-      {result || attention ? (
-        <span className="flex min-w-0 items-center gap-x-xs text-caption text-muted-foreground" data-node-row="true">
-          {/* The marks keep one line; the ones past the card's width leave it rather than overlap, a branch truncates, and `!` keeps its place at the right end (B30). */}
-          <span className="flex h-lh min-w-0 flex-1 flex-wrap items-center gap-x-xs overflow-hidden">{result}</span>
-          {attention ? (
-            <Hint label={attention.why}>
-              <span className="shrink-0 font-semibold text-mission-hold" data-node-attention-tag={node.attention!.reason}>! {attention.who}</span>
-            </Hint>
-          ) : null}
+      {/* The bottom line, under a hairline with the rows' one spacing above its words (D-51): the branch line for a change or a waiting node, the result line for a general node (D-52, D-54; PRD node-presets D-08). `⚠`, 내 차례 and `!` stand at the right end of its first row and take only the width the line leaves there, their words cut before the line's number or icon ever is (D-56). With neither line, the marks alone stand at the right end; with nothing at all, there is no foot. */}
+      {branch || result || marks ? (
+        <span className={cn("min-w-0 border-t border-border pt-xs text-caption text-muted-foreground", branch ? "block" : "flex items-center justify-end gap-x-xs")} data-node-foot="true">
+          {branch ? <BranchLineView line={branch} end={marks} /> : (
+            <>
+              {result ? <ResultLineView line={result} className="flex-1" /> : null}
+              {marks}
+            </>
+          )}
         </span>
       ) : null}
-    </button>
+    </MissionGraphCard>
+  );
+  const hovered = (
+    <MissionNodeHover mission={mission} node={node} facts={{ look, word, pace, failed, doing: doingLine ?? stopLine?.why ?? null, took, worker: run ? { agent: worker?.agent ?? null, run, device } : null, work, branch, result, gate, mergeDue }}>
+      {card}
+    </MissionNodeHover>
   );
   // The card and its satellites are one box to the layout, the card centred in it, so edges meet the card's middle.
   // An empty column as wide as the satellites' keeps the card in the middle of the box.
-  if (satellites.length === 0) return <div data-dependency-node={node.key} className="flex">{card}</div>;
+  if (satellites.length === 0) return <div data-dependency-node={node.key} className="flex">{hovered}</div>;
   return (
     <div data-dependency-node={node.key} className="grid grid-cols-[var(--spacing-xl)_auto_var(--spacing-xl)] items-center">
       <span aria-hidden="true" />
-      {card}
+      {hovered}
       {/* 노드 상세 opens the node's panel; it never shuts the panel already open, as a second press on the card does. */}
       <Satellites mission={mission} lines={satellites} dimmed={dimmed} onSelect={() => !selected && onSelect()} actions={actions} />
     </div>
+  );
+}
+
+/**
+ * A node's warning (hide-private issue 552): its worker looks stuck, and
+ * Hide told the Conductor, never the operator. The warning colour and its
+ * triangle beside the first warning's short word; each warning in full on
+ * hover, which the card's accessible name says too.
+ */
+function NodeWarning({ words, kinds }: { words: { short: string; full: string[] }; kinds: string }) {
+  return (
+    <Hint label={words.full.join("\n")}>
+      <span aria-hidden="true" className="flex min-w-(--size-icon-sm) shrink-[100] items-center gap-xxs overflow-hidden font-semibold text-warning" data-node-warning={kinds}>
+        <TriangleAlertIcon className="size-(--size-icon-sm) shrink-0" />
+        <span className="min-w-0 truncate">{words.short}</span>
+      </span>
+    </Hint>
   );
 }
 
@@ -466,47 +524,25 @@ function HideMark({ words }: { words: string }) {
   );
 }
 
-/** What a card names as its result (B1): every pull request's mark in the order the node got them, else a direct change's commit on main or its branch. */
-function cardResult(node: MissionNode, stale: boolean, t: TFunction<"translation">): ReactNode {
-  // An outside node's pull request or branch carries `↗` in every state (B19).
-  if (node.kind === "external" && node.external) {
-    return (
-      <span className="flex min-w-0 shrink items-center gap-xxs font-mono text-caption text-muted-foreground" data-node-outside="true">
-        <span aria-hidden="true" className="shrink-0">↗</span>
-        {"pr" in node.external
-          ? <MissionPrMark number={node.external.pr} state={node.pr_state} stale={stale} data-node-pr={node.external.pr} />
-          : <span className="truncate" title={node.external.branch} data-node-branch={node.external.branch}>{node.external.branch}</span>}
-      </span>
-    );
-  }
-  // Each pull request carries the one PR mark, its state's icon and colour, as the panel does; one Hide never read keeps the muted icon (B18).
-  if (node.prs.length > 0) return <>{node.prs.map((pr) => <MissionPrMark key={pr.number} number={pr.number} state={pr.state} stale={stale} data-node-pr={pr.number} />)}</>;
-  const result = nodeResult(node);
-  switch (result?.kind) {
-    case "commit":
-      return <span className="shrink-0 font-mono text-caption text-muted-foreground" title={result.commit} data-node-commit={result.commit}>{t("mission.result.main", { commit: shortCommit(result.commit) })}</span>;
-    case "branch":
-      return (
-        <span className="flex min-w-0 shrink items-center gap-xxs text-caption text-muted-foreground" data-node-branch={result.branch}>
-          <GitBranchIcon aria-hidden="true" className="size-(--size-pr-icon) shrink-0" />
-          <span className="truncate font-mono" title={result.branch}>{result.branch}</span>
-        </span>
-      );
-    default:
-      return null;
-  }
-}
-
 function ReportCard({ mission, dimmed }: { mission: Mission; dimmed: boolean }) {
   const { t } = useInterfaceTranslation();
   const stack = stackWaiting(mission);
   const note = mission.status === "done" ? t("mission.report.done") : mission.status === "merge_wait" && stack > 0 ? t("mission.report.stack") : mission.status === "cancelled" ? t("mission.cancelled") : t("mission.report.waiting");
   const look: NodeLook = mission.status === "done" ? "done" : mission.status === "cancelled" ? "cancelled" : "waiting";
-  return (
-    <div data-dependency-node={REPORT} data-mission-report={mission.status} className={cn("flex w-(--size-mission-node) items-center justify-center gap-xs rounded-xl border px-md py-sm transition-opacity", LOOK_CARD[look], dimmed && "opacity-(--opacity-dimmed)")}>
-      <MissionNodeMark look={look} label={note} />
-      <span className="text-body font-semibold">{t("mission.report")}</span>
-      <span className="text-caption text-muted-foreground">{note}</span>
-    </div>
-  );
+  return <MissionGraphReport status={mission.status} note={note} look={look} dimmed={dimmed} />;
 }
+
+/** A stopped node's words (operator decision 2026-11-13): why it stopped, its worker's cause or no worker, for its line, and how long ago for its worker row; `full` is the whole sentence, the agent's own line included, for the hover and the card's name. */
+function useStopWords(work: MissionNodeWork | null): { why: string; age: string | null; full: string } | null {
+  const { t } = useInterfaceTranslation();
+  const stopped = work?.state === "stopped" || work?.state === "no_worker" ? work : null;
+  const age = useElapsed(stoppedSince(stopped));
+  if (!stopped) return null;
+  const why = stopped.state === "stopped" ? stopCauseWords(stopped.cause, t, true) : t("mission.work.stop.noWorker");
+  return {
+    why: nodeWorkWords(stopped, t),
+    age,
+    full: age ? t("mission.work.stoppedFull", { age, why }) : t("mission.work.stopped", { why }),
+  };
+}
+

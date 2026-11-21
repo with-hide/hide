@@ -1,0 +1,26 @@
+{
+  "schema": 1,
+  "file": "~/.config/hide-android/release.env",
+  "keys": {
+    "HIDE_ANDROID_UPLOAD_KEYSTORE": {
+      "requirement": "required",
+      "shape": "^/.+\\.p12$",
+      "note": "The upload keystore (PKCS12) on the build machine, outside the checkout; jarsigner reads it by path, and the command checks its owner and mode and never copies it."
+    },
+    "HIDE_ANDROID_UPLOAD_KEY_ALIAS": {
+      "requirement": "required",
+      "shape": "^[A-Za-z0-9_-]{1,64}$",
+      "note": "The alias of the upload key inside that keystore."
+    },
+    "HIDE_ANDROID_UPLOAD_PASSWORD": {
+      "requirement": "required",
+      "shape": "^[!-~]{16,128}$",
+      "note": "The keystore's password, which is also the key's (PKCS12 has one); it reaches keytool and jarsigner through a pipe only, never an argument, the environment or a file."
+    },
+    "HIDE_ANDROID_PLAY_SERVICE_ACCOUNT": {
+      "requirement": "upload",
+      "shape": "^/.+\\.json$",
+      "note": "The Play Console service account's key file (JSON), with release rights on the testing tracks only; only an upload reads it (HIDE_ANDROID_NO_UPLOAD=1 does not), and its private key reaches openssl through a pipe only."
+    }
+  }
+}

@@ -1,33 +1,40 @@
 import { AgentRecordTitle } from "./components/agent-record-title";
 import { ChevronDownIcon, ChevronRightIcon, EllipsisIcon, FileTextIcon, GitBranchIcon, PlusIcon, ServerIcon, StarIcon } from "lucide-react";
-import { Fragment, memo, useLayoutEffect, useMemo, useRef, useState, type KeyboardEvent, type ReactNode } from "react";
+import { Fragment, memo, useContext, useLayoutEffect, useMemo, useRef, useState, type CSSProperties, type KeyboardEvent, type ReactNode } from "react";
 import type { TFunction } from "i18next";
 import type { Actions } from "./actions";
 import { deviceScope } from "./agentScope";
 import { AgentRowMark } from "./AgentRowMark";
 import { useAgentLogosShown } from "./agentLogoMode";
 import { agentProductName } from "./agentAdapters";
-import { backgroundTail, recordWords, forkLabel, leadWord, lineParts, markTone, markWords, rowDimmed, rowLine, rowSentence, stateLine, type LineParts } from "./agentRow";
+import { agentWithProfile, leftTail, recordWords, forkLabel, leadWord, lineParts, markTone, markWords, rowDimmed, rowLine, rowSentence, stateLine, type LineParts } from "./agentRow";
 import { AgentForkMark } from "./components/fork-mark";
 import { RevisitStar, starred } from "./components/revisit-mark";
-import { askParts, TreeChevron, TreeRails, type TreePlace } from "./components/agent-tree";
+import { AskLine, askParts, DecisionViewsCount, TreeChevron, TreeRails, type TreePlace } from "./components/agent-tree";
+import { SubagentTreeRow } from "./components/subagent-row";
+import { HumanTurnDone, HumanTurnLine } from "./components/human-turn";
 import { childrenOf } from "./components/agent-tree-popover";
 import { Elapsed } from "./components/elapsed";
 import { AgentPrMark } from "./components/pr-mark";
 import { MissionChip } from "./components/mission-chip";
+import { SidebarMissionRow, useEveryDeviceMissionAsks, useMissionAsks } from "./components/sidebar-mission-row";
+import { SidebarAutomationRow, useEveryDeviceAutomationAsks } from "./components/sidebar-automation-row";
+import { automationOwnAsks, missionOwnAsks, ownAskKey } from "./ownAsks";
+import { DeviceChip } from "./components/device-chip";
 import { RowLineText } from "./components/row-line-text";
 import { StatusMark } from "./components/status-mark";
 import { Button } from "./components/ui/button";
+import { RowButton } from "./components/ui/row-button";
 import { Keycap } from "./components/ui/keycap";
 import { ToggleGroup, ToggleGroupItem } from "./components/ui/toggle-group";
 import { EntryContextMenu, EntryDropdown, type MenuEntry } from "./components/entry-menu";
 import { PartsMark } from "./components/pr-mark";
 import { archivedProject, archivedRows, archiveOffer } from "./archive";
-import { SidebarProjectFilter, useSidebarProject } from "./SidebarProjectFilter";
+import { SidebarProjectFilter, ToolProjectFilter, useSidebarProject } from "./SidebarProjectFilter";
 import { prMarkParts } from "./prMark";
 import { Hint } from "./components/ui/tooltip";
 import { deviceConnected, frontDeviceId } from "./devices";
-import { hideAiWords, homeTurnLine } from "./hideAiOrigin";
+import { automationNames, hideAiWords, homeTurnLine, taskLine } from "./hideAiOrigin";
 import { useInterfaceTranslation } from "./i18n/client";
 import { cn } from "./lib/utils";
 import { numberedPanes, numberOf } from "./numbering";
@@ -38,21 +45,31 @@ import { checkoutPathOfPane, sessionTreeLines } from "./sessionTree";
 import { sessionOfAgent } from "./sessionWork";
 import { commandLabel } from "./shortcutLabels";
 import { revealRow, sidebarFocusPane } from "./sidebarFocus";
-import type { SidebarTreeLine } from "./sidebarTree";
-import { catalogWorkspaces, localDeviceId, SIDEBAR_LENSES, type AgentRow, type TaskView } from "./snapshot";
+import { siblingsShown, type SidebarTreeLine } from "./sidebarTree";
+import { catalogWorkspaces, listedCatalog, localDeviceId, SIDEBAR_LENSES, type AgentRow, type TaskView } from "./snapshot";
 import { useShellStore } from "./store";
-import { drawnTasks, RAISED_TASK_GROUPS, TASK_GROUPS, taskFoldKey, taskList, taskSections, type ArchivedEntry, type TaskEntry, type TaskGroup, type TaskGroupState } from "./taskList";
+import { drawnTasks, elsewhereTasks, rowCount, TASK_GROUPS, taskFoldKey, taskList, taskSections, type ArchivedEntry, type TaskEntry, type TaskGroup, type TaskGroupState } from "./taskList";
 import { useUiStore } from "./ui";
-import type { TaskState } from "./agentScope";
+import { InToolCell, ToolLabel } from "./components/tool-mark";
+import type { TaskState, ToolCell } from "./agentScope";
+import { toolProjectChoice, toolTaskList } from "./toolCells";
 
 const NO_FOLDS: string[] = [];
 const NO_PANES: ReadonlySet<string> = new Set();
+/** A mission row's mark stands on a task row's mark column, past the chevron's lane. */
+const MISSION_INSET = "calc(var(--size-lineage-chevron) + var(--spacing-xs))";
 /** A row's second line by the task's state: a question and a block are the operator's turn, both in the warning colour (B8; status-marks B32). */
 const LINE_TONE: Partial<Record<TaskState, string>> = { needs_you: "text-warning", blocked: "text-warning" };
 
+/** A group's name: in a tool's cell 내 차례 is the tool's turn to answer and 읽을 것 is what it finished. */
+function groupLabel(state: TaskGroupState, tool: boolean, t: TFunction<"translation">): string {
+  return tool && (state === "needs_you" || state === "done") ? t(`taskLens.tool.group.${state}`) : t(`taskLens.group.${state}`);
+}
+
 /**
- * The sidebar's 프로젝트 | 태스크 switch (PRD sidebar-task-lens B1, B39):
- * under the head, right above the list. ⇧⌘B turns it.
+ * The sidebar's 프로젝트 | 태스크 | PR switch (PRD sidebar-task-lens B1, B39):
+ * under the head, right above the list, a device's cell's and a tool's
+ * alike, with one stored choice. ⇧⌘B turns it.
  */
 export function SidebarLensSwitch({ actions }: { actions: Actions }) {
   const { t } = useInterfaceTranslation();
@@ -95,13 +112,22 @@ export function TaskLens({ actions }: { actions: Actions }) {
   // Lineage crosses devices, so a row's children are read from every device's agents.
   const agents = useMemo(() => everyPaneAgent(localAgents, rest?.status?.remote), [localAgents, rest?.status?.remote]);
   const byPane = useMemo(() => agentsByPane(agents), [agents]);
-  const projects = useMemo(() => catalogWorkspaces(rest), [rest]);
+  // A run in an automation's own folder stands under no project (PRD automations B30).
+  const projects = useMemo(() => listedCatalog(rest), [rest]);
   const archived = useMemo(() => {
     const rows = archivedRows(rest, deviceId);
     return filter ? rows.filter((row) => archivedProject(row, catalogWorkspaces(rest))?.id === filter.workspace_id) : rows;
   }, [rest, deviceId, filter]);
-  const list = useMemo(() => taskList(scope?.tasks, byPane, projects, view, archived), [scope?.tasks, byPane, projects, view, archived]);
-  const noProject = rest !== null && projects.every((project) => project.is_home || project.device_id !== deviceId);
+  // A mission that is its own Needs You item stands in 내 차례 as it does in the 프로젝트 list, counted with the tasks.
+  // 내 차례 lists every connected device's tasks and missions, each other device's named on its row, unless a project narrows the list.
+  const ownAsks = useMissionAsks(deviceId, filter?.workspace_id ?? null);
+  const everyAsk = useEveryDeviceMissionAsks(deviceId);
+  // An automation stopped for a person stands in 내 차례 beside them (PRD automations B23); it is no project's, so a project filter leaves it out.
+  const everyAutomation = useEveryDeviceAutomationAsks(deviceId);
+  const asks = useMemo(() => (filter ? missionOwnAsks(ownAsks) : [...missionOwnAsks(everyAsk), ...automationOwnAsks(everyAutomation)]), [filter, ownAsks, everyAsk, everyAutomation]);
+  const elsewhere = useMemo(() => (filter ? [] : elsewhereTasks(rest?.navigator?.devices, deviceId, (id) => deviceConnected(rest, id), (id) => machineName(rest?.navigator?.devices, id, t))), [filter, rest, deviceId, t]);
+  const list = useMemo(() => taskList(scope?.tasks, deviceId, byPane, projects, view, archived, asks, elsewhere), [scope?.tasks, deviceId, byPane, projects, view, archived, asks, elsewhere]);
+  const noProject = rest !== null && projects.every((project) => project.device_id !== deviceId);
   const unresponsive = rest !== null && !connected ? (rest.navigator?.devices?.find((device) => device.id === deviceId) ? machineName(rest.navigator?.devices, deviceId, t) : deviceId) : null;
   return (
     <div className="flex min-h-0 min-w-0 flex-1 flex-col" data-task-lens={view}>
@@ -118,6 +144,48 @@ export function TaskLens({ actions }: { actions: Actions }) {
       ) : null}
       {rest === null || !scope ? <TaskSkeleton /> : noProject ? <NoProject actions={actions} /> : list.total === 0 && list.groups.length === 0 && list.resting.length === 0 && list.cleanup.length === 0 && list.archived.length === 0 ? <NoTasks actions={actions} /> : (
         <TaskGroups list={list} view={view} showProject={view === "status" && !filter} byPane={byPane} agents={agents} folds={folds} focusedPane={inWorkspace ? focusedPane : null} disabled={!connected} actions={actions} />
+      )}
+    </div>
+  );
+}
+
+/**
+ * A tool's cell's 태스크 list (PRD hide-external-control B40, B42, B45;
+ * operator decision 2026-11-15): the work the tool keeps, by state or by
+ * project under the same `상태 | 프로젝트` switch and stored choice as the
+ * operator's list, the state view's first group what waits on the tool's
+ * answer, then 작업 중 and 끝남. The project chip narrows it on the same
+ * stored choice, read for the tool (`ToolProjectFilter`). A task on another
+ * device names it on its row; a cell with no work says so. The operator
+ * answers in a row's pane from here as anywhere (B43).
+ */
+export function ToolTaskLens({ tool, actions }: { tool: ToolCell; actions: Actions }) {
+  const { t } = useInterfaceTranslation();
+  const rest = useShellStore((s) => s.rest);
+  const localAgents = useShellStore((s) => s.agents);
+  const view: TaskView = rest?.ui_state?.task_view ?? "status";
+  const folds = rest?.ui_state?.sessions_expanded_agent_pane_ids ?? NO_FOLDS;
+  const inWorkspace = useUiStore((s) => s.screen?.kind === "workspace" && !s.overviewOpen);
+  const focusedPane = useShellStore((s) => s.focusedPaneId);
+  const agents = useMemo(() => everyPaneAgent(localAgents, rest?.status?.remote), [localAgents, rest?.status?.remote]);
+  const byPane = useMemo(() => agentsByPane(agents), [agents]);
+  const chosen = toolProjectChoice(rest, tool);
+  const list = useMemo(() => toolTaskList(rest, tool, byPane, (id) => machineName(rest?.navigator?.devices, id, t), view, chosen), [rest, tool, byPane, t, view, chosen]);
+  // A project group holds its own resting and cleanup rows; the state view holds them under every group.
+  const count = list.groups.reduce((sum, group) => sum + rowCount(group.bands) + group.resting.length + group.cleanup.length, 0) + list.resting.length + list.cleanup.length;
+  return (
+    <div className="flex min-h-0 min-w-0 flex-1 flex-col" data-task-lens={view} data-tool-cell={tool.connection}>
+      <div className="flex shrink-0 items-center gap-xs px-md py-xs text-micro text-muted-foreground">
+        <ToolProjectFilter tool={tool} chosen={chosen} actions={actions} />
+        <span className="min-w-0 flex-1 truncate" data-task-count={count}>{t("taskLens.count", { count })}</span>
+        <ViewSwitch view={view} actions={actions} />
+      </div>
+      {count === 0 ? (
+        <NoTasks actions={actions} tool />
+      ) : (
+        <InToolCell.Provider value={true}>
+          <TaskGroups list={list} view={view} showProject={view === "status" && !chosen} byPane={byPane} agents={agents} folds={folds} focusedPane={inWorkspace ? focusedPane : null} disabled={false} actions={actions} />
+        </InToolCell.Provider>
       )}
     </div>
   );
@@ -153,12 +221,17 @@ function TaskSkeleton() {
   );
 }
 
-function NoTasks({ actions }: { actions: Actions }) {
+/**
+ * An empty 태스크 list: a device's offers a new agent; a tool's says in its
+ * words that the tool keeps nothing (B42), since what the operator starts is
+ * never the tool's work.
+ */
+function NoTasks({ actions, tool = false }: { actions: Actions; tool?: boolean }) {
   const { t } = useInterfaceTranslation();
   return (
-    <div className="flex flex-col items-start gap-sm px-md py-md text-caption text-muted-foreground" data-tasks-empty="true">
-      <p>{t("taskLens.empty")}</p>
-      <Button variant="outline" size="sm" onClick={() => actions.openStartPanel()} data-tasks-new-agent="true"><PlusIcon />{t("taskLens.newAgent")}</Button>
+    <div className="flex flex-col items-start gap-sm px-md py-md text-caption text-muted-foreground" data-tasks-empty="true" data-tool-cell-empty={tool ? "true" : undefined}>
+      <p>{tool ? t("taskLens.tool.empty") : t("taskLens.empty")}</p>
+      {tool ? null : <Button variant="outline" size="sm" onClick={() => actions.openStartPanel()} data-tasks-new-agent="true"><PlusIcon />{t("taskLens.newAgent")}</Button>}
     </div>
   );
 }
@@ -184,6 +257,7 @@ const TaskGroups = memo(function TaskGroups({ list, view, showProject, byPane, a
   const [shownAll, setShownAll] = useState<ReadonlySet<string>>(NO_PANES);
   // The resting and cleanup folds open in place for this page only (B5); the
   // page keeps them, so the ⌥n numbers read the same drawn order.
+  const tool = useContext(InToolCell);
   const foldsOpen = useUiStore((s) => s.taskFoldsOpen);
   const toggleFold = useUiStore((s) => s.toggleTaskFold);
   const focusedRestFold = useMemo(() => {
@@ -205,8 +279,9 @@ const TaskGroups = memo(function TaskGroups({ list, view, showProject, byPane, a
   // An ⌥ hold numbers the task rows top to bottom, nine at most, and ⌥n opens that row (electron-digit-shortcuts-hints D-02).
   const numbered = useUiStore((s) => s.hint === "agents");
   const numbers = numbered ? numberedPanes(drawnTasks(shown).map(({ agent }) => agent.pane_id)) : null;
-  const treesOf = (entries: TaskEntry[]) => entries.map((entry) => ({ entry, lines: sessionTreeLines(entry.agent, byPane, opened, shownAll) }));
-  const sections = shown.sections.map(({ group, resting, cleanup, archived }) => ({ group, bands: group.bands.map((band) => ({ state: band.state, trees: treesOf(band.entries) })), resting: treesOf(resting), cleanup: treesOf(cleanup), archived }));
+  const siblings = useShellStore((s) => siblingsShown(s.rest));
+  const treesOf = (entries: TaskEntry[]) => entries.map((entry) => ({ entry, lines: sessionTreeLines(entry.agent, byPane, opened, shownAll, siblings) }));
+  const sections = shown.sections.map(({ group, resting, cleanup, archived }) => ({ group, bands: group.bands.map((band) => { const trees = treesOf(band.entries); return { state: band.state, trees, rows: band.rows.map((row) => (row.kind === "ask" ? row : { kind: "task" as const, tree: trees[band.entries.indexOf(row.entry)]! })) }; }), resting: treesOf(resting), cleanup: treesOf(cleanup), archived }));
   const restingTrees = treesOf(shown.resting);
   const cleanupTrees = treesOf(shown.cleanup);
   const drawn = new Set([...sections.flatMap(({ bands, resting, cleanup }) => [...bands.flatMap((band) => band.trees), ...resting, ...cleanup]), ...restingTrees, ...cleanupTrees]
@@ -230,39 +305,44 @@ const TaskGroups = memo(function TaskGroups({ list, view, showProject, byPane, a
     <TaskTree key={entry.card.root} entry={entry} lines={lines} byPane={byPane} opened={opened} selected={selected} number={numbers ? numberOf(numbers, entry.agent.pane_id) : null} showProject={showProject} disabled={disabled} actions={actions} onShowAll={showAll} />
   ));
   const archivedList = (entries: ArchivedEntry[]) => entries.map((entry) => <ArchivedRow key={entry.row.id} entry={entry} showProject={showProject} disabled={disabled} actions={actions} />);
-  const drawSection = ({ group, bands, resting, cleanup, archived }: (typeof sections)[number]) => (
-    <section key={group.key} data-task-group={group.state ?? group.project?.id ?? ""} aria-label={groupName(group, t)}>
-      <GroupHead group={group} />
+  // In 상태별 a section draws no box of its own, so its head sticks beside the
+  // heads of the groups above it rather than leaving with its rows: each head
+  // stacks under the ones already passed, and pressing one goes back to its rows.
+  const drawSection = ({ group, bands, resting, cleanup, archived }: (typeof sections)[number], stack: number) => (
+    <section key={group.key} className={view === "status" ? "contents" : undefined} data-task-group={group.state ?? group.project?.id ?? ""} aria-label={groupName(group, tool, t)}>
+      <GroupHead group={group} stack={stack} />
       {bands.map((band) => (
         <Fragment key={band.state}>
           {view === "project" ? <BandHead state={band.state} /> : null}
-          <ul className="flex min-w-0 flex-col" aria-label={view === "project" ? t(`taskLens.group.${band.state}`) : undefined} data-task-band-list={view === "project" ? band.state : undefined}>{rows(band.trees)}</ul>
+          <ul className="flex min-w-0 flex-col" aria-label={view === "project" ? groupLabel(band.state, tool, t) : undefined} data-task-band-list={view === "project" ? band.state : undefined}>
+            {band.rows.map((row) => (row.kind === "ask"
+              ? row.own.kind === "mission"
+                ? <SidebarMissionRow key={ownAskKey(row.own)} ask={row.own.ask} inset={MISSION_INSET} actions={actions} place={showProject} data-task-focus="row" />
+                : <SidebarAutomationRow key={ownAskKey(row.own)} ask={row.own.ask} inset={MISSION_INSET} actions={actions} data-task-focus="row" />
+              : rows([row.tree])[0]))}
+          </ul>
         </Fragment>
       ))}
       {view === "project" ? <Folds group={group} resting={resting} cleanup={cleanup} archived={archived} open={openFolds} onToggle={toggleFold} rows={rows} archivedRows={archivedList} /> : null}
     </section>
   );
-  // 상태별 holds 내 차례 and 읽을 것 still above the rest, like the projects
-  // tree's raised Needs You and Done: reading one row after another never
-  // scrolls them away. Up to half the height, past which they scroll on their
-  // own; with nothing under them they are the whole list.
-  const raised = view === "status" ? sections.filter(({ group }) => group.state !== null && RAISED_TASK_GROUPS.has(group.state)) : [];
-  const below = sections.filter((section) => !raised.includes(section));
-  const held = raised.length > 0 && (below.length > 0 || list.resting.length + list.cleanup.length + list.archived.length > 0);
-  // The arrow keys move through both parts as one.
+  // One list scrolls everything: 내 차례 and 읽을 것 are its first sections, like the
+  // projects tree's Needs You and Done, and scroll away with the rest. Their heads
+  // stay, stacked under the ones already passed, so a scrolled list still says what
+  // is above it and pressing a head goes back to its rows.
+  const statusFolds = view === "status" ? [list.resting, list.cleanup, list.archived].filter((entries) => entries.length > 0).length : 0;
   return (
     <div ref={lists} className={cn("flex min-h-0 flex-1 flex-col", disabled && "opacity-(--opacity-disabled)")} data-task-list="true" onKeyDown={moveFocus}>
-      {held ? <div className="max-h-1/2 shrink-0 scroll-pt-(--size-sidebar-section-header) overflow-y-auto border-b border-border px-sm pb-xs" data-task-scroll="raised">{raised.map(drawSection)}</div> : null}
-      <div className={cn("min-h-0 flex-1 overflow-y-auto px-sm pb-md", view === "status" && "scroll-pt-(--size-sidebar-section-header)")} data-task-scroll="list">
-        {(held ? below : sections).map(drawSection)}
-        {view === "status" ? <Folds group={{ key: "", resting: list.resting, cleanup: list.cleanup, archived: list.archived }} resting={restingTrees} cleanup={cleanupTrees} archived={shown.archived} open={openFolds} onToggle={toggleFold} rows={rows} archivedRows={archivedList} sticky /> : null}
+      <div className="min-h-0 flex-1 overflow-y-auto px-sm pb-md" style={view === "status" ? stackPadding(sections.length + statusFolds) : undefined} data-task-scroll="list">
+        {sections.map(drawSection)}
+        {view === "status" ? <Folds group={{ key: "", resting: list.resting, cleanup: list.cleanup, archived: list.archived }} resting={restingTrees} cleanup={cleanupTrees} archived={shown.archived} open={openFolds} onToggle={toggleFold} rows={rows} archivedRows={archivedList} stackFrom={sections.length} /> : null}
       </div>
     </div>
   );
 }, (before, after) => before.list === after.list && before.view === after.view && before.showProject === after.showProject && before.byPane === after.byPane && before.folds === after.folds && before.focusedPane === after.focusedPane && before.disabled === after.disabled && before.actions === after.actions);
 
-function groupName(group: TaskGroup, t: ReturnType<typeof useInterfaceTranslation>["t"]): string {
-  return group.project?.label ?? (group.state ? t(`taskLens.group.${group.state}`) : "");
+function groupName(group: TaskGroup, tool: boolean, t: TFunction<"translation">): string {
+  return group.project?.label ?? (group.state ? groupLabel(group.state, tool, t) : "");
 }
 
 /**
@@ -272,33 +352,65 @@ function groupName(group: TaskGroup, t: ReturnType<typeof useInterfaceTranslatio
  */
 function BandHead({ state }: { state: TaskGroupState }) {
   const { t } = useInterfaceTranslation();
+  const tool = useContext(InToolCell);
   return (
-    <div aria-hidden="true" data-task-band={state} className={cn("px-xs pt-xs pb-xxs text-micro text-muted-foreground", state === "needs_you" && "text-warning")}>
-      {t(`taskLens.group.${state}`)}
+    <div aria-hidden="true" data-task-band={state} className={cn("px-xs pt-xs pb-xxs text-micro text-muted-foreground", state === "needs_you" && !tool && "text-warning")}>
+      {groupLabel(state, tool, t)}
     </div>
   );
 }
 
-const STICKY_TASK_HEAD = "sticky top-0 z-10 h-(--size-sidebar-section-header) bg-sidebar";
+const STICKY_TASK_HEAD = "sticky z-20 h-(--size-sidebar-section-header) bg-sidebar";
 
-/** A group's state and count stay above its scrolling rows; project heads carry their counts by state (B4, B6). */
-function GroupHead({ group }: { group: TaskGroup }) {
+/** Where the `stack`th sticky head of a scrolling part stands: under the heads above it. */
+function stackTop(stack: number): CSSProperties {
+  return { top: `calc(var(--size-sidebar-section-header) * ${stack})` };
+}
+
+/** A part's scroll padding under its `count` stacked heads, so a row brought into view is never under them. */
+function stackPadding(count: number): CSSProperties {
+  return { scrollPaddingTop: `calc(var(--size-sidebar-section-header) * ${count})` };
+}
+
+/**
+ * Brings a stacked head's rows back: the part scrolls until the first row
+ * under the head stands right below the head's own place in the stack.
+ */
+function goToHead(head: HTMLElement, stack: number) {
+  const scroller = head.closest<HTMLElement>("[data-task-scroll]");
+  const first = head.nextElementSibling;
+  if (!scroller || !(first instanceof HTMLElement)) return;
+  const top = scroller.scrollTop + first.getBoundingClientRect().top - scroller.getBoundingClientRect().top - (stack + 1) * head.offsetHeight;
+  scroller.scrollTo({ top: Math.max(0, top) });
+}
+
+/**
+ * A group's state and count stay above its scrolling rows, stacked under the
+ * heads of the groups already passed, and pressing one goes back to its rows;
+ * project heads carry their counts by state (B4, B6).
+ */
+function GroupHead({ group, stack }: { group: TaskGroup; stack: number }) {
   const { t } = useInterfaceTranslation();
+  const tool = useContext(InToolCell);
   if (group.state) {
+    const name = groupLabel(group.state, tool, t);
     return (
-      <h3 tabIndex={-1} data-task-focus="group" data-section-sticky="true" className={cn(STICKY_TASK_HEAD, "flex items-center gap-xs rounded-xs px-xs py-xs text-micro font-medium text-subtle-foreground outline-none focus-visible:ring-1 focus-visible:ring-ring", group.state === "needs_you" && "text-warning")} data-task-group-head={group.state}>
-        <span>{t(`taskLens.group.${group.state}`)}</span>
-        <span className="tabular-nums">{group.entries.length}</span>
+      <h3 data-section-sticky="true" className={STICKY_TASK_HEAD} style={stackTop(stack)} data-task-group-head={group.state}>
+        <RowButton data-task-focus="group" aria-label={`${name} ${rowCount(group.bands)}`} onClick={(event) => goToHead(event.currentTarget.parentElement!, stack)}
+          className={cn("h-full rounded-xs text-micro font-medium text-subtle-foreground outline-none focus-visible:ring-1 focus-visible:ring-ring", group.state === "needs_you" && !tool && "text-warning")}>
+          <span>{name}</span>
+          <span className="tabular-nums">{rowCount(group.bands)}</span>
+        </RowButton>
       </h3>
     );
   }
   const counts = TASK_GROUPS.filter((state) => group.counts[state]);
   return (
     <h3 tabIndex={-1} data-task-focus="group" className="flex min-w-0 items-center gap-sm rounded-xs px-xs pt-sm pb-xs text-caption font-semibold text-foreground outline-none focus-visible:ring-1 focus-visible:ring-ring" data-task-group-head="project">
-      <span className="min-w-0 flex-1 truncate" title={group.project?.path}>{group.project?.label ?? ""}</span>
+      <span className="min-w-0 flex-1 truncate" title={group.project?.path}>{group.project?.label ?? t("taskLens.outsideProjects")}</span>
       {counts.map((state: TaskGroupState) => (
-        <span key={state} className={cn("shrink-0 text-micro font-normal", state === "needs_you" ? "text-warning" : "text-muted-foreground")}>
-          {t(`taskLens.group.${state}`)} {group.counts[state]}
+        <span key={state} className={cn("shrink-0 text-micro font-normal", state === "needs_you" && !tool ? "text-warning" : "text-muted-foreground")}>
+          {groupLabel(state, tool, t)} {group.counts[state]}
         </span>
       ))}
     </h3>
@@ -306,7 +418,7 @@ function GroupHead({ group }: { group: TaskGroup }) {
 }
 
 /** `쉬는 중 N ›`, `정리할 것 N ›` and, last, `보관됨 N ›` (B5; PRD session-archive B14, B15): folded, opened in place, closed with `접기`. */
-function Folds({ group, resting, cleanup, archived, open, onToggle, rows, archivedRows: drawArchived, sticky = false }: {
+function Folds({ group, resting, cleanup, archived, open, onToggle, rows, archivedRows: drawArchived, stackFrom = null }: {
   group: Pick<TaskGroup, "key" | "resting" | "cleanup" | "archived">;
   resting: { entry: TaskEntry; lines: SidebarTreeLine[] }[];
   cleanup: { entry: TaskEntry; lines: SidebarTreeLine[] }[];
@@ -315,16 +427,20 @@ function Folds({ group, resting, cleanup, archived, open, onToggle, rows, archiv
   onToggle: (key: string) => void;
   rows: (trees: { entry: TaskEntry; lines: SidebarTreeLine[] }[]) => ReactNode;
   archivedRows: (entries: ArchivedEntry[]) => ReactNode;
-  sticky?: boolean;
+  /** In 상태별, the place in the stack of sticky heads the first fold button takes; null where the folds do not stick. */
+  stackFrom?: number | null;
 }) {
   const { t } = useInterfaceTranslation();
+  const counts = [group.resting.length, group.cleanup.length, group.archived.length];
   const fold = (kind: "rest" | "cleanup" | "archived", count: number, drawn: ReactNode) => {
     if (count === 0) return null;
     const key = taskFoldKey(kind, group.key);
     const expanded = open.has(key);
+    const index = ["rest", "cleanup", "archived"].indexOf(kind);
+    const stack = stackFrom === null ? null : stackFrom + counts.slice(0, index).filter((n) => n > 0).length;
     return (
-      <div data-task-fold={kind}>
-        <Button variant="text" size="inline" data-task-focus="fold" data-section-sticky={sticky ? "true" : undefined} aria-expanded={expanded} onClick={() => onToggle(key)} className={cn("w-full justify-start px-xs py-xs text-micro", sticky && STICKY_TASK_HEAD)}>
+      <div data-task-fold={kind} className={stack === null ? undefined : "contents"}>
+        <Button variant="text" size="inline" data-task-focus="fold" data-section-sticky={stack === null ? undefined : "true"} aria-expanded={expanded} onClick={() => onToggle(key)} style={stack === null ? undefined : stackTop(stack)} className={cn("w-full justify-start px-xs py-xs text-micro", stack !== null && STICKY_TASK_HEAD)}>
           {expanded ? <ChevronDownIcon aria-hidden="true" className="size-(--size-icon-sm)" /> : <ChevronRightIcon aria-hidden="true" className="size-(--size-icon-sm)" />}
           <span>{t(kind === "rest" ? "taskLens.fold.resting" : kind === "cleanup" ? "taskLens.fold.cleanup" : "archive.fold", { count })}</span>
         </Button>
@@ -341,11 +457,14 @@ function Folds({ group, resting, cleanup, archived, open, onToggle, rows, archiv
 /** A task's row and, through every opened row, its descendants (B10). */
 function TaskTree({ entry, lines, byPane, opened, selected, number, showProject, disabled, actions, onShowAll }: { entry: TaskEntry; lines: SidebarTreeLine[]; byPane: ReadonlyMap<string, AgentRow>; opened: ReadonlySet<string>; selected: string | null; number: number | null; showProject: boolean; disabled: boolean; actions: Actions; onShowAll: (parent: string) => void }) {
   const { agent } = entry;
-  const openOf = (of: AgentRow) => (childrenOf(of, byPane).length > 0 ? opened.has(of.pane_id) : null);
+  // A row with children or subagents of its own opens to show them.
+  const openOf = (of: AgentRow) => (childrenOf(of, byPane).length > 0 || (of.subagents ?? 0) > 0 ? opened.has(of.pane_id) : null);
   return <>
     <TaskRow entry={entry} open={openOf(agent)} selected={selected === agent.pane_id} number={number} showProject={showProject} disabled={disabled} actions={actions} />
     {lines.slice(1).map((line) => {
       if (line.kind === "more") return <TreeMoreRow key={`more:${line.parent}`} line={line} onShowAll={onShowAll} />;
+      if (line.kind === "subagent") return <SubagentTreeRow key={`subagent:${line.parent}:${line.subagent.id}`} line={line} />;
+      if (line.kind === "subagents-more") return <SubagentTreeRow key={`subagents-more:${line.parent}`} line={line} />;
       const child = line.row.agent;
       const parent = (child.lineage_parent_pane_id ? byPane.get(child.lineage_parent_pane_id) : undefined) ?? agent;
       return <ChildRow key={child.pane_id} parent={parent} child={child} depth={line.row.depth} place={line.place} open={openOf(child)} selected={selected === child.pane_id} disabled={disabled} actions={actions} workspace={entry.project?.id ?? null} />;
@@ -359,7 +478,8 @@ function TaskRow({ entry, open, selected, number, showProject, disabled, actions
   const { agent, card, project } = entry;
   const session = useMemo(() => sessionOfAgent(agent), [agent]);
   const go = () => { if (!disabled) actions.openListedAgent(agent.pane_id); };
-  const record = session ? () => actions.openSessionRecord(session) : null;
+  // Pressed on the row, the record opens in this agent's own slot (operator decision 2026-11-09).
+  const record = session ? () => actions.openSessionRecord(session, { pane: agent.pane_id }) : null;
   const toggle = () => actions.toggleSessionTree(agent.pane_id);
   // The ⋯ and a right-click on the row open the same menu (PRD session-archive B1, D-27).
   // The core refuses to resolve work that runs or waits, or an approval prompt (`sessions::resolve_refusal`), so the menu does not offer it.
@@ -367,39 +487,40 @@ function TaskRow({ entry, open, selected, number, showProject, disabled, actions
   const menu = useTaskMenu(agent, record, go, resolvable, disabled, actions, true);
   // The row's own mark words, as the sidebar row says them (status-marks B3, B33); a fold's rows say the fold.
   // A task waiting in 다시 볼 것 wears the ★ in its mark's slot (PRD revisit-group B6). A read ask in 내 차례
-  // wears a hollow `!`, is dimmed and says 읽음 (needs-you-cleanup B10).
+  // wears a hollow `!` and is dimmed; the mark says it was read, so no word repeats it (needs-you-cleanup B10).
   // The small ★ after the title steps aside where the time's slot shows the ☆/★ button, so the row never draws two.
   const starMark = card.state === "revisit";
   const read = card.state === "needs_you" && card.read === true;
   const revisitWords = starMark || starred(agent) ? t("taskLens.revisit.starred") : read ? t("taskLens.revisit.readAsk") : null;
   const words = [card.state === "resting" || card.state === "cleanup" ? t(`taskLens.state.${card.state}`) : read ? t("agents.mark.turn") : markWords(t, agent), revisitWords].filter(Boolean).join(" · ");
   const sentence = rowSentence(t, agent);
+  const names = useShellStore((s) => automationNames(s.automations));
   // The visible second line follows the button and is read after it, so the name leaves the sentence to it.
-  const name = [agent.identity_label, forkLabel(t, agent), agentProductName(agent.agent_kind), recordWords(t, agent), agent.record_summary, words, hideAiWords(t, agent.hide_ai)].filter(Boolean).join(", ");
+  const name = [agent.identity_label, entry.device, forkLabel(t, agent), agentWithProfile(t, agent), recordWords(t, agent), agent.record_summary, words, hideAiWords(t, agent.hide_ai, names)].filter(Boolean).join(", ");
   return (
     <EntryContextMenu asChild label={t("taskLens.more", { name: agent.identity_label })} title={agent.identity_label} items={menu.items} onSelect={menu.select} disabled={disabled} data-task-context={agent.pane_id}>
-    <li className={cn("group/task relative flex min-w-0 items-stretch rounded-xs pr-xs", selected ? "bg-selected" : "hover:bg-accent focus-within:bg-accent", rowDimmed(agent) && "opacity-(--opacity-dimmed)")}
+    <li className={cn("group/task group/turn relative flex min-w-0 items-stretch rounded-xs pr-xs", selected ? "bg-selected" : "hover:bg-accent focus-within:bg-accent", rowDimmed(agent) && "opacity-(--opacity-dimmed)")}
       data-task-row={agent.pane_id} data-task-state={card.state} data-task-read={read ? "true" : undefined} data-selected={selected ? "true" : undefined} onClick={go}>
       <TreeChevron name={agent.identity_label} open={open} onToggle={toggle} hangs={false} disabled={disabled} data-task-chevron={agent.pane_id} />
-      <div className="flex min-w-0 flex-1 flex-col gap-xxs py-xs pl-xs">
+      <div className="flex min-w-0 flex-1 flex-col gap-xs py-xs pl-xs">
         <div className="flex min-h-(--size-sidebar-line) min-w-0 items-center gap-xs">
           <button type="button" data-task-focus="row" disabled={disabled} aria-current={selected ? "true" : undefined} aria-expanded={open ?? undefined} aria-label={name}
-            title={[agent.identity_label, agentProductName(agent.agent_kind), recordWords(t, agent), agent.record_summary, words, sentence].filter(Boolean).join("\n")}
+            title={[agent.identity_label, agentWithProfile(t, agent), recordWords(t, agent), agent.record_summary, words, sentence].filter(Boolean).join("\n")}
             onClick={(event) => { event.stopPropagation(); go(); }}
             onKeyDown={(event) => rowKey(event, open, toggle, record)}
             className="flex min-w-0 flex-1 items-center gap-xs text-left outline-none focus-visible:ring-1 focus-visible:ring-ring disabled:opacity-50">
-            {starMark ? <RevisitStar slot /> : read ? <StatusMark mark="turn" read /> : <StatusMark mark={agent.mark} className={markTone(agent)} />}
-            <AgentRowMark kind={agent.agent_kind} hideAi={agent.hide_ai ? "card" : null} />
+            {starMark ? <RevisitStar slot /> : read ? <StatusMark mark="turn" read human={agent.human_turn !== undefined} /> : <StatusMark mark={agent.mark} human={agent.human_turn !== undefined} className={markTone(agent)} />}
+            <AgentRowMark kind={agent.agent_kind} hideAi={agent.hide_ai ? "card" : null} profile={agent.profile} />
             <AgentRecordTitle agent={agent} className={cn("text-caption font-medium", read && "opacity-(--opacity-read-status)")} />
             <AgentForkMark agent={agent} />
             {starred(agent) && !starMark ? <RevisitStar className="group-hover/task:hidden group-focus-within/task:hidden hoverless:hidden" /> : null}
           </button>
-          <AgentPrMark agent={agent} pulls={rowPulls(agent)} disabled={disabled} onOpen={(pull) => actions.openSessionPullRequest({ workspace_id: project?.id ?? null, url: pull.url, number: pull.number })} onExternal={(pull) => actions.openLink(pull.url, true)} />
-          <MissionChip agent={agent} onOpen={(id) => actions.openMission(id)} />
-          {read ? <span aria-hidden="true" className="shrink-0 rounded-xs border border-border px-xxs text-micro text-subtle-foreground group-hover/task:hidden group-focus-within/task:hidden hoverless:hidden" data-task-read-tag="">{t("taskLens.readTag")}</span> : null}
-          <TimeSlot agent={agent} record={record} menu={menu} revisit={{ on: starred(agent), disabled, actions }} />
+          {entry.device ? <DeviceChip label={entry.device} className="max-w-2/5" /> : null}
+          <AgentPrMark agent={agent} pulls={rowPulls(agent)} disabled={disabled} onOpen={(pull) => actions.openSessionPullRequest({ workspace_id: project?.id ?? null, url: pull.url, number: pull.number }, { pane: agent.pane_id })} onExternal={(pull) => actions.openLink(pull.url, true)} />
+          <MissionChip agent={agent} onOpen={(id) => actions.openMission(id, { pane: agent.pane_id })} />
+          <TimeSlot agent={agent} since={waitedSince(entry)} record={record} menu={menu} revisit={{ on: starred(agent), disabled, actions }} />
         </div>
-        <SecondLine entry={entry} showProject={showProject} read={read} />
+        <SecondLine entry={entry} showProject={showProject} read={read} actions={actions} />
       </div>
       {number !== null ? <Keycap number={number} /> : null}
     </li>
@@ -449,7 +570,7 @@ function ArchivedRow({ entry, showProject, disabled, actions }: { entry: Archive
       <li className={cn("group/task relative flex min-w-0 items-stretch rounded-xs pr-xs hover:bg-accent focus-within:bg-accent", (pending || away) && "opacity-(--opacity-dimmed)")}
         data-archived-row={row.id} data-archived-phase={row.phase} data-archived-resume={failed ? "failed" : pending ? "pending" : undefined} onClick={record}>
         <TreeChevron name={root.title} open={null} onToggle={() => {}} hangs={false} />
-        <div className="flex min-w-0 flex-1 flex-col gap-xxs py-xs pl-xs">
+        <div className="flex min-w-0 flex-1 flex-col gap-xs py-xs pl-xs">
           <div className="flex min-h-(--size-sidebar-line) min-w-0 items-center gap-xs">
             <button type="button" data-task-focus="row" aria-label={[root.title, agentProductName(root.agent_kind), t("archive.state"), row.starred ? t("taskLens.revisit.starred") : null, state].filter(Boolean).join(", ")}
               title={[root.title, agentProductName(root.agent_kind), root.last_line].filter(Boolean).join("\n")}
@@ -504,7 +625,7 @@ function useTaskMenu(agent: AgentRow, record: (() => void) | null, onPane: () =>
     // Before 해결 and 세션 보관 on a root task (PRD revisit-group D-08, B9); a read ask in 내 차례
     // also offers 치우기, which puts it away until the agent asks something new (needs-you-cleanup B15).
     if (root) entries.push(revisitEntry(agent, disabled, t));
-    if (root && readAsk(agent)) entries.push({ id: "put_away", icon: "unstar", label: t("taskLens.menu.putAway"), unavailable: disabled ? "" : null });
+    if (root && readAsk(agent)) entries.push({ id: "put_away", icon: "put_away", label: t("taskLens.menu.putAway"), unavailable: disabled ? "" : null });
     if (resolvable) entries.push({ id: "resolve", icon: "check", label: t("agentSessions.resolve"), unavailable: disabled ? "" : null });
     const archive = root ? archiveOffer(useShellStore.getState().rest, agent, t) : { kind: "hidden" as const };
     if (archive.kind === "offered") entries.push({ id: "archive", icon: "archive", label: t("archive.menu.archive"), unavailable: archive.unavailable, separated: true });
@@ -569,15 +690,25 @@ const revealed = (open: boolean) => (open ? "flex" : "hidden group-hover/task:fl
 const resting = (open: boolean) => (open ? "hidden" : "group-hover/task:hidden group-focus-within/task:hidden hoverless:hidden");
 
 /**
+ * The time a row shows: in 내 차례 how long its ask has waited, the time the
+ * core orders the asks by, so the times read in order down the list
+ * (operator decision 2026-11-14); elsewhere its latest actual prompt.
+ */
+function waitedSince({ agent, card }: TaskEntry): number | null | undefined {
+  if (card.state !== "needs_you") return agent.last_prompt_at_unix_ms;
+  return (card.read ? agent.revisit?.since_unix_ms : agent.state.request_since) ?? agent.last_prompt_at_unix_ms;
+}
+
+/**
  * The time, and in its place under the pointer or focus the record button
  * and `⋯` (B15, B18).
  */
-function TimeSlot({ agent, record, menu, revisit }: { agent: AgentRow; record: (() => void) | null; menu: TaskMenu; revisit?: { on: boolean; disabled: boolean; actions: Actions } }) {
+function TimeSlot({ agent, since = agent.last_prompt_at_unix_ms, record, menu, revisit }: { agent: AgentRow; since?: number | null | undefined; record: (() => void) | null; menu: TaskMenu; revisit?: { on: boolean; disabled: boolean; actions: Actions } }) {
   const { t } = useInterfaceTranslation();
   const [open, setOpen] = useState(false);
   return (
     <span className="flex shrink-0 items-center" onClick={(event) => event.stopPropagation()}>
-      <Elapsed since={agent.last_prompt_at_unix_ms} data-agent-elapsed="true" className={cn("text-micro text-muted-foreground tabular-nums", resting(open))} />
+      <Elapsed since={since} data-agent-elapsed="true" className={cn("text-micro text-muted-foreground tabular-nums", resting(open))} />
       <span data-row-actions="" className={cn("items-center gap-xxs", revealed(open))}>
         {revisit ? <RevisitButton agent={agent} {...revisit} /> : null}
         {record ? (
@@ -602,19 +733,32 @@ function TimeSlot({ agent, record, menu, revisit }: { agent: AgentRow; record: (
  * B8: the project's name in 상태별, then the question, the block's cause, the
  * label line or the unfinished work; none is drawn when there is nothing to say.
  */
-function SecondLine({ entry, showProject, read = false }: { entry: TaskEntry; showProject: boolean; read?: boolean }) {
+function SecondLine({ entry, showProject, read = false, actions }: { entry: TaskEntry; showProject: boolean; read?: boolean; actions: Actions }) {
   const { t } = useInterfaceTranslation();
   const indent = detailIndent(useAgentLogosShown() || Boolean(entry.agent.hide_ai));
+  const toolList = useContext(InToolCell);
   const { agent, card, project } = entry;
+  const names = useShellStore((s) => automationNames(s.automations));
+  // An automation run names its automation where a project would stand, its own folder being no project (PRD automations B15, B30).
+  const origin = agent.hide_ai?.task?.kind === "automation" ? taskLine(t, agent.hide_ai.task, names) : null;
   const ask = card.state === "needs_you" ? agent.state.ask : null;
   const turn = card.state === "needs_you" && !ask ? agent.hide_ai?.turn : undefined;
   const parts: LineParts | null = ask ? askParts(t, ask) : turn ? { lead: null, text: homeTurnLine(t, turn), tail: null } : card.state === "resting" && !agent.state.session.unfinished ? null : agentLineParts(t, agent);
-  if (!parts && !(showProject && project)) return null;
+  // In a tool's cell every row is the tool's, so none names it (PRD hide-external-control B40).
+  const tool = toolList ? undefined : agent.tool;
+  if (!parts && !(showProject && project) && !tool && !origin) return null;
+  // A person's turn says its kind and place as selectable text with its device, and Done under it (PRD ask-human B10, B19).
+  const human = ask?.subject?.cause === "human_turn" && agent.human_turn ? agent.human_turn : null;
   return (
-    <div className={cn(indent, "flex min-w-0 items-baseline gap-xs text-micro")} data-task-line={card.state}>
-      {showProject && project ? <span className="shrink-0 text-muted-foreground" data-task-project={project.id}>{project.label}</span> : null}
-      {parts ? <RowLineText parts={parts} className={cn("min-w-0 flex-1", LINE_TONE[card.state] ?? "text-subtle-foreground", read && "opacity-(--opacity-read-status)")} title={partsTitle(parts)} /> : null}
-    </div>
+    <>
+      <div className={cn(indent, "flex min-w-0 items-baseline gap-xs text-micro")} data-task-line={card.state}>
+        <ToolLabel tool={tool} />
+        {origin ? <span className="shrink-0 text-muted-foreground" data-task-origin="automation">{origin}</span> : showProject && project ? <span className="shrink-0 text-muted-foreground" data-task-project={project.id}>{project.label}</span> : null}
+        {human && ask ? <AskLine ask={ask} copy={actions.copyText} className={cn("min-w-0 flex-1 text-micro", read && "opacity-(--opacity-read-status)")} /> : parts ? <RowLineText parts={parts} className={cn("min-w-0 flex-1", (toolList ? null : LINE_TONE[card.state]) ?? "text-subtle-foreground", read && "opacity-(--opacity-read-status)")} title={partsTitle(parts)} /> : null}
+        {ask && !human ? <DecisionViewsCount subject={ask.subject} /> : null}
+      </div>
+      {human ? <HumanTurnDone turn={human} actions={actions} className={indent} /> : null}
+    </>
   );
 }
 
@@ -622,16 +766,20 @@ function SecondLine({ entry, showProject, read = false }: { entry: TaskEntry; sh
  * A row's line in its parts, as the sidebar's (status-marks B7, B10, B27,
  * B29, B31): a sleeping row has none, a waking, failed or unknown one says its
  * state, a waiting ring leads with 대기 and its cause, a stop leads with how
- * it ended and keeps its background tail; work in progress says its sentence.
+ * it ended and keeps the tail of what it left running (background tasks,
+ * children still working); work in progress says its sentence.
  */
 function agentLineParts(t: ReturnType<typeof useInterfaceTranslation>["t"], agent: AgentRow): LineParts | null {
   const own = stateLine(agent);
   if (own === null) return null;
-  const row = own ?? rowLine(agent);
+  // A row whose move is to look says the View, as the sidebar's does (`sidebarLine`): an external tool's
+  // question on the same row is the tool's, so it is no line of the operator's (PRD hide-external-control B29).
+  const looking = agent.mark === "look" && agent.look ? { text: agent.look.label, mode: "request" as const, look: agent.look.count } : null;
+  const row = own ?? looking ?? rowLine(agent);
   if (own || row?.mode === "waiting" || row?.mode === "request") return lineParts(t, agent, row!);
   const text = agent.state.session.line;
   if (!text) return null;
-  return { lead: agent.mark === "going" || agent.mark === "waiting" ? null : leadWord(t, agent), text, tail: backgroundTail(t, agent) };
+  return { lead: agent.mark === "going" || agent.mark === "waiting" ? null : leadWord(t, agent), text, tail: leftTail(t, agent) };
 }
 
 const partsTitle = (parts: LineParts) => [parts.lead, parts.text, parts.tail].filter(Boolean).join(" · ");
@@ -650,41 +798,48 @@ function ChildRow({ parent, child, depth, place, open, selected, disabled, actio
     return own !== parent.device_id && own !== localDeviceId(s.rest) ? machineName(s.rest?.navigator?.devices, own, t) : null;
   });
   const go = () => { if (!disabled) actions.openListedAgent(child.pane_id); };
-  const record = session ? () => actions.openSessionRecord(session) : null;
+  const record = session ? () => actions.openSessionRecord(session, { pane: child.pane_id }) : null;
   const toggle = () => actions.toggleSessionTree(child.pane_id);
   const menu = useTaskMenu(child, record, go, false, disabled, actions, false);
   const quiet = !child.state.title_emphasized && !(selected && child.state.selection_emphasizes_title);
   return (
-    <li className={cn("group/task flex min-w-0 items-stretch rounded-xs pr-xs", selected ? "bg-selected" : "hover:bg-accent focus-within:bg-accent", rowDimmed(child) && "opacity-(--opacity-dimmed)")}
+    <li className={cn("group/task group/turn flex min-w-0 items-stretch rounded-xs pr-xs", selected ? "bg-selected" : "hover:bg-accent focus-within:bg-accent", rowDimmed(child) && "opacity-(--opacity-dimmed)")}
       data-task-child={child.pane_id} data-depth={depth} data-selected={selected ? "true" : undefined} onClick={go}>
       <TreeRails place={place} />
       <TreeChevron name={child.identity_label} open={open} onToggle={toggle} hangs chain={place.chain} disabled={disabled} data-task-chevron={child.pane_id} />
-      <div className="flex min-w-0 flex-1 flex-col gap-xxs py-xs pl-xs">
+      <div className="flex min-w-0 flex-1 flex-col gap-xs py-xs pl-xs">
         <div className="flex min-h-(--size-sidebar-line) min-w-0 items-center gap-xs">
           <button type="button" data-task-focus="row" disabled={disabled} aria-current={selected ? "true" : undefined} aria-expanded={open ?? undefined}
-            aria-label={[child.identity_label, forkLabel(t, child), agentProductName(child.agent_kind), recordWords(t, child), child.record_summary, markWords(t, child), child.state.branch_badge, device].filter(Boolean).join(", ")}
-            title={[child.identity_label, agentProductName(child.agent_kind), recordWords(t, child), child.record_summary, markWords(t, child), rowSentence(t, child)].filter(Boolean).join("\n")}
+            aria-label={[child.identity_label, forkLabel(t, child), agentWithProfile(t, child), recordWords(t, child), child.record_summary, markWords(t, child), child.state.branch_badge, device].filter(Boolean).join(", ")}
+            title={[child.identity_label, agentWithProfile(t, child), recordWords(t, child), child.record_summary, markWords(t, child), rowSentence(t, child)].filter(Boolean).join("\n")}
             onClick={(event) => { event.stopPropagation(); go(); }}
             onKeyDown={(event) => rowKey(event, open, toggle, record)}
             className="flex min-w-0 flex-1 items-center gap-xs text-left outline-none focus-visible:ring-1 focus-visible:ring-ring disabled:opacity-50">
-            <StatusMark mark={child.mark} className={markTone(child)} /><AgentRowMark kind={child.agent_kind} />
+            <StatusMark mark={child.mark} human={child.human_turn !== undefined} className={markTone(child)} /><AgentRowMark kind={child.agent_kind} profile={child.profile} />
             <AgentRecordTitle agent={child} className={cn("text-caption", quiet ? "text-subtle-foreground" : "text-foreground")} />
             <AgentForkMark agent={child} />
           </button>
           {device ? <span className="flex shrink-0 items-center gap-xxs rounded-xs border border-border px-xxs text-micro text-muted-foreground" data-task-device={device}><ServerIcon aria-hidden="true" className="size-(--size-icon-sm)" />{device}</span> : null}
-          <AgentPrMark agent={child} pulls={rowPulls(child)} disabled={disabled} onOpen={(pull) => actions.openSessionPullRequest({ workspace_id: workspace, url: pull.url, number: pull.number })} onExternal={(pull) => actions.openLink(pull.url, true)} />
+          <AgentPrMark agent={child} pulls={rowPulls(child)} disabled={disabled} onOpen={(pull) => actions.openSessionPullRequest({ workspace_id: workspace, url: pull.url, number: pull.number }, { pane: child.pane_id })} onExternal={(pull) => actions.openLink(pull.url, true)} />
           <TimeSlot agent={child} record={record} menu={menu} />
         </div>
-        <ChildLine child={child} />
+        <ChildLine child={child} actions={actions} />
         {child.state.branch_badge ? <BranchLine agent={child} branch={child.state.branch_badge} /> : null}
       </div>
     </li>
   );
 }
 
-function ChildLine({ child }: { child: AgentRow }) {
+function ChildLine({ child, actions }: { child: AgentRow; actions: Actions }) {
   const { t } = useInterfaceTranslation();
   const indent = detailIndent(useAgentLogosShown());
+  // A declaring child says its person's turn and keeps Done in the tree too (PRD ask-human B14, B17).
+  if (child.human_turn) {
+    return <>
+      <div className={cn(indent, "flex min-w-0 text-micro")} data-task-line="human_turn"><HumanTurnLine turn={child.human_turn} copy={actions.copyText} className="min-w-0 flex-1 text-micro" /></div>
+      <HumanTurnDone turn={child.human_turn} actions={actions} className={indent} />
+    </>;
+  }
   const ask = child.state.session.group === "needs_you" ? child.state.ask : null;
   const parts: LineParts | null = ask ? askParts(t, ask) : agentLineParts(t, child);
   if (!parts) return null;

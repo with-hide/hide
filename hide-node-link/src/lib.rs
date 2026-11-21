@@ -1,7 +1,7 @@
 //! The contract between the core and a node (PRD core-host-node D-21).
 //!
 //! The core decides and keeps state; a node does the work on its machine:
-//! files, git, processes, its Herdr server. The two speak only through
+//! files, git, processes, its pane holders. The two speak only through
 //! [`NodeLink`], whatever carries it: a call inside one process for the
 //! core's own machine, or a channel to another machine. This crate holds
 //! that contract and the shapes that cross it, and nothing that touches a
@@ -13,6 +13,7 @@ pub mod address;
 pub mod ai;
 pub mod attachments;
 pub mod branch;
+pub mod browse;
 pub mod bytes;
 pub mod catalog;
 pub mod cleanup;
@@ -24,16 +25,20 @@ pub mod error;
 pub mod feedback;
 pub mod gh;
 pub mod git;
+pub mod herdr_save;
 pub mod holders;
 pub mod home;
+pub mod importable;
 pub mod index;
 pub mod link;
 pub mod link_panes;
 pub mod list;
+pub mod memory;
 pub mod mutate;
 pub mod panes;
 pub mod ports;
 pub mod process;
+pub mod profiles;
 pub mod project;
 pub mod protocol;
 pub mod readers;

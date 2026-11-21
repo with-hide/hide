@@ -5,21 +5,19 @@
 import { AGENT_ADAPTERS } from "./agentAdapters";
 import type { ProviderKind } from "./agentPicker";
 import type { NotificationPermission } from "./host";
-import { FIRST_RUN_VERSION, type AgentUpdate, type AiProvider, type FirstRunStep, type HerdrProfiles, type Kit, type KitAgent, type KitPiece, type KitWhy, type SnapshotRest } from "./snapshot";
+import { FIRST_RUN_VERSION, type AgentUpdate, type AiProvider, type FirstRunStep, type MachineProfiles, type Kit, type KitAgent, type KitPiece, type KitWhy, type SnapshotRest } from "./snapshot";
 
 /** The desktop route includes saved devices; a browser tab has its first step alone. */
 export type WizardStep = Exclude<FirstRunStep, "done">;
 
 /**
  * Failed or unread discovery has its own retry step; only a complete read that found nothing skips it, so a list cut
- * at a bound keeps the step (the core's `first_run_has_devices` holds the same rule). Moving the operator's
- * older Herdr comes first, and only while there is one to move (PRD herdr-takeover B1, B17).
+ * at a bound keeps the step (the core's `first_run_has_devices` holds the same rule).
  */
-export function wizardSteps(profiles: HerdrProfiles | undefined, herdr = false): readonly WizardStep[] {
-  const rest: readonly WizardStep[] = profiles?.state === "ready" && profiles.profiles.length === 0 && !profiles.truncated
+export function wizardSteps(profiles: MachineProfiles | undefined): readonly WizardStep[] {
+  return profiles?.state === "ready" && profiles.profiles.length === 0 && !profiles.truncated
     ? ["agents", "notifications", "project"]
     : ["agents", "devices", "notifications", "project"];
-  return herdr ? ["herdr", ...rest] : rest;
 }
 
 /**
@@ -31,9 +29,10 @@ export function wizardSteps(profiles: HerdrProfiles | undefined, herdr = false):
 export function firstRunStep(rest: SnapshotRest | null, desktop: boolean): WizardStep | null {
   const run = rest?.ui_state?.first_run;
   if (!run || run.version !== FIRST_RUN_VERSION || run.step === "done") return null;
-  // A browser tab's wizard is the agent step alone; its Continue leaves a Herdr step unanswered (PRD herdr-takeover D-24).
-  if (!desktop) return run.step === "agents" || run.step === "herdr" ? "agents" : null;
-  return run.step;
+  const step = run.step;
+  // A browser tab's wizard is the agent step alone.
+  if (!desktop) return step === "agents" ? "agents" : null;
+  return step;
 }
 
 /** The agents whose sign-in Hide checks (D-06); the others can only say they are installed. */
@@ -71,10 +70,18 @@ export const SUGGESTED_INSTALLS = ["claude-code", "codex"] as const;
 /** One place under What changes: the path Hide writes and the agents it writes it for, with no piece named (B11). */
 export type ChangeRow = { path: string; labels: string[] };
 
-export function accountHome(homeFolder: string | null | undefined): string | null {
-  if (!homeFolder) return null;
-  const cut = Math.max(homeFolder.lastIndexOf("/"), homeFolder.lastIndexOf("\\"));
-  return cut > 0 ? homeFolder.slice(0, cut) : null;
+/**
+ * The account home, read from the places the kit reports: every one sits in a
+ * dot folder directly under it (`~/.claude`, `~/.codex`, `~/.config`,
+ * `~/.local`), so what comes before the first dot folder is the home on every
+ * system. Null when no place says.
+ */
+export function accountHome(locations: readonly string[]): string | null {
+  for (const location of locations) {
+    const match = /^(.+?)[\\/]\.[^\\/]/.exec(location);
+    if (match?.[1]) return match[1];
+  }
+  return null;
 }
 
 /** `path` with the account `home` written as `~`, on every system (D-26); a path outside it as it is. */
@@ -88,16 +95,18 @@ export function underHome(path: string, home: string | null): string {
 /**
  * What Continue changes on this Mac: for each agent left on, the files and
  * folders its pieces are written to (the hook file or its plugin or
- * extension, the skill, Herdr's integration), one row per place, so a skill
+ * extension, the skill), one row per place, so a skill
  * folder agents share is one row naming them all; then the `hide` command's
  * link. Each place is where the kit reports it, with the account home as `~`
  * (B11, D-26). A piece the agent does not have here (`absent`) writes nothing.
  */
-export function whatChanges(agents: readonly KitAgent[], on: ReadonlySet<string>, kit: Kit | null | undefined, home: string | null = null): { rows: ChangeRow[]; cli: string | null } {
+export function whatChanges(agents: readonly KitAgent[], on: ReadonlySet<string>, kit: Kit | null | undefined): { rows: ChangeRow[]; cli: string | null } {
   const rows: ChangeRow[] = [];
+  const cli = kit?.components.find((component) => component.id === "cli")?.location ?? null;
+  const home = accountHome([...agents.flatMap((agent) => [agent.hook?.location, agent.skill?.location]), cli].filter((location): location is string => !!location));
   for (const agent of agents) {
     if (!on.has(agent.id)) continue;
-    const pieces: (KitPiece | null | undefined)[] = [agent.hook, agent.skill, agent.herdr];
+    const pieces: (KitPiece | null | undefined)[] = [agent.hook, agent.skill];
     for (const piece of pieces) {
       if (!piece || piece.state === "absent" || !piece.location) continue;
       const path = underHome(piece.location, home);
@@ -106,7 +115,6 @@ export function whatChanges(agents: readonly KitAgent[], on: ReadonlySet<string>
       else rows.push({ path, labels: [agent.label] });
     }
   }
-  const cli = kit?.components.find((component) => component.id === "cli")?.location ?? null;
   return { rows, cli: cli === null ? null : underHome(cli, home) };
 }
 
@@ -118,14 +126,14 @@ export function failedAgents(agents: readonly KitAgent[], chosen: readonly strin
   return agents.flatMap((agent) => {
     if (!agent.enabled || !chosen.includes(agent.id)) return [];
     // A piece refused because the copy is too old is not a failure Try again fixes; the update installs it.
-    const failed = [agent.hook, agent.skill, agent.herdr ?? null].find((piece) => piece?.state === "failed" && piece.why?.cause !== "update_agent");
+    const failed = [agent.hook, agent.skill].find((piece) => piece?.state === "failed" && piece.why?.cause !== "update_agent");
     return failed ? [{ id: agent.id, label: agent.label, why: failed.why ?? null }] : [];
   });
 }
 
 function startKind(id: string): ProviderKind | null {
   const row = AGENT_ADAPTERS.find((adapter) => adapter.id === id && adapter.can_start);
-  return row ? (row.herdr_kind as ProviderKind) : null;
+  return row ? (row.agent_cli as ProviderKind) : null;
 }
 
 /**
@@ -147,7 +155,7 @@ export function firstStartAgent(agents: readonly KitAgent[], providers: readonly
  * check, Terminal, or a sign-in not read yet says nothing (D-06).
  */
 export function notSignedIn(kind: ProviderKind | "terminal", providers: readonly AiProvider[] | undefined): boolean {
-  const id = AGENT_ADAPTERS.find((adapter) => adapter.can_start && adapter.herdr_kind === kind)?.id;
+  const id = AGENT_ADAPTERS.find((adapter) => adapter.can_start && adapter.agent_cli === kind)?.id;
   if (!id || !SIGN_IN_CHECKED.has(id)) return false;
   return providers?.find((row) => row.agent === id)?.state === "needs_login";
 }

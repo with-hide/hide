@@ -1,5 +1,6 @@
 """The journey table as report.md and report.json, and as the terminal shows it."""
 
+from datetime import datetime, timezone
 import json
 
 from agent_live_check.protection import write_private
@@ -11,6 +12,10 @@ def text(value):
     return str(value).replace("|", "\\|").replace("\n", " ").replace("\r", " ")
 
 
+def clock(ms):
+    return datetime.fromtimestamp(ms / 1000, timezone.utc).strftime("%H:%M:%S.%f")[:-3]
+
+
 def table_lines(report):
     lines = ["| Agent | " + " | ".join(CELLS) + " |", "| --- |" + " --- |" * len(CELLS)]
     for agent, cells in report["table"].items():
@@ -20,15 +25,16 @@ def table_lines(report):
 
 def markdown(report):
     lines = ["# Agent journey", "",
-             f"Mode: {report['mode']}. Herdr: {text(report['herdr'].get('version', 'not started'))}. "
-             f"Candidate hided sha256: {text(report['herdr'].get('hided_sha256', 'not started'))}.", "",
+             f"Mode: {report['mode']}. "
+             f"Holder sha256: {text(report['holders'].get('holder_sha256', 'not started'))}. "
+             f"Candidate hided sha256: {text(report['holders'].get('hided_sha256', 'not started'))}.", "",
              *(["**Fixture run**: the compiled stand-ins of web/e2e/shims answered in place of the CLIs and no model "
                 "read a prompt; this report is never a release's agent evidence.", ""] if report.get("fixture") else []),
              *(["**Fake model run**: the real CLIs with Hide's real kit, answered by the journey's fake model instead "
                 "of a provider; its rows are apart from a signed-in run's and never prove a provider or a login.", ""]
                if report.get("fake_model") else []),
              "Each cell is judged from what Hide reported (spawn answer, snapshot rows, Hide's conversation reader, "
-             "the letter record, Herdr's session report), never from screen text; the composer cell is judged by the "
+             "the letter record, the engine's session report or Hide's registration ledger), never from screen text; the composer cell is judged by the "
              "product's composer parser on the screen's styling, and keeps no screen text.", "",
              *table_lines(report), "",
              "## Every cell", "", "| Agent | Cell | Result | Reason | Evidence |", "| --- | --- | --- | --- | --- |"]
@@ -65,10 +71,25 @@ def markdown(report):
                 lines.append(f"- {key} argv: `{text(json.dumps(agent[key]['argv']))}`")
         if agent.get("spawn"):
             lines.append(f"- route: `{text(json.dumps(agent['spawn']['route']))}`")
+        if agent.get("steps"):
+            # When each step ran, to read a failed cell's hided log against.
+            lines.append("- steps (UTC): " + ", ".join(
+                f"{step['step']} {clock(step['started_ms'])}-{clock(step['ended_ms']) if 'ended_ms' in step else '?'}"
+                for step in agent["steps"]))
+        for cut in agent.get("hided_logs_cut", []):
+            lines.append(f"- {text(cut['file'])} cut to its last whole lines at {text(cut['limit'])}")
         lines.append("")
     if report.get("hide_ai_requests"):
         lines.extend(["## Hide AI", "", "The candidate's own model requests, outside every agent's budget: "
                       + text(", ".join(f"{provider} {count}" for provider, count in report["hide_ai_requests"].items())), ""])
+    if report.get("hook_records"):
+        # The hook's own last outcome, which the run reads where the candidate
+        # keeps it: a turn that never read idle is explained here rather than
+        # by the reader going to the copied file (agent_journey/hook_records.py).
+        records = report["hook_records"]
+        lines.extend(["## Hook records", "",
+                      "The last report outcome the candidate's own hooks recorded, read where its state folder keeps"
+                      " it (`hook_records.folder`): " + text(records["cause"]), ""])
     if report.get("product_findings"):
         lines.extend(["## Product findings", ""])
         lines.extend(f"- {text(finding)}" for finding in report["product_findings"])

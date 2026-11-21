@@ -12,7 +12,7 @@ import { useShellStore } from "./store";
 import type { DispatchFn } from "./ws";
 
 vi.mock("./terminals", () => ({ mountTerminalPreview: () => false }));
-const pane = (id: string): PaneRow => ({ id, device_id: "local", device_pane_id: id, herdr_label: id, terminal_title: null, cwd: "/fixture", status_code: "idle", requires_close_confirmation: false, requires_close_status_check: false, identity_label: null });
+const pane = (id: string): PaneRow => ({ id, device_id: "local", device_pane_id: id, engine_label: id, terminal_title: null, cwd: "/fixture", status_code: "idle", requires_close_confirmation: false, requires_close_status_check: false, identity_label: null });
 const tab = (id: string, panes: string[]): Tab => ({ id, workspace_id: "w1", checkout_id: "checkout", label: id, empty: false, delegated: false, panes: panes.map(pane), sidebar: { number: 1, manual_name: null, named_by_operator: false, focused_pane_id: panes[0] } });
 const tabs = [tab("t1", ["p1", "p2"]), tab("t2", ["p3"]), tab("t3", ["p4"])];
 const checkout: Checkout = { id: "checkout", workspace_id: "project", label: "Fixture", path: "/fixture", branch: null, purpose: null, is_worktree: false, exists: true, has_panes: true, pull_request: null, active_tab_id: "t1", strip: [], next_tab_label: "4", tabs, agent_scope: emptyScope() };
@@ -86,24 +86,36 @@ describe("pane move gesture", () => {
     await act(async () => useShellStore.setState({ rest: { pane_layouts: [{ workspace_id: "w1", tab_id: "t1", focused_pane_id: "p1", zoomed: true, root: { type: "pane", pane_id: "p1" } }] } }));
     await pointer("pointerup", 390, 100); expect(moves()).toHaveLength(0);
   });
-  it("keeps an uncertain result reserved and checks status without dispatching another move", async () => {
+  it("settles a move nobody answered by asking the core, with the request it sent, and never shows a position bar", async () => {
     await act(async () => element('[data-menu-move]').click());
     const request = moves()[0]!.payload as { request_id: string };
     await act(async () => { vi.advanceTimersByTime(15_000); });
-    expect(container.textContent).toContain("Check position before moving again");
+    expect(events.filter(event => event.kind === "pane_move_check")).toEqual([{ schema_version: 2, kind: "pane_move_check", payload: { request_id: request.request_id, request } }]);
+    expect(container.textContent).not.toContain("Check position");
+    expect([...container.querySelectorAll("button")].some(button => button.textContent === "Check status")).toBe(false);
+    // The tabs stay reserved while the core settles it, and no second move is sent.
     await act(async () => element('[data-menu-move]').click());
     expect(moves()).toHaveLength(1);
-    const check = [...container.querySelectorAll("button")].find(button => button.textContent === "Check status")!;
-    await act(async () => check.click());
-    expect(events.filter(event => event.kind === "pane_move_check")).toEqual([{ schema_version: 2, kind: "pane_move_check", payload: { request_id: request.request_id } }]);
+    // Still unanswered: it asks again, since a check changes nothing it asks for twice.
+    await act(async () => { vi.advanceTimersByTime(15_000); });
+    expect(events.filter(event => event.kind === "pane_move_check")).toHaveLength(2);
   });
-  it("restores a published unknown reservation and check action after mounting without local request state", async () => {
+  it("stops asking once the core has published an answer for the move", async () => {
+    await act(async () => element('[data-menu-move]').click());
+    const request = moves()[0]!.payload as { request_id: string };
+    const done: AsyncOperation = { id: request.request_id, kind: "pane.move", target_id: "p1", scope_id: "t1", phase: "completed", stage: "move", message: null, retryable: false };
+    await act(async () => useShellStore.setState({ rest: { status: { async_operations: [done] } } }));
+    await act(async () => { vi.advanceTimersByTime(30_000); });
+    expect(events.filter(event => event.kind === "pane_move_check")).toHaveLength(0);
+    expect(container.querySelector("[data-pane-move-status]")).toBeNull();
+  });
+  it("settles a published unknown reservation by itself after mounting without local request state", async () => {
     const unknown: AsyncOperation = { id: "retained-move", kind: "pane.move", target_id: "p1", scope_id: "t1", related_scope_ids: ["t1", "t2"], phase: "unknown", stage: "move", message: null, retryable: false };
     await act(async () => useShellStore.setState({ rest: { status: { async_operations: [unknown] } } }));
     expect(element('[data-busy]').textContent).toBe("true:false");
-    const check = [...container.querySelectorAll("button")].find(button => button.textContent === "Check status")!;
-    await act(async () => check.click());
     expect(events.filter(event => event.kind === "pane_move_check")).toEqual([{ schema_version: 2, kind: "pane_move_check", payload: { request_id: unknown.id } }]);
+    expect(container.textContent).not.toContain("Check position");
+    expect([...container.querySelectorAll("button")].some(button => button.textContent === "Check status")).toBe(false);
     expect(moves()).toHaveLength(0);
   });
   it("cancels on connection loss and suppresses a later release click", async () => {
@@ -132,10 +144,11 @@ describe("pane move gesture", () => {
 // The record title is a draggable part of an existing button; its logo and status are not.
 it("starts from the grip, title text or blank space while preserving ordinary record clicks and excluding controls and the second row", () => {
   const host = document.createElement("section");
-  host.innerHTML = '<header><span data-pane-move-grip></span><button data-pane-record="session"><span data-logo data-pane-move-excluded>logo</span><span data-status data-pane-status-mark>status</span><span data-pane-move-title><span data-title-text>title</span><span data-title-gap></span></span></button><span data-pane-move-blank></span><button data-menu>menu</button><button data-close>close</button></header><div data-pane-header-band>second row</div>';
+  // The left side is one row of its own (PaneView); a gap between its parts is the header's unused space.
+  host.innerHTML = '<header><div data-pane-move-row="true"><span data-pane-move-grip></span><button data-pane-record="session"><span data-logo data-pane-move-excluded>logo</span><span data-status data-pane-status-mark>status</span><span data-pane-move-title><span data-title-text>title</span><span data-title-gap></span></span></button><span class="contents"><button data-chip>PR</button></span><span data-pane-move-blank></span></div><button data-menu>menu</button><button data-close>close</button></header><div data-pane-header-band>second row</div>';
   const header = host.querySelector("header")!;
-  for (const selector of ["[data-pane-move-grip]", "[data-title-text]", "[data-title-gap]", "[data-pane-record]", "[data-pane-move-blank]"]) expect(paneMoveStartTarget(header, host.querySelector(selector))).toBe(true);
-  for (const selector of ["[data-logo]", "[data-status]", "[data-menu]", "[data-close]", "[data-pane-header-band]"]) expect(paneMoveStartTarget(header, host.querySelector(selector))).toBe(false);
+  for (const selector of ["[data-pane-move-grip]", "[data-title-text]", "[data-title-gap]", "[data-pane-record]", "[data-pane-move-blank]", "[data-pane-move-row]"]) expect(paneMoveStartTarget(header, host.querySelector(selector))).toBe(true);
+  for (const selector of ["[data-logo]", "[data-status]", "[data-chip]", "[data-menu]", "[data-close]", "[data-pane-header-band]"]) expect(paneMoveStartTarget(header, host.querySelector(selector))).toBe(false);
   const record = vi.fn(); host.querySelector("button")!.addEventListener("click", record); host.querySelector<HTMLElement>("[data-title-text]")!.click();
   expect(record).toHaveBeenCalledOnce();
 });

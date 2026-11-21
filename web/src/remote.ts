@@ -1,13 +1,13 @@
 // The selected SSH device as the shell's context (PRD S5 B19). The core
-// already connects to the device, projects its Herdr session with ids scoped
-// to the target, attaches the panes of that Herdr's visible tab, and routes
+// already connects to the device, projects its engine session with ids scoped
+// to the target, attaches the panes of that engine's visible tab, and routes
 // `remote_control` to the exact host after checking every id against the
 // session. This module only reads that projection and builds the events, so
 // the sidebar, the strip, the canvas and every command resolve one context the
 // same way and a remote action can never be built from a local id.
 
 import type { TFunction } from "i18next";
-import type { AgentRow, Checkout, Device, RemotePaneLayout, RemoteSession, RemoteStatus, SnapshotRest, Tab, Workspace } from "./snapshot";
+import { listedWorkspaces, type AgentRow, type Checkout, type Device, type RemotePaneLayout, type RemoteSession, type RemoteStatus, type SnapshotRest, type Tab, type Workspace } from "./snapshot";
 import { findArea } from "./areaLayout";
 import type { WorkspaceView } from "./workspace";
 import { machineName } from "./screenMachine";
@@ -103,7 +103,7 @@ export function remoteView(session: RemoteSession | null, front?: WorkspaceView 
 
 /**
  * The view of `tabId` beside `view`'s: an Agent area of a node that dialed in
- * shows a tab other than the one its Herdr has in front, and the core attaches
+ * shows a tab other than the one its engine has in front, and the core attaches
  * that tab's panes too (`node_shown_agent_tabs`). The keyboard stays on the
  * front tab's pane, so no pane of another tab is drawn focused.
  */
@@ -144,33 +144,10 @@ export function contextAgents(rest: SnapshotRest | null, localAgents: AgentRow[]
   return context ? (context.session?.agents ?? NO_AGENTS) : localAgents;
 }
 
-/** Every workspace of the context on screen, the device's Home (`~/hide`) included: what holds a pane. */
-export function contextAllWorkspaces(rest: SnapshotRest | null): Workspace[] {
-  const context = remoteContext(rest);
-  return context ? (context.session?.workspaces ?? NO_WORKSPACES) : (rest?.navigator?.workspaces ?? NO_WORKSPACES);
-}
-
-const projectLists = new WeakMap<Workspace[], Workspace[]>();
-
-/**
- * `workspaces` without the device's Home, which is drawn as its own row and
- * counted as no project (PRD home-device-rail D-13). The list itself when it
- * holds no Home, and one cached list per source otherwise, so a selector
- * returning it keeps its identity between snapshots.
- */
-export function projectsOf(workspaces: Workspace[]): Workspace[] {
-  if (!workspaces.some((row) => row.is_home)) return workspaces;
-  let listed = projectLists.get(workspaces);
-  if (!listed) {
-    listed = workspaces.filter((row) => !row.is_home);
-    projectLists.set(workspaces, listed);
-  }
-  return listed;
-}
-
-/** The projects the sidebar lists: the selected host's Herdr workspaces, or this machine's projects, never the Home. */
+/** The projects the sidebar lists: the selected host's engine workspaces, or this machine's projects, an automation's own folder left out (PRD automations B30). */
 export function contextWorkspaces(rest: SnapshotRest | null): Workspace[] {
-  return projectsOf(contextAllWorkspaces(rest));
+  const context = remoteContext(rest);
+  return listedWorkspaces(context ? (context.session?.workspaces ?? NO_WORKSPACES) : (rest?.navigator?.workspaces ?? NO_WORKSPACES));
 }
 
 const NO_AGENTS: AgentRow[] = [];
@@ -212,18 +189,6 @@ export function withDeviceForward(event: ReturnType<typeof remoteControl>) {
 export function frameStyle(frame: { x: number; y: number; width: number; height: number }): Record<string, string> {
   const percent = (value: number) => `${Math.max(0, Math.min(1, value)) * 100}%`;
   return { left: percent(frame.x), top: percent(frame.y), width: percent(frame.width), height: percent(frame.height) };
-}
-
-/** Whether Herdr on the host is new enough to store a purpose (the native `supportsRemotePurpose`). */
-export function supportsRemotePurpose(version: string | null | undefined): boolean {
-  if (!version) return false;
-  const numeric = (version.startsWith("v") ? version.slice(1) : version).split(/[-+]/)[0] ?? "";
-  const parts = numeric.split(".").map((part) => Number.parseInt(part, 10));
-  if (parts.length !== 3 || parts.some((part) => !Number.isFinite(part))) return false;
-  const [major, minor, patch] = parts as [number, number, number];
-  if (major !== 0) return major > 0;
-  if (minor !== 9) return minor > 9;
-  return patch >= 1;
 }
 
 export type DeviceCatalogLine = {

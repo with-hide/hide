@@ -15,7 +15,7 @@ function checkoutWith(tabs: string[], extra: { id: string; kind: "file" | "diff"
     id: "c1",
     workspace_id: "w1",
     strip: [
-      ...tabs.map((id) => ({ id: `herdr:${id}`, kind: "herdr" as const, source_id: id, label: id, preview: false })),
+      ...tabs.map((id) => ({ id: `engine:${id}`, kind: "engine" as const, source_id: id, label: id, preview: false })),
       ...extra.map((row) => ({ id: `${row.kind}:${row.id}`, kind: row.kind, source_id: row.id, label: row.id, preview: false })),
     ],
     tabs: tabs.map((id) => ({ id, label: id, panes: [] })),
@@ -47,6 +47,21 @@ it("numbers grouped roots in physical tab order, skipping children and duplicate
   expect(keycaps("a", "c1")).toBeNull();
   expect(keycaps("b", "c1")).toBe(2);
   expect(keycaps("child", "c1")).toBeNull();
+});
+
+// with-hide/hide-private#664: the core's sidebar tree names a child that works on another device, so the
+// numbering resolves it against every device's rows, not the front device's alone.
+it("numbers the roots of a tree that opens a child working on another device", () => {
+  const agents = [agent("a", { lineage_child_pane_ids: ["remote:mini:pane:child"], lineage_collapsed: false }), agent("b")];
+  const child = agent("remote:mini:pane:child", { delegated: true, lineage_parent_pane_id: "a" });
+  const checkout = checkoutWith(["t1"]);
+  checkout.tabs[0]!.panes = [{ id: "a" }, { id: "b" }] as Checkout["tabs"][number]["panes"];
+  const rest = legacyRest({ navigator: { focused_device_id: "local", devices: [{ id: "local", kind: "local" }, { id: "mini", kind: "remote" }], workspaces: [{ id: "w1", device_id: "local", expanded: true, checkouts: [checkout] }] }, status: { remote: [{ target_id: "mini", state: "connected", session: { agents: [child] } }] } } as unknown as SnapshotRest, agents);
+  const refs = [["a", 0], ["remote:mini:pane:child", 1], ["b", 0]].map(([pane_id, depth]) => ({ pane_id: pane_id as string, occurrence: 0, depth: depth as number, descendants: 0 }));
+  const placed = rest.navigator!.workspaces![0]!.checkouts[0]!;
+  placed.agent_scope.sidebar_tree.rows = refs.filter((row) => row.depth === 0);
+  placed.agent_scope.sidebar_tree.visible_rows = refs;
+  expect([...numberedAgents(agentListOrder({ rest, agents })).values()]).toEqual(["a", "b"]);
 });
 
 describe("numbering (electron-digit-shortcuts-hints D-02)", () => {
@@ -135,7 +150,7 @@ describe("numbering (electron-digit-shortcuts-hints D-02)", () => {
     const folded = projectListNumbers(numbered, projectRows(workspaces, {}, listed), workspaces);
     expect(folded("d4", null)).toBeNull();
     expect(folded("d4", "main")).toBe(4);
-    const opened = projectListNumbers(numbered, projectRows(workspaces, {}, listed, null, ["done"]), workspaces);
+    const opened = projectListNumbers(numbered, projectRows(workspaces, {}, listed, ["done"]), workspaces);
     expect(opened("d4", null)).toBe(4);
     expect(opened("d4", "main")).toBeNull();
   });

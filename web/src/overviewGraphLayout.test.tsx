@@ -5,14 +5,14 @@
 import { act } from "react";
 import { createRoot } from "react-dom/client";
 import { afterEach, expect, it, vi } from "vitest";
-import type { OverviewGraphModel } from "./overviewGraphModel";
+import { ADD_PROJECT, type OverviewGraphModel } from "./overviewGraphModel";
 import { projectDropPlaces, useOverviewGraphLayout, type GraphLayout, type RememberedPlaces } from "./overviewGraphLayout";
 import { ForceMap } from "./overviewMapLayout";
 
 const TOKENS = { gap: 8, "root-width": 160, "root-height": 120, "root-orb": 48, "child-width": 120, "child-height": 96, "child-orb": 32 };
 const model = {
   structure: "fixture",
-  projects: [{ id: "p", shown: [{ id: "s1" }, { id: "s2" }], revealSlot: null }, { id: "q", shown: [{ id: "s3" }], revealSlot: null }],
+  projects: [{ id: "p", shown: [{ id: "s1" }, { id: "s2" }], revealSlot: null, startSlot: "p:start" }, { id: "q", shown: [{ id: "s3" }], revealSlot: null, startSlot: "q:start" }],
   layoutParents: new Map([["s1", null], ["s2", "s1"], ["s3", null]]),
   visible: [],
 } as unknown as OverviewGraphModel;
@@ -21,10 +21,18 @@ const nothing: RememberedPlaces = { anchors: new Map(), pins: new Map() };
 
 let layout: GraphLayout | null = null;
 const host: { current: HTMLDivElement | null } = { current: null };
-function Probe({ places }: { places: RememberedPlaces }) {
-  layout = useOverviewGraphLayout(model, host, 0, places);
+function Probe({ places, graph = model }: { places: RememberedPlaces; graph?: OverviewGraphModel }) {
+  layout = useOverviewGraphLayout(graph, host, 0, places);
   return null;
 }
+
+/** The fixture's model with every session and project renamed by `n`, so the physics starts it from other angles. */
+const renamed = (n: number) => ({
+  ...model,
+  structure: `fixture-${n}`,
+  projects: [{ id: `p${n}`, shown: [{ id: `s1-${n}` }, { id: `s2-${n}` }], revealSlot: null, startSlot: `p${n}:start` }, { id: `q${n}`, shown: [{ id: `s3-${n}` }], revealSlot: null, startSlot: `q${n}:start` }],
+  layoutParents: new Map([[`s1-${n}`, null], [`s2-${n}`, `s1-${n}`], [`s3-${n}`, null]]),
+}) as unknown as OverviewGraphModel;
 
 afterEach(() => {
   document.body.replaceChildren();
@@ -88,4 +96,47 @@ it("a project drop carries only the pins the core still remembers, at scale one"
   const dropped = projectDropPlaces(map, "p", { anchors: new Map(), pins: new Map([["s1", { x: 1, y: 1 }]]) }, 2);
   expect(dropped).toEqual({ anchor: { x: 150, y: 0 }, pins: [{ id: "s1", at: { x: 100, y: 50 } }] });
   expect(projectDropPlaces(map, "missing", nothing, 1)).toBeNull();
+});
+
+it("places each project's start circle clear of every session's circle and words, and the Add project place among the sessions (issue 2514)", async () => {
+  const root = await mount(1);
+  await act(async () => root.render(<Probe places={nothing} />));
+  const at = layout!.map!.positions();
+  // A session's room takes in its words, a little inside its neighbours' room.
+  const session = Math.max(TOKENS["root-width"] / 2, TOKENS["root-height"] - TOKENS["root-orb"] / 2) * 0.85 + TOKENS.gap / 2;
+  const places: [string, number][] = [["s1", session], ["s3", session], [ADD_PROJECT.slot, session]];
+  for (const id of [...places.map(([id]) => id), "p:start", "q:start"]) expect(at.get(id)).toBeDefined();
+  // The places keep their rooms apart, give or take the physics' last settling step.
+  for (const [i, [a, ra]] of places.entries()) for (const [b, rb] of places.slice(i + 1)) expect(Math.hypot(at.get(a)!.x - at.get(b)!.x, at.get(a)!.y - at.get(b)!.y)).toBeGreaterThan((ra + rb) * 0.8);
+  // A start circle moves with its project; the Add project place belongs to none.
+  layout!.map!.moveProject("p", { x: 30, y: 0 });
+  expect(layout!.map!.positions().get("p:start")!.x).toBeCloseTo(at.get("p:start")!.x + 30);
+  expect(layout!.map!.positions().get(ADD_PROJECT.slot)).toEqual(at.get(ADD_PROJECT.slot));
+  // No session's circle or words cover a start circle, so a press on it
+  // reaches it, from whatever angles the physics starts the sessions at.
+  const box = (kind: "root" | "child") => ({ width: TOKENS[`${kind}-width`], height: TOKENS[`${kind}-height`], orb: TOKENS[`${kind}-orb`] });
+  for (let n = 0; n < 40; n += 1) {
+    await act(async () => root.render(<Probe places={nothing} graph={renamed(n)} />));
+    const placed = layout!.map!.positions();
+    const clearance = (start: string, id: string, kind: "root" | "child") => {
+      const c = placed.get(start)!, s = placed.get(id)!, b = box(kind);
+      const dx = Math.max(s.x - b.width / 2 - c.x, 0, c.x - (s.x + b.width / 2));
+      const dy = Math.max(s.y - b.orb / 2 - c.y, 0, c.y - (s.y + b.height - b.orb / 2));
+      return Math.hypot(dx, dy) - TOKENS["root-orb"] / 2;
+    };
+    for (const start of [`p${n}:start`, `q${n}:start`]) for (const [id, kind] of [[`s1-${n}`, "root"], [`s2-${n}`, "child"], [`s3-${n}`, "root"]] as const) expect(clearance(start, id, kind), `${start} beside ${id}`).toBeGreaterThan(0);
+  }
+  await act(async () => root.unmount());
+});
+
+it("gathers the Add project place in the gap between projects, leaving every project's place as it was (issue 2514)", () => {
+  const sessions = [{ id: "a1", projectId: "a", parent: null, radius: 40 }, { id: "b1", projectId: "b", parent: null, radius: 40 }];
+  const without = new ForceMap({ projects: ["a", "b"], sessions, operator: 40 });
+  const withFree = new ForceMap({ projects: ["a", "b", ADD_PROJECT.project], sessions: [...sessions, { id: ADD_PROJECT.slot, projectId: ADD_PROJECT.project, parent: null, radius: 40 }], operator: 40, free: ADD_PROJECT.project });
+  expect(withFree.anchorOf("a")).toEqual(without.anchorOf("a"));
+  expect(withFree.anchorOf("b")).toEqual(without.anchorOf("b"));
+  // Two projects stand above and below the operator; the place goes to the side between them.
+  expect(Math.abs(withFree.anchorOf(ADD_PROJECT.project)!.y)).toBeLessThan(1e-9);
+  without.stop();
+  withFree.stop();
 });

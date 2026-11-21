@@ -6,9 +6,13 @@
 // shell's bridge or the daemon's token.
 //
 //   shown      -> created on first show, then placed and made visible
+//   asked off screen -> a web page on no desk on screen whose load the core
+//                 asks for: created and loaded hidden (PRD lane-desk-pair-view B32)
 //   not shown  -> hidden, still alive; a move between areas never reloads
 //   closed     -> the core's inventory no longer names it: destroyed,
 //                 which ends its renderer process
+//   closed itself -> the page's `window.close()` ended its contents: closed,
+//                 and a fresh unloaded page on its slot says so until reloaded
 //
 // A hidden page past `MAX_LIVE_VIEWS`, or one hidden and idle for
 // `IDLE_UNLOAD_MS`, is unloaded: closed, reported `gone`, and loaded again
@@ -23,10 +27,10 @@ import fs from "node:fs";
 import path from "node:path";
 import type { TFunction } from "i18next";
 import { fileURLToPath, pathToFileURL } from "node:url";
-import type { BrowserDevicePlacement, BrowserHostEvent, BrowserPageState, BrowserPlacement, BrowserRect } from "../../../web/src/host";
+import type { BrowserDevicePlacement, BrowserHostEvent, BrowserPageState, BrowserPlacement, BrowserRect, BrowserSync } from "../../../web/src/host";
 import { hostChord, isCycleCommand, keySystemOf, matchHost, releaseModifier, systemRegistry, type Command, type CommandId } from "../../../web/src/shortcuts";
 import { BROWSER_CAPTURE_CHANNEL, BROWSER_COMMAND_CHANNEL, BROWSER_CYCLE_END_CHANNEL, BROWSER_EVENT_CHANNEL, BROWSER_SYNC_CHANNEL } from "../channel";
-import { appScheme, browserPartition, deviceEmulation, IDLE_CHECK_MS, IDLE_UNLOAD_MS, idleExpired, isLocalNetworkHost, isPopup, loadable, localPageRequest, MAX_AUTHORIZED_SCOPES, MAX_LIVE_VIEWS, MAX_POPUPS, overCap, parseCommand, parseSync, parseTarget, popupBounds, remoteRequest, toBounds, viewKey } from "./browserSync";
+import { appScheme, browserPartition, deviceEmulation, IDLE_CHECK_MS, IDLE_UNLOAD_MS, idleExpired, isLocalNetworkHost, isPopup, loadable, localPageRequest, MAX_AUTHORIZED_SCOPES, MAX_LIVE_VIEWS, MAX_POPUPS, offScreenBounds, offScreenEmulation, overCap, parseCommand, parseSync, parseTarget, popupBounds, remoteRequest, toBounds, viewKey } from "./browserSync";
 import { nextZoomFactor, type PageZoom } from "../../../web/src/zoomSteps";
 import type { HostLog } from "./log";
 import type { CdpPage, CdpRetirement, CdpScope } from "./browserCdp";
@@ -63,6 +67,8 @@ type Page = {
   workspace: string;
   id: string;
   view: WebContentsView;
+  /** Its contents' id, kept because a view whose contents were destroyed no longer names them. */
+  readonly contentsId: number;
   /** The load stamp this page last loaded. */
   applied: number;
   visible: boolean;
@@ -114,16 +120,26 @@ type Page = {
   readonly hostVerdicts: Map<string, boolean>;
   /** Its document navigation in flight that began while something else held the keyboard. */
   grab: NavigationGrab | null;
+  /**
+   * Laid out at `bounds` by emulation because no slot has shown it since its
+   * contents were made: Chromium gives a page it never showed no viewport, so
+   * an agent's clicks would land nowhere (PRD lane-desk-pair-view B32). Its
+   * slot ends it.
+   */
+  offScreen?: boolean;
 };
 /**
  * Chromium hands the keyboard to a page's view as each new document commits,
  * whoever held it: a page that reloads itself (a dashboard's meta refresh) or
  * that an agent navigates would take the keys the operator is typing into a
- * terminal. A navigation that began while the shell (`from` null) or another
- * page held the keyboard gives it back; a press in the page while it loads
- * (`claimed`) keeps it there.
+ * terminal. Every document navigation of a page is one, from its start to its
+ * stop. Whether the page's focus during it is a grab is decided when the focus
+ * arrives, by who holds the keyboard then (`BrowserViews.keyboard`): the shell
+ * or another page gets it back, the page itself keeps it, and a press in the
+ * page while it loads (`claimed`) keeps it there. A decision at the start
+ * would miss a keyboard that moved to the shell during the load.
  */
-type NavigationGrab = { readonly from: Page | null; claimed: boolean };
+type NavigationGrab = { claimed: boolean };
 /**
  * One load the core asked of a page, so its stages are logged against it
  * alone: `native` once its own `loadURL` was called, since until then a
@@ -157,6 +173,15 @@ export class BrowserViews {
   private readonly pages = new Map<string, Page>();
   /** Unloaded web pages by key, until their display closes or they show again. */
   private readonly unloaded = new Map<string, Unloaded>();
+  /**
+   * The newest load stamp of the core's inventory this shell has sent, or
+   * null before its first inventory. The core gives each load a stamp later
+   * than every earlier one, so a retained page with no live page here and a
+   * newer stamp is one the core asked to load after this shell saw it (B32).
+   * The first inventory sets it and asks nothing, so a relaunch, a reload or
+   * a checkout that comes back loads none of the pages it already had.
+   */
+  private newestLoad: number | null = null;
   private idleTimer: NodeJS.Timeout | null = null;
   /** Area membership comes from the core's retained inventory, including hidden workspaces. */
   private cdpAreas = new Map<string, string>();
@@ -253,7 +278,7 @@ export class BrowserViews {
     // An ineligible document/frame invalidates the bound generation before
     // another protocol request can use it. Area moves are handled by scope.
     const excluded = this.cdpObserved.filter((previous) => !next.some((row) => row.key === previous.key)
-      && [...this.pages.values()].some((page) => page.key === previous.key && page.view.webContents.id === previous.contents));
+      && [...this.pages.values()].some((page) => page.key === previous.key && page.contentsId === previous.contents));
     if (changed || retirement || this.cdpObservedRevision !== this.cdpScopesRevision) {
       this.cdpObserved = next;
       this.cdpObservedRevision = this.cdpScopesRevision;
@@ -310,7 +335,7 @@ export class BrowserViews {
       // UI owns this optional wire field. Its parser forwards it after the
       // shared contract lands; older shells have no replay epoch.
       const authority = sync as typeof sync & { attachment_epoch?: string; authorized_scopes?: { workspace: string; area_id: string; incarnation?: number }[] };
-      this.sync(sync.workspace, sync.displays, sync.retained, authority.attachment_epoch, authority.authorized_scopes);
+      this.sync(sync.workspace, sync.displays, sync.retained, sync.inventoried === true, authority.attachment_epoch, authority.authorized_scopes);
       if (sync.external_grants) this.keepGrants(new Set(sync.external_grants));
     });
     ipcMain.handle(BROWSER_CAPTURE_CHANNEL, async (event, value: unknown) => {
@@ -368,7 +393,9 @@ export class BrowserViews {
     // A shell that loads again, or moves to another daemon, has not placed
     // anything yet: its pages hide until it says where they go.
     window.webContents.on("did-start-navigation", (details) => {
-      if (details.isMainFrame && !details.isSameDocument) this.hideAll();
+      if (!details.isMainFrame || details.isSameDocument) return;
+      this.hideAll();
+      this.newestLoad = null;
     });
     window.on("blur", () => {
       this.reportWindowFocus(false);
@@ -404,6 +431,7 @@ export class BrowserViews {
       if (this.window === window) {
         this.window = null;
         this.unloaded.clear();
+        this.newestLoad = null;
         if (this.idleTimer) clearInterval(this.idleTimer);
         this.idleTimer = null;
       }
@@ -467,7 +495,12 @@ export class BrowserViews {
   private emulate(page: Page, force = false): void {
     const contents = page.view.webContents;
     if (contents.isDestroyed()) return;
-    const params = page.device && page.bounds ? deviceEmulation(page.device, page.bounds, contents.getZoomFactor()) : null;
+    // Emulating a page no slot has shown before it has a document stalls the
+    // main process, at a device size too; its commit applies the layout.
+    if (page.offScreen && !contents.getURL()) return;
+    const params = !page.bounds ? null
+      : page.device ? deviceEmulation(page.device, page.bounds, contents.getZoomFactor())
+      : page.offScreen ? offScreenEmulation(page.bounds) : null;
     const key = params ? JSON.stringify(params) : null;
     if (!force && key === page.emulated) return;
     if (params) contents.enableDeviceEmulation(params);
@@ -493,7 +526,7 @@ export class BrowserViews {
     return true;
   }
 
-  private sync(workspace: string | null, displays: BrowserPlacement[], retained: { workspace: string; id: string; area_id?: string }[], attachmentEpoch?: string, authorizedScopes?: { workspace: string; area_id: string; incarnation?: number }[]): void {
+  private sync(workspace: string | null, displays: BrowserPlacement[], retained: BrowserSync["retained"], inventoried: boolean, attachmentEpoch?: string, authorizedScopes?: { workspace: string; area_id: string; incarnation?: number }[]): void {
     const window = this.window;
     if (!window) return;
     this.reportWindowFocus(window.isFocused());
@@ -524,6 +557,7 @@ export class BrowserViews {
     }
     const now = this.idle.now();
     const zoom = window.webContents.getZoomFactor();
+    const onSlot = new Set<string>();
     for (const display of displays) {
       const key = viewKey(workspace ?? "", display.id);
       let page = this.pages.get(key);
@@ -533,20 +567,12 @@ export class BrowserViews {
           page.placed = false;
           this.show(page, false);
         }
-        // An unloaded page follows the address and load the core asks of it now.
-        const record = this.unloaded.get(key);
-        if (record && !display.grant) Object.assign(record, { url: display.url, load: display.load });
         continue;
       }
-      if (!page) page = this.create(window, workspace ?? "", display);
-      else if (page.partition !== this.partitionOf(workspace ?? "", display)) {
-        this.destroy(page, "replaced");
-        page = this.create(window, workspace ?? "", display);
-      } else if (display.load > page.applied) {
-        page.applied = display.load;
-        this.load(page, this.addressOf(display));
-      }
+      onSlot.add(key);
+      page = this.refresh(window, workspace ?? "", display).page;
       const bounds = toBounds(display.rect, zoom);
+      page.offScreen = false;
       page.view.setBounds(bounds);
       page.placed = true;
       page.device = display.device ?? null;
@@ -557,12 +583,73 @@ export class BrowserViews {
       page.idleSince = now;
       this.unloaded.delete(key);
     }
+    // Only a sync that carries the core's inventory asks or moves the baseline.
+    const baseline = inventoried ? this.newestLoad : null;
+    for (const row of retained) if (!onSlot.has(viewKey(row.workspace, row.id))) this.offScreen(window, row, now, baseline);
+    if (inventoried) this.newestLoad = retained.reduce((newest, row) => Math.max(newest, row.load ?? 0), this.newestLoad ?? 0);
     this.evictOverCap();
     this.publishCdp();
     if (attachmentEpoch && /^[A-Za-z0-9-]{1,64}$/.test(attachmentEpoch) && attachmentEpoch !== this.attachmentEpoch) {
       this.attachmentEpoch = attachmentEpoch;
-      for (const page of this.pages.values()) this.sendCdpAttached(page, this.cdpLeases.has(page.view.webContents.id));
+      for (const page of this.pages.values()) this.sendCdpAttached(page, this.cdpLeases.has(page.contentsId));
     }
+  }
+
+  /**
+   * A retained page no slot on screen shows: on no desk, on the desk of an
+   * Agent tab or a Workspace not in front, or under a folded desk (PRD
+   * lane-desk-pair-view B32, D-37). A web page whose stamp is newer than
+   * `baseline`, the newest this shell had sent before, is one the core asked
+   * to load: it is loaded here hidden, so an agent's `hide browser` commands
+   * and `--wait` find it loaded and the desk later shows the same page, and
+   * it counts toward `MAX_LIVE_VIEWS` as just seen. A live page loads a newer
+   * stamp where it is. One the core asks nothing of follows its address and
+   * stamp, for `cdpRevive`. An outside file names no address and loads only
+   * when shown.
+   */
+  private offScreen(window: BrowserWindow, row: BrowserSync["retained"][number], now: number, baseline: number | null): void {
+    if (row.url === undefined || row.load === undefined) return;
+    const key = viewKey(row.workspace, row.id);
+    const live = this.pages.get(key);
+    const record = this.unloaded.get(key);
+    if (!live && (baseline === null || row.load <= baseline)) {
+      // Only a web page enters CDP, so only it is loaded for an agent's connection.
+      if (record) Object.assign(record, { url: row.url, load: row.load, area_id: row.area_id });
+      else if (!isFileAddress(row.url)) this.unloaded.set(key, { workspace: row.workspace, id: row.id, area_id: row.area_id, url: row.url, load: row.load, device: null, bounds: null });
+      return;
+    }
+    const { page, changed } = this.refresh(window, row.workspace, { id: row.id, area_id: row.area_id, url: row.url, load: row.load, rect: null, visible: false });
+    if (!changed) return;
+    if (page !== live) {
+      // A new page, or one in another partition, has had no slot show it.
+      page.device = live?.device ?? record?.device ?? null;
+      page.bounds = live?.bounds ?? record?.bounds ?? offScreenBounds(window.getContentBounds());
+      page.offScreen = true;
+      page.view.setBounds(page.bounds);
+      this.emulate(page);
+      this.unloaded.delete(key);
+    }
+    page.shownAt = page.idleSince = now;
+    this.log.event("browser.loaded_off_screen", { id: page.id, live: this.pages.size });
+  }
+
+  /**
+   * The live page of a display, on a slot or off screen, as the core last
+   * asked for it: created when there is none, made again when its address
+   * needs another partition, or loaded again when its stamp is newer than the
+   * one it loaded. `changed` is whether any of these happened.
+   */
+  private refresh(window: BrowserWindow, workspace: string, display: BrowserPlacement): { page: Page; changed: boolean } {
+    const page = this.pages.get(viewKey(workspace, display.id));
+    if (!page) return { page: this.create(window, workspace, display), changed: true };
+    if (page.partition !== this.partitionOf(workspace, display)) {
+      this.destroy(page, "replaced");
+      return { page: this.create(window, workspace, display), changed: true };
+    }
+    if (display.load <= page.applied) return { page, changed: false };
+    page.applied = display.load;
+    this.load(page, this.addressOf(display));
+    return { page, changed: true };
   }
 
   /**
@@ -607,7 +694,13 @@ export class BrowserViews {
   }
 
   private create(window: BrowserWindow, workspace: string, display: BrowserPlacement): Page {
-    const partition = this.partitionOf(workspace, display);
+    const page = this.construct(window, workspace, display, this.partitionOf(workspace, display));
+    this.load(page, this.addressOf(display));
+    return page;
+  }
+
+  /** A page for `display` in its own new contents, added to the window hidden and not loaded. */
+  private construct(window: BrowserWindow, workspace: string, display: Pick<BrowserPlacement, "id" | "url" | "load" | "grant">, partition: string): Page {
     const view = new WebContentsView({
       webPreferences: { session: this.sessionFor(partition), sandbox: true, contextIsolation: true, nodeIntegration: false, webSecurity: true },
     });
@@ -616,6 +709,7 @@ export class BrowserViews {
       workspace,
       id: display.id,
       view,
+      contentsId: view.webContents.id,
       applied: display.load,
       visible: false,
       placed: false,
@@ -645,9 +739,29 @@ export class BrowserViews {
     window.contentView.addChildView(view);
     this.pages.set(page.key, page);
     this.watch(page);
-    this.load(page, this.addressOf(display));
     this.log.event("browser.view_created", { live: this.pages.size });
     return page;
+  }
+
+  /**
+   * A page that ended its own contents (`window.close()`, which Chromium
+   * allows a page that opened with one history entry) leaves its view with
+   * none. It is closed as the core's close would close it and a fresh, unloaded
+   * page takes its place on the same slot, showing why with the toolbar's
+   * reload; loading it again on its own would loop on a page that closes
+   * itself as it loads.
+   */
+  private closedItself(page: Page): void {
+    this.log.event("browser.page_closed_itself", { id: page.id, contents: page.contentsId });
+    this.destroy(page, "closed");
+    const window = this.window;
+    if (!window || window.isDestroyed()) return;
+    const fresh = this.construct(window, page.workspace, { id: page.id, url: page.state.url, load: page.applied, grant: page.grant }, page.partition);
+    Object.assign(fresh, { placed: page.placed, shownAt: page.shownAt, idleSince: page.idleSince, device: page.device, bounds: page.bounds });
+    if (fresh.bounds) fresh.view.setBounds(fresh.bounds);
+    this.emulate(fresh);
+    this.show(fresh, page.visible);
+    this.update(fresh, { url: page.state.url, title: page.state.title, loading: false, failure: this.words()("native.browser.closedItself") });
   }
 
   private sessionFor(partition: string): Session {
@@ -813,11 +927,16 @@ export class BrowserViews {
    */
   private loadStage(page: Page, owned: CoreLoad, event: "browser.load_routed" | "browser.load_committed" | "browser.load_stopped", fields: Record<string, string | number | null> = {}): void {
     if (page.loading !== owned) return;
-    this.log.event(event, { id: page.id, contents: page.view.webContents.id, load: owned.load, ms: this.idle.now() - owned.at, ...fields });
+    this.log.event(event, { id: page.id, contents: page.contentsId, load: owned.load, ms: this.idle.now() - owned.at, ...fields });
   }
 
   private watch(page: Page): void {
     const contents = page.view.webContents;
+    // `destroy` takes the page out of the map before it closes the contents,
+    // so a page still in it lost them some other way.
+    contents.once("destroyed", () => {
+      if (this.pages.get(page.key) === page) this.closedItself(page);
+    });
     const history = () => ({ canGoBack: contents.navigationHistory.canGoBack(), canGoForward: contents.navigationHistory.canGoForward() });
     contents.on("did-start-loading", () => this.update(page, { loading: true, failure: null }));
     contents.on("did-stop-loading", () => {
@@ -826,7 +945,7 @@ export class BrowserViews {
     });
     contents.on("did-start-navigation", (details) => {
       if (!details.isMainFrame || details.isSameDocument) return;
-      page.grab = this.keyboard === page || contents.isFocused() ? null : { from: this.keyboard, claimed: false };
+      page.grab = { claimed: false };
     });
     // A press in a loading page is the operator choosing it: its keyboard stays.
     contents.on("input-event", (_event, input) => {
@@ -878,7 +997,8 @@ export class BrowserViews {
     contents.on("blur", () => this.log.event("browser.page_blur", { id: page.id, owed_page: this.returnTo === page, visible: page.visible, window_focused: this.window?.isFocused() ?? false, owed: this.returnTo !== null }));
     contents.on("focus", () => {
       this.log.event("browser.page_focus", { id: page.id, owed_page: this.returnTo === page, visible: page.visible, window_focused: this.window?.isFocused() ?? false, owed: this.returnTo !== null, navigating: page.grab !== null });
-      if (page.grab) this.undoGrab(page, page.grab);
+      // The page holding the keyboard already is not taking it from anyone.
+      if (page.grab && this.keyboard !== page) this.undoGrab(page, page.grab, this.keyboard);
       else this.tookKeyboard(page);
     });
     this.guard(page, contents);
@@ -889,7 +1009,7 @@ export class BrowserViews {
     contents.on("did-frame-navigate", (_event, url) => {
       if (!isFileAddress(url) || page.cdpFileFrame) return;
       page.cdpFileFrame = true;
-      this.publishCdp({ contentsId: page.view.webContents.id, reason: "replaced" });
+      this.publishCdp({ contentsId: page.contentsId, reason: "replaced" });
     });
     contents.setWindowOpenHandler(({ url, disposition, features, referrer }) => this.openWindow(page, contents, url, isPopup(disposition, features), referrer.url));
     const forget = () => this.declined.delete(contents.id);
@@ -1018,14 +1138,14 @@ export class BrowserViews {
 
   /** Whether the contents asking are on screen: a page shown in the front Workspace, or a popup's visible window. */
   private shown(page: Page, contents: WebContents): boolean {
-    if (contents.id === page.view.webContents.id) return page.visible;
+    if (contents.id === page.contentsId) return page.visible;
     return this.popups.get(contents.id)?.window.isVisible() ?? false;
   }
 
   /** The page a request or a question comes from: a page's own contents, or a popup it owns. */
   private ownerOf(contentsId: number | undefined): Page | undefined {
     if (contentsId === undefined) return undefined;
-    for (const page of this.pages.values()) if (page.view.webContents.id === contentsId) return page;
+    for (const page of this.pages.values()) if (page.contentsId === contentsId) return page;
     return this.popups.get(contentsId)?.owner;
   }
 
@@ -1192,23 +1312,24 @@ export class BrowserViews {
   }
 
   /**
-   * A navigation's commit focused `page`. The press that would claim it
+   * A navigation's commit focused `page` while `from` (a page, or the shell
+   * as null) held the keyboard. The press that would claim it
    * reaches `input-event` after the native focus it causes, in the same
    * turn, so the keyboard goes back on the next one unless a press came.
    * A window in the background is left alone: macOS gives it back the
    * focus it stored on blur when it returns, and focusing contents there
    * would bring the window forward.
    */
-  private undoGrab(page: Page, grab: NavigationGrab): void {
+  private undoGrab(page: Page, grab: NavigationGrab, from: Page | null): void {
     setImmediate(() => {
       if (this.pages.get(page.key) !== page || page.view.webContents.isDestroyed() || !page.view.webContents.isFocused()) return;
       if (grab.claimed) return this.tookKeyboard(page);
       const window = this.window;
       if (!window?.isFocused() || window.webContents.isDestroyed()) return;
-      const from = grab.from && this.pages.get(grab.from.key) === grab.from && grab.from.visible ? grab.from : null;
-      if (from) from.view.webContents.focus();
+      const holder = from && this.pages.get(from.key) === from && from.visible ? from : null;
+      if (holder) holder.view.webContents.focus();
       else window.webContents.focus();
-      this.log.event("browser.navigation_focus_returned", { id: page.id, to: from?.id ?? "shell" });
+      this.log.event("browser.navigation_focus_returned", { id: page.id, to: holder?.id ?? "shell" });
     });
   }
 
@@ -1230,7 +1351,7 @@ export class BrowserViews {
     if (page.visible || page.placed || page.playing || page.downloads > 0) return true;
     // A second player still heard after the first one paused.
     if (page.view.webContents.isCurrentlyAudible()) return true;
-    if (this.cdpLeases.has(page.view.webContents.id)) return true;
+    if (this.cdpLeases.has(page.contentsId)) return true;
     for (const popup of this.popups.values()) if (popup.owner === page) return true;
     return false;
   }
@@ -1275,8 +1396,10 @@ export class BrowserViews {
       else {
         page = this.create(window, record.workspace, { id: record.id, area_id: record.area_id, url: record.url, load: record.load, rect: null, visible: false });
         page.device = record.device;
-        page.bounds = record.bounds;
-        if (record.bounds) page.view.setBounds(record.bounds);
+        // A page never shown here lays out where an off-screen load would (B32).
+        page.bounds = record.bounds ?? offScreenBounds(window.getContentBounds());
+        page.offScreen = true;
+        page.view.setBounds(page.bounds);
         this.emulate(page);
       }
       // Loaded again counts as seen, so the next check does not close it at once.
@@ -1327,7 +1450,7 @@ export class BrowserViews {
     if (this.returnTo === page) this.returnTo = null;
     if (this.keyboard === page) this.keyboard = null;
     this.pages.delete(page.key);
-    this.publishCdp({ contentsId: page.view.webContents.id, reason: reason === "idle" ? "evicted" : reason });
+    this.publishCdp({ contentsId: page.contentsId, reason: reason === "idle" ? "evicted" : reason });
     // An outside file's page resolved no route, so the daemon has none to let go.
     if (!page.grant) this.release(page.workspace, page.id, page.applied);
     if (page.report) clearTimeout(page.report);
@@ -1335,7 +1458,8 @@ export class BrowserViews {
     if (window && !window.isDestroyed()) window.contentView.removeChildView(page.view);
     // Closing the contents ends the page's renderer process; a view left
     // alone keeps it running after the view is gone.
-    if (!page.view.webContents.isDestroyed()) page.view.webContents.close();
+    const contents = page.view.webContents as WebContents | undefined;
+    if (contents && !contents.isDestroyed()) contents.close();
     this.log.event("browser.view_closed", { reason, live: this.pages.size });
   }
 }

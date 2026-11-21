@@ -23,9 +23,11 @@ use hide_node_link::device::{
 
 pub use super::host::bootstrap::Ran;
 
-/// How long ssh has to sign in and reach the start script, not counting the
-/// time a question or a browser check waits for the operator: a server that
-/// takes longer is not answering.
+/// How long ssh has to answer an attempt's questions (`ssh -V`, `ssh -G`),
+/// sign in and reach the start script, not counting the time a question or
+/// a browser check waits for the operator: an ssh that takes longer is not
+/// answering. One clock for all of it, so a slow first start of the program
+/// is part of connecting and never a failure of its own.
 pub(super) const SIGN_IN_TIMEOUT: Duration = Duration::from_secs(90);
 /// How long a browser check waits (D-10).
 const BROWSER_WITHIN: Duration = Duration::from_secs(5 * 60);
@@ -245,6 +247,9 @@ pub(super) struct Dial<'a> {
     pub askpass: Option<&'a Path>,
     /// Names the connection in the log.
     pub target: &'a str,
+    /// When the attempt's [`SIGN_IN_TIMEOUT`], started before its first
+    /// question to ssh, runs out.
+    pub until: Instant,
 }
 
 /// Starts `ssh` for the alias and reads the start script's probe through the
@@ -295,7 +300,7 @@ pub(super) fn sign_in(
         dial.alias,
         dial.resolved,
         version,
-        bootstrap::REMOTE_COMMAND,
+        &bootstrap::remote_command(),
     ));
     match (&desk, dial.askpass) {
         (Some(desk), Some(program)) => {
@@ -337,19 +342,26 @@ pub(super) fn sign_in(
         .map_err(|error| EstablishError::Helper(format!("ssh's link could not start: {error}")))?;
     let mut pipe = SigningIn::new(link, desk, sign_in, wake, cancel);
     stage("sign_in");
-    let facts = match bootstrap::probe(&mut pipe, Instant::now() + SIGN_IN_TIMEOUT) {
+    let asked = Instant::now();
+    let facts = match bootstrap::probe(&mut pipe, dial.until) {
         Ok(facts) => facts,
         Err(ProbeError::Unsupported(reason)) => {
             pipe.link.kill();
             return Err(EstablishError::Unsupported(reason));
         }
         Err(ProbeError::Stopped(stop)) => {
+            // Read before the kill below ends ssh's output itself, and before
+            // the kill's own reap makes the tree unreadable.
+            let closed = pipe.link.output_ended();
+            let silent = pipe
+                .link
+                .silent_state(Instant::now().saturating_duration_since(asked));
             pipe.link.kill();
             if cancel.is_cancelled() {
                 return Err(EstablishError::Helper(ENDED.to_owned()));
             }
             let stderr: Vec<String> = pipe.stderr.iter().cloned().collect();
-            let mut failure = openssh::classify(&openssh::Ending {
+            let failure = openssh::classify(&openssh::Ending {
                 stderr: &stderr,
                 refusal: pipe
                     .desk
@@ -369,21 +381,22 @@ pub(super) fn sign_in(
                     openssh::Asking::Nobody
                 },
                 browser_waited: pipe.browser_expired,
+                stopped: match &stop {
+                    Stop::Quiet => openssh::Stopped::Quiet,
+                    Stop::Ended(reason) if closed => openssh::Stopped::Closed(reason),
+                    Stop::Ended(reason) => openssh::Stopped::Ended(reason),
+                },
             });
-            if failure.problem == SshProblem::Unclassified && stderr.is_empty() {
-                failure.detail = match stop {
-                    Stop::Quiet => {
-                        format!("ssh did not sign in within {} s", SIGN_IN_TIMEOUT.as_secs())
-                    }
-                    Stop::Ended(reason) => reason,
-                };
-            }
             crate::diagnostic!(json!({
                 "component": "remote_host",
                 "kind": "host.ssh_failed",
                 "target": dial.target,
                 "problem": failure.problem.code(),
                 "stderr_tail": stderr,
+                // What the start script's child was doing when it never
+                // answered, so a shell that ran no wrapper reads apart from
+                // one whose wrapper was busy.
+                "silent": silent,
             }));
             return Err(EstablishError::Ssh(failure));
         }
@@ -434,6 +447,11 @@ impl SessionError {
                 SshProblem::NameNotFound
                     | SshProblem::Unreachable
                     | SshProblem::ProxyFailed
+                    | SshProblem::SilentEnd
+                    | SshProblem::SilentTimeout
+                    | SshProblem::ConfigUnreadable
+                    | SshProblem::CheckFailed
+                    | SshProblem::Busy
                     | SshProblem::Unclassified
             ),
             Self::Lost(_) => true,
@@ -515,9 +533,10 @@ impl SshTarget {
         &self.alias
     }
 
-    /// What `ssh -G` resolves the alias to now.
-    pub fn resolve(&self) -> Result<Resolved, SshFailure> {
-        self.program.resolve(&self.alias)
+    /// What `ssh -G` resolves the alias to now, within the attempt's
+    /// `until` ([`SIGN_IN_TIMEOUT`] from its start) or until `cancel`.
+    pub fn resolve(&self, until: Instant, cancel: &Cancel) -> Result<Resolved, SshFailure> {
+        self.program.resolve(&self.alias, until, cancel)
     }
 }
 
@@ -550,12 +569,16 @@ impl Session {
     pub fn open(
         target: &SshTarget,
         resolved: &Resolved,
+        until: Instant,
         cancel: &Cancel,
         screen: Arc<dyn SignIn>,
         wake: Wake,
     ) -> Result<Self, SessionError> {
         let name = format!("ssh:{}", target.alias);
-        let version = target.program.version().map_err(SessionError::Ssh)?;
+        let version = target
+            .program
+            .version(until, cancel)
+            .map_err(SessionError::Ssh)?;
         // D-06, B14: a dial nobody pressed for hands its questions to
         // nobody, so the first one ends it as a sign-in needed and the
         // screen never shows it.
@@ -571,6 +594,7 @@ impl Session {
                 version,
                 askpass: target.askpass.as_deref(),
                 target: &name,
+                until,
             },
             Arc::clone(&asks),
             wake,
@@ -591,6 +615,11 @@ impl Session {
     /// The account and platform the machine answered with.
     pub fn home(&self) -> &str {
         &self.facts.home
+    }
+
+    /// The machine's system as it answered: `macos`, `linux` or `windows`.
+    pub fn system(&self) -> &str {
+        &self.facts.os
     }
 
     /// Whether a step lost this session, so no later step may use it.
@@ -629,7 +658,13 @@ impl Session {
         let payload = packages
             .payload(&self.facts.os, &self.facts.arch)
             .map_err(|error| SessionError::Refused(error.to_string()))?;
-        let installed = bootstrap::install_build(&mut self.pipe, root, &self.facts.home, payload);
+        let installed = bootstrap::install_build(
+            &mut self.pipe,
+            root,
+            &self.facts.home,
+            payload,
+            self.facts.unpacks,
+        );
         // The install reads its own failure into words; whether the
         // connection is still in step is not among them.
         if installed.is_err() {
@@ -768,6 +803,7 @@ mod tests {
                     },
                     askpass: None,
                     target: "ssh:studio",
+                    until: Instant::now() + SIGN_IN_TIMEOUT,
                 },
                 Arc::clone(&row) as Arc<dyn SignIn>,
                 Wake::Allowed,
@@ -839,5 +875,37 @@ mod tests {
             pipe.stderr,
             ["Log in with your Cloudflare account: https://team.cloudflareaccess.com/…"]
         );
+    }
+
+    /// A start script that never answers names what this computer's `ssh` was
+    /// doing (with-hide/hide-private#2564, #874): how long the script went
+    /// unanswered, the client's pid and the processor time it used. It says
+    /// "this computer's ssh" because the login shell and the wrapper run on
+    /// the device and are never in this tree, so a reader cannot take the
+    /// list for the device's processes.
+    #[test]
+    fn a_start_script_that_never_answers_names_the_client_and_its_wait() {
+        let mut command = std::process::Command::new("/bin/sh");
+        command
+            .args(["-c", "exec sleep 60"])
+            .stdin(std::process::Stdio::piped())
+            .stdout(std::process::Stdio::piped())
+            .stderr(std::process::Stdio::piped());
+        let child = hide_platform::process::OwnedChild::spawn_tied(&mut command).unwrap();
+        let pid = child.id();
+        let cancel = Cancel::default();
+        let ssh = ChildLink::start("ssh:studio", child, Some(&cancel)).unwrap();
+        let ran = Duration::from_millis(7);
+        let silent = ssh.silent_state(ran);
+        // The client, the time it waited, and what it is: never a claim about
+        // the device's processes.
+        assert!(silent.contains("this computer's ssh"), "{silent}");
+        assert!(silent.contains(&format!("{pid}")), "{silent}");
+        assert!(silent.contains("7.0ms"), "{silent}");
+        assert!(
+            silent.contains("sleep") || silent.contains("sh"),
+            "{silent}"
+        );
+        drop(ssh);
     }
 }

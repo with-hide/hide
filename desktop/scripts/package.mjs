@@ -1,6 +1,6 @@
 // Packages the release app for the system this runs on: the Electron host
-// with the release daemon, the hide CLI, the hook helper, the
-// pinned Herdr in its resources folder (the Electron release app PRD, D-03),
+// with the release daemon, the hide CLI, the hook helper and the pane holder
+// in its resources folder (the Electron release app PRD, D-03),
 // wrapped in that system's installers and the files its updater reads
 // (installers.mjs; PRD auto-update D-08, D-35), each installer beside a
 // SHA-256 checksum, all in desktop/out/release.
@@ -12,10 +12,8 @@
 // builds an unsigned per-user installer and Linux x64 an unsigned deb and rpm
 // (operator decision 2026-10-03, PRD auto-update D-07: no paid signing outside
 // macOS). Each is built on its own system, because the release binaries come from that
-// system's cargo build. A release Mac or Windows app carries the manifest of
-// the two Linux device bundles a run made from device-helpers.yml at this
-// exact source, version and build order, publishing the archives
-// separately; a local package carries none (see below).
+// system's cargo build. No package carries or publishes a device kit (see
+// below).
 //
 // `package.mjs compile` stops after the web shell and the release binaries,
 // recording them in desktop/out/release-binaries.json, and `package.mjs
@@ -35,11 +33,10 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { packager } from "@electron/packager";
 import { applyFuses, assertFuses } from "./fuses.mjs";
-import { copyTree } from "./copy-tree.mjs";
 import { APP_ID, buildInstallers } from "./installers.mjs";
 import { assertNotarized, developerIdOptions, macosSigning, notarizeApp } from "./macos-signing.mjs";
 import { orderOnMain, resolveVersion } from "./build-identity.mjs";
-import { DEVICE_BUNDLE_MANIFEST, readDeviceBundles } from "./device-helpers.mjs";
+import { DEVICE_BUNDLE_MANIFEST, DEVICE_KITS } from "./device-helpers.mjs";
 import { checkReleaseBinaries, recordReleaseBinaries, RELEASE_PROGRAMS } from "./release-binaries.mjs";
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
@@ -55,43 +52,21 @@ const run = (file, args, options = {}) => execFileSync(file, args, { cwd: repo, 
 const pnpm = (args) => run("pnpm", args, { stdio: "inherit", shell: process.platform === "win32" });
 
 /**
- * What differs per system. `arch` is the one architecture the pinned Herdr
- * asset for that system serves (`contracts/herdr-bundle.json`), so another
- * machine is refused rather than given a Herdr it cannot run. `herdr` fetches
- * the verified asset and answers its executable and the files that must sit
- * beside it.
+ * What differs per system. `arch` is the one architecture a package for that
+ * system is built for, so another machine is refused rather than given
+ * binaries it cannot run.
  */
 const SYSTEMS = {
-  darwin: {
-    label: "macos",
-    arch: "arm64",
-    herdr: () => ({ executable: run("zsh", ["scripts/fetch-herdr-runtime.sh"]), companions: [] }),
-  },
-  win32: {
-    label: "windows",
-    arch: "x64",
-    // The Windows asset is a zip: herdr.exe finds its ConPTY runtime in the
-    // `conpty` folder beside it, and the zip carries that runtime's notices.
-    // Every entry ships as upstream laid it out.
-    herdr: () => {
-      const executable = run("pwsh", ["-NoProfile", "-File", "scripts/fetch-herdr-runtime.ps1"]);
-      const folder = path.dirname(executable);
-      const companions = fs.readdirSync(folder).filter((entry) => entry !== path.basename(executable)).map((entry) => path.join(folder, entry));
-      return { executable, companions };
-    },
-  },
-  linux: {
-    label: "linux",
-    arch: "x64",
-    herdr: () => ({ executable: run("zsh", ["scripts/fetch-herdr-runtime.sh", "--platform", "linux-x86_64"]), companions: [] }),
-  },
+  darwin: { label: "macos", arch: "arm64" },
+  win32: { label: "windows", arch: "x64" },
+  linux: { label: "linux", arch: "x64" },
 };
 
 const platform = process.platform;
 const system = SYSTEMS[platform];
 if (!system) throw new Error(`hide has no package for ${platform}`);
 const arch = process.arch;
-if (arch !== system.arch) throw new Error(`the pinned Herdr serves ${system.label} ${system.arch} only, and this machine is ${arch}`);
+if (arch !== system.arch) throw new Error(`hide packages ${system.label} ${system.arch} only, and this machine is ${arch}`);
 const exe = platform === "win32" ? ".exe" : "";
 const [phase = "both", ...extraArguments] = process.argv.slice(2);
 if (!["both", "compile", "assemble"].includes(phase) || extraArguments.length > 0) throw new Error("usage: package.mjs [compile|assemble]");
@@ -142,27 +117,12 @@ if (phase !== "assemble") {
 // names it in HIDE_BUILD_ORDER, or is refused.
 const order = process.env.HIDE_BUILD_ORDER || orderOnMain();
 if (!/^[0-9]+$/.test(order)) throw new Error(`the package's build order could not be read (got '${order}')`);
-// Required artifacts are checked before the native release build, or before
-// the app is assembled from compiled binaries. No release Mac or Windows app
-// may silently leave a Linux device, or a WSL distribution, without its kit:
-// they take the bundles a run's `device-bundles` job made, downloaded here,
-// as they are, so both apps ship one manifest. A local package (no
-// HIDE_VERSION) on either system carries no device manifest at all: its
-// version is a `-main.` build with no published release, which the daemon
-// refuses to download for anyway (hide-node device_bundles), and the Linux
-// helpers build only on Linux runners, so asking for them would leave a
-// source build on a Mac waiting and on Windows unable to finish
-// (with-hide/hide#2041); a device then reports that this build has no device
-// download manifest.
-const deviceBundles = path.join(out, "device-bundles");
-const releasing = Boolean(process.env.HIDE_VERSION);
-const carriesDeviceKit = (platform === "darwin" || platform === "win32") && releasing && phase !== "compile";
-const identity = { version, commit, order };
-if (carriesDeviceKit && !fs.existsSync(path.join(deviceBundles, DEVICE_BUNDLE_MANIFEST))) {
-  throw new Error(`the ${version} release needs this run's device bundles in ${deviceBundles} (the hide-device-bundles artifact, made by desktop/scripts/device-helpers.mjs bundle)`);
-}
-const deviceManifest = carriesDeviceKit ? readDeviceBundles(deviceBundles, identity) : null;
-if (platform !== "linux" && !releasing && phase !== "compile") console.log("device_manifest=none (a local build has no device release)");
+// No app carries a device kit or its manifest, and no package publishes one:
+// a core of any system fetches the manifest from its own release and the
+// kits it names (with-hide/hide-private#501 decision 1,
+// hide-node/src/ssh/kit/), which the release candidate makes and the private
+// publisher places beside the installers (docs/BUILD.md, Device helper
+// release bundles).
 const cargoRelease = path.join(repo, "target", "release");
 const releaseBinaries = RELEASE_PROGRAMS.map((name) => `${name}${exe}`);
 if (phase === "assemble") {
@@ -174,12 +134,7 @@ if (phase === "compile") {
   recordReleaseBinaries(binariesRecord, cargoRelease, releaseBinaries, { commit, version, order });
   process.exit(0);
 }
-const herdr = system.herdr();
-
-const shipped = [
-  ...releaseBinaries.map((name) => [name, path.join(cargoRelease, name)]),
-  [`herdr${exe}`, herdr.executable],
-];
+const shipped = releaseBinaries.map((name) => [name, path.join(cargoRelease, name)]);
 const missing = shipped.filter(([, source]) => {
   try {
     fs.accessSync(source, fs.constants.X_OK);
@@ -202,16 +157,9 @@ const extraResource = shipped.map(([name, source]) => {
   fs.chmodSync(target, 0o755);
   return target;
 });
-if (deviceManifest) extraResource.push(deviceManifest);
-for (const companion of herdr.companions) {
-  const target = path.join(staged, path.basename(companion));
-  copyTree(companion, target);
-  extraResource.push(target);
-}
 // A Windows holder runs its pane only on the pinned ConPTY runtime, which the
 // node finds in `holder-conpty` beside its program (hide_kit::holders::
-// CONPTY_SOURCE), apart from the `conpty` folder Herdr's asset ships. The
-// fetch refuses a package or a file of any digest other than
+// CONPTY_SOURCE). The fetch refuses a package or a file of any digest other than
 // contracts/conpty.json's, which fails the package.
 const HOLDER_CONPTY = "holder-conpty";
 if (platform === "win32") {
@@ -226,6 +174,9 @@ extraResource.push(notices);
 extraResource.push(path.join(resources, "app-update.yml"));
 
 const APP_BUNDLE_ID = APP_ID;
+
+/** What macOS shows when Hide first reaches another machine on the same network. */
+const LOCAL_NETWORK_REASON = "Hide connects directly to your other computers on this network.";
 
 /**
  * macOS's notification permission helper (PRD first-run-onboarding D-12):
@@ -275,6 +226,11 @@ const [outputDir] = await packager({
   platform,
   arch,
   overwrite: true,
+  // macOS shows this once, when the operator first shares this Mac or adds
+  // a device, and without the key blocks every path to an address on the
+  // same network, so two Macs on one Wi-Fi would connect only through the
+  // relay (PRD device-connect-iroh D-83).
+  extendInfo: { NSLocalNetworkUsageDescription: LOCAL_NETWORK_REASON },
   // The packager's own default (native modules unpacked), plus the status page: with the shipped
   // fuses `loadFile` cannot read a file inside the archive (`src/main/statusPage.ts`).
   asar: { unpack: "**/{.**,**}/**/*.node", unpackDir: "dist/static" },
@@ -331,18 +287,19 @@ for (const [name] of shipped) {
   fs.accessSync(file, fs.constants.X_OK);
   if (!fs.statSync(file).isFile()) throw new Error(`${name} did not land as a file in ${bundledResources}`);
 }
-for (const companion of herdr.companions) {
-  const name = path.basename(companion);
-  if (!fs.existsSync(path.join(bundledResources, name))) throw new Error(`Herdr's ${name} did not land in ${bundledResources}`);
-}
 if (platform === "win32") {
-  for (const file of ["conpty.dll", "x64/OpenConsole.exe", "arm64/OpenConsole.exe", "conpty-files.json"]) {
+  // The files contracts/conpty.json pins and the file list the fetch writes beside them.
+  const pinned = Object.keys(JSON.parse(fs.readFileSync(path.join(repo, "contracts", "conpty.json"), "utf8")).files);
+  for (const file of [...pinned, "conpty-files.json"]) {
     if (!fs.statSync(path.join(bundledResources, HOLDER_CONPTY, file), { throwIfNoEntry: false })?.isFile()) {
       throw new Error(`the holder's ConPTY runtime ${file} did not land in ${path.join(bundledResources, HOLDER_CONPTY)}`);
     }
   }
 }
 if (platform === "darwin") {
+  // Read back from the built app, like the fuses: a bundle without it ships a Mac that never connects directly.
+  const reason = spawnSync("/usr/bin/plutil", ["-extract", "NSLocalNetworkUsageDescription", "raw", path.join(bundle, "Contents", "Info.plist")], { encoding: "utf8" });
+  if (reason.status !== 0 || reason.stdout.trim() !== LOCAL_NETWORK_REASON) throw new Error("hide.app's Info.plist does not carry NSLocalNetworkUsageDescription");
   const helper = path.join(bundle, "Contents", "MacOS", path.basename(notificationHelper));
   if (!fs.statSync(helper, { throwIfNoEntry: false })?.isFile()) throw new Error(`the notification permission helper did not land at ${helper}`);
   // A Developer ID bundle was signed inside the packager; a release's is notarized below.
@@ -356,22 +313,17 @@ if (platform === "darwin") {
   if (signing.mode === "developer-id") notarizeApp(bundle, signing, out);
 }
 
+// An app carries neither a device kit's manifest nor another platform's
+// programs; a device's kit is a release asset only.
+if (fs.existsSync(path.join(bundledResources, DEVICE_BUNDLE_MANIFEST))) throw new Error("the device kit manifest must not ship in the app");
+for (const devicePlatform of Object.keys(DEVICE_KITS)) {
+  for (const name of releaseBinaries) {
+    if (fs.existsSync(path.join(bundledResources, `${name}-${devicePlatform}`))) throw new Error("foreign device binaries must not ship in the app");
+  }
+}
 // The installers wrap the app as it stands; a Developer ID build's dmg is
 // signed and notarized there too.
 const installers = await buildInstallers({ app: bundle, version, out: release, signing });
-if (deviceManifest) {
-  const manifest = JSON.parse(fs.readFileSync(path.join(bundledResources, DEVICE_BUNDLE_MANIFEST), "utf8"));
-  for (const [devicePlatform, { asset }] of Object.entries(manifest.platforms)) {
-    for (const name of ["hided", "hide", "hide-agent-hooks", "hide-holder", "herdr"]) {
-      if (fs.existsSync(path.join(bundledResources, `${name}-${devicePlatform}`))) throw new Error("foreign device binaries must not ship in the app");
-    }
-    // The archives and their manifest are release assets once, beside the
-    // Mac app; the Windows app ships the same manifest and publishes neither.
-    if (platform === "darwin") fs.copyFileSync(path.join(deviceBundles, asset), path.join(release, asset));
-  }
-  if (platform === "darwin") fs.copyFileSync(deviceManifest, path.join(release, DEVICE_BUNDLE_MANIFEST));
-  console.log(`device_manifest_bytes=${fs.statSync(deviceManifest).size}`);
-}
 // What a downloader of the update gets is the zip, so Gatekeeper judges the app expanded from it.
 if (signing?.mode === "developer-id") {
   const zip = Object.values(installers).find((file) => file.endsWith(".zip"));

@@ -1,0 +1,151 @@
+#!/usr/bin/env bash
+# The release gate on the signed app: what the build machine reads out of the exported ipa, held to what the release
+# is allowed to be. Prints every failed check and exits 1 when there is one; the upload never starts after a failure.
+#
+# Usage: check-release-app.sh <app dir> <facts dir> <release-expect.json> <bundle manifest.json> <version> <build>
+#   <app dir>     the unpacked Payload/App.app
+#   <facts dir>   JSON the caller made from the app's property lists (mini-release.sh does, with plutil and codesign):
+#                 info.json, privacy.json, entitlements.json, profile.json, and for each app extension in PlugIns/
+#                 appex/<name>/info.json, privacy.json, entitlements.json
+#   <manifest>    the bundle manifest bundle-manifest.mjs wrote: the sha256 of every file the app's public/ may hold
+#
+# It needs jq and a sha256 tool only, so its tests run wherever the mobile tests do. The entitlements in
+# release-expect.json are the exact list: a node that adds a capability adds its entitlement there in the same change.
+set -euo pipefail
+
+(( $# == 6 )) || { printf 'usage: %s <app dir> <facts dir> <release-expect.json> <manifest.json> <version> <build>\n' "$0" >&2; exit 2; }
+app=$1 facts=$2 expect=$3 manifest=$4 version=$5 build=$6
+
+failures=0
+fail() { printf 'release check failed: %s\n' "$1" >&2; failures=$((failures + 1)); }
+# `ok <what> <jq filter> <file>`: the filter must print true.
+ok() {
+    local result
+    result=$(jq -r "$2" "$3" 2> /dev/null || printf 'error')
+    [[ "$result" == true ]] || fail "$1"
+}
+sha256_of() { if command -v sha256sum > /dev/null; then sha256sum "$1" | cut -d' ' -f1; else shasum -a 256 "$1" | cut -d' ' -f1; fi; }
+
+for file in "$facts/info.json" "$facts/privacy.json" "$facts/entitlements.json" "$facts/profile.json" "$app/capacitor.config.json" "$expect" "$manifest"; do
+    [[ -s "$file" ]] || { printf 'release check failed: %s is missing or empty\n' "$file" >&2; exit 1; }
+done
+
+bundle=$(jq -r .bundleId "$expect")
+team=$(jq -r .teamId "$expect")
+min_os=$(jq -r .minimumOS "$expect")
+sdk=$(jq -r .sdkPrefix "$expect")
+
+# The identity of the build.
+ok "bundle id is $bundle" ".CFBundleIdentifier == \"$bundle\"" "$facts/info.json"
+ok "version is $version" ".CFBundleShortVersionString == \"$version\"" "$facts/info.json"
+ok "build number is $build" ".CFBundleVersion == \"$build\"" "$facts/info.json"
+ok "iPhone only" '.UIDeviceFamily == [1]' "$facts/info.json"
+ok "minimum iOS is $min_os" ".MinimumOSVersion == \"$min_os\"" "$facts/info.json"
+ok "built with the $sdk SDK" "(.DTSDKName // \"\") | startswith(\"$sdk\")" "$facts/info.json"
+# The app and its extension name their keychain groups from this value (PairingKeychain, PushKeychain). Without it the
+# app keeps a push key in its own group, which the extension cannot read, and every notification stays the fixed text.
+ok "the app's Info.plist names the team prefix $team." ".AppIdentifierPrefix == \"$team.\"" "$facts/info.json"
+
+# Export compliance: the operator answered App Store Connect's questionnaire (standard encryption algorithms, not
+# distributed in France), and the app states that answer so no build waits at Missing Compliance. The key must be present
+# and false; absent leaves the question to every build, true is refused at validation without Apple's code (error 90592),
+# and a code in the app would claim a review nobody did. docs/BUILD.md says when the answers must be given again.
+ok "the app declares ITSAppUsesNonExemptEncryption false" '.ITSAppUsesNonExemptEncryption == false' "$facts/info.json"
+ok "the app carries no export compliance code" 'has("ITSEncryptionExportComplianceCode") | not' "$facts/info.json"
+
+# No debug left in: Capacitor's own debug switch, an ATS exception, a web view anyone can inspect, a remote page.
+ok "CAPACITOR_DEBUG is not on" '((.CAPACITOR_DEBUG // "") | tostring | ascii_downcase) as $v | ($v != "true" and $v != "yes" and $v != "1")' "$facts/info.json"
+ok "no App Transport Security exception" 'has("NSAppTransportSecurity") | not' "$facts/info.json"
+ok "Capacitor logging is none" '.loggingBehavior == "none"' "$app/capacitor.config.json"
+ok "the app loads no server url" '(.server // {}) | (has("url") or .cleartext == true) | not' "$app/capacitor.config.json"
+ok "the app allows no navigation" '((.server // {}).allowNavigation // []) == []' "$app/capacitor.config.json"
+ok "Capacitor leaves the notification center to the app" '((.ios // {}).handleApplicationNotifications) == false' "$app/capacitor.config.json"
+ok "the web view cannot be inspected" '((.ios // {}).webContentsDebuggingEnabled // false) == false' "$app/capacitor.config.json"
+
+# The binary: the debug pairing, tapping and clock hooks are compiled out, and the bridge gate is compiled in.
+executable=$(jq -r .CFBundleExecutable "$facts/info.json")
+if [[ -f "$app/$executable" ]]; then
+    # Each debug-only input of the simulator checks is read from one variable: none of the names may survive into a release.
+    for hook in pairing:HIDE_DEBUG_PAIR_LINK tapping:HIDE_DEBUG_TAPS clock:HIDE_DEBUG_NOW; do
+        ! grep -aq "${hook#*:}" "$app/$executable" || fail "the debug ${hook%%:*} hook is in the binary"
+    done
+    grep -aq 'BridgeGate' "$app/$executable" || fail "the bridge gate is not in the binary"
+else
+    fail "the app has no executable named $executable"
+fi
+
+# Background modes: the app wakes only for a notification, and for nothing else.
+ok "the only background mode is remote-notification" ".UIBackgroundModes == $(jq -c .backgroundModes "$expect")" "$facts/info.json"
+
+# Each app extension: exactly the ones the release names, each signed for its own bundle id with the entitlements it is
+# allowed, carrying a privacy manifest, and (for the notification extension) holding no code that can reach the network.
+declared=$(jq -r '(.appExtensions // []) | map(.name) | sort | .[]' "$expect")
+found=$( (cd "$app/PlugIns" 2> /dev/null && ls -d ./*.appex 2> /dev/null | sed 's|^\./||') | LC_ALL=C sort || true)
+[[ "$declared" == "$found" ]] || fail "the app embeds different extensions than release-expect.json names (embedded: ${found:-none}; named: ${declared:-none})"
+while IFS= read -r name; do
+    [[ -n "$name" ]] || continue
+    appex="$app/PlugIns/$name"
+    af="$facts/appex/$name"
+    entry=$(jq -c --arg n "$name" '.appExtensions[] | select(.name == $n)' "$expect")
+    appex_bundle=$(jq -r .bundleId <<< "$entry")
+    point=$(jq -r .extensionPoint <<< "$entry")
+    for file in "$af/info.json" "$af/privacy.json" "$af/entitlements.json"; do
+        [[ -s "$file" ]] || { fail "$name: $file is missing or empty"; continue 2; }
+    done
+    ok "$name: bundle id is $appex_bundle" ".CFBundleIdentifier == \"$appex_bundle\"" "$af/info.json"
+    ok "$name: Info.plist names the team prefix $team." ".AppIdentifierPrefix == \"$team.\"" "$af/info.json"
+    ok "$name: version is $version" ".CFBundleShortVersionString == \"$version\"" "$af/info.json"
+    ok "$name: build number is $build" ".CFBundleVersion == \"$build\"" "$af/info.json"
+    ok "$name: extension point is $point" ".NSExtension.NSExtensionPointIdentifier == \"$point\"" "$af/info.json"
+    ok "$name: minimum iOS is $min_os" ".MinimumOSVersion == \"$min_os\"" "$af/info.json"
+    ok "$name: no App Transport Security exception" 'has("NSAppTransportSecurity") | not' "$af/info.json"
+    ok "$name: no background modes" 'has("UIBackgroundModes") | not' "$af/info.json"
+    [[ -f "$appex/PrivacyInfo.xcprivacy" ]] || fail "$name: has no PrivacyInfo.xcprivacy"
+    ok "$name: the manifest says no tracking and collects nothing" '.NSPrivacyTracking == false and (.NSPrivacyTrackingDomains // []) == [] and (.NSPrivacyCollectedDataTypes // []) == []' "$af/privacy.json"
+    ok "$name: every declared API has a reason" '(.NSPrivacyAccessedAPITypes // []) | all(.NSPrivacyAccessedAPITypeReasons | length > 0)' "$af/privacy.json"
+    if jq -e --argjson want "$entry" '. == $want.entitlements' "$af/entitlements.json" > /dev/null 2>&1; then :; else
+        fail "$name: entitlements differ from release-expect.json (got: $(jq -c -S . "$af/entitlements.json" 2> /dev/null | cut -c1-300))"
+    fi
+    appex_exec=$(jq -r .CFBundleExecutable "$af/info.json")
+    if [[ -f "$appex/$appex_exec" ]]; then
+        while IFS= read -r word; do
+            [[ -n "$word" ]] || continue
+            ! grep -aq -- "$word" "$appex/$appex_exec" || fail "$name: its binary holds networking code ($word)"
+        done < <(jq -r '.forbiddenBinaryStrings[]?' <<< "$entry")
+    else
+        fail "$name: has no executable named $appex_exec"
+    fi
+done <<< "$declared"
+
+# The privacy manifest: no tracking, nothing collected, and a reason for every required-reason API the app declares.
+[[ -f "$app/PrivacyInfo.xcprivacy" ]] || fail "the app has no PrivacyInfo.xcprivacy"
+ok "the manifest says no tracking and collects nothing" '.NSPrivacyTracking == false and (.NSPrivacyTrackingDomains // []) == [] and (.NSPrivacyCollectedDataTypes // []) == []' "$facts/privacy.json"
+ok "every declared API has a reason" '(.NSPrivacyAccessedAPITypes // []) | all(.NSPrivacyAccessedAPITypeReasons | length > 0)' "$facts/privacy.json"
+
+# Signed for the store: the entitlements are exactly the list, from an App Store profile.
+if jq -e --slurpfile want "$expect" '. == $want[0].entitlements' "$facts/entitlements.json" > /dev/null 2>&1; then :; else
+    fail "entitlements differ from release-expect.json (got: $(jq -c -S . "$facts/entitlements.json" 2> /dev/null | cut -c1-300))"
+fi
+ok "the profile is an App Store profile (no device list, not enterprise)" '(has("ProvisionedDevices") | not) and (.ProvisionsAllDevices // false) == false' "$facts/profile.json"
+ok "the profile belongs to team $team" ".TeamIdentifier == [\"$team\"]" "$facts/profile.json"
+# Apple lists every platform a profile covers (iOS, xrOS, visionOS); iOS must be one of them.
+ok "the profile is for iOS" '(.Platform // []) | index("iOS") != null' "$facts/profile.json"
+
+# The web bundle: every file in public/ is in the manifest, with its digest, and none is missing.
+if [[ -d "$app/public" ]]; then
+    actual=$(cd "$app/public" && find . -type f | sed 's|^\./||' | LC_ALL=C sort)
+    wanted=$(jq -r '.files | keys[]' "$manifest" | LC_ALL=C sort)
+    [[ "$actual" == "$wanted" ]] || fail "public/ holds different files than the bundle manifest ($(diff <(printf '%s\n' "$wanted") <(printf '%s\n' "$actual") | grep -c '^[<>]') differ)"
+    while IFS= read -r path; do
+        [[ -n "$path" && -f "$app/public/$path" ]] || continue
+        [[ "$(sha256_of "$app/public/$path")" == "$(jq -r --arg p "$path" '.files[$p]' "$manifest")" ]] || fail "public/$path differs from the bundle manifest"
+    done <<< "$wanted"
+else
+    fail "the app has no public/ folder"
+fi
+
+if (( failures > 0 )); then
+    printf '%s release check(s) failed\n' "$failures" >&2
+    exit 1
+fi
+printf 'release checks passed for %s (%s)\n' "$version" "$build"

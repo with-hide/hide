@@ -10,7 +10,7 @@ import path from "node:path";
 import { startFixture } from "./engine-fixture";
 import { openProject, withControl } from "./daemon-actions";
 import { startHided } from "./hided-fixture";
-import { showExplorer, showProjectRow, showTool, screenshot } from "./wire";
+import { showExplorer, projectOpener, showProjectRow, showTool, screenshot } from "./wire";
 import { toPage } from "../../desktop/src/main/wirePath";
 
 test.describe.configure({ timeout: 90_000 });
@@ -21,10 +21,10 @@ function overflows(scroller: Locator): Promise<boolean> {
 }
 
 test("file and diff views open wrapped and Wrap turns it off per tab", async ({ page }) => {
-  const herdr = await startFixture({ agents: false });
+  const engine = await startFixture({ agents: false });
   let daemon: Awaited<ReturnType<typeof startHided>> | null = null;
   try {
-    const repoDir = path.join(herdr.root, "wrap-repo");
+    const repoDir = path.join(engine.root, "wrap-repo");
     fs.mkdirSync(repoDir);
     const repo = fs.realpathSync(repoDir);
     const file = path.join(repo, "long.txt");
@@ -35,10 +35,10 @@ test("file and diff views open wrapped and Wrap turns it off per tab", async ({ 
     execFileSync("git", ["-c", "user.email=e2e@example.com", "-c", "user.name=e2e", "-c", "commit.gpgsign=false", "commit", "-qm", "base"], { cwd: repo });
     fs.writeFileSync(file, `${line("base")}\n${line("added")}\n`);
 
-    daemon = await startHided(herdr, "view-wrap");
+    daemon = await startHided(engine, "view-wrap");
     await withControl(daemon, (control) => openProject(control, repo, "wrap-repo"));
     await page.goto(`${daemon.origin}/#token=${daemon.token}`);
-    await (await showProjectRow(page, page.locator("[data-project]", { hasText: "wrap-repo" }).locator("[data-checkout]").first())).click();
+    await (await showProjectRow(page, projectOpener(page.locator("[data-project]", { hasText: "wrap-repo" })))).click({ position: { x: 12, y: 8 } });
 
     await showExplorer(page);
     await page.locator(`[data-explorer-row="${toPage(file)}"]`).click();
@@ -68,6 +68,6 @@ test("file and diff views open wrapped and Wrap turns it off per tab", async ({ 
     expect(band).toBeGreaterThan(await diffScroller.evaluate((element) => element.clientWidth));
   } finally {
     daemon?.stop();
-    herdr.stop();
+    engine.stop();
   }
 });

@@ -145,29 +145,29 @@ class FinishedAgent(unittest.TestCase):
     def test_each_pane_the_journey_opened_is_closed_once_and_one_that_stays_is_named(self):
         calls = []
 
-        def command(argv, check=True):
-            calls.append(argv)
-            return (1, "", "pane_not_found\n") if argv[-1] == "w5:p1" else (0, "", "")
-        runtime = SimpleNamespace(run=Path("/run"), command=command,
+        def close_pane(pane):
+            calls.append(pane)
+            return (1, "pane_not_found\n") if pane == "w5:p1" else (0, "")
+        runtime = SimpleNamespace(run=Path("/run"), close_pane=close_pane,
                                   owner=SimpleNamespace(cancelled=threading.Event()))
         record = {}
-        journey = Journey(runtime, None, None, {}, {"id": "codex", "herdr_kind": "codex", "model_flag": []},
-                          Path("/repo"), record, None, branch="b", created=[], sessions=Path("/h"), route={}, composer_judge=None)
+        journey = Journey(runtime, None, None, {}, {"id": "codex", "agent_cli": "codex", "model_flag": []},
+                          Path("/repo"), record, None, branch="b", created=[], sessions=Path("/h"), route={}, composer_judge=None, failure_logs=None)
         journey.opened += ["w4:p2", "w4:p3", "w4:p2", None, "w5:p1"]
         journey.close()
-        self.assertEqual(calls, [["pane", "close", pane] for pane in ("w4:p2", "w4:p3", "w5:p1")])
+        self.assertEqual(calls, ["w4:p2", "w4:p3", "w5:p1"])
         self.assertEqual(record["closed"], {"w4:p2": "closed", "w4:p3": "closed", "w5:p1": "pane_not_found"})
 
     def test_a_pane_no_later_cell_types_into_closes_after_its_step_and_each_pane_closes_once(self):
         calls = []
 
-        def command(argv, check=True):
-            calls.append(argv[-1])
-            return 0, "", ""
-        runtime = SimpleNamespace(run=Path("/run"), command=command,
+        def close_pane(pane):
+            calls.append(pane)
+            return 0, ""
+        runtime = SimpleNamespace(run=Path("/run"), close_pane=close_pane,
                                   owner=SimpleNamespace(cancelled=threading.Event()))
-        journey = Journey(runtime, None, None, {}, {"id": "omp", "herdr_kind": "omp", "model_flag": []},
-                          Path("/repo"), {}, None, branch="b", created=[], sessions=Path("/h"), route={}, composer_judge=None)
+        journey = Journey(runtime, None, None, {}, {"id": "omp", "agent_cli": "omp", "model_flag": []},
+                          Path("/repo"), {}, None, branch="b", created=[], sessions=Path("/h"), route={}, composer_judge=None, failure_logs=None)
         # The agent's pane, then its fork's: the fork's ends with the fork cell.
         journey.pane = "w4:p2"
         journey.opened += ["w4:p2", "w4:p3"]
@@ -182,20 +182,50 @@ class FinishedAgent(unittest.TestCase):
         journey.close()
         self.assertEqual(calls, ["w4:p3", "w4:p2", "w4:p4", "w5:p2"])
 
+    def test_a_refused_spawns_pane_closes_with_the_journeys_other_panes(self):
+        # One left open held OpenCode's 293 MB until the guardian's 2 GiB
+        # cap ended the run's daemon (Windows, run 42586901056).
+        from unittest import mock
+        from agent_journey import journey as journey_module
+        calls = []
+
+        def close_pane(pane):
+            calls.append(pane)
+            return 0, ""
+        runtime = SimpleNamespace(run=Path("/run"), probe=Path("/probe"), close_pane=close_pane,
+                                  home=Path("/run/daemon-home"), state=Path("/run/state"),
+                                  owner=SimpleNamespace(cancelled=threading.Event()))
+        journey = Journey(runtime, None, None, {}, {"id": "opencode", "agent_cli": "opencode", "model_flag": []},
+                          Path("/repo"), {}, None, branch="b", created=[], sessions=Path("/h"), route={},
+                          composer_judge=None, failure_logs=None)
+        refused = {"ok": False, "reason": "native_identity_unavailable", "message": "not reported yet"}
+        settled = []
+        with mock.patch.object(journey, "spawn", return_value=(["agent", "spawn"], refused, [refused])), \
+                mock.patch.object(journey, "pane_of", return_value="w4:p9"), \
+                mock.patch.object(journey, "engine_view", return_value={}), \
+                mock.patch.object(journey, "shell_children", return_value={}), \
+                mock.patch.object(journey, "evidence", return_value=None), \
+                mock.patch.object(journey, "settle", side_effect=lambda *cell: settled.append(cell[0])), \
+                mock.patch.object(journey_module, "created_branch", return_value={}):
+            journey.start()
+        self.assertEqual(settled, ["start"])
+        journey.close()
+        self.assertEqual(calls, ["w4:p9"])
+
 
 class FailedCellScreen(unittest.TestCase):
     def test_a_failed_cell_keeps_the_screen_of_the_pane_it_measured(self):
         with tempfile.TemporaryDirectory() as folder:
             read = []
 
-            def command(argv, check=True):
-                read.append(argv[2])
-                return 0, f"screen of {argv[2]}\n", ""
-            runtime = SimpleNamespace(run=Path(folder), command=command,
+            def read_pane(pane, **_kwargs):
+                read.append(pane)
+                return f"screen of {pane}\n"
+            runtime = SimpleNamespace(run=Path(folder),
                                       owner=SimpleNamespace(cancelled=threading.Event()))
             table = {"opencode": {name: {"status": "pending"} for name in ("fork", "resume")}}
-            journey = Journey(runtime, None, None, table, {"id": "opencode", "herdr_kind": "opencode", "model_flag": []},
-                              Path("/repo"), {}, None, branch="b", created=[], sessions=Path("/h"), route={}, composer_judge=None)
+            journey = Journey(runtime, None, SimpleNamespace(read_pane=read_pane), table, {"id": "opencode", "agent_cli": "opencode", "model_flag": []},
+                              Path("/repo"), {}, None, branch="b", created=[], sessions=Path("/h"), route={}, composer_judge=None, failure_logs=None)
             journey.pane = "w3:p1"
             # A fork is measured in its own pane while the journey's stays the source's.
             journey.settle("fork", ("fail", "no answer"), pane="w3:p7")
@@ -249,7 +279,7 @@ class LeftoversAndReport(unittest.TestCase):
                           "and the fake model refused 3 past it"])
 
     def test_a_fixture_report_says_so_and_lists_what_a_stand_in_cannot_show(self):
-        report = {"mode": "ci", "fixture": True, "fixture_limits": ci.FIXTURE_LIMITS, "herdr": {}, "table": {},
+        report = {"mode": "ci", "fixture": True, "fixture_limits": ci.FIXTURE_LIMITS, "holders": {}, "table": {},
                   "systems": {}, "agents": []}
         text = markdown(report)
         self.assertIn("**Fixture run**", text)

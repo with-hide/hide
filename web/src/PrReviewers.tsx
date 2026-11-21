@@ -2,7 +2,7 @@ import { CheckCircle2Icon, CircleDotIcon, TriangleAlertIcon } from "lucide-react
 import { Button } from "./components/ui/button";
 import { Hint } from "./components/ui/tooltip";
 import { useElapsed } from "./components/elapsed";
-import { useInterfaceTranslation } from "./i18n/client";
+import { useInterfaceTranslation } from "./i18n/translator";
 import { cn } from "./lib/utils";
 import { approvalCount, initials, reviewerMarks, type PrReview } from "./prReview";
 import type { PrReviewer, PrReviewerState } from "./snapshot";

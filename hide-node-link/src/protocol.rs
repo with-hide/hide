@@ -298,24 +298,166 @@ use crate::error::HostError;
 /// 71: a node answers where a holder pane's screen is in its scrollback,
 /// moves it, and reads the rows it shows (`holders::PaneCall::Scroll`,
 /// `holders::PaneCall::ReadVisible`), so the core's own engine routes a pane
-/// search and shows its matches as Herdr's `pane.get`, `pane.scroll` and
-/// `visible` read let it. A helper on 70 would refuse both asks, so it is
+/// search and shows its matches. A helper on 70 would refuse both asks, so it is
 /// refused at Hello and upgraded.
 /// 72: pane mutations require connection ownership and a durable reserved
 /// existence record. An older node cannot fence late requests on reconnect.
 /// 73: removes the running-agent queue call. Running input is typed through
 /// the engine so a letter reaches an ongoing turn; older helpers upgrade.
-pub const PROTOCOL_VERSION: u32 = 73;
+/// 74: adds `HerdrSave` and `HerdrStop`, so the core moves a device's Herdr
+/// session into its own engine (PRD engine-bundle-4-herdr-removal D-10); an
+/// older helper would refuse both, so it upgrades.
+/// 75: a letter's text is a list of parts (`holders::PaneCall::Letter`), so
+/// the core types Herdr's focus report before a Copilot prompt and its
+/// paste boundary after a Windows Codex one, inside the submission. An
+/// older helper would refuse the letter, so it upgrades.
+/// 76: drops what started or fed a node's Herdr services (`PanesStart`,
+/// `TerminalsStart`, the kit call's Herdr socket and saved-session flag) and
+/// the pane proofs' passive hook observations, since every node runs its
+/// panes in holders (PRD engine-bundle-4-herdr-removal D-10), and the Herdr
+/// link stream, the Hello's Herdr socket and the label lock's Herdr socket
+/// (the lock now names the engine folder, `scope`); a helper on 75 still
+/// takes them, so it upgrades.
+/// 77: a Windows node answers `Call::AgentInstalled` with the file a start
+/// runs and the words before its arguments (`StartForm::Direct`), npm's
+/// launcher read as the program it runs, so a first input rides the start
+/// there too; a helper on 76 would answer `program` or `batch` for it, so
+/// it upgrades.
+/// 78: a pointer event reaches a pane's holder as what it means
+/// (`TerminalControl::Mouse`), which the holder encodes for the program's
+/// mouse mode, in place of the core's own bytes (`Write`); a helper on 77
+/// would refuse it, so it upgrades.
+/// 79: a device's terminals send what a pane's program wrote to the
+/// clipboard (`TerminalUp::Clipboard`), once, for the core's window in
+/// front; a core on 78 cannot read the line and would drop every copy, so
+/// the helper upgrades.
+/// 80: `home_list` lists one folder under the node's home for Add a
+/// project's folder list and `new_folder_target` says where a clone or a new
+/// project would land under that home, so both run on any device (PRD
+/// device-add-project D-01, D-07); a helper on 79 would refuse both, so it
+/// upgrades.
+/// 82: `importable_projects` answers the projects worth adding on the node,
+/// from its agents' sessions and Paseo's and Herdr's lists, for Add a
+/// project on any device (PRD device-add-project D-09); a helper on 81
+/// would refuse it, so it upgrades (81 is taken by an open change).
+/// 83 (81 was held for this change while 82 landed first): a node renews a
+/// pane's holder from this build's version folder
+/// (`holders::PaneCall::Renew`, with-hide/hide-private#646), which the core
+/// asks before it wakes an agent in the pane, and takes only the sleep's own
+/// input (`holders::PaneCall::SleeperInput`) into a pane whose agent is
+/// asleep; a helper on an earlier protocol would refuse both calls, so it
+/// upgrades.
+/// 84: `owed_confirmations` hands the core the letter confirmations a pane's
+/// hooks could not send in time (`hide_agent_hooks::owed::take`), which the
+/// core asks once the pane rests (`docs/delivery.md`, A confirmation that
+/// missed its hook); a helper on 83 would refuse it, so it upgrades.
+/// 85: the home folder is a project (PRD home-folder-project). `Registrable`
+/// asks about it instead of refusing it (`HostError::home`), `Index` carries
+/// the other projects of the node (`others`) so the home project's walk
+/// skips them, and Home never links it; a helper on 84 would refuse the
+/// home folder as a project, so it upgrades.
+/// 86: a node keeps its machine's agent profiles (`ProfileList`,
+/// `ProfileApply`, `ProfileInstall`, PRD agent-profiles D-04) and its kit
+/// installs into each profile's account; a helper on 85 would refuse the
+/// calls, so it upgrades, and a node the core still admits on an older
+/// protocol answers them unrun, which the core reads as no profiles there.
+/// 87: `home_retire` replaces `home_sync` (PRD retire-hide-home): the core no
+/// longer keeps a Home folder, and asks each helper once to remove what
+/// Hide's marker lists in `~/hide`; a helper on 86 would refuse the call, so
+/// it upgrades first and keeps its `~/hide` until then.
+/// 88: a node answers how a start of one of its profiles runs there
+/// (`ProfileLaunch`, PRD agent-profiles D-26): the profile's variables and
+/// program, checked on that machine, and the `hide` beside the node that
+/// starts it (`hide agent exec`); a helper on 87 would refuse the call, so
+/// it upgrades, and a node the core still admits on an older protocol
+/// answers it unrun, which the core reads as a machine that starts only each
+/// agent's built-in default profile. The same step lets the core read one
+/// process of a pane fresh (`holders::PaneCall::Process`) and carries the
+/// process that sent a start's report (`panes::NodeEvent::PaneProof`'s
+/// `executor`), by which the core decides what came of that start.
+/// 89: a node answers which account it registered holds a session a resume
+/// names by its file or id alone (`SessionAccount`, PRD agent-profiles
+/// B19), so a session line resumes with the profile of its own account; a
+/// helper on 88 keeps profiles but would refuse the call, so it upgrades,
+/// and a node the core still admits on an older protocol keeps no profile,
+/// which the core reads as the default account.
+/// 90: a profile's start line names only its attempt, in a shorter shape,
+/// and the agent's own words, and its executor asks for the profile's
+/// variables and program just before it runs
+/// (`panes::AgentExecEvent::Profile`), answered at the version its start
+/// was checked with. An executor of 88 or 89 would read the new line as a
+/// start with no variables, and refuses its attempt's shape instead; a
+/// helper on 88 or 89 is not admitted, so it upgrades before the core types
+/// a profile's start there.
+/// 91: a hook's session-start report carries the account variables its
+/// agent runs with (`panes::HookStatusReport::account`, PRD agent-profiles
+/// D-03, D-35), which a node passes on to the core inside the hook request
+/// the report is; a core on 90 refuses a report with a field it does not
+/// know, so a helper upgrades with its core. The same step lists each
+/// profile's sign-in and account variables (`profiles::ListedProfile`) and
+/// lets a usage read name a profile (`Call::UsageLimitFetch`), both optional
+/// fields an older side leaves out.
+/// 92: each listed profile carries the account its node's `resolve` keyed
+/// it by (`profiles::ListedProfile::account_key`, PRD agent-profiles D-12),
+/// which the core compares accounts by instead of keying one itself; a
+/// helper on 91 lists none, so it is not admitted and upgrades with its
+/// core.
+/// 93: holder renewal carries
+/// the connection's numbered creation request,
+/// just like reserve/start/cancel. An earlier node issues a separate number
+/// during replacement and could retire the next tab's request, so it must
+/// upgrade before any renewal.
+/// 94: a Hide AI backend names the profile it runs as
+/// (`ai::BackendSpec::profile`, PRD agent-profiles-phase2 D-09), so each
+/// item's model list is read in its own account and with its wrapper; a
+/// helper on 93 would ignore the field and answer the agent's default
+/// account in its place, so it is not admitted, and the helper this build
+/// carries is installed on the next connect.
+/// 95: `HerdrStop` is gone. Hide no longer stops an earlier Hide's Herdr on a
+/// device; the import only reads its save (`HerdrSave`). A helper on 94
+/// would still offer the call, so it is refused at Hello and upgraded.
+/// 96: a hook's report of a turn the provider refused carries why
+/// (`panes::HookStatusReport::refused`, Claude Code's `StopFailure`), which a
+/// core on 95 refuses as a field it does not know, so a helper upgrades with
+/// its core.
+/// 97: a node answers its machine's memory pressure (`MemoryPressure`), which
+/// the core's agent sleep reads for that machine's agents; a helper on 96
+/// does not know the call, so it is refused at Hello and upgraded with its
+/// core.
+/// 98: a hook's report lists the subagents its session runs, each one's kind,
+/// task and start (`panes::HookStatusReport::subagents`), which a core on 97
+/// refuses as a field it does not know, so a helper upgrades with its core.
+/// 99: a node makes an automation's own folder (`AutomationFolder`); a helper
+/// on 98 does not know the call, so it is refused at Hello and upgraded with
+/// its core.
+/// 100: the kit carries the store of skills and MCP items (PRD
+/// skill-mcp-manager): a kit report carries the store's, the `store` pass
+/// and the `follow_store` check answer the store's report alone, and
+/// `store_export` reads a store for a copy to a device; a helper on 99 knows
+/// none of these calls, so it is refused at Hello and upgraded with its
+/// core.
+pub const PROTOCOL_VERSION: u32 = 100;
 
 /// How a start of an agent's CLI carries its arguments on the machine that
-/// runs it ([`Call::AgentInstalled`]).
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+/// runs it ([`Call::AgentInstalled`]), as `hide_platform::programs::Start`
+/// reads it there.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum StartForm {
-    /// The program itself takes them, each whole.
+    /// The program itself takes them, each whole, started by its name, which
+    /// the pane's shell finds as the node did (macOS, Linux).
     Program,
-    /// Windows runs the program through `cmd.exe`, a batch file such as
-    /// npm's shim (`hide_platform::programs::runs_through_cmd`).
+    /// The start names `program`, a file on the node, and puts `leading`
+    /// before its arguments, which it takes each whole: on Windows, where
+    /// the shell would find another file by the name, and npm's launcher is
+    /// read as the program it runs (`hide_platform::programs::START_NAMES_FILE`).
+    Direct {
+        program: String,
+        leading: Vec<String>,
+    },
+    /// Windows runs the program through `cmd.exe`: a batch file that is not
+    /// npm's launcher (`hide_platform::programs::Start::Batch`), so nothing
+    /// that `cmd.exe` would read again rides its start.
     Batch,
 }
 
@@ -377,9 +519,6 @@ pub struct ShellLaunch {
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum LinkEnd {
-    /// The node's own Herdr socket (D-18, D-19), on a node that dialed its
-    /// core.
-    Herdr,
     /// The browser relay of the node's daemon, which carries a caller's CDP
     /// to the gateway of the desktop window whose registration the daemon
     /// holds: a caller on another machine driving a page only that window
@@ -398,7 +537,6 @@ impl LinkEnd {
     /// refused.
     pub const fn cap(self) -> usize {
         match self {
-            Self::Herdr => crate::panes::MAX_HERDR_STREAMS,
             Self::BrowserRelay => crate::panes::MAX_BROWSER_STREAMS,
             Self::Loopback { .. } => crate::panes::MAX_PAGE_STREAMS,
         }
@@ -461,8 +599,14 @@ pub enum Call {
     },
     /// Every file under the root the ignore files admit, capped
     /// (`hide_host::index::walk`), for the ⌘P palette.
+    ///
+    /// When the root is the node's home folder the walk leaves out its
+    /// top-level hidden names and app-data folder and every folder in
+    /// `others`, the other projects registered on the node.
     Index {
         root: RootRef,
+        #[serde(default)]
+        others: Vec<String>,
     },
     OpenDocument {
         root: RootRef,
@@ -538,7 +682,7 @@ pub enum Call {
         diffs: Vec<crate::git::DiffTarget>,
     },
     /// The project facts of a folder on this machine (`hide_project::facts`):
-    /// a Herdr pane's directory or a registered project's path, which the
+    /// a pane's directory or a registered project's path, which the
     /// daemon's catalog groups into projects with this device's id. Only
     /// facts are answered, never contents.
     Project {
@@ -579,11 +723,43 @@ pub enum Call {
         #[serde(default, skip_serializing_if = "Option::is_none")]
         confirmed_outside_home: Option<String>,
     },
-    /// Makes this host's Hide Home folder (`~/hide`) hold one link per
-    /// project in `projects` and nothing Hide did not make
-    /// (`hide_host::home::sync`).
-    HomeSync {
-        projects: Vec<String>,
+    /// One folder under this host's home as Add a project lists it
+    /// (`browse::HomeListing`): `path` is `~`, `~/...` or an absolute path
+    /// in either spelling, and has to lead to home or a folder under it
+    /// without leaving it through a link. Hidden names are left out, and a
+    /// repository carries its branch and a folder its repository count.
+    HomeList {
+        path: String,
+    },
+    /// The projects worth adding on this host (`importable::ImportableProjects`):
+    /// the folders its agents worked in and the projects Paseo and Herdr keep,
+    /// each as the root a registration would add under home, newest within
+    /// thirty days first, at most twenty, leaving out every root `exclude`
+    /// names (the core's registrations here, at most
+    /// `importable::EXCLUDE_CAP`). It only reads.
+    ImportableProjects {
+        #[serde(default, skip_serializing_if = "Vec::is_empty")]
+        exclude: Vec<String>,
+    },
+    /// Where a clone (`kind` `clone`) or a new project (`project`) named
+    /// `name` would land in `parent`, home or a folder under it, judged
+    /// against this host's home (`browse::NewFolderTarget`); nothing is
+    /// made.
+    NewFolderTarget {
+        parent: String,
+        name: String,
+        kind: crate::browse::NewFolderKind,
+    },
+    /// Retires this host's old Hide Home folder (`~/hide`) once: removes the
+    /// entries Hide's marker lists as its own and, unless something else is
+    /// there or `keep_empty`, the folder (`hide_host::home::retire`).
+    /// Repeating it changes nothing more.
+    HomeRetire {
+        keep_empty: bool,
+        /// The second call for a folder that stays: the first leaves the
+        /// marker until the caller has saved the answer, this one removes it.
+        #[serde(default)]
+        settle: bool,
     },
     /// A branch measured against `base` in the repository at `root`
     /// (`hide_host::branch_merge::facts`): how far ahead, whether it is in
@@ -657,11 +833,14 @@ pub enum Call {
     /// Moves the branch checked out in the worktree at `root` to its
     /// upstream as last fetched (`hide_host::branch_merge::catch_up`):
     /// fast-forward only, no fetch, no push, and only while `HEAD` is still
-    /// `head`, the commit the operator was shown. The answer is a
+    /// `head`, the commit the operator was shown, and, with `branch`, while
+    /// that branch is the one `HEAD` has out. The answer is a
     /// [`crate::branch::CatchUpOutcome`] and only `Updated` changes anything.
     BranchCatchUp {
         root: String,
         head: String,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        branch: Option<String>,
     },
     /// Retires a worktree owned by a completed or discarded background task.
     WorktreeRetire {
@@ -684,23 +863,60 @@ pub enum Call {
     },
     /// The device's install kit (`hide_host::kit`): the helper acts on the
     /// helper root it runs from, never on a folder the request names.
-    /// `cli_dir` is where the consent allows the `hide` link, and
-    /// `herdr_socket` the registration's Herdr socket; both may start with
-    /// `~/`.
+    /// `cli_dir` is where the consent allows the `hide` link; it may start
+    /// with `~/`.
     Kit {
         action: KitAction,
         cli_dir: String,
-        herdr_socket: Option<String>,
-        /// A saved Herdr profile grants attachment, without server replacement.
-        #[serde(default)]
-        preserve_herdr_server: bool,
         /// Known registered checkout roots on this helper's device only.
         #[serde(default)]
         retirement_projects: Vec<String>,
     },
+    /// The machine's agent profiles (`crate::profiles::ProfileList`), each
+    /// with its pieces as the kit judges them; `values` adds each variable's
+    /// value, for the screen that edits a profile.
+    ProfileList {
+        #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+        values: bool,
+    },
+    /// Changes the machine's profiles and installs or takes out the pieces
+    /// of the accounts it touches (`crate::profiles::ProfileApplied`).
+    /// `expected_version` is the list's version the caller changes; a list
+    /// that has moved since is refused as a conflict.
+    ProfileApply {
+        /// Named `change` because a call's own tag is `op`.
+        change: crate::profiles::ProfileOp,
+        expected_version: u64,
+    },
+    /// Reinstall of one profile's pieces, even those the operator took out;
+    /// answers the list. Named `profile` because a request's own `id` sits
+    /// beside a call's fields on the wire.
+    ProfileInstall {
+        profile: hide_agent_adapter::ProfileId,
+    },
+    /// How a start of the agent `kind` with the profile `profile` runs on
+    /// this machine (`crate::profiles::ProfileLaunch`): ready, gone, or
+    /// refused when the profile is being removed or another agent's, when its
+    /// account or variables no longer resolve here, or when its program is
+    /// not found. The built-in default profile is never asked: it starts as
+    /// the agent always has.
+    ProfileLaunch {
+        kind: String,
+        profile: hide_agent_adapter::ProfileId,
+    },
     /// Whether the node's account has Hide's agent hooks in place, read from
     /// that account's own configuration (`hide_agent_hooks::Diagnosis`).
     HookDiagnosis,
+    /// Hands over and forgets the letter confirmations the hooks of the
+    /// pane `pane` (the engine's id on this machine) could not send in time
+    /// (`hide_agent_hooks::owed::take`): `null`, or the session the letters
+    /// reached and their ids (`hide_agent_hooks::owed::Owed`).
+    OwedConfirmations {
+        pane: String,
+    },
+    /// The node account's Herdr save and whether a server runs on its default
+    /// socket (`crate::herdr_save::Found`), only read.
+    HerdrSave,
     /// Replaces the project guardrails' policy file under the node's home
     /// with `policy`, the projects of this machine with a protection on
     /// (`hide_agent_hooks::guardrails::write_policy`); answers `null` once
@@ -722,6 +938,13 @@ pub enum Call {
     /// its own, relative to it, or `null`.
     IgnoredRepository {
         worktree: String,
+    },
+    /// Makes an automation's own folder, `~/hide/automations/<name>` under
+    /// this host's home with the folders above it, and answers its real path
+    /// (`project::AutomationFolder`); a folder already there is answered as
+    /// it is (PRD automations D-08).
+    AutomationFolder {
+        name: String,
     },
     /// Makes a project at `path` (`project::ProjectCreated`): its folder
     /// first when `new_folder`, at the literal path the shell checked, then
@@ -819,10 +1042,16 @@ pub enum Call {
     },
     /// A declared subscription source, fetched on the core's own node.
     /// `root` is the Claude working directory or Codex home for that source.
-    /// Devices refuse it; credentials never cross the link (`usage::LimitFetch`).
+    /// `profile` reads the account of one of the node's profiles instead of
+    /// the agent's default one (PRD agent-profiles B23), as the node resolves
+    /// it from its own profile file, so the core never names an account's
+    /// folder. Devices refuse it; credentials never cross the link
+    /// (`usage::LimitFetch`).
     UsageLimitFetch {
         source: crate::usage::LimitSource,
         root: String,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        profile: Option<hide_agent_adapter::ProfileId>,
     },
     /// One bounded public price-table read (`usage::PriceFetch`).
     /// No caller-selected URL or payload; devices refuse it.
@@ -866,7 +1095,7 @@ pub enum Call {
     },
     /// Ends the job `leader` leads, a pane's foreground job, for agent sleep
     /// (`hide_platform::process::terminate_group`): `SIGTERM` to its process
-    /// group on Unix, and on Windows, where Herdr names the job by its first
+    /// group on Unix, and on Windows, where the job is named by its first
     /// process, that process and everything under it. A group of 1 or less
     /// is refused unsent, since kill(-0) and kill(-1) reach far more. The
     /// answer is a [`crate::process::GroupEnd`]: ended, with what was left
@@ -877,7 +1106,7 @@ pub enum Call {
     /// How a start of the agent CLI named `name` on the node carries its
     /// arguments, a [`StartForm`], or null when it is not on the node's
     /// `PATH`: asked before a pane is asked to start it, and before a prompt
-    /// rides that start (`herdr-core` `start_prompt`).
+    /// rides that start (`hide-core` `start_prompt`).
     AgentInstalled {
         name: String,
     },
@@ -900,19 +1129,27 @@ pub enum Call {
     /// an [`OpenCodeFork`]: decided by the schema of the database holding it
     /// (`hide_session::opencode::fork_route`), and for OpenCode 2.x made by its
     /// server before the answer, within the node's own bound.
+    /// `profile` is the profile the fork's agent starts with, as its
+    /// machine answered it ([`Call::ProfileLaunch`]): OpenCode runs with its
+    /// variables and program, as the agent will (PRD agent-profiles D-26).
     #[serde(rename = "opencode_fork")]
     OpenCodeFork {
         source: String,
         cwd: String,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        profile: Option<crate::profiles::ProfileStart>,
     },
     /// Records (`trusted`) or takes out an agent's trust of a worktree Hide
-    /// made, in the node account's own settings of that agent
-    /// (`hide_agent_hooks::folder_trust`). `agent` is the start's kind, as
-    /// the adapter names it.
+    /// made, in the agent's settings of the account the start runs in
+    /// (`hide_agent_hooks::folder_trust`): the account of `profile` when the
+    /// start names one, the node account's default one otherwise. `agent` is
+    /// the start's kind, as the adapter names it.
     AgentTrust {
         agent: String,
         path: String,
         trusted: bool,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        profile: Option<hide_agent_adapter::ProfileId>,
     },
     /// Answers the account's exact normal shell recipe and readiness policy.
     /// Tries Hide's first-prompt integration, otherwise preserves the same
@@ -957,6 +1194,9 @@ pub enum Call {
     /// The machine's TCP listeners and where each was started
     /// (`ports::ListeningPorts`).
     ListeningPorts,
+    /// The machine's memory pressure now and where the node read it
+    /// (`memory::PressureAnswer`), or an error where the machine cannot say.
+    MemoryPressure,
     /// Bytes free to an unprivileged writer on the volume holding `path`;
     /// `None` when the volume cannot say.
     VolumeFree {
@@ -967,7 +1207,9 @@ pub enum Call {
     /// The helper keeps nothing between reads; it answers events and the
     /// next checkpoint, never a path.
     LabelTranscript {
-        request: hide_session::label_transcript::LabelTranscriptRequest,
+        /// Boxed: the request is the largest a node takes, and the call
+        /// enum is as large as its largest variant.
+        request: Box<hide_session::label_transcript::LabelTranscriptRequest>,
     },
     /// The one original turn a backlog item came from, for its panel's
     /// origin and the Start prompt. No other turn is returned.
@@ -977,6 +1219,11 @@ pub enum Call {
     /// Metadata-only activity using the same native ownership proof as labels.
     SessionActivity {
         request: hide_session::session_activity::SessionActivityRequest,
+    },
+    /// The account the node registered that holds the session a resume
+    /// names by its file or id alone (`hide_session::session_account::read`).
+    SessionAccount {
+        request: hide_session::session_account::SessionAccountRequest,
     },
     /// The device's session files changed since a time and, for a later
     /// page, up to one, newest first and capped
@@ -1034,7 +1281,7 @@ pub enum Call {
         scope: Option<hide_session::SessionReadScope>,
     },
     /// One page of the thread of the session an agent pane runs, named as
-    /// Herdr reports the pane's session (`hide_session::thread::read_pane_thread`):
+    /// the engine reports the pane's session (`hide_session::thread::read_pane_thread`):
     /// ACP session updates and the page's cursors, never a path.
     SessionThread {
         request: hide_session::thread::ThreadRequest,
@@ -1047,39 +1294,25 @@ pub enum Call {
         #[serde(default, skip_serializing_if = "Option::is_none")]
         checkpoint: Option<hide_session::ConversationCheckpoint>,
     },
-    /// Starts this node's pane service for the Herdr at `herdr_socket`: the
-    /// bootstrap socket a device pane's `hide` asks on. Answered with
-    /// [`crate::panes::PanesStarted`]; asking again for the same Herdr
-    /// answers the same socket.
-    PanesStart {
-        herdr_socket: String,
-    },
-    /// Starts this node's terminal service for the Herdr at `herdr_socket`:
-    /// from then on the link's terminal lines reach it. Asking again while
-    /// it runs changes nothing.
-    TerminalsStart {
-        herdr_socket: String,
-    },
     /// The core's answer to the pane proof `request` the node sent up.
     PaneProofAnswer {
         request: u64,
         answer: crate::panes::ProofAnswer,
     },
-    /// `pane_id`'s identity now, read from this node's Herdr and kernel, so
+    /// `pane_id`'s identity now, read from this node's pane holder and kernel, so
     /// the core can tell a credential's pane from a replaced one.
     PaneInspect {
         pane_id: String,
     },
     /// Starts this node's pane holders and the terminal service that shows
     /// their screens, over the node's own state folder, so the core's own
-    /// engine runs the machine's panes with no Herdr (PRD
+    /// engine runs the machine's panes (PRD
     /// engine-bundle-3-core-owns D-22): from then on the link's terminal
     /// lines reach that service, [`Call::Pane`] its holders, and a pane's
     /// `hide` is proved by the pane's holder record on the node's pane
     /// service, whose bootstrap socket it answers with
     /// ([`crate::panes::PanesStarted`]). Asking again while they run changes
-    /// nothing; a node whose terminals run on its Herdr refuses it, since
-    /// one node runs one engine's panes. Only a device's link carries it:
+    /// nothing. Only a device's link carries it:
     /// the core's own node is given its holders when it is made.
     HoldersStart,
     /// One request of the core's engine to this node's pane holders (start,
@@ -1138,22 +1371,21 @@ pub enum Call {
         scope: serde_json::Value,
         relay: bool,
     },
-    /// Takes the label generator lock of the Herdr server at `herdr_socket`
-    /// on this node's machine, or of the server this link's pane service
-    /// serves when it names none, for the core's worker `generator`, and
-    /// holds it while the link lives. Answered with [`LabelLock`]; asked
+    /// Takes the label generator lock of the engine whose folder is
+    /// `scope` on this node's machine, for the core's worker `generator`,
+    /// and holds it while the link lives. Answered with [`LabelLock`]; asked
     /// again by the same worker while held, it is held, and by another
-    /// worker of the same core, it is not.
+    /// worker of the same core, it is not. Only the core's own node answers
+    /// it; a device's link refuses it, and its core labels that device's
+    /// agents alone.
     LabelLock {
-        #[serde(default, skip_serializing_if = "Option::is_none")]
-        herdr_socket: Option<String>,
+        scope: String,
         generator: u64,
     },
     /// Gives back the lock [`Call::LabelLock`] took for `generator` on the
-    /// same server; a lock another worker holds stays held.
+    /// same engine; a lock another worker holds stays held.
     LabelUnlock {
-        #[serde(default, skip_serializing_if = "Option::is_none")]
-        herdr_socket: Option<String>,
+        scope: String,
         generator: u64,
     },
     /// Stops the reporting call `request`: its next report is answered with
@@ -1191,10 +1423,10 @@ impl Call {
     }
 
     /// Whether this request is link control rather than machine work: a
-    /// greeting, a pane's proof answer or stream, or a Herdr stream. Each is
+    /// greeting, a pane's proof answer or stream, or a link stream. Each is
     /// short on the node, so both ends run them in a lane of their own, and
     /// four slow machine calls (a port scan, a disk walk) never hold a pane's
-    /// reply or a Herdr write behind them. One may still wait: a link write
+    /// reply or a stream write behind them. One may still wait: a link write
     /// to an end that stops reading holds its worker until the write
     /// deadline (`hide_host::link_bridge`, 5 s) and then ends that stream,
     /// so four such streams can hold the lane for one such window.
@@ -1251,7 +1483,10 @@ impl Call {
             | Self::BranchCheck { .. }
             | Self::Directory { .. }
             | Self::Registrable { .. }
-            | Self::HomeSync { .. }
+            | Self::HomeRetire { .. }
+            | Self::HomeList { .. }
+            | Self::ImportableProjects { .. }
+            | Self::NewFolderTarget { .. }
             | Self::BranchFacts { .. }
             | Self::BranchMerge { .. }
             | Self::BranchMergePush { .. }
@@ -1263,11 +1498,18 @@ impl Call {
             | Self::WorktreeRemove { .. }
             | Self::WorktreeRemovalCheck { .. }
             | Self::Kit { .. }
+            | Self::ProfileList { .. }
+            | Self::ProfileApply { .. }
+            | Self::ProfileInstall { .. }
+            | Self::ProfileLaunch { .. }
             | Self::HookDiagnosis
+            | Self::OwedConfirmations { .. }
+            | Self::HerdrSave
             | Self::GuardrailPolicy { .. }
             | Self::WorktreesRegistered { .. }
             | Self::IgnoredRepository { .. }
             | Self::ProjectCreate { .. }
+            | Self::AutomationFolder { .. }
             | Self::PathFacts { .. }
             | Self::RealPaths { .. }
             | Self::Repository { .. }
@@ -1289,10 +1531,12 @@ impl Call {
             | Self::LineInput { .. }
             | Self::DiskUsage { .. }
             | Self::ListeningPorts
+            | Self::MemoryPressure
             | Self::VolumeFree { .. }
             | Self::LabelTranscript { .. }
             | Self::SessionWorkTurn { .. }
             | Self::SessionActivity { .. }
+            | Self::SessionAccount { .. }
             | Self::LinkFiles { .. }
             | Self::LinkRead { .. }
             | Self::UsageFiles { .. }
@@ -1303,8 +1547,6 @@ impl Call {
             | Self::SessionText { .. }
             | Self::SessionConversation { .. }
             | Self::SessionThread { .. }
-            | Self::PanesStart { .. }
-            | Self::TerminalsStart { .. }
             | Self::PaneProofAnswer { .. }
             | Self::PaneInspect { .. }
             | Self::HoldersStart
@@ -1316,8 +1558,6 @@ impl Call {
             | Self::LinkWrite { .. }
             | Self::LinkClose { .. }
             | Self::BrowserGateway { .. }
-            | Self::LabelLock { .. }
-            | Self::LabelUnlock { .. }
             | Self::Feedback { .. }
             | Self::StageAttachment { .. }
             | Self::RemoveAttachments { .. }
@@ -1336,14 +1576,20 @@ impl Call {
             | Self::Gh { .. }
             | Self::ReadAttachments { .. }
             | Self::ReadDropped { .. }
-            | Self::RemoveClipboard { .. } => false,
+            | Self::RemoveClipboard { .. }
+            // A label lock is the core's own node's, keyed by its engine
+            // folder; a device's labels run unshared.
+            | Self::LabelLock { .. }
+            | Self::LabelUnlock { .. } => false,
         }
     }
 }
 
 /// What a `kit` request does. `apply` and `reinstall` answer a
-/// `hide_kit::KitReport`, `status` answers one without changing anything, and
-/// `remove` answers a [`KitRemoved`].
+/// `hide_kit::KitReport`, `status` answers one without changing anything,
+/// `store` answers a `hide_kit::store::StoreReport`, `follow_store` one or
+/// `null`, `store_export` a `hide_kit::store::StoreExport`, and `remove`
+/// answers a [`KitRemoved`].
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "kind", rename_all = "snake_case")]
 pub enum KitAction {
@@ -1364,6 +1610,24 @@ pub enum KitAction {
         #[serde(default, skip_serializing_if = "std::ops::Not::not")]
         codex_daemon_off: bool,
     },
+    /// A pass over the device's store alone (`hide_kit::apply_store`): the
+    /// operator's changes from a cell, a button or a command of the store's,
+    /// in order, or the daily check for new versions. It answers the store's
+    /// report alone, since a kit read asks the machine's Codex.
+    Store {
+        #[serde(default)]
+        changes: Vec<hide_kit::store::StoreChange>,
+    },
+    /// The follow of the store's folders, every few seconds
+    /// (`hide_kit::follow_store`): a pass when a followed folder changed,
+    /// answered with its report, else `null`.
+    FollowStore,
+    /// This machine's store as a copy to a device carries it
+    /// (`hide_kit::export_store`, PRD skill-mcp-manager B28), answered with a
+    /// `hide_kit::store::StoreExport` that holds each skill's files and each
+    /// MCP server's key values: the core keeps it in memory and hands each
+    /// item to the device as a `receive` change, and logs none of it.
+    StoreExport,
     Status,
     /// The device is being removed from Hide: Hide's parts come off, then
     /// the helper root.
@@ -1409,6 +1673,14 @@ pub struct Hello {
     /// The home directory of the account the helper runs as, the boundary
     /// the device's own registration listing applies (PRD S5.5 B24).
     pub home: Option<String>,
+    /// The same folder as the node's filesystem names it (every link
+    /// resolved, on-disk case), so a registered folder, which a node
+    /// answers resolved the same way, is the home folder when the two
+    /// are equal; the core measures no size for it (PRD home-folder-project
+    /// D-06). Absent from a node older than protocol 85, or when the home
+    /// cannot be resolved.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub home_real: Option<String>,
     /// Read once when this connection starts; a failure leaves lineage
     /// unresolved without making the file helper unavailable.
     pub machine_identity: MachineIdentity,
@@ -1417,14 +1689,6 @@ pub struct Hello {
     /// remain available.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub reader_features: Option<crate::sessions::ReaderFeatures>,
-    /// The socket of the node's own Herdr, as the node spells it, when its
-    /// link streams bridge that server to the core: a WSL distribution's
-    /// helper, whose Herdr no socket on the core's machine reaches (PRD
-    /// wsl-device D-07). Absent for a node that bridges none. Both ends of
-    /// a link run one build, so the field never meets a peer that lacks it;
-    /// its default only keeps a Hello without it readable.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub herdr_socket: Option<String>,
     /// Where the node shows the drives of the Windows PC it runs on, when it
     /// is a WSL distribution (`hide_platform::host::windows_drives`), so Add
     /// a project can spell a pasted `C:\` path as that node's own path.
@@ -1494,6 +1758,27 @@ pub struct RevisionNow {
 mod tests {
     use super::*;
 
+    /// A usage read of the default account is written as an older core
+    /// wrote it, and an older core's read is one of the default account.
+    #[test]
+    fn a_usage_read_names_a_profile_only_when_it_reads_one() {
+        let default = Call::UsageLimitFetch {
+            source: crate::usage::LimitSource::ClaudeUsage,
+            root: "/hide".into(),
+            profile: None,
+        };
+        let written = serde_json::to_value(&default).unwrap();
+        assert!(!written.to_string().contains("profile"), "{written}");
+        assert_eq!(serde_json::from_value::<Call>(written).unwrap(), default);
+        let profile = Call::UsageLimitFetch {
+            source: crate::usage::LimitSource::CodexUsage,
+            root: "/hide".into(),
+            profile: Some(hide_agent_adapter::ProfileId("p-a".into())),
+        };
+        let written = serde_json::to_value(&profile).unwrap();
+        assert_eq!(serde_json::from_value::<Call>(written).unwrap(), profile);
+    }
+
     /// An older caller's `reinstall` has no `codex_daemon_off` and means
     /// "leave the shared server alone"; the request is on the wire only when
     /// it is made.
@@ -1526,6 +1811,59 @@ mod tests {
         assert_eq!(
             serde_json::to_value(&unasked).unwrap(),
             serde_json::json!({"kind": "reinstall", "components": []})
+        );
+    }
+
+    /// A store request carries the operator's changes to a device as the
+    /// store reads them, in order, and the follow carries nothing.
+    #[test]
+    fn the_store_calls_carry_the_operators_changes_to_a_device() {
+        use hide_kit::store::{ItemKind, SourceSpec, StoreChange};
+        let changes = vec![
+            StoreChange::Inspect {
+                source: SourceSpec::Git {
+                    url: "https://github.com/acme/skills".into(),
+                },
+            },
+            StoreChange::Set {
+                item: "skill:style".into(),
+                column: Some("antigravity".into()),
+                on: false,
+            },
+            StoreChange::Adopt {
+                confirmed: None,
+                kind: ItemKind::Skill,
+                name: "notes".into(),
+                from: None,
+            },
+        ];
+        let call = Call::Kit {
+            action: KitAction::Store {
+                changes: changes.clone(),
+            },
+            cli_dir: "~/.local/bin".into(),
+            retirement_projects: Vec::new(),
+        };
+        let wire = serde_json::to_value(&call).unwrap();
+        assert_eq!(
+            wire["action"],
+            serde_json::json!({
+                "kind": "store",
+                "changes": [
+                    {"op": "inspect", "source": {"kind": "git", "url": "https://github.com/acme/skills"}},
+                    {"op": "set", "item": "skill:style", "column": "antigravity", "on": false},
+                    {"op": "adopt", "kind": "skill", "name": "notes"},
+                ],
+            })
+        );
+        let read: Call = serde_json::from_value(wire).unwrap();
+        assert!(matches!(
+            read,
+            Call::Kit { action: KitAction::Store { changes: read }, .. } if read == changes
+        ));
+        assert_eq!(
+            serde_json::to_value(KitAction::FollowStore).unwrap(),
+            serde_json::json!({"kind": "follow_store"})
         );
     }
 
@@ -1564,11 +1902,18 @@ mod tests {
         let catch_up = Call::BranchCatchUp {
             root: "/repo".into(),
             head: "c".repeat(40),
+            branch: None,
         };
         assert_eq!(
             serde_json::to_value(&catch_up).unwrap(),
             serde_json::json!({"op": "branch_catch_up", "root": "/repo", "head": "c".repeat(40)})
         );
+        let on_branch = Call::BranchCatchUp {
+            root: "/repo".into(),
+            head: "c".repeat(40),
+            branch: Some("feat".into()),
+        };
+        assert_eq!(serde_json::to_value(&on_branch).unwrap()["branch"], "feat");
         let merge_push = Call::BranchMergePush {
             root: "/repo".into(),
             branch: "feat".into(),
@@ -1595,6 +1940,79 @@ mod tests {
             assert!(call.answered_by_device());
             assert!(!call.runs_until_stopped() && !call.is_control() && !call.is_background());
         }
+    }
+
+    /// The profile calls cross the link as whole requests: a call's fields
+    /// sit beside the request's own `id` and `op`, so none may be named
+    /// either, and each one reads back as it was sent.
+    #[test]
+    fn the_profile_calls_round_trip_as_requests_and_a_device_answers_them() {
+        use crate::profiles::ProfileOp;
+        use hide_agent_adapter::{AccountRef, ProfileId};
+        let calls = [
+            Call::ProfileList { values: true },
+            Call::ProfileList { values: false },
+            Call::ProfileApply {
+                change: ProfileOp::Add {
+                    kind: "claude-code".into(),
+                    name: "work".into(),
+                    account: Some(AccountRef::Folder("~/work/".into())),
+                    program: Some("claude-gw".into()),
+                    env: vec![("ANTHROPIC_BASE_URL".into(), "https://gw.example".into())],
+                    default: true,
+                },
+                expected_version: 3,
+            },
+            Call::ProfileApply {
+                change: ProfileOp::Edit {
+                    id: ProfileId("p-1".into()),
+                    name: "office".into(),
+                    program: None,
+                    env: Vec::new(),
+                },
+                expected_version: 4,
+            },
+            Call::ProfileApply {
+                change: ProfileOp::Default {
+                    kind: "omp".into(),
+                    id: ProfileId::default_profile(),
+                },
+                expected_version: 5,
+            },
+            Call::ProfileApply {
+                change: ProfileOp::Remove {
+                    id: ProfileId("p-1".into()),
+                },
+                expected_version: 6,
+            },
+            Call::ProfileInstall {
+                profile: ProfileId("p-wire-probe".into()),
+            },
+            Call::ProfileLaunch {
+                kind: "claude-code".into(),
+                profile: ProfileId("p-1".into()),
+            },
+        ];
+        for call in calls {
+            let request = Request { id: 991, call };
+            let text = serde_json::to_string(&request).unwrap();
+            assert_eq!(
+                serde_json::from_str::<Request>(&text).unwrap(),
+                request,
+                "{text}"
+            );
+            assert!(request.call.answered_by_device());
+        }
+        assert_eq!(
+            serde_json::to_value(Request {
+                id: 991,
+                call: Call::ProfileInstall {
+                    profile: ProfileId("p-wire-probe".into()),
+                },
+            })
+            .unwrap(),
+            serde_json::json!({"id": 991, "op": "profile_install", "profile": "p-wire-probe"})
+        );
     }
 
     #[test]

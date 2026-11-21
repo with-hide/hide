@@ -23,13 +23,12 @@ export function ServerSessionScene({ scene: kind, theme, scale, content, state =
     scene.agents = scene.agents.filter((row) => row.pane_id === pane.id);
     scene.rest.navigator!.focused_workspace_id = workspace.id;
     scene.rest.navigator!.focused_checkout_id = checkout.id;
-    scene.rest.workspace_view = {device_id:"local",path:checkout.path,open:false,documents:false,tool:null,pinned:false,document_width:null,detail_width:null,explorer_width:null,panel_width:null,lane_called:0,lane_calls:0,lane_called_side:"view"};
+    scene.rest.workspace_view = {device_id:"local",path:checkout.path,open:false,tray: { tab_id: "t1", shown: false, count: 0 },tool:null,document_width:null,explorer_width:null,panel_width:null,lane_called:0,lane_calls:0,lane_called_side:"view"};
     if (kind === "checkout-git") {
       const head = "a".repeat(40);
       workspace.label = content === "long" ? "한글과 English가 섞인 매우 긴 프로젝트 이름" : "herdr-ide";
       checkout.branch = content === "long" ? "feature/매우-긴-한글과-English-checkout-name" : "main";
       workspace.is_git = state !== "folder";
-      workspace.is_home = state === "home";
       // A stale header keeps its last CI answers, dimmed by a failed read (PRD git-freshness B22).
       const ciObserved = state === "stale" ? { freshness: "failed" as const, read_at_unix_ms: Date.now() - 6 * 60_000 } : { freshness: "fresh" as const, read_at_unix_ms: Date.now() };
       scene.rest.workspace_view.git = {

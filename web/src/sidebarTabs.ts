@@ -4,7 +4,7 @@ import type { AgentGroup } from "./agentLayout";
 
 /**
  * One tab's segment of a checkout's agent list. `glyph` is set for every real tab, which draws its guide whatever it holds or is named;
- * `line` is set when it also draws its tab line, which an unnamed tab holding one agent leaves out, since `Tab N` says nothing its one row does not.
+ * `line` is set when it also draws its tab line, which only a tab holding no agent has: a tab with agents is told by its agents and the guide that gathers them.
  */
 export type SidebarTabGroup = { tab: Tab | null; rows: BoardRow[]; count: number; glyph: boolean; line: boolean };
 
@@ -33,7 +33,8 @@ export function sidebarTabGroups(checkout: Checkout, device: string, rows: reado
     if (!members.length && !(tab !== null && namedOnStrip(tab))) return [];
     const count = tab ? new Set(tab.panes.filter((pane) => agentPanes.has(pane.id)).map((pane) => pane.id)).size : 0;
     const glyph = tab !== null && tab.id !== null && tab.sidebar !== undefined;
-    const line = glyph && (tab!.sidebar!.manual_name !== null || count !== 1);
+    // A tab with agents is told by its agents and the guide that gathers them; only a tab with none says its name, since nothing else shows it.
+    const line = glyph && count === 0;
     return [{ tab, rows: members, count, glyph, line }];
   });
 }

@@ -1,35 +1,33 @@
 // The words the host draws itself (the app menu, the connection screen) in each
-// language, on the real Electron build against a private Herdr and hided.
+// language, on the real Electron build against a private engine and hided.
 
 import { expect, type ElectronApplication } from "@playwright/test";
 import fs from "node:fs";
 import path from "node:path";
-import { startHerdr, type HerdrFixture } from "../../web/e2e/herdr-fixture";
+import { startEngine } from "../../web/e2e/engine-fixture";
 import { enterWorkspace } from "../../web/e2e/wire";
-import { HIDE_CLI, hostLog, isolate, launch, relaunch, screenshot, test, type Isolated } from "./fixture";
+import { HIDE_CLI, hostLog, isolate, launch, launchShell, relaunch, screenshot, startStack, test, type Isolated } from "./fixture";
 
-let herdr: HerdrFixture;
 let run: Isolated;
+let stopHome: (() => void) | null = null;
 let app: ElectronApplication | null = null;
 
-test.beforeAll(async () => {
-  herdr = await startHerdr();
-});
-
-test.afterAll(() => {
-  herdr?.stop();
-});
-
-test.beforeEach(() => {
-  run = isolate(herdr, test.info().title.split(":")[0]!);
-});
+/** A home whose app never reaches a daemon: it needs an engine only for the home it gives, so none runs a daemon. */
+async function startBareHome(): Promise<void> {
+  const engine = await startEngine();
+  run = isolate(engine, test.info().title.split(":")[0]!);
+  stopHome = () => {
+    try { run.cleanup(); } finally { engine.stop(); }
+  };
+}
 
 test.afterEach(async () => {
   const info = test.info();
-  if (info.status !== info.expectedStatus) console.log(hostLog(run.env).map((line) => JSON.stringify(line)).join("\n"));
+  if (stopHome && info.status !== info.expectedStatus) console.log(hostLog(run.env).map((line) => JSON.stringify(line)).join("\n"));
   await app?.close().catch(() => undefined);
   app = null;
-  run.cleanup();
+  stopHome?.();
+  stopHome = null;
 });
 
 const storedChoice = () => path.join(run.env.HIDE_DESKTOP_USER_DATA_DIR!, "interface-language.json");
@@ -56,6 +54,7 @@ const EXPECTED = {
 
 for (const language of ["en", "ko", "zh-CN", "ja"] as const) {
   test(`stored-${language}: the connection screen and the menu use the last confirmed language before any daemon answers`, async () => {
+    await startBareHome();
     store(language);
     ({ app } = await launch({ ...run.env, HIDE_CLI_PATH: path.join(run.root, "bin", "hide") }));
     const page = await app.firstWindow();
@@ -70,6 +69,7 @@ for (const language of ["en", "ko", "zh-CN", "ja"] as const) {
 }
 
 test("unset: with no stored choice the system language decides, and an unsupported one reads English", async () => {
+  await startBareHome();
   ({ app } = await launch({ ...run.env, HIDE_DESKTOP_SYSTEM_LANGUAGE: "ja-JP", HIDE_CLI_PATH: path.join(run.root, "bin", "hide") }));
   const page = await app.firstWindow();
   await expect(page.locator("#reason")).toHaveText(EXPECTED.ja.reason, { timeout: 20_000 });
@@ -82,8 +82,12 @@ test("unset: with no stored choice the system language decides, and an unsupport
 });
 
 test("choice: the language chosen in Settings relabels the menu, is kept for the next launch, and system returns to the OS language", async () => {
-  ({ app } = await launch(run.env));
-  const page = await app.firstWindow();
+  const stack = await startStack("choice", { agents: false });
+  run = stack.run;
+  stopHome = stack.stop;
+  const launched = await launchShell(run.env);
+  app = launched.app;
+  const page = launched.page;
   await enterWorkspace(page, "fixture");
   expect((await menuLabels(app)).newTab).toBe(EXPECTED.en.newTab);
   await page.locator("[data-open-settings]").click();

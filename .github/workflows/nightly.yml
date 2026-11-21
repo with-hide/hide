@@ -81,9 +81,6 @@ jobs:
     with:
       lane: nightly-macos
       runner: macos-15
-      herdr-platform: macos-aarch64
-      # And once more on the core's own engine (PRD engine-bundle-3-core-owns D-14).
-      own-engine: true
       shards: 1
       grep: "@platform"
 
@@ -98,8 +95,6 @@ jobs:
     with:
       lane: nightly-windows
       runner: windows-latest
-      herdr-platform: windows-x86_64
-      own-engine: true
       shards: 1
       grep: "@platform"
 
@@ -116,7 +111,6 @@ jobs:
       contents: read
     with:
       runner: macos-15
-      herdr-platform: macos-aarch64
 
   # The agy contract on all three systems (one system's on that system's hand
   # run); a pull request runs only its Windows leg.
@@ -193,7 +187,6 @@ jobs:
     with:
       lane: nightly-${{ matrix.system }}
       runner: ${{ fromJSON('{"linux":"ubuntu-latest","macos":"macos-15","windows":"windows-latest"}')[matrix.system] }}
-      herdr-platform: ${{ fromJSON('{"linux":"linux-x86_64","macos":"macos-aarch64","windows":"windows-x86_64"}')[matrix.system] }}
       # The whole suite on macOS, in the two shards `pr.yml` gives it, the
       # @platform tests elsewhere, in one.
       shards: ${{ matrix.system == 'macos' && 2 || 1 }}
@@ -242,7 +235,7 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 10
     # The issue step reads this run with the development issues App's token
-    # and files in with-hide/hide-private (docs/TESTING.md, Nightly failures),
+    # and files in this repository (docs/TESTING.md, Nightly failures),
     # so this job's own token reads only the checkout.
     permissions:
       contents: read
@@ -264,7 +257,7 @@ jobs:
           client-id: ${{ vars.HIDE_ISSUES_APP_CLIENT_ID }}
           private-key: ${{ secrets.HIDE_ISSUES_APP_KEY }}
           owner: with-hide
-          repositories: hide,hide-private
+          repositories: hide
       - name: Open, comment on and close the nightly-failure issues
         if: ${{ always() && github.ref == 'refs/heads/main' }}
         env:

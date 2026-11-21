@@ -23,7 +23,7 @@ use serde_json::Value;
 
 use crate::program::Program;
 use crate::runner::{self, Environment, Spec};
-use crate::text_cli::{self, TextCliConfig, classify_failure, json_from_text, system_with_schema};
+use crate::text_cli::{TextCliConfig, classify_failure, json_from_text, system_with_schema};
 use crate::{
     AiBackend, AiError, AiRequest, AiResponse, AiUsage, Availability, CancelToken, ModelCatalog,
     ProviderId,
@@ -72,7 +72,7 @@ impl PiCliBackend {
     }
 
     fn list_models(&self, binary: &Program) -> Result<Vec<String>, String> {
-        let run = text_cli::probe(binary, &["--list-models"], &self.config.cwd, "pi_models")?;
+        let run = self.config.probe(binary, &["--list-models"], "pi_models")?;
         if !run.succeeded() {
             return Err(format!("pi_models_failed:exit={}", run.exit()));
         }
@@ -123,10 +123,9 @@ impl AiBackend for PiCliBackend {
             return Availability::NotInstalled;
         };
         if let Some((provider, _)) = self.config.model.split_once('/') {
-            return match text_cli::probe(
+            return match self.config.probe(
                 &binary,
                 &["auth", "check", "--provider", provider],
-                &self.config.cwd,
                 "pi_auth",
             ) {
                 Ok(run) => match run.code {
@@ -153,7 +152,7 @@ impl AiBackend for PiCliBackend {
             };
         };
         match self.list_models(&binary) {
-            Ok(models) if !models.is_empty() => ModelCatalog::Offered(models),
+            Ok(models) if !models.is_empty() => ModelCatalog::plain(models),
             Ok(_) => ModelCatalog::Unknown {
                 reason: "pi_models_empty".to_owned(),
             },
@@ -177,7 +176,7 @@ impl AiBackend for PiCliBackend {
                 cwd: &self.config.cwd,
                 stdin: Some(&request.input),
                 environment: Environment::Inherit,
-                set: &[],
+                set: &self.config.set(&[]),
                 deadline: request.deadline,
             },
             cancel,

@@ -12,10 +12,9 @@ import type { TFunction } from "i18next";
 import { statusText } from "./agentStatus";
 import type { MessageKey } from "./i18n/catalogs";
 import { translate } from "./i18n/client";
-import { projectsOf } from "./remote";
 import { PR_LOOK } from "./prMark";
 import { machineName, windowDeviceId, windowFirst, wslPlace } from "./screenMachine";
-import type { AgentRow, Checkout, Device, GithubSearchResult, PrState, PullRequest, SessionWorkSearch, SnapshotRest, Task, WorkSession, Workspace } from "./snapshot";
+import { listedWorkspaces, type AgentRow, type Checkout, type Device, type GithubSearchResult, type PrState, type PullRequest, type SessionWorkSearch, type SnapshotRest, type Task, type WorkSession, type Workspace } from "./snapshot";
 import { workKey } from "./sessionWork";
 import { askSubjectText } from "./askSubject";
 
@@ -159,8 +158,8 @@ export function openUrlEntry(query: string, unavailable: string | null, t: TFunc
 }
 
 
-/** What ⌘K reads from one device: its name as this window calls it, its agents and its projects (not its Home, which the device entry stands for). `own` is this window's machine. */
-export type SearchDevice = { agentScope: AgentScope | undefined; device: Device; name: string; own: boolean; agents: AgentRow[]; workspaces: Workspace[]; allWorkspaces: Workspace[]; local: boolean };
+/** What ⌘K reads from one device: its name as this window calls it, its agents and its projects. `own` is this window's machine. */
+export type SearchDevice = { agentScope: AgentScope | undefined; device: Device; name: string; own: boolean; agents: AgentRow[]; workspaces: Workspace[]; local: boolean };
 
 /** This machine and each connected device, in the rail's order; a device that is not connected has no current agents or projects to find. */
 export function searchDevices(rest: SnapshotRest): SearchDevice[] {
@@ -172,13 +171,14 @@ export function searchDevices(rest: SnapshotRest): SearchDevice[] {
   for (const device of devices) {
     const named = { name: listed?.length ? machineName(listed, device.id, translate) : translate(thisMachineKey(null)), own: device.id === own };
     if (device.id === localDeviceId(rest)) {
-      const all = rest.navigator?.workspaces ?? [];
-      rows.push({ agentScope: rest.navigator?.devices?.find((d) => d.id === device.id)?.agent_scope ?? rest.navigator?.agent_scope, device, ...named, agents: rest.navigator?.agents ?? [], workspaces: projectsOf(all), allWorkspaces: all, local: true });
+      // An automation's own folder is no project to find (PRD automations B30).
+      const all = listedWorkspaces(rest.navigator?.workspaces ?? []);
+      rows.push({ agentScope: rest.navigator?.devices?.find((d) => d.id === device.id)?.agent_scope ?? rest.navigator?.agent_scope, device, ...named, agents: rest.navigator?.agents ?? [], workspaces: all, local: true });
       continue;
     }
     const status = rest.status?.remote?.find((row) => row.target_id === device.id);
     const session = status?.state === "connected" ? status.session : null;
-    rows.push({ agentScope: device.agent_scope, device, ...named, agents: session?.agents ?? [], workspaces: projectsOf(session?.workspaces ?? []), allWorkspaces: session?.workspaces ?? [], local: false });
+    rows.push({ agentScope: device.agent_scope, device, ...named, agents: session?.agents ?? [], workspaces: listedWorkspaces(session?.workspaces ?? []), local: false });
   }
   return rows;
 }
@@ -193,14 +193,14 @@ function agentStatus(agent: Pick<AgentRow, "state" | "status_code">, t: TFunctio
 }
 
 /**
- * An agent row: titled by the name every surface calls it, with its Herdr
- * name (`agent start --name`, `agent rename`), its place and its state
- * sentence under it, so a query finds it by any of them. A Herdr name the
+ * An agent row: titled by the name every surface calls it, with its engine
+ * name (`hide agent spawn --name`), its place and its state
+ * sentence under it, so a query finds it by any of them. An engine name the
  * title already reads as is not drawn twice.
  */
 export function agentEntry(scope: SearchDevice, agent: AgentRow, place: string | null, front: string, t: TFunction<"translation">): SearchEntry {
   const sentence = agent.detail || (agent.ask_subject ? askSubjectText(t, agent.ask_subject) : statusText(t, agent.status_code));
-  const name = agent.herdr_name && agent.herdr_name.toLowerCase() !== agent.identity_label.toLowerCase() ? agent.herdr_name : null;
+  const name = agent.given_name && agent.given_name.toLowerCase() !== agent.identity_label.toLowerCase() ? agent.given_name : null;
   return {
     id: `agent:${agent.pane_id}`,
     title: agent.identity_label,
@@ -388,7 +388,7 @@ export function searchEntries(rest: SnapshotRest | null, t: TFunction<"translati
   const front = frontDeviceId(rest);
   const devices = searchDevices(rest);
   for (const scope of devices) {
-    const places = checkoutPlaces(scope.allWorkspaces);
+    const places = checkoutPlaces(scope.workspaces);
     for (const agent of scope.agents) entries.push(agentEntry(scope, agent, places.get(agent.pane_id) ?? null, front, t));
     for (const workspace of scope.workspaces) {
       entries.push(projectEntry(scope, workspace, front));
@@ -428,7 +428,7 @@ function agentHasPr(entry: SearchEntry, number: number): boolean {
   return entry.kind === "agent" && (entry.agent?.request?.pull_requests ?? []).some((pr) => pr.number === number);
 }
 
-/** The agents whose pane's Herdr id holds `query`, in its case since Herdr tells `pB` from `pb`, the shortest id (the whole one) first. */
+/** The agents whose pane's engine id holds `query`, in its case since the engine tells `pB` from `pb`, the shortest id (the whole one) first. */
 function paneIdMatches(entries: SearchEntry[], query: string): SearchEntry[] {
   return entries
     .flatMap((entry) => (entry.kind === "agent" && entry.devicePaneId !== undefined ? [{ entry, id: entry.devicePaneId }] : []))
@@ -439,7 +439,7 @@ function paneIdMatches(entries: SearchEntry[], query: string): SearchEntry[] {
 
 /**
  * The entries matching `query`, best first. A query holding `:`, as every
- * Herdr pane id does (`w9J:p52`, as `$HERDR_PANE_ID` gives it or Copy name
+ * engine pane id does (`w9J:p52`, as `$HERDR_PANE_ID` gives it or Copy name
  * and ID carries it), puts the agents whose id holds it ahead of everything, on every device;
  * a name with a colon (`fix: bug`) is held by no id, and without a colon no id
  * matches, so a name or a number never finds a pane by its id. A number (`273`, or with a hash) puts the

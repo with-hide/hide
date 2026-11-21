@@ -1,4 +1,4 @@
-// What the landing's lane shots open in the lane's 보기 slot, over the hero's
+// What the landing's lane shots open as a card tab on a desk, over the hero's
 // story: the card of pull request 431, the lead's session record, and the mission
 // the lead conducts. Invented English values; nothing here is read or sent.
 import type { AgentRow, DetailItem, LinkPanel, LinkedSession, Mission, MissionNode, PrCard, PrState, PullRequest, SessionRecord, WorkFlow, WorkOutput, WorkRequest, WorkSession } from "../snapshot";
@@ -32,6 +32,7 @@ export function leadSession(agents: AgentRow[]): WorkSession {
   return { device_id: "local", agent: lead?.agent_kind ?? "claude", session_id: lead?.session_id ?? sessionId(LEAD_PANE) };
 }
 
+/** What a desk holds in a lane shot: the card, the record, or the Conductor's mission map beside its pane. */
 export function laneItem(lane: LandingLane, agents: AgentRow[]): DetailItem {
   if (lane === "pr") return { kind: "pull_request", workspace_id: PROJECT, number: 431 };
   if (lane === "record") return { kind: "record", session: leadSession(agents) };
@@ -105,7 +106,7 @@ export function landingRecord(nowMs: number, agents: AgentRow[]): SessionRecord 
     return {
       session, title, fallback_title: agent, native_title: title, manual_title: null, state: end === "working" ? "working" : "idle", cwd: "/work/billing-app", path: null,
       started_at_unix_ms: nowMs - 50 * MINUTE, ended_at_unix_ms: null, status: { end, line, at_unix_ms: nowMs - 4 * MINUTE, limited: null, settled: null },
-      asks: [], flows: [], omitted_requests: 0, outputs: made, pr_groups: outputs.length ? [{ child: null, name: title, pulls: outputs.map(([number, name, state]) => listedPull(number, name, state, null, pullUrl(number))) }] : [], artifacts: [], children: [],
+      asks: [], folded_asks: [], flows: [], omitted_requests: 0, outputs: made, pr_groups: outputs.length ? [{ child: null, name: title, pulls: outputs.map(([number, name, state]) => listedPull(number, name, state, null, pullUrl(number))) }] : [], children: [],
     };
   };
   const children = [
@@ -129,12 +130,12 @@ export function landingRecord(nowMs: number, agents: AgentRow[]): SessionRecord 
         request(nowMs, 4, 22, `${ref(431)} is ready and its tests pass.`, { letter_from: "Export invoices as CSV", summary: null }),
       ], null),
     ],
-    omitted_requests: 0, outputs, pr_groups: children.filter((one) => one.pr_groups.length).map((one) => ({ child: one.session, name: one.title, pulls: one.pr_groups[0]!.pulls.map((pull) => ({ ...pull, own: false, holders: [one.title] })) })), artifacts: [], children,
+    folded_asks: [], omitted_requests: 0, outputs, pr_groups: children.filter((one) => one.pr_groups.length).map((one) => ({ child: one.session, name: one.title, pulls: one.pr_groups[0]!.pulls.map((pull) => ({ ...pull, own: false, holders: [one.title] })) })), children,
   };
 }
 
 function node(key: string, title: string, extra: Partial<MissionNode>): MissionNode {
-  return { key, title, kind: "change", depends_on: [], status: "planned", blocked: null, delivery: "pr", worker: null, agent_id: null, pane_id: null, machine: null, pr: null, base_pr: null, branch: null, pr_state: null, pr_url: null, stage: null, attempts: 0, line: null, change: null, review: null, criteria: [], criteria_met: 0, criteria_skipped: 0, external: null, unread: false, reopened: 0, started_at_unix_ms: null, finished_at_unix_ms: null, commit: null, landing: null, verdict: null, checks: null, attention: null, hide: null, ...extra, prs: extra.prs ?? (extra.pr != null ? [{ number: extra.pr, state: extra.pr_state ?? null, url: extra.pr_url ?? null }] : []) };
+  return { key, title, kind: "change", depends_on: [], status: "planned", blocked: null, delivery: "pr", worker: null, agent_id: null, pane_id: null, machine: null, pr: null, base_pr: null, branch: null, pr_state: null, pr_url: null, stage: null, attempts: 0, line: null, change: null, review: null, criteria: [], criteria_met: 0, criteria_skipped: 0, steps: [], brief_bytes: null, external: null, unread: false, reopened: 0, started_at_unix_ms: null, finished_at_unix_ms: null, commit: null, landing: null, verdict: null, checks: null, attention: null, hide: null, ...extra, prs: extra.prs ?? (extra.pr != null ? [{ number: extra.pr, state: extra.pr_state ?? null, url: extra.pr_url ?? null }] : []) };
 }
 
 /** The mission the lead conducts: one research node, four changes and a check together, each on the hero's panes. */
@@ -145,16 +146,16 @@ export function landingMission(nowMs: number, agents: AgentRow[]): Mission {
   const done = (started: number, length: number) => ({ status: "done" as const, started_at_unix_ms: ago(started), finished_at_unix_ms: ago(started - length) });
   const working = (started: number) => ({ status: "working" as const, started_at_unix_ms: ago(started) });
   const nodes = [
-    node("read", "Read how exports work today", { kind: "research", delivery: null, worker: opus, ...done(66, 8), line: "Findings in the plan" }),
+    node("read", "Read how exports work today", { kind: "general", preset: "research", delivery: null, worker: opus, ...done(66, 8), line: "Findings in the plan" }),
     node("csv", "Export invoices as CSV", { depends_on: ["read"], worker: codex, pane_id: "a1c1", ...done(52, 30), pr: 431, pr_state: "mergeable", landing: { state: "left", action: "merge" }, stage: 3, pr_url: pullUrl(431) }),
     node("sort", "Sort the export by date", { depends_on: ["read"], worker: codex, pane_id: "a1c3", ...working(40), pr: 432, pr_state: "pending", stage: 2, pr_url: pullUrl(432) }),
     node("button", "Add the export button", { depends_on: ["csv"], worker: codex, pane_id: "a1c6", ...done(30, 18), pr: 436, pr_state: "mergeable", landing: { state: "left", action: "merge" }, stage: 3, pr_url: pullUrl(436) }),
     node("empty", "Handle an empty invoice list", { depends_on: ["csv"], worker: codex, pane_id: "a1c7", ...working(12), pr: 435, pr_state: "pending", stage: 2, pr_url: pullUrl(435) }),
-    node("together", `Check ${ref(431)} and ${ref(436)} together`, { kind: "verify", delivery: null, depends_on: ["csv", "button"], worker: { agent: "codex", model: "GPT-5.6-Sol", effort: "low", effort_auto: false }, pane_id: "a3", ...done(18, 10), line: "38 passed" }),
+    node("together", `Check ${ref(431)} and ${ref(436)} together`, { kind: "general", preset: "verify", delivery: null, depends_on: ["csv", "button"], worker: { agent: "codex", model: "GPT-5.6-Sol", effort: "low", effort_auto: false }, pane_id: "a3", ...done(18, 10), line: "38 passed" }),
   ];
   return {
     id: "mission-export", title: "Invoice export", workspace_id: PROJECT, project: "/work/billing-app", checkout_path: "/work/billing-app", device_id: "local",
-    status: "running", scope: "pr", cap: 4, exempt: false, strength: null, other_vendor: null,
+    status: "running", scope: "pr", cap: 4, exempt: false, strength: null,
     conductor: { pane_id: LEAD_PANE, name: "Invoice export · Conductor", agent_kind: "claude", session: leadSession(agents), present: true, takes_answers: true },
     nodes, merge_order: ["csv", "button", "sort", "empty"], landing_order: ["csv", "button"], stack_waiting: 0, check: "pnpm test", github: "example",
     decision: null, question: null, answer: null, answer_failed: null, delay: null, report: null,

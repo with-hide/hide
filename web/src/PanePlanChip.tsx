@@ -1,4 +1,4 @@
-import { CheckIcon, ChevronRightIcon, ListChecksIcon } from "lucide-react";
+import { CheckIcon, ListChecksIcon } from "lucide-react";
 import { useEffect, useMemo, useRef, useState, type MouseEvent } from "react";
 import type { Actions } from "./actions";
 import { ProgressCells } from "./components/mission-tone";
@@ -9,6 +9,7 @@ import { cn } from "./lib/utils";
 import { paneChildren } from "./paneChildren";
 import { usePaneAgents } from "./PaneHeaderBand";
 import { PlanChecklist } from "./components/plan-checklist";
+import { PopoverOpenRow } from "./components/popover-open-row";
 import { PlanPill, planState } from "./PlanMap";
 import { formatElapsed, useElapsed } from "./components/elapsed";
 import { requireInterfaceLanguage } from "./i18n/locale";
@@ -24,7 +25,7 @@ const LEAVE_MS = 150;
 /**
  * The pane head's plan chip (PRD hide-plan B7, D-11, D-29; PRD
  * mission-plan-visibility B1, B3-B7), where the task chip was: the word
- * `계획`, a cell per step and `n/m`, `검토` in the warning colour while the
+ * `작업 단계`, a cell per step and `n/m`, `검토` in the warning colour while the
  * plan waits for review, a green check and `m/m` once finished, and nothing
  * for a pane with no plan. The pointer or the keyboard's focus opens the
  * checklist; a press or ⇧⌘U pins it, and a second press, ⇧⌘U or Esc closes
@@ -86,9 +87,10 @@ export function PanePlanChip({ paneId, actions }: { paneId: string; actions: Act
 
 /**
  * The popover's body (B3, B7), headed as the plan's page is: its state pill,
- * a cell per step, `n/m` and `크게 ›`; then the checklist, and a foot with the
- * direct children no step is handed to and when the plan last moved, or how
- * long a finished one took.
+ * a cell per step and `n/m`; then the checklist, a foot with the direct
+ * children no step is handed to and when the plan last moved, or how long a
+ * finished one took, and the last row, `지도 열기 ›`, the same row a mission's
+ * popover ends in.
  */
 export function PlanPopoverBody({ paneId, plan, onLarge, openPane }: { paneId: string; plan: PlanView; onLarge: () => void; openPane: (paneId: string) => void }) {
   const { t } = useInterfaceTranslation();
@@ -101,20 +103,12 @@ export function PlanPopoverBody({ paneId, plan, onLarge, openPane }: { paneId: s
         <span className="shrink-0 font-semibold tabular-nums text-foreground" data-plan-count="true">
           {proposed ? t("plan.steps", { count: plan.progress.total }) : planCount(plan)}
         </span>
-        <button
-          type="button"
-          className="flex shrink-0 items-center gap-xxs rounded-xs px-xs py-xxs text-primary outline-none hover:bg-accent focus-visible:ring-1 focus-visible:ring-ring"
-          onClick={onLarge}
-          data-pane-plan-large="true"
-        >
-          {t("plan.large")}
-          <ChevronRightIcon aria-hidden="true" className="size-(--size-icon-sm)" />
-        </button>
       </div>
       <div className="px-xs py-sm">
         <PlanChecklist plan={plan} popover openPane={openPane} />
       </div>
       <PlanFoot paneId={paneId} plan={plan} />
+      <PopoverOpenRow label={t("plan.popover.open")} onClick={onLarge} data-pane-plan-large="true" />
     </div>
   );
 }
@@ -126,7 +120,7 @@ function PlanFoot({ paneId, plan }: { paneId: string; plan: PlanView }) {
   const updated = useElapsed(finished ? null : plan.updated_at_unix_ms);
   const when = finished ? t("plan.took", { elapsed: formatElapsed(requireInterfaceLanguage(i18n.language), plan.updated_at_unix_ms - plan.created_at_unix_ms) }) : updated ? t("plan.updated", { elapsed: updated }) : null;
   return (
-    <div className="mx-sm flex min-w-0 items-baseline gap-sm border-t border-border pb-sm pt-xs text-micro text-muted-foreground" data-plan-foot="true">
+    <div className="flex min-w-0 items-baseline gap-sm px-sm pb-sm pt-xs text-micro text-muted-foreground" data-plan-foot="true">
       <Delegated paneId={paneId} plan={plan} />
       {when ? <span className="ml-auto shrink-0" data-plan-summary-when="true">{when}</span> : null}
     </div>
@@ -143,7 +137,7 @@ export function planChipLook(proposed: boolean, finished: boolean): string {
 }
 
 /**
- * What the plan chip shows (PRD hide-plan B7): its mark, `계획` or `검토`, a
+ * What the plan chip shows (PRD hide-plan B7): its mark, `작업 단계` or `검토`, a
  * cell per step and `n/m`. The pane head wraps it in its press; Desk's card
  * and thread head draw it from a job's own plan (PRD
  * session-docs-and-assistant B24, B25).
@@ -154,8 +148,9 @@ export function PlanChipFace({ tones, count, proposed, finished }: { tones: read
   return (
     <>
       <Mark aria-hidden="true" className="size-(--size-icon-sm) shrink-0" />
-      <span className="whitespace-nowrap">{proposed ? t("plan.review") : t("plan.title")}</span>
-      <ProgressCells tones={tones} size="chip" />
+      {/* In a narrow pane's head the mark and the count stay; elsewhere no pane container narrows it. */}
+      <span className={cn("whitespace-nowrap", !proposed && "pane-head-narrow:hidden")}>{proposed ? t("plan.review") : t("plan.title")}</span>
+      <ProgressCells tones={tones} size="chip" className="pane-head-narrow:hidden" />
       {proposed ? null : <span className="font-mono tabular-nums">{count}</span>}
     </>
   );
@@ -164,7 +159,7 @@ export function PlanChipFace({ tones, count, proposed, finished }: { tones: read
 /**
  * What a pane head chip with a popover shares (PRD hide-plan B7,
  * mission-pane-chip D-01): the pointer or the keyboard's focus opens it, a
- * press or the Show plan chord pins it through `ui.planPane`, and a second
+ * press or the Show task steps chord pins it through `ui.planPane`, and a second
  * press, the chord or Esc closes it. Opening never takes the keyboard from
  * the terminal. `present` is false while the pane has nothing to show, and a
  * pin outlives that only as long as the pane does.

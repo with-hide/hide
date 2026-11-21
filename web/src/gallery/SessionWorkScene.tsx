@@ -24,10 +24,12 @@ const CHILD_SESSION: WorkSession = { ...SESSION, agent: "claude", session_id: "c
 const request = (offset: number, minutes: number, text: string, patch: Partial<WorkRequest> = {}): WorkRequest => ({ offset, text, at_unix_ms: AT + minutes * MIN, author: "operator", images: 0, summary: null, answers: null, letter_from: null, count: 1, goal_command: false, ...patch });
 const ask = (id: string, text: string): MissedWork => ({ id, kind: "ask", text, status: "open", at_unix_ms: AT + 230 * MIN, turn_offset: 9, issue_repository: null, issue_number: null, creating: false, backlog_key: null });
 const pr = (number: number, title: string, state: string, source: WorkSession, sourceName: string): WorkOutput => ({ kind: "pr", repository: "example/hide", number, title, url: `https://example.invalid/pull/${number}`, state, stale: false, last_read_at_unix_ms: AT, created_at_unix_ms: AT + number, source, source_name: sourceName });
+/** An issue the session made, which the record's 결과물 lists after the Views. */
+const issue = (number: number, title: string, state: "open" | "closed"): WorkOutput => ({ ...pr(number, title, state, SESSION, "세션 기록 재설계 PRD"), kind: "issue", url: `https://example.invalid/issues/${number}` });
 /** One PR of a session's list as the core lays it: its own when `holder` is null, else a descendant's. */
 const listed = (number: number, title: string, state: PrState, holder: string | null = null): SessionPull => ({ url: `https://example.invalid/pull/${number}`, number, title, state, own: holder === null, holders: holder ? [holder] : [], stale: false, last_read_at_unix_ms: AT });
 const flow = (id: string, name: string, minutes: number, requests: WorkRequest[], result: WorkFlow["result"]): WorkFlow => ({ id, name, at_unix_ms: AT + minutes * MIN, requests, request_count: requests.filter((one) => !one.letter_from).length, result });
-const empty = { status: null, asks: [], flows: [], omitted_requests: 0, outputs: [], pr_groups: [], artifacts: [], children: [] } satisfies Partial<RecordValue>;
+const empty = { status: null, asks: [], folded_asks: [], flows: [], omitted_requests: 0, outputs: [], pr_groups: [], children: [] } satisfies Partial<RecordValue>;
 // Invented content matching the user-approved record design.
 const CHILDREN = [
   ["기록 화면 조사", "claude", "done", []],
@@ -62,9 +64,8 @@ const BASE: RecordValue = {
       request(12, 267, "이거 봐줘", { summary: "이 화면 확인", images: 1 }),
     ], null),
   ],
-  artifacts: ["session-record-goal-flow PRD", "record-revised-cases.html"],
 };
-BASE.outputs = [pr(1533, "pane 카드 정리", "merged", SESSION, BASE.title), ...children.flatMap((child) => child.outputs)];
+BASE.outputs = [issue(1541, "좁은 열에서 흐름 이름이 잘림", "open"), issue(1536, "기록 화면 요청 순서 뒤집힘", "closed"), pr(1533, "pane 카드 정리", "merged", SESSION, BASE.title), ...children.flatMap((child) => child.outputs)];
 BASE.pr_groups = [{ child: null, name: BASE.title, pulls: [listed(1533, "pane 카드 정리", "merged")] }, ...children.filter((child) => child.pr_groups.length).map((child) => ({ child: child.session, name: child.title, pulls: child.pr_groups[0]!.pulls.map((pull) => ({ ...pull, own: false, holders: [child.title] })) }))];
 BASE.children = children;
 
@@ -106,6 +107,11 @@ function recordFor(base: RecordValue, kind: string | null): RecordValue {
     record.asks = [];
   }
   if (kind === "omitted") record.omitted_requests = 37;
+  if (kind === "folded") {
+    // What Hide AI read as settled with no answer: folded under 정리됨 with its reason (status-model.md, A question still waiting).
+    const folded = (id: string, text: string, reason: string): MissedWork => ({ ...ask(id, text), status: "folded", reason });
+    record.folded_asks = [folded("ask-3", "릴리스 노트를 지금 쓸지", "다른 세션이 운영자 결정을 전해 받아 이미 씀"), folded("ask-4", "실패한 검사를 다시 돌릴지", "에이전트가 직접 다시 돌려 통과함")];
+  }
   if (kind === "delegated") record.flows = record.flows.map((one) => ({ ...one, requests: one.requests.map((row) => ({ ...row, author: "parent" as const })) }));
   if (kind === "empty") Object.assign(record, { ...empty, status: null });
   return record;
@@ -137,7 +143,6 @@ export function SessionWorkScene({ params }: { params: URLSearchParams }) {
     if (state === "off") {
       // Summaries off: the record keeps no flow names, results or summaries (B28).
       record.asks = [];
-      record.artifacts = [];
       record.flows = record.flows.map((one) => ({ ...one, requests: one.requests.map((row) => ({ ...row, summary: null, answers: null })) }));
     }
     if (state.startsWith("restore")) {

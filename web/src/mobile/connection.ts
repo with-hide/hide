@@ -9,29 +9,51 @@
 
 import {
   MAX_MESSAGES,
+  automationFailure,
   credentialHash,
   inputFailure,
+  listedAgents,
   macNameOf,
+  missionAnswerFailure,
+  missionMaterialFailure,
+  missionReopenFailure,
   parseFragment,
+  prFailure,
   refusalOf,
   replyProblem,
   sameKey,
   sleepTarget,
   type AgentKey,
+  type AutomationAction,
+  type DetailTab,
   type DetailView,
+  type LookRow,
+  type PhoneAgent,
+  type PhoneAutomation,
+  type PhoneDecisionView,
   type PhoneMessage,
+  type PhoneMission,
   type QuickKey,
   type ServerFrame,
 } from "./protocol";
-import { mayHaveStarted, selectionOf, startFailure, startProblem } from "./start";
-import { CLOSED_SHEET, applyFrame, patch, usePhone, type StartSheet } from "./store";
-import { forgetPush, syncPush } from "./push";
+import { NO_CHOICE, mayHaveStarted, selectionOf, startFailure, startProblem, type StartChoice } from "./start";
+import { confirmOf, holds, prOf } from "./prModel";
+import { CLOSED_SHEET, agentOf, answerSentFor, applyFrame, automationOf, openPr, patch, usePhone, type StartSheet } from "./store";
+import type { LookContent } from "./lookContent";
+import { dropTransfer, onLookTransfer } from "./lookTransfer";
+import { appHost } from "./appHost";
+import { appPushRefused, syncAppPush } from "./appPush";
+import { browserPushResult, forgetPush, syncPush } from "./push";
 import { RelaySocket, type PhoneSocket } from "./relaySocket";
+import { DemoSocket, demoRequested } from "./demoSocket";
+import { translate } from "../i18n/translator";
 import { hostedPhone, PHONE_PROTOCOL, takePairing } from "./relayRuntime";
-import { readHosts, saveHost, forgetHost, type PairedHost } from "./hosts";
+import { HOST_LIST_LINK, hostStore, type PairedHost } from "./hosts";
 import type { PairingQr } from "../../../hide-relay-protocol/web";
 
 let relayHost: PairedHost | null = null;
+/** The sample host is the socket: no pairing, credential or address is involved (demoSocket.ts). */
+let demo = false;
 let relayPair: PairingQr | null = null;
 export const currentHost = () => relayHost;
 function storageFailed(): void { patch({ relayError: "storage" }); }
@@ -54,12 +76,18 @@ function storedCredential(): string | null {
   }
 }
 
+/** Writes to the host store one after another, so a pairing and a refusal that follows it never overtake each other. */
+let storing: Promise<unknown> = Promise.resolve();
+function persist(write: () => Promise<void>): void {
+  storing = storing.then(write).catch(storageFailed);
+}
+
 function storeCredential(credential: string | null): void {
   if (hostedPhone()) {
-    try {
-      if (relayHost && credential) { relayHost = { ...relayHost, credential }; saveHost(localStorage, relayHost); }
-      else if (relayHost) forgetHost(localStorage, relayHost.room);
-    } catch { storageFailed(); }
+    const host = relayHost;
+    if (host && credential) { relayHost = { ...host, credential }; const saved = relayHost; persist(() => hostStore().save(saved)); }
+    // A revoked device stays listed as disconnected, without the credential it refused.
+    else if (host) { relayHost = { ...host, credential: null }; persist(() => hostStore().revoke(host.room)); }
     return;
   }
   try {
@@ -222,10 +250,10 @@ function connect(): void {
   if (stopped) return;
   if (socket && socket.readyState <= WebSocket.OPEN) return;
   // Nothing to present: the unpaired screen stays, no socket is opened.
-  if (!pairCode && !credential) return;
+  if (!demo && !pairCode && !credential) return;
   const first = pairCode ? { client_kind: "phone", pair: pairCode } : { client_kind: "phone", token: credential };
   let refused = false;
-  const ws: PhoneSocket = relayHost ? new RelaySocket(relayHost, () => {
+  const ws: PhoneSocket = demo ? new DemoSocket() : relayHost ? new RelaySocket(relayHost, () => {
     stopped = true;
     window.location.replace(`/?host=${encodeURIComponent(relayHost!.room)}`);
   }, (reason) => {
@@ -266,14 +294,46 @@ function connect(): void {
       applyFrame(frame);
       reopenDetail();
       reopenStartSheet();
+      reopenPr();
+      return;
+    }
+    if (frame.type === "look_head" || frame.type === "look_chunk" || frame.type === "look_end") {
+      onLookTransfer(frame, (requestId, seq) => void send({ type: "look_ack", request_id: requestId, seq }));
+      markLookSeen();
       return;
     }
     if (frame.type === "input_result") {
       onInputResult(frame.ok, frame.reason);
       return;
     }
+    if (frame.type === "human_turn_result") {
+      onHumanTurnResult(frame.request_id, frame.ok);
+      return;
+    }
     if (frame.type === "start_result") {
       onStartResult(frame);
+      return;
+    }
+    if (frame.type === "mission_result") {
+      onMissionResult(frame);
+      return;
+    }
+    if (frame.type === "pr_result") {
+      onPrResult(frame);
+      return;
+    }
+    if (frame.type === "automation_result") {
+      onAutomationResult(frame);
+      return;
+    }
+    if (frame.type === "missions") {
+      applyFrame(frame);
+      settleMissionReopen();
+      return;
+    }
+    if (frame.type === "automations") {
+      applyFrame(frame);
+      settleLastAutomation();
       return;
     }
     if (frame.type === "sleep_result") {
@@ -282,6 +342,7 @@ function connect(): void {
       return;
     }
     applyFrame(frame);
+    if (frame.type === "look_result" || frame.type === "look_changes") markLookSeen();
     if (frame.type === "paired" && hostedPhone()) {
       try { patch({ installHint: localStorage.getItem("hide.phone.installed-hint") !== "seen" }); }
       catch { storageFailed(); }
@@ -290,8 +351,10 @@ function connect(): void {
       openPending();
       openStarted();
     }
-    // hided sends the push mode right after hello; the subscription follows it.
-    if (frame.type === "meta") void syncPush();
+    // Reconcile this phone's receiving choice after hello.
+    if (frame.type === "meta") { void syncPush(); void syncAppPush(); }
+    if (frame.type === "push_state" && !appHost()) browserPushResult(frame.notifications);
+    if (frame.type === "refused_request" && (frame.request === "apns_registration" || frame.request === "fcm_registration")) appPushRefused();
   };
   ws.onclose = () => settleLoss(ws, refused);
 }
@@ -302,8 +365,14 @@ function settleLoss(ws: PhoneSocket, refused: boolean): void {
   stopWatch();
   const state = usePhone.getState();
   failPendingSleep();
+  failLoadingLook();
+  if (state.missionAnswer) patch({ missionAnswer: null, missionAnswerError: { mission: state.missionAnswer.mission, notice: missionAnswerFailure("offline") } });
+  if (state.missionReopen) patch({ missionReopen: null, missionAnswerError: { mission: state.missionReopen.mission, notice: missionReopenFailure("offline") } });
   if (state.pendingInput) patch({ pendingInput: null, inputError: inputFailure("offline") });
   if (state.startSheet.pending) patch({ startSheet: { ...state.startSheet, pending: null, error: startFailure("offline") } });
+  if (state.prPending) patch({ prPending: null, prNotice: { key: state.prPending.key, notice: prFailure("offline") } });
+  if (state.automationPending) patch({ automationPending: null, automationNotice: { id: state.automationPending.id, notice: automationFailure("offline") } });
+  if (state.prDelegate?.pending) patch({ prDelegate: { ...state.prDelegate, pending: null, error: startFailure("offline") } });
   patch({ connected: false, unreachable: !refused || state.refusal === "mobile_off" });
   if (!refused || state.refusal === "mobile_off") scheduleRetry();
 }
@@ -330,7 +399,12 @@ function openPending(): void {
   const pending = usePhone.getState().pendingOpen;
   if (!pending) return;
   patch({ pendingOpen: null });
-  openDetail(pending);
+  openNoticed(pending);
+}
+
+/** A tapped notification opens its agent as the row does: on 볼 것 while it has a View to look at (B11, status-model.md A View to look at). */
+export function openNoticed(key: AgentKey): void {
+  openDetail(key, agentOf(usePhone.getState().groups, key)?.mark === "look" ? "looks" : "conversation");
 }
 
 function reopenDetail(): void {
@@ -341,28 +415,115 @@ function reopenDetail(): void {
   send({ type: "open", device_id: detail.key.device_id, pane_id: detail.key.pane_id, view: detail.view });
 }
 
-export function openDetail(key: AgentKey): void {
+/** Opens an agent's detail; the eye row of the list opens it on 볼 것 (B11), any other row on the conversation. */
+export function openDetail(key: AgentKey, tab: DetailTab = "conversation"): void {
   const state = usePhone.getState();
   if (!state.groups) {
     patch({ pendingOpen: key });
     return;
   }
   const view: DetailView = "conversation";
-  patch({ detail: { key, view, rows: null, moreAskedAt: null, conversation: null, olderAskedAt: null }, inputError: null, pendingInput: null });
+  dropTransfer();
+  patch({ detail: { key, view, tab, rows: null, moreAskedAt: null, conversation: null, olderAskedAt: null, looks: null, look: null }, inputError: null, pendingInput: null });
   send({ type: "open", device_id: key.device_id, pane_id: key.pane_id, view });
 }
 
-/** Conversation or terminal: hided reads only what the phone shows. */
-export function setView(view: DetailView): void {
+/**
+ * A tab of the detail. Conversation and terminal are what hided reads for the phone, so it is told; 볼 것 is already on its way
+ * with the detail and stays the phone's own choice.
+ */
+export function setTab(tab: DetailTab): void {
   const detail = usePhone.getState().detail;
-  if (!detail || detail.view === view) return;
-  patch({ detail: { ...detail, view } });
-  send({ type: "view", view });
+  if (!detail || (detail.tab === tab && !detail.look)) return;
+  if (tab === "looks") {
+    patch({ detail: { ...detail, tab } });
+    return;
+  }
+  // Leaving 볼 것 ends a View that is open.
+  dropTransfer();
+  patch({ detail: { ...detail, tab, view: tab, look: null } });
+  if (detail.view !== tab) send({ type: "view", view: tab });
 }
 
 export function closeDetail(): void {
+  dropTransfer();
   patch({ detail: null, inputError: null, pendingInput: null });
   send({ type: "close" });
+}
+
+/** Opens one View full screen and asks hided for its content by id alone (B13, D-16). */
+export function openLook(row: LookRow): void {
+  const detail = usePhone.getState().detail;
+  if (!detail) return;
+  const requestId = newRequestId();
+  dropTransfer();
+  const sent = send({ type: "look_open", request_id: requestId, device_id: detail.key.device_id, pane_id: detail.key.pane_id, view_id: row.id });
+  patch({ detail: { ...detail, look: { row, requestId, content: sent ? { state: "loading" } : { state: "failed" }, shown: false, refreshing: false } } });
+}
+
+/**
+ * A page's screen again (B20, B21): the same View under a new request while the screen on view stays, so a refresh that cannot be
+ * taken replaces it with the address and the message and one that is taken replaces it with the new one. Without a connection
+ * nothing is sent and nothing changes (B45); another kind of View starts over as a new read.
+ */
+export function refreshLook(): void {
+  const detail = usePhone.getState().detail;
+  const look = detail?.look;
+  if (!detail || !look) return;
+  if (look.content.state !== "shot" && look.content.state !== "page") {
+    openLook(look.row);
+    return;
+  }
+  if (look.refreshing) return;
+  const requestId = newRequestId();
+  if (!send({ type: "look_open", request_id: requestId, device_id: detail.key.device_id, pane_id: detail.key.pane_id, view_id: look.row.id })) return;
+  dropTransfer();
+  patch({ detail: { ...detail, look: { ...look, requestId, refreshing: true } } });
+}
+
+/** "다시": the same View from the start, under a new request, so nothing of the failed read is reused (B23). */
+export function retryLook(): void {
+  const row = usePhone.getState().detail?.look?.row;
+  if (row) openLook(row);
+}
+
+/** Back to the list; a read still going is dropped. */
+export function closeLook(): void {
+  const detail = usePhone.getState().detail;
+  if (!detail?.look) return;
+  dropTransfer();
+  patch({ detail: { ...detail, look: null } });
+}
+
+/** A read the lost socket cut off is a failed read, with 다시 (B23). */
+function failLoadingLook(): void {
+  const detail = usePhone.getState().detail;
+  if (detail?.look?.refreshing) {
+    // The screen on view stays; the refresh that was cut off is simply not coming.
+    dropTransfer();
+    patch({ detail: { ...detail, look: { ...detail.look, refreshing: false } } });
+    return;
+  }
+  if (detail?.look?.content.state !== "loading") return;
+  dropTransfer();
+  patch({ detail: { ...detail, look: { ...detail.look, content: { state: "failed" } } } });
+}
+
+/**
+ * What the phone drew about a View, however much of it: a loading, closed, failed or unreachable screen is not that (B24, D-15).
+ * Every state answers, so a new one cannot be left out by accident.
+ */
+const SEEN: Record<LookContent["state"], boolean> = {
+  loading: false, text: true, image: true, changes: true, shot: true, html: true, page: true, other: true, too_large: true, closed: false, device_unreachable: false, failed: false,
+};
+
+/** The View on screen was opened and the phone drew its answer: it is seen, once, here and on the desktop (B24, D-15). */
+function markLookSeen(): void {
+  const detail = usePhone.getState().detail;
+  const look = detail?.look;
+  if (!detail || !look || look.shown || !SEEN[look.content.state]) return;
+  const sent = send({ type: "look_seen", device_id: detail.key.device_id, pane_id: detail.key.pane_id, view_id: look.row.id });
+  if (sent) patch({ detail: { ...detail, look: { ...look, shown: true } } });
 }
 
 /** Asks for the next page of older rows once per page (B25). */
@@ -415,6 +576,134 @@ export function wakeAgent(key: AgentKey, fresh = false): void {
   sendSleepCommand(sleepTarget(key), requestId, { type: "wake_agent", request_id: requestId, device_id: key.device_id, pane_id: key.pane_id, ...(fresh ? { fresh } : {}) });
 }
 
+/** What the decision's answer sends: a choice counted from 1, a written line, or the desktop's own "send again" for one typed without confirmation. */
+export type MissionAnswerChoice = { option: number } | { text: string } | { resend: true };
+
+/** An answer whose outcome is unknown keeps its request id, so a resend of the same press lands once (B35). */
+let lastMissionAnswer: { key: string; requestId: string } | null = null;
+
+/**
+ * The operator's answer to a mission's decision: the desktop's `mission_answer`, by request id. The page draws it sent until the core keeps it,
+ * refuses it, or asks something else; a refusal the operator can act on comes back on the mission, in the desktop's words.
+ */
+export function answerMission(mission: PhoneMission, choice: MissionAnswerChoice, words: string): boolean {
+  const state = usePhone.getState();
+  // One press of this mission at a time; an answer left from another mission's page does not count.
+  if (answerSentFor(state.missionAnswer, mission.id)) return false;
+  const key = mission.question?.key ?? 0;
+  const intent = JSON.stringify([mission.id, key, choice]);
+  const requestId = lastMissionAnswer?.key === intent ? lastMissionAnswer.requestId : newRequestId();
+  lastMissionAnswer = { key: intent, requestId };
+  const sent = send({ type: "answer_mission", request_id: requestId, mission: mission.id, key, ...choice });
+  patch(sent
+    ? { missionAnswer: { requestId, mission: mission.id, pressed: { key, text: words, failed: mission.answer_failed, resend: "resend" in choice } }, missionAnswerError: null }
+    : { missionAnswerError: { mission: mission.id, notice: missionAnswerFailure("offline") } });
+  return sent;
+}
+
+/** Drops the sent answer's own drawing once the core's state stands for it. */
+export function settleMissionAnswer(): void {
+  patch({ missionAnswer: null });
+}
+
+/** The last `자료 요청` sent, so a refusal of it is told on its mission. */
+let lastMaterial: { requestId: string; mission: string } | null = null;
+
+/**
+ * The decision card's `자료 요청`: one request for the question on the page,
+ * which the core turns into one letter to the Conductor however often it is
+ * pressed; `material_asked` on the question says it went.
+ */
+export function askMissionMaterial(mission: PhoneMission): boolean {
+  const key = mission.question?.key;
+  if (key === undefined) return false;
+  const requestId = newRequestId();
+  const sent = send({ type: "ask_mission_material", request_id: requestId, mission: mission.id, key });
+  lastMaterial = sent ? { requestId, mission: mission.id } : null;
+  patch({ missionAnswerError: sent ? null : { mission: mission.id, notice: missionMaterialFailure("offline") } });
+  return sent;
+}
+
+/**
+ * A closed View of the decision on the page, pressed: the Mac opens it again first, as the View of the
+ * agent that had it open, and the row's `reopen` then says what became of this press. One at a time.
+ */
+export function reopenMissionView(mission: PhoneMission, view: PhoneDecisionView): boolean {
+  const key = mission.question?.key;
+  if (key === undefined || usePhone.getState().missionReopen) return false;
+  const requestId = newRequestId();
+  const sent = send({ type: "reopen_mission_view", request_id: requestId, mission: mission.id, key, view: view.view });
+  patch(sent
+    ? { missionReopen: { requestId, mission: mission.id, key, view: view.view }, missionAnswerError: null }
+    : { missionAnswerError: { mission: mission.id, notice: missionReopenFailure("offline") } });
+  if (sent) watchMissionReopen(requestId);
+  return sent;
+}
+
+/**
+ * The press ends on what the core did, as the missions frame carries it: the row open again opens the
+ * agent's 볼 것 (or, with that agent gone, leaves the open row as it is), its own press refused among the
+ * row's kept presses, or a question that moved on, says so, and a device that stopped answering says it is
+ * out of reach. The core ends a press that never opens anything after its wait, and the phone gives up on
+ * one the core never kept after that wait and a margin, so none of these waits for ever.
+ */
+function settleMissionReopen(): void {
+  const { missionReopen: asked, missions } = usePhone.getState();
+  if (!asked) return;
+  const mission = missions?.find((item) => item.id === asked.mission);
+  const row = mission?.question?.key === asked.key ? mission.decision_views?.find((view) => view.view === asked.view) : undefined;
+  const fail = (reason: string) => patch({ missionReopen: null, missionAnswerError: { mission: asked.mission, notice: missionReopenFailure(reason) } });
+  if (!mission || !row) return fail("gone");
+  if (mission.stale) return fail("offline");
+  if (!row.closed) {
+    patch({ missionReopen: null });
+    if (row.pane_id) openDetail({ device_id: row.device_id, pane_id: row.pane_id }, "looks");
+    return;
+  }
+  if (row.reopens?.some((press) => press.request_id === asked.requestId && press.refused)) fail("refused");
+}
+
+/** Past the core's own wait (20 s) and a margin, a press the core never kept or never answered for ends as not opened. */
+const REOPEN_GIVE_UP_MS = 30_000;
+let reopenGiveUp: ReturnType<typeof setTimeout> | null = null;
+
+function watchMissionReopen(requestId: string): void {
+  if (reopenGiveUp) clearTimeout(reopenGiveUp);
+  reopenGiveUp = setTimeout(() => {
+    reopenGiveUp = null;
+    const asked = usePhone.getState().missionReopen;
+    if (asked?.requestId === requestId) patch({ missionReopen: null, missionAnswerError: { mission: asked.mission, notice: missionReopenFailure("failed") } });
+  }, REOPEN_GIVE_UP_MS);
+}
+
+function onMissionResult(frame: Extract<ServerFrame, { type: "mission_result" }>): void {
+  const asked = usePhone.getState().missionReopen;
+  if (asked && frame.request_id === asked.requestId) {
+    // Accepted, the press waits for the row; refused by hided, nothing reached the core.
+    if (!frame.ok) patch({ missionReopen: null, missionAnswerError: { mission: asked.mission, notice: missionReopenFailure(frame.reason) } });
+    return;
+  }
+  if (lastMaterial && frame.request_id === lastMaterial.requestId) {
+    const asked = lastMaterial;
+    lastMaterial = null;
+    if (!frame.ok) patch({ missionAnswerError: { mission: asked.mission, notice: missionMaterialFailure(frame.reason) } });
+    return;
+  }
+  const sent = usePhone.getState().missionAnswer;
+  // Only the answer to the press this page is waiting on.
+  if (!sent || frame.request_id !== sent.requestId) return;
+  if (!frame.ok) {
+    // Nothing reached the core: the text stays in its field and the same press may go again.
+    lastMissionAnswer = null;
+    patch({ missionAnswer: null, missionAnswerError: { mission: sent.mission, notice: missionAnswerFailure(frame.reason) } });
+    return;
+  }
+  lastMissionAnswer = null;
+  const drafts = { ...usePhone.getState().missionDrafts };
+  delete drafts[sent.mission];
+  patch({ missionDrafts: drafts, missionAnswerError: null });
+}
+
 /** Sends a reply with Enter after it; the caller clears its field only on success (B26, B27). */
 export function sendReply(text: string): boolean {
   const state = usePhone.getState();
@@ -441,6 +730,27 @@ export function sendKey(key: QuickKey): void {
   patch(sent ? { pendingInput: { requestId, kind: "key" }, inputError: null } : { inputError: inputFailure("offline") });
 }
 
+/**
+ * Done on the person's turn `agent` leads with (PRD ask-human B18, B19):
+ * hided sends the declaring agent one letter and the turn goes from the
+ * list once the Mac says so; a refusal or a lost link says so under it, and
+ * the operator presses again.
+ */
+export function finishHumanTurn(agent: Pick<PhoneAgent, "device_id" | "pane_id" | "human_turn">): void {
+  const declaration = agent.human_turn?.id;
+  const pending = usePhone.getState().humanTurn;
+  if (!declaration || (pending?.declaration === declaration && pending.requestId)) return;
+  const requestId = newRequestId();
+  const sent = send({ type: "human_turn_done", request_id: requestId, device_id: agent.device_id, pane_id: agent.pane_id, declaration });
+  patch({ humanTurn: { declaration, requestId: sent ? requestId : null, failed: !sent } });
+}
+
+function onHumanTurnResult(requestId: string | undefined, ok: boolean): void {
+  const pending = usePhone.getState().humanTurn;
+  if (!pending || pending.requestId !== requestId) return;
+  patch({ humanTurn: ok ? null : { ...pending, requestId: null, failed: true } });
+}
+
 type ReplyListener = (ok: boolean) => void;
 const replyListeners = new Set<ReplyListener>();
 
@@ -465,13 +775,14 @@ const STARTED_WAIT_MS = 15000;
 /** A started agent's detail opens once the list has it, so it never opens as "gone". */
 function openStarted(): void {
   const { startedAgent, groups } = usePhone.getState();
-  if (!startedAgent || !groups?.some((group) => group.agents.some((agent) => sameKey(agent, startedAgent)))) return;
+  if (!startedAgent || !groups || !listedAgents(groups).some((agent) => sameKey(agent, startedAgent))) return;
   patch({ startedAgent: null });
   openDetail(startedAgent);
 }
 
 function reopenStartSheet(): void {
-  if (usePhone.getState().startSheet.open) send({ type: "start_sheet", open: true });
+  const state = usePhone.getState();
+  if (state.startSheet.open || state.prDelegate) send({ type: "start_sheet", open: true });
 }
 
 /** Opens the sheet; hided reads the model catalog while it is open and sends what it lists. */
@@ -523,6 +834,7 @@ export function submitStart(): boolean {
 }
 
 function onStartResult(frame: Extract<ServerFrame, { type: "start_result" }>): void {
+  if (onDelegateResult(frame)) return;
   const sheet = usePhone.getState().startSheet;
   // Only the answer to the start this sheet is waiting on.
   if (!sheet.pending || frame.request_id !== sheet.pending) return;
@@ -543,6 +855,221 @@ function onStartResult(frame: Extract<ServerFrame, { type: "start_result" }>): v
   }, STARTED_WAIT_MS);
 }
 
+/** Reads the card of the page that is open, so the page and its Merge show what the core read for the head now (B39). */
+function readOpenPr(lookAgain = false): void {
+  const key = usePhone.getState().prOpen;
+  if (!key) return;
+  send({ type: "read_pr", request_id: newRequestId(), pr: key, ...(lookAgain ? { look_again: true } : {}) });
+}
+
+/** After a lost connection the page's card and the hand-over sheet's catalog and feedback are read again. */
+function reopenPr(): void {
+  readOpenPr();
+  const sheet = usePhone.getState().prDelegate;
+  if (sheet) readFeedback(sheet.key);
+}
+
+/** Opens a pull request's page and asks the core for its card, as the desktop's card does when it opens (B39). */
+export function openPrPage(key: string): void {
+  openPr(key);
+  readOpenPr();
+}
+
+/** The desktop's `Look again` after a write GitHub refused. */
+export function lookAgainPr(): void {
+  readOpenPr(true);
+}
+
+/** Opens the merge confirmation for what the page shows now; nothing in it is preselected (B41). */
+export function askMerge(): void {
+  const { prs, prOpen } = usePhone.getState();
+  const pr = prOf(prs?.items ?? null, prOpen);
+  const confirm = pr ? confirmOf(pr) : null;
+  if (confirm) patch({ prConfirm: confirm, prNotice: null });
+}
+
+export function cancelMerge(): void {
+  patch({ prConfirm: null });
+}
+
+/** A merge whose outcome is unknown keeps its request id, so a resend of the same press reaches GitHub once (B43). */
+let lastMerge: { key: string; requestId: string } | null = null;
+
+/** Sends the confirmed merge, for the head and method the confirmation named, when the page still shows them (B41-B43). */
+export function confirmMerge(): boolean {
+  const state = usePhone.getState();
+  const confirm = state.prConfirm;
+  if (!confirm || state.prPending) return false;
+  const pr = prOf(state.prs?.items ?? null, confirm.key);
+  patch({ prConfirm: null });
+  if (!pr || !holds(confirm, pr)) return false;
+  const intent = JSON.stringify([confirm.key, confirm.head, confirm.queue ? null : confirm.method]);
+  const requestId = lastMerge?.key === intent ? lastMerge.requestId : newRequestId();
+  lastMerge = { key: intent, requestId };
+  const sent = send({
+    type: "merge_pr",
+    request_id: requestId,
+    pr: confirm.key,
+    head: confirm.head,
+    ...(confirm.queue || !confirm.method ? {} : { method: confirm.method }),
+  });
+  patch(sent ? { prPending: { requestId, key: confirm.key }, prNotice: null } : { prNotice: { key: confirm.key, notice: prFailure("offline") } });
+  return sent;
+}
+
+/** The last press sent, with what it saw of its automation; while that holds, the same press again is the same request. */
+let lastAutomation: { id: string; action: AutomationAction; seen: string; requestId: string } | null = null;
+
+/** What a press reads of its automation: the newest run for [지금 실행], the pause for [멈춤] and [다시 켜기]. */
+function pressSees(automation: PhoneAutomation | null, action: AutomationAction): string {
+  if (action !== "run") return JSON.stringify(automation?.paused ?? null);
+  const run = automation?.records.find((record) => record.kind === "run");
+  return JSON.stringify(run?.kind === "run" ? run.number : null);
+}
+
+/** A list that moved what the last press saw ends it: whoever moved it (this press, the desktop, the CLI), the next press is a new one. */
+function settleLastAutomation(): void {
+  if (!lastAutomation) return;
+  const automation = automationOf(usePhone.getState().automations, lastAutomation.id);
+  if (pressSees(automation, lastAutomation.action) !== lastAutomation.seen) lastAutomation = null;
+}
+
+/**
+ * [지금 실행], [멈춤] or [다시 켜기] from the automations tab (PRD automations B34): one press at a time, sent again under the same
+ * request id while hided has not taken it, so a repeat reaches the core once (B36). What the core did comes back on the automation.
+ */
+export function pressAutomation(id: string, action: AutomationAction): boolean {
+  const state = usePhone.getState();
+  if (state.automationPending) return false;
+  // Only a press that never landed is sent again under its id: one that took effect, or anything else that moved what it saw,
+  // ended it when that list arrived (`settleLastAutomation`).
+  const seen = pressSees(automationOf(state.automations, id), action);
+  const same = lastAutomation?.id === id && lastAutomation.action === action && lastAutomation.seen === seen;
+  const requestId = same ? lastAutomation!.requestId : newRequestId();
+  lastAutomation = { id, action, seen, requestId };
+  const sent = send({ type: "automation", request_id: requestId, action, id });
+  patch(sent ? { automationPending: { requestId, id, action }, automationNotice: null } : { automationNotice: { id, notice: automationFailure("offline") } });
+  return sent;
+}
+
+function onAutomationResult(frame: Extract<ServerFrame, { type: "automation_result" }>): void {
+  const pending = usePhone.getState().automationPending;
+  // Only the answer to the press the tab is waiting on.
+  if (!pending || frame.request_id !== pending.requestId) return;
+  // Taken, or refused for a reason a new press would meet again: the next press is a new one.
+  if (frame.ok || (frame.reason !== "in_flight" && frame.reason !== "offline")) lastAutomation = null;
+  patch({ automationPending: null, automationNotice: frame.ok ? null : { id: pending.id, notice: automationFailure(frame.reason) } });
+}
+
+function onPrResult(frame: Extract<ServerFrame, { type: "pr_result" }>): void {
+  const state = usePhone.getState();
+  if (frame.action === "merge_pr") {
+    const pending = state.prPending;
+    // Only the answer to the merge this page is waiting on.
+    if (!pending || frame.request_id !== pending.requestId) return;
+    // The core's own state, on the card, says what GitHub then did; a refusal that sent nothing may go again under a new id.
+    if (frame.ok || (frame.reason !== "in_flight" && frame.reason !== "offline")) lastMerge = null;
+    patch({ prPending: null, prNotice: frame.ok ? null : { key: pending.key, notice: prFailure(frame.reason) } });
+    return;
+  }
+  if (frame.ok) return;
+  if (frame.action === "read_pr" && frame.pr && frame.pr === state.prOpen) {
+    patch({ prNotice: { key: frame.pr, notice: prFailure(frame.reason) } });
+    return;
+  }
+  const sheet = state.prDelegate;
+  if (frame.action === "read_pr_feedback" && sheet && sheet.feedbackId === frame.request_id) {
+    patch({ prDelegate: { ...sheet, feedbackId: null, error: prFailure(frame.reason) } });
+  }
+}
+
+/** Asks the core to read the failed checks and change requests a hand-over's prompt is made from. */
+function readFeedback(key: string): void {
+  const requestId = newRequestId();
+  const sheet = usePhone.getState().prDelegate;
+  if (!sheet || sheet.key !== key) return;
+  patch({ prDelegate: { ...sheet, feedbackId: requestId, error: null } });
+  send({ type: "read_pr_feedback", request_id: requestId, pr: key });
+}
+
+/** Opens the hand-over sheet; hided sends the agent kinds and what the desktop remembers while it is open (B44). */
+export function openDelegate(key: string): void {
+  if (usePhone.getState().prDelegate?.key === key) return;
+  patch({ prDelegate: { key, prompt: "", edited: false, choice: NO_CHOICE, feedbackId: null, pending: null, error: null }, prDelegated: null });
+  send({ type: "start_sheet", open: true });
+  readFeedback(key);
+}
+
+/** Closes the sheet and, unless the start sheet still needs it, the catalog with it. */
+export function closeDelegate(): void {
+  patch({ prDelegate: null });
+  if (!usePhone.getState().startSheet.open) send({ type: "start_sheet", open: false });
+}
+
+export function editDelegate(next: Partial<Pick<PrDelegateDraft, "prompt" | "choice">>): void {
+  const sheet = usePhone.getState().prDelegate;
+  if (!sheet) return;
+  patch({ prDelegate: { ...sheet, ...next, edited: sheet.edited || next.prompt !== undefined, error: null } });
+}
+
+/** The prompt a finished feedback read made, put in the field while the operator has not typed. */
+export function fillDelegatePrompt(prompt: string): void {
+  const sheet = usePhone.getState().prDelegate;
+  if (!sheet || sheet.edited || sheet.prompt === prompt) return;
+  patch({ prDelegate: { ...sheet, prompt } });
+}
+
+export function readFeedbackAgain(): void {
+  const sheet = usePhone.getState().prDelegate;
+  if (sheet) readFeedback(sheet.key);
+}
+
+type PrDelegateDraft = { prompt: string; choice: StartChoice };
+
+/** A hand-over whose outcome is unknown keeps its request id, so a resend of the same one starts one agent (B43 for start). */
+let lastDelegate: { key: string; requestId: string } | null = null;
+
+/** Sends the hand-over with the sheet's prompt and the agent kind and model the sheet shows (D-13). */
+export function submitDelegate(): boolean {
+  const state = usePhone.getState();
+  const sheet = state.prDelegate;
+  if (!sheet || sheet.pending || !state.startCatalog) return false;
+  const problem = startProblem(sheet.prompt);
+  if (problem) {
+    patch({ prDelegate: { ...sheet, error: startFailure(problem) } });
+    return false;
+  }
+  const selection = selectionOf(state.startCatalog, sheet.choice);
+  const key = JSON.stringify([sheet.key, sheet.prompt, selection.kind, selection.model]);
+  const requestId = lastDelegate?.key === key ? lastDelegate.requestId : newRequestId();
+  lastDelegate = { key, requestId };
+  const sent = send({
+    type: "delegate_pr",
+    request_id: requestId,
+    pr: sheet.key,
+    prompt: sheet.prompt,
+    kind: selection.kind,
+    ...(selection.model ? { model: selection.model } : {}),
+  });
+  patch({ prDelegate: { ...sheet, pending: sent ? requestId : null, error: sent ? null : startFailure("offline") } });
+  return sent;
+}
+
+/** hided's answer to a hand-over: the sheet closes on a start and keeps its prompt on a refusal. */
+function onDelegateResult(frame: Extract<ServerFrame, { type: "start_result" }>): boolean {
+  const sheet = usePhone.getState().prDelegate;
+  if (!sheet?.pending || frame.request_id !== sheet.pending) return false;
+  if (!frame.ok) {
+    if (!mayHaveStarted(frame.reason)) lastDelegate = null;
+    patch({ prDelegate: { ...sheet, pending: null, error: startFailure(frame.reason) } });
+    return true;
+  }
+  lastDelegate = null;
+  patch({ prDelegate: null, prDelegated: sheet.key });
+  if (!usePhone.getState().startSheet.open) send({ type: "start_sheet", open: false });
+  return true;
+}
+
 /** The user tapped Connect on the pairing screen (B11). */
 export function pairNow(): void {
   const pair = usePhone.getState().pair;
@@ -554,6 +1081,7 @@ export function pairNow(): void {
 
 /** Reads the page address and starts: pair, reconnect, or show how to pair (B11-B13). */
 export function start(): void {
+  if (demoRequested()) { startDemo(); return; }
   if (hostedPhone()) { void startRelay(); return; }
   const fragment = parseFragment(window.location.hash);
   window.addEventListener("online", wake);
@@ -585,6 +1113,24 @@ export function start(): void {
 }
 
 
+/**
+ * The sample host: the app opens on its list as for a paired host, over a socket that sends sample data. Nothing is paired, so
+ * nothing is stored; leaving goes back to the first screen, which has no memory of the visit.
+ */
+function startDemo(): void {
+  demo = true;
+  stopped = false;
+  document.documentElement.dataset.phoneDemo = "true";
+  patch({ demo: true, screen: "app", macName: translate("mobile.demo.host"), unreachable: false });
+  connect();
+}
+
+/** The sample host's way out: the first screen or the list of computers, never one of them, or its real QR scan and paste flow. */
+export function leaveDemo(connectReal = false): void {
+  stop();
+  window.location.assign(connectReal ? "/?add=1" : HOST_LIST_LINK);
+}
+
 async function startRelay(): Promise<void> {
   try {
     try { relayPair = await takePairing(); }
@@ -597,13 +1143,15 @@ async function startRelay(): Promise<void> {
     }
     if (relayPair) {
       relayHost = { room: relayPair.room, noiseKey: relayPair.noise_key, name: relayPair.name,
-        credential: "", protocol: PHONE_PROTOCOL, lastSeen: null };
+        credential: null, protocol: PHONE_PROTOCOL, lastSeen: null };
       patch({ screen: "pair", macName: relayPair.name });
       if (query.get("connect") === "1") pairNow();
     } else {
-      relayHost = readHosts(localStorage).find((host) => host.room === query.get("host")) ?? null;
+      relayHost = (await hostStore().list()).find((host) => host.room === query.get("host")) ?? null;
       if (!relayHost) { window.location.replace("/"); return; }
       credential = relayHost.credential;
+      // A revoked device opened from a link or a notification says so without dialing it.
+      if (!credential) { stopped = true; patch({ screen: "refused", refusal: "revoked" }); return; }
       patch({ screen: "app", macName: relayHost.name, unreachable: !navigator.onLine });
       connect();
     }

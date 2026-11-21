@@ -1,10 +1,9 @@
 // A stand-in for Pi and omp (PRD pi-omp-extension D-11): a small program run as
-// `pi` or `omp` in a pane of the private Herdr that loads the extension Hide's
+// `pi` or `omp` in a pane of the private engine that loads the extension Hide's
 // kit wrote, the way both hosts load a file from their extensions folder, and
 // emits its events with the shapes captured from Pi 1.0.4 and omp 18.7.0
-// (`hide-agent-hooks/tests/fixtures/pi-extension/`). It tells Herdr what it is
-// the way Herdr's own integration does (`pane report-agent` with the session
-// file path), so Herdr lists the pane as a Pi or omp agent.
+// (`hide-agent-hooks/tests/fixtures/pi-extension/`). Hide's extension is what
+// reports the session, so the pane is listed as a Pi or omp agent.
 //
 // The spec drives it through numbered command files in the pane's folder and
 // reads each answer from the file of the same number; a command runs in the
@@ -23,7 +22,8 @@ const { pathToFileURL } = require("node:url");
 
 const agent = path.basename(process.argv[1]);
 const config = JSON.parse(fs.readFileSync(path.join(path.dirname(process.argv[1]), "pi-omp-host.json"), "utf8"));
-const pane = process.env.HERDR_PANE_ID;
+// A pane on the core's own engine names itself HIDE_PANE_ID.
+const pane = process.env.HIDE_PANE_ID;
 const folder = path.join(config.dir, pane.replace(/[^A-Za-z0-9]/g, "-"));
 fs.mkdirSync(folder, { recursive: true });
 // The pane's hide reaches the fixture daemon, as the operator's reaches theirs.
@@ -35,22 +35,6 @@ const sessions = path.join(folder, "sessions", agent === "omp" ? "-" + "deep-che
 fs.mkdirSync(sessions, { recursive: true });
 const session = path.join(sessions, "2026-10-08T20-05-41-366Z_01a11d1f-1f76-701d-87bb-b31dc28aab3b.jsonl");
 fs.writeFileSync(session, "");
-
-// Herdr's integration reports the pane's state and the session file; Herdr takes them only once it has
-// detected the agent in the pane, so the stand-in reports again until Herdr lists its session.
-const listed = () => JSON.parse(execFileSync(config.herdr, ["agent", "list"], { encoding: "utf8", timeout: 10000 }))
-  .result.agents.find((row) => row.pane_id === pane)?.agent_session?.value;
-function announce() {
-  for (let attempt = 1; listed() !== session; attempt += 1) {
-    if (attempt > 50) throw new Error("Herdr never took the stand-in's session");
-    const seq = Date.now() * 1000 + attempt * 2;
-    execFileSync(config.herdr, ["pane", "report-agent", pane, "--source", "herdr:" + agent, "--agent", agent,
-      "--state", "idle", "--agent-session-path", session, "--seq", String(seq)], { timeout: 10000 });
-    execFileSync(config.herdr, ["pane", "report-agent-session", pane, "--source", "herdr:" + agent, "--agent", agent,
-      "--agent-session-path", session, "--session-start-source", "startup", "--seq", String(seq + 1)], { timeout: 10000 });
-    Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 100);
-  }
-}
 
 // The context each host hands a handler: the pane's TUI session, or one of omp's in-process subagents.
 const main = { hasUI: true, mode: "tui", cwd: process.cwd(), sessionManager: { getSessionFile: () => session, getSessionId: () => "01a11d1f" },
@@ -116,7 +100,7 @@ const subs = new Map();
 let extension;
 
 (async () => {
-  announce();
+  // The extension's own session report is how Hide learns the session.
   // The kit writes a .ts file that is plain JavaScript; Node reads it as the ES module both hosts load.
   const copy = path.join(folder, "hide.mjs");
   fs.copyFileSync(config.extension[agent], copy);
@@ -141,7 +125,7 @@ let extension;
 });
 `;
 
-export type HostConfig = { herdr: string; stateDir: string; extension: { pi: string; omp: string }; dir: string };
+export type HostConfig = { stateDir: string; extension: { pi: string; omp: string }; dir: string };
 
 /** Writes the stand-in as `pi` and `omp` in `bin`, configured by `config`. */
 export function installPiOmpHosts(bin: string, config: HostConfig): void {

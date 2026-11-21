@@ -20,8 +20,8 @@ bin=${CARGO_HOME:-$HOME/.cargo}/bin
 mkdir -p "$bin"
 archive=$(mktemp)
 trap 'rm -f "$archive"' EXIT
-curl -LsSf -o "$archive" \
-    "https://github.com/guppy-rs/guppy/releases/download/cargo-hakari-$version/cargo-hakari-$version-$asset.tar.gz"
+bash "$(dirname "${BASH_SOURCE[0]}")/download.sh" \
+    "https://github.com/guppy-rs/guppy/releases/download/cargo-hakari-$version/cargo-hakari-$version-$asset.tar.gz" "$archive"
 printf '%s  %s\n' "$digest" "$archive" | shasum -a 256 -c - >/dev/null || {
     printf 'cargo-hakari %s archive does not match its pinned digest\n' "$version" >&2
     exit 1

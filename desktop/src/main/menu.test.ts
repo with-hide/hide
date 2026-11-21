@@ -19,6 +19,19 @@ describe("the app menu (B9)", () => {
     expect(() => accelerator({ code: "IntlRo", meta: true })).toThrow();
   });
 
+  it("shows and delivers directional terminal focus on macOS, Windows and Linux", () => {
+    for (const system of ["mac", "pc"] as const) {
+      const sent: string[] = [];
+      const template = menuTemplate({ appName: "hide", send: (id) => sent.push(id), developer: false, system, t: korean });
+      const pane = template.find((menu) => menu.label === korean("native.menu.pane"));
+      const items = Array.isArray(pane?.submenu) ? pane.submenu : [];
+      const right = items.find((item) => item.id === "focus_pane_right");
+      expect(right?.accelerator).toBe(system === "mac" ? "Alt+Command+Right" : "Control+Shift+Right");
+      (right?.click as () => void)();
+      expect(sent).toEqual(["focus_pane_right"]);
+    }
+  });
+
   it("places every clickable command exactly once, including the immediate navigation commands", () => {
     const placed = Object.values(MENU_LAYOUT).flat().filter((id) => id !== null);
     expect(new Set(placed).size).toBe(placed.length);

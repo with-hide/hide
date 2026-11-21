@@ -7,6 +7,7 @@ import { createHash } from "node:crypto";
 import { fileURLToPath } from "node:url";
 import type { Parameters as EmulationParameters } from "electron";
 import type { BrowserCommand, BrowserDevicePlacement, BrowserPlacement, BrowserRect, BrowserSync } from "../../../web/src/host";
+import { isLoopbackHost } from "../../../web/src/loopbackHost";
 
 /** A Workspace holds at most this many displays (`MAX_VIEW_DISPLAYS` is 32);
  * the bound is kept wider than the core's. */
@@ -89,7 +90,8 @@ function device(value: unknown): BrowserDevicePlacement | null | undefined {
 /** A sync message, or null when any part of it is out of shape. */
 export function parseSync(value: unknown): BrowserSync | null {
   if (typeof value !== "object" || value === null) return null;
-  const { workspace, displays, retained, attachment_epoch, authorized_scopes, node, external_grants } = value as Record<string, unknown>;
+  const { workspace, displays, retained, attachment_epoch, authorized_scopes, node, external_grants, inventoried } = value as Record<string, unknown>;
+  if (inventoried !== undefined && inventoried !== true) return null;
   if (external_grants !== undefined && (!Array.isArray(external_grants) || external_grants.length > MAX_EXTERNAL_LISTED || !external_grants.every(externalGrant))) return null;
   if (attachment_epoch !== undefined && (typeof attachment_epoch !== "string" || attachment_epoch.length === 0 || attachment_epoch.length > 64 || /[^A-Za-z0-9-]/.test(attachment_epoch))) return null;
   if (workspace !== null && !workspaceIdentity(workspace)) return null;
@@ -114,12 +116,15 @@ export function parseSync(value: unknown): BrowserSync | null {
   const ownedAreas = new Map<string, string>();
   for (const entry of retained as unknown[]) {
     if (typeof entry !== "object" || entry === null) return null;
-    const { workspace: owner, id, area_id } = entry as Record<string, unknown>;
+    const { workspace: owner, id, area_id, url, load } = entry as Record<string, unknown>;
     if (!workspaceIdentity(owner) || !identity(id) || !identity(area_id)) return null;
+    // A web page names its address and load together, or neither (an outside file).
+    if ((url === undefined) !== (load === undefined)) return null;
+    if (url !== undefined && (!text(url) || typeof load !== "number" || !Number.isSafeInteger(load) || load < 0)) return null;
     const key = viewKey(owner, id);
     if (ownedAreas.has(key)) return null;
     ownedAreas.set(key, area_id);
-    owned.push({ workspace: owner, id, area_id });
+    owned.push({ workspace: owner, id, area_id, ...(url === undefined ? {} : { url: url as string, load: load as number }) });
   }
   const parsed: BrowserPlacement[] = [];
   const ids = new Set<string>();
@@ -145,6 +150,7 @@ export function parseSync(value: unknown): BrowserSync | null {
     ...(authorized_scopes === undefined ? {} : { authorized_scopes: scopes }),
     ...(node === undefined ? {} : { node: node as string }),
     ...(external_grants === undefined ? {} : { external_grants: external_grants as string[] }),
+    ...(inventoried ? { inventoried: true as const } : {}),
   };
 }
 
@@ -236,13 +242,6 @@ export function browserPartition(workspace: string, url: string, node: string | 
     return `persist:hide-browser-loopback-${createHash("sha256").update(device).digest("hex").slice(0, 32)}`;
   }
   return "persist:hide-browser-web";
-}
-
-function isLoopbackHost(hostname: string): boolean {
-  const host = hostname.toLowerCase().replace(/\.$/, "");
-  const mapped = /^\[::(?:(?:ffff:)?([0-9a-f]{1,4}):([0-9a-f]{1,4}))\]$/.exec(host);
-  const embeddedLoopback = mapped ? Number.parseInt(mapped[1]!, 16) >> 8 === 127 : false;
-  return host === "localhost" || host === "0.0.0.0" || host === "[::1]" || /^127\./.test(host) || embeddedLoopback;
 }
 
 /** Route a remote page's absolute loopback requests through its owned View.
@@ -355,6 +354,18 @@ export function viewKey(workspace: string, id: string): string {
 
 export type LiveView = { key: string; visible: boolean; shownAt: number };
 
+/** The width a page no slot shows lays out at: the lane's width for a page (PRD lane-desk-pair-view B32). */
+export const OFF_SCREEN_WIDTH = 900;
+
+/**
+ * The bounds of a page loaded with no slot on screen: the lane's width for a
+ * page, or the window's when narrower, at the window's height, so an agent's
+ * snapshot and clicks meet the layout the operator would see.
+ */
+export function offScreenBounds(content: { width: number; height: number }): BrowserRect {
+  return { x: 0, y: 0, width: Math.max(1, Math.min(OFF_SCREEN_WIDTH, Math.round(content.width))), height: Math.max(1, Math.round(content.height)) };
+}
+
 /**
  * The hidden pages to close so no more than `cap` stay alive, least recently
  * shown first. A page on screen is never closed; there are at most as many
@@ -401,6 +412,17 @@ export function deviceEmulation(device: BrowserDevicePlacement, bounds: BrowserR
     viewSize: view,
     scale: bounds.width > 0 ? bounds.width / view.width : 1,
   };
+}
+
+/**
+ * The layout of a page no slot has shown since its contents were made: a
+ * desktop viewport of `bounds`' size at scale 1. Chromium gives a page it
+ * never showed no viewport, so without this an agent's snapshot reads no
+ * layout and its clicks land outside the page (PRD lane-desk-pair-view B32).
+ */
+export function offScreenEmulation(bounds: BrowserRect): EmulationParameters {
+  const view = { width: Math.max(1, bounds.width), height: Math.max(1, bounds.height) };
+  return { screenPosition: "desktop", screenSize: view, viewPosition: { x: 0, y: 0 }, deviceScaleFactor: 0, viewSize: view, scale: 1 };
 }
 
 /** A rect in the shell's CSS pixels as whole window points. */

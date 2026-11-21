@@ -16,22 +16,28 @@ path = "src/bin/hide.rs"
 hide-agent-adapter = { path = "../hide-agent-adapter" }
 # The session-start rules `hide guide` prints (`guide.rs`).
 hide-agent-hooks = { path = "../hide-agent-hooks" }
-herdr-core = { path = "../herdr-core" }
+hide-core = { path = "../hide-core" }
 # Where Desk's Codex finds the operator's own sign-in (`hide_desk::codex`).
 hide-desk = { path = "../hide-desk" }
+# The one rule that cuts a styled read to a bound, which the holder's read
+# and the phone's terminal frame share (`hide_holder_protocol::styled`).
+hide-holder-protocol = { path = "../hide-holder-protocol" }
 hide-host = { path = "../hide-host" }
 hide-node = { path = "../hide-node" }
 hide-node-link = { path = "../hide-node-link" }
+hide-peer = { path = "../hide-peer" }
+# The endpoint other Hides connect to (`peer_host`); iroh stays behind this
+# crate (`scripts/check-iroh-stays-behind-the-seam.py`).
+hide-peer-iroh = { path = "../hide-peer-iroh" }
 hide-platform = { path = "../hide-platform" }
 hide-relay-protocol = { path = "../hide-relay-protocol" }
 hide-kit = { path = "../hide-kit" }
-hide-herdr-client = { path = "../hide-herdr-client" }
 hide-session = { path = "../hide-session" }
 axum = { version = "=0.8.9", features = ["ws"] }
 tokio = { version = "=1.53.2", features = ["fs", "io-util", "macros", "net", "process", "rt-multi-thread", "signal", "sync", "time"] }
 serde = { version = "=1.0.229", features = ["derive"] }
 serde_json = "=1.0.151"
-jiff = { version = "=0.2.38", default-features = false, features = ["std"] }
+jiff = { version = "=0.2.38", default-features = false, features = ["std", "tz-system", "tzdb-zoneinfo", "tzdb-concatenated", "tzdb-bundle-platform"] }
 hex = "=0.4.3"
 getrandom = "=0.2.16"
 libc = "=0.2.190"
@@ -43,7 +49,7 @@ tokio-tungstenite = { version = "=0.30.0", default-features = false, features = 
 futures-util = "=0.3.34"
 # Web Push: VAPID signing and RFC 8291 encryption (ring), and the POST to the
 # push service (ureq over rustls). Both are already in the build through
-# hide-memory and herdr-core.
+# hide-memory and hide-core.
 ring = "=0.17.14"
 ureq = { version = "=3.4.2", default-features = false, features = ["rustls"] }
 # A device pane's command stream arrives as bytes over its node link and is

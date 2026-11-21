@@ -31,13 +31,13 @@ const FOLDERS: Array<{ name: string; setup: (root: string) => void; mark: { stat
 
 for (const folder of FOLDERS) {
   test(`an Explorer row stays where it was drawn when the Git status of ${folder.name} lands`, async ({ page }) => {
-    const herdr = await startFixture({ agents: false });
+    const engine = await startFixture({ agents: false });
     let daemon: Daemon | null = null;
     try {
-      const root = fs.realpathSync(path.join(herdr.root, "fixture"));
+      const root = fs.realpathSync(path.join(engine.root, "fixture"));
       for (const name of ["first.md", "second.md"]) fs.writeFileSync(path.join(root, name), `# ${name}\n`);
       folder.setup(root);
-      daemon = await startHided(herdr, "explorer-git-status");
+      daemon = await startHided(engine, "explorer-git-status");
       const release = await holdGitAnswer(page, root);
       await page.goto(`${daemon.origin}/#token=${daemon.token}`);
       await enterWorkspace(page, "fixture");
@@ -56,7 +56,7 @@ for (const folder of FOLDERS) {
       } else await expect(mark).toHaveCount(0);
     } finally {
       daemon?.stop();
-      herdr.stop();
+      engine.stop();
     }
   });
 }

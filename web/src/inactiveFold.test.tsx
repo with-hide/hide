@@ -21,11 +21,11 @@ const browserCanvas = vi.hoisted(() => {
 });
 afterAll(() => browserCanvas.restore());
 
-// The Inactive fold's click reaches the core as one `inactive_checkouts_toggle` naming the project, and the fold
+// The Checkouts fold's click reaches the core as one `inactive_checkouts_toggle` naming the project, and the fold
 // draws whatever `expanded` the core says back. What the core does with the event is owned by
 // `inactive_fold_events_toggle_project_path_and_device_state_independently` in
-// `herdr-core/src/runtime/tests/projects.rs`; the e2e flows no longer click this fold.
-it("sends the project's path when the Inactive fold is clicked and draws the fold the core says is open", async () => {
+// `hide-core/src/runtime/tests/projects.rs`; the e2e flows no longer click this fold.
+it("sends the project's path when the Checkouts fold is clicked and draws the fold the core says is open", async () => {
   vi.stubGlobal("IS_REACT_ACT_ENVIRONMENT", true);
   vi.stubGlobal("ResizeObserver", class { observe() {} unobserve() {} disconnect() {} });
   // jsdom loads no stylesheet, and the sidebar reads its width tokens from the document: take them from the token source.
@@ -42,14 +42,14 @@ it("sends the project's path when the Inactive fold is clicked and draws the fol
     inactive_checkouts: { expanded, checkout_ids: ["old"] },
   });
   const catalog = (expanded: boolean) =>
-    ({ navigator: { devices: [{ id: "local", label: "This Mac", kind: "local", state: "local" }], workspaces: [project(expanded)], agents: [], focused_device_id: "local" } }) as unknown as SnapshotRest;
+    ({ navigator: { devices: [{ id: "local", label: "This Mac", kind: "local", state: "local", agent_scope: {} }], workspaces: [project(expanded)], agents: [], focused_device_id: "local" } }) as unknown as SnapshotRest;
   useShellStore.setState({ rest: catalog(false), agents: [], connection: "live" });
   const events: Parameters<DispatchFn>[0][] = [];
   const actions = createActions((event) => { events.push(event); return true; });
   const container = document.createElement("div");
   document.body.append(container);
   const root = createRoot(container);
-  const fold = () => container.querySelector<HTMLButtonElement>('[data-inactive-checkouts="/fixture"]');
+  const fold = () => container.querySelector<HTMLButtonElement>('[data-other-checkouts="project"]');
   try {
     await act(async () => root.render(<TooltipProvider><Sidebar actions={actions} /></TooltipProvider>));
     expect(fold()?.getAttribute("aria-expanded")).toBe("false");

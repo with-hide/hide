@@ -2,7 +2,7 @@ import { ArrowLeftRightIcon } from "lucide-react";
 import { useLayoutEffect, useRef, useState } from "react";
 import type { Actions } from "./actions";
 import { holdShellDrag } from "./shellDrag";
-import { columnLanding, edgeColumn, laneLanding, type LaneFrame, type LaneLanding, type LaneSizes } from "./workspace";
+import { columnLanding, edgeColumn, laneLanding, pairLanding, pairPaneWidth, type LaneFrame, type LaneLanding, type LaneSizes } from "./workspace";
 
 /** One arrow key on a focused divider moves it this many pixels. */
 const DIVIDER_STEP = 32;
@@ -10,17 +10,19 @@ const DIVIDER_STEP = 32;
 /**
  * A divider of the lane (PRD right-lane B6, B10; lane-two-columns B17;
  * `Component / Side panel grip`): `lane`, at the lane's left edge, sets the
- * width of the column at that edge, against Agent Views when docked and
- * over them otherwise (`edge`, hung outside the lane's box); `column`,
+ * width of the column at that edge, over Agent Views (`edge`, hung outside
+ * the lane's box); `column`,
  * between the viewing column and the tool column, trades width between the
- * two. Nothing at rest, and on hover, keyboard focus and while dragging a
+ * two; `pair`, between pair view's pane and its desk (PRD lane-desk-pair-view
+ * D-47), lands the mode's one ratio, so the pane's grid follows once on
+ * release. Nothing at rest, and on hover, keyboard focus and while dragging a
  * hairline with a ⇆ pill at its middle. A drag moves a guide and lands once
  * on release, so no terminal or page resizes during it and every page shows
  * its still; a focused divider moves one step per arrow key, one event per
  * press, each step measured from the last one the core has not yet
  * confirmed.
  */
-export function LaneDivider({ kind, label, workspace, acknowledged, frame, origin, sizes, setGuide, actions, edge = false }: { kind: "lane" | "column"; label: string; workspace: string; acknowledged: string | null; frame: LaneFrame; origin: HTMLElement | null; sizes: LaneSizes; setGuide: (x: number | null) => void; actions: Actions; edge?: boolean }) {
+export function LaneDivider({ kind, label, workspace, acknowledged, frame, origin, sizes, setGuide, actions, edge = false }: { kind: "lane" | "column" | "pair"; label: string; workspace: string; acknowledged: string | null; frame: LaneFrame; origin: HTMLElement | null; sizes: LaneSizes; setGuide: (x: number | null) => void; actions: Actions; edge?: boolean }) {
   const cancelDrag = useRef<(() => void) | null>(null);
   const [keySession] = useState(() => crypto.randomUUID());
   const keyIntent = useRef<{ frame: LaneFrame; published: LaneFrame; extent: number; request: string; observed: string | null } | null>(null);
@@ -40,20 +42,25 @@ export function LaneDivider({ kind, label, workspace, acknowledged, frame, origi
   // Switching either, or unmounting, retires the guide and its page still.
   useLayoutEffect(() => () => cancelDrag.current?.(), [workspace, origin, frame.mode, frame.width, frame.view?.width, frame.tool?.width]);
   const landingAt = (x: number, basis: LaneFrame): LaneLanding =>
-    kind === "lane" ? laneLanding({ x, body: extent(), frame: basis, sizes }) : columnLanding({ x, frame: basis });
+    kind === "pair" ? { pair_ratio: pairLanding({ x, body: extent(), sizes }) } : kind === "lane" ? laneLanding({ x, body: extent(), frame: basis, sizes }) : columnLanding({ x, frame: basis });
   // The frame a landing leaves, so the next arrow key steps from it.
   const landed = (basis: LaneFrame, patch: LaneLanding): LaneFrame => {
+    if (kind === "pair") {
+      if (patch.pair_ratio === undefined) return basis;
+      const pane = pairPaneWidth(extent(), patch.pair_ratio, sizes);
+      return { ...basis, pane, width: extent() - pane - sizes.divider };
+    }
     const view = basis.view ? { ...basis.view, width: patch[basis.view.field] ?? basis.view.width } : null;
     const tool = basis.tool ? { ...basis.tool, width: patch[basis.tool.field] ?? basis.tool.width } : null;
     const width = kind === "lane" ? (view?.width ?? 0) + (tool?.width ?? 0) + (view && tool ? sizes.divider : 0) : basis.width;
     return { ...basis, view, tool, width };
   };
   // Where the divider's left edge stands, from its origin's left edge.
-  const position = (basis: LaneFrame) => (kind === "lane" ? extent() - basis.width - sizes.divider : basis.view?.width ?? 0);
+  const position = (basis: LaneFrame) => (kind === "column" ? basis.view?.width ?? 0 : extent() - basis.width - sizes.divider);
   const land = (x: number, basis = frame, request?: string) => {
     if (extent() <= 0) return;
     const patch = landingAt(x, basis);
-    const changed = [basis.view, basis.tool].some((column) => column && patch[column.field] !== undefined && patch[column.field] !== column.width);
+    const changed = kind === "pair" ? landed(basis, patch).pane !== basis.pane : [basis.view, basis.tool].some((column) => column && patch[column.field] !== undefined && patch[column.field] !== column.width);
     if (!changed) return;
     if (request) keyIntent.current = { frame: landed(basis, patch), published: frame, extent: extent(), request, observed: acknowledged };
     if (actions.setWorkspaceView({ ...patch, ...(request ? { width_request_id: request } : {}) }) === false) keyIntent.current = null;
@@ -63,10 +70,14 @@ export function LaneDivider({ kind, label, workspace, acknowledged, frame, origi
     event.preventDefault();
     cancelDrag.current?.();
     keyIntent.current = null;
-    const left = origin.getBoundingClientRect().left;
     const target = event.currentTarget;
     target.setPointerCapture(event.pointerId);
-    const at = (next: PointerEvent) => next.clientX - left - sizes.divider / 2;
+    // The divider moves by what the pointer moved since it grabbed it, wherever on the divider it grabbed: a position
+    // read from the pointer's absolute x is off by the lane's own border, which the edge divider sits inside, so a
+    // press with no move would land a pixel narrower.
+    const from = position(frame);
+    const start = event.clientX;
+    const at = (next: PointerEvent) => from + next.clientX - start;
     // The guide shows where the divider would land, clamped like the landing.
     const move = (next: PointerEvent) => setGuide(position(landed(frame, landingAt(at(next), frame))));
     // The drag marks the root, so a page the guide crosses gives way to its still.
@@ -95,11 +106,12 @@ export function LaneDivider({ kind, label, workspace, acknowledged, frame, origi
     target.addEventListener("lostpointercapture", end);
   };
   const moved = kind === "lane" ? edgeColumn(frame) : frame.view;
-  const value = moved?.width ?? 0;
-  const min = moved?.min ?? 0;
-  // Docked, the lane grows into what Agent Views can spare; over them, to
-  // the body's edge; between the columns, into what the tool column can spare.
-  const spare = kind === "lane" ? (frame.mode === "overlay" ? frame.agents - frame.width - sizes.divider : frame.agents - sizes.agentMin) : (frame.tool?.width ?? 0) - (frame.tool?.min ?? 0);
+  // Pair view's divider says the pane's width, between its minimum and what the desk's minimum leaves.
+  const value = kind === "pair" ? frame.pane ?? 0 : moved?.width ?? 0;
+  const min = kind === "pair" ? sizes.agentMin : moved?.min ?? 0;
+  // Over the agents the lane grows to the body's edge; between the columns,
+  // into what the tool column can spare; in pair view, into the desk down to its minimum.
+  const spare = kind === "pair" ? (frame.view?.width ?? 0) - sizes.viewMin : kind === "lane" ? frame.agents - frame.width - sizes.divider : (frame.tool?.width ?? 0) - (frame.tool?.min ?? 0);
   return (
     <div
       role="separator"
@@ -110,7 +122,7 @@ export function LaneDivider({ kind, label, workspace, acknowledged, frame, origi
       aria-valuemax={value + Math.max(0, spare)}
       tabIndex={0}
       data-lane-divider={kind}
-      className={`group z-10 flex w-sm shrink-0 cursor-col-resize justify-center outline-none ${edge ? "absolute inset-y-0" : "relative bg-background"}`}
+      className={`group z-10 flex w-sm shrink-0 cursor-col-resize justify-center outline-none ${edge ? `absolute inset-y-0 border-r border-border${kind === "pair" ? " bg-background" : ""}` : kind === "lane" ? "relative border-l border-border bg-card" : "relative border-l border-border bg-background"}`}
       style={edge ? { left: -sizes.divider } : undefined}
       onPointerDown={drag}
       onBlur={() => { keyIntent.current = null; }}
@@ -129,10 +141,10 @@ export function LaneDivider({ kind, label, workspace, acknowledged, frame, origi
   );
 }
 
-/** A drag's guide, drawn where the divider would land, `left` pixels from its origin. */
-export function DividerGuide({ left }: { left: number }) {
+/** A drag's guide, drawn where the divider would land, `left` pixels from its origin; in pair view it starts under the tab row and the strip, as the divider does. */
+export function DividerGuide({ left, pair = false }: { left: number; pair?: boolean }) {
   return (
-    <div className="pointer-events-none absolute inset-y-0 z-30 flex w-sm justify-center" style={{ left }} data-lane-guide="true">
+    <div className={`pointer-events-none absolute bottom-0 z-30 flex w-sm justify-center ${pair ? "top-[calc(var(--size-tab-strip)*2)]" : "top-0"}`} style={{ left }} data-lane-guide="true">
       <DividerGrip />
     </div>
   );

@@ -16,8 +16,15 @@ export type HidedControl = {
    * `what` after `ms`.
    */
   until: <T>(read: (rest: Rest) => T | undefined | null | false, what: string, ms?: number) => Promise<T>;
-  close: () => void;
+  /**
+   * Closes the connection and resolves once the daemon has closed it, which
+   * it does only after applying every event sent on it; rejects naming the
+   * connection and the latest events sent on it when that does not happen
+   * within the connection's bound.
+   */
+  close: () => Promise<void>;
 };
 
-export function connectControl(daemon: { origin: string; token: string }, ms?: number, terminalEvidence?: (chunks: unknown[]) => void): Promise<HidedControl>;
+export function connectControl(daemon: { origin: string; token: string; clientKind?: "web" }, ms?: number, terminalEvidence?: (chunks: unknown[]) => void): Promise<HidedControl>;
 export function connectStateDir(stateDir: string, ms?: number): Promise<HidedControl>;
+export function useControl<T>(control: HidedControl, use: (control: HidedControl) => Promise<T>): Promise<T>;

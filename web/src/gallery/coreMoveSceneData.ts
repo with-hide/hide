@@ -46,7 +46,7 @@ export function coreMoveRest(side: CoreMoveSide, content: SceneContent, nowMs: n
     return { ...device, label: "build-box", host: host("linux-x86_64"), kit: quietKit };
   });
   // build-box answered once and is not reachable now, as the bundle draws it.
-  const remote = (scene.rest.status?.remote ?? []).map((row) => (row.target_id === NODE_DEVICE ? { ...row, herdr_version: "0.9.3" } : { ...row, state: "unavailable", herdr_version: "0.9.1" }));
+  const remote = (scene.rest.status?.remote ?? []).map((row) => (row.target_id === NODE_DEVICE ? row : { ...row, state: "unavailable" }));
   return { rest: { ...scene.rest, navigator: { ...navigator, devices }, status: { ...scene.rest.status, remote } } as SnapshotRest, agents: scene.agents };
 }
 

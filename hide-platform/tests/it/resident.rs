@@ -260,6 +260,46 @@ fn starter() {
     };
     #[cfg(windows)]
     let _job = windows_job::enter(&setup);
+    let raised = if setup.contains("raise_open_files") || setup.contains("raise_only") {
+        // Started low, as launchd starts an app, so the raise moves it; a
+        // guest's node starts with what its starter gave it.
+        #[cfg(unix)]
+        if setup.contains("raise_open_files") {
+            set_soft_open_file_limit(STARTER_OPEN_FILES);
+        }
+        match hide_platform::process::raise_open_file_limit().unwrap() {
+            Some(limit) => format!(
+                "raised_before={} raised_after={}",
+                limit.before, limit.after
+            ),
+            None => "raised=none".to_owned(),
+        }
+    } else {
+        String::new()
+    };
+    if setup.contains("through_guest") {
+        // As the core starts a guest's node: an ordinary child that raises
+        // its own limit and starts the residents, here one, and ends.
+        let mut guest = role_command("starter");
+        guest.env(SETUP, "raise_only exit");
+        hide_platform::process::keep_starting_open_file_limit(&mut guest);
+        let output = guest.output().unwrap();
+        let text = String::from_utf8_lossy(&output.stdout);
+        let line = text
+            .lines()
+            .find_map(|line| line.find("STARTED ").map(|at| &line[at..]))
+            .unwrap_or_else(|| panic!("the guest answered nothing: {text}"));
+        println!("{line}");
+        live_out_role();
+        return;
+    }
+    // An ordinary child beside the resident, started as any child is: it
+    // stays in the starter's group (Unix) or job (Windows).
+    let ordinary = setup.contains("ordinary").then(|| {
+        let mut command = role_command("sleep");
+        command.stdout(Stdio::null());
+        command.spawn().unwrap().id()
+    });
     let (reader, writer) = std::io::pipe().unwrap();
     let command = resident_command();
     #[cfg(unix)]
@@ -271,10 +311,11 @@ fn starter() {
             drop(writer);
             let report = line_after(reader, "RESIDENT ");
             println!(
-                "STARTED pid={} outer_job={} starter={} {report}",
+                "STARTED pid={} outer_job={} starter={} ordinary={} {raised} {report}",
                 resident.pid,
                 resident.outer_job,
-                std::process::id()
+                std::process::id(),
+                ordinary.map_or_else(|| "none".to_owned(), |pid| pid.to_string())
             );
         }
         Err(error) => println!("REFUSED kind={:?} {error}", error.kind()),
@@ -346,11 +387,45 @@ fn describe_self() -> String {
     };
     format!(
         "pid={pid} sid={sid} parent={parent} tty={tty} streams_null={streams_null} \
-         foreign=[{}] hup={} int={} term_blocked={term_blocked}",
+         foreign=[{}] hup={} int={} term_blocked={term_blocked} open_files={}",
         foreign.join(","),
         disposition(libc::SIGHUP),
         disposition(libc::SIGINT),
+        soft_open_file_limit(),
     )
+}
+
+/// The soft open-file limit a starter sets itself before it raises it: below
+/// any system's ceiling, so the raise always moves it.
+#[cfg(unix)]
+const STARTER_OPEN_FILES: libc::rlim_t = 64;
+
+#[cfg(unix)]
+fn soft_open_file_limit() -> libc::rlim_t {
+    let mut limit = libc::rlimit {
+        rlim_cur: 0,
+        rlim_max: 0,
+    };
+    // SAFETY: `getrlimit` writes into the structure we own.
+    assert_eq!(
+        unsafe { libc::getrlimit(libc::RLIMIT_NOFILE, &mut limit) },
+        0
+    );
+    limit.rlim_cur
+}
+
+#[cfg(unix)]
+fn set_soft_open_file_limit(soft: libc::rlim_t) {
+    let mut limit = libc::rlimit {
+        rlim_cur: 0,
+        rlim_max: 0,
+    };
+    // SAFETY: plain calls on structures we own.
+    unsafe {
+        assert_eq!(libc::getrlimit(libc::RLIMIT_NOFILE, &mut limit), 0);
+        limit.rlim_cur = soft;
+        assert_eq!(libc::setrlimit(libc::RLIMIT_NOFILE, &limit), 0);
+    }
 }
 
 #[cfg(windows)]
@@ -391,11 +466,12 @@ mod windows_job {
     };
     use windows_sys::Win32::System::Threading::GetCurrentProcess;
 
-    /// Puts this process in a new kill-on-close job, which lets a process
-    /// leave it when `setup` says `breakaway`, and leaves every child out of
-    /// it unasked when it says `silent` too, as libuv's job for Node and
-    /// Electron does; held until this process exits, which closes the job
-    /// and ends what is in it.
+    /// Puts this process in a new kill-on-close job, or one that ends
+    /// nothing when it closes when `setup` says `nokill`, as a CI runner's
+    /// does; it lets a process leave it when `setup` says `breakaway`, and
+    /// leaves every child out of it unasked when it says `silent` too, as
+    /// libuv's job for Node and Electron does; held until this process
+    /// exits, which closes the job.
     pub(super) fn enter(setup: &str) -> Option<HANDLE> {
         if !setup.contains("job") {
             return None;
@@ -405,17 +481,19 @@ mod windows_job {
             let job = CreateJobObjectW(std::ptr::null(), std::ptr::null());
             assert!(!job.is_null());
             let mut limits: JOBOBJECT_EXTENDED_LIMIT_INFORMATION = std::mem::zeroed();
-            limits.BasicLimitInformation.LimitFlags = JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE
-                | if setup.contains("breakaway") {
-                    JOB_OBJECT_LIMIT_BREAKAWAY_OK
-                } else {
-                    0
-                }
-                | if setup.contains("silent") {
-                    JOB_OBJECT_LIMIT_SILENT_BREAKAWAY_OK
-                } else {
-                    0
-                };
+            limits.BasicLimitInformation.LimitFlags = if setup.contains("nokill") {
+                0
+            } else {
+                JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE
+            } | if setup.contains("breakaway") {
+                JOB_OBJECT_LIMIT_BREAKAWAY_OK
+            } else {
+                0
+            } | if setup.contains("silent") {
+                JOB_OBJECT_LIMIT_SILENT_BREAKAWAY_OK
+            } else {
+                0
+            };
             assert_ne!(
                 SetInformationJobObject(
                     job,
@@ -496,6 +574,46 @@ fn a_resident_child_keeps_nothing_of_its_starter() {
     assert!(resident.is_running());
 }
 
+/// A starter that raised its open-file limit starts a resident with the
+/// limit it started with: a resident is a pane's holder, and the programs it
+/// runs are the operator's. Windows has no such limit to raise.
+#[test]
+fn a_resident_child_starts_with_the_open_file_limit_its_starter_started_with() {
+    let (_starter, line) = run_starter("raise_open_files");
+    assert!(line.starts_with("STARTED "), "{line}");
+    let _resident = Started::new(field(&line, "pid").parse().unwrap());
+    #[cfg(unix)]
+    {
+        let started_with = STARTER_OPEN_FILES.to_string();
+        assert_eq!(field(&line, "raised_before"), started_with, "{line}");
+        let raised: libc::rlim_t = field(&line, "raised_after").parse().unwrap();
+        assert!(raised > STARTER_OPEN_FILES, "{line}");
+        assert_eq!(field(&line, "open_files"), started_with, "{line}");
+    }
+    #[cfg(windows)]
+    assert_eq!(field(&line, "raised"), "none", "{line}");
+}
+
+/// A guest's node is no resident: the core starts it as an ordinary child,
+/// with the limit the core started with, and the node raises its own and
+/// starts its holders with that one. The chain core -> guest node -> holder.
+#[test]
+fn a_guest_node_and_its_holders_start_with_the_limit_the_core_started_with() {
+    let (_core, line) = run_starter("raise_open_files through_guest");
+    assert!(line.starts_with("STARTED "), "{line}");
+    let _holder = Started::new(field(&line, "pid").parse().unwrap());
+    #[cfg(unix)]
+    {
+        let started_with = STARTER_OPEN_FILES.to_string();
+        // The guest's node started with the core's original limit ...
+        assert_eq!(field(&line, "raised_before"), started_with, "{line}");
+        // ... and so does its holder.
+        assert_eq!(field(&line, "open_files"), started_with, "{line}");
+    }
+    #[cfg(windows)]
+    assert_eq!(field(&line, "raised"), "none", "{line}");
+}
+
 /// The starter's group and session (Unix), or its kill-on-close job
 /// (Windows), end; the resident does not.
 #[test]
@@ -529,6 +647,75 @@ fn a_resident_child_outlives_what_ends_its_starter() {
     assert!(resident.is_running(), "the resident ended with its starter");
 }
 
+/// Runs a starter with `setup` as an owned child started by `spawn`, and
+/// answers it with the line it printed.
+fn run_owned_starter(
+    setup: &str,
+    spawn: fn(&mut Command) -> std::io::Result<hide_platform::process::OwnedChild>,
+) -> (hide_platform::process::OwnedChild, String) {
+    let mut command = role_command("starter");
+    command.env(SETUP, setup);
+    let mut starter = spawn(&mut command).unwrap();
+    let stdout = starter.take_stdout().unwrap();
+    let (sender, heard) = mpsc::channel();
+    thread::spawn(move || {
+        for line in BufReader::new(stdout).lines().map_while(Result::ok) {
+            for marker in ["STARTED ", "REFUSED "] {
+                if let Some((_, rest)) = line.split_once(marker) {
+                    let _ = sender.send(format!("{marker}{rest}"));
+                    return;
+                }
+            }
+        }
+    });
+    let line = heard
+        .recv_timeout(HANG_LIMIT)
+        .expect("the starter answered nothing");
+    (starter, line)
+}
+
+/// A program run as an owned child that lets residents leave (as
+/// `hide connect` runs `hided core-update`) places a resident beside an
+/// ordinary child; ending the owned child's tree, its group on Unix and
+/// its kill-on-close job on Windows, ends the ordinary child and leaves the
+/// resident running.
+#[test]
+fn a_resident_child_outlives_the_owned_child_that_started_it() {
+    let (mut starter, line) = run_owned_starter(
+        "ordinary",
+        hide_platform::process::OwnedChild::spawn_letting_residents_leave,
+    );
+    assert!(line.starts_with("STARTED "), "{line}");
+    let resident = Started::new(field(&line, "pid").parse().unwrap());
+    let ordinary = Started::new(field(&line, "ordinary").parse().unwrap());
+    assert!(ordinary.is_running(), "{line}");
+    starter.kill_tree().unwrap();
+    wait_until(
+        "the ordinary child ends with the owned child's tree",
+        || !ordinary.is_running(),
+    );
+    assert!(
+        resident.is_running(),
+        "the resident ended with the owned child's tree"
+    );
+}
+
+/// Any other owned child keeps what it starts: on Windows its job lets no
+/// process leave, so a resident start inside it is refused rather than
+/// started to end with it (on Unix a resident leaves the group whoever
+/// starts it).
+#[cfg(windows)]
+#[test]
+fn a_resident_start_inside_an_ordinary_owned_child_is_refused() {
+    let (_starter, line) = run_owned_starter("", hide_platform::process::OwnedChild::spawn);
+    assert!(line.starts_with("REFUSED "), "{line}");
+    assert_eq!(field(&line, "kind"), "PermissionDenied", "{line}");
+    assert!(
+        line.contains("kill_on_close=true,breakaway_ok=false"),
+        "{line}"
+    );
+}
+
 /// The job the desktop app's daemon runs in: Electron starts it with
 /// Node's `child_process.spawn`, whose libuv job ends its processes when the
 /// app closes it and lets each leave, silently. A resident started there
@@ -546,6 +733,20 @@ fn a_resident_child_outlives_the_job_electron_starts_its_daemon_in() {
         resident.is_running(),
         "the resident ended with the app's job"
     );
+}
+
+/// The job a CI runner starts a step in lets no process leave and ends
+/// none when it closes: it keeps the resident, which outlives the starter,
+/// and the start says a job holds it.
+#[cfg(windows)]
+#[test]
+fn a_job_that_ends_nothing_on_close_keeps_the_resident() {
+    let (mut starter, line) = run_starter("job nokill exit");
+    assert!(line.starts_with("STARTED "), "{line}");
+    let resident = Started::new(field(&line, "pid").parse().unwrap());
+    starter.0.wait().unwrap();
+    assert_eq!(field(&line, "outer_job"), "true", "{line}");
+    assert!(resident.is_running(), "the resident ended with the job");
 }
 
 #[cfg(windows)]

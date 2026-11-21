@@ -21,7 +21,8 @@
 //! The screen is pulled, not pushed: the PTY reader only marks it changed,
 //! and the connection's writer draws the screen as it is when it can write,
 //! at most once per [`MIN_FRAGMENT_INTERVAL`], as a fragment of what changed
-//! since the last one it wrote. A slow node therefore gets fewer, larger
+//! since the last one it wrote; the program's answer to input is drawn at
+//! once ([`Pending::input`]). A slow node therefore gets fewer, larger
 //! fragments and never a queue, and no connection means no drawing at all
 //! (PRD engine-bundle-2-pane-holder D-7, D-9). A watch's facts are pulled
 //! the same way.
@@ -39,8 +40,8 @@ use std::time::{Duration, Instant};
 
 use hide_holder_protocol::{
     Ask, Capability, ClientMessage, CloseReason, Closed, Fragment, FrameError, HELLO_LIMIT, Hello,
-    HolderMessage, Notice, NoticeReason, Opening as FirstMessage, Size, Unknown, Watching, Welcome,
-    agree, read_client, read_opening, write_holder,
+    HolderMessage, Notice, NoticeReason, Opening as FirstMessage, Size, SubmitPart, Unknown,
+    Watching, Welcome, agree, read_client, read_opening, write_holder,
 };
 use hide_platform::ipc::{ListenerCloser, LocalListener, LocalStream, ShutdownHandle};
 use hide_platform::process::{Session, SessionEnd};
@@ -52,7 +53,7 @@ use crate::encode::Encoder;
 use crate::log::Log;
 use crate::pane::{Pane, Wheel};
 use crate::record::Claim;
-use crate::watch::{FactsWriter, SharedRules, Wake, WatchConnection, WatchReader};
+use crate::watch::{FactsWriter, LineEditingRead, SharedRules, Wake, WatchConnection, WatchReader};
 
 /// How long ending the pane's session may take before it is reported as
 /// unconfirmed.
@@ -69,8 +70,10 @@ const FLUSH_LIMIT: Duration = Duration::from_secs(2);
 /// How long one write to a connection may wait for the node to read.
 const WRITE_LIMIT: Duration = Duration::from_secs(5);
 
-/// The least time between two fragments a connection is sent, as Herdr
-/// draws at most once per frame of a 60 Hz screen.
+/// The least time between two fragments a connection is sent for output the
+/// program makes on its own, so a screen of 60 Hz is drawn at most once per
+/// frame; the program's answer to input does not wait for it
+/// ([`Pending::input`]).
 const MIN_FRAGMENT_INTERVAL: Duration = Duration::from_millis(16);
 
 /// How long a connection's screen stays still after a fragment before the
@@ -94,8 +97,13 @@ const ANSWER_QUEUE_CAP: usize = 64 * 1024;
 /// connection that sent them is closed (`input_queue_full`).
 const INPUT_QUEUE_CAP: usize = 1024 * 1024;
 
-/// The most connections reading their hello at once; one past it is closed
-/// with `opening_full`.
+/// The least a queued submission counts against [`INPUT_QUEUE_CAP`]: it
+/// holds the writer for its gap whatever its size, so at most 256 wait,
+/// and a connection that sends more is ended as one past the cap is.
+const SUBMIT_COST: usize = 4 * 1024;
+
+/// The most connections opening at once, from their accept until the run
+/// thread takes them; one past it is closed with `opening_full`.
 const MAX_OPENING: usize = 8;
 
 /// How long the listener gives one refusal of a connection past
@@ -115,15 +123,40 @@ const PANIC_ON_INPUT: &str = "HIDE_HOLDER_TEST_PANIC_ON_INPUT";
 /// program never gets it.
 const HOLD_WRITES: &str = "HIDE_HOLDER_TEST_HOLD_WRITES";
 
+/// Debug builds only: a holder started with this variable naming a file
+/// starts its program and writes nothing more of its start until that file
+/// exists, so its record still says `preparing` while the program runs, and
+/// a test decides when the record says `running`
+/// (with-hide/hide-private#719). A release holder never reads it, and the
+/// pane's program never gets it.
+const HOLD_RUNNING: &str = "HIDE_HOLDER_TEST_HOLD_RUNNING";
+
+/// How long a holder started with [`HOLD_RUNNING`] holds at most: a test
+/// that fails before it releases the holder leaves no holder waiting.
+const HOLD_RUNNING_LIMIT: Duration = Duration::from_secs(30);
+
 /// How much one read of the PTY takes.
 const READ_CHUNK: usize = 64 * 1024;
 
 /// What this holder can send, and what it reads beyond version 1's input
-/// ([`Capability::Keys`]).
-const SENDS: [Capability; 3] = [Capability::Screen, Capability::Notices, Capability::Keys];
+/// ([`Capability::Keys`], [`Capability::MouseOutside`]).
+const SENDS: [Capability; 6] = [
+    Capability::Screen,
+    Capability::Notices,
+    Capability::Keys,
+    Capability::Submit,
+    Capability::Clipboard,
+    Capability::MouseOutside,
+];
 
 /// What this holder sends on a watch.
-const WATCH_SENDS: [Capability; 1] = [Capability::Facts];
+const WATCH_SENDS: [Capability; 5] = [
+    Capability::Facts,
+    Capability::ProgramPackage,
+    Capability::LineEditing,
+    Capability::ForegroundUnread,
+    Capability::AlternateScreen,
+];
 
 enum Event {
     /// A connection whose hello was accepted.
@@ -131,12 +164,17 @@ enum Event {
         stream: LocalStream,
         version: u16,
         sends: Vec<Capability>,
+        slot: OpeningSlot,
     },
     /// What a connection asks of the run thread: all it sends but the
     /// program's input, which its reader hands the PTY writer itself.
+    /// `applied` is dropped once the run thread has acted on it, and the
+    /// reader reads the connection's next message only then, so input sent
+    /// after a resize reaches a program that already has the new size.
     Message {
         generation: u64,
         message: Control,
+        applied: Sender<()>,
     },
     /// A connection's input passed [`INPUT_QUEUE_CAP`] waiting bytes.
     InputQueueFull {
@@ -158,6 +196,7 @@ enum Event {
         stream: LocalStream,
         version: u16,
         sends: Vec<Capability>,
+        slot: OpeningSlot,
     },
     /// A watch's node let go (`None`), or its stream ended or failed.
     WatchGone {
@@ -239,50 +278,90 @@ impl InputPath {
         if *holding != generation {
             return Taken::Next;
         }
-        let (bytes, moved) = {
+        let (write, moved) = {
             let mut pane = self.pane.lock().unwrap_or_else(PoisonError::into_inner);
-            let encoded = match &message {
-                ClientMessage::Input(_) => Ok(None),
-                ClientMessage::Paste(text) => pane.paste(text).map(Some),
-                ClientMessage::Mouse(mouse) => pane.mouse(mouse),
-                ClientMessage::Key(keys) => pane.keys(keys).map(Some),
-                ClientMessage::Scroll(scroll) => match pane.scroll(scroll) {
-                    Ok(Wheel::Input(bytes)) => Ok(Some(bytes)),
-                    // The screen moved, or did not: nothing for the program.
-                    Ok(Wheel::Moved) => {
+            if let ClientMessage::Submit(submit) = &message {
+                let part = |pane: &mut Pane, part: &SubmitPart| match part {
+                    SubmitPart::Input(bytes) => Ok(bytes.clone()),
+                    SubmitPart::Paste(text) => pane.paste(text),
+                    SubmitPart::Keys(keys) => pane.keys(keys),
+                };
+                let encoded = submit
+                    .text
+                    .iter()
+                    .try_fold(Vec::new(), |mut text, each| {
+                        text.extend(part(&mut pane, each)?);
+                        Ok::<_, hide_vt::Error>(text)
+                    })
+                    .and_then(|text| Ok((text, part(&mut pane, &submit.enter)?)));
+                let (text, enter) = match encoded {
+                    Ok(encoded) => encoded,
+                    Err(error) => {
                         drop(pane);
-                        outbox.changed();
+                        self.log.event(
+                            "holder.input_unencoded",
+                            &[
+                                ("what", "submit".into()),
+                                ("error", error.to_string().into()),
+                            ],
+                        );
                         return Taken::Next;
                     }
-                    Ok(Wheel::Still) => return Taken::Next,
-                    Err(error) => Err(error),
-                },
-                _ => unreachable!("a reader hands over only the program's input"),
-            };
-            let bytes = match (encoded, message) {
-                (Ok(None), ClientMessage::Input(bytes)) => bytes,
-                (Ok(Some(bytes)), _) => bytes,
-                // The program tracks no mouse: nothing to send.
-                (Ok(None), _) => return Taken::Next,
-                (Err(error), message) => {
-                    drop(pane);
-                    self.log.event(
-                        "holder.input_unencoded",
-                        &[
-                            ("what", input_name(&message).into()),
-                            ("error", error.to_string().into()),
-                        ],
-                    );
-                    return Taken::Next;
-                }
-            };
-            let moved = pane.scroll_to_bottom();
-            (bytes, moved)
+                };
+                let moved = pane.scroll_to_bottom();
+                (
+                    PtyWrite::Submit {
+                        generation,
+                        text,
+                        gap: submit.gap,
+                        enter,
+                    },
+                    moved,
+                )
+            } else {
+                let encoded = match &message {
+                    ClientMessage::Input(_) => Ok(None),
+                    ClientMessage::Paste(text) => pane.paste(text).map(Some),
+                    ClientMessage::Mouse(mouse) => pane.mouse(mouse),
+                    ClientMessage::Key(keys) => pane.keys(keys).map(Some),
+                    ClientMessage::Scroll(scroll) => match pane.scroll(scroll) {
+                        Ok(Wheel::Input(bytes)) => Ok(Some(bytes)),
+                        // The screen moved, or did not: nothing for the program.
+                        Ok(Wheel::Moved) => {
+                            drop(pane);
+                            outbox.changed();
+                            return Taken::Next;
+                        }
+                        Ok(Wheel::Still) => return Taken::Next,
+                        Err(error) => Err(error),
+                    },
+                    _ => unreachable!("a reader hands over only the program's input"),
+                };
+                let bytes = match (encoded, message) {
+                    (Ok(None), ClientMessage::Input(bytes)) => bytes,
+                    (Ok(Some(bytes)), _) => bytes,
+                    // The program tracks no mouse: nothing to send.
+                    (Ok(None), _) => return Taken::Next,
+                    (Err(error), message) => {
+                        drop(pane);
+                        self.log.event(
+                            "holder.input_unencoded",
+                            &[
+                                ("what", input_name(&message).into()),
+                                ("error", error.to_string().into()),
+                            ],
+                        );
+                        return Taken::Next;
+                    }
+                };
+                let moved = pane.scroll_to_bottom();
+                (PtyWrite::Input { generation, bytes }, moved)
+            }
         };
         if moved {
             outbox.changed();
         }
-        let length = bytes.len();
+        let length = write.len();
         // Held to the end, so the takeover waits for this input to be queued.
         let _holding = holding;
         let queued = self.queued.load(Ordering::SeqCst);
@@ -293,11 +372,10 @@ impl InputPath {
             return Taken::Full;
         }
         self.queued.fetch_add(length, Ordering::SeqCst);
-        if self
-            .writes
-            .send(PtyWrite::Input { generation, bytes })
-            .is_err()
-        {
+        // Before the program can answer, so its answer is never taken for
+        // a change before it.
+        outbox.input();
+        if self.writes.send(write).is_err() {
             // The writer's thread is gone, which only a panic does, and a
             // panic ends the holder.
             self.queued.fetch_sub(length, Ordering::SeqCst);
@@ -308,6 +386,7 @@ impl InputPath {
 
 fn input_name(message: &ClientMessage) -> &'static str {
     match message {
+        ClientMessage::Submit(_) => "submit",
         ClientMessage::Paste(_) => "paste",
         ClientMessage::Mouse(_) => "mouse",
         ClientMessage::Scroll(_) => "scroll",
@@ -322,6 +401,8 @@ fn input_name(message: &ClientMessage) -> &'static str {
 struct Outbox {
     state: Mutex<Pending>,
     wake: Condvar,
+    /// The node accepts [`HolderMessage::Clipboard`].
+    clipboard: bool,
 }
 
 #[derive(Default)]
@@ -337,6 +418,42 @@ struct Pending {
     /// 100,000 wakes for 100 MB on macOS, where a PTY read gives about
     /// 1 KiB).
     waits_for_change: bool,
+    /// The screen's version when input was handed to the program and no
+    /// fragment has answered it yet: a change after it is the program's
+    /// answer, such as a key's echo, and is drawn at once rather than after
+    /// the interval between fragments, so an echo never waits on the
+    /// fragment before it. One fragment more per input message at most;
+    /// output the program makes on its own stays paced.
+    input: Option<u64>,
+}
+
+impl Pending {
+    /// When the changed screen may be drawn, and whether a change should
+    /// wake the writer before then: once `next` passes, at once when the
+    /// change answers input, and never before the end of the synchronized
+    /// output the screen was `held` at, unless it changes again.
+    fn draw_at(
+        &self,
+        next: Instant,
+        held: Option<(u64, Instant)>,
+        now: Instant,
+    ) -> (Instant, bool) {
+        let mut at = if self.answers_input() { now } else { next };
+        // Held for the program's synchronized output: a change may be the
+        // end of it, so it wakes the writer.
+        let mut waits_for_change = false;
+        if let Some((version, until)) = held
+            && version == self.version
+        {
+            at = at.max(until);
+            waits_for_change = true;
+        }
+        (at, waits_for_change)
+    }
+
+    fn answers_input(&self) -> bool {
+        self.input.is_some_and(|input| input < self.version)
+    }
 }
 
 impl Outbox {
@@ -367,15 +484,42 @@ impl Outbox {
         self.wake.notify_one();
     }
 
+    /// Queues the text the program wrote to the clipboard in place of one
+    /// still waiting, since only the latest write is what the clipboard
+    /// holds; answers whether the node accepts it.
+    fn clipboard(&self, text: Vec<u8>) -> bool {
+        if !self.clipboard {
+            return false;
+        }
+        let mut pending = self.pending();
+        pending
+            .messages
+            .retain(|message| !matches!(message, HolderMessage::Clipboard(_)));
+        pending.messages.push_back(HolderMessage::Clipboard(text));
+        drop(pending);
+        self.wake.notify_one();
+        true
+    }
+
     fn changed(&self) {
         let mut pending = self.pending();
         pending.changed = true;
         pending.version += 1;
-        let wake = std::mem::take(&mut pending.waits_for_change);
+        // The program's answer to input is drawn at once, so it wakes a
+        // writer waiting out the interval too.
+        let wake = std::mem::take(&mut pending.waits_for_change) || pending.input.is_some();
         drop(pending);
         if wake {
             self.wake.notify_one();
         }
+    }
+
+    /// Input is being handed to the program: the next change is its answer
+    /// ([`Pending::input`]).
+    fn input(&self) {
+        let mut pending = self.pending();
+        let version = pending.version;
+        pending.input.get_or_insert(version);
     }
 
     /// The next screen is sent whole.
@@ -411,6 +555,15 @@ impl Connection {
 enum PtyWrite {
     /// A connection's input.
     Input { generation: u64, bytes: Vec<u8> },
+    /// A connection's submission ([`hide_holder_protocol::Submit`]): `text`,
+    /// then `enter` once `gap` has passed since `text` was written, with the
+    /// input written after it waiting until then.
+    Submit {
+        generation: u64,
+        text: Vec<u8>,
+        gap: Duration,
+        enter: Vec<u8>,
+    },
     /// The holder's answers to the program's questions.
     Answers(Vec<u8>),
 }
@@ -494,7 +647,15 @@ impl Holder {
         // program runs, one write of the record says it runs and the socket
         // listens; a failure from here to the spawn leaves no program, and
         // the dropped listener takes its endpoint with it.
-        let pane = Pane::new(size, config.theme.as_ref())?;
+        #[cfg_attr(not(windows), allow(unused_mut))]
+        let mut pane = Pane::new(size, config.theme.as_ref())?;
+        // ConPTY draws the console's screen again for the holder, placing
+        // the rows of a wrapped line itself and does not reliably leave the
+        // parser a soft wrap: the pane says nothing of wraps rather than that
+        // a wrapped row ends with a line break, and the screen keeps its
+        // last-column rule.
+        #[cfg(windows)]
+        pane.without_wraps();
         let listener = LocalListener::bind(&config.socket).map_err(|error| {
             format!(
                 "{} could not be listened on: {error}",
@@ -506,7 +667,7 @@ impl Holder {
         let mut command = CommandBuilder::from_argv(config.program.clone());
         command.cwd(&config.cwd);
         // The terminal the program writes to is the holder's, and nothing
-        // else's: no Herdr pane, outer terminal or parent agent (D-9).
+        // else's: no outer Hide pane, outer terminal or parent agent (D-9).
         crate::pane_env::apply(&mut command);
         command.env_remove(hide_platform::process::LENT_KEY);
         // The holder's own launch metadata, never its program's: a guarded
@@ -521,6 +682,10 @@ impl Holder {
             .filter(|_| cfg!(debug_assertions))
             .map(PathBuf::from);
         command.env_remove(HOLD_WRITES);
+        let hold_running = std::env::var_os(HOLD_RUNNING)
+            .filter(|_| cfg!(debug_assertions))
+            .map(PathBuf::from);
+        command.env_remove(HOLD_RUNNING);
         #[cfg(unix)]
         let spawned = pair.slave.spawn_command(command);
         #[cfg(windows)]
@@ -542,6 +707,12 @@ impl Holder {
         // write, as it was when the program had a write of its own, and a
         // start writes its record once less (each write is flushed, and the
         // start of every new pane waited for them).
+        if let Some(release) = &hold_running {
+            let given_up = Instant::now() + HOLD_RUNNING_LIMIT;
+            while !release.exists() && Instant::now() < given_up {
+                thread::park_timeout(Duration::from_millis(10));
+            }
+        }
         if let Some(record) = &record {
             record
                 .running(program)
@@ -578,6 +749,7 @@ impl Holder {
             let marks = Marks {
                 outbox: outbox.clone(),
                 watch: watch_wake.clone(),
+                log: log.clone(),
             };
             let sender = sender.clone();
             let answers = answers.clone();
@@ -693,10 +865,16 @@ impl Holder {
                     stream,
                     version,
                     sends,
-                } => self.take_over(stream, version, sends),
+                    slot,
+                } => {
+                    // Taken: no longer opening, before it is welcomed.
+                    drop(slot);
+                    self.take_over(stream, version, sends);
+                }
                 Event::Message {
                     generation,
                     message,
+                    applied: _applied,
                 } => {
                     // A connection that was taken over may still have sent
                     // something; it no longer holds the pane.
@@ -762,7 +940,11 @@ impl Holder {
                     stream,
                     version,
                     sends,
-                } => self.watch(stream, version, sends),
+                    slot,
+                } => {
+                    drop(slot);
+                    self.watch(stream, version, sends);
+                }
                 Event::WatchGone { generation, error } => {
                     if self.watch.as_ref().map(|watch| watch.generation) == Some(generation) {
                         let closed = match error {
@@ -841,7 +1023,10 @@ impl Holder {
                 format!("connection {generation} took the pane over"),
             ));
         }
-        let outbox = Arc::new(Outbox::default());
+        let outbox = Arc::new(Outbox {
+            clipboard: sends.contains(&Capability::Clipboard),
+            ..Outbox::default()
+        });
         let (written_tx, written) = mpsc::channel();
         let shutdown = stream.shutdown_handle();
         outbox.send(HolderMessage::Welcome(Welcome {
@@ -905,6 +1090,24 @@ impl Holder {
     /// told it was taken over, and its reader's late rules change nothing.
     /// Its first facts are sent whatever they are, and its node's first rule
     /// set is read as soon as it arrives.
+    /// How a watch reads whether the terminal edits lines under the
+    /// foreground program it names: from the master on Unix; on Windows from
+    /// a helper attached to the pane's console, which the holder never
+    /// attaches to itself (`console_input.rs`).
+    fn line_editing(&self, master: PtyMaster) -> LineEditingRead {
+        #[cfg(unix)]
+        {
+            Box::new(move |_program, _ask| master.line_editing())
+        }
+        #[cfg(windows)]
+        {
+            let _ = master;
+            let mut console =
+                crate::console_input::ConsoleLines::new(self.program, self.log.clone());
+            Box::new(move |program, ask| console.read(program, ask))
+        }
+    }
+
     fn watch(&mut self, stream: LocalStream, version: u16, sends: Vec<Capability>) {
         self.watch_generation += 1;
         let generation = self.watch_generation;
@@ -930,6 +1133,10 @@ impl Holder {
             .unwrap_or_else(PoisonError::into_inner)
             .owner = generation;
         let wake = Arc::new(Wake::default());
+        let program_package = sends.contains(&Capability::ProgramPackage);
+        let line_editing = sends.contains(&Capability::LineEditing);
+        let foreground_unread = sends.contains(&Capability::ForegroundUnread);
+        let alternate_screen = sends.contains(&Capability::AlternateScreen);
         wake.send(HolderMessage::Watching(Watching {
             version,
             rules_engine: hide_screen_rules::ENGINE_VERSION,
@@ -955,7 +1162,15 @@ impl Holder {
                 pane: self.pane.clone(),
                 rules: self.rules.clone(),
                 shell: self.program,
-                group: Box::new(move || master.group()),
+                program_package,
+                group: Box::new({
+                    let master = master.clone();
+                    let shell = self.program;
+                    move || master.group(shell)
+                }),
+                foreground_unread,
+                alternate_screen,
+                line_editing: line_editing.then(|| self.line_editing(master.clone())),
                 log: self.log.clone(),
             };
             let shutdown = stream.shutdown_handle();
@@ -1353,7 +1568,10 @@ impl Answers {
         let length = answers.len();
         let mut refused = self.refused.lock().unwrap_or_else(PoisonError::into_inner);
         let queued = self.queued.load(Ordering::SeqCst);
-        if queued + length > ANSWER_QUEUE_CAP {
+        // A run of refusals ends only once the program took every answer
+        // that waits: ending it as soon as one parse's few answers fit would
+        // start a new run at the next big one.
+        if queued + length > ANSWER_QUEUE_CAP || (refused.is_some() && queued > 0) {
             match refused.as_mut() {
                 Some((count, bytes)) => {
                     *count += 1;
@@ -1414,9 +1632,27 @@ impl Answers {
 struct Marks {
     outbox: Arc<Mutex<Option<Arc<Outbox>>>>,
     watch: Arc<Mutex<Option<Arc<Wake>>>>,
+    log: Log,
 }
 
 impl Marks {
+    /// Hands what the program wrote to the clipboard to the connection that
+    /// holds the pane, once. With none, or one that does not take it, the
+    /// write is dropped: a connection that comes later never gets an older
+    /// write, so a reattach or a redraw does not write it again.
+    fn clipboard(&self, text: Vec<u8>) {
+        let outbox = self
+            .outbox
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .clone();
+        let bytes = text.len() as u64;
+        if !outbox.is_some_and(|outbox| outbox.clipboard(text)) {
+            self.log
+                .event("holder.clipboard_dropped", &[("bytes", bytes.into())]);
+        }
+    }
+
     fn changed(&self) {
         let outbox = self
             .outbox
@@ -1447,10 +1683,35 @@ impl PtyMaster {
         self.0.lock().unwrap_or_else(PoisonError::into_inner)
     }
 
-    /// The terminal's foreground process group, or why it is not known.
-    fn group(&self) -> Result<u32, Unknown> {
+    /// Whether the terminal edits lines, as the platform reads the master
+    /// this holder keeps (`hide_platform::process::master_line_input`):
+    /// unknown when the terminal could not be asked, its pane having ended.
+    #[cfg(unix)]
+    fn line_editing(&self) -> hide_holder_protocol::LineEditing {
+        use hide_holder_protocol::LineEditing;
+        use hide_platform::process::{LineInput, master_line_input};
+        let guard = self.lock();
+        let read = guard
+            .as_ref()
+            .and_then(|master| master.as_raw_fd())
+            // SAFETY: the master stays open while its lock is held, for the
+            // whole of the call.
+            .map(|fd| master_line_input(unsafe { std::os::fd::BorrowedFd::borrow_raw(fd) }));
+        match read {
+            Some(Ok(Some(LineInput::Lines { .. }))) => LineEditing::Edits,
+            Some(Ok(Some(LineInput::Keys))) => LineEditing::ReadsKeys,
+            _ => LineEditing::Unknown,
+        }
+    }
+
+    /// The terminal's foreground process group, or why it is not known. On
+    /// Windows, which names none for a console, the process that stands in
+    /// for it under `shell`, the pane's program
+    /// (`hide_platform::process::console_foreground`).
+    fn group(&self, shell: u32) -> Result<u32, Unknown> {
         #[cfg(unix)]
         {
+            let _ = shell;
             let group = self
                 .lock()
                 .as_ref()
@@ -1463,7 +1724,13 @@ impl PtyMaster {
         #[cfg(windows)]
         {
             let _ = self;
-            Err(Unknown::NotOnThisSystem)
+            hide_platform::process::console_foreground(shell).map_err(|error| {
+                if error.kind() == std::io::ErrorKind::NotFound {
+                    Unknown::NoGroup
+                } else {
+                    Unknown::Unreadable
+                }
+            })
         }
     }
 }
@@ -1487,10 +1754,15 @@ fn read_pty(
             // A Unix PTY answers EIO once no program holds its other end.
             Err(_) => break,
         };
-        pane.lock()
-            .unwrap_or_else(PoisonError::into_inner)
-            .feed(&buffer[..count], &mut answered);
+        let copied = {
+            let mut pane = pane.lock().unwrap_or_else(PoisonError::into_inner);
+            pane.feed(&buffer[..count], &mut answered);
+            pane.take_clipboard()
+        };
         answers.send(std::mem::take(&mut answered));
+        if let Some(copied) = copied {
+            marks.clipboard(copied);
+        }
         marks.changed();
     }
     let _ = events.send(Event::PtyClosed);
@@ -1515,30 +1787,110 @@ fn write_pty(
         }
     }
     let mut refused = None;
-    for write in writes {
+    // Input that came while a submission waited for its gap, in order.
+    let mut waiting: VecDeque<PtyWrite> = VecDeque::new();
+    loop {
+        let write = match waiting.pop_front() {
+            Some(write) => write,
+            None => match writes.recv() {
+                Ok(write) => write,
+                Err(_) => return,
+            },
+        };
+        let length = write.len();
         match write {
             PtyWrite::Input { generation, bytes } => {
                 assert!(
                     !panic_on_input,
                     "asked to panic on input ({PANIC_ON_INPUT})"
                 );
-                if refused != Some(generation)
-                    && let Err(error) = writer.write_all(&bytes).and_then(|()| writer.flush())
-                {
-                    refused = Some(generation);
-                    let _ = events.send(Event::InputFailed {
-                        generation,
-                        error: error.to_string(),
-                    });
+                write_input(&mut *writer, events, generation, &bytes, &mut refused);
+                input.queued.fetch_sub(length, Ordering::SeqCst);
+            }
+            PtyWrite::Submit {
+                generation,
+                text,
+                gap,
+                enter,
+            } => {
+                // A submission: the gap runs from the text's
+                // flush, the program's answers go on meanwhile, and the
+                // input after it waits until the submit was written.
+                write_input(&mut *writer, events, generation, &text, &mut refused);
+                // Read before the gap's start, so the submit is written no
+                // sooner than a gap after this.
+                let text_at = std::time::SystemTime::now();
+                let due = Instant::now() + gap;
+                while refused != Some(generation) {
+                    let left = due.saturating_duration_since(Instant::now());
+                    if left.is_zero() {
+                        break;
+                    }
+                    match writes.recv_timeout(left) {
+                        Ok(PtyWrite::Answers(bytes)) => {
+                            let _ = writer.write_all(&bytes).and_then(|()| writer.flush());
+                            answers_queued.fetch_sub(bytes.len(), Ordering::SeqCst);
+                        }
+                        Ok(other) => waiting.push_back(other),
+                        Err(RecvTimeoutError::Timeout) => break,
+                        Err(RecvTimeoutError::Disconnected) => return,
+                    }
                 }
-                input.queued.fetch_sub(bytes.len(), Ordering::SeqCst);
+                write_input(&mut *writer, events, generation, &enter, &mut refused);
+                input.queued.fetch_sub(length, Ordering::SeqCst);
+                // One line a submission, never one a key.
+                input.log.event(
+                    "holder.submitted",
+                    &[
+                        ("generation", generation.into()),
+                        (
+                            "text_at_unix_ms",
+                            text_at
+                                .duration_since(std::time::UNIX_EPOCH)
+                                .map_or(0, |since| since.as_millis() as u64)
+                                .into(),
+                        ),
+                        ("gap_ms", (gap.as_millis() as u64).into()),
+                        ("written", (refused != Some(generation)).into()),
+                    ],
+                );
             }
             PtyWrite::Answers(bytes) => {
                 // A PTY that refuses answers refuses everything; the pane's
                 // end follows, and nothing waits for them.
                 let _ = writer.write_all(&bytes).and_then(|()| writer.flush());
-                answers_queued.fetch_sub(bytes.len(), Ordering::SeqCst);
+                answers_queued.fetch_sub(length, Ordering::SeqCst);
             }
+        }
+    }
+}
+
+/// Writes a connection's input unless the PTY already refused that
+/// connection's, and says so when it refuses now.
+fn write_input(
+    writer: &mut (dyn std::io::Write + Send),
+    events: &Sender<Event>,
+    generation: u64,
+    bytes: &[u8],
+    refused: &mut Option<u64>,
+) {
+    if *refused != Some(generation)
+        && let Err(error) = writer.write_all(bytes).and_then(|()| writer.flush())
+    {
+        *refused = Some(generation);
+        let _ = events.send(Event::InputFailed {
+            generation,
+            error: error.to_string(),
+        });
+    }
+}
+
+impl PtyWrite {
+    /// What it counts against its queue's cap.
+    fn len(&self) -> usize {
+        match self {
+            Self::Input { bytes, .. } | Self::Answers(bytes) => bytes.len(),
+            Self::Submit { text, enter, .. } => (text.len() + enter.len()).max(SUBMIT_COST),
         }
     }
 }
@@ -1662,20 +2014,14 @@ impl ScreenWriter {
                 return Job::Send(message);
             }
             if pending.changed {
-                let mut at = next;
-                // Held for the program's synchronized output: a change may
-                // be the end of it, so it wakes the writer.
-                let mut waits_for_change = false;
-                if let Some((version, until)) = held
-                    && version == pending.version
-                {
-                    at = at.max(until);
-                    waits_for_change = true;
-                }
                 let now = Instant::now();
+                let (at, waits_for_change) = pending.draw_at(next, held, now);
                 if now >= at {
                     pending.changed = false;
                     pending.waits_for_change = false;
+                    if pending.answers_input() {
+                        pending.input = None;
+                    }
                     return Job::Draw {
                         full: std::mem::take(&mut pending.full),
                     };
@@ -1763,7 +2109,8 @@ fn read_connection(
                     | ClientMessage::Paste(_)
                     | ClientMessage::Mouse(_)
                     | ClientMessage::Scroll(_)
-                    | ClientMessage::Key(_)) => {
+                    | ClientMessage::Key(_)
+                    | ClientMessage::Submit(_)) => {
                         match input.take(generation, outbox, input_message) {
                             Taken::Next => continue,
                             Taken::Full => return,
@@ -1771,16 +2118,21 @@ fn read_connection(
                     }
                 };
                 let ends = matches!(control, Control::Release | Control::Terminate);
+                let (applied, waited) = mpsc::channel();
                 if events
                     .send(Event::Message {
                         generation,
                         message: control,
+                        applied,
                     })
                     .is_err()
                     || ends
                 {
                     return;
                 }
+                // Ends when the run thread dropped `applied`: it acted on the
+                // message, passed it over, or ended.
+                let _ = waited.recv();
             }
             Err(error) => {
                 let _ = events.send(Event::Gone { generation, error });
@@ -1806,25 +2158,40 @@ struct AcceptSide {
     master: PtyMaster,
 }
 
-/// How many connections are reading their hello, which the pane's end waits
-/// to reach none.
+/// The connections still opening: those reading their hello, which the
+/// pane's end waits to reach none, and the [`MAX_OPENING`] slots, which a
+/// connection holds from its accept until the run thread takes it
+/// ([`OpeningSlot`]), so a connection already welcomed holds none.
 #[derive(Default)]
 struct Opening {
     count: Mutex<usize>,
     idle: Condvar,
+    slots: Mutex<usize>,
+}
+
+/// One of the [`MAX_OPENING`] slots, given back when dropped.
+struct OpeningSlot(Arc<Opening>);
+
+impl Drop for OpeningSlot {
+    fn drop(&mut self) {
+        *self.0.slots.lock().unwrap_or_else(PoisonError::into_inner) -= 1;
+    }
 }
 
 impl Opening {
-    /// Counts one more, unless `MAX_OPENING` are already.
-    fn enter(&self) -> bool {
-        let mut count = self.count.lock().unwrap_or_else(PoisonError::into_inner);
-        if *count >= MAX_OPENING {
-            return false;
+    /// A slot and one more reading its hello, unless `MAX_OPENING` slots
+    /// are held already.
+    fn enter(opening: &Arc<Self>) -> Option<OpeningSlot> {
+        let mut slots = opening.slots.lock().unwrap_or_else(PoisonError::into_inner);
+        if *slots >= MAX_OPENING {
+            return None;
         }
-        *count += 1;
-        true
+        *slots += 1;
+        *opening.count.lock().unwrap_or_else(PoisonError::into_inner) += 1;
+        Some(OpeningSlot(opening.clone()))
     }
 
+    /// One fewer reading its hello.
     fn leave(&self) {
         let mut count = self.count.lock().unwrap_or_else(PoisonError::into_inner);
         *count -= 1;
@@ -1833,7 +2200,7 @@ impl Opening {
         }
     }
 
-    /// Waits until none is opening, or `deadline` passes.
+    /// Waits until none is reading its hello, or `deadline` passes.
     fn wait_idle(&self, deadline: Instant) -> bool {
         let mut count = self.count.lock().unwrap_or_else(PoisonError::into_inner);
         while *count > 0 {
@@ -1868,7 +2235,7 @@ impl AcceptSide {
                     return;
                 }
             };
-            if !self.opening.enter() {
+            let Some(slot) = Opening::enter(&self.opening) else {
                 refuse(
                     &stream,
                     Closed::new(
@@ -1879,7 +2246,7 @@ impl AcceptSide {
                     &self.log,
                 );
                 continue;
-            }
+            };
             let side = Asked {
                 sender: self.sender.clone(),
                 ending: self.ending.clone(),
@@ -1891,7 +2258,7 @@ impl AcceptSide {
             };
             let opening = self.opening.clone();
             spawn_named("connection-opening", move || {
-                side.open(stream);
+                side.open(stream, slot);
                 opening.leave();
             });
         }
@@ -1951,7 +2318,7 @@ impl Asked {
             .clone()
     }
 
-    fn open(&self, stream: LocalStream) {
+    fn open(&self, stream: LocalStream, slot: OpeningSlot) {
         let log = &self.log;
         let mut bounded = stream.duplicate();
         bounded.set_deadline(Instant::now() + HELLO_LIMIT);
@@ -1963,7 +2330,7 @@ impl Asked {
         let hello = match read_opening(&mut bounded) {
             Ok(FirstMessage::Hello(hello)) => hello,
             Ok(FirstMessage::Ask(ask)) => return self.answer(&stream, ask),
-            Ok(FirstMessage::Watch(hello)) => return self.watch(stream, &hello),
+            Ok(FirstMessage::Watch(hello)) => return self.watch(stream, &hello, slot),
             Err(error) => {
                 let closed = Closed::new(hello_reason(&error), error.to_string());
                 refuse(&stream, closed, Instant::now() + HELLO_LIMIT, log);
@@ -1987,6 +2354,7 @@ impl Asked {
             stream,
             version,
             sends,
+            slot,
         };
         if let Err(mpsc::SendError(Event::Opened { stream, .. })) = self.sender.send(opened) {
             let closed = self
@@ -1998,7 +2366,7 @@ impl Asked {
 
     /// Hands an accepted watch to the holder's loop, which replaces any watch
     /// before it; a watch that does not take facts has nothing to follow.
-    fn watch(&self, stream: LocalStream, hello: &Hello) {
+    fn watch(&self, stream: LocalStream, hello: &Hello, slot: OpeningSlot) {
         let log = &self.log;
         let (version, sends) = match agree(hello, &WATCH_SENDS) {
             Ok(agreed) => agreed,
@@ -2020,6 +2388,7 @@ impl Asked {
             stream,
             version,
             sends,
+            slot,
         };
         if let Err(mpsc::SendError(Event::Watch { stream, .. })) = self.sender.send(opened) {
             let closed = self
@@ -2092,7 +2461,7 @@ impl Asked {
             }
             Ask::Processes => Ok(crate::ask::processes(
                 self.shell,
-                self.master.group(),
+                self.master.group(self.shell),
                 &self.log,
             )),
         };
@@ -2170,5 +2539,102 @@ mod tests {
         assert_eq!(held.len(), 2, "{held:?}");
         assert_eq!(held[1].reason, NoticeReason::AnswersRefused);
         assert_eq!(held[1].count, 1001);
+    }
+
+    /// A connection the run thread took gives its opening slot back at once,
+    /// however late its opening thread ends, while the pane's end still
+    /// waits for that thread; one still reading its hello keeps its slot.
+    #[test]
+    fn a_taken_connection_holds_no_opening_slot_while_its_thread_ends() {
+        let opening = Arc::new(Opening::default());
+        let mut slots: Vec<OpeningSlot> = (0..MAX_OPENING)
+            .map(|_| Opening::enter(&opening).unwrap())
+            .collect();
+        assert!(Opening::enter(&opening).is_none());
+        // The run thread takes one before its thread has ended.
+        drop(slots.pop());
+        let ninth = Opening::enter(&opening).expect("the taken connection's slot is free");
+        assert!(
+            !opening.wait_idle(Instant::now()),
+            "nine threads still read"
+        );
+        // Threads that end free no slot that is still held.
+        for _ in 0..MAX_OPENING + 1 {
+            opening.leave();
+        }
+        assert!(opening.wait_idle(Instant::now()));
+        assert!(Opening::enter(&opening).is_none());
+        drop(ninth);
+        assert!(Opening::enter(&opening).is_some());
+    }
+
+    /// Once answers are refused, a parse whose few answers would fit beside
+    /// what waits is refused too: the run ends only when the program has
+    /// taken every answer that waits, so one run is logged and told once
+    /// however the program's output was cut into reads.
+    #[test]
+    fn a_refusal_run_ends_only_once_the_program_took_what_waits() {
+        let (writes, written) = mpsc::channel();
+        let (events, told) = mpsc::channel();
+        let answers = Answers {
+            writes,
+            queued: Arc::new(AtomicUsize::new(0)),
+            refused: Arc::new(Mutex::new(None)),
+            events,
+            log: Log::open(None, "p").unwrap(),
+        };
+        let told = || -> Vec<(NoticeReason, u64)> {
+            told.try_iter()
+                .map(|event| match event {
+                    Event::Notice(notice) => (notice.reason, notice.count),
+                    _ => panic!("not a notice"),
+                })
+                .collect()
+        };
+        answers.send(vec![b'a'; ANSWER_QUEUE_CAP - 100]);
+        answers.send(vec![b'b'; 1000]);
+        assert_eq!(told(), [(NoticeReason::AnswersRefused, 1)]);
+        // A short read's answer would fit beside what waits.
+        answers.send(vec![b'c'; 10]);
+        answers.send(vec![b'd'; 1000]);
+        assert_eq!(told(), []);
+        // The program takes what waits, as the writer counts it.
+        let PtyWrite::Answers(first) = written.try_recv().unwrap() else {
+            panic!("not answers");
+        };
+        assert!(written.try_recv().is_err(), "a refused answer was queued");
+        answers.queued.fetch_sub(first.len(), Ordering::SeqCst);
+        answers.send(vec![b'e'; 10]);
+        assert_eq!(told(), [(NoticeReason::AnswersResumed, 3)]);
+        assert!(matches!(written.try_recv(), Ok(PtyWrite::Answers(e)) if e == [b'e'; 10]));
+    }
+
+    /// The program's answer to input is drawn at once, however recently the
+    /// last fragment went out; output before the input, or with none, waits
+    /// out the interval, and synchronized output still holds an answer.
+    #[test]
+    fn a_change_after_input_is_drawn_at_once_and_other_output_is_paced() {
+        let now = Instant::now();
+        let next = now + Duration::from_secs(3600);
+        let outbox = Outbox::default();
+
+        outbox.changed();
+        assert_eq!(outbox.pending().draw_at(next, None, now), (next, false));
+
+        outbox.input();
+        assert_eq!(
+            outbox.pending().draw_at(next, None, now),
+            (next, false),
+            "the change before the input does not answer it"
+        );
+        outbox.changed();
+        assert_eq!(outbox.pending().draw_at(next, None, now), (now, false));
+
+        let pending = outbox.pending();
+        let until = now + Duration::from_secs(1);
+        assert_eq!(
+            pending.draw_at(next, Some((pending.version, until)), now),
+            (until, true)
+        );
     }
 }

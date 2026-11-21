@@ -2,7 +2,7 @@ import { emptyScope, legacyRest } from "../test/legacyAgentScope";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { createActions } from "./actions";
 import { initializeInterfaceI18n } from "./i18n/instance";
-import { deviceCatalogLine, remoteTabView, remoteTargetOfPane, remoteView, supportsRemotePurpose } from "./remote";
+import { deviceCatalogLine, remoteTabView, remoteTargetOfPane, remoteView } from "./remote";
 import { queueBuffer, tabBufferKey } from "./buffers";
 import type { Device, EditorSnapshot, RemoteSession, RemoteStatus, SnapshotRest, Tab, Workspace } from "./snapshot";
 import { useShellStore, type DaemonInfo } from "./store";
@@ -31,7 +31,7 @@ function tab(id: string, paneIds: string[], working: string[] = [], device = "st
       id: paneId,
       device_id: device,
       device_pane_id: paneId,
-      herdr_label: paneId,
+      engine_label: paneId,
       terminal_title: null,
       cwd: "/home/remote/app",
       status_code: "idle",
@@ -137,7 +137,7 @@ function rest(focusedDevice: string, state = "connected"): SnapshotRest {
     },
     // What typing into the remote pane leaves in the core's terminal pane.
     terminal: { pane_id: PANE_A, panes: [] },
-    status: { remote: [{ target_id: "studio", state, message: null, herdr_version: "0.9.1", session: session() }] },
+    status: { remote: [{ target_id: "studio", state, message: null, session: session() }] },
   };
 }
 
@@ -148,12 +148,10 @@ function deviceViews(views: boolean): WorkspaceView {
     device_id: "studio",
     path: "/home/remote/app",
     open: views,
-    documents: views,
+    tray: { tab_id: "t1", shown: views, count: 0 },
     tool: null,
     
-    pinned: true,
     document_width: null,
-    detail_width: null,
     explorer_width: null,
     panel_width: null,
     lane_called: 0, lane_calls: 0, lane_called_side: "view",
@@ -220,8 +218,8 @@ describe("remote view", () => {
     const value: SnapshotRest = {
       status: {
         remote: [
-          { target_id: "studio", state: "connected", message: null, herdr_version: null, session: onDevice("studio", [PANE_A]) },
-          { target_id: "studio2", state: "connected", message: null, herdr_version: null, session: onDevice("studio2", ["remote:studio2:pane:w1:p1"]) },
+          { target_id: "studio", state: "connected", message: null, session: onDevice("studio", [PANE_A]) },
+          { target_id: "studio2", state: "connected", message: null, session: onDevice("studio2", ["remote:studio2:pane:w1:p1"]) },
         ],
       },
     };
@@ -231,18 +229,11 @@ describe("remote view", () => {
     // A pane no device publishes is no device's, whatever its id spells.
     expect(remoteTargetOfPane(value, "remote:studio:pane:w9:p9")).toBeNull();
   });
-
-  it("stores a remote purpose only from Herdr 0.9.1", () => {
-    expect(supportsRemotePurpose("0.9.1")).toBe(true);
-    expect(supportsRemotePurpose("v0.10.0")).toBe(true);
-    expect(supportsRemotePurpose("0.9.0")).toBe(false);
-    expect(supportsRemotePurpose(null)).toBe(false);
-  });
 });
 
 describe("commands with an SSH device selected", () => {
   beforeEach(() => {
-    useUiStore.setState({ notice: null, pendingClose: null });
+    useUiStore.setState({ notices: [], pendingClose: null });
   });
 
   it("splits, zooms and focuses the host's exact pane and sends nothing local", () => {
@@ -280,15 +271,15 @@ describe("commands with an SSH device selected", () => {
     actions.split("down");
     actions.closeTab("remote:studio:tab:w9:t1");
     expect(sent).toHaveLength(0);
-    expect(useUiStore.getState().notice?.text).toContain("Studio Mac is not connected");
+    expect(useUiStore.getState().notices.at(-1)?.text).toContain("Studio Mac is not connected");
   });
 
   it("closes the device Workspace's active view with the close chord while its View area owns the keyboard, connected or not", () => {
     for (const state of ["connected", "stale"]) {
-      useUiStore.setState({ notice: null, pendingClose: null });
+      useUiStore.setState({ notices: [], pendingClose: null });
       seed({ ...rest("studio", state), workspace_view: deviceViews(true) });
       const { sent, actions } = recorder();
-      useUiStore.setState({ screen: { kind: "workspace" }, drawnLane: { mode: "docked", view: "documents", tool: null, stacked: false } });
+      useUiStore.setState({ screen: { kind: "workspace" }, drawnLane: { mode: "overlay", view: "documents", tool: null, stacked: false } });
       noteKeyboardOwner({ kind: "view", workspace: frontCheckout(useShellStore.getState().rest)!.id, areaId: "a1" });
       actions.closeFocused();
       expect(sent).toHaveLength(1);
@@ -296,7 +287,7 @@ describe("commands with an SSH device selected", () => {
         kind: "view_layout",
         payload: { action: "close", display_id: "d2", workspace: { device_id: "studio", path: "/home/remote/app" } },
       });
-      expect(useUiStore.getState().notice).toBeNull();
+      expect(useUiStore.getState().notices).toEqual([]);
       expect(useUiStore.getState().pendingClose).toBeNull();
     }
   });
@@ -315,15 +306,15 @@ describe("commands with an SSH device selected", () => {
     actions.openFind();
     expect(sent).toHaveLength(0);
     expect(useUiStore.getState().overlay).toBe("find");
-    expect(useUiStore.getState().notice).toBeNull();
+    expect(useUiStore.getState().notices).toEqual([]);
   });
 
   it("reorders the device's own strip, naming its checkout", () => {
     seed(rest("studio"));
     const { sent, actions } = recorder();
-    actions.reorderTab("herdr:remote:studio:tab:w9:t2", 0);
+    actions.reorderTab("engine:remote:studio:tab:w9:t2", 0);
     expect(sent).toHaveLength(1);
-    expect(sent[0]).toMatchObject({ kind: "reorder_tab", payload: { tab_id: "herdr:remote:studio:tab:w9:t2", to_index: 0 } });
+    expect(sent[0]).toMatchObject({ kind: "reorder_tab", payload: { tab_id: "engine:remote:studio:tab:w9:t2", to_index: 0 } });
     expect(String(sent[0]?.payload.checkout_id)).toMatch(/^remote:studio:/);
   });
 
@@ -337,12 +328,11 @@ describe("commands with an SSH device selected", () => {
 });
 
 describe("deviceCatalogLine", () => {
-  const device: Device = { agent_scope: emptyScope(), id: "studio", label: "Studio", kind: "remote", state: "ready", message: null, ssh_alias: "studio", herdr_socket_path: null, agent_count: 0 } as Device;
+  const device: Device = { agent_scope: emptyScope(), id: "studio", label: "Studio", kind: "remote", state: "ready", message: null, ssh_alias: "studio", agent_count: 0 } as Device;
   const status = (state: string, session: RemoteSession | null, catalog?: RemoteStatus["catalog"]): RemoteStatus => ({
     target_id: "studio",
     state,
     message: state === "connected" ? null : "ssh refused",
-    herdr_version: null,
     session,
     catalog,
   });

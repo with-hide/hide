@@ -1,6 +1,13 @@
+pub mod accepting;
+pub mod access;
+pub mod access_cli;
 pub mod agent_cli;
+pub mod agent_exec;
+pub mod always_on;
 pub mod attach;
 pub mod attachments;
+pub mod automation_cli;
+mod automation_screen;
 pub mod backoff;
 pub mod boundary;
 mod browser_assets;
@@ -14,6 +21,7 @@ pub mod build_order;
 pub mod cli;
 pub mod cli_contract;
 pub mod core;
+pub mod core_install;
 pub mod core_move;
 pub mod core_update;
 pub mod delivery_cli;
@@ -25,11 +33,13 @@ pub mod ending;
 pub mod env;
 pub mod file_url;
 pub mod guide;
-pub mod herdr_handoff;
+mod herdr_transition;
+pub mod holder_restart;
 pub mod index;
-pub mod link_mux;
+pub mod issue_cli;
 pub mod login_item;
 pub mod mission_cli;
+mod mission_show;
 pub mod mobile;
 pub mod node_browser;
 pub mod node_cli;
@@ -38,20 +48,31 @@ pub mod node_pages;
 pub mod node_uploads;
 mod outside_open;
 pub mod page_forward;
+pub mod pairing;
+pub mod pairing_ssh;
 pub mod pane_cli;
+pub mod pane_install;
 pub mod plan_cli;
+pub mod profile_cli;
 mod project_open;
+pub mod store_cli;
 
+pub mod guest_node;
+pub mod guests;
 mod hook_request;
 pub mod node_panes;
 pub mod node_role;
 mod owned_task;
 pub mod pane_auth;
 mod pane_sizes;
+pub mod peer_dial;
+pub mod peer_host;
+pub mod peer_inbox;
 pub mod placement;
 mod product_analytics;
 pub mod ps_cli;
 pub mod relay;
+pub mod role;
 pub mod screen_event;
 pub mod screen_sign_in;
 pub mod seat;
@@ -73,7 +94,7 @@ use std::sync::atomic::{AtomicU64, AtomicUsize};
 use std::sync::{Arc, Mutex};
 use std::time::{Instant, SystemTime, UNIX_EPOCH};
 
-use herdr_core::{CoreOptions, SCHEMA_VERSION};
+use hide_core::{CoreOptions, SCHEMA_VERSION};
 use tokio::sync::Notify;
 
 use crate::attachments::Attachments;
@@ -147,12 +168,18 @@ pub struct RunningDaemon {
     node_attach_socket: std::path::PathBuf,
     node_attach_record: std::path::PathBuf,
     pub mobile: Arc<mobile::Mobile>,
+    /// This machine's endpoint for other Hides; closed by the role's end.
+    pub peers: Arc<peer_host::PeerHost>,
     /// Ended on drop, before the instance lock is released: the core's last
     /// layout and state saves are on disk before another daemon can start,
     /// and before whoever owns the state folder can remove it.
     core: Arc<CoreHandle>,
     /// Closed while this core runs on a move's copy that has not committed.
     pub move_gate: Arc<core_move::gate::MoveGate>,
+    /// Told when a Herdr save's import is asked for: the supervisor starts
+    /// the core role again, which imports it before the engine opens (PRD
+    /// engine-bundle-4-herdr-removal D-7).
+    pub(crate) import_restart: Arc<tokio::sync::Notify>,
     /// Told when the role ends, before the core stops, so the role's sockets
     /// close (`AppState::role_ended`).
     role_ended: tokio::sync::watch::Sender<bool>,
@@ -244,11 +271,6 @@ pub async fn run_daemon(env: Env) -> Result<(), String> {
 /// A core daemon on a seat of its own, for a caller that is not a process's
 /// supervisor (the integration tests); the seat and lock end with it.
 pub async fn start_daemon(env: Env) -> Result<RunningDaemon, String> {
-    // Refused before anything is written: a daemon that came up on this
-    // path would answer healthy and then fail every pane attach in turn.
-    if let Some(error) = env::herdr_bin_error(&env) {
-        return Err(error);
-    }
     let lock = acquire_lock(&env.state_dir).map_err(|error| error.to_string())?;
     let seat = seat::Seat::serve(
         server::bind(env.bind).await?,
@@ -256,11 +278,10 @@ pub async fn start_daemon(env: Env) -> Result<RunningDaemon, String> {
         ending::Ending::new(),
     )?;
     let state_dir = env.state_dir.clone();
-    let herdr_socket = env.herdr_socket_path.clone();
     let mut running = start_core_role(env, seat.parts()).await?;
     // Recorded once the daemon runs, so a start that failed leaves no record
     // naming a process that is gone.
-    record_daemon(&state_dir, &seat.parts(), herdr_socket)?;
+    record_daemon(&state_dir, &seat.parts())?;
     seat.end_with(running.shutdown.clone(), state_dir.clone());
     running.own = Some(OwnSeat {
         _seat: seat,
@@ -275,7 +296,6 @@ pub async fn start_daemon(env: Env) -> Result<RunningDaemon, String> {
 pub(crate) fn record_daemon(
     state_dir: &std::path::Path,
     seat: &seat::SeatParts,
-    herdr_socket: Option<String>,
 ) -> Result<(), String> {
     let started_at = SystemTime::now()
         .duration_since(UNIX_EPOCH)
@@ -286,7 +306,6 @@ pub(crate) fn record_daemon(
         pid,
         port: seat.port,
         token: seat.token.clone(),
-        socket: herdr_socket,
         started_at,
         pid_started: hide_platform::process::start_time(pid).ok(),
     };
@@ -295,21 +314,14 @@ pub(crate) fn record_daemon(
         .map_err(|error| error.to_string())
 }
 
-/// [`Env::herdr_program`] off the async runtime: the account's search can
-/// wait on its login shell.
-async fn herdr_program(env: &Env) -> Result<Option<std::path::PathBuf>, String> {
-    let env = env.clone();
-    tokio::task::spawn_blocking(move || env.herdr_program())
-        .await
-        .map_err(|error| format!("the herdr search did not finish: {error}"))
-}
-
 /// The core role on `seat`, which already holds the instance lock.
 pub async fn start_core_role(env: Env, seat: seat::SeatParts) -> Result<RunningDaemon, String> {
     seat.starting("core.state");
     // This machine's name in every key that names it. A machine Hide cannot
     // name refuses to start rather than guess one (PRD core-host-node D-28).
-    let node = herdr_core::node::NodeId::of_this_machine()?;
+    let node = hide_core::node::NodeId::of_this_machine()?;
+    // The id this machine gives a peer as its product device id.
+    let peer_device = node.to_string();
     // A machine whose core runs elsewhere starts the node role instead.
     if placement::read(&env.state_dir, node.as_str())?.is_some() {
         return Err(
@@ -323,7 +335,7 @@ pub async fn start_core_role(env: Env, seat: seat::SeatParts) -> Result<RunningD
     // reads it; a store that cannot be converted stops the start and names
     // the file (PRD core-host-node B2).
     let converted =
-        herdr_core::node_migration::convert(&env.state_dir, &node).map_err(|refusal| {
+        hide_core::node_migration::convert(&env.state_dir, &node).map_err(|refusal| {
             let record = serde_json::json!({
                 "component": "hided",
                 "kind": "node_migration.refused",
@@ -337,7 +349,7 @@ pub async fn start_core_role(env: Env, seat: seat::SeatParts) -> Result<RunningD
                 "reason": &refusal.reason,
             });
             if let Err(error) =
-                herdr_core::diagnostics::record_now(&env.state_dir.join("core-state.json"), record)
+                hide_core::diagnostics::record_now(&env.state_dir.join("core-state.json"), record)
             {
                 eprintln!("the start refusal could not be logged: {error}");
             }
@@ -353,44 +365,76 @@ pub async fn start_core_role(env: Env, seat: seat::SeatParts) -> Result<RunningD
             "retention_rows": converted.retention_rows,
         });
         if let Err(error) =
-            herdr_core::diagnostics::record_now(&env.state_dir.join("core-state.json"), record)
+            hide_core::diagnostics::record_now(&env.state_dir.join("core-state.json"), record)
         {
             eprintln!("the conversion could not be logged: {error}");
         }
+    }
+    // A device an earlier build registered under its SSH alias takes its
+    // machine's own id once, before the core reads the folder; a write that
+    // fails stops the start like the conversion above, and a device a check
+    // refuses stays under its old id, held unconnected, with why here.
+    let log = |record: serde_json::Value| {
+        if let Err(error) =
+            hide_core::diagnostics::record_now(&env.state_dir.join("core-state.json"), record)
+        {
+            eprintln!("the device naming could not be logged: {error}");
+        }
+    };
+    let named =
+        hide_core::node_migration::name_devices(&env.state_dir, &node).map_err(|refusal| {
+            log(serde_json::json!({
+                "component": "hided",
+                "kind": "node_migration.devices_refused",
+                "pid": std::process::id(),
+                "node": node.as_str(),
+                "file": refusal.file.display().to_string(),
+                "reason": &refusal.reason,
+            }));
+            refusal.to_string()
+        })?;
+    if !named.renamed.is_empty() || !named.named.is_empty() {
+        log(serde_json::json!({
+            "component": "hided",
+            "kind": "node_migration.devices_named",
+            "node": node.as_str(),
+            "renamed": named.renamed,
+            "named": named.named,
+            "files": named.files,
+        }));
+    }
+    if !named.held.is_empty() {
+        log(serde_json::json!({
+            "component": "hided",
+            "kind": "node_migration.devices_held",
+            "node": node.as_str(),
+            "held": named.held,
+        }));
+    }
+    // A Herdr session asked to move is moved, and what is not moved yet is
+    // recorded, before the engine opens (PRD engine-bundle-4-herdr-removal
+    // D-3, D-25).
+    seat.starting("core.herdr_import");
+    {
+        let env = env.clone();
+        let node = node.as_str().to_owned();
+        tokio::task::spawn_blocking(move || herdr_transition::before_core(&env, &node))
+            .await
+            .map_err(|error| format!("the Herdr session could not be read: {error}"))?;
     }
     let host_id = state_file::host_id(&env.state_dir)
         .map_err(|error| format!("the daemon host id could not be read or written: {error}"))?;
     let token = seat.token.clone();
     let port = seat.port;
-    seat.starting("core.herdr_program");
-    let herdr_bin = herdr_program(&env).await?;
-    match herdr_bin.as_ref() {
-        // The core's own engine runs no Herdr (PRD engine-bundle-3-core-owns D-5).
-        None if env.own_engine => eprintln!(
-            "{}",
-            serde_json::json!({
-                "component": "hided",
-                "kind": "engine.own",
-                "message": "the core runs its own engine over this node's pane holders; no Herdr is used",
-            })
-        ),
-        Some(path) => eprintln!(
-            "{}",
-            serde_json::json!({
-                "component": "hided",
-                "kind": "herdr_bin.resolved",
-                "path": path.display().to_string(),
-            })
-        ),
-        None => eprintln!(
-            "{}",
-            serde_json::json!({
-                "component": "hided",
-                "kind": "herdr_bin.missing",
-                "message": "no herdr binary: HERDR_BIN_PATH is unset and neither this build's pinned copy nor the account's search has one; pane terminals cannot attach",
-            })
-        ),
-    }
+    seat.starting("core.engine");
+    eprintln!(
+        "{}",
+        serde_json::json!({
+            "component": "hided",
+            "kind": "engine.own",
+            "message": "the core runs its own engine over this node's pane holders",
+        })
+    );
     let options = CoreOptions {
         schema_version: SCHEMA_VERSION,
         // A relative HOME names no account folder; the core then reports
@@ -400,8 +444,6 @@ pub async fn start_core_role(env: Env, seat: seat::SeatParts) -> Result<RunningD
             .is_absolute()
             .then(|| env.home.display().to_string()),
         node_id: node.clone(),
-        herdr_socket_path: env.herdr_socket_path.clone(),
-        herdr_bin_path: herdr_bin.as_ref().map(|path| path.display().to_string()),
         app_state_path: env.state_dir.join("core-state.json").display().to_string(),
         host_helper_root: env.host_helper_root.clone(),
         host_cli_dir: env.host_cli_dir.clone(),
@@ -434,6 +476,7 @@ pub async fn start_core_role(env: Env, seat: seat::SeatParts) -> Result<RunningD
         // amendment 3).
         effects_held: !move_gate.is_open(),
         machine_name: host_name(),
+        windows_drives: hide_host::serve::windows_drives(),
         account_state_folder: env.account_state_folder,
     };
     let effects_held = options.effects_held;
@@ -443,11 +486,27 @@ pub async fn start_core_role(env: Env, seat: seat::SeatParts) -> Result<RunningD
     let node_panes = Arc::new(node_panes::NodePanes::new(tokio::runtime::Handle::current()));
     let pane_events: hide_node::ssh::PaneEventsSlot = Default::default();
     let _ = pane_events.set(Arc::new(node_panes::Events(Arc::clone(&node_panes))));
+    // How the core opens its node on a machine it is paired with; the
+    // endpoint it uses is handed in below, once it exists.
+    let this_build = build_order::Release::of_this_build();
+    let peer_dial = peer_dial::Dialer::new(
+        tokio::runtime::Handle::current(),
+        this_build.version.clone(),
+        this_build
+            .is_official()
+            .then(|| this_build.commit.clone())
+            .flatten()
+            .map(|commit| hide_peer::protocol::manage::Release {
+                commit,
+                order: this_build.order,
+            }),
+        env.state_dir.clone(),
+    );
     seat.starting("core.owner");
     let core = Arc::new(CoreHandle::spawn(
         options,
-        env.own_engine,
         Arc::clone(&pane_events),
+        Some(Arc::clone(&peer_dial) as Arc<dyn hide_node::ssh::host::peer::PeerDial>),
     )?);
     seat.starting("core.services");
     if effects_held {
@@ -458,7 +517,7 @@ pub async fn start_core_role(env: Env, seat: seat::SeatParts) -> Result<RunningD
                 && let Ok(Err(message)) =
                     tokio::task::spawn_blocking(move || core.release_effects()).await
             {
-                herdr_core::diagnostic!(serde_json::json!({
+                hide_core::diagnostic!(serde_json::json!({
                     "component": "core_move",
                     "kind": "effects.release_failed",
                     "message": message,
@@ -512,6 +571,9 @@ pub async fn start_core_role(env: Env, seat: seat::SeatParts) -> Result<RunningD
     let _reaper = browser_routes.spawn_reaper(Arc::clone(&desktop_renderers), shutdown.clone());
     let renderers = Arc::new(AtomicUsize::new(0));
     let start_demand = Arc::new(demand::ObservationDemand::default());
+    // The desktop windows' gateways, shared by `hide browser` and the phone's
+    // screenshot of a page.
+    let browser_control = Arc::new(browser_control::BrowserControl::default());
     let desktop_notices = Arc::new(desktop_notices::DesktopNotices::default());
     seat.starting("core.mobile");
     let mobile = mobile::Mobile::start(mobile::Config {
@@ -526,11 +588,104 @@ pub async fn start_core_role(env: Env, seat: seat::SeatParts) -> Result<RunningD
         host_name: host_name(),
         core: Arc::clone(&core),
         input_gate: core.input_gate()?,
-        renderers: Arc::clone(&renderers),
         start_demand: Arc::clone(&start_demand),
         open: move_gate.subscribe(),
         desktop: Arc::clone(&desktop_notices),
+        boundary: Arc::clone(&boundary),
+        roots: Arc::clone(&roots),
+        browser_control: Arc::clone(&browser_control),
     });
+    seat.starting("core.peers");
+    let peers = peer_host::PeerHost::new(
+        peer_host::Settings {
+            state_dir: env.state_dir.clone(),
+            build: build_order::Release::of_this_build().version,
+            device: peer_device.clone(),
+            release: build_order::Release::of_this_build().is_official(),
+            direct: env.peer_direct,
+            device_connect: env.device_connect,
+        },
+        shutdown.clone(),
+    );
+    peer_dial.attach(Arc::clone(&peers));
+    peer_dial.take_events(Arc::new(peer_inbox::Letters::new(Arc::clone(&core))));
+    // Each stream kind's owner hands its handler in here, before the
+    // endpoint opens. The start is not held for the endpoint: a machine
+    // whose network is down still starts, and the reason is in the log.
+    //
+    // Other machines' work here: each guest's node runs from that guest's
+    // build, and a guest of this build runs from the programs beside this
+    // one.
+    let guests = guests::Guests::new(
+        env.state_dir.clone(),
+        env.home.clone(),
+        hide_node::ssh::host::HelperPackages::new(
+            std::env::current_exe()
+                .ok()
+                .and_then(|exe| exe.parent().map(std::path::Path::to_path_buf)),
+            cli::RELEASE,
+        ),
+        Some(guests::Screens {
+            core: Arc::clone(&core),
+        }),
+    );
+    // A build that does not offer connections between two Hides takes no
+    // other machine's work: no guest's stream is handled and no guest node
+    // is started again from the folders a development build left.
+    if env.device_connect {
+        guests.serve(&peers, shutdown.clone());
+    }
+    // A paired machine's login item follows the peer records (PRD
+    // device-connect-iroh D-41).
+    let always_on = always_on::Follower::new(
+        env.home.clone(),
+        env.state_dir.clone(),
+        env.starter_program.is_some(),
+        env.device_connect,
+    );
+    let pairing = pairing::Pairing::new(
+        Arc::clone(&peers),
+        Arc::clone(&core),
+        always_on.clone(),
+        hide_peer::pairing::Me {
+            name: host_name()
+                .as_deref()
+                .and_then(hide_peer::link::clean_name)
+                .unwrap_or_else(|| peer_device.clone()),
+            device: peer_device,
+        },
+        pairing_ssh::Reach {
+            home: env.home.clone(),
+            command_folder: env.host_cli_dir.clone(),
+        },
+        shutdown.clone(),
+    );
+    pairing.follow_guests(Arc::clone(&guests));
+    // A build that does not offer connections between two Hides opens no
+    // endpoint and lists no paired machine, whatever records are on disk.
+    if env.device_connect {
+        let peers = Arc::clone(&peers);
+        let pairing = Arc::clone(&pairing);
+        tokio::spawn(async move {
+            match peers.start().await {
+                // Paired with something: dial every known host and go on
+                // with what was not settled.
+                Ok(Some(_)) => pairing.started().await,
+                // Nothing to dial: a machine a host dropped is still listed.
+                // No grant is saved either, so no machine is a guest here.
+                Ok(None) => {
+                    guests.granted(Vec::new());
+                    pairing.rested().await;
+                }
+                Err(error) => hide_core::diagnostic!(serde_json::json!({
+                    "component": "peer_host",
+                    "kind": "peer_host.open_failed",
+                    "reason": error.to_string(),
+                })),
+            }
+        });
+    }
+    let listeners = Arc::new(accepting::CoreListeners::default());
     let app = AppState {
         core: Arc::clone(&core),
         boundary,
@@ -542,7 +697,7 @@ pub async fn start_core_role(env: Env, seat: seat::SeatParts) -> Result<RunningD
         token: Arc::new(token.clone()),
         pane_capabilities: Arc::clone(&pane_capabilities),
         browser_routes,
-        browser_control: Arc::new(browser_control::BrowserControl::default()),
+        browser_control,
         browser_comments: Arc::default(),
         allowed_origins: Arc::new(server::allowed_origins(port, env.vite_origin.as_deref())),
         clients: Arc::new(AtomicUsize::new(0)),
@@ -585,24 +740,28 @@ pub async fn start_core_role(env: Env, seat: seat::SeatParts) -> Result<RunningD
                 .unwrap_or_else(|_| "0".into()),
             "state_dir": env.state_dir.display().to_string(),
             "core_state_path": env.state_dir.join("core-state.json").display().to_string(),
-            "herdr_bin_path": herdr_bin.as_ref().map(|path| path.display().to_string()),
-            "herdr_socket_path": env.herdr_socket_path.clone(),
             "keep_alive": env.keep_alive,
             "idle_secs": env.idle_secs,
             "core_instance": core_instance(),
+            // Whether this build offers connections between two Hides: the
+            // window shows pairing only where it does.
+            "device_connect": env.device_connect,
         })),
         mobile: Arc::clone(&mobile),
+        peers: Arc::clone(&peers),
+        pairing: Arc::clone(&pairing),
         desktop_notices,
         relay_grants: Arc::clone(&relay_grants),
         own_screens: Arc::new(Mutex::new(0)),
         pane_sizes: core.outputs.pane_sizes(),
+        listeners: Arc::clone(&listeners),
         window_calls: tokio::sync::broadcast::channel(4).0,
     };
     seat.starting("core.roots");
     node_panes.serve(app.clone());
     // Seeded before the server accepts a client with the registrations the
     // core loaded in `CoreHandle::spawn`. A checkout the core learns later,
-    // from Herdr's first sync, reaches a client's snapshot and these roots on
+    // from the engine's first sync, reaches a client's snapshot and these roots on
     // separate reads; a refused event catches them up (`server::admit_event`).
     if let Err(error) = app.roots.catch_up() {
         roots_failed(&error);
@@ -613,12 +772,16 @@ pub async fn start_core_role(env: Env, seat: seat::SeatParts) -> Result<RunningD
     server::renderers_drawn(&app, false);
     tokio::spawn(pane_auth::serve(
         pane_listener,
-        Arc::clone(&pane_capabilities),
-        Arc::clone(&core),
-        core.engine().cloned(),
-        port,
+        pane_auth::Answering {
+            registry: Arc::clone(&pane_capabilities),
+            core: Arc::clone(&core),
+            engine: Some(core.engine().clone()),
+            port,
+            desktop_renderers: Arc::clone(&app.desktop_renderers),
+            pairing,
+            health: Arc::clone(&listeners.pane_bootstrap),
+        },
         shutdown.clone(),
-        Arc::clone(&app.desktop_renderers),
     ));
     tokio::spawn(attach::serve(
         attach_listener,
@@ -634,9 +797,34 @@ pub async fn start_core_role(env: Env, seat: seat::SeatParts) -> Result<RunningD
             move_gate: Arc::clone(&move_gate),
             moves: Arc::clone(&seat.moves),
         }),
+        Arc::clone(&listeners.node_attach),
         shutdown.clone(),
     ));
     let idle = server::mount(&seat, app);
+    // A paired machine's login item is put in, or an unpaired one's taken
+    // out, as the peer records stand now: the pairing tells it of a change
+    // only once its endpoint is open, which a machine unpaired since its
+    // last start never opens.
+    always_on.peers_changed();
+    // The save the core offers on the screen is imported when the operator
+    // asks, and the core role starts again with it (PRD
+    // engine-bundle-4-herdr-removal D-7, D-8).
+    let import_restart = Arc::new(tokio::sync::Notify::new());
+    {
+        let env = env.clone();
+        let import_restart = Arc::clone(&import_restart);
+        let core = Arc::clone(&core);
+        tokio::task::spawn_blocking(move || {
+            let machine = herdr_transition::LocalMachine::new(&env, import_restart);
+            if let Err(reason) = core.set_herdr_import(Arc::new(machine)) {
+                hide_core::diagnostic!(serde_json::json!({
+                    "component": "herdr_transition",
+                    "kind": "herdr_transition.install_failed",
+                    "reason": reason,
+                }));
+            }
+        });
+    }
     Ok(RunningDaemon {
         port,
         token,
@@ -648,9 +836,11 @@ pub async fn start_core_role(env: Env, seat: seat::SeatParts) -> Result<RunningD
         node_attach_socket,
         node_attach_record: attach::attach_record(&env.state_dir),
         mobile,
+        peers,
         core,
         move_gate,
         role_ended,
+        import_restart,
         own: None,
     })
 }
@@ -659,9 +849,6 @@ pub async fn start_core_role(env: Env, seat: seat::SeatParts) -> Result<RunningD
 /// placement record names, and this machine's screens, with no core here.
 /// A node daemon on a seat of its own; see `start_daemon`.
 pub async fn start_node_daemon(env: Env) -> Result<RunningNode, String> {
-    if let Some(error) = env::herdr_bin_error(&env) {
-        return Err(error);
-    }
     let lock = acquire_lock(&env.state_dir).map_err(|error| error.to_string())?;
     let seat = seat::Seat::serve(
         server::bind(env.bind).await?,
@@ -669,9 +856,8 @@ pub async fn start_node_daemon(env: Env) -> Result<RunningNode, String> {
         ending::Ending::new(),
     )?;
     let state_dir = env.state_dir.clone();
-    let herdr_socket = env.herdr_socket_path.clone();
     let mut running = start_node_role(env, seat.parts()).await?;
-    record_daemon(&state_dir, &seat.parts(), herdr_socket)?;
+    record_daemon(&state_dir, &seat.parts())?;
     seat.end_with(running.shutdown.clone(), state_dir.clone());
     running.own = Some(OwnSeat {
         _seat: seat,
@@ -684,15 +870,11 @@ pub async fn start_node_daemon(env: Env) -> Result<RunningNode, String> {
 /// The node role on `seat`, which already holds the instance lock.
 pub async fn start_node_role(env: Env, seat: seat::SeatParts) -> Result<RunningNode, String> {
     seat.starting("node");
-    let node = herdr_core::node::NodeId::of_this_machine()?;
+    let node = hide_core::node::NodeId::of_this_machine()?;
     let placement = placement::read(&env.state_dir, node.as_str())?
         .ok_or("no core placement record: this state folder starts a core")?;
-    let herdr_socket = env
-        .herdr_socket_path
-        .clone()
-        .ok_or("the node role needs this machine's Herdr socket (HERDR_SOCKET_PATH)")?;
     // Its records go where the core's would: Logs beside the state folder.
-    if let Err(error) = herdr_core::diagnostics::install(&env.state_dir.join("core-state.json")) {
+    if let Err(error) = hide_core::diagnostics::install(&env.state_dir.join("core-state.json")) {
         eprintln!(
             "{}",
             serde_json::json!({"kind": "diagnostics.open_failed", "message": error.to_string()})
@@ -723,10 +905,6 @@ pub async fn start_node_role(env: Env, seat: seat::SeatParts) -> Result<RunningN
             label: host_name().unwrap_or_else(|| node.as_str().to_owned()),
             build: build.clone(),
             release: crate::build_order::Release::of_this_build(),
-            herdr_socket: std::path::PathBuf::from(&herdr_socket),
-            herdr_bin: herdr_program(&env)
-                .await?
-                .ok_or("the node role needs this machine's Herdr binary")?,
             worktree_facts: Some(hide_kit::layout::worktree_facts(&env.state_dir)),
         },
         node_daemon::ServerParts {
@@ -755,7 +933,7 @@ pub async fn start_node_role(env: Env, seat: seat::SeatParts) -> Result<RunningN
                 state_dir: env.state_dir.clone(),
             }),
     )?;
-    herdr_core::diagnostic!(serde_json::json!({
+    hide_core::diagnostic!(serde_json::json!({
         "component": "node_daemon",
         "kind": "started",
         "node": node.as_str(),
@@ -764,7 +942,10 @@ pub async fn start_node_role(env: Env, seat: seat::SeatParts) -> Result<RunningN
         "port": port,
     }));
     // The node lives as the core's daemon does: while a screen is open or
-    // its Herdr server answers, so its agents keep reaching their core.
+    // a pane of its holders may still run, so its agents keep reaching
+    // their core. Its holders keep their records in the device node's
+    // folder (`NodeTerminals::start_holders`).
+    let node_home = env.home.clone();
     let idle = server::watch_idle(
         server::Idle {
             idle_secs: env.idle_secs,
@@ -772,12 +953,14 @@ pub async fn start_node_role(env: Env, seat: seat::SeatParts) -> Result<RunningN
             clients: Arc::clone(&daemon.state.clients),
             last_client_gone: Arc::clone(&daemon.state.last_client_gone),
             shutdown: shutdown.clone(),
-            herdr: Some(herdr_core::engine::EngineHandle::herdr(hide_node::herdr(
-                std::path::Path::new(&herdr_socket),
-            ))),
-            // A node daemon runs its panes in Herdr; holder panes belong to
-            // the machine whose core runs the core's own engine.
-            panes: None,
+            live_work: Arc::new(move || {
+                hide_kit::panes::Panes::open(
+                    &node_home,
+                    &hide_kit::layout::device_node_state(&node_home),
+                    |record| hide_core::diagnostic!(record),
+                )?
+                .live()
+            }),
         },
         || false,
     );
@@ -790,7 +973,7 @@ pub async fn start_node_role(env: Env, seat: seat::SeatParts) -> Result<RunningN
             .with_graceful_shutdown(async move { relay_stopping.ended().await })
             .await;
         if let Err(error) = served {
-            herdr_core::diagnostic!(serde_json::json!({
+            hide_core::diagnostic!(serde_json::json!({
                 "component": "node_daemon",
                 "kind": "browser_relay.exit",
                 "message": error.to_string(),
@@ -885,7 +1068,7 @@ impl RootFollower {
     }
 }
 
-fn roots_changed(rest: &herdr_core::RestSections, have: u64) -> bool {
+fn roots_changed(rest: &hide_core::RestSections, have: u64) -> bool {
     rest.navigator.workspaces.revision > have
         || rest.status.remote.revision > have
         || rest.navigator.root_path.revision > have
@@ -949,7 +1132,7 @@ fn spawn_root_refresh(roots: Arc<RootFollower>, clients: Arc<AtomicUsize>) {
 
 /// One snapshot value's roots, watch folders and registered index roots.
 fn apply_snapshot(
-    rest: &herdr_core::RestSections,
+    rest: &hide_core::RestSections,
     core: &CoreHandle,
     boundary: &Boundary,
     watch: &watch::WatchService,
@@ -998,7 +1181,7 @@ fn apply_snapshot(
     ));
 }
 
-fn roots_from_rest(rest: &herdr_core::RestSections) -> Vec<Root> {
+fn roots_from_rest(rest: &hide_core::RestSections) -> Vec<Root> {
     rest.navigator
         .workspaces
         .iter()
@@ -1017,10 +1200,7 @@ fn roots_from_rest(rest: &herdr_core::RestSections) -> Vec<Root> {
         .collect()
 }
 
-fn device_roots_from_rest(
-    rest: &herdr_core::RestSections,
-    node: &str,
-) -> Vec<boundary::DeviceRoot> {
+fn device_roots_from_rest(rest: &hide_core::RestSections, node: &str) -> Vec<boundary::DeviceRoot> {
     rest.navigator
         .workspaces
         .iter()
@@ -1063,25 +1243,26 @@ mod tests {
             .unwrap()
             .to_string_lossy()
             .into_owned();
-        let options: herdr_core::CoreOptions = serde_json::from_value(serde_json::json!({
+        let options: hide_core::CoreOptions = serde_json::from_value(serde_json::json!({
             "schema_version": 2, "node_id": "test-node", "app_state_path": ""
         }))
         .unwrap();
-        let mut snapshot = herdr_core::Snapshot::initial(&options);
-        let paths = herdr_core::workspace::PathIndex::ask(
+        let mut snapshot = hide_core::Snapshot::initial(&options);
+        let paths = hide_core::workspace::PathIndex::ask(
             &hide_node::Local::of_process(),
             std::collections::BTreeSet::from([path.clone()]),
         )
         .unwrap();
-        snapshot.navigator.workspaces = herdr_core::workspace::build_catalog(
-            &herdr_core::node::NodeId::parse("test-node").unwrap(),
+        snapshot.navigator.workspaces = hide_core::workspace::build_catalog(
+            &hide_core::node::NodeId::parse("test-node").unwrap(),
             &[],
-            &[herdr_core::workspace::SessionSpace {
+            &[hide_core::workspace::SessionSpace {
                 checkout: None,
                 id: "fixture".to_owned(),
                 label: "fixture".to_owned(),
                 cwds: vec![path.clone()],
                 purpose: None,
+                owner_mark: None,
             }],
             &Default::default(),
             &paths,
@@ -1091,7 +1272,7 @@ mod tests {
         device.device_id = "fixture-device".to_owned();
         device.checkouts[0].path = "/remote/fixture".to_owned();
         snapshot.navigator.workspaces.push(device);
-        let initial = herdr_core::RestSections::capture(&snapshot, None, 1);
+        let initial = hide_core::RestSections::capture(&snapshot, None, 1);
         assert_eq!(roots_from_rest(&initial).len(), 1);
         assert_eq!(
             roots_from_rest(&initial)[0].path,
@@ -1105,7 +1286,7 @@ mod tests {
             }]
         );
         snapshot.zoomed = Some("fixture:pane".to_owned());
-        let selected = herdr_core::RestSections::capture(&snapshot, Some(&initial), 2);
+        let selected = hide_core::RestSections::capture(&snapshot, Some(&initial), 2);
         assert_eq!(roots_from_rest(&selected), roots_from_rest(&initial));
         assert_eq!(
             device_roots_from_rest(&selected, "test-node"),
@@ -1113,7 +1294,7 @@ mod tests {
         );
         snapshot.navigator.workspaces[0].checkouts[0].exists = false;
         snapshot.navigator.workspaces.pop();
-        let removed = herdr_core::RestSections::capture(&snapshot, Some(&selected), 3);
+        let removed = hide_core::RestSections::capture(&snapshot, Some(&selected), 3);
         assert!(roots_from_rest(&removed).is_empty());
         assert!(device_roots_from_rest(&removed, "test-node").is_empty());
         assert_eq!(
@@ -1126,7 +1307,7 @@ mod tests {
     #[test]
     fn root_follower_detects_remote_session_changes_for_independent_and_reset_cursors() {
         let mut snapshot = watch::tests::remote_snapshot();
-        let initial = herdr_core::RestSections::capture(&snapshot, None, 1);
+        let initial = hide_core::RestSections::capture(&snapshot, None, 1);
         assert_eq!(
             device_roots_from_rest(&initial, "test-node"),
             vec![boundary::DeviceRoot {
@@ -1137,7 +1318,7 @@ mod tests {
         assert!(roots_changed(&initial, 0));
         assert!(!roots_changed(&initial, 1));
         snapshot.zoomed = Some("fixture:p1".into());
-        let zoom = herdr_core::RestSections::capture(&snapshot, Some(&initial), 2);
+        let zoom = hide_core::RestSections::capture(&snapshot, Some(&initial), 2);
         assert!(
             !roots_changed(&zoom, 1),
             "another reader's zoom does not renew roots"
@@ -1149,7 +1330,7 @@ mod tests {
             .workspaces[0]
             .checkouts[0]
             .path = "/r/new".into();
-        let moved = herdr_core::RestSections::capture(&snapshot, Some(&zoom), 3);
+        let moved = hide_core::RestSections::capture(&snapshot, Some(&zoom), 3);
         assert!(roots_changed(&moved, 2));
         assert!(roots_changed(&moved, 1));
         assert_eq!(
@@ -1157,7 +1338,7 @@ mod tests {
             "/r/new"
         );
         snapshot.status.remote.clear();
-        let removed = herdr_core::RestSections::capture(&snapshot, Some(&moved), 4);
+        let removed = hide_core::RestSections::capture(&snapshot, Some(&moved), 4);
         assert!(roots_changed(&removed, 3));
         assert!(roots_changed(&removed, 1));
         assert!(

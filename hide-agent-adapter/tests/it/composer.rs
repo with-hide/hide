@@ -88,7 +88,7 @@ fn every_supported_agent_reads_typed_pasted_and_erased_composers() {
 /// Grok 1.0.52 under Herdr 0.9.5 at 119 columns on 2026-10-22, after a turn
 /// ended: its predicted next prompt stands in the empty composer as italic
 /// ghost text (`suggest`), and a console Grok takes for Windows' legacy one
-/// (`GROK_FORCE_LEGACY_CONSOLE=1`, as a Herdr pane on Windows is) draws `>`
+/// (`GROK_FORCE_LEGACY_CONSOLE=1`, as a pane on Windows is) draws `>`
 /// for `❯` (`legacy`). Each step as above, then typing the start of the
 /// suggestion, which leaves the rest of it as ghost text after the typed
 /// letters.
@@ -147,6 +147,94 @@ fn claude_reads_its_composer_under_a_labelled_top_rule() {
         let name = format!("claude-2.1.314-{name}");
         assert_eq!(claude.judge(&screen(&name)), want, "{name}");
     }
+}
+
+/// Antigravity 1.5.11 in an isolated Hide at 80 columns on 2026-11-19
+/// (with-hide/hide#2580): the mode hint shift+tab cycles stands in its
+/// empty composer in palette grey, so its prompt reads empty with no mode,
+/// in accept-edits, in plan and after an interrupted turn, while typed text
+/// is drawn in the default colour; and every list or question agy opens
+/// under its composer (`/`, `?`, `/resume`, `/model`, a permission or ask
+/// question) takes the keys, so a screen showing one has no composer to
+/// type into. The trust capture's folder path is replaced with
+/// `~/projects/fixture`.
+#[test]
+fn antigravity_reads_its_mode_hint_as_empty_and_a_list_under_its_composer_as_none() {
+    let agy = AgentId::Antigravity.adapter().composer.supported().unwrap();
+    for (step, want) in [
+        ("0-empty", Ok(())),
+        ("accept-edits-hint", Ok(())),
+        ("plan-hint", Ok(())),
+        // At 50 and 40 columns agy cuts its hint with `...`, and at 40 drops
+        // the model from its status line, which stays one row.
+        ("50-columns-plan-hint", Ok(())),
+        ("40-columns-plan-hint", Ok(())),
+        ("interrupted", Ok(())),
+        ("typed", Err(Miss::PlaceholderStyle)),
+        ("slash-popup", Err(Miss::OpenUnder)),
+        ("shortcuts", Err(Miss::OpenUnder)),
+        ("session-picker", Err(Miss::OpenUnder)),
+        ("model-picker", Err(Miss::OpenUnder)),
+        // Its questions are drawn under the composer too, and the
+        // folder-trust question at start draws no rules at all.
+        ("permission", Err(Miss::OpenUnder)),
+        ("question", Err(Miss::OpenUnder)),
+        ("trust", Err(Miss::NoRule)),
+    ] {
+        let name = format!("agy-1.5.11-{step}");
+        assert_eq!(agy.explain(&screen(&name)), want, "{name}");
+    }
+    assert!(agy.holds(&screen("agy-1.5.11-typed"), "hello"));
+}
+
+/// What an agent draws under its composer is read only where it is
+/// declared. An empty composer reads empty only above exactly the declared
+/// rows, each beginning with its words; blank rows never count, and any
+/// other row, alone or beside them, is something open under it, such as a
+/// notice or a plan approval a capture never showed. A composer holding
+/// text may change those rows' words, so it only has no more of them.
+#[test]
+fn an_empty_composer_reads_empty_only_above_the_rows_its_agent_declares_under_it() {
+    let agy = AgentId::Antigravity.adapter().composer.supported().unwrap();
+    let grey = |text: &str| format!("\x1b[38;5;8m{text}\x1b[0m");
+    let rule = grey(&"─".repeat(40));
+    let prompt = format!("\x1b[38;5;12m> \x1b[0m{}", grey("Plan mode: research"));
+    let screen = |under: &str| format!("{rule}\n{prompt}\n{rule}\n{under}");
+    let status = "? for shortcuts            plan · Gemini 3.1 Pro · low";
+    assert_eq!(agy.explain(&screen(status)), Ok(()));
+    assert_eq!(agy.explain(&screen("? for shortcuts\n\n\n")), Ok(()));
+    for under in [
+        "",
+        "                           plan · Gemini 3.1 Pro · low",
+        "esc to cancel              plan · Gemini 3.1 Pro · low",
+        "Update available: run agy update",
+        "  Conversations\n? for shortcuts",
+        "? for shortcuts\n  Approve this plan?",
+    ] {
+        assert_eq!(
+            agy.explain(&screen(under)),
+            Err(Miss::OpenUnder),
+            "{under:?}"
+        );
+    }
+    assert_eq!(Miss::OpenUnder.verdict(), Verdict::NotFound);
+    // Typed text, which drops `? for shortcuts`, still reads as held.
+    let typed = |under: &str| format!("{rule}\n> hello\n{rule}\n{under}");
+    let model = "                           plan · Gemini 3.1 Pro · low";
+    assert!(agy.holds(&typed(model), "hello"));
+    assert!(!agy.holds(&typed(&format!("  Approve this plan?\n{model}")), "hello"));
+    // A grey line is the hint; the same words in the default colour were typed.
+    assert_eq!(
+        agy.explain(&format!("{rule}\n> Plan mode: research\n{rule}\n")),
+        Err(Miss::PlaceholderStyle)
+    );
+    // Claude Code declares nothing under its composer: its lines there are not read.
+    let claude = AgentId::ClaudeCode.adapter().composer.supported().unwrap();
+    let rule = "─".repeat(40);
+    assert_eq!(
+        claude.judge(&format!("{rule}\n❯ \n{rule}\none\ntwo\nthree\n")),
+        Verdict::Empty
+    );
 }
 
 /// A label is text between a space and a closing run of `─` drawn in the
@@ -295,7 +383,12 @@ fn a_screen_not_read_empty_names_the_step_that_stopped_it() {
     let grok = AgentId::Grok.adapter().composer.supported().unwrap();
     assert_eq!(grok.explain("$ ls\r\n"), Err(Miss::NoRegion));
 
-    for miss in [Miss::NoRule, Miss::NoMarker, Miss::NotPlaceholder] {
+    for miss in [
+        Miss::NoRule,
+        Miss::NoMarker,
+        Miss::OpenUnder,
+        Miss::NotPlaceholder,
+    ] {
         assert_eq!(Miss::from_code(miss.code()), Some(miss));
     }
     assert_eq!(Miss::from_code("hello"), None);
@@ -349,6 +442,62 @@ fn omp_holds_a_brief_left_unsubmitted_by_its_first_line() {
         "Line one of the brief.\nReply with exactly the token on the next line.\nJOURNEY-31FD51C1";
     assert!(composer.holds(&held, brief));
     assert!(!composer.holds(&held, "Another brief.\nJOURNEY-31FD51C1"));
+}
+
+/// A paste the agent keeps as one mark shows in its composer as that mark
+/// alone, with the paste's line count in the agent's own unit: twelve lines
+/// pasted (the captures above) are held, any other count is another paste,
+/// and an agent whose mark has no count, or that shows the text, holds it
+/// only as text.
+#[test]
+fn a_composer_holds_a_paste_by_the_agents_mark_with_its_line_count() {
+    let twelve: String = (1..=12)
+        .map(|n| format!("composer check line {n:02}"))
+        .collect::<Vec<_>>()
+        .join("\n");
+    let thirteen = format!("{twelve}\ncomposer check line 13");
+    for (agent, name) in [
+        (AgentId::ClaudeCode, "claude"),
+        (AgentId::ClaudeCode, "claude-2.1.314-labelled"),
+        (AgentId::Grok, "grok"),
+        (AgentId::Grok, "grok-legacy"),
+        (AgentId::OpenCode, "opencode"),
+        (AgentId::Pi, "pi"),
+        (AgentId::Antigravity, "agy"),
+    ] {
+        let composer = agent.adapter().composer.supported().expect(name);
+        let pasted = screen(&format!("{name}-3-pasted"));
+        assert!(composer.holds(&pasted, &twelve), "{name}");
+        assert!(!composer.holds(&pasted, &thirteen), "{name}: another count");
+        assert!(
+            !composer.holds(&screen(&format!("{name}-5-cleared")), &twelve),
+            "{name}: cleared"
+        );
+    }
+    let omp = AgentId::Omp.adapter().composer.supported().unwrap();
+    assert!(
+        !omp.holds(&screen("omp-3-pasted"), &twelve),
+        "no count to match"
+    );
+}
+
+/// OpenCode 2.0.29 on Windows kept a spawn's eighteen-line brief as its
+/// paste mark, the Enter that would submit it lost while its model loaded
+/// (agent journey run 41951563729): the mark is that brief, so it gets its
+/// Enter, and a brief of another length is not it.
+#[test]
+fn opencode_holds_a_brief_left_as_its_paste_mark() {
+    let composer = AgentId::OpenCode.adapter().composer.supported().unwrap();
+    let held = screen("opencode-2.0.29-windows-brief-pasted");
+    let notes: Vec<String> = (1..=12)
+        .map(|n| format!("- Note {n}: keep `hide agent show` and `--brief-file` as they are."))
+        .collect();
+    let brief = format!(
+        "# Journey brief\n\n## Notes\n{}\n\n## Request\nReply with exactly JOURNEY-1\n",
+        notes.join("\n")
+    );
+    assert!(composer.holds(&held, &brief));
+    assert!(!composer.holds(&held, &format!("{brief}One more line.\n")));
 }
 
 /// `hide pane send --paste` goes only to an agent the composer cell

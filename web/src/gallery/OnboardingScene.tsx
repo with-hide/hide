@@ -11,8 +11,6 @@ import { useLayoutEffect, useMemo, useState } from "react";
 import { createActions } from "../actions";
 import { TooltipProvider } from "../components/ui/tooltip";
 import { FirstRunWizard, useSetupWalk } from "../FirstRunWizard";
-import { HerdrGate } from "../HerdrTakeover";
-import { herdrGate } from "../herdrTakeoverRules";
 import type { HostBridge, NotificationPermission, UpdateStatus } from "../host";
 import type { MobileState } from "../mobileSettings";
 import { clientI18n } from "../i18n/translator";
@@ -20,7 +18,8 @@ import { OverviewPage } from "../Overview";
 import { SettingsGate } from "../SettingsSheet";
 import { SETTINGS_GROUPS, type SettingsTab } from "../settings";
 import { Sidebar } from "../sidebar";
-import type { AiProvider, HerdrProfile, HerdrTakeover, KitAgent, KitPiece, SnapshotRest } from "../snapshot";
+import type { AiProvider, DeskSection, HerdrImport, MachineProfile, KitAgent, KitPiece, SnapshotRest } from "../snapshot";
+import { AGENTS } from "./deskSceneData";
 import { StartPanelHost } from "../StartPanel";
 import { useStartPanel } from "../startDraft";
 import { useShellStore } from "../store";
@@ -80,7 +79,7 @@ export const ONBOARDING_STATES = [
   "devices",
   "devices-loading",
   "devices-failed",
-  "devices-disabled",
+  "devices-unavailable",
   "devices-partial",
   "devices-long32",
   "devices-wsl",
@@ -97,8 +96,13 @@ export const ONBOARDING_STATES = [
   "project-add",
   "start-panel",
   "start-panel-signed-out",
+  "start-panel-branches",
+  "start-panel-new-branch",
   "home-no-project",
   "home-no-agent",
+  "home-no-agent-work",
+  "home-device-connecting",
+  "home-device-not-connected",
   "settings-on",
   "settings-off",
   "settings-blocked",
@@ -106,14 +110,12 @@ export const ONBOARDING_STATES = [
   "settings-both",
   "settings-refused",
   "settings-update",
-  "herdr-moving",
-  "herdr-failed",
-  "herdr-moved",
-  "herdr-moved-behind",
-  "herdr-restart",
-  "herdr-look",
-  "gate-newer",
-  "gate-mismatch",
+  "settings-import",
+  "import-offer",
+  "import-start",
+  "import-unreadable",
+  "import-refused",
+  "import-waiting",
 ] as const;
 
 export type OnboardingState = (typeof ONBOARDING_STATES)[number];
@@ -134,12 +136,12 @@ export type OnboardingSceneParams = {
 
 /** `update=<state>` in the query: the states About's update row draws (PRD auto-update D-20). */
 const SCENE_UPDATES: Record<string, UpdateStatus> = {
-  idle: { phase: { kind: "idle", checkedAt: Date.now() - 12 * 60_000 }, prerelease: false, installOnQuit: true },
-  downloading: { phase: { kind: "downloading", version: "0.5.0", percent: 42 }, prerelease: false, installOnQuit: true },
-  ready: { phase: { kind: "ready", version: "0.5.0" }, prerelease: false, installOnQuit: true },
-  "ready-linux": { phase: { kind: "ready", version: "0.5.0" }, prerelease: true, installOnQuit: false },
-  failed: { phase: { kind: "failed", stage: "download" }, prerelease: false, installOnQuit: true },
-  location: { phase: { kind: "off", reason: "location" }, prerelease: false, installOnQuit: true },
+  idle: { phase: { kind: "idle", checkedAt: Date.now() - 12 * 60_000 }, prerelease: false, installOnQuit: true, dismissed: null, required: false },
+  downloading: { phase: { kind: "downloading", version: "0.5.0", percent: 42 }, prerelease: false, installOnQuit: true, dismissed: null, required: false },
+  ready: { phase: { kind: "ready", version: "0.5.0" }, prerelease: false, installOnQuit: true, dismissed: null, required: false },
+  "ready-linux": { phase: { kind: "ready", version: "0.5.0" }, prerelease: true, installOnQuit: false, dismissed: null, required: false },
+  failed: { phase: { kind: "failed", stage: "download" }, prerelease: false, installOnQuit: true, dismissed: null, required: false },
+  location: { phase: { kind: "off", reason: "location" }, prerelease: false, installOnQuit: true, dismissed: null, required: false },
 };
 
 export function onboardingSceneParams(params: URLSearchParams): OnboardingSceneParams {
@@ -160,6 +162,17 @@ export function onboardingSceneParams(params: URLSearchParams): OnboardingSceneP
 }
 
 const HOME = "/Users/me";
+
+/** Labs' Desk section: Desk on, with the agents the Desk gallery scene draws. */
+const SCENE_DESK: DeskSection = {
+  selection: { agent: "claude", model: null, effort: null },
+  agents: AGENTS,
+  host: { state: "ready", detail: null },
+  conversation: { generation: 1, items: [], dropped: 0 },
+  approvals_waiting: 0,
+  settings: { enabled: true, default_agent: "claude", location: "desk", cap: 8, permissions: { hide: "run", read: "run", shell: "run", edit: "ask" } },
+  lane: { pinned: false, kept: [] },
+};
 
 /** Phone access off, no phone paired, push only while the app is closed: the daemon's `mobile` frame on a fresh Mac. */
 const SCENE_MOBILE: MobileState = {
@@ -186,7 +199,7 @@ function kitAgents(state: OnboardingState, system: OnboardingSystem): KitAgent[]
   const piece = (location: string | null, failed: string | null = null): KitPiece => ({ state: failed ? "failed" : "off", why: failed ? { cause: failed } : null, location });
   const shared = `${HOME}/.agents/skills/hide/SKILL.md`;
   const none = state === "agents-none";
-  const row = (id: string, label: string, installed: boolean, pieces: { hook?: string; skill: string; herdr: string }, extra: Partial<KitAgent> = {}): KitAgent => ({
+  const row = (id: string, label: string, installed: boolean, pieces: { hook?: string; skill: string }, extra: Partial<KitAgent> = {}): KitAgent => ({
     id,
     label,
     availability: none || !installed ? "not_installed" : "available",
@@ -194,7 +207,6 @@ function kitAgents(state: OnboardingState, system: OnboardingSystem): KitAgent[]
     chosen: false,
     skill: piece(pieces.skill),
     hook: pieces.hook ? piece(pieces.hook) : null,
-    herdr: piece(pieces.herdr),
     doc_url: "https://example.test",
     ...extra,
   });
@@ -204,18 +216,18 @@ function kitAgents(state: OnboardingState, system: OnboardingSystem): KitAgent[]
   // tell, which gets its install page (docs/agent-hooks.md, Updating an agent that is too old).
   const tooOld = state === "agents-update" || state === "settings-update";
   const refusedOld = state === "settings-update" ? "update_agent" : null;
-  const old = (installed: string, minimum: string, path: string, command: string | null, pieces: { hook: string; skill: string; herdr: string }): Partial<KitAgent> =>
-    tooOld ? { update: { installed, minimum, path, command }, ...(refusedOld ? { hook: { ...piece(pieces.hook, refusedOld), why: { cause: refusedOld, value: minimum } }, skill: piece(pieces.skill), herdr: piece(pieces.herdr) } : {}) } : {};
-  const claude = { hook: `${HOME}/.claude/settings.json`, skill: `${HOME}/.claude/skills/hide/SKILL.md`, herdr: `${HOME}/.claude` };
-  const omp = { hook: `${HOME}/.omp/agent/extensions/hide.ts`, skill: shared, herdr: `${HOME}/.omp/agent` };
+  const old = (installed: string, minimum: string, path: string, command: string | null, pieces: { hook: string; skill: string }): Partial<KitAgent> =>
+    tooOld ? { update: { installed, minimum, path, command }, ...(refusedOld ? { hook: { ...piece(pieces.hook, refusedOld), why: { cause: refusedOld, value: minimum } }, skill: piece(pieces.skill) } : {}) } : {};
+  const claude = { hook: `${HOME}/.claude/settings.json`, skill: `${HOME}/.claude/skills/hide/SKILL.md` };
+  const omp = { hook: `${HOME}/.omp/agent/extensions/hide.ts`, skill: shared };
   return [
     row("claude-code", "Claude Code", true, claude, old("2.1.200", "2.1.278", `${HOME}/.local/share/claude/versions/2.1.200`, "claude update", claude)),
-    row("codex", "Codex", true, { hook: `${HOME}/.codex/hooks.json`, skill: shared, herdr: `${HOME}/.codex` }, state === "agents-failed" ? { enabled: true, chosen: true, hook: piece(`${HOME}/.codex/hooks.json`, "not_changed") } : {}),
-    row("grok", "Grok", false, { hook: `${HOME}/.grok/hooks/hide.json`, skill: shared, herdr: `${HOME}/.grok` }),
-    row("opencode", "OpenCode", true, { hook: `${HOME}/.config/opencode/plugins/hide.js`, skill: shared, herdr: `${HOME}/.config/opencode` }, pc ? { availability: "unsupported_system" } : {}),
-    row("pi", "Pi", true, { hook: `${HOME}/.pi/agent/extensions/hide.ts`, skill: shared, herdr: `${HOME}/.pi/agent` }),
+    row("codex", "Codex", true, { hook: `${HOME}/.codex/hooks.json`, skill: shared }, state === "agents-failed" ? { enabled: true, chosen: true, hook: piece(`${HOME}/.codex/hooks.json`, "not_changed") } : {}),
+    row("grok", "Grok", false, { hook: `${HOME}/.grok/hooks/hide.json`, skill: shared }),
+    row("opencode", "OpenCode", true, { hook: `${HOME}/.config/opencode/plugins/hide.js`, skill: shared }, pc ? { availability: "unsupported_system" } : {}),
+    row("pi", "Pi", true, { hook: `${HOME}/.pi/agent/extensions/hide.ts`, skill: shared }),
     row("omp", "omp", !pc, omp, state === "settings-update" ? old("18.2.1", "18.7.0", `${HOME}/src/oh-my-pi/bin/omp`, null, omp) : {}),
-    row("antigravity", "Antigravity", false, { hook: `${HOME}/.gemini/config/hooks.json`, skill: `${HOME}/.gemini/config/skills/hide/SKILL.md`, herdr: `${HOME}/.gemini/config` }),
+    row("antigravity", "Antigravity", false, { hook: `${HOME}/.gemini/config/hooks.json`, skill: `${HOME}/.gemini/config/skills/hide/SKILL.md` }),
   ];
 }
 
@@ -245,7 +257,6 @@ function sceneHost(system: OnboardingSystem, permission: NotificationPermission,
     reportLanguage: () => undefined,
     reportDesk: () => undefined,
     revealPath: () => undefined,
-    quit: () => undefined,
     openPractice: () => undefined,
     pickFolder: async () => null,
     probePaths: async (paths) => paths.map(() => null),
@@ -254,7 +265,7 @@ function sceneHost(system: OnboardingSystem, permission: NotificationPermission,
     onNotificationOpen: none,
     withdrawNotifications: () => undefined,
     notificationPermission: async () => permission,
-    onWindowChrome: () => () => undefined, editorAvailable: async () => false, openInEditor: () => undefined, restartHerdr: async () => "unavailable", openNotificationSettings: () => undefined,
+    onWindowChrome: () => () => undefined, editorAvailable: async () => false, openInEditor: () => undefined, openNotificationSettings: () => undefined,
     reportBadge: () => undefined,
     browser: { sync: () => undefined, endCycle: () => undefined, capture: async () => null, command: () => undefined, onEvent: none },
     updates: {
@@ -265,40 +276,51 @@ function sceneHost(system: OnboardingSystem, permission: NotificationPermission,
       check: () => undefined,
       restart: () => undefined,
       setPrerelease: () => undefined,
+      dismiss: () => undefined,
     },
   };
 }
 
-/**
- * The operator's own Herdr as the core publishes it for the `herdr-*` and `gate-*` states (PRD herdr-takeover, operator
- * decision 2026-10-23): the move the core started on its own, its failure, its result with the terminal's `herdr`, a
- * restart, a look that could not read the server, a newer Herdr, and a mismatch the core offers nothing for.
- */
-function sceneHerdr(state: OnboardingState): { herdr: Record<string, unknown>; herdr_takeover?: HerdrTakeover; herdr_versions: Record<string, unknown> } {
-  const offer = (patch: Partial<HerdrTakeover>): HerdrTakeover => ({ kind: "move", stage: "moving", server_version: "0.8.2", version: "0.9.5", same_protocol: false, failure: null, path_herdr: null, ...patch });
-  const older = { state: "protocol_mismatch", received_version: "0.8.2", received_protocol: 20, expected_protocol: 22 };
-  const versions = { hide: "0.9.5", path_herdr: { version: "0.8.2", behind: true, update_command: "sudo install -m 755 '/Applications/hide.app/Contents/Resources/herdr' '/usr/local/bin/herdr'" } };
+/** This machine's engine connection and its Herdr save, as the core publishes them for the `import-*` states. */
+function sceneEngineStatus(state: OnboardingState): { engine: Record<string, unknown>; herdr_import?: HerdrImport; herdr_import_devices?: HerdrImport[] } {
   const connected = { state: "connected", received_version: "0.9.5", received_protocol: 22, expected_protocol: 22 };
   switch (state) {
-    case "herdr-moving": return { herdr: older, herdr_takeover: offer({}), herdr_versions: versions };
-    case "herdr-failed": return { herdr: older, herdr_takeover: offer({ stage: "failed", failure: "refused" }), herdr_versions: versions };
-    case "herdr-moved": return { herdr: connected, herdr_takeover: offer({ stage: "moved", path_herdr: { stage: "updated", version: "0.9.5" } }), herdr_versions: versions };
-    case "herdr-moved-behind": return { herdr: connected, herdr_takeover: offer({ stage: "moved", path_herdr: { stage: "behind", version: "0.8.2" } }), herdr_versions: versions };
-    case "herdr-restart": return { herdr: { ...older, received_version: "0.6.2", received_protocol: 10 }, herdr_takeover: offer({ kind: "restart", stage: "offered", server_version: "0.6.2" }), herdr_versions: versions };
-    case "herdr-look": return { herdr: { state: "malformed" }, herdr_takeover: offer({ kind: "look", stage: "failed", failure: "unreadable", server_version: "", version: "" }), herdr_versions: versions };
-    case "gate-newer": return { herdr: { state: "protocol_mismatch", received_version: "0.10.0", received_protocol: 23, expected_protocol: 22 }, herdr_takeover: offer({ kind: "update_hide", stage: "offered", server_version: "0.10.0" }), herdr_versions: versions };
-    case "gate-mismatch": return { herdr: older, herdr_versions: versions };
-    default: return { herdr: connected, herdr_versions: versions };
+    default: return { engine: connected, herdr_import: sceneHerdrImport(state) };
+  }
+}
+
+/**
+ * This machine's Herdr save as the core offers it for the `import-*` states (PRD engine-bundle-4-herdr-removal B11,
+ * B14 to B16): a save to import read only, a save that could not be read, workspaces an import left out, and
+ * conversations waiting for their Herdr to close. The refusal reasons are the converter's own.
+ */
+function sceneHerdrImport(state: OnboardingState): HerdrImport | undefined {
+  const found = (patch: Partial<HerdrImport>): HerdrImport => ({ kind: "import", stage: "offered", workspaces: 3, tabs: 5, agents: 4, waiting: 0, herdr_running: true, failure: null, reason: null, refused: [], ...patch });
+  const none = { workspaces: 0, tabs: 0, agents: 0, herdr_running: false };
+  switch (state) {
+    case "import-offer": case "import-start": case "settings-import": return found({ kind: "import" });
+    case "import-unreadable": return found({ kind: "import", stage: "failed", failure: "unreadable", reason: "it is format 4, newer than the format 3 this build reads", ...none });
+    case "import-refused": return found({ kind: "result", stage: "moved", ...none, refused: [{ label: "api", reason: "its tab 2 does not lay out exactly the panes it holds" }, { label: "docs", reason: "its tab 1 holds more than 24 panes" }] });
+    case "import-waiting": return found({ kind: "import", ...none, waiting: 2 });
+    default: return undefined;
   }
 }
 
 function sceneRest(state: OnboardingState, system: OnboardingSystem): SnapshotRest {
   const now = Math.floor(Date.now() / 1000);
-  const projects = state.startsWith("project") || state.startsWith("agents") || state.startsWith("devices") || state.startsWith("notifications") || state.startsWith("herdr") || state === "home-no-project" ? [] : [
-    workspace("my-app", { path: "/work/my-app", checkouts: [checkout({ id: "my-app:main", workspace: "my-app", branch: "main", primary: true, age: 3600 }, now)] }, REFERENCE_FOLDS),
+  const projects = state === "import-start" || state.startsWith("project") || state.startsWith("agents") || state.startsWith("devices") || state.startsWith("notifications") || state === "home-no-project" || state.startsWith("home-device") ? [] : [
+    workspace("my-app", {
+      path: "/work/my-app",
+      // The start panel's branch menu has a project with worktrees to list and a base to make a new branch from.
+      ...(state.startsWith("start-panel-") && state !== "start-panel-signed-out" ? { is_git: true, branches: ["main", "release/2.4"] } : {}),
+      checkouts: [
+        checkout({ id: "my-app:main", workspace: "my-app", branch: "main", primary: true, age: 3600 }, now),
+        ...(state.startsWith("start-panel-") && state !== "start-panel-signed-out" ? [checkout({ id: "my-app:login", workspace: "my-app", branch: "fix/login-error-message", age: 600 }, now), checkout({ id: "my-app:billing", workspace: "my-app", branch: "feat/billing-retry-with-a-rather-long-branch-name", age: 7200 }, now)] : []),
+      ],
+    }, REFERENCE_FOLDS),
   ];
   // Help's walk is the page's own, over a first run that ended (B45).
-  const step = state === "agents-setup" ? "done" : state.startsWith("herdr") ? "herdr" : state.startsWith("agents") ? "agents" : state.startsWith("devices") ? "devices" : state.startsWith("notifications") ? "notifications" : state.startsWith("project") ? "project" : "done";
+  const step = state === "agents-setup" ? "done" : state === "import-start" ? "project" : state.startsWith("agents") ? "agents" : state.startsWith("devices") ? "devices" : state.startsWith("notifications") ? "notifications" : state.startsWith("project") ? "project" : "done";
   // The switch is on once Turn on was pressed; macOS's answer is the host's (`permissionOf`).
   const enabled = (state.startsWith("notifications-") && state !== "notifications-no-service") || state === "settings-on" || state === "settings-blocked" || state === "settings-both";
   // A first pass that stopped before changing anything: a state folder HIDE_STATE_DIR chose that other
@@ -308,54 +330,47 @@ function sceneRest(state: OnboardingState, system: OnboardingSystem): SnapshotRe
   const kit = refused
     ? { agents, components: [], busy: false, refused: { cause: "unsafe", path: system === "windows" ? "D:\\" : system === "linux" ? "/srv/team" : "/Volumes/Team", variable: "HIDE_STATE_DIR", stop: REFUSED_STOP[system] } }
     : { agents, components: [{ id: "cli", label: "hide", state: "off", why: null, location: system === "windows" ? `${HOME}/.local/bin/hide.cmd` : `${HOME}/.local/bin/hide` }], busy: false };
-  const profile = (id: string, label: string, patch: Partial<HerdrProfile> = {}): HerdrProfile => ({ id, label, target: `${id}@work.example`, session: "work", herdr: true, ssh_host: null, address: null, enabled: true, added_as: null, device_id: null, problem: null, connect_state: "saved", connect_refusal: null, ...patch });
-  // A Host of the account's ssh config, which Add device lists too, and one that is also a saved Herdr profile.
-  const host = (alias: string, address: string, patch: Partial<HerdrProfile> = {}): HerdrProfile => profile(`ssh:${alias}`, alias, { target: alias, session: "default", herdr: false, ssh_host: alias, address, ...patch });
+  // A Host of the account's ssh config, the list Add device reads too.
+  const host = (alias: string, address: string | null, patch: Partial<MachineProfile> = {}): MachineProfile => ({ id: `ssh:${alias}`, label: alias, target: alias, ssh_host: alias, address, added_as: null, device_id: null, problem: null, connect_state: "saved", connect_refusal: null, ...patch });
+  // This PC's default WSL distribution, which the core lists first (PRD wsl-device B1, B29).
+  const wsl = (name: string, patch: Partial<MachineProfile> = {}): MachineProfile => ({ id: `wsl:${name}`, label: `WSL ${name}`, target: name, ssh_host: null, address: null, wsl_distro: name, added_as: null, device_id: null, problem: null, connect_state: "saved", connect_refusal: null, ...patch });
   const linked = (alias: string, connect_state: string) => ({ added_as: alias, device_id: alias, connect_state });
-  const savedProfiles = state === "devices-long32" ? Array.from({ length: 32 }, (_, index) => profile(`research-${index}`, `연구 개발팀의 아주 긴 기기 이름 ${index + 1} · 프로젝트 빌드 서버`, { target: `developer-${index}@very-long-research-hostname.engineering.example.test:2222`, session: "research-team-project-session-with-a-long-name" }))
-    : state === "devices-disabled" ? [profile("build", "Build server", { enabled: false, problem: "disabled" }), profile("existing", "Design Mac", { added_as: "Design Mac", device_id: "existing", connect_state: "added" }), profile("invalid", "Unavailable configuration", { problem: "invalid_target" })]
-    : state === "devices-partial" ? [profile("build", "Build server", { added_as: "Build server", device_id: "build", connect_state: "connected" }), profile("research", "Research server", { added_as: "Research server", device_id: "research", connect_state: "failed", connect_refusal: null })]
-    // This PC's default WSL distribution, which the core lists first (PRD wsl-device B1, B29).
-    : state === "devices-wsl" ? [profile("wsl:Ubuntu", "WSL Ubuntu", { target: "Ubuntu", session: "default", wsl_distro: "Ubuntu" }), profile("build", "Build server")]
-    : state === "devices-wsl1" ? [profile("wsl:Ubuntu-20.04", "WSL Ubuntu-20.04", { target: "Ubuntu-20.04", session: "default", wsl_distro: "Ubuntu-20.04", problem: "wsl1" }), profile("build", "Build server")]
+  const savedProfiles = state === "devices-long32" ? Array.from({ length: 32 }, (_, index) => host(`research-team-build-server-${index + 1}-for-the-long-running-project`, `developer-${index}@very-long-research-hostname.engineering.example.test:2222`))
+    : state === "devices-unavailable" ? [host("build", null, { problem: "ssh_failed" }), host("design-mac", "me@design-mac.example:22", linked("design-mac", "added")), host("old-lab", null, { problem: "timed_out" })]
+    : state === "devices-partial" ? [host("build", "dev@build.example:22", linked("build", "connected")), host("research", "dev@research.example:22", linked("research", "failed"))]
+    : state === "devices-wsl" ? [wsl("Ubuntu"), host("build", "dev@build.example:22")]
+    : state === "devices-wsl1" ? [wsl("Ubuntu-20.04", { problem: "wsl1" }), host("build", "dev@build.example:22")]
     : state === "devices-signin" ? [host("mini", "me@mini.example:22", linked("mini", "connected")), host("config-ubuntu", "ubuntu@config-ubuntu.example:22", linked("config-ubuntu", "connecting")), host("office", "dev@office.example:22", linked("office", "connecting")), host("lab", "me@lab.example:22", linked("lab", "connecting")), host("home-nas", "me@nas.example:22", linked("home-nas", "connecting"))]
     : state === "devices-ssh-failed" ? [host("office", "dev@office.example:22", linked("office", "failed")), host("lab", "me@lab.example:22", linked("lab", "failed")), host("home-nas", "me@nas.example:22", linked("home-nas", "failed"))]
-    // The account's ssh config Hosts beside Herdr's profiles: one row per machine, a chip for where it came from.
-    : [host("config-ubuntu", "ubuntu@config-ubuntu.example:22"), profile("mini", "mini", { target: "mini", session: "default", ssh_host: "mini", address: "me@mini.example:22" }), host("office", "dev@office.example:22"), profile("gpu-box", "gpu-box", { target: "me@gpu-box.example", session: "default", address: null, added_as: "gpu-box", device_id: "gpu-box", connect_state: "added" })];
+    : [host("config-ubuntu", "ubuntu@config-ubuntu.example:22"), host("mini", "me@mini.example:22"), host("office", "dev@office.example:22"), host("gpu-box", "me@gpu-box.example:22", linked("gpu-box", "added"))];
   const deviceStep = state.startsWith("devices");
   return {
     revision: 1,
     navigator: {
+      siblings_shown: 5,
       agent_scope: EMPTY_GALLERY_SCOPE,
       workspaces: projects,
       inactive_projects: [],
       agents: [],
-      devices: [{ agent_scope: EMPTY_GALLERY_SCOPE, id: "local", label: "This Mac", kind: "local", state: "local", message: null, ssh_alias: null, agent_count: 0, test: null, kit }, ...(state === "devices-partial" ? [{ agent_scope: EMPTY_GALLERY_SCOPE, id: "build", label: "Build server", kind: "remote", state: "connected", message: null, ssh_alias: "build", agent_count: 0, test: null, kit }] : []), ...sshDevices(state, kit)],
-      focused_device_id: "local",
+      devices: [{ agent_scope: EMPTY_GALLERY_SCOPE, id: "local", label: "This Mac", kind: "local", state: "local", message: null, ssh_alias: null, agent_count: 0, test: null, kit }, ...(state === "devices-partial" ? [{ agent_scope: EMPTY_GALLERY_SCOPE, id: "build", label: "Build server", kind: "remote", state: "connected", message: null, ssh_alias: "build", agent_count: 0, test: null, kit }] : []), ...sshDevices(state, kit), ...(state.startsWith("home-device") ? [{ agent_scope: EMPTY_GALLERY_SCOPE, id: "window", label: "window", kind: "remote", state: "connected", message: null, ssh_alias: "window", agent_count: 0, test: null, kit }] : [])],
+      focused_device_id: state.startsWith("home-device") ? "window" : "local",
       focused_checkout_id: null,
     },
     ui_state: {
       left_sidebar_visible: true,
       first_run: { version: 1, step },
       first_run_choices: { devices: state === "devices-partial" ? ["build", "research"] : state === "devices" ? ["ssh:config-ubuntu", "mini"] : state === "devices-signin" ? ["ssh:mini", "ssh:config-ubuntu", "ssh:office", "ssh:lab", "ssh:home-nas"] : state === "devices-ssh-failed" ? ["ssh:office", "ssh:lab", "ssh:home-nas"] : state.startsWith("devices-wsl") ? null : [], project_form: { view: state === "project-add" ? "add" : "" } },
-      agent_onboarding: state === "agents-refused" ? null : step === "agents" || step === "herdr" ? "pending" : "done",
+      agent_onboarding: state === "agents-refused" ? null : step === "agents" ? "pending" : "done",
       desktop_notifications: enabled,
       desktop_notifications_done: state === "settings-done-only" || state === "settings-both",
-      workspace_registrations: [{ id: "home", label: "hide", path: `${HOME}/hide`, device_id: "local", pinned: false, home: true }, ...projects.map((row) => ({ id: row.id, label: row.label, path: row.path, device_id: "local", pinned: false }))],
+      workspace_registrations: [...projects.map((row) => ({ id: row.id, label: row.label, path: row.path, device_id: "local", pinned: false }))],
     },
-    status: { ...sceneHerdr(state), background_ai: { enabled: true, provider: "claude", chosen: true, providers: providers(), unavailable_reason: null }, herdr_profiles: { state: state === "devices-loading" ? "loading" : state === "devices-failed" ? "failed" : "ready", error: state === "devices-failed" ? "Saved profiles could not be read" : null, profiles: deviceStep ? savedProfiles : [], truncated: false }, remote: state === "devices-partial" ? [{ target_id: "build", state: "connected" }, { target_id: "research", state: "error", message: "SSH access was refused" }] : sshRemotes(state) },
+    status: { ...sceneEngineStatus(state), background_ai: { enabled: true, provider: "claude", chosen: true, providers: providers(), unavailable_reason: null }, machine_profiles: { state: state === "devices-loading" ? "loading" : state === "devices-failed" ? "failed" : "ready", error: state === "devices-failed" ? "Saved profiles could not be read" : null, profiles: deviceStep ? savedProfiles : [], truncated: false }, remote: state === "devices-partial" ? [{ target_id: "build", state: "connected" }, { target_id: "research", state: "error", message: "SSH access was refused" }] : state === "home-device-not-connected" ? [{ target_id: "window", state: "not_connected", message: "Reconnecting to the device", session: null, unreachable_since_unix_ms: (now - 180) * 1000 }] : sshRemotes(state) },
   } as unknown as SnapshotRest;
 }
 
-/** The screen that holds Hide, as `App` draws it in place of the shell; here over it, for a crop. */
-function SceneGate({ actions }: { actions: ReturnType<typeof createActions> }) {
-  const gate = useShellStore((s) => herdrGate(s.rest));
-  return gate ? <HerdrGate actions={actions} gate={gate} /> : null;
-}
-
 export function OnboardingScene({ theme, state, system, language, scale, page = "notifications", update: requested }: OnboardingSceneParams) {
-  // A newer Herdr's wait shows the last check's answer: no Hide made for it yet.
-  const update = requested ?? (state === "gate-newer" ? SCENE_UPDATES.idle : undefined);
+  const update = requested;
   // This fixture changes invented snapshots only. It records consent presses,
   // and never dispatches to a daemon, SSH target or native permission service.
   const actions = useMemo(() => createActions((event) => {
@@ -368,12 +383,12 @@ export function OnboardingScene({ theme, state, system, language, scale, page = 
       const payload = event.payload as Record<string, unknown>;
       if (event.kind === "first_run_draft") ui.first_run_choices = { ...ui.first_run_choices, ...payload };
       if (event.kind === "first_run_back" || event.kind === "first_run_advance") {
-        const steps = rest.status?.herdr_profiles?.profiles.length ? ["agents", "devices", "notifications", "project", "done"] : ["agents", "notifications", "project", "done"];
+        const steps = rest.status?.machine_profiles?.profiles.length ? ["agents", "devices", "notifications", "project", "done"] : ["agents", "notifications", "project", "done"];
         const index = steps.indexOf(String(payload.from));
         if (ui.first_run?.step === payload.from && index >= 0) ui.first_run = { version: 1, step: steps[index + (event.kind === "first_run_back" ? -1 : 1)] as NonNullable<typeof ui.first_run>["step"] };
       }
-      if (event.kind === "herdr_profile_connect") {
-        const row = rest.status?.herdr_profiles?.profiles.find((entry) => entry.id === payload.profile_id);
+      if (event.kind === "machine_profile_connect") {
+        const row = rest.status?.machine_profiles?.profiles.find((entry) => entry.id === payload.profile_id);
         if (row) row.connect_state = "connecting";
       }
       return { rest, revision: current.revision + 1 };
@@ -383,8 +398,10 @@ export function OnboardingScene({ theme, state, system, language, scale, page = 
   // The host and the stores are in place before the first render, since the wizard asks the host which one it is in.
   useMemo(() => {
     window.hideHost = sceneHost(system, permissionOf(state, system), update);
-    useShellStore.setState({ connection: "live", rest: sceneRest(state, system), agents: [], revision: 1, mobile: SCENE_MOBILE } as never);
-    useUiStore.setState({ screen: { kind: "main" }, overviewOpen: false, mainView: "backlog" } as never);
+    useShellStore.setState({ connection: "live", rest: sceneRest(state, system), agents: [], revision: 1, mobile: SCENE_MOBILE, desk: page === "labs" ? SCENE_DESK : null } as never);
+    // The Overview's Work tab is where an empty device, or one on its way, says so (UI_BEHAVIOR, Overview).
+    const device = state.startsWith("home-device") ? "window" : undefined;
+    useUiStore.setState({ screen: { kind: "main", ...(device ? { deviceId: device } : {}) }, overviewOpen: false, mainView: state === "home-no-agent-work" || device ? "work" : "backlog" } as never);
   }, [state, system, update]);
 
   // Set once the presses below have landed and a frame has drawn them, so a capture waits for it.
@@ -407,7 +424,9 @@ export function OnboardingScene({ theme, state, system, language, scale, page = 
     };
     if (state === "agents-setup") useSetupWalk.getState().open();
     if (state.startsWith("settings-")) useUiStore.getState().openSettings(page);
-    if (state.startsWith("start-panel")) useStartPanel.getState().open(false, { projectId: "my-app", kind: state === "start-panel" ? "claude" : "codex" });
+    if (state.startsWith("start-panel")) useStartPanel.getState().open(false, { projectId: "my-app", kind: state === "start-panel-signed-out" ? "codex" : "claude" });
+    if (state === "start-panel-new-branch") useStartPanel.getState().setTarget("worktree:local:/work/my-app");
+    if (state === "start-panel-branches") click('[data-start-branch][data-state="closed"]');
     // Effects run twice in development, so the toggle is pressed only while it is closed.
     if (state === "agents-changes") click('[data-first-run-what-changes][aria-expanded="false"]');
     // The pass that took the press has landed.
@@ -442,7 +461,7 @@ export function OnboardingScene({ theme, state, system, language, scale, page = 
         </main>
         <StartPanelHost actions={actions} />
         <SettingsGate actions={actions} />
-        {state.startsWith("gate-") ? <SceneGate actions={actions} /> : <FirstRunWizard actions={actions} />}
+        <FirstRunWizard actions={actions} />
       </div>
     </TooltipProvider>
   );

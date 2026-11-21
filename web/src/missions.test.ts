@@ -4,8 +4,13 @@ import { describe, expect, it } from "vitest";
 import { STRENGTHS } from "./conductorSettings";
 import { english } from "./i18n/catalogs";
 import { initializeInterfaceI18n } from "./i18n/instance";
-import { attentionChoices, attentionWords, missionAsks, cardLine, checkerState, eventWords, hideWords, lineOutrun, nodeResumable, summaryGroups, liveNodes, conductorState, missionResultCounts, reportLine, chipWords, conductedBy, criteriaTally, launchSession, runWords, criterionName, missionHeadCells, criterionNote, defectEdges, firstPlans, kindWord, landingLeft, mainCommit, nodeLanded, missionCells, missionOfPane, missionResults, missionTally, missionTone, missionWorkLine, neighbours, nodeLook, nodeResult, nodeTimes, nodeTone, paneChipWords, missionCounts, nodeLine, nodeMark, workerAsleep, conductorUnanswered, conductorResume, stackWaiting, stageWord, takeOverPrompt, takeOverProvider, turnItems } from "./missions";
-import type { AgentRow, Mission, MissionAttention, MissionCriterion, MissionEvent, MissionLanding, MissionNode, SnapshotRest } from "./snapshot";
+import { heldLettersText, heldNodes, missionDelay, missionTurn, nodeWait, missionNumber, nodeWork, nodeWorkWords, nodeSteps, holdReason, attentionPr, attentionWords, missionAsks, cardLine, checkerState, eventWords, hideWords, lineOutrun, nodeResumable, summaryGroups, liveNodes, conductorState, missionResultCounts, reportLine, chipWords, conductedBy, criteriaTally, itemNames, launchSession, runWords, criterionName, missionHeadCells, criterionNote, defectEdges, firstPlans, landingLeft, mainCommit, nodeLanded, missionCells, missionOfPane, missionResults, missionTally, missionTone, missionWorkLine, neighbours, nodeLook, nodeResult, nodeSpans, nodeTimes, nodeTone, paneChipWords, missionCounts, nodeLine, nodeMark, nodePace, pacedSteps, workerAsleep, conductorResume, stackWaiting, stageWord, takeOverPrompt, takeOverProvider, turnItems, warningWords, workerEscalation, escalationWhy, type EscalationCause } from "./missions";
+import { kindWord } from "./missionLine";
+import { missionEntry, rowLine, rowLineText } from "./missionList";
+import { missionEntries } from "./mobile/missionModel";
+import type { PhoneMission } from "./mobile/protocol";
+import { forgetCatalogs } from "./agentPicker";
+import { MISSION_ATTENTION_REASONS, type AgentRow, type BackgroundAi, type Device, type Mission, type MissionAttention, type MissionAttentionReason, type MissionCriterion, type MissionEvent, type MissionLanding, type MissionNode, type PullRequest, type SnapshotRest } from "./snapshot";
 
 // What the map and the Conductor row read from a mission (PRD
 // software-factory-conductor B14-B21, B44, B46): the core decides every value,
@@ -15,11 +20,11 @@ const t = initializeInterfaceI18n("en").getFixedT(null, "translation");
 const contract = JSON.parse(fs.readFileSync(path.resolve(__dirname, "../../contracts/snapshot-wire-enums.json"), "utf8"));
 
 function node(key: string, extra: Partial<MissionNode> = {}): MissionNode {
-  return { key, title: key, kind: "change", depends_on: [], status: "planned", blocked: null, delivery: "pr", worker: null, agent_id: null, pane_id: null, machine: null, pr: null, base_pr: null, branch: null, pr_state: null, pr_url: null, stage: null, attempts: 0, line: null, change: null, review: null, criteria: [], criteria_met: 0, criteria_skipped: 0, external: null, unread: false, reopened: 0, started_at_unix_ms: null, finished_at_unix_ms: null, commit: null, landing: null, verdict: null, checks: null, attention: null, hide: null, ...extra, prs: extra.prs ?? (extra.pr != null ? [{ number: extra.pr, state: extra.pr_state ?? null, url: extra.pr_url ?? null }] : []) };
+  return { key, title: key, kind: "change", depends_on: [], status: "planned", blocked: null, delivery: "pr", worker: null, agent_id: null, pane_id: null, machine: null, pr: null, base_pr: null, branch: null, pr_state: null, pr_url: null, stage: null, attempts: 0, line: null, change: null, review: null, criteria: [], criteria_met: 0, criteria_skipped: 0, steps: [], brief_bytes: null, external: null, unread: false, reopened: 0, started_at_unix_ms: null, finished_at_unix_ms: null, commit: null, landing: null, verdict: null, checks: null, attention: null, hide: null, ...extra, prs: extra.prs ?? (extra.pr != null ? [{ number: extra.pr, state: extra.pr_state ?? null, url: extra.pr_url ?? null }] : []) };
 }
 
 function mission(id: string, extra: Partial<Mission> = {}): Mission {
-  return { id, title: `Mission ${id}`, workspace_id: "w", project: "/repo", checkout_path: "/repo", device_id: "mac", status: "running", scope: "pr", cap: 4, exempt: false, strength: null, other_vendor: null, conductor: { pane_id: "p1", name: "conductor", agent_kind: "claude", session: { device_id: "mac", agent: "claude", session_id: "s-1" }, present: true, takes_answers: true }, nodes: [], merge_order: [], landing_order: [], stack_waiting: 0, check: null, github: null, decision: null, question: null, answer: null, answer_failed: null, delay: null, report: null, created_at_unix_ms: 1, started_at_unix_ms: 1, closed_at_unix_ms: null, running: 0, stale: false, github_stale: false, github_read_at_unix_ms: null, ...extra };
+  return { id, title: `Mission ${id}`, workspace_id: "w", project: "/repo", checkout_path: "/repo", device_id: "mac", status: "running", scope: "pr", cap: 4, exempt: false, strength: null, conductor: { pane_id: "p1", name: "conductor", agent_kind: "claude", session: { device_id: "mac", agent: "claude", session_id: "s-1" }, present: true, takes_answers: true }, nodes: [], merge_order: [], landing_order: [], stack_waiting: 0, check: null, github: null, decision: null, question: null, answer: null, answer_failed: null, delay: null, report: null, created_at_unix_ms: 1, started_at_unix_ms: 1, closed_at_unix_ms: null, running: 0, stale: false, github_stale: false, github_read_at_unix_ms: null, ...extra };
 }
 
 const rest = (items: Mission[]) => ({ missions: { items } }) as unknown as SnapshotRest;
@@ -33,6 +38,13 @@ describe("the wire values", () => {
     expect(STRENGTHS).toEqual(contract.mission_strength);
     for (const strength of contract.mission_strength) expect(english).toHaveProperty(`mission.strength.${strength}`);
     for (const status of contract.mission_status) expect(chipWords(mission("m", { status })).key).toMatch(/^mission\.chip/);
+    for (const kind of contract.mission_warning_kind) expect(english).toHaveProperty(`mission.warning.${kind}.short`);
+    // Who merges and where that stands (PRD mission-destination D-45): only `due` is the operator's turn.
+    for (const by of contract.mission_merge_by) expect(["operator", "conductor"]).toContain(by);
+    for (const state of contract.mission_merge_step) {
+      const n = node("n", { status: "done", pr: 1, landing: { state: "left", action: "merge" }, merge: { by: "operator", why: "w", state } });
+      expect(turnItems(mission("m", { nodes: [n], landing_order: ["n"] }), () => null).length).toBe(state === "due" ? 1 : 0);
+    }
     for (const action of contract.mission_landing_action) {
       expect(english).toHaveProperty(`mission.landing.${action}`);
       expect(landingLeft(node("n", { status: "done", landing: { state: "left", action } }))).toBe(action);
@@ -77,8 +89,8 @@ describe("the numbers and words", () => {
   });
 
   it("reads a node's kind while it waits on an earlier node, since the edge says what it waits for, and its line once it has one", () => {
-    const nodes = [node("cause", { title: "Find the cause", kind: "research", status: "working" }), node("fix", { depends_on: ["cause"] })];
-    expect(nodeLine(nodes[1]!, t)).toBe("Change");
+    const nodes = [node("cause", { title: "Find the cause", kind: "general", preset: "research", status: "working" }), node("fix", { depends_on: ["cause"] })];
+    expect(nodeLine(nodes[1]!, t)).toBe("Code");
     expect(nodeLine({ ...nodes[1]!, line: "CI failed" }, t)).toBe("CI failed");
     expect(nodeLine(node("n", { blocked: "upstream_dropped" }), t)).toMatch(/^Waiting · earlier node/);
   });
@@ -93,20 +105,55 @@ describe("the numbers and words", () => {
 
   it("names what runs from the pane's launch alone, and the plan's words marked planned before a launch (B29)", () => {
     const words = { auto: "auto", defaultModel: "default model" };
-    const plan = { agent: "codex", model: "gpt-6-astra", effort: "high", effort_auto: false };
+    const plan = { model: "gpt-6-astra", effort: "high", effort_auto: false };
     const launch = (launch_model: string | null, launch_effort: string | null) => ({ device_id: "mac", pane_id: "p9", session_digest: "d", launch_model, launch_effort });
     // Before Hide recorded a launch: the plan's words, marked planned; `auto` for an effort the Conductor chooses; never the agent.
-    expect(runWords(null, plan, words)).toEqual({ words: "gpt-6-astra·high", planned: true });
-    expect(runWords(null, { agent: "claude", model: "opus", effort_auto: true }, words)).toEqual({ words: "opus·auto", planned: true });
-    expect(runWords(null, { agent: "opencode" }, words)).toBeNull();
+    expect(runWords(null, plan, words)).toEqual({ words: "gpt-6-astra·high", planned: true, profile: null });
+    expect(runWords(null, { model: "opus", effort_auto: true }, words)).toEqual({ words: "opus·auto", planned: true, profile: null });
+    expect(runWords(null, {}, words)).toBeNull();
     expect(runWords(null, null, words)).toBeNull();
     // A launch speaks alone: its effort over a different planned one, its model over the plan's.
-    expect(runWords(launch("gpt-6-sol", "low"), plan, words)).toEqual({ words: "gpt-6-sol·low", planned: false });
+    expect(runWords(launch("gpt-6-sol", "low"), plan, words)).toEqual({ words: "gpt-6-sol·low", planned: false, profile: null });
     // A launch that set no effort shows none, and one that set no model ran the CLI's default; the plan fills neither.
-    expect(runWords(launch("gpt-6-sol", null), plan, words)).toEqual({ words: "gpt-6-sol", planned: false });
-    expect(runWords(launch(null, "low"), plan, words)).toEqual({ words: "default model·low", planned: false });
+    expect(runWords(launch("gpt-6-sol", null), plan, words)).toEqual({ words: "gpt-6-sol", planned: false, profile: null });
+    expect(runWords(launch(null, "low"), plan, words)).toEqual({ words: "default model·low", planned: false, profile: null });
     // A session with neither value carries no proven launch: the plan's words stay marked planned.
-    expect(runWords(launch(null, null), plan, words)).toEqual({ words: "gpt-6-astra·high", planned: true });
+    expect(runWords(launch(null, null), plan, words)).toEqual({ words: "gpt-6-astra·high", planned: true, profile: null });
+  });
+
+  it("names the item a worker started with or is planned as, its profile before its model, and the built-in default as before (agent-profiles-phase2 B1, B12, B23)", () => {
+    const words = { auto: "auto", defaultModel: "default model" };
+    const launch = (profile: string | null, launch_model: string | null) => ({ launch_model, launch_effort: null, profile });
+    expect(runWords(launch("work", "opus"), null, words)).toEqual({ words: "work · opus", planned: false, profile: "work" });
+    expect(runWords(launch("work", null), { model: "opus" }, words)).toEqual({ words: "work · default model", planned: false, profile: "work" });
+    expect(runWords(launch(null, "opus"), null, words)).toEqual({ words: "opus", planned: false, profile: null });
+    // A planned item reads as a launched one does, marked planned.
+    expect(runWords(null, { model: "deepseek-v4", effort: "high", profileName: "gateway" }, words)).toEqual({ words: "gateway · deepseek-v4·high", planned: true, profile: "gateway" });
+    expect(runWords(null, { profileName: "gateway" }, words)).toEqual({ words: "gateway", planned: true, profile: "gateway" });
+  });
+
+  it("reads an item's profile by its name now and its models by the names its own list shows, else as passed (agent-profiles-phase2 B12, B23)", () => {
+    forgetCatalogs();
+    const devices = [
+      { id: "mac", kind: "local", kit: { profiles: { state: "listed", version: 2, profiles: [{ id: "p-gw", kind: "claude-code", name: "gateway", version: 3 }], defaults: {} } } },
+      { id: "mini", kind: "remote", kit: { profiles: { state: "listed", version: 1, profiles: [{ id: "p-gw", kind: "claude-code", name: "gateway", version: 3 }], defaults: {} } } },
+    ] as unknown as Device[];
+    const ai = { providers: [{ agent: "claude-code", state: "ready", models: ["opus", "sonnet"], model_labels: { opus: "Opus" }, profile_models: [{ profile: "p-gw", version: 3, models: ["opus"], model_labels: { opus: "deepseek-v4-flash" }, models_fixed: false, models_unavailable_reason: null }] }] } as unknown as BackgroundAi;
+    const names = (machine: string, profile: { id?: string; name?: string } | null, lists: BackgroundAi | undefined = ai) => {
+      const item = itemNames(devices, lists, machine, "claude", profile, "없는 프로필");
+      return [item.profile, item.model("opus"), item.model("sonnet")];
+    };
+    // The built-in default names no profile and its models by the agent's own list.
+    expect(names("mac", null)).toEqual([null, "Opus", "sonnet"]);
+    // A profile by its id or by its name reads by its name now and its own list's names.
+    expect(names("mac", { id: "p-gw", name: "old" })).toEqual(["gateway", "deepseek-v4-flash", "sonnet"]);
+    expect(names("mac", { name: "gateway" })).toEqual(["gateway", "deepseek-v4-flash", "sonnet"]);
+    // A launch whose profile is gone keeps the name it started with; a planned one says it is gone; neither reads another list.
+    expect(names("mac", { id: "p-old", name: "old" })).toEqual(["old", "opus", "sonnet"]);
+    expect(names("mac", { id: "p-old" })).toEqual(["없는 프로필", "opus", "sonnet"]);
+    // Another machine's lists are not read here, and no list read yet leaves each model as passed.
+    expect(names("mini", { id: "p-gw" })).toEqual(["gateway", "opus", "sonnet"]);
+    expect(names("mac", { id: "p-gw" }, { providers: [{ agent: "claude-code", state: "ready", models: ["opus"] }] } as unknown as BackgroundAi)).toEqual(["gateway", "opus", "sonnet"]);
   });
 
   it("finds a pane's launch on its machine, else on the mission's", () => {
@@ -139,7 +186,7 @@ describe("the Conductor pane's chip (PRD mission-pane-chip B2, B10)", () => {
     expect(words({ status: "planning" })).toEqual(["planning", "Planning", null]);
     expect(words({ status: "planning", nodes: planned })).toEqual(["running", "Mission", "1/2"]);
     expect(words({ status: "running", nodes: planned })).toEqual(["running", "Mission", "1/2"]);
-    expect(words({ status: "running", nodes: planned, decision: "Which base?" })).toEqual(["decision", "Mission", "1/2"]);
+    expect(words({ status: "running", nodes: planned, decision: "Which base?" })).toEqual(["turn", "Mission", "1/2"]);
     expect(words({ status: "merge_wait", nodes: planned })).toEqual(["merge_wait", "Waiting to merge", null]);
     expect(words({ status: "done", nodes: planned, decision: "stale ask" })).toEqual(["done", "Mission", "1/2"]);
     expect(words({ status: "cancelled", nodes: planned })).toEqual(["cancelled", "Cancelled", null]);
@@ -154,7 +201,7 @@ describe("the Conductor pane's chip (PRD mission-pane-chip B2, B10)", () => {
   });
 });
 
-const raised = (to: "conductor" | "operator", reason: MissionAttention["reason"] = "worker_ended", pr: number | null = null): MissionAttention => ({ reason, pr, to, since_unix_ms: 10, on_row: false, item: to === "operator" });
+const raised = (to: "conductor" | "operator", reason: MissionAttention["reason"] = "worker_ended", pr: number | null = null): MissionAttention => ({ reason, pr, to, since_unix_ms: 10, on_row: false, item: to === "operator", choices: ["leave", "drop"] });
 
 describe("a node's state colour (PRD mission-node-simple D-01, D-02, B5)", () => {
   it("reads each status as waiting, in progress or done, a node someone has to look at in the decision colour, a blocked node waiting and a cancelled mission's unfinished node cancelled", () => {
@@ -173,7 +220,7 @@ describe("a node's state colour (PRD mission-node-simple D-01, D-02, B5)", () =>
   });
 
   it("draws the mission page's head cells as its cards: finished work one green whether or not it reached main, an outside node waiting (PRD mission-map-git-criteria B26)", () => {
-    const m = mission("m", { nodes: [node("spec", { status: "done", kind: "research", delivery: null }), node("api", { status: "done", pr: 3, pr_state: "merged" }), node("ui", { status: "done", pr: 4, pr_state: "mergeable", depends_on: ["api"] }), node("out", { kind: "external", delivery: null, external: { pr: 9 } }), node("old", { status: "dropped" })] });
+    const m = mission("m", { nodes: [node("spec", { status: "done", kind: "general", preset: "research", delivery: null }), node("api", { status: "done", pr: 3, pr_state: "merged" }), node("ui", { status: "done", pr: 4, pr_state: "mergeable", depends_on: ["api"] }), node("out", { kind: "external", delivery: null, external: { pr: 9 } }), node("old", { status: "dropped" })] });
     expect(missionHeadCells(m)).toEqual(["done", "done", "external", "done"]);
     // A node someone has to look at is the decision colour's cell whatever its shape (PRD mission-node-simple B5).
     expect(missionHeadCells(mission("m", { nodes: [node("a", { status: "done", attention: raised("conductor", "close_refused") }), node("b", { status: "working" })] }))).toEqual(["attention", "working"]);
@@ -183,6 +230,18 @@ describe("a node's state colour (PRD mission-node-simple D-01, D-02, B5)", () =>
     expect(missionTone(mission("m", { decision: "Which base?" }))).toBe("hold");
     expect(missionTone(mission("m", { status: "done", decision: "stale ask" }))).toBe("done");
     expect([missionTone(mission("m", { status: "planning" })), missionTone(mission("m", { status: "merge_wait" })), missionTone(mission("m", { status: "cancelled" }))]).toEqual(["waiting", "review", "cancelled"]);
+  });
+
+  it("turns a running mission's chip to the stopped colour once a node stopped and none works, and keeps it working while one still moves (operator decision 2026-11-20)", () => {
+    const stopped = { status: "working" as const, work: { state: "stopped" as const, cause: null, since_unix_ms: 1 } };
+    const tones = [
+      [node("a", stopped), node("b", { status: "working", work: { state: "working" } })],
+      [node("a", stopped), node("b", { status: "done" }), node("c")],
+      // A node resting on a review still moves; nothing stopped is not a stall.
+      [node("a", { status: "working", work: { state: "waiting", on: { kind: "review" } } }), node("b", stopped)],
+      [node("a", { status: "done" }), node("b")],
+    ].map((nodes) => missionTone(mission("m", { nodes })));
+    expect(tones).toEqual(["working", "stopped", "working", "working"]);
   });
 });
 
@@ -201,24 +260,27 @@ describe("what a running mission's pane says (PRD mission-plan-visibility B9, B1
   });
 
   it("names where each node's work is: a change node's step of four, else its kind", () => {
-    const names = [node("a"), node("b", { stage: 2 }), node("c", { stage: 3 }), node("d", { stage: 4 }), node("e", { delivery: "direct", stage: 2 }), node("f", { delivery: "direct", stage: 4 }), node("g", { kind: "research" }), node("h", { kind: "verify" })].map((one) => t(stageWord(one)));
+    const names = [node("a"), node("b", { stage: 2 }), node("c", { stage: 3 }), node("d", { stage: 4 }), node("e", { delivery: "direct", stage: 2 }), node("f", { delivery: "direct", stage: 4 }), node("g", { kind: "general", preset: "research" }), node("h", { kind: "general", preset: "verify" })].map((one) => t(stageWord(one)));
     expect(names).toEqual(["Code", "PR", "Review", "Merge", "Checks", "main", "Research", "Verify"]);
   });
 });
 
 describe("what a node left (PRD mission-plan-visibility B11, B22)", () => {
-  it("is its pull request, a direct change's branch, a research conclusion or a verify line, and nothing the record does not hold", () => {
+  it("is its pull request, a direct change's branch, or a done general node's verdict or line as its card reads it, and nothing the record does not hold", () => {
     expect(nodeResult(node("a", { pr: 7, pr_state: "merged" }))).toEqual({ kind: "pr", number: 7, state: "merged" });
     expect(nodeResult(node("b", { delivery: "direct", branch: "fix/x" }))).toEqual({ kind: "branch", branch: "fix/x" });
-    expect(nodeResult(node("c", { kind: "research", status: "done", line: "cache first" }))).toEqual({ kind: "conclusion", line: "cache first" });
-    expect(nodeResult(node("d", { kind: "verify", status: "done", line: "6 of 6" }))).toEqual({ kind: "verify", line: "6 of 6" });
+    expect(nodeResult(node("c", { kind: "general", preset: "research", status: "done", line: "cache first" }))).toEqual({ kind: "line", line: "cache first" });
+    expect(nodeResult(node("d", { kind: "general", preset: "verify", status: "done", line: "6 of 6" }))).toEqual({ kind: "line", line: "6 of 6" });
+    // A verdict on any preset, once done; a deploy node's line is its result too (PRD node-presets B1, B2).
+    expect(nodeResult(node("p", { kind: "general", preset: "deploy", status: "done", line: "1.2.8 out", verdict: "fail", checks: { passed: 5, total: 7 } }))).toEqual({ kind: "verdict", verdict: "fail", checks: { passed: 5, total: 7 } });
+    expect(nodeResult(node("q", { kind: "general", preset: "deploy", status: "done", line: "1.2.8 out" }))).toEqual({ kind: "line", line: "1.2.8 out" });
     // A running node's line is its progress, not what it left.
-    expect([nodeResult(node("r", { kind: "research", status: "working", line: "reading logs" })), nodeResult(node("v", { kind: "verify", status: "working", line: "3 of 6 so far" }))]).toEqual([null, null]);
-    expect([nodeResult(node("e")), nodeResult(node("f", { kind: "research" })), nodeResult(node("g", { line: "a change's own line is no result" }))]).toEqual([null, null, null]);
+    expect([nodeResult(node("r", { kind: "general", preset: "research", status: "working", line: "reading logs" })), nodeResult(node("v", { kind: "general", preset: "verify", status: "working", line: "3 of 6 so far" }))]).toEqual([null, null]);
+    expect([nodeResult(node("e")), nodeResult(node("f", { kind: "general", preset: "research" })), nodeResult(node("g", { line: "a change's own line is no result" }))]).toEqual([null, null, null]);
   });
 
   it("lists only the done nodes that left something, in order", () => {
-    const m = mission("m", { nodes: [node("b", { status: "done", pr: 8, depends_on: ["a"] }), node("a", { status: "done", kind: "research", line: "why" }), node("c", { status: "working", pr: 9 }), node("d", { status: "done" })] });
+    const m = mission("m", { nodes: [node("b", { status: "done", pr: 8, depends_on: ["a"] }), node("a", { status: "done", kind: "general", preset: "research", line: "why" }), node("c", { status: "working", pr: 9 }), node("d", { status: "done" })] });
     expect(missionResults(m).map(({ node: one }) => one.key)).toEqual(["a", "b"]);
   });
 });
@@ -254,7 +316,7 @@ describe("a card's look (PRD mission-node-simple D-01, B1)", () => {
     expect(nodeLook(m, node("n", { status: "working", attention: raised("operator", "merged_unproven", 3) }))).toBe("working");
     expect(nodeLook(m, node("n", { status: "done", pr: 3, pr_state: "merged" }))).toBe("done");
     expect(nodeLook(m, node("n", { status: "done", delivery: "direct", commit: "c216793eb4a1" }))).toBe("done");
-    expect(nodeLook(m, node("n", { status: "done", kind: "research", delivery: null }))).toBe("done");
+    expect(nodeLook(m, node("n", { status: "done", kind: "general", preset: "research", delivery: null }))).toBe("done");
     expect(nodeLook(m, node("n", { status: "done", pr: 3, pr_state: "mergeable" }))).toBe("done");
     const outside = (status: MissionNode["status"]) => node("x", { kind: "external", delivery: null, external: { pr: 1232 }, status });
     expect([nodeLook(m, outside("planned")), nodeLook(m, outside("done")), nodeLook(m, { ...outside("working"), attention: raised("conductor", "pr_closed", 1232) })]).toEqual(["external", "done", "external"]);
@@ -282,12 +344,12 @@ describe("a card's look (PRD mission-node-simple D-01, B1)", () => {
   });
 
   it("tags finished work with what the core left before main, and nothing it could not read or that landed", () => {
-    // The core decides each node's landing (`herdr-core/src/runtime/mission_landing.rs`); the card only words it.
+    // The core decides each node's landing (`hide-core/src/runtime/mission_landing.rs`); the card only words it.
     expect(landingLeft(node("a", { status: "done", pr: 4, landing: { state: "left", action: "merge" } }))).toBe("merge");
     expect(landingLeft(node("b", { status: "done", delivery: "direct", branch: "feat/b", landing: { state: "left", action: "join" } }))).toBe("join");
     expect(landingLeft(node("c", { status: "done", delivery: "direct", branch: "feat/c", unread: true, landing: { state: "unread", action: "join" } }))).toBeNull();
     expect(landingLeft(node("d", { status: "done", pr: 5, landing: { state: "landed", proof: { by: "merged" } } }))).toBeNull();
-    expect(landingLeft(node("e", { status: "done", kind: "research", delivery: null }))).toBeNull();
+    expect(landingLeft(node("e", { status: "done", kind: "general", preset: "research", delivery: null }))).toBeNull();
   });
 
   it("draws a branch's commit Hide found in main as → main, before one recorded by hand, and the node is in main with nothing left to join (B17)", () => {
@@ -332,7 +394,10 @@ describe("a node's finish lines (PRD mission-map-git-criteria B6, B12, B23, B28,
     expect(criterionNote(line("ci", "ci", { state: "pass", reruns: 1 }), m, t)).toBe("rerun 1 time");
     expect(criterionNote(line("ci", "ci", { state: "fail", rerunning: true }), m, t)).toBe("rerunning");
     // Two of three passed under `all`: the line is open and says so (B6).
-    expect(criterionNote(line("verify", "verify", { rule: "all", checkers: [checker("claude", "pass"), checker("codex", "pass"), checker("gemini")] }), m, t)).toBe("2/3 passed");
+    // The count is the core's: two of the three asked are bound, one passed, and the empty slot is in neither number.
+    expect(criterionNote(line("verify", "verify", { rule: "all", checkers: [checker("claude", "pass"), checker("codex"), checker("gemini")], tally: { passed: 1, total: 2 } }), m, t)).toBe("1/2 passed");
+    // Without a tally from the core the page counts nothing itself.
+    expect(criterionNote(line("verify", "verify", { rule: "all", checkers: [checker("claude", "pass"), checker("codex", "pass"), checker("gemini")] }), m, t)).toBeNull();
     expect(criterionNote(line("verify", "verify", { checkers: [checker("claude")] }), m, t)).toBeNull();
     expect(criterionNote(line("d1", "defect", { text: "the filter resets", found_by: "verify-all" }), m, t)).toBe("found by Check together");
   });
@@ -366,7 +431,7 @@ describe("picking a card and the edges back (PRD mission-map-git-criteria B21, B
 
   it("draws a defect back from the node that found it while its line is open or failing", () => {
     const defect = (state: MissionCriterion["state"], found_by = "verify") => line("d1", "defect", { text: "the filter resets", found_by, state });
-    const m = (state: MissionCriterion["state"], found_by?: string) => mission("m", { nodes: [node("api", { criteria: [defect(state, found_by)] }), node("verify", { kind: "verify", delivery: null, depends_on: ["api"] })] });
+    const m = (state: MissionCriterion["state"], found_by?: string) => mission("m", { nodes: [node("api", { criteria: [defect(state, found_by)] }), node("verify", { kind: "general", preset: "verify", delivery: null, depends_on: ["api"] })] });
     expect(defectEdges(m("open"))).toEqual([{ from: "verify", to: "api" }]);
     expect(defectEdges(m("fail"))).toEqual([{ from: "verify", to: "api" }]);
     expect(defectEdges(m("pass"))).toEqual([]);
@@ -376,11 +441,16 @@ describe("picking a card and the edges back (PRD mission-map-git-criteria B21, B
 
 describe("a card's line (PRD mission-map-git-criteria B20, B28)", () => {
   it("says what a working node has left, what a planned one waits for, and what an outside one watches", () => {
-    const m = mission("m", { nodes: [node("core", { status: "working", pr: 1703 }), node("ui", { depends_on: ["core"] })] });
+    const m = mission("m", { nodes: [node("core", { status: "working", pr: 1703 }), node("ui", { depends_on: ["core"], waiting_on: { kind: "nodes", keys: ["core"] } })] });
     const working = node("w", { status: "working", criteria: [line("c1", "own", { state: "pass" }), line("review", "review"), line("ci", "ci", { state: "fail" })] });
     expect(cardLine(m, working, null, t)).toEqual({ text: "left: review, CI", attention: false });
     expect(cardLine(m, { ...working, line: "replay 19/31" }, null, t)?.text).toBe("replay 19/31");
     expect(cardLine(m, m.nodes[1]!, null, t)).toEqual({ text: "waiting for #1703", attention: false });
+    // The nodes it names are the core's `waiting_on`, never worked out again from `depends_on`.
+    expect(cardLine(m, { ...m.nodes[1]!, waiting_on: { kind: "start" } }, null, t)).toBeNull();
+    // mission-82: one waiting on a finish line names it after its node, and once free to start it says where it stacks.
+    expect(cardLine(m, { ...m.nodes[1]!, depends_on: ["core:c1"], waiting_on: { kind: "nodes", keys: ["core:c1"] } }, null, t)?.text).toBe("waiting for #1703 c1");
+    expect(cardLine(m, { ...m.nodes[1]!, depends_on: ["core:c1"], waiting_on: { kind: "start" }, stack: { on: "core", branch: "m82/core", pr: 1703 } }, null, t)?.text).toBe("can start · stacked on core");
     const outside = node("x", { kind: "external", delivery: null, external: { pr: 1232 }, status: "planned" });
     expect(cardLine(m, outside, null, t)?.text).toBe("waiting for main");
     expect(cardLine(m, { ...outside, unread: true }, null, t)?.text).toBe("Could not check");
@@ -405,13 +475,32 @@ describe("the operator's turn (PRD mission-map-git-criteria B18, B20, B25; PRD m
       // A blocked label its Conductor can handle stays on the card.
       p3: { request: { verb: "blocked", verb_since_unix_ms: 1, line: "Needs a token", end: "blocked", request: null, later_by: null, pull_requests: [] } },
     };
-    const row = (n: MissionNode) => (n.pane_id ? ((rows[n.pane_id] as AgentRow | undefined) ?? null) : null);
+    const row = (n: MissionNode) => workerEscalation(n.pane_id ? (rows[n.pane_id] as AgentRow | undefined) : null);
     const items = turnItems(mission("m", { decision: "Rail or slot?", nodes }), row);
     expect(items.map((item) => item.kind)).toEqual(["decision", "attention", "worker_blocked"]);
     expect(items[1]).toMatchObject({ node: { key: "outside" }, attention: { reason: "pr_closed", pr: 1232 } });
     expect(items[2]).toMatchObject({ node: { key: "api" }, cause: "child_blocked", line: "Login expired" });
     const raisedOnly = { ...rows.p2!, request: undefined };
-    expect(turnItems(mission("m", { nodes: [nodes[0]!] }), () => raisedOnly as AgentRow)[0]).toMatchObject({ kind: "worker_blocked", line: null });
+    expect(turnItems(mission("m", { nodes: [nodes[0]!] }), () => workerEscalation(raisedOnly as AgentRow))[0]).toMatchObject({ kind: "worker_blocked", line: null });
+  });
+
+  it("lists a worker's person's turn in 내 차례 with what and where, and says it on its step too (operator decision 2026-11-13; PRD ask-human B25)", () => {
+    const ko = initializeInterfaceI18n("ko").getFixedT(null, "translation");
+    const working = node("api", { title: "API", status: "working", pane_id: "p2" });
+    const declared = { escalation: { cause: "human_turn", letter_id: null, since_unix_ms: 1, human_notice: false }, human_turn: { id: "w.1", kind: "auth", place: "github.com/login", pane_id: "p2", title: "w", since_unix_ms: 1, own: true } } as unknown as AgentRow;
+    const escalation = workerEscalation(declared);
+    expect(escalation).toMatchObject({ cause: "human_turn", human: { kind: "auth", place: "github.com/login" } });
+    const items = turnItems(mission("m", { nodes: [working] }), () => escalation);
+    expect(items).toEqual([{ kind: "human_turn", node: working, human: { kind: "auth", place: "github.com/login" } }]);
+    // The list stands the mission in its 내 차례 and words the row as the step does.
+    const entry = missionEntry(mission("m", { nodes: [working] }), () => escalation);
+    expect(entry.group).toBe("turn");
+    expect(rowLineText(rowLine(entry.mission, entry.turn[0]!)!, ko)).toBe("API · 인증 · github.com/login");
+    expect(holdReason(mission("m", { nodes: [working] }), working, () => escalation)).toEqual({ kind: "worker", escalation });
+    expect(escalationWhy(escalation!, ko)).toBe("인증 · github.com/login");
+    // A step that is not working has no worker to wait on, and a finished mission nothing in 내 차례.
+    expect(turnItems(mission("m", { nodes: [{ ...working, status: "done" }] }), () => escalation)).toEqual([]);
+    expect(turnItems(mission("m", { status: "done", nodes: [working] }), () => escalation)).toEqual([]);
   });
 
   it("lists what waits for main in the Conductor's merge order while the mission waits to merge, a branch-only one as a join", () => {
@@ -434,6 +523,33 @@ describe("the operator's turn (PRD mission-map-git-criteria B18, B20, B25; PRD m
     expect(turnItems(mission("m", { conductor: gone }), none).map((item) => item.kind)).toEqual(["takeover"]);
     expect(turnItems(mission("m", { status: "done", conductor: gone, decision: "old" }), none)).toEqual([]);
   });
+
+  it("gives at most one turn item for one cause on five nodes, whatever the raise's reason, with or without a Conductor (hide-private docs/missions.md, the principle of 2026-11-11)", () => {
+    const gone = { pane_id: "p1", name: "c", agent_kind: "claude", session: null, present: false, takes_answers: false };
+    // The reasons only the operator settles stay theirs per node: a gate reached with no Conductor, and a Conductor's failure from before.
+    const operatorFirst: Record<MissionAttentionReason, boolean> = { merged_unproven: false, worker_ended: false, pr_closed: false, unplanned_pr: false, conductor_failed: true, wake_refused: false, close_refused: false, human_gate: true, not_started: false, warning_stood: false, wait_stood: false };
+    const wrong: string[] = [];
+    for (const reason of MISSION_ATTENTION_REASONS) {
+      const keys = ["a", "b", "c", "d", "e"];
+      const to = operatorFirst[reason] ? "operator" : "conductor";
+      const nodes = keys.map((key, index) => node(key, { status: "working", attention: { ...raised(to, reason), since_unix_ms: 100 + index } }));
+      const held = operatorFirst[reason] ? [] : keys.map((key, index) => ({ key, title: key, reason, pr: null, since_unix_ms: 100 + index }));
+      const net = (present: boolean) => (held.length > 0 ? { conductor_present: present, since_unix_ms: 100, nodes: held } : null);
+      const cases = [
+        ["conductor, before 20 minutes", mission("m", { nodes })],
+        ["conductor, 20 minutes", mission("m", { nodes, safety_net: net(true) })],
+        ["no conductor", mission("m", { nodes, conductor: gone, safety_net: net(false) })],
+      ] as const;
+      for (const [name, one] of cases) {
+        const kinds = turnItems(one, none).map((item) => item.kind);
+        const expected = operatorFirst[reason]
+          ? [...(one.conductor.present ? [] : ["takeover"]), ...keys.map(() => "attention")]
+          : name === "conductor, before 20 minutes" ? [] : [one.conductor.present ? "safety_net" : "takeover"];
+        if (JSON.stringify(kinds) !== JSON.stringify(expected)) wrong.push(`${reason} / ${name}: ${kinds.join(" ")}`);
+      }
+    }
+    expect(wrong).toEqual([]);
+  });
 });
 
 describe("a finished mission's results and the map's summary (PRD mission-tool B12, B19-B21)", () => {
@@ -447,7 +563,7 @@ describe("a finished mission's results and the map's summary (PRD mission-tool B
         node("a", { status: "done", agent_id: "w1", pr: 1, pr_state: "merged", landing: { state: "landed", proof: { by: "merged" } }, criteria: [pass("c1"), { key: "c2", kind: "own", state: "skipped" }, checked("pass", "r1")], criteria_met: 3, criteria_skipped: 1 }),
         node("b", { status: "done", agent_id: "w2", pr: 2, pr_state: "mergeable", landing: { state: "left", action: "merge" }, criteria: [pass("c1"), { key: "ci", kind: "ci", state: "fail" }], criteria_met: 1, criteria_skipped: 0 }),
         node("c", { status: "done", agent_id: "w3", delivery: "direct", branch: "c", landing: { state: "landed", proof: { by: "in_main", commit: "abc1234" } } }),
-        node("check", { kind: "verify", delivery: null, status: "done", agent_id: "w4" }),
+        node("check", { kind: "general", preset: "verify", delivery: null, status: "done", agent_id: "w4" }),
         // An outside pull request and a dropped node are not the mission's results.
         node("out", { kind: "external", delivery: null, external: { pr: 9 }, pr: 9, pr_state: "merged", status: "done", landing: { state: "landed", proof: { by: "outside" } } }),
         node("gone", { status: "dropped", agent_id: "w5", pr: 3, pr_state: "closed" }),
@@ -455,7 +571,7 @@ describe("a finished mission's results and the map's summary (PRD mission-tool B
     });
     expect(missionResultCounts(done)).toEqual({ merged: { merged: 1, total: 2 }, criteria: { passed: 3, total: 5, skipped: 1 }, agents: { workers: 4, checkers: 1 }, landed: { landed: 2, total: 3 } });
     // No pull request state read, no finish lines, no agent bound, no change: no tile.
-    const bare = mission("m", { status: "done", exempt: true, nodes: [node("r", { kind: "research", delivery: null, status: "done", pr: null, criteria: [pass("c1")], criteria_met: 1 }), node("p", { kind: "verify", delivery: null, status: "done", pr: 4, pr_state: null })] });
+    const bare = mission("m", { status: "done", exempt: true, nodes: [node("r", { kind: "general", preset: "research", delivery: null, status: "done", pr: null, criteria: [pass("c1")], criteria_met: 1 }), node("p", { kind: "general", preset: "verify", delivery: null, status: "done", pr: 4, pr_state: null })] });
     expect(missionResultCounts(bare)).toEqual({ merged: null, criteria: null, agents: null, landed: null });
   });
 
@@ -480,16 +596,7 @@ describe("a finished mission's results and the map's summary (PRD mission-tool B
     expect(conductorState(mission("m", { status: "done", conductor: gone }), null)).toBeNull();
   });
 
-  it("offers 이어받기 of a Conductor still there only once a raise it was asked first reached the operator, and never resumes its live conversation", () => {
-    const asked = (to: "conductor" | "operator", reason: MissionAttention["reason"]) => mission("m", { nodes: [node("n", { status: "working", attention: raised(to, reason, 12) })] });
-    // A raise the Conductor still has (B14) or one only the operator settles (B26) is no sign it stopped answering.
-    expect(conductorUnanswered(asked("conductor", "pr_closed"))).toBe(false);
-    expect(conductorUnanswered(asked("operator", "conductor_failed"))).toBe(false);
-    // Ten minutes unanswered moved it to the operator (D-05, B15).
-    expect(conductorUnanswered(asked("operator", "pr_closed"))).toBe(true);
-    // A mission no Conductor holds already offers it on its gone row; a closed one is not taken over.
-    expect(conductorUnanswered({ ...asked("operator", "pr_closed"), conductor: { ...mission("m").conductor, present: false } })).toBe(false);
-    expect(conductorUnanswered({ ...asked("operator", "pr_closed"), status: "done" })).toBe(false);
+  it("resumes only a gone Conductor's own conversation, never a live one's", () => {
     // The live Conductor keeps its own conversation; the gone one's is resumed first.
     expect(conductorResume(mission("m"))).toBeNull();
     expect(conductorResume(mission("m", { conductor: { ...mission("m").conductor, present: false } }))).toEqual({ provider: "claude", sessionId: "s-1" });
@@ -502,7 +609,6 @@ describe("a node that waits on someone, and what Hide did (PRD mission-node-simp
       const words = attentionWords(node("n", { attention: raised("operator", reason, 12) }), t);
       expect(words?.who).toBe("You");
       expect(words?.why).not.toMatch(/mission\.|\{\{/);
-      expect(attentionChoices(reason).length).toBeGreaterThan(0);
     }
     for (const action of contract.mission_operator_action) expect(english).toHaveProperty(`mission.operator.${action}`);
     for (const action of contract.mission_hide_action) expect(english).toHaveProperty(`mission.hide.${action}`);
@@ -518,15 +624,71 @@ describe("a node that waits on someone, and what Hide did (PRD mission-node-simp
     const other = mission("b", { nodes: [node("n", { status: "working", attention: waiting(40, false) })] });
     const unnamed = mission("c", { nodes: [node("n", { status: "working", attention: waiting(1, false) })] });
     const asks = missionAsks([orphan, other, unnamed], ["b", "a"]);
-    expect(asks.map((ask) => [ask.mission.id, ask.node.key, ask.more])).toEqual([["b", "n", 0], ["a", "early", 1]]);
+    expect(asks.map((ask) => [ask.mission.id, ask.kind === "node" ? ask.node.key : ask.kind, ask.more])).toEqual([["b", "n", 0], ["a", "early", 1]]);
     expect(missionAsks([orphan], [])).toEqual([]);
   });
 
-  it("offers the choices each reason takes", () => {
-    expect(attentionChoices("merged_unproven")).toEqual(["done"]);
-    expect(attentionChoices("worker_ended")).toEqual(["drop"]);
-    expect(attentionChoices("unplanned_pr")).toEqual(["attach", "leave"]);
-    expect(attentionChoices("conductor_failed")).toEqual(["resume", "drop"]);
+  it("draws a mission whose raises its Conductor has not settled as one Needs You item for its safety net, however many nodes it holds", () => {
+    const held = ["a", "b", "c", "d", "e"].map((key, index) => ({ key, title: key, reason: "worker_ended" as const, pr: null, since_unix_ms: 100 + index }));
+    const nodes = held.map((one) => node(one.key, { status: "working", attention: { ...raised("conductor", "worker_ended"), since_unix_ms: one.since_unix_ms } }));
+    const net = { conductor_present: true, since_unix_ms: 100, nodes: held };
+    const asks = missionAsks([mission("m", { nodes, safety_net: net })], ["m"]);
+    expect(asks).toEqual([{ kind: "net", mission: expect.objectContaining({ id: "m" }), net, since_unix_ms: 100, more: 0 }]);
+    // A raise only the operator settles leads, and the safety net is one more thing the mission waits on.
+    const failed = node("f", { status: "working", attention: { ...raised("operator", "conductor_failed"), since_unix_ms: 300, item: true } });
+    const [first] = missionAsks([mission("m", { nodes: [...nodes, failed], safety_net: net })], ["m"]);
+    expect(first && first.kind === "node" ? [first.node.key, first.more] : null).toEqual(["f", 1]);
+  });
+
+  it("raises a ready pull request the plan left to the operator as one turn and one Needs You item while the mission runs, and never one of a scope pr mission (PRD mission-destination B20, B21, D-35)", () => {
+    const none = () => null;
+    const left = { state: "left", action: "merge" } as const;
+    const mine = (state: "ahead" | "due" | "merged") => ({ by: "operator" as const, why: "DB는 직접", state });
+    const ko = initializeInterfaceI18n("ko").getFixedT(null, "translation");
+    const db = (state: "ahead" | "due" | "merged", extra: Partial<MissionNode> = {}) => node("db", { status: "done", pr: 33, landing: left, finished_at_unix_ms: 50, merge: mine(state), ...extra });
+    const api = node("api", { status: "working", pr: 31 });
+    // Ahead of its turn: nothing asks, on any surface the one rule feeds.
+    const ahead = mission("m", { scope: "merge", nodes: [db("ahead", { status: "working", landing: null }), api], landing_order: [] });
+    expect(turnItems(ahead, none)).toEqual([]);
+    expect(missionTurn(ahead)).toBeNull();
+    expect(missionEntry(ahead, none).group).toBe("running");
+    expect(missionAsks([ahead], ["m"])).toEqual([]);
+    // Due: 내 차례 says 머지할 차례 with the node, the list stands it in 내 차례 with 머지하기, and the mission is its Needs You item.
+    const due = mission("m", { scope: "merge", nodes: [db("due"), api], landing_order: ["db"] });
+    const [item] = turnItems(due, none);
+    expect(item).toMatchObject({ kind: "landing", git: false, due: true });
+    expect(item!.kind === "landing" && item!.nodes.map((n) => n.key)).toEqual(["db"]);
+    expect(missionEntry(due, none).group).toBe("turn");
+    const [ask] = missionAsks([due], ["m"]);
+    expect(ask && ask.kind === "merge" ? [ask.node.key, ask.since_unix_ms, ask.more] : ask).toEqual(["db", 50, 0]);
+    expect(ko("mission.merge.due", { pr: 33 })).toBe("머지할 차례 PR #33");
+    // Merged on GitHub: it asks nothing more.
+    const merged = mission("m", { scope: "merge", nodes: [db("merged", { landing: { state: "landed", proof: { by: "merged" } } }), api], landing_order: [] });
+    expect(turnItems(merged, none)).toEqual([]);
+    expect(missionAsks([merged], ["m"])).toEqual([]);
+    // A scope pr mission's ready pull request is the operator's, never due: no turn while it runs.
+    const scopePr = mission("m", { scope: "pr", nodes: [db("ahead", { merge: { by: "operator", state: "ahead" } }), api], landing_order: ["db"] });
+    expect(turnItems(scopePr, none)).toEqual([]);
+    expect(missionAsks([scopePr], ["m"])).toEqual([]);
+    // Once it waits on the merges, the landing turn is as before, for both.
+    for (const nodes of [[db("due")], [db("ahead", { merge: { by: "operator", state: "ahead" } })]]) {
+      expect(turnItems(mission("m", { status: "merge_wait", nodes, landing_order: ["db"] }), none)[0]).toMatchObject({ kind: "landing", git: false, due: false });
+    }
+    // The phone reads the same rule from the merge its core sends.
+    const phone = { ...due, nodes: due.nodes.map((n) => ({ ...n, worker_agent: null, agent: null, escalation: null })) } as unknown as PhoneMission;
+    expect(missionEntries([phone])[0]!.group).toBe("turn");
+  });
+
+  it("names the pull request a raise is about, with the state the project's list reads", () => {
+    const pull = (number: number, state: PullRequest["state"]) => ({ number, title: "", url: "", badge: "open", review: null, is_draft: false, state }) as PullRequest;
+    const ended = raised("operator", "worker_ended");
+    const at = node("n", { pr: 7, pr_state: "pending" });
+    expect(attentionPr(node("n"), ended, [])).toBeNull();
+    expect(attentionPr(at, ended, [pull(7, "failed")])).toEqual({ number: 7, state: "failed" });
+    expect(attentionPr(at, ended, null)).toEqual({ number: 7, state: "pending" });
+    // A raise about another pull request names it, with no state the node's would lend it.
+    expect(attentionPr(at, raised("operator", "unplanned_pr", 12), null)).toEqual({ number: 12, state: null });
+    expect(attentionPr(node("o", { kind: "external", external: { pr: 1232 } }), ended, null)?.number).toBe(1232);
   });
 
   it("says what Hide did last and why", () => {
@@ -550,11 +712,284 @@ describe("a node that waits on someone, and what Hide did (PRD mission-node-simp
     expect(lineOutrun({ ...working, line: null, hide: { action: "done", at_unix_ms: 20 } }, [])).toBe(false);
   });
 
+  it("holds the working step the decision stopped and a working step whose worker the core raised in needs a look, after the raised nodes (PRD mobile-companion-ui B36)", () => {
+    const question = { key: 1, why: null, recommend: null, node: "stopped", asked_at_unix_ms: 1 };
+    const nodes = [node("blocked", { status: "working" }), node("stopped", { status: "working" }), node("busy", { status: "working" }), node("flagged", { status: "working", attention: raised("conductor") }), node("done", { status: "done" })];
+    const asked = mission("m", { decision: "Merge now?", question, nodes });
+    const escalationOf = (one: MissionNode) => (one.key === "blocked" ? { cause: "child_blocked" as const, line: "Login expired" } : null);
+    const keys = (groups: ReturnType<typeof summaryGroups<MissionNode>>) => [groups.attention, groups.working, groups.done].map((list) => list.map((one) => one.key));
+    expect(keys(summaryGroups(asked, escalationOf))).toEqual([["flagged", "blocked", "stopped"], ["busy"], ["done"]]);
+    expect(nodes.map((one) => holdReason(asked, one, escalationOf)?.kind ?? null)).toEqual(["worker", "decision", null, "attention", null]);
+    // Once the decision is answered the stopped step works again; a raised worker on a finished step holds nothing.
+    expect(keys(summaryGroups({ ...asked, decision: null }, escalationOf))).toEqual([["flagged", "blocked"], ["stopped", "busy"], ["done"]]);
+    expect(holdReason(asked, nodes[4]!, () => ({ cause: "child_blocked", line: null }))).toBeNull();
+  });
+
   it("groups the summary as needs a look, in progress and done, and lets a done or dropped node work again outside a cancelled mission", () => {
     const m = mission("m", { nodes: [node("a", { status: "done" }), node("b", { status: "working" }), node("c", { status: "done", attention: raised("operator", "conductor_failed") }), node("d"), node("e", { status: "dropped" })] });
-    const groups = summaryGroups(m);
+    const groups = summaryGroups(m, () => null);
     expect([groups.attention, groups.working, groups.done].map((nodes) => nodes.map((one) => one.key))).toEqual([["c"], ["b"], ["a"]]);
     expect([nodeResumable(m, m.nodes[0]!), nodeResumable(m, m.nodes[4]!), nodeResumable(m, m.nodes[1]!)]).toEqual([true, true, false]);
     expect(nodeResumable(mission("m", { status: "cancelled" }), m.nodes[0]!)).toBe(false);
+  });
+});
+
+describe("where a node's time went (mission-82)", () => {
+  const minute = 60_000;
+  const end = 1_000 * minute;
+  const at = (minutes: number) => end - minutes * minute;
+  it("splits at its start and where its worker's lines first all stood met, counting a running span to the end", () => {
+    expect(nodeSpans(node("n", { status: "working", ready_at_unix_ms: at(780), started_at_unix_ms: at(600), own_met_at_unix_ms: at(510) }), end)).toEqual({ work: 90 * minute, review: 510 * minute, wait: 180 * minute });
+    expect(nodeSpans(node("n", { status: "done", started_at_unix_ms: at(200), own_met_at_unix_ms: at(110), finished_at_unix_ms: at(20) }), end)).toEqual({ work: 90 * minute, review: 90 * minute, wait: null });
+    expect(nodeSpans(node("n", { status: "working", started_at_unix_ms: at(40), ready_at_unix_ms: at(40) }), end)).toEqual({ work: 40 * minute, review: null, wait: null });
+    expect(nodeSpans(node("n", { status: "planned", ready_at_unix_ms: at(25) }), end)).toEqual({ work: null, review: null, wait: 25 * minute });
+  });
+  it("counts a node back at work from a finish from when it went back, not the time it stood done", () => {
+    expect(nodeSpans(node("n", { status: "working", ready_at_unix_ms: at(1000), started_at_unix_ms: at(1000), worked_at_unix_ms: at(60), own_met_at_unix_ms: at(20) }), end)).toEqual({ work: 40 * minute, review: 20 * minute, wait: null });
+  });
+  it("leaves out what the record cannot say: a finished node from before the stamp, and a node that could not start yet", () => {
+    expect(nodeSpans(node("n", { status: "done", started_at_unix_ms: at(300), finished_at_unix_ms: at(10) }), end)).toBeNull();
+    // Its wait alone never stands in for the total of a node that started.
+    expect(nodeSpans(node("n", { status: "done", ready_at_unix_ms: at(480), started_at_unix_ms: at(300), finished_at_unix_ms: at(10) }), end)).toBeNull();
+    expect(nodeSpans(node("n", { status: "planned" }), end)).toBeNull();
+  });
+});
+
+describe("a node's warnings", () => {
+  // hide-private issue 552: the card shows the first warning's short word
+  // with `+n` for the rest, and its hover says each in full as told to the
+  // Conductor; a dropped node or a cancelled mission warns of nothing.
+  const warned = node("n", {
+    status: "working",
+    review_rounds: { line: "review", rounds: 3, limit: 3 },
+    warnings: [
+      { kind: "review_fails", from_unix_ms: 1, since_unix_ms: 1, told_unix_ms: 1 },
+      { kind: "stopped", from_unix_ms: 0, since_unix_ms: 6 * 60_000, told_unix_ms: 6 * 60_000, cause: { kind: "error", line: "API Error: 500" } },
+    ],
+  });
+
+  it("names the first on the card and each in full", () => {
+    expect(warningWords(mission("m"), warned, t)).toEqual({
+      short: "Review limit 3/3 +1",
+      full: ["Warned the Conductor: review or verify failed in round 3: the 3-round limit is reached", "Warned the Conductor: worker stopped for 6 minutes · API error · API Error: 500"],
+    });
+    expect(warningWords(mission("m"), { ...warned, warnings: [warned.warnings![1]!] }, t)?.short).toBe("Stopped");
+  });
+
+  it("leaves out an older core's review warning, which carries no rounds", () => {
+    expect(warningWords(mission("m"), { ...warned, review_rounds: undefined }, t)).toEqual({ short: "Stopped", full: ["Warned the Conductor: worker stopped for 6 minutes · API error · API Error: 500"] });
+    expect(warningWords(mission("m"), { ...warned, review_rounds: null, warnings: [warned.warnings![0]!] }, t)).toBeNull();
+  });
+
+  it("says a stopped worker's warning with how long and why (mission-56)", () => {
+    const stopped = { kind: "stopped" as const, from_unix_ms: 0, since_unix_ms: 6 * 60_000, told_unix_ms: 6 * 60_000, cause: { kind: "error" as const, line: "API Error: 500" } };
+    expect(warningWords(mission("m"), { ...warned, warnings: [stopped] }, t)).toEqual({
+      short: "Stopped",
+      full: ["Warned the Conductor: worker stopped for 6 minutes · API error · API Error: 500"],
+    });
+  });
+
+  it("says a warning told only once its letter was queued", () => {
+    const untold = { ...warned, warnings: [{ ...warned.warnings![1]!, told_unix_ms: null }] };
+    expect(warningWords(mission("m"), untold, t)?.full).toEqual(["Conductor to be told: worker stopped for 6 minutes · API error · API Error: 500"]);
+  });
+
+  it("is none without a warning, on a dropped node or in a cancelled mission", () => {
+    expect(warningWords(mission("m"), node("n"), t)).toBeNull();
+    expect(warningWords(mission("m"), { ...warned, status: "dropped" }, t)).toBeNull();
+    expect(warningWords(mission("m", { status: "cancelled" }), warned, t)).toBeNull();
+  });
+});
+
+describe("missionTurn", () => {
+  // Every mission chip marks the operator's turn: a decision first, else a
+  // node whose raise reached the operator; one waiting on the Conductor is not
+  // theirs, and a mission that ended marks nothing.
+  const raised = (to: "operator" | "conductor") => node("n", { attention: { reason: "not_started", pr: null, to, since_unix_ms: 1, on_row: false, item: true, choices: ["leave", "drop"] } });
+
+  it("is the decision, else a node raised to the operator", () => {
+    expect(missionTurn(mission("m", { decision: "Which?", nodes: [raised("operator")] }))).toBe("decision");
+    expect(missionTurn(mission("m", { nodes: [raised("operator")] }))).toBe("attention");
+    expect(missionTone(mission("m", { nodes: [raised("operator")] }))).toBe("hold");
+    expect(missionTurn(mission("m", { nodes: [raised("conductor")] }))).toBeNull();
+    expect(missionTurn(mission("m", { status: "cancelled", nodes: [raised("operator")] }))).toBeNull();
+  });
+
+  it("gives chips, the map and desktop/phone lists the same turn reason", () => {
+    const gate = node("gate", { attention: { ...raised("operator").attention!, reason: "human_gate" } });
+    const cases = [
+      { name: "held letters alone", extra: { conductor_letters: { count: 2, reason: "draft" as const, since_unix_ms: 1 } }, kind: "letters", turn: "attention" },
+      { name: "decision", extra: { decision: "Which?" }, kind: "decision", turn: "decision" },
+      { name: "safety net", extra: { safety_net: { conductor_present: true, since_unix_ms: 1, nodes: [{ key: "a", title: "A", reason: "worker_ended" as const, pr: null, since_unix_ms: 1 }] } }, kind: "safety_net", turn: "attention" },
+      { name: "gate", extra: { nodes: [gate] }, kind: "attention", turn: "attention" },
+    ] satisfies { name: string; extra: Partial<Mission>; kind: string; turn: string }[];
+    for (const row of cases) {
+      const one = mission("m", row.extra);
+      expect(missionTurn(one), row.name).toBe(row.turn);
+      expect(paneChipWords(one).turn, row.name).toBe(row.turn);
+      expect(missionTone(one), row.name).toBe("hold");
+      expect(turnItems(one, () => null).map((item) => item.kind), row.name).toEqual([row.kind]);
+      const entry = missionEntry(one, () => null);
+      expect(entry.group, row.name).toBe("turn");
+      expect(entry.turn.map((item) => item.kind), row.name).toEqual([row.kind]);
+      const phone: PhoneMission = {
+        ...one, device_label: null,
+        conductor: { ...one.conductor, agent: null },
+        nodes: one.nodes.map((node) => ({ ...node, agent_runtime: null, worker_agent: null, agent: null, escalation: null })),
+      };
+      const [phoneEntry] = missionEntries([phone]);
+      expect(phoneEntry?.group, row.name).toBe("turn");
+      expect(phoneEntry?.turn.map((item) => item.kind), row.name).toEqual([row.kind]);
+      const closed = { ...one, status: "done" as const };
+      expect(missionTurn(closed), row.name).toBeNull();
+      expect(turnItems(closed, () => null), row.name).toEqual([]);
+      expect(missionEntry(closed, () => null).group, row.name).toBe("closed");
+    }
+  });
+
+  it("names a delay only while the mission is open", () => {
+    expect(missionDelay(mission("m", { delay: "disk" }))).toBe("disk");
+    expect(missionDelay(mission("m", { delay: "disk", status: "done" }))).toBeNull();
+  });
+});
+
+describe("nodeWait", () => {
+  // The core decides which nodes wait (`Mission::wait_of`): the card's pause
+  // line reads its wait, the list's count only a node's own hold.
+  const own = { why: "check on the phone in the morning", until_unix_ms: 9 * 3_600_000, mission: false };
+  const delay = { why: "disk", until_unix_ms: 3_600_000, mission: true };
+
+  it("reads the core's wait and counts the nodes held on their own", () => {
+    const held = mission("m", { nodes: [node("a", { wait: own }), node("b", { wait: delay }), node("c")] });
+    expect(nodeWait(held.nodes[0]!)).toEqual(own);
+    expect(nodeWait(held.nodes[1]!)).toEqual(delay);
+    expect(nodeWait(held.nodes[2]!)).toBeNull();
+    expect(heldNodes(held)).toBe(1);
+  });
+});
+
+describe("nodeSteps", () => {
+  const step = (key: string, title: string, status: "done" | "working" | "planned" | "dropped") => ({ key, title, depends_on: [], status, line: null, output: null, changed: false, change: null, waiting: false, delegate: false, evidence: null, delegation: null });
+  const plan = (steps: ReturnType<typeof step>[], current: string | null, finished = false) => ({
+    pane_id: "", session: { device_id: "mac", agent: "codex", session_id: "s" }, steps,
+    review: "approved" as const, ask: null, progress: { current, next: null, done: steps.filter((one) => one.status === "done").length, total: steps.length, finished }, created_at_unix_ms: 1, updated_at_unix_ms: 2,
+  });
+
+  it("is the Conductor's steps, all only planned, until a worker's plan exists", () => {
+    expect(nodeSteps(node("a"))).toBeNull();
+    expect(nodeSteps(node("a", { steps: ["One", "Two"] }))).toEqual({ source: "plan", now: null, steps: [{ title: "One", tone: "plan" }, { title: "Two", tone: "plan" }] });
+  });
+
+  it("is the worker's plan once it exists, a dropped step left out", () => {
+    const worker = plan([step("a", "One", "done"), step("b", "Two, changed", "working"), step("c", "Gone", "dropped"), step("d", "Three", "planned")], "b");
+    expect(nodeSteps(node("a", { steps: ["One", "Two", "Three"], plan: worker }))).toEqual({
+      source: "worker",
+      now: "Two, changed",
+      steps: [{ title: "One", tone: "done" }, { title: "Two, changed", tone: "working" }, { title: "Three", tone: "plan" }],
+    });
+    // A finished plan has no current step.
+    const finished = nodeSteps(node("a", { plan: plan([step("a", "One", "done")], null, true) }));
+    expect(finished).toMatchObject({ now: null, steps: [{ title: "One", tone: "done" }] });
+  });
+});
+
+describe("how a node in progress moves (operator decision 2026-11-13)", () => {
+  it("is worked, rests on someone or stands stopped, and only a node in progress has a pace", () => {
+    const m = mission("m");
+    const pace = (extra: Partial<MissionNode>) => nodePace(m, node("a", { status: "working", ...extra }));
+    expect(pace({ work: { state: "working" } })).toBe("working");
+    // A row Hide cannot read says nothing, and the card stays as it was: worked.
+    expect(pace({})).toBe("working");
+    expect(pace({ work: { state: "waiting", on: { kind: "review" } } })).toBe("waiting");
+    // A worker Hide put to sleep rests; its sleep is the label's.
+    expect(pace({ agent_runtime: "asleep" })).toBe("waiting");
+    expect(pace({ agent_runtime: "asleep", work: { state: "asleep" } })).toBe("waiting");
+    expect(pace({ work: { state: "stopped", cause: null, since_unix_ms: 1 } })).toBe("stopped");
+    expect(pace({ work: { state: "no_worker" } })).toBe("stopped");
+    expect(pace({ work: { state: "no_worker", since_unix_ms: 1 } })).toBe("stopped");
+    expect(nodePace(m, node("a", { status: "planned" }))).toBeNull();
+    expect(nodePace(m, node("a", { status: "done" }))).toBeNull();
+    expect(nodePace(m, node("a", { status: "working", kind: "external" }))).toBeNull();
+    expect(nodePace(mission("m", { status: "cancelled" }), node("a", { status: "working", work: { state: "no_worker" } }))).toBeNull();
+  });
+
+  it("draws a stopped node's head cell and its step at work in the stopped colour", () => {
+    const m = mission("m", { nodes: [node("a", { status: "working", work: { state: "no_worker" } }), node("b", { status: "working", work: { state: "waiting", on: { kind: "ci" } } }), node("c", { status: "working", work: { state: "no_worker" }, attention: raised("operator", "worker_ended") })] });
+    // A node the operator has to look at keeps the decision colour over its pace, on the map's head and on the chip and list row alike.
+    expect(missionHeadCells(m)).toEqual(["stopped", "working", "attention"]);
+    expect(missionCells(m)).toEqual(["stopped", "working", "hold"]);
+    const steps = [{ title: "a", tone: "done" as const }, { title: "b", tone: "working" as const }, { title: "c", tone: "plan" as const }];
+    expect(pacedSteps(steps, "stopped")).toEqual(["done", "stopped", "plan"]);
+    expect(pacedSteps(steps, "waiting")).toEqual(["done", "working", "plan"]);
+    expect(pacedSteps(steps, null)).toEqual(["done", "working", "plan"]);
+  });
+});
+
+describe("what a stalled mission shows (hide-private issues 678, 680)", () => {
+  it("words every reason the core holds a Conductor's letters for and every state of a node's work", () => {
+    for (const reason of contract.mission_letters_held_for) expect(english).toHaveProperty(`mission.letters.reason.${reason}`);
+    const states = contract.mission_node_work as string[];
+    expect(states).toEqual(["working", "waiting", "asleep", "stopped", "no_worker"]);
+    expect(nodeWorkWords({ state: "working" }, t)).toBe("Working");
+    // A worker Hide put to sleep is said asleep, never a wait on it (letters-missions-simplify B23).
+    expect(nodeWorkWords({ state: "asleep" }, t)).toBe("Worker asleep");
+    // A stopped worker says why: a usage limit with the agent's own line, an API error, or no report (mission-56).
+    expect(nodeWorkWords({ state: "stopped", cause: { kind: "limit", line: "resets 4pm" }, since_unix_ms: 1 }, t)).toBe("Stopped · usage limit · resets 4pm");
+    expect(nodeWorkWords({ state: "stopped", cause: { kind: "error", line: "API Error: 500" }, since_unix_ms: 1 }, t)).toBe("Stopped · API error");
+    expect(nodeWorkWords({ state: "stopped", cause: null, since_unix_ms: 1 }, t)).toBe("Stopped · no report");
+    // No worker is a stop too, said as one (operator decision 2026-11-13).
+    expect(nodeWorkWords({ state: "no_worker" }, t)).toBe("Stopped · no worker");
+    for (const kind of ["decision", "blocked", "start", "worker", "review", "verify", "ci", "merge", "conductor"] as const) {
+      expect(nodeWorkWords({ state: "waiting", on: { kind } }, t)).toMatch(/^Waiting · \S/);
+    }
+    expect(nodeWorkWords({ state: "waiting", on: { kind: "attention", to: "operator", reason: "worker_ended" } }, t)).toBe("Waiting · You");
+    expect(heldLettersText({ count: 2, reason: "draft", since_unix_ms: 1 }, t)).toBe("Letters waiting for the Conductor: 2 · unsent text in the Conductor's input: send or clear it");
+  });
+
+  it("folds a worker raised for its held letter into the Conductor's letters line, in 내 차례 and the summary's 확인 필요 alike, and keeps any other cause in both", () => {
+    const letters = { count: 2, reason: "draft" as const, since_unix_ms: 1 };
+    const nodes = [node("api", { status: "working", pane_id: "p2" })];
+    const raisedFor = (cause: EscalationCause) => () => ({ cause, line: null });
+    // Both screens read one rule (`shownEscalation`): what 내 차례 lists for the worker, and whether the summary holds its node.
+    const shown = (cause: EscalationCause, withLetters: boolean) => {
+      const m = mission("m", { nodes, ...(withLetters ? { conductor_letters: letters } : {}) });
+      const turn = turnItems(m, raisedFor(cause)).some((item) => item.kind === "worker_blocked");
+      const held = holdReason(m, nodes[0]!, raisedFor(cause)) !== null;
+      const groups = summaryGroups(m, raisedFor(cause));
+      expect(groups.attention.length > 0, `${cause}: summary group`).toBe(held);
+      expect(groups.working.length > 0, `${cause}: a folded worker reads as working`).toBe(!held);
+      expect(turn, `${cause}: 내 차례 and 확인 필요 agree`).toBe(held);
+      return turn;
+    };
+    for (const cause of ["draft", "parent_blocked"] as const) {
+      expect(shown(cause, true), cause).toBe(false);
+      expect(turnItems(mission("m", { conductor_letters: letters, nodes }), raisedFor(cause)).map((item) => item.kind)).toEqual(["letters"]);
+      // Without the letters line the worker's own item still says it, on both.
+      expect(shown(cause, false), cause).toBe(true);
+    }
+    for (const cause of ["child_blocked", "observer_unconfirmed", "input_unconfirmed"] as const) {
+      expect(shown(cause, true), cause).toBe(true);
+      expect(turnItems(mission("m", { conductor_letters: letters, nodes }), raisedFor(cause)).map((item) => item.kind)).toEqual(["letters", "worker_blocked"]);
+    }
+  });
+
+  it("puts a running mission's held Conductor letters in 내 차례 and says a node's work only while it is in progress", () => {
+    const letters = { count: 3, reason: "approval" as const, since_unix_ms: 1 };
+    expect(turnItems(mission("m", { conductor_letters: letters }), () => null)).toEqual([{ kind: "letters", letters }]);
+    expect(turnItems(mission("m", { conductor_letters: letters, status: "done" }), () => null)).toEqual([]);
+    expect(turnItems(mission("m"), () => null)).toEqual([]);
+    const waiting = { state: "waiting" as const, on: { kind: "review" as const } };
+    expect(nodeWork(mission("m"), node("n", { status: "working", work: waiting }))).toEqual(waiting);
+    expect(nodeWork(mission("m"), node("n", { status: "done", work: waiting }))).toBeNull();
+    expect(nodeWork(mission("m", { status: "cancelled" }), node("n", { status: "working", work: waiting }))).toBeNull();
+    expect(nodeWork(mission("m"), node("n", { status: "working" }))).toBeNull();
+  });
+});
+
+describe("missionNumber", () => {
+  it("names a mission by the number in the core's id, and gives none for an id without one", () => {
+    expect(missionNumber("mission-39")).toBe("M39");
+    expect(missionNumber("mission-7")).toBe("M7");
+    for (const id of ["imported", "mission-", "mission-3a", "Mission-3", "mission-3-b"]) expect(missionNumber(id)).toBeNull();
   });
 });

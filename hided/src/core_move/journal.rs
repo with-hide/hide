@@ -9,7 +9,7 @@
 
 use std::path::{Path, PathBuf};
 
-use herdr_core::node_migration::{IdTable, OwnerChange};
+use hide_core::node_migration::{IdTable, OwnerChange};
 use hide_platform::fs::atomic::DurableAccess;
 use serde::{Deserialize, Serialize};
 

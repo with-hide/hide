@@ -1,15 +1,6 @@
 use super::*;
-use crate::definition::{Builtin, builtin as defs};
-
-/// The agent's own folder, from its built-in definition's `home`; a
-/// definition with Hide's features always names one, or the build fails.
-const fn folder(definition: &Builtin) -> &'static [&'static str] {
-    match definition.home {
-        Some(home) => home,
-        None => panic!("a built-in agent with Hide's features names its home"),
-    }
-}
-use composer::{Composer, Placeholder, Region, Style};
+use crate::definition::builtin as defs;
+use composer::{Composer, LineCount, PasteMark, Placeholder, Region, Style};
 const GROK_CONTEXT_ABSENCE: CapabilityAbsence = CapabilityAbsence {
     reason: "Grok discards SessionStart and UserPromptSubmit output; the installed path cannot inject guidance or Memory.",
     evidence: "docs/agent-hooks.md#which-agents-hide-supports",
@@ -25,7 +16,28 @@ const OPENCODE_AI_ABSENCE: CapabilityAbsence = CapabilityAbsence {
 const RETIRED_CONTEXT_ABSENCE: CapabilityAbsence = CapabilityAbsence {
     reason: "Cursor is retired from active support; only historical conversation reading remains.",
     evidence: "docs/agent-hooks.md",
-    would_change: "Restore active support with a pinned Herdr integration and measured context and title contracts.",
+    would_change: "Restore active support with hooks Hide installs and measured context and title contracts.",
+};
+
+/// A retired agent is never rung, so it has no screen to declare.
+const RETIRED_SCENES: scene::SceneDeclaration = {
+    const GONE: Capability<scene::SceneCase> = Support::Unsupported(RETIRED_CONTEXT_ABSENCE);
+    scene::SceneDeclaration {
+        rest: GONE,
+        rest_draft: GONE,
+        working: GONE,
+        interrupted: GONE,
+        session_picker: GONE,
+        model_picker: GONE,
+        popup: GONE,
+        tool_approval: GONE,
+        question: GONE,
+        plan_approval: GONE,
+        trust_dialog: GONE,
+        hooks_review: GONE,
+        first_run: GONE,
+        update_notice: GONE,
+    }
 };
 
 use usage::{
@@ -247,23 +259,17 @@ pub const ADAPTERS: &[AgentAdapter] = &[
         label: defs::CLAUDE_CODE.name,
         picker_label: "Claude",
         sidebar_label: Some("Claude"),
-        terminal_click: true,
         aliases: defs::CLAUDE_CODE.aliases,
         executables: defs::CLAUDE_CODE.executables,
-        folder: folder(&defs::CLAUDE_CODE),
         minimum: Some(MinimumVersion {
             version: "2.1.278",
             evidence: "docs/agent-hooks.md#the-oldest-version-of-each-agent",
         }),
         skill_location: SkillLocation::Claude,
+        skill_also_reads: &[],
         hook: HookInstall::Runtime(HookDialect::ClaudeCode),
         guidance: Support::Supported(ContextRoute::NativeHook(HookDialect::ClaudeCode)),
-        observation: ObservationSupport::Native(HookDialect::ClaudeCode),
-        herdr: HerdrIntegration {
-            name: "claude",
-            target: "claude",
-        },
-        home_variable: None,
+        engine_kind: "claude",
         ai: Support::Supported(AiProvider {
             id: "claude",
             requests: Support::Supported(()),
@@ -273,11 +279,15 @@ pub const ADAPTERS: &[AgentAdapter] = &[
             dialect: HookDialect::ClaudeCode,
             context: true,
         }),
-        spawn_guard: Some(HookDialect::ClaudeCode),
+        guard: Some(HookDialect::ClaudeCode),
         subagent_counts: Some(HookDialect::ClaudeCode),
         memory: Support::Supported(ContextRoute::NativeHook(HookDialect::ClaudeCode)),
         bell: true,
+        scenes: scene_declarations::CLAUDE_CODE,
         bell_names_inbox: false,
+        bell_echo: Some(BellEcho {
+            chrome: &['⏺', '⎿'],
+        }),
         turn_end_letters: None,
         tool_letters: None,
         session: Some(SessionFormat::Claude),
@@ -294,12 +304,19 @@ pub const ADAPTERS: &[AgentAdapter] = &[
             region: Region::BetweenRules,
             marker: &["❯"],
             trailer: 0,
+            under: None,
             // A suggestion such as `Try "…"` or the next prompt it predicts,
             // which changes from screen to screen, always dim.
             empty: &[Placeholder {
                 text: "",
                 style: Style::Dim,
             }],
+            // Claude Code counts a paste's line breaks: twelve lines show `+11
+            // lines` (`tests/fixtures/composer/claude-3-pasted.ansi`).
+            pasted: Some(PasteMark {
+                words: "[Pasted text #{n} +{count} lines]",
+                count: LineCount::Breaks,
+            }),
         }),
         // Claude Code's messaging socket is not a rung: Claude Code holds a
         // message for a session that bypasses permission prompts unless its
@@ -314,9 +331,9 @@ pub const ADAPTERS: &[AgentAdapter] = &[
         find: Some(FindDialect::ClaudeTranscript),
         usage: UsageDeclaration {
             limits: LimitDeclaration {
-                five_hour: Support::Supported(LimitSource::ClaudeUsageText),
-                weekly: Support::Supported(LimitSource::ClaudeUsageText),
-                scoped: Support::Supported(LimitSource::ClaudeUsageText),
+                five_hour: Support::Supported(LimitSource::ClaudeUsage),
+                weekly: Support::Supported(LimitSource::ClaudeUsage),
+                scoped: Support::Supported(LimitSource::ClaudeUsage),
                 monthly: absent(
                     AbsenceKind::NoSuchData,
                     "The agent has no independent subscription window.",
@@ -351,23 +368,17 @@ pub const ADAPTERS: &[AgentAdapter] = &[
         label: defs::CODEX.name,
         picker_label: "Codex",
         sidebar_label: Some("Codex"),
-        terminal_click: false,
         aliases: defs::CODEX.aliases,
         executables: defs::CODEX.executables,
-        folder: folder(&defs::CODEX),
         minimum: Some(MinimumVersion {
             version: "0.155.1",
             evidence: "docs/agent-hooks.md#the-oldest-version-of-each-agent",
         }),
         skill_location: SkillLocation::Shared,
+        skill_also_reads: &[],
         hook: HookInstall::Runtime(HookDialect::Codex),
         guidance: Support::Supported(ContextRoute::NativeHook(HookDialect::Codex)),
-        observation: ObservationSupport::Native(HookDialect::Codex),
-        herdr: HerdrIntegration {
-            name: "codex",
-            target: "codex",
-        },
-        home_variable: Some("CODEX_HOME"),
+        engine_kind: "codex",
         ai: Support::Supported(AiProvider {
             id: "codex",
             requests: Support::Supported(()),
@@ -377,11 +388,15 @@ pub const ADAPTERS: &[AgentAdapter] = &[
             dialect: HookDialect::Codex,
             context: true,
         }),
-        spawn_guard: Some(HookDialect::Codex),
+        guard: Some(HookDialect::Codex),
         subagent_counts: Some(HookDialect::Codex),
         memory: Support::Supported(ContextRoute::NativeHook(HookDialect::Codex)),
         bell: true,
+        scenes: scene_declarations::CODEX,
         bell_names_inbox: true,
+        bell_echo: Some(BellEcho {
+            chrome: &['•', '└', '├', '│'],
+        }),
         turn_end_letters: None,
         tool_letters: None,
         session: Some(SessionFormat::Codex),
@@ -398,10 +413,13 @@ pub const ADAPTERS: &[AgentAdapter] = &[
             region: Region::ToBlank,
             marker: &["›"],
             trailer: 0,
+            under: None,
             empty: &[Placeholder {
                 text: "Ask Codex to do anything",
                 style: Style::Dim,
             }],
+            // Codex shows a paste as its text.
+            pasted: None,
         }),
         input: &[
             InputRung::AgentApi(AgentApi::LaunchPrompt),
@@ -447,10 +465,8 @@ pub const ADAPTERS: &[AgentAdapter] = &[
         label: defs::GROK.name,
         picker_label: "Grok",
         sidebar_label: None,
-        terminal_click: false,
         aliases: defs::GROK.aliases,
         executables: defs::GROK.executables,
-        folder: folder(&defs::GROK),
         minimum: Some(MinimumVersion {
             // The journey ran on 1.0.52 on all three systems; 1.0.50 is a
             // reading of Grok's source, not a run.
@@ -458,14 +474,10 @@ pub const ADAPTERS: &[AgentAdapter] = &[
             evidence: "docs/agent-hooks.md#the-oldest-version-of-each-agent",
         }),
         skill_location: SkillLocation::Shared,
+        skill_also_reads: &[SkillLocation::Claude],
         hook: HookInstall::Guidance(GuidanceDialect::Grok),
         guidance: Support::Unsupported(GROK_CONTEXT_ABSENCE),
-        observation: ObservationSupport::Native(HookDialect::Grok),
-        herdr: HerdrIntegration {
-            name: "grok",
-            target: "grok",
-        },
-        home_variable: None,
+        engine_kind: "grok",
         ai: Support::Supported(AiProvider {
             id: "grok",
             requests: Support::Supported(()),
@@ -477,11 +489,15 @@ pub const ADAPTERS: &[AgentAdapter] = &[
             dialect: HookDialect::Grok,
             context: false,
         }),
-        spawn_guard: Some(HookDialect::Grok),
+        guard: Some(HookDialect::Grok),
         subagent_counts: Some(HookDialect::Grok),
         memory: Support::Unsupported(GROK_CONTEXT_ABSENCE),
         bell: true,
+        scenes: scene_declarations::GROK,
         bell_names_inbox: true,
+        bell_echo: Some(BellEcho {
+            chrome: &['◆', '◈', '┃'],
+        }),
         turn_end_letters: Some(HookDialect::Grok),
         tool_letters: Some(HookDialect::Grok),
         session: Some(SessionFormat::Grok),
@@ -501,9 +517,10 @@ pub const ADAPTERS: &[AgentAdapter] = &[
                 side: '│',
             },
             // `> ` on a console Grok takes for Windows' legacy one, which a
-            // Herdr pane on Windows is (`glyphs::prompt_arrow`).
+            // pane on Windows is (`glyphs::prompt_arrow`).
             marker: &["❯", ">"],
             trailer: 0,
+            under: None,
             // The next prompt Grok predicts after a turn, drawn as ghost text
             // in an empty composer (`ghost_text_style`, always italic); its
             // words change from screen to screen. Typed text and the grey
@@ -513,6 +530,11 @@ pub const ADAPTERS: &[AgentAdapter] = &[
                 text: "",
                 style: Style::Italic,
             }],
+            // (`tests/fixtures/composer/grok-3-pasted.ansi`)
+            pasted: Some(PasteMark {
+                words: "[Pasted: {count} lines]",
+                count: LineCount::Lines,
+            }),
         }),
         // Grok 1.0.70 holds `-- <prompt>` through its folder trust question,
         // and 1.0.52 shows none (measured 2026-11-02).
@@ -569,10 +591,8 @@ pub const ADAPTERS: &[AgentAdapter] = &[
         label: defs::OPENCODE.name,
         picker_label: "OpenCode",
         sidebar_label: Some("OpenCode"),
-        terminal_click: false,
         aliases: defs::OPENCODE.aliases,
         executables: defs::OPENCODE.executables,
-        folder: folder(&defs::OPENCODE),
         minimum: Some(MinimumVersion {
             // Windows loaded the plugin on 1.18.35; 1.18.30's shapes are
             // proven on macOS and Linux only.
@@ -580,14 +600,10 @@ pub const ADAPTERS: &[AgentAdapter] = &[
             evidence: "docs/agent-hooks.md#the-oldest-version-of-each-agent",
         }),
         skill_location: SkillLocation::Shared,
+        skill_also_reads: &[],
         hook: HookInstall::Plugin(PluginDialect::OpenCode),
         guidance: Support::Supported(ContextRoute::PluginPrompt(PluginDialect::OpenCode)),
-        observation: ObservationSupport::Plugin(PluginDialect::OpenCode),
-        herdr: HerdrIntegration {
-            name: "opencode",
-            target: "opencode",
-        },
-        home_variable: None,
+        engine_kind: "opencode",
         ai: Support::Supported(AiProvider {
             id: "opencode",
             requests: Support::Unsupported(OPENCODE_AI_ABSENCE),
@@ -597,13 +613,15 @@ pub const ADAPTERS: &[AgentAdapter] = &[
             dialect: HookDialect::OpenCode,
             context: true,
         }),
-        spawn_guard: Some(HookDialect::OpenCode),
+        guard: Some(HookDialect::OpenCode),
         subagent_counts: Some(HookDialect::OpenCode),
         memory: Support::Supported(ContextRoute::PluginPrompt(PluginDialect::OpenCode)),
         // A bell's Enter in OpenCode's session picker opens another session
         // (measured 2026-10-07); letters reach it on its next prompt instead.
         bell: false,
+        scenes: scene_declarations::OPENCODE,
         bell_names_inbox: false,
+        bell_echo: None,
         turn_end_letters: None,
         tool_letters: Some(HookDialect::OpenCode),
         session: Some(SessionFormat::OpenCode),
@@ -624,10 +642,17 @@ pub const ADAPTERS: &[AgentAdapter] = &[
             },
             marker: &[],
             trailer: 1,
+            under: None,
             empty: &[Placeholder {
                 text: "Ask anything…",
                 style: Style::Rgb(128, 128, 128),
             }],
+            // (`tests/fixtures/composer/opencode-3-pasted.ansi`; a 18-line brief
+            // showed `~18 lines` on Windows, agent journey run 41951563729)
+            pasted: Some(PasteMark {
+                words: "[Pasted ~{count} lines]",
+                count: LineCount::Lines,
+            }),
         }),
         // OpenCode 2.0.29 submits a `--prompt=<prompt>` as soon as its model
         // list arrives, without waiting for the configuration that names the
@@ -687,23 +712,17 @@ pub const ADAPTERS: &[AgentAdapter] = &[
         label: defs::PI.name,
         picker_label: "Pi",
         sidebar_label: None,
-        terminal_click: false,
         aliases: defs::PI.aliases,
         executables: defs::PI.executables,
-        folder: folder(&defs::PI),
         minimum: Some(MinimumVersion {
             version: "1.0.4",
             evidence: "hide-agent-hooks/tests/fixtures/pi-extension/pi-1.0.4.json",
         }),
         skill_location: SkillLocation::Shared,
+        skill_also_reads: &[],
         hook: HookInstall::Plugin(PluginDialect::Pi),
         guidance: Support::Supported(ContextRoute::PluginPrompt(PluginDialect::Pi)),
-        observation: ObservationSupport::Plugin(PluginDialect::Pi),
-        herdr: HerdrIntegration {
-            name: "pi",
-            target: "pi",
-        },
-        home_variable: None,
+        engine_kind: "pi",
         ai: Support::Supported(AiProvider {
             id: "pi",
             requests: Support::Supported(()),
@@ -713,7 +732,7 @@ pub const ADAPTERS: &[AgentAdapter] = &[
             dialect: HookDialect::Pi,
             context: true,
         }),
-        spawn_guard: Some(HookDialect::Pi),
+        guard: Some(HookDialect::Pi),
         // Pi runs no subagents.
         subagent_counts: None,
         memory: Support::Supported(ContextRoute::PluginPrompt(PluginDialect::Pi)),
@@ -722,7 +741,9 @@ pub const ADAPTERS: &[AgentAdapter] = &[
         // picks the highlighted item (measured 2026-10-07). Letters reach it on
         // its next prompt instead.
         bell: false,
+        scenes: scene_declarations::PI,
         bell_names_inbox: false,
+        bell_echo: None,
         turn_end_letters: None,
         tool_letters: Some(HookDialect::Pi),
         session: Some(SessionFormat::Pi),
@@ -739,7 +760,13 @@ pub const ADAPTERS: &[AgentAdapter] = &[
             region: Region::BetweenRules,
             marker: &[],
             trailer: 0,
+            under: None,
             empty: &[],
+            // (`tests/fixtures/composer/pi-3-pasted.ansi`)
+            pasted: Some(PasteMark {
+                words: "[paste #{n} +{count} lines]",
+                count: LineCount::Lines,
+            }),
         }),
         // Pi 1.0.4 holds `-- <prompt>` through its folder trust question,
         // but reads one that starts with `@` as a file and exits when there
@@ -798,23 +825,17 @@ pub const ADAPTERS: &[AgentAdapter] = &[
         label: defs::OMP.name,
         picker_label: "omp",
         sidebar_label: None,
-        terminal_click: false,
         aliases: defs::OMP.aliases,
         executables: defs::OMP.executables,
-        folder: folder(&defs::OMP),
         minimum: Some(MinimumVersion {
             version: "18.7.0",
             evidence: "hide-agent-hooks/tests/fixtures/pi-extension/omp-18.7.0.json",
         }),
         skill_location: SkillLocation::Shared,
+        skill_also_reads: &[SkillLocation::Claude],
         hook: HookInstall::Plugin(PluginDialect::Omp),
         guidance: Support::Supported(ContextRoute::PluginPrompt(PluginDialect::Omp)),
-        observation: ObservationSupport::Plugin(PluginDialect::Omp),
-        herdr: HerdrIntegration {
-            name: "omp",
-            target: "omp",
-        },
-        home_variable: None,
+        engine_kind: "omp",
         ai: Support::Supported(AiProvider {
             id: "omp",
             requests: Support::Supported(()),
@@ -824,14 +845,16 @@ pub const ADAPTERS: &[AgentAdapter] = &[
             dialect: HookDialect::Omp,
             context: true,
         }),
-        spawn_guard: Some(HookDialect::Omp),
+        guard: Some(HookDialect::Omp),
         subagent_counts: Some(HookDialect::Omp),
         memory: Support::Supported(ContextRoute::PluginPrompt(PluginDialect::Omp)),
         // omp's previous-session picker reads `done` and a bell's Enter there
         // resumes another session (measured 2026-10-07). Letters reach it on
         // its next prompt instead.
         bell: false,
+        scenes: scene_declarations::OMP,
         bell_names_inbox: false,
+        bell_echo: None,
         turn_end_letters: None,
         tool_letters: Some(HookDialect::Omp),
         session: Some(SessionFormat::Omp),
@@ -848,10 +871,13 @@ pub const ADAPTERS: &[AgentAdapter] = &[
             region: Region::Line,
             marker: &["╰─"],
             trailer: 0,
+            under: None,
             empty: &[Placeholder {
                 text: "⇧⇥ to change thinking effort",
                 style: Style::Any,
             }],
+            // omp marks a paste with its number alone (`📄 #1`), which no count ties to the text.
+            pasted: None,
         }),
         // omp 18.7.0 holds `-- <prompt>` through its first-run setup and its
         // update notice (measured 2026-11-02).
@@ -910,24 +936,18 @@ pub const ADAPTERS: &[AgentAdapter] = &[
         label: defs::ANTIGRAVITY.name,
         picker_label: "Antigravity",
         sidebar_label: Some("Antigravity"),
-        terminal_click: false,
         aliases: defs::ANTIGRAVITY.aliases,
         executables: defs::ANTIGRAVITY.executables,
-        folder: folder(&defs::ANTIGRAVITY),
         minimum: Some(MinimumVersion {
             // The Windows guard was proven on 1.4.2; 1.4.0 on macOS only.
             version: "1.4.2",
             evidence: "docs/agent-hooks.md#the-oldest-version-of-each-agent",
         }),
         skill_location: SkillLocation::Antigravity,
+        skill_also_reads: &[],
         hook: HookInstall::Guidance(GuidanceDialect::Antigravity),
         guidance: Support::Supported(ContextRoute::GuidanceHook(GuidanceDialect::Antigravity)),
-        observation: ObservationSupport::Native(HookDialect::Antigravity),
-        herdr: HerdrIntegration {
-            name: "agy",
-            target: "antigravity-cli",
-        },
-        home_variable: None,
+        engine_kind: "agy",
         ai: Support::Supported(AiProvider {
             id: "antigravity",
             requests: Support::Supported(()),
@@ -939,18 +959,26 @@ pub const ADAPTERS: &[AgentAdapter] = &[
             dialect: HookDialect::Antigravity,
             context: true,
         }),
-        spawn_guard: Some(HookDialect::Antigravity),
+        guard: Some(HookDialect::Antigravity),
         subagent_counts: Some(HookDialect::Antigravity),
         memory: Support::Supported(ContextRoute::GuidanceHook(GuidanceDialect::Antigravity)),
-        // Herdr 0.9.3 reads agy's permission question as an approval, but
-        // its folder-trust question is unmeasured, and a bell's Enter into a
-        // dialog Herdr reads as `idle` would answer it; letters reach agy on
-        // its next prompt instead (PRD antigravity-first-class D-06), and
-        // while it works on a later model call of the turn, which its
+        // Rung only at rest, and only once the screen read right before the
+        // bell shows agy's empty prompt: its composer between the rules with
+        // nothing but its mode hint, and nothing under it but its status
+        // line. Every question, picker and dialog agy draws either replaces
+        // the rules (the folder-trust question, the first start) or is drawn
+        // under the composer (a permission or ask question, `/resume`,
+        // `/model`), so none reads as that prompt (`docs/delivery.md`, Safe
+        // intake and manual fallback; with-hide/hide#2580). While it works,
+        // letters reach it on a later model call of the turn, which its
         // `PreInvocation` hook runs before and Hide answers with the letters
         // due as an injected system message (`tool_letters`).
-        bell: false,
+        bell: true,
+        scenes: scene_declarations::ANTIGRAVITY,
         bell_names_inbox: false,
+        bell_echo: Some(BellEcho {
+            chrome: &['●', '⎿', '┃'],
+        }),
         turn_end_letters: None,
         tool_letters: Some(HookDialect::Antigravity),
         session: Some(SessionFormat::Antigravity),
@@ -967,7 +995,24 @@ pub const ADAPTERS: &[AgentAdapter] = &[
             region: Region::BetweenRules,
             marker: &[">"],
             trailer: 0,
-            empty: &[],
+            // Its status line, `? for shortcuts` and on its right the mode
+            // and the model; a picker, the shortcuts list, a question or any
+            // other row drawn there is not its empty prompt
+            // (`tests/fixtures/composer/agy-1.5.11-*`).
+            under: Some(&["? for shortcuts"]),
+            // Its mode hint, such as `Auto mode: edits & safe commands
+            // auto-approved (shift+tab to cycle)`, whose words change with
+            // the mode, in palette grey; typed text and the paste mark are
+            // drawn in the default colour.
+            empty: &[Placeholder {
+                text: "",
+                style: Style::Palette(8),
+            }],
+            // (`tests/fixtures/composer/agy-3-pasted.ansi`)
+            pasted: Some(PasteMark {
+                words: "[Pasted text #{n} +{count} lines]",
+                count: LineCount::Lines,
+            }),
         }),
         // agy 1.4.12 holds `-i` through its folder trust question (measured
         // 2026-11-01). Its running TUI is also a language server on a
@@ -1029,30 +1074,24 @@ pub(super) const RETIRED_CURSOR: AgentAdapter = AgentAdapter {
     label: defs::CURSOR.name,
     picker_label: "Cursor",
     sidebar_label: None,
-    terminal_click: false,
     aliases: defs::CURSOR.aliases,
     executables: defs::CURSOR.executables,
-    folder: folder(&defs::CURSOR),
     minimum: None,
     skill_location: SkillLocation::Shared,
+    skill_also_reads: &[],
     hook: HookInstall::None,
     guidance: Support::Unsupported(RETIRED_CONTEXT_ABSENCE),
-    observation: ObservationSupport::Unsupported {
-        reason: "Cursor is retired; historical hooks perform no observation.",
-    },
-    herdr: HerdrIntegration {
-        name: "cursor",
-        target: "cursor",
-    },
-    home_variable: None,
+    engine_kind: "cursor",
     ai: Support::Unsupported(RETIRED_CONTEXT_ABSENCE),
     default_on: false,
     prompt_hook: None,
-    spawn_guard: None,
+    guard: None,
     subagent_counts: None,
     memory: Support::Unsupported(RETIRED_CONTEXT_ABSENCE),
     bell: false,
+    scenes: RETIRED_SCENES,
     bell_names_inbox: false,
+    bell_echo: None,
     turn_end_letters: None,
     tool_letters: None,
     session: Some(SessionFormat::Cursor),

@@ -25,7 +25,7 @@ export function agentLogo(id: string): string | null {
 }
 
 /**
- * The agent a Herdr kind names, with its logo, for the mark on a pane, tab or
+ * The agent an engine kind names, with its logo, for the mark on a pane, tab or
  * row; `logo` is null for an agent with no bundled mark, which draws the
  * monogram of `label` (design 10). Null for a plain shell and for a kind Hide
  * does not support, which draw the neutral mark: a retained history logo
@@ -35,7 +35,7 @@ export function agentMarkOf(kind: string | null | undefined): { id: string; logo
   const adapter = agentAdapter(kind ?? "");
   if (!adapter) return null;
   const logo = LOGOS[adapter.logo_id] ?? null;
-  return { id: adapter.herdr_kind, logo, label: adapter.label, plated: logo !== null && PLATED.has(adapter.logo_id) };
+  return { id: adapter.agent_cli, logo, label: adapter.label, plated: logo !== null && PLATED.has(adapter.logo_id) };
 }
 
 /** Up to two letters of a name: the monogram of an agent with no logo. */

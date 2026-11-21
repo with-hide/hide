@@ -1,4 +1,5 @@
 import { MobileScene } from "./MobileScene";
+import { ExternalToolsScene } from "./ExternalToolsScene";
 import { clientI18n } from "../i18n/translator";
 import { requireInterfaceLanguage } from "../i18n/locale";
 import { StrictMode } from "react";
@@ -7,8 +8,11 @@ import { Gallery, GalleryFrame } from "./Gallery";
 import { CmdkScene, cmdkSceneParams } from "./CmdkScene";
 import { GALLERY, type Section } from "./manifest";
 import { ServerSessionScene } from "./ServerSessionScene";
+import { MissionScreenScene, missionScreenSceneParams } from "./MissionScreenScene";
+import { AutomationScreenScene, automationScreenSceneParams } from "./AutomationScreenScene";
 import { RightLaneScene, rightLaneSceneParams } from "./RightLaneScene";
 import { GroupTabsScene } from "./GroupTabsScene";
+import { StartPanelScene } from "./StartPanelScene";
 import { ViewFeedbackScene, viewFeedbackSceneParams } from "./ViewFeedbackScene";
 import { sceneParams, SidebarScene } from "./SidebarScene";
 import { AreaFocusScene } from "./AreaFocusScene";
@@ -23,8 +27,11 @@ import { OverviewScene, overviewSceneParams } from "./OverviewScene";
 import { UsageScene } from "./UsageScene";
 import { ProjectSettingsScene } from "./ProjectSettingsScene";
 import { AddDeviceScene } from "./AddDeviceScene";
+import { PairingScene } from "./PairingScene";
+import { AddProjectScene } from "./AddProjectScene";
 import { HideAiSettingsScene } from "./HideAiSettingsScene";
 import { AgentsSettingsScene } from "./AgentsSettingsScene";
+import { AgentProfilesScene } from "./AgentProfilesScene";
 import { SessionWorkScene } from "./SessionWorkScene";
 import { PrCardScene } from "./PrCardScene";
 import { PrListScene } from "./PrListScene";
@@ -55,9 +62,19 @@ export function mountGallery(root: Root) {
       root.render(<StrictMode><MobileScene params={params} /></StrictMode>);
       return;
     }
+    if (scene === "external-tools") {
+      document.title = "hide · External tools scene";
+      root.render(<StrictMode><ExternalToolsScene params={params} /></StrictMode>);
+      return;
+    }
     if (scene === "group-tabs") {
       document.title = "hide · Group tabs scene";
       root.render(<StrictMode><GroupTabsScene params={params} /></StrictMode>);
+      return;
+    }
+    if (scene === "start-panel") {
+      document.title = "hide · Start panel scene";
+      root.render(<StrictMode><StartPanelScene params={params} /></StrictMode>);
       return;
     }
     if (scene === "project-settings") {
@@ -69,6 +86,16 @@ export function mountGallery(root: Root) {
       root.render(<StrictMode><AddDeviceScene params={params} /></StrictMode>);
       return;
     }
+    if (scene === "pairing") {
+      document.title = "hide · Pairing scene";
+      root.render(<StrictMode><PairingScene params={params} /></StrictMode>);
+      return;
+    }
+    if (scene === "add-project") {
+      document.title = "hide · Add project scene";
+      root.render(<StrictMode><AddProjectScene params={params} /></StrictMode>);
+      return;
+    }
     if (scene === "hide-ai-settings") {
       document.title = "hide · Hide AI settings scene";
       root.render(<StrictMode><HideAiSettingsScene params={params} /></StrictMode>);
@@ -77,6 +104,11 @@ export function mountGallery(root: Root) {
     if (scene === "agents-settings") {
       document.title = "hide · Agents settings scene";
       root.render(<StrictMode><AgentsSettingsScene params={params} /></StrictMode>);
+      return;
+    }
+    if (scene === "agent-profiles") {
+      document.title = "hide · Agent profiles scene";
+      root.render(<StrictMode><AgentProfilesScene params={params} /></StrictMode>);
       return;
     }
     if (scene === "close-tree") {
@@ -149,6 +181,16 @@ export function mountGallery(root: Root) {
     // A scene seeds the app's own stores, so it is one document per scene.
     if (scene === "workspace-servers" || scene === "checkout-git") {
       root.render(<StrictMode><ServerSessionScene scene={scene} {...sceneParams(params)}/></StrictMode>);
+      return;
+    }
+    if (scene === "automation-screen") {
+      document.title = "hide · Automation screen scene";
+      root.render(<StrictMode><AutomationScreenScene {...automationScreenSceneParams(params)} /></StrictMode>);
+      return;
+    }
+    if (scene === "mission-screen") {
+      document.title = "hide · Mission screen scene";
+      root.render(<StrictMode><MissionScreenScene {...missionScreenSceneParams(params)} /></StrictMode>);
       return;
     }
     if (scene === "right-lane") {

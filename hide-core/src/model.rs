@@ -1,0 +1,12142 @@
+use std::collections::{BTreeMap, BTreeSet};
+use std::sync::Arc;
+
+use serde::{Deserialize, Serialize};
+
+pub const SCHEMA_VERSION: u32 = 2;
+
+fn serialize_optional_shared<T: Serialize, S: serde::Serializer>(
+    value: &Option<Arc<T>>,
+    serializer: S,
+) -> Result<S::Ok, S::Error> {
+    value.as_deref().serialize(serializer)
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize)]
+pub struct CoreOptions {
+    pub schema_version: u32,
+    /// The account home the core reads and writes for: agent conversations,
+    /// label state, saved AI settings, usage and the install kit. Absent
+    /// means the process `HOME`; an embedder running with a private home
+    /// (a test daemon) names it so nothing reaches the operator's.
+    #[serde(default)]
+    pub home: Option<String>,
+    /// The machine this core runs on (`node::NodeId`), read by the host
+    /// before the core is placed behind its runtime mutex. Every key naming
+    /// this machine, in the snapshot and in stored state, is this id.
+    pub node_id: crate::node::NodeId,
+    pub app_state_path: String,
+    /// Where the helper is installed on devices; `~/` is the device account's
+    /// home. Absent means `remote::DEFAULT_HELPER_ROOT`.
+    #[serde(default)]
+    pub host_helper_root: Option<String>,
+    /// The folder on devices where `hide` is linked to the copy installed
+    /// with the helper; `~/` is the device account's home. Absent means
+    /// `remote::DEFAULT_CLI_DIR`.
+    #[serde(default)]
+    pub host_cli_dir: Option<String>,
+    /// Where a shell that draws separate Agent and View areas keeps each
+    /// Workspace's presentation (PRD S6 D-10). Its presence is what turns
+    /// those semantics on: the web daemon passes it; a client that passes
+    /// nothing keeps a document in place of the terminal canvas.
+    #[serde(default)]
+    pub workspace_views_path: Option<String>,
+    /// The state file the removed native app wrote, whose `shortcut_bindings`
+    /// the core adopts once while its own set is empty, so the desktop app
+    /// starts with the pane chords the operator chose there. The file is
+    /// never written again; the core is the owner that outlived it.
+    #[serde(default)]
+    pub shortcut_import_path: Option<String>,
+    /// The file that keeps every project's Local issues (`local_issues.rs`).
+    /// Absent keeps them in memory for the session only, as a test core does.
+    #[serde(default)]
+    pub local_issues_path: Option<String>,
+    /// The core starts on a move's copy whose link has not committed it:
+    /// it acts on nothing outside the machine until the embedder calls
+    /// `Core::release_effects` (`effects.rs`).
+    #[serde(default)]
+    pub effects_held: bool,
+    /// What the machine this core runs on calls itself, which a window on
+    /// another machine shows for the core's row (PRD core-host-node-move
+    /// B2); absent where the system names none.
+    #[serde(default)]
+    pub machine_name: Option<String>,
+    /// Where this machine shows the drives of the Windows PC it runs on,
+    /// when it is a WSL distribution (`hide_platform::host::windows_drives`);
+    /// absent on any other machine. It goes on this machine's own device
+    /// row, as a device's helper reports its own, so a Windows path pasted
+    /// into a core that runs in a distribution becomes that distribution's
+    /// path (PRD wsl-device B16).
+    #[serde(default)]
+    pub windows_drives: Option<String>,
+    /// The embedder runs on the state folder this account's hide picks by
+    /// default; only such a core writes this machine's guardrails policy,
+    /// which every hook of the account reads (PRD agent-guardrails D-11). A
+    /// test daemon on a relocated folder writes nothing under `~/.hide`.
+    #[serde(default)]
+    pub account_state_folder: bool,
+}
+
+#[derive(Clone, Debug, Serialize)]
+pub struct Snapshot {
+    pub usage: crate::usage::model::UsageSnapshot,
+    pub schema_version: u32,
+    pub delivery_watches: Vec<crate::delivery::watch::View>,
+    pub overview_graph: OverviewGraphSnapshot,
+    /// Each Conductor's mission as its map draws it (PRD
+    /// software-factory-conductor D-14).
+    pub missions: crate::runtime::missions::MissionsSnapshot,
+    /// The events of the mission the page's mission screen shows only (PRD
+    /// mission-plan-visibility D-22; PRD mission-screen D-16).
+    pub mission_events: crate::runtime::mission_events::MissionEventsSnapshot,
+    /// The brief of the one node whose folded box the operator opened.
+    pub mission_brief: crate::runtime::mission_brief::MissionBriefSnapshot,
+    /// The whole answer the operator opened on a turn card, for one card at
+    /// a time (`runtime/turn_answer.rs`).
+    pub turn_answer: crate::runtime::turn_answer::TurnAnswerReadSnapshot,
+    /// Each pane's session's own plan (PRD hide-plan D-10).
+    pub plans: crate::runtime::plans::PlansSnapshot,
+    pub navigator: NavigatorSnapshot,
+    pub overlay: OverlaySnapshot,
+    pub tab: TabSnapshot,
+    pub connection: ConnectionSnapshot,
+    pub zoomed: Option<String>,
+    pub focused: FocusedSnapshot,
+    /// Every tab's layout in the local engine session, keyed by the tab id
+    /// each one carries. The shell draws the entry whose tab is active, so a
+    /// tab switch is a lookup rather than a wait: nothing here is emptied to
+    /// mark a switch in progress, and the geometry drawn is always one the
+    /// engine has already applied.
+    pub pane_layouts: Vec<PaneLayoutSnapshot>,
+    pub terminal: TerminalSnapshot,
+    pub editor: EditorSnapshot,
+    pub sessions: SessionsSnapshot,
+    /// Edited rather than compared: the section carries every diff on
+    /// screen, and a snapshot read tells it changed by its edit number.
+    pub changes: Edited<ChangesSnapshot>,
+    pub card: CheckoutCardSnapshot,
+    pub git_worktrees: Option<ProjectWorktreesSnapshot>,
+    pub git_worktrees_loading: bool,
+    pub git_worktrees_remote: bool,
+    /// The Project tool's `남은 것` (PRD project-panel-results B9): the
+    /// changed files and the committed group of the worktree the viewing
+    /// column shows, read by that worktree's path on a read of its own, so
+    /// it never waits on the checkout in front. Absent while nothing shows
+    /// it; it carries no diff text.
+    pub remains: Option<RemainsSnapshot>,
+    pub worktree_removal: Option<WorktreeRemovalSnapshot>,
+    pub task_operation: Option<TaskOperationSnapshot>,
+    pub repository_clone: Option<RepositoryCloneSnapshot>,
+    pub explorer_operation: Option<ExplorerOperationSnapshot>,
+    pub issue_work: IssueWorkSnapshot,
+    pub pr_work: PrWorkSnapshot,
+    pub find: PaneFindSnapshot,
+    pub ui_state: UiStateSnapshot,
+    pub ime: ImeSnapshot,
+    pub status: StatusSnapshot,
+    pub recent_closed: RecentClosedSnapshot,
+    /// The front Workspace's presentation, present only in a shell that draws
+    /// separate Agent and View areas (`CoreOptions::workspace_views_path`).
+    /// Omitted rather than null otherwise, so an older client's snapshot
+    /// keeps exactly its keys.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub workspace_view: Option<WorkspaceViewSnapshot>,
+    /// Browser displays across retained Workspaces. The native host uses this
+    /// inventory to close a hidden page when a pane closes its View remotely.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub browser_views: Vec<BrowserViewInventoryRow>,
+    /// Positive browser control authority, including an area's empty state.
+    /// Losing a scope permanently revokes its desktop capabilities.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub browser_scopes: Vec<BrowserAreaScopeRow>,
+    /// The desktop host's grants every outside file's tab stands on, across
+    /// every Workspace (PRD outside-path-in-hide). The host lets go of a
+    /// grant this list no longer names, so a closed tab ends its file's grant.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub external_grants: Vec<String>,
+    #[serde(skip)]
+    pub browser_views_revision: Option<u64>,
+    /// Project Memory (PRD project-memory-v2): the Project a shell opened
+    /// Memory for, and the cards each live agent session on this Mac was
+    /// given. Its own revisioned section, absent until there is either.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub memory: Option<MemorySnapshot>,
+    /// The Hide AI tool's 제안 tab for the Project it opened (PRD
+    /// hide-ai-suggestions). Its own revisioned section, absent until the
+    /// tool opens a Project; a new `Arc` whenever it changes.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    #[serde(serialize_with = "serialize_optional_shared")]
+    pub suggestions: Option<Arc<SuggestionsSnapshot>>,
+    /// The Desk room (PRD Desk 1차): its agents, conversation and settings.
+    /// Its own revisioned section, absent until Desk is installed; a new
+    /// `Arc` whenever it changes.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    #[serde(serialize_with = "serialize_optional_shared")]
+    pub desk: Option<Arc<DeskSnapshot>>,
+    /// The Desk reply being written, its own section so a streamed chunk
+    /// never resends the conversation.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    #[serde(serialize_with = "serialize_optional_shared")]
+    pub desk_live: Option<Arc<DeskLiveSnapshot>>,
+    /// The sessions Desk started, its own section so a card's change never
+    /// resends the conversation.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    #[serde(serialize_with = "serialize_optional_shared")]
+    pub desk_jobs: Option<Arc<DeskJobsSnapshot>>,
+    /// Desk's `@` menu, its own section for the same reason.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    #[serde(serialize_with = "serialize_optional_shared")]
+    pub desk_mentions: Option<Arc<DeskMentionsSnapshot>>,
+    /// External tools: requests waiting and approved connections (PRD
+    /// hide-external-control). Its own section, so a tool's use never
+    /// resends anything else.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    #[serde(serialize_with = "serialize_optional_shared")]
+    pub access: Option<Arc<AccessSnapshot>>,
+    /// Automations and their runs (PRD automations D-02, D-20). Its own
+    /// section, absent until the core restored its book, so a run's change
+    /// never resends anything else.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    #[serde(serialize_with = "serialize_optional_shared")]
+    pub automations: Option<Arc<crate::automations::AutomationsSnapshot>>,
+    /// Each project's link counts and session chips (PRD link-graph D-45),
+    /// absent until the link worker first answers. Its own revisioned
+    /// section, off `rest`, so an agent row's change never resends it.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub link_summaries: Option<crate::links::LinkSummariesSnapshot>,
+    /// The record for the pull request or issue a panel shows, absent until
+    /// a shell opens one; its own revisioned section.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub link_panel: Option<crate::links::LinkPanelSnapshot>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    #[serde(serialize_with = "serialize_optional_shared")]
+    pub session_record: Option<Arc<crate::links::ledger::SessionRecordSnapshot>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    #[serde(serialize_with = "serialize_optional_shared")]
+    pub session_work_search: Option<Arc<crate::links::ledger::SessionSearchSnapshot>>,
+    /// The session thread a screen has open, absent until one opens one;
+    /// its state and live page, then its kept pages, each on its own
+    /// revision so a working session re-sends only its live page.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    #[serde(serialize_with = "serialize_optional_shared")]
+    pub session_thread: Option<Arc<SessionThreadSnapshot>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    #[serde(serialize_with = "serialize_optional_shared")]
+    pub session_thread_history: Option<Arc<SessionThreadHistorySnapshot>>,
+}
+
+/// A snapshot value that takes a new edit number whenever it may change, so
+/// a snapshot read tells a changed value from an unchanged one by comparing
+/// two numbers instead of the contents: the Changes section carries every
+/// diff on screen, and a View document a whole file, and a read runs on
+/// every terminal output burst.
+///
+/// The value is reachable mutably only through [`Edited::edit`] and
+/// [`Edited::set`], which take the number, so no change can skip it; a
+/// mutable borrow that changes nothing costs one extra send, never a missed
+/// one. Numbers come from one process-wide counter, so a value moved or
+/// replaced never repeats a number a stamp still holds, and two equal
+/// numbers always mean equal values.
+#[derive(Clone, Debug)]
+pub struct Edited<T> {
+    value: T,
+    edit: u64,
+}
+
+fn next_edit() -> u64 {
+    static NEXT: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(1);
+    NEXT.fetch_add(1, std::sync::atomic::Ordering::Relaxed)
+}
+
+impl<T> Edited<T> {
+    pub fn new(value: T) -> Self {
+        Self {
+            value,
+            edit: next_edit(),
+        }
+    }
+
+    /// The value to change in place, under a new edit number.
+    pub fn edit(&mut self) -> &mut T {
+        self.edit = next_edit();
+        &mut self.value
+    }
+
+    pub fn set(&mut self, value: T) {
+        *self = Self::new(value);
+    }
+
+    pub fn edit_number(&self) -> u64 {
+        self.edit
+    }
+}
+
+impl<T> std::ops::Deref for Edited<T> {
+    type Target = T;
+
+    fn deref(&self) -> &T {
+        &self.value
+    }
+}
+
+impl<T: Default> Default for Edited<T> {
+    fn default() -> Self {
+        Self::new(T::default())
+    }
+}
+
+/// Equality is the value's; the edit numbers only say whether it moved.
+impl<T: PartialEq> PartialEq for Edited<T> {
+    fn eq(&self, other: &Self) -> bool {
+        self.value == other.value
+    }
+}
+
+impl<T: PartialEq> PartialEq<T> for Edited<T> {
+    fn eq(&self, other: &T) -> bool {
+        self.value == *other
+    }
+}
+
+/// On the wire an edited value is the value alone.
+impl<T: Serialize> Serialize for Edited<T> {
+    fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        self.value.serialize(serializer)
+    }
+}
+
+/// The column a lane call brought forward (PRD lane-two-columns B19).
+#[derive(Clone, Copy, Debug, Default, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum LaneCallSide {
+    /// The viewing column: the documents or the 보기 slot.
+    #[default]
+    View,
+    /// The tool column.
+    Tool,
+}
+
+/// What the front Workspace shows: its right lane (the tool, the pin, the
+/// file tree and both widths) and its View area tree (PRD right-lane D-11).
+/// The editor's `active_tab_id` is the document of the active area's active
+/// display.
+#[derive(Clone, Debug, PartialEq, Serialize)]
+
+pub struct WorkspaceViewSnapshot {
+    pub device_id: String,
+    pub path: String,
+    /// The active checkout only, read by its own node independently of Changes.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(crate) git: Option<crate::checkout_git::Header>,
+    /// Whether the lane is open (PRD lane-two-columns B1, B15); closed, it
+    /// keeps the tray's `shown` and `tool` for the next open. An open lane is
+    /// drawn over the agents only once a call opened it (right-lane D-02).
+    pub open: bool,
+    /// The tool column's tool, or null while there is none.
+    pub tool: Option<crate::workspace_views::Tool>,
+    /// The tray's width, in CSS pixels, or null for the shell's default
+    /// until it is resized (D-09).
+    pub document_width: Option<u32>,
+    /// The tool column's width with the Explorer, the same way.
+    pub explorer_width: Option<u32>,
+    /// The tool column's width with the Project or Changes, the same way.
+    pub panel_width: Option<u32>,
+    /// The last width request the core accepted for this Workspace. Runtime
+    /// only, so a shell can distinguish its latest intent from an older echo.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub width_request_id: Option<String>,
+    /// The number of this Workspace's last lane call, 0 for none since the
+    /// core started; a number past `lane_calls` as the shell last read it is
+    /// a call the shell shows by drawing the lane (D-02, B16).
+    pub lane_called: u64,
+    /// Which column the last call brought forward, so a lane too narrow to
+    /// draw both knows which to draw (PRD lane-two-columns B19): the tray
+    /// for an open, a card or ⌘E, the tool column for a tool, a reveal or a
+    /// folder link.
+    pub lane_called_side: LaneCallSide,
+    /// How many lane calls the core has numbered, in any Workspace.
+    pub lane_calls: u64,
+    /// Whether this is the Workspace the operator last chose, now or before a
+    /// restart, which the shell opens on; any other front starts on Main
+    /// (D-11).
+    pub resumed: bool,
+    /// The tray of the Agent tab in front (PRD lane-desk-pair-view D-06):
+    /// its tab, whether the lane shows it, how many Views are on it and its
+    /// pair view. `layout` is its View areas.
+    pub tray: TraySnapshot,
+    pub layout: ViewLayoutSnapshot,
+    /// The window's pair view mode (D-45, D-47): whether it is on, and the
+    /// left pane's share of the body.
+    pub pair_mode: PairModeSnapshot,
+    /// The panes of this Workspace's Agent tabs that have something to show
+    /// beside the desk, a View their agent opened or a live session's record
+    /// (B19): ◧ is on for these and off, with why, for every other.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub pairable: Vec<String>,
+    /// The Agent areas, for a Workspace whose tabs the core arranges (this
+    /// machine's and a node's that dialed in); `None` on a device this core
+    /// dials, whose engine shows one tab.
+    pub agent_layout: Option<AgentLayoutSnapshot>,
+    /// The operator's comments on this checkout's Views (PRD
+    /// view-opener-feedback); absent while there are none and no Send to say.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub feedback: Option<ViewFeedbackSnapshot>,
+    /// For each pane of the checkout, the Views of unsaved documents its
+    /// close would close with its session, so the shell asks first (PRD
+    /// session-files D-14); absent while there are none.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub session_drafts: Vec<SessionDraftsSnapshot>,
+}
+
+/// One Agent tab's tray as the screen draws it (PRD lane-desk-pair-view
+/// D-06, D-29).
+#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
+pub struct TraySnapshot {
+    /// The engine's id of the Agent tab whose tray this is; empty while the
+    /// Workspace shows no tab.
+    pub tab_id: String,
+    /// Whether the lane shows the tray while it is open; the tray button
+    /// folds it and brings it back.
+    pub shown: bool,
+    /// The Views on it: the rail's number (D-29). An agent's View on no
+    /// tray is not counted.
+    pub count: usize,
+    /// The pair view drawn now (D-08, D-45): while the mode is on and the
+    /// pane the operator is on in this tab has something to show; the strip,
+    /// the tab row and the sidebar mark only it (D-17).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub pair: Option<PairViewSnapshot>,
+}
+
+/// The window's pair view mode (PRD lane-desk-pair-view D-45, D-47).
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize)]
+pub struct PairModeSnapshot {
+    pub on: bool,
+    /// The left pane's share of the body in thousandths, the divider's
+    /// landing (D-47); half while absent.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub ratio: Option<u16>,
+}
+
+/// An Agent tab in pair view: the pane drawn beside its tray.
+#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
+pub struct PairViewSnapshot {
+    pub tab_id: String,
+    pub pane_id: String,
+    /// The desk tabs in front of the drawn desk that another agent of the
+    /// paired tab owns, which the desk folds into its `Others N` menu
+    /// (D-41); bringing one in front takes its agent to the left (B24). A
+    /// tab whose owner is in another Agent tab, like one nobody owns, stays
+    /// on the strip. Only the desk on screen carries them.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub folded: Vec<String>,
+}
+
+/// The Views of unsaved documents one pane's session alone opened.
+#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
+pub struct SessionDraftsSnapshot {
+    pub pane_id: String,
+    pub views: Vec<SessionDraftSnapshot>,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
+pub struct SessionDraftSnapshot {
+    pub display_id: String,
+    pub tab_id: String,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
+pub struct BrowserViewInventoryRow {
+    pub device_id: String,
+    pub path: String,
+    pub area_id: String,
+    pub view_id: String,
+    /// The Agent tab whose tray holds the page, or null for a page on no
+    /// tray, which the desktop host keeps loaded off screen (PRD
+    /// lane-desk-pair-view D-37).
+    pub tray: Option<String>,
+    /// A web page's address and the load the core last asked of it, so the
+    /// host can load a page that is on no desk on screen (D-37, B32); null
+    /// and 0 for an outside HTML file, whose path stays in the host.
+    pub url: Option<String>,
+    pub load: u64,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
+pub struct BrowserAreaScopeRow {
+    pub device_id: String,
+    pub path: String,
+    pub area_id: String,
+    /// Stable while authority remains present; a regrant gets a new value
+    /// even when the shell never receives the intervening revocation.
+    pub incarnation: u64,
+}
+
+/// Agent tab identities only; pane contents remain in checkout.tabs.
+#[derive(Clone, Debug, PartialEq, Serialize)]
+pub struct AgentLayoutSnapshot {
+    pub group_id: Option<String>,
+    pub groups: Vec<AgentGroupSnapshot>,
+    pub drafts: Vec<String>,
+    pub start_receipts: Vec<AgentStartReceiptSnapshot>,
+    pub can_undo_group: bool,
+    pub waiting: usize,
+    pub root: crate::split_tree::Node<crate::agent_layout::Tab>,
+    pub active_area: String,
+    pub canvases: BTreeMap<String, String>,
+    pub limits: ViewLimitsSnapshot,
+    pub display_count: usize,
+}
+
+#[derive(Clone, Debug, PartialEq, Serialize)]
+pub struct AgentGroupSnapshot {
+    pub id: Option<String>,
+    pub name: Option<String>,
+    pub tabs: Vec<String>,
+}
+
+#[derive(Clone, Debug, Default, PartialEq, Serialize)]
+pub struct AgentGroupsSnapshot {
+    pub selected: Option<String>,
+    pub groups: Vec<AgentGroupSnapshot>,
+    pub drafts: Vec<String>,
+    pub start_receipts: Vec<AgentStartReceiptSnapshot>,
+}
+
+/// A start's identity and outcome. Prompts and ownership markers stay private.
+#[derive(Clone, Debug, PartialEq, Serialize)]
+pub struct AgentStartReceiptSnapshot {
+    pub request_id: String,
+    pub group_id: Option<String>,
+    pub area_id: String,
+    pub draft_tab_id: Option<String>,
+    pub live_tab_id: Option<String>,
+    pub pane_id: Option<String>,
+    pub add_pane: bool,
+    pub state: String,
+    pub agent_kind: Option<String>,
+    pub agent_phase: Option<String>,
+}
+
+/// The front Workspace's View areas (PRD S7): the tree the shell draws, the
+/// area in use, and the caps a split or an open is refused at.
+#[derive(Clone, Debug, PartialEq, Serialize)]
+pub struct ViewLayoutSnapshot {
+    pub root: ViewNodeSnapshot,
+    pub active_area: String,
+    pub limits: ViewLimitsSnapshot,
+    pub display_count: usize,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize)]
+pub struct ViewLimitsSnapshot {
+    pub areas: usize,
+    pub depth: usize,
+    pub displays: usize,
+}
+
+#[derive(Clone, Debug, PartialEq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ViewNodeSnapshot {
+    Area(ViewAreaSnapshot),
+    Split(ViewSplitSnapshot),
+}
+
+#[derive(Clone, Debug, PartialEq, Serialize)]
+pub struct ViewAreaSnapshot {
+    pub id: String,
+    pub active: Option<String>,
+    pub displays: Vec<ViewDisplaySnapshot>,
+}
+
+#[derive(Clone, Debug, PartialEq, Serialize)]
+pub struct ViewSplitSnapshot {
+    pub id: String,
+    pub axis: crate::view_layout::SplitAxis,
+    pub ratio: f32,
+    pub first: Box<ViewNodeSnapshot>,
+    pub second: Box<ViewNodeSnapshot>,
+}
+
+/// One display: which document it shows and whether it can show it now.
+#[derive(Clone, Debug, PartialEq, Serialize)]
+pub struct ViewDisplaySnapshot {
+    pub id: String,
+    /// The editor tab (document buffer) it shows: set while `open`, and for
+    /// an `unavailable` display whose unavailable tab exists.
+    pub tab_id: Option<String>,
+    pub path: String,
+    pub label: String,
+    pub kind: crate::view_layout::DisplayKind,
+    pub committed: Option<bool>,
+    pub preview: bool,
+    pub state: ViewDisplayState,
+    /// Why a `waiting` or `unavailable` display shows no document.
+    pub reason: Option<String>,
+    /// A browser display's address and its page's title (issue 155); absent
+    /// for a file or a diff, and the title until the page reports one.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub url: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub title: Option<String>,
+    /// A browser display's load stamp: a larger one than the host last
+    /// loaded asks it to load `url` again. Zero for a file or a diff.
+    #[serde(skip_serializing_if = "load_unset")]
+    pub load: u64,
+    /// The agent that last opened it (PRD view-opener-feedback D-03);
+    /// absent for a View the operator opened.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub opener: Option<ViewOpenerSnapshot>,
+    /// The operator's comments on it that are not sent, and of those the
+    /// ones whose letter expired (B14, B29).
+    #[serde(skip_serializing_if = "count_unset")]
+    pub comments: usize,
+    #[serde(skip_serializing_if = "count_unset")]
+    pub not_delivered: usize,
+    /// An agent opened it and the operator has not looked at it since (PRD
+    /// unseen-agent-views B10): its tab wears the 볼 것 mark.
+    #[serde(skip_serializing_if = "std::ops::Not::not")]
+    pub unseen: bool,
+    /// An outside file's grant, name and viewer (PRD outside-path-in-hide);
+    /// absent for every other kind. The window whose desktop host holds the
+    /// grant draws the file; every other window draws only its name.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub external: Option<crate::view_layout::ExternalFile>,
+    /// A card tab's card (PRD lane-desk-pair-view D-13); absent for every
+    /// other kind. The screen draws the card from the snapshot's sections,
+    /// as it does wherever the card shows.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub card: Option<DetailItem>,
+    /// The pane of the agent this desk tab belongs to (PRD lane-desk-pair-view
+    /// B24, D-41): an agent's View its opener's pane now, a card its owner's
+    /// (the record's or plan's session, a mission's Conductor, the agent that
+    /// made a pull request); absent for what the operator opened. Pair view
+    /// takes this pane to the left and folds another agent's tabs by it.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub owner_pane: Option<String>,
+}
+
+impl ViewDisplaySnapshot {
+    /// What this display shows, as its stored display's `shown` says it.
+    pub fn shown(&self) -> crate::view_layout::Shown<'_> {
+        crate::view_layout::Shown::of(
+            &self.id,
+            self.kind,
+            &self.path,
+            self.committed,
+            self.url.as_deref(),
+            self.external.as_ref(),
+            self.card.as_ref(),
+        )
+    }
+}
+
+fn load_unset(load: &u64) -> bool {
+    *load == 0
+}
+
+fn count_unset(count: &usize) -> bool {
+    *count == 0
+}
+
+/// A View's opener as the screen shows it: its name and logo, and the pane
+/// it is in now, found by its terminal and session, never by a pane id
+/// (D-23, B40).
+#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
+pub struct ViewOpenerSnapshot {
+    pub name: String,
+    pub provider: String,
+    pub device_id: String,
+    /// The pane the agent is in now; absent while it is closed (B6).
+    pub pane_id: Option<String>,
+    /// Whether `Reopen and send` can start its session again (D-10).
+    pub resumable: bool,
+}
+
+/// The operator's comments on the front Workspace's Views and where their
+/// Send stands (PRD view-opener-feedback). Absent while there is nothing.
+#[derive(Clone, Debug, PartialEq, Serialize)]
+pub struct ViewFeedbackSnapshot {
+    /// The open comments on the Views the layout shows, with their text.
+    pub comments: Vec<ViewCommentSnapshot>,
+    /// Every recipient with open comments in this checkout, those on closed
+    /// Views included (B30).
+    pub groups: Vec<ViewFeedbackGroupSnapshot>,
+    /// The Views the layout shows that a live agent opened, one row per
+    /// thing shown (B8).
+    pub opened: Vec<OpenedViewSnapshot>,
+    /// The last Send of this checkout, while the screen says it.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub send: Option<ViewFeedbackSendSnapshot>,
+    /// The comment the last delete removed, which Undo brings back (B43).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub deleted: Option<String>,
+}
+
+#[derive(Clone, Debug, PartialEq, Serialize)]
+pub struct ViewCommentSnapshot {
+    pub id: String,
+    /// The displays of the layout it shows on.
+    pub display_ids: Vec<String>,
+    pub kind: crate::view_layout::DisplayKind,
+    pub path: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub url: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub committed: Option<bool>,
+    pub anchor: crate::view_feedback::Anchor,
+    pub note: String,
+    pub shot: bool,
+    pub changed: bool,
+    pub not_delivered: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub revision: Option<String>,
+    /// The group it is sent with, `""` for a View no agent opened.
+    pub group: String,
+    /// Its place in its group's letter, from 1 (B11).
+    pub number: usize,
+}
+
+#[derive(Clone, Debug, PartialEq, Serialize)]
+pub struct ViewFeedbackGroupSnapshot {
+    /// The recipient's key, `""` for comments on Views no agent opened,
+    /// whose Send asks for a recipient (B18).
+    pub key: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub recipient: Option<ViewOpenerSnapshot>,
+    pub comments: usize,
+    pub views: usize,
+    pub not_delivered: usize,
+    /// The displays of the layout that hold some of its comments.
+    pub display_ids: Vec<String>,
+}
+
+#[derive(Clone, Debug, PartialEq, Serialize)]
+pub struct OpenedViewSnapshot {
+    pub pane_id: String,
+    pub view_id: String,
+    pub kind: crate::view_layout::DisplayKind,
+    pub label: String,
+    pub path: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub url: Option<String>,
+    pub comments: usize,
+    /// The operator has not looked at it since the agent opened it (PRD
+    /// unseen-agent-views B10).
+    #[serde(skip_serializing_if = "std::ops::Not::not")]
+    pub unseen: bool,
+}
+
+/// A View a session record's session, or one of its descendants, opened:
+/// one tile of the record's 결과물 gallery (PRD session-docs-and-assistant
+/// D-40). It names the View by the checkout that holds it, and carries only
+/// what Hide already holds about it: an open document's first lines, never
+/// a read or a capture made for the tile.
+#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
+pub struct RecordViewSnapshot {
+    pub device_id: String,
+    /// The checkout whose View list holds it.
+    pub checkout_path: String,
+    pub display_id: String,
+    pub kind: crate::view_layout::DisplayKind,
+    /// Its name as its tab says it.
+    pub label: String,
+    pub path: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub url: Option<String>,
+    /// The kind of the file its editor tab holds; absent while none does.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub document_kind: Option<DocumentKind>,
+    /// The first lines of the text document its editor tab holds, each cut
+    /// to a bounded length; empty for anything else.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub lines: Vec<String>,
+    /// The session of the record's tree that opened it.
+    pub session: crate::links::ledger::SessionIdentity,
+}
+
+/// A View the agent in a pane opened that is still open, as the phone's
+/// 볼 것 tab lists it (PRD mobile-companion-ui D-07): the same tile a session
+/// record's gallery draws, with whether the operator has looked at it. It
+/// names the View by the checkout that holds it; the phone asks for its
+/// content by `display_id` alone and hided finds the path here (D-16).
+#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
+pub struct LookView {
+    pub device_id: String,
+    /// The checkout whose View list holds it.
+    pub checkout_path: String,
+    pub display_id: String,
+    pub kind: crate::view_layout::DisplayKind,
+    pub label: String,
+    pub path: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub url: Option<String>,
+    /// Which Changes group a diff shows; absent for anything else.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub committed: Option<bool>,
+    /// What a file is as a 결과물 by its extension (`image`, `pdf`, `video`,
+    /// `board`, `document`); absent for any other file and for a View that
+    /// is not a file.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub output: Option<&'static str>,
+    pub unseen: bool,
+    /// When the agent opened it while unseen, else when it was last looked at.
+    pub at_unix_ms: u64,
+}
+
+/// The Views a pane's agent has open, newest first, and how many more than
+/// the list's bound there were.
+#[derive(Clone, Debug, Default, Eq, PartialEq)]
+pub struct LookViews {
+    pub views: Vec<LookView>,
+    pub omitted: usize,
+}
+
+/// One file of a checkout's change list, as the phone shows it: a name and
+/// line counts, never a line of code (PRD mobile-companion-ui D-08).
+#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
+pub struct LookChange {
+    /// Relative to the checkout root.
+    pub path: String,
+    pub status: ChangedFileStatus,
+    /// Absent for a file git cannot count: an untracked file or a binary.
+    pub added: Option<u32>,
+    pub removed: Option<u32>,
+}
+
+/// Where a Send stands (B21, B27, B28, B20).
+#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
+pub struct ViewFeedbackSendSnapshot {
+    pub request_id: String,
+    pub state: ViewFeedbackSendState,
+    pub count: usize,
+    /// The recipient's name.
+    pub to: String,
+    /// The recipient's pane, for Go to pane.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub pane_id: Option<String>,
+    /// The device a Send waits for, or whose cap or copy failed, by name.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub device: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub reason: Option<ViewFeedbackSendReason>,
+    pub at_unix_ms: u64,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ViewFeedbackSendState {
+    Sending,
+    Sent,
+    Waiting,
+    Reopening,
+    Failed,
+}
+
+/// Why a Send did not go, each a sentence the screen says (B27, B20).
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ViewFeedbackSendReason {
+    AttachmentsFull,
+    LetterUnsaved,
+    LettersFull,
+    ShotCopy,
+    ReopenFailed,
+    Closed,
+}
+
+/// `waiting` while its Workspace's root cannot be read yet (a device helper
+/// or catalog not ready, or this machine's root not opened), `opening` while
+/// its file is read, `open` with its document, `unavailable` when the read
+/// failed (Close and Retry).
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ViewDisplayState {
+    Open,
+    Opening,
+    Waiting,
+    Unavailable,
+}
+
+#[derive(Clone, Debug, Default, Eq, PartialEq, Serialize)]
+pub struct RecentClosedSnapshot {
+    pub count: usize,
+    pub top_label: Option<String>,
+    pub restoring: bool,
+    pub notices: Vec<RecentClosedNoticeSnapshot>,
+    /// Close reservations whose topology is not confirmed yet. These are
+    /// deliberately separate from `count`: a pending close must not evict a
+    /// confirmed undo entry or become reopenable by accident.
+    pub pending: Vec<RecentClosedPendingSnapshot>,
+    pub can_reopen: bool,
+    pub reopen_blocked_reason: Option<String>,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
+pub struct RecentClosedNoticeSnapshot {
+    pub pane_id: Option<String>,
+    pub message: String,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
+pub struct RecentClosedPendingSnapshot {
+    pub key: String,
+    pub target_id: String,
+    pub label: String,
+    pub phase: String,
+    pub checking: bool,
+    pub message: Option<String>,
+    pub retryable: bool,
+}
+
+/// A core-owned asynchronous mutation. The shell renders this record in the
+/// existing request-scoped affordance for the subject and never infers a
+/// server confirmation from the transport response alone.
+#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
+pub struct AsyncOperationSnapshot {
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub related_scope_ids: Vec<String>,
+    pub id: String,
+    pub kind: String,
+    pub target_id: String,
+    pub scope_id: String,
+    pub phase: String,
+    pub stage: String,
+    pub started_at_unix_ms: u64,
+    pub deadline_at_unix_ms: Option<u64>,
+    pub message: Option<String>,
+    pub retryable: bool,
+}
+
+/// What a pane search found, over the pane's whole scrollback.
+///
+/// The count is the reason this crosses the wire at all: the terminal view the
+/// shell draws holds only the visible rows, so a counter it computed itself
+/// would report what is on screen and call it the total.
+#[derive(Clone, Debug, Default, PartialEq, Serialize)]
+pub struct PaneFindSnapshot {
+    /// Which pane the result belongs to, so a result that lands after the
+    /// operator has moved on is ignored rather than shown over another pane.
+    pub pane_id: Option<String>,
+    pub term: String,
+    /// 1-based position of the current match, or 0 when there is none.
+    pub index: usize,
+    pub total: usize,
+    /// The engine capped the history it returned, so `total` counts what was
+    /// searched rather than everything the pane has ever printed.
+    pub truncated: bool,
+    pub unavailable_reason: Option<String>,
+    /// Where the last `pane_find_open` sent the search, named by the request
+    /// that asked, so the shell acts on its own answer once and never on a
+    /// late one.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub opened: Option<PaneFindOpened>,
+}
+
+/// The answer to one `pane_find_open`.
+#[derive(Clone, Debug, PartialEq, Serialize)]
+pub struct PaneFindOpened {
+    pub request_id: String,
+    pub route: PaneFindRoute,
+}
+
+/// Where ⌘F's search went for an agent with its own find.
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum PaneFindRoute {
+    /// The agent's own search is open in the pane and takes the typing.
+    Agent,
+    /// The engine holds the pane's history, or the agent's search could not be
+    /// opened (`unavailable_reason` says why), so Hide's find bar opens.
+    Bar,
+}
+
+/// A device an Add over SSH did not add (`NavigatorSnapshot::device_not_added`).
+#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
+pub struct DeviceNotAddedSnapshot {
+    /// The name the operator gave it.
+    pub label: String,
+    /// Why its switch stopped, as the code a device row's failed switch
+    /// carries (`DeviceSwitchSnapshot::reason`).
+    pub reason: String,
+}
+
+#[derive(Clone, Debug, PartialEq, Serialize)]
+pub struct NavigatorSnapshot {
+    pub agent_scope: crate::agent_state::Scope,
+    /// How many siblings a tree draws under one parent before its "N more"
+    /// (PRD agent-hierarchy-screens B12). The core holds the number once; the
+    /// sidebar, its popover and the phone's list all apply it.
+    pub siblings_shown: usize,
+    pub root_path: Option<String>,
+    /// The focused local checkout's History scope. A registered subfolder may
+    /// be narrower than the Git checkout used by Explorer and editor tabs.
+    pub changes_root_path: Option<String>,
+    pub focused_device_id: Option<String>,
+    pub focused_workspace_id: Option<String>,
+    pub focused_checkout_id: Option<String>,
+    pub devices: Vec<DeviceSnapshot>,
+    /// The device the last Add over SSH did not add, with why (PRD
+    /// device-connect-iroh B41): its first switch stopped before anything
+    /// was started on that machine, and no device is left on the helper.
+    /// One at most, until the next device is added.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub device_not_added: Option<DeviceNotAddedSnapshot>,
+    /// The machines this one is paired with over the peer connection, both
+    /// directions of each pair, as hided last told the core (PRD
+    /// device-connect-iroh D-72). Beside `devices`, not among them: a paired
+    /// machine runs its own core.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub peers: Vec<crate::peer_machines::PeerMachine>,
+    /// The panes other machines' work runs in on this machine, by guest, as
+    /// hided last told the core (PRD device-connect-iroh D-77 (5), B10).
+    /// They are not this core's panes: its engine runs none of them.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub guest_panes: Vec<crate::guest_panes::GuestPanes>,
+    pub workspaces: Vec<WorkspaceSnapshot>,
+    /// Project rows the core grouped at the bottom of each device's Projects
+    /// list. `workspaces` remains the one authoritative row collection so
+    /// search, focus, and project navigation never lose a folded project.
+    pub inactive_projects: Vec<InactiveProjectGroupSnapshot>,
+    pub agents: Vec<SidebarAgentSnapshot>,
+    /// The checkouts Hide AI, or an external tool that keeps its work, started
+    /// an agent in, by device and path. A list
+    /// beside the checkouts, not a field on them, because a checkout row is
+    /// rebuilt from Git and the engine at several places and would lose a value
+    /// laid on it; the shell joins it by `(device_id, path)`.
+    pub hide_ai_checkouts: Vec<HideAiCheckoutSnapshot>,
+    /// Durable absent-pane sessions are not live agents or pane addresses.
+    pub sleeping_sessions: Vec<crate::agent_sleep::SleepingSessionSnapshot>,
+    /// The archived sessions, newest archived first (PRD session-archive
+    /// D-09); a row whose root is live again only feeds that root's record.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub archived_sessions: Vec<crate::session_archive::ArchivedSessionSnapshot>,
+    /// One cell per external tool connected at Act, beside the devices
+    /// (PRD hide-external-control D-45, D-47): the work it keeps, which the
+    /// operator's own scopes leave out.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub tools: Vec<crate::agent_state::ToolCell>,
+}
+
+/// Hide AI started this agent, read from the coordination ledger's record of
+/// the spawn and never from a branch name. `task` is what it was started for.
+///
+/// A kind with a home makes the row the home's: it leaves the operator's
+/// lists and reaches Needs You only on the operator's turn (PRD
+/// hide-ai-work-home D-06, D-13). A kind this build has no home for keeps
+/// its mark and stays an operator row (D-19).
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize)]
+pub struct HideAiSnapshot {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub task: Option<crate::coordination::SpawnTask>,
+    /// The screen that owns this agent's work; absent for a kind this build
+    /// has no home for.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub home: Option<crate::coordination::TaskHome>,
+    /// The catalog Project whose home shows the work, once the home has
+    /// recorded the attempt.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub workspace_id: Option<String>,
+    /// What the home waits for the operator to do, beyond what the agent
+    /// itself asks.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub turn: Option<HomeTurn>,
+}
+
+/// An external tool's work on a row (PRD hide-external-control D-09, D-15).
+#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
+pub struct ToolWorkSnapshot {
+    /// The tool's connection, by id (`AccessConnectionSnapshot::id`): a new
+    /// connection of the same name is another id, and takes none of this
+    /// work (D-40).
+    pub connection: String,
+    /// The name the tool connected with, which the pane head writes.
+    pub name: String,
+    /// The tool keeps the work now: its connection stands at Act. Read from
+    /// the connection list on every projection, never stored, so a
+    /// disconnect, a leave or View only hands the work to the operator at
+    /// once and Act again takes it back (D-14, D-40).
+    pub owns: bool,
+}
+
+/// The home's turn: the operator is to act on the work the agent did
+/// (D-14). The agent's own question, approval or block is the row's demand,
+/// not this.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+pub enum HomeTurn {
+    /// The pull request is open, ready, passing or unchecked, and nobody
+    /// asked for changes: it waits for the operator's review.
+    PrReview { pr_number: u64 },
+    /// Checks failed and the agent is not at work on them.
+    CiFailed { pr_number: u64 },
+    /// The agent committed the fix on its branch and stopped: the operator
+    /// looks at it and merges, sends or discards it (PRD
+    /// hide-ai-branch-first-apply D-02, B3).
+    BranchReady,
+}
+
+/// A checkout Hide made for an agent Hide AI started, or for one an external
+/// tool started while the tool keeps its work.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
+pub struct HideAiCheckoutSnapshot {
+    pub device_id: String,
+    pub path: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub task: Option<crate::coordination::SpawnTask>,
+    /// The name of the external tool whose work the checkout is, while its
+    /// connection stands at Act (PRD hide-external-control D-14); absent for
+    /// Hide AI's. Once the tool lets go the checkout is the operator's and
+    /// leaves this list.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub tool: Option<String>,
+}
+
+#[derive(Clone, Debug, Default, PartialEq, Serialize)]
+pub struct InactiveProjectGroupSnapshot {
+    pub device_id: String,
+    pub expanded: bool,
+    /// IDs in the same recent-activity order as `NavigatorSnapshot.workspaces`.
+    pub project_ids: Vec<String>,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
+pub struct DeviceSnapshot {
+    pub agent_scope: crate::agent_state::Scope,
+    pub id: String,
+    /// The name the operator registered the device under. The core's own
+    /// row has none: its name is what its system calls it (This Mac, This
+    /// PC, This computer), which each shell says in its own language from
+    /// `host.platform`, so no English sentence travels the wire.
+    pub label: Option<String>,
+    pub kind: String,
+    /// `local` for this Mac; for an SSH device `ready`, `unavailable` or
+    /// `disabled`, read off its remote status.
+    pub state: String,
+    /// Why an SSH device is not `ready`, in the words its remote status
+    /// carries; `None` while it is.
+    pub message: Option<String>,
+    /// Why an SSH device's last attempt did not connect, as its row draws
+    /// it ([`DeviceProblem`]); `None` while it is ready or connecting.
+    pub problem: Option<String>,
+    /// What the device's connection attempt waits on from the operator now
+    /// (B4, B6, B9, B11, B12, B27); `None` when it waits on nothing.
+    pub sign_in: Option<DeviceSignInSnapshot>,
+    pub ssh_alias: Option<String>,
+    /// The WSL distribution of this PC the device is (PRD wsl-device D-20).
+    pub wsl_distro: Option<String>,
+    pub agent_count: u32,
+    /// The last connection test the operator asked for, or the one running.
+    pub test: Option<DeviceTestSnapshot>,
+    /// Where file and Git work for this device runs, and whether it may.
+    pub host: DeviceHostSnapshot,
+    /// What Hide's install kit has put on this machine (PRD device-parity
+    /// B7): the same parts, in the same order, on This Mac and on every
+    /// device.
+    pub kit: KitSnapshot,
+    /// On the core's row only: what its machine calls itself, which a window
+    /// on another machine shows in place of "This Mac" (PRD
+    /// core-host-node-move B2).
+    pub machine_name: Option<String>,
+    /// A node that dials this core, which the core never dials: it has no
+    /// SSH alias, connection test or helper consent here (PRD
+    /// core-host-node-remote-core D-04).
+    pub dials_in: bool,
+    /// The connection key of the paired machine this device is (PRD
+    /// device-connect-iroh D-72): the machine has one row in Settings, its
+    /// pairing's, and this device serves its rail tile and its panes.
+    pub peer_key: Option<String>,
+    /// Where the device's switch to its machine's own connection stands
+    /// (PRD device-connect-iroh B36, B41); `None` when none was asked for
+    /// or it finished.
+    pub switch: Option<DeviceSwitchSnapshot>,
+    /// What the Hide this core started on the device's machine over SSH
+    /// still needs from the operator to stay reachable (PRD
+    /// device-connect-iroh B30), as that machine said when it was started;
+    /// kept while this core runs.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub needs: Option<DeviceNeedsSnapshot>,
+    /// Whether the device can be switched to its machine's own connection
+    /// (PRD device-connect-iroh B35, [`LinkOrigin::switches`]): the one
+    /// rule the row's `바꾸기` and `hide device switch` both follow.
+    #[serde(skip_serializing_if = "std::ops::Not::not")]
+    pub switchable: bool,
+    /// How many of the device's terminals its switch could not take up
+    /// again and closed (B36), kept while this core runs.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub not_carried: Option<u32>,
+    /// Added over SSH to be switched at once (B41): its switch is asked
+    /// when it first connects, and it is not left on the helper when that
+    /// switch stops before anything was started on its machine.
+    #[serde(skip_serializing_if = "std::ops::Not::not")]
+    pub switch_first: bool,
+}
+
+/// What a machine's Hide, started over SSH, needs to stay reachable with no
+/// one at it (PRD device-connect-iroh B30).
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+pub struct DeviceNeedsSnapshot {
+    pub kind: DeviceNeeds,
+    /// With `linger`: the command an administrator runs on that machine.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub command: Option<String>,
+}
+
+impl DeviceNeedsSnapshot {
+    /// Whether it is spelled as a row can draw it: a linger with its one
+    /// command line, an automatic login with none.
+    pub(crate) fn valid(&self) -> bool {
+        match (self.kind, self.command.as_deref()) {
+            (DeviceNeeds::AutoLogin, None) => true,
+            (DeviceNeeds::Linger, Some(command)) => {
+                !command.is_empty()
+                    && command.len() <= 256
+                    && !command.chars().any(char::is_control)
+            }
+            _ => false,
+        }
+    }
+}
+
+/// `contracts/snapshot-wire-enums.json`: `device_needs`.
+#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum DeviceNeeds {
+    /// A Mac's core starts at a login: after a restart it is back only
+    /// once someone logs in, or with automatic login on.
+    AutoLogin,
+    /// Linux: the core ends with the account's last session until an
+    /// administrator turns linger on.
+    Linger,
+}
+
+/// A helper device's switch to the connection of the Hide on its machine,
+/// as its row draws it: the step under way, or why the last one stopped.
+#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
+pub struct DeviceSwitchSnapshot {
+    pub state: DeviceSwitchState,
+    /// Why a `failed` switch stopped: a code the shell words, the pairing's
+    /// refusal codes among them.
+    pub reason: Option<String>,
+}
+
+/// `contracts/snapshot-wire-enums.json`: `device_switch_state`.
+#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum DeviceSwitchState {
+    /// The machine is asked what it has.
+    Checking,
+    /// A Hide is being put on the machine.
+    Installing,
+    /// The two machines are paired and the connection is being opened.
+    Connecting,
+    /// The switch stopped; the device is used as before.
+    Failed,
+}
+
+/// Why the kit does not run on a machine at all, as a code the web words
+/// (`contracts/snapshot-wire-enums.json`: `kit_unavailable`); what went wrong
+/// in the operator's terms goes to the `kit.unavailable` diagnostic.
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum KitUnavailable {
+    /// This daemon is not running from the installed app, so it installs
+    /// nothing here; opening the app installs.
+    Standalone,
+    /// The operator has not allowed Hide's helper on the device.
+    NoConsent,
+    /// The consent was given to an older build's kit; Hide asks again.
+    ConsentOutdated,
+    /// This build has no helper for the device's platform.
+    UnsupportedPlatform,
+    /// Hide could not start the worker that runs its installer.
+    InstallerUnavailable,
+    /// The machine did not answer the kit's call; the log says why.
+    Unreadable,
+}
+
+impl KitUnavailable {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Standalone => "standalone",
+            Self::NoConsent => "no_consent",
+            Self::ConsentOutdated => "consent_outdated",
+            Self::UnsupportedPlatform => "unsupported_platform",
+            Self::InstallerUnavailable => "installer_unavailable",
+            Self::Unreadable => "unreadable",
+        }
+    }
+}
+
+/// One machine's install kit as Settings shows it (PRD device-parity B7, B8).
+#[derive(Clone, Debug, Default, Eq, PartialEq, Serialize)]
+pub struct KitSnapshot {
+    /// Why the kit does not run on this machine at all: a daemon outside the
+    /// app, a device with no consent or an unsupported platform. The parts
+    /// are then empty and no Reinstall is offered.
+    pub unavailable: Option<KitUnavailable>,
+    /// An install is running for this machine; Reinstall shows its progress.
+    pub busy: bool,
+    /// Every part, in the kit's own order; empty until the machine was first
+    /// checked.
+    pub components: Vec<KitComponentSnapshot>,
+    /// Every agent Hide has an adapter for, with its switch and the state of
+    /// its skill and hook on this machine (issue #517); empty until the
+    /// machine was first checked, and from a helper that predates agents.
+    pub agents: Vec<KitAgentSnapshot>,
+    /// Whether any part or any agent that is on is outdated, missing,
+    /// removed or failed, which is the only time the row offers Reinstall.
+    pub offers_reinstall: bool,
+    /// Another registered device that reaches the same account on the same
+    /// machine, by its label; removing this device then leaves the kit there
+    /// for it.
+    pub shares_account_with: Option<String>,
+    /// What the machine's Codex answered about its shared daemon, for the
+    /// `--no-daemon` start flag (`codex_launch`): `true` when it has the
+    /// setting, `false` when it is confirmed older and has none, `None`
+    /// when there is no answer (no Codex, or the read failed).
+    pub codex_daemon: Option<bool>,
+    /// Whether that Codex starts the shared daemon on its own now (`None`
+    /// with no answer or an older Codex). With it on, a Codex pane that
+    /// reports nothing is read as running on the shared server (B27).
+    pub codex_daemon_on: Option<bool>,
+    /// Whether a shared daemon answers now (`None` with no readable answer).
+    /// With the setting already off, a daemon that still answers keeps a
+    /// Codex pane on the shared server (PRD codex-daemon-apply D-07, B9). The
+    /// core reads it into the pane's reason; the shell never does.
+    #[serde(skip)]
+    pub codex_daemon_running: Option<bool>,
+    /// The daemon answer the kit could not read, for the log only.
+    #[serde(skip)]
+    pub codex_daemon_unreadable: Option<String>,
+    /// Why the kit had no answer for `codex_daemon`, for the log only.
+    #[serde(skip)]
+    pub codex_capability_unread: Option<hide_kit::CodexReadFailure>,
+    /// How the last turn-off of the shared server ended, until the next one
+    /// starts; the pane popover reads it (B30).
+    pub codex_daemon_off: Option<CodexDaemonOffSnapshot>,
+    /// A read asked with Check again is under way on this machine: set when
+    /// the request is queued and cleared by whatever answer lands first (B10).
+    pub checking: bool,
+    /// Why this machine's last read failed, until a read lands; the report
+    /// the machine last gave stays as it was (B10).
+    pub check_failed: Option<KitCheckFailure>,
+    /// The machine's last pass or read stopped before changing anything:
+    /// what stopped it, for one line with Try again. The parts and agents
+    /// are then empty, and the kit's own words are in the log.
+    pub refused: Option<KitRefusalSnapshot>,
+    /// The machine's agent profiles as its node lists them (PRD
+    /// agent-profiles D-04); `None` until they were first read.
+    pub profiles: Option<ProfilesSnapshot>,
+    /// The machine's store of skills and MCP items as its kit last reported
+    /// it (PRD skill-mcp-manager): each kind's columns with the agents each
+    /// one covers, which the screen joins with `agents` to show only the
+    /// agents installed and switched on there; each item with its source,
+    /// version, update and one cell per column; what only an agent has; the
+    /// undo list; and the previews and update diffs waiting for a choice.
+    /// Each change's outcome is in `status.store_answers`, not here. `None`
+    /// until the machine was read.
+    pub store: Option<hide_kit::store::StoreReport>,
+    /// The cells whose change waits for a new session (B17): an agent
+    /// session of the cell's column that was running when the change landed
+    /// still is.
+    pub store_new_session: Vec<StoreCellRef>,
+}
+
+/// One cell of the store's table: an item and a column of its kind.
+#[derive(Clone, Debug, Eq, Ord, PartialEq, PartialOrd, Serialize)]
+pub struct StoreCellRef {
+    pub item: String,
+    pub column: String,
+}
+
+/// What one store request came to (`status.store_answers`), as
+/// `status.agent_profile_answer` does for profiles: the request id it
+/// carried and the machine, then each of its changes' outcomes in order once
+/// the machine's store ran them. `refused` with no outcomes is a request that
+/// never reached the store; `refused` retains its cause and log sentence. A request from the screen
+/// and one from `hide skill` / `hide mcp` each find their own by id.
+#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
+pub struct StoreAnswer {
+    pub request_id: String,
+    pub device_id: String,
+    pub state: crate::agent_profiles::AnswerState,
+    pub outcomes: Vec<hide_kit::store::ChangeOutcome>,
+    /// A refusal before any per-change outcome, such as a copy export limit.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub refused: Option<hide_kit::store::StoreRefusal>,
+}
+
+/// A machine's agent profiles: what its node lists, never a variable's
+/// value, each with its pieces as the kit last judged them.
+#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
+pub struct ProfilesSnapshot {
+    pub state: ProfilesState,
+    /// The list's version, which a change names (`ProfileApply`).
+    pub version: u64,
+    pub profiles: Vec<ProfileSnapshot>,
+    /// Each agent's default profile where it is not the built-in one, by
+    /// agent id.
+    pub defaults: BTreeMap<String, String>,
+}
+
+/// Whether the machine's profiles could be read
+/// (`contracts/snapshot-wire-enums.json`: `profiles_state`).
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ProfilesState {
+    Listed,
+    /// The machine's node predates profiles: only each agent's built-in
+    /// default profile runs there.
+    Unsupported,
+    /// The list could not be read; the last list read stays, and why is in
+    /// the log.
+    Unreadable,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
+pub struct ProfileSnapshot {
+    pub id: String,
+    /// The agent's id.
+    pub kind: String,
+    pub name: String,
+    /// The folder or omp name it runs in; `None` for the agent's default
+    /// account.
+    pub account: Option<String>,
+    pub program: Option<String>,
+    /// The names of the variables it adds; their values stay on the node.
+    pub env_keys: Vec<String>,
+    pub version: u64,
+    /// Where its pieces are; `None` until the kit judged this version.
+    pub install: Option<ProfileInstall>,
+    /// The account's own folder, for a profile whose account is its own.
+    pub folder: Option<String>,
+    pub hook: Option<KitPieceSnapshot>,
+    pub skill: Option<KitPieceSnapshot>,
+    /// Whether its account is signed in, as its node found it (B10); `None`
+    /// where nothing is shown: a program of its own, the agent's default
+    /// account, no way to look.
+    pub login: Option<hide_node_link::profiles::ProfileLogin>,
+    /// The last start of it ran in another of the machine's accounts, as its
+    /// hook reported (D-35, B25): its program sets a folder of its own.
+    #[serde(skip_serializing_if = "std::ops::Not::not")]
+    pub wrapper_folder: bool,
+    /// A new start may take it now: it is not being removed (D-30). The one
+    /// judgment every start, the account a hook reported and the screen's
+    /// preselection read (`ProfilesSnapshot::startable`); laid by the list
+    /// and the kit's judgment of it ([`ProfilesSnapshot::judged`]).
+    pub startable: bool,
+    /// Its account's identity as its node's `resolve` keyed it
+    /// (`ListedProfile::account_key`, D-12); `None` for a profile that does
+    /// not resolve there. The shell does not see it.
+    #[serde(skip)]
+    pub account_key: Option<hide_agent_adapter::AccountKey>,
+    /// The account variables a start of it sets, as a hook reports them
+    /// (`ListedProfile::account_variables`); the shell does not see them.
+    #[serde(skip)]
+    pub account_variables: Vec<(String, String)>,
+}
+
+/// Where a profile's pieces are (`contracts/snapshot-wire-enums.json`:
+/// `profile_install`).
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ProfileInstall {
+    /// The agent's default account: its pieces are the agent's own row.
+    Default,
+    /// An account of its own, with its pieces in `hook` and `skill`.
+    Own,
+    /// Nothing can be judged or put in its account; why is in the log.
+    Refused,
+    /// Being removed.
+    Removing,
+    /// Being removed, and Hide's pieces could not all leave its account;
+    /// why is in the log, and the next pass tries again.
+    RemoveFailed,
+}
+
+impl ProfilesSnapshot {
+    pub fn unsupported() -> Self {
+        Self {
+            state: ProfilesState::Unsupported,
+            version: 0,
+            profiles: Vec::new(),
+            defaults: BTreeMap::new(),
+        }
+    }
+
+    pub fn from_list(list: &hide_node_link::profiles::ProfileList) -> Self {
+        let mut snapshot = Self {
+            state: ProfilesState::Listed,
+            version: list.version,
+            profiles: list
+                .profiles
+                .iter()
+                .map(|profile| ProfileSnapshot {
+                    id: profile.id.0.clone(),
+                    kind: profile.kind.clone(),
+                    name: profile.name.clone(),
+                    account: profile.account.as_ref().map(|account| match account {
+                        hide_agent_adapter::AccountRef::Folder(text)
+                        | hide_agent_adapter::AccountRef::Name(text) => text.clone(),
+                    }),
+                    program: profile.program.clone(),
+                    env_keys: profile.env_keys.clone(),
+                    version: profile.version,
+                    install: profile.removing.then_some(ProfileInstall::Removing),
+                    folder: None,
+                    hook: None,
+                    skill: None,
+                    login: profile.login,
+                    wrapper_folder: false,
+                    startable: !profile.removing,
+                    account_key: profile.account_key.clone(),
+                    account_variables: profile.account_variables.clone(),
+                })
+                .collect(),
+            defaults: list
+                .defaults
+                .iter()
+                .map(|(kind, id)| (kind.clone(), id.0.clone()))
+                .collect(),
+        };
+        let places: Vec<hide_kit::ProfileReport> = list
+            .profiles
+            .iter()
+            .filter_map(|profile| {
+                Some(hide_kit::ProfileReport {
+                    id: profile.id.clone(),
+                    version: profile.version,
+                    place: profile.place.clone()?,
+                })
+            })
+            .collect();
+        snapshot.judged(&places);
+        snapshot
+    }
+
+    /// Takes the kit's judgment of each profile, where it is about the
+    /// profile's version this list holds; one about an older version is a
+    /// late answer and is dropped (D-30).
+    pub fn judged(&mut self, reports: &[hide_kit::ProfileReport]) {
+        for profile in &mut self.profiles {
+            let Some(report) = reports
+                .iter()
+                .find(|report| report.id.0 == profile.id && report.version == profile.version)
+            else {
+                continue;
+            };
+            let (install, folder, hook, skill) = match &report.place {
+                hide_kit::ProfilePlace::Default => (ProfileInstall::Default, None, None, None),
+                hide_kit::ProfilePlace::Own {
+                    folder,
+                    hook,
+                    skill,
+                } => (
+                    ProfileInstall::Own,
+                    Some(folder.clone()),
+                    hook.as_ref().map(Into::into),
+                    skill.as_ref().map(Into::into),
+                ),
+                hide_kit::ProfilePlace::Refused { .. } => {
+                    (ProfileInstall::Refused, None, None, None)
+                }
+                hide_kit::ProfilePlace::Removing { failure: None } => {
+                    (ProfileInstall::Removing, None, None, None)
+                }
+                hide_kit::ProfilePlace::Removing { failure: Some(_) } => {
+                    (ProfileInstall::RemoveFailed, None, None, None)
+                }
+            };
+            profile.install = Some(install);
+            profile.startable = !matches!(
+                install,
+                ProfileInstall::Removing | ProfileInstall::RemoveFailed
+            );
+            profile.folder = folder;
+            profile.hook = hook;
+            profile.skill = skill;
+        }
+    }
+
+    /// The profile `id` of the agent `kind` (any spelling) as this list holds
+    /// it, when a new start may take it now ([`ProfileSnapshot::startable`]).
+    /// A start that came to it on its own (a project's or the machine's
+    /// default) falls through past one that may not; one the operator chose
+    /// is refused (`launch::chosen_id`); one an agent's record names is asked
+    /// of its machine, which refuses it by name (`launch::resolve`).
+    pub(crate) fn startable(&self, kind: &str, id: &str) -> Option<&ProfileSnapshot> {
+        let agent = hide_agent_adapter::adapter(kind).map_or(kind, |adapter| adapter.id);
+        self.profiles
+            .iter()
+            .find(|profile| profile.kind == agent && profile.id == id && profile.startable)
+    }
+
+    /// The profiles of the agent `kind` (any spelling) a new start may take
+    /// in the account `key`, the agent's default on this machine first, then
+    /// the list's order: what a session found in that account resumes with,
+    /// and what an agent whose hook reported that account runs with (PRD
+    /// agent-profiles D-03, B19, B24).
+    pub(crate) fn in_account<'a>(
+        &'a self,
+        kind: &str,
+        key: &hide_agent_adapter::AccountKey,
+    ) -> Vec<&'a ProfileSnapshot> {
+        let agent = hide_agent_adapter::adapter(kind).map_or(kind, |adapter| adapter.id);
+        let default = self.defaults.get(agent);
+        let mut found: Vec<&ProfileSnapshot> = self
+            .profiles
+            .iter()
+            .filter(|profile| {
+                profile.kind == agent
+                    && profile.startable
+                    && profile.account_key.as_ref() == Some(key)
+            })
+            .collect();
+        found.sort_by_key(|profile| Some(&profile.id) != default);
+        found
+    }
+}
+
+/// Why a machine's kit pass stopped, as the screen words it (`hide_kit::KitRefusal`
+/// without its detail, which stays in the log).
+#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
+pub struct KitRefusalSnapshot {
+    pub cause: hide_kit::RefusalCause,
+    /// The folder or file at fault, as that machine spells it.
+    pub path: Option<String>,
+    /// The variable that chose Hide's state folder at fault, by name.
+    pub variable: Option<hide_kit::layout::StateVariable>,
+    /// The command that stops this machine's background service, so the
+    /// next launch reads `variable` again.
+    pub stop: Option<String>,
+}
+
+impl From<&hide_kit::KitRefusal> for KitRefusalSnapshot {
+    fn from(refusal: &hide_kit::KitRefusal) -> Self {
+        Self {
+            cause: refusal.cause,
+            path: refusal.path.clone(),
+            variable: refusal.variable,
+            stop: refusal.stop.clone(),
+        }
+    }
+}
+
+/// Why a kit read did not come back with a report. A code, never the call's
+/// own words (the words go to the diagnostic log).
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum KitCheckFailure {
+    /// The call to the machine's helper ended without a report.
+    ReadFailed,
+}
+
+/// The outcome of the operator's request to turn Codex's shared server off on
+/// one machine. A failure carries a code, never the command's own words.
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize)]
+#[serde(tag = "state", rename_all = "snake_case")]
+pub enum CodexDaemonOffSnapshot {
+    Pending,
+    Done,
+    Failed { reason: CodexDaemonOffFailure },
+}
+
+pub use hide_kit::CodexDaemonOffFailure;
+
+#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
+pub struct KitComponentSnapshot {
+    pub id: hide_kit::ComponentId,
+    pub label: String,
+    pub state: hide_kit::ComponentState,
+    /// Why the part is in its state, as a cause the app words; the kit's own
+    /// sentence goes to the `kit` / `part.reason` diagnostic.
+    pub why: Option<hide_kit::PartWhy>,
+    pub location: Option<String>,
+}
+
+/// One agent on one machine: its switch, and what Hide put there for it.
+#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
+pub struct KitAgentSnapshot {
+    pub id: String,
+    pub label: String,
+    pub availability: hide_kit::Availability,
+    pub enabled: bool,
+    /// The machine's record holds the operator's own choice for this agent.
+    /// An agent that is on only by default has none, so a shell keeps an
+    /// agent under Installed once its program is gone only when this is true
+    /// (PRD settings-cleanup B9, D-07).
+    pub chosen: bool,
+    pub skill: KitPieceSnapshot,
+    /// `None` for an agent that gets the skill only.
+    pub hook: Option<KitPieceSnapshot>,
+    /// Hide does only some of what it does for Claude Code with this agent:
+    /// the row wears the Partial chip whether or not the agent is on (PRD
+    /// settings-cleanup B18).
+    pub partial: bool,
+    /// Every feature of the Partial popover, in the table's order, with
+    /// whether this build does it for the agent (`hide_kit::agents::Feature`).
+    pub features: Vec<KitFeatureSnapshot>,
+    /// How many of the agent's sessions run on this machine now, for the
+    /// row's "N sessions" (B16); a sleeping agent is not running and is not
+    /// counted. `None` for an agent whose sessions Hide does not read (B19)
+    /// and for a machine whose sessions are not read yet.
+    pub sessions: Option<u32>,
+    /// The found copy of the agent's CLI is older than its minimum, and what
+    /// updates it (`hide_kit::AgentReport::update`); its command is only ever
+    /// one this build's declaration names for the agent.
+    pub update: Option<hide_kit::AgentUpdate>,
+    /// The official page the adapter's answers come from.
+    pub doc_url: String,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
+pub struct KitFeatureSnapshot {
+    pub id: hide_kit::Feature,
+    pub supported: bool,
+}
+
+impl KitAgentSnapshot {
+    /// Whether Reinstall would change something for this agent: only an
+    /// agent that is on has pieces to repair.
+    pub fn needs_attention(&self) -> bool {
+        self.enabled
+            && (self.skill.state.needs_attention()
+                || self
+                    .hook
+                    .as_ref()
+                    .is_some_and(|hook| hook.state.needs_attention()))
+    }
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
+pub struct KitPieceSnapshot {
+    pub state: hide_kit::ComponentState,
+    /// As [`KitComponentSnapshot::why`].
+    pub why: Option<hide_kit::PartWhy>,
+    pub location: Option<String>,
+}
+
+impl From<&hide_kit::PieceReport> for KitPieceSnapshot {
+    fn from(piece: &hide_kit::PieceReport) -> Self {
+        Self {
+            state: piece.state,
+            why: piece.why.clone(),
+            location: piece.location.clone(),
+        }
+    }
+}
+
+impl KitSnapshot {
+    pub fn from_report(report: &hide_kit::KitReport) -> Self {
+        let components = report
+            .components
+            .iter()
+            .map(|part| KitComponentSnapshot {
+                id: part.id,
+                label: part.id.label().to_owned(),
+                state: part.state,
+                why: part.why.clone(),
+                location: part.location.clone(),
+            })
+            .collect::<Vec<_>>();
+        let agents = report
+            .agents
+            .iter()
+            .filter_map(|agent| {
+                let row = hide_agent_adapter::adapter(&agent.id)?;
+                Some(KitAgentSnapshot {
+                    id: row.id.to_owned(),
+                    label: agent.label.clone(),
+                    availability: agent.availability,
+                    enabled: agent.enabled,
+                    chosen: agent.chosen,
+                    skill: (&agent.skill).into(),
+                    hook: agent.hook.as_ref().map(Into::into),
+                    partial: row.basic(),
+                    features: hide_agent_adapter::Feature::ALL
+                        .into_iter()
+                        .map(|id| KitFeatureSnapshot {
+                            id,
+                            supported: row.supports(id),
+                        })
+                        .collect(),
+                    sessions: None,
+                    update: agent.update.clone().map(|mut update| {
+                        // A report is a helper's answer: a command this
+                        // build's declaration does not name is not shown.
+                        if update.command.as_deref().is_some_and(|command| {
+                            !row.updates.iter().any(|route| route.command == command)
+                        }) {
+                            update.command = None;
+                        }
+                        update
+                    }),
+                    doc_url: agent.doc_url.clone(),
+                })
+            })
+            .collect::<Vec<_>>();
+        Self {
+            unavailable: None,
+            busy: false,
+            // Reinstall repairs what is on: a hook part of an agent that is
+            // switched off is not a repair, and the pass would refuse it.
+            offers_reinstall: components.iter().any(|part| {
+                hide_kit::agents::repairable(part.state, part.why.as_ref())
+                    && hide_kit::agents::agent_of_part(part.id).is_none_or(|agent| {
+                        report
+                            .agents
+                            .iter()
+                            .find(|row| row.id == agent)
+                            .is_none_or(|row| row.enabled)
+                    })
+            }) || report
+                .agents
+                .iter()
+                .any(hide_kit::AgentReport::reinstall_repairs),
+            components,
+            agents,
+            shares_account_with: None,
+            codex_daemon: report.codex_daemon,
+            codex_daemon_on: report.codex_daemon_on,
+            codex_daemon_running: report.codex_daemon_running,
+            codex_daemon_unreadable: report.codex_daemon_unreadable.clone(),
+            codex_capability_unread: report.codex_capability_unread,
+            codex_daemon_off: report
+                .codex_daemon_off
+                .as_ref()
+                .map(|outcome| match outcome {
+                    hide_kit::CodexDaemonOff::Done { .. } => CodexDaemonOffSnapshot::Done,
+                    hide_kit::CodexDaemonOff::Failed { reason, .. } => {
+                        CodexDaemonOffSnapshot::Failed { reason: *reason }
+                    }
+                }),
+            checking: false,
+            check_failed: None,
+            refused: report.refused.as_deref().map(Into::into),
+            profiles: None,
+            store: report.store.clone(),
+            store_new_session: Vec::new(),
+        }
+    }
+
+    pub fn unavailable(cause: KitUnavailable) -> Self {
+        Self {
+            unavailable: Some(cause),
+            ..Self::default()
+        }
+    }
+
+    /// Whether a Codex started by hand on this machine joins the shared
+    /// server: the setting starts it, or a daemon still answers after the
+    /// setting went off (PRD settings-cleanup B27; codex-daemon-apply D-07,
+    /// B9). After a stop that did not take effect, only a read that says no
+    /// daemon answers ends it, so an answer Hide could not read keeps the
+    /// retry on offer (B7). The pane popover's turn-off is offered exactly
+    /// while this holds.
+    pub fn shares_codex_server(&self) -> bool {
+        let stop_failed = matches!(
+            self.codex_daemon_off,
+            Some(CodexDaemonOffSnapshot::Failed {
+                reason: CodexDaemonOffFailure::StopFailed
+            })
+        );
+        self.codex_daemon_on == Some(true)
+            || self.codex_daemon_running == Some(true)
+            || stop_failed && self.codex_daemon_running.is_none()
+    }
+}
+
+/// A device's file host as the operator reads it in Settings and wherever a
+/// file or Git action needs it (PRD S5.5 B36, B50-B52).
+#[derive(Clone, Debug, Default, Eq, PartialEq, Serialize)]
+pub struct DeviceHostSnapshot {
+    /// `this_machine` for the daemon's own machine; for a device `none`,
+    /// `granted`, or `outdated` when the consent covers an older scope.
+    pub consent: String,
+    /// The install root the consent names or would name. On this machine's
+    /// row it is the root a new device consent would name, so the add form
+    /// can say where the helper goes before the operator agrees.
+    pub helper_root: Option<String>,
+    /// The folder the device's `hide` command is linked in, named the same
+    /// way as `helper_root`.
+    pub cli_dir: Option<String>,
+    pub contract: u32,
+    /// `user@host:port (SHA256:...)` the consent is bound to, once bound.
+    pub bound_identity: Option<String>,
+    pub granted_at_unix_ms: Option<u64>,
+    /// `ready`, `connecting`, `not_allowed`, `identity_changed`,
+    /// `unsupported` (this build cannot serve the device) or `unavailable`.
+    pub state: String,
+    pub message: Option<String>,
+    /// `macos aarch64` as the helper reported it.
+    pub platform: Option<String>,
+    pub helper_path: Option<String>,
+    /// Where the device shows the drives of the Windows PC it runs on, when
+    /// it is a WSL distribution (`/mnt`), as its helper reported it; Add a
+    /// project spells a pasted `C:\` path under it (PRD wsl-device B16).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub windows_drives: Option<String>,
+}
+
+/// Why a device's ssh did not connect, as its row draws it: one of three
+/// states by what the operator does ([`SshProblem::action`]), sign in, check
+/// the server key in a terminal, or retry, and a fourth for a Hide an app
+/// update replaced, which only Hide opened again can connect from. A retry over ssh's last line is
+/// `cannot_connect`; the three retries ssh has no line for carry their own
+/// value, which the row words in the operator's language. The finer
+/// [`SshProblem`] stays in the diagnostic log (PRD system-ssh-device-link
+/// D-13, superseded on the row by the operator's 2026-10-30 decision).
+///
+/// [`SshProblem::action`]: hide_node_link::device::SshProblem::action
+/// [`SshProblem`]: hide_node_link::device::SshProblem
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum DeviceProblem {
+    SignInNeeded,
+    SignInRefused,
+    HostKeyChanged,
+    CannotConnect,
+    SshMissing,
+    OpenSshOld,
+    Unsupported,
+    HideUpdated,
+}
+
+impl DeviceProblem {
+    pub fn of(problem: hide_node_link::device::SshProblem) -> Self {
+        use hide_node_link::device::{FailureAction, SshProblem};
+        match (problem.action(), problem) {
+            (FailureAction::SignIn, SshProblem::SignInRefused) => Self::SignInRefused,
+            (FailureAction::SignIn, _) => Self::SignInNeeded,
+            (FailureAction::CheckHostKey, _) => Self::HostKeyChanged,
+            (FailureAction::ReopenHide, _) => Self::HideUpdated,
+            (FailureAction::Retry, SshProblem::SshMissing) => Self::SshMissing,
+            (FailureAction::Retry, SshProblem::OpenSshOld) => Self::OpenSshOld,
+            (FailureAction::Retry, SshProblem::Unsupported) => Self::Unsupported,
+            (FailureAction::Retry, _) => Self::CannotConnect,
+        }
+    }
+
+    pub fn code(self) -> &'static str {
+        match self {
+            Self::SignInNeeded => "sign_in_needed",
+            Self::SignInRefused => "sign_in_refused",
+            Self::HostKeyChanged => "host_key_changed",
+            Self::CannotConnect => "cannot_connect",
+            Self::SshMissing => "ssh_missing",
+            Self::OpenSshOld => "openssh_old",
+            Self::Unsupported => "unsupported",
+            Self::HideUpdated => "hide_updated",
+        }
+    }
+}
+
+/// What a device's connection attempt waits on, as its row shows it.
+pub type DeviceSignInSnapshot = hide_node_link::device::ShownSignIn;
+
+/// One staged connection test of an SSH device: SSH, authentication,
+/// protocol, PTY and Git, each with the host's answer.
+#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
+pub struct DeviceTestSnapshot {
+    /// `running`, `passed` or `failed`.
+    pub state: String,
+    pub checked_at_unix_ms: Option<u64>,
+    pub stages: Vec<DeviceTestStageSnapshot>,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
+pub struct DeviceTestStageSnapshot {
+    pub stage: String,
+    /// `pending`, `passed` or `failed`.
+    pub state: String,
+    pub detail: String,
+}
+
+fn is_zero_u32(value: &u32) -> bool {
+    *value == 0
+}
+
+/// A question the core asks on an agent's row for it, sent as what it is
+/// rather than as words, so each shell, the bell and the phone say it in
+/// their own language (hide-plan B14).
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(tag = "cause", rename_all = "snake_case")]
+pub enum AskSubject {
+    /// The agent's proposed plan of `steps` steps waits for the operator's
+    /// review.
+    PlanReview { steps: u32 },
+    /// The mission this Conductor conducts waits on the operator's decision,
+    /// whose one line it carries (needs-you-cleanup D-12), and how many
+    /// Views linked to it are open for the operator to look at (0 left off
+    /// the wire).
+    MissionDecision {
+        line: String,
+        #[serde(default, skip_serializing_if = "is_zero_u32")]
+        views: u32,
+    },
+    /// A node of the mission waits on the operator to look (PRD
+    /// mission-node-simple D-05, B14): its title and why.
+    ///
+    /// `unmet` is, for a refused close, how many finished nodes have a line
+    /// empty now (0 for every other reason and then left off the wire).
+    MissionAttention {
+        node: String,
+        reason: crate::missions::AttentionReason,
+        #[serde(default, skip_serializing_if = "is_zero_u32")]
+        unmet: u32,
+    },
+    /// Hide typed a brief or a letter's bell into the agent and the agent
+    /// has not recorded it, and no parent cleared it (`delivery::typed`).
+    /// `held` says the agent's composer was read still showing the text, so
+    /// it was not taken; without it the input is only not confirmed.
+    /// `spent` says Hide stopped typing it again.
+    InputUnconfirmed {
+        input: crate::delivery::typed::InputKind,
+        spent: bool,
+        held: bool,
+    },
+    /// The agent declared that its next step is one only a person can take
+    /// (`hide agent ask-human`, PRD ask-human): the declaration's id, which
+    /// Done names, its kind, where the person acts, and the name of the
+    /// device the agent runs on (none for the core's own machine), which a
+    /// notification says.
+    HumanTurn {
+        id: String,
+        kind: crate::coordination::human_turn::HumanKind,
+        place: String,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        device: Option<String>,
+    },
+    /// A question the agent put to the operator that still waits, as Hide
+    /// AI recorded it in the session's `나를 기다리는 것`: the record's id
+    /// for it, which 무시하기 names, and its words (docs/status-model.md, A
+    /// question still waiting).
+    OpenAsk { id: String, line: String },
+}
+
+/// The questions a row's session put to the operator that still wait, as
+/// the session record's `나를 기다리는 것` lists them, oldest first: what
+/// the row's `?N`, the pane's mark and the turn card draw, and the session
+/// 무시하기 names (docs/status-model.md, A question still waiting).
+#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
+pub struct OpenAsksSnapshot {
+    pub session: crate::links::ledger::SessionIdentity,
+    pub items: Vec<OpenAskSnapshot>,
+}
+
+/// One question that still waits on the operator.
+#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
+pub struct OpenAskSnapshot {
+    /// The record's id for it, which 무시하기 names.
+    pub id: String,
+    pub text: String,
+    pub at_unix_ms: u64,
+}
+
+/// A person's turn a row's own agent declared, as the row carries it.
+#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
+pub struct DeclaredHumanTurn {
+    /// The declaration Done settles.
+    pub id: String,
+    pub kind: crate::coordination::human_turn::HumanKind,
+    pub place: String,
+    /// The device the agent runs on, by its name; absent for the core's own.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub device: Option<String>,
+    pub since_unix_ms: u64,
+}
+
+impl DeclaredHumanTurn {
+    /// The question it asks of the operator, as a surface words it.
+    pub fn subject(&self) -> AskSubject {
+        AskSubject::HumanTurn {
+            id: self.id.clone(),
+            kind: self.kind,
+            place: self.place.clone(),
+            device: self.device.clone(),
+        }
+    }
+}
+
+/// The person's turn a row leads with (PRD ask-human D-09, D-17, D-20):
+/// on the agent that declared it and on its lineage root, never on a
+/// parent between them.
+#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
+pub struct HumanTurnLead {
+    /// The declaration Done settles.
+    pub id: String,
+    pub kind: crate::coordination::human_turn::HumanKind,
+    pub place: String,
+    /// The agent that declared it: this row's own pane, or the raised
+    /// descendant's, which Open goes to.
+    pub pane_id: String,
+    /// That agent's title, for a root's band and hover.
+    pub title: String,
+    /// The device that pane is on, read by the one address owner
+    /// (`crate::address`); absent for the core's own node. Done is disabled
+    /// while it is not connected (D-21).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub device_id: Option<String>,
+    pub since_unix_ms: Option<u64>,
+    /// Whether this row's own agent declared it.
+    pub own: bool,
+}
+
+/// A published value the core derives from other fields of its row before
+/// every snapshot (`Runtime::stamp_row_addresses`). Equality ignores it,
+/// because the fields it is derived from are compared already: a freshly
+/// projected row, not yet stamped, is the same row as the stamped one it
+/// replaces, so no comparison reads a stamp as a change.
+#[derive(Clone, Debug, Default, Serialize)]
+#[serde(transparent)]
+pub struct Derived<T>(pub T);
+
+impl<T> PartialEq for Derived<T> {
+    fn eq(&self, _: &Self) -> bool {
+        true
+    }
+}
+
+impl<T> Eq for Derived<T> {}
+
+/// An agent's state on four independent lifecycle axes, plus the values the shell draws
+/// from them.
+///
+/// The axes answer four different questions that a single flat state string
+/// used to mix: what the agent needs from the operator (`demand`), whether it
+/// is running (`activity`), whether it has reported a completion (`completed`),
+/// and whether the operator has looked at it since it last changed (`unread`).
+/// Everything below `unread` is derived here so the shell only draws (design
+/// rule 4).
+#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
+pub struct SidebarAgentSnapshot {
+    /// The machine the row's pane is on (the core's own node id, or a
+    /// device's) and the id that machine gives the pane (`w1:p2`), read from
+    /// `pane_id` by the one address owner (`crate::address`) before every
+    /// snapshot (`Runtime::stamp_row_addresses`), so no reader splits the
+    /// pane id itself.
+    pub device_id: Derived<String>,
+    pub device_pane_id: Derived<String>,
+    /// Display provenance only; independent of hook health and GitHub reads.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub record_connection: Option<crate::labels::record::RecordConnection>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub record_summary: Option<String>,
+    #[serde(skip_serializing)]
+    pub(crate) record_metadata: Option<crate::links::ledger::SessionMetadata>,
+    /// A delayed telemetry read leaves the last confirmed read fingerprint intact.
+    #[serde(skip)]
+    pub(crate) telemetry_stale: bool,
+    /// Where the agent stands in the start the engine made of it: while it is
+    /// starting its activity is unknown, yet it has run nothing but the first
+    /// prompt its start may carry (`agent_state::AgentStart`).
+    #[serde(skip)]
+    pub(crate) start: crate::agent_state::AgentStart,
+    /// Raw engine session bound to destructive close approval, never a label fallback.
+    #[serde(skip_serializing)]
+    pub close_session: Option<crate::sidebar::SessionAgentSessionPayload>,
+    pub state: crate::agent_state::RowState,
+    pub resolved: Option<crate::agent_state::sessions::Resolution>,
+    /// Resolved within the last 24 hours, so Sessions still lists it under Resolved.
+    pub resolved_recent: bool,
+    /// The operator's ★ or a read, unanswered ask (PRD revisit-group).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub revisit: Option<crate::agent_state::sessions::Revisit>,
+    pub escalation: Option<crate::agent_state::escalation::Escalation>,
+    /// How many letters wait on this pane because a draft may stand in its
+    /// composer, once it has rested long enough for the operator to be shown
+    /// them (`doorbell::letters_waiting`): the pane header's Deliver now and
+    /// the row's envelope. Absent from the wire while none waits.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub letters_waiting: Option<u32>,
+    /// On a lineage root: every raised descendant, lead first (PRD D-10, D-27).
+    pub raised: Vec<crate::agent_state::escalation::RaisedAsk>,
+    /// On a parent between a declaring descendant and its lineage root: the
+    /// person's turns raised below it, oldest first, which its pane's head
+    /// draws as the root's does (PRD ask-human B15). Its row stays as it was;
+    /// only the head reads this.
+    #[serde(skip)]
+    pub human_below: Vec<crate::agent_state::escalation::RaisedAsk>,
+    /// The person's turn this row's own agent declared (PRD ask-human D-07),
+    /// laid from the ledger in a field of its own: the row's own question,
+    /// `ask_subject` and demand stay as they are, and every reading of the
+    /// row looks here first and counts them behind it. Absent while none
+    /// stands.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub declared_human_turn: Option<DeclaredHumanTurn>,
+    /// Derived: the person's turn this row leads with (PRD ask-human), its
+    /// own declaration or the oldest one its descendants raised to it, which
+    /// draws the key, the `<kind> · <place>` line and Done. Absent from the
+    /// wire while there is none.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub human_turn: Option<HumanTurnLead>,
+    /// The pull requests this row's session holds or made and every
+    /// descendant's, live or ended (`agent_state::work::family`): the one
+    /// list every PR mark of the row draws. Laid with the lineage pass.
+    pub pulls: Option<crate::agent_state::work::family::SessionPulls>,
+    /// The one mark this row wears for its descendants while folded (PRD D-40).
+    pub descendant_mark: Option<crate::agent_state::escalation::DescendantMark>,
+    /// The label line of the most recently changed working descendant, the
+    /// Sessions line of a root waiting on its children (PRD B31).
+    #[serde(skip_serializing)]
+    pub descendant_line: Option<String>,
+    pub id: String,
+    /// The name someone gave the agent (`hide agent spawn --name`), which ⌘K
+    /// also finds it by; absent when it has
+    /// none or only one Hide made up from its pane (`fork::hide_made_name`).
+    /// `id` falls back to the pane id and a device's row replaces it, so it
+    /// cannot stand in for this.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub given_name: Option<String>,
+    /// The name the engine reports the agent by, a name Hide made up included,
+    /// which a pane's launch record is matched by (`runtime::agent_choice`).
+    /// Never on the wire.
+    #[serde(skip_serializing)]
+    pub started_name: Option<String>,
+    /// What this pane declares about the agent it was forked from: the
+    /// source's pane and the digest of the session it hosted
+    /// (`wire::fork_declaration`). A fork is the operator's root, so this is
+    /// provenance and never enters ownership.
+    #[serde(skip_serializing)]
+    pub declared_fork: Option<(String, Option<String>)>,
+    /// Present on a pane Hide's Fork agent made, after its title on every
+    /// row and header that draws the fork mark
+    /// (`agent_state::apply_fork_sources`).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub forked_from: Option<ForkSourceSnapshot>,
+    pub pane_id: String,
+    pub workspace_label: String,
+    /// The checkout the agent's pane is in, once the navigator has placed it.
+    #[serde(default)]
+    pub checkout_label: Option<String>,
+    pub agent_kind: String,
+    /// What the agent needs from the operator: `question`, `approval`, `error`,
+    /// or `none`. The engine's `blocked` lifecycle is an approval.
+    pub demand: String,
+    /// Whether the agent is running: `working`, `stopped`, or `unknown`.
+    /// The engine's `done` and `idle` are the same activity. Completion and Hide's
+    /// pane-level read state remain separate axes.
+    pub activity: String,
+    /// Whether the engine reported a completed turn. A newly
+    /// opened agent can be stopped while it waits for its first instruction;
+    /// that ready state is not a completion and must not appear as Done.
+    #[serde(skip_serializing)]
+    pub completed: bool,
+    /// Whether this pane has changed since the operator last had it focused.
+    /// Owned by Hide per pane, never by a tab-scoped seen.
+    pub unread: bool,
+    /// An approval prompt waits on this pane right now: the engine reports one, or
+    /// the agent's session says its plan waits for the operator's approval.
+    /// It holds the row in Needs You whether or not the operator has read it.
+    pub blocked: bool,
+    /// Derived: `needs_you`, `done`, `working`, or `seen`.
+    pub group: String,
+    /// Derived: whose move is next, the one mark every surface draws.
+    pub mark: crate::agent_state::RowMark,
+    /// Derived: rows in Needs You and Done are drawn bright, the rest subdued.
+    pub emphasized: bool,
+    /// Derived: the status code the screen turns into a word. No view shows an
+    /// axis value.
+    pub status_code: AgentStatusCode,
+    /// Derived: closing this pane would interrupt work or discard a result the
+    /// operator has not read.
+    pub requires_close_confirmation: bool,
+    /// Derived: the activity evidence is incomplete, so a destructive close
+    /// must wait for a fresh status rather than assuming the pane is idle.
+    pub requires_close_status_check: bool,
+    /// The title every surface calls this agent by; `sidebar.rs` owns the
+    /// ladder that picks it (PRD D-01). A profile agent's title is the one
+    /// its agent would have with the built-in default.
+    pub identity_label: String,
+    /// The name of the profile the agent runs with, when it is not the
+    /// agent's built-in default (PRD agent-profiles B17): the screens mark
+    /// the agent with it beside its logo, and `hide agent list` names it
+    /// after its agent (`Claude · work`). Laid from the pane's launch record
+    /// (`Runtime::lay_profiles`).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub profile: Option<String>,
+    /// The label's one-line progress sentence (`labels`).
+    #[serde(skip_serializing)]
+    pub progress: Option<String>,
+    /// The one action the operator is being asked for, at most 40 characters.
+    #[serde(skip_serializing)]
+    pub expected_reply: Option<String>,
+    /// Derived: the row's second line, chosen by the group from the three
+    /// sentences above (PRD D-06). `None` draws no sentence.
+    pub detail: Option<String>,
+    /// Everything the agent last said through its hooks, uncut: the request
+    /// it waits on (`expected_reply`), then what it did (`progress`), one per
+    /// line. `detail` is the row's one chosen sentence cut to the row; this is
+    /// the whole of both, which the Overview's node popover shows (PRD
+    /// overview-lenses-tiles-agents D-50). Absent when neither was reported.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub message: Option<String>,
+    /// Bounded native question/plan content for the current session and
+    /// state. Missing source content remains absent rather than inferred.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub user_turn: Option<hide_session::turns::UserTurnFact>,
+    /// What the core asks on this row for the agent, when the question is
+    /// the core's and not the agent's own; the row then draws no sentence
+    /// of its own and every surface words the subject.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub ask_subject: Option<AskSubject>,
+    /// When the core's question on this row was asked, and how many more
+    /// of its questions wait behind it (a plan review and a mission decision
+    /// at once), so the row's ask leads with what waited longest and counts
+    /// the rest (needs-you-cleanup D-13).
+    #[serde(skip)]
+    pub(crate) laid_since_unix_ms: Option<u64>,
+    /// When the core first read this delegated child blocked, while it still
+    /// is (`runtime/blocked_children.rs`): the start of the grace its parent
+    /// has before its lineage root is raised (`escalation::grace_end`).
+    #[serde(skip)]
+    pub(crate) blocked_since_unix_ms: Option<u64>,
+    #[serde(skip)]
+    pub(crate) laid_more: usize,
+    /// Which of the core's questions are laid on this row now, the one it
+    /// leads with and those counted behind it, each by the event that raised
+    /// it (`runtime/plans.rs::core_asks`); empty while none is. What the read
+    /// record compares, so a question the operator read stays read while the
+    /// agent works and rests under it (docs/status-model.md, A question the
+    /// core lays stays read).
+    #[serde(skip)]
+    pub(crate) laid_asks: BTreeSet<String>,
+    /// The questions the row's session put to the operator that still wait
+    /// and that the operator has sent nothing since, whether or not one is
+    /// laid on the row (`runtime/plans.rs::lay_reviews_on`); absent while
+    /// none does.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub open_asks: Option<OpenAsksSnapshot>,
+    /// Derived: whether the row draws its status word. It leaves working and
+    /// read rows, where the mark already says it, and stays on rows that
+    /// still concern the operator.
+    pub status_word_visible: bool,
+    /// When the core last saw this agent change state, in epoch
+    /// milliseconds; `None` before the core has observed it. Retained for
+    /// state ordering, independently of the latest prompt.
+    pub changed_at_unix_ms: Option<u64>,
+    /// Latest actual native request in this proven session, in epoch
+    /// milliseconds. Unknown or undated requests supply no display time.
+    /// The shell derives elapsed time on its shared clock, without snapshots.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub last_prompt_at_unix_ms: Option<u64>,
+    /// The later of the latest request and the latest reply in this proven
+    /// session, in epoch milliseconds: what idle-agent sleep counts its
+    /// hours from, because a relaunch moves no line of
+    /// the conversation. `None` until a session read proves one.
+    #[serde(skip_serializing)]
+    pub last_conversation_at_unix_ms: Option<u64>,
+    /// The ordering key: `changed_at_unix_ms` as thirteen digits when the
+    /// core has it, otherwise the engine's state change sequence zero-padded.
+    pub last_activity: String,
+    /// The engine's own state change sequence, one of the three inputs to a pane's
+    /// read record.
+    #[serde(skip_serializing)]
+    pub state_change_seq: Option<u64>,
+    /// The conversation id this agent is running, kept only when the engine recorded
+    /// the session as an id. A session recorded as a path is dropped here,
+    /// because neither agent's fork command takes one. The agent row's Copy
+    /// session id reads it (PRD sidebar-context-menus D-06); absent from the
+    /// wire when the engine recorded none.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub session_id: Option<String>,
+    /// The agent has its own search over its whole conversation, so ⌘F on its
+    /// pane asks the core where the search goes (`pane_find_open`) rather
+    /// than opening Hide's find bar (`agent_find.rs`).
+    pub own_find: bool,
+    /// The pane this agent was spawned from, as the `parent_pane` token its
+    /// spawner declared (the engine records no lineage). It is a claim that holds
+    /// only while both panes still host the sessions it was written for:
+    /// `wire.rs` checks the child's, `crate::agent_state::apply_lineage` the parent's and
+    /// clears the claim when either moved on, so an agent that took over a
+    /// pane is a root rather than a child of whoever the pane's last agent
+    /// was spawned by.
+    #[serde(skip_serializing)]
+    pub spawned_from_pane_id: Option<String>,
+    /// The exact pane token before device scoping. It lets a disconnected
+    /// cross-device parent resolve again when its machine reconnects.
+    #[serde(skip_serializing)]
+    pub declared_parent_pane_id: Option<String>,
+    /// The stable machine identity recorded for a cross-device parent.
+    #[serde(skip_serializing)]
+    pub spawned_from_machine_id: Option<String>,
+    /// The digest of the parent's session the declaration was written for.
+    #[serde(skip_serializing)]
+    pub declared_parent_session: Option<String>,
+    /// The digest of the session this pane's agent runs now, which a child's
+    /// declaration is compared with when this row is its parent.
+    #[serde(skip_serializing)]
+    pub lineage_session: Option<String>,
+    /// Why the provider refused the turn this row's own session last ended,
+    /// as its hook said it (`agent_hooks::facts::TurnRefused`); none for any
+    /// other turn. What a mission reads as its stopped worker's cause.
+    #[serde(skip)]
+    pub(crate) refused: Option<crate::agent_hooks::facts::TurnRefused>,
+    /// Hide's server mark as the pane carries it (`wire::SERVER_MARK_TOKEN`):
+    /// which run of the engine a saved `state_change_seq` for this pane can be
+    /// compared on.
+    #[serde(skip_serializing)]
+    pub server_mark: Option<String>,
+    /// Ownership, derived from the lineage alone: a root is the operator's own
+    /// work, a descendant is work the root delegated. It is the fourth derived
+    /// axis beside demand, activity and read, and it is advice rather than a
+    /// boundary - a delegated pane is still selectable and still takes input,
+    /// because the operator has to be able to read a child's blocked prompt
+    /// (PRD D-36, D-56).
+    ///
+    /// An orphan is a root again: when the parent is gone, ownership comes
+    /// back to the person (PRD D-52).
+    pub delegated: bool,
+    /// The pane that spawned this one, when that pane's agent is still in the
+    /// list. `spawned_from_pane_id` records what the engine said; this records
+    /// which row it actually resolved to, so a breadcrumb never points at a
+    /// pane that is not there.
+    pub lineage_parent_pane_id: Option<String>,
+    /// The ancestors between the lineage root and this agent, root first and
+    /// excluding this agent. The breadcrumb is this list; nothing persists a
+    /// visited path, because a stored one rots across a restart, a tab switch
+    /// or a child exiting (PRD D-18).
+    pub lineage_path_pane_ids: Vec<String>,
+    /// Every agent sharing this agent's parent, in the same order the parent
+    /// lists its children, including this agent. It is what a breadcrumb
+    /// step's dropdown offers (PRD B10).
+    ///
+    /// A root has none: the layer above a root is the sidebar, not the
+    /// breadcrumb, and independent roots are not one another's siblings.
+    pub lineage_sibling_pane_ids: Vec<String>,
+    /// What every live descendant of this row is doing, counted by state, for
+    /// the badge the row wears while its descendants are folded away. It is
+    /// derived on the lineage pass and counts all descendants, not only the
+    /// direct children, because a grandchild's question is still this row's
+    /// to answer (PRD B3, B4, D-05).
+    pub descendant_counts: DescendantCountsSnapshot,
+    /// Facts for the common direct-child popover, independent of tree folding.
+    pub direct_child_counts: DescendantCountsSnapshot,
+    /// What a quiet row, one with no demand of its own that is stopped, idle
+    /// or done, is waiting on: a working descendant, a background job its
+    /// session proves is still running, or the reply to a Hide request it
+    /// sent while the recipient is still making it. A waiting row has not
+    /// finished, so it stays in Working rather than reading as finished, and
+    /// it reaches Done only once nothing it waits on is in progress
+    /// (sidebar-agent-status D-01). It
+    /// travels as this additive field beside `group: working`, never as a new
+    /// group value, so a decoder that does not know it draws an ordinary
+    /// Working row (D-10).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub wait: Option<AgentWait>,
+    /// The pull request whose checks this row would wait on: a duty pull
+    /// request of its own with checks running on a current read, or one its
+    /// session just printed whose read has not landed (`AgentWait::Checks`).
+    /// Laid before the lineage (`Runtime::lay_checks`); the line names it.
+    #[serde(skip_serializing)]
+    pub checks_wait: Option<u32>,
+    /// The checks this row waited on finished in its current state, and how
+    /// (docs/status-model.md, A quiet row that waits). It is part of the read
+    /// fingerprint, so the end turns the row unread once.
+    #[serde(skip_serializing)]
+    pub checks_ended: Option<ChecksEnded>,
+    /// The background tasks a finished turn left running, which its line
+    /// names (status-marks D-19); 0 on any other row.
+    #[serde(skip_serializing_if = "is_zero_u32")]
+    pub background_left: u32,
+    /// How many descendants still work under a root whose own finished turn
+    /// the operator has not read yet, which its line ends with: that turn is
+    /// not hidden by them (docs/status-model.md, A quiet row that waits); 0
+    /// on any other row.
+    #[serde(skip_serializing_if = "is_zero_u32")]
+    pub children_left: u32,
+    /// How many subagents the pane's session runs inside itself now, by its
+    /// hook's count (`sidebar::running_subagents`); 0 when none run and when
+    /// Hide cannot read the count, which no screen tells apart from none
+    /// (docs/UI_BEHAVIOR.md, Subagents). Laid before the lineage, which waits
+    /// on them, by `Runtime::lay_subagents` and, for a device's rows,
+    /// `Runtime::judge_device_pane_children`.
+    #[serde(skip_serializing_if = "is_zero_u32")]
+    pub subagents: u32,
+    /// The subagents counted in `subagents` that the session names, oldest
+    /// first and at most `hide_agent_hooks::report::SUBAGENTS_REPORTED`,
+    /// which a row lists under it, dimmed and with nothing to press
+    /// (docs/UI_BEHAVIOR.md, Subagents); laid with `subagents`.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub subagent_rows: Vec<SubagentRowSnapshot>,
+    /// How many subagents still run under a finished turn the operator has
+    /// not read yet, which its line ends with, as `children_left` does; 0 on
+    /// any other row.
+    #[serde(skip_serializing_if = "is_zero_u32")]
+    pub subagents_left: u32,
+    /// How many things the row's `wait` waits on, which its line counts
+    /// (`자식 2개 기다림`): working descendants, subagents, background tasks or
+    /// replies being made; 0 for running checks and on a row that waits for
+    /// nothing.
+    #[serde(skip_serializing_if = "is_zero_u32")]
+    pub wait_count: u32,
+    /// How many of its own subagents the row's wait waits on too
+    /// (`axes.rs::subagents_waited_on`), which a children wait's line adds
+    /// (`자식 1개 · 서브에이전트 2개 기다림`); 0 when it waits on none.
+    #[serde(skip_serializing_if = "is_zero_u32")]
+    pub wait_subagents: u32,
+    /// How many of the replies this row awaits are still being made
+    /// (`axes.rs::answer_in_progress`), decided on the lineage pass.
+    #[serde(skip_serializing)]
+    pub replies_in_progress: u32,
+    /// The lineage's half of a children wait: a root, quiet itself, with work
+    /// moving on below it. Whether it waits on them is decided with the read
+    /// axis (`axes.rs::settle_wait`).
+    #[serde(skip_serializing)]
+    pub children_moving: bool,
+    /// What the row waits on for itself (`axes.rs::own_wait`), which is its
+    /// wait whenever it does not wait on its children.
+    #[serde(skip_serializing)]
+    pub own_wait: Option<AgentWait>,
+    /// Whether the operator has not read the row's own turn, compared on its
+    /// own fields only (`axes.rs::record_covers_turn`): a child finishing, a
+    /// check ending or a person's turn turns the row unread and leaves this
+    /// alone, and a record that cannot be compared leaves it false.
+    #[serde(skip_serializing)]
+    pub own_unread: bool,
+    /// The demands and completions of this row's live descendants, keyed by
+    /// the descendant pane. It is what the read record compares against, so
+    /// a descendant asking or finishing turns this row unread the same way
+    /// its own state change would (PRD B5, B6, D-03).
+    #[serde(skip_serializing)]
+    pub descendant_signals: BTreeSet<DescendantSignal>,
+    /// Tree-only presentation. The canonical agent list and its read axes stay flat.
+    pub lineage_depth: usize,
+    pub lineage_child_pane_ids: Vec<String>,
+    /// Every live descendant pane in the order a close of this row takes
+    /// them: each descendant before its parent, so the row itself would go
+    /// last (PRD close-agent-subtree D-20). A row on a device that is not
+    /// connected is never listed, because it is neither shown nor closable
+    /// (D-16). Absent from the wire when there is none.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub close_descendant_pane_ids: Vec<String>,
+    pub lineage_root_checkout_id: Option<String>,
+    pub lineage_worktree_badge: Option<String>,
+    pub lineage_orphan: bool,
+    pub lineage_hint: Option<String>,
+    pub raised_hint: Option<String>,
+    /// The pane the hint points at, when that pane still holds an agent Hide
+    /// can name. It is what makes the line something to follow rather than
+    /// something to read.
+    pub spawn_origin_pane_id: Option<String>,
+    pub lineage_collapsed: bool,
+    /// Present while Hide has ended this agent's process and holds its
+    /// conversation to resume (`agent_sleep.rs`). It rides beside `group`,
+    /// never as a group or transport value, and is absent from the wire when
+    /// the agent is awake, so an awake row keeps exactly its keys (PRD D-16).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub sleep: Option<AgentSleepSnapshot>,
+    /// What the label worker read of this agent's session, which the request
+    /// block is built from (PRD overview-request-view D-14).
+    #[serde(skip_serializing)]
+    pub(crate) row_facts: Option<crate::request_view::RowFacts>,
+    /// Notification delivery waits for the final turn-end analysis; the
+    /// visible row continues to follow its own activity and demand facts.
+    pub notification_pending: bool,
+    /// A fallback already finalized this turn's notice as Done.
+    pub notification_finalized: bool,
+    /// The request and block letters the agent's session sent whose answer
+    /// it still waits for, each with who will answer it. Laid by the runtime
+    /// from the delivery ledger, never by a session read, so it does not make
+    /// `row_facts` present; the lineage pass decides from the recipients
+    /// whether one of those answers is still being made.
+    #[serde(skip_serializing)]
+    pub(crate) awaited_replies: Vec<AwaitedReply>,
+    /// Hide AI started this agent (PRD hide-ai-origin-mark D-01). Set by the
+    /// runtime from the coordination ledger, so a session read never makes
+    /// it; absent from the wire for every other agent.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub hide_ai: Option<HideAiSnapshot>,
+    /// An external tool's work (PRD hide-external-control D-09): an agent
+    /// the tool started, or one started under it with `--parent`. Set by
+    /// the runtime from the coordination ledger and the tool's connection,
+    /// so a session read never makes it; absent from the wire for every
+    /// other agent.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub tool: Option<ToolWorkSnapshot>,
+    /// The operator's own lists leave this row out
+    /// (`agent_state::listed_for_operator`): work Hide AI's home or an
+    /// external tool keeps, while it asks nothing of the operator. Written
+    /// with the group, so a wire reader (the phone) follows the core's one
+    /// decision instead of making its own; absent while the row is listed.
+    #[serde(skip_serializing_if = "std::ops::Not::not")]
+    pub unlisted: bool,
+    /// The request view's part of the row: the verb and since when, the
+    /// request and reply lines, the pull requests (`request_view.rs`).
+    /// Absent until the core has built it.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub request: Option<crate::request_view::AgentRequestSnapshot>,
+    /// The Views this row's agent opened last that the operator has not
+    /// looked at, newest first (PRD unseen-agent-views D-14, D-19). Laid by
+    /// the runtime from the View layouts before the lineage, never by a
+    /// session read; a delegated row hands them up as descendant signals.
+    #[serde(skip_serializing)]
+    pub(crate) unseen_views: Vec<UnseenViewFact>,
+    /// `볼 것` on an operator's own row: what its line names and what a press
+    /// brings forward (D-05, D-14). Absent on every other row.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub look: Option<LookSnapshot>,
+}
+
+/// One View an agent opened that the operator has not looked at yet.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(crate) struct UnseenViewFact {
+    pub device_id: String,
+    pub path: String,
+    pub view_id: String,
+    pub label: String,
+    /// The checkout's catalog ids, when the catalog names it now.
+    pub workspace_id: Option<String>,
+    pub checkout_id: Option<String>,
+    pub opened_unix_ms: u64,
+    /// An ancestor read it (D-22): it sends its ancestors no signal.
+    pub ancestors_read: bool,
+}
+
+/// What an operator's row says about the Views it opened that they have not
+/// seen: the newest, named and pressed, and how many there are (D-14).
+#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
+pub struct LookSnapshot {
+    /// The group the row would be in with nothing to look at, which tells
+    /// the notifications whether the row asks something of its own or only
+    /// has this to look at (status-model.md, A View to look at).
+    pub group: String,
+    pub count: u32,
+    pub view_id: String,
+    pub label: String,
+    pub workspace_id: Option<String>,
+    pub checkout_id: Option<String>,
+}
+
+/// What a sleeping agent's row and pane say about it.
+#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
+pub struct AgentSleepSnapshot {
+    /// `sleeping`, `waking` or `failed`.
+    pub state: String,
+    /// Why the last wake failed, in the operator's words; only on `failed`.
+    pub reason: Option<String>,
+    /// When the agent last changed state before it slept, for "Resuming the
+    /// conversation from <elapsed>".
+    pub since_unix_ms: u64,
+    /// The agent's last progress sentence, kept from before it slept.
+    pub progress: Option<String>,
+    /// Why Hide put it to sleep, when its hover says so; absent otherwise.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub cause: Option<crate::agent_sleep::SleepCause>,
+}
+
+/// Whether the pane menu's Sleep agent can run now, and why not (PRD B15).
+#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
+pub struct AgentSleepActionSnapshot {
+    pub available: bool,
+    pub reason: Option<AgentActionRefusal>,
+}
+
+/// Why the pane menu's Sleep agent or Fork cannot run now, as a code the web
+/// words (`contracts/snapshot-wire-enums.json`: `agent_action_refusal`); the
+/// English `detail` is for the log and a refused request's diagnostic.
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum AgentActionRefusal {
+    /// This agent's reader cannot sleep it.
+    Unsupported,
+    /// This agent sleeps only on the machine the core runs on.
+    CoreMachineOnly,
+    Asleep,
+    Working,
+    WaitingForYou,
+    /// Hide cannot tell what the agent is doing.
+    UnknownActivity,
+    /// The engine has not reported the agent's conversation yet.
+    NoConversation,
+}
+
+impl AgentActionRefusal {
+    pub fn detail(self) -> &'static str {
+        match self {
+            Self::Unsupported => "This agent's reader does not support sleep",
+            Self::CoreMachineOnly => "This agent sleeps only on the machine Hide's core runs on",
+            Self::Asleep => "This agent is already asleep",
+            Self::Working => "This agent is working",
+            Self::WaitingForYou => "This agent is waiting for the operator",
+            Self::UnknownActivity => "Hide cannot tell what this agent is doing",
+            Self::NoConversation => "The engine has not reported this agent's conversation",
+        }
+    }
+}
+
+#[derive(Clone, Debug, PartialEq, Serialize)]
+pub struct WorkspaceSnapshot {
+    pub agent_scope: crate::agent_state::Scope,
+    pub home_issues: crate::issues::ProjectIssuesSnapshot,
+    /// The project's tasks in the source-neutral shape the web reads
+    /// (`tasks.rs`); `home_issues` stays as older readers read it.
+    pub tasks: crate::tasks::ProjectTasksSnapshot,
+    /// The project's pull requests as `gh pr list` answered them, one per
+    /// branch, for the Overview's PRs tab (PRD overview-lenses-prs), where a
+    /// pull request with no checkout here (a bot's branch) is a row too. A
+    /// local Git project's only, and absent from the wire while empty.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub pull_requests: Vec<PullRequestSnapshot>,
+    pub id: String,
+    pub label: String,
+    pub path: String,
+    pub remote_target_id: Option<String>,
+    pub expanded: bool,
+    pub device_id: String,
+    pub repo_name: String,
+    pub is_git: bool,
+    pub default_branch: Option<String>,
+    /// Local branch refs available as a base for a new worktree. This is not
+    /// derived from checkout rows because a valid base need not be checked
+    /// out anywhere.
+    pub branches: Vec<String>,
+    pub registered: bool,
+    pub temporary: bool,
+    /// The engine workspaces whose panes sit in this project, in engine order.
+    /// Project identity is the repository path, not an engine workspace id, so
+    /// the engine dropping its workspace when the last pane closes leaves the row
+    /// and the persisted focus in place. Commands that need any workspace use
+    /// the first entry; purpose projection and persistence use the last
+    /// checkout occupant because that is the token whose value wins. An empty
+    /// list means the engine has none here yet. Commands may reuse an entry only
+    /// while no other project also contains it.
+    pub session_workspace_ids: Vec<String>,
+    /// The newest activity anywhere in this project, in Unix milliseconds:
+    /// the latest of its checkouts' last commit and its agents' last activity,
+    /// the same signal `project_context::sort_projects` orders the list by.
+    /// Absent when the project has neither, so the row can leave its time
+    /// blank instead of claiming the epoch. An additive snapshot field: the
+    /// shell reads it when present and keeps its previous behavior when not.
+    #[serde(default)]
+    pub last_activity_unix_ms: Option<u64>,
+    /// Whether the operator pinned this project's registration. A pinned
+    /// project sorts before its device's unpinned ones and is exempt from the
+    /// device's inactive fold; the shell draws the pinned rows under their own
+    /// `Pinned` section. It is the registration's flag carried onto the row
+    /// (D-07), so an unregistered workspace is never pinned.
+    #[serde(default)]
+    pub pinned: bool,
+    /// The core keeps this project off every list (the sidebar, the phone,
+    /// the project picker): an automation's own folder, registered only so
+    /// its runs can start there (PRD automations D-08, B30). Absent while
+    /// false.
+    #[serde(skip_serializing_if = "std::ops::Not::not")]
+    pub unlisted: bool,
+    pub checkouts: Vec<CheckoutSnapshot>,
+    /// Checkout rows grouped after the active rows in this project. The full
+    /// rows stay in `checkouts`, which remains the authority for focus,
+    /// search, tab state, and every non-sidebar consumer.
+    pub inactive_checkouts: InactiveCheckoutGroupSnapshot,
+    pub session_folds: SessionCheckoutFolds,
+    /// What the project's agents are doing, which the sidebar row draws as
+    /// its name's weight and its sleeping fold (PRD sidebar-titlebar-refresh
+    /// D-02, D-03, D-20).
+    pub agent_presence: ProjectAgentPresenceSnapshot,
+    /// What `Remove project…` would close, counted by the core so the
+    /// confirmation names the same panes the close will send to the engine
+    /// (D-10). Both are zero for a project the engine has no pane in, which is
+    /// the registration-only removal.
+    #[serde(default)]
+    pub removal: WorkspaceRemovalGateSnapshot,
+    /// A local Git project's allocated disk, for the web Overview's facts
+    /// line. Absent from the wire until the project has a size, a reason it
+    /// has none, or a measurement in flight, so an unmeasured project keeps
+    /// exactly its keys.
+    #[serde(default, skip_serializing_if = "ProjectDiskSnapshot::is_empty")]
+    pub disk: ProjectDiskSnapshot,
+    /// The disk cleanup review or run of this project, while there is one.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub cleanup: Option<crate::worktree_cleanup::CleanupSnapshot>,
+}
+
+/// What a project's agents are doing, decided by the core so the shell only
+/// draws it (`project_context::agent_presence`).
+#[derive(Clone, Debug, Default, Eq, PartialEq, Serialize)]
+pub struct ProjectAgentPresenceSnapshot {
+    /// An awake agent here draws a mark (turn, going, waiting, done or unread);
+    /// quiet, sleeping or no agents leave it false.
+    pub working: bool,
+    /// Present while the project has a sleeping agent and no awake one.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub asleep: Option<ProjectAsleepSnapshot>,
+}
+
+/// A project whose every agent sleeps: it starts folded each time it falls
+/// asleep, and stays open once the operator opens it until an agent wakes
+/// (the `asleep/<project>` key of `session_open_folds`, D-19).
+#[derive(Clone, Debug, Default, Eq, PartialEq, Serialize)]
+pub struct ProjectAsleepSnapshot {
+    /// When the most recent of its agents fell asleep, in Unix milliseconds.
+    pub since_unix_ms: u64,
+    pub expanded: bool,
+}
+
+/// A Git project's allocated disk: every worktree and the shared Git
+/// directory, counted once, as the catalog sums them (`disk_total_bytes`).
+/// `total_bytes` is known only once every part is measured; `measuring`
+/// says the Projects tab's sweep is measuring it now and `queued` that it
+/// will (PRD overview-device-tasks B53), both drawn over the last size.
+#[derive(Clone, Debug, Default, Eq, PartialEq, Serialize)]
+pub struct ProjectDiskSnapshot {
+    pub total_bytes: Option<u64>,
+    pub unavailable_reason: Option<String>,
+    pub measuring: bool,
+    #[serde(skip_serializing_if = "std::ops::Not::not")]
+    pub queued: bool,
+    /// Free space of the project's volume when it was measured; known
+    /// whether or not every checkout could be measured.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub free_bytes: Option<u64>,
+    /// The size of that volume.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub volume_total_bytes: Option<u64>,
+    /// What the checkouts that could be measured add up to. `total_bytes`
+    /// stays absent while any checkout is unavailable; this is the subtotal
+    /// the entrance may show beside it.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub confirmed_bytes: Option<u64>,
+    /// The layers of the checkouts that could be measured, summed; absent
+    /// only while none was measured.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub layers: Option<ProjectDiskLayersSnapshot>,
+}
+
+/// A project's allocated bytes by layer: the sum over its checkouts, and the
+/// shared Git directory on its own.
+#[derive(Clone, Debug, Default, Eq, PartialEq, Serialize)]
+pub struct ProjectDiskLayersSnapshot {
+    pub build_cache: u64,
+    pub dependencies: u64,
+    pub source: u64,
+    pub other: u64,
+    pub shared_git: u64,
+}
+
+impl ProjectDiskSnapshot {
+    pub fn is_empty(&self) -> bool {
+        self == &Self::default()
+    }
+}
+
+/// The counts the project removal confirmation reads (D-10).
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq, Serialize)]
+pub struct WorkspaceRemovalGateSnapshot {
+    pub pane_count: usize,
+    /// Panes whose agent is currently working.
+    pub running_agent_count: usize,
+}
+
+#[derive(Clone, Debug, Default, PartialEq, Serialize)]
+pub struct InactiveCheckoutGroupSnapshot {
+    pub expanded: bool,
+    /// IDs in the same recent-activity order as `WorkspaceSnapshot.checkouts`.
+    pub checkout_ids: Vec<String>,
+}
+
+#[derive(Clone, Debug, Default, Eq, PartialEq, Serialize)]
+pub struct SessionCheckoutFolds {
+    pub empty: Vec<String>,
+    /// Worktrees whose unresolved agents are all delegated children. They get
+    /// no checkout line and sit in no fold: the way to a child is the tree of
+    /// the root that owns it.
+    pub child_only: Vec<String>,
+    pub cleanup: Vec<String>,
+    pub empty_open: bool,
+    pub cleanup_open: bool,
+    pub open_prs: usize,
+}
+
+/// Agent counts and representative after Hide applies its pane-level read records.
+#[derive(Clone, Debug, Default, PartialEq, Serialize)]
+pub struct CheckoutAgentSummary {
+    pub representative_pane_id: Option<String>,
+    pub needs_you: usize,
+    pub done: usize,
+    pub working: usize,
+    pub seen: usize,
+    /// A subset of Seen, not an additional group.
+    pub unknown: usize,
+    /// How many agents here draw each mark on their own row, so a row that
+    /// stands for them can say what opening it would show.
+    pub marks: MarkCountsSnapshot,
+}
+
+/// How many rows draw each status mark (docs/status-model.md, The status
+/// badge): the operator's turn, in progress, to read as finished, and to read
+/// otherwise. A quiet row draws no mark and is counted in none.
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq, Serialize)]
+pub struct MarkCountsSnapshot {
+    pub turn: u32,
+    pub going: u32,
+    pub done: u32,
+    pub unread: u32,
+}
+
+/// The source of the one-line checkout purpose chosen by the core.
+///
+/// The shell uses this only for presentation tone. Resolution stays here so
+/// every surface reads the same fallback order instead of reconstructing it.
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum CheckoutPurposeOrigin {
+    Token,
+    BranchDescription,
+    AgentTitle,
+    PullRequestTitle,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
+pub struct CheckoutPurposeSnapshot {
+    pub text: String,
+    pub origin: CheckoutPurposeOrigin,
+}
+
+#[derive(Clone, Debug, Default, PartialEq, Serialize)]
+pub struct CheckoutSnapshot {
+    pub agent_groups: Option<AgentGroupsSnapshot>,
+    pub agent_scope: crate::agent_state::Scope,
+    pub issue: Option<crate::issues::IssueLinkSnapshot>,
+    /// The key of the task in its project's `tasks` this checkout works on.
+    pub task_key: Option<String>,
+    /// The other tasks of its project's `tasks` this checkout's pull request
+    /// closes, so each of them shows the same pull request (D-07).
+    pub closes_task_keys: Vec<String>,
+    #[serde(skip_serializing)]
+    pub branch_issue: Option<String>,
+    /// The commit HEAD pointed at when the catalog built this row, read from
+    /// Git's files beside the branch name and so known before the worktree
+    /// reader has answered. Core only, and never fresher than the reader's
+    /// own value: see `head_sha`.
+    #[serde(skip_serializing)]
+    pub head_oid: Option<String>,
+    /// The repository the engine reports the checkout it attached a device's
+    /// workspace to in (`workspace.worktree.repo_root`), on that device's raw
+    /// row. Core only: the device's grouping places a folder its helper can
+    /// no longer read by it (`device_catalog::recorded_place`).
+    #[serde(skip_serializing)]
+    pub engine_repo_root: Option<String>,
+    pub github: GithubStatusSnapshot,
+    pub agent_summary: CheckoutAgentSummary,
+    pub id: String,
+    pub workspace_id: String,
+    pub label: String,
+    pub path: String,
+    pub branch: Option<String>,
+    /// One line chosen in this order: engine workspace token, branch
+    /// description, representative agent title, pull-request title.
+    pub purpose: Option<CheckoutPurposeSnapshot>,
+    pub is_worktree: bool,
+    /// The core-owned home choice, independent of the Git main worktree.
+    pub is_primary: bool,
+    pub exists: bool,
+    pub temporary: bool,
+    /// Whether the engine has a pane here. A worktree earns a row from git rather
+    /// than from a pane, so the row needs this to draw the ones with no
+    /// terminal dimmed and offer to start one.
+    pub has_panes: bool,
+    pub dirty: bool,
+    pub changed_file_count: u32,
+    pub base_branch: Option<String>,
+    pub ahead: u32,
+    pub behind: u32,
+    pub added_lines: u32,
+    pub removed_lines: u32,
+    pub unpushed: Option<UnpushedSnapshot>,
+    /// This branch's pull request, absent when it has none or when `gh` could
+    /// not say. `GithubStatusSnapshot` on the card is what tells those apart.
+    pub pull_request: Option<PullRequestSnapshot>,
+    /// The complete worktree row backing the card and both removal menus.
+    /// All three surfaces therefore consume one core-owned policy result.
+    pub worktree: Option<WorktreeSnapshot>,
+    /// The work done here is in the base: Git finds HEAD in it, and the link
+    /// record ties the sessions that worked here to a merged pull request and
+    /// to none still open. Git alone cannot say this, because a checkout with
+    /// no commits of its own is in its base too. A merged pull request on
+    /// this checkout's own HEAD is the other proof, which `pull_request`
+    /// carries.
+    pub landed: bool,
+    pub tabs: Vec<TabSnapshot>,
+    /// The tab the engine reports as active in this checkout, or `None` when the
+    /// workspace's active tab lives in a sibling checkout. A checkout never
+    /// substitutes its first tab for a missing one; an active id the engine names
+    /// but the navigator cannot place is reported as a diagnostic instead.
+    pub active_tab_id: Option<String>,
+    /// The one ordered tab strip for this checkout: engine tabs and file tabs
+    /// in the order the operator sees them, which the shell draws as it is
+    /// given rather than joining two lists of its own.
+    pub strip: Vec<StripTabSnapshot>,
+    /// The label the next engine tab created here should carry. Decided by the
+    /// core from the engine's raw labels, next to the function that formats them,
+    /// so the shell never has to read a number back out of a label it was
+    /// given to draw.
+    pub next_tab_label: String,
+    /// The host's own id of the engine workspace that owns this checkout, where
+    /// every tab Hide creates here goes (`checkout_owner`); `None` while no
+    /// owner is open. Read from the session Hide already holds, never sent to
+    /// the shell.
+    #[serde(skip_serializing)]
+    pub owner_workspace_id: Option<String>,
+    /// A device's raw row only: its engine workspace's `hide_owner` token,
+    /// which the grouping checks against the checkout's folder
+    /// (`device_catalog::group`).
+    #[serde(skip_serializing)]
+    pub owner_mark: Option<String>,
+    /// A device checkout whose folder the device's helper has not confirmed:
+    /// whether it is a Git checkout is unknown, so an owner cannot be opened
+    /// for it until it is (`checkout_owner`).
+    #[serde(skip_serializing)]
+    pub unconfirmed: bool,
+}
+
+/// One entry in a checkout's tab strip.
+///
+/// It carries identity, kind, and the label to draw. The panes, the dirty
+/// mark, and the active mark stay on the snapshots the entry points at: those
+/// change on a keystroke, and the strip rides the revisioned navigator
+/// section, which must not be resent for every edited character.
+#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
+pub struct StripTabSnapshot {
+    /// Strip-wide identity, unique across kinds.
+    pub id: String,
+    pub kind: StripTabKind,
+    /// The engine tab id or editor tab id this entry stands for.
+    pub source_id: String,
+    pub label: String,
+    /// Whether this editor entry is the checkout's replaceable preview tab,
+    /// which the strip titles in italic. An engine entry is never one. It rides
+    /// the strip rather than only the editor tab because promotion and
+    /// replacement change the slot itself, and both happen once per tab, not
+    /// per keystroke.
+    pub preview: bool,
+    /// The one agent this tab holds, when it holds exactly one, drawn as the
+    /// tab's identity where a tab is named: the Recent Panels switcher shows
+    /// its name and mark instead of the engine label, which for an unnamed tab
+    /// is only a number (PRD D-16). A shell-only tab and a tab with several
+    /// agents carry `None` and keep their label.
+    pub agent_identity: Option<AgentChipSnapshot>,
+}
+
+/// The kinds of tab a strip holds.
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum StripTabKind {
+    Engine,
+    File,
+    Diff,
+    Session,
+}
+
+impl StripTabSnapshot {
+    pub fn engine(source_id: impl Into<String>, label: impl Into<String>) -> Self {
+        let source_id = source_id.into();
+        Self {
+            id: format!("engine:{source_id}"),
+            kind: StripTabKind::Engine,
+            source_id,
+            label: label.into(),
+            preview: false,
+            agent_identity: None,
+        }
+    }
+
+    pub fn file(source_id: impl Into<String>, label: impl Into<String>, preview: bool) -> Self {
+        let source_id = source_id.into();
+        Self {
+            id: format!("file:{source_id}"),
+            kind: StripTabKind::File,
+            source_id,
+            label: label.into(),
+            preview,
+            agent_identity: None,
+        }
+    }
+
+    pub fn diff(source_id: impl Into<String>, label: impl Into<String>, preview: bool) -> Self {
+        let source_id = source_id.into();
+        Self {
+            id: format!("diff:{source_id}"),
+            kind: StripTabKind::Diff,
+            source_id,
+            label: label.into(),
+            preview,
+            agent_identity: None,
+        }
+    }
+
+    pub fn session(source_id: impl Into<String>, label: impl Into<String>, preview: bool) -> Self {
+        let source_id = source_id.into();
+        Self {
+            id: format!("session:{source_id}"),
+            kind: StripTabKind::Session,
+            source_id,
+            label: label.into(),
+            preview,
+            agent_identity: None,
+        }
+    }
+
+    /// The strip entry an editor tab stands behind, so a replaced preview tab
+    /// can hand its slot to the tab that took its place.
+    pub fn editor(tab: &EditorTabSnapshot) -> Self {
+        match tab.kind {
+            EditorTabKind::File => Self::file(tab.id.clone(), tab.label.clone(), tab.preview),
+            EditorTabKind::Diff => Self::diff(tab.id.clone(), tab.label.clone(), tab.preview),
+            EditorTabKind::Session => Self::session(tab.id.clone(), tab.label.clone(), tab.preview),
+        }
+    }
+
+    /// The engine half of a strip, in the order the tabs are given.
+    ///
+    /// A tab with no id has no identity to key a strip entry by, so it is
+    /// dropped rather than given a placeholder. Both the local strip and the
+    /// remote projection build their engine entries here, so the rule that
+    /// decides which tabs earn a slot and what an unlabelled one reads as has
+    /// one implementation to change.
+    /// The engine tabs a checkout draws in its strip.
+    ///
+    /// A tab holding only delegated children is left out: the canvas keeps
+    /// one pane, and a strip slot for every child would put the pile back
+    /// where the split used to be (PRD B1).
+    pub fn from_engine_tabs(tabs: &[TabSnapshot]) -> Vec<Self> {
+        tabs.iter()
+            .filter(|tab| !tab.delegated)
+            .filter_map(|tab| {
+                Some(Self::engine(
+                    tab.id.clone()?,
+                    tab.label.clone().unwrap_or_default(),
+                ))
+            })
+            .collect()
+    }
+}
+
+/// Preserve the established numeric label when a projection has no newer number.
+pub fn tab_number(raw_label: &str, fallback: u32) -> u32 {
+    automatic_tab_number(raw_label).unwrap_or(fallback)
+}
+
+fn automatic_tab_number(raw_label: &str) -> Option<u32> {
+    let trimmed = raw_label.trim();
+    trimmed
+        .strip_prefix("Tab ")
+        .unwrap_or(trimmed)
+        .trim()
+        .parse()
+        .ok()
+}
+
+/// A custom name wins; automatic names follow the focused pane's identity.
+pub fn display_tab_label(
+    raw_label: &str,
+    number: u32,
+    agent_title: Option<&str>,
+    process: Option<&str>,
+) -> String {
+    let trimmed = raw_label.trim();
+    let automatic_number = automatic_tab_number(raw_label);
+    if !trimmed.is_empty() && automatic_number.is_none() {
+        return trimmed.to_owned();
+    }
+    agent_title
+        .into_iter()
+        .chain(process)
+        .map(str::trim)
+        .find(|name| !name.is_empty())
+        .map(str::to_owned)
+        .unwrap_or_else(|| format!("Tab {}", automatic_number.unwrap_or(number)))
+}
+
+/// Sidebar names use only the operator's name, never a pane's automatic title.
+fn sidebar_tab_naming<S: serde::Serializer>(
+    naming: &TabNaming,
+    serializer: S,
+) -> Result<S::Ok, S::Error> {
+    #[derive(Serialize)]
+    struct SidebarName<'a> {
+        focused_pane_id: &'a str,
+        manual_name: Option<&'a str>,
+        number: u32,
+        named_by_operator: bool,
+    }
+    SidebarName {
+        focused_pane_id: &naming.focused_pane_id,
+        manual_name: naming.manual_name(),
+        number: naming.number,
+        named_by_operator: naming.operator_name().is_some(),
+    }
+    .serialize(serializer)
+}
+
+/// Why a quiet row is waiting rather than finished or stopped.
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum AgentWait {
+    /// A live descendant is working, or stopped on a background task its
+    /// session proves.
+    Children,
+    /// A background command, monitor or task the agent started is still
+    /// running in the process that started it.
+    Background,
+    /// A Hide request the agent sent still waits for its reply, and the
+    /// recipient has not taken it in yet or is still making the answer.
+    Reply,
+    /// A pull request the row holds the duty of has checks running, or one
+    /// its session just printed has not been read from GitHub yet.
+    Checks,
+    /// Subagents the agent runs inside its own session are still running,
+    /// by its hook's count.
+    Subagents,
+}
+
+/// How the checks a row waited on ended, for the pull request `number`.
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]
+pub struct ChecksEnded {
+    pub number: u32,
+    pub passed: bool,
+}
+
+/// One answer a row's session waits for: the agent the letter went to, as
+/// the rows name it, and whether it has taken the letter in.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(crate) struct AwaitedReply {
+    pub(crate) recipient_pane_id: String,
+    /// The recipient's session digest, as the letter named it.
+    pub(crate) recipient_session: Option<String>,
+    pub(crate) taken_in: bool,
+}
+
+/// The status of one agent as a code, never as a sentence: the screen chooses
+/// the word in the operator's language, and `english` is the word for output
+/// that is not a screen (the project context an agent reads).
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum AgentStatusCode {
+    /// The agent stopped and named what stopped it (the label's `blocked`
+    /// end). The wire value keeps the name of the demand it rides on.
+    Error,
+    Question,
+    Approval,
+    Working,
+    Done,
+    Idle,
+    Unknown,
+    /// The engine is still starting the agent and it has reported nothing yet
+    /// (`agent_state::AgentStart::Starting`).
+    Starting,
+    /// Waiting: on delegated children, a background job, a reply or a pull
+    /// request's checks (the row is in progress), or, by the label's word, on
+    /// something nothing proves (the row is to read).
+    Waiting,
+    /// The turn stopped before the request was done and nothing is left to
+    /// wake the agent.
+    Unfinished,
+    /// A reported completion no label judged: finished or not is unknown.
+    Stopped,
+    /// A pane that holds a terminal but no agent.
+    Attached,
+    Sleeping,
+    Waking,
+    SleepFailed,
+}
+
+impl AgentStatusCode {
+    pub fn english(self) -> &'static str {
+        match self {
+            Self::Error => "Blocked",
+            Self::Question => "Question",
+            Self::Approval => "Approval",
+            Self::Working => "Working",
+            Self::Done => "Done",
+            Self::Idle => "Idle",
+            Self::Unknown => "Unknown",
+            Self::Starting => "Starting",
+            Self::Waiting => "Waiting",
+            Self::Unfinished => "Unfinished",
+            Self::Stopped => "Stopped",
+            Self::Attached => "Attached",
+            Self::Sleeping => "Sleeping \u{b7} resumes when opened",
+            Self::Waking => "Waking\u{2026}",
+            Self::SleepFailed => "Sleeping \u{b7} couldn\u{2019}t resume",
+        }
+    }
+}
+
+#[derive(Clone, Debug, PartialEq, Serialize)]
+pub struct TabAgentSnapshot {
+    pub state: crate::agent_state::TabState,
+    pub agent_kind: String,
+    pub mark: crate::agent_state::RowMark,
+    pub demand: String,
+    pub activity: String,
+    pub emphasized: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub wait: Option<AgentWait>,
+    pub status_code: AgentStatusCode,
+    /// The row's profile name, which the tab's logo wears as its badge
+    /// (`SidebarAgentSnapshot::profile`).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub profile: Option<String>,
+}
+
+impl From<&SidebarAgentSnapshot> for TabAgentSnapshot {
+    fn from(agent: &SidebarAgentSnapshot) -> Self {
+        Self {
+            state: crate::agent_state::TabState {
+                mark_tone: agent.state.mark_tone,
+            },
+            agent_kind: agent.agent_kind.clone(),
+            mark: agent.mark,
+            demand: agent.demand.clone(),
+            activity: agent.activity.clone(),
+            emphasized: agent.emphasized,
+            wait: agent.wait,
+            status_code: agent.status_code,
+            profile: agent.profile.clone(),
+        }
+    }
+}
+
+/// The label to give the next engine tab created in a checkout.
+///
+/// Reads the engine's raw labels, never the ones `display_tab_label` has already
+/// formatted. The two are one convention: that function decides how a tab's
+/// number is shown, this one decides which number is free. Deriving the free
+/// number from formatted text instead would write the convention down a second
+/// time, on the far side of the FFI boundary, where a change to either half
+/// breaks the other silently.
+///
+/// A tab the engine labels with a bare number, or with the `Tab N` this function
+/// hands out and the engine stores verbatim, holds that number; a tab labelled
+/// anything else holds none. The answer is the lowest number no tab holds.
+/// Counting only bare numbers made every created tab `Tab 2`.
+pub fn next_tab_label<'a>(raw_labels: impl IntoIterator<Item = &'a str>) -> String {
+    let used = raw_labels
+        .into_iter()
+        .filter_map(|label| {
+            let label = label.trim();
+            let number = label.strip_prefix("Tab ").unwrap_or(label);
+            number.trim().parse::<u32>().ok()
+        })
+        .collect::<BTreeSet<_>>();
+    // Bounded rather than an open range: n labels cannot cover n + 1
+    // candidates, so a gap always exists in this span and the search is total.
+    let number = (1..=used.len() as u32 + 1)
+        .find(|candidate| !used.contains(candidate))
+        .expect("a set of n numbers leaves one of n + 1 candidates free");
+    format!("Tab {number}")
+}
+
+#[derive(Clone, Debug, PartialEq, Serialize)]
+pub struct OverlaySnapshot {
+    pub kind: Option<String>,
+    pub title: Option<String>,
+    pub message: Option<String>,
+    pub actions: Vec<OverlayActionSnapshot>,
+}
+
+#[derive(Clone, Debug, PartialEq, Serialize)]
+pub struct OverlayActionSnapshot {
+    pub id: String,
+    pub label: String,
+    pub destructive: bool,
+}
+
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct TabNaming {
+    pub focused_pane_id: String,
+    pub number: u32,
+    pub processes: BTreeMap<String, String>,
+    pub raw: String,
+    pub automatic: String,
+    /// The manual name is one the operator gave through Rename, recorded in
+    /// `UiStateSnapshot::operator_tab_names`; a spawn's name, or one given
+    /// before Hide recorded them, is not. Always false on a device's tab.
+    pub by_operator: bool,
+}
+
+impl TabNaming {
+    /// The name the tab was given, never an automatic `Tab N`: the sidebar's
+    /// tab line shows it whoever gave it.
+    pub fn manual_name(&self) -> Option<&str> {
+        let raw = self.raw.trim();
+        (!raw.is_empty() && automatic_tab_number(raw).is_none()).then_some(raw)
+    }
+
+    /// The name the operator gave the tab: what makes it a named tab, which
+    /// outlives its agents (docs/UI_BEHAVIOR.md, Agent areas).
+    pub fn operator_name(&self) -> Option<&str> {
+        self.manual_name().filter(|_| self.by_operator)
+    }
+
+    /// Whether `names` records this tab's current manual name as the
+    /// operator's.
+    pub fn named_by(&self, tab_id: Option<&str>, names: &BTreeMap<String, String>) -> bool {
+        tab_id
+            .and_then(|id| names.get(id))
+            .is_some_and(|name| Some(name.as_str()) == self.manual_name())
+    }
+}
+
+#[derive(Clone, Debug, PartialEq, Serialize)]
+pub struct TabRenameSnapshot {
+    pub request_id: String,
+    pub tab_id: String,
+    pub label: String,
+    pub phase: String,
+}
+
+#[derive(Clone, Debug, PartialEq, Serialize)]
+pub struct TabSnapshot {
+    #[serde(rename = "sidebar", serialize_with = "sidebar_tab_naming")]
+    pub naming: TabNaming,
+    pub agent: Option<TabAgentSnapshot>,
+    pub id: Option<String>,
+    pub workspace_id: Option<String>,
+    pub checkout_id: Option<String>,
+    pub label: Option<String>,
+    pub empty: bool,
+    /// Every agent in this tab is somebody else's delegated child, so the tab
+    /// exists only to hold work the operator did not ask to look at. The tab
+    /// strip leaves it out; the sidebar and the breadcrumb still reach it
+    /// (PRD B1, B4, D-40).
+    pub delegated: bool,
+    pub panes: Vec<PaneSnapshot>,
+}
+
+#[derive(Clone, Debug, PartialEq, Serialize)]
+pub struct PaneSnapshot {
+    /// The machine the pane is on and the id that machine gives it, as on
+    /// an agent row ([`SidebarAgentSnapshot::device_id`]).
+    pub device_id: Derived<String>,
+    pub device_pane_id: Derived<String>,
+    /// Exact creation descriptor used only for start reconciliation, never a title.
+    #[serde(skip_serializing)]
+    pub start_claim: Option<String>,
+    /// Stable terminal incarnation shared by close approval and pane relocation.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub terminal_id: Option<String>,
+    /// The engine could not restore this terminal. Never inferred from its cwd or agent.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub failed_terminal_id: Option<String>,
+    pub id: String,
+    /// The three names a pane can be shown by, in the order the header prefers
+    /// them. The core ships the ingredients rather than a chosen title so the
+    /// local and remote projections cannot disagree about the ladder, and so
+    /// the one that runs it stays testable in the shell.
+    pub engine_label: Option<String>,
+    pub terminal_title: Option<String>,
+    pub cwd: String,
+    /// The status code of the agent in this pane, from the same derivation the
+    /// sidebar row uses.
+    pub status_code: AgentStatusCode,
+    /// Whether closing this pane needs the operator to confirm first. Derived
+    /// with the agent row's own value so the header and the core cannot
+    /// disagree about it.
+    pub requires_close_confirmation: bool,
+    /// Whether the core needs a fresh activity status before allowing a close.
+    pub requires_close_status_check: bool,
+    /// The agent's title, from the same ladder the sidebar row shows, so the
+    /// header and the row cannot call one pane two things (PRD D-09).
+    pub identity_label: Option<String>,
+    pub activity_at_unix_ms: Option<u64>,
+    pub fork: PaneForkSnapshot,
+    /// The ports listened on from at or below this pane's working directory.
+    pub ports: Vec<u16>,
+    /// Address-preserving listener endpoints from the same port sample.
+    pub servers: Vec<ServerEndpointSnapshot>,
+    /// What this pane's agent delegated, or why that is unknown. `None` on a
+    /// pane the engine detected no agent in: a shell, an editor or a log gets
+    /// neither chips nor an uninstrumented mark, because there is no agent
+    /// there to have children (PRD B22, D-30).
+    pub children: Option<PaneChildrenSnapshot>,
+    /// The breadcrumb: this pane's ancestors root first, then this pane. It
+    /// is empty for a lineage root, which is what leaves its header plain.
+    pub lineage_path: Vec<LineageStepSnapshot>,
+    /// The sleeping agent this pane holds, when it holds one; the pane body
+    /// draws it in place of the terminal (PRD B12, B14, B15).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub sleep: Option<AgentSleepSnapshot>,
+    /// Whether this pane's agent can be put to sleep from its menu, present
+    /// only on a local pane holding an awake agent (PRD B15).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub sleep_action: Option<AgentSleepActionSnapshot>,
+}
+
+/// Why a session is not connected to Hide.
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum PaneConnectionReason {
+    /// Codex on its shared server runs its hooks there, not in the pane, so
+    /// Hide hears nothing from it (openai/codex#48500). Reopen starts it on
+    /// its own server.
+    CodexSharedServer,
+    /// The hook was installed after this session started, so it never fired.
+    StartedBeforeHide,
+    /// Hide's hook is missing, unreadable or outdated on the machine: the
+    /// fix is the agent's row in Settings, not Reopen.
+    SetupNeeded,
+    /// The machine's copy of this agent is older than Hide's minimum, so
+    /// Hide put none of its pieces in: the fix is updating the agent, with
+    /// the command in `PaneConnectionSnapshot::update`.
+    UpdateAgent,
+    /// Hide's read of the session refuses, for a reason reading again
+    /// cannot clear, so letters and mission answers to it wait: any agent
+    /// whose read reports turns. Neither Settings nor Reopen fixes it; a new
+    /// session does.
+    SessionUnreadable,
+}
+
+/// What a Reopen of a not connected pane is doing.
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize)]
+#[serde(tag = "state", rename_all = "snake_case")]
+pub enum PaneReopenSnapshot {
+    Pending,
+    /// The pane stayed as it was; `reason` names why for the popover's one
+    /// line.
+    Failed {
+        reason: PaneReopenFailure,
+    },
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum PaneReopenFailure {
+    /// The engine or the agent could not start the session again.
+    StartRefused,
+    /// The pane or its session id is gone.
+    SessionGone,
+    /// The machine's Codex has not been read, so the start would not know
+    /// whether to leave the shared server.
+    CodexUnread,
+    /// The agent is working or waiting for the operator, so ending it to
+    /// start it again would lose what it is doing.
+    AgentBusy,
+    /// The agent did not hand the terminal back to its shell, or the engine
+    /// refused the end; nothing was started.
+    EndRefused,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
+pub struct PaneConnectionSnapshot {
+    pub connected: bool,
+    /// Whether the popover offers Reopen: false for a session that Reopen
+    /// cannot fix (`setup_needed`) and for a pane on another device.
+    pub can_reopen: bool,
+    /// Present exactly when `connected` is false.
+    pub reason: Option<PaneConnectionReason>,
+    /// Absent while no Reopen was asked or the last one ended well.
+    pub reopen: Option<PaneReopenSnapshot>,
+    /// What updates the agent, present exactly when `reason` is
+    /// `update_agent`: the machine's kit row's `update`.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub update: Option<hide_kit::AgentUpdate>,
+}
+
+/// What a pane header says about the work its agent delegated.
+///
+/// The three shapes it can take are deliberately different screens: chips
+/// mean known children, an empty chip list on an instrumented pane means a
+/// confirmed "this agent is working alone", and `instrumented: false` means
+/// Hide cannot see and says why (PRD B21, B23, B32).
+#[derive(Clone, Debug, Default, PartialEq, Serialize)]
+pub struct PaneChildrenSnapshot {
+    pub instrumented: bool,
+    /// The first matching reason from the fixed order, present exactly when
+    /// `instrumented` is false. It is never empty and never a guess.
+    pub uninstrumented_reason: Option<String>,
+    /// The accessible name for the uninstrumented mark, so the symbol never
+    /// carries the meaning by itself (PRD B37).
+    pub uninstrumented_label: Option<String>,
+    /// The reason's stable name. The Settings diagnosis reads it to list the
+    /// panes whose session predates the install, so that judgement is made
+    /// once here rather than by matching a sentence on two screens (PRD B27,
+    /// D-61).
+    pub uninstrumented_code: Option<String>,
+    /// One chip per pane child, in the lineage's own child order. Only panes:
+    /// an in-process subagent has no pane, so it cannot be a chip the
+    /// operator clicks into (PRD D-63).
+    pub chips: Vec<AgentChipSnapshot>,
+    /// Whether Hide hears this pane's session, for the pane header's "Not
+    /// connected" chip (PRD settings-cleanup B26 to B31). `None` on an agent
+    /// whose session Hide cannot reopen to connect it (Grok, OpenCode, Pi,
+    /// omp, Cursor: B19) and on one whose hook is switched off or whose machine
+    /// the core has not read yet. Derived from the same observation as
+    /// `instrumented` above, never a second detector.
+    pub connection: Option<PaneConnectionSnapshot>,
+    /// The parent badge, chosen from the pane children by the same priority
+    /// the Workspace summary uses. In-process subagents take no part in it.
+    pub representative: Option<AgentChipSnapshot>,
+    /// In-process subagents, summarised and never added to the chip count.
+    pub subagents: SubagentCountsSnapshot,
+}
+
+/// One agent in a line of them: a pane header chip, a breadcrumb step's
+/// sibling, or an Overview worktree row's agent.
+#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
+pub struct AgentChipSnapshot {
+    pub tone: crate::agent_state::Tone,
+    pub pane_id: String,
+    /// The short name the chip shows beside its mark.
+    pub label: String,
+    /// The checkout the child physically runs in. A pane header compares it
+    /// with its own checkout and shows the branch instead of the task title
+    /// only when they differ.
+    pub checkout_label: Option<String>,
+    /// The row's second line: the sentence the group chose, or nothing.
+    pub detail: Option<String>,
+    /// Whether the status word is drawn beside that sentence.
+    pub status_word_visible: bool,
+    pub agent_kind: String,
+    pub demand: String,
+    pub activity: String,
+    pub emphasized: bool,
+    pub mark: crate::agent_state::RowMark,
+    pub status_code: AgentStatusCode,
+    /// Whether this child is still delegated work. It lifts only when the
+    /// child's parent is gone and the child is a root again.
+    pub delegated: bool,
+}
+
+/// How many live descendants of a row are in each state the badge draws.
+///
+/// Every count is a real count over rows the projection holds; a descendant
+/// whose activity the engine reports as unknown is in none of them, because a
+/// badge that cannot say what a child is doing has nothing to claim, and the
+/// exclusion goes to the diagnostic log instead (PRD B7).
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq, Serialize)]
+pub struct DescendantCountsSnapshot {
+    pub error: u32,
+    pub approval: u32,
+    pub question: u32,
+    pub working: u32,
+    pub done: u32,
+    /// Descendants the engine cannot classify. Not drawn; the log carries it.
+    #[serde(skip_serializing)]
+    pub unknown: u32,
+}
+
+/// One thing a descendant is doing that its ancestors are told about: an
+/// outstanding demand, or a completion.
+///
+/// It is the unit the read record keeps per ancestor. A signal that appears
+/// turns the ancestor unread; a signal that goes away does not, because a
+/// question being answered or a finished child starting new work is not
+/// news the operator has to act on (PRD B5, B6).
+#[derive(Clone, Debug, Deserialize, Eq, Ord, PartialEq, PartialOrd, Serialize)]
+pub struct DescendantSignal {
+    pub pane_id: String,
+    /// `question`, `approval`, `error`, `completed`, or `view:<id>@<opened>`
+    /// for a View it opened that nobody has looked at.
+    pub kind: String,
+}
+
+/// One subagent a session runs, as its hook reported it: the agent's id for
+/// it, its kind and task when the agent says them, and when the hook first
+/// heard it run. The hook's own report row, so the screen lists exactly
+/// what the hook said.
+pub type SubagentRowSnapshot = hide_node_link::panes::HookSubagent;
+
+/// The in-process subagents a pane's session reports.
+///
+/// Each count is optional because each is separately knowable. An adapter
+/// that cannot observe one leaves it `None`, and `None` draws as unknown
+/// rather than as zero (PRD B24, B32, D-53).
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq, Serialize)]
+pub struct SubagentCountsSnapshot {
+    pub working: Option<u32>,
+    pub done: Option<u32>,
+    pub blocked: Option<u32>,
+}
+
+impl SubagentCountsSnapshot {
+    /// Whether there is anything at all to draw.
+    pub fn is_silent(&self) -> bool {
+        self.working.is_none_or(|count| count == 0)
+            && self.done.is_none_or(|count| count == 0)
+            && self.blocked.is_none_or(|count| count == 0)
+    }
+}
+
+/// One step of a pane header's lineage breadcrumb.
+#[derive(Clone, Debug, PartialEq, Serialize)]
+pub struct LineageStepSnapshot {
+    pub pane_id: String,
+    pub label: String,
+    /// That layer's other agents, in the parent's own child order, so the
+    /// step's dropdown can offer them without a second traversal. It includes
+    /// the step itself, so the current position is visible in the list.
+    pub siblings: Vec<AgentChipSnapshot>,
+}
+
+/// The TCP listeners the machine has, with where each was started from.
+///
+/// Attribution to a pane is not decided here: the reader ships what it saw and
+/// the projection applies the rule, so the rule stays testable without a
+/// server to point it at.
+#[derive(Clone, Debug, Default, Eq, PartialEq, Serialize)]
+pub struct ListeningPortsSnapshot {
+    pub entries: Vec<ListeningPortSnapshot>,
+    pub unavailable_reason: Option<String>,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
+pub struct ListeningPortSnapshot {
+    pub host: String,
+    pub port: u16,
+    pub cwd: String,
+}
+
+/// A reachable address for one observed TCP listener, before HTTP navigation.
+#[derive(Clone, Debug, Eq, PartialEq, Ord, PartialOrd, Serialize)]
+pub struct ServerEndpointSnapshot {
+    pub host: String,
+    pub port: u16,
+}
+
+/// The agent a fork was forked from. Both fields are present only while the
+/// source's pane still hosts the session the fork was made from; a source
+/// that closed or moved on to another conversation leaves both absent, and
+/// the mark then names no pane and opens nothing.
+#[derive(Clone, Debug, Default, Eq, PartialEq, Serialize)]
+pub struct ForkSourceSnapshot {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub pane_id: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub label: Option<String>,
+}
+
+/// What the pane header needs to know about forking this pane.
+///
+/// Both facts come from the engine: whether the pane runs an agent whose own fork
+/// command can take its recorded session, and whether this pane is itself the
+/// result of such a fork.
+///
+/// `reason` is set only on a pane whose agent can be forked in principle but
+/// not yet, so the menu item that is drawn disabled can say why; an agent that
+/// cannot be forked at all, and a pane with no agent, carry neither.
+#[derive(Clone, Debug, Default, Eq, PartialEq, Serialize)]
+pub struct PaneForkSnapshot {
+    pub available: bool,
+    pub reason: Option<AgentActionRefusal>,
+    /// Present when this pane is a fork, as its row's `forked_from`.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub forked_from: Option<ForkSourceSnapshot>,
+}
+
+#[derive(Clone, Debug, PartialEq, Serialize)]
+pub struct ConnectionSnapshot {
+    pub kind: String,
+    pub state: String,
+    pub target_id: Option<String>,
+}
+
+#[derive(Clone, Copy, Debug, Deserialize, PartialEq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum Surface {
+    Sidebar,
+    Terminal,
+    RightPanel,
+}
+
+#[derive(Clone, Debug, PartialEq, Serialize)]
+pub struct FocusedSnapshot {
+    pub surface: Surface,
+    pub pane_id: Option<String>,
+    /// The last operator `focus_pane` the core applied for each page that
+    /// numbers its focus events, oldest page first; see [`OperatorFocusAck`].
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub operator_focus: Vec<OperatorFocusAck>,
+}
+
+/// The newest operator focus a page numbered that the core has applied.
+///
+/// A page that moves its keyboard focus on the operator's click cannot tell a
+/// snapshot older than that click from a real move of focus by the core. The
+/// page numbers each operator `focus_pane` it sends, and the snapshot that
+/// carries the focused pane also says which of those numbers it already
+/// includes, so the page follows the snapshot's pane only once the number it
+/// last sent has come back. The number is recorded whether the core moved focus,
+/// refused it or found it already there, because the page is waiting on the
+/// answer, not on the move.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
+pub struct OperatorFocusAck {
+    pub client_id: String,
+    pub sequence: u64,
+}
+
+#[derive(Clone, Copy, Debug, Deserialize, PartialEq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum PaneLayoutDirection {
+    Right,
+    Down,
+}
+
+#[derive(Clone, Debug, PartialEq, Serialize)]
+pub struct PaneLayoutSnapshot {
+    pub workspace_id: String,
+    pub tab_id: String,
+    pub focused_pane_id: String,
+    pub zoomed: bool,
+    pub root: PaneLayoutNodeSnapshot,
+}
+
+impl Snapshot {
+    /// The layout being drawn: the one belonging to the tab that holds the
+    /// selected pane. Every tab's layout is carried, so this is a lookup and
+    /// never waits for the engine to name the visible tab again.
+    pub fn active_pane_layout(&self) -> Option<&PaneLayoutSnapshot> {
+        let pane_id = self.terminal.pane_id.as_deref()?;
+        self.pane_layouts
+            .iter()
+            .find(|layout| layout.pane_ids().contains(&pane_id))
+    }
+}
+
+impl PaneLayoutSnapshot {
+    pub fn pane_ids(&self) -> Vec<&str> {
+        let mut pane_ids = Vec::new();
+        self.root.collect_pane_ids(&mut pane_ids);
+        pane_ids
+    }
+}
+
+#[derive(Clone, Debug, PartialEq, Serialize)]
+#[serde(tag = "type", rename_all = "snake_case")]
+pub enum PaneLayoutNodeSnapshot {
+    Pane {
+        pane_id: String,
+    },
+    Split {
+        direction: PaneLayoutDirection,
+        ratio: f32,
+        first: Box<PaneLayoutNodeSnapshot>,
+        second: Box<PaneLayoutNodeSnapshot>,
+    },
+}
+
+impl PaneLayoutNodeSnapshot {
+    /// Every pane of the tree, first to last.
+    pub(crate) fn collect_pane_ids<'a>(&'a self, pane_ids: &mut Vec<&'a str>) {
+        match self {
+            Self::Pane { pane_id } => pane_ids.push(pane_id),
+            Self::Split { first, second, .. } => {
+                first.collect_pane_ids(pane_ids);
+                second.collect_pane_ids(pane_ids);
+            }
+        }
+    }
+}
+
+#[derive(Clone, Debug, PartialEq, Serialize)]
+pub struct TerminalSnapshot {
+    pub headers: BTreeMap<String, crate::agent_state::header::Header>,
+    pub pane_id: Option<String>,
+    pub closed: bool,
+    pub exit_code: Option<i32>,
+    pub panes: Vec<TerminalPaneSnapshot>,
+    /// Creation requests the shell sends keys against (PRD
+    /// instant-pane-topology D-11), so it can stop once one is discarded.
+    pub input_requests: Vec<InputRequestSnapshot>,
+}
+
+#[derive(Clone, Debug, PartialEq, Serialize)]
+pub struct InputRequestSnapshot {
+    pub request_id: String,
+    pub state: InputRequestState,
+    /// The pane a pending request's keys wait for, once it exists and holds
+    /// the keyboard: a fork's pane until its agent has started. The shell
+    /// keeps sending against the request while that pane has the keyboard.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub held_for: Option<String>,
+}
+
+/// Where keys sent against a creation request stand: kept until the engine
+/// answers, following the pane the engine named, or dropped.
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum InputRequestState {
+    Pending,
+    Ready,
+    Discarded,
+}
+
+#[derive(Clone, Debug, Default, PartialEq, Serialize)]
+pub struct TerminalPaneSnapshot {
+    pub pane_id: String,
+    pub closed: bool,
+    pub exit_code: Option<i32>,
+    pub transport_state: String,
+    pub transport_message: Option<String>,
+    pub transport_generation: u64,
+    pub transport_attempt: u64,
+    pub transport_last_attempt_at_unix_ms: Option<u64>,
+    pub transport_exit_category: Option<String>,
+    pub transport_retry_decision: String,
+}
+
+#[derive(Clone, Debug, PartialEq, Serialize)]
+pub struct EditorSnapshot {
+    /// Every open document; with View areas (PRD S7) a tab's `preview` says
+    /// whether every display of it is a preview.
+    pub tabs: Vec<EditorTabSnapshot>,
+    /// With View areas, the document of the front Workspace's active area's
+    /// active display, and null while that display cannot show it.
+    pub active_tab_id: Option<String>,
+    /// The active tab's document for a client without View areas. Always null with View
+    /// areas, whose documents ride the delta's `documents` section so a
+    /// keystroke re-sends one document rather than the editor.
+    pub document: Option<EditorDocumentSnapshot>,
+    pub archive_detail: Option<ArchiveDetailSnapshot>,
+    /// Files being read on a device before their tabs can show; one per
+    /// file, in the order they were asked for.
+    pub opening: Vec<EditorOpeningSnapshot>,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
+pub struct EditorOpeningSnapshot {
+    pub workspace_id: String,
+    pub checkout_id: String,
+    pub path: String,
+}
+
+#[derive(Clone, Debug, PartialEq, Serialize)]
+pub struct EditorTabSnapshot {
+    pub id: String,
+    /// The machine the tab's checkout is on, read from `checkout_id` by the
+    /// one address owner before every snapshot (`stamp_row_addresses`).
+    pub device_id: Derived<String>,
+    pub workspace_id: String,
+    pub checkout_id: String,
+    pub path: String,
+    pub label: String,
+    pub kind: EditorTabKind,
+    /// Which Changes group a diff tab represents. Present only for diff tabs.
+    pub diff_committed: Option<bool>,
+    /// Whether a Markdown file tab draws its formatting in place (Live) or
+    /// shows the source editor. Per tab; a reopened tab starts Live.
+    pub markdown_live: bool,
+    /// Whether a file or diff tab wraps long lines. Per tab; a new or
+    /// reopened tab starts wrapped.
+    pub wrap: bool,
+    pub dirty: bool,
+    /// The checkout's one replaceable preview tab (VS Code's model): opened by
+    /// a single click, replaced in place by the next single click, and
+    /// promoted to an ordinary tab by a double-click, the first edit, Keep
+    /// Open, or a drag. A dirty tab is never replaced. Only a shell with
+    /// separate View areas remembers its tabs across a restart.
+    pub preview: bool,
+    /// Why a View tab restored after a restart has no document: its file is
+    /// gone or its device cannot read it. Such a tab only offers Close (B20).
+    /// Absent from the wire when there is none, so a restored tab keeps
+    /// exactly its keys.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub unavailable_reason: Option<String>,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum EditorTabKind {
+    File,
+    Diff,
+    Session,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
+pub struct ArchiveDetailSnapshot {
+    pub id: String,
+    pub kind: String,
+    pub title: String,
+    pub provider: Option<String>,
+    pub unavailable_reason: Option<String>,
+    pub events: Vec<ArchiveEventSnapshot>,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
+pub struct ArchiveEventSnapshot {
+    pub source_offset: Option<u64>,
+    pub role: String,
+    pub kind: String,
+    pub at_unix_ms: u64,
+    pub text: String,
+    /// The cards a prompt hook gave the agent in full at this prompt, by
+    /// number (PRD project-memory-v2 B13).
+    pub memory_received: Vec<u64>,
+    /// The cards Memory learned from this event and still keeps, by number.
+    pub memory_learned: Vec<u64>,
+}
+
+/// Where the first-run agent choice stands (`ui_state.agent_onboarding`).
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Deserialize, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum AgentOnboarding {
+    /// This Mac's kit record waits for the operator's answer.
+    Pending,
+    /// Applied, or never needed.
+    Done,
+}
+
+/// The first-run wizard's flow (PRD first-run-onboarding D-07): a progress
+/// saved under another number belongs to a flow this build does not draw.
+pub const FIRST_RUN_VERSION: u32 = 1;
+
+/// Where the first-run wizard stands (`ui_state.first_run`): the step it
+/// opens on next, saved so a quit, a reload or a failed apply reopens it there
+/// (B6). It exists only on a Mac whose kit record waited for the first-run
+/// agent choice, so an existing install never sees the wizard (D-08).
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Deserialize, Serialize)]
+pub struct FirstRun {
+    pub version: u32,
+    pub step: FirstRunStep,
+}
+
+/// The wizard's steps in order; `Done` once the last was finished or skipped.
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Deserialize, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum FirstRunStep {
+    /// Also a step an earlier build saved as `herdr`, which moved an older
+    /// Herdr server first; there is no Herdr to move now, so it opens on Agents.
+    #[serde(alias = "herdr")]
+    Agents,
+    Devices,
+    Notifications,
+    Project,
+    Done,
+}
+
+impl FirstRunStep {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Agents => "agents",
+            Self::Devices => "devices",
+            Self::Notifications => "notifications",
+            Self::Project => "project",
+            Self::Done => "done",
+        }
+    }
+}
+
+/// Choices are independent of navigation: Back, reload and Help never redo
+/// an effect or restore the initial installed-agent defaults.
+#[derive(Clone, Debug, Default, Eq, PartialEq, Deserialize, Serialize)]
+#[serde(default)]
+pub struct FirstRunChoices {
+    pub agents: Option<Vec<String>>,
+    /// The checked device rows; none until the operator checks or unchecks
+    /// one, so the step can start with this PC's default WSL distribution
+    /// checked (PRD wsl-device B1) and keep it unchecked once they say so.
+    pub devices: Option<Vec<String>>,
+    pub project_device: Option<String>,
+    pub project_form: FirstRunProjectForm,
+    pub notifications_answered: bool,
+}
+
+#[derive(Clone, Debug, Default, Eq, PartialEq, Deserialize, Serialize)]
+#[serde(default)]
+pub struct FirstRunProjectForm {
+    pub view: String,
+    #[serde(
+        deserialize_with = "deserialize_first_run_url",
+        serialize_with = "serialize_first_run_url"
+    )]
+    pub url: String,
+    pub parent: String,
+    pub name: String,
+}
+
+/// Setup drafts are shared snapshots and durable preferences, never Git's
+/// credential-bearing input. Incomplete URLs stay local to the open form too.
+pub(crate) fn first_run_draft_url(raw: &str) -> String {
+    let value = raw.trim();
+    if value.len() > 4096
+        || value.contains(['?', '#'])
+        || hide_node_link::clone::CloneSource::parse(value).is_err()
+    {
+        return String::new();
+    }
+    let authority = if let Some((_, rest)) = value.split_once("://") {
+        rest.split('/').next().unwrap_or_default()
+    } else {
+        value.split(':').next().unwrap_or_default()
+    };
+    if authority.contains('@') {
+        return String::new();
+    }
+    value.to_owned()
+}
+
+fn deserialize_first_run_url<'de, D: serde::Deserializer<'de>>(
+    deserializer: D,
+) -> Result<String, D::Error> {
+    String::deserialize(deserializer).map(|value| first_run_draft_url(&value))
+}
+
+fn serialize_first_run_url<S: serde::Serializer>(
+    value: &str,
+    serializer: S,
+) -> Result<S::Ok, S::Error> {
+    serializer.serialize_str(&first_run_draft_url(value))
+}
+
+/// A screen whose one-line introduction shows on the first visit only
+/// (`ui_state.screen_intros_seen`, PRD first-run-onboarding B43).
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Ord, PartialOrd, Deserialize, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ScreenIntro {
+    Factory,
+}
+
+/// The web shell's color theme (Settings > Appearance). `System` follows the
+/// operator's OS appearance live; Dark is the default so an update never
+/// brightens the screen on its own (web-design-system-reset D-14).
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq, Deserialize, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ThemePreference {
+    System,
+    Light,
+    #[default]
+    Dark,
+}
+
+impl ThemePreference {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::System => "system",
+            Self::Light => "light",
+            Self::Dark => "dark",
+        }
+    }
+
+    pub fn parse(value: &str) -> Option<Self> {
+        match value {
+            "system" => Some(Self::System),
+            "light" => Some(Self::Light),
+            "dark" => Some(Self::Dark),
+            _ => None,
+        }
+    }
+}
+
+/// Whether the sidebar, the Sessions list and the tab bar draw an agent's
+/// provider logo before its title (PRD agent-logo-view-mode D-02). Hidden is the
+/// quiet default, so an update never changes a screen on its own (D-03).
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq, Deserialize, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum AgentLogoMode {
+    Shown,
+    #[default]
+    Hidden,
+}
+
+impl AgentLogoMode {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Shown => "shown",
+            Self::Hidden => "hidden",
+        }
+    }
+
+    pub fn parse(value: &str) -> Option<Self> {
+        match value {
+            "shown" => Some(Self::Shown),
+            "hidden" => Some(Self::Hidden),
+            _ => None,
+        }
+    }
+}
+
+/// How an agent pane draws its turn row over the terminal, the operator's
+/// last request and the agent's answer (View menu, `pane_turn_row_mode_set`).
+/// One line is the default: an ask no longer wraps over the terminal on a
+/// narrow pane. Two lines give the request its own line; off draws no turn
+/// row, and an ask then rides the pane head as a mark.
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq, Deserialize, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum PaneTurnRowMode {
+    #[default]
+    OneLine,
+    TwoLines,
+    Off,
+}
+
+impl PaneTurnRowMode {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::OneLine => "one_line",
+            Self::TwoLines => "two_lines",
+            Self::Off => "off",
+        }
+    }
+
+    pub fn parse(value: &str) -> Option<Self> {
+        match value {
+            "one_line" => Some(Self::OneLine),
+            "two_lines" => Some(Self::TwoLines),
+            "off" => Some(Self::Off),
+            _ => None,
+        }
+    }
+}
+
+/// The palette every window draws in (Settings > Appearance > Color theme),
+/// independent of the Mode above: Hide is the landing page's Owl Field
+/// colors, Neutral the grey chrome. Hide is the default, including for a store
+/// written before the choice existed (hide-color-theme D-04).
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq, Deserialize, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ColorTheme {
+    #[default]
+    Hide,
+    Neutral,
+}
+
+impl ColorTheme {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Hide => "hide",
+            Self::Neutral => "neutral",
+        }
+    }
+
+    pub fn parse(value: &str) -> Option<Self> {
+        match value {
+            "hide" => Some(Self::Hide),
+            "neutral" => Some(Self::Neutral),
+            _ => None,
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq, Deserialize, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum SessionsProviderFilter {
+    #[default]
+    All,
+    Codex,
+    Claude,
+}
+
+#[derive(Clone, Debug, Default, PartialEq, Serialize)]
+pub struct SessionsSnapshot {
+    pub project_id: Option<String>,
+    pub checkout_path: Option<String>,
+    pub provider_filter: SessionsProviderFilter,
+    pub query: String,
+    pub loading: bool,
+    pub unavailable_reason: Option<String>,
+    pub rows: Vec<SessionRowSnapshot>,
+    pub total_session_count: usize,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
+pub struct SessionRowSnapshot {
+    pub id: String,
+    pub provider: String,
+    pub provider_label: String,
+    pub locator: String,
+    pub checkout_path: String,
+    pub first_human_request: Option<String>,
+    pub started_at_unix_ms: Option<u64>,
+    pub updated_at_unix_ms: u64,
+    pub title: Option<String>,
+    pub unavailable_reason: Option<String>,
+    /// The account the session was listed in, which its detail is read in
+    /// (PRD agent-profiles B19); the shell does not see it.
+    #[serde(skip)]
+    pub account: hide_agent_adapter::AccountKey,
+}
+
+/// Project Memory on the wire: the Project a shell opened Memory for in its
+/// lane's Memory tool.
+#[derive(Clone, Debug, Default, Eq, PartialEq, Serialize)]
+pub struct MemorySnapshot {
+    pub project: Option<ProjectMemorySnapshot>,
+}
+
+/// One Project's Memory as a shell opened it with `memory_open` (PRD
+/// project-memory-v2 B20-B24): the switch, the cards, what analysis needs
+/// from the operator, and the card just forgotten with its Undo.
+#[derive(Clone, Debug, Default, Eq, PartialEq, Serialize)]
+pub struct ProjectMemorySnapshot {
+    /// The catalog Project the shell named.
+    pub workspace_id: String,
+    /// Why this Project has no Memory here.
+    pub unavailable: Option<MemoryUnavailableSnapshot>,
+    /// The first read of the Project's Memory has not answered yet.
+    pub loading: bool,
+    pub enabled: bool,
+    pub consent_required: bool,
+    /// Cards currently eligible for injection, excluding merged promotions.
+    pub usable_cards: usize,
+    /// At the store's cap with no card it may forget: new cards are refused.
+    pub capacity_reached: bool,
+    /// Older cards forgotten automatically to make room, still forgotten,
+    /// since the Memory tab last said so (`memory_evictions_seen`).
+    pub evicted_cards: usize,
+    /// When the newest of those was forgotten, which the tab names back
+    /// once it has said so.
+    pub evicted_through_unix_ms: Option<u64>,
+    /// Live cards, the most recently changed first.
+    #[serde(serialize_with = "serialize_memory_rows")]
+    pub rows: Arc<Vec<MemoryRowSnapshot>>,
+    /// What the operator is asked about (B28): cards suggested for a
+    /// repository file, then promotions that ended without a pull request.
+    pub questions: Vec<MemoryQuestionSnapshot>,
+    pub analysis: MemoryAnalysisState,
+    /// Only the card admitted by the running check, never the whole backlog.
+    pub checking_card: Option<u64>,
+    /// The UTC-day budget's next reset, drawn in the viewer's timezone.
+    pub check_resume_at_unix_ms: Option<u64>,
+    /// The card the last forget took away, which Undo brings back (B24).
+    pub forgotten: Option<u64>,
+    /// The operator's Memory action still running for this Project; another
+    /// waits for it.
+    pub pending_action: Option<MemoryAction>,
+    pub preparing_hooks: bool,
+    pub action_failure: Option<MemoryAction>,
+    /// The one card shown in full (`memory_expand`).
+    pub expanded: Option<MemoryCardSnapshot>,
+    /// The matcher's answer to the shell's `memory_search`.
+    pub search: Option<MemorySearchSnapshot>,
+    /// Cards out of the hooks after 60 quiet days, newest archive first,
+    /// each with its 되살리기 (PRD memory-self-improve B22).
+    pub archived: Vec<MemoryArchivedSnapshot>,
+}
+
+/// One archived card of the Memory tab's archive list.
+#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
+pub struct MemoryArchivedSnapshot {
+    pub number: u64,
+    pub title: String,
+    pub archived_at_unix_ms: u64,
+}
+
+/// Why a Project's Memory cannot be read.
+#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
+#[serde(tag = "reason", rename_all = "snake_case")]
+pub enum MemoryUnavailableSnapshot {
+    /// The Project left the catalog.
+    Unregistered,
+    /// The store could not be read; the reason is in the diagnostic log.
+    Unreadable,
+}
+
+/// One card of a Project's Memory list (B21).
+#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
+pub struct MemoryRowSnapshot {
+    /// `m<number>` names it to agents (`hide memory show`) and to every
+    /// Memory event.
+    pub number: u64,
+    pub title: String,
+    pub kind: MemoryCardKind,
+    /// Bounded text for each card in an active promotion's disclosure.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub body_preview: Option<String>,
+    /// Sources that are the operator's own words.
+    pub human_source_count: usize,
+    /// Distinct sessions given the card in full (D-18).
+    pub provided_session_count: usize,
+    /// Reads with `hide memory show`.
+    pub pull_count: u64,
+    pub updated_at_unix_ms: u64,
+    /// The card waits to be checked against the repository again and is not
+    /// given to agents meanwhile (`확인 중`).
+    pub verifying: bool,
+    /// Neither given nor said for 30 days (`낡음`, B22); still given.
+    pub stale: bool,
+    /// The card's way into the repository's own files while it is on one;
+    /// absent for a card that is not, was dismissed or whose pull request
+    /// closed unmerged (B30-B32).
+    pub promotion: Option<MemoryPromotionSnapshot>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub document_comparison: Option<MemoryDocumentSnapshot>,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
+pub struct MemoryPromotionSnapshot {
+    pub state: MemoryPromotionState,
+    /// The durable attempt's start, never the time the shell first saw it.
+    pub started_at_unix_ms: u64,
+    /// The agent putting the card in the repository, while it runs.
+    pub agent: Option<MemoryPromotionAgentSnapshot>,
+    pub pr_number: Option<u64>,
+    /// The durable original target, absent when legacy provenance is unknown.
+    pub pr_url: Option<String>,
+    /// The repository-relative file the card went into, once the agent said.
+    pub target_path: Option<String>,
+    /// Why GitHub could not say whether an `unconfirmed` attempt's pull
+    /// request came, when it gave a reason.
+    pub github_failure: Option<GithubFailureCategory>,
+    /// The batch's branch, which the 제안 tab's one row per batch is drawn
+    /// from (PRD hide-ai-branch-first-apply D-13).
+    #[serde(skip)]
+    pub branch: Option<String>,
+    /// Why Hide's last merge or discard of a ready branch did not happen.
+    #[serde(skip)]
+    pub failure: Option<String>,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum MemoryPromotionState {
+    Running,
+    PrOpen,
+    /// The card points at its file and is never given in full again.
+    Merged,
+    /// The agent ended without a pull request; the card is asked about again.
+    Failed,
+    /// The agent is gone and GitHub could not say whether its pull request
+    /// came (gh missing or logged out, or failing reads): the attempt is
+    /// still followed, and restoring GitHub settles it.
+    Unconfirmed,
+    /// The card's decision is not built yet and another branch builds it:
+    /// that branch's pull request carries the card into its file.
+    Building,
+    /// The card's decision is not built and no branch builds it; the card is
+    /// asked about once.
+    Unbuilt,
+    /// The card is committed on its batch's branch, which waits for the
+    /// operator's decision (PRD hide-ai-branch-first-apply D-13).
+    Ready,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
+pub struct MemoryPromotionAgentSnapshot {
+    pub name: String,
+    /// The pane the agent runs in now, which the name jumps to; absent once
+    /// it left its pane.
+    pub pane_id: Option<String>,
+    /// Its coordination id, which the 제안 tab's row names it by; none for
+    /// an agent another branch's worktree shows.
+    #[serde(skip)]
+    pub agent_id: Option<String>,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
+pub struct MemoryDocumentSnapshot {
+    pub authority: hide_memory::DocumentAuthority,
+    pub document: String,
+    pub document_at_unix_ms: Option<u64>,
+    pub operator_at_unix_ms: Option<u64>,
+    /// The operator's words that made the comparison, cut to their first
+    /// non-empty line; none when the conversation cannot be read.
+    pub operator_line: Option<String>,
+    /// The document's current sentence the correction replaces; none until a
+    /// comparison answer carried the pair.
+    pub document_sentence: Option<String>,
+    /// The sentence that replaces `document_sentence`.
+    pub replacement: Option<String>,
+}
+
+impl MemoryDocumentSnapshot {
+    /// The most characters of the operator's words a row carries.
+    const OPERATOR_LINE_CHARS: usize = 160;
+}
+
+impl From<&hide_memory::DocumentComparison> for MemoryDocumentSnapshot {
+    fn from(comparison: &hide_memory::DocumentComparison) -> Self {
+        Self {
+            authority: comparison.authority,
+            document: comparison.document.clone(),
+            document_at_unix_ms: comparison.document_at_unix_ms,
+            operator_at_unix_ms: comparison.operator_at_unix_ms,
+            operator_line: comparison
+                .operator_text
+                .lines()
+                .map(str::trim)
+                .find(|line| !line.is_empty())
+                .map(|line| line.chars().take(Self::OPERATOR_LINE_CHARS).collect()),
+            document_sentence: comparison.document_sentence.clone(),
+            replacement: comparison.replacement.clone(),
+        }
+    }
+}
+
+/// One thing the Memory tab asks the operator (B28-B32).
+#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+pub enum MemoryQuestionSnapshot {
+    DocsDisagree {
+        number: u64,
+        title: String,
+        document: MemoryDocumentSnapshot,
+    },
+    /// "저장소 문서로 올릴까요?" with the counts that crossed the bar.
+    Promote {
+        number: u64,
+        title: String,
+        /// Distinct sessions that carried the operator's own words.
+        human_session_count: usize,
+        pulled_session_count: usize,
+    },
+    /// The attempt ended with no pull request, try again: "PR 없이 끝남", or,
+    /// when its agent never started, why.
+    Failed {
+        number: u64,
+        title: String,
+        start_failure: Option<MemoryStartFailure>,
+    },
+    /// The card's decision is not built and no branch builds it: "아직 안
+    /// 만든 결정", with what the agent saw, until the operator leaves it.
+    Unbuilt {
+        number: u64,
+        title: String,
+        reason: Option<String>,
+    },
+}
+
+impl MemoryQuestionSnapshot {
+    /// Whether the Memory tab asks it: a card against a document is
+    /// Memory's; a card's way into the documents is the 제안 tab's (PRD
+    /// hide-ai-suggestions D-02).
+    pub fn memory_tab_owns(&self) -> bool {
+        match self {
+            Self::DocsDisagree { .. } => true,
+            Self::Promote { .. } | Self::Failed { .. } | Self::Unbuilt { .. } => false,
+        }
+    }
+}
+
+/// Why a failed promotion's agent never started, as its spawn answered.
+#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
+pub struct MemoryStartFailure {
+    pub code: MemoryStartFailureCode,
+    /// The last line the new pane's shell showed for `shell_starting`, at
+    /// most [`MemoryStartFailure::DETAIL_CHARS`] characters, or the reason
+    /// a worker could not process a card; the other
+    /// answers' words are the diagnostic log's (`promotion.start_failed`).
+    pub detail: Option<String>,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum MemoryStartFailureCode {
+    /// The new pane's shell stopped in its startup files (a question).
+    ShellStarting,
+    /// The agent's start ended at the shell without the agent, twice.
+    AgentNotStarted,
+    /// Hide's hook for the agent is not in place where it would run; that
+    /// machine's row in Settings says why.
+    AgentHookNotReady,
+    CardNotProcessed,
+    /// Any other answer: the device, the lock, the engine's refusal.
+    Other,
+}
+
+impl MemoryStartFailure {
+    pub const DETAIL_CHARS: usize = 160;
+
+    /// The failure a promotion keeps (`hide_memory::Promotion::failure`), a
+    /// spawn's refusal code with its detail after a unit separator.
+    pub fn of(failure: &str) -> Self {
+        let short = |text: &str| {
+            let text = text.trim();
+            (!text.is_empty()).then(|| text.chars().take(Self::DETAIL_CHARS).collect())
+        };
+        match crate::coordination::split_refusal(failure) {
+            (crate::agent_start::SHELL_STARTING, detail) => Self {
+                code: MemoryStartFailureCode::ShellStarting,
+                detail: detail.and_then(short),
+            },
+            ("card_not_processed", detail) => Self {
+                code: MemoryStartFailureCode::CardNotProcessed,
+                detail: detail.and_then(short),
+            },
+            (code, _) => Self {
+                code: if code == "agent_not_started" {
+                    MemoryStartFailureCode::AgentNotStarted
+                } else if crate::runtime::start_hook::HookRefusal::is_code(code) {
+                    MemoryStartFailureCode::AgentHookNotReady
+                } else {
+                    MemoryStartFailureCode::Other
+                },
+                detail: None,
+            },
+        }
+    }
+}
+
+/// What a card is; the same words the extraction and `hide memory show`
+/// use.
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum MemoryCardKind {
+    Rule,
+    Decision,
+    Lesson,
+    Fact,
+    Preference,
+}
+
+/// One card in full, as a row expanded in place shows it (B19, B21).
+#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
+pub struct MemoryCardSnapshot {
+    pub number: u64,
+    pub body: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub document_comparison: Option<hide_memory::DocumentComparison>,
+    /// Repository-relative files the card rests on (B27).
+    pub cited_paths: Vec<String>,
+    /// The most recent first.
+    pub sources: Vec<MemorySourceSnapshot>,
+    /// The text the current one replaced, which the card's Undo restores.
+    pub previous: Option<MemoryPreviousSnapshot>,
+    /// What Hide changed on the card by itself or on a recheck, newest
+    /// first, each with its 되돌리기 (B34).
+    pub changes: Vec<MemoryChangeSnapshot>,
+}
+
+/// One row of a card's change history (B21, B34).
+#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
+pub struct MemoryChangeSnapshot {
+    /// What `memory_action` `undo_change` names.
+    pub id: u64,
+    #[serde(flatten)]
+    pub change: MemoryChange,
+    pub at_unix_ms: u64,
+    /// Already taken back.
+    pub undone: bool,
+    /// Why it cannot be taken back; absent when it can, or was.
+    pub undo_blocked: Option<MemoryUndoBlocked>,
+}
+
+/// What one change did (`memory_change_kind`).
+#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+pub enum MemoryChange {
+    Stale,
+    Archive,
+    Revive,
+    /// The operator's own words added after the card was missed twice (B17).
+    Alias {
+        aliases: Vec<String>,
+    },
+    /// Cards of the same meaning folded into this one (B20, B21).
+    Merge {
+        cards: Vec<u64>,
+    },
+    /// A recheck: who asked, and once its sources were read again, how many
+    /// were a letter and how many could not be read (근거 확인 불가, B27).
+    Recheck {
+        by_agent: bool,
+        letters: Option<u64>,
+        unreadable: Option<u64>,
+    },
+}
+
+impl MemoryChange {
+    pub fn kind_str(&self) -> &'static str {
+        match self {
+            Self::Stale => "stale",
+            Self::Archive => "archive",
+            Self::Revive => "revive",
+            Self::Alias { .. } => "alias",
+            Self::Merge { .. } => "merge",
+            Self::Recheck { .. } => "recheck",
+        }
+    }
+}
+
+/// Why a change cannot be taken back (`memory_undo_blocked`).
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum MemoryUndoBlocked {
+    /// A later aging move replaced it; that one is taken back instead.
+    LaterChange,
+    /// A merged-in card changed since, so splitting would lose its text.
+    MergedCardChanged,
+    /// A merged-in card is gone for good.
+    MergedCardGone,
+    /// The recheck already ended; its result has its own Undo.
+    RecheckFinished,
+}
+
+impl MemoryUndoBlocked {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::LaterChange => "later_change",
+            Self::MergedCardChanged => "merged_card_changed",
+            Self::MergedCardGone => "merged_card_gone",
+            Self::RecheckFinished => "recheck_finished",
+        }
+    }
+}
+
+/// Where a card came from: one event of one session.
+#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
+pub struct MemorySourceSnapshot {
+    /// The runtime's name as the screens write it (`Claude Code`).
+    pub provider_label: String,
+    /// When the words were said; absent for a source older than the time.
+    pub at_unix_ms: Option<u64>,
+    /// The operator's own words.
+    pub human: bool,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
+pub struct MemoryPreviousSnapshot {
+    pub body: String,
+    /// When the current text replaced it.
+    pub changed_at_unix_ms: u64,
+}
+
+/// The cards a `memory_search` matched, best first.
+#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
+pub struct MemorySearchSnapshot {
+    pub query: String,
+    pub numbers: Vec<u64>,
+}
+
+/// What a Project's Memory analysis shows the operator (B23, D-27). A
+/// failure the operator cannot act on is logged and never shown.
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum MemoryAnalysisState {
+    #[default]
+    Idle,
+    Analyzing,
+    /// Memory is on but Hide AI is off or cannot answer, so no new card is
+    /// made; existing cards are still given.
+    AiNotReady,
+    Checking,
+    CheckBudgetExhausted,
+}
+
+/// One operator action on a Project's Memory (`memory_action`).
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Deserialize, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum MemoryAction {
+    Enable,
+    Disable,
+    Delete,
+    Forget,
+    Undo,
+    /// Start an agent that puts the card in the repository (B30); on a failed
+    /// promotion, try again.
+    Promote,
+    /// "안 올림": not until the card changes (B29).
+    Dismiss,
+    CardRight,
+    DocRight,
+    /// Bring an archived card back (B22).
+    Revive,
+    /// Hold the card out of the hooks until it is checked again (B27).
+    Recheck,
+    /// Take back one change of the card's history (B34).
+    UndoChange,
+}
+
+impl MemoryAction {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Enable => "enable",
+            Self::Disable => "disable",
+            Self::Delete => "delete",
+            Self::Forget => "forget",
+            Self::Undo => "undo",
+            Self::Promote => "promote",
+            Self::Dismiss => "dismiss",
+            Self::CardRight => "card_right",
+            Self::DocRight => "doc_right",
+            Self::Revive => "revive",
+            Self::Recheck => "recheck",
+            Self::UndoChange => "undo_change",
+        }
+    }
+}
+
+fn serialize_memory_rows<S: serde::Serializer>(
+    rows: &Arc<Vec<MemoryRowSnapshot>>,
+    serializer: S,
+) -> Result<S::Ok, S::Error> {
+    rows.as_ref().serialize(serializer)
+}
+
+/// What kind of document an open file is, decided once by the host that
+/// read it (`hide_node_link::document`) and drawn by the shell as one view per
+/// kind. Adding a kind is one variant there and one case in the shell's
+/// switch; nothing else in the shell inspects extensions or bytes.
+pub use hide_node_link::document::DocumentKind;
+
+#[derive(Clone, Debug, PartialEq, Serialize)]
+pub struct EditorDocumentSnapshot {
+    pub path: String,
+    pub language: Option<String>,
+    pub document_kind: DocumentKind,
+    pub contents_utf8: Option<String>,
+    /// The content revision (`sha256:<hex>`) the draft is based on: read at
+    /// open, moved by each save, and what the next save is checked against.
+    /// Present exactly for an editable document.
+    pub revision: Option<String>,
+    pub dirty: bool,
+    /// Why an otherwise editable document takes no edits: its size or its
+    /// permissions. The kind, not this field, says a PDF or image is read-only.
+    pub readonly_reason: Option<String>,
+    pub conflict: Option<EditorConflictSnapshot>,
+    /// A save that has not come to a known result yet.
+    pub save: Option<EditorSaveSnapshot>,
+}
+
+/// A save in progress, or one whose answer was lost (PRD S5.5 B14).
+#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
+pub struct EditorSaveSnapshot {
+    /// `saving` while it runs (a newer draft may wait behind it), `waiting`
+    /// while it waits for the device's helper to finish connecting, `unknown`
+    /// when the answer was lost and the file has not been read back yet, and
+    /// `checking` while it is read back. An unknown save blocks the next one.
+    /// `refused` when the last save was refused or never sent, and
+    /// `not_applied` when an unknown save was read back unchanged: it has not
+    /// reached the file yet and may still, so it is not called unsaved.
+    pub state: String,
+    pub message: Option<String>,
+}
+
+/// The right panel's persisted sections. AgentSessions never opens Memory.
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq, Deserialize, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum RightPanelSection {
+    #[default]
+    #[serde(alias = "git")]
+    Overview,
+    Explorer,
+    Changes,
+    AgentSessions,
+    Sessions,
+    Memory,
+}
+
+impl RightPanelSection {
+    pub fn parse(value: &str) -> Option<Self> {
+        match value {
+            "overview" | "git" => Some(Self::Overview),
+            "explorer" => Some(Self::Explorer),
+            "changes" => Some(Self::Changes),
+            "agent_sessions" => Some(Self::AgentSessions),
+            "sessions" => Some(Self::Sessions),
+            "memory" => Some(Self::Memory),
+            _ => None,
+        }
+    }
+}
+
+/// Explicit interface languages shared by every client of this core.
+#[derive(Clone, Copy, Debug, PartialEq, Deserialize, Serialize)]
+pub enum InterfaceLanguage {
+    #[serde(rename = "en")]
+    English,
+    #[serde(rename = "ko")]
+    Korean,
+    #[serde(rename = "zh-CN")]
+    SimplifiedChinese,
+    #[serde(rename = "ja")]
+    Japanese,
+}
+
+impl InterfaceLanguage {
+    /// The interface language a system's primary language means, by the
+    /// rules `web/src/i18n/locale.ts` (`systemLanguage`) resolves it with:
+    /// English, Korean and Japanese by their base language, Chinese only in
+    /// the Simplified script, and `None` for anything else.
+    pub fn from_system(tag: &str) -> Option<Self> {
+        let mut subtags = tag.split(['-', '_']);
+        let language = subtags.next()?.to_ascii_lowercase();
+        match language.as_str() {
+            "en" => Some(Self::English),
+            "ko" => Some(Self::Korean),
+            "ja" => Some(Self::Japanese),
+            "zh" => {
+                // The script, else the one the region implies when a tag is
+                // filled in (`zh-TW` is Traditional, `zh` and `zh-CN` Simplified).
+                let next = subtags.next().unwrap_or_default();
+                let simplified = if next.len() == 4 {
+                    next.eq_ignore_ascii_case("hans")
+                } else {
+                    !["tw", "hk", "mo"].contains(&next.to_ascii_lowercase().as_str())
+                };
+                simplified.then_some(Self::SimplifiedChinese)
+            }
+            _ => None,
+        }
+    }
+}
+
+/// The store retains an invalid value; the wire exposes its English fallback.
+fn serialize_interface_language<S: serde::Serializer>(
+    value: &Option<serde_json::Value>,
+    serializer: S,
+) -> Result<S::Ok, S::Error> {
+    value
+        .as_ref()
+        .map(|value| InterfaceLanguage::deserialize(value).unwrap_or(InterfaceLanguage::English))
+        .serialize(serializer)
+}
+
+/// Which list the sidebar shows under its head (PRD sidebar-task-lens
+/// D-10; lane-two-columns D-20): the projects tree, every task of the rail's
+/// device, or every pull request of its projects.
+#[derive(Clone, Copy, Debug, Default, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum SidebarLens {
+    #[default]
+    Projects,
+    Tasks,
+    Prs,
+}
+
+impl SidebarLens {
+    pub fn parse(value: &str) -> Option<Self> {
+        match value {
+            "projects" => Some(Self::Projects),
+            "tasks" => Some(Self::Tasks),
+            "prs" => Some(Self::Prs),
+            _ => None,
+        }
+    }
+
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Projects => "projects",
+            Self::Tasks => "tasks",
+            Self::Prs => "prs",
+        }
+    }
+}
+
+/// How the 태스크 list groups (PRD sidebar-task-lens D-11): by state across
+/// every project, or one group per project.
+#[derive(Clone, Copy, Debug, Default, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum TaskView {
+    #[default]
+    Status,
+    Project,
+}
+
+impl TaskView {
+    pub fn parse(value: &str) -> Option<Self> {
+        match value {
+            "status" => Some(Self::Status),
+            "project" => Some(Self::Project),
+            _ => None,
+        }
+    }
+
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Status => "status",
+            Self::Project => "project",
+        }
+    }
+}
+
+/// The project the sidebar's 태스크 and PR lists are narrowed to: one
+/// registered project on one machine, kept until the operator lifts it.
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct SidebarProject {
+    pub device_id: String,
+    pub workspace_id: String,
+}
+
+/// The most chapters of Hide's practice mode whose progress is kept.
+pub const PRACTICE_CHAPTER_LIMIT: usize = 64;
+
+/// The highest step index a chapter's progress can hold.
+pub const PRACTICE_STEP_LIMIT: u32 = 255;
+
+/// How far a learner got in one practice-mode chapter: the chapter version
+/// they played, the step they reached, and whether they reached the end.
+/// The chapters run in their own window on scripted data, so the core keeps
+/// only this, per chapter id (`ui_state.practice`).
+#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct PracticeProgress {
+    pub version: u32,
+    pub step: u32,
+    pub finished: bool,
+}
+
+/// Whether `id` names a practice chapter: 1 to 32 characters of `a-z`, `0-9`
+/// and `-`.
+pub fn practice_chapter_id_valid(id: &str) -> bool {
+    (1..=32).contains(&id.len())
+        && id
+            .bytes()
+            .all(|byte| byte.is_ascii_lowercase() || byte.is_ascii_digit() || byte == b'-')
+}
+
+/// One of Hide's cards, which opens as a tab on a tray (PRD sidebar-task-lens
+/// D-50, lane-desk-pair-view D-13): a card display carries it
+/// (`view_layout::Display::card`).
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
+pub enum DetailItem {
+    /// A pull request's card, by catalog project and number.
+    PullRequest { workspace_id: String, number: u32 },
+    /// A session's record (D-44).
+    Record {
+        session: crate::links::ledger::SessionIdentity,
+    },
+    /// A Conductor's mission map, opened from wherever a mission is pressed
+    /// outside the mission screen's table (operator decision 2026-11-09,
+    /// replacing PRD mission-screen D-09).
+    Mission { mission: String },
+    /// A session's own plan, drawn large (PRD hide-plan B11).
+    Plan {
+        session: crate::links::ledger::SessionIdentity,
+    },
+    /// A project's Git worktrees, from its Project tool (PRD lane-two-columns
+    /// B30).
+    Worktrees { workspace_id: String },
+    /// A project's last seven days of cost, from its Project tool (B31).
+    Cost { workspace_id: String },
+    /// What a worktree left unfinished, from its Project tool's 흘린 것: its
+    /// changed files and the commits it has not pushed (PRD
+    /// project-panel-results B9).
+    Remains {
+        workspace_id: String,
+        checkout_id: String,
+    },
+    /// A Hide AI branch waiting for the operator's decision, by its 제안 row,
+    /// with the file whose diff it shows, or its card of files (PRD
+    /// hide-ai-branch-first-apply B4).
+    Branch {
+        workspace_id: String,
+        row: String,
+        #[serde(default)]
+        path: Option<String>,
+    },
+}
+
+/// The cards an older build's 보기 slot kept for one pane, waiting to move
+/// once onto the tray of that pane's Agent tab (PRD lane-desk-pair-view
+/// D-18, B34): the pane's tab is known only once the engine lists it. `pane`
+/// absent is the slot that was in front with no pane named, which the pane
+/// in front takes. Core only; kept in `core-state.json` until moved.
+#[derive(Clone, Debug, Default, Deserialize, Eq, PartialEq, Serialize)]
+pub struct MovingCards {
+    #[serde(default)]
+    pub pane: Option<String>,
+    #[serde(default)]
+    pub cards: Vec<DetailItem>,
+    /// The slot was drawn: its tray is shown when the cards land.
+    #[serde(default)]
+    pub shown: bool,
+}
+
+#[derive(Clone, Debug, PartialEq, Deserialize, Serialize)]
+pub struct UiStateSnapshot {
+    #[serde(default)]
+    pub resolved_sessions: BTreeMap<String, crate::agent_state::sessions::Resolution>,
+    /// The operator's 다시 볼 것 marks, by root pane (PRD revisit-group D-11).
+    #[serde(default)]
+    pub revisit_sessions: BTreeMap<String, crate::agent_state::sessions::RevisitMark>,
+    /// The operator's 놔두기 on the Project tool's 흘린 것, by checkout
+    /// (PRD project-panel-results D-17). Core only.
+    #[serde(default, skip_serializing)]
+    pub stray_dismissals:
+        BTreeMap<String, crate::agent_state::tally::project_status::StrayDismissal>,
+    /// A new input starts work beyond any PR that had already settled.
+    #[serde(default)]
+    pub session_resolution_inputs: BTreeMap<String, u64>,
+    /// Sessions in a checkout start open; older expansion choices are ignored.
+    #[serde(default)]
+    pub session_collapsed_checkout_ids: Vec<String>,
+    #[serde(default)]
+    pub session_open_folds: Vec<String>,
+    #[serde(default = "default_panel_visible")]
+    pub left_sidebar_visible: bool,
+    /// The device rail on the sidebar's left. It is shown by default, and an
+    /// older store without the field keeps showing it.
+    #[serde(default = "default_panel_visible")]
+    pub device_rail_visible: bool,
+    #[serde(default = "default_panel_visible")]
+    pub right_panel_visible: bool,
+    /// Which of the right panel's four sections is showing. Persisted rather
+    /// than held in the view, because hiding the panel tears the view down
+    /// and the section has to come back the way it was left.
+    #[serde(default)]
+    pub right_panel_section: RightPanelSection,
+    pub expanded_paths: Vec<String>,
+    /// Folders expanded in each SSH device's Explorer, by device id; this
+    /// machine's are `expanded_paths`. A path means something only on its
+    /// own device, so two devices' same path never share a row (S5.5 B2).
+    #[serde(default)]
+    pub device_expanded_paths: BTreeMap<String, Vec<String>>,
+    /// The folder Add a project's folder list last showed on this machine,
+    /// as its node answered it; the next list here starts in it (PRD
+    /// device-add-project D-04).
+    #[serde(default)]
+    pub add_project_folder: Option<String>,
+    /// The same for each device, by device id; a device's folder means
+    /// something only on that device.
+    #[serde(default)]
+    pub device_add_project_folders: BTreeMap<String, String>,
+    #[serde(default)]
+    pub collapsed_workspace_ids: Vec<String>,
+    /// Sidebar workspaces (checkout paths) whose agent rows the removed
+    /// native shell hid; absence is open. It is kept as that shell's own
+    /// preference so an older store still loads; the web reads
+    /// `expanded_checkout_ids`.
+    #[serde(default)]
+    pub collapsed_checkout_ids: Vec<String>,
+    /// Checkouts whose agent rows the web Projects list opened. Absence is
+    /// the default closed state, where the checkout's second line names its
+    /// agents, so an old store needs no migration.
+    #[serde(default)]
+    pub expanded_checkout_ids: Vec<String>,
+    /// Projects whose Inactive checkout group the operator opened. Absence is
+    /// the default collapsed state, so old stores need no migration.
+    #[serde(default)]
+    pub expanded_inactive_checkout_project_paths: Vec<String>,
+    /// Device groups whose Inactive projects group the operator opened.
+    /// Absence is the default collapsed state.
+    #[serde(default)]
+    pub expanded_inactive_project_device_ids: Vec<String>,
+    #[serde(default)]
+    pub project_base_branches: BTreeMap<String, String>,
+    /// Private choices keyed by machine plus canonical main-worktree root.
+    /// Missing fields retain legacy path-based issue/base behavior.
+    #[serde(default)]
+    pub project_settings: BTreeMap<String, crate::project_settings::ProjectSettings>,
+    /// Bounded transient write receipts; never restored or saved as choices.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub project_settings_writes: BTreeMap<String, crate::project_settings::WriteStatus>,
+    /// Agent panes whose descendants the operator opened in the sidebar tree.
+    /// Absence is the default folded state, so a row with children starts
+    /// folded and shows its descendant badge until the operator opens it.
+    /// The set is keyed by pane id and lives as long as the pane does: a
+    /// pane made new has a new id, so it starts folded (PRD D-06, D-11).
+    #[serde(default)]
+    pub expanded_agent_pane_ids: Vec<String>,
+    /// Agent panes whose children the operator opened in the sidebar's
+    /// 태스크 list, kept apart from the 프로젝트 tree's (PRD
+    /// sidebar-task-lens D-48; the name is the Sessions list's, which held
+    /// it before, so a store and a core move read it as they did); folded by
+    /// default and pruned when the pane closes.
+    #[serde(default)]
+    pub sessions_expanded_agent_pane_ids: Vec<String>,
+    /// Which list the sidebar shows under its head (PRD sidebar-task-lens
+    /// D-10, D-25): the projects at first, then the last one chosen.
+    #[serde(default)]
+    pub sidebar_lens: SidebarLens,
+    /// How the 태스크 list groups its tasks (D-11), kept like the lens.
+    #[serde(default)]
+    pub task_view: TaskView,
+    /// The one project both of the sidebar's 태스크 and PR lists show, or
+    /// every project; kept like the lens.
+    #[serde(default)]
+    pub sidebar_project: Option<SidebarProject>,
+    /// Practice mode's progress, by chapter id (`practice_progress_set`):
+    /// the learner's place in each onboarding chapter, kept like the lens so
+    /// a relaunch resumes it. At most [`PRACTICE_CHAPTER_LIMIT`] chapters.
+    #[serde(default)]
+    pub practice: BTreeMap<String, PracticeProgress>,
+    /// The sidebar's invitation to practice was closed with its ×
+    /// (`practice_invite_close`); it never shows again. A learner who
+    /// opened a chapter loses it through `practice` instead.
+    #[serde(default)]
+    pub practice_invite_closed: bool,
+    /// Slot cards still moving onto their pane's tray (`MovingCards`). Core
+    /// only.
+    #[serde(default, skip_serializing)]
+    pub moving_cards: Vec<MovingCards>,
+    /// The Overview Work map's filter, hidden and folded projects, hand
+    /// team folds and dragged places (PRD overview-graph-remembered D-05).
+    #[serde(default)]
+    pub overview_graph: OverviewGraphChoices,
+    pub selected_path: Option<String>,
+    pub selected_pane_id: Option<String>,
+    /// Set by a core move's rekey (`node_migration::reown`): the machine the
+    /// core now runs on kept its selection only in its own engine while the
+    /// other core ran, so the first local session opens on the engine's focus
+    /// (`consume_restore_hint`). Core only, and kept in the store until that
+    /// session takes it.
+    #[serde(skip)]
+    pub focus_from_engine: bool,
+    pub shortcut_bindings: BTreeMap<String, String>,
+    /// Whether `shortcut_bindings` was already brought across from the removed
+    /// native app's state. Persisted, never on the wire: once the import ran, an
+    /// empty set is the operator's reset to defaults, not a set to import.
+    #[serde(skip)]
+    pub shortcut_bindings_imported: bool,
+    /// The web shell's own pane chords, command id to chord. They live apart
+    /// from `shortcut_bindings` because the two hosts reserve different keys
+    /// (Chrome keeps ⌘W), so one host's rebind must never become the other's.
+    #[serde(default)]
+    pub browser_shortcut_bindings: BTreeMap<String, String>,
+    #[serde(default)]
+    pub focused_device_id: Option<String>,
+    #[serde(default)]
+    pub focused_checkout_id: Option<String>,
+    #[serde(default)]
+    pub workspace_registrations: Vec<WorkspaceRegistration>,
+    #[serde(default)]
+    pub device_registrations: Vec<DeviceRegistration>,
+    /// The name the operator registered this machine under while a core on
+    /// another machine dialed it, kept when that core moved here, since a
+    /// core does not register its own machine (`node_migration::reown`); the
+    /// core's own device row carries it as its label, so the machine keeps
+    /// its name across the move. None on a machine never registered so.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub machine_label: Option<String>,
+    #[serde(default = "default_accent_hex")]
+    pub accent_hex: String,
+    /// The web shell's mode (Light, Dark or System).
+    #[serde(default)]
+    pub theme: ThemePreference,
+    /// Whether list rows and tabs draw the agent's logo (`agent_logo_mode_set`).
+    #[serde(default)]
+    pub agent_logo_mode: AgentLogoMode,
+    /// How agent panes draw their turn row (`pane_turn_row_mode_set`).
+    #[serde(default)]
+    pub pane_turn_row_mode: PaneTurnRowMode,
+    /// The palette every window draws in; `color_theme_set` owns it.
+    #[serde(default)]
+    pub color_theme: ColorTheme,
+    /// None follows each client's system language. Raw JSON preserves an
+    /// invalid stored selection through unrelated saves without publishing it.
+    #[serde(default, serialize_with = "serialize_interface_language")]
+    pub interface_language: Option<serde_json::Value>,
+    #[serde(default)]
+    pub usage: crate::usage::prefs::UsagePreferences,
+    /// The first-run agent choice (issue 517), a reading of this Mac's kit
+    /// record (the one place that knows whether it was asked and answered):
+    /// `None` until the kit has answered once, `Pending` while the record
+    /// waits for the operator, `Done` after Apply. A machine that already had
+    /// the kit is `Done` without ever asking.
+    #[serde(default)]
+    pub agent_onboarding: Option<AgentOnboarding>,
+    /// The agents the operator left on in the first-run choice (or, for a Mac
+    /// that was never asked, the ones it had on), which a device whose record
+    /// waits receives once per run.
+    #[serde(default)]
+    pub agent_onboarding_agents: Vec<String>,
+    /// The first-run wizard's progress; `None` on a Mac that was never asked.
+    #[serde(default)]
+    pub first_run: Option<FirstRun>,
+    #[serde(default)]
+    pub first_run_choices: FirstRunChoices,
+    /// Whether the desktop app shows an OS notification when a root agent
+    /// newly needs the operator (Settings > Notifications).
+    #[serde(default)]
+    pub desktop_notifications: bool,
+    /// Content-free product statistics, shared by every window of this core.
+    #[serde(default = "default_panel_visible")]
+    pub product_analytics_enabled: bool,
+    /// The UTC day each surface last sent `hide_active`. Persisted, never on
+    /// the wire.
+    #[serde(skip)]
+    pub product_active_days: crate::product_analytics::ActiveDays,
+    /// Done notifications are independent of Needs You; a fresh install
+    /// leaves them off. Persistence migrates the former shared switch.
+    #[serde(default)]
+    pub desktop_notifications_done: bool,
+    /// The screens whose one-line introduction was shown once (B43).
+    #[serde(default)]
+    pub screen_intros_seen: BTreeSet<ScreenIntro>,
+    /// The Projects and Agents sidebar's width in CSS pixels, dragged on its
+    /// right edge and kept within `SIDEBAR_WIDTH_MIN..=SIDEBAR_WIDTH_MAX`
+    /// (PRD sidebar-typography D-08, D-09). A store written before the drag
+    /// existed loads at the default.
+    #[serde(default = "default_sidebar_width")]
+    pub sidebar_width: u32,
+    /// The interface font size, in points, that Appearance's Interface text
+    /// slider sets. It scales the shell's own text, the sidebar included, and
+    /// no terminal or editor text.
+    #[serde(default = "default_font_size")]
+    pub font_size: f32,
+    /// Every terminal's base font size, in CSS pixels, that Appearance's
+    /// Terminal text slider sets. A pane's own `pane_text_scales` entry
+    /// multiplies it, so the chords keep zooming one pane on top of it.
+    #[serde(default = "default_terminal_font_size")]
+    pub terminal_font_size: f32,
+    /// The installed font every terminal draws its own text in, as the
+    /// operator typed it in General's Terminal font; empty draws in the
+    /// `--font-mono` token. The web puts it ahead of that token and of the
+    /// fitted symbol and CJK fallbacks (`web/src/terminalFonts.ts`), so a
+    /// name the machine does not have falls through to them.
+    #[serde(default)]
+    pub terminal_font_family: String,
+    /// Text scale for one pane's own content, keyed by pane id. A pane at the
+    /// default scale is absent rather than present at 1.0, so the map stays
+    /// the size of what the user actually changed.
+    ///
+    /// Every key here is a pane id the engine reports, which is what lets a pane
+    /// that goes away take its entry with it. Nothing else may be stored here.
+    #[serde(default)]
+    pub pane_text_scales: BTreeMap<String, f32>,
+    /// Text scale for the file editor's code, which is one surface rather than
+    /// one per document.
+    ///
+    /// It is its own field and not a row in `pane_text_scales` because the
+    /// editor is not a pane: keyed into that map it had no pane id to be
+    /// reported under, so the pass that drops a departed pane's scale dropped
+    /// the editor's zoom on every agent state change.
+    #[serde(default = "default_pane_text_scale")]
+    pub editor_text_scale: f32,
+    /// Eligible agent panes whose terminal is replaced by the local
+    /// conversation ledger. This is snapshot-only interaction state;
+    /// persistence owns a separate stored representation and intentionally
+    /// omits this set. A pane enters it only through `toggle_conversation`:
+    /// a new agent pane opens on its terminal, and a pane that leaves the
+    /// session leaves the set with it.
+    #[serde(default)]
+    pub conversation_pane_ids: BTreeSet<String>,
+    /// What the operator had already seen on each pane, keyed by pane id.
+    ///
+    /// This is Hide's own record and the only authority for the read axis.
+    /// A tab-level seen would mark every pane in a tab read the moment that tab
+    /// is focused, so three finished agents side by side would clear together;
+    /// a pane-level record is what keeps them separate. It rides the existing store rather
+    /// than a second file (engineering rule 7), and a store written before it
+    /// existed loads with an empty record, which reads as everything unread.
+    // The store owns persistence; the shell only reads the derived unread axis.
+    #[serde(default, skip_serializing)]
+    pub pane_read_records: BTreeMap<String, PaneReadRecord>,
+    /// The panes whose last stop finished work, keyed by pane id, so a
+    /// completion a restored engine no longer reports is still shown
+    /// (`agent_state::apply_completions`). The store owns it.
+    #[serde(default, skip_serializing)]
+    pub pane_completions: BTreeMap<String, PaneCompletion>,
+    /// The model and effort Hide started each pane's agent with, keyed by
+    /// pane id, so a sleep, a close or a fork captures them for the restart
+    /// it makes (`runtime::agent_choice`). The store owns it.
+    #[serde(default, skip_serializing)]
+    pub pane_launches: BTreeMap<String, PaneLaunch>,
+    /// The devices switched to their machine's own connection whose first
+    /// engine open on it has not ended (`runtime::device_switch`): that open
+    /// closes the panes the new link does not hold, and a core that stopped
+    /// before it still owes it. The store owns it.
+    #[serde(default, skip_serializing)]
+    pub device_switch_opens: BTreeSet<String>,
+    /// Each agent pane's request-view verb and when it took it, so the time
+    /// a row has waited survives a restart (PRD overview-request-view D-40).
+    /// The store owns it; the shell reads it on the row.
+    #[serde(default, skip_serializing)]
+    pub request_verbs: BTreeMap<String, crate::request_view::VerbRecord>,
+    /// How long an agent may go untouched before Hide ends its process and
+    /// keeps its conversation to resume: 1, 2, 4, 12 (the default) or 24
+    /// hours, or `None` for Off.
+    #[serde(default = "default_sleep_after_hours")]
+    pub agent_sleep_after_hours: Option<u32>,
+    /// Each local project's chosen issue source, `github` or `local`, by the
+    /// project's path; a project without an entry reads its default source
+    /// (`tasks::source_kind`). Set in Settings › Issues.
+    #[serde(default)]
+    pub project_issue_sources: BTreeMap<String, String>,
+    /// How starting work from an issue behaves (Settings › Issues).
+    #[serde(default)]
+    pub issue_settings: IssueSettingsSnapshot,
+    /// Settings › Mission: the values a new mission's plan starts from
+    /// (PRD software-factory-conductor D-31).
+    #[serde(default)]
+    pub conductor_settings: crate::missions::ConductorSettings,
+    /// Settings › Agents › 권한 for this machine's agents, by adapter id: an
+    /// agent with no entry starts with full access (`agent_permission`).
+    #[serde(default)]
+    pub agent_permissions: crate::agent_permission::AgentPermissions,
+    /// The same for each registered device's agents, by device id; this
+    /// machine's are `agent_permissions`, swapped as `expanded_paths` is when
+    /// the core moves (`node_migration::reown::OWN_PATHS`).
+    #[serde(default)]
+    pub device_agent_permissions: BTreeMap<String, crate::agent_permission::AgentPermissions>,
+    /// The agent kind and each kind's model the operator last started with,
+    /// from any start surface (PRD home-device-rail D-18, D-20): the next
+    /// start anywhere preselects them.
+    #[serde(default)]
+    pub agent_start: AgentStartChoice,
+    /// Each pane's last state change and last look, and the agents Hide has
+    /// put to sleep. Persisted with the rest of this store and never on the
+    /// wire: the last look of the tab on screen moves every minute, and a
+    /// field that did would resend the navigator to every client.
+    #[serde(default, skip_serializing)]
+    pub agent_sleep: crate::agent_sleep::AgentSleepStore,
+    /// The sessions the operator archived (PRD session-archive). Persisted
+    /// with this store and never on the wire: the navigator carries the
+    /// rows the shell draws (`archived_sessions`).
+    #[serde(default, skip_serializing)]
+    pub session_archive: crate::session_archive::SessionArchive,
+    /// The checkouts last brought to the front, newest first, at most
+    /// `RECENT_CHECKOUT_LIMIT` (PRD cmdk-recent D-05, D-08, D-09). ⌘K reads
+    /// the first five it can show; the rest are there so the exclusions of
+    /// the front checkout and of Related still leave five. Absent in a store
+    /// written before it existed, which loads empty.
+    #[serde(default)]
+    pub recent_checkouts: Vec<RecentCheckout>,
+    /// The terminal panes the keyboard has been in, newest first, at most
+    /// `RECENT_PANE_LIMIT`: the order the Agent area's Ctrl+Tab walks (issue
+    /// 301). The shell reports each visit with `pane_visit`; a remote pane is
+    /// held by its device-scoped id. Absent in a store written before it
+    /// existed, which loads empty.
+    #[serde(default)]
+    pub recent_pane_ids: Vec<String>,
+    /// The names the operator gave tabs through Rename, by tab id, at most
+    /// `OPERATOR_TAB_NAME_LIMIT`: a tab is named, and outlives its agents,
+    /// only while its label is still the name recorded here (the engine keeps tab
+    /// ids through a restore). A spawn's name, or one given before this was
+    /// recorded, is not the operator's. Persisted and never on the wire.
+    #[serde(default, skip_serializing)]
+    pub operator_tab_names: BTreeMap<String, String>,
+    /// The devices whose old Home still waits for their helper's one-time
+    /// retirement (`runtime/home_retire.rs`). Only a store written by the
+    /// release before this one makes an entry; the answer removes it.
+    #[serde(default, skip_serializing)]
+    pub home_retire: Vec<HomeRetirement>,
+}
+
+/// The most checkouts the recent list keeps; the oldest leave first.
+pub const RECENT_CHECKOUT_LIMIT: usize = 10;
+
+/// The most panes the recent pane order keeps; the oldest leave first.
+pub const RECENT_PANE_LIMIT: usize = 50;
+
+/// The most tab names the operator's Rename is remembered for; past it, the
+/// names of tabs that are gone leave first, and a rename with no room left
+/// is not remembered.
+pub const OPERATOR_TAB_NAME_LIMIT: usize = 256;
+
+/// One entry of the recent list: the ids that open the checkout and the
+/// facts that draw its row while its device has no catalog to read them from.
+///
+/// No project id is kept: a device project's id changes when its facts
+/// resolve, and a checkout id already names the project it is in on this
+/// machine, so the shell finds the project from the checkout in the live
+/// catalog. The names are the ones the checkout had when it was last in
+/// front; a connected device's row is drawn from its catalog instead. No
+/// device name is kept: the row's device is a listed one, which the shell
+/// names from its row in its own language. A record from an older build
+/// still carries a `device_name`, which is read past.
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+pub struct RecentCheckout {
+    pub device_id: String,
+    pub checkout_id: String,
+    pub project_name: String,
+    /// The checkout's branch, else its label.
+    pub branch: String,
+}
+
+/// One pane's read mark: the state the operator was looking at the last time
+/// the pane held keyboard focus.
+///
+/// A pane is unread when its current state does not match this record, so a
+/// missing record means unread. The session id distinguishes a new agent in a
+/// reused pane from the same agent restored by a new engine run.
+#[derive(Clone, Debug, Default, Deserialize, Eq, PartialEq, Serialize)]
+pub struct PaneReadRecord {
+    #[serde(default)]
+    pub state_change_seq: Option<u64>,
+    #[serde(default)]
+    pub session_id: Option<String>,
+    pub demand: String,
+    pub activity: String,
+    /// Part of the pane-level fingerprint so an idle-to-completed transition
+    /// becomes unread even when the engine's process-local sequence does not move.
+    #[serde(default)]
+    pub completed: bool,
+    /// The descendant demands and completions the operator had seen when this
+    /// pane was last read. A descendant signal missing from here is news and
+    /// keeps the pane unread; one that has since gone away is trimmed on the
+    /// next projection, so the same descendant can be news again after it
+    /// works and finishes a second time (PRD B5, B6, B8).
+    #[serde(default)]
+    pub descendant_signals: BTreeSet<DescendantSignal>,
+    /// The server mark (`wire::SERVER_MARK_TOKEN`) of the engine run
+    /// `state_change_seq` was read on. The sequence restarts with the engine,
+    /// so the record is compared with the pane only on that run;
+    /// none means no server can be named, as for a record saved before marks.
+    #[serde(default)]
+    pub server: Option<String>,
+    /// The pane no longer matched this record when Hide last judged it, and
+    /// the operator has not read it since. Saved whenever it changes, so a
+    /// restart that loses the engine's sequence carries the verdict over rather
+    /// than judging the pane again from numbers that no longer compare.
+    #[serde(default)]
+    pub unread: bool,
+    /// How the pull request checks the pane waited on had ended when it was
+    /// read. An end the record lacks is news (status-marks D-08); one gone
+    /// since is the pane moving on, which its own change already says.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub checks_ended: Option<ChecksEnded>,
+    /// The person's turn the pane's agent had declared when it was read
+    /// (PRD ask-human): another declaration is news, as a new demand is.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub human_turn: Option<String>,
+    /// The core's questions laid on the pane when it was read, each by the
+    /// event that raised it (`SidebarAgentSnapshot::laid_asks`): while the
+    /// questions laid are among these, the agent's own work and rest under
+    /// them are not news, and a question not among them is. None in a record
+    /// written before the questions were kept, which is judged as it was.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub read_asks: Option<BTreeSet<String>>,
+}
+
+/// A pane whose last stop finished work, as Hide last saw it. A
+/// restored engine can report such a pane as only ready (it does for a
+/// restored Claude), and this is what keeps its completion through that.
+#[derive(Clone, Debug, Default, Deserialize, Eq, PartialEq, Serialize)]
+pub struct PaneCompletion {
+    /// The digest of the session that finished (`wire::session_digest`).
+    #[serde(default)]
+    pub session: Option<String>,
+    /// The server mark and engine sequence the completion was last seen at.
+    #[serde(default)]
+    pub server: Option<String>,
+    #[serde(default)]
+    pub state_change_seq: Option<u64>,
+}
+
+/// The launch choice of the agent Hide started in a pane, under the name it
+/// started it with.
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+pub struct PaneLaunch {
+    /// The start may run but no matching agent row has been observed yet.
+    /// Its record protects the account until that observation or pane removal.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub pending: bool,
+    /// In-process ordering of profile attempts; restored records precede all.
+    #[serde(skip)]
+    pub start: u64,
+    /// The agent kind, in the engine's spelling.
+    pub kind: String,
+    /// The engine name Hide started the agent under (a task's, a wake's, a
+    /// fork's, a reopen's, or `hide agent spawn --name`). The engine keeps a name
+    /// unique among its live agents, and an agent started in the pane by hand,
+    /// or one the engine gives the pane's id to again, has another name or none,
+    /// so the record never describes it.
+    pub name: String,
+    pub choice: hide_agent_adapter::LaunchChoice,
+    /// The conversation the named agent last reported, so the same agent
+    /// still matches when it comes back from an engine restart without its
+    /// name.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub session: Option<String>,
+    /// The profile the agent runs with (PRD agent-profiles D-27); `None`, as
+    /// in every record written before profiles, for the built-in default.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub profile: Option<crate::launch::LaunchProfile>,
+}
+
+/// The scale a pane has until the user zooms it.
+pub const DEFAULT_PANE_TEXT_SCALE: f32 = 1.0;
+
+/// One press of the zoom chords. Small enough that the range takes several
+/// presses to cross, large enough to be visible in one.
+pub const PANE_TEXT_SCALE_STEP: f32 = 0.1;
+
+/// The bounds a pane's text scale is clamped to. Below the minimum the terminal
+/// is unreadable; above the maximum a standard pane holds too few columns to
+/// show a command line without wrapping.
+pub const MIN_PANE_TEXT_SCALE: f32 = 0.7;
+pub const MAX_PANE_TEXT_SCALE: f32 = 2.0;
+
+/// Rounded to the step so repeated presses cannot drift the stored value off
+/// the ladder through float error.
+pub fn clamp_pane_text_scale(scale: f32) -> f32 {
+    let stepped = (scale / PANE_TEXT_SCALE_STEP).round() * PANE_TEXT_SCALE_STEP;
+    stepped.clamp(MIN_PANE_TEXT_SCALE, MAX_PANE_TEXT_SCALE)
+}
+
+pub(crate) fn default_pane_text_scale() -> f32 {
+    DEFAULT_PANE_TEXT_SCALE
+}
+
+/// How starting work from an issue behaves, chosen in Settings › Issues.
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+pub struct IssueSettingsSnapshot {
+    /// Ask the background AI for the new worktree's name; the deterministic
+    /// name from the issue's number and title stands until it answers.
+    #[serde(default = "default_true")]
+    pub ai_worktree_name: bool,
+    /// End the first prompt by asking for a pull request that closes the
+    /// issue, so the PR and the issue link themselves (`Closes #N`).
+    #[serde(default = "default_true")]
+    pub closes_instruction: bool,
+}
+
+fn default_true() -> bool {
+    true
+}
+
+impl Default for IssueSettingsSnapshot {
+    fn default() -> Self {
+        Self {
+            ai_worktree_name: true,
+            closes_instruction: true,
+        }
+    }
+}
+
+/// The agents Hide starts in a pane itself. `terminal` (a tab alone) is a
+/// start choice too, but never a remembered one (PRD home-device-rail D-20).
+pub const AGENT_KINDS: [&str; hide_agent_adapter::START_KINDS.len()] =
+    hide_agent_adapter::START_KINDS;
+
+/// The agent kind and each kind's model the operator last chose, kept in the
+/// core's store so every start surface and every window preselects the same
+/// pair (PRD home-device-rail D-18). A kind with no model here starts with
+/// its CLI's own default, and no kind at all means the first start of this
+/// store.
+#[derive(Clone, Debug, Default, Deserialize, Eq, PartialEq, Serialize)]
+pub struct AgentStartChoice {
+    #[serde(default)]
+    pub kind: Option<String>,
+    #[serde(default)]
+    pub models: BTreeMap<String, String>,
+}
+
+impl AgentStartChoice {
+    /// The first choice of a store written before this one existed: the
+    /// agent the removed `issue_settings.default_agent` named, when it named
+    /// one Hide starts (D-18: that value becomes the first remembered one).
+    pub fn seeded(default_agent: Option<&str>) -> Self {
+        Self {
+            kind: default_agent
+                .filter(|kind| AGENT_KINDS.contains(kind))
+                .map(str::to_owned),
+            models: BTreeMap::new(),
+        }
+    }
+}
+
+/// The Overview's issue work in flight. Each is one slot a newer request
+/// replaces, like `task_operation`: the web matches a slot to its own request
+/// by id and ignores one it did not ask for.
+#[derive(Clone, Debug, Default, Eq, PartialEq, Serialize)]
+pub struct IssueWorkSnapshot {
+    pub detail: Option<IssueDetailSnapshot>,
+    pub name: Option<WorktreeNameSnapshot>,
+    pub update: Option<IssueUpdateSnapshot>,
+    /// The latest `github_search`; absent from the wire until the first one.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub search: Option<GithubSearchSnapshot>,
+    /// Backlog items on their way, the ones that failed, and the newest made
+    /// (PRD overview-device-tasks B29, B30, B40, B41, B44, B45).
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub backlog: Vec<BacklogItemSnapshot>,
+    /// The latest `되돌리기` (B32).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub undo: Option<BacklogUndoSnapshot>,
+    /// Where each item a backlog panel or a Start dialog shows came from, one
+    /// per workspace/device/item, kept while any window shows it (B31, B33).
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub origins: Vec<BacklogOriginSnapshot>,
+    /// Every backlog item key a missed line made, newest first, for the
+    /// backlog row's flag (B27).
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub missed_keys: Vec<crate::links::ledger::BacklogMissedKey>,
+    /// Every GitHub issue key Hide made for the backlog (the quick add, the
+    /// backlog's input or `백로그로`), newest first: only these and memos
+    /// show `되돌리기` (D-21, B31).
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub made_keys: Vec<String>,
+}
+
+/// One backlog item made from the backlog's input, the quick add or a
+/// missed line, named by the shell's intent key.
+#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
+pub struct BacklogItemSnapshot {
+    pub intent: String,
+    pub workspace_id: String,
+    pub title: String,
+    pub phase: BacklogPhase,
+    /// The item's task key once it exists.
+    pub task_key: Option<String>,
+    /// Why it was not made, on `failed`.
+    pub failure: Option<BacklogFailure>,
+    /// Whether `backlog_retry` can make it again: a failed item whose job
+    /// is kept and whose failure a retry does not repeat.
+    pub retry: bool,
+    /// The missed line it is made from.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub missed: Option<crate::links::ledger::MissedSource>,
+    pub at_unix_ms: u64,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum BacklogPhase {
+    Waiting,
+    Creating,
+    Created,
+    Failed,
+}
+
+/// The reason line a failed item shows: the five GitHub categories, a queue
+/// past its bound, an answer Hide could not confirm, a repository the item
+/// may no longer go to, Hide's own record that could not be read just now
+/// (worth trying again), and a refusal (final).
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum BacklogFailure {
+    NotInstalled,
+    Outdated,
+    NotLoggedIn,
+    NoGithubRemote,
+    NetworkOrRateLimit,
+    QueueFull,
+    Unconfirmed,
+    /// The project's repository connection changed while the item was being
+    /// made, or a missed line's session did not work in this repository.
+    RepositoryChanged,
+    /// Hide could not read or reach its own record of the item just now: an
+    /// undo of it can be tried again.
+    Unavailable,
+    Refused,
+}
+
+impl From<hide_node_link::gh::GithubFailureCategory> for BacklogFailure {
+    fn from(category: hide_node_link::gh::GithubFailureCategory) -> Self {
+        use hide_node_link::gh::GithubFailureCategory as Category;
+        match category {
+            Category::NotInstalled => Self::NotInstalled,
+            Category::Outdated => Self::Outdated,
+            Category::NotLoggedIn => Self::NotLoggedIn,
+            Category::NoGithubRemote => Self::NoGithubRemote,
+            Category::NetworkOrRateLimit => Self::NetworkOrRateLimit,
+        }
+    }
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
+pub struct BacklogUndoSnapshot {
+    pub workspace_id: String,
+    pub device_id: String,
+    pub task_key: String,
+    /// `working`, `done` or `failed`.
+    pub phase: String,
+    pub failure: Option<BacklogFailure>,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
+pub struct BacklogOriginSnapshot {
+    pub workspace_id: String,
+    pub device_id: String,
+    pub task_key: String,
+    /// `reading`, `ready` or `failed`.
+    pub phase: String,
+    /// Absent once read when no missed line made the item.
+    pub session: Option<crate::links::ledger::SessionIdentity>,
+    pub session_title: Option<String>,
+    /// The missed line's own words and the goal flow its turn belonged to.
+    pub missed_text: Option<String>,
+    pub flow_name: Option<String>,
+    /// The turn's request and answer, for the Start prompt only; read on
+    /// this device and never sent to GitHub (D-21).
+    pub request: Option<String>,
+    pub answer: Option<String>,
+}
+
+impl BacklogOriginSnapshot {
+    pub fn matches(&self, owner: &crate::links::ledger::BacklogOriginIdentity) -> bool {
+        self.workspace_id == owner.workspace_id
+            && self.device_id == owner.device_id
+            && self.task_key == owner.task_key
+    }
+}
+
+/// The latest GitHub search (`github_search`), matched by the web's own
+/// request id. `query` is the trimmed text the search ran, or was refused
+/// with. `results` is empty until `ready`; `message` says why a search
+/// `failed`, or that a `ready` one did not cover every repository.
+#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
+pub struct GithubSearchSnapshot {
+    pub request_id: String,
+    pub query: String,
+    /// `working`, `ready` or `failed`.
+    pub phase: String,
+    pub results: Vec<GithubSearchResult>,
+    pub message: Option<String>,
+}
+
+/// One pull request or issue a search found: at most 20 of each, pull
+/// requests first, in the order the repositories are searched.
+#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
+pub struct GithubSearchResult {
+    /// `pr` or `issue`.
+    pub kind: String,
+    /// `owner/name`.
+    pub repository: String,
+    pub number: u32,
+    pub title: String,
+    /// `open`, `closed` or `merged`.
+    pub state: String,
+    pub url: String,
+    /// A pull request's one state ([`PrState::of`]), read with no checks or
+    /// review because a search does not ask for them; absent for an issue.
+    pub pr_state: Option<PrState>,
+}
+
+impl GithubSearchSnapshot {
+    pub fn working(request_id: String, query: String) -> Self {
+        Self {
+            request_id,
+            query,
+            phase: "working".into(),
+            results: Vec::new(),
+            message: None,
+        }
+    }
+
+    pub fn failed(request_id: String, query: String, message: impl Into<String>) -> Self {
+        Self {
+            phase: "failed".into(),
+            message: Some(message.into()),
+            ..Self::working(request_id, query)
+        }
+    }
+}
+
+/// One issue as its panel and the Start dialog read it (PRD
+/// overview-lenses-issues D-40): the body and, for a GitHub issue, its labels,
+/// author, assignees and latest comments. The fields past `message` are
+/// empty until `ready`.
+#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
+pub struct IssueDetailSnapshot {
+    pub workspace_id: String,
+    pub device_id: String,
+    pub task_key: String,
+    /// `reading`, `ready` or `failed`.
+    pub phase: String,
+    pub body: Option<String>,
+    /// Why the read failed, as a code the page words: a `local_issue.*`
+    /// code, or `issue_detail.read_failed` with `gh`'s words in the
+    /// `issue_detail.failed` diagnostic.
+    pub failure: Option<String>,
+    pub labels: Vec<crate::tasks::TaskLabel>,
+    pub author: Option<String>,
+    pub created_at_unix_ms: Option<u64>,
+    pub assignees: Vec<String>,
+    pub comment_count: Option<u32>,
+    pub comments: Vec<crate::tasks::TaskComment>,
+    pub comments_cursor: Option<String>,
+    pub comments_has_more: bool,
+    pub comments_limited: bool,
+    pub comments_loading: bool,
+}
+
+impl IssueDetailSnapshot {
+    pub fn reading(workspace_id: String, device_id: String, task_key: String) -> Self {
+        Self::settled(workspace_id, device_id, task_key, "reading", None)
+    }
+
+    /// The answer to a read: `ready` with what it read, or `failed` with the
+    /// failure code.
+    pub fn answered(
+        workspace_id: String,
+        device_id: String,
+        task_key: String,
+        answer: Result<crate::tasks::TaskDetail, String>,
+    ) -> Self {
+        match answer {
+            Ok(detail) => Self::settled(workspace_id, device_id, task_key, "ready", Some(detail)),
+            Err(failure) => Self {
+                failure: Some(failure),
+                ..Self::settled(workspace_id, device_id, task_key, "failed", None)
+            },
+        }
+    }
+
+    pub fn matches(&self, workspace_id: &str, device_id: &str, task_key: &str) -> bool {
+        self.workspace_id == workspace_id
+            && self.device_id == device_id
+            && self.task_key == task_key
+    }
+
+    fn settled(
+        workspace_id: String,
+        device_id: String,
+        task_key: String,
+        phase: &str,
+        detail: Option<crate::tasks::TaskDetail>,
+    ) -> Self {
+        let read = detail.is_some();
+        let detail = detail.unwrap_or_default();
+        Self {
+            workspace_id,
+            device_id,
+            task_key,
+            phase: phase.into(),
+            body: read.then_some(detail.body),
+            failure: None,
+            labels: detail.labels,
+            author: detail.author,
+            created_at_unix_ms: detail.created_at_unix_ms,
+            assignees: detail.assignees,
+            comment_count: detail.comment_count,
+            comments: detail.comments,
+            comments_cursor: detail.comments_cursor,
+            comments_has_more: detail.comments_has_more,
+            comments_limited: detail.comments_limited,
+            comments_loading: false,
+        }
+    }
+}
+
+/// The answer to a Local issue's title and body edit (`local_issue_update`),
+/// matched by the web's own request id.
+#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
+pub struct IssueUpdateSnapshot {
+    pub request_id: String,
+    pub task_key: String,
+    /// `ready` or `failed`.
+    pub phase: String,
+    pub failure: Option<CodedFailure>,
+}
+
+/// Why an operation failed, as a code the web words (`local_issue.*`,
+/// `pr_link.*`, `explorer.*`, `host.*`, `link.*`) with the one limit its
+/// sentence names; the core's own words go to that operation's diagnostic.
+#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
+pub struct CodedFailure {
+    pub code: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub limit: Option<u64>,
+}
+
+impl CodedFailure {
+    pub fn new(code: &str) -> Self {
+        Self {
+            code: code.to_owned(),
+            limit: None,
+        }
+    }
+}
+
+impl From<crate::local_issues::LocalIssueError> for CodedFailure {
+    fn from(error: crate::local_issues::LocalIssueError) -> Self {
+        Self {
+            code: format!("local_issue.{}", error.code()),
+            limit: error.limit(),
+        }
+    }
+}
+
+/// The Overview's pull-request work in flight (PRD overview-lenses-prs):
+/// a pull request linked to an issue, and the checks and reviews read for
+/// an agent's first prompt. Each is one slot a newer request replaces; the
+/// web matches a slot to its own request by `request_id`.
+#[derive(Clone, Debug, Default, Eq, PartialEq, Serialize)]
+pub struct PrWorkSnapshot {
+    pub link: Option<PrLinkSnapshot>,
+    pub feedback: Option<PrFeedbackSnapshot>,
+    /// The decision cards open now, one per pull request, newest last, at
+    /// most [`PR_CARD_LIMIT`] (PRD work-tab-pr-lens D-06).
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub cards: Vec<PrCardSnapshot>,
+    /// The diffs of Hide AI branch files shown now (PRD
+    /// hide-ai-branch-first-apply B4): the one the 보기 slot's branch card
+    /// shows and the one the open 제안 row unfolds, at most two; empty while
+    /// neither shows a file.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub branch_diffs: Vec<BranchDiffSnapshot>,
+}
+
+/// One file's committed diff on a Hide AI branch against its base, read on
+/// the machine that holds the Project and never from the checkout in front.
+#[derive(Clone, Debug, Default, Eq, PartialEq, Serialize)]
+pub struct BranchDiffSnapshot {
+    pub workspace_id: String,
+    /// The 제안 row (`s12`, `m72`) whose branch it is.
+    pub row: String,
+    pub path: String,
+    /// The text has not answered yet.
+    pub reading: bool,
+    /// The read failed; the reason is in the log.
+    pub failed: bool,
+    pub text: Option<String>,
+    /// Why the text is short or absent, as the diff documents word it.
+    pub notice: Option<hide_node_link::git::DiffNotice>,
+    /// The branch commit the read was asked at; a row whose branch moved
+    /// is read again (`runtime::branch_card`).
+    #[serde(skip)]
+    pub tip: Option<String>,
+}
+
+/// Cards kept at once; the least recently asked for is dropped.
+pub const PR_CARD_LIMIT: usize = 8;
+
+/// What a pull request's card reads beyond the list: its body, changed files,
+/// unresolved review threads and what a merge may be, per head commit. A part
+/// that could not be read is named in `failed` and drawn as
+/// `읽지 못함 · 다시 시도` (B52); the others stand.
+#[derive(Clone, Debug, Default, Eq, PartialEq, Serialize)]
+pub struct PrCardSnapshot {
+    pub workspace_id: String,
+    pub number: u32,
+    /// A read is in flight; the parts below are the last read's.
+    pub reading: bool,
+    /// The head commit the parts were read at, which a merge is conditioned on.
+    pub head: Option<String>,
+    pub body: Option<String>,
+    pub files: Option<Vec<PrCardFile>>,
+    /// How many files the pull request changes in all; more than `files`
+    /// holds when GitHub's page was full.
+    pub files_total: u32,
+    pub threads: Option<Vec<PrCardThread>>,
+    pub merge: Option<PrCardMerge>,
+    /// `body`, `files` or `threads`, whichever the last read could not get.
+    pub failed: Vec<&'static str>,
+    /// When the head commit's checks last completed, for the card's
+    /// timeline (PRD pr-card-and-session-record-redesign D-15); absent while
+    /// unread, none completed or the read lacked it.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub checks_completed_at_unix_ms: Option<u64>,
+    /// When the standing review (the latest approval or change request) was
+    /// submitted; absent without one.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub review_at_unix_ms: Option<u64>,
+    /// The Merge or branch update asked for from this card, and how it went.
+    pub write: Option<PrWriteSnapshot>,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
+pub struct PrCardFile {
+    pub path: String,
+    pub additions: u32,
+    pub deletions: u32,
+    /// Marked `linguist-generated` in the project's `.gitattributes`, or a
+    /// well-known lock file (D-27).
+    pub generated: bool,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
+pub struct PrCardThread {
+    pub reviewer: Option<String>,
+    pub path: String,
+    pub line: Option<u32>,
+    pub text: String,
+}
+
+/// What the repository lets a merge be (D-21).
+#[derive(Clone, Debug, Default, Eq, PartialEq, Serialize)]
+pub struct PrCardMerge {
+    /// The methods the repository allows, in the order Merge offers them.
+    pub methods: Vec<hide_node_link::gh::PrMergeMethod>,
+    /// The base branch has a merge queue: the button adds to it.
+    pub queue: bool,
+    /// The signed-in account may write to the repository.
+    pub can_merge: bool,
+}
+
+/// One GitHub write asked for from a card (D-22, B31-B34).
+#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
+pub struct PrWriteSnapshot {
+    /// `merge` or `update_branch`.
+    pub action: &'static str,
+    /// The head commit the operator was shown.
+    pub head: String,
+    pub method: Option<hide_node_link::gh::PrMergeMethod>,
+    /// `working`, `done` or `failed`.
+    pub phase: &'static str,
+    /// Why it failed, as a code the card words with what to do:
+    /// `head_moved`, `denied`, `conflict`, `not_mergeable`, `unreachable`
+    /// or `failed`. The text GitHub gave goes to the diagnostic log.
+    pub reason: Option<&'static str>,
+}
+
+/// `pr_link_issue`'s progress: the issue made (a new one), the link Hide
+/// keeps, then `Closes #N` in the pull request's body. A failed body write
+/// keeps what came before it (D-31, D-53); `issue_key` names the issue the
+/// pull request is linked to, the new one included, so a retry sends it.
+#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
+pub struct PrLinkSnapshot {
+    pub request_id: String,
+    pub workspace_id: String,
+    pub pr_number: u32,
+    /// `create`, `link` or `body`: the step working now, or the one that failed.
+    pub step: String,
+    /// `working`, `ready` or `failed`.
+    pub phase: String,
+    pub issue_key: Option<String>,
+    /// The id the source shows for `issue_key` (`#12`, `L-3`).
+    pub issue_id: Option<String>,
+    /// The issue was made by this request.
+    pub created: bool,
+    pub failure: Option<CodedFailure>,
+}
+
+/// One failed check of a pull request, by the name GitHub shows and the page
+/// that says why. A check GitHub gives no name has none, and the page words
+/// it.
+#[derive(Clone, Debug, Eq, PartialEq, Deserialize, Serialize)]
+pub struct PrFailedCheck {
+    pub name: Option<String>,
+    pub url: Option<String>,
+}
+
+/// A review that asked for changes, as its author wrote it.
+#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
+pub struct PrChangeRequest {
+    pub author: Option<String>,
+    pub body: String,
+}
+
+/// What a pull request says for the work handed on from it: its body, for
+/// a new issue made from it (B12), and its failed checks and change
+/// requests, for the first prompt of an agent it is handed to (D-46).
+#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
+pub struct PrFeedbackSnapshot {
+    pub request_id: String,
+    pub device_id: String,
+    pub root: String,
+    pub pr_number: u32,
+    /// `reading`, `ready` or `failed`.
+    pub phase: String,
+    /// The body once read.
+    pub body: Option<String>,
+    pub failed_checks: Vec<PrFailedCheck>,
+    pub change_requests: Vec<PrChangeRequest>,
+    /// Why the read failed, as a code the page words:
+    /// `project_settings_repository_changed`, or `pr_feedback.read_failed`
+    /// with the sentence in the `pr_feedback.failed` diagnostic.
+    pub failure: Option<String>,
+}
+
+/// The background AI's name for a worktree started from an issue.
+#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
+pub struct WorktreeNameSnapshot {
+    /// The web's own id for the request it made.
+    pub request_id: String,
+    /// `working`, `ready` or `failed`.
+    pub phase: String,
+    pub name: Option<String>,
+    pub message: Option<String>,
+}
+
+fn default_sleep_after_hours() -> Option<u32> {
+    Some(crate::agent_sleep::DEFAULT_SLEEP_AFTER_HOURS)
+}
+
+impl Default for UiStateSnapshot {
+    fn default() -> Self {
+        Self {
+            resolved_sessions: BTreeMap::new(),
+            revisit_sessions: BTreeMap::new(),
+            stray_dismissals: BTreeMap::new(),
+            session_resolution_inputs: BTreeMap::new(),
+            session_collapsed_checkout_ids: Vec::new(),
+            session_open_folds: Vec::new(),
+            left_sidebar_visible: true,
+            device_rail_visible: true,
+            right_panel_visible: true,
+            right_panel_section: RightPanelSection::default(),
+            expanded_paths: Vec::new(),
+            device_expanded_paths: BTreeMap::new(),
+            add_project_folder: None,
+            device_add_project_folders: BTreeMap::new(),
+            collapsed_workspace_ids: Vec::new(),
+            collapsed_checkout_ids: Vec::new(),
+            expanded_checkout_ids: Vec::new(),
+            expanded_inactive_checkout_project_paths: Vec::new(),
+            expanded_inactive_project_device_ids: Vec::new(),
+            project_base_branches: BTreeMap::new(),
+            project_settings: BTreeMap::new(),
+            project_settings_writes: BTreeMap::new(),
+            expanded_agent_pane_ids: Vec::new(),
+            sessions_expanded_agent_pane_ids: Vec::new(),
+            sidebar_lens: SidebarLens::default(),
+            task_view: TaskView::default(),
+            sidebar_project: None,
+            practice: BTreeMap::new(),
+            practice_invite_closed: false,
+            moving_cards: Vec::new(),
+            overview_graph: OverviewGraphChoices::default(),
+            selected_path: None,
+            selected_pane_id: None,
+            focus_from_engine: false,
+            shortcut_bindings: BTreeMap::new(),
+            shortcut_bindings_imported: false,
+            browser_shortcut_bindings: BTreeMap::new(),
+            focused_device_id: None,
+            focused_checkout_id: None,
+            workspace_registrations: Vec::new(),
+            device_registrations: Vec::new(),
+            machine_label: None,
+            accent_hex: default_accent_hex(),
+            theme: ThemePreference::Dark,
+            agent_logo_mode: AgentLogoMode::Hidden,
+            pane_turn_row_mode: PaneTurnRowMode::OneLine,
+            color_theme: ColorTheme::Hide,
+            interface_language: None,
+            usage: Default::default(),
+            agent_onboarding: None,
+            agent_onboarding_agents: Vec::new(),
+            first_run: None,
+            first_run_choices: FirstRunChoices::default(),
+            desktop_notifications: false,
+            product_analytics_enabled: true,
+            product_active_days: Default::default(),
+            desktop_notifications_done: false,
+            screen_intros_seen: BTreeSet::new(),
+            sidebar_width: default_sidebar_width(),
+            font_size: default_font_size(),
+            terminal_font_size: default_terminal_font_size(),
+            terminal_font_family: String::new(),
+            pane_text_scales: BTreeMap::new(),
+            editor_text_scale: DEFAULT_PANE_TEXT_SCALE,
+            conversation_pane_ids: BTreeSet::new(),
+            pane_read_records: BTreeMap::new(),
+            pane_completions: BTreeMap::new(),
+            pane_launches: BTreeMap::new(),
+            device_switch_opens: BTreeSet::new(),
+            request_verbs: BTreeMap::new(),
+            agent_sleep_after_hours: default_sleep_after_hours(),
+            project_issue_sources: BTreeMap::new(),
+            issue_settings: IssueSettingsSnapshot::default(),
+            conductor_settings: crate::missions::ConductorSettings::default(),
+            agent_permissions: BTreeMap::new(),
+            device_agent_permissions: BTreeMap::new(),
+            agent_start: AgentStartChoice::default(),
+            agent_sleep: crate::agent_sleep::AgentSleepStore::default(),
+            session_archive: crate::session_archive::SessionArchive::default(),
+            recent_checkouts: Vec::new(),
+            recent_pane_ids: Vec::new(),
+            operator_tab_names: BTreeMap::new(),
+            home_retire: Vec::new(),
+        }
+    }
+}
+
+#[derive(Clone, Debug, Default, Deserialize, Eq, PartialEq, Serialize)]
+pub struct WorkspaceRegistration {
+    /// None preserves the root default for registrations written before this choice existed.
+    #[serde(default)]
+    pub primary_checkout_id: Option<String>,
+    pub id: String,
+    pub label: String,
+    pub path: String,
+    /// The node id for this machine. Stores written before node ids are
+    /// converted once at launch (`node_migration`), so none is missing.
+    pub device_id: String,
+    /// Absent in a store written before projects could be pinned, which
+    /// loads as unpinned without a warning (D-07). Removing the registration
+    /// takes the pin with it; nothing else about the pin is stored.
+    #[serde(default)]
+    pub pinned: bool,
+}
+
+/// A device's old Home registration (`~/hide`) whose retirement the helper has
+/// not yet answered (PRD retire-hide-home D-03, D-04). The registration is an
+/// ordinary pinned project meanwhile; the answer decides whether it stays.
+/// Persisted and never on the wire.
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+pub struct HomeRetirement {
+    pub device_id: String,
+    /// The registration that was the device's Home.
+    pub registration_id: String,
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(
+    try_from = "StoredDeviceRegistration",
+    into = "StoredDeviceRegistration"
+)]
+pub struct DeviceRegistration {
+    pub id: String,
+    pub label: String,
+    pub origin: LinkOrigin,
+    /// The operator's one consent for Hide's helper on this device (PRD S5.5
+    /// D-20, D-23). Absent until given; a device registered before consent
+    /// existed asks before its first file or Git use.
+    pub host_consent: Option<HostConsent>,
+}
+
+/// How a registered machine's link opens, and so what the core may do to
+/// it (PRD core-host-node-remote-core D-04, D-10).
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub enum LinkOrigin {
+    /// The core dials the machine over SSH under this alias. The alias is the
+    /// machine's label for the operator; its id is the machine's own once
+    /// `naming` is `Named` (with-hide/hide-private#671).
+    Dialed {
+        ssh_alias: String,
+        naming: DeviceNaming,
+    },
+    /// The machine's own node dials this core over the operator's SSH
+    /// login; its id is its node id.
+    Inbound,
+    /// A WSL distribution of the PC the core runs on, whose node the core
+    /// starts through `wsl.exe` (PRD wsl-device D-01, D-07).
+    Wsl { distro: String },
+    /// Another machine that runs Hide and gave this one a grant (PRD
+    /// device-connect-iroh D-61): this core's node runs there as a process
+    /// of this core's build, under that machine's Hide, on the connection
+    /// the two keep. `key` is that machine's connection key, 64 lower hex
+    /// characters; its id is that machine's own node id. `switched` is a
+    /// device the core dialed as a helper before the two machines were
+    /// paired (D-49): it keeps the id and the name it had.
+    Peer { key: String, switched: bool },
+}
+
+/// Whether a device the core dials over SSH is named by its machine's own id
+/// (`hide_platform::host::machine_id`, the id that machine's core names
+/// itself by), so one machine has one id whichever machine runs the core
+/// (with-hide/hide-private#671). Stored on the registration itself and never
+/// read from its consent, which the operator revokes and grants again.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum DeviceNaming {
+    /// Registered before machine ids named devices, under an id its alias
+    /// made, and so possibly with records under that id: the start's one-time
+    /// conversion names it (`node_migration::devices`), and until then the
+    /// core opens nothing on it.
+    Legacy,
+    /// Registered by this build and never connected, under an id its alias
+    /// made: nothing names it yet, so its first connection renames it to the
+    /// id its node reports (`runtime::device_names`).
+    Pending,
+    /// Its id is its machine's own, which every connection's node confirms.
+    Named,
+}
+
+impl DeviceNaming {
+    pub(crate) fn stored(self) -> Option<&'static str> {
+        match self {
+            Self::Legacy => None,
+            Self::Pending => Some("pending"),
+            Self::Named => Some("named"),
+        }
+    }
+
+    fn from_stored(stored: Option<&str>) -> Result<Self, String> {
+        match stored {
+            None => Ok(Self::Legacy),
+            Some("pending") => Ok(Self::Pending),
+            Some("named") => Ok(Self::Named),
+            Some(other) => Err(format!("{other:?} is not a device naming")),
+        }
+    }
+}
+
+impl LinkOrigin {
+    pub fn ssh_alias(&self) -> Option<&str> {
+        match self {
+            Self::Dialed { ssh_alias, .. } => Some(ssh_alias),
+            Self::Inbound | Self::Wsl { .. } | Self::Peer { .. } => None,
+        }
+    }
+
+    /// How a device dialed over SSH is named; `None` for a node that dials in
+    /// (named by its node id) and a WSL distribution (named by the PC and its
+    /// distribution, `docs/INSTALL.md`, What each system supports).
+    pub fn naming(&self) -> Option<DeviceNaming> {
+        match self {
+            Self::Dialed { naming, .. } => Some(*naming),
+            Self::Inbound | Self::Wsl { .. } | Self::Peer { .. } => None,
+        }
+    }
+
+    pub fn wsl_distro(&self) -> Option<&str> {
+        match self {
+            Self::Wsl { distro } => Some(distro),
+            Self::Dialed { .. } | Self::Inbound | Self::Peer { .. } => None,
+        }
+    }
+
+    /// The connection key of a machine paired with this one.
+    pub fn peer_key(&self) -> Option<&str> {
+        match self {
+            Self::Peer { key, .. } => Some(key),
+            Self::Dialed { .. } | Self::Inbound | Self::Wsl { .. } => None,
+        }
+    }
+
+    /// Whether the device was a helper device switched to its machine's
+    /// connection, which keeps the id and the name it had as one.
+    pub fn switched(&self) -> bool {
+        matches!(self, Self::Peer { switched: true, .. })
+    }
+
+    /// Whether the core dials a helper of its own on the machine: the kind
+    /// a device is switched from (D-49).
+    pub fn dials_helper(&self) -> bool {
+        matches!(self, Self::Dialed { .. } | Self::Wsl { .. })
+    }
+
+    /// Whether the device can be switched to its machine's own connection
+    /// now: one the core dials over SSH that has connected, so its id is
+    /// its machine's and the paired machine's device has it too (B35). A
+    /// device that never connected is switched once it has.
+    pub fn switches(&self) -> bool {
+        matches!(
+            self,
+            Self::Dialed {
+                naming: DeviceNaming::Named,
+                ..
+            }
+        )
+    }
+
+    /// Whether the core brings a lost link back itself; a node that dials
+    /// in comes back only by dialing again.
+    pub fn core_redials(&self) -> bool {
+        matches!(
+            self,
+            Self::Dialed { .. } | Self::Wsl { .. } | Self::Peer { .. }
+        )
+    }
+
+    /// Whether removing the registration takes Hide's kit off the machine:
+    /// a device the core dials, where its helper put it. A node that dials
+    /// in runs Hide itself and registers again on its next link, so the kit
+    /// the core keeps there through that link stays, and a paired machine's
+    /// own Hide removes this core's build with the pairing.
+    pub fn removes_kit(&self) -> bool {
+        matches!(self, Self::Dialed { .. } | Self::Wsl { .. })
+    }
+
+    /// Whether the core's helper there waits for the operator's consent; a
+    /// node that dials in was allowed by the operator's own SSH login, and
+    /// a paired machine by both operators at pairing.
+    pub fn takes_consent(&self) -> bool {
+        matches!(self, Self::Dialed { .. } | Self::Wsl { .. })
+    }
+
+    /// Whether the core reads the machine's facts (ports, disk, GitHub)
+    /// through its node as it reads its own machine's (D-29): a node that
+    /// dials in, and a WSL distribution of this PC, whose pull requests
+    /// this PC's GitHub login reads (PRD wsl-device D-18, B14). A device
+    /// the core dials over SSH has none of them.
+    pub fn reports_own_facts(&self) -> bool {
+        matches!(self, Self::Inbound | Self::Wsl { .. })
+    }
+}
+
+/// A registration as the store and the shell spell it: the alias of a
+/// device the core dials, the flag of a node that dials in, the WSL
+/// distribution it is, or the connection key of a paired machine, exactly
+/// one. A build that knows only the first two reads a WSL or a paired
+/// machine's record as naming neither and drops it alone (`persistence`).
+#[derive(Deserialize, Serialize)]
+struct StoredDeviceRegistration {
+    id: String,
+    label: String,
+    #[serde(default)]
+    ssh_alias: Option<String>,
+    #[serde(default)]
+    host_consent: Option<HostConsent>,
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    inbound: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    wsl_distro: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    peer_key: Option<String>,
+    /// A paired machine's device that was a helper device before
+    /// ([`LinkOrigin::switched`]).
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    peer_switched: bool,
+    /// A dialed device's `DeviceNaming`; absent is `Legacy`, which every
+    /// registration an earlier build wrote reads as. An earlier build reads
+    /// past it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    naming: Option<String>,
+}
+
+/// Whether `key` is a connection key as a registration stores it.
+pub(crate) fn peer_key_is_spelled(key: &str) -> bool {
+    key.len() == 64
+        && key
+            .bytes()
+            .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
+}
+
+impl TryFrom<StoredDeviceRegistration> for DeviceRegistration {
+    type Error = String;
+
+    fn try_from(stored: StoredDeviceRegistration) -> Result<Self, String> {
+        let naming = DeviceNaming::from_stored(stored.naming.as_deref())
+            .map_err(|error| format!("device {}: {error}", stored.id))?;
+        if naming != DeviceNaming::Legacy && stored.ssh_alias.is_none() {
+            return Err(format!(
+                "device {} is named as a dialed device but names no SSH alias",
+                stored.id
+            ));
+        }
+        let origin = match (
+            stored.ssh_alias,
+            stored.inbound,
+            stored.wsl_distro,
+            stored.peer_key,
+        ) {
+            (Some(ssh_alias), false, None, None) => LinkOrigin::Dialed { ssh_alias, naming },
+            (None, true, None, None) => LinkOrigin::Inbound,
+            (None, false, Some(distro), None) => LinkOrigin::Wsl { distro },
+            (None, false, None, Some(key)) => {
+                if !peer_key_is_spelled(&key) {
+                    return Err(format!(
+                        "device {} names a paired machine by a key that is not 64 lower hex characters",
+                        stored.id
+                    ));
+                }
+                LinkOrigin::Peer {
+                    key,
+                    switched: stored.peer_switched,
+                }
+            }
+            (None, false, None, None) => {
+                return Err(format!(
+                    "device {} names neither an SSH alias, a node that dials in, a WSL distribution nor a paired machine",
+                    stored.id
+                ));
+            }
+            _ => {
+                return Err(format!(
+                    "device {} names more than one way its link opens",
+                    stored.id
+                ));
+            }
+        };
+        Ok(Self {
+            id: stored.id,
+            label: stored.label,
+            origin,
+            host_consent: stored.host_consent,
+        })
+    }
+}
+
+impl From<DeviceRegistration> for StoredDeviceRegistration {
+    fn from(registration: DeviceRegistration) -> Self {
+        let inbound = matches!(registration.origin, LinkOrigin::Inbound);
+        Self {
+            id: registration.id,
+            label: registration.label,
+            ssh_alias: registration.origin.ssh_alias().map(str::to_owned),
+            host_consent: registration.host_consent,
+            inbound,
+            wsl_distro: registration.origin.wsl_distro().map(str::to_owned),
+            peer_key: registration.origin.peer_key().map(str::to_owned),
+            peer_switched: registration.origin.switched(),
+            naming: registration
+                .origin
+                .naming()
+                .and_then(DeviceNaming::stored)
+                .map(str::to_owned),
+        }
+    }
+}
+
+pub use hide_node_link::device::HostConsent;
+
+pub(crate) fn default_accent_hex() -> String {
+    "#B9FF66".to_owned()
+}
+
+/// The narrowest and widest sidebar the drag lands on (`--size-sidebar-min`
+/// and `--size-sidebar-max` in design/tokens.json); a width outside is refused.
+pub const SIDEBAR_WIDTH_MIN: u32 = 220;
+pub const SIDEBAR_WIDTH_MAX: u32 = 440;
+
+/// The sidebar's width until the operator drags it (`--size-sidebar-ideal`).
+pub(crate) fn default_sidebar_width() -> u32 {
+    292
+}
+
+pub(crate) fn sidebar_width_fits(width: u32) -> bool {
+    (SIDEBAR_WIDTH_MIN..=SIDEBAR_WIDTH_MAX).contains(&width)
+}
+
+pub(crate) fn default_font_size() -> f32 {
+    13.0
+}
+
+/// The bounds of Appearance's Terminal text slider, in CSS pixels; the
+/// default is the `--text-terminal-base` token every terminal drew before
+/// the setting existed.
+pub const TERMINAL_FONT_SIZE_MIN: f32 = 10.0;
+pub const TERMINAL_FONT_SIZE_MAX: f32 = 24.0;
+
+pub(crate) fn default_terminal_font_size() -> f32 {
+    14.0
+}
+
+pub(crate) fn terminal_font_size_fits(size: f32) -> bool {
+    (TERMINAL_FONT_SIZE_MIN..=TERMINAL_FONT_SIZE_MAX).contains(&size)
+}
+
+/// The longest Terminal font name kept, in characters; a font's family name
+/// is far shorter, so a longer one is a paste, not a name.
+pub const TERMINAL_FONT_FAMILY_MAX_CHARS: usize = 128;
+
+/// Whether `family` can be kept as the Terminal font: trimmed, at most
+/// `TERMINAL_FONT_FAMILY_MAX_CHARS`, with no control character. Empty is the
+/// default font.
+pub(crate) fn terminal_font_family_fits(family: &str) -> bool {
+    family.trim() == family
+        && family.chars().count() <= TERMINAL_FONT_FAMILY_MAX_CHARS
+        && !family.chars().any(char::is_control)
+}
+
+pub(crate) fn default_panel_visible() -> bool {
+    true
+}
+
+#[derive(Clone, Debug, PartialEq, Serialize)]
+pub struct EditorConflictSnapshot {
+    /// The revision the draft was based on.
+    pub opened_revision: String,
+    /// What the file holds now; absent when it was removed or could not be
+    /// read.
+    pub disk_revision: Option<String>,
+}
+
+/// `남은 것`'s read with the checkout it was read for: a nested worktree's
+/// folder lies inside its primary checkout's, so the view matches the
+/// checkout, never a folder prefix.
+#[derive(Clone, Debug, PartialEq, Serialize)]
+pub struct RemainsSnapshot {
+    pub workspace_id: String,
+    pub checkout_id: String,
+    #[serde(flatten)]
+    pub changes: ChangesSnapshot,
+}
+
+/// One checkout's Git working-tree state, plus the diff of the file the user
+/// selected in the changes view. Produced by [`crate::changes`] outside the
+/// runtime mutex and ingested whole.
+#[derive(Clone, Debug, Default, PartialEq, Serialize)]
+pub struct ChangesSnapshot {
+    /// The checkout these entries describe. A view that renders entries under
+    /// a different root than it asked about would be lying about whose
+    /// changes it is showing, so the root travels with them.
+    pub root_path: Option<String>,
+    /// The working tree's own changes: what `git status` reports.
+    pub entries: Vec<ChangedFileSnapshot>,
+    /// What commits on this branch changed since [`Self::base_branch`].
+    /// Separate from `entries` because they answer different questions - what
+    /// is not saved yet, and what this branch is - and the view shows them as
+    /// two groups for that reason.
+    pub committed: Vec<ChangedFileSnapshot>,
+    /// What the committed group is measured against. Absent for a plain
+    /// folder and for a repository whose base could not be resolved, in which
+    /// case the committed group is not shown at all.
+    pub base_branch: Option<String>,
+    pub selected_path: Option<String>,
+    /// Which group the selection is in. A path can appear in both groups and
+    /// its two diffs are different, so the group is part of the selection.
+    pub selected_committed: bool,
+    pub diff: Option<ChangedFileDiffSnapshot>,
+    /// The diff of every visible View display that shows one (PRD S7 A5):
+    /// one per distinct file and group among the front Workspace's
+    /// area-active displays. Empty, and absent from the wire, in a shell
+    /// without View areas.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub diffs: Vec<ViewDiffSnapshot>,
+    /// Why there is nothing to list. Present whenever the reader could not
+    /// produce entries, so an empty list is never mistaken for "no changes".
+    pub unavailable_reason: Option<String>,
+    /// The reason above is only that Git finds no repository for this
+    /// folder: nothing for the operator to repair, so the Explorer draws no
+    /// mark for it and the reason goes to the diagnostic log (issue 570).
+    #[serde(skip_serializing_if = "std::ops::Not::not")]
+    pub not_a_repository: bool,
+    /// Why the latest read of this checkout failed while the entries above,
+    /// from the last read that succeeded, are still shown: they may be out of
+    /// date, and the next read replaces them (S5.5 B22).
+    pub stale_reason: Option<String>,
+}
+
+/// The four working-tree states this round presents. Git's porcelain codes
+/// carry more distinctions than the view uses; [`ChangedFileStatus::from_porcelain`]
+/// is the single place they collapse.
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ChangedFileStatus {
+    Modified,
+    Added,
+    Deleted,
+    Untracked,
+    Renamed,
+    Conflict,
+}
+
+impl ChangedFileStatus {
+    /// Maps one porcelain v1 `XY` pair onto the presented status. Index and
+    /// worktree columns are read together: a file staged as added and then
+    /// edited is still an addition to the reader, and a delete on either side
+    /// is a delete.
+    pub fn from_porcelain(code: &str) -> Self {
+        let mut characters = code.chars();
+        let index = characters.next().unwrap_or(' ');
+        let worktree = characters.next().unwrap_or(' ');
+        if matches!(code, "DD" | "AU" | "UD" | "UA" | "DU" | "AA" | "UU") {
+            return Self::Conflict;
+        }
+        if index == '?' && worktree == '?' {
+            return Self::Untracked;
+        }
+        if index == 'R' || worktree == 'R' {
+            return Self::Renamed;
+        }
+        if index == 'D' || worktree == 'D' {
+            return Self::Deleted;
+        }
+        if index == 'A' || worktree == 'A' {
+            return Self::Added;
+        }
+        Self::Modified
+    }
+
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Modified => "modified",
+            Self::Added => "added",
+            Self::Deleted => "deleted",
+            Self::Untracked => "untracked",
+            Self::Renamed => "renamed",
+            Self::Conflict => "conflict",
+        }
+    }
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
+pub struct ChangedFileSnapshot {
+    /// Absolute, so activating a row needs no second join against the root.
+    pub path: String,
+    /// Relative to the checkout root, which is what the row shows.
+    pub relative_path: String,
+    /// The source side of a rename, relative to the checkout root. Absent for
+    /// every other status. The destination remains `relative_path`, so
+    /// opening a row always addresses the file that exists now.
+    pub previous_relative_path: Option<String>,
+    pub status: ChangedFileStatus,
+    /// Lines added and removed in this file. Absent for a file git cannot
+    /// count - an untracked file has no index side and a binary file has no
+    /// lines - so the row shows no numbers rather than a misleading zero.
+    pub added_lines: Option<u32>,
+    pub removed_lines: Option<u32>,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
+pub struct ChangedFileDiffSnapshot {
+    pub path: String,
+    pub text: String,
+    /// Set when the diff was cut short, naming the limit that cut it, or
+    /// could not be taken; the page words it. A silently truncated diff
+    /// would read as a complete one.
+    pub notice: Option<hide_node_link::git::DiffNotice>,
+}
+
+/// A diff a View display shows: the file, the group it is taken in, and the
+/// text, bounded like every diff.
+#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
+pub struct ViewDiffSnapshot {
+    pub path: String,
+    pub committed: bool,
+    pub text: String,
+    /// Set when the diff was cut short, or when the file is no longer in
+    /// its group or outside the folder History reads, naming why.
+    pub notice: Option<hide_node_link::git::DiffNotice>,
+}
+
+/// What a branch's pull request is, reduced to the five values the row badge
+/// and the card show. The mapping from `gh`'s `state`/`reviewDecision`/
+/// `isDraft` triple lives in [`crate::github`]; nothing downstream re-derives
+/// it, so the badge cannot drift between the row and the card.
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Deserialize, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum PullRequestBadge {
+    Merged,
+    Closed,
+    /// Open, not a draft, and a review decision has been recorded. The three
+    /// decisions are one badge with three colours rather than three badges.
+    Review,
+    /// Open with no review decision, or open as a draft.
+    Open,
+}
+
+impl PullRequestBadge {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Merged => "merged",
+            Self::Closed => "closed",
+            Self::Review => "review",
+            Self::Open => "open",
+        }
+    }
+
+    /// The two states a worktree may be removed from. Everything else means
+    /// work is still live on the branch, so the card offers no button at all.
+    pub fn is_settled(self) -> bool {
+        matches!(self, Self::Merged | Self::Closed)
+    }
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Deserialize, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ReviewDecision {
+    ReviewRequired,
+    ChangesRequested,
+    Approved,
+}
+
+/// CI rollup. Unknown and absent checks must never look like a pass.
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq, Deserialize, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum PullRequestChecks {
+    #[default]
+    Unknown,
+    None,
+    Pending,
+    Failed,
+    Passing,
+}
+
+/// The one state every PR mark draws (docs/status-model.md, Pull request
+/// visual states), worst first: a checkout's pull request and an agent row's
+/// own pull requests take it from [`PrState::of`] and nothing else decides it.
+#[derive(Clone, Copy, Debug, Deserialize, Eq, Ord, PartialEq, PartialOrd, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum PrState {
+    /// Checks failed, or a reviewer asked for changes.
+    Failed,
+    /// Checks running, absent or unknown, or a review still asked for.
+    Pending,
+    /// Checks passed, and the review is approved or not asked for.
+    Mergeable,
+    /// Open as a draft, whatever its checks say.
+    Draft,
+    Merged,
+    Closed,
+}
+
+impl PrState {
+    /// merged > closed > draft > failed > mergeable > pending. Absent or
+    /// unknown checks never read as a pass.
+    pub fn of(
+        badge: PullRequestBadge,
+        is_draft: bool,
+        checks: PullRequestChecks,
+        review: Option<ReviewDecision>,
+    ) -> Self {
+        match badge {
+            PullRequestBadge::Merged => Self::Merged,
+            PullRequestBadge::Closed => Self::Closed,
+            PullRequestBadge::Open | PullRequestBadge::Review => {
+                if is_draft {
+                    Self::Draft
+                } else if checks == PullRequestChecks::Failed
+                    || review == Some(ReviewDecision::ChangesRequested)
+                {
+                    Self::Failed
+                } else if checks == PullRequestChecks::Passing
+                    && matches!(review, None | Some(ReviewDecision::Approved))
+                {
+                    Self::Mergeable
+                } else {
+                    Self::Pending
+                }
+            }
+        }
+    }
+}
+
+/// One pull request GitHub listed. Which checkout it belongs to is decided
+/// by `github::pull_request_for_checkout`, never by comparing branch names
+/// where a call site stands. Its wire form adds the derived `state`
+/// (the `Serialize` impl below), so no shell derives it again.
+#[derive(Clone, Debug, Eq, PartialEq, Deserialize)]
+pub struct PullRequestSnapshot {
+    pub closing_issues: Vec<crate::issues::IssueReference>,
+    pub title: String,
+    pub checks: PullRequestChecks,
+    pub number: u32,
+    pub head_branch: String,
+    pub base_branch: String,
+    pub url: String,
+    pub badge: PullRequestBadge,
+    /// Present only for a `review` badge, and only to pick its colour.
+    pub review: Option<ReviewDecision>,
+    pub is_draft: bool,
+    pub merged_at_unix_ms: Option<u64>,
+    pub updated_at_unix_ms: Option<u64>,
+    /// When GitHub made the pull request, which ties it to the session whose
+    /// tool printed its address then (PRD overview-request-view D-31).
+    pub created_at_unix_ms: Option<u64>,
+    /// When it was closed or merged, for a row's chip after the request.
+    pub closed_at_unix_ms: Option<u64>,
+    /// The commit its head branch pointed at when GitHub last saw it. A
+    /// settled pull request belongs to a checkout only at exactly this
+    /// commit, because a branch name can be used again for new work. Core
+    /// only: no shell draws or compares it.
+    pub head_oid: Option<String>,
+    /// The head branch lives in another repository (a fork), so its name says
+    /// nothing about this repository's branch of the same name.
+    #[serde(default)]
+    pub cross_repository: bool,
+    /// What the PRs tool's list groups by (PRD work-tab-pr-lens D-08):
+    /// the GitHub values the 5-minute read adds, none of them parsed from a
+    /// body or a repository's own script (D-05).
+    #[serde(default)]
+    pub work: PullRequestWork,
+}
+
+/// How a pull request stands against its base, GitHub's `mergeStateStatus`
+/// (PRD work-tab-pr-lens D-20). A value this build does not know reads as
+/// `Unknown`, which keeps the pull request where it was.
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq, Deserialize, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum MergeState {
+    #[default]
+    Unknown,
+    Clean,
+    HasHooks,
+    /// Merge is allowed but a check that is not required failed.
+    Unstable,
+    Dirty,
+    Behind,
+    Blocked,
+    Draft,
+}
+
+impl MergeState {
+    pub fn parse(value: &str) -> Self {
+        match value.to_ascii_uppercase().as_str() {
+            "CLEAN" => Self::Clean,
+            "HAS_HOOKS" => Self::HasHooks,
+            "UNSTABLE" => Self::Unstable,
+            "DIRTY" => Self::Dirty,
+            "BEHIND" => Self::Behind,
+            "BLOCKED" => Self::Blocked,
+            "DRAFT" => Self::Draft,
+            _ => Self::Unknown,
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Deserialize, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ReviewRequestKind {
+    User,
+    Team,
+}
+
+/// One person or team a review was asked of.
+#[derive(Clone, Debug, Eq, PartialEq, Deserialize, Serialize)]
+pub struct ReviewRequest {
+    pub kind: ReviewRequestKind,
+    pub name: String,
+}
+
+/// Whether a review was asked of the signed-in account.
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq, Deserialize, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ReviewAsk {
+    /// The question that tells was not answered, so the pull request may or
+    /// may not have been asked of the account or its team. A pull request
+    /// starts here and leaves it only when an answer places it.
+    #[default]
+    Unknown,
+    /// Asked of neither the account nor a team of it.
+    None,
+    /// Asked of the account itself.
+    Direct,
+    /// Asked of a team the account is in and not of the account.
+    Team,
+}
+
+/// Where one reviewer of an open pull request stands (PRD pr-review-status
+/// B2, B6): their latest submitted review, or `Requested` while a review is
+/// still asked of them, which wins over an earlier review (D-13).
+#[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd, Deserialize, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum PrReviewerState {
+    ChangesRequested,
+    Approved,
+    Requested,
+    /// Reviewed with comments only: not counted as an approval.
+    Commented,
+    /// The review was dismissed: drawn muted, not counted.
+    Dismissed,
+}
+
+/// One person or team a pull request's review involves.
+#[derive(Clone, Debug, Eq, PartialEq, Deserialize, Serialize)]
+pub struct PrReviewer {
+    /// A login, or a team's slug when `team`.
+    pub login: String,
+    #[serde(default)]
+    pub team: bool,
+    pub state: PrReviewerState,
+    /// When the review was submitted, or for `Requested` when it was asked;
+    /// absent when GitHub's answer did not carry it.
+    pub at_unix_ms: Option<u64>,
+}
+
+/// The most reviewers one pull request carries on the wire; the rest are
+/// counted in [`PullRequestWork::reviewers_more`] (PRD pr-review-status B17).
+pub const PR_REVIEWER_LIMIT: usize = 20;
+
+/// A pull request's place in its base branch's merge queue, as far as GitHub
+/// has said.
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq, Deserialize, Serialize)]
+#[serde(rename_all = "snake_case", tag = "state", content = "position")]
+pub enum MergeQueuePlace {
+    /// The queue question was not answered. A pull request starts here.
+    #[default]
+    Unknown,
+    NotQueued,
+    /// From 1.
+    At(u32),
+}
+
+/// The questions a project's pull request read asks beside the list itself
+/// (issue #1189). The list alone decides whether the read succeeds; one of
+/// these failing leaves the judgments derived from it unknown.
+#[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd, Deserialize, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ExtraQuery {
+    /// The signed-in account (`gh api user`): which pull requests are mine.
+    Account,
+    /// The review requests made to the account (`gh pr list --search
+    /// review-requested:@me`): which are asked of me or my team.
+    ReviewRequests,
+    /// The merge queue place and review request time (`gh api graphql`).
+    MergeQueue,
+    /// Each reviewer's latest review and the base branch's approval count,
+    /// asked in the same query as the merge queue (PRD pr-review-status
+    /// D-12): when it fails the reviewers are unknown, never "none".
+    Reviews,
+}
+
+/// The GitHub values the PRs tool's list and the card read beyond the
+/// badge, checks and review: see [`PullRequestSnapshot::work`].
+#[derive(Clone, Debug, Default, Eq, PartialEq, Deserialize, Serialize)]
+pub struct PullRequestWork {
+    pub author: Option<String>,
+    pub author_is_bot: bool,
+    /// The signed-in account wrote it; `None` while the account is unknown.
+    pub mine: Option<bool>,
+    pub merge_state: MergeState,
+    pub review_requests: Vec<ReviewRequest>,
+    pub asked_of_me: ReviewAsk,
+    /// The checks of an open pull request that failed, by name, and how many
+    /// are still running: the second line's `✗ <name>` and `CI · N`.
+    pub failed_checks: Vec<PrFailedCheck>,
+    pub pending_checks: u32,
+    /// The open head's complete GitHub rollup; absent when it was not read.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub check_counts: Option<PrCheckCounts>,
+    /// How many of those checks have reported and still run (`QUEUED`,
+    /// `IN_PROGRESS`, `WAITING`, `PENDING`, `REQUESTED`), leaving out a
+    /// required check that never reported (`EXPECTED`): only a running one
+    /// holds an agent's row in progress (status-marks D-07). Core only.
+    #[serde(skip)]
+    pub running_checks: u32,
+    /// Its `Failed` checks are only workflow runs that were all cancelled
+    /// with none replacing them (`github::runs`), which a mission's CI
+    /// letter calls cancelled rather than failed. Core only.
+    #[serde(skip)]
+    pub checks_cancelled: bool,
+    /// A workflow run or a check on its head has not finished, which
+    /// `Failed` checks do not show (a failure ranks first): a mission's CI
+    /// letter waits until nothing runs. Core only.
+    #[serde(skip)]
+    pub checks_running: bool,
+    /// Its place in the base branch's merge queue.
+    pub queue: MergeQueuePlace,
+    /// When the latest review request on it was made, which `리뷰 · N시간째`
+    /// counts from.
+    pub review_requested_at_unix_ms: Option<u64>,
+    /// Each reviewer and where they stand, approvals and change requests
+    /// first; `None` while the facts query has not answered for an open pull
+    /// request, which the screen draws as nothing rather than as nobody
+    /// (PRD pr-review-status B15). Settled pull requests have none.
+    #[serde(default)]
+    pub reviewers: Option<Vec<PrReviewer>>,
+    /// Reviewers past [`PR_REVIEWER_LIMIT`] or past GitHub's page, counted
+    /// only (`+N`).
+    #[serde(default)]
+    pub reviewers_more: u32,
+    /// The approvals the base branch requires, from its rulesets or its
+    /// classic protection, whichever asks more (D-07). `None` when review is
+    /// not required or the count could not be read: no `n/m` is drawn then
+    /// (D-05).
+    #[serde(default)]
+    pub required_approvals: Option<u32>,
+    /// The sessions the link record says made or worked on it, and the
+    /// checkouts (paths) they ran in. Core only: the runtime attaches them
+    /// from the record (`runtime/links.rs`), the grouping reads them.
+    #[serde(skip)]
+    pub sessions: Vec<String>,
+    #[serde(skip)]
+    pub checkouts: Vec<String>,
+}
+
+/// Disjoint counts from one GitHub status-check rollup, never inferred from its summary.
+#[derive(Clone, Debug, Default, Eq, PartialEq, Deserialize, Serialize)]
+pub struct PrCheckCounts {
+    pub total: u32,
+    pub passed: u32,
+    pub failed: u32,
+    pub running: u32,
+    pub waiting: u32,
+    pub skipped: u32,
+    pub unknown: u32,
+}
+
+impl PullRequestSnapshot {
+    pub fn state(&self) -> PrState {
+        PrState::of(self.badge, self.is_draft, self.checks, self.review)
+    }
+
+    /// Something on its head's checks has not finished: they are pending,
+    /// or a workflow run or check still runs beside a failure, which ranks
+    /// first (`work.checks_running`). The advisory poll watches such a head
+    /// and a mission's CI letter waits for it, by this one rule.
+    pub(crate) fn checks_unfinished(&self) -> bool {
+        self.checks == PullRequestChecks::Pending || self.work.checks_running
+    }
+
+    /// Where its head's CI stands, by the one rule a mission's ci line and
+    /// its Conductor's CI letter both read: it has ended only when nothing
+    /// on the head still runs (`checks_unfinished`), so a failure beside a
+    /// running workflow is not the end yet.
+    pub(crate) fn ci_end(&self) -> CiEnd {
+        use crate::missions::CiResult;
+        match self.checks {
+            PullRequestChecks::None => CiEnd::NoChecks,
+            PullRequestChecks::Unknown => CiEnd::Unread,
+            _ if self.checks_unfinished() => CiEnd::Running,
+            PullRequestChecks::Passing => CiEnd::Ended(CiResult::Passed),
+            PullRequestChecks::Failed if self.work.checks_cancelled => {
+                CiEnd::Ended(CiResult::Cancelled)
+            }
+            PullRequestChecks::Failed => CiEnd::Ended(CiResult::Failed),
+            // Unreachable: pending is unfinished.
+            PullRequestChecks::Pending => CiEnd::Running,
+        }
+    }
+}
+
+/// Where a pull request head's CI stands ([`PullRequestSnapshot::ci_end`]).
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum CiEnd {
+    /// GitHub reports no checks on the head.
+    NoChecks,
+    /// Its checks could not be read.
+    Unread,
+    /// Something on the head is queued or still runs.
+    Running,
+    Ended(crate::missions::CiResult),
+}
+
+impl Serialize for PullRequestSnapshot {
+    fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        use serde::ser::SerializeStruct;
+        // The head commit, the repository and the closed time stay off the
+        // wire: only the core compares them. The created time is the card's
+        // `PR 열림` milestone (PRD pr-card-and-session-record-redesign B5).
+        let mut out = serializer.serialize_struct("PullRequestSnapshot", 15)?;
+        out.serialize_field("closing_issues", &self.closing_issues)?;
+        out.serialize_field("title", &self.title)?;
+        out.serialize_field("checks", &self.checks)?;
+        out.serialize_field("number", &self.number)?;
+        out.serialize_field("head_branch", &self.head_branch)?;
+        out.serialize_field("base_branch", &self.base_branch)?;
+        out.serialize_field("url", &self.url)?;
+        out.serialize_field("badge", &self.badge)?;
+        out.serialize_field("review", &self.review)?;
+        out.serialize_field("is_draft", &self.is_draft)?;
+        out.serialize_field("merged_at_unix_ms", &self.merged_at_unix_ms)?;
+        out.serialize_field("created_at_unix_ms", &self.created_at_unix_ms)?;
+        out.serialize_field("updated_at_unix_ms", &self.updated_at_unix_ms)?;
+        out.serialize_field("state", &self.state())?;
+        out.serialize_field("work", &self.work)?;
+        out.end()
+    }
+}
+
+pub use hide_node_link::gh::GithubFailureCategory;
+
+/// How a repository's `gh` lookup is doing, independent of what it found.
+///
+/// "No pull request on this branch" and "the lookup failed" are different
+/// answers and the card must not show one as the other, so availability,
+/// staleness, and the reason travel beside the results rather than being
+/// inferred from an empty list.
+#[derive(Clone, Debug, Default, Eq, PartialEq, Deserialize, Serialize)]
+pub struct GithubStatusSnapshot {
+    pub failure_category: Option<GithubFailureCategory>,
+    /// `gh` is installed and logged in.
+    pub available: bool,
+    /// No lookup has completed yet for this repository.
+    pub loading: bool,
+    /// The last lookup failed, so the values shown are the previous ones.
+    pub stale: bool,
+    pub last_success_at_unix_ms: Option<u64>,
+    /// `gh`'s own words for the failure, for the `pull_requests.failed`
+    /// diagnostic and the core's own judgments. Absent when the lookup is
+    /// healthy. Never sent to the screen, which words `failure_category`
+    /// (docs/LOCALIZATION.md, Translation boundary).
+    #[serde(skip_serializing)]
+    pub unavailable_reason: Option<String>,
+    /// The extra questions of the last read that failed while the pull request
+    /// list was read: the list is current and the judgments derived from these
+    /// are unknown (issue #1189).
+    #[serde(default)]
+    pub unread_queries: Vec<ExtraQuery>,
+}
+
+/// One repository's pull requests as `gh` reported them.
+#[derive(Clone, Debug, Default, Eq, PartialEq, Deserialize, Serialize)]
+pub struct GithubProjectSnapshot {
+    /// Successful component payloads, including a successful empty answer.
+    /// Internal reader provenance, not a snapshot wire field.
+    #[serde(skip)]
+    pub pull_requests_read: bool,
+    #[serde(skip)]
+    pub issues_read: bool,
+    pub issues: crate::issues::ProjectIssuesSnapshot,
+    /// The repository's main worktree, which is what identifies a project.
+    pub root_path: String,
+    pub status: GithubStatusSnapshot,
+    /// The account `gh` is signed in as, which "mine" is judged against;
+    /// absent before the first successful read.
+    #[serde(default)]
+    pub viewer: Option<String>,
+    /// One entry per branch that has a pull request.
+    pub pull_requests: Vec<PullRequestSnapshot>,
+}
+
+/// How a project's read ended, as the re-read clock counts it.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum GithubReadOutcome {
+    /// The pull requests and the issues were read.
+    Read,
+    /// The pull requests were read and the issues were not. The re-read
+    /// clock backs off as from a failure, so issues that fail every time
+    /// (a fork with its issues turned off) are not asked for every minute,
+    /// while the pull requests the answer holds are current.
+    IssuesFailed,
+    /// The pull requests were not read.
+    Failed,
+    /// The repository has no GitHub remote: there is nothing to ask GitHub,
+    /// and nothing changes that until its remotes do.
+    NoRemote,
+}
+
+impl GithubReadOutcome {
+    /// Whether the answer holds the project's pull requests as GitHub has
+    /// them now.
+    pub fn pull_requests_read(self) -> bool {
+        matches!(self, Self::Read | Self::IssuesFailed)
+    }
+}
+
+impl GithubProjectSnapshot {
+    /// Its pull request list answers for now: the last read listed them and
+    /// is not stale.
+    pub(crate) fn pulls_current(&self) -> bool {
+        !self.status.stale && self.pull_requests_read
+    }
+
+    pub fn read_outcome(&self) -> GithubReadOutcome {
+        if self.status.failure_category == Some(GithubFailureCategory::NoGithubRemote) {
+            GithubReadOutcome::NoRemote
+        } else if !self.pull_requests_read {
+            GithubReadOutcome::Failed
+        } else if !self.issues_read {
+            GithubReadOutcome::IssuesFailed
+        } else {
+            GithubReadOutcome::Read
+        }
+    }
+}
+
+/// Every repository's pull-request state, keyed by main worktree path.
+#[derive(Clone, Debug, Default, Eq, PartialEq, Serialize)]
+pub struct GithubSnapshot {
+    pub projects: Vec<GithubProjectSnapshot>,
+}
+
+impl GithubSnapshot {
+    pub fn project(&self, root_path: &str) -> Option<&GithubProjectSnapshot> {
+        self.projects
+            .iter()
+            .find(|project| project.root_path == root_path)
+    }
+}
+
+impl CheckoutSnapshot {
+    /// The commit this checkout is on: the one fact that tells a branch's
+    /// current work from an older one of the same name.
+    ///
+    /// The worktree reader's value wins when it has one, because the reader
+    /// runs again whenever a watched HEAD or ref changes, while `head_oid` is
+    /// only as new as the row's last build (a topology change or the catalog's
+    /// 30-second refresh). Until the reader has answered, and for a checkout
+    /// it never listed, the commit read from Git's files stands in, so a
+    /// settled pull request is connected from the first frame after a restart
+    /// instead of after the reader's first full pass.
+    pub fn head_sha(&self) -> Option<&str> {
+        self.worktree
+            .as_ref()
+            .and_then(|worktree| worktree.head_sha.as_deref())
+            .or(self.head_oid.as_deref())
+    }
+}
+
+/// How far a branch is from the remote it tracks. Absent entirely when the
+/// branch has no upstream, because "nothing to push" and "nowhere to push to"
+/// are different facts and the card shows only the first.
+#[derive(Clone, Debug, Default, Eq, PartialEq, Serialize)]
+pub struct UnpushedSnapshot {
+    pub remote: String,
+    pub count: u32,
+}
+
+/// One worktree of one repository, as `git worktree list` reports it plus the
+/// counts the row badge and the card show.
+#[derive(Clone, Debug, Default, Eq, PartialEq, Serialize)]
+pub struct WorktreeSnapshot {
+    pub lock_reason: Option<String>,
+    pub ignored_repositories: Vec<String>,
+    pub ignored_scan_unavailable: Option<String>,
+    pub head_sha: Option<String>,
+    pub last_commit_subject: Option<String>,
+    pub last_commit_unix_seconds: Option<u64>,
+    pub nested: bool,
+    /// Git's half of `merged`: HEAD is in the repository's default branch.
+    /// Core only, kept so each projection judges `merged` again from both
+    /// halves (`worktrees::merged`).
+    #[serde(skip)]
+    pub in_base: Option<bool>,
+    /// Whether the work is merged (`worktrees::merged`).
+    pub merged: Option<bool>,
+    pub upstream_state: String,
+    /// Commits the upstream has that this branch does not, as of the last
+    /// fetch. Absent when the branch has no upstream, the upstream is gone,
+    /// or the count could not be read; `upstream_state` says which, so the
+    /// Overview draws no cell, `?`, or a number rather than a silent zero.
+    pub behind_upstream: Option<u32>,
+    /// When a linked worktree was added: the creation time of its
+    /// `.git/worktrees/<name>` entry. The main worktree has none, and it
+    /// leads the Overview's list regardless.
+    pub created_at_unix_ms: Option<u64>,
+    pub unavailable_reason: Option<String>,
+    pub last_fetch_at_unix_ms: Option<u64>,
+    pub measured_at_unix_ms: Option<u64>,
+    pub pane_count: usize,
+    /// Who is working in this worktree and on what (PRD B34, B35, D-32,
+    /// D-55). Overview's own value is width, so this is one line rather than
+    /// a new area.
+    pub agent_line: WorktreeAgentLineSnapshot,
+    pub disk: DiskUsageSnapshot,
+    pub pull_request: Option<PullRequestSnapshot>,
+    pub github: GithubStatusSnapshot,
+    pub deletion_gate: WorktreeDeletionGateSnapshot,
+    pub open_error: Option<String>,
+    pub path: String,
+    pub branch: Option<String>,
+    /// Git lists the worktree but its path is not on disk.
+    pub missing: bool,
+    pub is_main: bool,
+    pub dirty: bool,
+    pub changed_file_count: u32,
+    /// What the ahead/behind and line counts are measured against: the pull
+    /// request's base when there is one, the repository default branch
+    /// otherwise, and absent when neither could be resolved.
+    pub base_branch: Option<String>,
+    pub ahead: u32,
+    pub behind: u32,
+    /// Lines added and removed by commits on this branch since the base.
+    /// Working-tree changes are deliberately excluded; the Changes view's
+    /// uncommitted group is where those are counted.
+    pub added_lines: u32,
+    pub removed_lines: u32,
+    pub unpushed: Option<UnpushedSnapshot>,
+}
+
+/// The Overview worktree row's agent line.
+///
+/// An empty `agents` with no reason is a worktree nobody is working in. An
+/// empty one carrying a reason is a worktree Hide cannot see into, which is a
+/// different answer and is drawn as one (PRD B35, D-60, `design/principles.md`
+/// rule 9).
+#[derive(Clone, Debug, Default, Eq, PartialEq, Serialize)]
+pub struct WorktreeAgentLineSnapshot {
+    /// The agents attached to this worktree's panes, in the sidebar's own
+    /// order so the two screens name them the same way.
+    pub agents: Vec<AgentChipSnapshot>,
+    /// The same mark and sentence the pane header shows, when one of those
+    /// agents is uninstrumented. The reason is the first in the resolution
+    /// order among them, so the line agrees with the pane it came from.
+    pub uninstrumented_reason: Option<String>,
+    pub uninstrumented_label: Option<String>,
+    pub uninstrumented_code: Option<String>,
+}
+
+/// One policy shared by all worktree deletion surfaces. Every field is a
+/// fact or a code the page words (docs/LOCALIZATION.md, Translation
+/// boundary); the core sends no sentence here.
+#[derive(Clone, Debug, Default, Eq, PartialEq, Serialize)]
+pub struct WorktreeDeletionGateSnapshot {
+    /// Why deletion cannot start: main, locked or unmeasured ignored folders.
+    pub blocked: Option<WorktreeDeletionBlock>,
+    /// What the operator should know before deleting, in the order shown.
+    pub warnings: Vec<WorktreeDeletionWarning>,
+    /// The panes the deletion closes first, which the button counts.
+    pub pane_count: usize,
+    /// The branch may go with the folder: it is named, is not the base, and
+    /// the worktree is on disk.
+    pub can_delete_branch: bool,
+    /// What deleting the branch loses: commits the base does not have, or an
+    /// answer Git could not give. Present means `git branch -D`.
+    pub branch_loss: Option<WorktreeBranchLoss>,
+    /// What the folder would lose (uncommitted files, a worktree inside it,
+    /// a status Git could not read, ignored repositories). Present means
+    /// deletion waits for the operator to accept it and then runs
+    /// `git worktree remove --force`.
+    pub discard: Option<WorktreeDiscard>,
+}
+
+/// Why a worktree cannot be deleted at all.
+#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
+#[serde(tag = "code", rename_all = "snake_case")]
+pub enum WorktreeDeletionBlock {
+    Main,
+    /// Git's own lock; `reason` is the text the lock was given, empty when
+    /// it was given none.
+    Locked {
+        name: String,
+        reason: String,
+    },
+    /// The scan for repositories inside it did not finish; its own sentence
+    /// stays on the row's `ignored_scan_unavailable`.
+    IgnoredScanUnavailable,
+}
+
+/// One warning badge in the deletion confirmation.
+#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
+#[serde(tag = "code", rename_all = "snake_case")]
+pub enum WorktreeDeletionWarning {
+    /// `files` is 0 when Git reported dirt without a count.
+    Uncommitted {
+        files: u32,
+    },
+    Nested,
+    Base,
+    StatusUnknown,
+    Unmerged {
+        ahead: u32,
+    },
+    NotPushed,
+    IgnoredRepositories {
+        count: usize,
+    },
+}
+
+/// What deleting the branch with the folder loses.
+#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
+#[serde(tag = "code", rename_all = "snake_case")]
+pub enum WorktreeBranchLoss {
+    /// Commits the base branch does not have; `base` is absent when the
+    /// worktree's base is unknown.
+    Commits { count: u32, base: Option<String> },
+    /// Git does not count it as merged though it has no commits ahead.
+    NotMerged,
+    /// Git could not tell whether it is merged.
+    Unknown,
+}
+
+/// What the folder's removal would lose, which the operator accepts.
+#[derive(Clone, Debug, Default, Eq, PartialEq, Serialize)]
+pub struct WorktreeDiscard {
+    /// Present when the folder has uncommitted changes; 0 when Git gave no count.
+    pub changed_files: Option<u32>,
+    pub nested: bool,
+    /// Git could not read the status, so there may be uncommitted changes.
+    pub status_unknown: bool,
+    pub ignored_repositories: Vec<String>,
+}
+
+/// The accepted deletion, measured before any pane closes and executed by
+/// the worker only after the engine confirms every pane is gone.
+#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
+pub struct WorktreeRemovalSnapshot {
+    pub id: u64,
+    /// The device the worktree is on; `None` is this machine. Its path and
+    /// panes are that device's.
+    pub device_id: Option<String>,
+    pub repository_root: String,
+    pub checkout_path: String,
+    pub expected_head_sha: Option<String>,
+    pub expected_branch: Option<String>,
+    pub protected_base_branch: Option<String>,
+    pub branch: Option<String>,
+    pub delete_branch: bool,
+    /// The branch goes with `git branch -D`: the operator was told it holds
+    /// commits the base does not.
+    pub force_delete_branch: bool,
+    /// The operator accepted losing the folder's changes, so the recheck
+    /// lets dirt through and Git removes with `--force`.
+    pub discard_changes: bool,
+    pub expected_ignored_repositories: Vec<String>,
+    pub phase: String,
+    /// How it ended, or why it stopped, as the delete dialog words it; the
+    /// sentences stay in the `worktree_removal` diagnostics.
+    pub notice: Option<WorktreeRemovalNotice>,
+}
+
+/// How a worktree removal ended, or why it stopped
+/// (docs/LOCALIZATION.md, Translation boundary).
+#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
+#[serde(tag = "code", rename_all = "snake_case")]
+pub enum WorktreeRemovalNotice {
+    /// The folder is gone; `branch` says what became of the local branch.
+    Removed {
+        branch: hide_node_link::worktrees::RemovalBranch,
+    },
+    /// The repository's host stopped it.
+    Stopped {
+        stop: hide_node_link::worktrees::RemovalStop,
+        panes_closed: bool,
+    },
+    /// The engine closed the panes, and these programs still run in the folder,
+    /// which the operator can end before deleting again.
+    StillRunning { programs: Vec<RunningProgram> },
+    /// A pane appeared in the worktree while the panes were closing.
+    PaneAppeared,
+    /// The worktree or its deletion gate changed while the panes closed.
+    ChangedWhileClosing,
+    /// The panes could not be closed, or the engine did not confirm it.
+    CloseFailed,
+    /// The repository's host could not be asked (`reason`: a `host.*` or
+    /// `link.*` code, `node_access::link_failure_code`), or stopped it
+    /// without naming why (a helper of an older build: no reason).
+    HostFailed {
+        panes_closed: bool,
+        reason: Option<String>,
+    },
+    /// The removal was sent and its answer never came, so its effect is
+    /// unknown.
+    ResultUnknown,
+    /// The removal's worker could not start; nothing was closed.
+    WorkerUnavailable,
+}
+
+/// A program still running in a worktree its panes were closed for.
+#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
+pub struct RunningProgram {
+    pub name: String,
+    pub pid: u32,
+}
+
+/// One user-initiated task whose blocking work runs outside the runtime mutex.
+///
+/// The shell observes this receipt to keep a sheet locked, focus a created
+/// pane, or show the exact failed step. A single slot also makes a repeated
+/// submission idempotent while an operation is in flight.
+#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
+pub struct TaskOperationSnapshot {
+    pub id: u64,
+    /// The device the task runs on; `None` is this machine. Its paths and
+    /// pane are that device's.
+    pub device_id: Option<String>,
+    pub kind: String,
+    pub phase: String,
+    pub repository_root: Option<String>,
+    pub branch: Option<String>,
+    pub base_branch: Option<String>,
+    pub path: Option<String>,
+    pub pane_id: Option<String>,
+    pub agent_kind: Option<String>,
+    /// Why the task failed, as a code the web words (`task_operation.*`,
+    /// `agent_start.*`, `checkout_purpose.*`, a start reason); the core's
+    /// own sentence goes to the `task_operation.failed` diagnostic.
+    pub failure: Option<String>,
+    /// How starting `agent_kind` in the created pane went, kept apart from
+    /// the creation itself: `starting`, `started`, `failed`, or `unknown`
+    /// when the engine did not answer and the pane has to be looked at. `None`
+    /// when the task started no agent.
+    pub agent_phase: Option<String>,
+    /// Why the agent did not start, when `agent_phase` is `failed` or
+    /// `unknown`: a code the start surfaces word (`agent_start.*`, or a
+    /// session check's own code), never a sentence.
+    pub agent_reason: Option<String>,
+    /// The last line of the pane's screen for an `agent_start.shell_starting`
+    /// failure, quoted as the terminal showed it.
+    pub agent_line: Option<String>,
+    /// The id the start surface sent with the request, so it follows its own
+    /// task and never another window's or phone's.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub request_id: Option<String>,
+    /// The task came from a surface that is not the operator's own screen
+    /// (a phone start): its tab is made without taking the screen, the
+    /// keyboard or the engine's focus. The core's own fact; no shell reads it.
+    #[serde(skip)]
+    pub stays_behind: bool,
+}
+
+/// The one repository clone Add a project started, and how far it got.
+///
+/// One slot, like `TaskOperationSnapshot`: a second clone while one runs is
+/// refused, and the same URL and folder sent again joins the one running.
+/// The URL is not here, because it can carry credentials; `host` is what the
+/// shell shows. `phase` is `cloning`, `cancelling`, then `finished` (the
+/// folder is registered through `create_workspace`), `failed` with the
+/// `failure` code the shell words, or `cancelled`.
+#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
+pub struct RepositoryCloneSnapshot {
+    pub id: u64,
+    /// The machine the clone runs on and its project is registered on.
+    pub device_id: String,
+    pub host: String,
+    /// The new folder's full path, `parent` and the name the URL gives.
+    pub path: String,
+    pub phase: String,
+    /// Git's own stage, `Receiving objects` and the like, once it names one.
+    pub stage: Option<String>,
+    pub percent: Option<u8>,
+    /// `CloneFailure::code` of a failed clone (`authentication`, `not_found`,
+    /// `git`, ...); its sentence is the diagnostic log's.
+    pub failure: Option<String>,
+    /// Git's own last `fatal:` line, credentials removed, when `failure` is
+    /// `git`: the shell quotes it as what Git said.
+    pub git_line: Option<String>,
+}
+
+/// The explorer's most recent filesystem change and how far it got.
+///
+/// One slot, like `TaskOperationSnapshot`: the shell reads the finished
+/// phase to reload the parents of `path` and `destination`, and the failed
+/// phase to draw `message` under the row the change started from. A new
+/// request replaces a settled slot; a request while one is working is
+/// refused, so a double-click cannot run the same rename twice.
+#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
+pub struct ExplorerOperationSnapshot {
+    pub id: u64,
+    pub kind: String,
+    pub phase: String,
+    /// The path the change started from: the item being renamed or moved,
+    /// or the path a new item takes.
+    pub path: String,
+    /// The item's path once the change has landed; equal to `path` for a
+    /// creation.
+    pub destination: String,
+    /// Why it failed, or why a created file did not open, as a code the
+    /// tree words (`explorer.*`, `host.*`, `link.*`).
+    pub failure: Option<CodedFailure>,
+}
+
+/// One repository's worktrees.
+#[derive(Clone, Debug, Default, Eq, PartialEq, Serialize)]
+pub struct ProjectWorktreesSnapshot {
+    pub github: GithubStatusSnapshot,
+    pub pull_requests: Vec<PullRequestSnapshot>,
+    pub pull_request_window: String,
+    pub shared_git_path: Option<String>,
+    pub shared_git_disk: DiskUsageSnapshot,
+    pub disk_total_bytes: Option<u64>,
+    pub disk_confirmed_bytes: Option<u64>,
+    pub linked_disk_bytes: Option<u64>,
+    pub disk_unavailable_reason: Option<String>,
+    pub base_branch: Option<String>,
+    pub base_source: String,
+    pub base_branch_fallback: Option<String>,
+    pub root_path: String,
+    pub default_branch: Option<String>,
+    pub branches: Vec<String>,
+    pub worktrees: Vec<WorktreeSnapshot>,
+    /// Why this repository has no worktree list. An empty list with no reason
+    /// means the repository genuinely has none.
+    pub unavailable_reason: Option<String>,
+    /// The GitHub repository its `origin` names (`[HOST/]OWNER/NAME`), by
+    /// which a device's pull requests are read with this machine's login.
+    #[serde(skip)]
+    pub repository: Option<String>,
+}
+
+#[derive(Clone, Debug, Default, Eq, PartialEq, Serialize)]
+pub struct WorktreeCatalogSnapshot {
+    pub projects: Vec<ProjectWorktreesSnapshot>,
+}
+
+impl WorktreeCatalogSnapshot {
+    pub fn project(&self, root_path: &str) -> Option<&ProjectWorktreesSnapshot> {
+        self.projects
+            .iter()
+            .find(|project| project.root_path == root_path)
+    }
+}
+
+/// How much disk one checkout occupies, and which of its top-level folders is
+/// the biggest share of it.
+#[derive(Clone, Debug, Default, Eq, PartialEq, Serialize)]
+pub struct DiskUsageSnapshot {
+    pub measured_at_unix_ms: Option<u64>,
+    /// The checkout this measurement describes. A card whose selection has
+    /// moved on compares this against its own path and shows `measuring`
+    /// rather than the previous checkout's size.
+    pub path: Option<String>,
+    pub total_bytes: Option<u64>,
+    pub largest_child_name: Option<String>,
+    pub largest_child_bytes: Option<u64>,
+    pub unavailable_reason: Option<String>,
+    /// What a checkout holds by layer, for a measured checkout row. Absent
+    /// for the shared Git directory and for a measurement that failed.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub layers: Option<hide_node_link::disk::DiskLayers>,
+    /// Free space of the volume the measured path sits on, in bytes.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub volume_free_bytes: Option<u64>,
+    /// The size of that volume.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub volume_total_bytes: Option<u64>,
+    /// The folders behind the layer cells. The core keeps them so a cleanup
+    /// can move them; the wire never carries a path.
+    #[serde(skip)]
+    pub folders: Vec<hide_node_link::disk::LayerFolder>,
+}
+
+/// The right panel's summary card for the selected checkout.
+///
+/// The per-checkout git facts are not repeated here: they live on
+/// [`CheckoutSnapshot`], which the card reads through the focused checkout.
+/// What this carries is everything the card needs that a checkout row does
+/// not: the repository's `gh` health, the one measured checkout's disk usage,
+/// and whether the worktree may be removed.
+#[derive(Clone, Debug, Default, Eq, PartialEq, Serialize)]
+pub struct CheckoutCardSnapshot {
+    /// Absent when nothing is selected, or when the selection is a remote
+    /// checkout - remote worktree management is out of scope, so no card.
+    pub checkout_id: Option<String>,
+    pub github: GithubStatusSnapshot,
+    pub disk: DiskUsageSnapshot,
+    /// True while the selected checkout's size is still being measured.
+    pub disk_measuring: bool,
+    pub deletion_gate: Option<WorktreeDeletionGateSnapshot>,
+    /// Current topology, not a claim about who authored HEAD or older commits.
+    pub panes: Vec<CheckoutPaneContext>,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
+pub struct CheckoutPaneContext {
+    pub pane_id: String,
+    pub title: String,
+    pub status: String,
+    pub session_id: Option<String>,
+    pub parent_pane_id: Option<String>,
+}
+
+#[derive(Clone, Debug, PartialEq, Serialize)]
+pub struct ImeSnapshot {
+    pub marked_text: String,
+    pub selected_range: TextRangeSnapshot,
+    pub replacement_range: Option<TextRangeSnapshot>,
+}
+
+#[derive(Clone, Debug, PartialEq, Serialize)]
+pub struct TextRangeSnapshot {
+    pub location: u64,
+    pub length: u64,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
+pub struct PaneMovePreviewPaneSnapshot {
+    pub pane_id: String,
+    pub text: String,
+}
+#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
+pub struct PaneMovePreviewSnapshot {
+    pub request_id: String,
+    pub tab_id: String,
+    pub phase: String,
+    pub panes: Vec<PaneMovePreviewPaneSnapshot>,
+    pub message: Option<String>,
+}
+
+/// A project's automatic start choice, from the same picker a start uses.
+#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
+pub struct StartProfilesSnapshot {
+    pub device_id: String,
+    pub root: String,
+    pub profiles: BTreeMap<String, String>,
+}
+
+#[derive(Clone, Debug, PartialEq, Serialize)]
+pub struct StatusSnapshot {
+    pub start_profiles: BTreeMap<String, StartProfilesSnapshot>,
+    pub server_discovery: ServerDiscoverySnapshot,
+    pub tab_rename: Option<TabRenameSnapshot>,
+    pub engine: ProviderStatusSnapshot,
+    /// What this machine's Herdr save offers to import into the core's own
+    /// engine (PRD engine-bundle-4-herdr-removal); absent while there is
+    /// nothing to show.
+    pub herdr_import: Option<HerdrImportSnapshot>,
+    /// What each device of that engine offers, on the link its engine
+    /// opened on (B18), each naming its `device`.
+    pub herdr_import_devices: Vec<HerdrImportSnapshot>,
+    pub remote: Vec<RemoteStatusSnapshot>,
+    pub environment: Vec<EnvironmentStatusSnapshot>,
+    pub agent_hooks: AgentHooksSnapshot,
+    pub background_ai: BackgroundAiSnapshot,
+    /// The Host entries Add device offers (Settings › Devices).
+    pub ssh_hosts: SshHostsSnapshot,
+    pub machine_profiles: MachineProfilesSnapshot,
+    /// What Settings › Agents' last profile request came to (PRD
+    /// agent-profiles B2-B13); absent until one was made.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub agent_profile_answer: Option<crate::agent_profiles::ProfileAnswer>,
+    /// What the latest store requests came to, oldest first, at most
+    /// `kit_store::ANSWER_LIMIT` (PRD skill-mcp-manager): a request finds its
+    /// own by id.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub store_answers: Vec<StoreAnswer>,
+    /// The installs and updates agents asked for with `hide skill` /
+    /// `hide mcp` that wait on the operator's confirm (B32).
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub store_asks: Vec<crate::runtime::StoreAskSnapshot>,
+    pub diagnostics: Vec<DiagnosticSnapshot>,
+    pub last_error: Option<LastErrorSnapshot>,
+    /// Core-owned operations which are waiting for a transport result or an
+    /// authoritative engine event. Keeping these beside status lets every
+    /// surface show the same bounded, target-scoped state.
+    pub async_operations: Vec<AsyncOperationSnapshot>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub pane_move_preview: Option<PaneMovePreviewSnapshot>,
+    /// The core-owned outcome of the latest explicitly correlated pane-focus
+    /// request. Ordinary focus events have no request id and do not replace
+    /// this receipt, so a relationship control never mistakes another pane's
+    /// error or an older focused layout for its own answer.
+    pub pane_focus_request: Option<PaneFocusRequestSnapshot>,
+    /// The answers to the latest `browser_open` requests that named
+    /// themselves, oldest first and bounded, so a `hide browser open` waiting
+    /// on one reads its own (issue 155).
+    pub browser_opens: Vec<BrowserOpenReceiptSnapshot>,
+    /// The latest 마무리 맡기기 presses, oldest first and bounded, so a 흘린
+    /// 것 row reads its own (PRD project-panel-results B12, B13).
+    pub stray_hand_offs: Vec<StrayHandOffSnapshot>,
+    /// The adds that named a request id (Add a project's importable list),
+    /// oldest first and bounded, each with its own outcome, so a row reads
+    /// its answer whatever event came after it (PRD device-add-project B25).
+    pub project_adds: Vec<ProjectAddReceiptSnapshot>,
+    /// The operator's agent definition files that were left out, each with
+    /// why (PRD engine-bundle-3-core-owns D-17, B24): Settings › Agents draws
+    /// one dimmed line for each. `None` until the core has read them.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub agent_definitions: Option<AgentDefinitionsSnapshot>,
+}
+
+/// What the last read of the operator's agent definition folder left out.
+#[derive(Clone, Debug, Default, Eq, PartialEq, Serialize)]
+pub struct AgentDefinitionsSnapshot {
+    /// Each file left out, in the folder's name order.
+    pub rejected: Vec<RejectedDefinitionSnapshot>,
+    /// The folder itself could not be listed, so only the built-in agents
+    /// are known; the reason in one line.
+    pub unreadable: Option<String>,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
+pub struct RejectedDefinitionSnapshot {
+    pub file: String,
+    /// One line that starts with the file's name.
+    pub reason: String,
+}
+
+/// The concrete Host entries of the account's `~/.ssh/config`, as Add device
+/// lists them (PRD settings-cleanup D-19). Hide keeps only an alias and a name
+/// for a device; this is read on request and never stored.
+#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
+pub struct SshHostsSnapshot {
+    /// `idle` before the first request, `loading` while one runs, `ready`
+    /// once its answer is in; a later request shows the last answer as
+    /// `loading` until the new one lands.
+    pub state: String,
+    pub hosts: Vec<SshHostSnapshot>,
+    /// The config names more concrete aliases than are listed.
+    pub truncated: bool,
+    /// This PC's WSL distributions, listed beside the aliases (PRD
+    /// wsl-device B4); none on a system without WSL.
+    pub wsl: Vec<WslDistributionSnapshot>,
+    /// Why this PC's WSL distributions could not be read; a failed read is
+    /// never shown as "no WSL" (B25).
+    pub wsl_problem: Option<String>,
+}
+
+impl Default for SshHostsSnapshot {
+    fn default() -> Self {
+        Self {
+            state: "idle".to_owned(),
+            hosts: Vec::new(),
+            truncated: false,
+            wsl: Vec::new(),
+            wsl_problem: None,
+        }
+    }
+}
+
+/// One WSL distribution of this PC, as Add device lists it.
+#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
+pub struct WslDistributionSnapshot {
+    pub name: String,
+    /// The name the device gets when it is added (PRD wsl-device D-20).
+    pub device_name: String,
+    /// 1 or 2; only a WSL 2 distribution connects.
+    pub wsl_version: u8,
+    /// The distribution `wsl.exe` runs when none is named.
+    pub default: bool,
+    /// The name of the registered device that already is this distribution.
+    pub added_as: Option<String>,
+    /// Why it cannot be connected: `setup_unfinished` (its first-run user
+    /// setup has not finished, B28) or `wsl1`.
+    pub problem: Option<String>,
+}
+
+/// One alias of the config.
+#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
+pub struct SshHostSnapshot {
+    pub alias: String,
+    /// `user@host:port` as `ssh -G` resolved it; absent when it could not.
+    pub address: Option<String>,
+    /// The name of the registered device that already uses this alias or
+    /// reaches the same address.
+    pub added_as: Option<String>,
+    /// Why there is no address: `ssh_missing`, `ssh_failed` or `timed_out`.
+    pub problem: Option<String>,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
+pub struct MachineProfilesSnapshot {
+    pub state: String,
+    pub error: Option<String>,
+    pub profiles: Vec<MachineProfileSnapshot>,
+    pub truncated: bool,
+}
+
+impl Default for MachineProfilesSnapshot {
+    fn default() -> Self {
+        Self {
+            state: "idle".to_owned(),
+            error: None,
+            profiles: Vec::new(),
+            truncated: false,
+        }
+    }
+}
+
+/// One machine the first-run Devices step offers: a Host of the account's
+/// ssh config (Add device's list), one row per `user@host:port`, or this
+/// PC's default WSL distribution.
+#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
+pub struct MachineProfileSnapshot {
+    pub id: String,
+    pub label: String,
+    /// The Host alias, or the distribution of a WSL row.
+    pub target: String,
+    /// The ssh config Host the row is.
+    pub ssh_host: Option<String>,
+    /// `user@host:port` as `ssh -G` resolved the Host, read without
+    /// connecting.
+    pub address: Option<String>,
+    /// Set on the one row that is not a Host: this PC's default WSL
+    /// distribution (PRD wsl-device B1), which connects as a WSL device.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub wsl_distro: Option<String>,
+    pub added_as: Option<String>,
+    pub problem: Option<String>,
+    pub device_id: Option<String>,
+    pub connect_state: String,
+    /// Why Hide itself declined to connect the profile, as a code the web
+    /// words (`contracts/snapshot-wire-enums.json`: `profile_refusal`).
+    /// A connection that was tried and failed has none: its row reads the
+    /// device's connection state.
+    pub connect_refusal: Option<MachineProfileRefusal>,
+}
+
+/// Why Hide declined to connect a first-run machine, one per thing the
+/// operator does next.
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum MachineProfileRefusal {
+    /// The helper installation was not allowed.
+    NoConsent,
+    /// The Host or distribution cannot be used.
+    InvalidTarget,
+    /// The machines are still being read.
+    DiscoveryPending,
+    /// As many devices as Hide keeps are registered.
+    DeviceLimit,
+}
+
+#[derive(Clone, Debug, PartialEq, Serialize)]
+pub struct ServerDiscoverySnapshot {
+    pub loading: bool,
+    pub failure: Option<String>,
+}
+
+/// One 마무리 맡기기 and where it stands: `sending` while the words go to the
+/// session's pane or a new agent starts, `sent` once they went, `failed`
+/// with the reason in the diagnostic log (PRD project-panel-results B12,
+/// B13).
+#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
+pub struct StrayHandOffSnapshot {
+    pub request_id: String,
+    pub checkout_id: String,
+    pub state: &'static str,
+}
+
+/// One add's receipt: the folder it named on its machine and where it stands.
+#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
+pub struct ProjectAddReceiptSnapshot {
+    pub request_id: String,
+    pub device_id: String,
+    pub path: String,
+    #[serde(flatten)]
+    pub outcome: ProjectAddOutcome,
+}
+
+/// Where one add stands.
+#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
+#[serde(tag = "state", rename_all = "snake_case")]
+pub enum ProjectAddOutcome {
+    Pending,
+    /// The folder's project is registered on its machine.
+    Added,
+    /// The registration was refused: the core's error kind and message.
+    Refused {
+        kind: String,
+        message: String,
+    },
+}
+
+/// One `browser_open` request's outcome: where the page opened, or why not.
+#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
+pub struct BrowserOpenReceiptSnapshot {
+    pub request_id: String,
+    pub ok: bool,
+    pub message: Option<String>,
+    pub device_id: Option<String>,
+    pub path: Option<String>,
+    pub display_id: Option<String>,
+}
+
+/// One explicitly correlated pane-focus request and its core-owned outcome.
+#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
+pub struct PaneFocusRequestSnapshot {
+    pub request_id: String,
+    pub target_pane_id: String,
+    pub phase: String,
+    pub message: Option<String>,
+    pub retryable: bool,
+}
+
+/// Which agent and model Hide AI uses, and what each agent can do about it
+/// right now (Settings › Hide AI).
+///
+/// The choice is the operator's, stored by `hide-ai` in its own file; the
+/// availability and the model lists come from asking the providers, on the
+/// coordinator's reader, never under the runtime mutex. Every reason is a
+/// short machine code: the shell writes the words, and nothing here carries
+/// an account, a path or a conversation (B68).
+#[derive(Clone, Debug, Default, PartialEq, Serialize)]
+pub struct BackgroundAiSnapshot {
+    /// Use Hide AI (D-14). Off, no model is asked anything and the other
+    /// settings are kept.
+    pub enabled: bool,
+    /// The agent Hide AI runs on first (Runs on), or `None` when nobody
+    /// chose one and none can be chosen yet (B47): Hide features then work
+    /// without a model, and the first agent that is switched on and signed in
+    /// is chosen by itself (D-18, D-27).
+    pub provider: Option<String>,
+    /// The profile of `provider`'s agent Runs on runs as; `None` is its
+    /// built-in default (PRD agent-profiles-phase2 D-07).
+    pub profile: Option<String>,
+    /// `profile` is one its machine no longer lists, or the machine keeps no
+    /// profiles (B6, B21): the screen dims it and Hide AI passes over it.
+    pub profile_missing: bool,
+    /// The connected device `provider` runs on; `None` is the core's own
+    /// machine (PRD wsl-device B11).
+    pub device: Option<String>,
+    /// The model Runs on is asked for; empty is the CLI's own default.
+    pub model: String,
+    /// Whether `provider` is a stored choice.
+    pub chosen: bool,
+    /// The `에이전트 요약` switch: agent labels are asked for and shown.
+    pub agent_summary: bool,
+    /// One row per agent Hide AI knows, in the fixed order. An agent that is
+    /// not on this Mac is still a row, because "not here" and "not signed in"
+    /// are different answers. The rows of the agents on each connected device
+    /// follow, keyed by `device_id`, and an agent placed on a device that is
+    /// not connected has a row that says it cannot answer.
+    pub providers: Vec<BackgroundAiProviderSnapshot>,
+    /// The agents tried, in this order, when `provider` cannot answer; empty
+    /// until the operator adds one (D-16).
+    pub fallback: Vec<BackgroundAiFallbackSnapshot>,
+    /// Why Runs on is not answering, and which listed agent answers instead;
+    /// absent while the chosen agent answers (B41, B42).
+    pub refusal: Option<BackgroundAiRefusalSnapshot>,
+    /// Why the saved choice could not be read or written. The defaults are in
+    /// use while this is set; it is never left empty to stand for success.
+    pub unavailable_reason: Option<String>,
+    /// The Usage limit: the share of an agent's week Hide AI may use before a
+    /// background request moves to the next agent of the order. `None` is
+    /// No limit (PRD hide-ai-usage-limit D-01).
+    pub usage_limit: Option<u8>,
+}
+
+impl BackgroundAiSnapshot {
+    /// Every provider, none of them asked yet. This is what the screen shows
+    /// before the first read lands, and what an unobserved read answers. No
+    /// choice is claimed, because nothing has been read that could say one.
+    pub fn unread() -> Self {
+        Self {
+            enabled: true,
+            providers: hide_ai::PROVIDERS
+                .iter()
+                .map(|provider| BackgroundAiProviderSnapshot::unread(*provider))
+                .collect(),
+            agent_summary: true,
+            usage_limit: Some(hide_ai::DEFAULT_LIMIT_PERCENT),
+            ..Self::default()
+        }
+    }
+}
+
+#[derive(Clone, Debug, Default, PartialEq, Serialize)]
+pub struct BackgroundAiProviderSnapshot {
+    /// The provider layer's own id, such as `codex`.
+    pub id: String,
+    /// The connected device this row's agent runs on; `None` is the core's
+    /// own machine (PRD wsl-device B11).
+    pub device_id: Option<String>,
+    pub label: String,
+    /// The id the Agents tab and the logos key the same agent by: the kit's
+    /// adapter id (`claude-code`, `codex`, `grok`, `opencode`, `pi`,
+    /// `antigravity`).
+    pub agent: String,
+    /// The availability class the provider layer reported: `ready`,
+    /// `needs_login`, `not_installed`, `unavailable`, `unsupported`, or
+    /// `unread` before it has been asked.
+    pub state: String,
+    /// The short words beside the provider's name. The core writes them; no
+    /// view builds a sentence out of `state`.
+    pub headline: String,
+    /// The provider layer's own reason code, when its state carries one
+    /// (`cannot_guarantee_read_only`, `model_not_offered:<model>`).
+    pub message: Option<String>,
+    /// Whether the agent's program was found; false only for
+    /// `not_installed`.
+    pub installed: bool,
+    /// Whether the agent's sign-in is checked without a request. Every
+    /// current provider checks it; older peers may report false.
+    pub login_checked: bool,
+    /// Whether Runs on and Add agent offer it: installed, signed in, a
+    /// backend, and a call that cannot change files (D-15). Parked in a usage
+    /// limit is still selectable.
+    pub selectable: bool,
+    /// When a usage limit ends, as unix milliseconds, when the agent said.
+    pub retry_at_ms: Option<u64>,
+    /// The model this agent is asked for; empty is the CLI's own default. For
+    /// an agent in the fallback list it is that entry's model.
+    pub model: String,
+    /// The models this agent offers. Empty when they are not known, which
+    /// `models_unavailable_reason` then says.
+    pub models: Vec<String>,
+    /// The name the agent shows for a listed model where it is not the
+    /// model itself (Claude Code's `displayName`, PRD agent-profiles-phase2
+    /// B8): a start passes the model and a menu shows this name.
+    #[serde(skip_serializing_if = "BTreeMap::is_empty")]
+    pub model_labels: BTreeMap<String, String>,
+    /// The list came from documented aliases rather than an account query,
+    /// as an older peer may report, so the shell labels it (B36).
+    pub models_fixed: bool,
+    /// Whether "CLI default" can be chosen: the agent is asked with no
+    /// `--model` (B36). True for the agents measured against nothing yet.
+    pub cli_default: bool,
+    pub models_unavailable_reason: Option<String>,
+    /// The agent's weekly usage as the toolbar's usage read last answered it;
+    /// absent when it gave no figure, and then the agent is never held back
+    /// by the usage limit (PRD hide-ai-usage-limit D-07).
+    pub weekly: Option<BackgroundAiWeekly>,
+    /// The weekly figure is at or past the usage limit: this agent cannot
+    /// answer a request Hide AI starts on its own (D-02).
+    pub past_limit: bool,
+    /// The model lists of the row's machine's profiles of this agent, each
+    /// read with the profile's own account, variables and wrapper (PRD
+    /// agent-profiles-phase2 D-09), in the machine's list order; absent with
+    /// none, and while no screen reads model lists.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub profile_models: Vec<BackgroundAiProfileModels>,
+}
+
+/// One profile's model list, beside its agent's built-in default's.
+#[derive(Clone, Debug, Default, PartialEq, Serialize)]
+pub struct BackgroundAiProfileModels {
+    /// The profile's id.
+    pub profile: String,
+    /// The profile's version this list was read for: a list of another
+    /// version than the profile's now is no list of it.
+    pub version: u64,
+    /// The models the agent listed in the profile's environment. Empty when
+    /// they could not be read, which `models_unavailable_reason` says; the
+    /// screens then offer the agent's default list (B9).
+    pub models: Vec<String>,
+    #[serde(skip_serializing_if = "BTreeMap::is_empty")]
+    pub model_labels: BTreeMap<String, String>,
+    pub models_fixed: bool,
+    pub models_unavailable_reason: Option<String>,
+    /// The profile's sign-in as its agent's row says it
+    /// (`BackgroundAiProviderSnapshot::state`), read with the profile's own
+    /// account; `profile_missing` is a profile its machine no longer lists.
+    pub state: String,
+    /// The provider layer's own reason code, when the state carries one.
+    pub message: Option<String>,
+    /// Whether Runs on and Add agent offer the item (D-15).
+    pub selectable: bool,
+    /// The weekly usage of the profile's own account; absent for a profile
+    /// with no figure of its own, which the usage limit never holds back.
+    pub weekly: Option<BackgroundAiWeekly>,
+    /// The weekly figure is at or past the usage limit.
+    pub past_limit: bool,
+}
+
+/// One agent's weekly usage: the share spent and when the window resets.
+#[derive(Clone, Copy, Debug, PartialEq, Serialize)]
+pub struct BackgroundAiWeekly {
+    pub used_percent: f64,
+    /// Unix milliseconds, when the agent said.
+    pub resets_at_ms: Option<u64>,
+}
+
+impl BackgroundAiProviderSnapshot {
+    pub fn unread(provider: hide_ai::ProviderId) -> Self {
+        Self {
+            id: provider.as_str().to_owned(),
+            label: provider.label().to_owned(),
+            agent: provider.agent().to_owned(),
+            state: "unread".to_owned(),
+            headline: "Not checked yet".to_owned(),
+            installed: true,
+            login_checked: true,
+            model: provider.default_model().to_owned(),
+            cli_default: provider.default_model().is_empty(),
+            ..Self::default()
+        }
+    }
+}
+
+#[derive(Clone, Debug, PartialEq, Serialize)]
+pub struct BackgroundAiFallbackSnapshot {
+    pub provider: String,
+    /// The profile of the agent it runs as; `None` is its built-in default.
+    pub profile: Option<String>,
+    /// `profile` is one its machine no longer lists (B21).
+    pub profile_missing: bool,
+    /// The connected device it runs on; `None` is the core's own machine.
+    pub device: Option<String>,
+    /// The model it is asked for; empty is the CLI's default.
+    pub model: String,
+}
+
+/// "Using Codex · Claude Code is out of usage until 3:10 PM" (B41), or the
+/// Runs on row's reason when nothing answers (B42). Codes only.
+#[derive(Clone, Debug, PartialEq, Serialize)]
+pub struct BackgroundAiRefusalSnapshot {
+    /// The agent that cannot answer: Runs on.
+    pub provider: String,
+    /// The profile Runs on runs as; `None` is the agent's built-in default.
+    pub profile: Option<String>,
+    /// The router's availability class for it: `usage_limited`,
+    /// `past_limit` (at or past the operator's usage limit), `needs_login`,
+    /// `not_installed`, `unavailable`, `unsupported` or `profile_missing`
+    /// (a profile its machine no longer lists, PRD agent-profiles-phase2
+    /// B21).
+    pub reason: String,
+    /// When a usage limit ends, as unix milliseconds, when the agent said.
+    pub retry_at_ms: Option<u64>,
+    /// The listed agent answering instead; absent when none can (B42).
+    pub using: Option<String>,
+    /// The profile `using` runs as; `None` is its built-in default.
+    pub using_profile: Option<String>,
+    /// For `past_limit`: the agent's weekly share and the limit it is past,
+    /// so the screen says `past your 90% limit` from the core's own numbers.
+    pub used_percent: Option<f64>,
+    pub limit: Option<u8>,
+}
+
+/// What the Settings diagnosis says about agent hooks (PRD B27, B28, D-31,
+/// D-48).
+#[derive(Clone, Debug, Default, PartialEq, Serialize)]
+pub struct AgentHooksSnapshot {
+    /// Each machine's hook parts are its kit rows (`DeviceSnapshot.kit`,
+    /// PRD device-parity B27), and the sessions Hide does not hear are
+    /// counted on those rows' `sessions` and named on each pane's
+    /// `children.connection` (PRD settings-cleanup D-23: one per-session
+    /// warning list that grew with every session is gone).
+    /// The sentence describing the last hook report the engine did not take, when
+    /// the most recent report failed. It is what separates "installed but
+    /// every report is refused" from the restart advice above: with it on
+    /// screen, a restart is not the fix and the sentence says what is.
+    pub last_report_failure: Option<String>,
+}
+
+#[derive(Clone, Debug, PartialEq, Serialize)]
+pub struct EnvironmentStatusSnapshot {
+    pub key: String,
+    pub required: bool,
+    pub format: String,
+    pub state: String,
+    pub absent_behavior: String,
+    pub message: String,
+}
+
+#[derive(Clone, Debug, PartialEq, Serialize)]
+pub struct DiagnosticSnapshot {
+    pub kind: String,
+    pub message: String,
+    pub occurred_at: u64,
+}
+
+/// Carries no "last checked" stamp on purpose. Every check restamped it, the
+/// stamp rides `rest`, and `rest` is compared field by field to decide whether
+/// the reader is current - so a clock reading nothing renders made every
+/// heartbeat re-send the whole navigator, ui state and status.
+#[derive(Clone, Debug, PartialEq, Serialize)]
+pub struct ProviderStatusSnapshot {
+    pub state: String,
+    pub message: Option<String>,
+}
+
+/// What this machine's Herdr save offers to import into the core's own engine,
+/// and what the last import came to (PRD engine-bundle-4-herdr-removal D-7,
+/// D-8, B11, B14 to B17).
+#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
+pub struct HerdrImportSnapshot {
+    /// `import` for a save, read only (D-8); `result` when nothing is left to
+    /// offer and the last import's result waits to be read.
+    pub kind: String,
+    /// `offered`, `moving` while the import is asked for and the core starts
+    /// again with it, `failed`, or `moved` for a `result`.
+    pub stage: String,
+    /// What importing offers: workspaces, tabs and agents not imported yet.
+    pub workspaces: usize,
+    pub tabs: usize,
+    pub agents: usize,
+    /// Conversations an earlier import left waiting in the Herdr they came
+    /// from, which an import resumes once that Herdr no longer runs (B15).
+    pub waiting: usize,
+    /// A Herdr runs on with the save's conversations open, so an import
+    /// opens their panes as shells (B15).
+    pub herdr_running: bool,
+    /// `unreadable` (the save could not be read, B11) while `stage` is `failed`.
+    pub failure: Option<String>,
+    /// Why the save could not be read, in one line.
+    pub reason: Option<String>,
+    /// The workspaces the last import left out, with why (B11).
+    pub refused: Vec<HerdrImportRefusedSnapshot>,
+    /// The device whose save this is; absent for this machine's (B18).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub device: Option<String>,
+}
+
+/// A workspace a move left out.
+#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
+pub struct HerdrImportRefusedSnapshot {
+    pub label: String,
+    pub reason: String,
+}
+
+#[derive(Clone, Debug, PartialEq, Serialize)]
+pub struct RemoteStatusSnapshot {
+    pub target_id: String,
+    pub state: String,
+    pub message: Option<String>,
+    pub session: Option<RemoteSessionSnapshot>,
+    pub files: RemoteFileListSnapshot,
+    /// Whether the session's projects are grouped from the device's own
+    /// facts (`device_catalog`).
+    pub catalog: DeviceCatalogSnapshot,
+    /// Since when the device has not answered (PRD overview-device-tasks
+    /// B4): set when its row stops being `connected`, or when it first
+    /// waits for its connection, and cleared when it answers; absent from
+    /// the wire while it is connected.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub unreachable_since_unix_ms: Option<u64>,
+}
+
+/// How far a device's projects are confirmed by its helper (PRD S5.5 B3,
+/// B4). `resolving`: the helper is being asked; `ready`: every directory the
+/// device's engine names has the helper's answer; `unavailable`: the helper
+/// cannot be asked now, and why goes to the `device_catalog` diagnostics, not
+/// the wire (the web words the state). A directory the helper has not
+/// answered for is shown as its engine workspace alone, never grouped by a
+/// guess and never read on this machine.
+#[derive(Clone, Debug, PartialEq, Serialize)]
+pub struct DeviceCatalogSnapshot {
+    pub state: String,
+    /// Directories the helper answered with a refusal (missing, unreadable),
+    /// each with its reason; their workspaces stay ungrouped.
+    pub refused: Vec<DeviceCatalogRefusal>,
+}
+
+impl Default for DeviceCatalogSnapshot {
+    fn default() -> Self {
+        Self {
+            state: "resolving".to_owned(),
+            refused: Vec::new(),
+        }
+    }
+}
+
+#[derive(Clone, Debug, PartialEq, Serialize)]
+pub struct DeviceCatalogRefusal {
+    pub path: String,
+    pub message: String,
+}
+
+#[derive(Clone, Debug, PartialEq, Serialize)]
+pub struct RemoteFileListSnapshot {
+    pub root_path: Option<String>,
+    pub state: String,
+    pub entries: Vec<RemoteFileEntrySnapshot>,
+    pub message: Option<String>,
+    pub generation: u64,
+}
+
+impl RemoteFileListSnapshot {
+    pub fn idle() -> Self {
+        Self {
+            root_path: None,
+            state: "idle".to_owned(),
+            entries: Vec::new(),
+            message: None,
+            generation: 0,
+        }
+    }
+}
+
+#[derive(Clone, Debug, PartialEq, Serialize)]
+pub struct RemoteFileEntrySnapshot {
+    pub path: String,
+    pub name: String,
+    pub is_directory: bool,
+}
+
+#[derive(Clone, Debug, PartialEq, Serialize)]
+pub struct RemoteSessionSnapshot {
+    pub workspaces: Vec<WorkspaceSnapshot>,
+    pub agents: Vec<SidebarAgentSnapshot>,
+    pub active_tab_ids: BTreeMap<String, String>,
+    pub focused_workspace_id: Option<String>,
+    pub focused_checkout_id: Option<String>,
+    pub focused_tab_id: Option<String>,
+    pub focused_pane_id: Option<String>,
+    pub pane_layouts: Vec<RemotePaneLayoutSnapshot>,
+    /// Each device pane's Hide hook tokens, by its remote pane id. The core
+    /// judges a device pane's children from them and the device's kit
+    /// (`Runtime::derive_device_session`), so they are not sent to the shell.
+    #[serde(skip)]
+    pub pane_hook_tokens: BTreeMap<String, crate::agent_hooks::PaneHookTokens>,
+    /// The issue tokens of the device's engine: a workspace's by its engine
+    /// id, a pane's by its remote pane id. The core reads a node checkout's
+    /// issue link from them (`Runtime::project_node_issues`), so they are not
+    /// sent to the shell either.
+    #[serde(skip)]
+    pub issue_tokens: crate::engine::tokens::IssueTokens,
+    /// The GitHub issues a node project's checkouts link to, by project
+    /// root, made with its rows (`Runtime::project_node_issues`) for the
+    /// node's GitHub read to bring the ones its open list leaves out; empty
+    /// in a raw session. Not sent to the shell.
+    #[serde(skip)]
+    pub issue_links: BTreeMap<String, Vec<crate::issues::IssueReference>>,
+}
+
+#[derive(Clone, Debug, PartialEq, Serialize)]
+pub struct RemotePaneLayoutSnapshot {
+    pub workspace_id: String,
+    pub tab_id: String,
+    pub focused_pane_id: String,
+    pub zoomed: bool,
+    pub frames: Vec<RemotePaneLayoutFrame>,
+}
+
+#[derive(Clone, Debug, PartialEq, Serialize)]
+pub struct RemotePaneLayoutFrame {
+    pub pane_id: String,
+    pub x: f64,
+    pub y: f64,
+    pub width: f64,
+    pub height: f64,
+}
+
+#[derive(Clone, Debug, PartialEq, Serialize)]
+pub struct LastErrorSnapshot {
+    pub kind: String,
+    pub message: String,
+    pub retryable: bool,
+    pub occurred_at: u64,
+    /// The request this refusal answers, when the event carried one, so the
+    /// surface that sent it (the start panel, a phone) reads its own answer
+    /// and no other.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub request_id: Option<String>,
+    /// The folder a `workspace.create_refused.needs_confirmation` asks the
+    /// operator about when it is not the one sent: the project outside the
+    /// device's home that folder belongs to (PRD wsl-device B15).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub confirm: Option<String>,
+    /// A `workspace.create_refused.needs_confirmation` whose folder is the
+    /// device's home itself, which the shell asks about in its own words.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub home: bool,
+}
+
+impl Snapshot {
+    pub fn initial(options: &CoreOptions) -> Self {
+        Self {
+            schema_version: SCHEMA_VERSION,
+            usage: crate::usage::model::UsageSnapshot::initial(options.node_id.as_str()),
+            delivery_watches: Vec::new(),
+            overview_graph: OverviewGraphSnapshot::default(),
+            missions: Default::default(),
+            mission_events: Default::default(),
+            mission_brief: Default::default(),
+            turn_answer: Default::default(),
+            plans: Default::default(),
+            navigator: NavigatorSnapshot {
+                agent_scope: Default::default(),
+                siblings_shown: crate::agent_state::tally::lineage::SIBLINGS_SHOWN,
+                root_path: None,
+                changes_root_path: None,
+                focused_device_id: None,
+                focused_workspace_id: None,
+                focused_checkout_id: None,
+                devices: vec![crate::workspace::local_device(
+                    &options.node_id,
+                    options.machine_name.as_deref(),
+                    None,
+                )],
+                device_not_added: None,
+                peers: Vec::new(),
+                guest_panes: Vec::new(),
+                workspaces: Vec::new(),
+                inactive_projects: Vec::new(),
+                agents: Vec::new(),
+                hide_ai_checkouts: Vec::new(),
+                sleeping_sessions: Vec::new(),
+                archived_sessions: Vec::new(),
+                tools: Vec::new(),
+            },
+            overlay: OverlaySnapshot {
+                kind: None,
+                title: None,
+                message: None,
+                actions: Vec::new(),
+            },
+            tab: TabSnapshot {
+                agent: None,
+                naming: Default::default(),
+                id: None,
+                workspace_id: None,
+                checkout_id: None,
+                label: None,
+                empty: true,
+                delegated: false,
+                panes: Vec::new(),
+            },
+            connection: ConnectionSnapshot {
+                kind: "local".to_owned(),
+                state: "not_connected".to_owned(),
+                target_id: None,
+            },
+            zoomed: None,
+            focused: FocusedSnapshot {
+                surface: Surface::Terminal,
+                pane_id: None,
+                operator_focus: Vec::new(),
+            },
+            pane_layouts: Vec::new(),
+            terminal: TerminalSnapshot {
+                headers: BTreeMap::new(),
+                pane_id: None,
+                closed: false,
+                exit_code: None,
+                panes: Vec::new(),
+                input_requests: Vec::new(),
+            },
+            editor: EditorSnapshot {
+                tabs: Vec::new(),
+                active_tab_id: None,
+                document: None,
+                archive_detail: None,
+                opening: Vec::new(),
+            },
+            sessions: SessionsSnapshot::default(),
+            changes: Edited::default(),
+            card: CheckoutCardSnapshot::default(),
+            git_worktrees: None,
+            git_worktrees_loading: true,
+            git_worktrees_remote: false,
+            remains: None,
+            worktree_removal: None,
+            task_operation: None,
+            repository_clone: None,
+            explorer_operation: None,
+            issue_work: IssueWorkSnapshot::default(),
+            pr_work: PrWorkSnapshot::default(),
+            find: PaneFindSnapshot::default(),
+            ui_state: UiStateSnapshot::default(),
+            ime: ImeSnapshot {
+                marked_text: String::new(),
+                selected_range: TextRangeSnapshot {
+                    location: 0,
+                    length: 0,
+                },
+                replacement_range: None,
+            },
+            status: StatusSnapshot {
+                start_profiles: BTreeMap::new(),
+                tab_rename: None,
+                // The engine's status until the session sync first answers.
+                engine: ProviderStatusSnapshot {
+                    state: "unconfigured".to_owned(),
+                    message: None,
+                },
+                herdr_import: None,
+                herdr_import_devices: Vec::new(),
+                remote: Vec::new(),
+                environment: Vec::new(),
+                agent_hooks: AgentHooksSnapshot::default(),
+                background_ai: BackgroundAiSnapshot::unread(),
+                ssh_hosts: SshHostsSnapshot::default(),
+                machine_profiles: MachineProfilesSnapshot::default(),
+                agent_profile_answer: None,
+                store_answers: Vec::new(),
+                store_asks: Vec::new(),
+                diagnostics: Vec::new(),
+                last_error: None,
+                async_operations: Vec::new(),
+                pane_move_preview: None,
+                pane_focus_request: None,
+                browser_opens: Vec::new(),
+                stray_hand_offs: Vec::new(),
+                project_adds: Vec::new(),
+                agent_definitions: None,
+                server_discovery: ServerDiscoverySnapshot {
+                    loading: true,
+                    failure: None,
+                },
+            },
+            recent_closed: RecentClosedSnapshot::default(),
+            workspace_view: None,
+            browser_views: Vec::new(),
+            browser_scopes: Vec::new(),
+            external_grants: Vec::new(),
+            browser_views_revision: None,
+            memory: None,
+            suggestions: None,
+            desk: None,
+            desk_live: None,
+            desk_jobs: None,
+            desk_mentions: None,
+            access: None,
+            automations: None,
+            link_summaries: None,
+            link_panel: None,
+            session_record: None,
+            session_work_search: None,
+            session_thread: None,
+            session_thread_history: None,
+        }
+    }
+}
+
+mod access;
+mod desk;
+mod overview_graph;
+pub(crate) mod overview_graph_choices;
+/// The sections of [`Snapshot`] that ride the revisioned `rest` channel of
+/// the delta wire: everything except the editor and the changes view (each
+/// with its own revision), the terminal chunk ring (sequence cursor), and the
+/// per-event scalars, which now include find state.
+/// Owned copy retained by the runtime to stamp revisions by comparison, so
+/// no mutation site needs dirty-tracking discipline.
+mod rest;
+mod session_thread;
+mod suggestions;
+pub use access::*;
+pub use desk::*;
+pub use overview_graph::{GraphSession, OverviewGraphSnapshot};
+pub use overview_graph_choices::{
+    OVERVIEW_GRAPH_LIST_LIMIT, OverviewGraphChange, OverviewGraphChoices,
+};
+pub use rest::{RestSections, RestWire};
+pub use session_thread::*;
+pub use suggestions::*;
+
+/// One delta response taken from the runtime, holding everything the wire
+/// needs and nothing that reaches back into the runtime.
+///
+/// Taking a payload is what runs under the runtime lock; serializing it is
+/// what must not. Sections ride the reference-counted copies the runtime
+/// already retains for revision stamping, so taking one copies no section body.
+pub struct SnapshotDeltaPayload {
+    /// Cursor normalized to zero on reset, for negotiated semantic deltas.
+    pub have_revision: u64,
+    /// Complete immutable state for typed internal projections.
+    pub current_rest: Arc<RestSections>,
+    pub schema_version: u32,
+    pub revision: u64,
+    pub rest: Option<Arc<RestSections>>,
+    pub usage: Option<Arc<crate::usage::model::UsageSnapshot>>,
+    pub editor: Option<Arc<EditorSnapshot>>,
+    pub changes: Option<Arc<ChangesSnapshot>>,
+    /// The visible View documents (PRD S7 contract 3.1); always `None` in a
+    /// shell without View areas.
+    pub documents: Option<DocumentsDelta>,
+    pub memory: Option<Arc<MemorySnapshot>>,
+    pub suggestions: Option<Arc<SuggestionsSnapshot>>,
+    pub desk: Option<Arc<DeskSnapshot>>,
+    pub desk_live: Option<Arc<DeskLiveSnapshot>>,
+    pub desk_jobs: Option<Arc<DeskJobsSnapshot>>,
+    pub desk_mentions: Option<Arc<DeskMentionsSnapshot>>,
+    pub access: Option<Arc<AccessSnapshot>>,
+    pub automations: Option<Arc<crate::automations::AutomationsSnapshot>>,
+    pub link_summaries: Option<Arc<crate::links::LinkSummariesSnapshot>>,
+    pub link_panel: Option<Arc<crate::links::LinkPanelSnapshot>>,
+    pub session_record: Option<Arc<crate::links::ledger::SessionRecordSnapshot>>,
+    pub session_work_search: Option<Arc<crate::links::ledger::SessionSearchSnapshot>>,
+    pub session_thread: Option<Arc<SessionThreadSnapshot>>,
+    pub session_thread_history: Option<Arc<SessionThreadHistorySnapshot>>,
+    pub find: PaneFindSnapshot,
+}
+
+/// The documents the front Workspace's area-active displays show, in tree
+/// order, and those among them that changed past the reader's revision. The
+/// shell keeps the documents it has whose ids are in `visible`, overwrites
+/// `changed`, and drops the rest, so a keystroke re-sends one document.
+pub struct DocumentsDelta {
+    pub visible: Vec<String>,
+    pub changed: Vec<(String, Arc<EditorDocumentSnapshot>)>,
+}
+
+/// One delta response on the snapshot wire. `rest`, `editor`, and `changes`
+/// are present only when the caller's `have_revision` predates their last
+/// change; terminal output travels in frames of its own (PRD
+/// core-host-node-terminal D-15), never here. The changes view holds a whole file's diff text, so it is kept off `rest`,
+/// which restamps whenever any agent row changes.
+///
+/// It borrows from a `SnapshotDeltaPayload`, never from the runtime, so
+/// building and serializing it needs no lock.
+#[derive(Serialize)]
+pub struct SnapshotDeltaWire<'a> {
+    pub schema_version: u32,
+    pub revision: u64,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub rest_format: Option<&'static str>,
+    pub rest: Option<RestWire<'a>>,
+    /// Usage-only changes never resend the navigator or unrelated UI state.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub usage: Option<&'a crate::usage::model::UsageSnapshot>,
+    pub editor: Option<&'a EditorSnapshot>,
+    pub changes: Option<&'a ChangesSnapshot>,
+    /// Absent unless a visible View document changed for this reader, and
+    /// always absent in a shell without View areas, so such a wire keeps
+    /// exactly its keys.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub documents: Option<DocumentsWire<'a>>,
+    /// Omitted until Memory has a Project open or a live session given a
+    /// card.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub memory: Option<&'a MemorySnapshot>,
+    /// Omitted until the Hide AI tool opens a Project.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub suggestions: Option<&'a SuggestionsSnapshot>,
+    /// Omitted until Desk is installed, and while it has not changed.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub desk: Option<&'a DeskSnapshot>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub desk_live: Option<&'a DeskLiveSnapshot>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub desk_jobs: Option<&'a DeskJobsSnapshot>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub desk_mentions: Option<&'a DeskMentionsSnapshot>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub access: Option<&'a AccessSnapshot>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub automations: Option<&'a crate::automations::AutomationsSnapshot>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub link_summaries: Option<&'a crate::links::LinkSummariesSnapshot>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub link_panel: Option<&'a crate::links::LinkPanelSnapshot>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub session_record: Option<&'a crate::links::ledger::SessionRecordSnapshot>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub session_work_search: Option<&'a crate::links::ledger::SessionSearchSnapshot>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub session_thread: Option<&'a SessionThreadSnapshot>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub session_thread_history: Option<&'a SessionThreadHistorySnapshot>,
+    /// Find state rides top-level rather than in `rest`, because it changes on
+    /// every keystroke while a search is open. In `rest` each keystroke would
+    /// restamp that revision and resend the whole navigator and ui state
+    /// sections with it - the wire would be sized by total state instead of by
+    /// what changed. Six scalars on every response cost far less.
+    pub find: &'a PaneFindSnapshot,
+}
+
+impl<'a> SnapshotDeltaWire<'a> {
+    /// Only clients which negotiated this representation receive nested omissions.
+    pub fn granular(payload: &'a SnapshotDeltaPayload) -> Self {
+        let mut wire = Self::borrow(payload);
+        wire.rest_format = Some("semantic-rest-v1");
+        wire.rest = payload.rest.as_deref().map(|rest| RestWire {
+            rest,
+            have_revision: payload.have_revision,
+            legacy: false,
+        });
+        wire
+    }
+
+    pub fn borrow(payload: &'a SnapshotDeltaPayload) -> Self {
+        Self {
+            schema_version: payload.schema_version,
+            revision: payload.revision,
+            rest_format: None,
+            rest: payload.rest.as_deref().map(|rest| RestWire {
+                rest,
+                have_revision: 0,
+                legacy: true,
+            }),
+            usage: payload.usage.as_deref(),
+            editor: payload.editor.as_deref(),
+            changes: payload.changes.as_deref(),
+            documents: payload.documents.as_ref().map(|documents| DocumentsWire {
+                visible: &documents.visible,
+                changed: documents
+                    .changed
+                    .iter()
+                    .map(|(tab_id, document)| ChangedDocumentWire { tab_id, document })
+                    .collect(),
+            }),
+            memory: payload.memory.as_deref(),
+            suggestions: payload.suggestions.as_deref(),
+            desk: payload.desk.as_deref(),
+            desk_live: payload.desk_live.as_deref(),
+            desk_jobs: payload.desk_jobs.as_deref(),
+            desk_mentions: payload.desk_mentions.as_deref(),
+            access: payload.access.as_deref(),
+            automations: payload.automations.as_deref(),
+            link_summaries: payload.link_summaries.as_deref(),
+            link_panel: payload.link_panel.as_deref(),
+            session_record: payload.session_record.as_deref(),
+            session_work_search: payload.session_work_search.as_deref(),
+            session_thread: payload.session_thread.as_deref(),
+            session_thread_history: payload.session_thread_history.as_deref(),
+            find: &payload.find,
+        }
+    }
+}
+
+#[derive(Serialize)]
+pub struct DocumentsWire<'a> {
+    pub visible: &'a [String],
+    pub changed: Vec<ChangedDocumentWire<'a>>,
+}
+
+#[derive(Serialize)]
+pub struct ChangedDocumentWire<'a> {
+    pub tab_id: &'a str,
+    pub document: &'a EditorDocumentSnapshot,
+}
+
+#[cfg(test)]
+mod interface_language_tests {
+    use super::InterfaceLanguage;
+
+    /// The cases `web/src/i18n/locale.test.ts` resolves, so a closed-window
+    /// reader in the core and a shell agree on the system's language.
+    #[test]
+    fn a_system_language_resolves_as_the_shell_resolves_it() {
+        for (tag, expected) in [
+            ("en-GB", Some(InterfaceLanguage::English)),
+            ("ko-KR", Some(InterfaceLanguage::Korean)),
+            ("ja-JP", Some(InterfaceLanguage::Japanese)),
+            ("zh-CN", Some(InterfaceLanguage::SimplifiedChinese)),
+            ("zh-Hans", Some(InterfaceLanguage::SimplifiedChinese)),
+            ("zh-Hans-KR", Some(InterfaceLanguage::SimplifiedChinese)),
+            ("zh-SG", Some(InterfaceLanguage::SimplifiedChinese)),
+            ("zh", Some(InterfaceLanguage::SimplifiedChinese)),
+            ("zh-TW", None),
+            ("zh-Hant", None),
+            ("zh-Hant-HK", None),
+            ("fr-FR", None),
+            ("", None),
+        ] {
+            assert_eq!(InterfaceLanguage::from_system(tag), expected, "{tag}");
+        }
+    }
+}
+
+#[cfg(test)]
+mod memory_start_failure_tests {
+    use super::{MemoryStartFailure, MemoryStartFailureCode};
+
+    /// The failed card shows why its agent never started: the question its
+    /// shell stopped at, and never more than that one line.
+    #[test]
+    fn a_start_failure_carries_its_code_and_at_most_the_question_line() {
+        let question = crate::coordination::refusal(
+            crate::agent_start::SHELL_STARTING,
+            "[oh-my-zsh] Would you like to update? [Y/n]",
+        );
+        assert_eq!(
+            MemoryStartFailure::of(&question),
+            MemoryStartFailure {
+                code: MemoryStartFailureCode::ShellStarting,
+                detail: Some("[oh-my-zsh] Would you like to update? [Y/n]".to_owned()),
+            }
+        );
+        let long =
+            crate::coordination::refusal(crate::agent_start::SHELL_STARTING, &"y".repeat(400));
+        assert_eq!(
+            MemoryStartFailure::of(&long)
+                .detail
+                .map(|line| line.chars().count()),
+            Some(MemoryStartFailure::DETAIL_CHARS)
+        );
+        assert_eq!(
+            MemoryStartFailure::of(crate::agent_start::SHELL_STARTING).detail,
+            None,
+            "a screen that could not be read"
+        );
+        assert_eq!(
+            MemoryStartFailure::of("agent_not_started"),
+            MemoryStartFailure {
+                code: MemoryStartFailureCode::AgentNotStarted,
+                detail: None,
+            }
+        );
+        assert_eq!(
+            MemoryStartFailure::of("agent_not_installed"),
+            MemoryStartFailure {
+                code: MemoryStartFailureCode::Other,
+                detail: None,
+            }
+        );
+        assert_eq!(
+            MemoryStartFailure::of("card_not_processed\u{1f}The owning guide is unavailable"),
+            MemoryStartFailure {
+                code: MemoryStartFailureCode::CardNotProcessed,
+                detail: Some("The owning guide is unavailable".to_owned()),
+            }
+        );
+    }
+}
+
+#[cfg(test)]
+mod pull_request_state_tests {
+    use super::PullRequestSnapshot;
+
+    /// A checkout's pull request reaches the shell with the one state every
+    /// PR mark draws, so no shell derives it from the badge, draft flag,
+    /// checks and review again (docs/status-model.md, Pull request visual
+    /// states); the core-only facts stay off the wire.
+    #[test]
+    fn a_checkout_pull_request_carries_its_one_state_on_the_wire() {
+        for (badge, draft, checks, review, expected) in [
+            ("open", false, "failed", None, "failed"),
+            (
+                "review",
+                false,
+                "passing",
+                Some("changes_requested"),
+                "failed",
+            ),
+            (
+                "review",
+                false,
+                "passing",
+                Some("review_required"),
+                "pending",
+            ),
+            ("open", false, "unknown", None, "pending"),
+            ("review", false, "passing", Some("approved"), "mergeable"),
+            ("open", true, "failed", None, "draft"),
+            ("merged", true, "failed", None, "merged"),
+            ("closed", false, "passing", None, "closed"),
+        ] {
+            let pull: PullRequestSnapshot = serde_json::from_value(serde_json::json!({
+                "closing_issues": [], "title": "t", "checks": checks, "number": 7,
+                "head_branch": "feature", "base_branch": "main", "url": "https://github.com/acme/app/pull/7",
+                "badge": badge, "review": review, "is_draft": draft,
+                "merged_at_unix_ms": null, "updated_at_unix_ms": null,
+                "head_oid": "abc", "cross_repository": true,
+            }))
+            .expect("pull request decodes");
+            let wire = serde_json::to_value(&pull).expect("pull request encodes");
+            assert_eq!(
+                wire["state"], expected,
+                "{badge} {draft} {checks} {review:?}"
+            );
+            assert!(wire.get("head_oid").is_none() && wire.get("cross_repository").is_none());
+        }
+    }
+}
+
+#[cfg(test)]
+mod wire_enum_tests {
+    //! The shell decodes these strings strictly, so the values the core emits
+    //! are a contract, pinned in `contracts/snapshot-wire-enums.json` and
+    //! decoded by the shell's `SnapshotWireEnumTests`. Each list below is
+    //! matched exhaustively: a new variant fails to compile here until it is
+    //! listed, and then fails this test until it is in the contract file.
+    use super::*;
+
+    fn contract() -> serde_json::Map<String, serde_json::Value> {
+        let path = concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/../contracts/snapshot-wire-enums.json"
+        );
+        let text = std::fs::read_to_string(path).expect("contracts/snapshot-wire-enums.json");
+        match serde_json::from_str(&text).expect("contract is JSON") {
+            serde_json::Value::Object(map) => map,
+            other => panic!("contract must be an object, got {other}"),
+        }
+    }
+
+    fn assert_wire<T: Serialize>(
+        contract: &serde_json::Map<String, serde_json::Value>,
+        key: &str,
+        variants: &[T],
+    ) {
+        let listed = contract[key]
+            .as_array()
+            .unwrap_or_else(|| panic!("{key} must be an array"))
+            .iter()
+            .map(|value| {
+                value
+                    .as_str()
+                    .unwrap_or_else(|| panic!("{key} holds strings"))
+                    .to_owned()
+            })
+            .collect::<Vec<_>>();
+        let emitted = variants
+            .iter()
+            .map(|variant| match serde_json::to_value(variant).unwrap() {
+                serde_json::Value::String(value) => value,
+                other => panic!("{key} serializes as a string, got {other}"),
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(
+            emitted, listed,
+            "{key}: the core emits the left, the contract lists the right"
+        );
+    }
+
+    #[test]
+    fn every_snapshot_enum_value_is_in_the_contract() {
+        let contract = contract();
+        let mut checked = BTreeSet::new();
+
+        let origins = [
+            CheckoutPurposeOrigin::Token,
+            CheckoutPurposeOrigin::BranchDescription,
+            CheckoutPurposeOrigin::AgentTitle,
+            CheckoutPurposeOrigin::PullRequestTitle,
+        ];
+        for variant in origins {
+            match variant {
+                CheckoutPurposeOrigin::Token
+                | CheckoutPurposeOrigin::BranchDescription
+                | CheckoutPurposeOrigin::AgentTitle
+                | CheckoutPurposeOrigin::PullRequestTitle => {}
+            }
+        }
+        assert_wire(&contract, "checkout_purpose_origin", &origins);
+        checked.insert("checkout_purpose_origin");
+
+        let badges = [
+            PullRequestBadge::Merged,
+            PullRequestBadge::Closed,
+            PullRequestBadge::Review,
+            PullRequestBadge::Open,
+        ];
+        for variant in badges {
+            match variant {
+                PullRequestBadge::Merged
+                | PullRequestBadge::Closed
+                | PullRequestBadge::Review
+                | PullRequestBadge::Open => {}
+            }
+        }
+        assert_wire(&contract, "pull_request_badge", &badges);
+        checked.insert("pull_request_badge");
+
+        let decisions = [
+            ReviewDecision::ReviewRequired,
+            ReviewDecision::ChangesRequested,
+            ReviewDecision::Approved,
+        ];
+        for variant in decisions {
+            match variant {
+                ReviewDecision::ReviewRequired
+                | ReviewDecision::ChangesRequested
+                | ReviewDecision::Approved => {}
+            }
+        }
+        assert_wire(&contract, "review_decision", &decisions);
+        checked.insert("review_decision");
+
+        let reviewer_states = [
+            PrReviewerState::ChangesRequested,
+            PrReviewerState::Approved,
+            PrReviewerState::Requested,
+            PrReviewerState::Commented,
+            PrReviewerState::Dismissed,
+        ];
+        for variant in reviewer_states {
+            match variant {
+                PrReviewerState::ChangesRequested
+                | PrReviewerState::Approved
+                | PrReviewerState::Requested
+                | PrReviewerState::Commented
+                | PrReviewerState::Dismissed => {}
+            }
+        }
+        assert_wire(&contract, "pr_reviewer_state", &reviewer_states);
+        checked.insert("pr_reviewer_state");
+
+        let checks = [
+            PullRequestChecks::Unknown,
+            PullRequestChecks::None,
+            PullRequestChecks::Pending,
+            PullRequestChecks::Failed,
+            PullRequestChecks::Passing,
+        ];
+        for variant in checks {
+            match variant {
+                PullRequestChecks::Unknown
+                | PullRequestChecks::None
+                | PullRequestChecks::Pending
+                | PullRequestChecks::Failed
+                | PullRequestChecks::Passing => {}
+            }
+        }
+        assert_wire(&contract, "pull_request_checks", &checks);
+        checked.insert("pull_request_checks");
+
+        use crate::agent_state::RequestVerb;
+        let verbs = [
+            RequestVerb::Answer,
+            RequestVerb::Blocked,
+            RequestVerb::Fix,
+            RequestVerb::Review,
+            RequestVerb::Stopped,
+            RequestVerb::Result,
+            RequestVerb::Working,
+            RequestVerb::Waiting,
+            RequestVerb::Idle,
+        ];
+        for variant in verbs {
+            match variant {
+                RequestVerb::Answer
+                | RequestVerb::Blocked
+                | RequestVerb::Fix
+                | RequestVerb::Review
+                | RequestVerb::Stopped
+                | RequestVerb::Result
+                | RequestVerb::Working
+                | RequestVerb::Waiting
+                | RequestVerb::Idle => {}
+            }
+        }
+        assert_wire(&contract, "request_verb", &verbs);
+        checked.insert("request_verb");
+
+        let waits = [
+            AgentWait::Children,
+            AgentWait::Background,
+            AgentWait::Reply,
+            AgentWait::Checks,
+            AgentWait::Subagents,
+        ];
+        for variant in waits {
+            match variant {
+                AgentWait::Children
+                | AgentWait::Background
+                | AgentWait::Reply
+                | AgentWait::Checks
+                | AgentWait::Subagents => {}
+            }
+        }
+        assert_wire(&contract, "agent_wait", &waits);
+        checked.insert("agent_wait");
+
+        use crate::agent_state::RowMark;
+        let marks = [
+            RowMark::Turn,
+            RowMark::Going,
+            RowMark::Waiting,
+            RowMark::Done,
+            RowMark::Unread,
+            RowMark::Quiet,
+            RowMark::Unknown,
+            RowMark::Asleep,
+            RowMark::Look,
+        ];
+        for variant in marks {
+            match variant {
+                RowMark::Turn
+                | RowMark::Look
+                | RowMark::Going
+                | RowMark::Waiting
+                | RowMark::Done
+                | RowMark::Unread
+                | RowMark::Quiet
+                | RowMark::Unknown
+                | RowMark::Asleep => {}
+            }
+        }
+        assert_wire(&contract, "row_mark", &marks);
+        checked.insert("row_mark");
+
+        let codes = [
+            AgentStatusCode::Error,
+            AgentStatusCode::Question,
+            AgentStatusCode::Approval,
+            AgentStatusCode::Working,
+            AgentStatusCode::Done,
+            AgentStatusCode::Idle,
+            AgentStatusCode::Unknown,
+            AgentStatusCode::Starting,
+            AgentStatusCode::Waiting,
+            AgentStatusCode::Unfinished,
+            AgentStatusCode::Stopped,
+            AgentStatusCode::Attached,
+            AgentStatusCode::Sleeping,
+            AgentStatusCode::Waking,
+            AgentStatusCode::SleepFailed,
+        ];
+        for variant in codes {
+            match variant {
+                AgentStatusCode::Error
+                | AgentStatusCode::Question
+                | AgentStatusCode::Approval
+                | AgentStatusCode::Working
+                | AgentStatusCode::Done
+                | AgentStatusCode::Idle
+                | AgentStatusCode::Unknown
+                | AgentStatusCode::Starting
+                | AgentStatusCode::Waiting
+                | AgentStatusCode::Unfinished
+                | AgentStatusCode::Stopped
+                | AgentStatusCode::Attached
+                | AgentStatusCode::Sleeping
+                | AgentStatusCode::Waking
+                | AgentStatusCode::SleepFailed => {}
+            }
+        }
+        assert_wire(&contract, "agent_status_code", &codes);
+        checked.insert("agent_status_code");
+
+        use crate::labels::analysis::LabelEnd;
+        let ends = [
+            LabelEnd::Working,
+            LabelEnd::Question,
+            LabelEnd::Blocked,
+            LabelEnd::Done,
+            LabelEnd::Waiting,
+            LabelEnd::Unfinished,
+            LabelEnd::Limited,
+        ];
+        for variant in ends {
+            match variant {
+                LabelEnd::Working
+                | LabelEnd::Question
+                | LabelEnd::Blocked
+                | LabelEnd::Done
+                | LabelEnd::Waiting
+                | LabelEnd::Unfinished
+                | LabelEnd::Limited => {}
+            }
+        }
+        assert_wire(&contract, "label_end", &ends);
+        checked.insert("label_end");
+
+        use hide_session::turns::UserTurnKind;
+        let user_turns = [UserTurnKind::PlanApproval, UserTurnKind::Question];
+        for variant in user_turns {
+            match variant {
+                UserTurnKind::PlanApproval | UserTurnKind::Question => {}
+            }
+        }
+        assert_wire(&contract, "user_turn_kind", &user_turns);
+        checked.insert("user_turn_kind");
+
+        let subjects = [
+            AskSubject::PlanReview { steps: 1 },
+            AskSubject::MissionDecision {
+                line: "line".into(),
+                views: 0,
+            },
+            AskSubject::MissionAttention {
+                node: "node".into(),
+                reason: crate::missions::AttentionReason::WorkerEnded,
+                unmet: 0,
+            },
+            AskSubject::InputUnconfirmed {
+                input: crate::delivery::typed::InputKind::Brief,
+                spent: false,
+                held: false,
+            },
+            AskSubject::HumanTurn {
+                id: "agent-1.1".into(),
+                kind: crate::coordination::human_turn::HumanKind::Auth,
+                place: "github.com/login".into(),
+                device: Some("mini".into()),
+            },
+            AskSubject::OpenAsk {
+                id: "m1".into(),
+                line: "line".into(),
+            },
+        ];
+        for variant in &subjects {
+            match variant {
+                AskSubject::PlanReview { .. }
+                | AskSubject::MissionDecision { .. }
+                | AskSubject::MissionAttention { .. }
+                | AskSubject::InputUnconfirmed { .. }
+                | AskSubject::HumanTurn { .. }
+                | AskSubject::OpenAsk { .. } => {}
+            }
+        }
+        let causes = subjects
+            .iter()
+            .map(|subject| serde_json::to_value(subject).unwrap()["cause"].clone())
+            .collect::<Vec<_>>();
+        assert_wire(&contract, "ask_subject_cause", &causes);
+        checked.insert("ask_subject_cause");
+
+        use crate::coordination::human_turn::HumanKind;
+        let human_kinds = [HumanKind::Auth, HumanKind::Permission, HumanKind::Install];
+        for variant in human_kinds {
+            match variant {
+                HumanKind::Auth | HumanKind::Permission | HumanKind::Install => {}
+            }
+        }
+        assert_wire(&contract, "human_kind", &human_kinds);
+        checked.insert("human_kind");
+
+        let statuses = [
+            ChangedFileStatus::Modified,
+            ChangedFileStatus::Added,
+            ChangedFileStatus::Deleted,
+            ChangedFileStatus::Untracked,
+            ChangedFileStatus::Renamed,
+            ChangedFileStatus::Conflict,
+        ];
+        for variant in statuses {
+            match variant {
+                ChangedFileStatus::Modified
+                | ChangedFileStatus::Added
+                | ChangedFileStatus::Deleted
+                | ChangedFileStatus::Untracked
+                | ChangedFileStatus::Renamed
+                | ChangedFileStatus::Conflict => {}
+            }
+        }
+        assert_wire(&contract, "changed_file_status", &statuses);
+        checked.insert("changed_file_status");
+
+        let tab_kinds = [
+            EditorTabKind::File,
+            EditorTabKind::Diff,
+            EditorTabKind::Session,
+        ];
+        for variant in tab_kinds {
+            match variant {
+                EditorTabKind::File | EditorTabKind::Diff | EditorTabKind::Session => {}
+            }
+        }
+        assert_wire(&contract, "editor_tab_kind", &tab_kinds);
+        checked.insert("editor_tab_kind");
+
+        let document_kinds = [
+            DocumentKind::Text,
+            DocumentKind::Markdown,
+            DocumentKind::Image,
+            DocumentKind::Pdf,
+            DocumentKind::Binary,
+        ];
+        for variant in document_kinds {
+            match variant {
+                DocumentKind::Text
+                | DocumentKind::Markdown
+                | DocumentKind::Image
+                | DocumentKind::Pdf
+                | DocumentKind::Binary => {}
+            }
+        }
+        assert_wire(&contract, "document_kind", &document_kinds);
+        checked.insert("document_kind");
+
+        let sections = [
+            RightPanelSection::Overview,
+            RightPanelSection::Explorer,
+            RightPanelSection::Changes,
+            RightPanelSection::AgentSessions,
+            RightPanelSection::Sessions,
+            RightPanelSection::Memory,
+        ];
+        for variant in sections {
+            match variant {
+                RightPanelSection::Overview
+                | RightPanelSection::Explorer
+                | RightPanelSection::Changes
+                | RightPanelSection::AgentSessions
+                | RightPanelSection::Sessions
+                | RightPanelSection::Memory => {}
+            }
+        }
+        assert_wire(&contract, "right_panel_section", &sections);
+        checked.insert("right_panel_section");
+
+        use crate::agent_state::escalation::{MarkKind, Verb};
+        use crate::agent_state::sessions::Group;
+        let session_groups = crate::agent_state::sessions::GROUPS;
+        for group in session_groups {
+            match group {
+                Group::NeedsYou | Group::Working | Group::Done | Group::Idle | Group::Resolved => {}
+            }
+        }
+        assert_wire(&contract, "session_group", &session_groups);
+        checked.insert("session_group");
+        let lenses = [SidebarLens::Projects, SidebarLens::Tasks, SidebarLens::Prs];
+        for variant in lenses {
+            match variant {
+                SidebarLens::Projects | SidebarLens::Tasks | SidebarLens::Prs => {}
+            }
+        }
+        assert_wire(&contract, "sidebar_lens", &lenses);
+        checked.insert("sidebar_lens");
+
+        let views = [TaskView::Status, TaskView::Project];
+        for variant in views {
+            match variant {
+                TaskView::Status | TaskView::Project => {}
+            }
+        }
+        assert_wire(&contract, "task_view", &views);
+        checked.insert("task_view");
+        use overview_graph_choices::OverviewGraphFocus;
+        let focuses = [
+            OverviewGraphFocus::All,
+            OverviewGraphFocus::Turn,
+            OverviewGraphFocus::Working,
+            OverviewGraphFocus::Results,
+        ];
+        for variant in focuses {
+            match variant {
+                OverviewGraphFocus::All
+                | OverviewGraphFocus::Turn
+                | OverviewGraphFocus::Working
+                | OverviewGraphFocus::Results => {}
+            }
+        }
+        assert_wire(&contract, "overview_graph_focus", &focuses);
+        checked.insert("overview_graph_focus");
+        let verbs = [Verb::Approval, Verb::Answer, Verb::Confirm, Verb::Draft];
+        for verb in verbs {
+            match verb {
+                Verb::Approval | Verb::Answer | Verb::Confirm | Verb::Draft => {}
+            }
+        }
+        assert_wire(&contract, "raise_verb", &verbs);
+        checked.insert("raise_verb");
+        let pr_states = [
+            PrState::Failed,
+            PrState::Pending,
+            PrState::Mergeable,
+            PrState::Draft,
+            PrState::Merged,
+            PrState::Closed,
+        ];
+        for state in pr_states {
+            match state {
+                PrState::Failed
+                | PrState::Pending
+                | PrState::Mergeable
+                | PrState::Draft
+                | PrState::Merged
+                | PrState::Closed => {}
+            }
+        }
+        assert_wire(&contract, "pr_state", &pr_states);
+        checked.insert("pr_state");
+        let marks = [MarkKind::Raised, MarkKind::Working];
+        for mark in marks {
+            match mark {
+                MarkKind::Raised | MarkKind::Working => {}
+            }
+        }
+        assert_wire(&contract, "descendant_mark", &marks);
+        checked.insert("descendant_mark");
+
+        let strip_kinds = [
+            StripTabKind::Engine,
+            StripTabKind::File,
+            StripTabKind::Diff,
+            StripTabKind::Session,
+        ];
+        for variant in strip_kinds {
+            match variant {
+                StripTabKind::Engine
+                | StripTabKind::File
+                | StripTabKind::Diff
+                | StripTabKind::Session => {}
+            }
+        }
+        assert_wire(&contract, "strip_tab_kind", &strip_kinds);
+        checked.insert("strip_tab_kind");
+
+        let card_kinds = [
+            MemoryCardKind::Rule,
+            MemoryCardKind::Decision,
+            MemoryCardKind::Lesson,
+            MemoryCardKind::Fact,
+            MemoryCardKind::Preference,
+        ];
+        for variant in card_kinds {
+            match variant {
+                MemoryCardKind::Rule
+                | MemoryCardKind::Decision
+                | MemoryCardKind::Lesson
+                | MemoryCardKind::Fact
+                | MemoryCardKind::Preference => {}
+            }
+        }
+        assert_wire(&contract, "memory_card_kind", &card_kinds);
+        checked.insert("memory_card_kind");
+
+        let analysis_states = [
+            MemoryAnalysisState::Idle,
+            MemoryAnalysisState::Analyzing,
+            MemoryAnalysisState::AiNotReady,
+            MemoryAnalysisState::Checking,
+            MemoryAnalysisState::CheckBudgetExhausted,
+        ];
+        for variant in analysis_states {
+            match variant {
+                MemoryAnalysisState::Idle
+                | MemoryAnalysisState::Analyzing
+                | MemoryAnalysisState::AiNotReady
+                | MemoryAnalysisState::Checking
+                | MemoryAnalysisState::CheckBudgetExhausted => {}
+            }
+        }
+        assert_wire(&contract, "memory_analysis_state", &analysis_states);
+        checked.insert("memory_analysis_state");
+
+        let promotion_states = [
+            MemoryPromotionState::Running,
+            MemoryPromotionState::PrOpen,
+            MemoryPromotionState::Merged,
+            MemoryPromotionState::Failed,
+            MemoryPromotionState::Unconfirmed,
+            MemoryPromotionState::Building,
+            MemoryPromotionState::Unbuilt,
+            MemoryPromotionState::Ready,
+        ];
+        for variant in promotion_states {
+            match variant {
+                MemoryPromotionState::Running
+                | MemoryPromotionState::PrOpen
+                | MemoryPromotionState::Merged
+                | MemoryPromotionState::Failed
+                | MemoryPromotionState::Unconfirmed
+                | MemoryPromotionState::Building
+                | MemoryPromotionState::Unbuilt
+                | MemoryPromotionState::Ready => {}
+            }
+        }
+        assert_wire(&contract, "memory_promotion_state", &promotion_states);
+        checked.insert("memory_promotion_state");
+
+        let start_failures = [
+            MemoryStartFailureCode::ShellStarting,
+            MemoryStartFailureCode::AgentNotStarted,
+            MemoryStartFailureCode::AgentHookNotReady,
+            MemoryStartFailureCode::CardNotProcessed,
+            MemoryStartFailureCode::Other,
+        ];
+        for variant in start_failures {
+            match variant {
+                MemoryStartFailureCode::ShellStarting
+                | MemoryStartFailureCode::CardNotProcessed
+                | MemoryStartFailureCode::AgentNotStarted
+                | MemoryStartFailureCode::AgentHookNotReady
+                | MemoryStartFailureCode::Other => {}
+            }
+        }
+        assert_wire(&contract, "memory_start_failure_code", &start_failures);
+        checked.insert("memory_start_failure_code");
+
+        let actions = [
+            MemoryAction::Enable,
+            MemoryAction::Disable,
+            MemoryAction::Delete,
+            MemoryAction::Forget,
+            MemoryAction::Undo,
+            MemoryAction::Promote,
+            MemoryAction::Dismiss,
+            MemoryAction::CardRight,
+            MemoryAction::DocRight,
+            MemoryAction::Revive,
+            MemoryAction::Recheck,
+            MemoryAction::UndoChange,
+        ];
+        for variant in actions {
+            match variant {
+                MemoryAction::Enable
+                | MemoryAction::Disable
+                | MemoryAction::Delete
+                | MemoryAction::Forget
+                | MemoryAction::Undo
+                | MemoryAction::Promote
+                | MemoryAction::Dismiss
+                | MemoryAction::CardRight
+                | MemoryAction::DocRight
+                | MemoryAction::Revive
+                | MemoryAction::Recheck
+                | MemoryAction::UndoChange => {}
+            }
+            assert_eq!(serde_json::to_value(variant).unwrap(), variant.as_str());
+        }
+        assert_wire(&contract, "memory_action", &actions);
+        checked.insert("memory_action");
+
+        let changes = [
+            MemoryChange::Stale,
+            MemoryChange::Archive,
+            MemoryChange::Revive,
+            MemoryChange::Alias {
+                aliases: Vec::new(),
+            },
+            MemoryChange::Merge { cards: Vec::new() },
+            MemoryChange::Recheck {
+                by_agent: false,
+                letters: None,
+                unreadable: None,
+            },
+        ];
+        for change in &changes {
+            match change {
+                MemoryChange::Stale
+                | MemoryChange::Archive
+                | MemoryChange::Revive
+                | MemoryChange::Alias { .. }
+                | MemoryChange::Merge { .. }
+                | MemoryChange::Recheck { .. } => {}
+            }
+            assert_eq!(
+                serde_json::to_value(change).unwrap()["kind"],
+                change.kind_str()
+            );
+        }
+        let kinds = changes
+            .iter()
+            .map(MemoryChange::kind_str)
+            .collect::<Vec<_>>();
+        assert_eq!(contract["memory_change_kind"], serde_json::json!(kinds));
+        checked.insert("memory_change_kind");
+
+        let blocked = [
+            MemoryUndoBlocked::LaterChange,
+            MemoryUndoBlocked::MergedCardChanged,
+            MemoryUndoBlocked::MergedCardGone,
+            MemoryUndoBlocked::RecheckFinished,
+        ];
+        for variant in blocked {
+            match variant {
+                MemoryUndoBlocked::LaterChange
+                | MemoryUndoBlocked::MergedCardChanged
+                | MemoryUndoBlocked::MergedCardGone
+                | MemoryUndoBlocked::RecheckFinished => {}
+            }
+            assert_eq!(serde_json::to_value(variant).unwrap(), variant.as_str());
+        }
+        assert_wire(&contract, "memory_undo_blocked", &blocked);
+        checked.insert("memory_undo_blocked");
+
+        let send_states = [
+            ViewFeedbackSendState::Sending,
+            ViewFeedbackSendState::Sent,
+            ViewFeedbackSendState::Waiting,
+            ViewFeedbackSendState::Reopening,
+            ViewFeedbackSendState::Failed,
+        ];
+        for variant in send_states {
+            match variant {
+                ViewFeedbackSendState::Sending
+                | ViewFeedbackSendState::Sent
+                | ViewFeedbackSendState::Waiting
+                | ViewFeedbackSendState::Reopening
+                | ViewFeedbackSendState::Failed => {}
+            }
+        }
+        assert_wire(&contract, "view_feedback_send_state", &send_states);
+        checked.insert("view_feedback_send_state");
+
+        let send_reasons = [
+            ViewFeedbackSendReason::AttachmentsFull,
+            ViewFeedbackSendReason::LetterUnsaved,
+            ViewFeedbackSendReason::LettersFull,
+            ViewFeedbackSendReason::ShotCopy,
+            ViewFeedbackSendReason::ReopenFailed,
+            ViewFeedbackSendReason::Closed,
+        ];
+        for variant in send_reasons {
+            match variant {
+                ViewFeedbackSendReason::AttachmentsFull
+                | ViewFeedbackSendReason::LetterUnsaved
+                | ViewFeedbackSendReason::LettersFull
+                | ViewFeedbackSendReason::ShotCopy
+                | ViewFeedbackSendReason::ReopenFailed
+                | ViewFeedbackSendReason::Closed => {}
+            }
+        }
+        assert_wire(&contract, "view_feedback_send_reason", &send_reasons);
+        checked.insert("view_feedback_send_reason");
+
+        let find_routes = [PaneFindRoute::Agent, PaneFindRoute::Bar];
+        for variant in find_routes {
+            match variant {
+                PaneFindRoute::Agent | PaneFindRoute::Bar => {}
+            }
+        }
+        assert_wire(&contract, "pane_find_route", &find_routes);
+        checked.insert("pane_find_route");
+
+        let input_states = [
+            InputRequestState::Pending,
+            InputRequestState::Ready,
+            InputRequestState::Discarded,
+        ];
+        for variant in input_states {
+            match variant {
+                InputRequestState::Pending
+                | InputRequestState::Ready
+                | InputRequestState::Discarded => {}
+            }
+        }
+        assert_wire(&contract, "input_request_state", &input_states);
+        checked.insert("input_request_state");
+
+        let kit_parts = hide_kit::ComponentId::ALL;
+        for variant in kit_parts {
+            match variant {
+                hide_kit::ComponentId::Cli
+                | hide_kit::ComponentId::ClaudeCodeHook
+                | hide_kit::ComponentId::CodexHook
+                | hide_kit::ComponentId::CoordinationRetirement => {}
+            }
+        }
+        assert_wire(&contract, "kit_component_id", &kit_parts);
+        checked.insert("kit_component_id");
+
+        let kit_states = [
+            hide_kit::ComponentState::Installed,
+            hide_kit::ComponentState::Outdated,
+            hide_kit::ComponentState::NotInstalled,
+            hide_kit::ComponentState::Removed,
+            hide_kit::ComponentState::Failed,
+            hide_kit::ComponentState::Absent,
+            hide_kit::ComponentState::Off,
+        ];
+        for variant in kit_states {
+            match variant {
+                hide_kit::ComponentState::Installed
+                | hide_kit::ComponentState::Outdated
+                | hide_kit::ComponentState::NotInstalled
+                | hide_kit::ComponentState::Removed
+                | hide_kit::ComponentState::Failed
+                | hide_kit::ComponentState::Absent
+                | hide_kit::ComponentState::Off => {}
+            }
+        }
+        assert_wire(&contract, "kit_component_state", &kit_states);
+        checked.insert("kit_component_state");
+
+        let profiles_states = [
+            ProfilesState::Listed,
+            ProfilesState::Unsupported,
+            ProfilesState::Unreadable,
+        ];
+        for variant in profiles_states {
+            match variant {
+                ProfilesState::Listed | ProfilesState::Unsupported | ProfilesState::Unreadable => {}
+            }
+        }
+        assert_wire(&contract, "profiles_state", &profiles_states);
+        checked.insert("profiles_state");
+
+        let sleep_causes = [crate::agent_sleep::SleepCause::MemoryPressure];
+        for variant in sleep_causes {
+            match variant {
+                crate::agent_sleep::SleepCause::MemoryPressure => {}
+            }
+        }
+        assert_wire(&contract, "sleep_cause", &sleep_causes);
+        checked.insert("sleep_cause");
+
+        let installs = [
+            ProfileInstall::Default,
+            ProfileInstall::Own,
+            ProfileInstall::Refused,
+            ProfileInstall::Removing,
+            ProfileInstall::RemoveFailed,
+        ];
+        for variant in installs {
+            match variant {
+                ProfileInstall::Default
+                | ProfileInstall::Own
+                | ProfileInstall::Refused
+                | ProfileInstall::Removing
+                | ProfileInstall::RemoveFailed => {}
+            }
+        }
+        assert_wire(&contract, "profile_install", &installs);
+        checked.insert("profile_install");
+
+        use hide_node_link::profiles::ProfileLogin;
+        let logins = [
+            ProfileLogin::SignedIn,
+            ProfileLogin::SignedOut,
+            ProfileLogin::Unknown,
+        ];
+        for variant in logins {
+            match variant {
+                ProfileLogin::SignedIn | ProfileLogin::SignedOut | ProfileLogin::Unknown => {}
+            }
+        }
+        assert_wire(&contract, "profile_login", &logins);
+        checked.insert("profile_login");
+
+        use crate::agent_profiles::AnswerState as ProfileAnswerState;
+        let answers = [
+            ProfileAnswerState::Pending,
+            ProfileAnswerState::Done,
+            ProfileAnswerState::Refused,
+        ];
+        for variant in answers {
+            match variant {
+                ProfileAnswerState::Pending
+                | ProfileAnswerState::Done
+                | ProfileAnswerState::Refused => {}
+            }
+        }
+        assert_wire(&contract, "profile_answer_state", &answers);
+        checked.insert("profile_answer_state");
+
+        use hide_node_link::profiles::ProfileField;
+        let fields = [
+            ProfileField::Kind,
+            ProfileField::Name,
+            ProfileField::Account,
+            ProfileField::Program,
+            ProfileField::Env,
+            ProfileField::Profile,
+        ];
+        for variant in fields {
+            match variant {
+                ProfileField::Kind
+                | ProfileField::Name
+                | ProfileField::Account
+                | ProfileField::Program
+                | ProfileField::Env
+                | ProfileField::Profile => {}
+            }
+        }
+        assert_wire(&contract, "profile_field", &fields);
+        checked.insert("profile_field");
+
+        use hide_node_link::profiles::ProfileReason;
+        let reasons = [
+            ProfileReason::KindUnknown,
+            ProfileReason::ProfilesFull,
+            ProfileReason::NameEmpty,
+            ProfileReason::NameLong,
+            ProfileReason::NameControl,
+            ProfileReason::NameBuiltin,
+            ProfileReason::NameTaken,
+            ProfileReason::ProgramLong,
+            ProfileReason::ProfileBuiltin,
+            ProfileReason::ProfileMissing,
+            ProfileReason::ProfileRemoving,
+            ProfileReason::ProfileOtherKind,
+            ProfileReason::NodeVariable,
+            ProfileReason::AccountHomeMissing,
+            ProfileReason::AccountUnsupported,
+            ProfileReason::AccountNeedsFolder,
+            ProfileReason::AccountNeedsName,
+            ProfileReason::AccountEmpty,
+            ProfileReason::AccountRelative,
+            ProfileReason::AccountIsDefault,
+            ProfileReason::AccountName,
+            ProfileReason::AccountUnprepared,
+            ProfileReason::EnvTooMany,
+            ProfileReason::EnvName,
+            ProfileReason::EnvReserved,
+            ProfileReason::EnvRepeated,
+            ProfileReason::EnvValue,
+            ProfileReason::Other,
+        ];
+        for variant in reasons {
+            match variant {
+                ProfileReason::KindUnknown
+                | ProfileReason::ProfilesFull
+                | ProfileReason::NameEmpty
+                | ProfileReason::NameLong
+                | ProfileReason::NameControl
+                | ProfileReason::NameBuiltin
+                | ProfileReason::NameTaken
+                | ProfileReason::ProgramLong
+                | ProfileReason::ProfileBuiltin
+                | ProfileReason::ProfileMissing
+                | ProfileReason::ProfileRemoving
+                | ProfileReason::ProfileOtherKind
+                | ProfileReason::NodeVariable
+                | ProfileReason::AccountHomeMissing
+                | ProfileReason::AccountUnsupported
+                | ProfileReason::AccountNeedsFolder
+                | ProfileReason::AccountNeedsName
+                | ProfileReason::AccountEmpty
+                | ProfileReason::AccountRelative
+                | ProfileReason::AccountIsDefault
+                | ProfileReason::AccountName
+                | ProfileReason::AccountUnprepared
+                | ProfileReason::EnvTooMany
+                | ProfileReason::EnvName
+                | ProfileReason::EnvReserved
+                | ProfileReason::EnvRepeated
+                | ProfileReason::EnvValue
+                | ProfileReason::Other => {}
+            }
+        }
+        assert_wire(&contract, "profile_reason", &reasons);
+        checked.insert("profile_reason");
+
+        let onboarding = [AgentOnboarding::Pending, AgentOnboarding::Done];
+        for variant in onboarding {
+            match variant {
+                AgentOnboarding::Pending | AgentOnboarding::Done => {}
+            }
+        }
+        assert_wire(&contract, "agent_onboarding", &onboarding);
+        checked.insert("agent_onboarding");
+
+        let first_run = [
+            FirstRunStep::Agents,
+            FirstRunStep::Devices,
+            FirstRunStep::Notifications,
+            FirstRunStep::Project,
+            FirstRunStep::Done,
+        ];
+        for variant in first_run {
+            match variant {
+                FirstRunStep::Agents
+                | FirstRunStep::Devices
+                | FirstRunStep::Notifications
+                | FirstRunStep::Project
+                | FirstRunStep::Done => {}
+            }
+        }
+        assert_wire(&contract, "first_run_step", &first_run);
+        checked.insert("first_run_step");
+
+        let intros = [ScreenIntro::Factory];
+        for variant in intros {
+            match variant {
+                ScreenIntro::Factory => {}
+            }
+        }
+        assert_wire(&contract, "screen_intro", &intros);
+        checked.insert("screen_intro");
+
+        let logo_modes = [AgentLogoMode::Shown, AgentLogoMode::Hidden];
+        for variant in logo_modes {
+            match variant {
+                AgentLogoMode::Shown | AgentLogoMode::Hidden => {}
+            }
+        }
+        assert_wire(&contract, "agent_logo_mode", &logo_modes);
+        checked.insert("agent_logo_mode");
+
+        let turn_row_modes = [
+            PaneTurnRowMode::OneLine,
+            PaneTurnRowMode::TwoLines,
+            PaneTurnRowMode::Off,
+        ];
+        for variant in turn_row_modes {
+            match variant {
+                PaneTurnRowMode::OneLine | PaneTurnRowMode::TwoLines | PaneTurnRowMode::Off => {}
+            }
+        }
+        assert_wire(&contract, "pane_turn_row_mode", &turn_row_modes);
+        checked.insert("pane_turn_row_mode");
+
+        let kit_availability = [
+            hide_kit::Availability::Available,
+            hide_kit::Availability::NotInstalled,
+            hide_kit::Availability::UnsupportedSystem,
+        ];
+        for variant in kit_availability {
+            match variant {
+                hide_kit::Availability::Available
+                | hide_kit::Availability::NotInstalled
+                | hide_kit::Availability::UnsupportedSystem => {}
+            }
+        }
+        assert_wire(&contract, "kit_agent_availability", &kit_availability);
+        checked.insert("kit_agent_availability");
+
+        let features = hide_kit::Feature::ALL;
+        for variant in features {
+            match variant {
+                hide_kit::Feature::Skill
+                | hide_kit::Feature::Guidance
+                | hide_kit::Feature::Letters
+                | hide_kit::Feature::Bell
+                | hide_kit::Feature::Memory
+                | hide_kit::Feature::Sleep
+                | hide_kit::Feature::Fork
+                | hide_kit::Feature::Start
+                | hide_kit::Feature::Titles => {}
+            }
+        }
+        assert_wire(&contract, "kit_feature", &features);
+        checked.insert("kit_feature");
+
+        let reasons = [
+            PaneConnectionReason::CodexSharedServer,
+            PaneConnectionReason::StartedBeforeHide,
+            PaneConnectionReason::SetupNeeded,
+            PaneConnectionReason::UpdateAgent,
+            PaneConnectionReason::SessionUnreadable,
+        ];
+        for variant in reasons {
+            match variant {
+                PaneConnectionReason::CodexSharedServer
+                | PaneConnectionReason::StartedBeforeHide
+                | PaneConnectionReason::SetupNeeded
+                | PaneConnectionReason::UpdateAgent
+                | PaneConnectionReason::SessionUnreadable => {}
+            }
+        }
+        assert_wire(&contract, "pane_connection_reason", &reasons);
+        checked.insert("pane_connection_reason");
+
+        let reopen_failures = [
+            PaneReopenFailure::StartRefused,
+            PaneReopenFailure::SessionGone,
+            PaneReopenFailure::CodexUnread,
+            PaneReopenFailure::AgentBusy,
+            PaneReopenFailure::EndRefused,
+        ];
+        for variant in reopen_failures {
+            match variant {
+                PaneReopenFailure::StartRefused
+                | PaneReopenFailure::SessionGone
+                | PaneReopenFailure::CodexUnread
+                | PaneReopenFailure::AgentBusy
+                | PaneReopenFailure::EndRefused => {}
+            }
+        }
+        assert_wire(&contract, "pane_reopen_failure", &reopen_failures);
+        checked.insert("pane_reopen_failure");
+
+        let daemon_failures = [
+            CodexDaemonOffFailure::CodexMissing,
+            CodexDaemonOffFailure::CodexRefused,
+            CodexDaemonOffFailure::TimedOut,
+            CodexDaemonOffFailure::Unreachable,
+            CodexDaemonOffFailure::StopFailed,
+        ];
+        for variant in daemon_failures {
+            match variant {
+                CodexDaemonOffFailure::CodexMissing
+                | CodexDaemonOffFailure::CodexRefused
+                | CodexDaemonOffFailure::TimedOut
+                | CodexDaemonOffFailure::Unreachable
+                | CodexDaemonOffFailure::StopFailed => {}
+            }
+        }
+        assert_wire(&contract, "codex_daemon_off_failure", &daemon_failures);
+        checked.insert("codex_daemon_off_failure");
+
+        let check_failures = [KitCheckFailure::ReadFailed];
+        for variant in check_failures {
+            match variant {
+                KitCheckFailure::ReadFailed => {}
+            }
+        }
+        assert_wire(&contract, "kit_check_failure", &check_failures);
+        checked.insert("kit_check_failure");
+
+        let refusal_causes = [
+            hide_kit::RefusalCause::Unsafe,
+            hide_kit::RefusalCause::Record,
+            hide_kit::RefusalCause::Busy,
+            hide_kit::RefusalCause::Projects,
+            hide_kit::RefusalCause::Other,
+        ];
+        for variant in refusal_causes {
+            match variant {
+                hide_kit::RefusalCause::Unsafe
+                | hide_kit::RefusalCause::Record
+                | hide_kit::RefusalCause::Busy
+                | hide_kit::RefusalCause::Projects
+                | hide_kit::RefusalCause::Other => {}
+            }
+        }
+        assert_wire(&contract, "kit_refusal_cause", &refusal_causes);
+        checked.insert("kit_refusal_cause");
+
+        let part_causes = [
+            hide_kit::PartCause::TakenOut,
+            hide_kit::PartCause::OlderVersion,
+            hide_kit::PartCause::Edited,
+            hide_kit::PartCause::HelperGone,
+            hide_kit::PartCause::RouteChanged,
+            hide_kit::PartCause::OtherBuild,
+            hide_kit::PartCause::NotHides,
+            hide_kit::PartCause::NoHelper,
+            hide_kit::PartCause::Unreadable,
+            hide_kit::PartCause::OtherProgram,
+            hide_kit::PartCause::Foreign,
+            hide_kit::PartCause::AgentAbsent,
+            hide_kit::PartCause::NotCreatedYet,
+            hide_kit::PartCause::ProgramMissing,
+            hide_kit::PartCause::Unsupported,
+            hide_kit::PartCause::UpdateAgent,
+            hide_kit::PartCause::AiFolder,
+            hide_kit::PartCause::StillInPlace,
+            hide_kit::PartCause::NotChanged,
+            hide_kit::PartCause::CodexUntrusted,
+            hide_kit::PartCause::RecordUnsaved,
+            hide_kit::PartCause::RetirementPending,
+            hide_kit::PartCause::OtherInstall,
+            hide_kit::PartCause::Other,
+        ];
+        for variant in part_causes {
+            match variant {
+                hide_kit::PartCause::TakenOut
+                | hide_kit::PartCause::OlderVersion
+                | hide_kit::PartCause::Edited
+                | hide_kit::PartCause::HelperGone
+                | hide_kit::PartCause::RouteChanged
+                | hide_kit::PartCause::OtherBuild
+                | hide_kit::PartCause::NotHides
+                | hide_kit::PartCause::NoHelper
+                | hide_kit::PartCause::Unreadable
+                | hide_kit::PartCause::OtherProgram
+                | hide_kit::PartCause::Foreign
+                | hide_kit::PartCause::AgentAbsent
+                | hide_kit::PartCause::NotCreatedYet
+                | hide_kit::PartCause::ProgramMissing
+                | hide_kit::PartCause::Unsupported
+                | hide_kit::PartCause::UpdateAgent
+                | hide_kit::PartCause::AiFolder
+                | hide_kit::PartCause::StillInPlace
+                | hide_kit::PartCause::NotChanged
+                | hide_kit::PartCause::CodexUntrusted
+                | hide_kit::PartCause::RecordUnsaved
+                | hide_kit::PartCause::RetirementPending
+                | hide_kit::PartCause::OtherInstall
+                | hide_kit::PartCause::Other => {}
+            }
+        }
+        assert_wire(&contract, "kit_part_cause", &part_causes);
+        checked.insert("kit_part_cause");
+
+        let unavailable = [
+            KitUnavailable::Standalone,
+            KitUnavailable::NoConsent,
+            KitUnavailable::ConsentOutdated,
+            KitUnavailable::UnsupportedPlatform,
+            KitUnavailable::InstallerUnavailable,
+            KitUnavailable::Unreadable,
+        ];
+        for variant in unavailable {
+            match variant {
+                KitUnavailable::Standalone
+                | KitUnavailable::NoConsent
+                | KitUnavailable::ConsentOutdated
+                | KitUnavailable::UnsupportedPlatform
+                | KitUnavailable::InstallerUnavailable
+                | KitUnavailable::Unreadable => {}
+            }
+        }
+        assert_wire(&contract, "kit_unavailable", &unavailable);
+        checked.insert("kit_unavailable");
+
+        let profile_refusals = [
+            MachineProfileRefusal::NoConsent,
+            MachineProfileRefusal::InvalidTarget,
+            MachineProfileRefusal::DiscoveryPending,
+            MachineProfileRefusal::DeviceLimit,
+        ];
+        for variant in profile_refusals {
+            match variant {
+                MachineProfileRefusal::NoConsent
+                | MachineProfileRefusal::InvalidTarget
+                | MachineProfileRefusal::DiscoveryPending
+                | MachineProfileRefusal::DeviceLimit => {}
+            }
+        }
+        assert_wire(&contract, "profile_refusal", &profile_refusals);
+        checked.insert("profile_refusal");
+
+        let action_refusals = [
+            AgentActionRefusal::Unsupported,
+            AgentActionRefusal::CoreMachineOnly,
+            AgentActionRefusal::Asleep,
+            AgentActionRefusal::Working,
+            AgentActionRefusal::WaitingForYou,
+            AgentActionRefusal::UnknownActivity,
+            AgentActionRefusal::NoConversation,
+        ];
+        for variant in action_refusals {
+            match variant {
+                AgentActionRefusal::Unsupported
+                | AgentActionRefusal::CoreMachineOnly
+                | AgentActionRefusal::Asleep
+                | AgentActionRefusal::Working
+                | AgentActionRefusal::WaitingForYou
+                | AgentActionRefusal::UnknownActivity
+                | AgentActionRefusal::NoConversation => {}
+            }
+        }
+        assert_wire(&contract, "agent_action_refusal", &action_refusals);
+        checked.insert("agent_action_refusal");
+
+        let state_variables = [
+            hide_kit::layout::StateVariable::HideStateDir,
+            hide_kit::layout::StateVariable::XdgStateHome,
+        ];
+        for variant in state_variables {
+            match variant {
+                hide_kit::layout::StateVariable::HideStateDir
+                | hide_kit::layout::StateVariable::XdgStateHome => {}
+            }
+        }
+        assert_wire(&contract, "kit_state_variable", &state_variables);
+        checked.insert("kit_state_variable");
+        use crate::links::{FileState, IssueSource, LinkTarget, SessionRole};
+        let files = [FileState::Present, FileState::Missing, FileState::Unknown];
+        for variant in files {
+            match variant {
+                FileState::Present | FileState::Missing | FileState::Unknown => {}
+            }
+        }
+        assert_wire(&contract, "link_file_state", &files);
+        checked.insert("link_file_state");
+
+        let sources = [IssueSource::Closes, IssueSource::Hide];
+        for variant in sources {
+            match variant {
+                IssueSource::Closes | IssueSource::Hide => {}
+            }
+        }
+        assert_wire(&contract, "link_issue_source", &sources);
+        checked.insert("link_issue_source");
+
+        let roles = [
+            SessionRole::Created,
+            SessionRole::Worked,
+            SessionRole::Reviewed,
+        ];
+        for variant in roles {
+            match variant {
+                SessionRole::Created | SessionRole::Worked | SessionRole::Reviewed => {}
+            }
+        }
+        assert_wire(&contract, "link_session_role", &roles);
+        checked.insert("link_session_role");
+
+        // An internally tagged enum: its `kind` is the wire string.
+        let targets = [
+            LinkTarget::Pr { number: 1 },
+            LinkTarget::Issue { key: "k".into() },
+        ];
+        let kinds = targets
+            .iter()
+            .map(|target| {
+                match target {
+                    LinkTarget::Pr { .. } | LinkTarget::Issue { .. } => {}
+                }
+                serde_json::to_value(target).unwrap()["kind"].clone()
+            })
+            .collect::<Vec<_>>();
+        assert_wire(&contract, "link_target_kind", &kinds);
+        checked.insert("link_target_kind");
+
+        use crate::agent_state::tally::tasks::TaskState as OverviewTaskState;
+        let task_states = [
+            OverviewTaskState::NeedsYou,
+            OverviewTaskState::Blocked,
+            OverviewTaskState::Working,
+            OverviewTaskState::Waiting,
+            OverviewTaskState::Done,
+            OverviewTaskState::Revisit,
+            OverviewTaskState::Resting,
+            OverviewTaskState::Cleanup,
+        ];
+        for variant in task_states {
+            match variant {
+                OverviewTaskState::NeedsYou
+                | OverviewTaskState::Blocked
+                | OverviewTaskState::Working
+                | OverviewTaskState::Waiting
+                | OverviewTaskState::Done
+                | OverviewTaskState::Revisit
+                | OverviewTaskState::Resting
+                | OverviewTaskState::Cleanup => {}
+            }
+        }
+        assert_wire(&contract, "task_state", &task_states);
+        checked.insert("task_state");
+
+        use crate::model::{BacklogFailure, BacklogPhase};
+        let backlog_phases = [
+            BacklogPhase::Waiting,
+            BacklogPhase::Creating,
+            BacklogPhase::Created,
+            BacklogPhase::Failed,
+        ];
+        for variant in backlog_phases {
+            match variant {
+                BacklogPhase::Waiting
+                | BacklogPhase::Creating
+                | BacklogPhase::Created
+                | BacklogPhase::Failed => {}
+            }
+        }
+        assert_wire(&contract, "backlog_phase", &backlog_phases);
+        checked.insert("backlog_phase");
+        let backlog_failures = [
+            BacklogFailure::NotInstalled,
+            BacklogFailure::Outdated,
+            BacklogFailure::NotLoggedIn,
+            BacklogFailure::NoGithubRemote,
+            BacklogFailure::NetworkOrRateLimit,
+            BacklogFailure::QueueFull,
+            BacklogFailure::Unconfirmed,
+            BacklogFailure::RepositoryChanged,
+            BacklogFailure::Unavailable,
+            BacklogFailure::Refused,
+        ];
+        for variant in backlog_failures {
+            match variant {
+                BacklogFailure::NotInstalled
+                | BacklogFailure::Outdated
+                | BacklogFailure::NotLoggedIn
+                | BacklogFailure::NoGithubRemote
+                | BacklogFailure::NetworkOrRateLimit
+                | BacklogFailure::QueueFull
+                | BacklogFailure::Unconfirmed
+                | BacklogFailure::RepositoryChanged
+                | BacklogFailure::Unavailable
+                | BacklogFailure::Refused => {}
+            }
+        }
+        assert_wire(&contract, "backlog_failure", &backlog_failures);
+        checked.insert("backlog_failure");
+
+        let color_themes = [ColorTheme::Hide, ColorTheme::Neutral];
+        for variant in color_themes {
+            match variant {
+                ColorTheme::Hide | ColorTheme::Neutral => {}
+            }
+        }
+        assert_wire(&contract, "color_theme", &color_themes);
+        checked.insert("color_theme");
+
+        {
+            use crate::missions::{
+                Blocked, Delivery, MissionScope, MissionStatus, NodeKind, NodeStatus,
+            };
+            let statuses = [
+                MissionStatus::Planning,
+                MissionStatus::Running,
+                MissionStatus::MergeWait,
+                MissionStatus::Done,
+                MissionStatus::Cancelled,
+            ];
+            for variant in statuses {
+                match variant {
+                    MissionStatus::Planning
+                    | MissionStatus::Running
+                    | MissionStatus::MergeWait
+                    | MissionStatus::Done
+                    | MissionStatus::Cancelled => {}
+                }
+            }
+            assert_wire(&contract, "mission_status", &statuses);
+            checked.insert("mission_status");
+            let scopes = [MissionScope::Pr, MissionScope::Merge];
+            for variant in scopes {
+                match variant {
+                    MissionScope::Pr | MissionScope::Merge => {}
+                }
+            }
+            assert_wire(&contract, "mission_scope", &scopes);
+            checked.insert("mission_scope");
+            use crate::missions::Strength;
+            let strengths = [Strength::Fast, Strength::Normal, Strength::Thorough];
+            for variant in strengths {
+                match variant {
+                    Strength::Fast | Strength::Normal | Strength::Thorough => {}
+                }
+            }
+            assert_wire(&contract, "mission_strength", &strengths);
+            checked.insert("mission_strength");
+            let kinds = [NodeKind::Change, NodeKind::General, NodeKind::External];
+            for variant in kinds {
+                match variant {
+                    NodeKind::Change | NodeKind::General | NodeKind::External => {}
+                }
+            }
+            assert_wire(&contract, "mission_node_kind", &kinds);
+            checked.insert("mission_node_kind");
+            use crate::missions::{GateWhen, PRESETS, Preset};
+            let presets = [Preset::Research, Preset::Verify, Preset::Deploy];
+            for variant in presets {
+                match variant {
+                    Preset::Research | Preset::Verify | Preset::Deploy => {}
+                }
+            }
+            assert_wire(&contract, "mission_node_preset", &presets);
+            checked.insert("mission_node_preset");
+            // The table's name keys are the wire's names, and a general node
+            // with no preset has its own row.
+            let keys: Vec<&str> = PRESETS.iter().map(|row| row.key).collect();
+            let named: Vec<String> = presets
+                .iter()
+                .map(|preset| {
+                    serde_json::to_value(preset)
+                        .unwrap()
+                        .as_str()
+                        .unwrap()
+                        .to_owned()
+                })
+                .chain(["general".to_owned()])
+                .collect();
+            assert_eq!(keys, named);
+            let whens = [GateWhen::Start, GateWhen::End];
+            for variant in whens {
+                match variant {
+                    GateWhen::Start | GateWhen::End => {}
+                }
+            }
+            assert_wire(&contract, "mission_gate_when", &whens);
+            checked.insert("mission_gate_when");
+            let deliveries = [Delivery::Pr, Delivery::Direct];
+            for variant in deliveries {
+                match variant {
+                    Delivery::Pr | Delivery::Direct => {}
+                }
+            }
+            assert_wire(&contract, "mission_delivery", &deliveries);
+            checked.insert("mission_delivery");
+            let node_statuses = [
+                NodeStatus::Planned,
+                NodeStatus::Working,
+                NodeStatus::Done,
+                NodeStatus::Dropped,
+            ];
+            for variant in node_statuses {
+                match variant {
+                    NodeStatus::Planned
+                    | NodeStatus::Working
+                    | NodeStatus::Done
+                    | NodeStatus::Dropped => {}
+                }
+            }
+            assert_wire(&contract, "mission_node_status", &node_statuses);
+            checked.insert("mission_node_status");
+            let blocked = [Blocked::UpstreamDropped];
+            for variant in blocked {
+                match variant {
+                    Blocked::UpstreamDropped => {}
+                }
+            }
+            assert_wire(&contract, "mission_blocked", &blocked);
+            checked.insert("mission_blocked");
+            let verdicts = [
+                crate::missions::Verdict::Pass,
+                crate::missions::Verdict::Fail,
+            ];
+            for variant in verdicts {
+                match variant {
+                    crate::missions::Verdict::Pass | crate::missions::Verdict::Fail => {}
+                }
+            }
+            assert_wire(&contract, "mission_verdict", &verdicts);
+            checked.insert("mission_verdict");
+            use crate::runtime::mission_landing::LandingAction;
+            let landing_actions = [LandingAction::Merge, LandingAction::Join];
+            for variant in landing_actions {
+                match variant {
+                    LandingAction::Merge | LandingAction::Join => {}
+                }
+            }
+            assert_wire(&contract, "mission_landing_action", &landing_actions);
+            checked.insert("mission_landing_action");
+            use crate::runtime::mission_landing::{LandingProof, NodeLanding};
+            let proofs = [
+                LandingProof::Merged,
+                LandingProof::InMain {
+                    commit: "c0ffee".into(),
+                },
+                LandingProof::Outside,
+            ];
+            for variant in &proofs {
+                match variant {
+                    LandingProof::Merged | LandingProof::InMain { .. } | LandingProof::Outside => {}
+                }
+            }
+            // Internally tagged: the wire value is each variant's tag.
+            let tag = |value: serde_json::Value, key: &str| value[key].as_str().unwrap().to_owned();
+            let proof_tags: Vec<String> = proofs
+                .iter()
+                .map(|proof| tag(serde_json::to_value(proof).unwrap(), "by"))
+                .collect();
+            assert_wire(&contract, "mission_landing_proof", &proof_tags);
+            checked.insert("mission_landing_proof");
+            let landings = [
+                NodeLanding::Landed {
+                    proof: LandingProof::Merged,
+                },
+                NodeLanding::Left {
+                    action: LandingAction::Merge,
+                },
+                NodeLanding::Unread {
+                    action: LandingAction::Join,
+                },
+            ];
+            for variant in &landings {
+                match variant {
+                    NodeLanding::Landed { .. }
+                    | NodeLanding::Left { .. }
+                    | NodeLanding::Unread { .. } => {}
+                }
+            }
+            let landing_tags: Vec<String> = landings
+                .iter()
+                .map(|landing| tag(serde_json::to_value(landing).unwrap(), "state"))
+                .collect();
+            assert_wire(&contract, "mission_landing_state", &landing_tags);
+            checked.insert("mission_landing_state");
+            use crate::mission_criteria::{CriterionKind, CriterionState, Role, Rule};
+            let criterion_kinds = [
+                CriterionKind::Own,
+                CriterionKind::Check,
+                CriterionKind::Ci,
+                CriterionKind::Review,
+                CriterionKind::Verify,
+                CriterionKind::Defect,
+                CriterionKind::Human,
+            ];
+            for variant in criterion_kinds {
+                match variant {
+                    CriterionKind::Own
+                    | CriterionKind::Check
+                    | CriterionKind::Ci
+                    | CriterionKind::Review
+                    | CriterionKind::Verify
+                    | CriterionKind::Defect
+                    | CriterionKind::Human => {}
+                }
+            }
+            assert_wire(&contract, "mission_criterion_kind", &criterion_kinds);
+            checked.insert("mission_criterion_kind");
+            use crate::mission_criteria::GateVia;
+            let vias = [GateVia::Card, GateVia::Phone, GateVia::Pane];
+            for variant in vias {
+                match variant {
+                    GateVia::Card | GateVia::Phone | GateVia::Pane => {}
+                }
+            }
+            assert_wire(&contract, "mission_gate_via", &vias);
+            checked.insert("mission_gate_via");
+            use crate::runtime::mission_gates::GateState;
+            let gate_states = [GateState::Ahead, GateState::Open, GateState::Passed];
+            for variant in gate_states {
+                match variant {
+                    GateState::Ahead | GateState::Open | GateState::Passed => {}
+                }
+            }
+            assert_wire(&contract, "mission_gate_state", &gate_states);
+            checked.insert("mission_gate_state");
+            use crate::runtime::mission_landing::{MergeBy, MergeStep};
+            let merge_by = [MergeBy::Operator, MergeBy::Conductor];
+            for variant in merge_by {
+                match variant {
+                    MergeBy::Operator | MergeBy::Conductor => {}
+                }
+            }
+            assert_wire(&contract, "mission_merge_by", &merge_by);
+            checked.insert("mission_merge_by");
+            let merge_steps = [MergeStep::Ahead, MergeStep::Due, MergeStep::Merged];
+            for variant in merge_steps {
+                match variant {
+                    MergeStep::Ahead | MergeStep::Due | MergeStep::Merged => {}
+                }
+            }
+            assert_wire(&contract, "mission_merge_step", &merge_steps);
+            checked.insert("mission_merge_step");
+            let criterion_states = [
+                CriterionState::Open,
+                CriterionState::Pass,
+                CriterionState::Fail,
+                CriterionState::Skipped,
+            ];
+            for variant in criterion_states {
+                match variant {
+                    CriterionState::Open
+                    | CriterionState::Pass
+                    | CriterionState::Fail
+                    | CriterionState::Skipped => {}
+                }
+            }
+            assert_wire(&contract, "mission_criterion_state", &criterion_states);
+            checked.insert("mission_criterion_state");
+            let rules = [Rule::All, Rule::Majority];
+            for variant in rules {
+                match variant {
+                    Rule::All | Rule::Majority => {}
+                }
+            }
+            assert_wire(&contract, "mission_check_rule", &rules);
+            checked.insert("mission_check_rule");
+            let roles = [
+                Role::Worker,
+                Role::Checker,
+                Role::Conductor,
+                Role::Hide,
+                Role::Operator,
+            ];
+            for variant in roles {
+                match variant {
+                    Role::Worker
+                    | Role::Checker
+                    | Role::Conductor
+                    | Role::Hide
+                    | Role::Operator => {}
+                }
+            }
+            assert_wire(&contract, "mission_recorded_role", &roles);
+            checked.insert("mission_recorded_role");
+            use crate::runtime::missions::AnswerState;
+            let states = [
+                AnswerState::Sending,
+                AnswerState::Waiting,
+                AnswerState::Unconfirmed,
+            ];
+            for variant in states {
+                match variant {
+                    AnswerState::Sending | AnswerState::Waiting | AnswerState::Unconfirmed => {}
+                }
+            }
+            assert_wire(&contract, "mission_answer_state", &states);
+            checked.insert("mission_answer_state");
+            use crate::runtime::missions::AnswerHold;
+            let holds = [
+                AnswerHold::Working,
+                AnswerHold::Typing,
+                AnswerHold::Recent,
+                AnswerHold::Approval,
+                AnswerHold::Other,
+                AnswerHold::Forced,
+            ];
+            for variant in holds {
+                match variant {
+                    AnswerHold::Working
+                    | AnswerHold::Typing
+                    | AnswerHold::Recent
+                    | AnswerHold::Approval
+                    | AnswerHold::Other
+                    | AnswerHold::Forced => {}
+                }
+            }
+            assert_wire(&contract, "mission_answer_hold", &holds);
+            checked.insert("mission_answer_hold");
+            use crate::mission_events::{AnswerSource, EventKind};
+            let kinds = [
+                EventKind::Planned,
+                EventKind::Replanned,
+                EventKind::Node,
+                EventKind::Retried,
+                EventKind::PrOpened,
+                EventKind::PrMerged,
+                EventKind::Landed,
+                EventKind::Asked,
+                EventKind::Answered,
+                EventKind::AnswerUndelivered,
+                EventKind::AnswerUnconfirmed,
+                EventKind::Reported,
+                EventKind::Cancelled,
+                EventKind::Skipped,
+                EventKind::Reopened,
+                EventKind::Strength,
+                EventKind::Hide,
+                EventKind::HideClosed,
+                EventKind::Raised,
+                EventKind::RaisedToOperator,
+                EventKind::Resolved,
+            ];
+            for variant in kinds {
+                match variant {
+                    EventKind::Planned
+                    | EventKind::Replanned
+                    | EventKind::Node
+                    | EventKind::Retried
+                    | EventKind::PrOpened
+                    | EventKind::PrMerged
+                    | EventKind::Landed
+                    | EventKind::Asked
+                    | EventKind::Answered
+                    | EventKind::AnswerUndelivered
+                    | EventKind::AnswerUnconfirmed
+                    | EventKind::Reported
+                    | EventKind::Cancelled
+                    | EventKind::Skipped
+                    | EventKind::Reopened
+                    | EventKind::Strength
+                    | EventKind::Hide
+                    | EventKind::HideClosed
+                    | EventKind::Raised
+                    | EventKind::RaisedToOperator
+                    | EventKind::Resolved => {}
+                }
+            }
+            assert_wire(&contract, "mission_event_kind", &kinds);
+            checked.insert("mission_event_kind");
+            use crate::missions::{AttentionReason, FixReason, HideAction, OperatorAction};
+            let reasons = [
+                AttentionReason::MergedUnproven,
+                AttentionReason::WorkerEnded,
+                AttentionReason::PrClosed,
+                AttentionReason::UnplannedPr,
+                AttentionReason::ConductorFailed,
+                AttentionReason::WakeRefused,
+                AttentionReason::CloseRefused,
+                AttentionReason::HumanGate,
+                AttentionReason::NotStarted,
+                AttentionReason::WarningStood,
+                AttentionReason::WaitStood,
+            ];
+            for variant in reasons {
+                match variant {
+                    AttentionReason::MergedUnproven
+                    | AttentionReason::WorkerEnded
+                    | AttentionReason::PrClosed
+                    | AttentionReason::UnplannedPr
+                    | AttentionReason::ConductorFailed
+                    | AttentionReason::WakeRefused
+                    | AttentionReason::CloseRefused
+                    | AttentionReason::HumanGate
+                    | AttentionReason::NotStarted
+                    | AttentionReason::WarningStood
+                    | AttentionReason::WaitStood => {}
+                }
+            }
+            assert_wire(&contract, "mission_attention_reason", &reasons);
+            checked.insert("mission_attention_reason");
+            use crate::missions::AttentionTo;
+            let whom = [AttentionTo::Conductor, AttentionTo::Operator];
+            for variant in whom {
+                match variant {
+                    AttentionTo::Conductor | AttentionTo::Operator => {}
+                }
+            }
+            assert_wire(&contract, "mission_attention_to", &whom);
+            checked.insert("mission_attention_to");
+            let actions = [HideAction::Done, HideAction::Attached, HideAction::Woke];
+            for variant in actions {
+                match variant {
+                    HideAction::Done | HideAction::Attached | HideAction::Woke => {}
+                }
+            }
+            assert_wire(&contract, "mission_hide_action", &actions);
+            checked.insert("mission_hide_action");
+            let fixes = [
+                FixReason::CiFailed,
+                FixReason::Conflict,
+                FixReason::ChangesRequested,
+            ];
+            for variant in fixes {
+                match variant {
+                    FixReason::CiFailed | FixReason::Conflict | FixReason::ChangesRequested => {}
+                }
+            }
+            assert_wire(&contract, "mission_fix_reason", &fixes);
+            checked.insert("mission_fix_reason");
+            use crate::missions::WarningKind;
+            let warnings = [WarningKind::ReviewFails, WarningKind::Stopped];
+            for variant in warnings {
+                match variant {
+                    WarningKind::ReviewFails | WarningKind::Stopped => {}
+                }
+            }
+            assert_wire(&contract, "mission_warning_kind", &warnings);
+            checked.insert("mission_warning_kind");
+            let chosen = [
+                OperatorAction::Done,
+                OperatorAction::Drop,
+                OperatorAction::Attach,
+                OperatorAction::Leave,
+                OperatorAction::Resume,
+            ];
+            for variant in chosen {
+                match variant {
+                    OperatorAction::Done
+                    | OperatorAction::Drop
+                    | OperatorAction::Attach
+                    | OperatorAction::Leave
+                    | OperatorAction::Resume => {}
+                }
+            }
+            assert_wire(&contract, "mission_operator_action", &chosen);
+            checked.insert("mission_operator_action");
+            let sources = [AnswerSource::Banner, AnswerSource::Conversation];
+            for variant in sources {
+                match variant {
+                    AnswerSource::Banner | AnswerSource::Conversation => {}
+                }
+            }
+            assert_wire(&contract, "mission_answer_source", &sources);
+            checked.insert("mission_answer_source");
+            use crate::runtime::mission_views::LinkedViewBy;
+            let linked_by = [LinkedViewBy::Conductor, LinkedViewBy::Worker];
+            for variant in linked_by {
+                match variant {
+                    LinkedViewBy::Conductor | LinkedViewBy::Worker => {}
+                }
+            }
+            assert_wire(&contract, "mission_decision_view_by", &linked_by);
+            checked.insert("mission_decision_view_by");
+            use crate::missions::AnswerFailure;
+            let failures = [
+                AnswerFailure::ConductorGone,
+                AnswerFailure::DeviceDisconnected,
+                AnswerFailure::SendFailed,
+                AnswerFailure::SessionUnreadable,
+            ];
+            for variant in failures {
+                match variant {
+                    AnswerFailure::ConductorGone
+                    | AnswerFailure::DeviceDisconnected
+                    | AnswerFailure::SendFailed
+                    | AnswerFailure::SessionUnreadable => {}
+                }
+            }
+            assert_wire(&contract, "mission_answer_failure", &failures);
+            checked.insert("mission_answer_failure");
+            use crate::delivery::held::HeldFor;
+            let held = [HeldFor::Approval, HeldFor::Draft];
+            for variant in held {
+                match variant {
+                    HeldFor::Approval | HeldFor::Draft => {}
+                }
+            }
+            assert_wire(&contract, "mission_letters_held_for", &held);
+            checked.insert("mission_letters_held_for");
+            use crate::runtime::missions::NodeWork;
+            let work = [
+                NodeWork::Working,
+                NodeWork::Waiting {
+                    on: crate::missions::WaitingOn::Review,
+                },
+                NodeWork::Asleep,
+                NodeWork::Stopped {
+                    cause: None,
+                    since_unix_ms: 0,
+                },
+                NodeWork::NoWorker {
+                    since_unix_ms: None,
+                },
+            ];
+            for variant in &work {
+                match variant {
+                    NodeWork::Working
+                    | NodeWork::Waiting { .. }
+                    | NodeWork::Asleep
+                    | NodeWork::Stopped { .. }
+                    | NodeWork::NoWorker { .. } => {}
+                }
+            }
+            let states: Vec<String> = work
+                .iter()
+                .map(|variant| {
+                    serde_json::to_value(variant).unwrap()["state"]
+                        .as_str()
+                        .unwrap()
+                        .to_owned()
+                })
+                .collect();
+            assert_wire(&contract, "mission_node_work", &states);
+            checked.insert("mission_node_work");
+        }
+
+        {
+            use crate::plans::{Output, Review, StepStatus};
+            let statuses = [
+                StepStatus::Planned,
+                StepStatus::Working,
+                StepStatus::Done,
+                StepStatus::Dropped,
+            ];
+            for variant in statuses {
+                match variant {
+                    StepStatus::Planned
+                    | StepStatus::Working
+                    | StepStatus::Done
+                    | StepStatus::Dropped => {}
+                }
+            }
+            assert_wire(&contract, "plan_step_status", &statuses);
+            checked.insert("plan_step_status");
+            let reviews = [Review::Approved, Review::Proposed];
+            for variant in reviews {
+                match variant {
+                    Review::Approved | Review::Proposed => {}
+                }
+            }
+            assert_wire(&contract, "plan_review", &reviews);
+            checked.insert("plan_review");
+            let outputs = [Output::Pr, Output::File, Output::None];
+            for variant in outputs {
+                match variant {
+                    Output::Pr | Output::File | Output::None => {}
+                }
+            }
+            assert_wire(&contract, "plan_output", &outputs);
+            checked.insert("plan_output");
+            use crate::plans::{DelegationState, Evidence};
+            let states = [
+                DelegationState::Working,
+                DelegationState::Reported,
+                DelegationState::Blocked,
+                DelegationState::Closed,
+            ];
+            for variant in states {
+                match variant {
+                    DelegationState::Working
+                    | DelegationState::Reported
+                    | DelegationState::Blocked
+                    | DelegationState::Closed => {}
+                }
+            }
+            assert_wire(&contract, "plan_delegation_state", &states);
+            checked.insert("plan_delegation_state");
+            // An evidence's kind is its tag on the wire.
+            let evidence = [
+                Evidence::Pr {
+                    repo: String::new(),
+                    number: 1,
+                },
+                Evidence::File {
+                    path: String::new(),
+                },
+            ];
+            let kinds: Vec<serde_json::Value> = evidence
+                .iter()
+                .map(|variant| match variant {
+                    Evidence::Pr { .. } | Evidence::File { .. } => {
+                        serde_json::to_value(variant).unwrap()["kind"].clone()
+                    }
+                })
+                .collect();
+            assert_wire(&contract, "plan_evidence_kind", &kinds);
+            checked.insert("plan_evidence_kind");
+        }
+
+        let session = crate::links::ledger::SessionIdentity {
+            device_id: "mac".into(),
+            agent: "codex".into(),
+            session_id: "s".into(),
+        };
+        let items = [
+            DetailItem::PullRequest {
+                workspace_id: "w".into(),
+                number: 1,
+            },
+            DetailItem::Record {
+                session: session.clone(),
+            },
+            DetailItem::Mission {
+                mission: "mission-1".into(),
+            },
+            DetailItem::Worktrees {
+                workspace_id: "w".into(),
+            },
+            DetailItem::Cost {
+                workspace_id: "w".into(),
+            },
+            DetailItem::Remains {
+                workspace_id: "w".into(),
+                checkout_id: "c".into(),
+            },
+            DetailItem::Plan { session },
+            DetailItem::Branch {
+                workspace_id: "w".into(),
+                row: "s1".into(),
+                path: None,
+            },
+        ];
+        for item in &items {
+            match item {
+                DetailItem::PullRequest { .. }
+                | DetailItem::Record { .. }
+                | DetailItem::Mission { .. }
+                | DetailItem::Worktrees { .. }
+                | DetailItem::Cost { .. }
+                | DetailItem::Remains { .. }
+                | DetailItem::Plan { .. }
+                | DetailItem::Branch { .. } => {}
+            }
+        }
+        let kinds: Vec<String> = items
+            .iter()
+            .map(|item| {
+                serde_json::to_value(item).unwrap()["kind"]
+                    .as_str()
+                    .unwrap()
+                    .to_owned()
+            })
+            .collect();
+        assert_wire(&contract, "detail_item_kind", &kinds);
+        checked.insert("detail_item_kind");
+
+        let freshness = [
+            crate::observed::Freshness::Fresh,
+            crate::observed::Freshness::Stale,
+            crate::observed::Freshness::Failed,
+        ];
+        for variant in freshness {
+            match variant {
+                crate::observed::Freshness::Fresh
+                | crate::observed::Freshness::Stale
+                | crate::observed::Freshness::Failed => {}
+            }
+        }
+        assert_wire(&contract, "observed_freshness", &freshness);
+        checked.insert("observed_freshness");
+
+        {
+            use crate::suggestions::ledger::{ImprovementKind, Signal};
+            use crate::suggestions::notebook::Outcome;
+            use crate::suggestions::policy::Quantity;
+            use crate::suggestions::settings::ApplyMode;
+
+            let signals = Signal::ALL;
+            for variant in signals {
+                match variant {
+                    Signal::FailedTool
+                    | Signal::AgentWait
+                    | Signal::Correction
+                    | Signal::LabelMissed
+                    | Signal::Improvement
+                    | Signal::CheckFailed
+                    | Signal::ChangeRequest
+                    | Signal::RepeatedRequest
+                    | Signal::MemoryIgnored => {}
+                }
+            }
+            assert_wire(&contract, "suggestion_signal", &signals);
+            checked.insert("suggestion_signal");
+
+            let kinds = ImprovementKind::ALL;
+            for variant in kinds {
+                match variant {
+                    ImprovementKind::NoDoc
+                    | ImprovementKind::SearchedAgain
+                    | ImprovementKind::WrongGuess
+                    | ImprovementKind::ToolFriction => {}
+                }
+            }
+            assert_wire(&contract, "suggestion_improvement_kind", &kinds);
+            checked.insert("suggestion_improvement_kind");
+
+            let quantities = Quantity::ALL;
+            for variant in quantities {
+                match variant {
+                    Quantity::Few | Quantity::Normal | Quantity::Many => {}
+                }
+            }
+            assert_wire(&contract, "suggestion_quantity", &quantities);
+            checked.insert("suggestion_quantity");
+
+            let modes = [ApplyMode::Confirm, ApplyMode::AutoPr];
+            for variant in modes {
+                match variant {
+                    ApplyMode::Confirm | ApplyMode::AutoPr => {}
+                }
+            }
+            assert_wire(&contract, "suggestion_apply_mode", &modes);
+            checked.insert("suggestion_apply_mode");
+
+            let outcomes = [Outcome::Pr, Outcome::Issue, Outcome::Local];
+            for variant in outcomes {
+                match variant {
+                    Outcome::Pr | Outcome::Issue | Outcome::Local => {}
+                }
+            }
+            assert_wire(&contract, "suggestion_outcome", &outcomes);
+            checked.insert("suggestion_outcome");
+
+            use crate::suggestions::lifecycle::LocalFailure;
+            let failures = [
+                LocalFailure::NoRoom,
+                LocalFailure::TooLarge,
+                LocalFailure::Unreadable,
+                LocalFailure::Changed,
+                LocalFailure::Edited,
+                LocalFailure::WriteFailed,
+                LocalFailure::EvidenceUnconfirmed,
+                LocalFailure::BadLine,
+            ];
+            for variant in failures {
+                match variant {
+                    LocalFailure::NoRoom
+                    | LocalFailure::TooLarge
+                    | LocalFailure::Unreadable
+                    | LocalFailure::Changed
+                    | LocalFailure::Edited
+                    | LocalFailure::WriteFailed
+                    | LocalFailure::EvidenceUnconfirmed
+                    | LocalFailure::BadLine => {}
+                }
+            }
+            assert_wire(&contract, "suggestion_local_failure", &failures);
+            checked.insert("suggestion_local_failure");
+
+            use crate::global_instruction::Unusable;
+            let unusable = [Unusable::TooLarge, Unusable::Unreadable];
+            for variant in unusable {
+                match variant {
+                    Unusable::TooLarge | Unusable::Unreadable => {}
+                }
+            }
+            assert_wire(&contract, "global_instruction_unusable", &unusable);
+            checked.insert("global_instruction_unusable");
+
+            use crate::suggestions::ledger::Given;
+            let given = [Given::Index, Given::Body];
+            for variant in given {
+                match variant {
+                    Given::Index | Given::Body => {}
+                }
+            }
+            assert_wire(&contract, "suggestion_given", &given);
+            checked.insert("suggestion_given");
+        }
+
+        let unavailable = [
+            SuggestionsUnavailable::Unregistered,
+            SuggestionsUnavailable::Unreadable,
+        ];
+        for variant in unavailable {
+            match variant {
+                SuggestionsUnavailable::Unregistered | SuggestionsUnavailable::Unreadable => {}
+            }
+        }
+        assert_wire(&contract, "suggestions_unavailable", &unavailable);
+        checked.insert("suggestions_unavailable");
+
+        let statuses = [
+            SuggestionsStatus::FirstRunPending,
+            SuggestionsStatus::Investigating,
+            SuggestionsStatus::NoneToday,
+            SuggestionsStatus::NotInvestigated,
+            SuggestionsStatus::Idle,
+            SuggestionsStatus::Off,
+        ];
+        for variant in statuses {
+            match variant {
+                SuggestionsStatus::FirstRunPending
+                | SuggestionsStatus::Investigating
+                | SuggestionsStatus::NoneToday
+                | SuggestionsStatus::NotInvestigated
+                | SuggestionsStatus::Idle
+                | SuggestionsStatus::Off => {}
+            }
+        }
+        assert_wire(&contract, "suggestions_status", &statuses);
+        checked.insert("suggestions_status");
+
+        let ai = [
+            SuggestionsAi::Ready,
+            SuggestionsAi::NotReady,
+            SuggestionsAi::CannotInvestigate,
+        ];
+        for variant in ai {
+            match variant {
+                SuggestionsAi::Ready
+                | SuggestionsAi::NotReady
+                | SuggestionsAi::CannotInvestigate => {}
+            }
+        }
+        assert_wire(&contract, "suggestions_ai", &ai);
+        checked.insert("suggestions_ai");
+
+        let github = [SuggestionsGithub::Connected, SuggestionsGithub::Missing];
+        for variant in github {
+            match variant {
+                SuggestionsGithub::Connected | SuggestionsGithub::Missing => {}
+            }
+        }
+        assert_wire(&contract, "suggestions_github", &github);
+        checked.insert("suggestions_github");
+
+        let signal_unavailable = [
+            SignalUnavailable::NoGithub,
+            SignalUnavailable::MemoryOff,
+            SignalUnavailable::AnalysisOff,
+        ];
+        for variant in signal_unavailable {
+            match variant {
+                SignalUnavailable::NoGithub
+                | SignalUnavailable::MemoryOff
+                | SignalUnavailable::AnalysisOff => {}
+            }
+        }
+        assert_wire(
+            &contract,
+            "suggestion_signal_unavailable",
+            &signal_unavailable,
+        );
+        checked.insert("suggestion_signal_unavailable");
+
+        let groups = [
+            SuggestionGroup::Choose,
+            SuggestionGroup::Applying,
+            SuggestionGroup::Applied,
+        ];
+        for variant in groups {
+            match variant {
+                SuggestionGroup::Choose | SuggestionGroup::Applying | SuggestionGroup::Applied => {}
+            }
+        }
+        assert_wire(&contract, "suggestion_group", &groups);
+        checked.insert("suggestion_group");
+
+        let states = [
+            SuggestionState::New,
+            SuggestionState::MyTurn,
+            SuggestionState::HideAiWorking,
+            SuggestionState::Watching,
+            SuggestionState::Effective,
+            SuggestionState::Applied,
+        ];
+        for variant in states {
+            match variant {
+                SuggestionState::New
+                | SuggestionState::MyTurn
+                | SuggestionState::HideAiWorking
+                | SuggestionState::Watching
+                | SuggestionState::Effective
+                | SuggestionState::Applied => {}
+            }
+        }
+        assert_wire(&contract, "suggestion_state", &states);
+        checked.insert("suggestion_state");
+
+        let sources = [SuggestionSource::Notebook, SuggestionSource::Memory];
+        for variant in sources {
+            match variant {
+                SuggestionSource::Notebook | SuggestionSource::Memory => {}
+            }
+        }
+        assert_wire(&contract, "suggestion_source", &sources);
+        checked.insert("suggestion_source");
+
+        let holds = [
+            SuggestionHold::GithubNeeded,
+            SuggestionHold::AutoPrUnreviewed,
+        ];
+        for variant in holds {
+            match variant {
+                SuggestionHold::GithubNeeded | SuggestionHold::AutoPrUnreviewed => {}
+            }
+        }
+        assert_wire(&contract, "suggestion_hold", &holds);
+        checked.insert("suggestion_hold");
+
+        let evidence = [SuggestionEvidenceKind::Session, SuggestionEvidenceKind::Pr];
+        for variant in evidence {
+            match variant {
+                SuggestionEvidenceKind::Session | SuggestionEvidenceKind::Pr => {}
+            }
+        }
+        assert_wire(&contract, "suggestion_evidence_kind", &evidence);
+        checked.insert("suggestion_evidence_kind");
+
+        let phases = [
+            SuggestionAttemptPhase::Starting,
+            SuggestionAttemptPhase::Working,
+            SuggestionAttemptPhase::Ready,
+            SuggestionAttemptPhase::Merging,
+            SuggestionAttemptPhase::Syncing,
+            SuggestionAttemptPhase::PrOpen,
+            SuggestionAttemptPhase::CiFailed,
+            SuggestionAttemptPhase::Failed,
+            SuggestionAttemptPhase::IssueOpen,
+            SuggestionAttemptPhase::Merged,
+        ];
+        for variant in phases {
+            match variant {
+                SuggestionAttemptPhase::Starting
+                | SuggestionAttemptPhase::Working
+                | SuggestionAttemptPhase::Ready
+                | SuggestionAttemptPhase::Merging
+                | SuggestionAttemptPhase::Syncing
+                | SuggestionAttemptPhase::PrOpen
+                | SuggestionAttemptPhase::CiFailed
+                | SuggestionAttemptPhase::Failed
+                | SuggestionAttemptPhase::IssueOpen
+                | SuggestionAttemptPhase::Merged => {}
+            }
+        }
+        assert_wire(&contract, "suggestion_attempt_phase", &phases);
+        checked.insert("suggestion_attempt_phase");
+
+        use crate::suggestions::lifecycle::AttemptPurpose;
+        let purposes = [
+            AttemptPurpose::Branch,
+            AttemptPurpose::Pr,
+            AttemptPurpose::Rebase,
+        ];
+        for variant in purposes {
+            match variant {
+                AttemptPurpose::Branch | AttemptPurpose::Pr | AttemptPurpose::Rebase => {}
+            }
+        }
+        assert_wire(&contract, "suggestion_attempt_purpose", &purposes);
+        checked.insert("suggestion_attempt_purpose");
+
+        use hide_node_link::device::SignInWait;
+        let problems = [
+            DeviceProblem::SignInNeeded,
+            DeviceProblem::SignInRefused,
+            DeviceProblem::HostKeyChanged,
+            DeviceProblem::CannotConnect,
+            DeviceProblem::SshMissing,
+            DeviceProblem::OpenSshOld,
+            DeviceProblem::Unsupported,
+            DeviceProblem::HideUpdated,
+        ];
+        for variant in problems {
+            match variant {
+                DeviceProblem::SignInNeeded
+                | DeviceProblem::SignInRefused
+                | DeviceProblem::HostKeyChanged
+                | DeviceProblem::CannotConnect
+                | DeviceProblem::SshMissing
+                | DeviceProblem::OpenSshOld
+                | DeviceProblem::Unsupported
+                | DeviceProblem::HideUpdated => {}
+            }
+        }
+        assert_wire(
+            &contract,
+            "device_problem",
+            &problems.map(DeviceProblem::code),
+        );
+        checked.insert("device_problem");
+
+        let switch_states = [
+            DeviceSwitchState::Checking,
+            DeviceSwitchState::Installing,
+            DeviceSwitchState::Connecting,
+            DeviceSwitchState::Failed,
+        ];
+        for variant in switch_states {
+            match variant {
+                DeviceSwitchState::Checking
+                | DeviceSwitchState::Installing
+                | DeviceSwitchState::Connecting
+                | DeviceSwitchState::Failed => {}
+            }
+        }
+        assert_wire(&contract, "device_switch_state", &switch_states);
+        checked.insert("device_switch_state");
+
+        let needs = [DeviceNeeds::AutoLogin, DeviceNeeds::Linger];
+        for variant in needs {
+            match variant {
+                DeviceNeeds::AutoLogin | DeviceNeeds::Linger => {}
+            }
+        }
+        assert_wire(&contract, "device_needs", &needs);
+        checked.insert("device_needs");
+
+        let text = String::new;
+        let waits = [
+            SignInWait::Secret {
+                prompt: text(),
+                key_file: None,
+            },
+            SignInWait::HostKey {
+                host: text(),
+                fingerprint: text(),
+            },
+            SignInWait::Confirm { prompt: text() },
+            SignInWait::Touch { prompt: text() },
+            SignInWait::Browser { url: text() },
+        ];
+        for variant in &waits {
+            match variant {
+                SignInWait::Secret { .. }
+                | SignInWait::HostKey { .. }
+                | SignInWait::Confirm { .. }
+                | SignInWait::Touch { .. }
+                | SignInWait::Browser { .. } => {}
+            }
+        }
+        assert_wire(
+            &contract,
+            "device_sign_in_kind",
+            &waits.each_ref().map(SignInWait::kind),
+        );
+        checked.insert("device_sign_in_kind");
+
+        assert_wire(
+            &contract,
+            "desk_agent",
+            &hide_desk::AdapterId::all().collect::<Vec<_>>(),
+        );
+        checked.insert("desk_agent");
+        let states = [
+            DeskAgentState::Checking,
+            DeskAgentState::Ready,
+            DeskAgentState::Preparing,
+            DeskAgentState::InstallFailed,
+            DeskAgentState::NodeMissing,
+            DeskAgentState::CliMissing,
+            DeskAgentState::NoAskMode,
+            DeskAgentState::Off,
+        ];
+        for state in states {
+            match state {
+                DeskAgentState::Checking
+                | DeskAgentState::Ready
+                | DeskAgentState::Preparing
+                | DeskAgentState::InstallFailed
+                | DeskAgentState::NodeMissing
+                | DeskAgentState::CliMissing
+                | DeskAgentState::NoAskMode
+                | DeskAgentState::Off => {}
+            }
+        }
+        assert_wire(&contract, "desk_agent_state", &states);
+        checked.insert("desk_agent_state");
+        assert_wire(
+            &contract,
+            "desk_host_state",
+            &[
+                DeskHostState::Idle,
+                DeskHostState::Starting,
+                DeskHostState::Ready,
+                DeskHostState::Thinking,
+                DeskHostState::Stopped,
+            ],
+        );
+        checked.insert("desk_host_state");
+        assert_wire(
+            &contract,
+            "desk_reply_state",
+            &[DeskReplyState::Done, DeskReplyState::Stopped],
+        );
+        checked.insert("desk_reply_state");
+        assert_wire(
+            &contract,
+            "desk_card_kind",
+            &[
+                DeskCardKind::Command,
+                DeskCardKind::Edit,
+                DeskCardKind::Read,
+                DeskCardKind::Other,
+            ],
+        );
+        checked.insert("desk_card_kind");
+        {
+            use hide_desk::permission::{Answer, Ask, Irreversible, Row};
+            assert_wire(
+                &contract,
+                "desk_permission_row",
+                &[Row::Hide, Row::Read, Row::Shell, Row::Edit],
+            );
+            checked.insert("desk_permission_row");
+            assert_wire(
+                &contract,
+                "desk_permission_answer",
+                &[Answer::Run, Answer::Ask],
+            );
+            checked.insert("desk_permission_answer");
+            assert_wire(&contract, "desk_irreversible", &Irreversible::ALL);
+            checked.insert("desk_irreversible");
+            let kinds: Vec<serde_json::Value> = [
+                Ask::Irreversible(Irreversible::ForcePush),
+                Ask::Row(Row::Shell),
+            ]
+            .iter()
+            .map(|ask| serde_json::to_value(ask).unwrap()["kind"].clone())
+            .collect();
+            assert_wire(&contract, "desk_approval_ask", &kinds);
+            checked.insert("desk_approval_ask");
+        }
+        assert_wire(
+            &contract,
+            "desk_approval_state",
+            &[
+                DeskApprovalState::Waiting,
+                DeskApprovalState::Allowed,
+                DeskApprovalState::AllowedConversation,
+                DeskApprovalState::Rejected,
+                DeskApprovalState::Closed,
+            ],
+        );
+        checked.insert("desk_approval_state");
+        assert_wire(
+            &contract,
+            "desk_notice",
+            &[
+                DeskNotice::Blocked,
+                DeskNotice::Preparing,
+                DeskNotice::HostStopped,
+                DeskNotice::ResumeFailed,
+                DeskNotice::LoginNeeded,
+                DeskNotice::InstallFailed,
+                DeskNotice::NoAskMode,
+                DeskNotice::TurnFailed,
+            ],
+        );
+        checked.insert("desk_notice");
+        assert_wire(
+            &contract,
+            "desk_location",
+            &[
+                DeskLocation::Desk,
+                DeskLocation::Worktree,
+                DeskLocation::Checkout,
+            ],
+        );
+        checked.insert("desk_location");
+        assert_wire(
+            &contract,
+            "desk_mention_kind",
+            &[DeskMentionKind::Session, DeskMentionKind::Project],
+        );
+        checked.insert("desk_mention_kind");
+        assert_wire(
+            &contract,
+            "desk_carried",
+            &[DeskCarried::All, DeskCarried::Trimmed, DeskCarried::None],
+        );
+        checked.insert("desk_carried");
+        assert_wire(
+            &contract,
+            "desk_job_state",
+            &[
+                DeskJobState::Queued,
+                DeskJobState::Starting,
+                DeskJobState::Working,
+                DeskJobState::Asking,
+                DeskJobState::Done,
+                DeskJobState::Failed,
+                DeskJobState::Cancelled,
+                DeskJobState::Closed,
+                DeskJobState::MovedOut,
+                DeskJobState::Sleeping,
+                DeskJobState::Archived,
+            ],
+        );
+        checked.insert("desk_job_state");
+        assert_wire(
+            &contract,
+            "desk_ask_kind",
+            &[
+                DeskAskKind::Question,
+                DeskAskKind::Approval,
+                DeskAskKind::Decision,
+                DeskAskKind::PlanReview,
+                DeskAskKind::Blocked,
+            ],
+        );
+        checked.insert("desk_ask_kind");
+        assert_wire(
+            &contract,
+            "desk_job_reason",
+            &[
+                DeskJobReason::SpawnFailed,
+                DeskJobReason::Exited,
+                DeskJobReason::DeviceDisconnected,
+            ],
+        );
+        checked.insert("desk_job_reason");
+        assert_wire(
+            &contract,
+            "desk_job_failure",
+            &[
+                DeskJobFailure::DeviceUnavailable,
+                DeskJobFailure::AgentNotInstalled,
+                DeskJobFailure::AgentHookNotReady,
+                DeskJobFailure::BranchInUse,
+                DeskJobFailure::ProjectUnavailable,
+                DeskJobFailure::AlreadyStarted,
+                DeskJobFailure::Busy,
+                DeskJobFailure::NotStarted,
+                DeskJobFailure::InvalidRequest,
+                DeskJobFailure::Other,
+            ],
+        );
+        checked.insert("desk_job_failure");
+        assert_wire(
+            &contract,
+            "desk_output_kind",
+            &[
+                DeskOutputKind::Image,
+                DeskOutputKind::Page,
+                DeskOutputKind::Doc,
+                DeskOutputKind::Pr,
+            ],
+        );
+        checked.insert("desk_output_kind");
+        assert_wire(
+            &contract,
+            "desk_job_location",
+            &[DeskJobLocationKind::Checkout, DeskJobLocationKind::Worktree],
+        );
+        checked.insert("desk_job_location");
+        let thread_states = [
+            ThreadState::Closed,
+            ThreadState::Loading,
+            ThreadState::Ready,
+            ThreadState::Failed,
+        ];
+        for variant in thread_states {
+            match variant {
+                ThreadState::Closed
+                | ThreadState::Loading
+                | ThreadState::Ready
+                | ThreadState::Failed => {}
+            }
+        }
+        assert_wire(&contract, "session_thread_state", &thread_states);
+        checked.insert("session_thread_state");
+        let thread_failures = [ThreadFailure::NoRecord, ThreadFailure::Refused];
+        for variant in thread_failures {
+            match variant {
+                ThreadFailure::NoRecord | ThreadFailure::Refused => {}
+            }
+        }
+        assert_wire(&contract, "session_thread_failure", &thread_failures);
+        checked.insert("session_thread_failure");
+        let thread_panes = [ThreadPane::Same, ThreadPane::Changed, ThreadPane::Gone];
+        for variant in thread_panes {
+            match variant {
+                ThreadPane::Same | ThreadPane::Changed | ThreadPane::Gone => {}
+            }
+        }
+        assert_wire(&contract, "session_thread_pane", &thread_panes);
+        checked.insert("session_thread_pane");
+        let thread_older = [
+            ThreadOlder::Idle,
+            ThreadOlder::Loading,
+            ThreadOlder::Capacity,
+            ThreadOlder::Failed,
+        ];
+        for variant in thread_older {
+            match variant {
+                ThreadOlder::Idle
+                | ThreadOlder::Loading
+                | ThreadOlder::Capacity
+                | ThreadOlder::Failed => {}
+            }
+        }
+        assert_wire(&contract, "session_thread_older", &thread_older);
+        checked.insert("session_thread_older");
+        let thread_inputs = [
+            ThreadInputState::Sending,
+            ThreadInputState::Sent,
+            ThreadInputState::Refused,
+        ];
+        for variant in thread_inputs {
+            match variant {
+                ThreadInputState::Sending | ThreadInputState::Sent | ThreadInputState::Refused => {}
+            }
+        }
+        assert_wire(&contract, "session_thread_input_state", &thread_inputs);
+        checked.insert("session_thread_input_state");
+        let hide_parts = [
+            hide_session::thread::HideCall::Plan,
+            hide_session::thread::HideCall::Spawn {
+                name: None,
+                intent: None,
+                agent_id: None,
+            },
+            hide_session::thread::HideCall::Letter {
+                to: String::new(),
+                body: None,
+            },
+            hide_session::thread::HideCall::View {
+                view: hide_session::thread::ViewKind::File,
+                target: String::new(),
+            },
+            hide_session::thread::HideCall::Mission { mission: None },
+        ];
+        for variant in &hide_parts {
+            match variant {
+                hide_session::thread::HideCall::Plan
+                | hide_session::thread::HideCall::Spawn { .. }
+                | hide_session::thread::HideCall::Letter { .. }
+                | hide_session::thread::HideCall::View { .. }
+                | hide_session::thread::HideCall::Mission { .. } => {}
+            }
+        }
+        assert_wire(
+            &contract,
+            "session_thread_part_kind",
+            &hide_parts
+                .iter()
+                .map(|part| serde_json::to_value(part).unwrap()["kind"].clone())
+                .collect::<Vec<_>>(),
+        );
+        checked.insert("session_thread_part_kind");
+        let views = [
+            hide_session::thread::ViewKind::Browser,
+            hide_session::thread::ViewKind::File,
+            hide_session::thread::ViewKind::Diff,
+        ];
+        for variant in views {
+            match variant {
+                hide_session::thread::ViewKind::Browser
+                | hide_session::thread::ViewKind::File
+                | hide_session::thread::ViewKind::Diff => {}
+            }
+        }
+        assert_wire(&contract, "session_thread_view_kind", &views);
+        checked.insert("session_thread_view_kind");
+
+        use crate::automations::{MissedReason, PauseReason, RunState, Trigger, Weekday};
+        let triggers = [Trigger::Scheduled, Trigger::Manual, Trigger::Missed];
+        for variant in triggers {
+            match variant {
+                Trigger::Scheduled | Trigger::Manual | Trigger::Missed => {}
+            }
+        }
+        assert_wire(&contract, "automation_trigger", &triggers);
+        checked.insert("automation_trigger");
+
+        let states = [
+            RunState::Starting,
+            RunState::Running,
+            RunState::Succeeded,
+            RunState::Failed,
+            RunState::Stopped,
+        ];
+        for variant in states {
+            match variant {
+                RunState::Starting
+                | RunState::Running
+                | RunState::Succeeded
+                | RunState::Failed
+                | RunState::Stopped => {}
+            }
+        }
+        assert_wire(&contract, "automation_run_state", &states);
+        checked.insert("automation_run_state");
+
+        let pauses = [
+            PauseReason::Operator,
+            PauseReason::LoginExpired,
+            PauseReason::FolderMissing,
+            PauseReason::AgentMissing,
+            PauseReason::FolderDetached,
+            PauseReason::MachineChanged,
+            PauseReason::FolderInRepository,
+        ];
+        for variant in pauses {
+            match variant {
+                PauseReason::Operator
+                | PauseReason::LoginExpired
+                | PauseReason::FolderMissing
+                | PauseReason::AgentMissing
+                | PauseReason::FolderDetached
+                | PauseReason::MachineChanged
+                | PauseReason::FolderInRepository => {}
+            }
+        }
+        assert_wire(&contract, "automation_pause_reason", &pauses);
+        checked.insert("automation_pause_reason");
+
+        let missed = [MissedReason::CoreOff, MissedReason::Asleep];
+        for variant in missed {
+            match variant {
+                MissedReason::CoreOff | MissedReason::Asleep => {}
+            }
+        }
+        assert_wire(&contract, "automation_missed_reason", &missed);
+        checked.insert("automation_missed_reason");
+
+        let days = [
+            Weekday::Sun,
+            Weekday::Mon,
+            Weekday::Tue,
+            Weekday::Wed,
+            Weekday::Thu,
+            Weekday::Fri,
+            Weekday::Sat,
+        ];
+        for variant in days {
+            match variant {
+                Weekday::Sun
+                | Weekday::Mon
+                | Weekday::Tue
+                | Weekday::Wed
+                | Weekday::Thu
+                | Weekday::Fri
+                | Weekday::Sat => {}
+            }
+        }
+        assert_wire(&contract, "automation_weekday", &days);
+        checked.insert("automation_weekday");
+
+        {
+            use crate::peer_machines::{PeerOpenedBy, PeerOpens, PeerPath, PeerReason, PeerUpdate};
+            let opens = [
+                PeerOpens::Confirming,
+                PeerOpens::Active,
+                PeerOpens::Paused,
+                PeerOpens::PausedThere,
+                PeerOpens::Removing,
+                PeerOpens::Unpaired,
+            ];
+            for variant in opens {
+                match variant {
+                    PeerOpens::Confirming
+                    | PeerOpens::Active
+                    | PeerOpens::Paused
+                    | PeerOpens::PausedThere
+                    | PeerOpens::Removing
+                    | PeerOpens::Unpaired => {}
+                }
+            }
+            assert_wire(&contract, "peer_opens", &opens);
+            checked.insert("peer_opens");
+
+            let opened_by = [PeerOpenedBy::Active, PeerOpenedBy::Paused];
+            for variant in opened_by {
+                match variant {
+                    PeerOpenedBy::Active | PeerOpenedBy::Paused => {}
+                }
+            }
+            assert_wire(&contract, "peer_opened_by", &opened_by);
+            checked.insert("peer_opened_by");
+
+            let paths = [PeerPath::Direct, PeerPath::Relay, PeerPath::Local];
+            for variant in paths {
+                match variant {
+                    PeerPath::Direct | PeerPath::Relay | PeerPath::Local => {}
+                }
+            }
+            assert_wire(&contract, "peer_path", &paths);
+            checked.insert("peer_path");
+
+            let reasons = [PeerReason::RelayUnreachable, PeerReason::RelayMonthlyLimit];
+            for variant in reasons {
+                match variant {
+                    PeerReason::RelayUnreachable | PeerReason::RelayMonthlyLimit => {}
+                }
+            }
+            assert_wire(&contract, "peer_reason", &reasons);
+            checked.insert("peer_reason");
+
+            let updates = [PeerUpdate::Here, PeerUpdate::There];
+            for variant in updates {
+                match variant {
+                    PeerUpdate::Here | PeerUpdate::There => {}
+                }
+            }
+            assert_wire(&contract, "peer_update", &updates);
+            checked.insert("peer_update");
+        }
+
+        {
+            use hide_kit::store::{
+                CellFailure, CellState, ItemKind, StorePassRefusal, StoreRefusalCause,
+            };
+            let kinds = [ItemKind::Skill, ItemKind::Mcp];
+            for variant in kinds {
+                match variant {
+                    ItemKind::Skill | ItemKind::Mcp => {}
+                }
+            }
+            assert_wire(&contract, "store_item_kind", &kinds);
+            checked.insert("store_item_kind");
+
+            let cells = [
+                CellState::On,
+                CellState::Off,
+                CellState::Waiting,
+                CellState::HandWritten,
+                CellState::Failed,
+                CellState::Unsupported,
+                CellState::AgentOff,
+            ];
+            for variant in cells {
+                match variant {
+                    CellState::On
+                    | CellState::Off
+                    | CellState::Waiting
+                    | CellState::HandWritten
+                    | CellState::Failed
+                    | CellState::Unsupported
+                    | CellState::AgentOff => {}
+                }
+            }
+            assert_wire(&contract, "store_cell_state", &cells);
+            checked.insert("store_cell_state");
+
+            let causes = [
+                StoreRefusalCause::NotFound,
+                StoreRefusalCause::NoSkills,
+                StoreRefusalCause::NoAccess,
+                StoreRefusalCause::Unreachable,
+                StoreRefusalCause::NoGit,
+                StoreRefusalCause::TooLarge,
+                StoreRefusalCause::NameTaken,
+                StoreRefusalCause::Differs,
+                StoreRefusalCause::TooMany,
+                StoreRefusalCause::Unsupported,
+                StoreRefusalCause::Failed,
+            ];
+            for variant in causes {
+                match variant {
+                    StoreRefusalCause::NotFound
+                    | StoreRefusalCause::NoSkills
+                    | StoreRefusalCause::NoAccess
+                    | StoreRefusalCause::Unreachable
+                    | StoreRefusalCause::NoGit
+                    | StoreRefusalCause::TooLarge
+                    | StoreRefusalCause::NameTaken
+                    | StoreRefusalCause::Differs
+                    | StoreRefusalCause::TooMany
+                    | StoreRefusalCause::Unsupported
+                    | StoreRefusalCause::Failed => {}
+                }
+            }
+            assert_wire(&contract, "store_refusal_cause", &causes);
+            checked.insert("store_refusal_cause");
+
+            let refusals = [
+                StorePassRefusal::KeysSecretGone,
+                StorePassRefusal::Unreadable,
+            ];
+            for variant in refusals {
+                match variant {
+                    StorePassRefusal::KeysSecretGone | StorePassRefusal::Unreadable => {}
+                }
+            }
+            assert_wire(&contract, "store_pass_refusal", &refusals);
+            checked.insert("store_pass_refusal");
+
+            let failures = [
+                CellFailure::Unreadable,
+                CellFailure::Unwritable,
+                CellFailure::Keys,
+                CellFailure::Pending,
+            ];
+            for variant in failures {
+                match variant {
+                    CellFailure::Unreadable
+                    | CellFailure::Unwritable
+                    | CellFailure::Keys
+                    | CellFailure::Pending => {}
+                }
+            }
+            assert_wire(&contract, "store_cell_failure", &failures);
+            checked.insert("store_cell_failure");
+        }
+
+        let unchecked = contract
+            .keys()
+            .filter(|key| !checked.contains(key.as_str()))
+            .collect::<Vec<_>>();
+        assert!(
+            unchecked.is_empty(),
+            "contract lists enums this test does not pin: {unchecked:?}"
+        );
+    }
+
+    /// The operator's three row states (2026-10-30): every ssh class lands
+    /// on sign in, the server key or a retry, and only the retries ssh has
+    /// no line for keep a value of their own.
+    #[test]
+    fn a_device_row_draws_every_ssh_failure_as_one_of_three_states() {
+        use hide_node_link::device::SshProblem;
+        let row = |problem| DeviceProblem::of(problem).code();
+        assert_eq!(row(SshProblem::SignInNeeded), "sign_in_needed");
+        assert_eq!(row(SshProblem::BrowserTimeout), "sign_in_needed");
+        assert_eq!(row(SshProblem::SignInRefused), "sign_in_refused");
+        assert_eq!(row(SshProblem::HostKeyChanged), "host_key_changed");
+        for problem in [
+            SshProblem::PolicyRefused,
+            SshProblem::NameNotFound,
+            SshProblem::Unreachable,
+            SshProblem::ProxyFailed,
+            SshProblem::SilentEnd,
+            SshProblem::SilentTimeout,
+            SshProblem::ConfigUnreadable,
+            SshProblem::CheckFailed,
+            SshProblem::Busy,
+            SshProblem::Unclassified,
+        ] {
+            assert_eq!(row(problem), "cannot_connect", "{problem:?}");
+        }
+        assert_eq!(row(SshProblem::SshMissing), "ssh_missing");
+        assert_eq!(row(SshProblem::OpenSshOld), "openssh_old");
+        assert_eq!(row(SshProblem::Unsupported), "unsupported");
+        assert_eq!(row(SshProblem::HideUpdated), "hide_updated");
+    }
+}
+
+#[cfg(test)]
+mod release_1_2_1_wire_tests {
+    //! The snapshot wire has no cross-build reader (`docs/ARCHITECTURE.md`,
+    //! "No link forms across builds"): a shell and its core are one build.
+    //! These tests read what release 1.2.1 sent (`tests/fixtures/release-1.2.1/
+    //! snapshot.json`, an isolated run) and pin each rename: the old key is
+    //! mapped to its engine name in the test, so a renamed field that drifts
+    //! back to its 1.2.1 key fails here.
+    use super::*;
+    use serde_json::{Map, Value, json};
+
+    fn sent() -> Value {
+        serde_json::from_str(include_str!(
+            "../tests/fixtures/release-1.2.1/snapshot.json"
+        ))
+        .unwrap()
+    }
+
+    /// The 1.2.1 object with each listed top-level key renamed.
+    fn renamed(sent: &Value, names: &[(&str, &str)]) -> Value {
+        let mut object = Map::new();
+        for (key, value) in sent.as_object().unwrap() {
+            let name = names
+                .iter()
+                .find(|(old, _)| *old == key)
+                .map_or(key.as_str(), |(_, new)| *new);
+            object.insert(name.to_owned(), value.clone());
+        }
+        Value::Object(object)
+    }
+
+    #[test]
+    fn every_status_key_1_2_1_sent_is_sent_under_its_engine_name() {
+        let snapshot = Snapshot::initial(&CoreOptions {
+            schema_version: SCHEMA_VERSION,
+            home: None,
+            node_id: crate::node::test_node(),
+            app_state_path: String::new(),
+            host_helper_root: None,
+            host_cli_dir: None,
+            workspace_views_path: None,
+            shortcut_import_path: None,
+            local_issues_path: None,
+            effects_held: false,
+            machine_name: None,
+            windows_drives: None,
+            account_state_folder: false,
+        });
+        let rest = RestSections::capture(&snapshot, None, 1);
+        let status = serde_json::to_value(&rest.status).unwrap();
+        let expected = renamed(
+            &sent()["status"],
+            &[("herdr", "engine"), ("herdr_profiles", "machine_profiles")],
+        );
+        let missing = expected
+            .as_object()
+            .unwrap()
+            .keys()
+            .filter(|key| status.get(key.as_str()).is_none())
+            .collect::<Vec<_>>();
+        assert!(
+            missing.is_empty(),
+            "1.2.1 sent under engine names, this build does not: {missing:?}"
+        );
+        assert!(status.get("herdr").is_none() && status.get("herdr_profiles").is_none());
+        assert!(status["engine"].get("socket_path").is_none());
+    }
+
+    #[test]
+    fn an_engine_tab_in_the_strip_is_sent_as_1_2_1_sent_it_under_engine_names() {
+        let mut expected = sent()["strip"].clone();
+        expected["id"] = json!("engine:h1:t1");
+        expected["kind"] = json!("engine");
+        assert_eq!(
+            serde_json::to_value(StripTabSnapshot::engine("h1:t1", "c3 first named")).unwrap(),
+            expected
+        );
+    }
+
+    #[test]
+    fn a_pane_is_sent_as_1_2_1_sent_it_under_engine_names() {
+        let pane = PaneSnapshot {
+            device_id: Default::default(),
+            device_pane_id: Default::default(),
+            start_claim: None,
+            terminal_id: Some("h1:p4".into()),
+            failed_terminal_id: None,
+            id: "h1:p4".into(),
+            engine_label: None,
+            terminal_title: None,
+            cwd: "/private/tmp/rn.oiOy/repo".into(),
+            status_code: AgentStatusCode::Idle,
+            requires_close_confirmation: false,
+            requires_close_status_check: false,
+            identity_label: Some("c3 restore label check".into()),
+            activity_at_unix_ms: Some(1_793_994_360_223),
+            fork: PaneForkSnapshot {
+                available: true,
+                reason: None,
+                forked_from: None,
+            },
+            ports: Vec::new(),
+            servers: Vec::new(),
+            children: None,
+            lineage_path: Vec::new(),
+            sleep: None,
+            sleep_action: None,
+        };
+        assert_eq!(
+            serde_json::to_value(&pane).unwrap(),
+            renamed(&sent()["pane"], &[("herdr_label", "engine_label")])
+        );
+    }
+
+    /// 1.2.1's shell read a named agent's name as `herdr_name`; this build
+    /// sends `given_name`, and the 1.2.1 key is not sent.
+    #[test]
+    fn a_named_agent_row_sends_its_name_as_given_name() {
+        let mut row = crate::sidebar::project_agents(
+            crate::sidebar::owned_label_fixture(json!({"agents": [
+                {"id": "h1:p4", "pane_id": "h1:p4", "agent_status": "idle", "state_change_seq": 1}
+            ]}))
+            .unwrap(),
+        )
+        .agents
+        .remove(0);
+        row.given_name = Some("reviewer".into());
+        let wire = serde_json::to_value(&row).unwrap();
+        assert_eq!(wire["given_name"], json!("reviewer"));
+        assert!(wire.get("herdr_name").is_none());
+    }
+}

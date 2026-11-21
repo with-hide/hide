@@ -1,0 +1,75 @@
+{
+ "tag": "v1.2.3",
+ "commit": "6790baab32bc1441ef434d4ac933e00be63fc2dc",
+ "core_node": "c0de0000000000000000000000000001",
+ "device": {
+  "alias": "mini",
+  "machine_id": "de510000000000000000000000000002"
+ },
+ "steps": [
+  {
+   "step": "projects and device",
+   "ok": true
+  },
+  {
+   "step": "Claude Code on for the device",
+   "ok": true
+  },
+  {
+   "step": "project settings for a core and a device project",
+   "ok": true
+  },
+  {
+   "step": "agents",
+   "ok": true
+  },
+  {
+   "step": "views opened from two device sessions and the core",
+   "ok": true
+  },
+  {
+   "step": "device pane move",
+   "ok": true
+  },
+  {
+   "step": "letters to and from a device agent",
+   "ok": true
+  },
+  {
+   "step": "project memory cards",
+   "ok": true
+  },
+  {
+   "step": "plan step spawned from a device session",
+   "ok": true
+  },
+  {
+   "step": "mission conducted on the device with its worker there",
+   "ok": true
+  },
+  {
+   "step": "remains item in the detail slot",
+   "ok": true
+  },
+  {
+   "step": "sleeping device agent",
+   "ok": true
+  },
+  {
+   "step": "Pi on the core asleep with its pane closed",
+   "ok": true
+  },
+  {
+   "step": "agent started from the start panel",
+   "ok": true
+  },
+  {
+   "step": "archived session",
+   "ok": true
+  },
+  {
+   "step": "a Home started on the core and the device",
+   "ok": true
+  }
+ ]
+}

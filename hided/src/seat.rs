@@ -120,7 +120,7 @@ impl SeatParts {
             .lock()
             .unwrap_or_else(|error| error.into_inner());
         let now = Instant::now();
-        herdr_core::diagnostic!(serde_json::json!({
+        hide_core::diagnostic!(serde_json::json!({
             "component": "hided",
             "kind": "start.step",
             "step": start.step,

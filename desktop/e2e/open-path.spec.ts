@@ -6,8 +6,7 @@ import { expect, type ElectronApplication } from "@playwright/test";
 import fs from "node:fs";
 import path from "node:path";
 import { chord } from "../../web/e2e/chords";
-import { startHerdr } from "../../web/e2e/herdr-fixture";
-import { hostLog, isolate, launch, test } from "./fixture";
+import { hostLog, launchShell, startStack, test } from "./fixture";
 
 const windowVisible = (app: ElectronApplication) =>
   app.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()[0]?.isVisible() ?? false);
@@ -16,14 +15,14 @@ const hideWindow = (app: ElectronApplication) =>
   app.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()[0]?.hide());
 
 test("hide <path> adds a folder as a project, brings it forward again, and calls the window back", async () => {
-  const herdr = await startHerdr();
-  const run = isolate(herdr, "open-path");
+  const stack = await startStack("open-path");
+  const { run } = stack;
   let app: ElectronApplication | undefined;
   try {
     const home = run.env.HOME!;
     const beta = path.join(home, "projects", "beta");
     fs.mkdirSync(path.join(beta, "src"), { recursive: true });
-    const launched = await launch(run.env);
+    const launched = await launchShell(run.env);
     app = launched.app;
     const page = launched.page;
     await expect(page.locator("[data-main-screen], [data-workspace-screen]")).toBeVisible({ timeout: 30_000 });
@@ -65,7 +64,6 @@ test("hide <path> adds a folder as a project, brings it forward again, and calls
     expect(missing.stderr).toContain("no folder is there; check the path");
   } finally {
     await app?.close();
-    run.cleanup();
-    herdr.stop();
+    stack.stop();
   }
 });

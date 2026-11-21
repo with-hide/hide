@@ -20,6 +20,9 @@ use anyhow::{Context, Result, bail, ensure};
 use hide_platform::process::OwnedChild;
 
 const READY_BOUND: Duration = Duration::from_secs(10);
+/// How many ports a start tries before it gives up: a port another test's
+/// server took between the choice and the bind is answered with a new one.
+const PORT_ATTEMPTS: usize = 8;
 
 pub struct Sshd {
     pub port: u16,
@@ -52,6 +55,13 @@ fn program() -> Result<PathBuf> {
 
 impl Sshd {
     /// Starts a server in `dir` whose sessions get `environment`.
+    ///
+    /// The port is chosen by binding port 0 and letting it go, and the server
+    /// binds it a moment later; many tests run a server at once, so another
+    /// test's server can take the port in between. The server that lost the
+    /// bind says so and exits, and a new port is chosen. Which server
+    /// answered is told by this server's own log, never by a connection: a
+    /// connection to the port reaches whichever server holds it.
     pub fn start(dir: &Path, environment: &[(OsString, OsString)]) -> Result<Self> {
         std::fs::create_dir_all(dir)?;
         let dir = std::fs::canonicalize(dir)?;
@@ -67,7 +77,24 @@ impl Sshd {
             }
         }
         std::fs::copy(dir.join("client.pub"), dir.join("authorized_keys"))?;
-        let port = free_port()?;
+        for _ in 0..PORT_ATTEMPTS {
+            let sshd = Self::configured(&dir, free_port()?, environment)?;
+            match sshd.online(true) {
+                Ok(()) => return Ok(sshd),
+                Err(error) if sshd.lost_the_bind() => {
+                    eprintln!(
+                        "sshd lost port {} to another server, choosing another: {error:#}",
+                        sshd.port
+                    );
+                }
+                Err(error) => return Err(error),
+            }
+        }
+        bail!("sshd found no free port in {PORT_ATTEMPTS} tries")
+    }
+
+    /// The server's files for `port`, written and not started.
+    fn configured(dir: &Path, port: u16, environment: &[(OsString, OsString)]) -> Result<Self> {
         let mut set_env = String::from("SetEnv");
         for (name, value) in environment {
             let value = value.to_string_lossy();
@@ -101,15 +128,26 @@ impl Sshd {
             &known_hosts,
             format!("[127.0.0.1]:{port} {}\n", public.trim()),
         )?;
-        let sshd = Self {
+        Ok(Self {
             port,
             client_key: dir.join("client"),
             known_hosts,
-            dir,
+            dir: dir.to_owned(),
             child: std::sync::Mutex::new(None),
-        };
-        sshd.online(true)?;
-        Ok(sshd)
+        })
+    }
+
+    /// Whether this server's log says another server held its port.
+    fn lost_the_bind(&self) -> bool {
+        self.log().contains(&self.bind_failure())
+    }
+
+    /// The line this server's log gets when another server holds its port.
+    fn bind_failure(&self) -> String {
+        format!(
+            "Bind to port {} on 127.0.0.1 failed: Address already in use",
+            self.port
+        )
     }
 
     /// Lets the key whose public half is `public` sign in too.
@@ -178,20 +216,40 @@ impl Sshd {
             .stdin(Stdio::null())
             .stdout(Stdio::null())
             .stderr(log);
+        // The log is appended to across restarts, so a start reads only what
+        // its own server wrote after this point: an earlier start's
+        // "Server listening" line is not this server's.
+        let from = self.log().len();
         let started = child.insert(OwnedChild::spawn(&mut command)?);
+        // Ready is this server's own "Server listening" line for this port.
+        // A connection that succeeds proves only that some server holds the
+        // port, and a server that lost the bind has exited by then.
+        let listening = format!("Server listening on 127.0.0.1 port {}.", self.port);
         let deadline = Instant::now() + READY_BOUND;
-        while std::net::TcpStream::connect(("127.0.0.1", self.port)).is_err() {
-            if let Some(status) = started.try_wait()? {
-                bail!("sshd exited {status}: {}", self.log());
+        loop {
+            let log = self.log();
+            let written = log.get(from..).unwrap_or_default();
+            if written.contains(&listening) {
+                return Ok(());
             }
-            ensure!(
-                Instant::now() < deadline,
-                "sshd did not listen: {}",
-                self.log()
-            );
+            if let Some(status) = started.try_wait()? {
+                child.take();
+                bail!(
+                    "sshd exited {status} before it listened on port {}{}: {written}",
+                    self.port,
+                    if written.contains(&self.bind_failure()) {
+                        " (another server holds it)"
+                    } else {
+                        ""
+                    }
+                );
+            }
+            if Instant::now() >= deadline {
+                child.take();
+                bail!("sshd did not listen: {written}");
+            }
             std::thread::sleep(Duration::from_millis(20));
         }
-        Ok(())
     }
 
     /// How many connections signed in since the server first started.

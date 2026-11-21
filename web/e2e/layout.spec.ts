@@ -1,15 +1,12 @@
-// Tabs, splits, zoom, closes, a closed tab given back and resizes, on the
-// engine HIDE_E2E_ENGINE names (PRD engine-bundle-3-core-owns D-14, D-24,
-// B37): each test starts its own checkout of two shell panes made through
-// the daemon (`engine-fixture.ts`), so the same body runs on the pinned
-// Herdr and on the core's own engine.
+// Tabs, splits, zoom, closes, a closed tab given back and resizes (PRD
+// engine-bundle-3-core-owns D-14, D-24, B37): each test starts its own
+// checkout of two shell panes made through the daemon (`engine-fixture.ts`).
 
 import { expect, test, type Page } from "@playwright/test";
-import { chord } from "./chords";
-import { e2eEngine } from "./e2e-engine";
+import { chord, SYSTEM } from "./chords";
 import { openLayout, startLayoutStack, type LayoutStack } from "./engine-fixture";
-import { corePaneFocus } from "./daemon-actions";
-import { panePrompt, paneSizeCommand, type PaneShell } from "./herdr-fixture";
+import { shownTab, corePaneFocus } from "./daemon-actions";
+import { panePrompt, paneSizeCommand, type PaneShell } from "./pane-fixture";
 import { countSent, screenshot } from "./wire";
 
 test.describe.configure({ timeout: 90_000 });
@@ -42,11 +39,12 @@ async function focusPane(page: Page, stack: LayoutStack, pane: string): Promise<
 }
 
 /**
- * The split chord on the second pane: a third pane running the fixture
- * shell, which the core focuses. Returns once it has its prompt and the keyboard.
+ * The split chord on the second pane, or on `target`: a third pane running
+ * the fixture shell, which the core focuses. Returns once it has its prompt
+ * and the keyboard.
  */
-async function splitShell(page: Page, { stack, sent }: Open): Promise<string> {
-  await focusPane(page, stack, stack.panes[1]!);
+async function splitShell(page: Page, { stack, sent }: Open, target = stack.panes[1]!): Promise<string> {
+  await focusPane(page, stack, target);
   const before = await paneIds(page);
   await page.keyboard.press(chord("split_right"));
   await expect(page.locator("[data-pane-view]")).toHaveCount(3);
@@ -76,11 +74,12 @@ async function programSize(page: Page, pane: string, shell: PaneShell, marker: s
   return { rows: Number(rows), cols: Number(cols) };
 }
 
-test("⌘D splits the focused pane, a divider drag sends one resize_pane, and ⌥⇧W closes the focused idle pane without a confirmation", { tag: "@platform" }, async ({ page }) => {
+test("⌘D splits the focused pane, a divider drag moves the divider under the pointer, and ⌥⇧W closes the focused idle pane without a confirmation", { tag: "@platform" }, async ({ page }) => {
   const open = await startOpen(page);
   try {
     const { sent } = open;
-    await splitShell(page, open);
+    // Splitting the first pane nests the new split inside the first side: ((A|B)|C).
+    await splitShell(page, open, open.stack.panes[0]!);
     await expect(page.locator("[data-split]")).toHaveCount(2);
     const boundaries = page.locator("[data-pane-boundary]");
     await expect(boundaries).toHaveCount(2);
@@ -90,20 +89,31 @@ test("⌘D splits the focused pane, a divider drag sends one resize_pane, and �
     }
     await screenshot(page, "layout-two-splits");
 
-    // A divider drag sends one resize_pane on release and the grid follows the engine.
+    // A drag of the divider between B and C sends one resize_pane on release
+    // and lands that divider where the pointer let go; the one between A and
+    // B keeps its share of the first side (issue 2346).
     const outer = page.locator("[data-split=right]").first();
+    const inner = outer.locator("[data-split=right]");
     const divider = outer.locator("> [data-divider]");
     const box = (await divider.boundingBox())!;
-    const before = await outer.evaluate((el) => (el as HTMLElement).style.gridTemplateColumns);
+    const columns = (split: typeof outer) => split.evaluate((el) => (el as HTMLElement).style.gridTemplateColumns);
+    const innerBefore = await columns(inner);
+    const release = box.x + box.width / 2 - 120;
     await page.mouse.move(box.x + box.width / 2, box.y + box.height / 2);
     await page.mouse.down();
-    await page.mouse.move(box.x + box.width / 2 + 60, box.y + box.height / 2, { steps: 6 });
+    await page.mouse.move(box.x + box.width / 2 - 60, box.y + box.height / 2, { steps: 6 });
     await expect(page.locator("[data-resize-guide]")).toHaveCount(1);
-    await page.mouse.move(box.x + box.width / 2 + 120, box.y + box.height / 2, { steps: 6 });
+    await page.mouse.move(release, box.y + box.height / 2, { steps: 6 });
     await page.mouse.up();
     await expect(page.locator("[data-resize-guide]")).toHaveCount(0);
     await expect.poll(() => sent.get("resize_pane")).toBe(1);
-    await expect.poll(() => outer.evaluate((el) => (el as HTMLElement).style.gridTemplateColumns), { timeout: 10_000 }).not.toBe(before);
+    await expect
+      .poll(async () => {
+        const moved = (await divider.boundingBox())!;
+        return Math.abs(moved.x + moved.width / 2 - release);
+      }, { timeout: 10_000 })
+      .toBeLessThan(3);
+    expect(await columns(inner)).toBe(innerBefore);
 
     // ⌥⇧W closes the focused idle pane; the engine's new geometry redraws the
     // grid, and the closed pane's terminal is disposed, not parked (D-05).
@@ -248,12 +258,7 @@ test("Reopen closed tab gives back the tab just closed with a working shell", { 
     await expect.poll(() => sent.get("reopen_closed")).toBe(1);
     await expect(page.locator("[data-tab]")).toHaveCount(2);
     const reopened = (await page.locator("[data-tab]").evaluateAll((tabs) => tabs.map((el) => el.getAttribute("data-tab")!))).find((id) => id !== stack.tab)!;
-    // The reopened tab takes the screen by itself. Windows on the Herdr
-    // engine is the one exception: Herdr's late confirmation of the focus sent
-    // just before the reopen is read as its own move back to the old tab (the
-    // shape of #425), a Herdr-path defect that goes with Herdr in bundle 4, so
-    // there the tab is clicked and only its shell is checked.
-    if (process.platform === "win32" && e2eEngine() === "herdr") await page.locator(`[data-tab="${reopened}"]`).click();
+    // The reopened tab takes the screen by itself.
     await expect(page.locator("[data-canvas]")).toHaveAttribute("data-canvas", reopened);
     await expect(page.locator("[data-pane-view]")).toHaveCount(1);
     const pane = (await paneIds(page))[0]!;
@@ -284,5 +289,54 @@ test("a narrower window reaches each pane's program as a narrower terminal", { t
     expect(await programSize(page, right, stack.server.shell, "narrow")).toEqual(await grid(right));
   } finally {
     open.stack.stop();
+  }
+});
+
+test("directional chords keep terminal input inside the drawn tab and preserve zoom and sheets", { tag: "@platform" }, async ({ page }) => {
+  const { stack, sent } = await startOpen(page);
+  try {
+    // Browser zoom produces independently rounded shared edges.
+    await page.evaluate(() => { document.documentElement.style.zoom = "1.25"; });
+    const [left, right] = stack.panes as [string, string];
+    await focusPane(page, stack, right);
+    await page.keyboard.press(chord("split_down"));
+    await expect(page.locator("[data-pane-view]")).toHaveCount(3);
+    const bottom = (await paneIds(page)).find((id) => id !== left && id !== right)!;
+    await expect.poll(() => probePane(page)).toBe(bottom);
+    for (const [command, destination] of [
+      ["focus_pane_up", right], ["focus_pane_left", left],
+      ["focus_pane_right", right], ["focus_pane_down", bottom],
+    ] as const) {
+      await page.keyboard.press(chord(command));
+      await expect.poll(() => probePane(page)).toBe(destination);
+      await stack.control.until((rest) => corePaneFocus(rest) === destination && shownTab(rest) === stack.tab || undefined, "focus in the original tab");
+    }
+    await page.keyboard.type("echo NAVIGATION_INPUT");
+    await page.keyboard.press("Enter");
+    await expect.poll(() => paneText(page, bottom)).toContain("NAVIGATION_INPUT");
+    const focusEvents = sent.get("focus_pane") ?? 0;
+    await page.keyboard.press(chord("focus_pane_down"));
+    await page.keyboard.press(chord("focus_pane_right"));
+    await page.keyboard.press(chord("toggle_zoom"));
+    await expect(page.locator("[data-canvas][data-zoomed=true]")).toBeVisible();
+    await page.keyboard.press(chord("focus_pane_left"));
+    await page.keyboard.press(chord("toggle_zoom"));
+    await expect(page.locator("[data-canvas][data-zoomed=false]")).toBeVisible();
+    await page.keyboard.press(chord("shortcuts"));
+    await expect(page.getByRole("dialog")).toBeVisible();
+    await page.keyboard.press(chord("focus_pane_up"));
+    await expect(page.getByRole("dialog")).toBeVisible();
+    await page.keyboard.press("Escape");
+    await expect(page.getByRole("dialog")).toHaveCount(0);
+    expect(sent.get("focus_pane") ?? 0).toBe(focusEvents);
+    await expect.poll(() => probePane(page)).toBe(bottom);
+    await page.locator("[data-open-settings]").click();
+    const field = page.getByRole("textbox", { name: "Terminal font", exact: true });
+    await field.fill("alpha beta");
+    await field.press("End");
+    await field.press(SYSTEM === "mac" ? "Alt+Shift+ArrowLeft" : "Control+Shift+ArrowLeft");
+    expect(await field.evaluate((element: HTMLInputElement) => element.value.slice(element.selectionStart!, element.selectionEnd!))).toBe("beta");
+  } finally {
+    stack.stop();
   }
 });

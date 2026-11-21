@@ -1,6 +1,6 @@
 import type { ProjectSuggestions, SuggestionRow, SuggestionSignal } from "../src/snapshot";
 
-// A Project's 제안 tab as the core sends it (herdr-core/src/model/suggestions.rs),
+// A Project's 제안 tab as the core sends it (hide-core/src/model/suggestions.rs),
 // with every field at its quiet value, so a test names only what it is about.
 
 const SIGNALS: SuggestionSignal[] = ["failed_tool", "agent_wait", "correction", "repeated_request", "memory_ignored", "label_missed", "improvement", "check_failed", "change_request"];

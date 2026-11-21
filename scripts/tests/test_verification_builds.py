@@ -77,28 +77,28 @@ class RealVerificationBuilds(BuildFixture):
         members = {'hided': ('hided', 'hide'), 'hide-agent-hooks': ('hide-agent-hooks',),
                    'hide-holder': ('hide-holder',)}
         (root / 'Cargo.toml').write_text(
-            '[workspace]\nmembers = ["herdr-core", "hided", "hide-agent-hooks", "hide-holder"]'
+            '[workspace]\nmembers = ["hide-core", "hided", "hide-agent-hooks", "hide-holder"]'
             '\nresolver = "2"\n')
-        (root / 'herdr-core/src').mkdir(parents=True)
-        (root / 'herdr-core/Cargo.toml').write_text(
-            '[package]\nname = "herdr-core"\nversion = "0.1.0"\nedition = "2021"\n')
+        (root / 'hide-core/src').mkdir(parents=True)
+        (root / 'hide-core/Cargo.toml').write_text(
+            '[package]\nname = "hide-core"\nversion = "0.1.0"\nedition = "2021"\n')
         self.rust_source(root, value)
         for package, binaries in members.items():
             (root / package / 'src/bin').mkdir(parents=True)
-            core = '../' * package.count('/') + '../herdr-core'
+            core = '../' * package.count('/') + '../hide-core'
             (root / package / 'Cargo.toml').write_text(
                 f'[package]\nname = "{package.rsplit("/", 1)[-1]}"\nversion = "0.1.0"\nedition = "2021"\n'
-                f'[dependencies]\nherdr-core = {{ path = "{core}" }}\n')
+                f'[dependencies]\nhide-core = {{ path = "{core}" }}\n')
             (root / package / 'src/lib.rs').write_text('')
             for binary in binaries:
                 (root / package / 'src/bin' / f'{binary}.rs').write_text(
-                    'fn main() { println!("{}", herdr_core::fixture_value()); }\n')
+                    'fn main() { println!("{}", hide_core::fixture_value()); }\n')
         subprocess.run(['bash', '-ec', '. scripts/toolchain-env.sh; cargo generate-lockfile'],
                        cwd=root, env=self.env, check=True, capture_output=True)
         return root
 
     def rust_source(self, root, value, expected=None):
-        (root / 'herdr-core/src/lib.rs').write_text(
+        (root / 'hide-core/src/lib.rs').write_text(
             f'pub fn fixture_value() -> i32 {{ {value} }}\n'
             f'#[test]\nfn current_value() {{ assert_eq!(fixture_value(), {value if expected is None else expected}); }}\n')
 
@@ -110,7 +110,7 @@ class RealVerificationBuilds(BuildFixture):
         self.env.pop('LC_ALL', None)
         self.env.pop('LC_CTYPE', None)
         self.env['LANG'] = 'C.UTF-8'
-        (root / 'herdr-core/src/lib.rs').write_text('''
+        (root / 'hide-core/src/lib.rs').write_text('''
 pub fn fixture_value() -> i32 { 41 }
 #[test]
 fn system_lock_holder_starts() {
@@ -140,7 +140,7 @@ fn system_lock_holder_starts() {
         self.run_wrapper(root, 'release')
         self.assertEqual(self.output(root, 'hided'), '42', 'the release daemon linked a stale core')
 
-        (root / 'herdr-core/src/lib.rs').write_text('compile_error!("broken core");\n')
+        (root / 'hide-core/src/lib.rs').write_text('compile_error!("broken core");\n')
         for mode in ('test', 'release'):
             result = self.run_wrapper(root, mode, succeeds=False)
             self.assertIn('broken core', result.stderr)

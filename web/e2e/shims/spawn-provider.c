@@ -476,7 +476,7 @@ int main(int argc, char **argv) {
   if (argc > 1 && strcmp(argv[1], "auth") == 0) { puts("{\"loggedIn\":true}"); return 0; }
   for (int i = 1; i < argc; i++) if (strcmp(argv[i], "--json-schema") == 0) return 1;
   initialize_runner();
-  // Exercise this exact supervisor without a terminal or a Herdr server.
+  // Exercise this exact supervisor without a terminal or an engine.
   if (argc > 4 && strcmp(argv[1], "--run-child") == 0) {
     char *end;
     unsigned long within_ms = strtoul(argv[2], &end, 10);
@@ -486,16 +486,15 @@ int main(int argc, char **argv) {
     return status;
   }
   if (load_config() != 0) return 1;
-  /* The pane names itself as `hide_agent_hooks::pane` reads it: HIDE_PANE_ID first. */
+  /* The pane names itself as `hide_agent_hooks::pane` reads it: HIDE_PANE_ID. */
   const char *pane = getenv("HIDE_PANE_ID");
-  if (!pane || !*pane) pane = getenv("HERDR_PANE_ID");
   if (!pane || !*pane) return 1;
   /* A resumed conversation keeps its id, as Claude Code's own does. */
   char session[80];
   snprintf(session, sizeof session, "fixture-%d", process_id());
   for (int i = 1; i + 1 < argc; i++)
     if (strcmp(argv[i], "--resume") == 0) snprintf(session, sizeof session, "%s", argv[i + 1]);
-  /* Run under another agent's name (a Grok pane's), the pane is that agent's, which Herdr reads from the
+  /* Run under another agent's name (a Grok pane's), the pane is that agent's, which the engine reads from the
      program; only the Claude Code stand-in reports a session of its own. */
   const char *base = argv[0];
   for (const char *at = argv[0]; *at; at++) if (*at == '/' || *at == '\\') base = at + 1;
@@ -507,6 +506,14 @@ int main(int argc, char **argv) {
   if (terminal_write(ready, sizeof ready - 1) != (fixture_count_t)(sizeof ready - 1)) return 1;
   static const char prompt[] = "\r\n────────────────\r\n❯ \r\n────────────────\r\n";
   if (terminal_write(prompt, sizeof prompt - 1) != (fixture_count_t)(sizeof prompt - 1)) return 1;
+  const char *root = getenv("HIDE_E2E_ROOT");
+  if (root) {
+    char marker[4096];
+    if (snprintf(marker, sizeof marker, "%s/terminal-ready-%s", root, pane) >= (int)sizeof marker) return 1;
+    for (char *at = marker + strlen(root); *at; at++) if (*at == ':') *at = '-';
+    FILE *file = file_open(marker);
+    if (!file || fclose(file) != 0) return 1;
+  }
   char bytes[16384];
   /* Everything else typed is echoed, as the `claude` stand-in echoes it
      (`claude-shim.c`), so a spec draws the screens an engine reads an

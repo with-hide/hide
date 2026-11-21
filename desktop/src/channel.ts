@@ -7,7 +7,7 @@ export const BINDINGS_CHANNEL = "hide:bindings";
 /** The core's explicit interface language (a language code or null for the system's), renderer -> main. */
 export const LANGUAGE_CHANNEL = "hide:language";
 
-/** Whether Settings › Desk has Desk on (a boolean), renderer -> main; the menu carries Desk's command only then. */
+/** Whether Settings › Labs › Desk has Desk on (a boolean), renderer -> main; the menu carries Desk's command only then. */
 export const DESK_CHANNEL = "hide:desk";
 
 /** A file or folder the shell asks the OS file manager to show (a menu's `reveal_external`), renderer -> main. */
@@ -50,6 +50,15 @@ export const NOTIFY_OPEN_CHANNEL = "hide:notify-open";
 export const NOTIFY_WITHDRAW_CHANNEL = "hide:notify-withdraw";
 export const NOTIFY_PERMISSION_CHANNEL = "hide:notify-permission";
 export const NOTIFY_SETTINGS_CHANNEL = "hide:notify-settings";
+
+/**
+ * The Windows firewall rules for same-network machines (PRD
+ * device-connect-iroh D-38, B32): whether they are in place, and the one
+ * ask of Windows for them when the operator shares this PC or allows its
+ * first pairing (both invoke).
+ */
+export const FIREWALL_STATE_CHANNEL = "hide:firewall-state";
+export const FIREWALL_ALLOW_CHANNEL = "hide:firewall-allow";
 
 /**
  * The app icon's badge: how many root agents need the operator, which the
@@ -96,28 +105,19 @@ export const EDITOR_OPEN_CHANNEL = "hide:editor-open";
 /**
  * This app's own updates (PRD auto-update): the shell asks for the status
  * once (invoke) and hears every change (main -> renderer); it asks for a
- * check, a Restart into the ready update, and preview releases on or off
- * (renderer -> main).
+ * check, a Restart into the ready update, preview releases on or off, and
+ * the close of the ready card for one version (renderer -> main).
  */
 export const UPDATE_STATUS_GET_CHANNEL = "hide:update-status-get";
 export const UPDATE_STATUS_CHANNEL = "hide:update-status";
 export const UPDATE_CHECK_CHANNEL = "hide:update-check";
 export const UPDATE_RESTART_CHANNEL = "hide:update-restart";
 export const UPDATE_PRERELEASE_CHANNEL = "hide:update-prerelease";
-
-/**
- * Restarting the operator's Herdr server on this app's Herdr where Herdr
- * cannot hand it over live (PRD herdr-takeover B12): the shell asks once the
- * operator confirmed what ends (invoke), and the host answers how it went.
- */
-export const HERDR_RESTART_CHANNEL = "hide:herdr-restart";
-
-/**
- * Quitting the app from the screen that holds Hide while this machine's Herdr
- * speaks another protocol (PRD herdr-takeover): the window's own Quit, as
- * the app menu's would; hided keeps running, as it does after any quit.
- */
-export const QUIT_CHANNEL = "hide:quit";
+export const UPDATE_DISMISS_CHANNEL = "hide:update-dismiss";
 
 /** Help > Practice Hide and the empty Home: open the practice window, or bring it forward (renderer -> main). */
 export const PRACTICE_OPEN_CHANNEL = "hide:practice-open";
+
+/** System use, observed by the main host and replayed to its own shell. */
+export const COMPUTER_USE_CHANNEL = "hide:computer-use";
+export const COMPUTER_USE_GET_CHANNEL = "hide:computer-use-get";

@@ -1,6 +1,10 @@
 //! Which agent runtimes Hide instruments, and the vocabulary it writes.
 
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
+
+use hide_agent_adapter::AccountPath;
+
+use crate::account::AccountAt;
 
 use serde::{Deserialize, Serialize};
 
@@ -25,22 +29,24 @@ pub const HELPER_BINARY_NAME: &str = if cfg!(windows) {
 /// The pane's `hide_hooks` reporting protocol. Raise it only when older
 /// reports cannot be interpreted: changing an installed command must not
 /// disconnect an already-running pane whose reports are still valid.
-/// Version 8's reports still read the same when they reach the core through
+/// Version 8's reports still read the same when they began to reach the core through
 /// hided instead of through Herdr, so moving the path kept it.
 pub const HOOK_VERSION: u32 = 8;
 
 /// The installed Claude Code and Codex command version, independent of the
 /// pane reporting protocol. Version 10 adds passive Post observation slots;
 /// version 11 adds the permission and interrupt events (PRD engine-bundle-1
-/// D-10).
-pub const HOOK_ENTRY_VERSION: u32 = 11;
+/// D-10); version 12's Windows guard tests for the helper without a cmdlet
+/// (with-hide/hide-private#318); version 13 adds Claude Code's `StopFailure`
+/// and its usage-limit continuation notice (mission-56).
+pub const HOOK_ENTRY_VERSION: u32 = 13;
 
 /// The intent table at the front of `PURPOSE_CONTEXT`, as a literal so the
 /// `hide` skill (`hide_kit::agents::GUIDE_SKILL`) carries the very same text.
 #[macro_export]
 macro_rules! intent_table {
     () => {
-        "Inside Hide, turn what the operator asks for into its command:\n| The operator asks | Run |\n| --- | --- |\n| show the operator a file, a diff or a web page | `hide file open <path>`, `hide diff open <path>`, `hide browser open <url-or-path>`: it opens as a tab of the active View area and waits in the operator's Needs You as To look at until they look at it |\n| check a page for yourself (your own browser QA) | your own browser tool, such as `aside`, not `hide browser open`: a page you open in Hide waits for the operator |\n| collect what a delegated child opened | `hide view list` shows what the operator has not seen and who opened it; read it with `hide view status <view-id>` or `hide browser snapshot <display>`, and to show it, open it again from your own pane |\n| start an agent beside you | `hide agent spawn --beside …` (your own checkout only; add `--parent here` to supervise it) |\n| hand work to an agent and collect its result | `hide agent spawn --parent here …` |\n| split the work across several agents | plan it (`hide plan help`) and hand only the steps that deliver something with `hide agent spawn --parent here --plan-node <key> …`; research stays with your own subagents |\n| start independent work the operator will handle | `hide agent spawn …` without --parent |\nWithout --beside, `hide agent spawn` opens the agent in a tab of its own. Never start an agent with `hide pane open` or by typing its program into a pane: that agent has no parent, letters or watch. Never show the operator a result with the system opener (`open`, `xdg-open`, `start`, `Start-Process`, `Invoke-Item`): it lands in an app outside Hide with no trace of who opened it, and Hide refuses the call. Use `hide browser open` for a page or a URL and `hide file open` for anything else, for a file outside the checkout too."
+        "Inside Hide, turn what the operator asks for into its command:\n| The operator asks | Run |\n| --- | --- |\n| show the operator a file, a diff or a web page | `hide file open <path>`, `hide diff open <path>`, `hide browser open <url-or-path>`: it opens beside your terminal when the operator watches your pane, else waits in your pane's Views list, and stays in the operator's Needs You as To look at until they look at it |\n| check a page for yourself (your own browser QA) | your own browser tool, such as `aside`, not `hide browser open`: a page you open in Hide waits for the operator |\n| collect what a delegated child opened | `hide view list` shows what the operator has not seen and who opened it; read it with `hide view status <view-id>` or `hide browser snapshot <display>`, and to show it, open it again from your own pane |\n| start an agent beside you | `hide agent spawn --beside …` (your own checkout only; it is the operator's to watch, so it takes no `--parent`) |\n| hand work to an agent and collect its result | `hide agent spawn --parent here …` |\n| complex work: planning or review first, multiple PRs or parallel work, another agent reviewing, or work likely to fill the conversation | first ask in one line: Shall I run this as a mission, or do it directly? Follow the operator's answer; if they already requested a mission or invoked `/hide-mission`, run `hide mission help` and follow it without asking again. With none of these signals, work directly without asking |\n| Hide itself misbehaves: a crash, a command that fails or answers wrongly for no reason of yours, a pane or screen that breaks | `hide issue help`, which the `hide-issue` skill points at: collect the exact error, versions and steps into the bug template, show the operator, and file it in with-hide/hide after their yes |\n| start independent work the operator will handle | `hide agent spawn …` without --parent |\n| repeat a task at set times with no one present (every weekday morning, every few hours) | `hide automation add --name <name> --task <text> --schedule <when> --kind <kind>`; run `hide automation help` first for the schedule forms, then tell the operator what it reads as and when it runs next. Not a cron job, an OS scheduler or a script of your own. A wait or a check shorter than five minutes, or one that ends within this conversation, you keep doing yourself as now |\nWithout --beside, `hide agent spawn` opens the agent in a tab of its own. Never start an agent with `hide pane open` or by typing its program into a pane: that agent has no parent, letters or watch. Never show the operator a result with the system opener (`open`, `xdg-open`, `start`, `Start-Process`, `Invoke-Item`): it lands in an app outside Hide with no trace of who opened it, and Hide refuses the call. Use `hide browser open` for a page or a URL and `hide file open` for anything else, for a file outside the checkout too."
     };
 }
 
@@ -53,7 +59,7 @@ macro_rules! intent_table {
 pub const PURPOSE_CONTEXT: &str = concat!(
     intent_table!(),
     "\n\n",
-    "Read and drive the panes of your machine through Hide: `hide pane read <pane>` and `hide agent read <agent>` print a pane's last 120 lines, unwrapped (`--lines <n>`, 2000 at most), `hide pane send <pane> <text>` types text, presses keys with `--key <name>` (esc, enter, up, down, tab, ctrl-c, ...) and Enter only with `--enter`, `hide agent show <id>` says what an agent is doing and waits on, and `hide pane open --beside -- <command>` runs a command in a new pane right of yours and prints its id, leaving your focus where it is unless `--focus`; `hide ps` lists the panes and their ids. Text typed into another agent's pane is no letter: hand an agent something with `hide request send`, which keeps it with its reply and retry, and add `--force` to put it into the agent's input now even while it works, which is refused while someone is typing there. When you create a worktree, set its one-line purpose in 40 characters or fewer with `hide workspace purpose \"…\"`, and remove a worktree Hide shows with `hide workspace remove <path>`, never a plain `git worktree remove`, which leaves its panes open. For work you will supervise, delegate with `hide agent spawn --parent here …`; this records responsibility and starts an automatic watch. For independent work the operator will handle, hand it off with `hide agent spawn …` without --parent; it becomes an operator-owned root with no automatic watch. Both modes record you as origin and leave the current screen and keyboard focus unchanged. From the machine that runs Hide, start the agent on a connected device by adding `--machine <device id>` (the device_id `hide workspace info` shows, the machine `hide agent list` shows for agents there); `--repo` and `--path` are then that device's paths. An agent on a device cannot use `--machine`: it is refused with `machine_not_permitted`."
+    "Read and drive the panes of your machine through Hide: `hide pane read <pane>` and `hide agent read <agent>` print a pane's last 120 lines, unwrapped (`--lines <n>`, 2000 at most), `hide pane send <pane> <text>` types text, presses keys with `--key <name>` (esc, enter, up, down, tab, ctrl-c, ...) and Enter only with `--enter`, `hide agent show <id>` says what an agent is doing and waits on, and `hide pane open --beside -- <command>` runs a command in a new pane right of yours and prints its id, leaving your focus where it is unless `--focus`; `hide ps` lists the panes and their ids. A bare pane id such as `w1:p2` names a pane of your own machine; a pane of another machine is named by its full address `remote:<device id>:pane:<id>` (`hide device list` shows the device ids), and an `@name (pane <address> · task)` reference the operator pastes gives that address, which `hide pane read`, `hide pane send` and `hide request send` take as it stands; a pane that is no registered agent takes `hide pane send` and no letter. Text typed into another agent's pane is no letter: hand an agent something with `hide request send`, which keeps it with its reply and retry, and add `--force` to put it into the agent's input now even while it works, which is refused while someone is typing there. When you create a worktree, set its one-line purpose in 40 characters or fewer with `hide workspace purpose \"…\"` run in that worktree's folder (`cd <worktree> && hide workspace purpose \"…\"`), which names that worktree and not your own checkout, and remove a worktree Hide shows with `hide workspace remove <path>`, never a plain `git worktree remove`, which leaves its panes open. For work you will supervise, delegate with `hide agent spawn --parent here …`; this records responsibility and starts an automatic watch. For independent work the operator will handle, hand it off with `hide agent spawn …` without --parent; it becomes an operator-owned root with no automatic watch. Both modes record you as origin and leave the current screen and keyboard focus unchanged. From the machine that runs Hide, start the agent on a connected device by adding `--machine <device id>` (the device_id `hide workspace info` shows, the machine `hide agent list` shows for agents there); `--repo` and `--path` are then that device's paths. An agent on a device cannot use `--machine`: it is refused with `machine_not_permitted`. When the next step is one only a person can take (a sign-in, an unlock, an app or OS permission), run `hide agent ask-human auth|permission <where>` and stop: the operator is told and you get a letter once they have done it; give a command that waits for a person's approval a timeout so it cannot hang."
 );
 
 pub fn hook_stdout(runtime: AgentRuntime, event: HookEvent) -> Option<String> {
@@ -79,7 +85,8 @@ pub fn hook_stdout_with_context(
         | HookEvent::PostToolUseFailure
         | HookEvent::PermissionRequest
         | HookEvent::Notification
-        | HookEvent::Interrupt => return None,
+        | HookEvent::Interrupt
+        | HookEvent::StopFailure => return None,
     };
     let output = match runtime {
         AgentRuntime::ClaudeCode | AgentRuntime::Codex => serde_json::json!({
@@ -146,7 +153,7 @@ pub fn silences_claude_hook<V>(variable: impl Fn(&str) -> Option<V>) -> bool {
 /// hooks it runs, its own and the Claude Code and Cursor hooks it loads beside
 /// them; `GROK_SESSION_ID` can also reach a program a Grok session started,
 /// such as a Claude Code launched from its shell, whose own hook must still
-/// count, so it does not decide this. (That Claude Code's spawn guard stays
+/// count, so it does not decide this. (That Claude Code's opener guard stays
 /// out as in any foreign session, `ForeignOrigin`.)
 pub fn inside_grok<V>(variable: impl Fn(&str) -> Option<V>) -> bool {
     variable("GROK_HOOK_EVENT").is_some()
@@ -278,15 +285,15 @@ impl AgentRuntime {
     pub const ALL: [AgentRuntime; 2] = [Self::ClaudeCode, Self::Codex];
 
     /// The events each runtime declares: Codex reports nonzero outcomes in
-    /// PostToolUse and has no PostToolUseFailure or Notification, and only
-    /// Codex declares Interrupt, so neither is given an event it would not
-    /// send.
+    /// PostToolUse and has no PostToolUseFailure, Notification or
+    /// StopFailure, and only Codex declares Interrupt, so neither is given an
+    /// event it would not send.
     pub fn events(self) -> impl Iterator<Item = HookEvent> {
         HookEvent::ALL.into_iter().filter(move |event| match self {
             Self::ClaudeCode => *event != HookEvent::Interrupt,
             Self::Codex => !matches!(
                 event,
-                HookEvent::PostToolUseFailure | HookEvent::Notification
+                HookEvent::PostToolUseFailure | HookEvent::Notification | HookEvent::StopFailure
             ),
         })
     }
@@ -346,45 +353,50 @@ impl AgentRuntime {
         }
     }
 
-    /// The directory whose presence means this runtime is set up on this Mac:
-    /// the agent's folder in the install scope
-    /// (`hide_agent_adapter::HomeScope::Install`), whatever `CODEX_HOME` the
-    /// launching shell carries.
+    /// The directory whose presence means this runtime is set up in the
+    /// account: its own folder (`AccountPath::State`). For a home, that is
+    /// the default account's for a node that honours no variable, whatever
+    /// `CODEX_HOME` the launching shell carries.
     ///
     /// Hide installs nothing for a runtime the operator does not use: writing
     /// `~/.codex/hooks.json` on a machine with no Codex would create a file
     /// for a tool that is not there.
-    pub fn home_directory(self, home: &Path) -> PathBuf {
-        self.dialect().adapter().install_home(home)
+    pub fn home_directory<'a>(self, at: impl Into<AccountAt<'a>>) -> PathBuf {
+        at.into()
+            .place(self.dialect().adapter(), AccountPath::State)
     }
 
     /// The file whose `hooks` object Hide appends to.
-    pub fn config_path(self, home: &Path) -> PathBuf {
-        match self {
-            Self::ClaudeCode => self.home_directory(home).join("settings.json"),
-            Self::Codex => self.home_directory(home).join("hooks.json"),
-        }
+    pub fn config_path<'a>(self, at: impl Into<AccountAt<'a>>) -> PathBuf {
+        at.into()
+            .place(self.dialect().adapter(), AccountPath::Hooks)
     }
 
     /// The file that keeps this runtime's folder trust, found from the same
     /// folder as [`Self::config_path`], so the trust Hide records and its
     /// hooks are always read from one place (`crate::folder_trust`).
     ///
-    /// Claude Code's is its global config, `~/.claude.json`, or the older
-    /// `.config.json` in its folder while that file has content, which Claude
-    /// Code then reads instead (its `getGlobalClaudeFile`); Codex's is the
-    /// `config.toml` in its folder, which only Codex writes.
-    pub fn trust_path(self, home: &Path) -> PathBuf {
-        match self {
-            Self::ClaudeCode => {
-                let legacy = self.home_directory(home).join(".config.json");
-                if std::fs::metadata(&legacy).is_ok_and(|meta| meta.is_file() && meta.len() > 0) {
-                    return legacy;
-                }
-                home.join(".claude.json")
-            }
-            Self::Codex => self.home_directory(home).join("config.toml"),
+    /// Claude Code's is its global config (`AccountPath::FolderTrust`), or
+    /// the older `.config.json` in its folder while that file has content,
+    /// which Claude Code then reads instead (its `getGlobalClaudeFile`);
+    /// Codex's is the `config.toml` in its folder, which only Codex writes.
+    pub fn trust_path<'a>(self, at: impl Into<AccountAt<'a>>) -> PathBuf {
+        let at = at.into();
+        self.older_config(at)
+            .unwrap_or_else(|| at.place(self.dialect().adapter(), AccountPath::FolderTrust))
+    }
+
+    /// Claude Code's older global config, `.config.json`, which it reads in
+    /// place of `.claude.json` while that file has content: for its folder
+    /// trust and its MCP servers alike (`crate::mcp::McpFile::of`).
+    pub(crate) fn older_config(self, at: AccountAt<'_>) -> Option<PathBuf> {
+        if self != Self::ClaudeCode {
+            return None;
         }
+        let legacy = self.home_directory(at).join(".config.json");
+        std::fs::metadata(&legacy)
+            .is_ok_and(|meta| meta.is_file() && meta.len() > 0)
+            .then_some(legacy)
     }
 }
 
@@ -394,9 +406,10 @@ impl AgentRuntime {
 /// against the installed Claude Code binary and the Codex configuration on
 /// 2026-09-09 (PRD D-09), and `PreToolUse`, observed on Claude Code 2.1.292
 /// and codex-cli 0.160.0 on 2026-10-07 (PRD herdr-spawn-guard D-06). An event
-/// only one runtime has is not registered: a key a runtime does not know is a
-/// key its settings validator may reject, and the sweep at `Stop` already
-/// covers what `SessionEnd` would.
+/// only one runtime has is registered for that runtime alone
+/// ([`AgentRuntime::events`]): a key a runtime does not know is a key its
+/// settings validator may reject, and the sweep at `Stop` already covers
+/// what `SessionEnd` would.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum HookEvent {
     /// A new session took over this pane: the pane's counts start again.
@@ -412,9 +425,9 @@ pub enum HookEvent {
     /// is what clears a count left behind by a `SubagentStop` that never
     /// arrived (PRD B31, D-53).
     Stop,
-    /// A tool call is about to run. Hide's entry selects the shell tool by its
-    /// matcher and refuses only a call that starts an agent through Herdr
-    /// directly (`crate::spawn_guard`); every other call passes untouched.
+    /// A tool call is about to run. Hide's entry selects the tools by its
+    /// matcher and refuses only what a guard names (`crate::pre_tool`); every
+    /// other call passes untouched.
     PreToolUse,
     PostToolUse,
     PostToolUseFailure,
@@ -428,10 +441,17 @@ pub enum HookEvent {
     Notification,
     /// The operator interrupted the turn (Codex), which no `Stop` reports.
     Interrupt,
+    /// The provider refused the turn and it ended (Claude Code): an API
+    /// error or a usage limit, which no `Stop` reports. Claude Code 2.1.322
+    /// sends it with the refusal's kind (`error`) and the line it showed
+    /// (`last_assistant_message`), and on a subscription's usage limit then
+    /// waits on its screen for the reset, which the engine reads as working
+    /// (with-hide/hide mission-56).
+    StopFailure,
 }
 
 impl HookEvent {
-    pub const ALL: [HookEvent; 11] = [
+    pub const ALL: [HookEvent; 12] = [
         Self::SessionStart,
         Self::UserPromptSubmit,
         Self::SubagentStart,
@@ -443,6 +463,7 @@ impl HookEvent {
         Self::PermissionRequest,
         Self::Notification,
         Self::Interrupt,
+        Self::StopFailure,
     ];
 
     pub fn name(self) -> &'static str {
@@ -458,6 +479,7 @@ impl HookEvent {
             Self::PermissionRequest => "PermissionRequest",
             Self::Notification => "Notification",
             Self::Interrupt => "Interrupt",
+            Self::StopFailure => "StopFailure",
         }
     }
 
@@ -469,6 +491,7 @@ impl HookEvent {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::path::Path;
 
     #[test]
     fn the_marker_is_found_with_its_version_and_only_for_hides_own_entries() {
@@ -550,22 +573,40 @@ mod tests {
             assert!(PURPOSE_CONTEXT.contains("`hide agent list`"));
             assert!(PURPOSE_CONTEXT.contains("From the machine that runs Hide"));
             assert!(PURPOSE_CONTEXT.contains("`machine_not_permitted`"));
+            // A step only a person takes is declared, and a wait on a
+            // person's approval is bounded (PRD ask-human B27).
+            assert!(PURPOSE_CONTEXT.contains("`hide agent ask-human auth|permission <where>`"));
+            assert!(PURPOSE_CONTEXT.contains("a timeout"));
             // The intent table comes first, in English, and names the exact
             // command for each request (PRD agent-beside-and-session-guide B18).
             assert!(PURPOSE_CONTEXT.starts_with("Inside Hide, turn what the operator asks for"));
+            assert!(!PURPOSE_CONTEXT.contains("hide task help"));
             for command in [
                 "`hide file open <path>`",
                 "`hide diff open <path>`",
                 "`hide browser open <url-or-path>`",
-                "waits in the operator's Needs You as To look at",
+                "stays in the operator's Needs You as To look at",
+                "else waits in your pane's Views list",
                 "such as `aside`, not `hide browser open`",
                 "open it again from your own pane",
                 "`hide agent spawn --beside …`",
                 "`hide agent spawn --parent here …`",
                 "`hide agent spawn …` without --parent",
-                // Split work goes through the plan (PRD hide-plan-delegate B22).
-                "| split the work across several agents | plan it (`hide plan help`)",
-                "`hide agent spawn --parent here --plan-node <key> …`; research stays with your own subagents",
+                // An agent asked for a repeated task makes an automation
+                // (PRD automations B9).
+                "`hide automation add --name <name> --task <text> --schedule <when> --kind <kind>`",
+                "run `hide automation help` first",
+                // Only unattended repeats at set times: a short wait inside
+                // the conversation stays the agent's own (D-16 caps runs,
+                // not polling).
+                "with no one present",
+                "or one that ends within this conversation, you keep doing yourself as now",
+                // Propose before complex work, but do not re-ask an explicit choice.
+                "first ask in one line: Shall I run this as a mission, or do it directly?",
+                "Follow the operator's answer",
+                "if they already requested a mission or invoked `/hide-mission`",
+                "run `hide mission help` and follow it without asking again",
+                "With none of these signals, work directly without asking",
                 "Never start an agent with `hide pane open` or by typing its program into a pane",
                 "`hide pane read <pane>`",
                 "`hide agent read <agent>`",

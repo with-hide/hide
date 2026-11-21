@@ -20,7 +20,8 @@ use serde::{Deserialize, Serialize};
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum TurnEnded {
-    /// The agent finished the turn.
+    /// The agent finished the turn (Codex's `task_complete`, Claude Code's
+    /// `turn_duration`).
     Completed,
     /// The operator interrupted it (Claude Code's `[Request interrupted`
     /// record, Codex's aborted turn).
@@ -766,9 +767,12 @@ impl TurnTracker {
                     }
                 }
             }
+            // An interrupted turn stays interrupted whichever record comes
+            // last: Claude Code can write its turn's end after the
+            // interruption of a tool call.
             TurnMark::Completed { turn } => {
                 let current = self.current(turn);
-                if current.end != Some(End::Completed) {
+                if current.end.is_none() {
                     current.end = Some(End::Completed);
                     current.answered = false;
                 }
@@ -967,6 +971,58 @@ mod tests {
         let mut keys = folded(&both).answered_calls();
         keys.sort();
         assert_eq!(keys, ["Bash:", "Bash:00aa"]);
+    }
+
+    /// Claude Code can write a turn's end after the interruption of a tool
+    /// call. Within one turn the interruption stands whichever is written
+    /// last; the next turn, named or started by a prompt, ends on its own.
+    #[test]
+    fn an_interrupted_turn_stays_interrupted_whichever_end_is_written_last() {
+        let started = |turn: &str| TurnMark::Started {
+            turn: id(turn),
+            mode: TurnMode::Other,
+        };
+        let named = |turn: &str| {
+            (
+                TurnMark::Completed { turn: id(turn) },
+                TurnMark::Aborted { turn: id(turn) },
+            )
+        };
+        let unnamed = (TurnMark::Completed { turn: None }, TurnMark::Interrupted);
+        let (named_end, named_abort) = named("t1");
+        let (next_end, _) = named("t2");
+        let cases = [
+            (
+                vec![started("t1")],
+                named_end,
+                named_abort,
+                vec![started("t2")],
+                next_end,
+            ),
+            (
+                vec![TurnMark::Prompt, TurnMark::Reply],
+                unnamed.0.clone(),
+                unnamed.1.clone(),
+                vec![TurnMark::Prompt, TurnMark::Reply],
+                unnamed.0.clone(),
+            ),
+        ];
+        for (start, end, abort, next, next_end) in cases {
+            for order in [[abort.clone(), end.clone()], [end.clone(), abort.clone()]] {
+                let turn = [start.clone(), order.to_vec()].concat();
+                assert_eq!(
+                    folded(&turn).ended(),
+                    Some(TurnEnded::Interrupted),
+                    "{turn:?}"
+                );
+                let then = [turn, next.clone(), vec![next_end.clone()]].concat();
+                assert_eq!(
+                    folded(&then).ended(),
+                    Some(TurnEnded::Completed),
+                    "{then:?}"
+                );
+            }
+        }
     }
 
     #[test]

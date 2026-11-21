@@ -11,6 +11,9 @@ await rename(`phone-dist/p/${version}/phone-bundle.html`, `phone-dist/p/${versio
 await mkdir("phone-dist/m", { recursive: true });
 for (const file of ["icon-192.png", "icon-512.png", "apple-touch-icon.png"]) await copyFile(`public/m/${file}`, `phone-dist/m/${file}`);
 await copyFile("public/m/sw.js", "phone-dist/sw.js");
+// The file iOS reads to open the app from a scanned pairing link; the app's own bundle does not carry it (mobile/scripts/assemble.mjs).
+await mkdir("phone-dist/.well-known", { recursive: true });
+await copyFile("public/m/apple-app-site-association", "phone-dist/.well-known/apple-app-site-association");
 const manifest = JSON.parse(await readFile("public/m/manifest.webmanifest", "utf8"));
 await writeFile("phone-dist/manifest.webmanifest", JSON.stringify({ ...manifest, id: "/", start_url: "/", scope: "/" }));
 await writeFile("phone-dist/protocols.json", JSON.stringify([version]));

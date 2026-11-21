@@ -37,7 +37,7 @@ fn run(home: &Path, kind: &str, id: &str, cwd: &str, path: Option<PathBuf>) -> R
     let path = match path {
         Some(path) => Some(path),
         None if agent.has_session_file() => Some(
-            SessionLocator::new(home)
+            SessionLocator::new(&hide_session::Accounts::new(home))
                 .locate("thread", agent, Some(&SessionIdentity::id(id)), Some(cwd))
                 .map_err(|error| format!("session_locate_failed: {error}"))?,
         ),
@@ -50,8 +50,14 @@ fn run(home: &Path, kind: &str, id: &str, cwd: &str, path: Option<PathBuf>) -> R
     let mut pages = Vec::new();
     let mut before: Option<ThreadCursor> = None;
     for _ in 0..MAX_PAGES {
-        let page = read_thread(home, agent, path.as_deref(), &scope, before.as_ref())
-            .map_err(|refusal| refusal.reason().to_owned())?;
+        let page = read_thread(
+            &hide_session::Accounts::new(home),
+            agent,
+            path.as_deref(),
+            &scope,
+            before.as_ref(),
+        )
+        .map_err(|refusal| refusal.reason().to_owned())?;
         for (reason, count) in &page.skipped {
             eprintln!("skipped {reason}: {count}");
         }

@@ -1,4 +1,4 @@
-// hide-opencode-tui@3 sha256=e648c2463551887de231e8adff533e328325bd3a2349cb54becdc4caef7436bc
+// hide-opencode-tui@6 sha256=9965401fdbe01aec7a18d8d176c5e19cedbde94f2c88730e9bc387689c608343
 // Hide's OpenCode 2 plugin, its TUI half, written by Hide's install kit (hide-agent-hooks).
 // An edit is kept and shown as edited in Settings; Reinstall puts Hide's back.
 // It runs in the terminal, so in a Herdr pane it is that pane: it attaches to the root session the pane shows,
@@ -22,7 +22,7 @@ import {
 } from "./server.js";
 
 const ROUTE_POLL_MS = 250;
-const OPERATIONS = new Set(["prompt", "tool", "letters", "confirm", "observation"]);
+const OPERATIONS = new Set(["prompt", "tool", "letters", "confirm"]);
 
 /**
  * The root session above a child: up the children this half saw start, then as OpenCode's own sessions know it, so
@@ -35,27 +35,51 @@ function rootOf(state, api, child) {
 }
 
 /**
- * Sends the pane's subagent counts when they changed, or always when `force`. One report runs at a time and only
- * the newest waiting one follows it, so a burst of subagents costs two helper runs, not one per change.
+ * What a child session says of the subagent it runs, for the pane's list of them: OpenCode titles a subagent's session
+ * `<task> (@<agent> subagent)`, and OpenCode 2 names the agent beside it (`plugin.js` reads OpenCode 1.x the same way). Words the helper makes one short line.
  */
-function publishCounts(state, api, force) {
-  let working = 0;
+function subagentOf(title, agent) {
+  const text = typeof title === "string" ? title : "";
+  const named = /^(.*?)\s*\(@([^()\s]+) subagent\)\s*$/.exec(text);
+  const kind = typeof agent === "string" && agent ? agent : named ? named[2] : "";
+  const task = (named ? named[1] : text).trim();
+  return { kind: kind || undefined, task: task || undefined };
+}
+
+/**
+ * The running children under the pane's root as the helper lists them, oldest first, and how many children ran and
+ * finished: the counts and the list one report carries.
+ */
+function runningChildren(state, under) {
+  const running = [];
   let done = 0;
   for (const [child, status] of state.children) {
-    if (rootOf(state, api, child) !== state.root) continue;
-    if (status.busy) working += 1;
+    if (!under(child)) continue;
+    if (status.busy) running.push({ id: child, kind: status.kind, task: status.task, started_unix_ms: status.started });
     else if (status.ran) done += 1;
   }
-  const key = `${working}/${done}`;
+  running.sort((a, b) => (a.started_unix_ms ?? 0) - (b.started_unix_ms ?? 0));
+  return { running, done };
+}
+
+/**
+ * Sends the pane's subagent counts, with the running ones it names, when they changed, or always when `force`. One
+ * report runs at a time and only the newest waiting one follows it, so a burst of subagents costs two helper runs,
+ * not one per change.
+ */
+function publishCounts(state, api, force) {
+  const { running, done } = runningChildren(state, (child) => rootOf(state, api, child) === state.root);
+  const working = running.length;
+  const key = `${working}/${done}/${running.map((child) => child.id).join(",")}`;
   if (!force && key === state.published) return state.counting ?? Promise.resolve();
   // Only a report the core took counts as published: a failed one is sent again with the next change, prompt or rest.
   state.published = key;
-  state.nextCount = { working, done, key };
+  state.nextCount = { working, done, running, key };
   state.counting ??= (async () => {
     while (state.nextCount) {
       const next = state.nextCount;
       state.nextCount = null;
-      const answer = await helper(state, "subagents", { session_id: state.root, working: next.working, done: next.done }, COUNT_BUDGET_MS, state.pane);
+      const answer = await helper(state, "subagents", { session_id: state.root, working: next.working, done: next.done, running: next.running }, COUNT_BUDGET_MS, state.pane);
       if (answer?.reported !== true && state.published === next.key) state.published = null;
     }
     state.counting = null;
@@ -101,7 +125,7 @@ function onEvent(state, api, event) {
   if (type === "session.created") {
     // A child still running is never forgotten: it would leave the working count while it works.
     if (typeof data.parentID === "string") {
-      remember(state, state.children, sessionID, { parent: data.parentID, busy: false, ran: false }, [(child) => !child.busy]);
+      remember(state, state.children, sessionID, { parent: data.parentID, busy: false, ran: false, ...subagentOf(data.title, data.agent) }, [(child) => !child.busy]);
     }
     return;
   }
@@ -111,6 +135,7 @@ function onEvent(state, api, event) {
   if (child) {
     child.busy = started;
     child.ran ||= started;
+    if (started) child.started ??= Date.now();
     void publishCounts(state, api, false);
   } else if (sessionID === state.root && started) {
     void publishTurn(state, "working");
@@ -194,6 +219,8 @@ function setup(api) {
     state.turn = null;
     place = root ? api.data.session.get(root)?.location : undefined;
     attach(false);
+    // The session the pane now shows is its session, so letters and the inbox reach it before its first turn.
+    if (root) void helper(state, "session", { session_id: root }, COUNT_BUDGET_MS, state.pane);
     void publishCounts(state, api, true);
   };
   const offAsk = rpc.events.on("ask", (event) => {

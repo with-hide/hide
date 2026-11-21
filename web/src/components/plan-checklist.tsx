@@ -6,7 +6,7 @@ import { Button } from "./ui/button";
 import { Hint } from "./ui/tooltip";
 import { useInterfaceTranslation } from "../i18n/client";
 import { cn } from "../lib/utils";
-import { childNow, childPlanOf, evidenceWords, planChecklist, stepDelegationWord, type StepMarkWord } from "../plans";
+import { childNow, childPlanOf, evidenceWords, planChecklist, stepDelegationWord, stepLeft, type StepMarkWord } from "../plans";
 import type { PlanDelegation, PlanStep, PlanView } from "../snapshot";
 import { useShellStore } from "../store";
 
@@ -18,10 +18,10 @@ import { useShellStore } from "../store";
 // hide-plan-delegate B30). A done step's tail is what it left, a handed step
 // names its child and the child's current step, and the child's name goes to
 // its pane where `openPane` is given (B26, B28). The map is drawn only in the
-// 보기 slot. Every screen that lists a plan's steps draws this one list (PRD
+// desk. Every screen that lists a plan's steps draws this one list (PRD
 // session-docs-and-assistant D-72).
 
-export function PlanChecklist({ plan, popover = false, openPane }: { plan: PlanView; popover?: boolean; openPane?: (paneId: string) => void }) {
+export function PlanChecklist({ plan, popover = false, openPane, planned }: { plan: PlanView; popover?: boolean; openPane?: (paneId: string) => void; planned?: readonly string[] }) {
   const { t } = useInterfaceTranslation();
   const rows = useMemo(() => planChecklist(plan), [plan]);
   const current = useRef<HTMLLIElement>(null);
@@ -73,6 +73,11 @@ export function PlanChecklist({ plan, popover = false, openPane }: { plan: PlanV
                 </span>
               ) : null}
             </span>
+            {planned && planned.length > 0 && !step.changed && step.status !== "dropped" && !planned.includes(step.title) ? (
+              <Hint label={t("mission.steps.differs")}>
+                <span tabIndex={0} className="shrink-0 rounded-xs text-micro text-mission-hold outline-none focus-visible:ring-1 focus-visible:ring-ring" data-step-differs="true">{t("plan.changed")}</span>
+              </Hint>
+            ) : null}
             {step.changed ? (
               <Hint label={step.change ?? t("plan.changed")}>
                 <span tabIndex={0} className="shrink-0 rounded-xs outline-none focus-visible:ring-1 focus-visible:ring-ring" data-step-changed="true">
@@ -116,10 +121,11 @@ function StepTail({ step, now }: { step: PlanStep; now: boolean }) {
   const word = stepDelegationWord(step);
   if (word) return <DelegationWord word={word} />;
   if (now) return <span className="shrink-0 text-micro font-semibold text-mission-working">{t("plan.current")}</span>;
-  if (step.status === "done" && step.evidence) {
-    return <span className="shrink-0 font-mono text-micro text-mission-done" data-step-evidence={step.evidence.kind}>{evidenceWords(step.evidence)}</span>;
+  const left = stepLeft(step);
+  if (left?.kind === "evidence") {
+    return <span className="shrink-0 font-mono text-micro text-mission-done" data-step-evidence={left.evidence.kind}>{evidenceWords(left.evidence)}</span>;
   }
-  if (step.status === "done" && step.delegation && (!step.output || step.output === "none")) {
+  if (left?.kind === "report") {
     return <span className="shrink-0 text-micro text-muted-foreground" data-step-evidence="report">{t("plan.delegation.report")}</span>;
   }
   if (step.delegation && step.status !== "done") return null;
@@ -183,4 +189,23 @@ function Output({ step }: { step: PlanStep }) {
   const { t } = useInterfaceTranslation();
   if (!step.output || step.output === "none") return null;
   return <span className="shrink-0 font-mono text-micro text-muted-foreground" data-step-output={step.output}>{t(step.output === "pr" ? "plan.output.pr" : "plan.output.file")}</span>;
+}
+
+/**
+ * The steps a mission's Conductor planned for a node whose worker has put no
+ * plan up yet: each title whole, in order, behind the mark of a step not
+ * begun. The worker's plan, once it exists, is drawn by `PlanChecklist`.
+ */
+export function PlannedSteps({ steps }: { steps: readonly string[] }) {
+  const { t } = useInterfaceTranslation();
+  return (
+    <ol aria-label={t("plan.steplist")} className="flex min-w-0 flex-col" data-plan-checklist="planned">
+      {steps.map((title, index) => (
+        <li key={index} data-plan-row={index} data-step-status="planned" className="flex min-w-0 items-start gap-xs rounded-xs px-xs py-xxs">
+          <span role="img" aria-label={t("plan.status.planned")} className="mt-xxs inline-block size-(--size-agent-mark) shrink-0 rounded-full border border-muted-foreground" />
+          <span className="min-w-0 flex-1 break-words">{title}</span>
+        </li>
+      ))}
+    </ol>
+  );
 }

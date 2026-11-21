@@ -1,0 +1,2211 @@
+//! PRD mission-worker-sleep through the runtime: a letter to an agent Hide
+//! put to sleep, the wake a `request` or `block` asks for, a finished
+//! mission's agents put to sleep, and `hide agent sleep`. The engine workers
+//! are not run (the live context's runtime is gone, so nothing they do comes
+//! back); what they hand back is fed in through the calls a worker makes.
+
+use super::*;
+use crate::agent_sleep::{SleepPhase, SleepRecord, WakeMode};
+use crate::agent_sleep_engine::WakeOutcome;
+use crate::coordination::AgentRecord;
+use crate::delivery::Actor;
+use crate::delivery::ledger::{Ledger, Letter, State};
+use crate::memory_pressure::PressureReading;
+use crate::workspace_control::Query;
+use hide_node_link::memory::{MemoryPressure, PressureAnswer, PressureSource};
+
+const CHECKOUT: &str = "/private/tmp/hide-mission-worker-sleep";
+const TABS: [&str; 2] = ["w-order:t1", "w-order:t2"];
+const LEAD: &str = "w-order:t1:p";
+const WORKER: &str = "w-order:t2:p";
+
+/// The agent's conversation id in `pane`, in the shape Claude Code's are.
+fn native(pane: &str) -> String {
+    let digest = crate::engine::tokens::session_digest(pane).unwrap();
+    format!(
+        "{}-{}-{}-{}-{}",
+        &digest[..8],
+        &digest[8..12],
+        &digest[12..16],
+        &digest[16..20],
+        &digest[20..32]
+    )
+}
+
+fn actor(pane: &str) -> Actor {
+    Actor {
+        pane_id: pane.into(),
+        name: format!("{pane}-agent"),
+        kind: "claude".into(),
+        device_id: crate::node::TEST_NODE.into(),
+        session: crate::engine::tokens::session_digest(&native(pane)),
+    }
+}
+
+fn registration(id: &str, pane: &str, parent: Option<&str>) -> AgentRecord {
+    AgentRecord {
+        id: id.into(),
+        name: Some(format!("{pane}-agent")),
+        machine: crate::node::TEST_NODE.into(),
+        host_scope: "scope".into(),
+        native_machine: "fixture-machine".into(),
+        session: native(pane),
+        instance: format!("terminal-{pane}"),
+        pane: pane.into(),
+        parent: parent.map(str::to_owned),
+        origin: None,
+        project: None,
+        actor: actor(pane),
+        ended: false,
+        terminal_id: None,
+        forked: false,
+        successor: None,
+    }
+}
+
+fn record(pane: &str) -> SleepRecord {
+    serde_json::from_value(serde_json::json!({
+        "phase": "sleeping", "kind": "claude", "session_id": native(pane),
+        "identity_label": pane, "last_activity": "0", "workspace_label": "Fixture",
+        "since_unix_ms": 1_000, "cwd": CHECKOUT,
+    }))
+    .unwrap()
+}
+
+/// The two-tab session with `front` in front: the lead in t1, and, when
+/// `worker` gives its status, the worker in t2.
+fn session(front: &str, worker: Option<&str>) -> SessionSnapshotPayload {
+    let mut payload = tab_order_payload(CHECKOUT, &TABS, &TABS, front);
+    let mut agents = vec![serde_json::json!({
+        "id": "lead", "pane_id": LEAD, "agent": "claude", "agent_status": "working",
+        "state_change_seq": 1, "cwd": CHECKOUT,
+        "agent_session": {"kind": "id", "value": native(LEAD)},
+        "lineage_session": crate::engine::tokens::session_digest(&native(LEAD)),
+    })];
+    if let Some(status) = worker {
+        agents.push(serde_json::json!({
+            "id": "worker", "pane_id": WORKER, "agent": "claude", "agent_status": status,
+            "state_change_seq": 4, "cwd": CHECKOUT,
+            "agent_session": {"kind": "id", "value": native(WORKER)},
+            "lineage_session": crate::engine::tokens::session_digest(&native(WORKER)),
+            "tokens": {"task": "Fix the parser"}
+        }));
+    }
+    let owned: SessionSnapshotPayload =
+        crate::sidebar::owned_label_fixture(serde_json::json!({ "agents": agents })).unwrap();
+    payload.agents.extend(owned.agents);
+    payload
+}
+
+/// A live runtime showing `session`, with the engine's agents observed for
+/// delivery and registrations `agent-1` (the lead) and `agent-2` (the
+/// worker, the lead's child).
+fn live(session: SessionSnapshotPayload) -> Runtime {
+    let (mut runtime, _) = live_tab_order_runtime(CHECKOUT);
+    runtime.snapshot.ui_state.agent_sleep_after_hours = Some(24);
+    show(&mut runtime, session);
+    let mut ledger = Ledger::default();
+    ledger.agents.push(registration("agent-1", LEAD, None));
+    ledger
+        .agents
+        .push(registration("agent-2", WORKER, Some("agent-1")));
+    ledger.next_id = 3;
+    runtime.delivery_ledger = Ok(Arc::new(ledger));
+    runtime
+}
+
+/// Gives `runtime` the Workspace views a pane's command is checked against;
+/// the folder lives as long as the returned guard.
+fn views(runtime: Runtime) -> (Runtime, tempfile::TempDir) {
+    let folder = tempfile::tempdir().unwrap();
+    let runtime =
+        super::workspace_view::with_views_only(runtime, &folder.path().join("views.json"));
+    (runtime, folder)
+}
+
+/// The operator brings `tab` on screen.
+fn visit(runtime: &mut Runtime, tab: &str) {
+    let checkout = workspace::checkout_id_for_path("workspace:order", Path::new(CHECKOUT));
+    runtime.dispatch_json(&focus_tab_event(&checkout, tab));
+}
+
+fn show(runtime: &mut Runtime, session: SessionSnapshotPayload) {
+    runtime.ingest_session(Ok(session.clone()));
+    runtime.observe_delivery_laid(crate::node::TEST_NODE, &session, Some("scope"), None);
+}
+
+/// Registrations `agent-1` (the lead) and one per pane of `panes`, each
+/// asleep in its pane.
+fn sleepers(panes: &[&str]) -> Runtime {
+    let mut runtime = live(session("w-order:t1", None));
+    let mut ledger = (*runtime.delivery_state().unwrap()).clone();
+    ledger.agents.retain(|record| record.id == "agent-1");
+    for (index, pane) in panes.iter().enumerate() {
+        ledger.agents.push(registration(
+            &format!("agent-{}", index + 2),
+            pane,
+            Some("agent-1"),
+        ));
+        runtime
+            .snapshot
+            .ui_state
+            .agent_sleep
+            .records
+            .insert((*pane).into(), record(pane));
+    }
+    ledger.next_id = panes.len() as u64 + 2;
+    runtime.delivery_ledger = Ok(Arc::new(ledger));
+    runtime
+}
+
+/// The lead's letter of `kind` to the agent in `to`, as the store keeps it.
+fn letter(runtime: &mut Runtime, to: &str, kind: &str) -> String {
+    letter_from(runtime, LEAD, to, kind)
+}
+
+/// The letter of `kind` from the agent in `from` to the agent in `to`,
+/// published as the store publishes each save.
+fn letter_from(runtime: &mut Runtime, from: &str, to: &str, kind: &str) -> String {
+    letters_from(runtime, &[(from, to, kind)]).remove(0)
+}
+
+/// Each `(from, to, kind)` letter in turn, all published in one save of the
+/// store, as sends that land together are.
+fn letters_from(runtime: &mut Runtime, letters: &[(&str, &str, &str)]) -> Vec<String> {
+    let mut ledger = (*runtime.delivery_state().unwrap()).clone();
+    let ids = letters
+        .iter()
+        .map(|(from, to, kind)| {
+            let intent = format!("{to}-{kind}-{}", ledger.next_id);
+            crate::delivery::mailbox::send(
+                &mut ledger,
+                &actor(from),
+                &actor(to),
+                &intent,
+                "Fix the next bug",
+                kind,
+                None,
+                unix_milliseconds(),
+            )
+            .unwrap()
+            .id
+        })
+        .collect();
+    runtime.publish_delivery(Arc::new(ledger), true);
+    ids
+}
+
+fn phase(runtime: &Runtime, pane: &str) -> Option<SleepPhase> {
+    runtime
+        .snapshot
+        .ui_state
+        .agent_sleep
+        .records
+        .get(pane)
+        .map(|record| record.phase)
+}
+
+/// Changes the letter `id` by `edit` and publishes the ledger as the store
+/// does.
+fn edit_letter(runtime: &mut Runtime, id: &str, edit: impl FnOnce(&mut Letter)) {
+    let mut ledger = (*runtime.delivery_state().unwrap()).clone();
+    edit(
+        ledger
+            .letters
+            .iter_mut()
+            .find(|letter| letter.id == id)
+            .unwrap(),
+    );
+    runtime.publish_delivery(Arc::new(ledger), true);
+}
+
+/// B1: a letter to a registered agent asleep in its pane is taken by the
+/// store, pending, by its registration id and by the pane it sleeps in,
+/// where it was refused `target_unavailable` before.
+#[test]
+fn a_letter_to_a_sleeping_agent_is_taken_and_waits() {
+    let root = tempfile::tempdir().unwrap();
+    let (mut runtime, _views) = views(sleepers(&[WORKER]));
+    show(&mut runtime, session("w-order:t1", None));
+    assert!(!runtime.delivery_observations.contains_key(WORKER));
+    let context = runtime
+        .workspace_control_query(crate::node::TEST_NODE, LEAD, Query::Info)
+        .unwrap()
+        .context;
+    let runtime = Arc::new(Mutex::new(runtime));
+    let (_worker, client) = crate::delivery::worker::Worker::store(
+        Arc::downgrade(&runtime),
+        crate::handle::ChangeNotifier::noop(),
+        root.path().join("delivery.sqlite3"),
+    )
+    .unwrap();
+    runtime.lock().unwrap().install_delivery_client(client);
+    for (target, intent) in [("agent-2", "by-id"), (WORKER, "by-pane")] {
+        let prepared = runtime
+            .lock()
+            .unwrap()
+            .prepare_delivery(
+                crate::node::TEST_NODE,
+                LEAD,
+                &context,
+                None,
+                crate::delivery::Command::Send {
+                    target: target.into(),
+                    intent: intent.into(),
+                    body: "Fix the next bug".into(),
+                    kind: "report".into(),
+                    now: false,
+                    force: false,
+                },
+            )
+            .unwrap();
+        let sent = prepared.run(std::time::Duration::from_secs(10)).unwrap();
+        assert_eq!(sent["state"], "pending");
+        assert_eq!(sent["recipient"]["pane_id"], WORKER);
+    }
+    // A report wakes no one (B3).
+    let mut guard = runtime.lock().unwrap();
+    guard.drive_letter_wakes();
+    assert_eq!(phase(&guard, WORKER), Some(SleepPhase::Sleeping));
+}
+
+/// B2, B3: a `report` or `progress` letter leaves its recipient asleep; a
+/// `request` wakes it with its conversation resumed, and more letters to it
+/// while it wakes start no second wake.
+#[test]
+fn a_request_wakes_a_sleeping_agent_and_a_report_waits() {
+    let mut runtime = sleepers(&[WORKER]);
+    letter(&mut runtime, WORKER, "report");
+    letter(&mut runtime, WORKER, "progress");
+    runtime.drive_letter_wakes();
+    assert_eq!(phase(&runtime, WORKER), Some(SleepPhase::Sleeping));
+    letter(&mut runtime, WORKER, "request");
+    assert!(runtime.drive_letter_wakes());
+    assert_eq!(phase(&runtime, WORKER), Some(SleepPhase::Waking));
+    letter(&mut runtime, WORKER, "block");
+    assert!(!runtime.drive_letter_wakes());
+    assert_eq!(runtime.letter_wakes_running(), 1);
+}
+
+/// A request nobody takes in wakes its recipient once: after the agent
+/// sleeps again it waits as a letter to an awake agent does, so a sleep and
+/// a wake cannot follow each other for the same letter, while a new request
+/// still wakes it. A request a prompt hook took before the sleep wakes no one.
+#[test]
+fn a_request_wakes_its_recipient_once_and_a_taken_one_not_at_all() {
+    let mut runtime = sleepers(&[WORKER]);
+    let taken = letter(&mut runtime, WORKER, "request");
+    edit_letter(&mut runtime, &taken, |letter| {
+        letter.bell_sent = true;
+        letter.handed = true;
+    });
+    runtime.drive_letter_wakes();
+    assert_eq!(phase(&runtime, WORKER), Some(SleepPhase::Sleeping));
+    letter(&mut runtime, WORKER, "request");
+    runtime.drive_letter_wakes();
+    assert_eq!(phase(&runtime, WORKER), Some(SleepPhase::Waking));
+    // It wakes, nobody reads the letter, and the agent sleeps again.
+    let sleep = &mut runtime.snapshot.ui_state.agent_sleep.records;
+    sleep.remove(WORKER);
+    runtime.letter_wakes.touch();
+    runtime.drive_letter_wakes();
+    runtime
+        .snapshot
+        .ui_state
+        .agent_sleep
+        .records
+        .insert(WORKER.into(), record(WORKER));
+    runtime.letter_wakes.touch();
+    runtime.drive_letter_wakes();
+    assert_eq!(
+        phase(&runtime, WORKER),
+        Some(SleepPhase::Sleeping),
+        "the same letter does not wake it again"
+    );
+    letter(&mut runtime, WORKER, "block");
+    runtime.drive_letter_wakes();
+    assert_eq!(phase(&runtime, WORKER), Some(SleepPhase::Waking));
+}
+
+/// B4: letters to five sleeping agents wake four at once, in the order the
+/// letters came; the fifth wakes when one of the four is awake.
+#[test]
+fn letter_wakes_run_four_at_a_time_in_the_order_the_letters_came() {
+    let panes = ["w9:p1", "w9:p2", "w9:p3", "w9:p4", "w9:p5"];
+    let mut runtime = sleepers(&panes);
+    for pane in panes {
+        letter(&mut runtime, pane, "request");
+    }
+    runtime.drive_letter_wakes();
+    let waking = |runtime: &Runtime| {
+        panes
+            .iter()
+            .filter(|pane| phase(runtime, pane) == Some(SleepPhase::Waking))
+            .copied()
+            .collect::<Vec<_>>()
+    };
+    assert_eq!(waking(&runtime), panes[..4]);
+    // The first is awake: its record goes.
+    runtime
+        .snapshot
+        .ui_state
+        .agent_sleep
+        .records
+        .remove(panes[0]);
+    runtime.letter_wakes.touch();
+    runtime.drive_letter_wakes();
+    assert_eq!(waking(&runtime), panes[1..]);
+}
+
+/// B6: a wake that fails leaves the `request` and `block` letters waiting on
+/// it pending, with the wake's reason for their senders, as it leaves a
+/// `report` (PRD letters-missions-simplify B6); the next `request` tries the
+/// wake again.
+#[test]
+fn a_failed_letter_wake_leaves_its_requests_pending_and_the_next_one_tries_again() {
+    let mut runtime = sleepers(&[WORKER]);
+    let report = letter(&mut runtime, WORKER, "report");
+    let request = letter(&mut runtime, WORKER, "request");
+    runtime.drive_letter_wakes();
+    runtime.ingest_agent_wake(
+        WORKER,
+        WakeMode::Resume,
+        WakeOutcome::Failed {
+            reason: crate::agent_sleep_engine::WAKE_FOLDER_MISSING.into(),
+            detail: "fixture".into(),
+            passing: false,
+        },
+    );
+    runtime.drive_letter_wakes();
+    let failed = runtime.letter_wake_failures();
+    assert_eq!(
+        failed.get(&request).map(String::as_str),
+        Some(crate::agent_sleep_engine::WAKE_FOLDER_MISSING)
+    );
+    assert!(!failed.contains_key(&report));
+    let ledger = runtime.delivery_state().unwrap();
+    let waiting = ledger
+        .letters
+        .iter()
+        .find(|letter| letter.id == request)
+        .unwrap();
+    assert_eq!(waiting.state, State::Pending);
+    assert!(waiting.waiting_answer);
+    runtime.publish_delivery(ledger, true);
+    runtime.drive_letter_wakes();
+    assert_eq!(phase(&runtime, WORKER), Some(SleepPhase::Failed));
+    letter(&mut runtime, WORKER, "request");
+    runtime.drive_letter_wakes();
+    assert_eq!(phase(&runtime, WORKER), Some(SleepPhase::Waking));
+}
+
+/// The wake's answer that it typed nothing for a cause that can pass: the
+/// node of an off-screen device pane could not hold the resume line
+/// (with-hide/hide-private#660).
+fn refused_wake() -> WakeOutcome {
+    WakeOutcome::Failed {
+        reason: crate::agent_sleep_engine::WAKE_NOT_RESUMED.into(),
+        detail: "pane_input_cancelled: Pane input delivery exceeded its deadline".into(),
+        passing: true,
+    }
+}
+
+/// with-hide/hide-private#660, #675: a letter wake the engine refused before
+/// typing anything is not given up at once; the same wake is asked again
+/// once its wait has passed, and the sender is told the wake's reason only
+/// when the third wake in a row is refused as well.
+#[test]
+fn a_letter_wake_refused_before_typing_is_tried_again_and_given_up_on_the_third() {
+    let mut runtime = sleepers(&[WORKER]);
+    let request = letter(&mut runtime, WORKER, "request");
+    runtime.drive_letter_wakes();
+    assert_eq!(phase(&runtime, WORKER), Some(SleepPhase::Waking));
+    for wake in 1..=2 {
+        runtime.ingest_agent_wake(WORKER, WakeMode::Resume, refused_wake());
+        runtime.drive_letter_wakes();
+        assert!(
+            runtime.letter_wake_failures().is_empty(),
+            "wake {wake} was refused and its letter still waits"
+        );
+        // Nothing starts again before the wait has passed.
+        runtime.letter_wakes.touch();
+        runtime.drive_letter_wakes();
+        assert_eq!(phase(&runtime, WORKER), Some(SleepPhase::Failed));
+        runtime.letter_wake_retries_due();
+        runtime.drive_letter_wakes();
+        assert_eq!(
+            phase(&runtime, WORKER),
+            Some(SleepPhase::Waking),
+            "wake {} starts",
+            wake + 1
+        );
+    }
+    runtime.ingest_agent_wake(WORKER, WakeMode::Resume, refused_wake());
+    runtime.drive_letter_wakes();
+    assert_eq!(
+        runtime
+            .letter_wake_failures()
+            .get(&request)
+            .map(String::as_str),
+        Some(crate::agent_sleep_engine::WAKE_NOT_RESUMED)
+    );
+    runtime.letter_wake_retries_due();
+    runtime.letter_wakes.touch();
+    runtime.drive_letter_wakes();
+    assert_eq!(phase(&runtime, WORKER), Some(SleepPhase::Failed));
+}
+
+/// A refused letter wake whose next try brings the agent back leaves its
+/// letter pending for the bell, and the next refusal of a later sleep
+/// starts the count again.
+#[test]
+fn a_letter_wake_that_comes_back_on_its_next_try_keeps_its_letter() {
+    let mut runtime = sleepers(&[WORKER]);
+    let request = letter(&mut runtime, WORKER, "request");
+    runtime.drive_letter_wakes();
+    runtime.ingest_agent_wake(WORKER, WakeMode::Resume, refused_wake());
+    runtime.drive_letter_wakes();
+    runtime.letter_wake_retries_due();
+    runtime.drive_letter_wakes();
+    assert_eq!(phase(&runtime, WORKER), Some(SleepPhase::Waking));
+    // The agent is back: its record goes.
+    runtime.snapshot.ui_state.agent_sleep.records.remove(WORKER);
+    runtime.letter_wakes.touch();
+    runtime.drive_letter_wakes();
+    assert!(runtime.letter_wake_failures().is_empty());
+    let ledger = runtime.delivery_state().unwrap();
+    let kept = ledger
+        .letters
+        .iter()
+        .find(|letter| letter.id == request)
+        .unwrap();
+    assert_eq!(kept.state, State::Pending);
+}
+
+/// A wake that may have typed its start, or failed for a cause that stays,
+/// is not asked again: its sender is told at once.
+#[test]
+fn a_letter_wake_that_may_have_typed_is_given_up_at_once() {
+    let mut runtime = sleepers(&[WORKER]);
+    let request = letter(&mut runtime, WORKER, "request");
+    runtime.drive_letter_wakes();
+    runtime.ingest_agent_wake(
+        WORKER,
+        WakeMode::Resume,
+        WakeOutcome::Failed {
+            reason: crate::agent_sleep_engine::WAKE_NOT_READY.into(),
+            detail: "the engine's answer never came".into(),
+            passing: false,
+        },
+    );
+    runtime.drive_letter_wakes();
+    assert_eq!(
+        runtime
+            .letter_wake_failures()
+            .get(&request)
+            .map(String::as_str),
+        Some(crate::agent_sleep_engine::WAKE_NOT_READY)
+    );
+}
+
+/// D-16: a `request` to an agent whose wake failed that finds no
+/// connection to wake it on waits, rather than failing with the earlier
+/// wake's reason.
+#[test]
+fn a_failed_sleeper_waits_for_a_connection() {
+    let mut runtime = sleepers(&[WORKER]);
+    runtime
+        .snapshot
+        .ui_state
+        .agent_sleep
+        .records
+        .get_mut(WORKER)
+        .unwrap()
+        .phase = SleepPhase::Failed;
+    runtime.live = None;
+    let request = letter(&mut runtime, WORKER, "request");
+    runtime.drive_letter_wakes();
+    assert!(!runtime.letter_wake_failures().contains_key(&request));
+    assert_eq!(phase(&runtime, WORKER), Some(SleepPhase::Failed));
+}
+
+/// B7: a restart reads a wake that was running as asleep again, and the
+/// request still pending wakes it again.
+#[test]
+fn a_restart_queues_the_wake_a_pending_request_still_needs() {
+    let mut runtime = sleepers(&[WORKER]);
+    letter(&mut runtime, WORKER, "request");
+    runtime.drive_letter_wakes();
+    assert_eq!(phase(&runtime, WORKER), Some(SleepPhase::Waking));
+    // What a restart reads back.
+    runtime.snapshot.ui_state.agent_sleep.after_load();
+    runtime.letter_wakes = Default::default();
+    assert_eq!(phase(&runtime, WORKER), Some(SleepPhase::Sleeping));
+    let ledger = runtime.delivery_state().unwrap();
+    runtime.publish_delivery(ledger, false);
+    runtime.drive_letter_wakes();
+    assert_eq!(phase(&runtime, WORKER), Some(SleepPhase::Waking));
+}
+
+/// The machine's memory pressure at `level`, read at `now`.
+fn pressure(runtime: &mut Runtime, level: MemoryPressure, now: u64) {
+    runtime.ingest_memory_pressure(
+        None,
+        PressureReading {
+            answer: Ok(PressureAnswer {
+                level,
+                source: PressureSource::System,
+            }),
+            read_at_unix_ms: now,
+        },
+    );
+}
+
+const MINUTE: u64 = 60 * 1000;
+
+/// A worker asleep in its pane that a `request` woke, back with the
+/// conversation it resumed, whose last reply came 51 minutes before the wake
+/// (with-hide/hide#2627): the runtime, the letter's id and when it came back.
+fn woken_worker() -> (Runtime, String, u64) {
+    let mut runtime = sleepers(&[WORKER]);
+    let id = letter(&mut runtime, WORKER, "request");
+    assert!(runtime.drive_letter_wakes());
+    assert_eq!(phase(&runtime, WORKER), Some(SleepPhase::Waking));
+    runtime.ingest_agent_wake(WORKER, WakeMode::Resume, WakeOutcome::Started);
+    let mut back = session("w-order:t1", Some("idle"));
+    let worker = back
+        .agents
+        .iter_mut()
+        .find(|agent| agent.pane_id.as_deref() == Some(WORKER))
+        .unwrap();
+    worker.facts = Some(crate::request_view::RowFacts {
+        native_session_id: Some(native(WORKER)),
+        last_reply_at_unix_ms: Some(unix_milliseconds() - 51 * MINUTE),
+        ..Default::default()
+    });
+    show(&mut runtime, back);
+    let woke = unix_milliseconds();
+    assert_eq!(phase(&runtime, WORKER), None, "the worker is back");
+    (runtime, id, woke)
+}
+
+/// The minute decision at `at` under memory pressure, and the worker's sleep
+/// phase after it.
+fn pressure_minute(runtime: &mut Runtime, at: u64) -> Option<SleepPhase> {
+    pressure(runtime, MemoryPressure::Warning, at);
+    runtime.tick_agent_sleep(at);
+    phase(runtime, WORKER)
+}
+
+/// with-hide/hide#2627: a worker a `request` woke stays awake under memory
+/// pressure until the letter reaches it, though the conversation it resumed
+/// ended long before its sleep. In order: the wake, a pressure minute, a
+/// later one while the doorbell still holds the letter, then the doorbell.
+/// Once its prompt hook takes the bell, the next pressure minute takes the
+/// worker, and the letter it took wakes it no more.
+#[test]
+fn a_worker_a_letter_woke_is_not_slept_by_pressure_before_the_letter_reaches_it() {
+    let (mut runtime, id, woke) = woken_worker();
+
+    // The pressure minute, ten seconds after the wake: its idle time starts
+    // at the wake, and a letter waits for it. Either keeps it awake here;
+    // the next minute checks the letter alone, and the clock alone is
+    // `agent_sleep`'s tests' (`the_idle_clock_of_an_agent_that_came_back_starts_at_its_wake`,
+    // `a_wake_counts_as_a_look_so_its_old_conversation_does_not_sleep_it_again`).
+    assert_eq!(
+        pressure_minute(&mut runtime, woke + 10_000),
+        None,
+        "ten seconds on"
+    );
+    // Half an hour on, its session read has not settled the resumed turn,
+    // so the doorbell still holds the letter; the letter alone keeps it awake.
+    let held = woke + 31 * MINUTE;
+    let ledger = runtime.delivery_state().unwrap();
+    let waiting = ledger
+        .letters
+        .iter()
+        .find(|letter| letter.id == id)
+        .unwrap();
+    let patience = crate::delivery::doorbell::Patience::of(waiting);
+    assert_eq!(
+        runtime
+            .delivery_bell_verdict(&actor(WORKER), patience, held)
+            .err(),
+        Some(crate::delivery::doorbell::Hold::SessionUnread)
+    );
+    assert_eq!(
+        pressure_minute(&mut runtime, held),
+        None,
+        "a letter waits for it"
+    );
+
+    // The doorbell: the read settles the turn, and the pane takes the bell.
+    runtime
+        .delivery_observations
+        .get_mut(WORKER)
+        .unwrap()
+        .reads(hide_session::turns::Waiting::Nothing);
+    assert_eq!(
+        runtime
+            .delivery_bell_verdict(&actor(WORKER), patience, held + MINUTE / 2)
+            .err(),
+        None,
+        "the worker's pane takes the letter's bell"
+    );
+
+    // The bell is typed and its prompt hook takes the letter: nothing holds
+    // the worker but its idle time.
+    edit_letter(&mut runtime, &id, |letter| {
+        letter.bell_sent = true;
+        letter.bell_typed_at_unix_ms = Some(held + MINUTE / 2);
+        letter.handed = true;
+    });
+    assert_eq!(
+        pressure_minute(&mut runtime, held + MINUTE),
+        Some(SleepPhase::Ending),
+        "the next pressure minute takes it"
+    );
+    assert!(runtime.ingest_agent_sleep_end(WORKER, Ok(9)));
+    runtime.drive_letter_wakes();
+    assert_eq!(
+        phase(&runtime, WORKER),
+        Some(SleepPhase::Sleeping),
+        "the letter it took wakes it no more"
+    );
+}
+
+/// A bell typed into the pane can go to a screen of the agent's own and
+/// never reach its conversation: once a later sleep takes the worker, a
+/// letter whose bell was typed but not taken wakes it, as one never rung
+/// does, so the doorbell rings it again.
+#[test]
+fn a_letter_whose_bell_was_typed_but_not_taken_wakes_its_recipient_after_a_later_sleep() {
+    let (mut runtime, woke_for, woke) = woken_worker();
+    edit_letter(&mut runtime, &woke_for, |letter| letter.handed = true);
+    // A request while it is awake: its bell is typed, and a screen takes it.
+    let id = letter(&mut runtime, WORKER, "request");
+    edit_letter(&mut runtime, &id, |letter| {
+        letter.bell_sent = true;
+        letter.bell_typed_at_unix_ms = Some(woke + MINUTE);
+    });
+    assert_eq!(
+        pressure_minute(&mut runtime, woke + 31 * MINUTE),
+        Some(SleepPhase::Ending),
+        "the bell ended the hold, and pressure takes it"
+    );
+    assert!(runtime.ingest_agent_sleep_end(WORKER, Ok(9)));
+    assert_eq!(phase(&runtime, WORKER), Some(SleepPhase::Sleeping));
+    runtime.drive_letter_wakes();
+    assert_eq!(
+        phase(&runtime, WORKER),
+        Some(SleepPhase::Waking),
+        "the letter its pane did not take wakes it"
+    );
+}
+
+/// The letters that hold their recipient awake: a pending one whose bell
+/// was not typed and that no prompt hook was handed, and none that rang, was
+/// handed over, taken in, cancelled, superseded, ended with no recipient or
+/// expired.
+#[test]
+fn only_a_pending_letter_yet_to_reach_the_conversation_holds_its_recipient() {
+    let mut runtime = live(session("w-order:t1", Some("idle")));
+    let id = letter(&mut runtime, WORKER, "request");
+    let worker = runtime
+        .snapshot
+        .navigator
+        .agents
+        .iter()
+        .find(|agent| agent.pane_id == WORKER)
+        .cloned()
+        .unwrap();
+    for (state, rung, handed, holds) in [
+        (State::Pending, false, false, true),
+        (State::Pending, true, false, false),
+        (State::Pending, false, true, false),
+        (State::Delivered, false, false, false),
+        (State::Acknowledged, false, false, false),
+        (State::Cancelled, false, false, false),
+        (State::Superseded, false, false, false),
+        (State::NoRecipient, false, false, false),
+        (State::Expired, false, false, false),
+    ] {
+        edit_letter(&mut runtime, &id, |letter| {
+            letter.state = state;
+            letter.bell_sent = rung;
+            letter.handed = handed;
+        });
+        let waits = crate::agent_sleep::LetterWaits::of(&runtime.delivery_state().unwrap());
+        assert_eq!(
+            waits.holds(&worker),
+            holds,
+            "{state:?}, rung {rung}, handed {handed}"
+        );
+    }
+}
+
+/// A bell at rest names every letter waiting for its recipient (` · and 1
+/// more`), and the doorbell rings only the oldest: a letter queued before
+/// another letter's bell was typed into the pane holds its recipient no
+/// more, while one queued after that bell still does.
+#[test]
+fn a_bell_for_an_older_letter_ends_the_hold_of_the_letters_it_names() {
+    let mut runtime = live(session("w-order:t1", Some("idle")));
+    let [report, request] = <[String; 2]>::try_from(letters_from(
+        &mut runtime,
+        &[(LEAD, WORKER, "report"), (LEAD, WORKER, "request")],
+    ))
+    .unwrap();
+    let worker = runtime
+        .snapshot
+        .navigator
+        .agents
+        .iter()
+        .find(|agent| agent.pane_id == WORKER)
+        .cloned()
+        .unwrap();
+    let queued = runtime
+        .delivery_state()
+        .unwrap()
+        .letters
+        .iter()
+        .find(|letter| letter.id == request)
+        .unwrap()
+        .created_at_unix_ms;
+    let holds = |runtime: &Runtime| {
+        crate::agent_sleep::LetterWaits::of(&runtime.delivery_state().unwrap()).holds(&worker)
+    };
+    assert!(holds(&runtime), "both letters wait");
+    // A bell for another session in the pane, or for another pane, names
+    // nothing waiting for this one.
+    edit_letter(&mut runtime, &report, |letter| {
+        letter.bell_sent = true;
+        letter.bell_typed_at_unix_ms = Some(queued);
+        letter.recipient.session = Some("an-earlier-session".into());
+    });
+    assert!(holds(&runtime), "a bell for another session");
+    edit_letter(&mut runtime, &report, |letter| {
+        letter.recipient = actor(LEAD);
+    });
+    assert!(holds(&runtime), "a bell for another pane");
+    edit_letter(&mut runtime, &report, |letter| {
+        letter.recipient = actor(WORKER);
+    });
+    assert!(!holds(&runtime), "the report's bell names the request");
+    edit_letter(&mut runtime, &report, |letter| {
+        letter.bell_typed_at_unix_ms = Some(queued - 1);
+    });
+    assert!(
+        holds(&runtime),
+        "a bell typed before the request was queued"
+    );
+}
+
+fn mission(status: &str) -> crate::missions::Mission {
+    serde_json::from_value(serde_json::json!({
+        "id": "mission-1", "title": "Fix the bug", "project": CHECKOUT,
+        "device_id": crate::node::TEST_NODE,
+        "conductor": {"actor": actor(LEAD), "agent_id": "agent-1"},
+        "status": "running", "scope": "pr", "cap": 4,
+        "created_at_unix_ms": 1, "updated_at_unix_ms": 1,
+        "nodes": [{
+            "key": "fix", "title": "Fix it", "kind": "change", "status": status,
+            "agent_id": "agent-2",
+            "criteria": [{"key": "review", "kind": "review", "checkers": [
+                {"worker": {"agent": "codex"}, "agent_id": "agent-3"},
+                {"worker": {"agent": "claude"}, "agent_id": "agent-1"}
+            ]}]
+        }]
+    }))
+    .unwrap()
+}
+
+/// A mission whose node `fix` the worker in t2 works, with t1 in front.
+fn mission_runtime() -> Runtime {
+    let mut runtime = live(session("w-order:t1", Some("idle")));
+    runtime.missions.book.missions.push(mission("working"));
+    runtime.save_missions();
+    runtime
+}
+
+fn set_node(runtime: &mut Runtime, status: crate::missions::NodeStatus) {
+    runtime.missions.book.missions[0].nodes[0].status = status;
+    runtime.save_missions();
+}
+
+fn marks(runtime: &Runtime) -> Vec<String> {
+    runtime
+        .missions
+        .sleep_marks
+        .iter()
+        .map(|mark| mark.agent_id.clone())
+        .collect()
+}
+
+/// B8, B9, B12: a node that finishes marks its worker and its checkers,
+/// never the Conductor; the next minute ends the worker that rests off
+/// screen, and the mark is spent only when the end lands, so a wake after
+/// it does not put the worker to sleep again.
+#[test]
+fn a_finished_nodes_worker_sleeps_once() {
+    let mut runtime = mission_runtime();
+    assert!(marks(&runtime).is_empty());
+    set_node(&mut runtime, crate::missions::NodeStatus::Done);
+    assert_eq!(marks(&runtime), ["agent-2", "agent-3"]);
+    runtime.sleep_finished_mission_agents(unix_milliseconds());
+    assert_eq!(phase(&runtime, WORKER), Some(SleepPhase::Ending));
+    // The checker has no pane: it can never sleep here.
+    assert_eq!(marks(&runtime), ["agent-2"]);
+    runtime.sleep_finished_mission_agents(unix_milliseconds());
+    assert_eq!(marks(&runtime), ["agent-2"], "its end still runs");
+    runtime.ingest_agent_sleep_end(WORKER, Ok(4));
+    assert!(marks(&runtime).is_empty());
+    // It wakes, and the same finish asks nothing again.
+    runtime.snapshot.ui_state.agent_sleep.records.remove(WORKER);
+    runtime.missions.book.missions[0].nodes[0].line = Some("merged".into());
+    runtime.save_missions();
+    assert!(
+        marks(&runtime).is_empty(),
+        "a save of the same finish marks nothing"
+    );
+    runtime.sleep_finished_mission_agents(unix_milliseconds());
+    assert_eq!(phase(&runtime, WORKER), None);
+}
+
+/// with-hide/hide#2627: a finished node's worker that a letter waits for
+/// keeps its mark and stays awake; once the letter is taken in, the next
+/// minute puts it to sleep.
+#[test]
+fn a_finished_nodes_worker_a_letter_waits_for_sleeps_once_it_is_taken_in() {
+    let mut runtime = mission_runtime();
+    let id = letter(&mut runtime, WORKER, "request");
+    set_node(&mut runtime, crate::missions::NodeStatus::Done);
+    runtime.sleep_finished_mission_agents(unix_milliseconds());
+    assert_eq!(phase(&runtime, WORKER), None, "a letter waits for it");
+    assert_eq!(marks(&runtime), ["agent-2"], "it keeps its mark");
+    edit_letter(&mut runtime, &id, |letter| letter.state = State::Delivered);
+    runtime.sleep_finished_mission_agents(unix_milliseconds());
+    assert_eq!(phase(&runtime, WORKER), Some(SleepPhase::Ending));
+}
+
+/// D-19: an end refused because the agent took a turn keeps the mark, and
+/// the next minute tries again despite the hour a refused end waits.
+#[test]
+fn a_refused_mission_sleep_is_tried_again_the_next_minute() {
+    let mut runtime = mission_runtime();
+    set_node(&mut runtime, crate::missions::NodeStatus::Dropped);
+    runtime.sleep_finished_mission_agents(unix_milliseconds());
+    runtime.ingest_agent_sleep_end(WORKER, Err("busy".into()));
+    assert_eq!(phase(&runtime, WORKER), None);
+    assert!(marks(&runtime).contains(&"agent-2".to_owned()));
+    runtime.sleep_finished_mission_agents(unix_milliseconds());
+    assert_eq!(phase(&runtime, WORKER), Some(SleepPhase::Ending));
+}
+
+/// B10: a worker that works or is on the operator's screen keeps its mark,
+/// and a node opened again before it rests drops it.
+#[test]
+fn a_busy_or_shown_worker_waits_and_a_reopened_node_drops_its_marks() {
+    let mut runtime = live(session("w-order:t1", Some("working")));
+    runtime.missions.book.missions.push(mission("working"));
+    runtime.save_missions();
+    set_node(&mut runtime, crate::missions::NodeStatus::Done);
+    runtime.sleep_finished_mission_agents(unix_milliseconds());
+    assert_eq!(phase(&runtime, WORKER), None);
+    assert!(marks(&runtime).contains(&"agent-2".to_owned()));
+    show(&mut runtime, session("w-order:t1", Some("idle")));
+    visit(&mut runtime, "w-order:t2");
+    runtime.sleep_finished_mission_agents(unix_milliseconds());
+    assert_eq!(phase(&runtime, WORKER), None, "on the operator's screen");
+    assert!(marks(&runtime).contains(&"agent-2".to_owned()));
+    set_node(&mut runtime, crate::missions::NodeStatus::Working);
+    assert!(marks(&runtime).is_empty());
+}
+
+/// B9: a merged pull request finishes its node for its agents, and so does
+/// the mission's close.
+#[test]
+fn a_merged_pull_request_or_a_closed_mission_finishes_the_node() {
+    let mut runtime = mission_runtime();
+    let node = &mut runtime.missions.book.missions[0].nodes[0];
+    node.prs = vec![7];
+    node.pr_seen = vec![crate::missions::PrSeen {
+        number: 7,
+        merged: true,
+        ..Default::default()
+    }];
+    runtime.save_missions();
+    assert_eq!(marks(&runtime), ["agent-2", "agent-3"]);
+    let mut runtime = mission_runtime();
+    runtime.missions.book.missions[0].status = crate::missions::MissionStatus::Cancelled;
+    runtime.save_missions();
+    assert_eq!(marks(&runtime), ["agent-2", "agent-3"]);
+}
+
+/// B11: with sleep set to Off, a finish puts nothing to sleep.
+#[test]
+fn a_finish_sleeps_nothing_while_sleep_is_off() {
+    let mut runtime = mission_runtime();
+    runtime.snapshot.ui_state.agent_sleep_after_hours = None;
+    set_node(&mut runtime, crate::missions::NodeStatus::Done);
+    runtime.sleep_finished_mission_agents(unix_milliseconds());
+    assert_eq!(phase(&runtime, WORKER), None);
+    assert!(marks(&runtime).is_empty());
+}
+
+/// Which kind of mark each marked agent carries: `mission`, `plan` or
+/// `report`.
+fn origins(runtime: &Runtime) -> Vec<(String, &'static str)> {
+    runtime
+        .missions
+        .sleep_marks
+        .iter()
+        .map(|mark| (mark.agent_id.clone(), mark.origin.trigger()))
+        .collect()
+}
+
+/// A delegated child's report to its parent puts it to sleep at the next
+/// minute it rests off screen, long before its idle hours, while its parent
+/// stays awake; the mark is spent when the end lands, so a wake does not
+/// put it to sleep again for the same report, and a request wakes it. Its
+/// next report marks it again.
+#[test]
+fn a_childs_report_puts_it_to_sleep_at_the_next_minute_and_once() {
+    let mut runtime = live(session("w-order:t1", Some("idle")));
+    assert!(marks(&runtime).is_empty());
+    letter_from(&mut runtime, WORKER, LEAD, "report");
+    assert_eq!(origins(&runtime), [("agent-2".to_owned(), "report")]);
+    runtime.sleep_finished_mission_agents(unix_milliseconds());
+    assert_eq!(phase(&runtime, WORKER), Some(SleepPhase::Ending));
+    assert_eq!(phase(&runtime, LEAD), None, "the parent stays awake");
+    runtime.ingest_agent_sleep_end(WORKER, Ok(4));
+    assert_eq!(phase(&runtime, WORKER), Some(SleepPhase::Sleeping));
+    assert!(marks(&runtime).is_empty());
+
+    // The parent's request wakes it.
+    letter(&mut runtime, WORKER, "request");
+    runtime.drive_letter_wakes();
+    assert_eq!(phase(&runtime, WORKER), Some(SleepPhase::Waking));
+    // It is back, and the same report does not put it to sleep again.
+    runtime.snapshot.ui_state.agent_sleep.records.remove(WORKER);
+    let ledger = runtime.delivery_state().unwrap();
+    runtime.publish_delivery(ledger, true);
+    runtime.sleep_finished_mission_agents(unix_milliseconds());
+    assert_eq!(phase(&runtime, WORKER), None);
+    letter_from(&mut runtime, WORKER, LEAD, "report");
+    assert_eq!(marks(&runtime), ["agent-2"]);
+}
+
+/// A reported child that works, asks the operator or is on the operator's
+/// screen keeps its mark and stays awake, and sleeps once it rests off
+/// screen.
+#[test]
+fn a_reported_child_that_works_asks_or_is_shown_sleeps_only_once_it_rests() {
+    let mut runtime = live(session("w-order:t1", Some("working")));
+    letter_from(&mut runtime, WORKER, LEAD, "report");
+    runtime.sleep_finished_mission_agents(unix_milliseconds());
+    assert_eq!(phase(&runtime, WORKER), None, "it works");
+    show(&mut runtime, session("w-order:t1", Some("blocked")));
+    runtime.sleep_finished_mission_agents(unix_milliseconds());
+    assert_eq!(phase(&runtime, WORKER), None, "it asks the operator");
+    show(&mut runtime, session("w-order:t1", Some("idle")));
+    visit(&mut runtime, "w-order:t2");
+    runtime.sleep_finished_mission_agents(unix_milliseconds());
+    assert_eq!(
+        phase(&runtime, WORKER),
+        None,
+        "it is on the operator's screen"
+    );
+    assert_eq!(marks(&runtime), ["agent-2"]);
+    visit(&mut runtime, "w-order:t1");
+    runtime.sleep_finished_mission_agents(unix_milliseconds());
+    assert_eq!(phase(&runtime, WORKER), Some(SleepPhase::Ending));
+}
+
+/// A reported child whose own child still works waits for it: the
+/// grandchild's report must reach an awake parent.
+#[test]
+fn a_reported_child_waits_for_its_own_working_child() {
+    const TABS3: [&str; 3] = ["w-order:t1", "w-order:t2", "w-order:t3"];
+    const GRANDCHILD: &str = "w-order:t3:p";
+    let three = |grandchild: &str| {
+        let mut payload = tab_order_payload(CHECKOUT, &TABS3, &TABS3, "w-order:t1");
+        let mut two = session("w-order:t1", Some("idle"));
+        // The worker is the lead's child, one level down, as a delegated
+        // child is.
+        let worker = two
+            .agents
+            .iter_mut()
+            .find(|agent| agent.pane_id.as_deref() == Some(WORKER))
+            .unwrap();
+        worker.spawned_from_pane_id = Some(LEAD.into());
+        worker.declared_parent_session = crate::engine::tokens::session_digest(&native(LEAD));
+        payload.agents.extend(two.agents);
+        let owned: SessionSnapshotPayload =
+            crate::sidebar::owned_label_fixture(serde_json::json!({ "agents": [{
+                "id": "grandchild", "pane_id": GRANDCHILD, "agent": "claude",
+                "agent_status": grandchild, "state_change_seq": 7, "cwd": CHECKOUT,
+                "agent_session": {"kind": "id", "value": native(GRANDCHILD)},
+                "lineage_session": crate::engine::tokens::session_digest(&native(GRANDCHILD)),
+                "spawned_from_pane_id": WORKER,
+                "declared_parent_session": crate::engine::tokens::session_digest(&native(WORKER)),
+            }]}))
+            .unwrap();
+        payload.agents.extend(owned.agents);
+        payload
+    };
+    let mut runtime = live(three("working"));
+    let mut ledger = (*runtime.delivery_state().unwrap()).clone();
+    ledger
+        .agents
+        .push(registration("agent-3", GRANDCHILD, Some("agent-2")));
+    ledger.next_id = 4;
+    runtime.publish_delivery(Arc::new(ledger), true);
+    show(&mut runtime, three("working"));
+    let depth = |runtime: &Runtime, pane: &str| {
+        runtime
+            .snapshot
+            .navigator
+            .agents
+            .iter()
+            .find(|agent| agent.pane_id == pane)
+            .map(|agent| agent.lineage_depth)
+    };
+    assert_eq!(depth(&runtime, WORKER), Some(1));
+    assert_eq!(depth(&runtime, GRANDCHILD), Some(2));
+    letter_from(&mut runtime, WORKER, LEAD, "report");
+    runtime.sleep_finished_mission_agents(unix_milliseconds());
+    assert_eq!(phase(&runtime, WORKER), None, "its child works");
+    assert_eq!(marks(&runtime), ["agent-2"]);
+    show(&mut runtime, three("idle"));
+    runtime.sleep_finished_mission_agents(unix_milliseconds());
+    assert_eq!(phase(&runtime, WORKER), Some(SleepPhase::Ending));
+}
+
+/// The child's next letter to its parent that is not a report, or a
+/// `request` or `block` sent to it before it sleeps, drops its report's
+/// mark; another letter to it (a reply) leaves it.
+#[test]
+fn a_later_letter_drops_a_reports_mark_before_the_child_sleeps() {
+    let mut runtime = live(session("w-order:t1", Some("working")));
+    for kind in ["progress", "reply", "request", "block"] {
+        letter_from(&mut runtime, WORKER, LEAD, "report");
+        assert_eq!(marks(&runtime), ["agent-2"]);
+        letter_from(&mut runtime, WORKER, LEAD, kind);
+        assert!(marks(&runtime).is_empty(), "its {kind} to its parent");
+    }
+    for kind in ["request", "block"] {
+        letter_from(&mut runtime, WORKER, LEAD, "report");
+        letter(&mut runtime, WORKER, kind);
+        assert!(marks(&runtime).is_empty(), "a {kind} to it");
+    }
+    letter_from(&mut runtime, WORKER, LEAD, "report");
+    letter(&mut runtime, WORKER, "reply");
+    letter(&mut runtime, WORKER, "progress");
+    assert_eq!(marks(&runtime), ["agent-2"]);
+}
+
+/// Letters that land in one save are read in the order they were sent: a
+/// report then a progress leaves the child unmarked, a progress then a
+/// report marks it.
+#[test]
+fn letters_saved_together_are_read_in_the_order_they_were_sent() {
+    let mut runtime = live(session("w-order:t1", Some("working")));
+    letters_from(
+        &mut runtime,
+        &[(WORKER, LEAD, "report"), (WORKER, LEAD, "progress")],
+    );
+    assert!(marks(&runtime).is_empty());
+    letters_from(
+        &mut runtime,
+        &[(WORKER, LEAD, "progress"), (WORKER, LEAD, "report")],
+    );
+    assert_eq!(marks(&runtime), ["agent-2"]);
+}
+
+/// The operator's Done on a person's turn the child declared after its
+/// report would wake it asleep, so it drops the report's mark as a
+/// `request` does; another report of the operator's leaves it.
+#[test]
+fn the_operators_done_on_a_childs_turn_drops_its_reports_mark() {
+    use crate::coordination::human_turn::HumanKind;
+    let mut runtime = live(session("w-order:t1", Some("working")));
+    letter_from(&mut runtime, WORKER, LEAD, "report");
+    let mut ledger = (*runtime.delivery_state().unwrap()).clone();
+    crate::coordination::apply(
+        &mut ledger,
+        &actor(WORKER),
+        &crate::coordination::Mutation::AskHuman {
+            turn: Some((HumanKind::Auth, "github.com/login".into())),
+        },
+        unix_milliseconds(),
+    )
+    .unwrap();
+    runtime.publish_delivery(Arc::new(ledger), true);
+    assert_eq!(marks(&runtime), ["agent-2"], "its turn alone drops nothing");
+    let operator = |runtime: &mut Runtime, intent: &str| {
+        let mut ledger = (*runtime.delivery_state().unwrap()).clone();
+        let letter = crate::delivery::mailbox::send(
+            &mut ledger,
+            &Actor::operator(crate::node::TEST_NODE),
+            &actor(WORKER),
+            intent,
+            "운영자가 처리함: 인증",
+            "report",
+            None,
+            unix_milliseconds(),
+        )
+        .unwrap();
+        runtime.publish_delivery(Arc::new(ledger), true);
+        letter
+    };
+    let comment = operator(&mut runtime, "view-feedback:1");
+    assert!(!comment.wakes_a_sleeper());
+    assert_eq!(marks(&runtime), ["agent-2"], "a View's comment");
+    let turn = runtime
+        .delivery_state()
+        .unwrap()
+        .human_turns
+        .values()
+        .next()
+        .unwrap()
+        .clone();
+    let done = operator(
+        &mut runtime,
+        &crate::coordination::human_turn::done_intent(&turn),
+    );
+    assert!(done.wakes_a_sleeper());
+    assert!(marks(&runtime).is_empty(), "the operator's Done");
+}
+
+/// A reported child whose pull request's checks still run is at work: it
+/// keeps its mark and stays awake, and sleeps at the minute after its
+/// checks end.
+#[test]
+fn a_reported_child_sleeps_once_its_pull_requests_checks_end() {
+    use crate::labels::overlay::LabelOverlay;
+    use crate::labels::store::PaneRecord;
+    use crate::model::{AgentWait, PullRequestChecks};
+    let mut runtime = live(session("w-order:t1", Some("idle")));
+    // The worker's session opened pull request #7, which its row links.
+    let mut facts = crate::labels::facts::SessionFacts::default();
+    facts.created_prs = vec![crate::labels::facts::CreatedPr {
+        repository: "acme/app".to_owned(),
+        number: 7,
+        sighted_at_unix_ms: 5,
+    }];
+    let records = [(
+        WORKER.to_owned(),
+        PaneRecord {
+            owner: hide_session::label_reference_token("claude", "id", &native(WORKER)),
+            facts,
+            ..PaneRecord::default()
+        },
+    )];
+    runtime.set_label_overlay(LabelOverlay::of_records(
+        records.iter().map(|(pane, record)| (pane, record)),
+        true,
+        true,
+    ));
+    let mut pull_request = crate::model::PullRequestSnapshot {
+        closing_issues: Vec::new(),
+        title: "Fix the parser".to_owned(),
+        checks: PullRequestChecks::Pending,
+        number: 7,
+        head_branch: "fix/parser".to_owned(),
+        base_branch: "main".to_owned(),
+        url: "https://github.com/acme/app/pull/7".to_owned(),
+        badge: crate::model::PullRequestBadge::Open,
+        review: None,
+        is_draft: false,
+        merged_at_unix_ms: None,
+        updated_at_unix_ms: Some(10),
+        created_at_unix_ms: Some(5),
+        closed_at_unix_ms: None,
+        head_oid: None,
+        cross_repository: false,
+        work: Default::default(),
+    };
+    pull_request.work.running_checks = 2;
+    let github = |pull_request: &crate::model::PullRequestSnapshot| crate::model::GithubSnapshot {
+        projects: vec![crate::model::GithubProjectSnapshot {
+            root_path: "/work/app".to_owned(),
+            status: crate::model::GithubStatusSnapshot {
+                available: true,
+                ..Default::default()
+            },
+            pull_requests: vec![pull_request.clone()],
+            pull_requests_read: true,
+            ..Default::default()
+        }],
+    };
+    runtime.ingest_github(github(&pull_request));
+    show(&mut runtime, session("w-order:t1", Some("idle")));
+    let wait = |runtime: &Runtime| {
+        runtime
+            .snapshot
+            .navigator
+            .agents
+            .iter()
+            .find(|agent| agent.pane_id == WORKER)
+            .and_then(|agent| agent.wait)
+    };
+    assert_eq!(wait(&runtime), Some(AgentWait::Checks));
+    letter_from(&mut runtime, WORKER, LEAD, "report");
+    runtime.sleep_finished_mission_agents(unix_milliseconds());
+    assert_eq!(phase(&runtime, WORKER), None, "its checks run");
+    assert_eq!(marks(&runtime), ["agent-2"]);
+
+    pull_request.checks = PullRequestChecks::Passing;
+    pull_request.work.running_checks = 0;
+    runtime.ingest_github(github(&pull_request));
+    assert_eq!(wait(&runtime), None);
+    runtime.sleep_finished_mission_agents(unix_milliseconds());
+    assert_eq!(phase(&runtime, WORKER), Some(SleepPhase::Ending));
+}
+
+/// Only a delegated child is marked by its report: a root (an agent with
+/// no parent, as every spawn beside its caller is) and an open mission's
+/// Conductor are not, and a report to an agent that is not the sender's
+/// parent marks nothing either.
+#[test]
+fn a_report_marks_only_a_delegated_child_and_never_a_conductor() {
+    let mut runtime = live(session("w-order:t1", Some("idle")));
+    letter_from(&mut runtime, LEAD, WORKER, "report");
+    assert!(marks(&runtime).is_empty(), "a root");
+    // A report to anyone but its parent.
+    let parent = |runtime: &mut Runtime, parent: &str| {
+        let mut ledger = (*runtime.delivery_state().unwrap()).clone();
+        ledger.agents[1].parent = Some(parent.into());
+        runtime.publish_delivery(Arc::new(ledger), true);
+    };
+    parent(&mut runtime, "agent-9");
+    letter_from(&mut runtime, WORKER, LEAD, "report");
+    assert!(marks(&runtime).is_empty(), "not its parent");
+    parent(&mut runtime, "agent-1");
+    // agent-2 reports to its parent while it conducts an open mission.
+    let mut conducting = mission("working");
+    conducting.conductor.agent_id = Some("agent-2".into());
+    conducting.conductor.actor = actor(WORKER);
+    runtime.missions.book.missions.push(conducting);
+    runtime.save_missions();
+    letter_from(&mut runtime, WORKER, LEAD, "report");
+    assert!(marks(&runtime).is_empty(), "a Conductor");
+    // Once it conducts nothing, its report to its parent marks it.
+    runtime.missions.book.missions.clear();
+    runtime.save_missions();
+    letter_from(&mut runtime, WORKER, LEAD, "report");
+    assert_eq!(marks(&runtime), ["agent-2"]);
+}
+
+/// A node worker's report to its Conductor is the node's conclusion while
+/// the Conductor gives it none (with-hide/hide#2637): the report's first
+/// line that says anything, replaced by the next report and kept with the
+/// book; a letter of another kind leaves it.
+#[test]
+fn a_node_workers_report_to_its_conductor_sets_the_nodes_conclusion() {
+    let mut runtime = mission_runtime();
+    let send = |runtime: &mut Runtime, kind: &str, body: &str| {
+        let mut ledger = (*runtime.delivery_state().unwrap()).clone();
+        let intent = format!("node-{kind}-{}", ledger.next_id);
+        crate::delivery::mailbox::send(
+            &mut ledger,
+            &actor(WORKER),
+            &actor(LEAD),
+            &intent,
+            body,
+            kind,
+            None,
+            unix_milliseconds(),
+        )
+        .unwrap();
+        runtime.publish_delivery(Arc::new(ledger), true);
+    };
+    let conclusion = |runtime: &mut Runtime| {
+        runtime.refresh_missions();
+        runtime.snapshot.missions.items[0].nodes[0].reported.clone()
+    };
+    send(&mut runtime, "progress", "Halfway through the spike");
+    assert_eq!(conclusion(&mut runtime), None);
+    send(
+        &mut runtime,
+        "report",
+        "\n  \nGuest nodes work; only long macOS paths failed\n\nSix runs, see results.md",
+    );
+    assert_eq!(
+        conclusion(&mut runtime).as_deref(),
+        Some("Guest nodes work; only long macOS paths failed")
+    );
+    send(
+        &mut runtime,
+        "report",
+        "Shorter names fixed the macOS paths",
+    );
+    assert_eq!(
+        conclusion(&mut runtime).as_deref(),
+        Some("Shorter names fixed the macOS paths")
+    );
+    let saved = serde_json::to_value(&runtime.missions.book.missions[0].nodes[0]).unwrap();
+    assert_eq!(saved["reported"], "Shorter names fixed the macOS paths");
+}
+
+/// The ledger a runtime starts on is the baseline: a report it already
+/// holds marks nothing, so a restart does not put to sleep children that
+/// reported days ago or were woken since; a report sent after the start
+/// does.
+#[test]
+fn a_restart_marks_nothing_for_a_report_the_ledger_already_held() {
+    let mut runtime = live(session("w-order:t1", Some("idle")));
+    letter_from(&mut runtime, WORKER, LEAD, "report");
+    // What a restart reads back: the marks are gone and the saved ledger
+    // is the one the runtime starts on.
+    runtime.missions.sleep_marks.clear();
+    let ledger = runtime.delivery_state().unwrap();
+    runtime.publish_delivery(ledger, true);
+    runtime.sleep_finished_mission_agents(unix_milliseconds());
+    assert!(marks(&runtime).is_empty());
+    assert_eq!(phase(&runtime, WORKER), None);
+    letter_from(&mut runtime, WORKER, LEAD, "report");
+    assert_eq!(marks(&runtime), ["agent-2"]);
+}
+
+/// A node's finish takes the place of its worker's report mark, so a later
+/// letter that would drop a report's mark leaves the finished node's; with
+/// sleep Off a report puts nothing to sleep.
+#[test]
+fn a_nodes_finish_keeps_the_mark_a_later_letter_would_drop() {
+    let mut runtime = mission_runtime();
+    letter_from(&mut runtime, WORKER, LEAD, "report");
+    assert_eq!(origins(&runtime), [("agent-2".to_owned(), "report")]);
+    set_node(&mut runtime, crate::missions::NodeStatus::Done);
+    assert_eq!(
+        origins(&runtime),
+        [
+            ("agent-2".to_owned(), "mission"),
+            ("agent-3".to_owned(), "mission")
+        ]
+    );
+    letter_from(&mut runtime, WORKER, LEAD, "progress");
+    assert_eq!(marks(&runtime), ["agent-2", "agent-3"]);
+
+    let mut runtime = live(session("w-order:t1", Some("idle")));
+    runtime.snapshot.ui_state.agent_sleep_after_hours = None;
+    letter_from(&mut runtime, WORKER, LEAD, "report");
+    runtime.sleep_finished_mission_agents(unix_milliseconds());
+    assert_eq!(phase(&runtime, WORKER), None);
+    assert!(marks(&runtime).is_empty());
+}
+
+fn sleep_command(runtime: &mut Runtime, id: &str) -> Result<serde_json::Value, String> {
+    let context = runtime
+        .workspace_control_query(crate::node::TEST_NODE, LEAD, Query::Info)
+        .unwrap()
+        .context;
+    runtime
+        .agent_sleep_command(crate::node::TEST_NODE, LEAD, &context, id, None)
+        .map(|(answer, _)| answer)
+}
+
+/// B14: the parent puts its resting child to sleep and asking again
+/// answers the same; B15: a refusal says why and changes nothing.
+#[test]
+fn hide_agent_sleep_answers_its_state_and_refuses_with_a_reason() {
+    let (mut runtime, _views) = views(live(session("w-order:t1", Some("working"))));
+    assert_eq!(
+        sleep_command(&mut runtime, "agent-2").unwrap_err(),
+        "agent_sleep_working"
+    );
+    show(&mut runtime, session("w-order:t1", Some("idle")));
+    visit(&mut runtime, "w-order:t2");
+    assert_eq!(
+        sleep_command(&mut runtime, "agent-2").unwrap_err(),
+        "agent_sleep_on_screen"
+    );
+    assert_eq!(phase(&runtime, WORKER), None);
+    visit(&mut runtime, "w-order:t1");
+    assert_eq!(
+        sleep_command(&mut runtime, "agent-2").unwrap()["state"],
+        "ending"
+    );
+    assert_eq!(
+        sleep_command(&mut runtime, "agent-2").unwrap()["state"],
+        "ending"
+    );
+    runtime.ingest_agent_sleep_end(WORKER, Ok(4));
+    assert_eq!(
+        sleep_command(&mut runtime, "agent-2").unwrap()["state"],
+        "asleep"
+    );
+    assert_eq!(
+        sleep_command(&mut runtime, "agent-9").unwrap_err(),
+        "agent_unavailable"
+    );
+}
+
+/// D-20: only the agent itself or its parent may put it to sleep.
+#[test]
+fn hide_agent_sleep_takes_only_the_agent_or_its_parent() {
+    let (mut runtime, _views) = views(live(session("w-order:t1", Some("idle"))));
+    let mut ledger = (*runtime.delivery_state().unwrap()).clone();
+    // The worker's parent is someone else.
+    ledger.agents[1].parent = Some("agent-7".into());
+    runtime.delivery_ledger = Ok(Arc::new(ledger));
+    assert_eq!(
+        sleep_command(&mut runtime, "agent-2").unwrap_err(),
+        "parent_authority_required"
+    );
+    assert_eq!(phase(&runtime, WORKER), None);
+}
+
+/// D-20, PRD letters-missions-simplify D-24: binding an agent to a node
+/// gives the Conductor no say over it: an operator's root it binds as a
+/// worker still refuses the Conductor's sleep.
+#[test]
+fn hide_agent_sleep_refuses_a_conductor_that_only_binds_the_agent() {
+    let (mut runtime, _views) = views(live(session("w-order:t1", Some("idle"))));
+    let mut ledger = (*runtime.delivery_state().unwrap()).clone();
+    ledger.agents[1].parent = None;
+    runtime.delivery_ledger = Ok(Arc::new(ledger));
+    runtime.missions.book.missions.push(mission("working"));
+    runtime.save_missions();
+    assert_eq!(
+        sleep_command(&mut runtime, "agent-2").unwrap_err(),
+        "parent_authority_required"
+    );
+    assert_eq!(phase(&runtime, WORKER), None);
+}
+
+/// D-20, PRD letters-missions-simplify D-24, B2: the agent that took the
+/// worker's pane over answers to the worker's Conductor
+/// (`coordination::succeed` gives it the parent), so the Conductor puts it
+/// to sleep as it would the worker.
+#[test]
+fn hide_agent_sleep_takes_a_workers_successor_from_its_conductor() {
+    let (mut runtime, _views) = views(live(session("w-order:t1", Some("idle"))));
+    let mut ledger = (*runtime.delivery_state().unwrap()).clone();
+    // The worker's pane ran another conversation before this one.
+    let mut next = ledger.agents[1].clone();
+    next.id = String::new();
+    next.parent = None;
+    ledger.agents[1].actor.session = Some("earlier-session".into());
+    ledger.agents[1].session = "earlier-session".into();
+    let successions = std::collections::BTreeMap::from([(
+        "agent-2".to_owned(),
+        crate::coordination::Succession { successor: next },
+    )]);
+    let succeeded = crate::coordination::succeed(
+        &mut ledger,
+        &successions,
+        1,
+        &crate::coordination::Held::default(),
+    );
+    let successor = succeeded[0].1.clone();
+    runtime.delivery_ledger = Ok(Arc::new(ledger));
+    assert_eq!(
+        sleep_command(&mut runtime, &successor).unwrap()["state"],
+        "ending"
+    );
+}
+
+/// PRD hide-plan-delegate B6: a `request` that would wake a sleeping plan
+/// child while its main's plans already have three children awake is
+/// refused before the store keeps it; with a place free, or as a `report`
+/// that wakes no one, the letter goes as before.
+#[test]
+fn a_letter_waking_a_sleeping_plan_child_past_its_mains_cap_is_refused() {
+    let (mut runtime, _views) = views(sleepers(&[WORKER]));
+    show(&mut runtime, session("w-order:t1", None));
+    let lead = crate::links::ledger::SessionIdentity {
+        device_id: crate::node::TEST_NODE.into(),
+        agent: "claude".into(),
+        session_id: native(LEAD),
+    };
+    let handed = |ledger: &mut Ledger, step: &str, child: &str| {
+        let link = crate::coordination::PlanLink {
+            plan: "1000".into(),
+            step: step.into(),
+            attempt: 1,
+            parent_session: lead.clone(),
+        };
+        let mut record: crate::coordination::SpawnRecord =
+            serde_json::from_value(serde_json::json!({
+                "id": format!("spawn-{step}"), "parent": "agent-1",
+                "intent": crate::coordination::plan_intent(&link), "name": step, "kind": "claude",
+                "repo": CHECKOUT, "branch": step, "requested_path": null, "args": [],
+                "path": null, "pane": null, "child": child, "completed": true,
+            }))
+            .unwrap();
+        record.plan = Some(link);
+        ledger.spawns.push(record);
+    };
+    let mut ledger = (*runtime.delivery_state().unwrap()).clone();
+    handed(&mut ledger, "asleep", "agent-2");
+    for (step, child, pane) in [
+        ("a", "agent-3", "w-order:t3:p"),
+        ("b", "agent-4", "w-order:t4:p"),
+    ] {
+        ledger
+            .agents
+            .push(registration(child, pane, Some("agent-1")));
+        handed(&mut ledger, step, child);
+    }
+    runtime.delivery_ledger = Ok(Arc::new(ledger));
+    let context = runtime
+        .workspace_control_query(crate::node::TEST_NODE, LEAD, Query::Info)
+        .unwrap()
+        .context;
+    let send = |runtime: &mut Runtime, kind: &str| {
+        runtime
+            .prepare_delivery(
+                crate::node::TEST_NODE,
+                LEAD,
+                &context,
+                None,
+                crate::delivery::Command::Send {
+                    target: "agent-2".into(),
+                    intent: format!("wake-{kind}"),
+                    body: "Fix the next bug".into(),
+                    kind: kind.into(),
+                    now: false,
+                    force: false,
+                },
+            )
+            .map(drop)
+            .unwrap_err()
+    };
+    // Two awake: the woken child is the third, as the store would take it.
+    assert_eq!(send(&mut runtime, "request"), "delivery_unavailable");
+    let mut ledger = (*runtime.delivery_state().unwrap()).clone();
+    ledger
+        .agents
+        .push(registration("agent-5", "w-order:t5:p", Some("agent-1")));
+    handed(&mut ledger, "c", "agent-5");
+    runtime.delivery_ledger = Ok(Arc::new(ledger));
+    assert_eq!(
+        send(&mut runtime, "request"),
+        crate::coordination::refusal("plan_delegate_full", "3")
+    );
+    assert_eq!(send(&mut runtime, "report"), "delivery_unavailable");
+}
+
+/// PRD hide-plan-delegate B5, B6: a child whose sleep is still ending holds
+/// its place, for a waking letter as for a spawn, so one ending, one asleep
+/// and two working leave no place to wake the sleeping one.
+#[test]
+fn a_child_still_ending_its_sleep_holds_its_place_against_a_waking_letter() {
+    const ENDING: &str = "w-order:t3:p";
+    let (mut runtime, _views) = views(sleepers(&[WORKER, ENDING]));
+    show(&mut runtime, session("w-order:t1", None));
+    // Its end still runs: the pane's record says so until the end lands.
+    let mut ending = record(ENDING);
+    ending.phase = SleepPhase::Ending;
+    runtime
+        .snapshot
+        .ui_state
+        .agent_sleep
+        .records
+        .insert(ENDING.into(), ending);
+    let lead = crate::links::ledger::SessionIdentity {
+        device_id: crate::node::TEST_NODE.into(),
+        agent: "claude".into(),
+        session_id: native(LEAD),
+    };
+    let mut ledger = (*runtime.delivery_state().unwrap()).clone();
+    for (step, child) in [
+        ("asleep", "agent-2"),
+        ("ending", "agent-3"),
+        ("a", "agent-4"),
+        ("b", "agent-5"),
+    ] {
+        let link = crate::coordination::PlanLink {
+            plan: "1000".into(),
+            step: step.into(),
+            attempt: 1,
+            parent_session: lead.clone(),
+        };
+        let mut record: crate::coordination::SpawnRecord =
+            serde_json::from_value(serde_json::json!({
+                "id": format!("spawn-{step}"), "parent": "agent-1",
+                "intent": crate::coordination::plan_intent(&link), "name": step, "kind": "claude",
+                "repo": CHECKOUT, "branch": step, "requested_path": null, "args": [],
+                "path": null, "pane": null, "child": child, "completed": true,
+            }))
+            .unwrap();
+        record.plan = Some(link);
+        ledger.spawns.push(record);
+    }
+    for (child, pane) in [("agent-4", "w-order:t4:p"), ("agent-5", "w-order:t5:p")] {
+        ledger
+            .agents
+            .push(registration(child, pane, Some("agent-1")));
+    }
+    runtime.delivery_ledger = Ok(Arc::new(ledger));
+    let context = runtime
+        .workspace_control_query(crate::node::TEST_NODE, LEAD, Query::Info)
+        .unwrap()
+        .context;
+    let refusal = runtime
+        .prepare_delivery(
+            crate::node::TEST_NODE,
+            LEAD,
+            &context,
+            None,
+            crate::delivery::Command::Send {
+                target: "agent-2".into(),
+                intent: "wake-request".into(),
+                body: "Fix the next bug".into(),
+                kind: "request".into(),
+                now: false,
+                force: false,
+            },
+        )
+        .map(drop)
+        .unwrap_err();
+    assert_eq!(
+        refusal,
+        crate::coordination::refusal("plan_delegate_full", "3")
+    );
+}
+
+/// One life in every answer: a registered agent Hide put to sleep reads
+/// `asleep` with no connection in `hide agent show`, `hide agent list` and
+/// `hide ps` alike; while its end still runs, and again once the engine lists an
+/// agent in its pane, it reads `running`; an ended registration reads
+/// `ended`, not asleep, even while its pane keeps the sleep record.
+/// `hide agent list --live` lists it while asleep or running and not once
+/// ended (with-hide/hide#2303).
+#[test]
+fn every_answer_reads_a_sleeping_agent_asleep_and_running_once_it_wakes() {
+    use crate::delivery::answer::PsState;
+    let root = tempfile::tempdir().unwrap();
+    let (mut runtime, _views) = views(sleepers(&[WORKER]));
+    show(&mut runtime, session("w-order:t1", None));
+    let context = runtime
+        .workspace_control_query(crate::node::TEST_NODE, LEAD, Query::Info)
+        .unwrap()
+        .context;
+    let runtime = Arc::new(Mutex::new(runtime));
+    let (_worker, client) = crate::delivery::worker::Worker::store(
+        Arc::downgrade(&runtime),
+        crate::handle::ChangeNotifier::noop(),
+        root.path().join("delivery.sqlite3"),
+    )
+    .unwrap();
+    runtime.lock().unwrap().install_delivery_client(client);
+    let ask = |command| {
+        let prepared = runtime
+            .lock()
+            .unwrap()
+            .prepare_delivery(
+                crate::node::TEST_NODE,
+                LEAD,
+                &context,
+                None,
+                crate::delivery::Command::Agents { command },
+            )
+            .unwrap();
+        prepared.run(std::time::Duration::from_secs(10)).unwrap()
+    };
+    // What each answer says of the worker: show's and list's runtime and
+    // connection, and the state `hide ps` gives it.
+    let read = || {
+        let shown = ask(crate::coordination::Command::Show {
+            id: "agent-2".into(),
+        });
+        let list = ask(crate::coordination::Command::List { live: false });
+        let listed = list["items"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|item| item["id"] == "agent-2")
+            .unwrap();
+        assert_eq!(
+            (&shown["runtime"], &shown["connection"]),
+            (&listed["runtime"], &listed["connection"])
+        );
+        // `hide agent list --live` lists it while it sleeps or runs and
+        // leaves it out once it ended, and lists no ended agent.
+        let live = ask(crate::coordination::Command::List { live: true });
+        let live = live["items"].as_array().unwrap();
+        assert!(live.iter().all(|item| item["runtime"] != "ended"));
+        assert_eq!(
+            live.iter().any(|item| item["id"] == "agent-2"),
+            listed["runtime"] != "ended"
+        );
+        let ps = runtime
+            .lock()
+            .unwrap()
+            .ps_rows(crate::node::TEST_NODE, LEAD)
+            .unwrap()
+            .answer(true);
+        let state = ps
+            .panes
+            .iter()
+            .filter_map(|pane| pane.agent.as_ref())
+            .chain(&ps.agents)
+            .find(|agent| agent.id.as_deref() == Some("agent-2"))
+            .map(|agent| agent.state);
+        (
+            shown["runtime"].as_str().unwrap().to_owned(),
+            shown["connection"].as_str().unwrap().to_owned(),
+            state,
+        )
+    };
+    let lives = |runtime: &Arc<Mutex<Runtime>>, phase: Option<SleepPhase>, session| {
+        let mut guard = runtime.lock().unwrap();
+        if let Some(phase) = phase {
+            guard
+                .snapshot
+                .ui_state
+                .agent_sleep
+                .records
+                .get_mut(WORKER)
+                .unwrap()
+                .phase = phase;
+        }
+        show(&mut guard, session);
+    };
+    assert_eq!(
+        read(),
+        (
+            "asleep".into(),
+            "disconnected".into(),
+            Some(PsState::Asleep)
+        )
+    );
+    // Waking, or a wake that failed, is still not running.
+    for phase in [SleepPhase::Waking, SleepPhase::Failed] {
+        lives(&runtime, Some(phase), session("w-order:t1", None));
+        assert_eq!(
+            read(),
+            (
+                "asleep".into(),
+                "disconnected".into(),
+                Some(PsState::Asleep)
+            ),
+            "{phase:?}"
+        );
+    }
+    // The end still runs: so does the agent.
+    lives(
+        &runtime,
+        Some(SleepPhase::Ending),
+        session("w-order:t1", None),
+    );
+    let (life, connection, state) = read();
+    assert_eq!(
+        (life.as_str(), connection.as_str()),
+        ("running", "connected")
+    );
+    assert_ne!(state, Some(PsState::Asleep));
+    // Asleep again, then woken: the engine lists an agent in the pane.
+    lives(
+        &runtime,
+        Some(SleepPhase::Sleeping),
+        session("w-order:t1", None),
+    );
+    assert_eq!(read().0, "asleep");
+    lives(&runtime, None, session("w-order:t1", Some("working")));
+    assert_eq!(phase(&runtime.lock().unwrap(), WORKER), None);
+    assert_eq!(
+        read(),
+        ("running".into(), "connected".into(), Some(PsState::Going))
+    );
+    // Ended while its pane keeps a sleep record: ended, not asleep.
+    {
+        let mut guard = runtime.lock().unwrap();
+        guard
+            .snapshot
+            .ui_state
+            .agent_sleep
+            .records
+            .insert(WORKER.into(), record(WORKER));
+        let mut ledger = (*guard.delivery_state().unwrap()).clone();
+        ledger
+            .agents
+            .iter_mut()
+            .find(|record| record.id == "agent-2")
+            .unwrap()
+            .ended = true;
+        guard.publish_delivery(Arc::new(ledger), true);
+        show(&mut guard, session("w-order:t1", None));
+    }
+    assert_eq!(
+        read(),
+        ("ended".into(), "disconnected".into(), Some(PsState::Ended))
+    );
+}
+
+/// A mission's node carries its worker's life from the same decision as
+/// `hide agent show`: running, asleep once Hide puts it to sleep with nothing
+/// else moving, and running again once it wakes. Asleep, the node's work is
+/// a sleep, not a wait on its worker (PRD letters-missions-simplify B23).
+#[test]
+fn a_mission_node_reads_its_workers_sleep() {
+    use crate::delivery::answer::Runtime as Life;
+    use crate::runtime::missions::NodeWork;
+    let mut runtime = mission_runtime();
+    let life = |runtime: &mut Runtime| {
+        runtime.refresh_missions();
+        runtime.snapshot.missions.items[0].nodes[0].agent_runtime
+    };
+    assert_eq!(life(&mut runtime), Some(Life::Running));
+    runtime
+        .snapshot
+        .ui_state
+        .agent_sleep
+        .records
+        .insert(WORKER.into(), record(WORKER));
+    assert_eq!(life(&mut runtime), Some(Life::Asleep));
+    assert_eq!(
+        runtime.snapshot.missions.items[0].nodes[0].work,
+        Some(NodeWork::Asleep)
+    );
+    runtime.snapshot.ui_state.agent_sleep.records.remove(WORKER);
+    assert_eq!(life(&mut runtime), Some(Life::Running));
+}
+
+/// What a node's worker was launched with is kept on the node for that
+/// worker (the map's model and agent mark), along the paths that write the
+/// pane's launch record: a spawn records it before the agent shows a session
+/// and the agent pass fills the session in; a wake or a resume writes it with
+/// the session already in, with nothing else moving. It is still named once
+/// the pane's record is gone, is proven for a mission that closed first, and
+/// is never taken from a later session in the same pane or from the same
+/// pane id on another machine.
+#[test]
+fn a_node_keeps_the_launch_its_workers_own_session_was_started_with() {
+    use crate::missions::{MissionStatus, NodeLaunch};
+    const NAME: &str = "fix-worker";
+    let mut runtime = mission_runtime();
+    let launched = |runtime: &mut Runtime| {
+        runtime.refresh_missions();
+        runtime.snapshot.missions.items[0].nodes[0].launched.clone()
+    };
+    let opus = hide_agent_adapter::LaunchChoice {
+        model: Some("opus".into()),
+        effort: Some("high".into()),
+    };
+    let kept = |agent_id: &str| {
+        Some(NodeLaunch {
+            agent_id: agent_id.into(),
+            agent: "claude".into(),
+            profile: None,
+            model: Some("opus".into()),
+            effort: Some("high".into()),
+        })
+    };
+    // The worker's row as the engine lists it under the spawn's name, before and
+    // after its first turn reports the session.
+    let named = |session_shown: bool| {
+        let mut payload = session("w-order:t1", Some("idle"));
+        let row = payload
+            .agents
+            .iter_mut()
+            .find(|agent| agent.pane_id.as_deref() == Some(WORKER))
+            .unwrap();
+        row.name = Some(NAME.into());
+        if !session_shown {
+            row.agent_session = None;
+            row.lineage_session = None;
+        }
+        payload
+    };
+
+    // The spawn keeps the choice before any session: nothing is proven.
+    runtime.record_pane_launch(WORKER, "claude", NAME, &opus, None, None);
+    show(&mut runtime, named(false));
+    assert_eq!(
+        runtime.snapshot.ui_state.pane_launches[WORKER].session,
+        None
+    );
+    assert_eq!(launched(&mut runtime), None);
+    // The first turn reports the session; the same pass fills it in and proves it.
+    show(&mut runtime, named(true));
+    assert_eq!(launched(&mut runtime), kept("agent-2"));
+    assert_eq!(
+        runtime.missions.book.missions[0].nodes[0].launched,
+        kept("agent-2"),
+        "kept in the book, which is saved"
+    );
+    // The pane's record goes: the node still names what ran.
+    runtime.snapshot.ui_state.pane_launches.remove(WORKER);
+    show(&mut runtime, session("w-order:t1", None));
+    assert_eq!(launched(&mut runtime), kept("agent-2"));
+
+    // A later session in the same pane is another registration, bound to the
+    // node after the mission closed. Its resume writes the pane's record with
+    // its session in, the only thing that moves: the next pass proves it.
+    let later = native("w-order:t2:later");
+    let mut ledger = (*runtime.delivery_state().unwrap()).clone();
+    let mut resumed = registration("agent-4", WORKER, Some("agent-1"));
+    resumed.session = later.clone();
+    ledger.agents.push(resumed);
+    // The same pane id on another machine, in that very conversation.
+    let mut elsewhere = registration("agent-5", WORKER, Some("agent-1"));
+    elsewhere.machine = "mini".into();
+    elsewhere.session = later.clone();
+    ledger.agents.push(elsewhere);
+    ledger.next_id = 6;
+    runtime.publish_delivery(Arc::new(ledger), true);
+    runtime.missions.book.missions[0].status = MissionStatus::Done;
+    runtime.missions.book.missions[0].nodes[0].agent_id = Some("agent-4".into());
+    runtime.save_missions();
+    show(&mut runtime, session("w-order:t1", None));
+    assert_eq!(
+        launched(&mut runtime),
+        None,
+        "the earlier worker's launch is not the later one's"
+    );
+    runtime.put_pane_launch(WORKER, "claude", NAME, &opus, None, Some(&later));
+    show(&mut runtime, session("w-order:t1", None));
+    assert_eq!(launched(&mut runtime), kept("agent-4"));
+
+    // The other machine's registration names the same pane id and session,
+    // yet its pane is another: nothing is proven for it.
+    runtime.missions.book.missions[0].nodes[0].agent_id = Some("agent-5".into());
+    runtime.save_missions();
+    show(&mut runtime, session("w-order:t1", None));
+    assert_eq!(launched(&mut runtime), None);
+}
+
+/// A node keeps the profile its worker started with, by id with its name
+/// then and never its account (PRD agent-profiles-phase2 B12, B23), as the
+/// pane's launch record has it; a worker on the built-in default keeps none,
+/// so its launch reads as one recorded before profiles.
+#[test]
+fn a_node_keeps_the_profile_its_worker_started_with() {
+    const NAME: &str = "fix-worker";
+    let mut runtime = mission_runtime();
+    let work = crate::launch::LaunchProfile {
+        id: hide_agent_adapter::ProfileId("p-work".into()),
+        name: "work".into(),
+        account: hide_agent_adapter::AccountKey::Folder("/accounts/work".into()),
+    };
+    runtime.record_pane_launch(
+        WORKER,
+        "claude",
+        NAME,
+        &Default::default(),
+        Some(&work),
+        None,
+    );
+    let mut payload = session("w-order:t1", Some("idle"));
+    payload
+        .agents
+        .iter_mut()
+        .find(|agent| agent.pane_id.as_deref() == Some(WORKER))
+        .unwrap()
+        .name = Some(NAME.into());
+    show(&mut runtime, payload);
+    runtime.refresh_missions();
+    let launched = runtime.snapshot.missions.items[0].nodes[0]
+        .launched
+        .clone()
+        .unwrap();
+    assert_eq!(
+        launched.profile,
+        Some(crate::missions::NodeProfile {
+            id: work.id.clone(),
+            name: "work".into(),
+        })
+    );
+    let kept = serde_json::to_value(&runtime.missions.book.missions[0].nodes[0].launched).unwrap();
+    assert_eq!(
+        kept["profile"],
+        serde_json::json!({"id": "p-work", "name": "work"})
+    );
+    assert!(!kept.to_string().contains("/accounts/work"));
+}
+
+/// A node's worker plan is found by its registration's conversation (the
+/// map's `n/m` and the panel's checklist), so it stays on a finished node
+/// once the worker's pane is gone, and another conversation's plan is never
+/// taken for it.
+#[test]
+fn a_finished_node_keeps_its_workers_plan_after_the_pane_closes() {
+    let mut runtime = mission_runtime();
+    let plan_of = |pane: &str, status: &str| -> crate::plans::Plan {
+        serde_json::from_value(serde_json::json!({
+            "session": {"device_id": crate::node::TEST_NODE, "agent": "claude", "session_id": native(pane)},
+            "steps": [
+                {"key": "a", "title": "Read it", "status": "done"},
+                {"key": "b", "title": "Fix it", "depends_on": ["a"], "status": status}
+            ],
+            "created_at_unix_ms": 1, "updated_at_unix_ms": 1
+        }))
+        .unwrap()
+    };
+    // A plan written the way `hide task set` writes one: the book moves.
+    let put = |runtime: &mut Runtime, plan: crate::plans::Plan| {
+        runtime.plans.book.insert(plan.session.clone(), plan);
+        runtime.plans.edit += 1;
+    };
+    let shown = |runtime: &mut Runtime| {
+        runtime.refresh_missions();
+        runtime.snapshot.missions.items[0].nodes[0]
+            .plan
+            .as_ref()
+            .map(|plan| {
+                (
+                    plan.pane_id.clone(),
+                    plan.progress.done,
+                    plan.progress.total,
+                )
+            })
+    };
+    // Only the Conductor's plan is in the book: the worker has none.
+    put(&mut runtime, plan_of(LEAD, "working"));
+    assert_eq!(shown(&mut runtime), None);
+
+    put(&mut runtime, plan_of(WORKER, "working"));
+    assert_eq!(shown(&mut runtime), Some((WORKER.into(), 1, 2)));
+
+    // The worker finishes its plan and the node, then its pane closes.
+    put(&mut runtime, plan_of(WORKER, "done"));
+    set_node(&mut runtime, crate::missions::NodeStatus::Done);
+    show(&mut runtime, session("w-order:t1", None));
+    assert_eq!(shown(&mut runtime), Some((WORKER.into(), 2, 2)));
+}
+
+/// A node's fix for its sleeping worker is the worker's status cell, and the
+/// cell wakes it as the `request` it was before did: once per new cell, so a
+/// worker that wakes, does not look and sleeps again is not woken for the
+/// same cell, while a newer one wakes it (PRD letters-missions-simplify B8,
+/// B12).
+#[test]
+fn a_workers_new_status_cell_wakes_it_asleep_once() {
+    use crate::missions::{FixReason, PendingWake, WakeEvent};
+    let mut runtime = mission_runtime();
+    let asleep = |runtime: &mut Runtime| {
+        runtime
+            .snapshot
+            .ui_state
+            .agent_sleep
+            .records
+            .insert(WORKER.into(), record(WORKER));
+        runtime.letter_wakes.touch();
+    };
+    let fix = |runtime: &mut Runtime| {
+        let mission = &mut runtime.missions.book.missions[0];
+        mission.wake_seq += 1;
+        let wake = PendingWake {
+            seq: mission.wake_seq,
+            node: mission.nodes[0].key.clone(),
+            pr: Some(7),
+            event: WakeEvent::Fix,
+            head: Some("c3".into()),
+            to: Some("agent-2".into()),
+            reason: None,
+            why: Some(FixReason::CiFailed),
+            action: None,
+            warning: None,
+            ci: None,
+            line: None,
+            key: None,
+            since_unix_ms: None,
+            notified: false,
+            opened_seq: None,
+        };
+        crate::runtime::missions::push_wake(mission, wake).unwrap();
+        runtime.letter_wakes.touch();
+    };
+    asleep(&mut runtime);
+    runtime.drive_letter_wakes();
+    assert_eq!(
+        phase(&runtime, WORKER),
+        Some(SleepPhase::Sleeping),
+        "no cell yet"
+    );
+    fix(&mut runtime);
+    assert!(runtime.drive_letter_wakes());
+    assert_eq!(phase(&runtime, WORKER), Some(SleepPhase::Waking));
+    // It wakes, does not look, and sleeps again.
+    runtime.snapshot.ui_state.agent_sleep.records.remove(WORKER);
+    runtime.letter_wakes.touch();
+    runtime.drive_letter_wakes();
+    asleep(&mut runtime);
+    runtime.drive_letter_wakes();
+    assert_eq!(
+        phase(&runtime, WORKER),
+        Some(SleepPhase::Sleeping),
+        "the same cell does not wake it again"
+    );
+    fix(&mut runtime);
+    runtime.drive_letter_wakes();
+    assert_eq!(
+        phase(&runtime, WORKER),
+        Some(SleepPhase::Waking),
+        "a newer one does"
+    );
+}
+
+/// A wake a worker's cell started owns its result: a refusal that can pass
+/// is asked again, and the third in a row leaves the worker's node a raise
+/// its Conductor's cell says (`wake_refused`), so the failure reaches who can
+/// act on it; the same cell wakes nothing more.
+#[test]
+fn a_cell_wake_that_fails_is_tried_again_and_then_raised_to_the_conductor() {
+    use crate::missions::{AttentionReason, FixReason, PendingWake, WakeEvent};
+    let mut runtime = mission_runtime();
+    runtime
+        .snapshot
+        .ui_state
+        .agent_sleep
+        .records
+        .insert(WORKER.into(), record(WORKER));
+    {
+        let mission = &mut runtime.missions.book.missions[0];
+        mission.wake_seq += 1;
+        let wake = PendingWake {
+            seq: mission.wake_seq,
+            node: mission.nodes[0].key.clone(),
+            pr: Some(7),
+            event: WakeEvent::Fix,
+            head: Some("c3".into()),
+            to: Some("agent-2".into()),
+            reason: None,
+            why: Some(FixReason::CiFailed),
+            action: None,
+            warning: None,
+            ci: None,
+            line: None,
+            key: None,
+            since_unix_ms: None,
+            notified: false,
+            opened_seq: None,
+        };
+        crate::runtime::missions::push_wake(mission, wake).unwrap();
+    }
+    runtime.letter_wakes.touch();
+    runtime.drive_letter_wakes();
+    assert_eq!(phase(&runtime, WORKER), Some(SleepPhase::Waking));
+    for wake in 1..=2 {
+        runtime.ingest_agent_wake(WORKER, WakeMode::Resume, refused_wake());
+        runtime.drive_letter_wakes();
+        runtime.letter_wake_retries_due();
+        runtime.drive_letter_wakes();
+        assert_eq!(
+            phase(&runtime, WORKER),
+            Some(SleepPhase::Waking),
+            "wake {} starts",
+            wake + 1
+        );
+    }
+    runtime.ingest_agent_wake(WORKER, WakeMode::Resume, refused_wake());
+    runtime.drive_letter_wakes();
+    let node = &runtime.missions.book.missions[0].nodes[0];
+    assert_eq!(
+        node.attention.as_ref().map(|attention| attention.reason),
+        Some(AttentionReason::WakeRefused),
+        "the Conductor is told it could not wake the worker"
+    );
+    runtime.letter_wake_retries_due();
+    runtime.letter_wakes.touch();
+    runtime.drive_letter_wakes();
+    assert_eq!(
+        phase(&runtime, WORKER),
+        Some(SleepPhase::Failed),
+        "the same cell wakes nothing more"
+    );
+}

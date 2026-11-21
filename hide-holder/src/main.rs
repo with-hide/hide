@@ -23,6 +23,11 @@
 //! itself works in the folder its program file is in, its version folder, so
 //! it never keeps the folder it was started from.
 //!
+//! `hide-holder --console-input <pid>` is the helper a Windows holder starts
+//! to ask the console `pid` runs in whether it edits lines
+//! (`console_input.rs`); it answers on its standard streams and holds no
+//! pane.
+//!
 //! A panic on any thread ends the holder at once (`abort`) after one log
 //! line, and a `failed` line when it had not said `ready`: the pane's
 //! program then loses its terminal (Unix) or its job (Windows) and ends,
@@ -31,6 +36,8 @@
 
 mod answers;
 mod ask;
+#[cfg(windows)]
+mod console_input;
 mod encode;
 mod foreground;
 mod holder;
@@ -227,8 +234,32 @@ fn on_panic(info: &std::panic::PanicHookInfo<'_>) {
     std::process::abort();
 }
 
+/// The helper's mode (`console_input.rs`): attached to the console `pid`
+/// runs in, it answers on its standard streams until its input ends.
+#[cfg(windows)]
+fn console_input_helper(pid: Option<std::ffi::OsString>) -> ExitCode {
+    let Some(pid) = pid.and_then(|pid| pid.to_str()?.parse::<u32>().ok()) else {
+        let _ = writeln!(std::io::stderr(), "--console-input needs a process id");
+        return ExitCode::from(2);
+    };
+    match hide_platform::process::console_input::serve(pid, std::io::stdin(), std::io::stdout()) {
+        Ok(()) => ExitCode::SUCCESS,
+        Err(error) => {
+            let _ = writeln!(std::io::stderr(), "the console could not be read: {error}");
+            ExitCode::FAILURE
+        }
+    }
+}
+
 fn main() -> ExitCode {
     let begun = std::time::Instant::now();
+    #[cfg(windows)]
+    {
+        let mut arguments = std::env::args_os().skip(1);
+        if arguments.next().as_deref() == Some(console_input::HELPER_ARGUMENT.as_ref()) {
+            return console_input_helper(arguments.next());
+        }
+    }
     std::panic::set_hook(Box::new(on_panic));
     // The pipe the starter reads this holder's start from; a holder started
     // by hand has none and says it on its standard error instead.

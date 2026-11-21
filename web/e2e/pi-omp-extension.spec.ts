@@ -2,7 +2,7 @@
 // B1, B3, B5, B7, B9, B16, D-11): the kit writes the extension into the fixture HOME's Pi and omp folders, and a Pi
 // stand-in and an omp stand-in (`pi-omp-host.ts`) load it from there in the two panes. A letter from one reaches the
 // other's next prompt as a hidden message and is confirmed only once the host wrote that prompt and its reply, a shell
-// call that starts an agent through Herdr is refused with the spawn guard's reason, and omp's subagents move the pane's
+// call that hands a result to the system opener is refused with the opener guard's reason, and omp's subagents move the pane's
 // counts without taking the pane's letters.
 
 import { expect, test } from "@playwright/test";
@@ -12,7 +12,7 @@ import path from "node:path";
 import { bundledExecutable } from "./bundled-app";
 import { startFixture, type AgentFixture } from "./engine-fixture";
 import { sendKeys, withControl } from "./daemon-actions";
-import { startHided, type Daemon } from "./hided-fixture";
+import { hookRecords, startHided, type Daemon } from "./hided-fixture";
 import { installPiOmpHosts, piOmpHost, type Host } from "./pi-omp-host";
 import { snapshotCounts } from "./subagent-counts";
 import { enterWorkspace } from "./wire";
@@ -51,7 +51,7 @@ async function start(label: string): Promise<Stack> {
       expect(fs.readFileSync(file, "utf8")).toContain(JSON.stringify(bundledExecutable("hide-agent-hooks")));
     }
     const dir = path.join(fixture.root, "pi-omp");
-    installPiOmpHosts(path.join(fixture.root, "bin"), { herdr: (fixture as AgentFixture & { bin: string }).bin, stateDir: daemon.stateDir, extension, dir });
+    installPiOmpHosts(path.join(fixture.root, "bin"), { stateDir: daemon.stateDir, extension, dir });
     await withControl(daemon, async (control) => {
       sendKeys(control, fixture.panes[0], "pi\r");
       sendKeys(control, fixture.panes[1], "omp\r");
@@ -84,8 +84,7 @@ async function hide(host: Host, ...args: string[]): Promise<{ ok?: boolean; resu
 
 type Hidden = { customType: string; content: string; display: boolean; details: { hide: string } };
 
-// Herdr only: 새 엔진 첫 세션 보고는 묶음 4 PR A(b4-transition). The installed Pi/omp extensions do not bind a session at session_start yet; changing only the stand-in transport leaves hide inbox without a native identity.
-test("a letter rides each agent's next prompt as a hidden message and is confirmed only once the host wrote it @herdr", async ({ page }) => {
+test("a letter rides each agent's next prompt as a hidden message and is confirmed only once the host wrote it", async ({ page }) => {
   const stack = await start("pi-omp-letter");
   try {
     await page.goto(`${stack.daemon.origin}/#token=${stack.daemon.token}`);
@@ -123,19 +122,18 @@ test("a letter rides each agent's next prompt as a hidden message and is confirm
   }
 });
 
-// Herdr only: 새 엔진 첫 세션 보고는 묶음 4 PR A(b4-transition). The installed Pi/omp extensions do not bind a session at session_start yet; changing only the stand-in transport leaves hide inbox without a native identity.
-test("a shell call that starts an agent through Herdr is refused with the spawn guard's reason, and others run @herdr", async () => {
+test("a shell call that hands a result to the system opener is refused with the opener guard's reason, and others run", async () => {
   const stack = await start("pi-omp-guard");
   try {
     for (const host of [stack.pi, stack.omp]) {
       // B7: the model reads the reason as the tool's result.
-      const refused = await host.send({ op: "tool", tool: "bash", input: { command: "herdr agent start helper --kind claude" } });
-      expect(String(refused.refused), host.agent).toContain("hide agent spawn --parent here");
-      expect(String(refused.refused)).toContain("--kind claude");
+      const refused = await host.send({ op: "tool", tool: "bash", input: { command: "open report.html" } });
+      expect(String(refused.refused), host.agent).toContain("browser open report.html");
       expect(await host.send({ op: "tool", tool: "bash", input: { command: "ls -la" } })).toEqual({ ran: true });
       expect(await host.send({ op: "tool", tool: "read", input: { path: "/etc/hosts" } })).toEqual({ ran: true });
     }
-    const log = fs.readFileSync(path.join(stack.home, ".hide", "agent-hooks", "spawn-guard.log"), "utf8");
+    const log = fs.readFileSync(path.join(hookRecords(stack.daemon), "spawn-guard.log"), "utf8");
+    expect(log).toContain('"kind":"opener.refused"');
     expect(log).toContain('"runtime":"pi"');
     expect(log).toContain('"runtime":"omp"');
   } finally {
@@ -143,8 +141,7 @@ test("a shell call that starts an agent through Herdr is refused with the spawn 
   }
 });
 
-// Herdr only: 새 엔진 첫 세션 보고는 묶음 4 PR A(b4-transition). The installed Pi/omp extensions do not bind a session at session_start yet; changing only the stand-in transport leaves hide inbox without a native identity.
-test("omp's subagents move the pane's counts in the snapshot, and their prompts take no letters @herdr", async ({ page }) => {
+test("omp's subagents move the pane's counts in the snapshot, and their prompts take no letters", async ({ page }) => {
   const stack = await start("pi-omp-counts");
   try {
     const pane = stack.fixture.panes[1];

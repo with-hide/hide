@@ -19,21 +19,21 @@ function visible(page: Page, pane: string): Promise<string> {
 }
 
 test("keys typed into a split before its shell reads arrive whole", async ({ page }) => {
-  const herdr = await startFixture({ agents: false });
+  const engine = await startFixture({ agents: false });
   let daemon: Daemon | undefined;
   try {
-    daemon = await startHided(herdr, "new-pane-typeahead");
+    daemon = await startHided(engine, "new-pane-typeahead");
     // A shell started from now on waits in its startup file until `release`
     // exists, with its terminal still in the kernel's line mode. The
     // fixture's own two shells have read their startup file by now.
-    const home = path.join(herdr.root, "home");
+    const home = path.join(engine.root, "home");
     const release = path.join(home, "release");
     const rc = path.join(home, ".zshrc");
     fs.writeFileSync(rc, `while [[ ! -e ${release} ]]; do sleep 0.05; done\n${fs.readFileSync(rc, "utf8")}`);
 
     await page.goto(`${daemon.origin}/?probe=1#token=${daemon.token}`);
     await enterWorkspace(page, "fixture");
-    const [first] = herdr.panes;
+    const [first] = engine.panes;
     const origin = page.locator(`[data-pane-view="${first}"]`);
     await expect(origin).toHaveAttribute("data-transport", "controlling");
     await origin.locator(".xterm-helper-textarea").focus();
@@ -72,7 +72,7 @@ test("keys typed into a split before its shell reads arrive whole", async ({ pag
     try {
       daemon?.stop();
     } finally {
-      herdr.stop();
+      engine.stop();
     }
   }
 });

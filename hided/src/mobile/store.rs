@@ -16,8 +16,8 @@ use serde::{Deserialize, Serialize};
 #[serde(rename_all = "snake_case")]
 pub enum PushMode {
     #[default]
-    Off,
-    /// Only while no desktop or web shell is connected to this daemon.
+    #[serde(alias = "off")]
+    /// Rest during actual computer use when desktop Needs You notices are on.
     AppClosed,
     Always,
 }
@@ -25,7 +25,6 @@ pub enum PushMode {
 impl PushMode {
     pub fn parse(value: &str) -> Option<Self> {
         match value {
-            "off" => Some(Self::Off),
             "app_closed" => Some(Self::AppClosed),
             "always" => Some(Self::Always),
             _ => None,
@@ -34,7 +33,6 @@ impl PushMode {
 
     pub fn as_str(self) -> &'static str {
         match self {
-            Self::Off => "off",
             Self::AppClosed => "app_closed",
             Self::Always => "always",
         }
@@ -124,6 +122,53 @@ pub struct PushSubscription {
     pub auth: String,
 }
 
+/// An iOS app phone's notifications: the APNs device token and the key hided
+/// encrypts the body with, both given inside the paired phone's encrypted
+/// session. The token is Apple's address for the install, the key is the
+/// phone's; neither is a credential to this daemon (`docs/RELAY_PROTOCOL.md`,
+/// Push relay).
+#[derive(Clone, Deserialize, Eq, PartialEq, Serialize)]
+pub struct ApnsRegistration {
+    /// Hex, as Apple issues it (`admission::token_valid`).
+    pub token: String,
+    /// Which of Apple's two push services carries it, as the relay names it.
+    pub environment: hide_relay_protocol::admission::PushEnvironment,
+    /// The phone's P-256 public key, base64url: the same shape a Web Push
+    /// subscription's `p256dh` has, so one encryption path serves both.
+    pub p256dh: String,
+    /// The 16-byte authentication secret, base64url.
+    pub auth: String,
+}
+
+/// Never printed: a `Debug` of a phone record would otherwise carry the
+/// device token.
+impl std::fmt::Debug for ApnsRegistration {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str("ApnsRegistration([redacted])")
+    }
+}
+
+/// An Android app phone's notifications: the FCM registration token and the
+/// key hided encrypts the body with, given inside the paired phone's
+/// encrypted session like `ApnsRegistration`. FCM has one host, so there is
+/// no environment (`docs/RELAY_PROTOCOL.md`, Push relay).
+#[derive(Clone, Deserialize, Eq, PartialEq, Serialize)]
+pub struct FcmRegistration {
+    /// Google's registration token (`admission::fcm_token_valid`).
+    pub token: String,
+    /// The phone's P-256 public key, base64url.
+    pub p256dh: String,
+    /// The 16-byte authentication secret, base64url.
+    pub auth: String,
+}
+
+/// Never printed, as `ApnsRegistration` is not.
+impl std::fmt::Debug for FcmRegistration {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str("FcmRegistration([redacted])")
+    }
+}
+
 /// The core address a phone was paired at: the tailnet name of the exposure
 /// whose code it scanned (PRD core-host-node-move B17, amendment 12). A phone
 /// keeps its credential in its home-screen app, which belongs to that address,
@@ -152,8 +197,24 @@ pub struct PhoneRecord {
     pub notifications: Notifications,
     #[serde(default)]
     pub push: Option<PushSubscription>,
+    /// An iOS app phone's registration, which stands instead of `push`: the
+    /// app cannot receive Web Push, and a phone has one way at a time.
+    #[serde(default)]
+    pub apns: Option<ApnsRegistration>,
+    /// An Android app phone's registration, the third way, standing instead
+    /// of either of the others.
+    #[serde(default)]
+    pub fcm: Option<FcmRegistration>,
     #[serde(default)]
     pub origin: PhoneOrigin,
+}
+
+impl PhoneRecord {
+    /// Whether this phone can be sent a notice: a Web Push subscription or
+    /// an app's registration.
+    pub fn reachable(&self) -> bool {
+        self.push.is_some() || self.apns.is_some() || self.fcm.is_some()
+    }
 }
 
 #[derive(Clone, Debug, Default, Deserialize, Serialize)]
@@ -178,7 +239,7 @@ pub fn read<T: DeserializeOwned + Default>(path: &Path) -> T {
         Ok(bytes) => match serde_json::from_slice(&bytes) {
             Ok(value) => value,
             Err(error) => {
-                herdr_core::diagnostic!(serde_json::json!({
+                hide_core::diagnostic!(serde_json::json!({
                     "component": "mobile_store",
                     "kind": "store.unreadable",
                     "path": path.display().to_string(),
@@ -189,7 +250,7 @@ pub fn read<T: DeserializeOwned + Default>(path: &Path) -> T {
         },
         Err(error) if error.kind() == io::ErrorKind::NotFound => T::default(),
         Err(error) => {
-            herdr_core::diagnostic!(serde_json::json!({
+            hide_core::diagnostic!(serde_json::json!({
                 "component": "mobile_store",
                 "kind": "store.unreadable",
                 "path": path.display().to_string(),
@@ -221,7 +282,7 @@ pub fn write_logged<T: Serialize>(path: &Path, value: &T) -> bool {
     match write(path, value) {
         Ok(()) => true,
         Err(error) => {
-            herdr_core::diagnostic!(serde_json::json!({
+            hide_core::diagnostic!(serde_json::json!({
                 "component": "mobile_store",
                 "kind": "store.write_failed",
                 "path": path.display().to_string(),
@@ -249,6 +310,8 @@ mod tests {
                 last_seen_ms: 2,
                 notifications: Notifications::On,
                 push: None,
+                apns: None,
+                fcm: None,
                 origin: PhoneOrigin::Paired("mac.tailnet.ts.net".into()),
             }],
         };
@@ -256,6 +319,24 @@ mod tests {
         assert!(hide_platform::fs::private::is_private(&path).unwrap());
         let back: PhonesFile = read(&path);
         assert_eq!(back.phones, file.phones);
+    }
+
+    #[test]
+    fn phone_push_rest_preserves_its_saved_spelling_including_saved_off() {
+        for saved in [
+            "{}",
+            r#"{"push_mode":"off"}"#,
+            r#"{"push_mode":"app_closed"}"#,
+        ] {
+            let settings: MobileSettings = serde_json::from_str(saved).unwrap();
+            assert_eq!(settings.push_mode, PushMode::AppClosed);
+            assert_eq!(
+                serde_json::to_value(&settings).unwrap()["push_mode"],
+                "app_closed"
+            );
+        }
+        let always: MobileSettings = serde_json::from_str(r#"{"push_mode":"always"}"#).unwrap();
+        assert_eq!(always.push_mode, PushMode::Always);
     }
 
     #[test]
@@ -267,6 +348,6 @@ mod tests {
         fs::write(&path, b"{not json").unwrap();
         let damaged: MobileSettings = read(&path);
         assert!(!damaged.enabled);
-        assert_eq!(damaged.push_mode, PushMode::Off);
+        assert_eq!(damaged.push_mode, PushMode::AppClosed);
     }
 }

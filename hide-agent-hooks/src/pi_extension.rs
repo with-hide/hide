@@ -6,14 +6,14 @@
 //! used where the host reports it.
 //!
 //! The file is plain JavaScript that is also valid TypeScript, in a `.ts`
-//! file as Herdr's own extension for these agents is, so both hosts load it
+//! file, so both hosts load it
 //! from their user extension folder without a build step. Each prompt and
 //! shell call asks the helper (`hide-agent-hooks pi|omp <operation>`,
 //! `src/plugin/helper.rs`), and it tells the helper its version, so a file
 //! another build wrote does nothing (B13).
 //!
-//! It goes only into the default agent folders, the ones Herdr's integration
-//! uses; an omp profile or a `PI_CODING_AGENT_DIR` folder gets none (PRD
+//! It goes only into the default agent folders, the ones the agents read
+//! their extensions from; an omp profile or a `PI_CODING_AGENT_DIR` folder gets none (PRD
 //! non-goal).
 
 use hide_agent_adapter::AgentId;
@@ -22,8 +22,8 @@ use crate::plugin::{Plugin, PluginFile};
 
 /// The extension's version: the marker's, and the one the extension tells the
 /// helper. Raise both when the text or the helper protocol changes.
-pub const VERSION: u32 = 13;
-const VERSION_TEXT: &str = "13";
+pub const VERSION: u32 = 16;
+const VERSION_TEXT: &str = "16";
 
 /// The marker's name, one for both files: they differ only in the agent's name.
 pub const SOURCE_NAME: &str = "hide-extension";
@@ -36,7 +36,6 @@ pub const PI: PluginFile = PluginFile {
     source_name: SOURCE_NAME,
     version: VERSION,
     config: AgentId::Pi,
-    folder: "extensions",
     own_folder: None,
     file_name: "hide.ts",
     template: TEMPLATE,
@@ -52,7 +51,6 @@ pub const OMP: PluginFile = PluginFile {
     source_name: SOURCE_NAME,
     version: VERSION,
     config: AgentId::Omp,
-    folder: "extensions",
     own_folder: None,
     file_name: "hide.ts",
     template: TEMPLATE,

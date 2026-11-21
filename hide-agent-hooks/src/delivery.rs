@@ -1,21 +1,25 @@
 //! Prompt intake has a single total deadline. Pull is read-only; only a
-//! successful stdout flush permits confirmation. All child processes are
-//! owned and their bounded stdout is drained while they run.
+//! successful stdout flush permits confirmation. The pull and the
+//! confirmation are hook requests the hook sends itself ([`ask`]); neither
+//! starts a program (`crate::hook_request`).
 
 use std::borrow::Cow;
 use std::collections::BTreeMap;
 use std::io::Read;
 use std::path::{Path, PathBuf};
-use std::process::{Command, Stdio};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use hide_platform::fs::{self, private};
-use hide_platform::process::{CaptureFailureKind, OwnedChild};
 use serde::{Deserialize, Serialize};
 
-const OUTPUT_LIMIT: usize = 64 * 1024;
+use crate::hook_request::{Caller, HookCommand, PullPoint, Timing};
+
 const CONTEXT_LIMIT: usize = 8 * 1024;
 const CONFIRM_RESERVE: Duration = Duration::from_millis(400);
+/// How long a hook keeps a confirmation it owes the core ([`crate::owed`])
+/// before it drops it: a letter whose confirmation was dropped stays its
+/// recipient's until its agent ends, which ends it delivered.
+pub const OWED_KEPT_MS: u64 = 60 * 60 * 1_000;
 
 #[derive(Deserialize)]
 struct PromptInput {
@@ -164,9 +168,10 @@ pub fn valid_sha256_digest(digest: &str) -> bool {
             .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
 }
 
-/// The longest native session a letter pull carries: Herdr takes an agent
-/// session of up to 4096 bytes, and Pi and omp report theirs as a session file path, which on a deep checkout passes 250
-/// bytes (PRD pi-omp-extension D-05).
+/// The longest native session a letter pull carries: the engine takes an
+/// agent session of up to 4096 bytes, and Pi and omp report theirs as a
+/// session file path, which on a deep checkout passes 250 bytes (PRD
+/// pi-omp-extension D-05).
 pub const SESSION_LIMIT: usize = 4096;
 
 /// Whether a session id or session file path may travel as a `hide` argument.
@@ -188,6 +193,10 @@ pub struct Intake {
     /// be older than the core it asks.
     #[serde(default)]
     pub plan_context: Option<serde_json::Value>,
+    /// The native session the letters were pulled for, which a confirmation
+    /// that misses its hook is kept under ([`confirm_or_owe`]).
+    #[serde(skip)]
+    pub session: Option<String>,
 }
 
 #[derive(Debug)]
@@ -205,26 +214,51 @@ impl From<&'static str> for Failure {
     }
 }
 
+impl Failure {
+    /// Whether the core was not reached in time, so the same request may
+    /// still be taken later: the deadline passed, the hook could not form its
+    /// request (`cli`), no daemon or connection answered whole
+    /// ([`refusal_cause`]'s steps), or its store was not available. The
+    /// core's own refusal (`refused`, `capacity`, `identity`), an answer that
+    /// could not be read (`format`) and one that confirmed other letters
+    /// (`confirm`) would be the same again.
+    pub fn transient(&self) -> bool {
+        matches!(
+            self.code,
+            "deadline"
+                | "cli"
+                | "ledger"
+                | "unavailable"
+                | "record"
+                | "connect"
+                | "unsent"
+                | "timeout"
+                | "answer"
+        )
+    }
+}
+
 /// What the agent receives for the submitted prompt: the letter bodies when
 /// the core recognizes the prompt as the line its doorbell typed, otherwise
 /// at most a count.
 pub fn pull(deadline: Instant, prompt: &Prompt) -> Result<Option<Intake>, Failure> {
     let pull_deadline = deadline.checked_sub(CONFIRM_RESERVE).ok_or("deadline")?;
-    let mut arguments = vec!["inbox", "--hook"];
-    if let Some(digest) = &prompt.digest {
-        arguments.extend(["--prompt-digest", digest]);
-    }
-    if let Some(session) = &prompt.session {
-        arguments.extend(["--session", session]);
-    }
-    let answer = run_cli(&arguments, pull_deadline)?;
-    let intake = intake(answer)?;
+    let answer = ask(
+        HookCommand::LetterPull {
+            prompt_digest: prompt.digest.clone(),
+            session: prompt.session.clone(),
+            point: PullPoint::Prompt,
+            bundle: true,
+        },
+        pull_deadline,
+    )?;
+    let intake = intake(answer, prompt.session.as_deref())?;
     Ok(intake.and_then(|intake| keep_plan(intake, prompt.session.as_deref())))
 }
 
 /// Keeps the pull's plan summary in the pane's record for the pre-tool
 /// hook, and adds its line to what the agent reads (PRD hide-plan D-14,
-/// D-30). Outside a Herdr pane, or without the session, nothing is kept.
+/// D-30). Outside a pane Hide manages, or without the session, nothing is kept.
 fn keep_plan(mut intake: Intake, session: Option<&str>) -> Option<Intake> {
     let raw = intake.plan_context.take();
     let plan = raw.and_then(|raw| {
@@ -244,7 +278,7 @@ fn keep_plan(mut intake: Intake, session: Option<&str>) -> Option<Intake> {
         {
             diagnose(&home, "plan_record");
         }
-        if let Some(hint) = crate::plan_record::hint(&plan, crate::spawn_guard::now_ms()) {
+        if let Some(hint) = crate::plan_record::hint(&plan, crate::hook_log::now_ms()) {
             if !intake.context.is_empty() && !intake.context.ends_with('\n') {
                 intake.context.push('\n');
             }
@@ -261,24 +295,34 @@ fn keep_plan(mut intake: Intake, session: Option<&str>) -> Option<Intake> {
 /// agent, a letter still waiting and a session that is not the pane's own
 /// get nothing.
 pub fn pull_at_tool(deadline: Instant, session: &str) -> Result<Option<Intake>, Failure> {
-    pull_at_gap(deadline, session, "--tool")
+    pull_at_gap(deadline, session, PullPoint::Tool)
 }
 
 pub fn pull_at_turn_end(deadline: Instant, session: &str) -> Result<Option<Intake>, Failure> {
-    pull_at_gap(deadline, session, "--turn-end")
+    pull_at_gap(deadline, session, PullPoint::TurnEnd)
 }
 
-fn pull_at_gap(deadline: Instant, session: &str, point: &str) -> Result<Option<Intake>, Failure> {
+fn pull_at_gap(
+    deadline: Instant,
+    session: &str,
+    point: PullPoint,
+) -> Result<Option<Intake>, Failure> {
     let pull_deadline = deadline.checked_sub(CONFIRM_RESERVE).ok_or("deadline")?;
-    let answer = run_cli(
-        &["inbox", "--hook", "--session", session, point],
+    let answer = ask(
+        HookCommand::LetterPull {
+            prompt_digest: None,
+            session: Some(session.to_owned()),
+            point,
+            bundle: true,
+        },
         pull_deadline,
     )?;
-    intake(answer)
+    intake(answer, Some(session))
 }
 
-fn intake(answer: serde_json::Value) -> Result<Option<Intake>, Failure> {
-    let intake: Intake = serde_json::from_value(answer).map_err(|_| "format")?;
+fn intake(answer: serde_json::Value, session: Option<&str>) -> Result<Option<Intake>, Failure> {
+    let mut intake: Intake = serde_json::from_value(answer).map_err(|_| "format")?;
+    intake.session = session.map(str::to_owned);
     if intake.context.len() > CONTEXT_LIMIT || !valid_letter_ids(&intake.ids) {
         return Err("format".into());
     }
@@ -295,8 +339,9 @@ fn intake(answer: serde_json::Value) -> Result<Option<Intake>, Failure> {
 /// limit keeps a bundle under it.
 pub const BUNDLE_LETTERS: usize = 1_024;
 
-/// Whether `ids` may travel to `hide inbox --confirm` as its arguments: at
-/// most one bundle's letters, each a letter id rather than an option.
+/// Whether `ids` may be confirmed in one request, a hook's or `hide inbox
+/// --confirm`'s: at most one bundle's letters, each a letter id rather than
+/// an option.
 pub fn valid_letter_ids(ids: &[String]) -> bool {
     ids.len() <= BUNDLE_LETTERS
         && ids.iter().all(|id| {
@@ -307,78 +352,168 @@ pub fn valid_letter_ids(ids: &[String]) -> bool {
         })
 }
 
-pub fn confirm(intake: &Intake, deadline: Instant) -> Result<(), Failure> {
-    let mut arguments = vec!["inbox", "--confirm"];
-    arguments.extend(intake.ids.iter().map(String::as_str));
-    let answer = run_cli(&arguments, deadline)?;
-    let confirmed = answer
-        .get("confirmed")
-        .and_then(serde_json::Value::as_array)
-        .ok_or("confirm")?;
-    if confirmed.len() != intake.ids.len()
-        || !confirmed
-            .iter()
-            .zip(&intake.ids)
-            .all(|(actual, expected)| actual.as_str() == Some(expected))
-    {
-        return Err("confirm".into());
+/// Confirms the letters `ids`, which reached the agent of `session`, by
+/// `deadline`. One
+/// that did not reach the core in time ([`Failure::transient`]) is recorded
+/// and kept on this machine for the pane ([`crate::owed`]), which its node
+/// hands to the core once the pane rests; the core confirms it then. One
+/// the core refused would be refused again and is only recorded as a
+/// failure.
+pub fn confirm_or_owe(
+    home: &Path,
+    ids: &[String],
+    session: Option<&str>,
+    deadline: Instant,
+) -> Result<(), Failure> {
+    let Err(failure) = confirm(ids, deadline) else {
+        return Ok(());
+    };
+    diagnose_failure(home, &failure);
+    if !failure.transient() {
+        return Err(failure);
+    }
+    let (Some(pane), Some(session)) = (crate::pane::from_env(), session) else {
+        return Err(failure);
+    };
+    let owed = crate::owed::owe(home, &pane, session, ids, crate::hook_log::now_ms());
+    if let Err(cause) = owed {
+        diagnose(home, cause);
+    }
+    Err(failure)
+}
+
+/// Tells the daemon the letters `ids` name reached the agent, in as many
+/// requests as they take ([`confirm_runs`]), each answered with exactly the
+/// ids it named.
+pub fn confirm(ids: &[String], deadline: Instant) -> Result<(), Failure> {
+    for run in confirm_runs(ids) {
+        let answer = ask(HookCommand::LetterConfirm { ids: run.to_vec() }, deadline)?;
+        let confirmed = answer
+            .get("confirmed")
+            .and_then(serde_json::Value::as_array)
+            .ok_or("confirm")?;
+        if confirmed.len() != run.len()
+            || !confirmed
+                .iter()
+                .zip(run)
+                .all(|(actual, expected)| actual.as_str() == Some(expected))
+        {
+            return Err("confirm".into());
+        }
     }
     Ok(())
 }
 
-fn run_cli(arguments: &[&str], deadline: Instant) -> Result<serde_json::Value, Failure> {
-    run_cli_with_input(arguments, &[], deadline)
+/// The most bytes one confirmation's ids take, encoded: half a hook
+/// request, so the request's envelope (pane, nonce, installation, proof)
+/// fits beside them.
+const CONFIRM_IDS_BYTES: usize = crate::hook_request::HOOK_REQUEST_LIMIT / 2;
+
+/// `ids` cut, in order, into runs whose encoded ids fit one confirmation: a
+/// bundle of up to [`BUNDLE_LETTERS`] letters can name more than one hook
+/// request carries, and a bundle that could never be confirmed would be
+/// handed over again at every prompt.
+fn confirm_runs(ids: &[String]) -> Vec<&[String]> {
+    let mut runs = Vec::new();
+    let (mut start, mut bytes) = (0, 0);
+    for (at, id) in ids.iter().enumerate() {
+        // The id, its quotes, a backslash before each `"` and `\` in it (a
+        // valid id holds no control character, the only other escape), and
+        // its comma.
+        let size = id.len()
+            + id.bytes()
+                .filter(|byte| matches!(byte, b'"' | b'\\'))
+                .count()
+            + 3;
+        if at > start && bytes + size > CONFIRM_IDS_BYTES {
+            runs.push(&ids[start..at]);
+            (start, bytes) = (at, 0);
+        }
+        bytes += size;
+    }
+    if start < ids.len() {
+        runs.push(&ids[start..]);
+    }
+    runs
 }
 
-/// The `result` of one `hide` command run with `input` on its stdin, which
-/// must fit a pipe's buffer: it is written whole before the answer is read.
-pub(crate) fn run_cli_with_input(
-    arguments: &[&str],
-    input: &[u8],
-    deadline: Instant,
-) -> Result<serde_json::Value, Failure> {
-    if Instant::now() >= deadline {
-        return Err("deadline".into());
-    }
-    let executable = std::env::current_exe().map_err(|_| "cli")?;
-    let sibling = executable
-        .parent()
-        .ok_or("cli")?
-        .join(format!("hide{}", std::env::consts::EXE_SUFFIX));
-    // Reuse the installed sibling rather than trusting a different checkout
-    // earlier on PATH. A missing part follows the manual-inbox fallback.
-    let mut command = Command::new(sibling);
-    crate::route::apply(&mut command).map_err(Failure::from)?;
-    command
-        .args(arguments)
-        .stdin(if input.is_empty() {
-            Stdio::null()
-        } else {
-            Stdio::piped()
-        })
-        .stdout(Stdio::piped())
-        .stderr(Stdio::null());
-    let mut child = OwnedChild::spawn(&mut command).map_err(|_| "cli")?;
-    if let Some(mut stdin) = child.take_stdin() {
-        use std::io::Write as _;
-        stdin.write_all(input).map_err(|_| "cli")?;
-    }
-    let output = child
-        .capture_until(deadline, OUTPUT_LIMIT)
-        .map_err(|failure| Failure {
-            code: match failure.kind {
-                CaptureFailureKind::Deadline => "deadline",
-                CaptureFailureKind::OutputLimit { .. } => "format",
-                CaptureFailureKind::Io(_) | CaptureFailureKind::Cleanup => "cli",
-            },
-            cleanup: failure.cleanup.as_ref().map(std::io::Error::kind),
-        })?;
-    let value: serde_json::Value = serde_json::from_slice(&output.stdout).map_err(|_| "format")?;
-    if !output.status.success() || value["ok"] != true {
-        return Err(refusal_cause(value["reason"].as_str()).into());
-    }
-    value.get("result").cloned().ok_or_else(|| "format".into())
+/// The `result` of one hook request this hook sends the daemon itself
+/// ([`crate::hook_request`]), never through a `hide` it starts.
+pub fn ask(command: HookCommand, deadline: Instant) -> Result<serde_json::Value, Failure> {
+    ask_timed(command, deadline).0
 }
+
+/// [`ask`], with how long its steps took.
+pub fn ask_timed(
+    command: HookCommand,
+    deadline: Instant,
+) -> (Result<serde_json::Value, Failure>, Timing) {
+    let (answer, timing) = ask_answer(command, deadline);
+    let result = answer.and_then(|mut answer| {
+        answer
+            .get_mut("result")
+            .map(serde_json::Value::take)
+            .ok_or_else(|| "format".into())
+    });
+    (result, timing)
+}
+
+/// The daemon's whole `ok` answer to one hook request, `result` and all,
+/// with how long its steps took; an answer that is not `ok` is its cause.
+pub fn ask_answer(
+    command: HookCommand,
+    deadline: Instant,
+) -> (Result<serde_json::Value, Failure>, Timing) {
+    let (answer, timing) = answer_of(command, deadline);
+    let answer = answer.and_then(|value| {
+        if value["ok"] != true {
+            return Err(refusal_cause(value["reason"].as_str()).into());
+        }
+        Ok(value)
+    });
+    (answer, timing)
+}
+
+/// The daemon's answer to one hook request, `ok` or a refusal with its
+/// `reason`; only a request no daemon answered is the cause it stopped at.
+pub fn answer_of(
+    command: HookCommand,
+    deadline: Instant,
+) -> (Result<serde_json::Value, Failure>, Timing) {
+    if Instant::now() >= deadline {
+        return (Err("deadline".into()), Timing::default());
+    }
+    let home = match hide_platform::host::home_dir() {
+        Ok(home) => home,
+        Err(_) => return (Err("unavailable".into()), Timing::default()),
+    };
+    let state_dir = match crate::route::state_dir(&home) {
+        Ok(state_dir) => state_dir,
+        Err(cause) => return (Err(cause.into()), Timing::default()),
+    };
+    let pane_id = crate::pane::from_env();
+    let install = crate::route::pane_install();
+    let named = std::env::var_os(CAP_REF_VARIABLE).map(PathBuf::from);
+    let caller = Caller {
+        state_dir: &state_dir,
+        pane_id: pane_id.as_deref(),
+        install: install.as_deref(),
+        named: named.as_deref(),
+    };
+    let request_id = match crate::hook_request::fresh_request_id() {
+        Ok(request_id) => request_id,
+        Err(_) => return (Err("cli".into()), Timing::default()),
+    };
+    let sent = crate::hook_request::send(&caller, &request_id, command, deadline);
+    let answer = sent
+        .answer
+        .map_err(|failure| Failure::from(refusal_cause(Some(failure.reason))));
+    (answer, sent.timing)
+}
+
+/// The variable a pane names its persistent Workspace reference by, which a
+/// hook request names for its fresh proof to agree with.
+const CAP_REF_VARIABLE: &str = "HIDE_CAP_REF";
 
 /// The cause a `hide` answer that is not `ok` is recorded under, from its
 /// `reason`. A hook's request to its daemon names the step it stopped at
@@ -386,10 +521,13 @@ pub(crate) fn run_cli_with_input(
 /// its own: no daemon published its socket (`unavailable`), the record
 /// naming it is not trusted (`record`), nothing took the connection
 /// (`connect`), the request was not written whole (`unsent`), no answer came
-/// in time (`timeout`), the answer was unreadable (`answer`). A reason with
+/// in time (`timeout`), the answer was unreadable (`answer`). The pane's own
+/// installation did not answer: only another one did, refusing the pane
+/// (`other_install`), or one answered without naming the pane's, as an
+/// earlier build does (`unconfirmed`; `hook_request::install`). A reason with
 /// no cause of its own is the daemon's refusal (`refused`), and an answer
-/// without one is malformed (`format`); `cli` is kept for a `hide` that could
-/// not be run.
+/// without one is malformed (`format`); `cli` is a request the hook could not
+/// form.
 pub fn refusal_cause(reason: Option<&str>) -> &'static str {
     match reason {
         Some("ledger_unavailable") => "ledger",
@@ -403,6 +541,8 @@ pub fn refusal_cause(reason: Option<&str>) -> &'static str {
         Some("request_unsent") => "unsent",
         Some("request_timeout") => "timeout",
         Some("invalid_response") => "answer",
+        Some(crate::hook_request::install::INSTALL_UNCONFIRMED) => "unconfirmed",
+        Some(crate::hook_request::install::OTHER_INSTALL) => "other_install",
         Some(_) => "refused",
         None => "format",
     }
@@ -416,19 +556,39 @@ struct Diagnostics {
     /// before steps were kept has none.
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     step: BTreeMap<String, String>,
+    /// How long the stages of the request a cause last recorded took
+    /// (Memory's), so the record says which stage the time went to. A file
+    /// written before stages were kept has none.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    stages: BTreeMap<String, Stages>,
 }
 
-/// The fixed causes a hook may record: the delivery intake's sixteen (the
+/// When each stage of one hook request ended, in milliseconds from the start
+/// of its budget: the request began (the hook's input read), the stream to
+/// the daemon was connected, the answer was in, and the wait ended; a stage
+/// the request did not reach is absent.
+#[derive(Clone, Copy, Debug, Default, Deserialize, Serialize, Eq, PartialEq)]
+pub struct Stages {
+    pub asked_ms: u64,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub connected_ms: Option<u64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub answered_ms: Option<u64>,
+    pub ended_ms: u64,
+}
+
+/// The fixed causes a hook may record: the delivery intake's eighteen (the
 /// steps and refusals of [`refusal_cause`], `cli`, `deadline`, `format`,
-/// `confirm`, `stdout` and `session_conflict`), the spawn guard's one (`guard`: the daemon could
+/// `confirm`, `stdout` and `session_conflict`), the guards' one (`guard`: the daemon could
 /// not be asked), OpenCode's plugin's one (`plugin`: it skipped or gave up on
 /// a helper call), Memory's three (`crate::memory`: the core could not be
 /// asked, did not answer in time, or the thread asking panicked) and the
 /// guardrails' three (`guardrails`: the policy file could not be read;
 /// `guardrails_words`: a shell call named more words than are checked;
 /// `guardrails_failed`: the hook failed or ran out of time before it judged a
-/// call).
-const CAUSES: [&str; 26] = [
+/// call), the plan record's two, and an owed confirmation's two
+/// (`crate::owed`: its record could not be written, or too many panes owe).
+const CAUSES: [&str; 30] = [
     "session_conflict",
     "cli",
     "deadline",
@@ -443,6 +603,8 @@ const CAUSES: [&str; 26] = [
     "unsent",
     "timeout",
     "answer",
+    "unconfirmed",
+    "other_install",
     "refused",
     "stdout",
     "guard",
@@ -455,6 +617,8 @@ const CAUSES: [&str; 26] = [
     "guardrails_failed",
     "plan_record",
     "plan_context_format",
+    "owed_record",
+    "owed_capacity",
 ];
 
 /// Fixed causes ([`CAUSES`]), private storage and a nonblocking cross-process lock.
@@ -465,6 +629,19 @@ pub fn diagnose(home: &Path, cause: &'static str) -> bool {
 
 pub fn diagnose_failure(home: &Path, failure: &Failure) -> bool {
     let cause = failure.code;
+    // A route that does not resolve is a cause nothing can be written for:
+    // the account's folder belongs to another daemon, and a hook that
+    // recorded there would hide the failure in a file its own `doctor` never
+    // reads (engineering rule 4). The line still reaches the agent on
+    // standard error, and `Diagnosis::records_error` names the same folder,
+    // so the failure is not silent (rule 10).
+    if let Err(error) = diagnostic_path(home) {
+        eprintln!(
+            "{}",
+            serde_json::json!({"component":"delivery_hook","kind":"intake.failed","code":cause,"cause":error.to_string(),"diagnostic_saved":false})
+        );
+        return false;
+    }
     // Emit only after the cross-process claim is persisted. Damaged or
     // unavailable throttle storage cannot authorize an unthrottled log.
     if claim(home, cause) {
@@ -482,17 +659,23 @@ pub fn diagnose_failure(home: &Path, failure: &Failure) -> bool {
 /// True only when this call persisted the claim; a cause outside [`CAUSES`], a
 /// busy lock and damaged or unavailable storage all answer false.
 pub(crate) fn claim(home: &Path, cause: &str) -> bool {
-    claim_at(home, cause, None)
+    claim_at(home, cause, None, None)
 }
 
 /// [`claim`], keeping the `step` the failure stopped at beside a cause that
-/// does not name it; a step outside [`CAUSES`] answers false.
-pub(crate) fn claim_at(home: &Path, cause: &str, step: Option<&str>) -> bool {
+/// does not name it, and the request's `stages`; a step outside [`CAUSES`]
+/// answers false.
+pub(crate) fn claim_at(
+    home: &Path,
+    cause: &str,
+    step: Option<&str>,
+    stages: Option<Stages>,
+) -> bool {
     if !CAUSES.contains(&cause) || step.is_some_and(|step| !CAUSES.contains(&step)) {
         return false;
     }
-    let path = diagnostic_path(home);
     let result = (|| -> std::io::Result<bool> {
+        let path = diagnostic_path(home)?;
         let parent = path
             .parent()
             .ok_or_else(|| std::io::Error::other("diagnostic parent unavailable"))?;
@@ -517,10 +700,12 @@ pub(crate) fn claim_at(home: &Path, cause: &str, step: Option<&str>) -> bool {
         };
         if state.last.len() > CAUSES.len()
             || state.step.len() > CAUSES.len()
+            || state.stages.len() > CAUSES.len()
             || state
                 .last
                 .keys()
                 .chain(state.step.keys())
+                .chain(state.stages.keys())
                 .chain(state.step.values())
                 .any(|cause| !CAUSES.contains(&cause.as_str()))
         {
@@ -544,6 +729,9 @@ pub(crate) fn claim_at(home: &Path, cause: &str, step: Option<&str>) -> bool {
         if let Some(step) = step {
             state.step.insert(cause.to_owned(), step.to_owned());
         }
+        if let Some(stages) = stages {
+            state.stages.insert(cause.to_owned(), stages);
+        }
         let bytes = serde_json::to_vec(&state).map_err(std::io::Error::other)?;
         fs::atomic::write_file(&path, &bytes, fs::Access::Private)?;
         Ok(true)
@@ -551,16 +739,47 @@ pub(crate) fn claim_at(home: &Path, cause: &str, step: Option<&str>) -> bool {
     matches!(result, Ok(true))
 }
 
-fn diagnostic_path(home: &Path) -> PathBuf {
-    crate::counters::state_directory(home)
+/// The hook's delivery diagnostics, beside the pane records of the daemon
+/// this process asks. A state route that does not resolve is that error, so
+/// a hook never records another daemon's failure inside this one's folder
+/// (engineering rule 4); the cause then reaches the agent on standard error
+/// where [`diagnose_failure`] says it.
+fn diagnostic_path(home: &Path) -> std::io::Result<PathBuf> {
+    Ok(crate::counters::state_directory(home)?
         .parent()
         .expect("counter directory has a parent")
-        .join("delivery-diagnostics.json")
+        .join("delivery-diagnostics.json"))
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The largest bundle, of the longest ids a confirmation takes, is
+    /// confirmed in order and whole, in runs that each fit one hook request
+    /// beside its envelope; the bundles a prompt hands over in practice take
+    /// one.
+    #[test]
+    fn a_bundle_is_confirmed_in_runs_that_each_fit_one_request() {
+        let longest: Vec<String> = (0..BUNDLE_LETTERS).map(|n| format!("{n:0>256}")).collect();
+        assert!(valid_letter_ids(&longest));
+        let usual: Vec<String> = (28_000..28_000 + BUNDLE_LETTERS)
+            .map(|n| format!("letter-{n}"))
+            .collect();
+        for ids in [&longest, &usual] {
+            let runs = confirm_runs(ids);
+            assert_eq!(runs.concat(), *ids);
+            for run in &runs {
+                assert!(!run.is_empty());
+                let command =
+                    serde_json::to_string(&HookCommand::LetterConfirm { ids: run.to_vec() })
+                        .unwrap();
+                assert!(command.len() <= CONFIRM_IDS_BYTES + 64, "{}", command.len());
+            }
+        }
+        assert_eq!(confirm_runs(&usual[..20]).len(), 1);
+        assert!(confirm_runs(&[]).is_empty());
+    }
 
     #[test]
     fn a_plan_summary_this_helper_cannot_read_leaves_the_letters_to_deliver() {
@@ -569,7 +788,7 @@ mod tests {
             "ids": ["letter-1"],
             "plan_context": {"plan": null, "mission": null, "conductor": null, "later": 1},
         });
-        let intake = intake(answer).unwrap().unwrap();
+        let intake = intake(answer, None).unwrap().unwrap();
         assert_eq!(
             (intake.context.as_str(), intake.ids.as_slice()),
             ("letter body", &["letter-1".to_owned()][..])
@@ -737,10 +956,12 @@ mod tests {
         assert!(diagnose(home.path(), "cli"));
         assert!(!diagnose(home.path(), "cli"));
         assert!(diagnose(home.path(), "deadline"));
-        let stored = std::fs::read(diagnostic_path(home.path())).unwrap();
+        let stored = std::fs::read(diagnostic_path(home.path()).unwrap()).unwrap();
         let state: Diagnostics = serde_json::from_slice(&stored).unwrap();
         assert_eq!(state.last.len(), 2);
-        assert!(hide_platform::fs::private::is_private(&diagnostic_path(home.path())).unwrap());
+        assert!(
+            hide_platform::fs::private::is_private(&diagnostic_path(home.path()).unwrap()).unwrap()
+        );
         assert!(
             !String::from_utf8(stored)
                 .unwrap()
@@ -760,6 +981,8 @@ mod tests {
             ("request_unsent", "unsent"),
             ("request_timeout", "timeout"),
             ("invalid_response", "answer"),
+            ("install_unconfirmed", "unconfirmed"),
+            ("other_install", "other_install"),
         ];
         for (reason, cause) in steps {
             assert_eq!(refusal_cause(Some(reason)), cause, "{reason}");
@@ -791,10 +1014,15 @@ mod tests {
     #[test]
     fn a_step_is_kept_beside_its_cause_and_an_earlier_file_still_reads() {
         let home = tempfile::tempdir().unwrap();
-        let path = diagnostic_path(home.path());
+        let path = diagnostic_path(home.path()).unwrap();
         private::create_dir_all(path.parent().unwrap()).unwrap();
         fs::atomic::write_file(&path, br#"{"last":{"cli":0}}"#, fs::Access::Private).unwrap();
-        assert!(claim_at(home.path(), "memory_unavailable", Some("connect")));
+        assert!(claim_at(
+            home.path(),
+            "memory_unavailable",
+            Some("connect"),
+            None
+        ));
         let state: serde_json::Value =
             serde_json::from_slice(&std::fs::read(&path).unwrap()).unwrap();
         assert_eq!(state["last"]["cli"], 0);
@@ -803,7 +1031,8 @@ mod tests {
         assert!(!claim_at(
             home.path(),
             "memory_deadline",
-            Some("not a cause")
+            Some("not a cause"),
+            None
         ));
     }
 
@@ -815,7 +1044,7 @@ mod tests {
             b"{\"last\":{},\"step\":{\"memory_unavailable\":\"unknown\"}}".as_slice(),
         ] {
             let home = tempfile::tempdir().unwrap();
-            let path = diagnostic_path(home.path());
+            let path = diagnostic_path(home.path()).unwrap();
             private::create_dir_all(path.parent().unwrap()).unwrap();
             fs::atomic::write_file(&path, damaged, fs::Access::Private).unwrap();
             for _ in 0..3 {
@@ -824,7 +1053,7 @@ mod tests {
             assert_eq!(std::fs::read(&path).unwrap(), damaged);
         }
         let home = tempfile::tempdir().unwrap();
-        let path = diagnostic_path(home.path());
+        let path = diagnostic_path(home.path()).unwrap();
         private::create_dir_all(path.parent().unwrap()).unwrap();
         // A real invalid store shape fails before an output claim.
         private::create_dir_all(&path).unwrap();

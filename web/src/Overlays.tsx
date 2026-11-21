@@ -9,6 +9,7 @@ import type { TFunction } from "i18next";
 import { AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent, AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle } from "./components/ui/alert-dialog";
 import { Button } from "./components/ui/button";
 import { Hint } from "./components/ui/tooltip";
+import { Toast, TOAST_INFO_MS } from "./components/ui/toast";
 import { Input } from "./components/ui/input";
 import { useShellStore } from "./store";
 import { editorTabFor } from "./snapshot";
@@ -37,11 +38,12 @@ const CYCLE_TITLE: Record<Cycle["kind"], MessageKey> = {
 };
 
 const SURFACE_LABEL: Record<SurfaceKind, MessageKey> = {
-  herdr: "common.terminal",
+  engine: "common.terminal",
   file: "shell.surface.file",
   diff: "shell.diff",
   browser: "shell.surface.browser",
   external: "shell.surface.file",
+  card: "shell.surface.card",
 };
 
 function cycleDetail(detail: CycleDetail, t: TFunction<"translation">): string {
@@ -72,7 +74,7 @@ export function CycleOverlay() {
   const chord = commandLabel(cycle.kind === "area" || cycle.kind === "agents" ? "recent_area_tab" : cycle.kind === "panels" ? "recent_panel" : "recent_project", uiState);
   return createPortal(
     <div className="fixed inset-x-0 top-[var(--size-tab-strip)] z-30 flex justify-center" data-cycle={cycle.kind}>
-      <div role="listbox" aria-label={title} data-slot="cycle-overlay" className="w-[var(--size-pr-popover)] rounded-md border border-border bg-popover py-xs shadow-lg">
+      <div role="listbox" aria-label={title} data-slot="cycle-overlay" className="w-[var(--size-pr-popover)] rounded-md border border-border bg-popover py-xs shadow-overlay">
         <div className="flex items-center justify-between px-md pb-xxs">
           <span className="text-caption font-semibold uppercase text-muted-foreground">{title}</span>
           {chord ? <Kbd>{chord}</Kbd> : null}
@@ -126,7 +128,7 @@ function CycleMarks({ item, title }: { item: CycleItem; title: string }) {
 /** The Overview and a Project's Overview wear the marks their sidebar rows wear; an agent's row has its status mark in this slot instead (above). */
 function KindMark({ item, title }: { item: CycleItem; title: string }) {
   // A tab with no single agent keeps the neutral mark the tab strip draws (PRD agent-mark-quiet D-09).
-  if (item.kind === "herdr") return <AgentMark kind={null} />;
+  if (item.kind === "engine") return <AgentMark kind={null} />;
   if (item.kind === "project") return <FolderIcon aria-hidden="true" className="size-(--size-icon) text-muted-foreground" />;
   if (item.kind === "main") return <HouseIcon aria-hidden="true" className="size-(--size-icon) text-muted-foreground" />;
   return displayMark({ kind: item.kind, label: title });
@@ -366,48 +368,51 @@ export function ConfirmTrash({ actions }: { actions: Actions }) {
 }
 
 /**
- * A one-line notice the operator can act on: the refreshable one offers
- * `refresh_status`, and a view whose unsaved work this page cannot save
- * offers Don't save, the only close that drops it (S7 B5). It stays its own
- * row rather than a toast, because its state is one the operator still has to
- * act on (design 13).
+ * The notices the operator can act on, in the window's corner: the refreshable
+ * one offers `refresh_status`, and a view whose unsaved work this page cannot
+ * save offers Don't save, the only close that drops it (S7 B5). An info notice
+ * leaves on its own; an important one stays until it is dismissed (design 13).
  */
-export function NoticeBar({ actions }: { actions: Actions }) {
+export function NoticeToasts({ actions }: { actions: Actions }) {
   const { t } = useInterfaceTranslation();
-  const notice = useUiStore((s) => s.notice);
-  const setNotice = useUiStore((s) => s.setNotice);
-  if (!notice) return null;
-  const dontSave = notice.dontSave;
-  return (
-    <div role="status" data-notice="true" className="flex items-center gap-md border-b border-border bg-card px-md py-xs text-caption text-subtle-foreground">
-      <Hint label={notice.text} reveals>
-      <span className="min-w-0 flex-1 truncate">
+  const notices = useUiStore((s) => s.notices);
+  const dismiss = useUiStore((s) => s.dismissNotice);
+  return notices.map((notice) => {
+    const dontSave = notice.dontSave;
+    const offers = notice.refreshable || dontSave;
+    return (
+      <Toast
+        key={notice.id}
+        level={notice.level}
+        data-notice="true"
+        timeout={notice.level === "info" ? TOAST_INFO_MS : undefined}
+        onDismiss={() => dismiss(notice.id)}
+        dismissLabel={t("workspace.dismiss")}
+        actions={offers ? (
+          <>
+            {notice.refreshable ? (
+              <Button variant="text" size="inline" onClick={() => actions.refreshStatus()}>
+                {t("workspace.checkStatus")}
+              </Button>
+            ) : null}
+            {dontSave ? (
+              <Button
+                variant="text"
+                size="inline"
+                className="text-destructive"
+                data-notice-dont-save={dontSave.displayId}
+                onClick={() => actions.closeViewWithoutSaving(dontSave)}
+              >
+                {t("shell.dontSave")}
+              </Button>
+            ) : null}
+          </>
+        ) : null}
+      >
         {notice.text}
-      </span>
-      </Hint>
-      {notice.refreshable ? (
-        <Button variant="link" size="sm" className="h-auto px-none" onClick={() => actions.refreshStatus()}>
-          {t("workspace.checkStatus")}
-        </Button>
-      ) : null}
-      {dontSave ? (
-        <Button
-          variant="link"
-          size="sm"
-          className="h-auto px-none text-destructive"
-          data-notice-dont-save={dontSave.displayId}
-          onClick={() => actions.closeViewWithoutSaving(dontSave)}
-        >
-          {t("shell.dontSave")}
-        </Button>
-      ) : null}
-      <Hint label={t("workspace.dismiss")}>
-        <Button variant="ghost" size="icon-sm" aria-label={t("workspace.dismiss")} onClick={() => setNotice(null)}>
-          <XIcon />
-        </Button>
-      </Hint>
-    </div>
-  );
+      </Toast>
+    );
+  });
 }
 
 /** ⌘F over the focused pane, through the core's `pane_find`; the count comes back in the snapshot. An agent with its own find gets this bar only when the core answers `bar`. */
@@ -498,9 +503,15 @@ export function AgentCloseNotice({ actions }: { actions: Actions }) {
   const pending = useShellStore((s) => s.rest?.recent_closed?.pending);
   const item = pending?.find((item) => item.phase === "failed" || item.phase === "refused");
   if (!item) return null;
-  return <div role="status" data-agent-close-notice={item.key} className="flex items-center gap-md border-b border-border bg-card px-md py-xs text-caption text-subtle-foreground">
-    <span className="min-w-0 flex-1">{item.message}</span>
-    {item.retryable && <Button variant="link" size="sm" onClick={() => actions.retryAgentClose(item.key)}>{t("shell.retryClose")}</Button>}
-    <Button variant="ghost" size="icon-sm" aria-label={t("shell.dismissClose")} onClick={() => actions.dismissAgentClose(item.key)}><XIcon /></Button>
-  </div>;
+  return (
+    <Toast
+      level="important"
+      data-agent-close-notice={item.key}
+      onDismiss={() => actions.dismissAgentClose(item.key)}
+      dismissLabel={t("shell.dismissClose")}
+      actions={item.retryable ? <Button variant="text" size="inline" onClick={() => actions.retryAgentClose(item.key)}>{t("shell.retryClose")}</Button> : null}
+    >
+      {item.message}
+    </Toast>
+  );
 }

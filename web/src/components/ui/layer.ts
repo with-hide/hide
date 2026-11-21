@@ -4,6 +4,7 @@
 // and closes the innermost registered layer first; so every open layer
 // registers its close here, and nested layers close innermost-first.
 
+import { useDismissableLayerSurface } from "@radix-ui/react-dismissable-layer";
 import { useCallback, useEffect, useLayoutEffect, useRef, useState } from "react";
 import { restoreFocus } from "../../terminals";
 import { useUiStore } from "../../ui";
@@ -23,6 +24,18 @@ export function useEscapeLayer(open: boolean, close: () => void, base = false, i
     if (!open) return;
     return useUiStore.getState().pushEscape(() => latest.current(), base, inline);
   }, [open, base, inline]);
+}
+
+/**
+ * Marks a surface whose own press handler stops `mousedown`, such as the
+ * terminal, which keeps xterm from starting a selection, as still outside every
+ * open layer. A popover or dialog waits for the click before it closes and
+ * reads a press whose `mousedown` never reached the document as one something
+ * else took, so without this a popover over a terminal stays open when the
+ * terminal is pressed. Returns the ref to put on the surface's element.
+ */
+export function useOutsidePressSurface(): ReturnType<typeof useDismissableLayerSurface> {
+  return useDismissableLayerSurface();
 }
 
 /**

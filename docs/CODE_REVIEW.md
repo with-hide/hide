@@ -26,7 +26,7 @@ So every review covers the perspectives below, and names the perspective of each
   One decision has one owner; every caller asks that owner.
 - A new function that is most of an existing one; extend the existing one for the callers that exist now instead.
 - Two implementations of one boundary (two engines, two hosts, two systems) that each carry their own copy of a shared rule instead of calling one place.
-- A second string match, threshold or delay added for a decision that already has one: model the state instead of adding a case.
+- A fix that adds a special case for the instance in front of it (a second string match, threshold, delay or hardcoded value for a decision that already has one), above all when the same kind of bug has come back before: fix the common cause and model the state instead of adding a case.
 
 ### 3. Simplicity
 
@@ -38,21 +38,27 @@ So every review covers the perspectives below, and names the perspective of each
 ### 4. Module boundaries
 
 - One part does one job; a component that both decides and transports, or both renders and queries, is split.
-- Code outside a boundary that knows what is behind it (for Herdr, `docs/ARCHITECTURE.md` and `scripts/check-engine-boundary.py` say where that boundary is).
+- Code outside a boundary that knows what is behind it (for the pane engine, `docs/ARCHITECTURE.md` says where that boundary is).
 - New code that a planned removal will have to rewrite: a foundation laid on something already scheduled to go.
   Transition paths a removal needs are fine; a new feature built on the path being removed is not.
 
 ### 5. Ownership and limits
 
 - Whatever the change starts (a process, a thread, a timer, a watcher, a file, a connection) has an owner and ends on every exit path, and when that owner ends.
-- Whatever grows with use (a queue, a cache, a list, a count of processes) has a cap, and crossing it is a reported failure rather than a larger number.
+- Whatever grows with use (a queue, a cache, a list, a count of processes) has a cap, and it never grows past that cap.
+  At the cap, a record that keeps accumulating (agent registrations, the session archive, closed missions) makes room by dropping its oldest finished entries, with a diagnostic, rather than refusing the new one; new work is refused, as a reported failure, only when nothing finished can be dropped ([delivery.md](delivery.md), [ARCHITECTURE.md: Session archive](ARCHITECTURE.md#session-archive)).
 - Work added to a high-frequency path says its cost per input, its fan-out and its bound (`docs/PERFORMANCE_TESTING.md`).
 
 ### 6. Tests
 
 - A test asserts what a caller observes, with the expected answer taken from outside the implementation.
 - A test that costs more to keep than it returns, or that would still pass with the fix reverted, is a finding.
-- `docs/TESTING.md` owns which layer to test at and how to keep a test deterministic.
+- A bug fix comes with a test that fails without it and covers the kind of bug, not only the reported case, so the same bug cannot come back unseen; a fix without one is a finding.
+- A change that stores a device or machine id adds a step to the release-state scenario (`scripts/release_state/scenario.py`) and regenerates the folders it applies to ([TESTING.md, Upgrading a released state folder](TESTING.md#upgrading-a-released-state-folder)); without one, the first start after an upgrade can hold the device unconnected and no test sees it, which is an ordinary finding.
+- An end-to-end test names the user flow it protects and why a cheaper layer cannot observe it; a spec without both is an ordinary finding.
+- A new or changed test comes with its repeat result in the pull request's folded `Tests` block (changed tests times runs, linked to the repeat job); a test with none is an ordinary finding, because a single green run does not show a test is stable.
+- A new fixed wait, `sleep` or `timeout:` override names the state it waits for, as [Wait for state, not time](TESTING.md#wait-for-state-not-time) requires; one without it is an ordinary finding.
+- `docs/TESTING.md` owns which layer to test at, how to keep a test deterministic and the checklist for a test change ([Reviewing a pull request that adds or changes a test](TESTING.md#reviewing-a-pull-request-that-adds-or-changes-a-test)).
 
 ## Writing a finding
 
@@ -63,6 +69,8 @@ So every review covers the perspectives below, and names the perspective of each
   - **minor**: anything else worth saying.
 - Serious and ordinary findings block the merge until fixed or until the person who owns the decision accepts them in writing on the pull request.
   Minor findings do not block; the author fixes them or lists them as follow-ups.
+- In a mission, after the last review round its verification strength allows (`hide mission help`, Verification strength), the Conductor owns that decision for ordinary findings: it may accept them as follow-up issues, named on the pull request, and go on without asking the operator.
+  Serious findings still block until fixed in the node.
 - A review round after a fix reads only what changed since the round before and says whether each earlier finding is closed.
 
 ## Work spread over several pull requests
@@ -73,5 +81,7 @@ When one piece of work lands as a series, such as a mission's nodes or a stack, 
 ## Where reviews start from
 
 - `AGENTS.md` routes every reviewer here.
-- The file list a pull request's `Review` section names (runtime mutex, snapshot wire, ownership, Herdr contract, failure path, high-frequency path) is where a reviewer spends the most time; the perspectives above apply to the whole diff.
+- The file list in a pull request's folded `Risky files` block (runtime mutex, snapshot wire, ownership, engine contract, failure path, high-frequency path) is where a reviewer spends the most time; the perspectives above apply to the whole diff.
+  `contracts/peer-link.json` belongs in that block whenever it changes: a machine of another build reads it, and a field or message an older reader misreads cannot be taken back once two machines are paired ([contracts/README.md](../contracts/README.md#peer-link)).
+- The folded `Tests` block of a pull request that adds or changes a test (layer, what the test catches, repeat result, waits) is where a reviewer starts perspective 6; the reviewer checks each line against the diff rather than taking it as written.
 - `docs/TESTING.md`, `docs/VERIFICATION.md` and `docs/PERFORMANCE_TESTING.md` own the detail behind perspectives 5 and 6.

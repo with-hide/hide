@@ -114,12 +114,6 @@ export function tileHint(label: string, connected: boolean, counts: TileCounts, 
   return [label, ...(core ? [t("coreMove.railCore")] : []), ...tileFacts(connected, counts, t)].join(" · ");
 }
 
-/** The device's Home once its first start created it, from the projection it reports. */
-export function homeOf(rest: SnapshotRest | null, deviceId: string): Workspace | null {
-  const workspaces = deviceId === localDeviceId(rest) ? rest?.navigator?.workspaces : rest?.status?.remote?.find((row) => row.target_id === deviceId)?.session?.workspaces;
-  return workspaces?.find((row) => row.is_home) ?? null;
-}
-
 /**
  * The name on the sidebar's top line and the smaller word after it: the
  * device in front, named as this window calls it, then Remote for another

@@ -3,8 +3,8 @@
 //! settings-cleanup D-12, D-14; codex-daemon-apply D-04, D-05, D-11).
 //!
 //! A Codex attached to the shared daemon runs its hooks in the daemon's
-//! environment, not the pane's, so Herdr never learns that pane's session and
-//! Hide cannot read it (openai/codex#48500). Turning `daemon_auto_start` off
+//! environment, not the pane's, so Hide never learns that pane's session and
+//! cannot read it (openai/codex#48500). Turning `daemon_auto_start` off
 //! makes every Codex the operator starts by hand run in its own pane, but a
 //! daemon that is already running keeps serving each Codex that attaches to
 //! it, so the operator's confirmed request also stops that daemon

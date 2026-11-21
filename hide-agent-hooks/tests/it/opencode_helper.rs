@@ -12,12 +12,14 @@ use std::process::{Command, Stdio};
 
 use serde_json::{Value, json};
 
+use crate::stand_in_daemon::StandInDaemon;
 use crate::{programs, stand_ins};
 
 const PANE: &str = "w1:p1";
 
-/// The `hide` the helper asks: records each call beside the test's HOME and
-/// answers as Hide does for this pane.
+/// The `hide` the helper runs (a letter's confirmation) and the stand-in
+/// daemon's answers to the helper's own requests: records each call beside
+/// the test's HOME and answers as Hide does for this pane.
 const FAKE_HIDE: &str = r#"#!/bin/sh
 echo "$@" >> "${HOME%/*}/hide-calls"
 case "$1 $2" in
@@ -28,9 +30,6 @@ case "$1 $2" in
     { cat; echo; } >> "${HOME%/*}/status"
     if [ -f "${HOME%/*}/status-down" ]; then echo '{"ok":false,"reason":"hide_unavailable"}'; exit 2; fi
     echo '{"ok":true,"result":{"recorded":true}}' ;;
-  "observation --hook")
-    cat > "${HOME%/*}/observation"
-    echo '{"ok":true,"result":{"observed":true}}' ;;
   "workspace memory")
     cat > "${HOME%/*}/memory-prompt-$4"
     global=''
@@ -45,6 +44,7 @@ esac
 "#;
 
 pub(super) struct Machine {
+    daemon: StandInDaemon,
     _dir: tempfile::TempDir,
     pub(super) home: PathBuf,
     pub(super) helper: PathBuf,
@@ -67,12 +67,19 @@ impl Machine {
         let policy = home.join(".hide/agent-hooks/guardrails.json");
         std::fs::create_dir_all(policy.parent().unwrap()).unwrap();
         std::fs::write(policy, r#"{"version":1,"projects":[]}"#).unwrap();
+        let daemon = StandInDaemon::serve(&bin.join("hide"), &[("HOME", home.clone().into())]);
         Self {
+            daemon,
             _dir: dir,
             calls: root.join("hide-calls"),
             home,
             helper,
         }
+    }
+
+    /// The hooks' records folder of the daemon this machine stands in for.
+    pub(super) fn records(&self) -> PathBuf {
+        self.daemon.records()
     }
 
     fn run(&self, operation: &str, input: &Value, in_pane: bool) -> Value {
@@ -102,28 +109,6 @@ impl Machine {
         serde_json::from_slice(&output).unwrap()
     }
 
-    pub(super) fn run_installed(&self, installed: &str, input: &Value) {
-        let output = self.run_command(
-            Command::new("/bin/sh").args(["-c", installed]),
-            input.to_string().as_bytes(),
-            true,
-        );
-        assert!(
-            output.is_empty(),
-            "Post must not replace the original result"
-        );
-    }
-
-    pub(super) fn take_observation(&self) -> Value {
-        let path = self.home.parent().unwrap().join("observation");
-        let bytes = std::fs::read(&path).expect("declared observation must reach admission");
-        std::fs::remove_file(path).unwrap();
-        // One observation per recipient; every fixture names one.
-        let items: Vec<Value> = serde_json::from_slice(&bytes).unwrap();
-        assert_eq!(items.len(), 1);
-        items.into_iter().next().unwrap()
-    }
-
     fn run_command(&self, command: &mut Command, input: &[u8], in_pane: bool) -> Vec<u8> {
         command
             .env(hide_platform::host::HOME_VARIABLE, &self.home)
@@ -140,9 +125,9 @@ impl Machine {
                 command.env_remove(key);
             }
         }
-        command.env("HERDR_SOCKET_PATH", self.home.join("no-herdr.sock"));
+        self.daemon.route(command);
         if in_pane {
-            command.env("HERDR_PANE_ID", PANE).env("HERDR_ENV", "1");
+            command.env("HIDE_PANE_ID", PANE);
         }
         // Every operation ends within its own deadline, which is what bounds this wait.
         let mut child = hide_platform::process::OwnedChild::spawn(command).unwrap();
@@ -166,66 +151,6 @@ impl Machine {
             .map(str::to_owned)
             .collect()
     }
-}
-
-#[test]
-fn a_complete_opencode_native_result_reaches_admission_as_metadata() {
-    let machine = Machine::new();
-    let server = json!({"id":"cli:agent:prompt", "result":{"type":"agent_prompted",
-        "agent":{"pane_id":"w1:p2", "terminal_id":"term-target",
-            "agent_session":{"agent":"pi", "source":"herdr:pi", "kind":"path", "value":"/fixture/pi-session.jsonl"}}}});
-    let result = machine.run(
-        "observation",
-        &json!({"session_id":"ses_native",
-        "observation":{"command":"herdr agent prompt w1:p2 private-body", "call_id":"call-native",
-            "result":{"content":[{"type":"text", "text":format!("{server}\n")}]},
-            "truncated":false, "failed":false}}),
-        true,
-    );
-    assert_eq!(result["observed"], true);
-    let bytes = std::fs::read(machine.home.parent().unwrap().join("observation")).unwrap();
-    let fact = &serde_json::from_slice::<Value>(&bytes).unwrap()[0];
-    assert_eq!(fact["runtime_id"], "opencode");
-    assert_eq!(fact["session_id"], "ses_native");
-    assert_eq!(fact["call_id"], "call-native");
-    assert_eq!(fact["reason"], "complete");
-    assert_eq!(
-        fact["target"]["native_session"]["value"],
-        "/fixture/pi-session.jsonl"
-    );
-    assert!(!String::from_utf8(bytes).unwrap().contains("private-body"));
-}
-
-#[test]
-fn a_complete_omp_timed_result_reaches_admission_as_metadata() {
-    let machine = Machine::new();
-    let server = json!({"id":"cli:agent:prompt", "result":{"type":"agent_prompted",
-        "agent":{"pane_id":"w1:p2", "terminal_id":"term-target",
-            "agent_session":{"agent":"pi", "source":"herdr:pi", "kind":"path", "value":"/fixture/pi-session.jsonl"}}}});
-    let result = machine.run_as(
-        "omp",
-        "observation",
-        &json!({"version":hide_agent_hooks::pi_extension::VERSION, "session_id":"native-omp",
-        "observation":{"command":"herdr agent prompt w1:p2 private-body", "call_id":"call-native",
-            "result":{"content":[{"type":"text", "text":format!("{server}\n\n\nWall time: 0.34 seconds")}]},
-            "truncated":false, "failed":false, "asynchronous":false}}),
-        true,
-    );
-    assert_eq!(result["observed"], true);
-    let bytes = std::fs::read(machine.home.parent().unwrap().join("observation")).unwrap();
-    let fact = &serde_json::from_slice::<Value>(&bytes).unwrap()[0];
-    assert_eq!(fact["runtime_id"], "omp");
-    assert_eq!(fact["session_id"], "native-omp");
-    assert_eq!(fact["call_id"], "call-native");
-    assert_eq!(fact["reason"], "complete");
-    assert_eq!(fact["target"]["terminal_id"], "term-target");
-    assert_eq!(
-        fact["target"]["native_session"]["value"],
-        "/fixture/pi-session.jsonl"
-    );
-    let wire = String::from_utf8(bytes).unwrap();
-    assert!(!wire.contains("private-body"));
-    assert!(!wire.contains("Wall time"));
 }
 
 #[test]
@@ -321,46 +246,6 @@ fn confirm_confirms_exactly_the_letters_the_plugin_saw_stored() {
 }
 
 #[test]
-fn a_shell_call_that_starts_an_agent_through_herdr_is_refused_with_the_spawn_guards_reason() {
-    // OpenCode 1.x's shell tool and 2.x's.
-    for shell in ["bash", "shell"] {
-        let machine = Machine::new();
-        let answer = machine.run(
-            "tool",
-            &json!({"session_id": "ses_root", "tool": shell,
-                    "command": "herdr agent start --kind claude --name helper", "cwd": machine.home}),
-            true,
-        );
-        let reason = answer["deny"]
-            .as_str()
-            .unwrap_or_else(|| panic!("{shell}: {answer}"));
-        assert!(
-            reason.contains("hide agent spawn --parent here"),
-            "{reason}"
-        );
-        assert!(reason.contains("--kind claude"), "{reason}");
-        assert_eq!(machine.calls(), ["workspace bootstrap"]);
-        let log = std::fs::read_to_string(machine.home.join(".hide/agent-hooks/spawn-guard.log"))
-            .unwrap();
-        assert!(log.contains("\"runtime\":\"opencode\""), "{log}");
-        assert!(
-            !log.contains("--name helper"),
-            "the command is never logged"
-        );
-
-        // Any other shell call runs without asking.
-        let machine = Machine::new();
-        let answer = machine.run(
-            "tool",
-            &json!({"session_id": "ses_root", "tool": shell, "command": "cargo test"}),
-            true,
-        );
-        assert_eq!(answer, json!({}));
-        assert!(machine.calls().is_empty());
-    }
-}
-
-#[test]
 fn a_result_handed_to_the_system_opener_is_refused_for_opencode_pi_and_omp() {
     // OpenCode 1.x's shell tool and 2.x's, and Pi's and omp's.
     for (agent, shell) in [
@@ -387,8 +272,7 @@ fn a_result_handed_to_the_system_opener_is_refused_for_opencode_pi_and_omp() {
             "{reason}"
         );
         assert_eq!(machine.calls(), ["workspace bootstrap"]);
-        let log = std::fs::read_to_string(machine.home.join(".hide/agent-hooks/spawn-guard.log"))
-            .unwrap();
+        let log = std::fs::read_to_string(machine.records().join("spawn-guard.log")).unwrap();
         assert!(log.contains(&format!("\"runtime\":\"{agent}\"")), "{log}");
         assert!(!log.contains("shot.png"), "a path is never logged: {log}");
 
@@ -495,20 +379,22 @@ fn counts_and_turns_are_stored_under_the_session_and_reported_to_the_core() {
             .map(|line| serde_json::from_str(line).unwrap())
             .collect()
     };
+    let explore = json!({"id": "ses_child", "kind": "explore", "task": "Explore the parser",
+        "started_unix_ms": 1_791_374_410_000_u64});
     let answer = machine.run(
         "subagents",
-        &json!({"session_id": "ses_root", "working": 2, "done": 1}),
+        &json!({"session_id": "ses_root", "working": 2, "done": 1, "running": [explore.clone()]}),
         true,
     );
     assert_eq!(answer, json!({"reported": true}));
-    let stored: Value = serde_json::from_slice(
-        &std::fs::read(machine.home.join(".hide/agent-hooks/panes/w1_p1.json")).unwrap(),
-    )
-    .unwrap();
+    // The subagent the plugin names is kept as an entry, the other as a count.
+    let stored: Value =
+        serde_json::from_slice(&std::fs::read(machine.records().join("panes/w1_p1.json")).unwrap())
+            .unwrap();
     assert_eq!(
         stored,
-        json!({"sessions": [{"working": 2, "done": 1, "version": hide_agent_hooks::HOOK_VERSION,
-            "agent": "opencode", "session": "ses_root"}]})
+        json!({"sessions": [{"working": 1, "done": 1, "version": hide_agent_hooks::HOOK_VERSION,
+            "agent": "opencode", "session": "ses_root", "running": [explore.clone()]}]})
     );
     let answer = machine.run(
         "turn",
@@ -520,10 +406,11 @@ fn counts_and_turns_are_stored_under_the_session_and_reported_to_the_core() {
         reports(),
         [
             json!({"runtime": "opencode", "version": hide_agent_hooks::HOOK_VERSION,
-                "session": "ses_root", "counts": {"working": 2, "done": 1}, "session_start": false}),
+                "session": "ses_root", "counts": {"working": 2, "done": 1},
+                "subagents": [explore.clone()], "session_start": false}),
             json!({"runtime": "opencode", "version": hide_agent_hooks::HOOK_VERSION,
                 "session": "ses_root", "turn": "waiting", "counts": {"working": 2, "done": 1},
-                "session_start": false}),
+                "subagents": [explore.clone()], "session_start": false}),
         ]
     );
 
@@ -534,7 +421,9 @@ fn counts_and_turns_are_stored_under_the_session_and_reported_to_the_core() {
         true,
     );
     assert_eq!(answer, json!({"reported": false}));
-    let failure = hide_agent_hooks::report::last_failure(&machine.home).unwrap();
+    let failure = hide_agent_hooks::report::last_failure_at(&machine.records())
+        .expect("records read")
+        .expect("the failed report is recorded");
     assert_eq!(
         (
             failure.pane_id.as_str(),

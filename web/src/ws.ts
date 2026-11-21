@@ -1,13 +1,15 @@
 import { receiveAgentNotice } from "./agentNotices";
 import { configureAttachments, receiveAttachmentRefusal } from "./attachments";
 import type { AgentNotice } from "./generated/hided-ws";
-import { connectionAfterHealthFails, nextBackoff } from "./connection";
+import { BACKOFF_START_MS, connectionAfterHealthFails, nextBackoff } from "./connection";
 import { moveUnderWay, type MoveView } from "./coreMove";
 import { clearPending, receiveBytes, receiveBytesError, receiveBytesRefusal } from "./fileBytes";
+import { receiveAutomationResult, refuseWaitingAutomationCalls } from "./automationCall";
 import { isOperatorFocus, numbered } from "./operatorFocus";
 import { showProjectOpened } from "./opening";
 import { noteArrival, probeEnabled } from "./probe";
 import { useShellStore, type TerminalChunk } from "./store";
+import type { ProgramCopy } from "./clipboard";
 import { hostBridge, hostKind } from "./host";
 import type { ViewCommentAnchor } from "./snapshot";
 import { browserCommentKey, closeBrowserNote, noteBrowserComment, openBrowserNote, resetBrowserComments, type PagePlace } from "./viewFeedback";
@@ -20,6 +22,8 @@ export type DispatchFn = (event: {
 
 type Handlers = {
   onChunks: (chunks: TerminalChunk[], full: boolean) => void;
+  /** What a pane's program wrote to the clipboard, handed over once and never with the screen's output. */
+  onCopy: (copy: ProgramCopy) => void;
 };
 
 function tokenFromLocation(): string | null {
@@ -56,7 +60,7 @@ async function healthOk(): Promise<boolean> {
 export function connectShell(handlers: Handlers): { dispatch: DispatchFn; sendBinary: (bytes: Uint8Array) => void; close: () => void; drop: () => void } {
   let socket: WebSocket | null = null;
   let closed = false;
-  let backoff = 500;
+  let backoff = BACKOFF_START_MS;
   let healthFails = 0;
   let accessReported = false;
   let revision = 0;
@@ -69,6 +73,9 @@ export function connectShell(handlers: Handlers): { dispatch: DispatchFn; sendBi
   let terminalEpoch: string | null = null;
   let operatorFocusSequence = 0;
   let reconnectTimer: number | undefined;
+  // The token the current socket was opened with: the address is the page's
+  // credential, and a different one in it names a different daemon run.
+  let openedToken: string | null = null;
 
   // Decided once: the probe is a measurement seam, not a per-frame branch.
   const probing = probeEnabled();
@@ -126,6 +133,12 @@ export function connectShell(handlers: Handlers): { dispatch: DispatchFn; sendBi
     return connection === "moving" || (coreMove !== null && moveUnderWay(coreMove.state));
   };
 
+  const clearSocketState = () => {
+    clearPending("socket_closed");
+    refuseWaitingAutomationCalls();
+    resetBrowserComments();
+  };
+
   const open = () => {
     if (closed) return;
     const token = tokenFromLocation();
@@ -134,6 +147,7 @@ export function connectShell(handlers: Handlers): { dispatch: DispatchFn; sendBi
       return;
     }
     useShellStore.getState().setConnection(socket ? (held() ? "moving" : "reconnecting") : "connecting");
+    openedToken = token;
     const ws = new WebSocket(`${location.protocol === "https:" ? "wss" : "ws"}://${location.host}/ws`);
     // File bytes arrive as binary frames on this same socket; the header and
     // payload are split by the file-bytes reader, not by the snapshot store.
@@ -176,7 +190,7 @@ export function connectShell(handlers: Handlers): { dispatch: DispatchFn; sendBi
       if (frame.type === "daemon") {
         announcedCore = (frame.payload as { core_instance?: string } | undefined)?.core_instance ?? null;
       }
-      if (frame.type === "daemon" || frame.type === "mobile" || frame.type === "core_link") {
+      if (frame.type === "daemon" || frame.type === "mobile" || frame.type === "pairing" || frame.type === "core_link") {
         useShellStore.getState().applyFrame(frame);
         return;
       }
@@ -203,8 +217,16 @@ export function connectShell(handlers: Handlers): { dispatch: DispatchFn; sendBi
         showProjectOpened(frame.payload as Record<string, unknown> | undefined);
         return;
       }
+      if (frame.type === "clipboard") {
+        handlers.onCopy(frame.payload as unknown as ProgramCopy);
+        return;
+      }
       if (frame.type === "agent_notice") {
         receiveAgentNotice(frame.payload as unknown as AgentNotice);
+        return;
+      }
+      if (frame.type === "automation_result") {
+        receiveAutomationResult(frame.payload as unknown as { request_id: string; ok: boolean; value?: unknown; code?: string });
         return;
       }
       if (frame.type === "file_bytes_error") {
@@ -265,24 +287,28 @@ export function connectShell(handlers: Handlers): { dispatch: DispatchFn; sendBi
       // Only the socket that died fails its own reads; a stale socket's close
       // must not reject a read in flight on its successor.
       if (socket === ws) {
-        clearPending("socket_closed");
-        resetBrowserComments();
+        clearSocketState();
       }
-      if (closed) return;
+      // A socket a newer one replaced (a new token in the address) ends
+      // without a say in the window's state: its refusal is the old token's.
+      if (closed || socket !== ws) return;
       if (event.code >= 4001 && event.code <= 4004) {
         useShellStore.getState().setConnection("gone", true);
         return;
       }
-      void scheduleReconnect();
+      void scheduleReconnect(ws);
     });
     ws.addEventListener("error", () => {
       ws.close();
     });
   };
 
-  const scheduleReconnect = async () => {
+  const scheduleReconnect = async (ended: WebSocket) => {
     useShellStore.getState().setConnection(held() ? "moving" : "reconnecting");
     const ok = await healthOk();
+    // A new token in the address opened a connection while the health read
+    // was out: that one is the window's now, and a second would race it.
+    if (closed || socket !== ended) return;
     healthFails = ok ? 0 : healthFails + 1;
     const next = connectionAfterHealthFails(healthFails);
     if (next === "gone") {
@@ -293,6 +319,26 @@ export function connectShell(handlers: Handlers): { dispatch: DispatchFn; sendBi
     reconnectTimer = window.setTimeout(open, backoff);
   };
 
+  // A daemon that restarts gives its next run a new token, and the address
+  // that carries it is changed under a page that is already open (the host's
+  // next attach, a link followed in the same window). The new token is a new
+  // connection, from any state the old one ended in: a page the old token's
+  // refusal or a long outage left gone is drawn again, without a reload.
+  const followToken = () => {
+    const token = tokenFromLocation();
+    if (closed || !token || token === openedToken) return;
+    if (reconnectTimer) window.clearTimeout(reconnectTimer);
+    backoff = BACKOFF_START_MS;
+    healthFails = 0;
+    const replaced = socket;
+    // Retire reads owned by the old socket before a successor can start
+    // any. Its eventual close must leave the successor's reads alone.
+    clearSocketState();
+    open();
+    replaced?.close();
+  };
+  window.addEventListener("hashchange", followToken);
+
   open();
   configureAttachments({ dispatch, sendBinary });
   return {
@@ -302,6 +348,7 @@ export function connectShell(handlers: Handlers): { dispatch: DispatchFn; sendBi
     drop: () => socket?.close(),
     close: () => {
       closed = true;
+      window.removeEventListener("hashchange", followToken);
       if (reconnectTimer) window.clearTimeout(reconnectTimer);
       socket?.close();
     },

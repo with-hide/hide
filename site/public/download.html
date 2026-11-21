@@ -1,0 +1,88 @@
+<!doctype html>
+<html lang="en" class="no-js">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <meta name="description" content="Download hide for macOS on Apple Silicon, Windows x64 and Linux x64: every installer of the latest stable release with its SHA-256 checksum, and the iPhone app.">
+    <meta name="theme-color" content="#0d191b" media="(prefers-color-scheme: dark)">
+    <meta name="theme-color" content="#f4f4f6" media="(prefers-color-scheme: light)">
+    <meta property="og:type" content="website">
+    <meta property="og:title" content="hide · Download">
+    <meta property="og:description" content="Every installer of the latest stable hide release, with its checksum.">
+    <meta property="og:image" content="https://withhide.dev/assets/og-ade.png">
+    <meta property="og:image:width" content="1200">
+    <meta property="og:image:height" content="630">
+    <meta name="twitter:card" content="summary_large_image">
+    <link rel="canonical" href="https://withhide.dev/download">
+    <title>hide · Download</title>
+    <link rel="icon" type="image/png" href="./assets/hide-mark.png">
+    <link rel="preload" as="font" href="./assets/fonts/BricolageGrotesque-Variable.woff2" type="font/woff2" crossorigin>
+    <link rel="stylesheet" href="./styles.css">
+    <script>document.documentElement.classList.remove("no-js");</script>
+    <script type="module" src="./downloads.js"></script>
+    <script>window.va = window.va || function () { (window.vaq = window.vaq || []).push(arguments); };</script>
+    <script defer src="/_vercel/insights/script.js"></script>
+  </head>
+  <body>
+    <a class="skip-link" href="#main">Skip to content</a>
+    <header class="site-header">
+      <div class="wrap">
+        <a class="wordmark" href="./" aria-label="hide home">
+          <picture>
+            <source srcset="./assets/hide-icon.svg" media="(prefers-reduced-motion: reduce)">
+            <img src="./assets/hide-icon-blinking.svg" width="34" height="34" alt="">
+          </picture>
+          <span>hide</span>
+        </a>
+        <nav aria-label="Main navigation">
+          <a class="nav-extra" href="./#conductor">Product</a>
+          <a class="nav-extra" href="./#pricing">Pricing</a>
+          <a class="nav-extra" href="./#faq">FAQ</a>
+          <a href="/docs/">Docs</a>
+          <a class="nav-extra" href="https://github.com/with-hide/hide">GitHub</a>
+          <a class="nav-discord" href="https://discord.gg/h6zme5kybD" aria-label="Join the hide Discord"><svg class="discord-mark" viewBox="0 0 24 24" width="18" height="18" aria-hidden="true"><path fill="currentColor" d="M20.317 4.3698a19.7913 19.7913 0 00-4.8851-1.5152.0741.0741 0 00-.0785.0371c-.211.3753-.4447.8648-.6083 1.2495-1.8447-.2762-3.68-.2762-5.4868 0-.1636-.3933-.4058-.8742-.6177-1.2495a.077.077 0 00-.0785-.037 19.7363 19.7363 0 00-4.8852 1.515.0699.0699 0 00-.0321.0277C.5334 9.0458-.319 13.5799.0992 18.0578a.0824.0824 0 00.0312.0561c2.0528 1.5076 4.0413 2.4228 5.9929 3.0294a.0777.0777 0 00.0842-.0276c.4616-.6304.8731-1.2952 1.226-1.9942a.076.076 0 00-.0416-.1057c-.6528-.2476-1.2743-.5495-1.8722-.8923a.077.077 0 01-.0076-.1277c.1258-.0943.2517-.1923.3718-.2914a.0743.0743 0 01.0776-.0105c3.9278 1.7933 8.18 1.7933 12.0614 0a.0739.0739 0 01.0785.0095c.1202.099.246.1981.3728.2924a.077.077 0 01-.0066.1276 12.2986 12.2986 0 01-1.873.8914.0766.0766 0 00-.0407.1067c.3604.698.7719 1.3628 1.225 1.9932a.076.076 0 00.0842.0286c1.961-.6067 3.9495-1.5219 6.0023-3.0294a.077.077 0 00.0313-.0552c.5004-5.177-.8382-9.6739-3.5485-13.6604a.061.061 0 00-.0312-.0286zM8.02 15.3312c-1.1825 0-2.1569-1.0857-2.1569-2.419 0-1.3332.9555-2.4189 2.157-2.4189 1.2108 0 2.1757 1.0952 2.1568 2.419 0 1.3332-.9555 2.4189-2.1569 2.4189zm7.9748 0c-1.1825 0-2.1569-1.0857-2.1569-2.419 0-1.3332.9554-2.4189 2.1569-2.4189 1.2108 0 2.1757 1.0952 2.1568 2.419 0 1.3332-.946 2.4189-2.1568 2.4189Z"/></svg><span>Discord</span></a>
+        </nav>
+      </div>
+    </header>
+
+    <main id="main" class="legal-main">
+      <div class="wrap download-page">
+        <div class="legal-head">
+          <p class="label">Download</p>
+          <h1>Download hide</h1>
+          <p class="lead">For your computer and your phone. Each computer file comes with its SHA-256 checksum, and hide updates itself after you install it.</p>
+        </div>
+        <div class="downloads">
+          <div class="downloads-status" id="release-status" role="status" aria-live="polite" aria-atomic="true">
+            <p id="release-title">Enable JavaScript to see each platform's files, or open the latest release on GitHub.</p>
+            <button class="text-button" id="retry-release" type="button" hidden>Check again</button>
+          </div>
+          <div class="card-groups" id="downloads"></div>
+          <noscript><p class="quiet"><a href="https://github.com/with-hide/hide/releases/latest">Latest release on GitHub</a> · <a href="https://apps.apple.com/app/hide-remote-coding-agents/id6832780181">iPhone app on the App Store</a> · Android app coming to Google Play</p></noscript>
+        </div>
+        <p class="after-install"><span>After you install</span><a href="/docs/start/practice/">Try the practice screen</a><a href="/docs/start/first-10-minutes/">Follow the first 10 minutes</a><a href="/docs/reference/faq/#how-do-i-connect-my-phone">Connect your phone</a></p>
+        <div class="fallback-links">
+          <a class="text-link" href="https://github.com/with-hide/hide/releases">Every release on GitHub <span aria-hidden="true">↗</span></a>
+          <a class="text-link" href="https://github.com/with-hide/hide/blob/main/docs/INSTALL.md#build-and-install-from-source">Build from source <span aria-hidden="true">↗</span></a>
+        </div>
+      </div>
+    </main>
+
+    <footer class="site-footer">
+      <div class="wrap">
+        <span>hide · The ADE for humans</span>
+        <p class="footer-contact">Contact, Enterprise and teams: <a href="mailto:hello@withhide.dev">hello@withhide.dev</a></p>
+        <nav aria-label="More about hide">
+          <a href="./privacy">Privacy</a>
+          <a href="./support">Support</a>
+          <a href="https://github.com/with-hide/hide">Source</a>
+          <a href="/docs/">Docs</a>
+          <a href="/docs/start/overview/#pick-a-way-in">Install</a>
+          <a href="/download">Download</a>
+          <a href="https://discord.gg/h6zme5kybD">Discord</a>
+          <a href="https://github.com/with-hide/hide/blob/main/LICENSE">FSL license</a>
+        </nav>
+      </div>
+    </footer>
+  </body>
+</html>

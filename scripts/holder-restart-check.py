@@ -37,8 +37,8 @@ Usage: holder-restart-check.py --bin <folder with holder_node and hide-holder>
 On Windows the binaries folder also holds the pinned ConPTY runtime a holder
 runs on, in `holder-conpty` (`scripts/fetch-conpty.py --out
 <folder>/holder-conpty`), where the node finds it beside its holder as hided
-does in the app. Herdr is
-never started. Each CLI is found on PATH, where
+does in the app. No engine is
+started. Each CLI is found on PATH, where
 scripts/install-agent-clis.py put it.
 """
 
@@ -132,7 +132,6 @@ class Node:
         # The runner's environment less any Herdr, Hide or provider
         # variable: a holder hands the node's environment to its program.
         env = {**clean_env(), **home_env(home)}
-        env["HIDE_DEV_PANE_HOLDER"] = "1"
         argv = [str(program), "node", "--home", str(home), "--state", str(state)]
         if WINDOWS:
             # Through libuv's job, as the desktop app starts its daemon: a
@@ -370,7 +369,7 @@ def same_processes(before, after):
 
 def cell(row, binaries, run):
     """One agent's cell: its record, whatever happens."""
-    kind = row["herdr_kind"]
+    kind = row["agent_cli"]
     record = {"agent": row["id"], "kind": kind, "system": system(), "result": FAIL}
     program = ci.executable(None, kind)
     if not program:

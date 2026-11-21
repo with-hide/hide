@@ -13,7 +13,7 @@ import { AgentsTab } from "../settings/AgentsTab";
 import type { KitAgent, KitFeatureId, KitPiece } from "../snapshot";
 import { useShellStore } from "../store";
 
-const FEATURES: KitFeatureId[] = ["skill", "guidance", "letters", "bell", "memory", "spawn_guard", "herdr_integration", "sleep", "fork", "start", "titles"];
+const FEATURES: KitFeatureId[] = ["skill", "guidance", "letters", "bell", "memory", "sleep", "fork", "start", "titles"];
 const ok: KitPiece = { state: "installed", why: null, location: null };
 
 const agent = (id: string, label: string, over: Partial<KitAgent> = {}): KitAgent => ({
@@ -24,7 +24,6 @@ const agent = (id: string, label: string, over: Partial<KitAgent> = {}): KitAgen
   chosen: true,
   skill: ok,
   hook: ok,
-  herdr: ok,
   partial: false,
   features: FEATURES.map((feature) => ({ id: feature, supported: true })),
   sessions: 0,
@@ -66,6 +65,7 @@ export function AgentsSettingsScene({ params }: { params: URLSearchParams }) {
       rest: {
         status: state === "definitions" ? { agent_definitions: LEFT_OUT } : {},
         navigator: {
+          siblings_shown: 5,
           focused_device_id: "local",
           devices: [{ id: "local", kind: "local", label: null, machine_name: "Mac", state: "local", kit: { unavailable: null, busy: false, components: [{ id: "cli", state: "installed" }], agents: agents(state), offers_reinstall: false, shares_account_with: null } }],
         },

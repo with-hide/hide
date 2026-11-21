@@ -27,7 +27,7 @@ slow-timeout = { period = "60s", terminate-after = 2 }
 [profile.ci.junit]
 path = "junit.xml"
 
-# The remote mailbox test drives two Herdr servers over SSH. It took 38 to
+# The remote mailbox test drives two nodes' pane holders over SSH. It took 38 to
 # 63 s on the macOS runner in 19 green runs, and 36.7 s on the Linux runner
 # once the fixture's SSH server set TCP_NODELAY (one run, so the guard is sized
 # from the macOS spread); before that its install alone passed the product's
@@ -37,21 +37,15 @@ path = "junit.xml"
 filter = 'binary_id(hided::it) & test(/^remote_delivery::/)'
 slow-timeout = { period = "60s", terminate-after = 4 }
 
-# The remote-core journeys (hided/tests/it/remote_core.rs) start two hided
-# and two Herdr servers over SSH; several wait out a 30 to 60 s bound of the
-# product on purpose (a node's link returning, a screen held while its core
-# is away), so the default guard would end a healthy journey at 120 s on a
-# loaded runner. They get the remote mailbox's 240 s, and two hung attempts
-# still end inside their step's 10-minute limit.
+# A Windows core's ssh walks (hided/tests/it/windows_ssh_device.rs) send
+# this build's programs over the runner's loopback ssh, uncompressed through
+# `ssh.exe`'s input, at 4 to 10 MiB/s (300 MiB for the Linux walk). In their
+# first runs, both at once on the `windows wsl` lane (2026-11-05), they took
+# 53 to 84 s, of which the upload took 31 to 73 s; the default guard ends a
+# test at 120 s. They get the remote mailbox's 240 s, and two hung attempts
+# still end inside their step's 15-minute limit.
 [[profile.ci.overrides]]
-filter = 'binary_id(hided::it) & test(/^remote_core::/)'
-slow-timeout = { period = "60s", terminate-after = 4 }
-
-# The core-move journeys (hided/tests/it/core_move.rs) run the remote-core
-# shape and wait out the move's own bounds (a 30 s link, a 60 s pending
-# lease), so they get the same guard.
-[[profile.ci.overrides]]
-filter = 'binary_id(hided::it) & test(/^core_move::/)'
+filter = 'binary_id(hided::it) & test(/^windows_ssh_device::/)'
 slow-timeout = { period = "60s", terminate-after = 4 }
 
 # On Windows this test prints the job objects the run had (the test's own job,
@@ -59,6 +53,15 @@ slow-timeout = { period = "60s", terminate-after = 4 }
 # line even when the test passes, as the record of what the runner's jobs are.
 [[profile.ci.overrides]]
 filter = 'binary_id(hide-platform::it) & test(=resident::a_resident_child_keeps_nothing_of_its_starter)'
+success-output = "final"
+
+# A guest's hook entries cost every agent event on its host one start of the
+# guest's helper. The Windows lane prints what that start took, with and
+# without the shell Codex runs a hook in; the guest cap
+# (hide_peer_protocol::launch::MAX_GUEST_NODES) was set from those lines, so
+# CI shows them on a passing run too.
+[[profile.ci.overrides]]
+filter = 'binary_id(hide-agent-hooks::it) & (test(=windows_hook_command::a_guests_entries_say_nothing_and_cost_one_start_each) | test(=other_install::a_guests_entries_say_nothing_anywhere_but_in_that_guests_panes))'
 success-output = "final"
 
 # The pane holder's memory and idle tests print what each system charged a

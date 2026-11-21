@@ -12,15 +12,18 @@ import type { AgentRow, RaisedAsk } from "../snapshot";
 import { statusText } from "../agentStatus";
 import { machineName } from "../screenMachine";
 import { useShellStore } from "../store";
-import { SIBLINGS_SHOWN } from "../sidebarTree";
+import { siblingsShown } from "../sidebarTree";
 import { useUiStore } from "../ui";
 import { askWhat, AskLine, DescendantMark, TreeChevron, TreeRails, treePlaces } from "./agent-tree";
 import { AgentPrHover } from "./pr-mark";
 import { AgentRecordTitle } from "./agent-record-title";
 import { rowPulls } from "../prMark";
 import { DeviceChip } from "./device-chip";
+import { HumanTurnDone, HumanTurnLine } from "./human-turn";
+import type { Actions } from "../actions";
 import { Elapsed } from "./elapsed";
 import { StatusMark } from "./status-mark";
+import { SubagentLine, SubagentMoreLine, subagentsOf } from "./subagent-row";
 import { Command, CommandGroup, CommandItem, CommandList, CommandSeparator } from "./ui/command";
 import { Popover, PopoverContent, PopoverTrigger } from "./ui/popover";
 import { Hint } from "./ui/tooltip";
@@ -66,6 +69,7 @@ export function AgentTreePopover({
   returnFocus,
   trigger,
   triggerLabel,
+  actions = null,
 }: {
   parent: AgentRow;
   agents: readonly AgentRow[];
@@ -76,6 +80,8 @@ export function AgentTreePopover({
   returnFocus: () => void;
   trigger: ReactNode;
   triggerLabel: string;
+  /** Done on a descendant's person's turn (PRD ask-human B14); without it the tree draws none. */
+  actions?: Pick<Actions, "finishHumanTurn" | "openStoreAsk" | "copyText"> | null;
 }) {
   const { t } = useInterfaceTranslation();
   const [open, setOpen] = useState(false);
@@ -93,6 +99,7 @@ export function AgentTreePopover({
   const [expanded, setExpanded] = useState<Set<string>>(() => new Set());
   const [shownAll, setShownAll] = useState<Set<string>>(() => new Set());
   const [finishedShown, setFinishedShown] = useState<Set<string>>(() => new Set());
+  const shownLimit = useShellStore((state) => siblingsShown(state.rest));
   const relation = useUiStore((state) => state.relation);
   const outcome = useShellStore((state) => state.rest?.status?.pane_focus_request);
   const tracked = relation?.sourcePaneId === parent.pane_id && relation.targetPaneId === opening ? relation : null;
@@ -100,7 +107,11 @@ export function AgentTreePopover({
   const list = useRef<HTMLDivElement>(null);
   const afterClose = useRef<(() => void) | null>(null);
   const directs = childrenOf(root, byPane);
-  const empty = directs.length === 0;
+  // The agent's own subagents follow its children, as lines with nothing to
+  // press (docs/UI_BEHAVIOR.md, Subagents).
+  const subagents = root.subagents ?? 0;
+  const { rows: subagentRows, more: subagentsMore } = subagentsOf(root);
+  const empty = directs.length === 0 && subagents === 0;
 
   useEffect(() => {
     if (!open) return;
@@ -137,14 +148,14 @@ export function AgentTreePopover({
     const kids = siblings.filter((kid) => !finishedAndRead(kid) || asks.has(kid.pane_id));
     const finished = siblings.filter((kid) => !kids.includes(kid));
     const all = shownAll.has(of.pane_id);
-    const shown = [...(all ? kids : kids.slice(0, SIBLINGS_SHOWN)), ...(finishedShown.has(of.pane_id) ? finished : [])];
+    const shown = [...(all ? kids : kids.slice(0, shownLimit)), ...(finishedShown.has(of.pane_id) ? finished : [])];
     for (const kid of shown) {
       const hasChildren = (kid.lineage_child_pane_ids ?? []).some((id) => byPane.has(id));
       const isOpen = depth < 2 && hasChildren && expanded.has(kid.pane_id);
       lines.push({ kind: "agent", agent: kid, depth, hasChildren, open: isOpen });
       if (isOpen) walk(kid, depth + 1);
     }
-    const hidden = kids.length - Math.min(kids.length, all ? kids.length : SIBLINGS_SHOWN);
+    const hidden = kids.length - Math.min(kids.length, all ? kids.length : shownLimit);
     if (hidden > 0) lines.push({ kind: "more", parent: of.pane_id, depth, count: hidden });
     if (finished.length > 0 && !finishedShown.has(of.pane_id)) lines.push({ kind: "finished", parent: of.pane_id, depth, count: finished.length });
   };
@@ -205,10 +216,18 @@ export function AgentTreePopover({
           <div className="flex items-center gap-sm border-b border-border px-md py-sm">
             <AgentMark kind={root.agent_kind} />
             <AgentRecordTitle agent={root} className="text-body font-medium text-foreground" />
-            <span className="flex shrink-0 items-center gap-xxs text-muted-foreground" aria-label={t("agentSessions.tree.children", { count: directs.length })}>
-              <ListTreeIcon aria-hidden="true" className="size-(--size-icon-sm)" />
-              <span aria-hidden="true" className="font-mono text-caption">{directs.length}</span>
-            </span>
+            {directs.length > 0 ? (
+              <span className="flex shrink-0 items-center gap-xxs text-muted-foreground" aria-label={t("agentSessions.tree.children", { count: directs.length })}>
+                <ListTreeIcon aria-hidden="true" className="size-(--size-icon-sm)" />
+                <span aria-hidden="true" className="font-mono text-caption">{directs.length}</span>
+              </span>
+            ) : null}
+            {subagents > 0 ? (
+              <span className="flex shrink-0 items-center gap-xxs text-muted-foreground" aria-label={t("agents.subagents.working", { count: subagents })}>
+                <span aria-hidden="true" className="size-(--size-subagent-dot) rounded-full bg-agent-working opacity-(--opacity-secondary)" />
+                <span aria-hidden="true" className="font-mono text-caption">{subagents}</span>
+              </span>
+            ) : null}
           </div>
           <CommandList>
             <CommandGroup>
@@ -236,6 +255,7 @@ export function AgentTreePopover({
                     place={places[index]!}
                     ask={asks.get(line.agent.pane_id) ?? null}
                     pending={progress?.phase === "pending"}
+                    actions={actions}
                     onToggle={() => (line.depth >= 2 ? setRootId(line.agent.pane_id) : toggle(line.agent.pane_id))}
                     onOpen={() => openChild(line.agent)}
                     onOpenAsk={(ask) => {
@@ -246,6 +266,21 @@ export function AgentTreePopover({
                 ),
               )}
             </CommandGroup>
+            {subagents > 0 ? (
+              // Options the keyboard passes over and a press does nothing on: a subagent has no pane to open.
+              <CommandGroup heading={t("agents.subagents.section", { count: subagents })} data-agent-tree-subagents={subagents}>
+                {subagentRows.map((row) => (
+                  <CommandItem key={`subagent:${row.id}`} value={`subagent:${row.id}`} disabled className="py-none">
+                    <SubagentLine row={row} className="min-w-0 flex-1" />
+                  </CommandItem>
+                ))}
+                {subagentsMore > 0 ? (
+                  <CommandItem value="subagent:more" disabled className="py-none">
+                    <SubagentMoreLine count={subagentsMore} listed={subagentRows.length} className="min-w-0 flex-1" />
+                  </CommandItem>
+                ) : null}
+              </CommandGroup>
+            ) : null}
             {onTask ? (
               <>
                 <CommandSeparator />
@@ -286,6 +321,7 @@ function TreeItem({
   place,
   ask,
   pending,
+  actions,
   onToggle,
   onOpen,
   onOpenAsk,
@@ -295,6 +331,7 @@ function TreeItem({
   place: ReturnType<typeof treePlaces>[number];
   ask: RaisedAsk | null;
   pending: boolean;
+  actions: Pick<Actions, "finishHumanTurn" | "openStoreAsk" | "copyText"> | null;
   onToggle: () => void;
   onOpen: () => void;
   onOpenAsk: (ask: RaisedAsk) => void;
@@ -318,7 +355,9 @@ function TreeItem({
   const askUnavailable = !deviceConnected(rest, askDevice);
   const branch = child.state.branch_badge;
   // The same second line a tree row draws: a block's cause, a waiting ring's 대기 line, a sleep or unknown state (status-marks B29, B31).
-  const childLine = ask || unavailable ? null : treeLine(child);
+  // A child that declared a person's turn says it and keeps Done here (PRD ask-human B14).
+  const human = unavailable ? null : child.human_turn ?? null;
+  const childLine = ask || unavailable || human ? null : treeLine(child);
   const minutes = ask?.since_unix_ms == null ? null : Math.max(0, Math.floor((Date.now() - ask.since_unix_ms) / 60_000));
   return (
     <CommandItem
@@ -335,7 +374,7 @@ function TreeItem({
       <TreeChevron name={child.identity_label} open={line.hasChildren ? line.open : null} onToggle={onToggle} hangs={line.depth > 1} popup={line.depth >= 2} data-tree-chevron={child.pane_id} />
       <span className="flex min-w-0 flex-1 flex-col gap-xxs py-xs pl-xs">
         <span className="flex min-h-(--size-sidebar-line) min-w-0 items-center gap-xs">
-          <StatusMark mark={unavailable ? null : child.mark} className={unavailable ? undefined : markTone(child)} />
+          <StatusMark mark={unavailable ? null : child.mark} human={child.human_turn !== undefined} className={unavailable ? undefined : markTone(child)} />
           <AgentMark kind={child.agent_kind} />
           <AgentRecordTitle agent={child} className="text-foreground" />
           <AgentPrHover agent={child} pulls={rowPulls(child, "own")} />
@@ -344,7 +383,7 @@ function TreeItem({
         </span>
         {ask && !unavailable ? (
           <span className="flex min-w-0 items-center gap-xs">
-            <AskLine ask={{ verb: ask.verb, what: ask.what, more: 0, subject: ask.subject }} className="flex-1" />
+            <AskLine ask={{ verb: ask.verb, what: ask.what, more: 0, subject: ask.subject }} copy={human ? actions?.copyText : undefined} className="flex-1" />
             <button
               type="button"
               disabled={pending || askUnavailable}
@@ -359,6 +398,8 @@ function TreeItem({
             </button>
           </span>
         ) : null}
+        {human && !ask ? <HumanTurnLine turn={human} copy={actions?.copyText} /> : null}
+        {human && actions ? <HumanTurnDone turn={human} actions={actions} /> : null}
         {childLine ? <RowLineText data-tree-line={childLine.mode} parts={lineParts(t, child, childLine)} className={cn("text-caption", lineTone(childLine, child))} /> : null}
         {ask?.unreceived_by && minutes !== null && !unavailable ? (
           <span className="truncate text-caption text-muted-foreground">{t("agentSessions.unreceived", { name: ask.unreceived_by, minutes })}</span>

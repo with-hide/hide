@@ -22,6 +22,7 @@ fn press(action: MouseAction) -> ClientMessage {
         col: 3,
         row: 4,
         modifiers: Modifiers::default(),
+        outside: None,
     })
 }
 
@@ -172,7 +173,7 @@ fn questions_are_answered_once_each_in_order_with_no_node_connected() {
         holder.read(5).0.contains("asked")
     });
     script.wait_heard(
-        b"\x1b[1;11R\x1b[?62;22c\x1b[8;24;80t\x1b]10;rgb:ffff/ffff/ffff\x07\
+        b"\x1b[1;11R\x1b[?62;22c\x1b[8;24;80t\x1b[4;480;800t\x1b]10;rgb:ffff/ffff/ffff\x07\
           \x1bP1+r544E=787465726D2D323536636F6C6F72\x1b\\",
     );
 
@@ -182,7 +183,7 @@ fn questions_are_answered_once_each_in_order_with_no_node_connected() {
     connection.wait_closed();
     script.go(2);
     script.wait_heard(
-        b"\x1b[1;11R\x1b[?62;22c\x1b[8;24;80t\x1b]10;rgb:ffff/ffff/ffff\x07\
+        b"\x1b[1;11R\x1b[?62;22c\x1b[8;24;80t\x1b[4;480;800t\x1b]10;rgb:ffff/ffff/ffff\x07\
           \x1bP1+r544E=787465726D2D323536636F6C6F72\x1b\\\
           \x1b]10;rgb:1010/2020/3030\x07\x1b]10;rgb:abab/cdcd/efef\x07\
           \x1b]10;rgb:1010/2020/3030\x07",
@@ -261,4 +262,49 @@ fn a_color_question_is_answered_once_through_conpty() {
     let heard = String::from_utf8_lossy(&script.heard()).into_owned();
     eprintln!("a color question heard back {heard:?}");
     assert_eq!(heard.matches("11;rgb:").count(), 1, "{heard:?}");
+}
+
+/// A submission is written text first: its text,
+/// then its submit no sooner than its gap after, and input sent behind it
+/// reaches the program after the submit, never between the two.
+#[cfg(unix)]
+#[test]
+fn a_submission_writes_its_submit_a_gap_after_its_text_and_holds_the_input_behind_it() {
+    use hide_holder_protocol::{Submit, SubmitPart};
+    use std::time::{Duration, SystemTime};
+    let home = Home::new();
+    let script = Script::new(&home, vec![b"\x1b[H\x1b[2Jready".to_vec()]);
+    let holder = script.start(&home);
+    let mut connection = holder.open_accepting(vec![Capability::Screen, Capability::Keys]);
+    connection.wait_for_drawn("ready");
+    let gap = Duration::from_millis(300);
+    connection
+        .send(ClientMessage::Submit(Submit {
+            text: vec![
+                SubmitPart::Input(b"hel".to_vec()),
+                SubmitPart::Input(b"lo".to_vec()),
+            ],
+            gap,
+            enter: SubmitPart::Keys(vec![Key::Enter]),
+        }))
+        .unwrap();
+    connection
+        .send(ClientMessage::Input(b"!".to_vec()))
+        .unwrap();
+    script.wait_heard(b"hello\r!");
+    // The holder logs when it had written the text, before the gap began:
+    // the program reads the submit a gap after that, never with the text.
+    holder.wait_logged("holder.submitted", 1, &mut connection);
+    let line = holder
+        .log_text()
+        .lines()
+        .find(|line| line.contains("\"event\":\"holder.submitted\""))
+        .map(|line| serde_json::from_str::<serde_json::Value>(line).unwrap())
+        .unwrap();
+    let text_at =
+        SystemTime::UNIX_EPOCH + Duration::from_millis(line["text_at_unix_ms"].as_u64().unwrap());
+    assert!(
+        script.heard_at(5) >= text_at + gap,
+        "the submit came less than a gap after its text was written"
+    );
 }

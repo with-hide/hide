@@ -40,6 +40,7 @@
 mod schema;
 mod v2;
 
+use crate::account::Accounts;
 use std::path::{Path, PathBuf};
 
 use rusqlite::{Connection, OptionalExtension, params};
@@ -81,65 +82,71 @@ const TITLE_LIMIT_CHARS: i64 = 512;
 /// The longest `directory` a session row may name; a longer one is no checkout.
 const DIRECTORY_LIMIT_BYTES: i64 = 4096;
 
-/// Where OpenCode keeps its data: a folder under a root Hide confines every
-/// read to. OpenCode takes its data folder from `XDG_DATA_HOME` when that is
-/// set (`xdg-basedir`, in 1.x and 2.x; proven live on 2.0.29), so that is the
-/// node's own value ([`crate::environment`]); otherwise it is under `home`.
+/// Where OpenCode keeps its data: its database in a folder under a root
+/// Hide confines every read to. The database is the `sessions` place of the
+/// account read (`crate::account`): the default account's follows
+/// `XDG_DATA_HOME` when the node has one (`xdg-basedir`, in 1.x and 2.x;
+/// proven live on 2.0.29), and a profile's is in the folder it names; the
+/// root is the account's anchor.
 struct Place {
     root: PathBuf,
-    folder: &'static str,
+    folder: PathBuf,
+    database: PathBuf,
 }
 
-fn place(home: &Path) -> Result<Place, String> {
-    match crate::environment::data_home() {
-        Err(reason) => Err(reason.to_owned()),
-        Ok(Some(data)) => Ok(Place {
-            root: data.to_owned(),
-            folder: "opencode",
-        }),
-        Ok(None) => Ok(Place {
-            root: home.to_owned(),
-            folder: ".local/share/opencode",
-        }),
-    }
+fn place(accounts: &Accounts) -> Result<Place, String> {
+    let account = accounts
+        .root(crate::Agent::OpenCode)
+        .map_err(str::to_owned)?
+        .expect("OpenCode declares its database");
+    let folder = account
+        .place
+        .parent()
+        .and_then(|folder| folder.strip_prefix(&account.anchor).ok())
+        .expect("OpenCode's database is below its data folder")
+        .to_path_buf();
+    Ok(Place {
+        root: account.anchor.clone(),
+        folder,
+        database: account.place.clone(),
+    })
 }
 
 /// OpenCode's database, or why it cannot be named.
-pub(crate) fn database_path(home: &Path) -> Result<PathBuf, String> {
-    let place = place(home)?;
-    Ok(place.root.join(place.folder).join("opencode.db"))
+pub(crate) fn database_path(accounts: &Accounts) -> Result<PathBuf, String> {
+    Ok(place(accounts)?.database)
 }
 
 /// One bounded read of OpenCode's database ([`crate::sqlite::with_read`]),
 /// handed the schema the database holds. A database that holds neither is
 /// refused here, before `read` runs.
 pub(crate) fn with_read<T>(
-    home: &Path,
+    accounts: &Accounts,
     read: impl FnOnce(&Connection, Schema) -> T,
 ) -> Result<T, ReadRefusal> {
-    with_read_legacy(home, |connection, schema, _| read(connection, schema))
+    with_read_legacy(accounts, |connection, schema, _| read(connection, schema))
 }
 
 /// [`with_read`], also handed what a 2.x database holds of the 1.x tables.
 pub(crate) fn with_read_legacy<T>(
-    home: &Path,
+    accounts: &Accounts,
     read: impl FnOnce(&Connection, Schema, Legacy) -> T,
 ) -> Result<T, ReadRefusal> {
-    Ok(with_unchecked_read(home, |connection| {
+    Ok(with_unchecked_read(accounts, |connection| {
         Schema::detect(connection).map(|(schema, legacy)| read(connection, schema, legacy))
     })??)
 }
 
 /// One bounded read of the database file, whatever tables it holds.
 pub(crate) fn with_unchecked_read<T>(
-    home: &Path,
+    accounts: &Accounts,
     read: impl FnOnce(&Connection) -> T,
 ) -> Result<T, ReadRefusal> {
-    let place = place(home)?;
+    let place = place(accounts)?;
     crate::sqlite::with_read(
         &place.root,
-        place.folder,
-        &place.root.join(place.folder).join("opencode.db"),
+        &place.folder,
+        &place.database,
         &REASONS,
         SQL_STEPS_PER_READ,
         read,
@@ -284,12 +291,12 @@ impl Proven {
 /// that message, and finds the session rewound if the message before it is
 /// gone. Read in one transaction with the session's proof.
 pub fn message_checkpoint(
-    home: &Path,
+    accounts: &Accounts,
     id: &str,
     cwd: &str,
     index: u64,
 ) -> Result<(ConversationCheckpoint, ConfirmedLabelSession), String> {
-    with_read(home, |connection, schema| {
+    with_read(accounts, |connection, schema| {
         let proven = prove(connection, schema, id, Owner::Root { cwd: Some(cwd) })?;
         if index > proven.messages {
             return Err("label_session_read_changed".to_owned());
@@ -310,12 +317,12 @@ pub fn message_checkpoint(
 /// Whether `checkpoint` still names the same messages of the root session
 /// `id` in `cwd`: the session was not replaced or rewound past it.
 pub fn holds(
-    home: &Path,
+    accounts: &Accounts,
     id: &str,
     cwd: &str,
     checkpoint: &ConversationCheckpoint,
 ) -> Result<ConfirmedLabelSession, String> {
-    let (current, confirmed) = message_checkpoint(home, id, cwd, checkpoint.offset())?;
+    let (current, confirmed) = message_checkpoint(accounts, id, cwd, checkpoint.offset())?;
     if current.message_witness() != checkpoint.message_witness() {
         return Err("label_session_read_changed".to_owned());
     }
@@ -339,9 +346,9 @@ pub enum ForkRoute {
 /// is, by the schema the database holds, in the read that proves the session.
 /// A 2.x database that migrated a 1.x one holds both schemas, and its 2.x
 /// tables, the ones 2.x keeps writing, decide.
-pub fn fork_route(home: &Path, id: &str, cwd: &str) -> Result<ForkRoute, ReadRefusal> {
+pub fn fork_route(accounts: &Accounts, id: &str, cwd: &str) -> Result<ForkRoute, ReadRefusal> {
     Ok(with_read(
-        home,
+        accounts,
         |connection, schema| -> Result<_, String> {
             prove(connection, schema, id, Owner::Root { cwd: Some(cwd) })?;
             Ok(match schema {
@@ -357,7 +364,7 @@ pub fn fork_route(home: &Path, id: &str, cwd: &str) -> Result<ForkRoute, ReadRef
 /// The id is the exact route `opencode -s <id>` takes, so a proven id is
 /// also the proven resume route.
 pub(crate) fn activity(
-    home: &Path,
+    accounts: &Accounts,
     request: &crate::session_activity::SessionActivityRequest,
 ) -> Result<crate::session_activity::SessionActivity, ReadRefusal> {
     if request.reference_kind != "id" {
@@ -372,7 +379,7 @@ pub(crate) fn activity(
         return Err("session_route_owner_changed".into());
     }
     Ok(with_read(
-        home,
+        accounts,
         |connection, schema| -> Result<_, String> {
             let proven = prove(
                 connection,
@@ -413,6 +420,71 @@ fn newest_write(
     Ok(proven.updated.max(newest))
 }
 
+/// The folders OpenCode's root sessions worked in since `since_unix_ms`,
+/// each with when its newest session there last changed, for the folders
+/// agents worked in (`SessionCatalog::worked_folders`). Each folder is one
+/// row counted with the catalog's other entries, at most `limit`; crossing
+/// it is the catalog's capacity failure. No database means no folders, and
+/// a database Hide cannot open or list answers the inner `Err` with why.
+pub(crate) fn worked_directories(
+    accounts: &Accounts,
+    since_unix_ms: u64,
+    visited: &mut usize,
+    limit: usize,
+) -> Result<Result<Vec<(PathBuf, u64)>, String>, crate::SessionCatalogError> {
+    let database = match database_path(accounts) {
+        Ok(database) => database,
+        Err(reason) => return Ok(Err(reason)),
+    };
+    if std::fs::symlink_metadata(database)
+        .is_err_and(|error| error.kind() == std::io::ErrorKind::NotFound)
+    {
+        return Ok(Ok(Vec::new()));
+    }
+    let remaining = limit.saturating_sub(*visited);
+    let rows = with_read(accounts, |connection, schema| {
+        let mut statement = connection
+            .prepare(&format!(
+                "SELECT directory, max(time_updated) FROM {} WHERE parent_id IS NULL \
+                 AND typeof(directory) = 'text' AND octet_length(directory) <= ?1 \
+                 AND time_updated >= ?2 GROUP BY directory ORDER BY 2 DESC, 1 LIMIT ?3",
+                schema.sessions()
+            ))
+            .map_err(|error| refusal(&error))?;
+        statement
+            .query_map(
+                params![
+                    DIRECTORY_LIMIT_BYTES,
+                    i64::try_from(since_unix_ms).unwrap_or(i64::MAX),
+                    remaining as i64 + 1
+                ],
+                |row| {
+                    Ok((
+                        row.get::<_, String>(0)?,
+                        u64::try_from(row.get::<_, i64>(1)?).unwrap_or(0),
+                    ))
+                },
+            )
+            .map_err(|error| refusal(&error))?
+            .collect::<Result<Vec<_>, _>>()
+            .map_err(|error| refusal(&error))
+    });
+    let rows = match rows {
+        Ok(Ok(rows)) => rows,
+        Ok(Err(reason)) => return Ok(Err(reason)),
+        Err(refused) => return Ok(Err(refused.into())),
+    };
+    if rows.len() > remaining {
+        return Err(crate::SessionCatalogError::Capacity { limit });
+    }
+    *visited += rows.len();
+    Ok(Ok(rows
+        .into_iter()
+        .map(|(directory, at)| (PathBuf::from(directory), at))
+        .filter(|(directory, _)| directory.is_absolute())
+        .collect()))
+}
+
 /// The project's root OpenCode sessions, as the session catalog lists them:
 /// each one's checkout is the `directory` its own row records, resolved to
 /// the project like a file reader's `cwd`. At most `limit` session rows
@@ -425,7 +497,7 @@ fn newest_write(
 /// or first request cannot be read is listed unavailable with why. Each
 /// session's proof has its own SQL work cap.
 pub(crate) fn catalog(
-    home: &Path,
+    accounts: &Accounts,
     device_id: &str,
     project: &hide_project::ProjectIdentity,
     visited: &mut usize,
@@ -433,7 +505,7 @@ pub(crate) fn catalog(
 ) -> Result<Result<Vec<crate::ProjectSession>, String>, crate::SessionCatalogError> {
     // Only an answer that the file is not there is no OpenCode; a folder
     // Hide may not look into is a store it could not read.
-    let database = match database_path(home) {
+    let database = match database_path(accounts) {
         Ok(database) => database,
         Err(reason) => return Ok(Err(reason)),
     };
@@ -442,7 +514,7 @@ pub(crate) fn catalog(
     {
         return Ok(Ok(Vec::new()));
     }
-    with_read(home, |connection, schema| {
+    with_read(accounts, |connection, schema| {
         catalog_connection(connection, schema, device_id, project, visited, limit)
     })
     .unwrap_or_else(|refusal| Ok(Err(refusal.into())))
@@ -501,6 +573,7 @@ fn catalog_connection(
             event_count: 0,
             availability: crate::SessionAvailability::Available,
             stamp: None,
+            account: hide_agent_adapter::AccountKey::Default,
             id,
         };
         match read {
@@ -613,11 +686,11 @@ fn message_at(
 }
 
 pub(crate) fn read(
-    home: &Path,
+    accounts: &Accounts,
     request: &LabelTranscriptRequest,
 ) -> Result<LabelTranscript, ReadRefusal> {
     read_as(
-        home,
+        accounts,
         request,
         Owner::Root {
             cwd: request.cwd.as_deref(),
@@ -628,11 +701,11 @@ pub(crate) fn read(
 
 /// One bounded read of the session `owner` admits, with the row it proved.
 pub(crate) fn read_as(
-    home: &Path,
+    accounts: &Accounts,
     request: &LabelTranscriptRequest,
     owner: Owner<'_>,
 ) -> Result<(LabelTranscript, Proven), ReadRefusal> {
-    read_links(home, request, owner).map(|(transcript, proven, _, _)| (transcript, proven))
+    read_links(accounts, request, owner).map(|(transcript, proven, _, _)| (transcript, proven))
 }
 
 /// The pull requests each tool call of a read named, with the call's time.
@@ -641,11 +714,11 @@ pub(crate) type NamedCalls = Vec<(u64, Vec<crate::NamedPr>)>;
 /// [`read_as`] with the pull requests the read's tool calls named, for the
 /// link reader.
 pub(crate) fn read_links(
-    home: &Path,
+    accounts: &Accounts,
     request: &LabelTranscriptRequest,
     owner: Owner<'_>,
 ) -> Result<(LabelTranscript, Proven, NamedCalls, Option<u64>), ReadRefusal> {
-    Ok(with_read(home, |connection, schema| {
+    Ok(with_read(accounts, |connection, schema| {
         read_connection(connection, schema, request, owner)
             .map(|page| (page.transcript, page.proven, page.named, page.committed_at))
     })??)
@@ -660,7 +733,7 @@ pub(crate) fn read_links(
 /// message is classified as the file readers classify one: injected context
 /// or an interruption is not the operator's words.
 pub fn read_conversation(
-    home: &Path,
+    accounts: &Accounts,
     scope: &crate::SessionReadScope,
     saved: Option<ConversationCheckpoint>,
 ) -> Result<crate::ConversationRead, ReadRefusal> {
@@ -669,12 +742,13 @@ pub fn read_conversation(
         reference_kind: "id".to_owned(),
         reference_value: scope.id.clone(),
         cwd: Some(scope.cwd.clone()),
+        account: hide_agent_adapter::AccountKey::Default,
         checkpoint: saved,
         subagents: Default::default(),
         turns: None,
         tools: None,
     };
-    let page = with_read(home, |connection, schema| {
+    let page = with_read(accounts, |connection, schema| {
         read_connection(
             connection,
             schema,
@@ -1334,7 +1408,11 @@ impl Read {
             .and_then(Value::as_u64)
             .unwrap_or(message_at);
         let input = part.pointer("/state/input");
-        self.note_call(input, called);
+        let syntax = crate::call_shell::syntax(
+            hide_agent_adapter::HookDialect::OpenCode,
+            part.get("tool").and_then(Value::as_str).unwrap_or_default(),
+        );
+        self.note_call(input, syntax, called);
         let Some(output) = part.pointer("/state/output").and_then(Value::as_str) else {
             return;
         };
@@ -1345,21 +1423,23 @@ impl Read {
         let made = made_by(
             part.get("tool").and_then(Value::as_str),
             input,
+            syntax,
             part,
             output,
         );
         self.note_sightings(output, at, &made);
     }
 
-    /// The pull requests a tool call's input named, as of `at`.
-    fn note_call(&mut self, input: Option<&Value>, at: u64) {
+    /// The pull requests a tool call's input, read in `syntax`, named, as
+    /// of `at`.
+    fn note_call(&mut self, input: Option<&Value>, syntax: hide_shell::Syntax, at: u64) {
         let Some(input) = input else {
             return;
         };
-        if crate::named_prs::runs_git_commit(input) {
+        if crate::named_prs::runs_git_commit(input, syntax) {
             self.committed_at = self.committed_at.max(Some(at));
         }
-        let named = crate::named_prs::tool_call(input, None);
+        let named = crate::named_prs::tool_call(input, None, syntax);
         if named.is_empty() {
             return;
         }
@@ -1411,6 +1491,7 @@ impl Read {
 fn made_by(
     name: Option<&str>,
     input: Option<&Value>,
+    syntax: hide_shell::Syntax,
     part: &Value,
     output: &str,
 ) -> Vec<(String, u64)> {
@@ -1419,7 +1500,9 @@ fn made_by(
             .pointer("/state/metadata/exit")
             .and_then(Value::as_i64)
             .is_none_or(|code| code == 0);
-    if succeeded && input.is_some_and(|input| crate::named_prs::creates_pull_request(name, input)) {
+    if succeeded
+        && input.is_some_and(|input| crate::named_prs::creates_pull_request(name, input, syntax))
+    {
         crate::named_prs::created_addresses(&[output])
     } else {
         Vec::new()

@@ -1,0 +1,558 @@
+{
+  "resolved_sessions": {},
+  "revisit_sessions": {},
+  "stray_dismissals": {},
+  "session_resolution_inputs": {},
+  "session_collapsed_checkout_ids": [],
+  "session_open_folds": [],
+  "schema_version": 1,
+  "left_sidebar_visible": true,
+  "device_rail_visible": true,
+  "right_panel_visible": true,
+  "right_panel_section": "overview",
+  "expanded_paths": [],
+  "device_expanded_paths": {},
+  "collapsed_workspace_ids": [],
+  "collapsed_checkout_ids": [],
+  "expanded_checkout_ids": [],
+  "expanded_inactive_checkout_project_paths": [],
+  "expanded_inactive_project_device_ids": [],
+  "project_base_branches": {},
+  "project_settings": {
+    "project:899659c6245f19ce6d8633a4a1603637deaf6b50bc6e739e12edd7f8d50b590e": {
+      "version": 1,
+      "device_id": "c0de0000000000000000000000000001",
+      "root": "/home/me/core-proj",
+      "name": "Core project",
+      "repository": null,
+      "issue_source": null,
+      "new_work": "worktree",
+      "base_branch": {
+        "mode": "branch",
+        "branch": "main"
+      },
+      "auto_fetch": false
+    },
+    "project:db70b1859bf6ba7c8418518401f2d34b5dd18940ea2e6177c8b7c898df341791": {
+      "version": 1,
+      "device_id": "de510000000000000000000000000002",
+      "root": "/home/remote/dev-proj",
+      "name": "Device project",
+      "repository": null,
+      "issue_source": null,
+      "new_work": "worktree",
+      "base_branch": null,
+      "auto_fetch": false
+    }
+  },
+  "expanded_agent_pane_ids": [],
+  "sessions_expanded_agent_pane_ids": [],
+  "sidebar_lens": "projects",
+  "task_view": "status",
+  "practice": {},
+  "practice_invite_closed": false,
+  "detail_pane": "h1:p4",
+  "detail_panes": [
+    {
+      "pane": "remote:de510000000000000000000000000002:pane:h1:p1",
+      "slot": {
+        "items": [
+          {
+            "kind": "remains",
+            "workspace_id": "remote:de510000000000000000000000000002:project:db70b1859bf6ba7c8418518401f2d34b5dd18940ea2e6177c8b7c898df341791",
+            "checkout_id": "remote:de510000000000000000000000000002:checkout:897417db50259158"
+          }
+        ],
+        "shown": true
+      }
+    }
+  ],
+  "overview_graph": {
+    "focus": "all",
+    "include_resting": false,
+    "hidden_projects": [],
+    "folded_projects": [],
+    "team_folds": [],
+    "project_places": [],
+    "session_places": []
+  },
+  "selected_path": "/home/me/core-proj/README.md",
+  "selected_pane_id": "h1:p4",
+  "shortcut_bindings": {},
+  "shortcut_bindings_imported": false,
+  "browser_shortcut_bindings": {},
+  "focused_device_id": "c0de0000000000000000000000000001",
+  "focused_checkout_id": "workspace:0c6e30f59b7ca56a:checkout:0c6e30f59b7ca56a",
+  "workspace_registrations": [
+    {
+      "primary_checkout_id": null,
+      "id": "workspace:0c6e30f59b7ca56a",
+      "label": "core-proj",
+      "path": "/home/me/core-proj",
+      "device_id": "c0de0000000000000000000000000001",
+      "pinned": false
+    },
+    {
+      "primary_checkout_id": null,
+      "id": "remote:de510000000000000000000000000002:project:db70b1859bf6ba7c8418518401f2d34b5dd18940ea2e6177c8b7c898df341791",
+      "label": "dev-proj",
+      "path": "/home/remote/dev-proj",
+      "device_id": "de510000000000000000000000000002",
+      "pinned": false
+    }
+  ],
+  "device_registrations": [
+    {
+      "id": "de510000000000000000000000000002",
+      "label": "mini",
+      "ssh_alias": "mini",
+      "host_consent": {
+        "contract": 4,
+        "helper_root": "~/.hide/host-helper",
+        "cli_dir": "~/.local/bin",
+        "granted_at_unix_ms": 1794687933287,
+        "identity": {
+          "user": "remote",
+          "hostname": "device",
+          "port": 22,
+          "machine_id": "de510000000000000000000000000002",
+          "host_key_sha256": ""
+        }
+      },
+      "naming": "named"
+    }
+  ],
+  "accent_hex": "#B9FF66",
+  "theme": "dark",
+  "agent_logo_mode": "hidden",
+  "pane_turn_row_mode": "one_line",
+  "color_theme": "hide",
+  "interface_language": null,
+  "usage": {
+    "pinned": [
+      {
+        "agent": "claude",
+        "window": "weekly"
+      },
+      {
+        "agent": "codex",
+        "window": "weekly"
+      }
+    ],
+    "hidden": []
+  },
+  "agent_onboarding": null,
+  "agent_onboarding_agents": [],
+  "first_run": null,
+  "first_run_choices": {
+    "agents": null,
+    "devices": null,
+    "project_device": null,
+    "project_form": {
+      "view": "",
+      "url": "",
+      "parent": "",
+      "name": ""
+    },
+    "notifications_answered": false
+  },
+  "desktop_notifications": false,
+  "product_analytics_enabled": true,
+  "product_active_days": {
+    "desktop": 20771
+  },
+  "desktop_notifications_done": false,
+  "screen_intros_seen": [],
+  "sidebar_width": 292,
+  "font_size": 13.0,
+  "terminal_font_size": 14.0,
+  "terminal_font_family": "",
+  "pane_text_scales": {},
+  "editor_text_scale": 1.0,
+  "pane_read_records": {
+    "h1:p1": {
+      "state_change_seq": 1,
+      "session_id": "b6528c8f-8002-439d-a280-e0969abe4a85",
+      "demand": "question",
+      "activity": "stopped",
+      "completed": true,
+      "descendant_signals": [],
+      "server": "1a1dbbc9991-24-1",
+      "unread": false,
+      "read_asks": [
+        "decision:mission-3#2"
+      ]
+    },
+    "h1:p2": {
+      "state_change_seq": 2,
+      "session_id": "04db0739-e85c-4041-b933-3b320ffef0b3",
+      "demand": "none",
+      "activity": "stopped",
+      "completed": true,
+      "descendant_signals": [],
+      "server": "1a1dbbc9991-24-1",
+      "unread": false,
+      "read_asks": []
+    },
+    "h1:p4": {
+      "state_change_seq": 4,
+      "session_id": "dd339b9e-ce45-463b-bc03-0cd5473a983a",
+      "demand": "none",
+      "activity": "stopped",
+      "completed": false,
+      "descendant_signals": [],
+      "server": "1a1dbbc9991-24-1",
+      "unread": false,
+      "read_asks": []
+    },
+    "remote:de510000000000000000000000000002:pane:h1:p1": {
+      "state_change_seq": 1,
+      "session_id": "5162a799-1147-4f5e-840e-aca0041ba16e",
+      "demand": "question",
+      "activity": "stopped",
+      "completed": true,
+      "descendant_signals": [],
+      "server": "1a1dbbca792-24-2",
+      "unread": false,
+      "read_asks": [
+        "decision:mission-1#1"
+      ]
+    },
+    "remote:de510000000000000000000000000002:pane:h1:p2": {
+      "state_change_seq": 2,
+      "session_id": "c21a4dba-e777-4437-812b-19ef91ecb3ea",
+      "demand": "none",
+      "activity": "stopped",
+      "completed": true,
+      "descendant_signals": [],
+      "server": "1a1dbbca792-24-2",
+      "unread": false,
+      "read_asks": []
+    },
+    "remote:de510000000000000000000000000002:pane:h1:p5": {
+      "state_change_seq": 5,
+      "session_id": "6e6e1f4c-e7ad-4eb4-92d7-c3b769b929d7",
+      "demand": "none",
+      "activity": "stopped",
+      "completed": false,
+      "descendant_signals": [],
+      "server": "1a1dbbceec1-24-3",
+      "unread": false,
+      "read_asks": []
+    }
+  },
+  "pane_completions": {
+    "h1:p1": {
+      "session": "a7355c1bada5e55228cef5e63838edfcda818d1861936f6dfc37d09f1ab1502b",
+      "server": "1a1dbbc9991-24-1",
+      "state_change_seq": 1
+    },
+    "h1:p2": {
+      "session": "2ce5b09c76647867fcf213a378eba40bf6bb3d04ade24dac4e204ab50e2874fe",
+      "server": "1a1dbbc9991-24-1",
+      "state_change_seq": 2
+    },
+    "remote:de510000000000000000000000000002:pane:h1:p1": {
+      "session": "63e4f365f82013c9f1ea2bed93f08c6b9dfed607e604ee7f0f3953b44c5b8c38",
+      "server": "1a1dbbca792-24-2",
+      "state_change_seq": 1
+    },
+    "remote:de510000000000000000000000000002:pane:h1:p2": {
+      "session": "fa5c9c64ea13463fd4e0448f9f5aadbc63efeb1236f562fb29f6b2ee8d2ad0bb",
+      "server": "1a1dbbceec1-24-3",
+      "state_change_seq": 2
+    }
+  },
+  "pane_launches": {
+    "h1:p4": {
+      "kind": "claude",
+      "name": "hide-claude-h1-p4",
+      "choice": {
+        "model": "sonnet"
+      },
+      "session": "dd339b9e-ce45-463b-bc03-0cd5473a983a"
+    },
+    "remote:de510000000000000000000000000002:pane:h1:p4": {
+      "kind": "claude",
+      "name": "dev-worker",
+      "choice": {},
+      "session": "8dc6cc35-6d2f-4a36-8754-5c05ef5fdfb0"
+    },
+    "remote:de510000000000000000000000000002:pane:h1:p5": {
+      "kind": "claude",
+      "name": "hide-claude-h1-p5",
+      "choice": {
+        "model": "sonnet"
+      },
+      "session": "6e6e1f4c-e7ad-4eb4-92d7-c3b769b929d7"
+    },
+    "remote:de510000000000000000000000000002:pane:h2:p2": {
+      "kind": "claude",
+      "name": "dev-plan-child",
+      "choice": {},
+      "session": "fe8f8698-31cd-45d3-98de-de3a13fc7cc6"
+    }
+  },
+  "request_verbs": {
+    "h1:p1": {
+      "verb": "idle",
+      "since_unix_ms": 1794688090381
+    },
+    "h1:p2": {
+      "verb": "idle",
+      "since_unix_ms": 1794688111537
+    },
+    "h1:p4": {
+      "verb": "idle",
+      "since_unix_ms": 1794688118915
+    },
+    "remote:de510000000000000000000000000002:pane:h1:p1": {
+      "verb": "idle",
+      "since_unix_ms": 1794688114526
+    },
+    "remote:de510000000000000000000000000002:pane:h1:p2": {
+      "verb": "idle",
+      "since_unix_ms": 1794688113591
+    },
+    "remote:de510000000000000000000000000002:pane:h1:p4": {
+      "verb": "idle",
+      "since_unix_ms": 1794688014684
+    },
+    "remote:de510000000000000000000000000002:pane:h1:p5": {
+      "verb": "idle",
+      "since_unix_ms": 1794688119066
+    },
+    "remote:de510000000000000000000000000002:pane:h2:p2": {
+      "verb": "idle",
+      "since_unix_ms": 1794687979421
+    }
+  },
+  "pane_terminal_sizes": {},
+  "agent_sleep_hours": 12,
+  "project_issue_sources": {},
+  "issue_settings": {
+    "ai_worktree_name": true,
+    "closes_instruction": true
+  },
+  "conductor_settings": {
+    "concurrency": 4,
+    "default_scope": "pr",
+    "candidates": [],
+    "default_strength": "normal",
+    "clean_merged": true
+  },
+  "agent_start": {
+    "kind": "claude",
+    "models": {
+      "claude": "sonnet"
+    }
+  },
+  "agent_sleep": {
+    "stamps": {
+      "h1:p1": {
+        "changed_at_unix_ms": 1794688090380,
+        "seen_at_unix_ms": 1794688053315,
+        "state": {
+          "demand": "none",
+          "activity": "stopped",
+          "completed": true
+        }
+      },
+      "h1:p2": {
+        "changed_at_unix_ms": 1794688111537,
+        "seen_at_unix_ms": 1794688118736,
+        "state": {
+          "demand": "none",
+          "activity": "stopped",
+          "completed": true
+        }
+      },
+      "h1:p4": {
+        "changed_at_unix_ms": 1794688118932,
+        "seen_at_unix_ms": 1794688125249,
+        "state": {
+          "demand": "none",
+          "activity": "stopped",
+          "completed": false
+        }
+      },
+      "remote:de510000000000000000000000000002:pane:h1:p1": {
+        "changed_at_unix_ms": 1794688114526,
+        "seen_at_unix_ms": 1794688117726,
+        "state": {
+          "demand": "none",
+          "activity": "stopped",
+          "completed": true
+        }
+      },
+      "remote:de510000000000000000000000000002:pane:h1:p2": {
+        "changed_at_unix_ms": 1794687954625,
+        "seen_at_unix_ms": 1794687954631,
+        "state": {
+          "demand": "none",
+          "activity": "stopped",
+          "completed": true
+        }
+      },
+      "remote:de510000000000000000000000000002:pane:h1:p4": {
+        "changed_at_unix_ms": 1794688014701,
+        "seen_at_unix_ms": 0,
+        "state": {
+          "demand": "none",
+          "activity": "stopped",
+          "completed": false
+        }
+      },
+      "remote:de510000000000000000000000000002:pane:h1:p5": {
+        "changed_at_unix_ms": 1794688119083,
+        "seen_at_unix_ms": 1794688122081,
+        "state": {
+          "demand": "none",
+          "activity": "stopped",
+          "completed": false
+        }
+      },
+      "remote:de510000000000000000000000000002:pane:h2:p2": {
+        "changed_at_unix_ms": 1794687979438,
+        "seen_at_unix_ms": 0,
+        "state": {
+          "demand": "none",
+          "activity": "stopped",
+          "completed": false
+        }
+      }
+    },
+    "records": {
+      "remote:de510000000000000000000000000002:pane:h1:p2": {
+        "phase": "sleeping",
+        "kind": "claude",
+        "session_id": "c21a4dba-e777-4437-812b-19ef91ecb3ea",
+        "agent_name": null,
+        "identity_label": "Claude",
+        "label_owner": "v1:1fb1bd89b7097f28c9df4775ff78f289cb21d2fa7ec3a3caec1f2b76d6a4992f",
+        "progress": null,
+        "last_activity": "1794687944930",
+        "state_change_seq": 2,
+        "server_mark": "1a1dbbca792-24-2",
+        "completed": true,
+        "parent_pane_id": null,
+        "parent_session": null,
+        "fork_source": null,
+        "workspace_label": "dev-proj",
+        "cwd": "/home/remote/dev-proj",
+        "since_unix_ms": 1794688113590,
+        "reason": null,
+        "pending_wake": null
+      }
+    },
+    "dormant": {
+      "sleep-18e80355d748019f-1": {
+        "phase": "sleeping",
+        "revision": 5,
+        "node_id": "c0de0000000000000000000000000001",
+        "connection_generation": 1,
+        "old_pane_id": "h1:p3",
+        "old_state_change_seq": 3,
+        "kind": "pi",
+        "native_session_id": "07a1cf39-b3af-4339-a022-9cf0e0ea8b07",
+        "source_reference": {
+          "kind": "path",
+          "value": "/home/me/.pi/agent/sessions/--home-me-core-proj--/2026-11-14T20-28-37-000Z_07a1cf39-b3af-4339-a022-9cf0e0ea8b07.jsonl"
+        },
+        "label_owner": "v1:f2544a9148ba61a1fdf1864934d3f085c250bd6421f51552c7b5812ae6c443f2",
+        "identity_label": "pi",
+        "cwd": "/home/me/core-proj",
+        "context": {
+          "workspace_id": "h1",
+          "workspace_label": "Core project",
+          "workspace_ids_before_close": [
+            "h1"
+          ],
+          "tab_ids_before_close": [
+            "h1:t1",
+            "h1:t2",
+            "h1:t3"
+          ],
+          "pane_ids_before_close": [
+            "h1:p3"
+          ],
+          "checkout_id": "workspace:0c6e30f59b7ca56a:checkout:0c6e30f59b7ca56a",
+          "checkout_path": "/home/me/core-proj",
+          "tab_id": "h1:t3",
+          "tab_label": "pi",
+          "tab_index": 2,
+          "agent_area": [
+            "a1",
+            2
+          ],
+          "agent_group": null,
+          "replacement_in_tab": false,
+          "tab_name": "unnamed"
+        },
+        "close_key": "reopen-1794688118735-2",
+        "closed": true,
+        "wake_pane_id": null,
+        "wake_tab_id": null,
+        "since_unix_ms": 1794688118725,
+        "transition_started_unix_ms": 1794688118725,
+        "reason": null,
+        "owner": {
+          "repository_root": "/home/me/core-proj",
+          "is_git": true,
+          "label": "Core project"
+        }
+      }
+    }
+  },
+  "session_archive": {
+    "archive-18e803575b7a5820-1": {
+      "phase": "archived",
+      "revision": 2,
+      "archived_at_unix_ms": 1794688125238,
+      "project_root": "/home/me/core-proj",
+      "project_label": "Core project",
+      "members": [
+        {
+          "machine": "c0de0000000000000000000000000001",
+          "pane_id": "h1:p5",
+          "kind": "claude",
+          "native_session_id": "e7198c42-03f5-4215-b950-5c9a238cdb31",
+          "source_reference": {
+            "kind": "id",
+            "value": "e7198c42-03f5-4215-b950-5c9a238cdb31"
+          },
+          "cwd": "/home/me/core-proj",
+          "checkout_path": "/home/me/core-proj",
+          "title": "Claude",
+          "last_line": null,
+          "pulls": [],
+          "registration": null,
+          "parent": null,
+          "depth": 0,
+          "closed": true,
+          "resume": {
+            "state": "idle"
+          }
+        }
+      ],
+      "reason": null
+    }
+  },
+  "recent_checkouts": [
+    {
+      "device_id": "c0de0000000000000000000000000001",
+      "checkout_id": "workspace:0c6e30f59b7ca56a:checkout:0c6e30f59b7ca56a",
+      "project_name": "Core project",
+      "branch": "main"
+    },
+    {
+      "device_id": "de510000000000000000000000000002",
+      "checkout_id": "remote:de510000000000000000000000000002:checkout:897417db50259158",
+      "project_name": "Device project",
+      "branch": "main"
+    }
+  ],
+  "recent_pane_ids": [],
+  "operator_tab_names": {},
+  "home_retire": []
+}

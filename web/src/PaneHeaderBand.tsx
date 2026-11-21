@@ -3,7 +3,7 @@ import { useMemo, type ReactNode } from "react";
 import type { TFunction } from "i18next";
 import type { Actions } from "./actions";
 import { agentProductName } from "./agentAdapters";
-import { askWhat, VerbText } from "./components/agent-tree";
+import { askWhat } from "./components/agent-tree";
 import { AgentPrMark } from "./components/pr-mark";
 import { rowPulls } from "./prMark";
 import { AgentTreePopover } from "./components/agent-tree-popover";
@@ -11,14 +11,11 @@ import { Elapsed } from "./components/elapsed";
 import { Hint } from "./components/ui/tooltip";
 import { useInterfaceTranslation } from "./i18n/client";
 import { cn } from "./lib/utils";
-import { type PaneBand, type PaneHeader, type PaneRow, type SnapshotRest, type AgentRow, type Device, type RemoteStatus } from "./snapshot";
-import { remoteStateText } from "./coreError";
-import { machineName } from "./screenMachine";
+import { type PaneBand, type PaneHeader, type PaneRow, type SnapshotRest, type AgentRow } from "./snapshot";
 import { useShellStore } from "./store";
 import { useUiStore } from "./ui";
 import { relationState } from "./lineage";
-import { deviceConnected } from "./devices";
-import { remoteTargetOfPane } from "./remote";
+import { notConnectedText, useUnreachable } from "./deviceReach";
 import { useRelationProgress } from "./PaneRelations";
 import { markTone, markWords, recordWords, waitWord } from "./agentRow";
 import { allAgents, agentsByPane } from "./paneAgents";
@@ -31,6 +28,9 @@ import { planOfPane, planWorkLine } from "./plans";
 import { missionOfPane, missionWorkLine } from "./missions";
 import type { PaneTurnRowMode } from "./generated/hided-ws";
 import { Button } from "./components/ui/button";
+import { RowOverlayButton } from "./components/ui/row-button";
+import { HumanTurnDone, type HumanTurnTarget } from "./components/human-turn";
+import { HumanTurnCopy } from "./components/human-turn-copy";
 
 /** The View menu's turn row mode; absent reads as one line. */
 export function usePaneTurnRowMode(): PaneTurnRowMode {
@@ -100,6 +100,7 @@ export function PaneHeaderBand({ paneId, header, actions }: { paneId: string; he
   const outcome = useShellStore((state) => state.rest?.status?.pane_focus_request);
   const agents = usePaneAgents();
   const { children, devices } = usePaneChildren(paneId, agents);
+  const self = agentsByPane(agents).get(paneId);
   const childConnection = children?.unavailableDevice ? notConnectedText(devices?.status?.remote, devices?.navigator?.devices, children.unavailableDevice, t) : null;
   const mode = usePaneTurnRowMode();
   const off = mode === "off";
@@ -124,25 +125,30 @@ export function PaneHeaderBand({ paneId, header, actions }: { paneId: string; he
   const finished = !band && !off && (header?.finished ?? false);
   // A Conductor's mission line already names the work its children do.
   const waitingOnChildren = band || off || missionLine ? null : header?.waiting_on_children ?? null;
+  const waitingOnSubagents = band || off ? null : header?.waiting_on_subagents ?? null;
+  const waiting = waitingOnChildren || waitingOnSubagents ? waitWord(t, waitingOnChildren ? { wait: "children", wait_count: waitingOnChildren, wait_subagents: waitingOnSubagents } : { wait: "subagents", wait_count: waitingOnSubagents }) : null;
   // Before any early return: a hook runs on every render.
   // A raised ask names the device its pane is on; any other band's pane is looked up in the rows.
   const unreachable = useUnreachable(band?.raised ? { device: band.raised.open_device_id ?? null } : band?.action ? { pane: band.action.pane_id } : null);
+  const humanTurn = band ? bandHumanTurn(band, self) : null;
   const workingLine = header?.working ? <div className="pointer-events-none absolute inset-x-0 top-0 z-10 h-[calc(2*var(--size-hairline))] bg-agent-working" data-pane-working-line={paneId} /> : null;
-  if (off || (!band && !children && !ownProgress && !request && !finished && !waitingOnChildren)) return workingLine;
+  const below = self && (children || self.subagents) ? self : null;
+  if (off || (!band && !below && !ownProgress && !request && !finished && !waiting)) return workingLine;
   const tracked = band?.action && relation?.sourcePaneId === paneId && relation.targetPaneId === band.action.pane_id ? relation : null;
   const progress = relationState(tracked, outcome, t);
   const navigation = progress?.phase === "failed" ? progress.message : progress?.phase === "pending" ? t("panes.relation.opening", { name: tracked!.label }) : null;
-  const tree = children ? <PaneTreeButton paneId={paneId} children={children} agents={agents} actions={actions} connection={childConnection} /> : null;
+  const tree = below ? <PaneTreeButton paneId={paneId} parent={below} children={children} agents={agents} actions={actions} connection={childConnection} /> : null;
   const answer = <>
-    {band ? <AskBand paneId={paneId} band={band} navigation={navigation} unreachable={unreachable} failed={progress?.phase === "failed"} actions={actions} hasTree={children !== null} /> : <>
+    {band ? <AskBand paneId={paneId} band={band} navigation={navigation} unreachable={unreachable} failed={progress?.phase === "failed"} actions={actions} hasTree={tree !== null} /> : <>
       {finished ? <span className="shrink-0 font-medium text-success" data-pane-finished={paneId}>{t("paneTurn.finished")}</span> : null}
-      {waitingOnChildren ? <span className="min-w-0 flex-1 truncate" data-pane-children-wait={paneId}>{[waitWord(t, "children"), t("agents.line.children", { count: waitingOnChildren })].join(" · ")}</span> : null}
+      {waiting ? <span className="min-w-0 flex-1 truncate" data-pane-children-wait={waitingOnChildren ? paneId : undefined} data-pane-subagents-wait={waitingOnChildren ? undefined : paneId}>{waiting}</span> : null}
       {ownProgress ? <Hint label={ownProgress}><span className={cn("min-w-0 flex-1 truncate", missionLine?.decision && "text-mission-hold")} data-pane-own-progress={paneId} data-pane-mission-line={missionLine ? (missionLine.decision ? "decision" : "running") : undefined}>{ownProgress}</span></Hint> : null}
       {childConnection ? <span className={cn("min-w-0 truncate", ownProgress ? "max-w-1/4 shrink" : "flex-1")} title={childConnection} data-pane-child-connection={paneId}>{childConnection}</span> : null}
     </>}
     {band?.action ? <button type="button" data-pane-band-open={paneId} disabled={unreachable !== null || progress?.phase === "pending" || (progress?.phase === "failed" && !progress.retryable)} aria-busy={progress?.phase === "pending"} className="shrink-0 rounded-xs border border-border bg-background px-xs py-xxs text-micro text-foreground outline-none hover:brightness-95 focus-visible:ring-1 focus-visible:ring-ring disabled:opacity-50" onClick={() => actions.followRelation(paneId, band.action!.pane_id, band.action!.label)}>{progress?.phase === "failed" && progress.retryable ? t("common.retry") : t("common.open")}</button> : null}
+    {humanTurn ? <HumanTurnDone turn={humanTurn} actions={actions} variant="outline" reason={unreachable === null} className="shrink-0" /> : null}
   </>;
-  const kind = band?.kind ?? (finished ? "finished" : ownProgress ? "progress" : waitingOnChildren ? "waiting" : request ? "request" : "children");
+  const kind = band?.kind ?? (finished ? "finished" : ownProgress ? "progress" : waiting ? "waiting" : request ? "request" : "children");
   // A working turn with no word beyond its request, or a parent with no turn
   // to show, draws no answer at all, so two lines never add an empty one.
   const answered = (kind !== "request" && kind !== "children") || childConnection !== null;
@@ -150,20 +156,26 @@ export function PaneHeaderBand({ paneId, header, actions }: { paneId: string; he
   // surface; work left and a quiet turn sit in the head's surface.
   const tone = band && !unfinished(band) ? "bg-secondary border-l-2 border-warning text-foreground" : "bg-card border-t border-border text-muted-foreground";
   const twoLines = mode === "two_lines";
+  // With a request the whole `<request> → <answer>` is the turn card's one
+  // trigger: its button lies behind the row, the words let a press through
+  // to it, and every control in the row (the children button, Open, Done,
+  // copy) keeps its own press above it.
+  const through = request ? "pointer-events-none relative [&_button]:pointer-events-auto [&_[data-human-turn-place]]:pointer-events-auto [&_[data-pane-band-who]]:pointer-events-auto" : null;
   return <div className="absolute inset-x-0 top-0 z-10 bg-background">
     {/* One row whether or not it leads with a request, so the tree's
         popover stays open when the request comes or goes. One line caps the
         request at two fifths when an answer follows and cuts each part, so
         no turn grows over the terminal; two lines stack the parts, each cut. */}
-    <div className={cn("flex min-w-0 gap-x-xs px-sm text-caption", twoLines ? "flex-col items-stretch" : "flex-nowrap items-center", tone)} data-pane-header-band={kind} data-pane-turn={request ? paneId : undefined} data-pane-turn-row-mode={mode}>
+    <div className={cn("relative flex min-w-0 gap-x-xs px-sm text-caption", twoLines ? "flex-col items-stretch" : "flex-nowrap items-center", tone)} data-pane-header-band={kind} data-pane-turn={request ? paneId : undefined} data-pane-turn-row-mode={mode}>
+      {request ? <PaneTurnCard paneId={paneId} actions={actions} anchorClassName="peer/turn absolute inset-0" trigger={(state) => <TurnRowButton paneId={paneId} request={request} state={state} />} /> : null}
       {tree || request ? (
-        <div key="request" className={cn("flex h-(--size-pane-header) min-w-0 shrink items-center gap-xs", !twoLines && answered ? "max-w-2/5" : "max-w-full")} data-pane-turn-part="request">
+        <div key="request" className={cn("flex h-(--size-pane-header) min-w-0 shrink items-center gap-xs", !twoLines && answered ? "max-w-2/5" : "max-w-full", through, request && "text-subtle-foreground", request && TURN_LIT)} data-pane-turn-part="request">
           {tree}
-          {request ? <PaneTurnCard paneId={paneId} actions={actions} trigger={(state) => <TurnRequestButton paneId={paneId} request={request} state={state} />} /> : null}
+          {request ? <span className="min-w-0 truncate" data-pane-turn-request-text="true">{requestWords(t, request)}</span> : null}
         </div>
       ) : null}
       {answered ? (
-        <div key="answer" className={cn("flex h-(--size-pane-header) min-w-0 max-w-full items-center gap-xs", !twoLines && "grow", !twoLines && !request && "basis-0")} data-pane-turn-part="answer">
+        <div key="answer" className={cn("flex h-(--size-pane-header) min-w-0 max-w-full items-center gap-xs", !twoLines && "grow", !twoLines && !request && "basis-0", through, request && TURN_LIT)} data-pane-turn-part="answer">
           {request ? <span aria-hidden="true" className="shrink-0 text-subtle-foreground">→</span> : null}
           {answer}
         </div>
@@ -173,32 +185,32 @@ export function PaneHeaderBand({ paneId, header, actions }: { paneId: string; he
   </div>;
 }
 
+/** The turn's words brightened together while the pointer is on the row or its card is open; a word in its own colour keeps it. */
+const TURN_LIT = "peer-hover/turn:text-foreground peer-has-[[data-state=open]]/turn:text-foreground";
+
 /**
- * The request half of the turn: the request's one line in quiet text, with
- * no word before it on screen (its name still says `요청`), a button the
- * keyboard reaches. A press or focus on it opens the turn card, the
- * pointer passing over does not; it never takes the keyboard from the terminal.
+ * The turn card's trigger: the whole `<request> → <answer>` row, a button
+ * behind its words that lights the row under the pointer, named `요청: …`
+ * with no word before the request on screen, and one stop for the keyboard.
+ * A press or focus on it opens the turn card, the pointer passing over does
+ * not; it never takes the keyboard from the terminal.
  */
-function TurnRequestButton({ paneId, request, state }: { paneId: string; request: NonNullable<PaneHeader["request"]>; state: TurnCardTrigger }) {
+function TurnRowButton({ paneId, request, state }: { paneId: string; request: NonNullable<PaneHeader["request"]>; state: TurnCardTrigger }) {
   const { t } = useInterfaceTranslation();
-  const words = requestWords(t, request);
   return (
-    <button
-      type="button"
-      aria-label={`${t("paneTurn.request")}: ${words}`}
+    <RowOverlayButton
+      aria-label={`${t("paneTurn.request")}: ${requestWords(t, request)}`}
       aria-expanded={state.open}
       data-pane-turn-request={paneId}
       data-pinned={state.pinned || undefined}
       data-state={state.open ? "open" : "closed"}
-      className="flex min-w-0 items-center gap-xxs rounded-xs px-xxs -mx-xxs text-subtle-foreground outline-none hover:bg-accent hover:text-foreground focus-visible:ring-1 focus-visible:ring-ring data-[state=open]:text-foreground"
+      className="rounded-none"
       onMouseDown={(event) => event.preventDefault()}
       onClick={state.onToggle}
       onFocus={state.onFocus}
       onBlur={state.onBlur}
       onKeyDown={state.onKeyDown}
-    >
-      <span className="min-w-0 truncate" data-pane-turn-request-text="true">{words}</span>
-    </button>
+    />
   );
 }
 
@@ -212,9 +224,10 @@ export function PaneHeadChildren({ paneId, actions }: { paneId: string; actions:
   const mode = usePaneTurnRowMode();
   const agents = usePaneAgents();
   const { children, devices } = usePaneChildren(paneId, agents);
-  if (mode !== "off" || !children) return null;
-  const connection = children.unavailableDevice ? notConnectedText(devices?.status?.remote, devices?.navigator?.devices, children.unavailableDevice, t) : null;
-  return <PaneTreeButton paneId={paneId} children={children} agents={agents} actions={actions} connection={connection} />;
+  const self = agentsByPane(agents).get(paneId);
+  if (mode !== "off" || !self || (!children && !self.subagents)) return null;
+  const connection = children?.unavailableDevice ? notConnectedText(devices?.status?.remote, devices?.navigator?.devices, children.unavailableDevice, t) : null;
+  return <PaneTreeButton paneId={paneId} parent={self} children={children} agents={agents} actions={actions} connection={connection} />;
 }
 
 /**
@@ -245,8 +258,41 @@ export function PaneAskMark({ paneId, header, actions }: { paneId: string; heade
       onKeyDown={state.onKeyDown}
     >
       <span className={cn("font-semibold", unfinished(band) ? "text-foreground" : "text-warning")} data-verb={band.kind}>{verb}</span>
-      <Elapsed since={band.since_unix_ms} className="font-mono text-muted-foreground" />
+      <Elapsed since={band.since_unix_ms} className="font-mono text-muted-foreground pane-head-narrow:hidden" />
     </button>
+  )} />;
+}
+
+/**
+ * The pane's `질문 N` after its title, in words in the question colour
+ * (`--open-ask`): how many questions the agent put to the operator still wait
+ * (status-model.md, A question still waiting), at every turn row mode and
+ * while the agent works, since the second row then keeps its progress. It takes
+ * no warning colour, border or fill: a kept question is no call to act, and
+ * only a Needs You ask wears the warning colour. A press opens the turn card,
+ * which lists them with 무시하기.
+ */
+export function PaneOpenAsksMark({ paneId, actions }: { paneId: string; actions: Actions }) {
+  const { t } = useInterfaceTranslation();
+  const count = useShellStore((state) => allAgents(state.agents, state.rest?.status?.remote).find((agent) => agent.pane_id === paneId)?.open_asks?.items.length ?? 0);
+  if (count === 0) return null;
+  return <PaneTurnCard paneId={paneId} actions={actions} trigger={(state) => (
+    <Button
+      variant="text"
+      size="inline"
+      aria-expanded={state.open}
+      data-pane-open-asks={paneId}
+      data-open-asks={count}
+      data-state={state.open ? "open" : "closed"}
+      className="shrink-0 whitespace-nowrap text-caption font-semibold text-open-ask tabular-nums hover:text-open-ask"
+      onMouseDown={(event) => event.preventDefault()}
+      onClick={state.onToggle}
+      onFocus={state.onFocus}
+      onBlur={state.onBlur}
+      onKeyDown={state.onKeyDown}
+    >
+      {t("openAsks.count", { count })}
+    </Button>
   )} />;
 }
 
@@ -262,9 +308,11 @@ function unfinished(band: PaneBand): boolean {
 }
 
 /**
- * An ask, led by whose it is: the pane's own approval, answer, block or stop
- * starts with its verb, and a raised descendant's starts with that agent's
- * name and relationship, so the row never reads as its parent's own ask.
+ * An ask, led by whose it is: the pane's own approval or answer says only what
+ * is asked, its rail and colour saying whose turn it is; a block or a stop
+ * starts with its word (`막힘`, `일 남음`); and a raised descendant's starts
+ * with that agent's name and relationship, so the row never reads as its
+ * parent's own ask.
  * The pane's own ask dims once the operator has looked and stays until it is
  * answered. The older more-asks trigger remains only when it is the
  * available tree access.
@@ -287,6 +335,7 @@ function AskBand({ paneId, band, navigation, unreachable, failed, actions, hasTr
   ].filter(Boolean).join("\n") : null;
   const more = !hasTree && band.more > 0 && self ? <AgentTreePopover
     parent={self}
+    actions={actions}
     agents={agents}
     raised
     onOpenChild={(id, label) => actions.followRelation(paneId, id, label)}
@@ -296,11 +345,13 @@ function AskBand({ paneId, band, navigation, unreachable, failed, actions, hasTr
     trigger={<Button variant="text-link" size="inline" data-pane-band-more={paneId} className="shrink-0 px-xs py-xxs text-micro text-muted-foreground underline-offset-2">{t("agentSessions.moreAsks", { count: band.more })}</Button>}
   /> : null;
   const read = !raised && band.read;
+  const humanTurn = bandHumanTurn(band, self);
   return <>
-    <span className={cn("flex min-w-0 flex-[3] items-center gap-xs", read && "opacity-(--opacity-read-status)")} data-pane-band-read={read ? "true" : undefined}>
-      {raised ? <VerbText verb={raised.verb} /> : band.kind === "approval" || band.kind === "answer" ? <VerbText verb={band.kind} /> : <span className={cn("shrink-0 font-semibold", unfinished(band) ? "text-foreground" : "text-warning")} data-verb={band.kind}>{bandVerbWords(t, band.kind)}</span>}
+    <span className={cn("group/turn flex min-w-0 flex-[3] items-center gap-xs", read && "opacity-(--opacity-read-status)")} data-pane-band-read={read ? "true" : undefined}>
+      {raised || band.kind === "approval" || band.kind === "answer" ? null : <span className={cn("shrink-0 font-semibold", unfinished(band) ? "text-foreground" : "text-warning")} data-verb={band.kind}>{bandVerbWords(t, band.kind)}</span>}
       {raised && originTitle ? <Hint label={who!}><span className="flex min-w-0 max-w-1/3 shrink items-center gap-xxs font-semibold" data-pane-band-who={raised.raised_pane_id}><span className="min-w-0 truncate">{originTitle}</span><span className="shrink-0 text-muted-foreground">({t(originDepth > 2 ? "panes.children.descendant" : "panes.children.direct")})</span></span></Hint> : null}
-      <Hint label={navigation ?? what ?? ""}><span className={cn("min-w-0 flex-1 truncate", failed && "text-destructive")} role={failed ? "alert" : navigation ? "status" : undefined} data-pane-band-navigation={navigation ? failed ? "failed" : "pending" : undefined}>{navigation ?? what}</span></Hint>
+      <Hint label={navigation ?? what ?? ""}><span className={cn("min-w-0 flex-1 truncate", failed && "text-destructive", humanTurn && !navigation && "cursor-text select-text")} role={failed ? "alert" : navigation ? "status" : undefined} data-human-turn-place={humanTurn && !navigation ? humanTurn.id : undefined} data-pane-band-navigation={navigation ? failed ? "failed" : "pending" : undefined}>{navigation ?? what}</span></Hint>
+      {humanTurn && !navigation ? <HumanTurnCopy turn={humanTurn} copy={actions.copyText} /> : null}
     </span>
     {unreachable && !navigation ? <span className="min-w-0 max-w-1/4 shrink truncate text-muted-foreground" title={unreachable} data-pane-band-unreachable="true">{unreachable}</span> : null}
     {raised?.unreceived_by && minutes !== null ? <span className="min-w-0 max-w-1/4 flex-1 truncate text-muted-foreground" data-pane-band-unreceived="true">{t("agentSessions.unreceived", { name: raised.unreceived_by, minutes })}</span> : null}
@@ -309,21 +360,11 @@ function AskBand({ paneId, band, navigation, unreachable, failed, actions, hasTr
   </>;
 }
 
-/** Why `device` is not connected, worded from its state; a device still connecting or holding its last report is plainly not connected. */
-function notConnectedText(remote: readonly RemoteStatus[] | undefined, devices: readonly Device[] | undefined, device: string, t: TFunction<"translation">): string {
-  const state = remote?.find((row) => row.target_id === device)?.state;
-  return !state || state === "not_connected" || state === "stale" ? t("devices.rail.notConnected") : remoteStateText(state, machineName(devices, device, t), t);
-}
-
-/** Why a pane on a device that is not connected cannot be opened now, or null when it can (B8). */
-function useUnreachable(target: { device: string | null } | { pane: string } | null): string | null {
-  const { t } = useInterfaceTranslation();
-  return useShellStore((state) => {
-    if (target === null) return null;
-    const device = "device" in target ? target.device : remoteTargetOfPane(state.rest, target.pane);
-    if (device === null || deviceConnected(state.rest, device)) return null;
-    return notConnectedText(state.rest?.status?.remote, state.rest?.navigator?.devices, device, t);
-  });
+/** The person's turn a band asks, the pane's own or raised to it, which Done settles after Open (PRD ask-human B15). */
+function bandHumanTurn(band: PaneBand, self: AgentRow | undefined): HumanTurnTarget | null {
+  const raised = band.raised ?? null;
+  const human = raised ? (raised.subject?.cause === "human_turn" ? raised.subject : null) : band.subject?.cause === "human_turn" ? band.subject : null;
+  return human ? { id: human.id, kind: human.kind, place: human.place, device_id: raised ? raised.open_device_id : self?.human_turn?.device_id } : null;
 }
 
 /** Every agent row this page knows, including a device's retained topology; it changes only when a row does. */
@@ -364,13 +405,14 @@ export function PaneRecordButton({ paneId, title, product, actions, children, pl
   return (
     // The button names the agent as the plain head does, then what a press
     // does. The pointer opens nothing here: the turn card opens from the
-    // request on the second row only, and the record shows the whole title.
+    // turn on the second row only, and the record shows the whole title.
     <button
       type="button"
-      className="flex min-w-0 items-center gap-sm rounded-sm px-xxs -mx-xxs outline-none hover:bg-accent hover:text-foreground focus-visible:ring-1 focus-visible:ring-ring"
+      // Two columns, the marks and the title: the title's column gives up its width down to nothing, the marks' never, so a narrow head truncates the title rather than drawing the marks over the chips after it.
+      className="grid grid-flow-col grid-cols-[auto_minmax(0,auto)] items-center gap-sm rounded-sm px-xxs -mx-xxs outline-none hover:bg-accent hover:text-foreground focus-visible:ring-1 focus-visible:ring-ring"
       aria-label={[title, product, words, t("record.recordHint")].filter(Boolean).join(", ")}
       onMouseDown={(event) => event.preventDefault()}
-      onClick={() => actions.togglePaneRecord(session)}
+      onClick={() => actions.togglePaneRecord(session, paneId)}
       data-pane-record={session.session_id}
     >
       {children}
@@ -390,40 +432,54 @@ export function PanePrChip({ paneId, actions }: { paneId: string; actions: Actio
   const pulls = agent ? rowPulls(agent) : [];
   if (!agent || pulls.length === 0) return null;
   // The pane names no project; the PR's URL finds the one that lists it.
-  return <AgentPrMark agent={agent} pulls={pulls} side="bottom" onOpen={(pull) => actions.openSessionPullRequest({ workspace_id: null, url: pull.url, number: pull.number })} onExternal={(pull) => actions.openLink(pull.url, true)} />;
+  return <AgentPrMark agent={agent} pulls={pulls} side="bottom" onOpen={(pull) => actions.openSessionPullRequest({ workspace_id: null, url: pull.url, number: pull.number }, { pane: paneId })} onExternal={(pull) => actions.openLink(pull.url, true)} />;
 }
 
-/** How many direct children the children button draws a mark for before `+N`. */
-const CHILD_MARKS = 3;
+/** How many direct children the children button draws a mark for beside the count. */
+const CHILD_MARKS = 1;
 
 /**
- * The children button, at the row's left edge or, while off, on the head. Its face holds the tree, the
- * first direct children's status marks in tree order with `+N` for the rest,
- * and the chevron; its hint and name spell out every state count. A child of
- * unknown state draws no mark, so it is counted in `+N`, and with a device
- * away the face keeps the last total, since no mark can claim current work.
+ * The children button, at the row's left edge or, while off, on the head: the
+ * one chip for everything working under the pane's agent (docs/UI_BEHAVIOR.md,
+ * Subagents). Its face holds the tree, the first direct child's status mark in
+ * tree order and how many direct children there are, then, after a dot, the
+ * subagent mark and how many subagents the agent runs inside its session, and
+ * the chevron; its hint and name spell out every state count. A child of
+ * unknown state draws no mark, and with a device away the face keeps the last
+ * total, since no mark can claim current work. Only a child that asks colours
+ * its border: a subagent has nothing to ask the operator.
  */
-function PaneTreeButton({ paneId, children, agents, actions, connection }: { paneId: string; children: PaneChildren; agents: AgentRow[]; actions: Actions; connection: string | null }) {
+function PaneTreeButton({ paneId, parent, children, agents, actions, connection }: { paneId: string; parent: AgentRow; children: PaneChildren | null; agents: AgentRow[]; actions: Actions; connection: string | null }) {
   const { t } = useInterfaceTranslation();
-  const count = children.children.length;
-  const label = [t("agentSessions.tree.children", { count }), ...(connection ? [connection] : children.parts.map((part) => t(part.label, { count: part.count })))].join(" · ");
+  const count = children?.children.length ?? 0;
+  const subagents = parent.subagents ?? 0;
+  const label = [
+    count > 0 ? t("agentSessions.tree.children", { count }) : null,
+    ...(connection ? [connection] : (children?.parts ?? []).map((part) => t(part.label, { count: part.count }))),
+    subagents > 0 ? t("agents.subagents.working", { count: subagents }) : null,
+  ].filter(Boolean).join(" · ");
   // A device that is away keeps its raised count off the button, while the
   // tree still opens on the raised branches that remain reachable.
-  const raised = connection ? 0 : children.raised;
-  const marked = connection ? [] : children.children.filter((child) => child.mark !== "unknown").slice(0, CHILD_MARKS);
-  const rest = count - marked.length;
+  const raised = connection ? 0 : children?.raised ?? 0;
+  const marked = connection || !children ? [] : children.children.filter((child) => child.mark !== "unknown").slice(0, CHILD_MARKS);
   return <AgentTreePopover
-    parent={children.parent}
+    parent={children?.parent ?? parent}
+    actions={actions}
     agents={agents}
-    raised={children.raised > 0}
+    raised={(children?.raised ?? 0) > 0}
     onOpenChild={(id, name) => actions.followRelation(paneId, id, name)}
     onTask={() => actions.revealTask(paneId)}
     returnFocus={() => document.querySelector<HTMLButtonElement>(`[data-pane-tree="${paneId}"]`)?.focus()}
     triggerLabel={label}
-    trigger={<button type="button" aria-label={label} data-pane-tree={paneId} className={cn("flex h-(--size-sidebar-line-detail) shrink-0 items-center gap-xxs rounded-xs border bg-background px-xs text-micro text-subtle-foreground outline-none hover:bg-popover focus-visible:ring-1 focus-visible:ring-ring data-[state=open]:bg-secondary", raised > 0 ? "border-warning/60" : "border-border")}>
+    trigger={<button type="button" aria-label={label} data-pane-tree={paneId} data-pane-tree-subagents={subagents || undefined} className={cn("flex h-(--size-sidebar-line-detail) shrink-0 items-center gap-xxs rounded-xs border bg-background px-xs text-micro text-subtle-foreground outline-none hover:bg-popover focus-visible:ring-1 focus-visible:ring-ring data-[state=open]:bg-secondary", raised > 0 ? "border-warning/60" : "border-border")}>
       <ListTreeIcon aria-hidden="true" className="size-(--size-icon-sm) text-muted-foreground" />
-      {marked.map((child) => <StatusMark key={child.pane_id} mark={child.mark} className={markTone(child)} data-pane-tree-mark={child.pane_id} />)}
-      {rest > 0 ? <span aria-hidden="true" className="font-mono">{marked.length > 0 ? `+${rest}` : rest}</span> : null}
+      {marked.map((child) => <StatusMark key={child.pane_id} mark={child.mark} human={child.human_turn !== undefined} className={markTone(child)} data-pane-tree-mark={child.pane_id} />)}
+      {count > 0 && (count > 1 || marked.length === 0) ? <span aria-hidden="true" className="font-mono" data-pane-tree-count="">{count}</span> : null}
+      {count > 0 && subagents > 0 ? <span aria-hidden="true" className="text-muted-foreground">·</span> : null}
+      {subagents > 0 ? <>
+        <span aria-hidden="true" className="size-(--size-subagent-dot) shrink-0 rounded-full bg-agent-working opacity-(--opacity-secondary)" />
+        <span aria-hidden="true" className="font-mono" data-pane-tree-subagent-count="">{subagents}</span>
+      </> : null}
       <ChevronDownIcon aria-hidden="true" className="size-(--size-icon-sm) text-muted-foreground" />
     </button>}
   />;

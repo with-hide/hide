@@ -1,74 +1,50 @@
-// One player belongs to this status document. No polling or host/core state.
-import animationData from "./owl-roam.json";
+// One decoration belongs to this status document: the blinking owl, an SVG
+// that animates itself. It shows its still while it cannot be seen (reduced
+// motion, a hidden document, offscreen) or once connecting ends, so its own
+// timeline stops. No polling or host/core state.
+const MOTION = "owl-blink.svg";
+const STILL = "owl-blink-still.svg";
 
 export function startOwlMotion() {
-  const scene = document.getElementById("flight-scene");
-  const container = document.getElementById("owl-flight");
-  const still = document.getElementById("owl-still");
+  const owl = document.getElementById("owl");
   const reduced = window.matchMedia("(prefers-reduced-motion: reduce)");
-  let player = null;
-  let ready = false;
   let active = true;
   let onscreen = false;
   let disposed = false;
-  let failed = false;
-  let stillFailed = false;
+  // null: both drawings load; "motion": only the still does; "all": neither.
+  let failed = null;
   let reported = false;
   function report() {
     if (reported || disposed) return;
     reported = true;
-    window.console.error(JSON.stringify({ event: "brand_owl.unavailable", scene: "startup", asset: "owl-roam" }));
+    window.console.error(JSON.stringify({ event: "brand_owl.unavailable", scene: "startup", asset: "owl-blink" }));
   }
   function sync() {
-    const playing = ready && active && onscreen && !document.hidden && !reduced.matches && !failed;
-    container.hidden = failed || !ready || reduced.matches;
-    still.hidden = stillFailed || (ready && !failed && !reduced.matches);
+    const playing = active && onscreen && !document.hidden && !reduced.matches && failed === null;
+    const src = playing ? MOTION : STILL;
+    if (failed !== "all" && owl.getAttribute("src") !== src) owl.setAttribute("src", src);
+    owl.hidden = failed === "all";
     document.body.dataset.owlMotion = playing ? "playing" : "paused";
-    if (playing) player.play();
-    else player?.pause();
   }
   function fail() {
-    if (failed || disposed) return;
-    failed = true;
-    player?.destroy();
-    player = null;
-    container.hidden = true;
-    still.hidden = false;
+    if (disposed) return;
+    failed = failed === null && owl.getAttribute("src") === MOTION ? "motion" : "all";
     sync();
     report();
   }
-  function failStill() { stillFailed = true; sync(); report(); }
-  still.addEventListener("error", failStill, { once: true });
-  if (still.complete && still.naturalWidth === 0) failStill();
+  owl.addEventListener("error", fail);
+  if (owl.complete && owl.naturalWidth === 0) fail();
   const observer = new window.IntersectionObserver(([entry]) => { onscreen = entry.isIntersecting; sync(); });
-  observer.observe(scene);
+  observer.observe(owl);
   reduced.addEventListener("change", sync);
   document.addEventListener("visibilitychange", sync);
-  // Keep vendor module initialization inside the illustration boundary too:
-  // its canvas capability probe must never prevent status/recovery setup.
-  void import("lottie-web/build/player/lottie_light.min.js").then(({ default: lottie }) => {
-    if (disposed) return;
-    player = lottie.loadAnimation({ container, renderer: "svg", loop: true, autoplay: false, animationData });
-    player.addEventListener("data_failed", fail);
-    player.addEventListener("error", fail);
-    player.addEventListener("DOMLoaded", () => {
-      if (disposed || failed) return;
-      ready = true;
-      player.goToAndStop(0, true);
-      sync();
-    });
-    // This bundled vector has no images, fonts or async resources. Lottie
-    // configures it synchronously and may emit a config error before returning.
-    if (!player.isLoaded) fail();
-  }).catch(fail);
   window.addEventListener("pagehide", () => {
     disposed = true;
     observer.disconnect();
+    owl.removeEventListener("error", fail);
     reduced.removeEventListener("change", sync);
     document.removeEventListener("visibilitychange", sync);
-    still.removeEventListener("error", failStill);
-    player?.destroy();
-    player = null;
   }, { once: true });
+  sync();
   return { connecting(value) { active = value; sync(); } };
 }

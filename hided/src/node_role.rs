@@ -3,7 +3,7 @@
 //! names, and this daemon keeps one link to it. It dials the core's machine
 //! over SSH, runs the attach role there, trades the handshake, and answers
 //! the core's calls on that channel exactly as a device the core dialed
-//! answers them, with its own Herdr reached through the link.
+//! answers them.
 //!
 //! While the core cannot be reached the node waits and tries again, two
 //! seconds after the first failure and doubling to a minute; a link that
@@ -38,9 +38,9 @@ use tokio::sync::watch;
 
 use crate::attach::{self, Accepted, AttachOutcome, Line, NodeHello};
 use crate::backoff::Backoff;
-use crate::link_mux::Mux;
 use crate::placement::Placement;
 use crate::screen_sign_in::{NotOwner, ScreenSignIn, Shown};
+use hide_peer::mux::Mux;
 
 /// A link that lived this long starts the wait over.
 const SETTLED: Duration = Duration::from_secs(30);
@@ -66,11 +66,6 @@ pub struct NodeIdentity {
     pub build: String,
     /// This build's version and order, which the core's are compared with.
     pub release: crate::build_order::Release,
-    /// This machine's own Herdr, which the core reaches only through the
-    /// link.
-    pub herdr_socket: PathBuf,
-    /// The Herdr binary this machine's panes attach with.
-    pub herdr_bin: PathBuf,
     /// Where this node keeps what it measured of each repository's
     /// worktrees across links and restarts; none keeps them for one link.
     pub worktree_facts: Option<PathBuf>,
@@ -225,7 +220,7 @@ impl Phase {
             } => (
                 "stopped",
                 None,
-                Some(herdr_core::DeviceProblem::of(failure.problem).code()),
+                Some(hide_core::DeviceProblem::of(failure.problem).code()),
             ),
             Self::Waiting { reason } => (
                 "waiting",
@@ -718,7 +713,7 @@ fn keep_linked(shared: &Shared, home: &Path, placement: &Placement, identity: &N
         // A wait on the operator has no retry: only their connect ends it.
         let on_operator = reason.waits_for_operator();
         let wait = (!on_operator).then(|| backoff.failed());
-        herdr_core::diagnostic!(json!({
+        hide_core::diagnostic!(json!({
             "component": "node_role",
             "kind": "link.ended",
             "core": placement.node,
@@ -786,7 +781,7 @@ fn watch(shared: &Shared) {
                 (Phase::Live(_), Some(live)) => Some(live.core.alive(ANSWER_WITHIN)),
                 _ => None,
             };
-            herdr_core::diagnostic!(json!({
+            hide_core::diagnostic!(json!({
                 "component": "node_role",
                 "kind": "machine.moved",
                 "moved": moved,
@@ -802,7 +797,7 @@ fn watch(shared: &Shared) {
             None => port.look(&phase, || false),
         };
         if came_back {
-            herdr_core::diagnostic!(json!({
+            hide_core::diagnostic!(json!({
                 "component": "node_role",
                 "kind": "core.reachable_again",
             }));
@@ -984,7 +979,7 @@ fn parked(shared: &Shared) -> bool {
     if set_phase(shared, Phase::Disconnected) {
         return true;
     }
-    herdr_core::diagnostic!(json!({"component": "node_role", "kind": "link.disconnected"}));
+    hide_core::diagnostic!(json!({"component": "node_role", "kind": "link.disconnected"}));
     let mut state = lock(&shared.state);
     while state.disconnected && !state.stopping {
         state = shared
@@ -1103,7 +1098,7 @@ fn update_core(
     let spent = lock(&shared.state).update.attempt();
     if let Err(Spent { reason, now }) = spent {
         if now {
-            herdr_core::diagnostic!(json!({
+            hide_core::diagnostic!(json!({
                 "component": "node_role",
                 "kind": "update.failed",
                 "core": placement.node,
@@ -1135,7 +1130,7 @@ fn update_core(
         {
             record.extend(fields);
         }
-        herdr_core::diagnostic!(record);
+        hide_core::diagnostic!(record);
     };
     let failed = |reason: String| {
         lock(&shared.state).update = Update::Failed(reason.clone());
@@ -1151,7 +1146,10 @@ fn update_core(
         Ok(build) => build.root,
         Err(reason) => return failed(reason),
     };
-    let packages = hide_node::ssh::host::HelperPackages::new(Some(updates.packages.clone()));
+    let packages = hide_node::ssh::host::HelperPackages::new(
+        Some(updates.packages.clone()),
+        crate::cli::RELEASE,
+    );
     let program = match upstream.install_build(&packages, &root) {
         Ok(program) => program,
         // A dial that stopped on a sign-in or a server key waits for the
@@ -1295,7 +1293,7 @@ fn serve_link(
                 }
             };
             if let Some(refused) = refused {
-                herdr_core::diagnostic!(json!({
+                hide_core::diagnostic!(json!({
                     "component": "node_role",
                     "kind": "link.build_refused",
                     "core": placement.node,
@@ -1320,7 +1318,6 @@ fn serve_link(
             node: identity.node.clone(),
             label: identity.label.clone(),
             build: identity.build.clone(),
-            herdr_socket: identity.herdr_socket.display().to_string(),
             release: identity.release.clone(),
             move_intent: placement.move_intent.clone(),
         }),
@@ -1339,7 +1336,7 @@ fn serve_link(
         .get_ref()
         .set_read_timeout(None)
         .map_err(|error| ended(error.to_string()))?;
-    herdr_core::diagnostic!(json!({
+    hide_core::diagnostic!(json!({
         "component": "node_role",
         "kind": "link.accepted",
         "core": placement.node,
@@ -1371,10 +1368,7 @@ fn carry_link(
     let forward = core
         .forward(accepted.port)
         .map_err(|error| LinkFailure::Transport(format!("relay_forward: {error}")))?;
-    let terminals = Arc::new(NodeTerminals::for_screen(
-        Arc::clone(&shared.screen),
-        identity.herdr_bin.clone(),
-    ));
+    let terminals = Arc::new(NodeTerminals::for_screen(Arc::clone(&shared.screen)));
     let roots = match &shared.roots_changed {
         Some(changed) => {
             changed(&[]);
@@ -1435,7 +1429,6 @@ fn serve(
         writer,
         hide_host::serve::Services {
             terminals: Some(terminals),
-            herdr_socket: Some(identity.herdr_socket.clone()),
             heartbeat: true,
             checkout_callers: true,
             opened_roots: Some(roots),
@@ -1445,9 +1438,10 @@ fn serve(
             // app or the build this node runs, for the home the node serves
             // (a development build installs nothing).
             kit: std::env::current_exe().map_or(hide_host::serve::KitPlace::Standalone, |exe| {
-                let home = std::env::var_os("HOME").map(std::path::PathBuf::from);
+                let home = hide_platform::host::home_dir().ok();
                 hide_host::serve::KitPlace::of_program(&exe, home.as_deref())
             }),
+            panes: None,
         },
     )
     .map(|()| "link_closed".to_owned())
@@ -1574,7 +1568,7 @@ mod tests {
             assert_eq!(frame["payload"]["phase"], "stopped");
             assert_eq!(
                 frame["payload"]["problem"],
-                herdr_core::DeviceProblem::of(problem).code()
+                hide_core::DeviceProblem::of(problem).code()
             );
         }
         for (error, _) in dial_outcomes() {
@@ -1735,6 +1729,20 @@ mod tests {
             ),
             (
                 ssh(SshProblem::Unclassified, "Connection reset by peer"),
+                true,
+            ),
+            (
+                ssh(SshProblem::SilentEnd, "the helper's output closed"),
+                true,
+            ),
+            (
+                ssh(SshProblem::SilentTimeout, "ssh did not sign in within 90 s"),
+                true,
+            ),
+            (ssh(SshProblem::ConfigUnreadable, "Bad configuration"), true),
+            (ssh(SshProblem::CheckFailed, "ssh -G did not answer"), true),
+            (
+                ssh(SshProblem::Busy, "4 other devices kept connecting"),
                 true,
             ),
             (SessionError::Lost("the connection ended".to_owned()), true),

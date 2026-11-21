@@ -45,7 +45,10 @@ fn writer(home: &Path) -> Connection {
 }
 
 fn read_root(home: &Path) -> Result<LabelTranscript, hide_session::ReadRefusal> {
-    read(home, &request(Agent::OpenCode))
+    read(
+        &hide_session::Accounts::new(home),
+        &request(Agent::OpenCode),
+    )
 }
 
 fn continued(answer: &LabelTranscript) -> LabelTranscriptRequest {
@@ -230,10 +233,13 @@ fn an_opencode_2_message_still_being_written_waits_for_the_next_read() {
     assert!(!first.has_more);
     assert_eq!(first.checkpoint.offset(), FIXTURE_MESSAGES);
     assert!(
-        read(home.path(), &continued(&first))
-            .unwrap()
-            .events
-            .is_empty()
+        read(
+            &hide_session::Accounts::new(home.path()),
+            &continued(&first)
+        )
+        .unwrap()
+        .events
+        .is_empty()
     );
     // OpenCode finishes it, and the next read takes it whole.
     assistant(
@@ -244,7 +250,11 @@ fn an_opencode_2_message_still_being_written_waits_for_the_next_read() {
         true,
         vec![text_item("끝났습니다")],
     );
-    let done = read(home.path(), &continued(&first)).unwrap();
+    let done = read(
+        &hide_session::Accounts::new(home.path()),
+        &continued(&first),
+    )
+    .unwrap();
     assert_eq!(
         done.events
             .iter()
@@ -445,7 +455,11 @@ fn an_opencode_2_assistant_too_large_to_scan_that_ends_the_session_is_waited_for
         ADDED_AT + 10,
         &json!({"time": {"created": ADDED_AT + 10}, "outcome": "succeeded"}),
     );
-    let next = read(home.path(), &continued(&first)).unwrap();
+    let next = read(
+        &hide_session::Accounts::new(home.path()),
+        &continued(&first),
+    )
+    .unwrap();
     assert_eq!(next.skipped_reasons.get("message_capacity"), Some(&1));
     assert_eq!(next.checkpoint.offset(), FIXTURE_MESSAGES + 2);
 }
@@ -474,7 +488,11 @@ fn opencode_2_content_items_have_a_work_cap_that_holds_across_messages_and_resum
     );
     assert_eq!(first.checkpoint.offset(), 2);
     assert!(first.has_more);
-    let last = read(home.path(), &continued(&first)).unwrap();
+    let last = read(
+        &hide_session::Accounts::new(home.path()),
+        &continued(&first),
+    )
+    .unwrap();
     assert!(last.events.iter().any(|event| event.text == "2 x"));
     assert_eq!(last.checkpoint.offset(), 3);
     assert!(!last.has_more);
@@ -575,7 +593,11 @@ fn an_opencode_2_question_waits_with_its_text_and_choices_until_it_is_answered()
         false,
         vec![question_item("running")],
     );
-    let asking = read(home.path(), &continued(&first)).unwrap();
+    let asking = read(
+        &hide_session::Accounts::new(home.path()),
+        &continued(&first),
+    )
+    .unwrap();
     assert!(
         asking.events.is_empty(),
         "the unfinished message is no event yet"
@@ -589,7 +611,11 @@ fn an_opencode_2_question_waits_with_its_text_and_choices_until_it_is_answered()
     assert!(content.contains("release"), "{content}");
 
     // An idle reread of the same unfinished message keeps the same wait.
-    let again = read(home.path(), &continued(&asking)).unwrap();
+    let again = read(
+        &hide_session::Accounts::new(home.path()),
+        &continued(&asking),
+    )
+    .unwrap();
     assert_eq!(
         again.turns.as_ref().unwrap().waiting(),
         Some(Waiting::Question)
@@ -604,7 +630,11 @@ fn an_opencode_2_question_waits_with_its_text_and_choices_until_it_is_answered()
         true,
         vec![question_item("completed")],
     );
-    let answered = read(home.path(), &continued(&again)).unwrap();
+    let answered = read(
+        &hide_session::Accounts::new(home.path()),
+        &continued(&again),
+    )
+    .unwrap();
     assert_eq!(
         answered.turns.as_ref().unwrap().waiting(),
         Some(Waiting::Nothing)
@@ -625,7 +655,11 @@ fn a_streaming_opencode_2_question_is_asked_with_its_choices_once_it_runs() {
         false,
         vec![question_item("streaming")],
     );
-    let streaming = read(home.path(), &continued(&first)).unwrap();
+    let streaming = read(
+        &hide_session::Accounts::new(home.path()),
+        &continued(&first),
+    )
+    .unwrap();
     assert_eq!(
         streaming.turns.as_ref().unwrap().waiting(),
         Some(Waiting::Nothing)
@@ -638,7 +672,11 @@ fn a_streaming_opencode_2_question_is_asked_with_its_choices_once_it_runs() {
         false,
         vec![question_item("running")],
     );
-    let asking = read(home.path(), &continued(&streaming)).unwrap();
+    let asking = read(
+        &hide_session::Accounts::new(home.path()),
+        &continued(&streaming),
+    )
+    .unwrap();
     let fact = asking.turns.as_ref().unwrap().user_turn().unwrap();
     let content = serde_json::to_value(fact.content.unwrap())
         .unwrap()
@@ -744,7 +782,11 @@ fn an_opencode_2_question_past_the_read_budget_waits_for_the_next_read_and_then_
         first.turns.as_ref().unwrap().waiting(),
         Some(Waiting::Nothing)
     );
-    let next = read(home.path(), &continued(&first)).unwrap();
+    let next = read(
+        &hide_session::Accounts::new(home.path()),
+        &continued(&first),
+    )
+    .unwrap();
     assert_eq!(
         next.turns.as_ref().unwrap().waiting(),
         Some(Waiting::Question)
@@ -811,7 +853,7 @@ fn an_opencode_2_child_session_is_never_read_into_or_as_the_root_conversation() 
     let mut child = request(Agent::OpenCode);
     child.reference_value = "ses_0a1b2c3d4e5f60718293child".into();
     assert_eq!(
-        read(home.path(), &child).unwrap_err(),
+        read(&hide_session::Accounts::new(home.path()), &child).unwrap_err(),
         hide_session::ReadRefusal::Refused("label_session_not_root".into())
     );
 }
@@ -822,21 +864,23 @@ fn an_opencode_2_session_proves_its_checkout_and_refuses_another_one() {
     let mut other = request(Agent::OpenCode);
     other.cwd = Some("/work/other".into());
     assert_eq!(
-        read(home.path(), &other).unwrap_err(),
+        read(&hide_session::Accounts::new(home.path()), &other).unwrap_err(),
         hide_session::ReadRefusal::Refused("label_session_cwd_mismatch".into())
     );
     other.cwd = None;
     assert_eq!(
-        read(home.path(), &other).unwrap_err(),
+        read(&hide_session::Accounts::new(home.path()), &other).unwrap_err(),
         hide_session::ReadRefusal::Refused("label_session_cwd_unconfirmed".into())
     );
     other.cwd = Some("/work/app/".into());
-    let confirmed = read(home.path(), &other).unwrap().confirmed;
+    let confirmed = read(&hide_session::Accounts::new(home.path()), &other)
+        .unwrap()
+        .confirmed;
     assert_eq!(confirmed.native_session_id.as_deref(), Some(ROOT));
     assert_eq!(confirmed.incarnation, "opencode:1790989200000");
     other.reference_value = "ses_absent".into();
     assert_eq!(
-        read(home.path(), &other).unwrap_err(),
+        read(&hide_session::Accounts::new(home.path()), &other).unwrap_err(),
         hide_session::ReadRefusal::Refused("session_file_missing".into())
     );
 }
@@ -856,14 +900,25 @@ fn a_skipped_opencode_2_message_still_witnesses_where_a_read_ended() {
     );
     let whole = read_whole(home.path(), Agent::OpenCode);
     assert!(whole.skipped_reasons.contains_key("message_capacity"));
-    let held = hide_session::opencode::holds(home.path(), ROOT, "/work/app", &whole.checkpoint);
+    let held = hide_session::opencode::holds(
+        &hide_session::Accounts::new(home.path()),
+        ROOT,
+        "/work/app",
+        &whole.checkpoint,
+    );
     assert!(held.is_ok(), "{held:?}");
     // Once that message is gone the same checkpoint no longer holds.
     writer
         .execute("DELETE FROM session_message WHERE id = ?1", [ADDED])
         .unwrap();
     assert!(
-        hide_session::opencode::holds(home.path(), ROOT, "/work/app", &whole.checkpoint).is_err()
+        hide_session::opencode::holds(
+            &hide_session::Accounts::new(home.path()),
+            ROOT,
+            "/work/app",
+            &whole.checkpoint
+        )
+        .is_err()
     );
 }
 
@@ -885,7 +940,11 @@ fn an_opencode_2_session_rewound_and_grown_back_is_read_again_not_continued() {
         "다른 방향으로 다시 해줘",
         Vec::new(),
     );
-    let again = read(home.path(), &continued(&first)).unwrap();
+    let again = read(
+        &hide_session::Accounts::new(home.path()),
+        &continued(&first),
+    )
+    .unwrap();
     assert_eq!(again.rescanned.as_deref(), Some("replaced"));
     assert_eq!(
         again.events.first().map(|event| event.text.as_str()),
@@ -928,8 +987,12 @@ fn opencode_2_conversation_page_is_its_label_read_by_message_with_receipts_as_in
         cwd: cwd.to_owned(),
     };
 
-    let page =
-        hide_session::opencode::read_conversation(home.path(), &scope("/work/app"), None).unwrap();
+    let page = hide_session::opencode::read_conversation(
+        &hide_session::Accounts::new(home.path()),
+        &scope("/work/app"),
+        None,
+    )
+    .unwrap();
     let events = page
         .events
         .iter()
@@ -967,7 +1030,7 @@ fn opencode_2_conversation_page_is_its_label_read_by_message_with_receipts_as_in
 
     // Read on from its checkpoint, nothing new is there.
     let next = hide_session::opencode::read_conversation(
-        home.path(),
+        &hide_session::Accounts::new(home.path()),
         &scope("/work/app"),
         Some(page.checkpoint),
     )
@@ -976,8 +1039,12 @@ fn opencode_2_conversation_page_is_its_label_read_by_message_with_receipts_as_in
     assert_eq!(next.checkpoint.offset(), 9);
 
     assert_eq!(
-        hide_session::opencode::read_conversation(home.path(), &scope("/work/other"), None)
-            .unwrap_err(),
+        hide_session::opencode::read_conversation(
+            &hide_session::Accounts::new(home.path()),
+            &scope("/work/other"),
+            None
+        )
+        .unwrap_err(),
         hide_session::ReadRefusal::Refused("label_session_cwd_mismatch".into())
     );
 }
@@ -987,6 +1054,7 @@ fn opencode_2_activity_answers_its_newest_write_and_count_only_for_its_proven_ow
     use hide_session::session_activity::{SessionActivityRequest, read as activity};
     let home = home();
     let request = |cwd: &str| SessionActivityRequest {
+        account: Default::default(),
         agent: Agent::OpenCode,
         reference_kind: "id".into(),
         reference_value: ROOT.into(),
@@ -994,17 +1062,25 @@ fn opencode_2_activity_answers_its_newest_write_and_count_only_for_its_proven_ow
         exact_route: true,
         expected_id: Some(ROOT.into()),
     };
-    let answer = activity(home.path(), &request("/work/app")).unwrap();
+    let answer = activity(
+        &hide_session::Accounts::new(home.path()),
+        &request("/work/app"),
+    )
+    .unwrap();
     assert_eq!(answer.bytes, FIXTURE_MESSAGES);
     assert_eq!(answer.modified_at_unix_ms, START + 131_001);
     assert_eq!(
-        activity(home.path(), &request("/work/other")).unwrap_err(),
+        activity(
+            &hide_session::Accounts::new(home.path()),
+            &request("/work/other")
+        )
+        .unwrap_err(),
         hide_session::ReadRefusal::Refused("label_session_cwd_mismatch".into())
     );
     let mut changed = request("/work/app");
     changed.expected_id = Some("ses_other".into());
     assert_eq!(
-        activity(home.path(), &changed).unwrap_err(),
+        activity(&hide_session::Accounts::new(home.path()), &changed).unwrap_err(),
         hide_session::ReadRefusal::Refused("session_route_owner_changed".into())
     );
 }
@@ -1101,18 +1177,29 @@ mod schema {
             cwd: "/work/app".to_owned(),
         };
         assert_eq!(
-            hide_session::opencode::read_conversation(home.path(), &scope, None).unwrap_err(),
+            hide_session::opencode::read_conversation(
+                &hide_session::Accounts::new(home.path()),
+                &scope,
+                None
+            )
+            .unwrap_err(),
             hide_session::ReadRefusal::Refused(NEITHER.into())
         );
         assert_eq!(
-            hide_session::opencode::message_checkpoint(home.path(), ROOT, "/work/app", 0)
-                .unwrap_err(),
+            hide_session::opencode::message_checkpoint(
+                &hide_session::Accounts::new(home.path()),
+                ROOT,
+                "/work/app",
+                0
+            )
+            .unwrap_err(),
             NEITHER
         );
         assert_eq!(
             activity(
-                home.path(),
+                &hide_session::Accounts::new(home.path()),
                 &SessionActivityRequest {
+                    account: Default::default(),
                     agent: Agent::OpenCode,
                     reference_kind: "id".into(),
                     reference_value: ROOT.into(),
@@ -1127,9 +1214,10 @@ mod schema {
         let project_root = home.path().join("project");
         std::fs::create_dir_all(&project_root).unwrap();
         let project = hide_project::resolve(&project_root, "local").unwrap();
-        let listed = hide_session::SessionCatalog::new(home.path(), "local")
-            .project_sessions(&project)
-            .unwrap();
+        let listed =
+            hide_session::SessionCatalog::new(&hide_session::Accounts::new(home.path()), "local")
+                .project_sessions(&project)
+                .unwrap();
         assert!(listed.sessions.is_empty());
         assert_eq!(
             listed
@@ -1181,9 +1269,10 @@ mod listings {
     #[test]
     fn the_catalog_lists_an_opencode_2_root_session_with_its_first_request() {
         let (home, project) = home_in_checkout();
-        let listed = hide_session::SessionCatalog::new(home.path(), "local")
-            .project_sessions(&project)
-            .unwrap();
+        let listed =
+            hide_session::SessionCatalog::new(&hide_session::Accounts::new(home.path()), "local")
+                .project_sessions(&project)
+                .unwrap();
         assert!(listed.refusals.is_empty());
         let [session] = listed.sessions.as_slice() else {
             panic!("only the root session is listed: {:?}", listed.sessions);
@@ -1213,7 +1302,7 @@ mod listings {
             checkpoint: None,
         };
         let answers = links::read(
-            home.path(),
+            &hide_session::Accounts::new(home.path()),
             &[
                 ask("opencode/ses_0a1b2c3d4e5f60718293a4b5c6"),
                 ask("opencode/ses_0a1b2c3d4e5f60718293child"),
@@ -1240,22 +1329,30 @@ fn a_session_in_opencode_2_tables_forks_through_its_server_and_a_1x_one_by_its_f
 
     let two = home();
     assert_eq!(
-        fork_route(two.path(), ROOT, "/work/app"),
+        fork_route(&hide_session::Accounts::new(two.path()), ROOT, "/work/app"),
         Ok(ForkRoute::Server)
     );
     let one = crate::adapters::home(Agent::OpenCode);
     assert_eq!(
-        fork_route(one.path(), ROOT, "/work/app"),
+        fork_route(&hide_session::Accounts::new(one.path()), ROOT, "/work/app"),
         Ok(ForkRoute::Flag)
     );
     assert_eq!(
-        fork_route(two.path(), "ses_0a1b2c3d4e5f60718293child", "/work/app"),
+        fork_route(
+            &hide_session::Accounts::new(two.path()),
+            "ses_0a1b2c3d4e5f60718293child",
+            "/work/app"
+        ),
         Err(hide_session::ReadRefusal::Refused(
             "label_session_not_root".into()
         ))
     );
     assert_eq!(
-        fork_route(two.path(), ROOT, "/elsewhere/app"),
+        fork_route(
+            &hide_session::Accounts::new(two.path()),
+            ROOT,
+            "/elsewhere/app"
+        ),
         Err(hide_session::ReadRefusal::Refused(
             "label_session_cwd_mismatch".into()
         ))

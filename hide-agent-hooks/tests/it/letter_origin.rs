@@ -16,6 +16,7 @@ use std::time::{Duration, Instant};
 use hide_platform::process::OwnedChild;
 
 use crate::programs;
+use crate::stand_in_daemon::StandInDaemon;
 use crate::stand_ins;
 
 const PANE: &str = "w1:p1";
@@ -31,8 +32,10 @@ case "$2" in
 esac
 "#;
 
-/// The helper linked beside a fake `hide`, since the hook asks its sibling.
+/// The helper linked beside a fake `hide`, which confirms its letters, and a
+/// daemon answering from the same table, which hands them over.
 struct Machine {
+    daemon: StandInDaemon,
     _dir: tempfile::TempDir,
     home: PathBuf,
     hook: PathBuf,
@@ -51,7 +54,9 @@ impl Machine {
         stand_ins::place(programs::hook(), &hook);
         stand_ins::program(&bin.join("hide"), FAKE_HIDE);
         let calls = root.join("hide-calls");
+        let daemon = StandInDaemon::serve(&bin.join("hide"), &[("HOME", home.clone().into())]);
         Self {
+            daemon,
             _dir: dir,
             home,
             hook,
@@ -71,7 +76,7 @@ impl Machine {
             .args(["--source", "hide-subagents@6"])
             .env(hide_platform::host::HOME_VARIABLE, &self.home)
             .env("PATH", &self.home)
-            .env("HERDR_PANE_ID", PANE)
+            .env("HIDE_PANE_ID", PANE)
             .stdin(Stdio::null())
             .stdout(Stdio::piped())
             .stderr(Stdio::piped());
@@ -80,11 +85,12 @@ impl Machine {
             if ["HERDR_", "HIDE_", "HCOORD_", "CURSOR_", "OPENCODE", "GROK_"]
                 .iter()
                 .any(|prefix| name.starts_with(prefix))
-                && name != "HERDR_PANE_ID"
+                && name != "HIDE_PANE_ID"
             {
                 command.env_remove(key);
             }
         }
+        self.daemon.route(&mut command);
         command.envs(origin.iter().copied());
         let mut child = OwnedChild::spawn(&mut command).unwrap();
         let output = child
@@ -92,6 +98,12 @@ impl Machine {
             .expect("the hook ends within its bound");
         assert!(output.status.success());
         String::from_utf8(output.stdout).unwrap()
+    }
+
+    /// The hooks' records folder of the daemon this machine stands in for,
+    /// where a hook of the daemon keeps what it writes.
+    fn records(&self) -> PathBuf {
+        self.daemon.records()
     }
 
     /// The `hide inbox` calls the hook made; the guidance asks `hide` other
@@ -105,20 +117,12 @@ impl Machine {
             .collect()
     }
 
-    /// Every file Hide's hook left under the home, with its bytes.
+    /// Every file Hide's hook left under the home and in the daemon's
+    /// records, with its bytes.
     fn files(&self) -> BTreeMap<PathBuf, Vec<u8>> {
-        fn walk(dir: &Path, found: &mut BTreeMap<PathBuf, Vec<u8>>) {
-            for entry in std::fs::read_dir(dir).into_iter().flatten().flatten() {
-                let path = entry.path();
-                if path.is_dir() {
-                    walk(&path, found);
-                } else {
-                    found.insert(path.clone(), std::fs::read(&path).unwrap_or_default());
-                }
-            }
-        }
         let mut found = BTreeMap::new();
         walk(&self.home, &mut found);
+        walk(&self.records(), &mut found);
         found
     }
 }
@@ -222,4 +226,17 @@ fn cursor_silences_claude_aliases_before_any_hook_effect() {
     }
     assert!(machine.calls().is_empty());
     assert!(machine.files().is_empty());
+}
+
+/// Every file below `dir`, with its bytes; a folder that does not exist holds
+/// none.
+fn walk(dir: &Path, found: &mut BTreeMap<PathBuf, Vec<u8>>) {
+    for entry in std::fs::read_dir(dir).into_iter().flatten().flatten() {
+        let path = entry.path();
+        if path.is_dir() {
+            walk(&path, found);
+        } else {
+            found.insert(path.clone(), std::fs::read(&path).unwrap_or_default());
+        }
+    }
 }

@@ -51,6 +51,9 @@
       "vendor/patches/libghostty-vt/0005-bounded-word-selection.patch": "860a12e7db762e45174ea056cdbe4017dc91080df22b7cd795473a4ee4c4ae0e",
       "vendor/patches/libghostty-vt/0006-clear-screen-preserving-cursor-line.patch": "8570226466679fe75f743cabc43bafae9bfe50f57d864f45c247a110fa15c325",
       "vendor/patches/libghostty-vt/0007-experimental-png-retention.patch": "c584e68d01e3f12c81d10492b314368fb9d3f8d49810483b686679bb208dab4a"
+    },
+    "hide_patches": {
+      "patches/0001-msvc-stl-version-gate.patch": "4e2772706d342a27d58246ea704d3e1acd668b2e1d668b91183714f7c77c57dc"
     }
   },
   "packages": [
@@ -60,7 +63,7 @@
     },
     {
       "hash": "translate_c-0.0.0-Q_BUWhVNBwDOEcIqub4VFPJPB6D9dgwzUMHTX5KWr8Xr",
-      "url": "https://codeberg.org/vancluever/translate-c/archive/4e879eb8aba615de112eabd1231ea6e01920cead.tar.gz"
+      "url": "git+https://codeberg.org/vancluever/translate-c#4e879eb8aba615de112eabd1231ea6e01920cead"
     },
     {
       "hash": "aro-0.0.0-JSD1Qk6lNgDdcDV4Vh7Sfy-34m2TluIVOdPzMmj_0BjX",

@@ -8,6 +8,7 @@
 import { MapIcon } from "lucide-react";
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type KeyboardEvent, type ReactNode, type RefObject } from "react";
 import type { Actions } from "./actions";
+import { escapeConsumed } from "./components/ui/tooltip";
 import { askingCount, deskOn, laneCards, sessionFacts, sessionThreadId, threadKeyPane, unseenOutputs, type DeskItem, type DeskJob, type DeskMention, type DeskOutput, type DeskSessionRef } from "./desk";
 import { activeTab, backFromThread, namesView, closeLane, closeTab, closeTool, closeView, openMission, openThread, outputTab, showTab, showThreads, tabKey, toggleOutputs, toggleThreads, viewTabs } from "./deskLane";
 import { DeskOutputView } from "./DeskOutputView";
@@ -38,7 +39,7 @@ import { windowIsActive } from "./viewFocus";
 const NO_JOBS: DeskJob[] = [];
 const NO_TABS: DeskKeptTab[] = [];
 
-/** The sidebar's `◆ Desk` row (B1), once hided runs Desk and Settings › Desk switched it on (B41). */
+/** The sidebar's `◆ Desk` row (B1), once hided runs Desk and Settings › Labs › Desk switched it on (B41). */
 export function DeskSidebarEntry({ actions }: { actions: Actions }) {
   const shown = useShellStore((s) => deskOn(s.desk));
   const selected = useUiStore((s) => s.screen?.kind === "desk");
@@ -51,7 +52,7 @@ export function DeskSidebarEntry({ actions }: { actions: Actions }) {
   );
 }
 
-/** Settings › Desk (B4, B19, B21). */
+/** Settings › Labs › Desk (B4, B19, B21). */
 export function DeskSettingsPage({ actions }: { actions: Actions }) {
   const desk = useShellStore((s) => s.desk);
   if (!desk) return null;
@@ -572,7 +573,7 @@ function DeskLaneColumns({ actions, lane, chat }: { actions: Actions; lane: Lane
   }
 
   const onKeyDown = (event: KeyboardEvent<HTMLDivElement>) => {
-    if (event.key !== "Escape" || event.defaultPrevented) return;
+    if (event.key !== "Escape" || escapeConsumed(event)) return;
     if (place.expanded) set((now) => ({ ...now, expanded: false }));
     else if (place.up && !pinned) {
       set(closeLane);

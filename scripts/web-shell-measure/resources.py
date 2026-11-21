@@ -1,9 +1,10 @@
 #!/usr/bin/env python3
 """One-second CPU deltas and RSS samples for owned process trees.
 
-usage: resources.py <hided-pid> <herdr-pid|engine:pid,...> <chrome-pid> [--memory-series]
+usage: resources.py <hided-pid> <engine:pid,...|0> <chrome-pid>
 MEASURE_RESOURCE_SECONDS sets how many one-second samples (20 by default).
-A chrome pid of 0 samples no browser (a windowless window).
+A chrome pid of 0 samples no browser (a windowless window), and an engine of
+0 samples no pane holders.
 CPU is one-core percent from process CPU-time deltas, not ps's lifetime average.
 Each one-second sample also keeps the roots' own CPU and RSS and each child's, named
 by its accounting name (ps ucomm), so a short child is told apart from the
@@ -42,15 +43,13 @@ def tree(root, rows):
         found = grown
 
 
-if len(sys.argv) not in (4, 5) or (len(sys.argv) == 5 and sys.argv[4] != "--memory-series"):
-    raise SystemExit("usage: resources.py <hided-pid> <herdr-pid|engine:pid,...> <chrome-pid> [--memory-series]")
-# The engine argument can name a group of owned holder roots; each tree is
+if len(sys.argv) != 4:
+    raise SystemExit("usage: resources.py <hided-pid> <engine:pid,...|0> <chrome-pid>")
+# The engine argument names the group of owned holder roots; each tree is
 # counted once, with the roots themselves also reported apart from children.
-engine = sys.argv[2]
-engine_name = "engine" if engine.startswith("engine:") else "herdr"
-engine_pids = engine.removeprefix("engine:")
+engine_pids = sys.argv[2].removeprefix("engine:")
 roots = {name: set(int(pid) for pid in raw.split(",") if int(pid))
-         for name, raw in (("hided", sys.argv[1]), (engine_name, engine_pids), ("chrome", sys.argv[3]))}
+         for name, raw in (("hided", sys.argv[1]), ("engine", engine_pids), ("chrome", sys.argv[3]))}
 roots = {name: pids for name, pids in roots.items() if pids}
 
 
@@ -58,19 +57,6 @@ def group_tree(group, rows):
     return set().union(*(tree(pid, rows) for pid in group))
 
 
-if len(sys.argv) == 5:
-    origin = time.monotonic()
-    samples = []
-    for minute in range(11):
-        time.sleep(max(0, origin + minute * 60 - time.monotonic()))
-        rows = snapshot()
-        sample = {"seconds": time.monotonic() - origin}
-        for name, group in roots.items():
-            pids = group_tree(group, rows)
-            sample[name] = {"rss_kb": sum(rows[pid][2] for pid in pids), "pids": sorted(pids)}
-        samples.append(sample)
-    print(json.dumps({"method": "eleven one-minute RSS samples over ten minutes; owned process trees", "samples": samples}))
-    raise SystemExit(0)
 before, started = snapshot(), time.monotonic()
 samples = []
 seconds = int(os.environ.get("MEASURE_RESOURCE_SECONDS", "20"))

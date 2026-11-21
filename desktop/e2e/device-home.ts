@@ -1,12 +1,14 @@
 // The device side of SSH e2e runs only in the declared private HOME.
 // The isolated sshd must set HOME to HIDE_E2E_SSH_HOME and that folder must
 // carry the fixture marker before a device can receive Hide's kit.
+// It must also `AcceptEnv HIDE_MACHINE_ID`: every alias is this Mac, and a
+// device is named by its machine's id (docs/ARCHITECTURE.md, A device's id),
+// so each alias sends the id its device is expected under (`writeSshConfig`).
 
 import { spawnSync } from "node:child_process";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { herdrBinary } from "../../web/e2e/herdr-fixture";
 import { HIDE_CLI, seedKitRecord } from "./fixture";
 const MARKER = ".hide-e2e-device-home";
 
@@ -34,14 +36,22 @@ export const deviceState = (home: string) => path.join(home, ".hide", "state");
 /** The folder holding one `bridge-*` folder per daemon that has the device open. */
 export const deviceBridges = (home: string) => path.join(deviceState(home), "workspace-bridges");
 
-/** An SSH config and known_hosts under the run's local HOME, one host entry per alias for the isolated server. */
-export function writeSshConfig(localHome: string, aliases: string[]): void {
+/**
+ * An SSH config and known_hosts under the run's local HOME, one host entry per
+ * alias for the isolated server. Each alias in `devices` reaches the isolated
+ * sshd as the machine whose id is its value, the id its device is named by.
+ * Each entry names that known_hosts itself: ssh finds `~/.ssh/known_hosts` by
+ * the account's home, not `HOME`, so the account's own file would answer.
+ */
+export function writeSshConfig(localHome: string, devices: Record<string, string>): void {
   const ssh = path.join(localHome, ".ssh");
   fs.mkdirSync(ssh, { recursive: true });
   fs.copyFileSync(process.env.HIDE_E2E_SSH_KNOWN_HOSTS!, path.join(ssh, "known_hosts"));
-  fs.writeFileSync(path.join(ssh, "config"), aliases.flatMap((alias) => [
+  fs.writeFileSync(path.join(ssh, "config"), Object.entries(devices).flatMap(([alias, machine]) => [
     `Host ${alias}`, "  HostName 127.0.0.1", `  Port ${process.env.HIDE_E2E_SSH_PORT}`,
-    `  User ${os.userInfo().username}`, `  IdentityFile ${process.env.HIDE_E2E_SSH_KEY}`, "  IdentityAgent none", "",
+    `  User ${os.userInfo().username}`, `  IdentityFile ${process.env.HIDE_E2E_SSH_KEY}`, "  IdentityAgent none",
+    `  UserKnownHostsFile "${path.join(ssh, "known_hosts")}"`,
+    `  SetEnv HIDE_MACHINE_ID=${machine}`, "",
   ]).join("\n"), { mode: 0o600 });
 }
 
@@ -51,10 +61,11 @@ export function proveDeviceHome(localEnv: Record<string, string>, alias: string,
   const answer = spawnSync("ssh", [
     "-F", path.join(ssh, "config"), "-o", "BatchMode=yes", "-o", "StrictHostKeyChecking=yes",
     "-o", `UserKnownHostsFile=${path.join(ssh, "known_hosts")}`, "-o", "GlobalKnownHostsFile=/dev/null",
-    alias, 'printf "%s" "$HOME"',
+    alias, 'printf "%s\\n%s" "$HOME" "${HIDE_MACHINE_ID:-}"',
   ], { env: localEnv, encoding: "utf8", timeout: 20_000 });
   if (answer.status !== 0) throw new Error(`the isolated sshd did not answer: ${answer.stderr}`);
-  const remoteHome = answer.stdout;
+  const [remoteHome, machine] = answer.stdout.split("\n");
+  if (!machine) throw new Error("the isolated sshd must AcceptEnv HIDE_MACHINE_ID, so each alias is a machine of its own");
   if (!remoteHome || fs.realpathSync(remoteHome) !== home) {
     throw new Error(`a session on the isolated sshd does not receive the declared private HOME; the kit would write that account's own files`);
   }
@@ -68,15 +79,13 @@ export const codexHooks = (home: string) => path.join(home, ".codex", "hooks.jso
 export const readSettings = (file: string) => JSON.parse(fs.readFileSync(file, "utf8")) as AgentSettings;
 
 /**
- * Puts the private HOME back to a device that has never met Hide: Herdr
- * installed in ~/.local/bin, the kit's
- * folders gone, and the agent files seeded by `seedAgentFiles`.
+ * Puts the private HOME back to a device that has never met Hide: the kit's
+ * folders gone and the agent files seeded by `seedAgentFiles`.
  */
 export function resetDeviceHome(home: string): { claude: AgentSettings; codex: AgentSettings } {
   assertTestHome(home);
   for (const name of [".claude", ".codex", ".hide", ".local"]) fs.rmSync(path.join(home, name), { recursive: true, force: true });
   fs.mkdirSync(path.join(home, ".local", "bin"), { recursive: true });
-  fs.symlinkSync(herdrBinary(), path.join(home, ".local", "bin", "herdr"));
   return seedAgentFiles(home);
 }
 
@@ -149,9 +158,9 @@ export const codexAutostart = (home: string) => (fs.existsSync(path.join(home, "
 
 /**
  * A daemon folder laid out as the app's Contents/Resources: this build's
- * binaries, every kit part a device gets and the pinned Herdr the package
- * carries. The daemon reads the device payload from beside its own
- * executable.
+ * binaries, every kit part a device gets, and the pane holder
+ * (`web/e2e/bundled-app.ts`, `binaries`). The daemon reads
+ * the device payload from beside its own executable.
  */
 export function stageBuild(root: string): string {
   const debug = path.dirname(HIDE_CLI);
@@ -160,14 +169,10 @@ export function stageBuild(root: string): string {
   const place = (source: string, target: string) => {
     try { fs.linkSync(source, target); } catch { fs.copyFileSync(source, target); fs.chmodSync(target, 0o755); }
   };
-  for (const name of ["hided", "hide", "hide-agent-hooks"]) {
+  for (const name of ["hided", "hide", "hide-agent-hooks", "hide-holder"]) {
     const binary = path.join(debug, name);
-    if (!fs.existsSync(binary)) throw new Error(`${binary} is missing: run \`cargo build -p hided -p hide-agent-hooks\``);
+    if (!fs.existsSync(binary)) throw new Error(`${binary} is missing: run \`cargo build -p hided -p hide-agent-hooks -p hide-holder\``);
     place(binary, path.join(build, name));
   }
-  // A copy, so the device's Herdr server, which runs the linked pinned
-  // binary, never runs the file the upload reads.
-  fs.copyFileSync(herdrBinary(), path.join(build, "herdr"));
-  fs.chmodSync(path.join(build, "herdr"), 0o755);
   return build;
 }

@@ -21,9 +21,81 @@ pub struct Composer {
     /// Lines of the agent's own chrome at the end of the region, such as
     /// OpenCode's agent and model line, which are never content.
     pub trailer: usize,
+    /// The rows that show anything the agent draws under its composer while
+    /// nothing is open there, each by the words it begins with while the
+    /// composer is empty, such as Antigravity's status line `? for
+    /// shortcuts`. A picker, a list, a question or a notice drawn under the
+    /// composer may take the keys typed while it is open, so an empty
+    /// composer reads empty only above exactly these rows; a composer that
+    /// holds text may change their words (agy drops `? for shortcuts`), so
+    /// it only has no more rows there. `None` where what lies under it was
+    /// not measured, and is not read.
+    pub under: Option<&'static [&'static str]>,
     /// What may stand in an empty composer besides spaces. Every line that
     /// is not blank must be one of these for the composer to read empty.
     pub empty: &'static [Placeholder],
+    /// The one mark the agent draws in place of a paste of many lines, when
+    /// it draws one with the paste's line count; `None` for an agent that
+    /// shows the pasted text itself (Codex) or a mark with no count (omp).
+    pub pasted: Option<PasteMark>,
+}
+
+/// The mark an agent draws in its composer for a paste it keeps as one
+/// unit, such as Claude Code's `[Pasted text #1 +11 lines]`, which stands
+/// for the paste until it is submitted.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct PasteMark {
+    /// The mark's words, with `{n}` for the paste's own number, any digits,
+    /// and `{count}` for its size in [`PasteMark::count`]'s unit.
+    pub words: &'static str,
+    pub count: LineCount,
+}
+
+/// How an agent counts the lines of a paste in its mark.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum LineCount {
+    /// The lines of text, a last line break ending the last line rather
+    /// than starting another (OpenCode, Pi, Grok, Antigravity).
+    Lines,
+    /// The line breaks (Claude Code).
+    Breaks,
+}
+
+impl LineCount {
+    fn of(self, text: &str) -> usize {
+        let text = text.replace("\r\n", "\n").replace('\r', "\n");
+        match self {
+            Self::Lines => text.lines().count(),
+            Self::Breaks => text.matches('\n').count(),
+        }
+    }
+}
+
+impl PasteMark {
+    /// Whether `shown` is this mark for a paste of `text`.
+    fn stands_for(&self, shown: &str, text: &str) -> bool {
+        let words = self
+            .words
+            .replace("{count}", &self.count.of(text).to_string());
+        let mut parts = words.split("{n}");
+        let Some(head) = parts.next() else {
+            return false;
+        };
+        let Some(mut rest) = shown.strip_prefix(head) else {
+            return false;
+        };
+        for part in parts {
+            let digits = rest.len() - rest.trim_start_matches(|c: char| c.is_ascii_digit()).len();
+            if digits == 0 {
+                return false;
+            }
+            let Some(after) = rest[digits..].strip_prefix(part) else {
+                return false;
+            };
+            rest = after;
+        }
+        rest.is_empty()
+    }
 }
 
 /// The lines of the screen that make up the composer, found from the bottom
@@ -68,6 +140,10 @@ pub enum Style {
     Italic,
     /// This exact 24-bit foreground colour.
     Rgb(u8, u8, u8),
+    /// This entry of the terminal's palette as the foreground: 0-15 for the
+    /// basic and bright colours (SGR 30-37 and 90-97, or 38;5;n), up to 255
+    /// for the 256-colour palette.
+    Palette(u8),
 }
 
 /// A foreground colour the terminal was told to draw with.
@@ -116,6 +192,9 @@ pub enum Miss {
     NoMarker,
     /// The composer has fewer lines than the agent's own chrome under it.
     NoTrailer,
+    /// The rows under the composer are not the ones the agent draws there
+    /// at rest: a picker, a list, a question or a notice is open under it.
+    OpenUnder,
     /// A line shows a placeholder's text with a cell in another style.
     PlaceholderStyle,
     /// A line shows text that is none of the placeholders.
@@ -123,12 +202,13 @@ pub enum Miss {
 }
 
 impl Miss {
-    const ALL: [Self; 7] = [
+    const ALL: [Self; 8] = [
         Self::NoRule,
         Self::NoTopRule,
         Self::NoRegion,
         Self::NoMarker,
         Self::NoTrailer,
+        Self::OpenUnder,
         Self::PlaceholderStyle,
         Self::NotPlaceholder,
     ];
@@ -147,6 +227,7 @@ impl Miss {
             Self::NoRegion => "no_region",
             Self::NoMarker => "no_marker",
             Self::NoTrailer => "no_trailer",
+            Self::OpenUnder => "open_under",
             Self::PlaceholderStyle => "placeholder_style",
             Self::NotPlaceholder => "not_placeholder",
         }
@@ -171,7 +252,7 @@ struct Pen {
 type Cells = Vec<(char, Pen)>;
 
 impl Composer {
-    /// Judges a screen Herdr read with styling (`pane.read`, format `ansi`,
+    /// Judges a screen read with styling (`pane.read`, format `ansi`,
     /// rows separated by newlines).
     pub fn judge(&self, screen: &str) -> Verdict {
         self.explain(screen)
@@ -181,7 +262,7 @@ impl Composer {
     /// Judges a screen as [`Composer::judge`] does, and says which step kept
     /// it from reading empty.
     pub fn explain(&self, screen: &str) -> Result<(), Miss> {
-        let region = self.content(screen)?;
+        let (region, under) = self.content(screen)?;
         for line in region.iter().filter(|line| !blank(line)) {
             if !self.empty.iter().any(|shown| shown.matches(line)) {
                 return Err(if self.empty.iter().any(|shown| shown.shows_text(line)) {
@@ -191,6 +272,15 @@ impl Composer {
                 });
             }
         }
+        if let Some(rows) = self.under
+            && !(under.len() == rows.len()
+                && under
+                    .iter()
+                    .zip(rows)
+                    .all(|(line, words)| visible(line).trim_start().starts_with(words)))
+        {
+            return Err(Miss::OpenUnder);
+        }
         Ok(())
     }
 
@@ -198,11 +288,20 @@ impl Composer {
     /// it that was never submitted. Whitespace is ignored, since a terminal
     /// wraps and indents pasted lines; a composer declared as one line
     /// (`Region::Line`) shows only the text's first line, which has to be
-    /// that line whole.
+    /// that line whole. A paste the agent keeps as one mark shows as that
+    /// mark alone, with `text`'s line count ([`Composer::pasted`]).
     pub fn holds(&self, screen: &str, text: &str) -> bool {
-        let Ok(region) = self.content(screen) else {
+        let Ok((region, _)) = self.content(screen) else {
             return false;
         };
+        if let Some(mark) = &self.pasted {
+            let mut shown = region.iter().filter(|line| !blank(line));
+            if let (Some(line), None) = (shown.next(), shown.next())
+                && mark.stands_for(visible(line).trim(), text)
+            {
+                return true;
+            }
+        }
         let shown: String = region
             .iter()
             .flat_map(|line| line.iter().map(|(c, _)| *c))
@@ -223,10 +322,20 @@ impl Composer {
     }
 
     /// The composer's lines on `screen`, its marker and the agent's own
-    /// chrome under it taken off.
-    fn content(&self, screen: &str) -> Result<Vec<Cells>, Miss> {
+    /// chrome under it taken off, and the rows under it that show anything.
+    /// More of those than the agent draws there at rest is something open
+    /// under the composer whatever it holds.
+    fn content(&self, screen: &str) -> Result<(Vec<Cells>, Vec<Cells>), Miss> {
         let lines: Vec<Cells> = screen.split('\n').map(cells).collect();
-        let mut region = self.region(&lines)?;
+        let (mut region, end) = self.region(&lines)?;
+        let under: Vec<Cells> = lines[end..]
+            .iter()
+            .filter(|line| !blank(line))
+            .cloned()
+            .collect();
+        if self.under.is_some_and(|rows| under.len() > rows.len()) {
+            return Err(Miss::OpenUnder);
+        }
         if !self.marker.is_empty() {
             let first = region.first_mut().ok_or(Miss::NoMarker)?;
             let start = first.iter().take_while(|(c, _)| c.is_whitespace()).count();
@@ -245,10 +354,12 @@ impl Composer {
                 .ok_or(Miss::NoTrailer)?;
             region.truncate(last);
         }
-        Ok(region)
+        Ok((region, under))
     }
 
-    fn region(&self, lines: &[Cells]) -> Result<Vec<Cells>, Miss> {
+    /// The composer's lines and the index of the first row under it, past
+    /// its closing rule or border.
+    fn region(&self, lines: &[Cells]) -> Result<(Vec<Cells>, usize), Miss> {
         let marked = |line: &Cells| {
             let text = visible(line);
             let text = text.trim_start();
@@ -266,7 +377,7 @@ impl Composer {
                     .iter()
                     .rposition(|line| rule(line) || labelled_rule(line, pen))
                     .ok_or(Miss::NoTopRule)?;
-                Ok(lines[top + 1..bottom].to_vec())
+                Ok((lines[top + 1..bottom].to_vec(), bottom + 1))
             }
             Region::Box { open, close, side } => {
                 boxed(lines, open, close, side).ok_or(Miss::NoRegion)
@@ -278,11 +389,11 @@ impl Composer {
                     .iter()
                     .position(blank)
                     .map_or(lines.len(), |offset| top + 1 + offset);
-                Ok(lines[top..end].to_vec())
+                Ok((lines[top..end].to_vec(), end))
             }
             Region::Line => {
                 let line = lines.iter().rposition(marked).ok_or(Miss::NoRegion)?;
-                Ok(vec![lines[line].clone()])
+                Ok((vec![lines[line].clone()], line + 1))
             }
         }
     }
@@ -290,33 +401,35 @@ impl Composer {
 
 /// The lines between the last line beginning with `close` and the line
 /// beginning with `open` above it, stripped of the `side` border.
-fn boxed(lines: &[Cells], open: char, close: char, side: char) -> Option<Vec<Cells>> {
+fn boxed(lines: &[Cells], open: char, close: char, side: char) -> Option<(Vec<Cells>, usize)> {
     let bottom = lines.iter().rposition(|line| starts_with(line, close))?;
     let top = lines[..bottom]
         .iter()
         .rposition(|line| starts_with(line, open))?;
-    lines[top + 1..bottom]
+    let inner = lines[top + 1..bottom]
         .iter()
         .map(|line| strip_side(line, side, true))
-        .collect()
+        .collect::<Option<_>>()?;
+    Some((inner, bottom + 1))
 }
 
 /// The lines beginning with `side` directly above the last line beginning
 /// with `close`, stripped of that border.
-fn barred(lines: &[Cells], side: char, close: char) -> Option<Vec<Cells>> {
+fn barred(lines: &[Cells], side: char, close: char) -> Option<(Vec<Cells>, usize)> {
     let bottom = lines.iter().rposition(|line| starts_with(line, close))?;
     let top = lines[..bottom]
         .iter()
         .rposition(|line| !starts_with(line, side))
         .map_or(0, |index| index + 1);
     (top < bottom).then_some(())?;
-    lines[top..bottom]
+    let inner = lines[top..bottom]
         .iter()
         .map(|line| strip_side(line, side, false))
-        .collect()
+        .collect::<Option<_>>()?;
+    Some((inner, bottom + 1))
 }
 
-/// Whether a row of a screen Herdr read with styling (as [`Composer::judge`]
+/// Whether a row of a screen read with styling (as [`Composer::judge`]
 /// reads one) shows `text`, whatever its pen.
 pub fn screen_shows(screen: &str, text: &str) -> bool {
     screen
@@ -335,6 +448,7 @@ impl Placeholder {
                     Style::Dim => pen.dim,
                     Style::Italic => pen.italic,
                     Style::Rgb(r, g, b) => pen.fg == Some(Colour::Rgb(r, g, b)),
+                    Style::Palette(index) => pen.fg == Some(Colour::Index(index)),
                 })
     }
 
@@ -409,7 +523,7 @@ fn strip_side(line: &Cells, side: char, closed: bool) -> Option<Cells> {
 
 /// One row of a styled screen as characters with their pen. Only SGR
 /// sequences change the pen; every other escape is dropped, and a carriage
-/// return ends nothing, since Herdr separates rows with newlines.
+/// return ends nothing, since the engine separates rows with newlines.
 fn cells(row: &str) -> Cells {
     let mut pen = Pen::default();
     let mut out = Vec::new();

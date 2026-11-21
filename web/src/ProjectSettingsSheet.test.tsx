@@ -187,3 +187,20 @@ it("names the project from the first page's name field, refuses a name the core 
     expect(sheet().textContent).toContain("Saved");
   });
 });
+
+it("draws Agent accounts only for an agent with a profile of its own and saves the project's choice (agent-profiles B1, B15)", async () => {
+  await withScene("lang=en&state=work", async () => {
+    expect(document.querySelector("[data-project-agent-accounts]")).toBeNull();
+  });
+  await withScene("lang=en&state=agent-accounts", async () => {
+    expect([...document.querySelectorAll("[data-project-agent-account]")].map((row) => row.getAttribute("data-project-agent-account"))).toEqual(["claude-code"]);
+    const control = () => document.querySelector<HTMLElement>('[data-project-agent-account-value]')!;
+    expect(control().dataset.projectAgentAccountValue).toBe("follow");
+    await act(async () => control().dispatchEvent(new KeyboardEvent("keydown", { key: "ArrowDown", bubbles: true })));
+    const options = [...document.querySelectorAll<HTMLElement>('[role="option"]')];
+    expect(options.map((option) => option.textContent)).toEqual(["Agent default · side", "Default", "work", "side"]);
+    await act(async () => options.find((option) => option.textContent === "work")!.click());
+    expect(useShellStore.getState().rest?.ui_state?.project_settings?.example?.agent_profiles).toEqual({ "claude-code": "p-work" });
+    expect(control().dataset.projectAgentAccountValue).toBe("p-work");
+  });
+});

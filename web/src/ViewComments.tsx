@@ -63,14 +63,19 @@ export function useViewFeedback(): ViewFeedback | undefined {
 
 // --- the opener's mark (B1-B7) ----------------------------------------------------
 
-/** The selected View toolbar's opener mark; a press goes to the agent's pane. */
-export function OpenerMark({ opener, actions }: { opener: ViewOpener; actions: Actions }) {
+/**
+ * The selected View toolbar's opener mark, or a card's agent (`owner`) at the
+ * end of its path line; a press goes to the agent's pane.
+ */
+export function OpenerMark({ opener, role = "opener", actions }: { opener: ViewOpener; role?: "opener" | "owner"; actions: Actions }) {
   const { t } = useInterfaceTranslation();
   const product = agentProductName(opener.provider);
   const closed = !opener.pane_id;
   const name = closed ? t("feedback.mark.closed", { name: opener.name }) : opener.name;
-  const lines = [name, t("feedback.mark.opened", { product }), ...(closed ? [] : [t("feedback.mark.go")])].join("\n");
-  const label = closed ? t("feedback.mark.labelClosed", { name: opener.name, product }) : t("feedback.mark.label", { name: opener.name, product });
+  const lines = [name, t(role === "owner" ? "feedback.mark.owner" : "feedback.mark.opened", { product }), ...(closed ? [] : [t("feedback.mark.go")])].join("\n");
+  const label = role === "owner"
+    ? t(closed ? "feedback.mark.ownerLabelClosed" : "feedback.mark.ownerLabel", { name: opener.name, product })
+    : t(closed ? "feedback.mark.labelClosed" : "feedback.mark.label", { name: opener.name, product });
   const mark = agentMarkOf(opener.provider);
   return (
     <Hint label={lines} side="top">
@@ -127,12 +132,16 @@ export function CommentCount({ display }: { display: Pick<ViewDisplaySnapshot, "
 
 // --- a pane's views (B8) ---------------------------------------------------------
 
-/** `N views` after a pane's PR chip: the Views its agent opened that the layout shows, those the operator has not looked at marked on their rows and once on the chip. */
+/** `N views` after a pane's PR chip: the Views its agent opened that the layout shows, newest open first as the core lists them, those the operator has not looked at marked on their rows and once on the chip. */
+/** The Views `paneId`'s agent opened, the one reading the views chip and the pane head's split button share. */
+export function usePaneViewRows(paneId: string) {
+  const opened = useShellStore((s) => workspaceViewOf(s.rest)?.feedback?.opened);
+  return useMemo(() => (opened ?? []).filter((row) => row.pane_id === paneId), [opened, paneId]);
+}
+
 export function PaneViews({ paneId, name, actions }: { paneId: string; name: string; actions: Actions }) {
   const { t } = useInterfaceTranslation();
-  const opened = useShellStore((s) => workspaceViewOf(s.rest)?.feedback?.opened);
-  // What waits to be looked at leads the list, so the 볼 것 the eye names is the first row (B10).
-  const rows = useMemo(() => (opened ?? []).filter((row) => row.pane_id === paneId).sort((a, b) => Number(b.unseen ?? false) - Number(a.unseen ?? false)), [opened, paneId]);
+  const rows = usePaneViewRows(paneId);
   if (rows.length === 0) return null;
   const label = t("feedback.views", { count: rows.length });
   const unseen = rows.some((row) => row.unseen);
@@ -142,6 +151,7 @@ export function PaneViews({ paneId, name, actions }: { paneId: string; name: str
         <DropdownMenuTrigger asChild>
           <button
             type="button"
+            aria-label={unseen ? `${label}, ${t("agents.mark.look")}` : label}
             data-pane-views={paneId}
             data-pane-views-unseen={unseen ? "true" : undefined}
             className="flex h-(--size-sidebar-line-detail) shrink-0 items-center gap-xxs rounded-xs px-xs outline-none hover:bg-popover focus-visible:ring-1 focus-visible:ring-ring data-[state=open]:bg-secondary"
@@ -151,7 +161,7 @@ export function PaneViews({ paneId, name, actions }: { paneId: string; name: str
               {/* Any View still unseen dots the chip's icon: the row's 볼 것 eye already says there is something to look at, the dot says it is in here (PRD unseen-agent-views B10). */}
               {unseen ? <span role="img" aria-label={t("agents.mark.look")} className="absolute -right-xxs -top-xxs size-(--size-tab-status-dot) rounded-full bg-warning" /> : null}
             </span>
-            <span>{label}</span>
+            <span className="pane-head-narrow:hidden">{label}</span>
           </button>
         </DropdownMenuTrigger>
       </Hint>
@@ -234,7 +244,7 @@ export function NoteFormCard({ form, meta, full, workspace, actions, add, close 
   };
   return (
     <div
-      className="flex w-full flex-col gap-xs rounded-md border border-border bg-popover p-sm text-caption shadow-md"
+      className="flex w-full flex-col gap-xs rounded-md border border-border bg-popover p-sm text-caption shadow-overlay"
       data-view-note-form={form.displayId}
       onPointerDown={(event) => event.stopPropagation()}
       onMouseDown={(event) => event.stopPropagation()}
@@ -305,7 +315,7 @@ export function CommentCard({ comment, workspace, displayId, actions }: { commen
   const quoted = comment.changed && comment.anchor.kind === "lines" ? comment.anchor.lines.join(" ") : null;
   return (
     <div
-      className="flex w-full items-start gap-xs rounded-md border border-border bg-popover p-sm text-caption shadow-sm"
+      className="flex w-full items-start gap-xs rounded-md border border-border bg-popover p-sm text-caption shadow-raised"
       data-view-comment={comment.id}
       data-view-comment-number={comment.number}
       data-view-comment-changed={comment.changed ? "true" : "false"}
@@ -966,7 +976,7 @@ export function RegionHint({ displayId }: { displayId: string }) {
   if (!on) return null;
   return (
     <div className="pointer-events-none sticky top-sm z-20 flex h-0 justify-end pr-md" data-view-comment-hint={displayId}>
-      <span className="flex h-(--size-control-sm) items-center gap-xs rounded-full border border-border bg-popover px-sm text-caption text-foreground shadow-sm">
+      <span className="flex h-(--size-control-sm) items-center gap-xs rounded-full border border-border bg-popover px-sm text-caption text-foreground shadow-raised">
         {t("feedback.hint.region")}
       </span>
     </div>

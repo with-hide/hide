@@ -371,7 +371,7 @@ static void journey_screen(const char *text) {
   live_screen(text);
 }
 
-/* Herdr reads both agents' state from the terminal title first, as each CLI
+/* The pane's screen reading takes both agents' state from the terminal title first, as each CLI
    sets it: a braille spinner while a turn runs, Claude's `✳` and Codex's
    plain title at rest. */
 static const char *journey_composer(void) {

@@ -1,0 +1,946 @@
+//! Every restart Hide makes of an agent (a wake, a fork, a reopen) starts it
+//! with the model and effort it was started with, from the pane's launch
+//! record, and a record from a build that kept none restarts on the CLI's
+//! defaults as before. The restarts run through their real workers against a
+//! fake engine; the expected command lines are each CLI's own spelling
+//! (`claude --model <m> --effort <e>`, `codex --model <m> -c
+//! model_reasoning_effort=<e>`), measured against Claude Code 2.1.302 and
+//! Codex 0.163.0, where a bare resume or fork fell back to the configured
+//! default.
+
+use super::*;
+use crate::model::PaneLaunch;
+use hide_agent_adapter::LaunchChoice;
+use serde_json::json;
+
+const TABS: [&str; 2] = ["w-order:t1", "w-order:t2"];
+const AGENT: &str = "w-order:t2:p";
+const SESSION: &str = "11111111-2222-3333-4444-555555555555";
+/// The engine name Hide started the t2 agent under.
+const NAME: &str = "reviewer";
+
+fn choice(model: &str, effort: &str) -> LaunchChoice {
+    LaunchChoice {
+        model: Some(model.to_owned()),
+        effort: Some(effort.to_owned()),
+    }
+}
+
+/// Each kind's resume line and the words its launch choice adds after it.
+/// Each CLI's full-access option, as its help names it (read 2026-11-01):
+/// what a restart adds when the machine saved no 권한 for the agent.
+fn full_access(kind: &str) -> &'static [&'static str] {
+    match kind {
+        "codex" => &crate::agent_permission::CODEX_FULL_ACCESS,
+        _ => &crate::agent_permission::CLAUDE_FULL_ACCESS,
+    }
+}
+
+/// A resume with full access, then the choice.
+fn resumed(kind: &str, launch: &[&str]) -> serde_json::Value {
+    resumed_with(kind, full_access(kind), launch)
+}
+
+fn resumed_with(kind: &str, access: &[&str], launch: &[&str]) -> serde_json::Value {
+    let resume: &[&str] = match kind {
+        "codex" => &["resume", SESSION],
+        _ => &["--resume", SESSION],
+    };
+    json!([resume, access, launch].concat())
+}
+
+fn event(kind: &str, payload: serde_json::Value) -> Vec<u8> {
+    serde_json::to_vec(&json!({
+        "schema_version": SCHEMA_VERSION,
+        "kind": kind,
+        "payload": payload
+    }))
+    .unwrap()
+}
+
+/// The two-tab session with t1 in front and, when `listed`, the idle `kind`
+/// agent Hide started in t2 as [`NAME`], on [`SESSION`].
+fn session(checkout: &str, kind: &str, listed: bool) -> SessionSnapshotPayload {
+    hosting(
+        checkout,
+        listed.then_some((kind, Some(NAME), Some(SESSION))),
+    )
+}
+
+/// The same session with t2 hosting `agent`: its kind, the name the engine
+/// reports it by (none for one started by hand) and its conversation.
+fn hosting(
+    checkout: &str,
+    agent: Option<(&str, Option<&str>, Option<&str>)>,
+) -> SessionSnapshotPayload {
+    let mut payload = tab_order_payload(checkout, &TABS, &TABS, "w-order:t1");
+    if let Some((kind, name, session)) = agent {
+        let mut row = json!({
+            "id": name.unwrap_or(AGENT), "pane_id": AGENT, "agent": kind,
+            "agent_status": "idle", "state_change_seq": 4, "cwd": checkout,
+            "tokens": {"task": "Review the parser"}
+        });
+        if let Some(name) = name {
+            row["name"] = json!(name);
+        }
+        if let Some(session) = session {
+            row["agent_session"] = json!({"kind": "id", "value": session});
+            // The core proves the session it hosts by this digest, as `wire.rs` does.
+            row["lineage_session"] = json!(crate::engine::tokens::session_digest(session));
+        }
+        let owned: SessionSnapshotPayload =
+            crate::sidebar::owned_label_fixture(json!({"agents": [row]})).unwrap();
+        payload.agents.extend(owned.agents);
+    }
+    payload
+}
+
+/// A live runtime on a real checkout folder whose t2 agent Hide started
+/// with `launch` (none: an agent of an older build, or one started on the
+/// CLI's defaults), on a machine whose Codex has no shared daemon.
+fn started(kind: &str, launch: Option<&LaunchChoice>) -> (Runtime, tempfile::TempDir) {
+    let folder = tempfile::tempdir().unwrap();
+    let checkout = checkout_of(&folder);
+    let (mut runtime, _) = live_tab_order_runtime(&checkout);
+    let mut kit = runtime.kit_state(crate::node::TEST_NODE);
+    kit.codex_daemon = Some(false);
+    runtime.set_kit_state(crate::node::TEST_NODE, kit);
+    if let Some(launch) = launch {
+        // What the task start, the spawn executor and every restart do once
+        // the agent is running in the pane.
+        runtime.record_pane_launch(AGENT, kind, NAME, launch, None, None);
+    }
+    runtime.ingest_session(Ok(session(&checkout, kind, true)));
+    (runtime, folder)
+}
+
+fn checkout_of(folder: &tempfile::TempDir) -> String {
+    hide_platform::fs::identity::canonical(folder.path())
+        .unwrap()
+        .display()
+        .to_string()
+}
+
+/// A fake engine that starts any agent in a pane whose shell holds the
+/// terminal, and hands each start's arguments to the test.
+fn starting_engine() -> (Fake, std::sync::mpsc::Receiver<(String, serde_json::Value)>) {
+    let (sent, starts) = std::sync::mpsc::channel();
+    let observed = std::sync::Mutex::new(None::<serde_json::Value>);
+    let fake = FakeEngine::start(move |method, params| match method {
+        "pane_processes" => reply(fake::processes(&json!({
+            "shell_pid": 42, "foreground_process_group_id": 42,
+            "foreground_processes": [{"pid": 42, "name": "zsh"}]
+        }))),
+        "split_beside" => reply("w-order:t2:fork".to_owned()),
+        "delivery_agent" => match observed.lock().unwrap().as_ref() {
+            Some(agent) => reply(fake::delivery_agent(agent)),
+            None => refused("agent_not_found", "no agent started yet"),
+        },
+        "start_agent" => {
+            *observed.lock().unwrap() = Some(json!({
+                "pane_id": params["pane"], "name": params["name"], "agent": params["kind"],
+                "interactive_ready": true, "agent_status": "idle"
+            }));
+            sent.send((
+                params["pane"].as_str().unwrap().to_owned(),
+                params["args"].clone(),
+            ))
+            .unwrap();
+            reply(crate::engine::StartedAgent {
+                pane_id: params["pane"].as_str().unwrap().to_owned(),
+                terminal_id: Some("term".into()),
+            })
+        }
+        // A wake's pane already runs this build's holder.
+        "renew_holder" => reply(hide_node_link::holders::HolderRenewal::Current),
+        // What the fork's registration asks after its start is no part of
+        // the start; refusing it leaves a working fork.
+        other => refused("unsupported", &format!("fixture answers no {other}")),
+    });
+    (fake, starts)
+}
+
+fn next_start(
+    starts: &std::sync::mpsc::Receiver<(String, serde_json::Value)>,
+) -> (String, serde_json::Value) {
+    starts
+        .recv_timeout(Duration::from_secs(10))
+        .expect("the worker started the agent")
+}
+
+/// Puts the t2 agent to sleep and has the engine forget it, as the end does.
+fn sleep(runtime: &mut Runtime, folder: &tempfile::TempDir, kind: &str) {
+    runtime.dispatch_json(&event("agent_sleep", json!({"pane_id": AGENT})));
+    assert!(runtime.snapshot().status.last_error.is_none());
+    assert!(runtime.ingest_agent_sleep_end(AGENT, Ok(4)));
+    runtime.ingest_session(Ok(session(&checkout_of(folder), kind, false)));
+}
+
+fn wake(runtime: &mut Runtime, fake: &Fake) {
+    runtime.live.as_mut().unwrap().engine = fake.engine();
+    assert!(runtime.dispatch_json(&event("agent_wake", json!({"pane_id": AGENT}))));
+}
+
+#[test]
+fn a_wake_resumes_the_agent_with_the_model_and_effort_it_was_started_with() {
+    for (kind, launch, words) in [
+        (
+            "claude",
+            choice("sonnet", "high"),
+            ["--model", "sonnet", "--effort", "high"],
+        ),
+        (
+            "codex",
+            choice("gpt-6-luna", "low"),
+            ["--model", "gpt-6-luna", "-c", "model_reasoning_effort=low"],
+        ),
+    ] {
+        let (mut runtime, folder) = started(kind, Some(&launch));
+        sleep(&mut runtime, &folder, kind);
+        let (fake, starts) = starting_engine();
+        wake(&mut runtime, &fake);
+        assert_eq!(
+            next_start(&starts),
+            (AGENT.to_owned(), resumed(kind, &words)),
+            "{kind}"
+        );
+        // The woken agent is the same conversation on the same choice, so
+        // the next restart carries it again.
+        assert_eq!(
+            serde_json::to_value(runtime.snapshot().ui_state.pane_launches.get(AGENT)).unwrap(),
+            serde_json::to_value(Some(&PaneLaunch {
+                pending: false,
+                start: 0,
+                kind: kind.to_owned(),
+                name: NAME.to_owned(),
+                choice: launch,
+                session: Some(SESSION.to_owned()),
+                profile: None,
+            }))
+            .unwrap(),
+            "{kind}"
+        );
+    }
+}
+
+/// A spawn keeps its child's choice before the agent shows a session, which
+/// Codex CLI reports only at its first turn (the spawn's identity wait), so
+/// the record starts unbound; it binds to the session when that arrives, and
+/// a wake then resumes that conversation on the choice.
+#[test]
+fn a_choice_kept_before_the_session_arrives_reaches_the_wake() {
+    let launch = choice("gpt-6-luna", "low");
+    let folder = tempfile::tempdir().unwrap();
+    let checkout = checkout_of(&folder);
+    let (mut runtime, _) = live_tab_order_runtime(&checkout);
+    let mut kit = runtime.kit_state(crate::node::TEST_NODE);
+    kit.codex_daemon = Some(false);
+    runtime.set_kit_state(crate::node::TEST_NODE, kit);
+    // What the spawn writes once its start is typed, before any session.
+    runtime.record_pane_launch(AGENT, "codex", NAME, &launch, None, None);
+    runtime.ingest_session(Ok(hosting(&checkout, Some(("codex", Some(NAME), None)))));
+    assert_eq!(
+        runtime.snapshot().ui_state.pane_launches[AGENT].session,
+        None
+    );
+    // The agent's first turn reports its session.
+    runtime.ingest_session(Ok(session(&checkout, "codex", true)));
+    assert_eq!(
+        runtime.snapshot().ui_state.pane_launches[AGENT]
+            .session
+            .as_deref(),
+        Some(SESSION)
+    );
+    // The Overview map names the bound session's launch choice, model and effort.
+    let graph = &runtime.snapshot().overview_graph.sessions;
+    let drawn = graph
+        .iter()
+        .find(|session| session.pane_id == AGENT)
+        .unwrap();
+    assert_eq!(
+        (
+            drawn.launch_model.as_deref(),
+            drawn.launch_effort.as_deref()
+        ),
+        (Some("gpt-6-luna"), Some("low"))
+    );
+    sleep(&mut runtime, &folder, "codex");
+    let (fake, starts) = starting_engine();
+    wake(&mut runtime, &fake);
+    assert_eq!(
+        next_start(&starts),
+        (
+            AGENT.to_owned(),
+            resumed(
+                "codex",
+                &["--model", "gpt-6-luna", "-c", "model_reasoning_effort=low"]
+            )
+        )
+    );
+}
+
+/// An agent of an older build left no launch record and a sleep record
+/// without the field; it wakes on the resume alone, as before.
+#[test]
+fn a_wake_of_an_agent_with_no_recorded_choice_resumes_as_before() {
+    let (mut runtime, folder) = started("claude", None);
+    sleep(&mut runtime, &folder, "claude");
+    let record = runtime
+        .snapshot
+        .ui_state
+        .agent_sleep
+        .records
+        .get_mut(AGENT)
+        .unwrap();
+    let mut saved = serde_json::to_value(&*record).unwrap();
+    assert!(
+        saved.get("launch").is_none(),
+        "no choice is written as none"
+    );
+    saved.as_object_mut().unwrap().remove("launch");
+    *record = serde_json::from_value(saved).unwrap();
+    let (fake, starts) = starting_engine();
+    wake(&mut runtime, &fake);
+    assert_eq!(next_start(&starts).1, resumed("claude", &[]));
+    // Its pane records the start on the CLI's defaults and the built-in
+    // profile, which a child it starts reads (D-32).
+    assert!(
+        runtime
+            .snapshot()
+            .ui_state
+            .pane_launches
+            .values()
+            .all(|launch| launch.choice.is_default() && launch.profile.is_none())
+    );
+}
+
+#[test]
+fn a_fork_starts_with_the_model_and_effort_its_source_was_started_with() {
+    for (kind, launch, resume, words) in [
+        (
+            "claude",
+            choice("sonnet", "high"),
+            vec!["--resume", SESSION, "--fork-session"],
+            vec!["--model", "sonnet", "--effort", "high"],
+        ),
+        (
+            "codex",
+            choice("gpt-6-luna", "low"),
+            vec!["fork", SESSION],
+            vec!["--model", "gpt-6-luna", "-c", "model_reasoning_effort=low"],
+        ),
+    ] {
+        let (mut runtime, _folder) = started(kind, Some(&launch));
+        let terminals = record_terminals(&mut runtime);
+        let (fake, starts) = starting_engine();
+        let shared = SharedRuntime::new(runtime);
+        {
+            let mut runtime = shared.lock().unwrap();
+            let live = runtime.live.as_mut().unwrap();
+            live.engine = fake.engine();
+            live.runtime = shared.weak();
+            assert!(runtime.dispatch_json(&event(
+                "fork_pane",
+                json!({"pane_id": AGENT, "placement": "side", "origin": "operator"})
+            )));
+            assert!(
+                terminals.take().iter().any(|control| matches!(
+                    control,
+                    TerminalControl::RequestOpen { fork: true, .. }
+                )),
+                "an id-less fork must open a fork holder on the node"
+            );
+        }
+        assert_eq!(
+            next_start(&starts),
+            (
+                "w-order:t2:fork".to_owned(),
+                json!([resume.as_slice(), full_access(kind), &words].concat())
+            ),
+            "{kind}"
+        );
+        wait(&shared, "the fork to settle", |runtime| {
+            runtime.forks_in_flight.is_empty()
+        });
+        // The fork is a new agent on its source's choice, under the name
+        // the fork started it with.
+        let record = shared
+            .lock()
+            .unwrap()
+            .snapshot()
+            .ui_state
+            .pane_launches
+            .get("w-order:t2:fork")
+            .cloned()
+            .expect("the fork's pane keeps the choice");
+        assert_eq!(
+            (record.kind.as_str(), &record.choice, record.session),
+            (kind, &launch, None),
+            "{kind}"
+        );
+        assert!(record.name.starts_with("fork-"), "{}", record.name);
+    }
+}
+
+/// A saved choice the agent does not take (a store edited by hand) refuses
+/// the fork with the reason before any pane is made for it.
+#[test]
+fn a_fork_on_a_choice_its_agent_does_not_take_is_refused_before_a_pane_is_made() {
+    let launch = LaunchChoice {
+        model: None,
+        effort: Some("ultra".into()),
+    };
+    let (mut runtime, _folder) = started("codex", Some(&launch));
+    let (fake, starts) = starting_engine();
+    runtime.live.as_mut().unwrap().engine = fake.engine();
+    runtime.dispatch_json(&event(
+        "fork_pane",
+        json!({"pane_id": AGENT, "placement": "side", "origin": "operator"}),
+    ));
+    let error = runtime.snapshot().status.last_error.clone().unwrap();
+    assert_eq!(error.kind, "pane.fork_invalid_launch_choice");
+    assert!(error.message.contains("ultra"), "{}", error.message);
+    assert!(runtime.forks_in_flight.is_empty());
+    assert!(starts.recv_timeout(Duration::from_millis(200)).is_err());
+    assert!(fake.methods().is_empty(), "{:?}", fake.methods());
+}
+
+/// Closing a pane keeps its agent's choice with the closed pane, and the
+/// reopen's answer records it on the pane the reopen made.
+#[test]
+fn a_closed_agent_takes_its_choice_to_the_pane_its_reopen_makes() {
+    let launch = choice("sonnet", "high");
+    let (mut runtime, _folder) = started("claude", Some(&launch));
+    let tab = runtime
+        .snapshot()
+        .navigator
+        .workspaces
+        .iter()
+        .flat_map(|workspace| workspace.checkouts.iter())
+        .flat_map(|checkout| checkout.tabs.iter())
+        .find(|tab| tab.id.as_deref() == Some("w-order:t2"))
+        .cloned()
+        .unwrap();
+    let closed = runtime.closed_panes(&tab);
+    assert_eq!(
+        closed[0].agent,
+        Some(ClosedAgent {
+            kind: "claude".into(),
+            session_id: Some(SESSION.into()),
+            launch: launch.clone(),
+            profile: None,
+            registration: None,
+        })
+    );
+
+    let item = closed_file("closed", "/repo/closed.rs");
+    runtime.push_recent_closed(item.clone());
+    runtime.reopen_in_flight = Some("closed".to_owned());
+    let request = crate::recent_closed::reopen::ReopenRequest {
+        codex_daemon: Default::default(),
+        permissions: Default::default(),
+        item,
+        workspace_exists: true,
+        tab_exists: true,
+        fallback_pane_id: None,
+        owner: None,
+    };
+    assert!(runtime.ingest_reopen_result(
+        &request,
+        Ok(
+            crate::recent_closed::reopen::FileReopenResultOrEngine::Engine(
+                crate::recent_closed::reopen::ReopenOutcome {
+                    tab_id: None,
+                    consumed: true,
+                    focused_pane_id: None,
+                    notices: vec![],
+                    agents: vec![crate::recent_closed::reopen::ReopenedAgent {
+                        pane_id: "w-order:t3:p".into(),
+                        kind: "claude".into(),
+                        name: "reopen-closed-0".into(),
+                        launch: launch.clone(),
+                        session_id: Some(SESSION.into()),
+                        profile: None,
+                        registration: None,
+                    }],
+                }
+            )
+        ),
+    ));
+    assert_eq!(
+        serde_json::to_value(
+            runtime
+                .snapshot()
+                .ui_state
+                .pane_launches
+                .get("w-order:t3:p")
+        )
+        .unwrap(),
+        serde_json::to_value(Some(&PaneLaunch {
+            pending: false,
+            start: 0,
+            kind: "claude".into(),
+            name: "reopen-closed-0".into(),
+            choice: launch,
+            session: Some(SESSION.into()),
+            profile: None,
+        }))
+        .unwrap()
+    );
+}
+
+/// A record describes only the agent Hide started, by the name it started it
+/// under: an agent started in the same pane by hand (no name, or another),
+/// one of another kind, or a pane that is gone drops it, and an unnamed agent
+/// matches only by the conversation the named one last reported, as one back
+/// from an engine restart without its name does.
+#[test]
+fn a_launch_record_describes_only_the_agent_hide_started_under_its_name() {
+    let launch = choice("sonnet", "high");
+    let (mut runtime, folder) = started("claude", Some(&launch));
+    let checkout = checkout_of(&folder);
+    let launches = |runtime: &Runtime| runtime.snapshot().ui_state.pane_launches.clone();
+    let described = |runtime: &Runtime| {
+        let agent = runtime
+            .snapshot()
+            .navigator
+            .agents
+            .iter()
+            .find(|agent| agent.pane_id == AGENT)
+            .cloned()
+            .expect("the t2 agent");
+        runtime.launch_choice_of(&agent)
+    };
+    assert_eq!(
+        serde_json::to_value(launches(&runtime).get(AGENT)).unwrap(),
+        serde_json::to_value(Some(&PaneLaunch {
+            pending: false,
+            start: 0,
+            kind: "claude".into(),
+            name: NAME.into(),
+            choice: launch.clone(),
+            session: Some(SESSION.into()),
+            profile: None,
+        }))
+        .unwrap()
+    );
+    assert_eq!(described(&runtime), launch);
+
+    // The named agent's own new conversation (Claude Code `/clear`) is
+    // still the agent Hide started with the choice.
+    let cleared = "22222222-2222-3333-4444-555555555555";
+    runtime.ingest_session(Ok(hosting(
+        &checkout,
+        Some(("claude", Some(NAME), Some(cleared))),
+    )));
+    assert_eq!(described(&runtime), launch);
+    assert_eq!(launches(&runtime)[AGENT].session.as_deref(), Some(cleared));
+
+    // Back from an engine restart without its name, on the same conversation.
+    runtime.ingest_session(Ok(hosting(
+        &checkout,
+        Some(("claude", None, Some(cleared))),
+    )));
+    assert_eq!(described(&runtime), launch);
+
+    // Started by hand in the pane before it reported a conversation: never
+    // described, and dropped once its own conversation shows.
+    runtime.ingest_session(Ok(hosting(&checkout, Some(("claude", None, None)))));
+    assert_eq!(described(&runtime), LaunchChoice::default());
+    assert!(launches(&runtime).contains_key(AGENT));
+    let by_hand = "99999999-2222-3333-4444-555555555555";
+    runtime.ingest_session(Ok(hosting(
+        &checkout,
+        Some(("claude", None, Some(by_hand))),
+    )));
+    assert_eq!(described(&runtime), LaunchChoice::default());
+    assert!(launches(&runtime).is_empty());
+
+    // Started under another name (another Hide start, or a reused pane id).
+    runtime.record_pane_launch(AGENT, "claude", NAME, &launch, None, None);
+    runtime.ingest_session(Ok(hosting(
+        &checkout,
+        Some(("claude", Some("other"), None)),
+    )));
+    assert!(launches(&runtime).is_empty());
+
+    runtime.record_pane_launch(AGENT, "claude", NAME, &launch, None, None);
+    runtime.ingest_session(Ok(session(&checkout, "codex", true)));
+    assert!(launches(&runtime).is_empty());
+
+    runtime.record_pane_launch(AGENT, "claude", NAME, &launch, None, Some(SESSION));
+    runtime.ingest_session(Ok(tab_order_payload(
+        &checkout,
+        &TABS[..1],
+        &TABS[..1],
+        "w-order:t1",
+    )));
+    assert!(launches(&runtime).is_empty());
+}
+
+/// The records are bounded: one per pane a registered machine's engine holds,
+/// a removed device takes its own with it, and past the cap a start is
+/// recorded nowhere and logged.
+#[test]
+fn launch_records_leave_with_their_device_and_stop_at_the_cap() {
+    let launch = choice("sonnet", "high");
+    let (mut runtime, _folder) = started("claude", Some(&launch));
+    let device = "device-a";
+    runtime
+        .snapshot
+        .ui_state
+        .device_registrations
+        .push(crate::model::DeviceRegistration {
+            id: device.to_owned(),
+            label: device.to_owned(),
+            origin: crate::model::LinkOrigin::Dialed {
+                ssh_alias: device.to_owned(),
+                naming: crate::model::DeviceNaming::Named,
+            },
+            host_consent: None,
+        });
+    let remote = format!("remote:{device}:pane:w1:p1");
+    runtime.record_pane_launch(&remote, "claude", "hide-claude-w1-p1", &launch, None, None);
+    assert!(runtime.dispatch_json(&event("remove_device", json!({"device_id": device}))));
+    let launches = &runtime.snapshot().ui_state.pane_launches;
+    assert!(!launches.contains_key(&remote));
+    assert!(launches.contains_key(AGENT), "this machine's record stays");
+
+    for index in launches.len()..crate::runtime::agent_choice::PANE_LAUNCH_LIMIT {
+        runtime.record_pane_launch(
+            &format!("w9:p{index}"),
+            "claude",
+            "name",
+            &launch,
+            None,
+            None,
+        );
+    }
+    let ((), records) = crate::diagnostics::capture(|| {
+        runtime.record_pane_launch("w9:over", "claude", "name", &launch, None, None);
+    });
+    let launches = &runtime.snapshot().ui_state.pane_launches;
+    assert_eq!(
+        launches.len(),
+        crate::runtime::agent_choice::PANE_LAUNCH_LIMIT
+    );
+    assert!(!launches.contains_key("w9:over"));
+    assert!(
+        records
+            .iter()
+            .any(|record| record["kind"] == "pane_launch.limit"),
+        "{records:?}"
+    );
+}
+
+/// The record outlives the daemon, so a wake after a restart still has it.
+#[test]
+fn a_launch_record_survives_a_restart() {
+    let launch = choice("gpt-6-luna", "low");
+    let (mut runtime, _folder) = started("codex", Some(&launch));
+    let path = runtime.state_path.clone();
+    let _state = hold_dirs(&mut runtime);
+    runtime.write_ui_state().unwrap();
+    let saved = runtime.snapshot().ui_state.pane_launches.clone();
+    assert_eq!(saved.len(), 1);
+    drop(runtime);
+    let restarted = Runtime::new(
+        CoreOptions {
+            schema_version: SCHEMA_VERSION,
+            home: None,
+            node_id: crate::node::test_node(),
+            app_state_path: path.to_string_lossy().into_owned(),
+            host_helper_root: None,
+            host_cli_dir: None,
+            workspace_views_path: None,
+            shortcut_import_path: None,
+            local_issues_path: None,
+            effects_held: false,
+            machine_name: None,
+            windows_drives: None,
+            account_state_folder: false,
+        },
+        environment::EnvironmentReport {
+            statuses: Vec::new(),
+            home_path: None,
+            codex_home: None,
+        },
+        Arc::new(hide_node::Local::of_process()),
+        crate::node::test_devices(),
+    );
+    // In-flight ordering is process-local; the saved choice/session is the contract.
+    assert_eq!(
+        serde_json::to_value(&restarted.snapshot().ui_state.pane_launches).unwrap(),
+        serde_json::to_value(saved).unwrap()
+    );
+}
+
+fn set_permission(runtime: &mut Runtime, payload: serde_json::Value) -> bool {
+    runtime.dispatch_json(&event("agent_permission_set", payload))
+}
+
+/// A restart reads the machine's 권한 as it is when the restart is made, not
+/// as it was at the start: 매번 물어보기 adds nothing, and typed options go
+/// after the resume as typed, ahead of the choice.
+#[test]
+fn a_wake_follows_the_permission_saved_now_and_adds_nothing_for_ask() {
+    let words = ["--model", "sonnet", "--effort", "high"];
+    for (permission, access) in [
+        (json!({"mode": "ask"}), vec![]),
+        (
+            json!({"mode": "custom", "text": "--permission-mode acceptEdits"}),
+            vec!["--permission-mode", "acceptEdits"],
+        ),
+        (
+            json!({"mode": "full"}),
+            crate::agent_permission::CLAUDE_FULL_ACCESS.to_vec(),
+        ),
+    ] {
+        let (mut runtime, folder) = started("claude", Some(&choice("sonnet", "high")));
+        let mut payload = json!({"device_id": crate::node::TEST_NODE, "agent": "claude-code"});
+        payload
+            .as_object_mut()
+            .unwrap()
+            .extend(permission.as_object().unwrap().clone());
+        set_permission(&mut runtime, payload);
+        sleep(&mut runtime, &folder, "claude");
+        let (fake, starts) = starting_engine();
+        wake(&mut runtime, &fake);
+        assert_eq!(
+            next_start(&starts),
+            (AGENT.to_owned(), resumed_with("claude", &access, &words)),
+            "{permission}"
+        );
+    }
+}
+
+/// The setting is one choice per agent per machine, saved only where it
+/// differs from full access, and refused for an agent Hide does not start,
+/// a machine that is not registered, or typed text that is not only options.
+#[test]
+fn a_permission_is_kept_per_agent_and_machine_and_refused_when_it_names_nothing_hide_starts() {
+    let (mut runtime, _folder) = started("claude", None);
+    let node = crate::node::TEST_NODE;
+    assert!(set_permission(
+        &mut runtime,
+        json!({"device_id": node, "agent": "codex", "mode": "custom", "text": "--full-auto  -c 'a=b c'"})
+    ));
+    assert_eq!(
+        runtime.agent_permission(node, "codex"),
+        crate::agent_permission::AgentPermission::Custom {
+            text: "--full-auto  -c 'a=b c'".into(),
+            options: vec!["--full-auto".into(), "-c".into(), "a=b c".into()],
+        }
+    );
+    // The same choice again changes nothing.
+    assert!(!set_permission(
+        &mut runtime,
+        json!({"device_id": node, "agent": "codex", "mode": "custom", "text": "--full-auto  -c 'a=b c'"})
+    ));
+    // Back to the default: nothing is saved for it.
+    assert!(set_permission(
+        &mut runtime,
+        json!({"device_id": node, "agent": "codex", "mode": "full"})
+    ));
+    assert!(runtime.snapshot().ui_state.agent_permissions.is_empty());
+    for (payload, kind) in [
+        (
+            json!({"device_id": node, "agent": "terminal", "mode": "ask"}),
+            "agent_permission.unknown_agent",
+        ),
+        (
+            json!({"device_id": "nowhere", "agent": "codex", "mode": "ask"}),
+            "agent_permission.unknown_machine",
+        ),
+        (
+            json!({"device_id": node, "agent": "codex", "mode": "custom", "text": "--a; rm -rf ~"}),
+            "agent_permission.invalid_options",
+        ),
+        (
+            json!({"device_id": node, "agent": "codex", "mode": "ask", "text": "--a"}),
+            "agent_permission.invalid",
+        ),
+    ] {
+        assert!(set_permission(&mut runtime, payload), "{kind}");
+        assert_eq!(
+            runtime
+                .snapshot()
+                .status
+                .last_error
+                .as_ref()
+                .map(|error| error.kind.as_str()),
+            Some(kind)
+        );
+    }
+    assert!(runtime.snapshot().ui_state.agent_permissions.is_empty());
+    assert_eq!(
+        runtime.agent_permission(node, "codex"),
+        crate::agent_permission::AgentPermission::Full
+    );
+}
+
+/// B17: an agent started with a profile keeps the title it would have with
+/// the built-in default (`Claude`, then its task's), and its row names the
+/// profile beside it (`a`), which the screens mark beside its logo and
+/// `hide agent list` names after its agent (`Claude · a`); an agent on its
+/// built-in default reads as before.
+#[test]
+fn a_profile_agent_keeps_its_title_and_its_row_names_the_profile_beside_it() {
+    let folder = tempfile::tempdir().unwrap();
+    let checkout = checkout_of(&folder);
+    let (mut runtime, _) = live_tab_order_runtime(&checkout);
+    let untitled = || {
+        let mut payload = tab_order_payload(&checkout, &TABS, &TABS, "w-order:t1");
+        payload.agents.push(
+            serde_json::from_value(json!({
+                "id": NAME, "name": NAME, "pane_id": AGENT, "agent": "claude",
+                "agent_status": "idle", "state_change_seq": 4, "cwd": checkout,
+            }))
+            .unwrap(),
+        );
+        payload
+    };
+    // The row's title and profile, and the tab's agent wears the same profile.
+    let row = |runtime: &Runtime| {
+        let row = runtime.agent_row(AGENT).unwrap();
+        let tab = runtime
+            .snapshot()
+            .navigator
+            .workspaces
+            .iter()
+            .flat_map(|workspace| workspace.checkouts.iter())
+            .flat_map(|checkout| checkout.tabs.iter())
+            .find(|tab| tab.panes.iter().any(|pane| pane.id == AGENT))
+            .and_then(|tab| tab.agent.clone())
+            .unwrap();
+        assert_eq!(
+            tab.profile, row.profile,
+            "the tab's logo wears the row's profile"
+        );
+        (row.identity_label.clone(), row.profile.clone())
+    };
+
+    runtime.record_pane_launch(AGENT, "claude", NAME, &LaunchChoice::default(), None, None);
+    runtime.ingest_session(Ok(untitled()));
+    assert_eq!(row(&runtime), ("Claude".to_owned(), None));
+
+    let profile = crate::launch::LaunchProfile {
+        id: hide_agent_adapter::ProfileId("p-a".to_owned()),
+        name: "a".to_owned(),
+        account: hide_agent_adapter::AccountKey::Folder("/accounts/a".to_owned()),
+    };
+    runtime.record_pane_launch(
+        AGENT,
+        "claude",
+        NAME,
+        &LaunchChoice::default(),
+        Some(&profile),
+        None,
+    );
+    runtime.ingest_session(Ok(untitled()));
+    assert_eq!(row(&runtime), ("Claude".to_owned(), Some("a".to_owned())));
+
+    runtime.ingest_session(Ok(session(&checkout, "claude", true)));
+    assert_eq!(
+        row(&runtime),
+        ("Review the parser".to_owned(), Some("a".to_owned())),
+        "a title names the agent; the profile stays beside it"
+    );
+
+    let record: crate::coordination::AgentRecord = serde_json::from_value(json!({
+        "id": "agent-1", "name": NAME, "machine": crate::node::TEST_NODE,
+        "host_scope": "scope", "native_machine": crate::node::TEST_NODE,
+        "session": SESSION, "instance": AGENT, "pane": AGENT,
+        "parent": null, "project": null, "ended": false,
+        "actor": {"pane_id": AGENT, "name": NAME, "kind": "claude",
+                  "device_id": crate::node::TEST_NODE, "session": null},
+    }))
+    .unwrap();
+    let ledger = crate::delivery::ledger::Ledger::default();
+    let facts = runtime.registration_facts(std::slice::from_ref(&record));
+    assert_eq!(
+        crate::coordination::agent_view(&record, &ledger, &facts).profile,
+        Some("Claude · a".to_owned())
+    );
+}
+
+/// A session line's resume runs with the profile of the account its machine
+/// says holds the session: the built-in default for the default account, as
+/// for a session recorded before profiles; that agent's profile of the
+/// account, the agent's default among two first; and none for an account
+/// whose profile is gone or going, rather than another account (PRD
+/// agent-profiles B19).
+#[test]
+fn a_session_line_resumes_with_the_profile_of_the_account_that_holds_it() {
+    use hide_agent_adapter::AccountKey;
+    let (mut runtime, _) = live_tab_order_runtime("/repo");
+    let profile = |id: &str, kind: &str, account: &str| crate::model::ProfileSnapshot {
+        id: id.to_owned(),
+        kind: kind.to_owned(),
+        name: id.to_owned(),
+        account: Some(account.to_owned()),
+        program: None,
+        env_keys: Vec::new(),
+        version: 1,
+        install: None,
+        folder: None,
+        hook: None,
+        skill: None,
+        login: None,
+        wrapper_folder: false,
+        startable: true,
+        account_key: Some(AccountKey::Folder(account.to_owned())),
+        account_variables: Vec::new(),
+    };
+    let going = crate::model::ProfileSnapshot {
+        install: Some(crate::model::ProfileInstall::Removing),
+        startable: false,
+        ..profile("going", "claude-code", "/accounts/going")
+    };
+    let mut kit = runtime.kit_state(crate::node::TEST_NODE);
+    kit.profiles = Some(crate::model::ProfilesSnapshot {
+        state: crate::model::ProfilesState::Listed,
+        version: 1,
+        profiles: vec![
+            profile("work", "claude-code", "/accounts/work"),
+            profile("shared", "claude-code", "/accounts/shared"),
+            profile("shared-default", "claude-code", "/accounts/shared"),
+            profile("codex-work", "codex", "/accounts/work"),
+            profile("opencode-work", "opencode", "/accounts/opencode-work"),
+            going,
+        ],
+        defaults: [("claude-code".to_owned(), "shared-default".to_owned())].into(),
+    });
+    runtime.set_kit_state(crate::node::TEST_NODE, kit);
+    let folder = |path: &str| AccountKey::Folder(path.to_owned());
+    let resumed = |kind: &str, account: &AccountKey| {
+        runtime
+            .session_profile(crate::node::TEST_NODE, kind, account)
+            .map(|profile| profile.map(|(id, _)| id.0))
+    };
+
+    assert_eq!(resumed("claude", &AccountKey::Default), Ok(None));
+    assert_eq!(
+        resumed("claude", &folder("/accounts/work")),
+        Ok(Some("work".to_owned()))
+    );
+    assert_eq!(
+        resumed("claude", &folder("/accounts/shared")),
+        Ok(Some("shared-default".to_owned()))
+    );
+    assert_eq!(
+        resumed("opencode", &folder("/accounts/opencode-work")),
+        Ok(Some("opencode-work".to_owned()))
+    );
+    for gone in [
+        "/accounts/removed",
+        "/accounts/going",
+        "/accounts/opencode-work",
+    ] {
+        assert_eq!(
+            resumed("claude", &folder(gone)),
+            Err(crate::launch::PROFILE_GONE),
+            "{gone}"
+        );
+    }
+}

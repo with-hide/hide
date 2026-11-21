@@ -38,17 +38,48 @@ function HideAiBadge({ ground }: { ground: BadgeGround }) {
   );
 }
 
+/** The letter a profile badge carries: the profile name's first, upper-cased where its script has case. */
+export function profileInitial(profile: string): string {
+  return (Array.from(profile.trim())[0] ?? "").toLocaleUpperCase();
+}
+
+/**
+ * The badge of an agent that runs with a profile other than its built-in
+ * default (PRD agent-profiles B17): the profile name's first letter, on the
+ * logo's lower-right corner where the Hide AI badge sits, or standing alone
+ * in the logo's place while logos are hidden. Decorative: the caller's hover
+ * and accessible name say the agent and the profile (`Claude Code · work`).
+ */
+export function ProfileBadge({ profile, standalone = false }: { profile: string; standalone?: boolean }) {
+  return (
+    <span
+      aria-hidden="true"
+      data-profile-badge={profile}
+      className={cn(
+        "pointer-events-none flex h-(--size-hide-badge) min-w-(--size-hide-badge) shrink-0 items-center justify-center rounded-xs bg-popover px-(--size-hairline) text-(length:--text-badge) leading-none font-semibold text-foreground ring-1 ring-border",
+        !standalone && "absolute -right-(--size-hairline) -bottom-(--size-hairline)",
+      )}
+    >
+      {profileInitial(profile)}
+    </span>
+  );
+}
+
 /**
  * The agent's mark. `hideAi` marks an agent Hide AI started: the provider's
- * icon wears the badge. The badge is part of the row's name through the
- * caller's accessible name, never carried here (D-09).
+ * icon wears the badge. `profile` names the profile it runs with when that is
+ * not its built-in default, and the icon wears its badge instead; the two
+ * share one corner, so a Hide AI agent keeps its owl and names its profile
+ * in words only. A badge is part of the row's name through the caller's
+ * accessible name, never carried here (D-09).
  */
-export function AgentMark({ kind, className = "", hideAi = null }: { kind: string | null | undefined; className?: string; hideAi?: BadgeGround | null }) {
-  if (!hideAi) return <PlainMark kind={kind} className={className} />;
+export function AgentMark({ kind, className = "", hideAi = null, profile = null }: { kind: string | null | undefined; className?: string; hideAi?: BadgeGround | null; profile?: string | null }) {
+  const badge = hideAi ? <HideAiBadge ground={hideAi} /> : profile ? <ProfileBadge profile={profile} /> : null;
+  if (!badge) return <PlainMark kind={kind} className={className} />;
   return (
     <span data-agent-mark-badged="true" className="relative inline-flex shrink-0">
       <PlainMark kind={kind} className={className} />
-      <HideAiBadge ground={hideAi} />
+      {badge}
     </span>
   );
 }

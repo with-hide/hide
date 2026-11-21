@@ -7,6 +7,9 @@ import { useInterfaceTranslation } from "../../i18n/client";
 import { cn } from "../../lib/utils";
 import type { MessageKey } from "../../i18n/catalogs";
 import { missionToneOf, type CellTone } from "../../missions";
+
+/** Desk's job card carries a mission's counts, not its nodes' states, so its chip draws a running mission in the working colour; the sidebar's and the pane's chips read the stall. */
+const DESK_NOT_STALLED = false;
 import { PlanChipFace, planChipLook } from "../../PanePlanChip";
 import { DeviceChip } from "../device-chip";
 import { FileMark } from "../file-mark";
@@ -73,6 +76,7 @@ export function jobReasonWords(t: T, reason: string | null | undefined): string 
 const FAILURE: Record<DeskJobFailure, MessageKey> = {
   device_unavailable: "desk.jobFailure.device_unavailable",
   agent_not_installed: "desk.jobFailure.agent_not_installed",
+  agent_hook_not_ready: "desk.jobFailure.agent_hook_not_ready",
   branch_in_use: "desk.jobFailure.branch_in_use",
   project_unavailable: "desk.jobFailure.project_unavailable",
   already_started: "desk.jobFailure.already_started",
@@ -215,7 +219,7 @@ const MISSION_WORDS: Record<DeskMission["status"], MessageKey> = {
 /** A Conductor's `미션 k/n` chip (B34), drawn from the mission the job carries. */
 export function DeskMissionChip({ mission, onOpen }: { mission: DeskMission; onOpen: (missionId: string) => void }) {
   const { t } = useInterfaceTranslation();
-  return <MissionChipView id={mission.id} title={mission.title} words={t(MISSION_WORDS[mission.status])} counts={mission.status === "running" ? `${mission.done}/${mission.total}` : null} tone={missionToneOf(mission.status, mission.deciding)} deciding={mission.deciding} status={mission.status} onOpen={onOpen} />;
+  return <MissionChipView id={mission.id} title={mission.title} words={t(MISSION_WORDS[mission.status])} counts={mission.status === "running" ? `${mission.done}/${mission.total}` : null} tone={missionToneOf(mission.status, mission.turn !== null, DESK_NOT_STALLED)} turn={mission.turn} delay={mission.delay ? { line: mission.delay, until: mission.delay_until_unix_ms ?? null } : null} status={mission.status} onOpen={onOpen} />;
 }
 
 /** A job's plan as the pane head's plan chip draws it (B24): its cells, `n/m`, and `검토` while it waits for review. */
@@ -298,16 +302,16 @@ export function DeskJobCard({ job, selected = false, selectedOutput = null, ...a
       data-desk-job-selected={selected ? "true" : undefined}
     >
       {job.state !== "moved_out" ? <RowOverlayButton className="rounded-lg" hover={false} aria-label={t("desk.job.open", { title: job.title })} onClick={() => actions.onOpen(job)} /> : null}
-      <div className={cn("pointer-events-none relative flex min-w-0 flex-col gap-xxs px-md py-sm", (ended || job.disconnected) && "opacity-(--opacity-dimmed)")}>
+      {/* The lead marks take their own column, so the line under the title starts where the title does. */}
+      <div className={cn("pointer-events-none relative grid min-w-0 grid-cols-[auto_minmax(0,1fr)] items-center gap-x-sm gap-y-xxs px-md py-sm", (ended || job.disconnected) && "opacity-(--opacity-dimmed)")}>
+        <span className="flex shrink-0 items-center gap-xs"><JobLead job={job} /></span>
         <div className="flex min-h-(--size-sidebar-line) min-w-0 items-center gap-xs">
-          <JobLead job={job} />
           <span className="min-w-0 flex-1 truncate font-medium text-foreground">{job.title}</span>
           <span className="pointer-events-auto relative flex shrink-0 items-center gap-xxs">
             <JobChip job={job} selectedOutput={selectedOutput} onOutput={actions.onOutput} onMission={actions.onMission} />
           </span>
         </div>
-        <div className="flex min-w-0 items-center gap-xs">
-          <span aria-hidden="true" className="w-(--size-agent-mark) shrink-0" />
+        <div className="col-start-2 flex min-w-0 items-center gap-xs">
           <JobLine job={job} className="flex-1" />
           {action(t, job, actions)}
         </div>

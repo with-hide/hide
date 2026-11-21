@@ -1,0 +1,42 @@
+--- a/pkg/highway/build.zig
++++ b/pkg/highway/build.zig
+@@ -105,6 +105,11 @@
+             "-D_Avx2WmemEnabledWeakValue=_Avx2WmemEnabled",
+             "-fno-autolink",
+             "-fno-stack-protector",
++            // Each MSVC STL refuses a Clang older than the one its toolset
++            // expects (STL1000), and Zig's bundled Clang trails it: MSVC 14.52
++            // expects Clang 22, Zig 0.16 carries Clang 21. The headers compile
++            // with Zig's Clang, so turn the version gate off.
++            "-D_ALLOW_COMPILER_AND_STL_VERSION_MISMATCH",
+         });
+     }
+ 
+--- a/pkg/simdutf/build.zig
++++ b/pkg/simdutf/build.zig
+@@ -69,6 +69,11 @@
+         // On MSVC we skip linkLibCpp (see above), so the C++ standard is
+         // not set implicitly. simdutf requires C++17, so set it explicitly.
+         try flags.append(b.allocator, "-std=c++17");
++        // Each MSVC STL refuses a Clang older than the one its toolset
++        // expects (STL1000), and Zig's bundled Clang trails it: MSVC 14.52
++        // expects Clang 22, Zig 0.16 carries Clang 21. The headers compile
++        // with Zig's Clang, so turn the version gate off.
++        try flags.append(b.allocator, "-D_ALLOW_COMPILER_AND_STL_VERSION_MISMATCH");
+     }
+ 
+     if (target.result.os.tag == .freebsd or
+--- a/src/build/SharedDeps.zig
++++ b/src/build/SharedDeps.zig
+@@ -1002,6 +1002,11 @@
+             // -fno-autolink also drops UCRT's /alternatename fallback.
+             "-D_Avx2WmemEnabledWeakValue=_Avx2WmemEnabled",
+             "-fno-autolink",
++            // Each MSVC STL refuses a Clang older than the one its toolset
++            // expects (STL1000), and Zig's bundled Clang trails it: MSVC 14.52
++            // expects Clang 22, Zig 0.16 carries Clang 21. The headers compile
++            // with Zig's Clang, so turn the version gate off.
++            "-D_ALLOW_COMPILER_AND_STL_VERSION_MISMATCH",
+         });
+ 
+         m.addCSourceFiles(.{

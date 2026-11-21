@@ -4,8 +4,10 @@
 # Usage: verify-cargo.sh test [args...] | lint | release | cli
 # CI-scoped lanes: test-scoped | check | build | clippy | metadata [cargo arguments...]
 #                  nextest [cargo nextest run arguments...] (the CI Rust lane; .config/nextest.toml)
+#                  nextest-list [cargo nextest list arguments...] (the tests `nextest` would run, which the repeat lane counts)
 #                  fmt-check (cargo fmt --all --check alone)
 #                  hakari (workspace-hack is current; scripts/install-hakari.sh)
+#                  deny (licenses and advisories of the lockfile; deny.toml, scripts/install-cargo-deny.sh)
 #
 # The PRD harness runs each verify command with execvp and no shell, so an
 # `ENV=value cargo ...` binding fails with ENOENT at verify time rather than at
@@ -36,12 +38,46 @@ export CARGO_TARGET_DIR="$PWD/target"
 # A Herdr pane carries the socket and identity of the Herdr that opened it,
 # and a test daemon that reads them from its environment follows the
 # operator's live Herdr and labels its agents from the operator's
-# conversations. No test may reach that server; each one that needs Herdr
-# names its own. Retirement fixtures must also ignore an inherited legacy
+# conversations. No test may reach that server. Retirement fixtures must also ignore an inherited legacy
 # coordination-home override so no private kit pass follows operator state.
 for name in $(compgen -e); do
     case "$name" in HERDR_*|HCOORD_*) unset "$name" ;; esac
 done
+
+# A Hide pane carries the same kind of handle to the operator's Hide:
+# HIDE_STATE_DIR and HIDE_CAP_REF name the operator's state folder and
+# credential, HIDE_PANE_ID and HIDE_INSTALL(_CLI) name the pane and the
+# installation that started it, and the daemon's own settings (HIDE_PORT,
+# HIDE_KEEP_ALIVE and the rest) ride along. A test that reads one sees the
+# operator's running daemon and refuses or writes there: 104 hide-kit tests
+# failed that way in a pane (with-hide/hide-private#650), and three
+# hide-agent-hooks tests wrote under ~/.hide/agent-hooks (#627).
+# Every HIDE_* variable is therefore dropped, except the inputs a build or a
+# test is meant to be given by its caller: HIDE_TEST_* and HIDE_E2E_* (a
+# program or a prerequisite a test asks for, docs/TESTING.md), HIDE_BUILD_*
+# and HIDE_VT_* (build.rs inputs, set by toolchain-env.sh too), the release
+# identity, HOLDER_CONPTY, and the opt-in live probes. A new input of that
+# kind takes a HIDE_TEST_ name, or is added to this list in the change that
+# reads it; a variable the daemon or a pane sets is never added.
+for name in $(compgen -e); do
+    case "$name" in
+        HIDE_TEST_*|HIDE_E2E_*|HIDE_BUILD_*|HIDE_VT_*) ;;
+        HIDE_HOLDER_CONPTY|HIDE_VERSION|HIDE_COMMIT|HIDE_POSTHOG_PROJECT_TOKEN) ;;
+        HIDE_AGY_*|HIDE_AI_LIVE_EVIDENCE|HIDE_CODEX_BINARY|HIDE_SUGGESTIONS_REPLAY_*|HIDE_SNAPSHOT_OUT) ;;
+        HIDE_*) unset "$name" ;;
+    esac
+done
+
+# A test that runs git reads none of the account's git settings. The account's
+# commit.gpgsign with an SSH signer made a fixture commit fail whenever the
+# signing agent did not answer, under load (with-hide/hide-private#620, #333),
+# and CI's runners carry no such setting, so a test that passes only because
+# of one passes nowhere else. /dev/null is the empty config on every system
+# (Git for Windows reads it as `nul`); a fixture still names its own
+# user.name and user.email.
+isolate_git_config() {
+    export GIT_CONFIG_GLOBAL=/dev/null GIT_CONFIG_NOSYSTEM=1
+}
 
 # Each job's log names the toolchain that builds, the one rust-toolchain.toml
 # pins: a list of installed toolchains does not say which one ran. Once per
@@ -83,7 +119,7 @@ selects_vt() {
 # Scoped modes cannot move the checkout or its artifacts through cargo flags.
 # Keep the legacy modes unchanged for sealed verification commands.
 case "${1:-}" in
-    test-scoped|check|build|clippy|metadata|nextest)
+    test-scoped|check|build|clippy|metadata|nextest|nextest-list)
         mode=$1
         shift
         (( $# <= 128 )) || { printf 'too many cargo arguments\n' >&2; exit 2; }
@@ -97,6 +133,7 @@ case "${1:-}" in
         done
         report_toolchain
         if [[ "$mode" != metadata ]] && selects_vt "$@"; then prepare_vt_inputs; fi
+        case "$mode" in test-scoped|nextest) isolate_git_config ;; esac
         if [[ "$mode" == nextest ]]; then
             status=0
             cargo nextest run --locked "$@" || status=$?
@@ -107,6 +144,7 @@ case "${1:-}" in
             [[ ! -f "$report" ]] || mv "$report" "target/nextest/ci/junit.$$.$RANDOM.xml"
             exit "$status"
         fi
+        [[ "$mode" != nextest-list ]] || exec cargo nextest list --locked "$@"
         [[ "$mode" != test-scoped ]] || mode=test
         exec cargo "$mode" --locked "$@"
         ;;
@@ -114,6 +152,7 @@ case "${1:-}" in
         shift
         report_toolchain
         prepare_vt_inputs
+        isolate_git_config
         exec cargo test --locked --workspace "$@"
         ;;
     fmt-check)
@@ -127,6 +166,15 @@ case "${1:-}" in
         report_toolchain
         cargo hakari generate --diff
         exec cargo hakari manage-deps --dry-run
+        ;;
+    deny)
+        # Every crate the lockfile names carries a license Hide may ship
+        # under and no known vulnerability (deny.toml). It reads the advisory
+        # database from the network, so it runs where a dependency changed
+        # and nightly, never on a pull request that changed none.
+        # docs/BUILD.md, "Licenses and advisories".
+        report_toolchain
+        exec cargo deny --locked check licenses advisories
         ;;
     lint)
         report_toolchain
@@ -143,11 +191,13 @@ case "${1:-}" in
         exec cargo build --release --locked -p hided --bins -p hide-agent-hooks --bin hide-agent-hooks -p hide-holder --bin hide-holder
         ;;
     cli)
+        # Every pane runs in a pane holder, which links hide-vt.
         report_toolchain
-        exec cargo build --locked -p hided --bins -p hide-agent-hooks --bin hide-agent-hooks
+        prepare_vt_inputs
+        exec cargo build --locked -p hided --bins -p hide-agent-hooks --bin hide-agent-hooks -p hide-holder --bin hide-holder
         ;;
     *)
-        printf 'usage: %s test [args...]|lint|fmt-check|hakari|release|cli|test-scoped|check|build|clippy|metadata|nextest [args...]\n' "$0" >&2
+        printf 'usage: %s test [args...]|lint|fmt-check|hakari|deny|release|cli|test-scoped|check|build|clippy|metadata|nextest|nextest-list [args...]\n' "$0" >&2
         exit 2
         ;;
 esac

@@ -1,6 +1,6 @@
 //! The desktop app's agent notifications (PRD first-run-onboarding D-09,
 //! B31-B38): the phone push's notification transitions
-//! (`herdr_core::agent_state::push::Transitions`) run a second time for the
+//! (`hide_core::agent_state::push::Transitions`) run a second time for the
 //! desktop windows, independent of the Mobile setting.
 //!
 //! They judge the projection the mobile follower already reads off the core's
@@ -13,11 +13,14 @@
 //! desktop windows; whether a notification shows, and in what words, is the
 //! desktop host's and the window's to decide (D-10, B39).
 
+use std::collections::HashSet;
+use std::time::{Duration, Instant};
+
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 
-use herdr_core::agent_state::phone::{AgentKey, Projection};
-use herdr_core::agent_state::push::{Notice, Transitions};
+use hide_core::agent_state::phone::{AgentKey, Projection};
+use hide_core::agent_state::push::{Notice, Transitions};
 use serde_json::{Value, json};
 use tokio::sync::broadcast;
 
@@ -31,8 +34,35 @@ pub struct DesktopNotices {
     /// The desktop windows whose switch is on.
     demand: ObservationDemand,
     wanted: AtomicBool,
+    computer_use: Mutex<ComputerUse>,
+    resting: AtomicBool,
+    waiting: ObservationDemand,
+    waiting_wanted: AtomicBool,
     transitions: Mutex<Transitions>,
     frames: broadcast::Sender<Arc<str>>,
+}
+
+/// Only receipt times on this daemon, never a clock supplied by a phone.
+/// The existing one-second host poll cannot order inputs within one second:
+/// the computer wins that interval so the ambiguous case stays quiet.
+#[derive(Default)]
+struct ComputerUse {
+    hosts: HashSet<u64>,
+    computer: Option<Instant>,
+    phone: Option<Instant>,
+}
+
+impl ComputerUse {
+    fn rests(&self, wanted: bool) -> bool {
+        wanted
+            && !self.hosts.is_empty()
+            && match (self.computer, self.phone) {
+                (Some(computer), Some(phone)) => {
+                    phone.saturating_duration_since(computer) <= Duration::from_secs(1)
+                }
+                _ => true,
+            }
+    }
 }
 
 impl Default for DesktopNotices {
@@ -40,6 +70,10 @@ impl Default for DesktopNotices {
         Self {
             demand: ObservationDemand::default(),
             wanted: AtomicBool::new(false),
+            computer_use: Mutex::default(),
+            resting: AtomicBool::new(false),
+            waiting: ObservationDemand::default(),
+            waiting_wanted: AtomicBool::new(false),
             transitions: Mutex::default(),
             frames: broadcast::channel(FRAME_BACKLOG).0,
         }
@@ -59,15 +93,63 @@ impl DesktopNotices {
         self.demand.set(connection, wanted, |on| self.turned(on)) == Some(true)
     }
 
+    /// A host reports a use transition, connection replay, or input resumed
+    /// after a five-second pause. No per-keystroke work or snapshot publish.
+    pub fn activity(&self, connection: u64, in_use: bool) {
+        self.activity_at(connection, in_use, Instant::now());
+    }
+
+    pub(crate) fn activity_at(&self, connection: u64, in_use: bool, at: Instant) {
+        let mut use_state = self.computer_use.lock().expect("computer use");
+        if in_use {
+            use_state.hosts.insert(connection);
+            use_state.computer = Some(use_state.computer.map_or(at, |old| old.max(at)));
+        } else {
+            use_state.hosts.remove(&connection);
+        }
+        self.update_rest(&use_state);
+    }
+
+    /// Called only for a newly accepted phone action, including a device pane.
+    pub fn phone_input(&self, at: Instant) {
+        let mut use_state = self.computer_use.lock().expect("computer use");
+        use_state.phone = Some(use_state.phone.map_or(at, |old| old.max(at)));
+        self.update_rest(&use_state);
+    }
+
+    fn update_rest(&self, use_state: &ComputerUse) {
+        let resting = use_state.rests(self.waiting_wanted.load(Ordering::SeqCst));
+        if self.resting.swap(resting, Ordering::SeqCst) != resting {
+            hide_core::diagnostic!(json!({
+                "component": "mobile_push", "kind": "phone.rest_changed", "resting": resting,
+            }));
+        }
+    }
+
+    pub fn set_waiting(&self, connection: u64, wanted: bool) {
+        self.waiting.set(connection, wanted, |on| {
+            let use_state = self.computer_use.lock().expect("computer use");
+            self.waiting_wanted.store(on, Ordering::SeqCst);
+            self.update_rest(&use_state);
+        });
+    }
+
+    /// Resting must leave at least one desktop able to announce a person's turn.
+    pub fn rests_phone(&self) -> bool {
+        self.resting.load(Ordering::SeqCst)
+    }
+
     /// A closed window takes its demand with it.
     pub fn release(&self, connection: u64) {
         self.demand.release(connection, |on| self.turned(on));
+        self.activity(connection, false);
+        self.set_waiting(connection, false);
     }
 
     fn turned(&self, on: bool) {
         self.wanted.store(on, Ordering::SeqCst);
         self.lock().reset();
-        herdr_core::diagnostic!(json!({
+        hide_core::diagnostic!(json!({
             "component": "desktop_notices", "kind": "desktop_notices.demand", "on": on,
         }));
     }
@@ -92,7 +174,7 @@ impl DesktopNotices {
         if notices.is_empty() && seen.is_empty() {
             return;
         }
-        herdr_core::diagnostic!(json!({
+        hide_core::diagnostic!(json!({
             "component": "desktop_notices", "kind": "desktop_notice.judged",
             "agents": notices.iter().map(|notice| notice.key.tag()).collect::<Vec<_>>(),
             "cleared": seen.iter().map(AgentKey::tag).collect::<Vec<_>>(),
@@ -127,8 +209,78 @@ fn frame<'a>(notices: &[Notice], clear: impl Iterator<Item = &'a AgentKey>) -> V
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn any_active_host_with_a_waiting_notice_switch_rests_phones_until_it_leaves() {
+        let windows = super::DesktopNotices::default();
+        windows.activity(1, true);
+        assert!(
+            !windows.rests_phone(),
+            "an active host without notifications cannot replace the phone"
+        );
+        windows.set_waiting(1, true);
+        windows.activity(2, true);
+        windows.set_waiting(2, true);
+        assert!(windows.rests_phone());
+        windows.activity(1, false);
+        assert!(windows.rests_phone(), "the second host is still in use");
+        windows.release(2);
+        assert!(!windows.rests_phone(), "a disconnected host is gone");
+        windows.activity(1, true);
+        assert!(windows.rests_phone());
+        windows.release(1);
+        assert!(
+            !windows.rests_phone(),
+            "no attached window means phone pushes"
+        );
+    }
+    #[test]
+    fn latest_accepted_device_wins_with_computer_ties_and_no_host_fallback() {
+        let windows = super::DesktopNotices::default();
+        let at = std::time::Instant::now();
+        let second = std::time::Duration::from_secs(1);
+        windows.set_waiting(1, true);
+        windows.activity_at(1, true, at);
+        assert!(windows.rests_phone());
+        windows.phone_input(at + second * 2);
+        assert!(!windows.rests_phone());
+        windows.activity_at(1, true, at + second * 3);
+        assert!(
+            windows.rests_phone(),
+            "resumed input while already in use wins"
+        );
+        windows.phone_input(at + second * 3 + second / 2);
+        assert!(windows.rests_phone(), "within one poll the computer wins");
+        windows.phone_input(at + second * 5);
+        assert!(!windows.rests_phone());
+        windows.activity_at(1, false, at + second * 6);
+        assert!(
+            !windows.rests_phone(),
+            "lock, sleep or idle still permit pushes"
+        );
+        windows.activity_at(1, true, at + second * 7);
+        assert!(windows.rests_phone(), "waking to input rests again");
+        windows.set_waiting(1, false);
+        assert!(
+            !windows.rests_phone(),
+            "no desktop Needs You means phone pushes"
+        );
+        windows.set_waiting(1, true);
+        assert!(windows.rests_phone());
+        windows.release(1);
+        assert!(!windows.rests_phone());
+        windows.phone_input(at + second * 8);
+        assert!(
+            !windows.rests_phone(),
+            "no host keeps the existing fallback"
+        );
+        let restarted = super::DesktopNotices::default();
+        restarted.set_waiting(1, true);
+        restarted.activity_at(1, true, at + second * 9);
+        assert!(restarted.rests_phone(), "restart forgets phone takeover");
+    }
+
     use super::*;
-    use herdr_core::agent_state::phone::project;
+    use hide_core::agent_state::phone::project;
 
     fn rest(group: &str, demand: &str) -> Value {
         json!({

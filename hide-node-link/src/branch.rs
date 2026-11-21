@@ -228,6 +228,9 @@ pub enum CatchUpOutcome {
     Diverged,
     /// `HEAD` is no longer the commit the request named; nothing was done.
     HeadMoved,
+    /// `HEAD` has another branch out than the one the request named, `branch`,
+    /// or none when it is detached; nothing was done.
+    OtherBranch { branch: Option<String> },
     /// `HEAD` is detached, or its branch has no upstream or one that is gone.
     NoUpstream,
     /// The worktree is partway through a merge, rebase, cherry-pick or revert.
@@ -246,8 +249,9 @@ pub const CATCH_UP_WAIT: std::time::Duration =
     std::time::Duration::from_secs(10 * 60 + 13 * 15 + 60);
 
 /// A `BranchCatchUp` request's values, or why they cannot make a git command.
-pub fn check_catch_up(head: &str) -> Result<(), String> {
-    check_tip(head).map(|_| ())
+pub fn check_catch_up(head: &str, branch: Option<&str>) -> Result<(), String> {
+    check_tip(head)?;
+    branch.map(check_branch).transpose().map(|_| ())
 }
 
 /// A branch name a request may carry (`git::branch_name`).

@@ -1,9 +1,9 @@
 //! `hide workspace remove <path> [--delete-branch] [--force]`: removes a
 //! worktree of the caller's machine through the delete dialog's own path, so
-//! its Herdr workspace and panes close with it. The daemon runs it
-//! (`herdr_core::worktree_command`).
+//! its workspace and panes close with it. The daemon runs it
+//! (`hide_core::worktree_command`).
 
-use herdr_core::worktree_command::WorktreeRemove;
+use hide_core::worktree_command::WorktreeRemove;
 use serde_json::json;
 
 use crate::env::Env;
@@ -51,11 +51,14 @@ pub fn parse(args: &[String]) -> Result<RemoveCli, String> {
 /// names the folder Git lists, and the absolute path when it is gone, as a
 /// removed folder's leftover workspace is named.
 fn wire_path(raw: &str) -> Result<String, String> {
-    let absolute = std::path::absolute(raw)
-        .map_err(|_| format!("{raw}: Hide cannot resolve this path from the working directory"))?;
-    let path = hide_platform::fs::identity::canonical(&absolute).unwrap_or(absolute);
-    hide_platform::path::to_wire(&path)
-        .map_err(|_| format!("{raw}: Hide cannot spell this folder's path; rename it and retry"))
+    crate::cli::wire_folder(raw).map_err(|refused| match refused {
+        crate::cli::WireFolder::Unresolved => {
+            format!("{raw}: Hide cannot resolve this path from the working directory")
+        }
+        crate::cli::WireFolder::Unspelled => {
+            format!("{raw}: Hide cannot spell this folder's path; rename it and retry")
+        }
+    })
 }
 
 /// Runs the command and prints one line, `{"ok":true,"value":…}` or
@@ -86,7 +89,7 @@ pub fn run(env: &Env, cli: RemoveCli) -> Result<(), String> {
                 .to_owned();
             let message = answer["next_action"]
                 .as_str()
-                .or_else(|| herdr_core::worktree_command::next_action(&code))
+                .or_else(|| hide_core::worktree_command::next_action(&code))
                 .unwrap_or("Retry; the reason is in Hide's diagnostic log")
                 .to_owned();
             refused_with(code, &message, &answer)
@@ -95,7 +98,7 @@ pub fn run(env: &Env, cli: RemoveCli) -> Result<(), String> {
             // The daemon's own wait is shorter than this command's, so a
             // timeout here is a removal that may still be running.
             let message = if code == "request_timeout" {
-                herdr_core::worktree_command::next_action("worktree_remove_pending")
+                hide_core::worktree_command::next_action("worktree_remove_pending")
                     .unwrap_or_default()
             } else {
                 crate::cli::request_next_action(&code)

@@ -1,0 +1,749 @@
+//! `hide agent exec`, the start line of an agent with a profile (PRD
+//! agent-profiles D-26, B21, B22; docs/ARCHITECTURE.md, Starting an agent
+//! with a profile): the program runs with the profile's variables in the
+//! start's own process on Unix, as the one child of `hide` on Windows, its
+//! exit code is the start's, and a program that cannot start ends the start
+//! with a line that names the profile and the program. Each start asks its
+//! pane's node, here a stand-in for the daemon's bootstrap service, how its
+//! profile runs, since its line carries nothing of it, and reports to it:
+//! a profile the node refuses runs nothing, the program runs only once its
+//! `Ready` is answered ok, and a process read before and after that answer
+//! tells the executor from its program the way the engine reads it.
+
+use std::ffi::OsStr;
+use std::io::Read;
+use std::process::{Command, Stdio};
+use std::sync::mpsc::channel;
+use std::sync::{Arc, Mutex};
+use std::time::Duration;
+
+use hide_agent_hooks::hook_request::{AgentExecEvent, ExecProfile, ExecStart, HookCommand};
+use serde_json::{Value, json};
+
+use crate::stand_in_daemon::StandInDaemon;
+
+const HIDE: &str = env!("CARGO_BIN_EXE_hide");
+const HANG_GUARD: Duration = Duration::from_secs(30);
+/// The attempt every start line here names, in the shape an engine gives.
+const ATTEMPT: &str = "0123456789abcdef";
+
+/// How a profile labelled `label` runs: its variables and its program.
+fn start(label: &str, env: &[(&str, &str)], program: Option<&str>, leading: &[&str]) -> ExecStart {
+    ExecStart {
+        label: label.to_owned(),
+        env: env
+            .iter()
+            .map(|(name, value)| ((*name).to_owned(), (*value).to_owned()))
+            .collect(),
+        program: program.map(str::to_owned),
+        leading: leading.iter().map(|word| (*word).to_owned()).collect(),
+    }
+}
+
+/// The pane's node as a start's executor reaches it: it answers the
+/// attempt's ask for its profile with `profile` and each of its reports
+/// with `answer`'s line, and keeps them in order.
+struct Node {
+    daemon: StandInDaemon,
+    reports: Arc<Mutex<Vec<AgentExecEvent>>>,
+}
+
+impl Node {
+    fn answering(
+        profile: ExecProfile,
+        answer: impl Fn(&AgentExecEvent) -> Value + Send + Sync + 'static,
+    ) -> Self {
+        let answer = move |event: &AgentExecEvent| match event {
+            AgentExecEvent::Profile => json!({"ok": true, "result": profile}),
+            event => answer(event),
+        };
+        let reports = Arc::new(Mutex::new(Vec::new()));
+        let kept = Arc::clone(&reports);
+        let daemon = StandInDaemon::serve_table(move |command| {
+            let Ok(HookCommand::AgentExec { attempt, event }) =
+                serde_json::from_value(command.clone())
+            else {
+                return Some(json!({"ok": false, "reason": "unexpected_request"}));
+            };
+            if attempt != ATTEMPT {
+                return Some(json!({"ok": false, "reason": "attempt_unknown"}));
+            }
+            let answer = answer(&event);
+            kept.lock().unwrap().push(event);
+            Some(answer)
+        });
+        Self { daemon, reports }
+    }
+
+    /// A node that takes every report of a start that runs as `start`.
+    fn taking(start: ExecStart) -> Self {
+        Self::answering(ExecProfile::Ready(start), |_| json!({"ok": true}))
+    }
+
+    /// `program` run as a pane's shell runs it: with none of the test's own
+    /// Hide variables, so no start reaches the account's own daemon, and
+    /// with this node as its pane's.
+    fn command(&self, program: impl AsRef<OsStr>) -> Command {
+        let mut command = Command::new(program);
+        for (name, _) in std::env::vars_os() {
+            if name.to_string_lossy().starts_with("HIDE_") {
+                command.env_remove(name);
+            }
+        }
+        self.daemon.route(&mut command);
+        command
+    }
+
+    /// The `hide agent exec` of [`ATTEMPT`], followed by `rest`.
+    fn exec(&self, rest: &[&str]) -> Command {
+        let mut command = self.command(HIDE);
+        command
+            .args(["agent", "exec", "--attempt", ATTEMPT])
+            .args(rest);
+        command
+    }
+
+    fn reports(&self) -> Vec<AgentExecEvent> {
+        self.reports.lock().unwrap().clone()
+    }
+}
+
+/// Waits for `child` to end within the guard, on a thread of its own, and
+/// answers its exit code.
+fn exit_code(mut child: std::process::Child) -> Option<i32> {
+    let (ended, end) = channel();
+    std::thread::spawn(move || ended.send(child.wait().unwrap()));
+    end.recv_timeout(HANG_GUARD)
+        .expect("the start never ended")
+        .code()
+}
+
+/// Waits until `holds` answers true, within the guard.
+#[allow(clippy::disallowed_methods)] // a polling helper: it sleeps between observations of a state, bounded by a deadline
+fn until(what: &str, mut holds: impl FnMut() -> bool) {
+    let deadline = std::time::Instant::now() + HANG_GUARD;
+    while !holds() {
+        assert!(std::time::Instant::now() < deadline, "{what}");
+        std::thread::sleep(Duration::from_millis(20));
+    }
+}
+
+/// Runs `command` to its end within the guard, answering its exit code and
+/// its standard output and error.
+fn finished(mut command: Command) -> (Option<i32>, String, String) {
+    let mut child = command
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .unwrap();
+    let mut stdout = child.stdout.take().unwrap();
+    let mut stderr = child.stderr.take().unwrap();
+    let out = std::thread::spawn(move || {
+        let mut text = String::new();
+        stdout.read_to_string(&mut text).unwrap();
+        text
+    });
+    let err = std::thread::spawn(move || {
+        let mut text = String::new();
+        stderr.read_to_string(&mut text).unwrap();
+        text
+    });
+    let code = exit_code(child);
+    (code, out.join().unwrap(), err.join().unwrap())
+}
+
+#[cfg(unix)]
+#[test]
+fn a_unix_start_becomes_its_program_with_the_profiles_variables_and_its_exit_code() {
+    // The shell prints its own pid, then hands it to `hide`, which runs the
+    // program in the same process: the program's pid is the shell's.
+    let node = Node::taking(start(
+        "Claude Code · work",
+        &[("PROFILE_VAR", "a=b"), ("SECOND", "")],
+        None,
+        &[],
+    ));
+    let mut command = node.command("/bin/sh");
+    command
+        .env_remove("PROFILE_VAR")
+        .args([
+            "-c",
+            &format!(
+                r#"echo "$$"; exec "$0" agent exec --attempt {ATTEMPT} -- /bin/sh -c 'echo "$$ ${{PROFILE_VAR}} [${{SECOND-unset}}]"; exit 7'"#
+            ),
+        ])
+        .arg(HIDE);
+    let (code, stdout, stderr) = finished(command);
+    assert_eq!(code, Some(7), "{stderr}");
+    let lines: Vec<&str> = stdout.lines().collect();
+    assert_eq!(lines.len(), 2, "{stdout}");
+    assert_eq!(lines[1], format!("{} a=b []", lines[0]));
+    // It asked for its profile and said it was about to start, and nothing
+    // more: the program that replaced it has no executor left to report.
+    assert_eq!(
+        node.reports(),
+        [AgentExecEvent::Profile, AgentExecEvent::Ready]
+    );
+}
+
+#[cfg(unix)]
+#[test]
+fn a_profiles_program_runs_in_place_of_the_agents_with_its_leading_words() {
+    let node = Node::taking(start(
+        "pi · gateway",
+        &[],
+        Some("/bin/sh"),
+        &["-c", r#"echo "wrapper $0 $1""#],
+    ));
+    let command = node.exec(&["--", "pi", "first", "second"]);
+    let (code, stdout, stderr) = finished(command);
+    assert_eq!(code, Some(0), "{stderr}");
+    assert_eq!(stdout, "wrapper first second\n");
+}
+
+/// The process the engine reads is the executor until its `Ready` is
+/// answered, and the program, in the same process with the same start,
+/// once it is: the read that decides a start, of a real `hide` and program.
+#[cfg(unix)]
+#[test]
+fn a_read_of_the_start_sees_the_executor_until_its_ready_is_answered_and_the_program_after() {
+    use std::sync::mpsc::{Receiver, Sender};
+
+    use hide_agent_hooks::hook_request::{ExecSeen, executor_process, seen_executor};
+    use hide_platform::process::{argv_of, start_time};
+
+    let (arrived, ready_arrived): (Sender<()>, Receiver<()>) = channel();
+    let (release, released): (Sender<()>, Receiver<()>) = channel();
+    let released = Mutex::new(released);
+    let arrived = Mutex::new(arrived);
+    let node = Node::answering(
+        ExecProfile::Ready(start("Claude Code · work", &[], None, &[])),
+        move |event| {
+            if *event == AgentExecEvent::Ready {
+                arrived.lock().unwrap().send(()).unwrap();
+                released.lock().unwrap().recv_timeout(HANG_GUARD).unwrap();
+            }
+            json!({"ok": true})
+        },
+    );
+    let mut child = node
+        .exec(&["--", "/bin/cat", "-"])
+        .stdin(Stdio::piped())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .spawn()
+        .unwrap();
+    let pid = child.id();
+    ready_arrived.recv_timeout(HANG_GUARD).unwrap();
+
+    // Its Ready is held: the process is the attempt's executor, which the
+    // node's check of a report's sender takes, and a read sees nothing yet.
+    let executor = executor_process(pid, ATTEMPT).unwrap();
+    assert_eq!(executor.started, start_time(pid).unwrap());
+    let argv = argv_of(pid).unwrap();
+    assert_eq!(
+        seen_executor(Some((start_time(pid).unwrap(), &argv)), executor, ATTEMPT),
+        ExecSeen::Waiting,
+        "{argv:?}"
+    );
+
+    release.send(()).unwrap();
+    until("the program never replaced its executor", || {
+        let argv = argv_of(pid).unwrap();
+        seen_executor(Some((start_time(pid).unwrap(), &argv)), executor, ATTEMPT) == ExecSeen::Ran
+    });
+    assert_eq!(start_time(pid).unwrap(), executor.started);
+    assert_eq!(argv_of(pid).unwrap(), ["/bin/cat", "-"]);
+    // The program is not the executor: a report from it is refused.
+    assert_eq!(executor_process(pid, ATTEMPT), Err("attempt_mismatch"));
+
+    drop(child.stdin.take());
+    assert_eq!(exit_code(child), Some(0));
+    assert_eq!(
+        node.reports(),
+        [AgentExecEvent::Profile, AgentExecEvent::Ready]
+    );
+}
+
+#[test]
+fn a_program_that_cannot_start_is_refused_before_it_is_ready_naming_the_profile_and_the_program() {
+    let folder = tempfile::tempdir().unwrap();
+    let missing = folder.path().join("claude-gateway");
+    let node = Node::taking(start(
+        "Claude Code · gateway",
+        &[],
+        Some(&missing.display().to_string()),
+        &[],
+    ));
+    let command = node.exec(&["--", "claude"]);
+    let (code, stdout, stderr) = finished(command);
+    assert_eq!(code, Some(127), "{stderr}");
+    assert_eq!(stdout, "");
+    let failure = format!(
+        "Claude Code · gateway could not start {}: {} is not a file",
+        missing.display(),
+        missing.display()
+    );
+    assert_eq!(
+        stderr,
+        format!("hide: {failure}. This pane is a shell again.\n")
+    );
+    assert_eq!(
+        node.reports(),
+        [AgentExecEvent::Profile, AgentExecEvent::Refused { failure }]
+    );
+}
+
+/// A profile its node refuses now (changed since its start was checked,
+/// gone, being removed) runs nothing: the executor reports the refusal as
+/// its check's and ends the start, never asking to start.
+#[test]
+fn a_profile_its_node_refuses_now_runs_nothing_and_is_reported_refused() {
+    let failure =
+        "Claude was not started: its profile work changed while it was starting; start it again";
+    let node = Node::answering(
+        ExecProfile::Refused {
+            failure: failure.to_owned(),
+        },
+        |_| json!({"ok": true}),
+    );
+    let folder = tempfile::tempdir().unwrap();
+    let ran = folder.path().join("ran");
+    let (program, words) = writes(&ran);
+    let mut command = node.exec(&["--"]);
+    command.arg(program).args(words);
+    let (code, stdout, stderr) = finished(command);
+    assert_eq!(code, Some(126), "{stderr}");
+    assert_eq!(stdout, "");
+    assert_eq!(
+        stderr,
+        format!("hide: {failure}. This pane is a shell again.\n")
+    );
+    assert!(!ran.exists(), "the program ran");
+    assert_eq!(
+        node.reports(),
+        [
+            AgentExecEvent::Profile,
+            AgentExecEvent::Refused {
+                failure: failure.to_owned()
+            }
+        ]
+    );
+}
+
+/// A line that runs after its start ended (a deadline passed, its pane
+/// took a newer start) is handed nothing of its profile and runs nothing:
+/// the node takes no ask of an attempt that is not running.
+#[test]
+fn a_start_whose_ask_is_not_taken_runs_nothing_and_never_says_it_is_ready() {
+    let ran_folder = tempfile::tempdir().unwrap();
+    let ran = ran_folder.path().join("ran");
+    let (program, words) = writes(&ran);
+    let reports = Arc::new(Mutex::new(Vec::new()));
+    let kept = Arc::clone(&reports);
+    let daemon = StandInDaemon::serve_table(move |command| {
+        let Ok(HookCommand::AgentExec { event, .. }) = serde_json::from_value(command.clone())
+        else {
+            return Some(json!({"ok": false, "reason": "unexpected_request"}));
+        };
+        kept.lock().unwrap().push(event);
+        Some(json!({"ok": false, "reason": "attempt_unknown"}))
+    });
+    let node = Node { daemon, reports };
+    let mut command = node.exec(&["--"]);
+    command.arg(program).args(words);
+    let (code, _, stderr) = finished(command);
+    assert_eq!(code, Some(126));
+    assert!(
+        stderr.ends_with(
+            "Hide did not take this agent's start (attempt_unknown). This pane is a shell again.\n"
+        ),
+        "{stderr}"
+    );
+    assert!(!ran.exists(), "the program ran");
+    assert_eq!(node.reports(), [AgentExecEvent::Profile]);
+}
+
+/// A program the check takes that the system then refuses to run fails the
+/// start after its `Ready`, with the system's reason.
+#[test]
+fn a_program_the_system_refuses_after_its_check_fails_the_start_after_it_was_ready() {
+    let folder = tempfile::tempdir().unwrap();
+    let program = refused_program(folder.path());
+    let node = Node::taking(start(
+        "Codex · work",
+        &[],
+        Some(&program.display().to_string()),
+        &[],
+    ));
+    let command = node.exec(&["--", "codex"]);
+    let (code, stdout, stderr) = finished(command);
+    assert_eq!(code, Some(126), "{stderr}");
+    assert_eq!(stdout, "");
+    let named = format!("Codex · work could not start {}: ", program.display());
+    assert!(stderr.starts_with(&format!("hide: {named}")), "{stderr}");
+    let reports = node.reports();
+    match reports.as_slice() {
+        [
+            AgentExecEvent::Profile,
+            AgentExecEvent::Ready,
+            AgentExecEvent::Failed { failure },
+        ] => {
+            assert!(failure.starts_with(&named), "{failure}");
+        }
+        other => panic!("{other:?}"),
+    }
+}
+
+/// A file the check takes as a program that the system will not run: one
+/// whose only execute bit is its group's, which its owner cannot run.
+/// Root runs it, so the test needs another account, as every CI runner is.
+#[cfg(unix)]
+fn refused_program(folder: &std::path::Path) -> std::path::PathBuf {
+    use std::os::unix::fs::PermissionsExt;
+    // SAFETY: a plain call with no arguments.
+    assert_ne!(
+        unsafe { libc::geteuid() },
+        0,
+        "this test needs an account other than root, which runs any file with an execute bit"
+    );
+    let program = folder.join("claude-gateway");
+    std::fs::write(&program, "#!/bin/sh\nexit 0\n").unwrap();
+    std::fs::set_permissions(&program, std::fs::Permissions::from_mode(0o010)).unwrap();
+    program
+}
+
+/// A file named as a program that is not one: the system refuses to start it.
+#[cfg(windows)]
+fn refused_program(folder: &std::path::Path) -> std::path::PathBuf {
+    let program = folder.join("claude-gateway.exe");
+    std::fs::write(&program, "not a program").unwrap();
+    program
+}
+
+/// A start the node does not take never runs its program: its line came
+/// after the start was answered for.
+#[test]
+fn a_start_whose_ready_is_refused_never_runs_its_program() {
+    let node = Node::answering(
+        ExecProfile::Ready(start("Claude Code · work", &[], None, &[])),
+        |_| json!({"ok": false, "reason": "attempt_unknown"}),
+    );
+    let folder = tempfile::tempdir().unwrap();
+    let ran = folder.path().join("ran");
+    let (program, words) = writes(&ran);
+    let mut command = node.exec(&["--"]);
+    command.arg(program).args(words);
+    let (code, _, stderr) = finished(command);
+    assert_eq!(code, Some(126));
+    assert!(
+        stderr.ends_with(
+            "Hide did not take its start (attempt_unknown). This pane is a shell again.\n"
+        ),
+        "{stderr}"
+    );
+    assert!(!ran.exists(), "the program ran");
+    assert_eq!(
+        node.reports(),
+        [AgentExecEvent::Profile, AgentExecEvent::Ready]
+    );
+}
+
+/// A program and its words that create the file `ran`.
+#[cfg(unix)]
+fn writes(ran: &std::path::Path) -> (&'static str, Vec<String>) {
+    ("/usr/bin/touch", vec![ran.display().to_string()])
+}
+
+#[cfg(windows)]
+fn writes(ran: &std::path::Path) -> (&'static str, Vec<String>) {
+    (
+        "powershell.exe",
+        [
+            "-NoLogo",
+            "-NoProfile",
+            "-Command",
+            &format!("Set-Content -Path '{}' -Value 1", ran.display()),
+        ]
+        .map(str::to_owned)
+        .to_vec(),
+    )
+}
+
+/// A line this build cannot read starts nothing and asks nothing: one with
+/// words before `--`, and an earlier build's, whose attempt has another
+/// shape and whose profile's variables rode the line.
+#[test]
+fn a_start_line_it_cannot_read_starts_nothing() {
+    let node = Node::taking(start("p", &[], None, &[]));
+    let (code, _, stderr) = finished(node.exec(&["--env", "A=b", "--", "x"]));
+    assert_eq!(code, Some(2));
+    assert_eq!(
+        stderr,
+        "hide: this agent start line cannot be read: --env is not an option\n"
+    );
+    let mut earlier = node.command(HIDE);
+    earlier.args([
+        "agent",
+        "exec",
+        "--attempt",
+        "1794175536904-d976a9485d217ccbe6a55d4704337678",
+        "--profile",
+        "Claude · b",
+        "--env",
+        "CLAUDE_CONFIG_DIR=/home/me/.claude-b",
+        "--",
+        "x",
+    ]);
+    let (code, _, stderr) = finished(earlier);
+    assert_eq!(code, Some(2));
+    assert_eq!(
+        stderr,
+        "hide: this agent start line cannot be read: --attempt names no start\n"
+    );
+    assert!(node.reports().is_empty());
+}
+
+#[cfg(windows)]
+mod windows {
+    use super::*;
+    use std::os::windows::process::CommandExt;
+
+    use hide_agent_hooks::hook_request::ExecProcess;
+
+    const CREATE_NEW_PROCESS_GROUP: u32 = 0x0000_0200;
+    const CTRL_BREAK_EVENT: u32 = 1;
+
+    #[link(name = "kernel32")]
+    unsafe extern "system" {
+        fn GenerateConsoleCtrlEvent(event: u32, group: u32) -> i32;
+    }
+
+    fn powershell(script: &str) -> Vec<String> {
+        [
+            "powershell.exe",
+            "-NoLogo",
+            "-NoProfile",
+            "-Command",
+            script,
+        ]
+        .map(str::to_owned)
+        .to_vec()
+    }
+
+    fn exec(node: &Node, argv: &[String]) -> Command {
+        let mut command = node.exec(&["--"]);
+        command.args(argv);
+        command
+    }
+
+    /// The program runs as `hide`'s child, which `hide` reports once it is
+    /// in its job and resumed, as the process the program prints it is.
+    #[test]
+    fn a_windows_start_runs_its_program_with_the_profiles_variables_and_answers_its_exit_code() {
+        let node = Node::taking(start("Codex · work", &[("PROFILE_VAR", "a=b")], None, &[]));
+        let command = exec(
+            &node,
+            &powershell("Write-Output $PID; Write-Output $env:PROFILE_VAR; exit 7"),
+        );
+        let (code, stdout, stderr) = finished(command);
+        assert_eq!(code, Some(7), "{stderr}");
+        let lines: Vec<&str> = stdout.lines().collect();
+        assert_eq!(lines.len(), 2, "{stdout}");
+        assert_eq!(lines[1], "a=b");
+        let program: u32 = lines[0].trim().parse().unwrap();
+        match node.reports().as_slice() {
+            [
+                AgentExecEvent::Profile,
+                AgentExecEvent::Ready,
+                AgentExecEvent::Spawned {
+                    child: ExecProcess { pid, .. },
+                },
+            ] => assert_eq!(*pid, program),
+            other => panic!("{other:?}"),
+        }
+    }
+
+    /// `PATH` with `folder` first, then the test's own, where Node and
+    /// `cmd.exe` are.
+    fn path_with(folder: &std::path::Path) -> String {
+        let own = std::env::var_os("PATH").unwrap_or_default();
+        std::env::join_paths(
+            std::iter::once(folder.to_path_buf()).chain(std::env::split_paths(&own)),
+        )
+        .unwrap()
+        .into_string()
+        .unwrap()
+    }
+
+    /// An agent a batch file starts, one that is not npm's launcher, is
+    /// found by its name on the profile's `PATH` as `PATHEXT` finds it and
+    /// runs through `cmd.exe` (journey run 42586901056: Pi's profile start
+    /// ended with "program not found" while its start without a profile ran).
+    #[test]
+    fn a_windows_start_runs_a_batch_file_the_name_finds_on_the_profiles_path() {
+        let folder = tempfile::tempdir().unwrap();
+        std::fs::write(
+            folder.path().join("agent.cmd"),
+            "@echo off\r\necho %PROFILE_VAR%\r\necho %1\r\nexit /b 5\r\n",
+        )
+        .unwrap();
+        let path = path_with(folder.path());
+        let node = Node::taking(start(
+            "Pi · work",
+            &[("PROFILE_VAR", "a=b"), ("PATH", &path)],
+            None,
+            &[],
+        ));
+        let (code, stdout, stderr) =
+            finished(exec(&node, &["agent".to_owned(), "first".to_owned()]));
+        assert_eq!(code, Some(5), "{stderr}");
+        assert_eq!(stdout.lines().collect::<Vec<_>>(), ["a=b", "first"]);
+        assert!(
+            matches!(
+                node.reports().as_slice(),
+                [
+                    AgentExecEvent::Profile,
+                    AgentExecEvent::Ready,
+                    AgentExecEvent::Spawned { .. }
+                ]
+            ),
+            "{:?}",
+            node.reports()
+        );
+    }
+
+    /// npm 11's launcher for `@openai/codex`'s `bin/codex.js` (cmd-shim 8.0.0).
+    const NPM_LAUNCHER: &str =
+        include_str!("../../../hide-platform/tests/fixtures/launchers/npm-script.cmd");
+
+    /// An agent npm installed starts by its name as the Node and script its
+    /// launcher runs, never through `cmd.exe`, so an argument holding what
+    /// `cmd.exe` reads (`&`, `"`, `%`, `^`) reaches it whole, with the
+    /// profile's variables and its exit code (PRD agent-profiles D-26).
+    ///
+    /// The 30 s in [`HANG_GUARD`] is only a hang guard: this is the first
+    /// Node a CI job starts, and a fresh runner reads and scans `node.exe`
+    /// on that first start, which took from 2.5 s to past a 30 s guard
+    /// (issue 202) and 0.1 s the next time (issue 2568). So the first start
+    /// is paid before the guard begins, as `stand_ins` does for any program
+    /// a test runs against a deadline, and it runs the script the start
+    /// itself runs: `--version` answers before Node starts its engine and
+    /// crypto (with-hide/hide-private#329).
+    #[test]
+    fn a_windows_start_runs_npms_launcher_as_its_node_and_script_with_each_argument_whole() {
+        const SCRIPT: &str = "process.stdout.write(JSON.stringify([process.env.PROFILE_VAR, ...process.argv.slice(2)]));\nprocess.exit(4);\n";
+        let root = tempfile::tempdir().unwrap();
+        let modules = root.path().join("node_modules");
+        let package = modules.join("@openai").join("codex");
+        std::fs::create_dir_all(package.join("bin")).unwrap();
+        std::fs::write(
+            package.join("package.json"),
+            r#"{"name":"@openai/codex","bin":{"codex":"bin/codex.js"}}"#,
+        )
+        .unwrap();
+        std::fs::write(package.join("bin").join("codex.js"), SCRIPT).unwrap();
+        let bin = modules.join(".bin");
+        std::fs::create_dir_all(&bin).unwrap();
+        std::fs::write(bin.join("codex.cmd"), NPM_LAUNCHER).unwrap();
+        let path = path_with(&bin);
+        // The Node this start runs, readied before the hang guard begins.
+        let program = hide_platform::host::find_program(&std::env::var_os("PATH").unwrap(), "node")
+            .expect("node is required to start an npm launcher as its node and script");
+        crate::stand_ins::ready_with_args(&program, &["-e", SCRIPT]);
+        let node = Node::taking(start(
+            "Codex · work",
+            &[("PROFILE_VAR", "a=b"), ("PATH", &path)],
+            None,
+            &[],
+        ));
+        let word = r#"a & b "c" %PATH% ^x"#;
+        let argv = ["codex", "--model", word].map(str::to_owned);
+        let (code, stdout, stderr) = finished(exec(&node, &argv));
+        assert_eq!(code, Some(4), "{stderr}");
+        let words: Vec<String> = serde_json::from_str(&stdout).unwrap();
+        assert_eq!(words, ["a=b", "--model", word]);
+    }
+
+    /// The program's tree ends with the start, whatever it left running.
+    #[test]
+    fn a_windows_start_ends_the_programs_whole_tree_with_it() {
+        let node = Node::taking(start("grok · a", &[], None, &[]));
+        let folder = tempfile::tempdir().unwrap();
+        let pid_file = folder.path().join("grandchild.pid");
+        let script = format!(
+            "$p = Start-Process -FilePath powershell.exe -ArgumentList '-NoProfile','-Command','Start-Sleep 120' -NoNewWindow -PassThru; \
+             Set-Content -Path '{}' -Value $p.Id; exit 0",
+            pid_file.display()
+        );
+        let (code, _, stderr) = finished(exec(&node, &powershell(&script)));
+        assert_eq!(code, Some(0), "{stderr}");
+        let pid: u32 = std::fs::read_to_string(&pid_file)
+            .unwrap()
+            .trim()
+            .parse()
+            .unwrap();
+        until("the program's child outlived its start", || {
+            !hide_platform::process::is_alive(pid)
+        });
+    }
+
+    /// The variable that tells [`sleeper`] where to say it runs.
+    const SLEEPER: &str = "AGENT_EXEC_SLEEPER";
+
+    /// The interrupt test's program: this test binary, run for this test
+    /// alone, says it runs (in the file the profile's variable names) and
+    /// then waits a minute before ending with 3. It installs no console
+    /// handler, so Ctrl-Break ends it as it ends any console program that
+    /// keeps the default; PowerShell would break into its debugger instead.
+    #[test]
+    #[ignore = "the program a_windows_interrupt_reaches_the_program_and_the_start_ends_with_it starts"]
+    #[allow(clippy::disallowed_methods)] // the program waits for an interrupt it never answers
+    fn sleeper() {
+        let Some(running) = std::env::var_os(SLEEPER) else {
+            return;
+        };
+        std::fs::write(running, "1").unwrap();
+        std::thread::sleep(Duration::from_secs(60));
+        std::process::exit(3);
+    }
+
+    /// Ctrl-Break in the start's console group reaches its program, which
+    /// ends long before it would have, and the start ends with it.
+    #[test]
+    fn a_windows_interrupt_reaches_the_program_and_the_start_ends_with_it() {
+        let folder = tempfile::tempdir().unwrap();
+        let running = folder.path().join("running");
+        // The program says it runs once it does, so the interrupt cannot
+        // reach `hide` before its program exists.
+        let program = std::env::current_exe().unwrap();
+        let argv = [
+            program.display().to_string(),
+            "--exact".to_owned(),
+            "agent_exec::windows::sleeper".to_owned(),
+            "--ignored".to_owned(),
+            "--nocapture".to_owned(),
+        ];
+        let running_at = running.display().to_string();
+        let node = Node::taking(start("Claude · work", &[(SLEEPER, &running_at)], None, &[]));
+        let mut command = exec(&node, &argv);
+        command.creation_flags(CREATE_NEW_PROCESS_GROUP);
+        let child = command
+            .stdin(Stdio::null())
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .spawn()
+            .unwrap();
+        let group = child.id();
+        until("the program never started", || running.exists());
+        // SAFETY: a plain call naming the group the child leads.
+        assert_ne!(
+            unsafe { GenerateConsoleCtrlEvent(CTRL_BREAK_EVENT, group) },
+            0,
+            "{}",
+            std::io::Error::last_os_error()
+        );
+        assert_ne!(exit_code(child), Some(3), "the program ran to its own end");
+    }
+}

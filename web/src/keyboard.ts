@@ -22,15 +22,15 @@ import type { Actions } from "./actions";
 import { focusBrowserDisplay } from "./browserViews";
 import { advanceHint, clearHint, holdModifiers, idleHint, modifiersOf, NO_MODIFIERS, revealedFamily, type HintState } from "./hints";
 import { browserBridge, CHECK_UPDATES_COMMAND, hostBridge, hostKind, keySystem, SETUP_COMMAND } from "./host";
-import { herdrGate } from "./herdrTakeoverRules";
 import { useSetupWalk } from "./FirstRunWizard";
 import { numberedDevices, numberedTabs, sidebarNumbers } from "./numbering";
 import { areaFrame } from "./areaFrames";
 import { adjacentDisplay } from "./areaLayout";
+import { adjacentPane } from "./paneNavigation";
 import { availableEntries, currentEntry, expectPane, expectSurface, observeEntries, observePane, observeProject, paneItem, panelItem, projectItem, reconcileCycle, recentEntries, recentProjectOrder, type CycleItem } from "./recent";
-import { projectsOf, remoteContext } from "./remote";
-import { hostChord, hostRegistry, isNumberedCommand, pageKeepsKeyboard, releaseModifier, matchHost, numberedCommand, REGISTRY, storedBindings, type CommandId, type Digit, type NumberedFamily } from "./shortcuts";
-import { editorFor, type AgentRow, type SnapshotRest, type Workspace } from "./snapshot";
+import { remoteContext } from "./remote";
+import { hostChord, hostRegistry, isNumberedCommand, isPaneFocusCommand, pageKeepsKeyboard, releaseModifier, matchHost, numberedCommand, REGISTRY, storedBindings, type CommandId, type Digit, type NumberedFamily } from "./shortcuts";
+import { editorFor, listedWorkspaces, type AgentRow, type SnapshotRest, type Workspace } from "./snapshot";
 import { useShellStore } from "./store";
 import { coveringLayer, useUiStore, type Cycle } from "./ui";
 import { installWindowFocus } from "./windowFocus";
@@ -52,11 +52,11 @@ export function panelCycle(rest: SnapshotRest | null): Cycle | null {
   return items.length > 1 ? { kind: "panels", items, index: 0 } : null;
 }
 
-/** The projects of every connected device, this machine's first, none of them a device's Home. */
+/** The projects of every connected device, this machine's first. */
 function allProjects(rest: SnapshotRest | null): Workspace[] {
   return [
-    ...projectsOf(rest?.navigator?.workspaces ?? []),
-    ...(rest?.status?.remote ?? []).filter((status) => status.state === "connected").flatMap((status) => projectsOf(status.session?.workspaces ?? [])),
+    ...listedWorkspaces(rest?.navigator?.workspaces ?? []),
+    ...(rest?.status?.remote ?? []).filter((status) => status.state === "connected").flatMap((status) => listedWorkspaces(status.session?.workspaces ?? [])),
   ];
 }
 
@@ -231,9 +231,13 @@ export function installKeyboard(actions: Actions): () => void {
     nativeCycle = null;
   };
 
+  const paneFocusOwner = () => {
+    const owner = keyboardCommandOwner();
+    const state = ui();
+    return owner.kind === "pane" && state.screen?.kind === "workspace" && !state.overviewOpen && !layerOpen(state) ? owner : null;
+  };
+
   const run = (id: CommandId, event: KeyboardEvent | null) => {
-    // While a Herdr on another protocol holds Hide, no command reaches a workspace (PRD herdr-takeover).
-    if (herdrGate(useShellStore.getState().rest)) return;
     if (isNumberedCommand(id)) {
       // An empty number is nothing, not a diagnostic: the hold hint shows
       // which numbers exist, and pressing past them is an ordinary miss.
@@ -310,6 +314,8 @@ export function installKeyboard(actions: Actions): () => void {
         return actions.toggleLeftSidebar();
       case "overview":
         return actions.toggleOverview();
+      case "open_missions":
+        return actions.openMissions();
       case "sidebar_projects":
         return actions.focusSidebar();
       case "add_backlog":
@@ -324,8 +330,6 @@ export function installKeyboard(actions: Actions): () => void {
         return actions.toggleTool("project");
       case "toggle_lane_memory":
         return actions.toggleTool("memory");
-      case "toggle_lane_mission":
-        return actions.toggleTool("mission");
       case "toggle_lane_explorer":
         return actions.toggleTool("explorer");
       case "toggle_lane_changes":
@@ -358,15 +362,27 @@ export function installKeyboard(actions: Actions): () => void {
         return actions.split("right");
       case "split_down":
         return actions.split("down");
+      case "focus_pane_left":
+      case "focus_pane_right":
+      case "focus_pane_up":
+      case "focus_pane_down": {
+        const owner = paneFocusOwner();
+        if (!owner) return;
+        const target = adjacentPane(owner.paneId, id.slice("focus_pane_".length) as "left" | "right" | "up" | "down");
+        if (target) actions.focusPane(target);
+        return;
+      }
       case "toggle_zoom": {
         // One chord for "this, full size", chosen by where the operator
         // works: in the right lane it expands the lane and back, anywhere
         // else it zooms the focused terminal pane.
         const owner = keyboardCommandOwner();
         const lane = ui().drawnLane.mode;
-        if ((owner.kind === "view" || owner.kind === "tool" || owner.kind === "detail") && lane !== "closed") return ui().setLaneExpanded(!ui().laneExpanded);
+        if ((owner.kind === "view" || owner.kind === "tool") && lane !== "closed") return ui().setLaneExpanded(!ui().laneExpanded);
         return actions.toggleZoom();
       }
+      case "pair_view":
+        return actions.pairViewKey();
       case "toggle_plan":
         return actions.togglePlanChip();
       case "close_pane":
@@ -540,6 +556,8 @@ export function installKeyboard(actions: Actions): () => void {
     const { registry } = hostRegistry(useShellStore.getState().rest?.ui_state, host, system);
     const command = matchHost(event, registry, host);
     if (!command) return;
+    // Text fields keep their own selection keys, including Ctrl+Shift+arrows.
+    if (isPaneFocusCommand(command.id) && !paneFocusOwner()) return;
     // Desk switched off has no chord (D-76): the key goes on to the page or the terminal.
     if (command.id === "desk_terminal" && !deskOn(useShellStore.getState().desk)) return;
     event.preventDefault();
@@ -599,8 +617,6 @@ export function installKeyboard(actions: Actions): () => void {
     }
   });
   const unsubscribeMenu = bridge?.onCommand((id) => {
-    // The screen that holds Hide answers no menu item (PRD herdr-takeover).
-    if (herdrGate(useShellStore.getState().rest)) return;
     // Help > Set up Hide, the host's own item outside the registry (PRD first-run-onboarding B45).
     if (id === SETUP_COMMAND) {
       useSetupWalk.getState().open();

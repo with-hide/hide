@@ -38,7 +38,7 @@ function answered(workspace: Workspace): boolean {
 export function projectToRead(rest: SnapshotRest | null, frontCheckout: Checkout | null, asked: ReadonlySet<string>): Workspace | null {
   if (!rest || !frontCheckout) return null;
   const workspace = catalogWorkspaces(rest).find((row) => row.id === frontCheckout.workspace_id);
-  if (!workspace || workspace.is_home || !workspace.is_git || !readsHere(workspace, rest.navigator?.devices)) return null;
+  if (!workspace || !workspace.is_git || !readsHere(workspace, rest.navigator?.devices)) return null;
   if (asked.has(workspace.id) || answered(workspace)) return null;
   return workspace;
 }
@@ -72,7 +72,7 @@ export function lastReadWords(workspace: Workspace, now: number, t: TFunction<"t
 
 /** Whether the core has a project a GitHub search could look in (B16): its own or a node's, by the source it publishes. */
 export function hasGithubProject(rest: SnapshotRest | null): boolean {
-  return catalogWorkspaces(rest).some((workspace) => !workspace.is_home && workspace.is_git && workspace.tasks?.source?.kind === "github");
+  return catalogWorkspaces(rest).some((workspace) => workspace.is_git && workspace.tasks?.source?.kind === "github");
 }
 
 /** The state of the `Search GitHub for "…"` row. */

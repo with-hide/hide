@@ -1,6 +1,0 @@
-<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1024 1024" role="img" aria-label="Blue slime idle">
-  <g id="shadow-js" opacity=".18"><ellipse cx="512" cy="885" rx="220" ry="28" fill="#09132c"/></g>
-  <g id="body-js" fill="#9fe9ff" stroke="#174d9a" stroke-width="20"><path d="M245 790c-36-160-12-408 116-492 30-20 67-37 93-55 17-12 15-43 18-73 4-43 40-81 82-81 45 0 77 37 78 81 0 30 0 57 18 73 26 18 63 35 93 55 128 84 152 332 116 492-27 119-181 140-307 140s-280-21-307-140Z"/></g>
-  <g id="eyes-js" fill="#173b89"><circle cx="398" cy="555" r="48"/><circle cx="626" cy="555" r="48"/></g>
-</svg>
-

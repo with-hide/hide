@@ -1,9 +1,11 @@
-//! The account's login item that runs the core on the machine a move placed
-//! it on (PRD core-host-node-move B9, D-25, amendment 8): a login agent in
-//! the account's GUI session runs `hided core-login` on the state folder,
-//! which makes sure the machine's Herdr server runs and then runs the core.
-//! The item names the Herdr binary and socket this machine's hided resolved
-//! when the move placed the core, so a login starts the same ones.
+//! The account's login item that runs the core on a state folder: a paired
+//! machine's (PRD device-connect-iroh D-41, B30; `always_on` decides when)
+//! or one a move placed here (PRD core-host-node-move B9, D-25, amendment
+//! 8). The item runs `hided core-login --state-dir <dir>` from a build's
+//! version folder in its install root, at the account's login and again
+//! after any exit while the folder's keep-alive marker exists; the start
+//! ends at once without the marker (`at_login`), so `hide stop`, which
+//! removes it, keeps the core stopped until `hide connect` puts it back.
 
 use std::path::{Path, PathBuf};
 use std::sync::atomic::AtomicBool;
@@ -12,8 +14,6 @@ use std::time::{Duration, Instant};
 use hide_platform::user_agents::{Login, LoginAgent, UserAgents};
 use serde_json::json;
 
-/// How long a Herdr server this item started may take to answer.
-const HERDR_STARTED_WITHIN: Duration = Duration::from_secs(10);
 /// The most the core's own output (`Logs/core.log`, which launchd appends
 /// the job's output to) holds before the core sets it aside, as the
 /// diagnostic log's files do.
@@ -24,13 +24,47 @@ const CORE_LOG_LIMIT: u64 = 1024 * 1024;
 const CORE_LOG_LOOK_EVERY: Duration = Duration::from_secs(60);
 
 /// Installs the login item that runs `program` as the core on
-/// `state_dir`, which starts it; one already installed for that folder is
-/// replaced, which ends its core.
+/// `state_dir`, with the folder's marker, which starts it; one already
+/// installed for that folder is replaced, which ends its core. What asks is
+/// never that core: a starter replacing it (`core_install::starter`).
 pub fn start(
     agents: &UserAgents,
     home: &Path,
     state_dir: &Path,
     program: &Path,
+) -> Result<(), String> {
+    put_in(agents, home, state_dir, program, Put::Replace)
+}
+
+/// Installs the login item that runs `program` as the core on `state_dir`,
+/// with the folder's marker, asked by the core running on that folder
+/// (`always_on`): nothing that runs is stopped, the asking core's own run
+/// under an item it forgot included, and the item's core starts only to
+/// wait on the folder's lock until the asking core exits.
+pub fn adopt(
+    agents: &UserAgents,
+    home: &Path,
+    state_dir: &Path,
+    program: &Path,
+) -> Result<(), String> {
+    put_in(agents, home, state_dir, program, Put::Adopt)
+}
+
+/// Whether putting an item in stops the core running on the folder.
+#[derive(Clone, Copy, PartialEq)]
+enum Put {
+    /// A starter replaces the core: its run ends with the old item's.
+    Replace,
+    /// The core itself asks: nothing that runs is stopped.
+    Adopt,
+}
+
+fn put_in(
+    agents: &UserAgents,
+    home: &Path,
+    state_dir: &Path,
+    program: &Path,
+    put: Put,
 ) -> Result<(), String> {
     let stop = AtomicBool::new(false);
     if agents
@@ -44,10 +78,21 @@ pub fn start(
         );
     }
     let label = hide_kit::layout::core_login_item(home, state_dir);
-    let mut environment = core_environment(home, state_dir)?;
-    // The core stays up with no window: its nodes and phones are its
-    // clients.
-    environment.push(("HIDE_KEEP_ALIVE".to_owned(), "1".to_owned()));
+    let mut environment = item_environment(home)?;
+    // A core a move placed here stays up with no window: its nodes and
+    // phones are its clients. A paired machine's core keeps itself up while
+    // it is paired (`always_on`).
+    if crate::core_move::handover::read(state_dir)?.is_some() {
+        environment.push(("HIDE_KEEP_ALIVE".to_owned(), "1".to_owned()));
+    }
+    // A core adopts an item only for a pairing, which only a build that
+    // offers connections between two Hides keeps (`always_on`): the item's
+    // core has to offer them too, or its start would take the item out. A
+    // Task Scheduler task carries no environment; there the switch is the
+    // account's own (`env::Env::device_connect`).
+    if put == Put::Adopt && !cfg!(windows) {
+        environment.push((crate::env::HIDE_DEVICE_CONNECT.to_owned(), "1".to_owned()));
+    }
     let environment: Vec<(&str, &str)> = environment
         .iter()
         .map(|(key, value)| (key.as_str(), value.as_str()))
@@ -55,16 +100,107 @@ pub fn start(
     let log = core_log(state_dir);
     hide_platform::fs::private::create_dir_all(&state_dir.join("Logs"))
         .map_err(|error| error.to_string())?;
+    let state = state_dir.to_string_lossy().into_owned();
     let agent = LoginAgent {
         label: &label,
         program,
-        arguments: &["core-login"],
+        arguments: &["core-login", "--state-dir", &state],
         environment: &environment,
         log: &log,
     };
+    keep(state_dir)?;
+    // A core still running when the item is replaced is the one the old
+    // item ran; Task Scheduler ends a run without its program, so it is
+    // ended here by its pid, while the new item's core waits for the
+    // folder (`at_login`).
+    let previous = crate::state_file::read_state(state_dir)
+        .ok()
+        .flatten()
+        .filter(crate::state_file::DaemonState::is_proven_running);
+    match put {
+        Put::Replace => agents.install(&agent, &marker(state_dir), home, &stop),
+        Put::Adopt => agents.adopt(&agent, &marker(state_dir), home, &stop),
+    }
+    .map_err(|error| format!("the login item {label}: {error}"))?;
+    if let Some(previous) = previous
+        && put == Put::Replace
+        && previous.pid != std::process::id()
+        && previous.is_proven_running()
+        && cfg!(windows)
+    {
+        crate::core_install::starter::stop_pid(previous.pid)?;
+    }
+    Ok(())
+}
+
+/// What the item runs the core with besides its arguments: the account's
+/// home, which launchd and systemd are given; a Task Scheduler task carries
+/// no environment and runs in the account's own.
+fn item_environment(home: &Path) -> Result<Vec<(String, String)>, String> {
+    if cfg!(windows) {
+        return Ok(Vec::new());
+    }
+    Ok(vec![(
+        crate::env::HOME.to_owned(),
+        home.to_string_lossy().into_owned(),
+    )])
+}
+
+/// The folder's keep-alive marker (`hide_kit::layout::keep_alive`).
+pub fn marker(state_dir: &Path) -> PathBuf {
+    hide_kit::layout::keep_alive(state_dir)
+}
+
+/// Puts the folder's marker in place: its login item starts the core
+/// again after any exit.
+pub fn keep(state_dir: &Path) -> Result<(), String> {
+    hide_platform::fs::atomic::write_file(
+        &marker(state_dir),
+        b"",
+        hide_platform::fs::Access::Private,
+    )
+    .map(drop)
+    .map_err(|error| format!("the keep-alive marker: {error}"))
+}
+
+/// Takes the folder's marker away: its login item starts no core of it
+/// until the marker is back.
+pub fn release(state_dir: &Path) -> Result<(), String> {
+    match std::fs::remove_file(marker(state_dir)) {
+        Ok(()) => Ok(()),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(()),
+        Err(error) => Err(format!("the keep-alive marker: {error}")),
+    }
+}
+
+/// Whether the account's login item runs the core on `state_dir`.
+pub fn installed(agents: &UserAgents, home: &Path, state_dir: &Path) -> Result<bool, String> {
+    let label = hide_kit::layout::core_login_item(home, state_dir);
     agents
-        .install(&agent, home, &stop)
-        .and_then(|()| agents.start(&label, home, &stop))
+        .is_installed(&label, home)
+        .map_err(|error| format!("the login item {label}: {error}"))
+}
+
+/// Starts the installed item's core on `state_dir` now, with the marker put
+/// back, when it is not running; an item the system no longer holds is
+/// loaded again from its definition first ([`hold`]).
+pub fn start_installed(agents: &UserAgents, home: &Path, state_dir: &Path) -> Result<(), String> {
+    hold(agents, home, state_dir)?;
+    keep(state_dir)?;
+    let label = hide_kit::layout::core_login_item(home, state_dir);
+    agents
+        .start(&label, home, &AtomicBool::new(false))
+        .map_err(|error| format!("the login item {label}: {error}"))
+}
+
+/// Has the system hold the installed item of `state_dir` again when it does
+/// not (a failed load, Hide turned off in the login items, the task deleted
+/// in Task Scheduler), without starting it; an error says the item cannot
+/// run the core.
+pub fn hold(agents: &UserAgents, home: &Path, state_dir: &Path) -> Result<(), String> {
+    let label = hide_kit::layout::core_login_item(home, state_dir);
+    agents
+        .load(&label, home, &AtomicBool::new(false))
         .map_err(|error| format!("the login item {label}: {error}"))
 }
 
@@ -96,36 +232,24 @@ pub fn exited_at_start(
     }
 }
 
-/// What the core's login item runs it with: the account's home, the state
-/// folder, and the Herdr binary and socket this machine's hided resolved
-/// (`Env::herdr_program`, the herdr the move's checks asked). A move's
-/// checks of the account's logins run with it too (`core_move::preflight`).
+/// What the core's login item runs it with: the account's home and the
+/// state folder. A move's checks of the account's logins run with it too
+/// (`core_install::checks`).
 pub fn core_environment(home: &Path, state_dir: &Path) -> Result<Vec<(String, String)>, String> {
-    let env =
-        crate::env::load().map_err(|errors| format!("{} environment errors", errors.len()))?;
-    let mut environment = vec![
+    let environment = vec![
         ("HOME".to_owned(), home.to_string_lossy().into_owned()),
         (
             "HIDE_STATE_DIR".to_owned(),
             state_dir.to_string_lossy().into_owned(),
         ),
     ];
-    let socket = env
-        .herdr_socket_path
-        .clone()
-        .ok_or("this machine has no Herdr socket for its core (HERDR_SOCKET_PATH)")?;
-    environment.push(("HERDR_SOCKET_PATH".to_owned(), socket));
-    if let Some(bin) = env.herdr_program() {
-        environment.push((
-            "HERDR_BIN_PATH".to_owned(),
-            bin.to_string_lossy().into_owned(),
-        ));
-    }
     Ok(environment)
 }
 
-/// Removes the login item of the core on `state_dir`, which ends its core.
+/// Removes the login item of the core on `state_dir` and its marker, which
+/// ends its core.
 pub fn remove(agents: &UserAgents, home: &Path, state_dir: &Path) -> Result<(), String> {
+    release(state_dir)?;
     let label = hide_kit::layout::core_login_item(home, state_dir);
     agents
         .remove(&label, home, &AtomicBool::new(false))
@@ -134,13 +258,14 @@ pub fn remove(agents: &UserAgents, home: &Path, state_dir: &Path) -> Result<(), 
 
 /// Forgets the login item the core on `state_dir` runs under, leaving the
 /// item loaded: that core is the process asking, which its own unload would
-/// stop midway. It exits successfully next, which the item never restarts,
-/// so nothing of it starts again, and the next login starts nothing; the
-/// next install or removal unloads what is left loaded.
+/// stop midway. With its marker gone the item starts nothing of it again,
+/// and the next login starts nothing; the next install or removal unloads
+/// what is left loaded.
 pub fn forget(agents: &UserAgents, home: &Path, state_dir: &Path) -> Result<(), String> {
+    release(state_dir)?;
     let label = hide_kit::layout::core_login_item(home, state_dir);
     agents
-        .forget(&label, home)
+        .forget(&label, home, &AtomicBool::new(false))
         .map_err(|error| format!("the login item {label}: {error}"))
 }
 
@@ -172,14 +297,14 @@ impl LastLook {
     fn look(&mut self, state_dir: &Path) -> bool {
         let outcome = set_core_log_aside(state_dir);
         if let Ok(true) = outcome {
-            herdr_core::diagnostic!(json!({
+            hide_core::diagnostic!(json!({
                 "component": "login_item",
                 "kind": "core_log.rotated",
             }));
         }
         let failure = outcome.as_ref().err().map(ToString::to_string);
         if failure.is_some() && failure != self.failure {
-            herdr_core::diagnostic!(json!({
+            hide_core::diagnostic!(json!({
                 "component": "login_item",
                 "kind": "core_log.rotate_failed",
                 "message": failure,
@@ -212,7 +337,7 @@ fn keep_core_log_within_limit(state_dir: PathBuf) {
         .name("core-log".to_owned())
         .spawn(looks)
     {
-        herdr_core::diagnostic!(json!({
+        hide_core::diagnostic!(json!({
             "component": "login_item",
             "kind": "core_log.watch_failed",
             "message": error.to_string(),
@@ -220,158 +345,47 @@ fn keep_core_log_within_limit(state_dir: PathBuf) {
     }
 }
 
-/// `hided core-login`, before the daemon runs as any start of it does:
-/// the core's output is kept within its limit while it runs, and the
-/// machine's Herdr server is started when Herdr says none runs; a status
-/// Herdr cannot give starts nothing, so a server that may be running is
-/// never doubled. A core on its own engine (`HIDE_DEV_PANE_HOLDER` on) runs
-/// no Herdr, so none is started for it.
-pub fn before_core_at_login() {
-    if let Some(state_dir) = std::env::var_os(crate::env::HIDE_STATE_DIR) {
-        keep_core_log_within_limit(PathBuf::from(state_dir));
-    }
-    if matches!(
-        crate::env::pane_holder_switch(),
-        Ok(hide_node::terminal::holder::Switch::On)
-    ) {
-        return;
-    }
-    let Some(bin) = std::env::var_os(crate::env::HERDR_BIN_PATH) else {
-        return;
-    };
-    let outcome = ensure_herdr(Path::new(&bin), HERDR_STARTED_WITHIN);
-    herdr_core::diagnostic!(json!({
-        "component": "login_item",
-        "kind": "herdr.checked",
-        "outcome": outcome,
-    }));
+/// What `hided core-login` does once [`at_login`] has looked.
+#[derive(Debug, Eq, PartialEq)]
+pub enum AtLogin {
+    /// The core runs.
+    Run,
+    /// The marker is gone: nothing of this folder is to run, and the start
+    /// ends successfully.
+    End,
 }
 
-/// Starts the Herdr server at `bin` when it says none runs, and waits up to
-/// `started_within` for it; answers what happened, for the log. The server
-/// is the machine's, as one the operator starts is: it is left running when
-/// this process ends, so a core that restarts finds it.
-#[allow(clippy::disallowed_methods)] // a production wait for another process
-fn ensure_herdr(bin: &Path, started_within: Duration) -> String {
-    let status = || -> Result<bool, String> {
-        let mut command = std::process::Command::new(bin);
-        command.args(["status", "server", "--json"]);
-        let finished = hide_platform::process::run_to_end(
-            &mut command,
-            Duration::from_secs(5),
-            &AtomicBool::new(false),
-        )
-        .map_err(|error| format!("{error:?}"))?;
-        if !finished.succeeded() {
-            return Err(format!("herdr status exited {:?}", finished.code));
-        }
-        serde_json::from_str::<serde_json::Value>(&finished.stdout)
-            .ok()
-            .and_then(|value| value.get("running").and_then(serde_json::Value::as_bool))
-            .ok_or_else(|| "herdr status answered without a running field".to_owned())
-    };
-    match status() {
-        Ok(true) => return "running".to_owned(),
-        Ok(false) => {}
-        Err(reason) => return format!("status_failed: {reason}"),
+/// `hided core-login`, before the daemon runs as any start of it does: with
+/// the folder's marker gone the start ends at once; while another core of
+/// the folder runs (the one an app started before the item was put in, or
+/// the one an update replaces) it waits for that core's end, and looks at
+/// the marker again; then the core's output is kept within its limit while
+/// it runs. The folder is the one the process's environment names, which
+/// the item's `--state-dir` set.
+pub fn at_login() -> Result<AtLogin, String> {
+    let home = hide_platform::host::home_dir().map_err(|error| error.to_string())?;
+    let state_dir = hide_kit::layout::state_dir_from_process(&home);
+    if !marker(&state_dir).exists() {
+        return Ok(AtLogin::End);
     }
-    // Its panes' shells start with the server's environment, which launchd
-    // gave the system's folders alone on `PATH`: the server gets the
-    // account's own search with the login shell asked, as the desktop host
-    // gives the server it starts its children's.
-    let mut command = hide_platform::programs::command_on(
-        hide_platform::programs::account_path().as_deref(),
-        bin,
-    );
-    command.arg("server");
-    if std::env::var_os("LANG").is_none()
-        && std::env::var_os("LC_ALL").is_none()
-        && std::env::var_os("LC_CTYPE").is_none()
-    {
-        command.env("LC_CTYPE", "UTF-8");
+    wait_for_the_folder(&state_dir)?;
+    if !marker(&state_dir).exists() {
+        return Ok(AtLogin::End);
     }
-    if let Err(error) = hide_platform::process::detach(&mut command) {
-        return format!("start_failed: {error}");
-    }
-    command
-        .stdin(std::process::Stdio::null())
-        .stdout(std::process::Stdio::null())
-        .stderr(std::process::Stdio::null());
-    if let Err(error) = command.spawn() {
-        return format!("start_failed: {error}");
-    }
-    let deadline = Instant::now() + started_within;
-    while Instant::now() < deadline {
-        if status() == Ok(true) {
-            return "started".to_owned();
-        }
-        std::thread::sleep(Duration::from_millis(200));
-    }
-    "start_failed: the server did not answer in time".to_owned()
+    keep_core_log_within_limit(state_dir);
+    Ok(AtLogin::Run)
 }
 
-#[cfg(all(test, unix))]
-mod tests {
-    use super::*;
-
-    /// A stand-in Herdr whose status answers from files beside it: none
-    /// runs until its server is started, `.stuck` keeps a started server
-    /// silent, and `.broken` makes the status fail. Each start is a line in
-    /// `.starts`.
-    const HERDR: &str = r#"#!/bin/sh
-case "$1" in
-status)
-  [ -e "$0.broken" ] && exit 3
-  if [ -e "$0.running" ]; then echo '{"running":true}'; else echo '{"running":false}'; fi ;;
-server)
-  echo started >> "$0.starts"
-  [ -e "$0.stuck" ] || : > "$0.running" ;;
-esac
-"#;
-
-    fn herdr(with: &[&str]) -> (tempfile::TempDir, PathBuf) {
-        use std::os::unix::fs::PermissionsExt;
-        let dir = tempfile::tempdir().unwrap();
-        let bin = dir.path().join("herdr");
-        std::fs::write(&bin, HERDR).unwrap();
-        std::fs::set_permissions(&bin, std::fs::Permissions::from_mode(0o755)).unwrap();
-        for name in with {
-            std::fs::write(dir.path().join(format!("herdr.{name}")), "").unwrap();
-        }
-        (dir, bin)
-    }
-
-    fn starts(bin: &Path) -> usize {
-        std::fs::read_to_string(format!("{}.starts", bin.display()))
-            .map(|starts| starts.lines().count())
-            .unwrap_or(0)
-    }
-
-    /// A login starts the machine's Herdr server only when Herdr says none
-    /// runs (B9), and a status Herdr cannot give starts nothing, so a server
-    /// that may be running is never doubled.
-    #[test]
-    fn herdr_is_started_only_when_its_status_says_none_runs() {
-        let within = Duration::from_secs(5);
-
-        let (_dir, bin) = herdr(&[]);
-        assert_eq!(ensure_herdr(&bin, within), "started");
-        assert_eq!(starts(&bin), 1);
-
-        let (_dir, bin) = herdr(&["running"]);
-        assert_eq!(ensure_herdr(&bin, within), "running");
-        assert_eq!(starts(&bin), 0);
-
-        let (_dir, bin) = herdr(&["stuck"]);
-        assert_eq!(
-            ensure_herdr(&bin, Duration::from_millis(500)),
-            "start_failed: the server did not answer in time"
-        );
-        assert_eq!(starts(&bin), 1);
-
-        let (_dir, bin) = herdr(&["broken"]);
-        let outcome = ensure_herdr(&bin, within);
-        assert!(outcome.starts_with("status_failed: "), "{outcome}");
-        assert_eq!(starts(&bin), 0);
-    }
+/// Waits until no daemon holds the folder's instance lock, and lets it go
+/// for the daemon this start becomes to take: a start that loses it to
+/// another in between exits, and the item starts it again.
+fn wait_for_the_folder(state_dir: &Path) -> Result<(), String> {
+    let lock = crate::state_file::lock_path(state_dir);
+    let file = hide_platform::fs::private::open_own_file(&lock, true)
+        .map_err(|error| format!("{}: {error}", lock.display()))?;
+    let held =
+        hide_platform::fs::lock::lock_file_blocking(file, hide_platform::fs::lock::Mode::Exclusive)
+            .map_err(|error| format!("{}: {error}", lock.display()))?;
+    drop(held);
+    Ok(())
 }

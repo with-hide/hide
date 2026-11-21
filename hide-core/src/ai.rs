@@ -1,0 +1,2654 @@
+//! What the background AI providers can do right now, read for the Settings
+//! screen.
+//!
+//! Answering costs child processes: `codex app-server` is started and asked
+//! for the account and its model list, and `claude auth status` is run. So
+//! this reader is shaped like the project panel's readers rather than like a
+//! projection: the session-sync coordinator drives it, `read_if_due` decides
+//! whether anything runs, the work itself happens on
+//! [`BackgroundRead`](crate::reader::BackgroundRead)'s worker thread, and the
+//! runtime mutex is never held across any of it.
+//!
+//! Every provider backend here is a [`NodeBackend`]: the router stays in
+//! the core and each backend call is answered by the node of the machine the
+//! agent runs on, the core's own unless the operator placed the agent on a
+//! connected device ([`AiMachines`], PRD wsl-device B11), which runs the
+//! provider processes with that machine's logins (`hide_host::ai`).
+//!
+//! It also reads nothing at all while nobody is looking. `observing` is false
+//! unless the Background AI group is on screen, and an unobserved request
+//! answers from no provider, so an idle Hide starts no provider process.
+
+use std::collections::{BTreeMap, BTreeSet};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+use std::sync::{Arc, Mutex};
+use std::time::{Duration, SystemTime, UNIX_EPOCH};
+
+use hide_agent_adapter::{AccountKey, ProfileId};
+use hide_ai::{
+    AiBackend, AiError, AiLogEvent, AiLogSink, AiRequest as ProviderRequest, AiResponse, AiRouter,
+    AiSettings, AiUsageSink, Availability, CancelToken, Item, ModelCatalog, ProcessMeasurement,
+    ProviderId, ProviderStatus, UsageLimits,
+};
+use hide_node_link::ai::{BackendSpec, Logged};
+use hide_node_link::protocol::Call;
+
+use crate::node_access::{LinkError, NodeLink, call_as, call_as_with_progress};
+
+use crate::model::{BackgroundAiProviderSnapshot, BackgroundAiSnapshot};
+use crate::reader::BackgroundRead;
+
+/// How stale a provider answer may be while the group is on screen.
+///
+/// A login completes outside Hide, so the screen has to notice on its own;
+/// thirty seconds is soon enough for someone who has just logged in and rare
+/// enough that the child processes are not a background load. It matches the
+/// router's own availability window, so the two never disagree for long.
+const REFRESH_INTERVAL: Duration = Duration::from_secs(30);
+/// The least time between one read finishing and a changed request starting
+/// the next, so switching the model twice does not start two probes.
+const SPACING: Duration = Duration::from_secs(2);
+/// How often the agents that are switched on are asked whether they are
+/// signed in while nobody has chosen one and the screen is not open (D-27).
+/// A login takes minutes and the answer costs one status call per agent, so
+/// the idle cadence is slow; opening Settings asks at once.
+const SELECTING_INTERVAL: Duration = Duration::from_secs(300);
+
+/// What to ask the providers, and the freshness key for asking again.
+#[derive(Clone, Debug, Default, Eq, PartialEq)]
+pub struct AiRequest {
+    /// False unless the Background AI group is on screen. An unobserved
+    /// request starts no provider process; see the module comment.
+    pub observing: bool,
+    /// The model each provider is configured with. Codex reports a model the
+    /// account does not offer as an availability state, so a changed choice
+    /// is a different question and is asked at once rather than waiting out
+    /// the interval.
+    pub models: BTreeMap<ProviderId, String>,
+    /// The agents to ask whether they are signed in while the screen is not
+    /// open: those switched on in this Mac's kit and installed, and only
+    /// while nobody has chosen one and Hide AI is on, so the first signed-in
+    /// agent can be chosen by itself (D-18, D-27, B45, B47). Empty otherwise.
+    /// Nothing but availability is asked of them: no model list.
+    pub selecting: BTreeSet<ProviderId>,
+    /// The agents whose program this Mac's install kit found, `None` while
+    /// the kit has not answered. The kit owns "is it installed": an agent Hide
+    /// AI cannot use yet is listed as not installed from this, not from a
+    /// program table of its own.
+    pub cli_found: Option<BTreeSet<ProviderId>>,
+    /// The connected devices whose agents are asked too, so Runs on can
+    /// offer an agent signed in on one (PRD wsl-device B11). A device that
+    /// is not connected is not listed, so asking never wakes one.
+    pub devices: Vec<DeviceAsk>,
+    /// The core's own machine's profiles whose model lists are read beside
+    /// their agents' while a screen reads model lists (PRD
+    /// agent-profiles-phase2 D-09).
+    pub items: Vec<ItemAsk>,
+}
+
+/// What the read asks of one connected device: the same as of the core's
+/// own machine, with that device's kit.
+#[derive(Clone, Debug, Default, Eq, PartialEq)]
+pub struct DeviceAsk {
+    pub id: String,
+    /// The agents switched on and installed in the device's kit, asked
+    /// while nobody has chosen and the screen is not open.
+    pub selecting: BTreeSet<ProviderId>,
+    /// The agents the device's kit found, `None` while it has not answered.
+    pub cli_found: Option<BTreeSet<ProviderId>>,
+    /// The device's profiles whose model lists are read, as [`AiRequest::items`].
+    pub items: Vec<ItemAsk>,
+}
+
+/// One of a machine's profiles whose model list is read beside its agent's
+/// built-in default's: the agent item `Claude Code · work` (PRD
+/// agent-profiles-phase2 D-09).
+#[derive(Clone, Debug, Eq, Ord, PartialEq, PartialOrd)]
+pub struct ItemAsk {
+    pub provider: ProviderId,
+    pub profile: ProfileId,
+    /// The profile's version on its machine's list: an edit is read again,
+    /// by a backend made after it.
+    pub version: u64,
+    /// The model Hide AI asks the item for, which its sign-in is judged
+    /// with (Codex answers a model the account does not offer as an
+    /// availability state), so a changed model is read again.
+    pub model: String,
+}
+
+/// The most profiles whose model lists one machine's read asks. A node
+/// keeps at most 64 backends (`hide_host::ai`), shared with the routers of
+/// Settings, labels and Memory; a profile past this is answered as a
+/// reported failure (`model_reads_full`), never one backend more.
+const MAX_ITEM_READS: usize = 16;
+
+impl AiRequest {
+    /// Whether anything is asked at all.
+    fn asks(&self) -> bool {
+        self.observing
+            || !self.selecting.is_empty()
+            || self
+                .devices
+                .iter()
+                .any(|device| !device.selecting.is_empty())
+    }
+
+    /// The agents a machine's router is built with: every registered one
+    /// while the screen is open, only the ones being selected from
+    /// otherwise.
+    fn only<'a>(&self, selecting: &'a BTreeSet<ProviderId>) -> Option<&'a BTreeSet<ProviderId>> {
+        (!self.observing).then_some(selecting)
+    }
+}
+
+/// A router one screen reuses, and what it was built for. Rebuilding is
+/// what a changed model costs, because a backend is constructed with one.
+struct Cached {
+    models: BTreeMap<ProviderId, String>,
+    only: Option<BTreeSet<ProviderId>>,
+    router: Arc<AiRouter>,
+}
+
+/// The routers of the core's own machine (`None`) and each asked device.
+type CachedRouters = Arc<Mutex<BTreeMap<Option<String>, Cached>>>;
+
+/// One item's machine (`None` for the core's own), agent and profile.
+type ItemKey = (Option<String>, ProviderId, ProfileId);
+
+/// The backends that read the items' model lists, one per machine and item,
+/// kept while a screen reads model lists as the routers' are, so Claude's
+/// list keeps its ten minutes and a Codex app-server is started once per
+/// screen; and the reason each item's list was last logged as unreadable.
+#[derive(Default)]
+struct ItemReads {
+    backends: BTreeMap<ItemKey, ((u64, String), Arc<NodeBackend>)>,
+    logged: BTreeMap<ItemKey, String>,
+}
+
+pub struct AiReader {
+    inner: BackgroundRead<AiRequest, BackgroundAiSnapshot>,
+    /// Whether a screen still reads model lists, as the latest request
+    /// says: a read under way checks it before each item's backend and each
+    /// device's, so a window that closes mid-read starts no further profile
+    /// or device; the agents' own lists it is already asking are asked to
+    /// the end.
+    observing: Arc<AtomicBool>,
+}
+
+impl AiReader {
+    /// A reader whose agents run on the core's own machine and on the
+    /// connected devices each request lists.
+    pub(crate) fn new(machines: AiMachines) -> Self {
+        Self::spaced(machines, SPACING)
+    }
+
+    /// [`AiReader::new`] with `spacing` between one read and a changed
+    /// request's next.
+    fn spaced(machines: AiMachines, spacing: Duration) -> Self {
+        // One router per machine outlives the reads that use it, so a Codex
+        // app-server child is started once for a screen rather than once per
+        // read. It is rebuilt only when the configured models change, because
+        // the model is what the backend was constructed with.
+        let cached: CachedRouters = Arc::default();
+        // Only the read's own worker takes it, one read at a time.
+        let items: Mutex<ItemReads> = Mutex::default();
+        let observing = Arc::new(AtomicBool::new(false));
+        let still = Arc::clone(&observing);
+        Self {
+            observing,
+            inner: BackgroundRead::new(REFRESH_INTERVAL, spacing, move |request: &AiRequest| {
+                let still = || still.load(Ordering::SeqCst);
+                let mut guard = cached.lock().unwrap_or_else(|error| error.into_inner());
+                let mut items = items.lock().unwrap_or_else(|error| error.into_inner());
+                if !request.asks() {
+                    // Drop the routers with the screen: a Codex child is a
+                    // process, and nothing is reading its answers.
+                    guard.clear();
+                    items.keep(request);
+                    return BackgroundAiSnapshot::unread();
+                }
+                // A device no longer asked releases its agents' backends.
+                guard.retain(|machine, _| {
+                    machine
+                        .as_ref()
+                        .is_none_or(|id| request.devices.iter().any(|device| device.id == *id))
+                });
+                let own = router_for(&mut guard, &machines, None, request, &request.selecting);
+                let devices: Vec<_> = request
+                    .devices
+                    .iter()
+                    .filter(|device| request.observing || !device.selecting.is_empty())
+                    .map(|device| {
+                        let router = router_for(
+                            &mut guard,
+                            &machines,
+                            Some(&device.id),
+                            request,
+                            &device.selecting,
+                        );
+                        (device, router)
+                    })
+                    .collect();
+                drop(guard);
+                items.keep(request);
+                let mut snapshot = read(
+                    &own,
+                    &request.models,
+                    request.observing,
+                    request.cli_found.as_ref(),
+                );
+                if request.observing {
+                    items.read(
+                        &machines,
+                        None,
+                        &request.items,
+                        &mut snapshot.providers,
+                        &still,
+                    );
+                }
+                for (device, router) in devices {
+                    if request.observing && !still() {
+                        break;
+                    }
+                    let mut rows = read(
+                        &router,
+                        &request.models,
+                        request.observing,
+                        device.cli_found.as_ref(),
+                    )
+                    .providers;
+                    if request.observing {
+                        items.read(
+                            &machines,
+                            Some(&device.id),
+                            &device.items,
+                            &mut rows,
+                            &still,
+                        );
+                    }
+                    snapshot.providers.extend(rows.into_iter().map(|mut row| {
+                        row.device_id = Some(device.id.clone());
+                        row
+                    }));
+                }
+                snapshot
+            }),
+        }
+    }
+
+    pub fn read_if_due(&mut self, request: AiRequest) -> Option<BackgroundAiSnapshot> {
+        self.observing.store(request.observing, Ordering::SeqCst);
+        self.inner.set_interval(if request.observing {
+            REFRESH_INTERVAL
+        } else {
+            SELECTING_INTERVAL
+        });
+        self.inner.poll(request)
+    }
+}
+
+impl ItemReads {
+    /// Drops the backends of every item the request no longer reads, and
+    /// what was logged of them: all of them while no screen reads model
+    /// lists, else those of a machine or a profile no longer asked. Dropping
+    /// a backend releases its node's, which ends a resident process.
+    fn keep(&mut self, request: &AiRequest) {
+        if !request.observing {
+            self.backends.clear();
+            self.logged.clear();
+            return;
+        }
+        let asked = |machine: &Option<String>| -> &[ItemAsk] {
+            match machine {
+                None => &request.items,
+                Some(id) => request
+                    .devices
+                    .iter()
+                    .find(|device| device.id == *id)
+                    .map_or(&[], |device| device.items.as_slice()),
+            }
+        };
+        let still_asked = |(machine, provider, profile): &ItemKey, within: usize| {
+            asked(machine)
+                .iter()
+                .take(within)
+                .any(|ask| ask.provider == *provider && ask.profile == *profile)
+        };
+        self.backends
+            .retain(|key, _| still_asked(key, MAX_ITEM_READS));
+        // An item's failure is forgotten with it, a profile removed or a
+        // device gone; one past the cap is still asked, so its
+        // `model_reads_full` stays written once.
+        self.logged.retain(|key, _| still_asked(key, usize::MAX));
+    }
+
+    /// Reads the model list of each item `asks` names on `machine` and puts
+    /// it on its agent's row of `rows`. A list that cannot be read is logged
+    /// with its item once per reason (B9, design 13); the row then carries
+    /// the reason, and the screens offer the agent's default list. Once
+    /// `still` says no screen reads lists any more, no further item is read:
+    /// the one under way ends within its own read limit, and the next read
+    /// releases every backend.
+    fn read(
+        &mut self,
+        machines: &AiMachines,
+        machine: Option<&str>,
+        asks: &[ItemAsk],
+        rows: &mut [BackgroundAiProviderSnapshot],
+        still: &dyn Fn() -> bool,
+    ) {
+        for (index, ask) in asks.iter().enumerate() {
+            if !still() {
+                break;
+            }
+            let key: ItemKey = (
+                machine.map(str::to_owned),
+                ask.provider,
+                ask.profile.clone(),
+            );
+            let (availability, catalog) = if index < MAX_ITEM_READS {
+                let backend = self.backend(machines, &key, ask);
+                (backend.availability(), backend.models())
+            } else {
+                let full = "model_reads_full".to_owned();
+                (
+                    Availability::Unavailable {
+                        reason: full.clone(),
+                    },
+                    ModelCatalog::Unknown { reason: full },
+                )
+            };
+            self.log(&key, &catalog);
+            let Some(row) = rows.iter_mut().find(|row| row.id == ask.provider.as_str()) else {
+                continue;
+            };
+            let (models, model_labels) = listed(&catalog);
+            let (state, message) = state_of(&availability, None);
+            row.profile_models
+                .push(crate::model::BackgroundAiProfileModels {
+                    profile: ask.profile.0.clone(),
+                    version: ask.version,
+                    models,
+                    model_labels,
+                    models_fixed: catalog.is_fixed(),
+                    models_unavailable_reason: catalog.unknown_reason().map(str::to_owned),
+                    state: state.to_owned(),
+                    message,
+                    selectable: availability.is_ready(),
+                    weekly: None,
+                    past_limit: false,
+                });
+        }
+    }
+
+    /// The backend of `key`, made again when its profile or the model Hide
+    /// AI asks it for changed since.
+    fn backend(&mut self, machines: &AiMachines, key: &ItemKey, ask: &ItemAsk) -> Arc<NodeBackend> {
+        let built_for = (ask.version, ask.model.clone());
+        if let Some((built, backend)) = self.backends.get(key)
+            && *built == built_for
+        {
+            return Arc::clone(backend);
+        }
+        let (machine, provider, profile) = key;
+        let backend = Arc::new(NodeBackend::new(
+            machines,
+            machine.as_deref(),
+            Item::of(*provider, Some(profile.clone())),
+            ask.model.clone(),
+        ));
+        self.backends
+            .insert(key.clone(), (built_for, Arc::clone(&backend)));
+        backend
+    }
+
+    /// Writes why an item's list could not be read when that first happens
+    /// or its reason changes, not on every read the open screen repeats.
+    fn log(&mut self, key: &ItemKey, catalog: &ModelCatalog) {
+        let Some(reason) = catalog.unknown_reason() else {
+            self.logged.remove(key);
+            return;
+        };
+        if self.logged.get(key).map(String::as_str) == Some(reason) {
+            return;
+        }
+        self.logged.insert(key.clone(), reason.to_owned());
+        let (machine, provider, profile) = key;
+        crate::diagnostic!(serde_json::json!({
+            "component": "ai", "kind": "ai.models.unavailable",
+            "provider": provider.as_str(), "profile": profile.0,
+            "machine": machine, "reason": reason,
+        }));
+    }
+}
+
+/// The models a catalog lists, by the name a start passes, and the name the
+/// agent shows for each where that differs.
+fn listed(catalog: &ModelCatalog) -> (Vec<String>, BTreeMap<String, String>) {
+    let models = catalog.offered();
+    (
+        models.iter().map(|model| model.id.clone()).collect(),
+        models
+            .iter()
+            .filter_map(|model| Some((model.id.clone(), model.label.clone()?)))
+            .collect(),
+    )
+}
+
+/// The cached router of one machine, rebuilt when the models or the agents
+/// asked changed.
+fn router_for(
+    cached: &mut BTreeMap<Option<String>, Cached>,
+    machines: &AiMachines,
+    device: Option<&str>,
+    request: &AiRequest,
+    selecting: &BTreeSet<ProviderId>,
+) -> Arc<AiRouter> {
+    let only = request.only(selecting).cloned();
+    let key = device.map(str::to_owned);
+    if let Some(entry) = cached.get(&key)
+        && entry.models == request.models
+        && entry.only == only
+    {
+        return Arc::clone(&entry.router);
+    }
+    // Every agent of this router runs on `device`.
+    let placed = device.map_or_else(BTreeMap::new, |device| {
+        hide_ai::PROVIDERS
+            .iter()
+            .map(|provider| (*provider, device.to_owned()))
+            .collect()
+    });
+    let router = Arc::new(AiRouter::new(
+        backends(machines, &request.models, &placed, only.as_ref()),
+        hide_ai::RouterConfig::default(),
+        Arc::new(DiagnosticLogSink),
+    ));
+    cached.insert(
+        key,
+        Cached {
+            models: request.models.clone(),
+            only,
+            router: Arc::clone(&router),
+        },
+    );
+    router
+}
+
+/// Writes the provider boundary's events to the core's diagnostic log, so a
+/// fallback, an over-budget restart or a swept `CODEX_HOME` is visible from
+/// outside the process. `emit` only queues, so logging from a provider thread
+/// never waits on the file.
+struct DiagnosticLogSink;
+
+impl AiLogSink for DiagnosticLogSink {
+    fn log(&self, event: AiLogEvent) {
+        crate::diagnostic!(diagnostic_record(&event));
+    }
+}
+
+/// The event as a diagnostic record: its name under the log's `kind` key,
+/// `component` `ai`, the other fields as they serialize.
+fn diagnostic_record(event: &AiLogEvent) -> serde_json::Value {
+    let mut record = serde_json::to_value(event)
+        .unwrap_or_else(|error| serde_json::json!({ "serialize_error": error.to_string() }));
+    if let Some(fields) = record.as_object_mut() {
+        fields.remove("event");
+        fields.insert("kind".to_owned(), event.event.as_ref().into());
+        fields.insert("component".to_owned(), "ai".into());
+    }
+    record
+}
+
+/// One backend per registered agent, each on the machine `placed` puts it
+/// on: a device's id, or the core's own machine for an agent with none.
+fn backends(
+    machines: &AiMachines,
+    models: &BTreeMap<ProviderId, String>,
+    placed: &BTreeMap<ProviderId, String>,
+    only: Option<&BTreeSet<ProviderId>>,
+) -> Vec<Arc<dyn AiBackend>> {
+    hide_ai::PROVIDERS
+        .iter()
+        .filter(|provider| only.is_none_or(|only| only.contains(*provider)))
+        .map(|provider| {
+            let model = models
+                .get(provider)
+                .cloned()
+                .unwrap_or_else(|| hide_ai::settings::default_model(*provider).to_owned());
+            let device = placed.get(provider).map(String::as_str);
+            Arc::new(NodeBackend::new(
+                machines,
+                device,
+                Item::agent(*provider),
+                model,
+            )) as Arc<dyn AiBackend>
+        })
+        .collect()
+}
+
+/// The backends one settings value's router asks: every agent's built-in
+/// default item and each profile item of the order (PRD
+/// agent-profiles-phase2 D-07), each run as its profile on the machine it is
+/// placed on.
+fn routed(machines: &AiMachines, settings: &AiSettings) -> Vec<Arc<dyn AiBackend>> {
+    settings
+        .models_by_item()
+        .into_iter()
+        .map(|(item, model)| {
+            let device = settings.machine(&item);
+            Arc::new(NodeBackend::new(machines, device, item, model)) as Arc<dyn AiBackend>
+        })
+        .collect()
+}
+
+/// The router policy of one settings value, with the account each profile
+/// item of its order runs in, so items of one account share a usage limit's
+/// park (D-07).
+fn router_config(machines: &AiMachines, settings: &AiSettings) -> hide_ai::RouterConfig {
+    let mut config = settings.router_config();
+    config.accounts = config
+        .priority
+        .iter()
+        .filter_map(|item| {
+            let machine = settings.machine(item);
+            let key = machines.profiles.of(machine, item)?.account?;
+            let account = hide_ai::SharedAccount {
+                machine: machine.map(str::to_owned),
+                key,
+            };
+            Some((item.clone(), account))
+        })
+        .collect();
+    config
+}
+
+/// The agents Hide AI as stored in `home` asks, in its order, with the
+/// model each is asked for (PRD core-host-node-move D-04): what the machine
+/// taking the core must answer for. `Err` says why Hide AI asks none.
+pub fn hide_ai_asks(home: &std::path::Path) -> Result<Vec<(String, String)>, String> {
+    asks_of(
+        hide_ai::settings::load_choice(home)
+            .map_err(|error| format!("the Hide AI settings could not be read: {error}"))?,
+    )
+}
+
+/// [`hide_ai_asks`] of the settings [`stored_hide_ai_settings`] read on
+/// another machine: on a move back, the core's, which come back with it and
+/// which the machine taking the core back must answer for.
+pub fn hide_ai_asks_of_stored(stored: &serde_json::Value) -> Result<Vec<(String, String)>, String> {
+    asks_of(Some(serde_json::from_value(stored.clone()).map_err(
+        |error| format!("the Hide AI settings could not be read: {error}"),
+    )?))
+}
+
+fn asks_of(
+    settings: Option<hide_ai::settings::AiSettings>,
+) -> Result<Vec<(String, String)>, String> {
+    let settings = settings
+        .filter(|settings| settings.chosen)
+        .ok_or("Hide AI is not set up: no agent is chosen")?;
+    if !settings.enabled {
+        return Err("Hide AI is off".to_owned());
+    }
+    // An item placed on a device answers on that device's logins wherever
+    // the core runs (PRD wsl-device B11), so a move asks nothing of it. A
+    // profile item is asked as its agent with its model: profiles stay on the
+    // machine they were made on, so one the machine taking the core does not
+    // list is passed over there like any missing profile (D-12), and the
+    // move is not refused for it.
+    let mut asks: Vec<(String, String)> = Vec::new();
+    for item in settings.order() {
+        if settings.machine(&item).is_some() {
+            continue;
+        }
+        let ask = (
+            item.provider.as_str().to_owned(),
+            settings.effective_model(&item).to_owned(),
+        );
+        if !asks.contains(&ask) {
+            asks.push(ask);
+        }
+    }
+    Ok(asks)
+}
+
+/// Whether every agent in `asks` answers `Ready` on this machine with this
+/// account's logins. `Err` names each that does not and why.
+pub fn hide_ai_ready_here(asks: &[(String, String)]) -> Result<(), String> {
+    let missing: Vec<String> = asks
+        .iter()
+        .filter_map(|(id, model)| {
+            let Some(provider) = ProviderId::from_id(id) else {
+                return Some(format!("{id}: unknown to this build"));
+            };
+            let backend = hide_ai::build_backend(
+                provider,
+                model,
+                hide_ai::ItemRun::default(),
+                Arc::new(DiagnosticLogSink),
+            );
+            match backend.availability() {
+                Availability::Ready => None,
+                other => Some(format!("{id}: {}", other.class())),
+            }
+        })
+        .collect();
+    if missing.is_empty() {
+        Ok(())
+    } else {
+        Err(missing.join(", "))
+    }
+}
+
+/// The Hide AI settings stored in `home`, read as this build reads them,
+/// so two machines' files compare by what they choose rather than by their
+/// bytes; `None` when none are stored.
+pub fn stored_hide_ai_settings(
+    home: &std::path::Path,
+) -> Result<Option<serde_json::Value>, String> {
+    hide_ai_settings_at(&hide_ai_settings_path(home))
+}
+
+/// Where Hide AI keeps its settings under `home`.
+pub fn hide_ai_settings_path(home: &std::path::Path) -> std::path::PathBuf {
+    hide_ai::settings::settings_path(home)
+}
+
+/// [`stored_hide_ai_settings`] of the settings file at `path`.
+pub(crate) fn hide_ai_settings_at(
+    path: &std::path::Path,
+) -> Result<Option<serde_json::Value>, String> {
+    hide_ai::settings::load_choice_at(path)
+        .map_err(|error| format!("the Hide AI settings could not be read: {error}"))?
+        .map(|settings| serde_json::to_value(settings).map_err(|error| error.to_string()))
+        .transpose()
+}
+
+/// Looks up a connected device's link, `None` while it is not connected.
+/// It never wakes a device.
+pub(crate) type DeviceLinks = Arc<dyn Fn(&str) -> Option<DeviceLink> + Send + Sync>;
+
+/// A connected device's link, and the generation that tells this link of
+/// the device from the one before and the one after it.
+#[derive(Clone)]
+pub(crate) struct DeviceLink {
+    pub(crate) generation: u64,
+    pub(crate) link: Arc<dyn NodeLink>,
+}
+
+/// Where Hide AI's agents run (PRD wsl-device B11, B13): the core's own
+/// node, and the connected devices an agent may be placed on. A device's
+/// link is looked up each time its agent is asked, so a device that is not
+/// connected answers unavailable without being woken, and one that connects
+/// again answers through its next link.
+#[derive(Clone)]
+pub(crate) struct AiMachines {
+    pub(crate) own: Arc<dyn NodeLink>,
+    pub(crate) devices: DeviceLinks,
+    /// What each machine lists of its profiles, which the runtime keeps
+    /// current (`Runtime::refresh_ai_profiles`).
+    pub(crate) profiles: Arc<ItemProfiles>,
+}
+
+/// One profile item as its machine lists it: the version of the profile,
+/// which a delete ends and an edit raises, and the account it runs in when
+/// that is an account of its own. A profile of the agent's default account
+/// has none: a wrapper or variables alone can run it against another
+/// provider, so it shares no usage limit.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(crate) struct ItemProfile {
+    pub(crate) version: u64,
+    pub(crate) account: Option<AccountKey>,
+}
+
+/// Every profile item each machine lists, by machine (`None` for the core's
+/// own) and item (PRD agent-profiles-phase2 B21, D-07): a router asks only
+/// an item its machine lists, lets items of one account share a usage limit,
+/// and is built again when an item it asks is removed or edited. A shared
+/// cell like [`UsageLimits`]: the runtime writes it when a profile list
+/// changes, and a router reads it on any thread, under the runtime's lock or
+/// off it, without taking that lock.
+#[derive(Debug, Default)]
+pub(crate) struct ItemProfiles {
+    profiles: Mutex<BTreeMap<(Option<String>, Item), ItemProfile>>,
+}
+
+impl ItemProfiles {
+    /// Replaces every entry, and says whether anything changed.
+    pub(crate) fn set(&self, profiles: BTreeMap<(Option<String>, Item), ItemProfile>) -> bool {
+        let mut kept = self
+            .profiles
+            .lock()
+            .unwrap_or_else(|error| error.into_inner());
+        if *kept == profiles {
+            return false;
+        }
+        *kept = profiles;
+        true
+    }
+
+    fn of(&self, machine: Option<&str>, item: &Item) -> Option<ItemProfile> {
+        self.profiles
+            .lock()
+            .unwrap_or_else(|error| error.into_inner())
+            .get(&(machine.map(str::to_owned), item.clone()))
+            .cloned()
+    }
+
+    /// The version each profile item of `settings`' order has on the
+    /// machine it is placed on, in that order; `None` for one that machine
+    /// does not list. A router of `settings` asks these profiles as they
+    /// were when it was built.
+    pub(crate) fn versions(&self, settings: &AiSettings) -> Vec<Option<u64>> {
+        settings
+            .order()
+            .iter()
+            .filter(|item| !item.is_default())
+            .map(|item| {
+                self.of(settings.machine(item), item)
+                    .map(|profile| profile.version)
+            })
+            .collect()
+    }
+}
+
+/// What a router built from one settings value was told besides those
+/// settings; a router kept across jobs is built again when it moves.
+#[derive(Clone, Debug, Default, Eq, PartialEq)]
+pub(crate) struct RouterFacts {
+    /// The link generation of each device the settings place an agent on,
+    /// `None` while it is not connected, in device order. A router holds
+    /// what it was told of an agent for its availability window, so a
+    /// device that dropped and came back, even between two looks, is asked
+    /// at once on its new link.
+    links: Vec<Option<u64>>,
+    /// Each profile item's version ([`ItemProfiles::versions`]): a removed
+    /// profile is not asked again and an edited one runs as it is now
+    /// (B21), and the old router's backends are released.
+    profiles: Vec<Option<u64>>,
+}
+
+impl AiMachines {
+    /// What a router of `settings` built now would be told.
+    pub(crate) fn facts(&self, settings: &AiSettings) -> RouterFacts {
+        let devices: BTreeSet<String> = settings.machines_by_item().into_values().collect();
+        RouterFacts {
+            links: devices
+                .iter()
+                .map(|device| (self.devices)(device).map(|found| found.generation))
+                .collect(),
+            profiles: self.profiles.versions(settings),
+        }
+    }
+
+    /// Only the core's own node, for a core that reaches no device.
+    #[cfg(test)]
+    pub(crate) fn own(node: Arc<dyn NodeLink>) -> Self {
+        Self {
+            own: node,
+            devices: Arc::new(|_| None),
+            profiles: Arc::default(),
+        }
+    }
+
+    fn machine(&self, device: Option<&str>) -> Machine {
+        match device {
+            None => Machine::Own(Arc::clone(&self.own)),
+            Some(id) => Machine::Device {
+                id: id.to_owned(),
+                links: Arc::clone(&self.devices),
+            },
+        }
+    }
+}
+
+/// The machine one backend's agent runs on.
+enum Machine {
+    Own(Arc<dyn NodeLink>),
+    Device { id: String, links: DeviceLinks },
+}
+
+/// Numbers each backend the core builds; its node keeps one real backend
+/// per number.
+static NEXT_BACKEND: AtomicU64 = AtomicU64::new(1);
+/// How long a node may take to say whether a provider can answer: the
+/// Codex probe starts its app-server first.
+const NODE_PROBE_TIMEOUT: Duration = Duration::from_secs(120);
+/// What a request may take past its own deadline before the core stops
+/// waiting for its node.
+const NODE_EXECUTE_MARGIN: Duration = Duration::from_secs(30);
+const NODE_RELEASE_TIMEOUT: Duration = Duration::from_secs(10);
+
+/// The reason an item of a profile its machine does not list cannot answer
+/// (PRD agent-profiles-phase2 B21): the shell words it as a missing profile.
+pub(crate) const PROFILE_MISSING: &str = "profile_missing";
+
+/// A provider backend answered by a node. The router in the core picks,
+/// retries and budgets; the node runs the provider. Dropping it releases the
+/// node's backend, which ends its resident process; a link that ends ends
+/// the backends its node kept for it.
+struct NodeBackend {
+    machine: Machine,
+    spec: BackendSpec,
+    /// What the machines list of their profiles: a profile item is asked
+    /// only while its machine lists it.
+    profiles: Arc<ItemProfiles>,
+    /// The link last asked, which the release goes to: a device's link is
+    /// looked up per call, and a backend dropped under the runtime's lock
+    /// must not look one up.
+    asked: Mutex<Option<Arc<dyn NodeLink>>>,
+}
+
+impl NodeBackend {
+    /// A backend of `item` asked for `model`, run as the machine's profile
+    /// of its agent the item names, the built-in default for none.
+    fn new(machines: &AiMachines, device: Option<&str>, item: Item, model: String) -> Self {
+        Self {
+            machine: machines.machine(device),
+            profiles: Arc::clone(&machines.profiles),
+            spec: BackendSpec {
+                instance: NEXT_BACKEND.fetch_add(1, Ordering::Relaxed),
+                provider: item.provider,
+                model,
+                profile: item.profile,
+            },
+            asked: Mutex::new(None),
+        }
+    }
+
+    /// Whether this is a profile item its machine does not list, or lists
+    /// no profiles at all: it is passed over as [`PROFILE_MISSING`] before
+    /// its machine is asked (PRD agent-profiles-phase2 B21, D-12), since a
+    /// node that reads no profile field would run the agent's default
+    /// account instead (B6).
+    fn unlisted(&self) -> bool {
+        let device = match &self.machine {
+            Machine::Own(_) => None,
+            Machine::Device { id, .. } => Some(id.as_str()),
+        };
+        self.spec.profile.is_some() && self.profiles.of(device, &self.item()).is_none()
+    }
+
+    /// Why a call was not answered, as the router reads it: a profile its
+    /// machine says it does not have (a delete that landed after the list
+    /// was read) is [`PROFILE_MISSING`]; anything else, as a node at its
+    /// backend cap, names the machine's own refusal.
+    fn unanswered(&self, error: &LinkError) -> String {
+        match error {
+            LinkError::Refused(refused)
+                if self.spec.profile.is_some()
+                    && refused.code == hide_node_link::ErrorCode::NotFound =>
+            {
+                PROFILE_MISSING.to_owned()
+            }
+            _ => format!("The provider's machine could not be asked: {error}"),
+        }
+    }
+
+    /// The node the agent runs on now: a device that is not connected is
+    /// not asked and not woken.
+    fn node(&self) -> Result<Arc<dyn NodeLink>, LinkError> {
+        let node = match &self.machine {
+            Machine::Own(node) => Arc::clone(node),
+            Machine::Device { id, links } => {
+                links(id)
+                    .ok_or_else(|| {
+                        LinkError::NotConnected(format!("the device {id} is not connected"))
+                    })?
+                    .link
+            }
+        };
+        *self.asked.lock().unwrap_or_else(|error| error.into_inner()) = Some(Arc::clone(&node));
+        Ok(node)
+    }
+
+    /// One call whose answer carries the backend's log events, which go to
+    /// the diagnostic log here.
+    fn logged<T: serde::de::DeserializeOwned>(&self, call: Call) -> Result<T, LinkError> {
+        let answer: Logged<T> = call_as(self.node()?.as_ref(), call, NODE_PROBE_TIMEOUT)?;
+        write_log(answer.log);
+        Ok(answer.value)
+    }
+}
+
+fn write_log(events: Vec<AiLogEvent>) {
+    for event in events {
+        DiagnosticLogSink.log(event);
+    }
+}
+
+impl AiBackend for NodeBackend {
+    fn id(&self) -> ProviderId {
+        self.spec.provider
+    }
+
+    fn item(&self) -> Item {
+        Item::of(self.spec.provider, self.spec.profile.clone())
+    }
+
+    fn availability(&self) -> Availability {
+        if self.unlisted() {
+            return Availability::Unavailable {
+                reason: PROFILE_MISSING.to_owned(),
+            };
+        }
+        self.logged(Call::AiAvailability {
+            backend: self.spec.clone(),
+        })
+        .unwrap_or_else(|error| Availability::Unavailable {
+            reason: self.unanswered(&error),
+        })
+    }
+
+    fn models(&self) -> ModelCatalog {
+        if self.unlisted() {
+            return ModelCatalog::Unknown {
+                reason: PROFILE_MISSING.to_owned(),
+            };
+        }
+        self.logged(Call::AiModels {
+            backend: self.spec.clone(),
+        })
+        .unwrap_or_else(|error| ModelCatalog::Unknown {
+            reason: self.unanswered(&error),
+        })
+    }
+
+    fn execute(
+        &self,
+        request: &ProviderRequest,
+        cancel: &CancelToken,
+    ) -> Result<AiResponse, AiError> {
+        if self.unlisted() {
+            return Err(AiError::ProviderUnavailable(PROFILE_MISSING.to_owned()));
+        }
+        let call = Call::AiExecute {
+            backend: self.spec.clone(),
+            request: request.clone(),
+        };
+        let answer = self.node().and_then(|node| {
+            call_as_with_progress::<Logged<Result<AiResponse, AiError>>, serde_json::Value>(
+                node.as_ref(),
+                call,
+                request.deadline + NODE_EXECUTE_MARGIN,
+                |_| !cancel.is_cancelled(),
+            )
+        });
+        match answer {
+            Ok(answer) => {
+                write_log(answer.log);
+                answer.value
+            }
+            // Nothing reached the provider.
+            Err(error @ (LinkError::NotConnected(_) | LinkError::Busy | LinkError::Refused(_))) => {
+                Err(AiError::ProviderUnavailable(self.unanswered(&error)))
+            }
+            Err(LinkError::Unknown(reason)) => Err(AiError::CompletionUnknown(reason)),
+        }
+    }
+
+    fn last_measurement(&self) -> ProcessMeasurement {
+        self.node()
+            .and_then(|node| {
+                call_as(
+                    node.as_ref(),
+                    Call::AiMeasurement {
+                        backend: self.spec.clone(),
+                    },
+                    NODE_RELEASE_TIMEOUT,
+                )
+            })
+            .unwrap_or(ProcessMeasurement::Unavailable)
+    }
+
+    fn restart(&self) {
+        let restarted = self.node().and_then(|node| {
+            call_as::<()>(
+                node.as_ref(),
+                Call::AiRestart {
+                    backend: self.spec.clone(),
+                },
+                NODE_RELEASE_TIMEOUT,
+            )
+        });
+        if let Err(error) = restarted {
+            crate::diagnostic!(serde_json::json!({
+                "component": "ai", "kind": "backend.restart_failed",
+                "provider": self.spec.provider.as_str(), "error": error.to_string(),
+            }));
+        }
+    }
+}
+
+impl Drop for NodeBackend {
+    fn drop(&mut self) {
+        // A backend never asked holds nothing on any node.
+        let Some(node) = self
+            .asked
+            .get_mut()
+            .unwrap_or_else(|error| error.into_inner())
+            .take()
+        else {
+            return;
+        };
+        if node.closed_reason().is_some() {
+            return;
+        }
+        let released = call_as::<()>(
+            node.as_ref(),
+            Call::AiRelease {
+                instance: self.spec.instance,
+            },
+            NODE_RELEASE_TIMEOUT,
+        );
+        if let Err(error) = released {
+            crate::diagnostic!(serde_json::json!({
+                "component": "ai", "kind": "backend.release_failed",
+                "provider": self.spec.provider.as_str(), "error": error.to_string(),
+            }));
+        }
+    }
+}
+
+/// Builds the same provider boundary for Project Memory that the Settings
+/// probe describes. The feature owns its prompt and parsing; this retains the
+/// shared provider selection, process, retry, cancellation, and budget caps.
+pub(crate) fn memory_router(
+    machines: &AiMachines,
+    settings: &AiSettings,
+    gate: &Arc<UsageLimits>,
+    usage: &Arc<dyn AiUsageSink>,
+) -> AiRouter {
+    let mut config = router_config(machines, settings);
+    config.usage_gate = Some(Arc::clone(gate));
+    config.usage_sink = Some(Arc::clone(usage));
+    AiRouter::new(
+        routed(machines, settings),
+        config,
+        Arc::new(DiagnosticLogSink),
+    )
+}
+
+/// The router one `hide memory add` asks, whose every try ends before the
+/// caller stops waiting (PRD project-memory-v2 B8).
+pub(crate) fn memory_add_router(
+    machines: &AiMachines,
+    settings: &AiSettings,
+    usage: &Arc<dyn AiUsageSink>,
+) -> AiRouter {
+    let mut config = router_config(machines, settings);
+    config.overall_deadline_cap = crate::memory_command::ADD_PROVIDER_DEADLINE;
+    config.usage_sink = Some(Arc::clone(usage));
+    AiRouter::new(
+        routed(machines, settings),
+        config,
+        Arc::new(DiagnosticLogSink),
+    )
+}
+
+/// A router for work the operator waits on, such as the Start dialog's
+/// worktree name: the provider order with no usage limit, so it answers
+/// however much of the week is spent (PRD hide-ai-usage-limit D-03, B6).
+pub(crate) fn waited_router(
+    machines: &AiMachines,
+    settings: &AiSettings,
+    usage: &Arc<dyn AiUsageSink>,
+) -> AiRouter {
+    let mut config = router_config(machines, settings);
+    config.usage_sink = Some(Arc::clone(usage));
+    AiRouter::new(
+        routed(machines, settings),
+        config,
+        Arc::new(DiagnosticLogSink),
+    )
+}
+
+/// The same provider boundary for agent labels (PRD labels-in-hided D-05):
+/// the operator's provider and model choice, and the router's own retry,
+/// cooldown and budget rules, judged by the usage limit.
+pub(crate) fn labels_router(
+    machines: &AiMachines,
+    settings: &AiSettings,
+    gate: &Arc<UsageLimits>,
+    usage: &Arc<dyn AiUsageSink>,
+) -> AiRouter {
+    let mut config = router_config(machines, settings);
+    config.usage_gate = Some(Arc::clone(gate));
+    config.usage_sink = Some(Arc::clone(usage));
+    AiRouter::new(
+        routed(machines, settings),
+        config,
+        Arc::new(DiagnosticLogSink),
+    )
+}
+
+fn read(
+    router: &AiRouter,
+    models: &BTreeMap<ProviderId, String>,
+    with_catalogs: bool,
+    cli_found: Option<&BTreeSet<ProviderId>>,
+) -> BackgroundAiSnapshot {
+    let statuses = router.statuses();
+    let catalogs = if with_catalogs {
+        router.models()
+    } else {
+        Vec::new()
+    };
+    let providers = hide_ai::PROVIDERS
+        .iter()
+        .map(|provider| {
+            let default = Item::agent(*provider);
+            let status = statuses.iter().find(|status| status.item == default);
+            let catalog = catalogs
+                .iter()
+                .find(|(item, _)| *item == default)
+                .map(|(_, catalog)| catalog);
+            project(*provider, status, catalog, models, with_catalogs, cli_found)
+        })
+        .collect();
+    BackgroundAiSnapshot {
+        providers,
+        ..BackgroundAiSnapshot::default()
+    }
+}
+
+fn unix_now_ms() -> u64 {
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|duration| duration.as_millis().min(u64::MAX as u128) as u64)
+        .unwrap_or(0)
+}
+
+/// One provider row. Every reason is a code the shell turns into words; the
+/// short headline is the only English the core writes, kept for the rows
+/// that still show it.
+fn project(
+    provider: ProviderId,
+    status: Option<&ProviderStatus>,
+    catalog: Option<&ModelCatalog>,
+    models: &BTreeMap<ProviderId, String>,
+    catalogs_asked: bool,
+    cli_found: Option<&BTreeSet<ProviderId>>,
+) -> BackgroundAiProviderSnapshot {
+    let mut row = BackgroundAiProviderSnapshot::unread(provider);
+    row.model = models
+        .get(&provider)
+        .cloned()
+        .unwrap_or_else(|| provider.default_model().to_owned());
+    if let Some(status) = status {
+        let (state, message) = state_of(&status.availability, status.parked_for);
+        row.state = state.to_owned();
+        row.headline = headline_of(state).to_owned();
+        row.message = message;
+        row.installed = !matches!(status.availability, Availability::NotInstalled);
+        // An agent Hide AI cannot use yet has no backend that looks for its
+        // program; the install kit says whether it is on this machine.
+        if state == "unsupported" && cli_found.is_some_and(|found| !found.contains(&provider)) {
+            row.state = "not_installed".to_owned();
+            row.headline = "Not installed".to_owned();
+            row.message = None;
+            row.installed = false;
+        }
+        row.selectable = status.selectable;
+        row.retry_at_ms = status
+            .parked_for
+            .map(|remaining| unix_now_ms().saturating_add(remaining.as_millis() as u64));
+    }
+    match catalog {
+        Some(catalog) => {
+            (row.models, row.model_labels) = listed(catalog);
+            row.models_fixed = catalog.is_fixed();
+            row.models_unavailable_reason = catalog.unknown_reason().map(str::to_owned);
+        }
+        None => {
+            row.models_unavailable_reason = Some(
+                if catalogs_asked {
+                    "not_asked"
+                } else {
+                    "not_observed"
+                }
+                .to_owned(),
+            );
+        }
+    }
+    row
+}
+
+/// An item's availability as the snapshot's state code and the provider's
+/// reason, when its state carries one; a usage limit's park reads as
+/// `usage_limited` whatever was answered before it.
+fn state_of(
+    availability: &Availability,
+    parked_for: Option<Duration>,
+) -> (&'static str, Option<String>) {
+    match (availability, parked_for) {
+        (_, Some(_)) => ("usage_limited", None),
+        (Availability::Ready, None) => ("ready", None),
+        (Availability::NeedsLogin, None) => ("needs_login", None),
+        (Availability::NotInstalled, None) => ("not_installed", None),
+        (Availability::Unavailable { reason }, None) => ("unavailable", Some(reason.clone())),
+        (Availability::Unsupported { reason }, None) => ("unsupported", Some(reason.clone())),
+    }
+}
+
+/// The short words beside an agent's name, for the rows that still show
+/// them.
+fn headline_of(state: &str) -> &'static str {
+    match state {
+        "usage_limited" => "Out of usage",
+        "ready" => "Signed in",
+        "needs_login" => "Sign in required",
+        "not_installed" => "Not installed",
+        "unsupported" => "Not supported",
+        _ => "Cannot answer",
+    }
+}
+
+/// What the last label analysis found about the agent Hide AI runs on: it
+/// could not answer, why, until when it said, and which listed agent a request
+/// made now would run on (B41, B42). Written on the analyzer's thread after
+/// each job and read by the runtime on its own thread, so it is one value
+/// behind a mutex and never a reader of any provider.
+#[derive(Default)]
+pub(crate) struct AiStanding {
+    record: Mutex<Option<Standing>>,
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub(crate) struct Standing {
+    /// Runs on.
+    pub(crate) selected: Item,
+    /// `usage_limited`, `needs_login`, `not_installed`, `unavailable`,
+    /// `unsupported` or `profile_missing`.
+    pub(crate) reason: &'static str,
+    pub(crate) retry_at_ms: Option<u64>,
+    /// The item a request made now would run on, when one can answer.
+    pub(crate) using: Option<Item>,
+}
+
+impl AiStanding {
+    /// Records how `router` stands now. Asking is a query: it never runs a
+    /// request, and it refreshes a stale availability answer at most.
+    pub(crate) fn observe(&self, router: &AiRouter) {
+        let next = router.provider_state().and_then(|state| {
+            let degraded = state.degraded?;
+            Some(Standing {
+                selected: degraded.item.clone(),
+                reason: refusal_class(&degraded.reason),
+                retry_at_ms: degraded.until.map(|until| {
+                    // Seconds are what an account reports; a changing
+                    // millisecond would republish the snapshot for nothing.
+                    unix_now_ms().saturating_add(until.as_secs().saturating_mul(1_000)) / 1_000
+                        * 1_000
+                }),
+                using: state.active.filter(|active| *active != degraded.item),
+            })
+        });
+        *self
+            .record
+            .lock()
+            .unwrap_or_else(|error| error.into_inner()) = next;
+    }
+
+    pub(crate) fn current(&self) -> Option<Standing> {
+        self.record
+            .lock()
+            .unwrap_or_else(|error| error.into_inner())
+            .clone()
+    }
+}
+
+/// The class of a refusal the router reported for the selected agent. A
+/// usage-limit park is the one `Unavailable` that has its own class, because
+/// it is the one the shell says an end time for.
+fn refusal_class(reason: &Availability) -> &'static str {
+    match reason {
+        Availability::Unavailable { reason } if reason.starts_with("usage_limited") => {
+            "usage_limited"
+        }
+        Availability::Unavailable { reason } if reason == PROFILE_MISSING => PROFILE_MISSING,
+        other => other.class(),
+    }
+}
+
+/// The `worktree_name` feature: a short English branch slug for a worktree
+/// started from an issue. The Start dialog fills a deterministic name from the
+/// issue's number and title first and replaces it with this answer only while
+/// the operator has not edited the field, so a slow or absent provider costs
+/// nothing but the better name.
+const WORKTREE_NAME_SYSTEM: &str = "You name git branches for a coding task. \
+Read the issue title and body and answer with a short English kebab-case slug of two to five words \
+that says what the change does, like `sigterm-handler` or `overview-issue-board`. \
+Use only lowercase ASCII letters, digits and hyphens. Do not include an issue number, a prefix such as feat/ or fix/, or quotes.";
+/// The slug's own ceiling; the whole branch name is checked again by Git.
+const WORKTREE_SLUG_LIMIT: usize = 48;
+/// The body the model reads, in characters; the title carries most of it.
+const WORKTREE_NAME_BODY_LIMIT: usize = 2_000;
+
+/// A branch-safe slug: lowercase ASCII words joined by single hyphens.
+pub(crate) fn branch_slug(text: &str) -> String {
+    let mut slug = String::new();
+    for character in text.chars().flat_map(char::to_lowercase) {
+        if character.is_ascii_alphanumeric() {
+            slug.push(character);
+        } else if !slug.is_empty() && !slug.ends_with('-') {
+            slug.push('-');
+        }
+    }
+    let mut slug = slug.trim_matches('-').to_owned();
+    if slug.len() > WORKTREE_SLUG_LIMIT {
+        slug.truncate(WORKTREE_SLUG_LIMIT);
+        if let Some(cut) = slug.rfind('-') {
+            slug.truncate(cut);
+        }
+    }
+    slug.trim_matches('-').to_owned()
+}
+
+/// Asks the operator's background AI for a worktree name. Runs on a worker
+/// thread; the router starts and stops its own provider process.
+pub(crate) fn suggest_worktree_name(
+    machines: &AiMachines,
+    settings: &AiSettings,
+    usage: &Arc<dyn AiUsageSink>,
+    subject: &str,
+    prefix: &str,
+    title: &str,
+    body: &str,
+) -> Result<String, String> {
+    let body: String = body.chars().take(WORKTREE_NAME_BODY_LIMIT).collect();
+    let request = hide_ai::AiRequest {
+        feature_id: "worktree_name".into(),
+        request_id: hide_ai::RequestId(format!("worktree-name-{subject}")),
+        subject_id: subject.to_owned(),
+        system: WORKTREE_NAME_SYSTEM.to_owned(),
+        input: serde_json::json!({ "title": title, "body": body }).to_string(),
+        output_schema: serde_json::json!({
+            "type": "object",
+            "properties": { "slug": { "type": "string", "maxLength": WORKTREE_SLUG_LIMIT } },
+            "required": ["slug"],
+            "additionalProperties": false,
+        }),
+        deadline: Duration::from_secs(30),
+        schema_version: "1".into(),
+        pick: None,
+        // A Git name is lowercase ASCII whatever the operator reads (D-07).
+        output_language: None,
+        answer: hide_ai::AnswerMode::PlainJson,
+        provider_efforts: Vec::new(),
+    };
+    let router = waited_router(machines, settings, usage);
+    let answer = router
+        .execute(&request, &hide_ai::CancelToken::new())
+        .map_err(|error| format!("{error:?}"))?;
+    let slug = answer
+        .value
+        .get("slug")
+        .and_then(serde_json::Value::as_str)
+        .map(branch_slug)
+        .filter(|slug| !slug.is_empty())
+        .ok_or_else(|| "the answer had no usable name".to_owned())?;
+    Ok(format!("{prefix}{slug}"))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// The machine the tests run on, as the core reaches it.
+    fn node() -> Arc<dyn NodeLink> {
+        Arc::new(hide_node::Local::of_process())
+    }
+
+    fn models() -> BTreeMap<ProviderId, String> {
+        AiSettings::default().default_models()
+    }
+
+    /// A node that answers every agent as signed in, and counts what it was
+    /// asked.
+    #[derive(Default)]
+    struct AnsweringNode {
+        calls: Mutex<Vec<&'static str>>,
+    }
+
+    impl NodeLink for AnsweringNode {
+        fn call(
+            &self,
+            call: Call,
+            _timeout: Duration,
+        ) -> Result<hide_node_link::link::LinkAnswer, LinkError> {
+            let (name, value) = match call {
+                Call::AiAvailability { .. } => (
+                    "availability",
+                    serde_json::to_value(Logged {
+                        value: Availability::Ready,
+                        log: Vec::new(),
+                    })
+                    .unwrap(),
+                ),
+                Call::AiExecute { .. } => (
+                    "execute",
+                    serde_json::to_value(Logged {
+                        value: Ok::<AiResponse, AiError>(AiResponse {
+                            value: serde_json::json!({ "slug": "device-login" }),
+                            usage: hide_ai::AiUsage::default(),
+                        }),
+                        log: Vec::new(),
+                    })
+                    .unwrap(),
+                ),
+                Call::AiRelease { .. } => ("release", serde_json::Value::Null),
+                _ => ("other", serde_json::Value::Null),
+            };
+            self.calls.lock().unwrap().push(name);
+            Ok(hide_node_link::link::LinkAnswer::Parsed(value))
+        }
+    }
+
+    /// A node whose agents list one model each and whose profiles `p-gw`
+    /// and `p-slow` list a gateway's, and that keeps every backend it was
+    /// asked to build and release. A read of `p-slow` says on `slow`'s
+    /// sender that it started and answers once its receiver hears.
+    #[derive(Default)]
+    struct ProfilesNode {
+        built: Mutex<Vec<BackendSpec>>,
+        released: Mutex<Vec<u64>>,
+        slow: Mutex<Option<(std::sync::mpsc::Sender<()>, std::sync::mpsc::Receiver<()>)>>,
+    }
+
+    impl NodeLink for ProfilesNode {
+        fn call(
+            &self,
+            call: Call,
+            _timeout: Duration,
+        ) -> Result<hide_node_link::link::LinkAnswer, LinkError> {
+            let logged =
+                |value: serde_json::Value| serde_json::json!({ "value": value, "log": [] });
+            // A profile the machine does not list is refused, as a node's
+            // `profiles::ai_run` refuses it.
+            let unlisted = |backend: &BackendSpec| {
+                backend
+                    .profile
+                    .as_ref()
+                    .filter(|profile| !matches!(profile.0.as_str(), "p-gw" | "p-slow"))
+                    .map(|profile| {
+                        LinkError::Refused(hide_node_link::HostError::new(
+                            hide_node_link::ErrorCode::NotFound,
+                            format!("This machine has no profile {}", profile.0),
+                        ))
+                    })
+            };
+            let value = match call {
+                Call::AiAvailability { backend } => {
+                    if let Some(refused) = unlisted(&backend) {
+                        return Err(refused);
+                    }
+                    logged(serde_json::to_value(Availability::Ready).unwrap())
+                }
+                Call::AiModels { backend } => {
+                    if let Some(refused) = unlisted(&backend) {
+                        return Err(refused);
+                    }
+                    let profile = backend.profile.as_ref().map(|profile| profile.0.clone());
+                    let catalog = match profile.as_deref() {
+                        None => ModelCatalog::plain(["sonnet"]),
+                        Some("p-gw" | "p-slow") => ModelCatalog::Offered(vec![hide_ai::Model {
+                            id: "opus".to_owned(),
+                            label: Some("glm-4.6".to_owned()),
+                        }]),
+                        Some(other) => unreachable!("{other} was refused above"),
+                    };
+                    {
+                        let mut built = self.built.lock().unwrap();
+                        if !built.iter().any(|spec| spec.instance == backend.instance) {
+                            built.push(backend);
+                        }
+                    }
+                    if profile.as_deref() == Some("p-slow")
+                        && let Some((started, answer)) = self.slow.lock().unwrap().as_ref()
+                    {
+                        started.send(()).unwrap();
+                        answer
+                            .recv_timeout(Duration::from_secs(10))
+                            .expect("the test lets the slow read answer");
+                    }
+                    logged(serde_json::to_value(catalog).unwrap())
+                }
+                Call::AiRelease { instance } => {
+                    self.released.lock().unwrap().push(instance);
+                    serde_json::Value::Null
+                }
+                _ => serde_json::Value::Null,
+            };
+            Ok(hide_node_link::link::LinkAnswer::Parsed(value))
+        }
+    }
+
+    impl ProfilesNode {
+        /// The backends built for `profile`, by instance.
+        fn built_for(&self, profile: &str) -> Vec<u64> {
+            self.built
+                .lock()
+                .unwrap()
+                .iter()
+                .filter(|spec| spec.profile.as_ref().is_some_and(|id| id.0 == profile))
+                .map(|spec| spec.instance)
+                .collect()
+        }
+    }
+
+    /// PRD agent-profiles-phase2 D-09, B8, B9, B10: while a screen reads
+    /// model lists, each profile of the core's machine is read as that
+    /// profile on its own backend and kept beside its agent's row with the
+    /// names the agent shows; a list that cannot be read carries its
+    /// reason, and the backends are kept for the screen and released with
+    /// it or with an edit of the profile.
+    #[test]
+    fn each_profiles_model_list_is_read_as_that_profile_and_kept_beside_its_agents() {
+        let node = Arc::new(ProfilesNode::default());
+        let machines = listing(Arc::clone(&node) as Arc<dyn NodeLink>, &["p-gw", "p-slow"]);
+        let mut items = ItemReads::default();
+        let item = |profile: &str, version: u64| ItemAsk {
+            provider: ProviderId::CLAUDE,
+            profile: ProfileId(profile.to_owned()),
+            version,
+            model: "sonnet".to_owned(),
+        };
+        let mut request = AiRequest {
+            observing: true,
+            models: models(),
+            items: vec![item("p-gw", 1), item("p-gone", 1)],
+            ..AiRequest::default()
+        };
+        let read = |items: &mut ItemReads, request: &AiRequest| {
+            let mut rows = BackgroundAiSnapshot::unread().providers;
+            items.keep(request);
+            items.read(&machines, None, &request.items, &mut rows, &|| true);
+            rows
+        };
+
+        let rows = read(&mut items, &request);
+        let claude = rows.iter().find(|row| row.id == "claude").unwrap();
+        assert_eq!(
+            claude.profile_models.len(),
+            2,
+            "{:?}",
+            claude.profile_models
+        );
+        let gateway = &claude.profile_models[0];
+        assert_eq!(gateway.profile, "p-gw");
+        assert_eq!(
+            gateway.version, 1,
+            "the list says which version it was read for"
+        );
+        assert_eq!(gateway.models, ["opus"], "a start passes the value");
+        assert_eq!(
+            gateway.model_labels,
+            BTreeMap::from([("opus".to_owned(), "glm-4.6".to_owned())]),
+            "a menu shows the gateway's name"
+        );
+        assert_eq!(gateway.state, "ready");
+        assert!(gateway.selectable);
+        // A profile its machine no longer lists is named so, by its code,
+        // and cannot be chosen (PRD agent-profiles-phase2 B21).
+        let gone = &claude.profile_models[1];
+        assert!(gone.models.is_empty());
+        assert_eq!(
+            gone.models_unavailable_reason.as_deref(),
+            Some(PROFILE_MISSING),
+            "{gone:?}"
+        );
+        assert_eq!(gone.message.as_deref(), Some(PROFILE_MISSING), "{gone:?}");
+        assert!(!gone.selectable, "{gone:?}");
+        assert!(
+            rows.iter()
+                .filter(|row| row.id != "claude")
+                .all(|row| row.profile_models.is_empty()),
+            "a profile is read beside its own agent only"
+        );
+
+        // The same screen reads again on the backend it made.
+        read(&mut items, &request);
+        let first = node.built_for("p-gw");
+        assert_eq!(first.len(), 1, "one backend per item while it is read");
+
+        // An edit of the profile is read by a new backend, and the old one
+        // is released.
+        request.items[0].version = 2;
+        read(&mut items, &request);
+        let rebuilt = node.built_for("p-gw");
+        assert_eq!(rebuilt.len(), 2);
+        assert!(node.released.lock().unwrap().contains(&first[0]));
+
+        // With no screen reading lists, no profile's backend stays.
+        request.observing = false;
+        items.keep(&request);
+        assert!(items.backends.is_empty());
+        assert!(node.released.lock().unwrap().contains(&rebuilt[1]));
+    }
+
+    /// Engineering 14, 15: an item's backend and what was logged of its
+    /// failure leave with the item, a profile removed, a device gone or the
+    /// screen closed, so making, failing and removing profiles again and
+    /// again keeps no more of either than the items asked now.
+    #[test]
+    fn an_items_backend_and_its_logged_failure_leave_with_the_item() {
+        let node = Arc::new(ProfilesNode::default());
+        let machines = listing(Arc::clone(&node) as Arc<dyn NodeLink>, &["p-gw", "p-slow"]);
+        let mut items = ItemReads::default();
+        let ask = |profile: &str| ItemAsk {
+            provider: ProviderId::CLAUDE,
+            profile: ProfileId(profile.to_owned()),
+            version: 1,
+            model: "sonnet".to_owned(),
+        };
+        let mut request = AiRequest {
+            observing: true,
+            models: models(),
+            ..AiRequest::default()
+        };
+        let read = |items: &mut ItemReads, request: &AiRequest| {
+            let mut rows = BackgroundAiSnapshot::unread().providers;
+            items.keep(request);
+            items.read(&machines, None, &request.items, &mut rows, &|| true);
+            for device in &request.devices {
+                items.read(
+                    &machines,
+                    Some(&device.id),
+                    &device.items,
+                    &mut rows,
+                    &|| true,
+                );
+            }
+        };
+
+        for round in 0..20 {
+            // A profile that cannot be read is made, read and removed.
+            request.items = vec![ask("p-gw"), ask(&format!("p-gone-{round}"))];
+            read(&mut items, &request);
+            assert_eq!(items.backends.len(), 2);
+            assert_eq!(items.logged.len(), 1, "its failure is logged once");
+            request.items = vec![ask("p-gw")];
+            read(&mut items, &request);
+            assert_eq!(items.backends.len(), 1, "round {round}");
+            assert!(items.logged.is_empty(), "round {round}");
+        }
+
+        // A device's profile, unreadable while the device has no link,
+        // leaves with the device.
+        request.devices = vec![DeviceAsk {
+            id: "mini".to_owned(),
+            items: vec![ask("p-dev")],
+            ..DeviceAsk::default()
+        }];
+        read(&mut items, &request);
+        assert_eq!(items.backends.len(), 2);
+        assert_eq!(items.logged.len(), 1);
+        request.devices.clear();
+        read(&mut items, &request);
+        assert_eq!(items.backends.len(), 1);
+        assert!(items.logged.is_empty());
+
+        // The screen closes: nothing of any item stays.
+        request.items.push(ask("p-gone"));
+        read(&mut items, &request);
+        assert_eq!(items.logged.len(), 1);
+        request.observing = false;
+        items.keep(&request);
+        assert!(items.backends.is_empty() && items.logged.is_empty());
+    }
+
+    /// Past the cap a profile's list is a reported failure, never another
+    /// backend on its node (engineering 15), written once however often the
+    /// same screen reads it and forgotten when the profile leaves.
+    #[test]
+    fn a_machines_profiles_past_the_cap_are_answered_without_a_backend() {
+        let node = Arc::new(ProfilesNode::default());
+        let machines = AiMachines::own(Arc::clone(&node) as Arc<dyn NodeLink>);
+        let mut items = ItemReads::default();
+        let mut request = AiRequest {
+            observing: true,
+            models: models(),
+            items: (0..=MAX_ITEM_READS)
+                .map(|index| ItemAsk {
+                    model: "sonnet".to_owned(),
+                    provider: ProviderId::CLAUDE,
+                    profile: ProfileId(if index == MAX_ITEM_READS {
+                        "p-gw".to_owned()
+                    } else {
+                        format!("p-{index}")
+                    }),
+                    version: 1,
+                })
+                .collect(),
+            ..AiRequest::default()
+        };
+        let read = |items: &mut ItemReads, request: &AiRequest| {
+            let mut rows = BackgroundAiSnapshot::unread().providers;
+            items.keep(request);
+            items.read(&machines, None, &request.items, &mut rows, &|| true);
+            rows
+        };
+
+        let (rows, records) = crate::diagnostics::capture(|| {
+            let rows = read(&mut items, &request);
+            read(&mut items, &request);
+            rows
+        });
+        let claude = rows.iter().find(|row| row.id == "claude").unwrap();
+        assert_eq!(
+            claude.profile_models[MAX_ITEM_READS]
+                .models_unavailable_reason
+                .as_deref(),
+            Some("model_reads_full")
+        );
+        assert!(node.built_for("p-gw").is_empty(), "no backend past the cap");
+        let full = records
+            .iter()
+            .filter(|record| record["reason"] == "model_reads_full")
+            .count();
+        assert_eq!(full, 1, "a second read writes it no more: {records:?}");
+
+        request.items.pop();
+        read(&mut items, &request);
+        assert!(
+            !items
+                .logged
+                .keys()
+                .any(|(_, _, profile)| profile.0 == "p-gw"),
+            "the record leaves with the profile"
+        );
+    }
+
+    /// Engineering 14: once no window reads model lists, the coordinator
+    /// asks the reader for nothing and every item backend a screen's reads
+    /// made is released, whether the window left after a read or during
+    /// one; a read under way then starts no item after the one it is on.
+    #[test]
+    fn a_window_that_leaves_releases_the_item_backends_even_during_a_read() {
+        let node = Arc::new(ProfilesNode::default());
+        let (started, slow_started) = std::sync::mpsc::channel();
+        let (answer_slow, answer) = std::sync::mpsc::channel();
+        *node.slow.lock().unwrap() = Some((started, answer));
+        let mut reader = AiReader::spaced(
+            listing(Arc::clone(&node) as Arc<dyn NodeLink>, &["p-gw", "p-slow"]),
+            Duration::ZERO,
+        );
+        let (ready, answered) = std::sync::mpsc::channel();
+        reader.inner.on_ready(move || {
+            let _ = ready.send(());
+        });
+        let reading = |profiles: &[&str]| AiRequest {
+            observing: true,
+            models: models(),
+            items: profiles
+                .iter()
+                .map(|profile| ItemAsk {
+                    model: "sonnet".to_owned(),
+                    provider: ProviderId::CLAUDE,
+                    profile: ProfileId((*profile).to_owned()),
+                    version: 1,
+                })
+                .collect(),
+            ..AiRequest::default()
+        };
+        let nothing = AiRequest::default();
+        let finish = |reader: &mut AiReader, request: &AiRequest| {
+            answered
+                .recv_timeout(Duration::from_secs(10))
+                .expect("the read answers");
+            reader
+                .read_if_due(request.clone())
+                .expect("the answer is handed back on the next wake")
+        };
+        let released = |instance: u64| node.released.lock().unwrap().contains(&instance);
+
+        // A screen reads an item, then its window leaves.
+        assert!(reader.read_if_due(reading(&["p-gw"])).is_none());
+        finish(&mut reader, &reading(&["p-gw"]));
+        let gateway = node.built_for("p-gw");
+        assert_eq!(gateway.len(), 1);
+        assert!(reader.read_if_due(nothing.clone()).is_none());
+        finish(&mut reader, &nothing);
+        assert!(
+            released(gateway[0]),
+            "the window's item backend is released"
+        );
+
+        // The window leaves while a read waits on its first item.
+        assert!(reader.read_if_due(reading(&["p-slow", "p-gw"])).is_none());
+        slow_started
+            .recv_timeout(Duration::from_secs(10))
+            .expect("the read reaches its first item");
+        assert!(reader.read_if_due(nothing.clone()).is_none());
+        answer_slow.send(()).unwrap();
+        finish(&mut reader, &nothing);
+        assert_eq!(
+            node.built_for("p-gw"),
+            gateway,
+            "no item after the one under way is started"
+        );
+        finish(&mut reader, &nothing);
+        let slow = node.built_for("p-slow");
+        assert_eq!(slow.len(), 1);
+        assert!(released(slow[0]), "the item under way is released after it");
+    }
+
+    /// PRD wsl-device B12: with Runs on placed on a device, a worktree name,
+    /// a label and a Memory analysis are each answered there, on the
+    /// device's own login, and nothing is asked of the core's machine.
+    #[test]
+    fn every_hide_ai_feature_runs_on_the_device_its_agent_is_placed_on() {
+        let own = Arc::new(AnsweringNode::default());
+        let device = Arc::new(AnsweringNode::default());
+        let link = Arc::clone(&device) as Arc<dyn NodeLink>;
+        let machines = AiMachines {
+            own: Arc::clone(&own) as Arc<dyn NodeLink>,
+            devices: Arc::new(move |_| {
+                Some(DeviceLink {
+                    generation: 1,
+                    link: Arc::clone(&link),
+                })
+            }),
+            profiles: Arc::default(),
+        };
+        let mut settings = AiSettings::default();
+        settings.set_runs_on(ProviderId::CODEX.into());
+        settings.place(&ProviderId::CODEX.into(), Some("wsl-ubuntu".to_owned()));
+        let usage = crate::usage_ledger::ai_usage::AiUsageQueue::new() as Arc<dyn AiUsageSink>;
+        let gate = Arc::new(UsageLimits::new());
+
+        let name = suggest_worktree_name(&machines, &settings, &usage, "7", "", "Title", "")
+            .expect("the device answers the worktree name");
+        assert!(name.contains("device-login"), "{name}");
+        let request = |feature: &'static str| hide_ai::AiRequest {
+            feature_id: feature.into(),
+            request_id: hide_ai::RequestId(format!("{feature}-1")),
+            subject_id: "1".to_owned(),
+            system: String::new(),
+            input: String::new(),
+            output_schema: serde_json::json!({ "type": "object" }),
+            deadline: Duration::from_secs(5),
+            schema_version: "1".into(),
+            pick: None,
+            output_language: None,
+            answer: hide_ai::AnswerMode::PlainJson,
+            provider_efforts: Vec::new(),
+        };
+        for (feature, router) in [
+            ("label", labels_router(&machines, &settings, &gate, &usage)),
+            ("memory", memory_router(&machines, &settings, &gate, &usage)),
+        ] {
+            let answer = router
+                .execute(&request(feature), &CancelToken::new())
+                .unwrap_or_else(|error| panic!("{feature}: {error:?}"));
+            assert_eq!(answer.provider, ProviderId::CODEX, "{feature}");
+        }
+        let asked = device.calls.lock().unwrap().clone();
+        assert_eq!(
+            asked.iter().filter(|call| **call == "execute").count(),
+            3,
+            "{asked:?}"
+        );
+        assert!(
+            own.calls.lock().unwrap().is_empty(),
+            "nothing ran on the core's machine"
+        );
+    }
+
+    /// PRD wsl-device B13: an agent placed on a device that is not connected
+    /// answers unavailable and nothing is asked of any machine; once the
+    /// device connects, the same backend asks it there and is released
+    /// there, and the core's own machine was never asked.
+    #[test]
+    fn an_agent_on_a_device_that_is_not_connected_is_unavailable_until_it_connects() {
+        let own = Arc::new(AnsweringNode::default());
+        let device = Arc::new(AnsweringNode::default());
+        let connected: Arc<Mutex<Option<Arc<dyn NodeLink>>>> = Arc::default();
+        let links = Arc::clone(&connected);
+        let machines = AiMachines {
+            own: Arc::clone(&own) as Arc<dyn NodeLink>,
+            devices: Arc::new(move |id| {
+                assert_eq!(id, "wsl-ubuntu");
+                links.lock().unwrap().clone().map(|link| DeviceLink {
+                    generation: 1,
+                    link,
+                })
+            }),
+            profiles: Arc::default(),
+        };
+        let mut settings = AiSettings::default();
+        settings.set_runs_on(ProviderId::CLAUDE.into());
+        settings.place(&ProviderId::CLAUDE.into(), Some("wsl-ubuntu".to_owned()));
+        let backends = routed(&machines, &settings);
+        let claude = backends
+            .iter()
+            .find(|backend| backend.id() == ProviderId::CLAUDE)
+            .unwrap();
+        assert!(matches!(
+            claude.availability(),
+            Availability::Unavailable { .. }
+        ));
+        assert!(device.calls.lock().unwrap().is_empty());
+        *connected.lock().unwrap() = Some(Arc::clone(&device) as Arc<dyn NodeLink>);
+        assert!(matches!(claude.availability(), Availability::Ready));
+        drop(backends);
+        assert_eq!(*device.calls.lock().unwrap(), ["availability", "release"]);
+        assert!(
+            own.calls.lock().unwrap().is_empty(),
+            "nothing ran on the core's machine"
+        );
+    }
+
+    #[test]
+    fn a_slug_is_lowercase_ascii_words_within_the_limit() {
+        assert_eq!(
+            branch_slug("Graceful SIGTERM handler!"),
+            "graceful-sigterm-handler"
+        );
+        assert_eq!(branch_slug("  --Overview v4 보드--  "), "overview-v4");
+        assert_eq!(branch_slug("한국어만"), "");
+        let long = branch_slug(&"word ".repeat(30));
+        assert!(long.len() <= WORKTREE_SLUG_LIMIT && !long.ends_with('-'));
+    }
+
+    #[test]
+    fn an_ai_event_reaches_the_diagnostic_log_as_a_kind_record_without_absent_fields() {
+        let mut event = AiLogEvent::new("ai.codex_home.swept");
+        event.provider = Some(ProviderId::CODEX);
+        event.detail = Some("removed=2;bytes=10".to_owned());
+        assert_eq!(
+            diagnostic_record(&event),
+            serde_json::json!({
+                "kind": "ai.codex_home.swept",
+                "component": "ai",
+                "provider": "codex",
+                "detail": "removed=2;bytes=10",
+            })
+        );
+    }
+
+    #[test]
+    fn project_memory_uses_the_existing_selected_provider_and_fallback_policy() {
+        let settings = AiSettings {
+            runs_on: ProviderId::CLAUDE.into(),
+            ..AiSettings::default()
+        };
+        let router = memory_router(
+            &AiMachines::own(node()),
+            &settings,
+            &Arc::new(UsageLimits::new()),
+            &(crate::usage_ledger::ai_usage::AiUsageQueue::new() as Arc<dyn AiUsageSink>),
+        );
+        assert_eq!(
+            router.provider_state().unwrap().selected,
+            ProviderId::CLAUDE.into()
+        );
+        assert_eq!(
+            router_config(&AiMachines::own(node()), &settings).priority,
+            vec![ProviderId::CLAUDE.into()]
+        );
+    }
+
+    fn status(availability: Availability, selectable: bool) -> ProviderStatus {
+        ProviderStatus {
+            item: ProviderId::CODEX.into(),
+            availability,
+            selectable,
+            parked_for: None,
+        }
+    }
+
+    #[test]
+    fn an_unobserved_request_asks_no_provider_anything() {
+        let mut reader = AiReader::new(AiMachines::own(node()));
+        let request = AiRequest {
+            observing: false,
+            models: models(),
+            selecting: BTreeSet::new(),
+            cli_found: None,
+            devices: Vec::new(),
+            items: Vec::new(),
+        };
+        // The first read starts the worker; once it has ended, the next read
+        // hands its answer back.
+        let answer = reader.read_if_due(request.clone()).or_else(|| {
+            reader.inner.join_pending();
+            reader.read_if_due(request)
+        });
+        let answer = answer.expect("the reader answers an unobserved request");
+        assert_eq!(
+            answer,
+            BackgroundAiSnapshot::unread(),
+            "nothing was asked, so every provider is unread"
+        );
+        assert!(
+            answer
+                .providers
+                .iter()
+                .all(|provider| provider.state == "unread"),
+            "an unobserved read reports unread rather than a guess"
+        );
+    }
+
+    #[test]
+    fn a_request_selecting_among_agents_asks_only_those_agents() {
+        let only: BTreeSet<ProviderId> = [ProviderId::PI].into();
+        let request = AiRequest {
+            observing: false,
+            models: models(),
+            selecting: only.clone(),
+            cli_found: None,
+            devices: Vec::new(),
+            items: Vec::new(),
+        };
+        assert!(request.asks());
+        assert_eq!(request.only(&request.selecting), Some(&only));
+        let watching = AiRequest {
+            observing: true,
+            ..request
+        };
+        assert_eq!(
+            watching.only(&watching.selecting),
+            None,
+            "an open tab asks every agent"
+        );
+        assert!(!AiRequest::default().asks());
+    }
+
+    #[test]
+    fn a_provider_that_was_not_asked_is_unread_rather_than_unavailable() {
+        let row = project(ProviderId::CODEX, None, None, &models(), true, None);
+        assert_eq!(row.state, "unread");
+        assert!(row.models.is_empty());
+        assert!(!row.selectable);
+        assert_eq!(row.agent, "codex");
+        assert!(row.models_unavailable_reason.is_some());
+    }
+
+    #[test]
+    fn each_availability_state_carries_its_code_and_whether_it_can_be_chosen() {
+        let models = models();
+        let ready = project(
+            ProviderId::CODEX,
+            Some(&status(Availability::Ready, true)),
+            None,
+            &models,
+            true,
+            None,
+        );
+        assert_eq!((ready.state.as_str(), ready.selectable), ("ready", true));
+        assert_eq!(ready.message, None);
+        assert!(ready.installed);
+
+        let needs_login = project(
+            ProviderId::CLAUDE,
+            Some(&status(Availability::NeedsLogin, false)),
+            None,
+            &models,
+            true,
+            None,
+        );
+        assert_eq!(needs_login.state, "needs_login");
+        assert!(needs_login.installed && !needs_login.selectable);
+
+        let missing = project(
+            ProviderId::PI,
+            Some(&status(Availability::NotInstalled, false)),
+            None,
+            &models,
+            true,
+            None,
+        );
+        assert_eq!(missing.state, "not_installed");
+        assert!(!missing.installed);
+
+        let unsupported = project(
+            ProviderId::OPENCODE,
+            Some(&status(
+                Availability::Unsupported {
+                    reason: "cannot_guarantee_read_only".to_owned(),
+                },
+                false,
+            )),
+            None,
+            &models,
+            true,
+            None,
+        );
+        assert_eq!(unsupported.state, "unsupported");
+        assert_eq!(
+            unsupported.message.as_deref(),
+            Some("cannot_guarantee_read_only"),
+            "the provider layer's own reason code reaches the screen"
+        );
+        assert!(unsupported.installed && !unsupported.selectable);
+    }
+
+    /// The install kit owns "is the program on this Mac": an agent Hide AI
+    /// cannot use yet is listed as not installed from what the kit found, and
+    /// a kit that has not answered claims nothing.
+    #[test]
+    fn an_unsupported_agent_is_not_installed_when_the_kit_did_not_find_it() {
+        let unsupported = status(
+            Availability::Unsupported {
+                reason: "cannot_guarantee_read_only".to_owned(),
+            },
+            false,
+        );
+        let row = |found: Option<&BTreeSet<ProviderId>>| {
+            project(
+                ProviderId::OPENCODE,
+                Some(&unsupported),
+                None,
+                &models(),
+                true,
+                found,
+            )
+        };
+        let found: BTreeSet<ProviderId> = [ProviderId::OPENCODE].into();
+        let missing: BTreeSet<ProviderId> = [ProviderId::CODEX].into();
+
+        let on_this_mac = row(Some(&found));
+        assert_eq!(on_this_mac.state, "unsupported");
+        assert!(on_this_mac.installed);
+
+        let absent = row(Some(&missing));
+        assert_eq!(absent.state, "not_installed");
+        assert_eq!(absent.message, None);
+        assert!(!absent.installed);
+
+        assert_eq!(
+            row(None).state,
+            "unsupported",
+            "no kit answer yet is not a claim that the program is missing"
+        );
+    }
+
+    #[test]
+    fn every_current_provider_reports_that_it_checks_sign_in() {
+        let ready = status(Availability::Ready, true);
+        for provider in hide_ai::PROVIDERS {
+            let row = project(*provider, Some(&ready), None, &models(), true, None);
+            assert!(row.login_checked, "{provider}");
+            assert!(
+                BackgroundAiProviderSnapshot::unread(*provider).login_checked,
+                "{provider}"
+            );
+        }
+    }
+
+    #[test]
+    fn an_agent_in_a_usage_limit_is_still_selectable_and_says_when_it_ends() {
+        let mut parked = status(
+            Availability::Unavailable {
+                reason: "usage_limited;retry_after_s=60".to_owned(),
+            },
+            true,
+        );
+        parked.parked_for = Some(Duration::from_secs(60));
+        let row = project(
+            ProviderId::CLAUDE,
+            Some(&parked),
+            None,
+            &models(),
+            true,
+            None,
+        );
+        assert_eq!(row.state, "usage_limited");
+        assert!(row.selectable);
+        let at = row.retry_at_ms.expect("the end of the limit is known");
+        assert!(at >= unix_now_ms() + 59_000, "{at}");
+    }
+
+    #[test]
+    fn an_unknown_model_list_is_reported_as_unknown_and_a_fixed_one_as_fixed() {
+        let ready = status(Availability::Ready, true);
+        let row = project(
+            ProviderId::CODEX,
+            Some(&ready),
+            Some(&ModelCatalog::Unknown {
+                reason: "codex_not_installed".to_owned(),
+            }),
+            &models(),
+            true,
+            None,
+        );
+        assert!(row.models.is_empty());
+        assert_eq!(
+            row.models_unavailable_reason.as_deref(),
+            Some("codex_not_installed")
+        );
+
+        let offered = project(
+            ProviderId::CLAUDE,
+            Some(&ready),
+            Some(&ModelCatalog::plain(["haiku"])),
+            &models(),
+            true,
+            None,
+        );
+        assert_eq!(offered.models, vec!["haiku".to_owned()]);
+        assert_eq!(offered.models_unavailable_reason, None);
+        assert!(!offered.models_fixed);
+
+        // A compatible older node can still return a fixed catalog.
+        let fixed = project(
+            ProviderId::GROK,
+            Some(&ready),
+            Some(&ModelCatalog::Fixed(vec![hide_ai::Model::plain("pro")])),
+            &models(),
+            true,
+            None,
+        );
+        assert!(fixed.models_fixed && fixed.models == vec!["pro".to_owned()]);
+        assert!(
+            fixed.cli_default,
+            "a new agent can be asked for its CLI default"
+        );
+        assert!(
+            !offered.cli_default,
+            "Claude Code keeps its measured default"
+        );
+    }
+
+    #[test]
+    fn a_row_reports_the_model_the_provider_is_configured_with() {
+        let mut models = models();
+        models.insert(ProviderId::CLAUDE, "opus".to_owned());
+        assert_eq!(
+            project(ProviderId::CLAUDE, None, None, &models, true, None).model,
+            "opus"
+        );
+        assert_eq!(
+            project(ProviderId::CLAUDE, None, None, &BTreeMap::new(), true, None).model,
+            hide_ai::settings::default_model(ProviderId::CLAUDE),
+            "a provider with no configured model reports the backend's own default"
+        );
+    }
+
+    #[test]
+    fn a_usage_limit_park_is_the_one_unavailable_that_has_its_own_refusal_class() {
+        assert_eq!(
+            refusal_class(&Availability::Unavailable {
+                reason: "usage_limited;retry_after_s=5".to_owned()
+            }),
+            "usage_limited"
+        );
+        assert_eq!(
+            refusal_class(&Availability::Unavailable {
+                reason: "model_not_offered:x".to_owned()
+            }),
+            "unavailable"
+        );
+        assert_eq!(refusal_class(&Availability::NeedsLogin), "needs_login");
+    }
+
+    /// A home whose stored Hide AI settings are `body`, as the file is
+    /// written (`docs/AI_PROVIDERS.md`, The operator's choice).
+    fn home_with_ai_json(body: &str) -> tempfile::TempDir {
+        let home = tempfile::tempdir().unwrap();
+        let path = hide_ai_settings_path(home.path());
+        std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+        std::fs::write(&path, body).unwrap();
+        home
+    }
+
+    /// Inventory I-3.29 (PRD core-host-node-move D-04): a core move asks the
+    /// machine taking the core for every agent of Hide AI's order with its
+    /// model, Runs on first; an agent placed on a device answers there
+    /// wherever the core runs and is not asked, and a setting that chose
+    /// nothing or turned Hide AI off says why it asks none. The same answer
+    /// comes from the settings a move back carries.
+    #[test]
+    fn a_core_move_asks_the_new_machine_for_each_agent_of_the_order_with_its_model() {
+        let home = home_with_ai_json(
+            r#"{"provider":"claude","models":{"claude":"opus"},"enabled":true,
+                "fallback":[{"provider":"codex","model":"gpt-5.6-luna"},{"provider":"grok"}],
+                "agent_summary":true,"machines":{"grok":"wsl-ubuntu"}}"#,
+        );
+        let asks = hide_ai_asks(home.path()).unwrap();
+        assert_eq!(
+            asks,
+            [
+                ("claude".to_owned(), "opus".to_owned()),
+                ("codex".to_owned(), "gpt-5.6-luna".to_owned()),
+            ]
+        );
+        let stored = stored_hide_ai_settings(home.path()).unwrap().unwrap();
+        assert_eq!(hide_ai_asks_of_stored(&stored).unwrap(), asks);
+
+        let unchosen = home_with_ai_json(r#"{"enabled":true}"#);
+        assert!(
+            hide_ai_asks(unchosen.path())
+                .unwrap_err()
+                .contains("no agent is chosen")
+        );
+        let off = home_with_ai_json(r#"{"provider":"claude","enabled":false}"#);
+        assert_eq!(hide_ai_asks(off.path()).unwrap_err(), "Hide AI is off");
+        let malformed = home_with_ai_json("{");
+        assert!(
+            hide_ai_asks(malformed.path())
+                .unwrap_err()
+                .contains("could not be read")
+        );
+    }
+
+    /// A node whose profile `p-gone` is not on its list and every other item
+    /// answers; it records the profile each request ran as.
+    #[derive(Default)]
+    struct ItemNode {
+        ran_as: Mutex<Vec<Option<String>>>,
+    }
+
+    impl NodeLink for ItemNode {
+        fn call(
+            &self,
+            call: Call,
+            _timeout: Duration,
+        ) -> Result<hide_node_link::link::LinkAnswer, LinkError> {
+            let gone = |backend: &BackendSpec| {
+                backend
+                    .profile
+                    .as_ref()
+                    .is_some_and(|profile| profile.0 == "p-gone")
+            };
+            let refused = || {
+                LinkError::Refused(hide_node_link::HostError::new(
+                    hide_node_link::ErrorCode::NotFound,
+                    "This machine has no profile p-gone",
+                ))
+            };
+            let value = match call {
+                Call::AiAvailability { backend } if gone(&backend) => return Err(refused()),
+                Call::AiExecute { backend, .. } if gone(&backend) => return Err(refused()),
+                Call::AiAvailability { .. } => serde_json::to_value(Logged {
+                    value: Availability::Ready,
+                    log: Vec::new(),
+                })
+                .unwrap(),
+                Call::AiExecute { backend, .. } => {
+                    self.ran_as
+                        .lock()
+                        .unwrap()
+                        .push(backend.profile.map(|profile| profile.0));
+                    serde_json::to_value(Logged {
+                        value: Ok::<AiResponse, AiError>(AiResponse {
+                            value: serde_json::json!({ "slug": "item" }),
+                            usage: hide_ai::AiUsage::default(),
+                        }),
+                        log: Vec::new(),
+                    })
+                    .unwrap()
+                }
+                _ => serde_json::Value::Null,
+            };
+            Ok(hide_node_link::link::LinkAnswer::Parsed(value))
+        }
+    }
+
+    fn label_request() -> hide_ai::AiRequest {
+        hide_ai::AiRequest {
+            feature_id: "label".into(),
+            request_id: hide_ai::RequestId("label-1".to_owned()),
+            subject_id: "1".to_owned(),
+            system: String::new(),
+            input: String::new(),
+            output_schema: serde_json::json!({ "type": "object" }),
+            deadline: Duration::from_secs(5),
+            schema_version: "1".into(),
+            pick: None,
+            output_language: None,
+            answer: hide_ai::AnswerMode::PlainJson,
+            provider_efforts: Vec::new(),
+        }
+    }
+
+    fn profile_item(provider: ProviderId, profile: &str) -> Item {
+        Item::of(provider, Some(ProfileId(profile.to_owned())))
+    }
+
+    /// The core's own machine on `node`, listing each of `profiles` of
+    /// Claude Code at version 1, in the agent's default account.
+    fn listing(node: Arc<dyn NodeLink>, profiles: &[&str]) -> AiMachines {
+        let machines = AiMachines::own(node);
+        machines.profiles.set(
+            profiles
+                .iter()
+                .map(|profile| {
+                    let listed = ItemProfile {
+                        version: 1,
+                        account: None,
+                    };
+                    ((None, profile_item(ProviderId::CLAUDE, profile)), listed)
+                })
+                .collect(),
+        );
+        machines
+    }
+
+    /// PRD agent-profiles-phase2 B17, D-07: a request goes to the chosen
+    /// item and runs as its profile, on that profile's account.
+    #[test]
+    fn a_request_runs_as_the_profile_of_the_item_hide_ai_runs_on() {
+        let node = Arc::new(ItemNode::default());
+        let machines = listing(Arc::clone(&node) as Arc<dyn NodeLink>, &["p-work", "p-gw"]);
+        let mut settings = AiSettings::default();
+        settings.set_runs_on(profile_item(ProviderId::CLAUDE, "p-work"));
+        settings
+            .add_fallback(ProviderId::CLAUDE.into(), None)
+            .unwrap();
+        let usage = crate::usage_ledger::ai_usage::AiUsageQueue::new() as Arc<dyn AiUsageSink>;
+        let router = labels_router(&machines, &settings, &Arc::new(UsageLimits::new()), &usage);
+
+        let answer = router
+            .execute(&label_request(), &CancelToken::new())
+            .expect("the profile answers");
+        assert_eq!(answer.provider, ProviderId::CLAUDE);
+        assert_eq!(*node.ran_as.lock().unwrap(), [Some("p-work".to_owned())]);
+    }
+
+    /// PRD agent-profiles-phase2 B21, D-12: an item of a profile its machine
+    /// no longer lists is passed over, the next item of the order answers,
+    /// and the reason Runs on stepped aside is `profile_missing`.
+    #[test]
+    fn an_item_of_a_profile_its_machine_does_not_list_is_passed_over_with_its_reason() {
+        let node = Arc::new(ItemNode::default());
+        let machines = listing(Arc::clone(&node) as Arc<dyn NodeLink>, &["p-work"]);
+        let mut settings = AiSettings::default();
+        settings.set_runs_on(profile_item(ProviderId::CLAUDE, "p-gone"));
+        settings
+            .add_fallback(profile_item(ProviderId::CLAUDE, "p-work"), None)
+            .unwrap();
+        let usage = crate::usage_ledger::ai_usage::AiUsageQueue::new() as Arc<dyn AiUsageSink>;
+        let router = labels_router(&machines, &settings, &Arc::new(UsageLimits::new()), &usage);
+
+        router
+            .execute(&label_request(), &CancelToken::new())
+            .expect("the next item answers");
+        assert_eq!(*node.ran_as.lock().unwrap(), [Some("p-work".to_owned())]);
+        let state = router.provider_state().expect("an item is chosen");
+        assert_eq!(state.selected, profile_item(ProviderId::CLAUDE, "p-gone"));
+        assert_eq!(
+            state.active,
+            Some(profile_item(ProviderId::CLAUDE, "p-work"))
+        );
+        let degraded = state.degraded.expect("Runs on stepped aside");
+        assert_eq!(refusal_class(&degraded.reason), PROFILE_MISSING);
+    }
+
+    /// A node that refuses each profile in `refusals` with its code and
+    /// sentence, answers the others as ready, and records every profile it
+    /// is asked for.
+    #[derive(Default)]
+    struct RefusingNode {
+        refusals: BTreeMap<String, (hide_node_link::ErrorCode, String)>,
+        asked: Mutex<Vec<Option<String>>>,
+    }
+
+    impl NodeLink for RefusingNode {
+        fn call(
+            &self,
+            call: Call,
+            _timeout: Duration,
+        ) -> Result<hide_node_link::link::LinkAnswer, LinkError> {
+            use hide_node_link::link::LinkAnswer;
+            let Call::AiAvailability { backend } = call else {
+                return Ok(LinkAnswer::Parsed(serde_json::Value::Null));
+            };
+            let profile = backend.profile.map(|profile| profile.0);
+            self.asked.lock().unwrap().push(profile.clone());
+            if let Some((code, sentence)) = profile.and_then(|profile| self.refusals.get(&profile))
+            {
+                return Err(LinkError::Refused(hide_node_link::HostError::new(
+                    *code,
+                    sentence.clone(),
+                )));
+            }
+            Ok(LinkAnswer::Parsed(
+                serde_json::to_value(Logged {
+                    value: Availability::Ready,
+                    log: Vec::new(),
+                })
+                .unwrap(),
+            ))
+        }
+    }
+
+    fn reason_of(availability: Availability) -> String {
+        match availability {
+            Availability::Unavailable { reason } => reason,
+            other => panic!("expected unavailable, got {other:?}"),
+        }
+    }
+
+    /// PRD agent-profiles-phase2 B6, B21: a profile item is asked only while
+    /// its machine lists it. A device that lists no profiles, as an older
+    /// node that would read no profile field and run the agent's default
+    /// account, is never asked for one: the item is a missing profile.
+    #[test]
+    fn a_profile_its_machine_does_not_list_is_passed_over_without_asking_the_machine() {
+        let device = Arc::new(RefusingNode::default());
+        let link = Arc::clone(&device) as Arc<dyn NodeLink>;
+        let machines = AiMachines {
+            own: Arc::new(RefusingNode::default()),
+            devices: Arc::new(move |_| {
+                Some(DeviceLink {
+                    generation: 1,
+                    link: Arc::clone(&link),
+                })
+            }),
+            profiles: Arc::default(),
+        };
+        let item = profile_item(ProviderId::CLAUDE, "p-work");
+        let backend = NodeBackend::new(&machines, Some("old-device"), item, "sonnet".to_owned());
+
+        assert_eq!(reason_of(backend.availability()), PROFILE_MISSING);
+        assert!(
+            matches!(backend.models(), ModelCatalog::Unknown { reason } if reason == PROFILE_MISSING)
+        );
+        assert!(
+            device.asked.lock().unwrap().is_empty(),
+            "the device is not asked"
+        );
+
+        let default = NodeBackend::new(
+            &machines,
+            Some("old-device"),
+            Item::agent(ProviderId::CLAUDE),
+            "sonnet".to_owned(),
+        );
+        assert!(
+            default.availability().is_ready(),
+            "its built-in default is asked"
+        );
+        assert_eq!(*device.asked.lock().unwrap(), [None]);
+    }
+
+    /// PRD agent-profiles-phase2 B21, engineering 10: a listed profile its
+    /// machine then says it does not have (`NotFound`, as `ai_run` answers a
+    /// deleted one) is a missing profile, while a refusal of another kind, as
+    /// a node's backend cap (`Unsupported`, which hide-host's own test pins),
+    /// keeps the machine's sentence: the profile is there, the node is full.
+    #[test]
+    fn a_gone_profile_is_missing_and_a_full_node_keeps_its_own_reason() {
+        use hide_node_link::ErrorCode;
+        let node = Arc::new(RefusingNode {
+            refusals: BTreeMap::from([
+                (
+                    "p-gone".to_owned(),
+                    (
+                        ErrorCode::NotFound,
+                        "This machine has no profile p-gone".to_owned(),
+                    ),
+                ),
+                (
+                    "p-full".to_owned(),
+                    (
+                        ErrorCode::Unsupported,
+                        "This node already keeps 64 AI backends".to_owned(),
+                    ),
+                ),
+            ]),
+            ..RefusingNode::default()
+        });
+        let machines = listing(
+            Arc::clone(&node) as Arc<dyn NodeLink>,
+            &["p-gone", "p-full"],
+        );
+        let reason = |profile: &str| {
+            reason_of(
+                NodeBackend::new(
+                    &machines,
+                    None,
+                    profile_item(ProviderId::CLAUDE, profile),
+                    "sonnet".to_owned(),
+                )
+                .availability(),
+            )
+        };
+
+        assert_eq!(reason("p-gone"), PROFILE_MISSING);
+        let full = reason("p-full");
+        assert_ne!(full, PROFILE_MISSING);
+        assert!(full.contains("already keeps 64 AI backends"), "{full}");
+        assert_eq!(
+            refusal_class(&Availability::Unavailable { reason: full }),
+            "unavailable"
+        );
+    }
+
+    /// PRD agent-profiles-phase2 B21 with core-host-node-move D-04: a core
+    /// move asks the machine taking the core for a profile item as its
+    /// agent with its model, once per pair, and refuses nothing for it; a
+    /// profile that machine does not list is passed over there.
+    #[test]
+    fn a_core_move_asks_a_profile_item_as_its_agent_and_is_not_refused_for_it() {
+        let home = home_with_ai_json(
+            r#"{"provider":"claude","profile":"p-work","models":{"claude":"sonnet"},
+                "profile_models":{"claude":{"p-work":"opus"}},"enabled":true,
+                "fallback":[{"provider":"claude","profile":"p-gw","model":"glm-4.6"},
+                            {"provider":"claude"},{"provider":"claude","profile":"p-old","model":"sonnet"}],
+                "agent_summary":true}"#,
+        );
+        let asks = hide_ai_asks(home.path()).expect("profile items refuse no move");
+        assert_eq!(
+            asks,
+            [
+                ("claude".to_owned(), "opus".to_owned()),
+                ("claude".to_owned(), "glm-4.6".to_owned()),
+                ("claude".to_owned(), "sonnet".to_owned()),
+            ]
+        );
+    }
+
+    /// The new machine answers for an agent of an id it does not know by
+    /// naming it, never by skipping it.
+    #[test]
+    fn the_new_machine_names_an_agent_it_does_not_know_rather_than_skipping_it() {
+        let refused =
+            hide_ai_ready_here(&[("gemini-cli".to_owned(), "pro".to_owned())]).unwrap_err();
+        assert_eq!(refused, "gemini-cli: unknown to this build");
+    }
+}

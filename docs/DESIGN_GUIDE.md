@@ -14,6 +14,7 @@ A project hook refuses the first edit of a web source or the tokens in an agent 
 3. Open every layer (menu, dialog, popover, sheet, select) through its part.
    The parts register with the shell's one Escape owner and hand keyboard focus back when they close (`components/ui/layer.ts`); a hand-made layer leaves Escape to the terminal under it or loses focus.
    A surface no part can draw, such as the Start panel's floating palette, registers itself with `useEscapeLayer` and hands focus back as the parts do; that is the exception, and it stays in the baseline.
+   A surface whose own press handler stops `mousedown`, such as the terminal (`PaneView`), marks itself with `useOutsidePressSurface` (`components/ui/layer.ts`): a popover closes on the click and reads a press whose `mousedown` was stopped as taken elsewhere, so without the mark a popover over it stays open.
 
 `check-ui-parts.mjs` counts raw `<button>`, `<input>`, `<select>`, `<textarea>` and `role="dialog"`/`role="menu"` outside `components/ui` against `scripts/ui-parts-baseline.json`.
 A file may only go down: a new raw control fails, and a file with fewer than its baseline asks you to lock the lower number in with `node scripts/check-ui-parts.mjs --update`.
@@ -28,7 +29,7 @@ A file may only go down: a new raw control fails, and a file with fewer than its
 | An icon action inside a row that lights on hover | `Button variant="row-action" size="icon-xs"` | `ghost` would light in the row's own hover color and vanish. |
 | A whole row that is one action | `RowButton` | You lay out its content; it spans the line, reads left to right and lights on hover. |
 | A row that is one action but holds controls of its own | `RowOverlayButton` behind the content | Content gets `pointer-events-none relative`, each control inside `pointer-events-auto`; `aria-label` names the row's action. |
-| One of a few options, all visible | `ToggleGroup type="single"` + `ToggleGroupItem` | Roving focus and arrow keys come with it; `size="sm"` for caption text, `"xs"` for micro text. |
+| One of a few options, all visible | `ToggleGroup type="single"` + `ToggleGroupItem` | Roving focus and arrow keys come with it; `size="sm"` for caption text, `"xs"` for micro text. `variant="pill"` on the group and each item draws loose rounded chips that wrap, for a filter over a list whose options vary in number (Add a project's sources). |
 | Panels switched by a strip | `Tabs`, `TabsList`, `TabsTrigger`, `TabsContent` | |
 | An on/off setting | `Switch` | |
 | Several independent choices | `Checkbox` | |
@@ -41,11 +42,13 @@ A file may only go down: a new raw control fails, and a file with fewer than its
 | A floating panel with controls | `Popover` | |
 | A modal task | `Dialog` | `DialogHeader`, `DialogBody`, `DialogFooter`. |
 | Confirming an irreversible effect | `AlertDialog` | Prefer an undo (design principle 6); confirm only what cannot be undone. |
+| Guarding a destructive choice that can be undone, in a row of choices | The same `Button`, pressed twice | The first press turns it into its confirm word (`제외 확인`) in the `destructive` variant in place, a press elsewhere puts it back, and only the second press sends; no layer opens (`AttentionChoices`, `components/mission-attention.tsx`). |
 | A side or large panel | `Sheet` | |
 | A searchable command or item list | `Command` | `CommandDialog` for the palette form. |
 | A short label or count | `Badge` | `secondary` by default; `outline`, `default`, `destructive`. |
 | A shortcut | `Kbd`, `KbdGroup` | `Keycap` is the number a modifier hold reveals on a row or tile. |
 | A hint on hover or focus | `Hint` (or `Tooltip` parts) | A hint holds nothing to click. |
+| A notice the operator can act on | `Toast` inside the window's one `ToastStack` (`App.tsx`) | `level="info"` leaves on its own after `TOAST_INFO_MS` when given `timeout`; `level="important"` draws the warning border and mark and stays; a shell notice goes through `useUiStore`'s `showNotice` rather than a Toast of its own ([UI_BEHAVIOR.md](UI_BEHAVIOR.md#notices)). |
 | A divider | `Separator` | Spacing first (design principle 8). |
 
 ## Product composites
@@ -57,6 +60,8 @@ These already draw a thing Hide shows in several places; use them instead of dra
 | An agent's status | `StatusMark` (`status-mark.tsx`); a project's mark counts are `StatusBadge` |
 | A session as a row (태스크 줄) | `SessionRowBody` (`session-row.tsx`), the marks, title line and lines under it, which the sidebar's `SidebarAgentRow`, the session record's children (`size="record"`) and `SessionRow` all draw; `SessionRow` is the pressable list item of it |
 | A plan's steps | `PlanChecklist` (`plan-checklist.tsx`) |
+| A map page, a mission's or a plan's | `MapPage`, `MapSplit` (the map with the column beside it), and in that column `MapPanel` with `MapPanelHead` for the picked card (`map-page.tsx`); what a step's card, row and panel say comes from `plans.ts` (`stepStatusWord`, `stepLeft`) |
+| A state pill's colour | `PILL_TONE` and `STATE_PILL_TONE` (`mission-tone.tsx`) |
 | A letter | `letter-mark.tsx`: `LetterTag` at the head of a letter's line, `RowLetterMark` on a sidebar row, `PaneLetterButton` in a pane header |
 | A mission a session conducts | `MissionChip` (`mission-chip.tsx`), reading the store; `MissionChipView` draws one from values a caller holds |
 | An `@name` in a line of words | `MentionChip` (`mention-chip.tsx`), `kind` `session` or `project`; `lead` (a project's ⌂) replaces `@` on the same colour; Desk draws a project through `DeskMentionChip` in its messages, threads and the composer's chips, and a session there as `SessionChip` |
@@ -67,10 +72,10 @@ These already draw a thing Hide shows in several places; use them instead of dra
 | A settings form | `Group`, `Row`, `Disclosure`, `Value`, `Status`, `Note` (`settings-rows.tsx`) |
 | A pull request's mark or card | `pr-mark.tsx`, `pr-card.tsx` |
 | A file or folder mark | `FileMark` |
-| A device | `DeviceChip`, `device-rail.tsx`; the chip's `variant="inline"` puts its icon and name in a caption line without a border or padding |
+| A device | `DeviceChip`, `device-rail.tsx`; the chip's `variant="inline"` puts its icon and name in a caption line without a border or padding, and `variant="remote"` fills it in the other-device colour (`--device-remote`) for the mission map's card and panel |
 | What a close would take with it | `SubtreeList` |
 | A state that stands in a box | `StateBox` |
-| Desk: its chat, job and approval cards, composer and agent bar, `@` menu, Threads list, a thread, outputs, lane columns and rail, Settings › Desk | `components/desk/*`, drawn from props in the shape of `web/src/desk.ts`; the gallery's `scene=desk` shows every state. In Desk a session reads as `StatusMark`, agent mark and title wherever it appears; a card is unfilled with a `--border` line, `rounded-lg` and two lines, selected on `bg-accent`; nothing filled sits inside another filled box; the approval card's two answers are `Button variant="secondary"`, the composer's send a round `secondary` icon, and every other action is words (`variant="text"`, such as `답하기 ›`); Desk draws no `default` button, so lime marks focus and selection only; the lane's pin is `LanePinButton` (`components/lane-pin.tsx`), the same one the project lane draws, in the head of the column at the lane's edge just before `✕` |
+| Desk: its chat, job and approval cards, composer and agent bar, `@` menu, Threads list, a thread, outputs, lane columns and rail, Settings › Labs › Desk | `components/desk/*`, drawn from props in the shape of `web/src/desk.ts`; the gallery's `scene=desk` shows every state. In Desk a session reads as `StatusMark`, agent mark and title wherever it appears; a card is unfilled with a `--border` line, `rounded-lg` and two lines, selected on `bg-accent`; nothing filled sits inside another filled box; the approval card's two answers are `Button variant="secondary"`, the composer's send a round `secondary` icon, and every other action is words (`variant="text"`, such as `답하기 ›`); Desk draws no `default` button, so lime marks focus and selection only; Desk's lane pin is `LanePinButton` (`components/lane-pin.tsx`), which only Desk draws (the Workspace's lane has no pin), in the head of the column at the lane's edge just before `✕` |
 
 ## Tokens at a glance
 
@@ -81,6 +86,11 @@ These already draw a thing Hide shows in several places; use them instead of dra
 - Radius: `rounded-xs` to `rounded-xl`.
 - Text color by weight: `text-foreground`, then `text-subtle-foreground`, then `text-muted-foreground`.
 - Surfaces: `bg-background`, `bg-card`, `bg-secondary`, `bg-accent` (hover), `bg-popover`.
+- Every neutral color is a step of the generated palette (`--gray-*`, `--slate-*` for the Hide theme, and one step each of amber, red, green, blue and violet for status), named by its OKLCH lightness; a semantic token names its step under `palette` in `design/tokens.json`, and the generator refuses a recorded hex that its step does not draw. A new color picks a step; a new step is added only when no existing one fits, and screens use the semantic token, never the step.
+- Surfaces climb one step at a time: `bg-background`, `bg-sidebar`, `bg-card`, `bg-secondary`, `bg-accent` (hover); `scripts/check-token-contrast.mjs` checks the minimum distance between neighbouring layers and from `--border` to the surfaces it sits on.
+- A modal (`Dialog`, `AlertDialog`, `Sheet`) draws on `bg-dialog`, darker than `bg-popover`, so a menu, select or tooltip opened inside it stands above it; the modal sets `--secondary` to `--dialog-raised` and `--accent` to `--dialog-hover` for its subtree, so a secondary button and a hovered row stay distinct from that surface and from each other without a modal-only class.
+- In Light the fills sit close together and shadows carry the rest: a small object that floats over its surface, such as a graph node, draws on `bg-raised` (white in Light) with `shadow-raised` rather than on a gray fill.
+- Elevation has three levels and no others: `shadow-raised` for a control that sits on its surface, `shadow-overlay` for a popover, menu, select, tooltip or toast, and `shadow-modal` for a dialog, alert or sheet. A modal dims what is behind it with `bg-scrim`, never with an opacity on `bg-background`. Tailwind's own `shadow-sm`/`shadow-md`/`shadow-lg` are removed.
 - Dimming and disabled use the opacity tokens (`opacity-(--opacity-disabled)`, `--opacity-dimmed`), never a raw number.
 
 ## Screen rules

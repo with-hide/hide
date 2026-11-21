@@ -1,4 +1,3 @@
-import { skipOwnWindowsAgentStart } from "./own-windows-agent-start";
 // Closing an agent that spawned others (PRD close-agent-subtree): the close
 // sheet lists the descendants, Escape sends nothing, Enter closes the whole
 // subtree deepest first with the target last, and Close only leaves the
@@ -12,10 +11,10 @@ import path from "node:path";
 import { startFixture, type AgentFixture } from "./engine-fixture";
 import { connectControl } from "./hided-control.mjs";
 import { closePane, focusTab, openProject, openWorktree, showTabOf, tabOfPane, viewPane, withControl } from "./daemon-actions";
-import { agentReading, finishUnseenTurn, setAgentAsking, setAgentState, spawnChild, spawnRoot, startAgentInProject, takeOverSession } from "./fixture-agents";
-import { claudeProjects, writeFixtureTranscript, type FixtureLabel } from "./herdr-fixture";
+import { agentReading, finishUnseenTurn, setAgentAsking, setAgentState, spawnChild, spawnRoot, startAgentInProject } from "./fixture-agents";
+import { claudeProjects, writeFixtureTranscript, type FixtureLabel } from "./pane-fixture";
 import { startHided, type Daemon } from "./hided-fixture";
-import { countSent, enterWorkspace, screenshot } from "./wire";
+import { countSent, enterWorkspace, openOtherCheckouts, screenshot, showProjectRow } from "./wire";
 import { chord } from "./chords";
 import { completedCloseOrder, type CloseRecord, type CloseTiming } from "./close-order";
 
@@ -97,12 +96,13 @@ async function delegate(fixture: AgentFixture, daemon: Daemon, parent: string, n
 }
 
 /**
- * The fixture's second agent was spawned beside the first as its child: a
- * new session in its pane ends that relationship, so the pair are two
- * operator-owned agents, as two panes of one tab are.
+ * Closes the fixture's second agent, which the first spawned as its child,
+ * so the first starts with no children: a new conversation in its pane would
+ * not do, since the agent after it takes its parent too (PRD
+ * letters-missions-simplify D-24).
  */
-async function releaseChild(fixture: AgentFixture, daemon: Daemon): Promise<void> {
-  await takeOverSession(fixture, daemon, fixture.panes[1], "fixture-released");
+async function closeFixtureChild(fixture: AgentFixture, daemon: Daemon): Promise<void> {
+  await withControl(daemon, (control) => closePane(control, fixture.panes[1]));
 }
 
 /** Makes `dir` a Git repository on `main` with one commit, the folder a spawned child opens in. */
@@ -127,7 +127,7 @@ test("the close sheet counts and brightens what needs the operator, stays live w
     daemon = await startHided(fixture, "close-subtree-states");
     const live = daemon;
     const [target] = fixture.panes;
-    await releaseChild(fixture, live);
+    await closeFixtureChild(fixture, live);
     const working = await delegate(fixture, live, target, "working", { task: "계보 투영 구현" });
     const asking = await delegate(fixture, live, target, "asking", { task: "병합 전 검증 실행", reply: "병합 전에 검증을 다시 돌릴까요?", question: true });
     const finished = await delegate(fixture, live, target, "finished", { task: "릴리스 노트 초안" });
@@ -150,12 +150,13 @@ test("the close sheet counts and brightens what needs the operator, stays live w
     // The root's chevron opens its children in place (agent-hierarchy-screens B10), each with its own mark.
     const chevron = page.locator(`nav[data-sidebar] [data-pane="${target}"] [data-tree-chevron="${target}"]`).first();
     await chevron.click();
-    // A delegated child draws only in progress or quiet (status-marks B24); its state word is on the mark.
+    // A delegated child draws only in progress or quiet (status-marks B24): its own question waits on its parent,
+    // so it draws the waiting ring, and its state word is on the mark.
     for (const [pane, status] of [[working, "working"], [asking, "question"]]) {
       await expect(page.locator(`nav[data-sidebar] [data-pane="${pane}"] [data-agent-status]`).first()).toHaveAttribute("data-agent-status", status, { timeout: 30_000 });
     }
     await expect(page.locator(`nav[data-sidebar] [data-pane="${working}"] [data-mark]`).first()).toHaveAttribute("data-mark", "going");
-    await expect(page.locator(`nav[data-sidebar] [data-pane="${asking}"] [data-mark]`).first()).toHaveAttribute("data-mark", "quiet");
+    await expect(page.locator(`nav[data-sidebar] [data-pane="${asking}"] [data-mark]`).first()).toHaveAttribute("data-mark", "waiting");
     for (const pane of [finished, quiet]) {
       await expect(page.locator(`nav[data-sidebar] [data-pane="${pane}"] [data-agent-status]`).first()).not.toHaveAttribute("data-agent-status", "unknown", { timeout: 30_000 });
     }
@@ -295,9 +296,11 @@ test("an open close sheet follows the snapshot: Stop-work tracks its pane, and a
   try {
     daemon = await startHided(fixture, "close-stop-work-live");
     const live = daemon;
-    // The target and the keeper are two operator-owned agents in one tab.
-    const [target, keeper] = fixture.panes;
-    await releaseChild(fixture, live);
+    // The target and the keeper are two operator-owned agents.
+    const [target] = fixture.panes;
+    await closeFixtureChild(fixture, live);
+    const keeper = await spawnRoot(fixture, live, target, { name: "keeper", repo: path.join(fixture.root, "fixture") });
+    await withControl(live, (control) => focusTab(control, fixture, fixture.tab));
     await setAgentState(live, target, "working");
     const last = new Map<string, Record<string, unknown>>();
     const sent = countSent(page, last);
@@ -367,7 +370,6 @@ function git(cwd: string, args: string[]): string {
 
 // @platform: Process ownership: which processes belong to a checkout, read through libproc on macOS and /proc on Linux.
 test("Delete worktree closes the agents its checkout spawned outside it before the folder goes", { tag: "@platform" }, async ({ page }) => {
-  skipOwnWindowsAgentStart();
   await page.setViewportSize({ width: 1400, height: 900 });
   const fixture = await startFixture({ family: true });
   let daemon: Daemon | null = null;
@@ -402,15 +404,15 @@ test("Delete worktree closes the agents its checkout spawned outside it before t
       // The worktree's agent spawned one in another folder.
       return { spawner: agent.pane, outside: await delegate(fixture, live, agent.pane, "outside", undefined, outsideRepo) };
     });
+    // The worktree is not the project's main checkout, so its row and its agent's row wait in the
+    // project's Checkouts fold.
+    await openOtherCheckouts(page.locator("[data-project]").filter({ has: page.locator('[data-project-row][aria-label="fixture"]') }));
     await expect(page.locator(`nav[data-sidebar] [data-pane="${spawner}"] [data-tree-chevron="${spawner}"]`).first()).toBeVisible({ timeout: 30_000 });
 
     const feature = page.locator("[data-checkout-row]").filter({ has: page.locator(`[data-checkout][aria-label^="${branch}"]`) });
-    // The fixture branch has nothing ahead of main, yet no work of its own
-    // has landed, so its row stays among the active checkouts rather than
-    // folding under Inactive. Its commit age is drawn once the core has read
-    // the worktree's Git facts, which the deletion dialog is built from.
+    // Its commit age is drawn once the core has read the worktree's Git facts,
+    // which the deletion dialog is built from.
     await expect(feature.locator("[data-checkout-age]")).toBeVisible({ timeout: 30_000 });
-    await expect(page.locator("[data-inactive-checkouts]")).toHaveCount(0);
     await feature.locator("[data-checkout-menu]").click({ button: "right" });
     await page.getByRole("menu", { name: `${branch} actions` }).locator('[data-menu-item="delete_worktree"]').click();
 
@@ -465,7 +467,7 @@ test("Remove project closes the agents its panes spawned outside it before the p
     await expect(page.locator(`nav[data-sidebar] [data-pane="${parent}"] [data-tree-chevron="${parent}"]`).first()).toBeVisible({ timeout: 30_000 });
 
     // The project row's own menu removes the whole project.
-    await page.getByRole("button", { name: "More actions for fixture", exact: true }).click();
+    await (await showProjectRow(page, page.locator("[data-project]", { hasText: "fixture" }).locator("[data-row-more]"))).click({ position: { x: 12, y: 8 } });
     await page.getByRole("menu", { name: "More actions for fixture" }).locator('[data-menu-item="remove_project"]').click();
 
     const dialog = page.locator("[data-remove-project]");

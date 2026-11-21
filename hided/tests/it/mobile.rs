@@ -24,10 +24,6 @@ type Socket =
 fn env(dir: &Path, tailscale: &Path) -> Env {
     Env {
         home: dir.to_path_buf(),
-        herdr_socket_path: None,
-        herdr_bin_path: None,
-        own_engine: false,
-        login_shell: None,
         state_dir: dir.join("state"),
         legacy_state_dir: None,
         account_state_folder: false,
@@ -43,7 +39,11 @@ fn env(dir: &Path, tailscale: &Path) -> Env {
         pane_id: None,
         tailscale_bin: Some(tailscale.to_path_buf()),
         relay_url: "ws://127.0.0.1:9/ws".to_owned(),
+        peer_direct: None,
+        device_connect: false,
         search_path: None,
+        install: None,
+        access: None,
     }
 }
 
@@ -103,7 +103,12 @@ async fn renderer(running: &hided::RunningDaemon) -> Socket {
     socket
 }
 
-/// Reads frames until a `mobile` frame satisfies `accept`.
+/// Reads frames until a `mobile` frame satisfies `accept`. The frames queue
+/// on the socket in the order they were published, so a frame that matches
+/// may be an old one: a state that was already true before the step being
+/// waited on (no phones before one was paired) matches a frame published
+/// before that step. Wait first for a frame that only the step before it can
+/// have made, then for the one this step makes.
 async fn mobile_frame(socket: &mut Socket, accept: impl Fn(&Value) -> bool) -> Value {
     let deadline = tokio::time::Instant::now() + Duration::from_secs(20);
     loop {
@@ -204,6 +209,102 @@ async fn the_app_executable_is_run_as_the_cli() {
         .expect("tailscale status runs as the CLI");
     assert!(status.logged_in);
     assert_eq!(status.dns_name.as_deref(), Some(DNS));
+}
+
+/// The status answer does not follow the size of the tailnet: the full one
+/// lists every peer, about 1.2 KB each, and a tailnet of some 900 puts it past
+/// the 1 MiB a command may print, which would block Mobile for good. hided
+/// asks for the answer without the peers, whose fields it never reads.
+#[tokio::test]
+async fn a_tailnet_too_big_to_list_its_peers_still_answers_status() {
+    let dir = tempfile::tempdir().unwrap();
+    let fake = FakeTailscale::new(dir.path());
+    fake.ready();
+    fake.crowded_tailnet(1_500);
+    let listed = std::fs::metadata(fake.state.join("status-with-peers.json"))
+        .unwrap()
+        .len();
+    assert!(
+        listed > 1024 * 1024,
+        "the tailnet's full answer is {listed} bytes, not past the bound"
+    );
+    let status = hided::mobile::tailscale::status(&fake.bin)
+        .await
+        .expect("the status without peers fits whatever the tailnet's size");
+    assert!(status.logged_in);
+    assert_eq!(status.dns_name.as_deref(), Some(DNS));
+}
+
+/// A command's answer is read when it has exited, not when its output closes:
+/// a process left holding the output open must not keep the answer to the
+/// 15 s command deadline. On macOS a child another thread starts while the
+/// command's pipes are being made keeps them for as long as it lives, and a
+/// command that exited in milliseconds then timed out (with-hide/hide-private
+/// #524). `hide-platform`'s `a_pipe_holder_outside_the_tree_does_not_hold_the_answer`
+/// owns the holder outside the command's tree; this holds that the Tailscale
+/// commands are read the same way, with the holder inside it. The holder lives
+/// 20 s, past the deadline, so a read that waits for the output to close fails.
+#[tokio::test]
+async fn a_process_left_holding_the_command_s_output_does_not_hold_its_answer() {
+    let dir = tempfile::tempdir().unwrap();
+    let fake = FakeTailscale::new(dir.path());
+    fake.ready();
+    fake.hold_pipes();
+    let status = hided::mobile::tailscale::status(&fake.bin)
+        .await
+        .expect("the answer comes at the command's exit");
+    assert!(status.logged_in);
+    assert_eq!(status.dns_name.as_deref(), Some(DNS));
+}
+
+/// Changes of Mobile's own settings that meet a pass already running cost one
+/// pass more, not one each: the pass that follows reads them all (`PassOwed`).
+/// The first pass is held inside `tailscale status` so both changes arrive
+/// while it runs. Each change spawns a pass of its own, which waits on the
+/// pass lock behind it; a forced pass asked for after them is handed the lock
+/// after them (the lock goes in the order it was asked for), so the count is
+/// final once a second one returns. What can run: the held pass, one pass for
+/// the debt the two changes left (a stale pass of the start may take it before
+/// the forced one does, or the forced one settles it), and the two forced
+/// ones, so four at most; a pass for each change is at least five.
+#[tokio::test]
+async fn two_changes_that_meet_a_running_pass_cost_one_pass_more() {
+    let dir = tempfile::tempdir().unwrap();
+    let fake = FakeTailscale::new(dir.path());
+    fake.ready();
+    let running = hided::start_daemon(env(dir.path(), &fake.bin))
+        .await
+        .unwrap();
+    let change =
+        |kind: &str, payload: Value| json!({"schema_version": 2, "kind": kind, "payload": payload});
+    let mobile = &running.mobile;
+    mobile
+        .handle_event(0, &change("mobile_method", json!({"method": "tailscale"})))
+        .unwrap();
+    mobile.reconcile().await;
+    assert_eq!(fake.status_runs(), 0, "off never runs tailscale (B1)");
+
+    fake.hold_status();
+    mobile
+        .handle_event(0, &change("mobile_enable", json!({"enabled": true})))
+        .unwrap();
+    fake.wait_for_status_runs(1).await;
+    mobile
+        .handle_event(0, &change("mobile_enable", json!({"enabled": false})))
+        .unwrap();
+    mobile
+        .handle_event(0, &change("mobile_enable", json!({"enabled": true})))
+        .unwrap();
+    fake.release_status();
+    mobile.reconcile().await;
+    mobile.reconcile().await;
+
+    let runs = fake.status_runs();
+    assert!(
+        runs <= 4,
+        "tailscale status ran {runs} times; the two changes should cost one pass"
+    );
+    running.stop();
 }
 
 #[tokio::test]
@@ -916,7 +1017,26 @@ async fn paired_phone(
     let credential = answer["credential"].as_str().unwrap().to_owned();
     let (socket, hello) = phone(running.port, &credential).await;
     assert_eq!(hello["type"], "hello");
+    // The frames queued before the pairing list no phone; reading up to the
+    // one that lists this phone leaves a later "no phones" frame to a revoke.
+    mobile_frame(shell, |frame| {
+        frame["phones"]
+            .as_array()
+            .is_some_and(|phones| phones.iter().any(|phone| phone["id"] == phone_id.as_str()))
+    })
+    .await;
     (socket, phone_id, credential)
+}
+
+/// Revokes the phone in Settings and returns once the shell's list no longer
+/// has it. The phone was listed first (`paired_phone`), so the empty list
+/// this waits for is the revoke's own.
+async fn revoke_from_settings(shell: &mut Socket, phone_id: &str) {
+    event(shell, "mobile_revoke", json!({"phone_id": phone_id})).await;
+    mobile_frame(shell, |frame| {
+        frame["phones"].as_array().is_some_and(Vec::is_empty)
+    })
+    .await;
 }
 
 async fn send_phone(socket: &mut Socket, message: Value) {
@@ -972,6 +1092,7 @@ async fn core_answers(shell: &mut Socket, request_id: &str, window: Duration) ->
 #[tokio::test]
 async fn a_start_from_an_unadmitted_phone_is_refused_and_nothing_reaches_the_core() {
     let dir = tempfile::tempdir().unwrap();
+    seed_project(dir.path());
     let fake = FakeTailscale::new(dir.path());
     fake.ready();
     let running = hided::start_daemon(env(dir.path(), &fake.bin))
@@ -980,8 +1101,8 @@ async fn a_start_from_an_unadmitted_phone_is_refused_and_nothing_reaches_the_cor
     let mut shell = renderer(&running).await;
     let (mut socket, phone_id, credential) = paired_phone(&running, &mut shell).await;
     let catalog = open_sheet(&mut socket).await;
-    assert_eq!(catalog["targets"][0]["id"], home_target().as_str());
-    let start = |request_id: &str| json!({"type": "start_agent", "request_id": request_id, "text": "테스트 고쳐줘", "target": home_target().as_str(), "kind": "claude"});
+    let target = first_target(&catalog);
+    let start = |request_id: &str| json!({"type": "start_agent", "request_id": request_id, "text": "테스트 고쳐줘", "target": target.as_str(), "kind": "claude"});
     // A connection with no credential never reaches the vocabulary (B45).
     let (mut stranger, refused) = phone(running.port, &"0".repeat(64)).await;
     assert_eq!(refused["type"], "refused");
@@ -989,11 +1110,7 @@ async fn a_start_from_an_unadmitted_phone_is_refused_and_nothing_reaches_the_cor
         .send(Message::Text(start("stranger-1").to_string().into()))
         .await;
     // A phone revoked after it connected is refused before anything is dispatched.
-    event(&mut shell, "mobile_revoke", json!({"phone_id": phone_id})).await;
-    mobile_frame(&mut shell, |frame| {
-        frame["phones"].as_array().is_some_and(Vec::is_empty)
-    })
-    .await;
+    revoke_from_settings(&mut shell, &phone_id).await;
     let answer = running
         .mobile
         .start_agent(&phone_id, &start("revoked-1"))
@@ -1061,11 +1178,7 @@ async fn a_ping_gets_its_number_back_until_the_phone_is_revoked() {
         json!({"type": "pong", "id": 42})
     );
     // A phone no longer let in is never answered with a pong.
-    event(&mut shell, "mobile_revoke", json!({"phone_id": phone_id})).await;
-    mobile_frame(&mut shell, |frame| {
-        frame["phones"].as_array().is_some_and(Vec::is_empty)
-    })
-    .await;
+    revoke_from_settings(&mut shell, &phone_id).await;
     let _ = socket
         .send(Message::Text(
             json!({"type": "ping", "id": 43}).to_string().into(),
@@ -1083,6 +1196,7 @@ async fn a_ping_gets_its_number_back_until_the_phone_is_revoked() {
 #[tokio::test]
 async fn a_repeated_start_request_id_starts_once_and_returns_the_first_answer() {
     let dir = tempfile::tempdir().unwrap();
+    seed_project(dir.path());
     let fake = FakeTailscale::new(dir.path());
     fake.ready();
     let running = hided::start_daemon(env(dir.path(), &fake.bin))
@@ -1090,8 +1204,8 @@ async fn a_repeated_start_request_id_starts_once_and_returns_the_first_answer() 
         .unwrap();
     let mut shell = renderer(&running).await;
     let (mut socket, _phone_id, _credential) = paired_phone(&running, &mut shell).await;
-    open_sheet(&mut socket).await;
-    let start = json!({"type": "start_agent", "request_id": "retry-1", "text": "테스트 고쳐줘", "target": home_target().as_str(), "kind": "claude"});
+    let target = first_target(&open_sheet(&mut socket).await);
+    let start = json!({"type": "start_agent", "request_id": "retry-1", "text": "테스트 고쳐줘", "target": target.as_str(), "kind": "claude"});
     send_phone(&mut socket, start.clone()).await;
     let first = start_result(&mut socket, "retry-1").await;
     assert_ne!(first["reason"], "unknown_target", "{first}");
@@ -1113,6 +1227,7 @@ async fn a_repeated_start_request_id_starts_once_and_returns_the_first_answer() 
 #[tokio::test]
 async fn a_start_the_sheet_never_offered_is_refused_by_the_daemon() {
     let dir = tempfile::tempdir().unwrap();
+    seed_project(dir.path());
     let fake = FakeTailscale::new(dir.path());
     fake.ready();
     let running = hided::start_daemon(env(dir.path(), &fake.bin))
@@ -1120,15 +1235,11 @@ async fn a_start_the_sheet_never_offered_is_refused_by_the_daemon() {
         .unwrap();
     let mut shell = renderer(&running).await;
     let (mut socket, _phone_id, _credential) = paired_phone(&running, &mut shell).await;
-    open_sheet(&mut socket).await;
+    let offered = first_target(&open_sheet(&mut socket).await);
     for (request_id, target, kind, reason) in [
         ("bad-target", "/etc", "claude", "unknown_target"),
-        (
-            "bad-kind",
-            home_target().as_str(),
-            "terminal",
-            "unknown_kind",
-        ),
+        ("bad-kind", offered.as_str(), "terminal", "unknown_kind"),
+        ("old-home", "home:local", "claude", "unknown_target"),
     ] {
         send_phone(
             &mut socket,
@@ -1148,7 +1259,7 @@ async fn a_start_the_sheet_never_offered_is_refused_by_the_daemon() {
     }
     send_phone(
         &mut socket,
-        json!({"type": "start_agent", "request_id": "not a valid id", "text": "x", "target": home_target().as_str(), "kind": "claude"}),
+        json!({"type": "start_agent", "request_id": "not a valid id", "text": "x", "target": offered.as_str(), "kind": "claude"}),
     )
     .await;
     loop {
@@ -1161,9 +1272,28 @@ async fn a_start_the_sheet_never_offered_is_refused_by_the_daemon() {
     running.stop();
 }
 
-/// The phone's start target for this machine's Home: `home:<node id>`.
-fn home_target() -> String {
-    format!("home:{}", hide_platform::host::machine_id().unwrap())
+/// A project registered in the state folder before the daemon starts, so the
+/// start sheet has a target (Hide keeps no Home to start in: PRD
+/// retire-hide-home D-01). It needs no pane, so no holder starts.
+fn seed_project(dir: &Path) {
+    let project = dir.canonicalize().unwrap().join("work");
+    std::fs::create_dir_all(&project).unwrap();
+    let state = dir.join("state");
+    std::fs::create_dir_all(&state).unwrap();
+    let node = hide_platform::host::machine_id().unwrap();
+    std::fs::write(
+        state.join("core-state.json"),
+        json!({"schema_version": 1, "expanded_paths": [], "workspace_registrations": [
+            {"id": "workspace:work", "label": "work", "path": project.to_string_lossy(), "device_id": node, "pinned": true}
+        ]})
+        .to_string(),
+    )
+    .unwrap();
+}
+
+/// The id of the first target a start catalog lists.
+fn first_target(catalog: &Value) -> String {
+    catalog["targets"][0]["id"].as_str().unwrap().to_owned()
 }
 
 /// The desktop app's agent notifications share the phone's follower but not
@@ -1207,5 +1337,80 @@ async fn only_a_desktop_window_turns_agent_notifications_on() {
             break;
         }
     }
+    running.stop();
+}
+
+async fn look_result(socket: &mut Socket, request_id: &str) -> Value {
+    loop {
+        let frame = next_frame(socket).await.expect("a look result");
+        assert!(
+            !matches!(
+                frame["type"].as_str(),
+                Some("look_head" | "look_chunk" | "look_end" | "look_changes")
+            ),
+            "content reached the phone: {frame}"
+        );
+        if frame["type"] == "look_result" && frame["request_id"] == request_id {
+            return frame;
+        }
+    }
+}
+
+/// PRD mobile-companion-ui B27, D-16: a phone names a View by its id and
+/// nothing else. A request that carries a path, a root or a checkout, or
+/// names an agent Hide does not list, is answered with a refusal and sends no
+/// content. The reasons `scope.refused` records for each are decided in
+/// `phone.rs` (`look_scope`), where a unit test holds them: this process has
+/// no log file of its own to read them from.
+#[tokio::test]
+async fn a_phone_asking_for_a_path_is_refused_and_no_content_is_sent() {
+    let dir = tempfile::tempdir().unwrap();
+    let fake = FakeTailscale::new(dir.path());
+    fake.ready();
+    let running = hided::start_daemon(env(dir.path(), &fake.bin))
+        .await
+        .unwrap();
+    let mut shell = renderer(&running).await;
+    let (mut socket, _phone_id, _credential) = paired_phone(&running, &mut shell).await;
+    let ask = |request_id: &str, extra: Value| {
+        let mut message = json!({
+            "type": "look_open", "request_id": request_id,
+            "device_id": "local", "pane_id": "w9:p9", "view_id": "view-1",
+        });
+        message
+            .as_object_mut()
+            .unwrap()
+            .extend(extra.as_object().unwrap().clone());
+        message
+    };
+    for (request_id, extra) in [
+        ("path-1", json!({"path": "/etc/passwd"})),
+        ("root-1", json!({"root": "/"})),
+        ("checkout-1", json!({"checkout": "/mnt/other/repo"})),
+        ("file-1", json!({"file": "../../secret"})),
+    ] {
+        send_phone(&mut socket, ask(request_id, extra)).await;
+        let answer = look_result(&mut socket, request_id).await;
+        assert_eq!(answer["state"], "refused", "{answer}");
+    }
+    // An agent that is not listed is gone, with or without a View id Hide knows.
+    send_phone(&mut socket, ask("agent-1", json!({}))).await;
+    assert_eq!(look_result(&mut socket, "agent-1").await["state"], "gone");
+    // A confirmation or a seen mark for what is not open is refused too, and nothing is read.
+    send_phone(
+        &mut socket,
+        json!({"type": "look_seen", "device_id": "local", "pane_id": "w9:p9", "view_id": "view-1"}),
+    )
+    .await;
+    send_phone(
+        &mut socket,
+        json!({"type": "look_ack", "request_id": "never-1"}),
+    )
+    .await;
+    send_phone(&mut socket, json!({"type": "ping", "id": 7})).await;
+    assert_eq!(
+        next_pong(&mut socket).await,
+        json!({"type": "pong", "id": 7})
+    );
     running.stop();
 }

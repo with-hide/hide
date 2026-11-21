@@ -3,46 +3,80 @@ import { OfflineText } from "./OfflineText";
 // B30, B38): pairing, the refused and unpaired guidance, and the list; the
 // detail is `Detail.tsx`. Every value comes from the store the socket writes.
 
-import { BellIcon, ChevronRightIcon, LaptopIcon, Loader2Icon, PlusIcon, XIcon } from "lucide-react";
-import { StatusMark } from "../components/status-mark";
+import { LaptopIcon, Loader2Icon, PlusIcon, XIcon } from "lucide-react";
 import { useEffect, useState } from "react";
-import { useElapsed } from "../components/elapsed";
 import { useInterfaceTranslation } from "../i18n/translator";
-import { lineText, markWords, rowDimmed } from "../agentRow";
 import { Button } from "../components/ui/button";
-import { agentProductName } from "../agentAdapters";
-import { sleepingCaption } from "../sleeping-session";
-import { actOnSleepingSession, closeDetail, openDetail, openStartSheet, pairNow } from "./connection";
+import { closeDetail, openStartSheet, pairNow } from "./connection";
+import { AutomationDetail } from "./AutomationDetail";
+import { AutomationAskRows, AutomationsScreen } from "./AutomationsScreen";
 import { Detail } from "./Detail";
-import { AgentHead, LIST_INSET, Place } from "./parts";
+import { GroupRows } from "./ListRows";
+import { MissionDetail } from "./MissionDetail";
+import { MissionsScreen } from "./MissionsScreen";
+import { PrDetail } from "./PrDetail";
+import { PrsScreen } from "./PrsScreen";
+import { SettingsScreen } from "./SettingsScreen";
 import { StartSheet } from "./StartSheet";
+import { TabBar } from "./TabBar";
 import {
   GROUP_TITLE,
+  type GroupId,
   REFUSAL_NOTICE,
   headerLine,
+  machinesName,
   noticeText,
-  notificationRow,
-  type PhoneAgent,
-  type PhoneSleepingSession,
 } from "./protocol";
-import { closeStaleNotifications, enableNotifications, permission, pushSupported } from "./push";
+import { closeStaleNotifications } from "./push";
 import { patch, usePhone } from "./store";
+import { appHost } from "./appHost";
 import { hostedPhone, PHONE_PROTOCOL } from "./relayRuntime";
 import { HostPicker } from "./HostPicker";
 import { Landing, DeviceIdentity } from "./Landing";
 import { VersionScreen } from "./HostList";
+import { HOST_LIST_LINK } from "./hosts";
+import { DemoBar } from "./Demo";
 
 export function App() {
+  const demo = usePhone((s) => s.demo);
+  if (!demo) return <Screens />;
+  // The bar sits over the screen the sample host draws, which scrolls beneath it as it does alone.
+  return (
+    <div className="flex h-full flex-col">
+      <DemoBar />
+      <div className="min-h-0 flex-1 overflow-y-auto"><Screens /></div>
+    </div>
+  );
+}
+
+function Screens() {
   const { t } = useInterfaceTranslation();
   const screen = usePhone((s) => s.screen);
   const detail = usePhone((s) => s.detail);
   const name = usePhone((s) => s.macName);
   const deviceProtocol = usePhone((s) => s.deviceProtocol);
+  const tab = usePhone((s) => s.tab);
+  const missionOpen = usePhone((s) => s.missionOpen);
+  const prOpen = usePhone((s) => s.prOpen);
+  const automationOpen = usePhone((s) => s.automationOpen);
+  const pendingOpen = usePhone((s) => s.pendingOpen);
+  const unreachable = usePhone((s) => s.unreachable);
+  const relayError = usePhone((s) => s.relayError);
+  if (screen === "starting") return <main className="min-h-full" />;
   if (screen === "version") return <VersionScreen t={t} name={name} protocol={deviceProtocol} app={String(PHONE_PROTOCOL)} />;
   if (screen === "pair") return <PairScreen />;
   if (screen === "refused") return <Guidance refused />;
   if (screen === "unpaired") return <Guidance refused={false} />;
-  return detail ? <Detail onBack={closeDetail} /> : <ListScreen />;
+  // A notification opens the detail, not the list that happens to arrive before it. An offline or refused
+  // connection still exposes its normal recovery controls rather than leaving a steady surface forever.
+  if (appHost() && pendingOpen && !detail && !unreachable && !relayError) return <main className="min-h-full" />;
+  // A worker or a Conductor opened from a mission step is the agent's own detail, on either tab (B36).
+  if (detail) return <Detail onBack={closeDetail} />;
+  if (tab === "missions") return missionOpen ? <MissionDetail /> : <MissionsScreen />;
+  if (tab === "automations") return automationOpen ? <AutomationDetail /> : <AutomationsScreen />;
+  if (tab === "prs") return prOpen ? <PrDetail /> : <PrsScreen />;
+  if (tab === "settings") return <SettingsScreen />;
+  return <ListScreen />;
 }
 
 /** The page the QR opens (B11). */
@@ -81,37 +115,44 @@ function Guidance({ refused }: { refused: boolean }) {
         {relayError ? t(`mobile.relay.${relayError}`) : text}
       </p>
       {refused && refusal !== "phone_limit" && refusal !== "no_credential" ? <p className="text-subhead text-muted-foreground">{noticeText(t, REFUSAL_NOTICE.no_credential)}</p> : null}
-      {hostedPhone() ? <Button variant="secondary" className="min-h-(--size-touch-target) px-xl text-subhead" onClick={() => location.assign("/")}>{t("mobile.relay.choose")}</Button> : null}
+      {hostedPhone() ? <Button variant="secondary" className="min-h-(--size-touch-target) px-xl text-subhead" onClick={() => location.assign(HOST_LIST_LINK)}>{t("mobile.relay.choose")}</Button> : null}
     </Landing>
   );
 }
 
 function standalone(): boolean {
+  // The app is installed by being the app.
+  if (appHost()) return true;
   const iosStandalone = (navigator as Navigator & { standalone?: boolean }).standalone === true;
   return iosStandalone || window.matchMedia("(display-mode: standalone)").matches;
 }
 
-function ListScreen() {
+/**
+ * `hosted` and `picker` are the gallery's: the list as a hosted phone draws it,
+ * with the device sheet already open on the Mac it names. A phone passes none.
+ */
+export function ListScreen({ hosted = hostedPhone(), picker }: { hosted?: boolean; picker?: { room: string; open: boolean } }) {
   const { t } = useInterfaceTranslation();
   const macName = usePhone((s) => s.macName);
   const otherPhones = usePhone((s) => s.otherPhones);
   const connected = usePhone((s) => s.connected);
   const unreachable = usePhone((s) => s.unreachable);
   const groups = usePhone((s) => s.groups);
+  const omitted = usePhone((s) => s.agentsOmitted);
+  const devices = usePhone((s) => s.devices);
   const installHint = usePhone((s) => s.installHint);
   const relayError = usePhone((s) => s.relayError);
+  const asks = usePhone((s) => s.automationAsks.length);
   useEffect(() => {
     if (groups && connected) void closeStaleNotifications(groups);
   }, [groups, connected]);
   const dim = unreachable && !connected;
-  const agents = groups?.flatMap((group) => group.agents) ?? [];
-  const sleeping = groups?.flatMap((group) => group.sleeping_sessions ?? []) ?? [];
   return (
-    <main className="phone-safe-bottom flex min-h-full flex-col">
+    <main className="flex min-h-full flex-col">
       <header className="phone-safe-top px-xl" data-phone-connected={connected ? "true" : "false"}>
         <div className="flex items-center justify-between pt-lg">
           <h1 className="text-headline font-semibold text-foreground">hide</h1>
-          <div className="flex items-center gap-md">
+          <div className="flex items-center">
             <button
               type="button"
               aria-label={t("mobile.start.title")}
@@ -123,10 +164,10 @@ function ListScreen() {
             </button>
           </div>
         </div>
-        {hostedPhone() ? <HostPicker name={macName} /> : macName ? (
-          <p className="mt-xs flex items-center gap-xs text-subhead text-muted-foreground" data-phone-header={headerLine(t, macName, otherPhones)}>
+        {hosted ? <HostPicker name={machinesName(macName, devices)} activeRoom={picker?.room} defaultOpen={picker?.open} /> : macName ? (
+          <p className="mt-xs flex items-center gap-xs text-subhead text-muted-foreground" data-phone-header={headerLine(t, macName, otherPhones, devices)}>
             <LaptopIcon aria-hidden="true" className="size-(--size-icon) shrink-0" />
-            <span className="min-w-0 truncate">{headerLine(t, macName, otherPhones)}</span>
+            <span className="min-w-0 truncate">{headerLine(t, macName, otherPhones, devices)}</span>
           </p>
         ) : null}
       </header>
@@ -138,109 +179,50 @@ function ListScreen() {
       ) : null}
       {relayError === "storage" || relayError === "loadError" ? <p role="alert" className="px-lg text-warning">{t(`mobile.relay.${relayError}`)}</p> : null}
       {installHint && !standalone() ? <InstallHint /> : null}
-      {connected ? <NotificationRow /> : null}
       <div className={dim ? "opacity-(--opacity-dimmed)" : undefined} aria-busy={dim}>
-        {groups && agents.length === 0 && sleeping.length === 0 ? (
+        {groups && groups.length === 0 ? (
           <p className="px-lg py-xxl text-center text-title text-muted-foreground" data-phone-empty="true">
             {t("mobile.noAgents")}
           </p>
         ) : null}
+        {groups && asks > 0 && !groups.some((group) => group.group === "needs_you") ? (
+          <section className="px-xl pt-lg" data-phone-group="needs_you">
+            <GroupHead id="needs_you" count={asks} />
+            <AutomationAskRows />
+          </section>
+        ) : null}
         {groups?.map((group) => {
           const id = group.group;
-          if (group.count === 0) return null;
+          // An automation that stopped for a person is one more line of 내 차례 (PRD automations D-12, B23).
+          const count = group.count + (id === "needs_you" ? asks : 0);
+          if (count === 0) return null;
           return (
             <section key={id} className="px-xl pt-lg" data-phone-group={id}>
-              <h2 className="flex gap-sm pb-xs text-body text-muted-foreground">
-                <span>{t(GROUP_TITLE[id])}</span>
-                <span className="font-mono" data-phone-group-count={group.count}>
-                  {group.count}
-                </span>
-              </h2>
-              <ul className="divide-y divide-border border-b border-border">
-                {group.agents.map((agent) => (
-                  <AgentRow key={`${agent.device_id}|${agent.pane_id}`} agent={agent} />
-                ))}
-                {group.sleeping_sessions?.map((session) => (
-                  <SleepingRow key={session.sleep_id} session={session} />
-                ))}
-              </ul>
+              <GroupHead id={id} count={count} />
+              {id === "needs_you" ? <AutomationAskRows /> : null}
+              {group.count > 0 ? <GroupRows group={group} /> : null}
             </section>
           );
         })}
+        {groups && omitted > 0 ? (
+          <p className="px-xl py-md text-body text-muted-foreground" data-phone-agents-omitted={omitted}>{t("mobile.omitted", { count: omitted })}</p>
+        ) : null}
       </div>
+      <TabBar active="agents" />
       <StartSheet />
     </main>
   );
 }
 
-function SleepingRow({ session }: { session: PhoneSleepingSession }) {
+function GroupHead({ id, count }: { id: GroupId; count: number }) {
   const { t } = useInterfaceTranslation();
-  const connected = usePhone((state) => state.connected);
-  const action = usePhone((state) => state.sleepAction);
-  const pending = action?.sleepId === session.sleep_id && !!action.requestId;
-  const uncertain = session.phase === "close_unknown" || session.phase === "wake_unknown";
-  const failed = (action?.sleepId === session.sleep_id && action.error) || session.attention;
-  const caption = t(sleepingCaption(session));
-  const lineShown = failed || session.phase !== "sleeping" || session.checking;
   return (
-    <li className="flex min-h-(--size-touch-target) flex-col gap-xs py-md" data-phone-sleeping={session.sleep_id}>
-      <div className="flex min-w-0 items-center gap-sm">
-        {/* A grey moon at full strength; sleeping says itself there, waking or failing on the line below (status-marks D-21, B31). */}
-        <span className="flex size-(--size-agent-mark) shrink-0 items-center justify-center"><StatusMark mark="asleep" data-phone-mark="asleep" /></span>
-        <span className="min-w-0 flex-1 truncate text-title text-subtle-foreground">{session.title}<span className="sr-only">, {agentProductName(session.agent_kind)}{lineShown ? null : `, ${caption}`}</span></span>
-      </div>
-      <div className={`flex min-w-0 items-center justify-between gap-sm ${LIST_INSET}`}>
-        <span className="min-w-0 break-words text-subhead text-muted-foreground" role={failed ? "status" : undefined}>
-          {failed ? t("panes.sleep.requestFailed") : lineShown ? caption : null}
-        </span>
-        {session.wake_available || uncertain ? (
-          <Button
-            variant="ghost"
-            className="min-h-(--size-touch-target) shrink-0 text-body"
-            disabled={!connected || !!action?.requestId || session.checking}
-            data-phone-sleep-action={session.wake_available ? "wake" : "check"}
-            onClick={() => actOnSleepingSession(session.sleep_id, session.wake_available ? "wake_sleeping_session" : "check_sleeping_session")}
-          >
-            {session.checking ? t("agents.checking") : pending ? t(session.wake_available ? "panes.sleep.waking" : "agents.checking") : session.wake_available ? t("panes.sleep.wake") : t("workspace.checkStatus")}
-          </Button>
-        ) : null}
-      </div>
-    </li>
-  );
-}
-
-const LINE_TONE = { warning: "text-warning", news: "text-foreground", subtle: "text-subtle-foreground" } as const;
-
-function AgentRow({ agent }: { agent: PhoneAgent }) {
-  const { t } = useInterfaceTranslation();
-  const elapsed = useElapsed(agent.changed_at_unix_ms);
-  // Opening a row on the phone does not wake it, so the desktop's "wakes when opened" is not said here.
-  const words = agent.status_code === "sleeping" && agent.mark === "asleep" ? t("panes.sleep.sleeping") : markWords(t, agent);
-  const label = [words, agent.title, agentProductName(agent.agent_kind), agent.place, agent.device_label, elapsed].filter(Boolean).join(", ");
-  return (
-    <li className={rowDimmed(agent) ? "opacity-(--opacity-dimmed)" : undefined}>
-      <button
-        type="button"
-        aria-label={label}
-        data-phone-agent={`${agent.device_id}|${agent.pane_id}`}
-        className="flex min-h-(--size-touch-target) w-full flex-col gap-xs py-md text-left outline-none focus-visible:bg-accent active:bg-accent"
-        onClick={() => openDetail({ device_id: agent.device_id, pane_id: agent.pane_id })}
-      >
-        <span className="flex w-full items-center gap-sm">
-          <span className="min-w-0 flex-1">
-            <AgentHead agent={agent} large={false} />
-          </span>
-          <span className="shrink-0 font-mono text-body text-muted-foreground">{elapsed}</span>
-          <ChevronRightIcon aria-hidden="true" className="size-(--size-icon) shrink-0 text-muted-foreground" />
-        </span>
-        <Place agent={agent} inset={LIST_INSET} />
-        {agent.line ? (
-          <span className={`line-clamp-2 ${LIST_INSET} text-body ${LINE_TONE[agent.line.tone]}`} data-phone-line={agent.line.mode}>
-            {lineText(t, { wait: agent.wait, status_code: agent.status_code, descendant_counts: { working: agent.descendants_working }, background_left: agent.background_left }, agent.line)}
-          </span>
-        ) : null}
-      </button>
-    </li>
+    <h2 className="flex gap-sm pb-xs text-body text-muted-foreground">
+      <span>{t(GROUP_TITLE[id])}</span>
+      <span className="font-mono" data-phone-group-count={count}>
+        {count}
+      </span>
+    </h2>
   );
 }
 
@@ -257,39 +239,5 @@ function InstallHint() {
         <XIcon aria-hidden="true" className="size-(--size-icon)" />
       </Button>
     </div>
-  );
-}
-
-/** Turn on notifications, the Home Screen first, or the OS setting that is off (B30). */
-function NotificationRow() {
-  const { t } = useInterfaceTranslation();
-  const pushMode = usePhone((s) => s.pushMode);
-  const notifications = usePhone((s) => s.notifications);
-  const [asking, setAsking] = useState(false);
-  const row = notificationRow({ pushMode, notifications, permission: permission(), supported: pushSupported() });
-  if (!row) return null;
-  if (row === "enable") {
-    return (
-      <Button
-        variant="ghost"
-        disabled={asking}
-        data-phone-notifications="enable"
-        className="mx-xl mt-sm h-auto min-h-(--size-touch-target) justify-start gap-sm whitespace-normal px-none text-left text-subhead font-normal text-subtle-foreground"
-        onClick={() => {
-          setAsking(true);
-          void enableNotifications().finally(() => setAsking(false));
-        }}
-      >
-        <BellIcon aria-hidden="true" className="size-(--size-icon) shrink-0 text-muted-foreground" />
-        <span className="flex-1">{t("mobile.notifications.enable")}</span>
-        <ChevronRightIcon aria-hidden="true" className="size-(--size-icon) text-muted-foreground" />
-      </Button>
-    );
-  }
-  return (
-    <p className="mx-xl mt-sm flex items-start gap-sm py-sm text-body leading-relaxed text-muted-foreground" data-phone-notifications={row}>
-      <BellIcon aria-hidden="true" className="mt-xxs size-(--size-icon) shrink-0" />
-      <span>{row === "denied" ? t("mobile.notifications.denied") : t("mobile.notifications.installFirst")}</span>
-    </p>
   );
 }

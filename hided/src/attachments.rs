@@ -40,7 +40,7 @@ const MAX_STAGED_BYTES: u64 = 256 * 1024 * 1024;
 const MAX_OPEN_UPLOADS: usize = 64;
 
 /// Whether an id has the 36-character UUID shape the core requires for an
-/// attachment request (`herdr-core/src/terminal_attachments.rs`).
+/// attachment request (`hide-core/src/terminal_attachments.rs`).
 pub fn valid_request_id(value: &str) -> bool {
     value.len() == 36
         && value.bytes().enumerate().all(|(index, byte)| {
@@ -162,7 +162,7 @@ impl Attachments {
     pub fn new(state_dir: &Path) -> Self {
         let dir = state_dir.join("attachments");
         // The core reads a clipboard image from its own fixed path, so hided
-        // stages it exactly there (`herdr-core/src/terminal_attachments.rs`).
+        // stages it exactly there (`hide-core/src/terminal_attachments.rs`).
         let clipboard_root = state_dir.join(hide_node_link::attachments::CLIPBOARD_FOLDER);
         for folder in [&dir, &clipboard_root] {
             // The staged bytes are the operator's own files and screenshots;

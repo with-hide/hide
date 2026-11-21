@@ -2,7 +2,7 @@
 // in the production screens over invented device data
 // (`overviewSceneData.ts`): the backlog with ⌘⇧M open, Projects after the
 // disk sweep, a session's record beside the tabs at Home, and an agent pane
-// whose head showed its record in the lane's 보기 slot. No daemon runs; the
+// whose head showed its record as a card tab on a desk. No daemon runs; the
 // isolated daemon tests own runtime policy.
 import { useEffect, useLayoutEffect, useMemo } from "react";
 import { createActions } from "../actions";
@@ -21,12 +21,12 @@ import { AGENT_ADAPTERS } from "../agentAdapters";
 import { ledgerScene } from "./usageHistorySceneData";
 import type { SessionRecord, SessionSearchOptions, SessionSearchStatus, WorkSession } from "../snapshot";
 import type { NodeUsage } from "../generated/hided-ws";
-import { workKey } from "../sessionWork";
+import { MISSED_FOLD, workKey } from "../sessionWork";
 import { installKeyboard } from "../keyboard";
 import { Palette } from "../Palette";
 import { requireInterfaceLanguage, type InterfaceLanguage } from "../i18n/locale";
 
-const STATES = ["work", "mission-ask", "focus", "backlog", "backlog-add", "backlog-detail", "projects", "history", "usage", "home-record", "record"] as const;
+const STATES = ["work", "mission-ask", "focus", "backlog", "backlog-missed", "backlog-add", "backlog-detail", "projects", "history", "usage", "home-record", "record"] as const;
 type OverviewSceneState = (typeof STATES)[number];
 export type OverviewSceneParams = { state: OverviewSceneState; theme: "light" | "dark"; palette: "hide" | "neutral"; language: InterfaceLanguage; scale: number; content?: string };
 
@@ -55,7 +55,7 @@ export function OverviewScene({ state, theme, palette, language, scale, content 
       return {
         project: index === 0 ? "/work/billing-api" : "/work/hide",
         status: "archived" as SessionSearchStatus,
-        record: { ...world.record, session: { device_id: "local", agent: index === 0 ? "codex" : "claude", session_id: `gallery-history-${index}` }, title, native_title: title, state: "idle", status: { end: "done", line: `${title} 끝`, at_unix_ms: world.record.started_at_unix_ms! - shift + 30 * 60_000, limited: null, settled: null }, cwd: index === 0 ? "/work/billing-api" : "/work/hide", started_at_unix_ms: world.record.started_at_unix_ms! - shift, ended_at_unix_ms: world.record.started_at_unix_ms! - shift + 30 * 60_000, asks: [], children: [], outputs: [], pr_groups: [], artifacts: [], flows: [{ ...world.record.flows[0]!, name: title, at_unix_ms: world.record.flows[0]!.at_unix_ms - shift, requests: world.record.flows[0]!.requests.slice(0, 2).map((request, requestIndex) => ({ ...request, at_unix_ms: request.at_unix_ms - shift, text: requests[requestIndex]!, summary: null })), request_count: 2 }] } satisfies SessionRecord,
+        record: { ...world.record, session: { device_id: "local", agent: index === 0 ? "codex" : "claude", session_id: `gallery-history-${index}` }, title, native_title: title, state: "idle", status: { end: "done", line: `${title} 끝`, at_unix_ms: world.record.started_at_unix_ms! - shift + 30 * 60_000, limited: null, settled: null }, cwd: index === 0 ? "/work/billing-api" : "/work/hide", started_at_unix_ms: world.record.started_at_unix_ms! - shift, ended_at_unix_ms: world.record.started_at_unix_ms! - shift + 30 * 60_000, asks: [], children: [], outputs: [], pr_groups: [], flows: [{ ...world.record.flows[0]!, name: title, at_unix_ms: world.record.flows[0]!.at_unix_ms - shift, requests: world.record.flows[0]!.requests.slice(0, 2).map((request, requestIndex) => ({ ...request, at_unix_ms: request.at_unix_ms - shift, text: requests[requestIndex]!, summary: null })), request_count: 2 }] } satisfies SessionRecord,
       };
     }),
   ], [world]);
@@ -107,27 +107,27 @@ export function OverviewScene({ state, theme, palette, language, scale, content 
       const tab = checkout.tabs[0]!;
       const tabId = tab.id;
       if (!tabId) throw new Error("the record scene's checkout has no tab id");
-      checkout.strip = [{ id: `strip:${tabId}`, kind: "herdr", source_id: tabId, label: tab.label ?? tabId, preview: false }];
+      checkout.strip = [{ id: `strip:${tabId}`, kind: "engine", source_id: tabId, label: tab.label ?? tabId, preview: false }];
       rest.pane_layouts = [{
         workspace_id: project.id, tab_id: tabId, focused_pane_id: "h-a1", zoomed: false,
         root: { type: "split", direction: "right", ratio: 0.55, first: { type: "pane", pane_id: "h-a1" }, second: { type: "split", direction: "down", ratio: 0.5, first: { type: "pane", pane_id: "h-a1c1" }, second: { type: "pane", pane_id: "h-a1c2" } } },
       }];
       rest.terminal = { headers: Object.fromEntries(checkout.tabs[0]!.panes.map((pane) => [pane.id, { working: pane.id !== "h-a1c2", notice: null, band: null }])) } as never;
       rest.workspace_view = {
-        device_id: "local", path: checkout.path, open: false, documents: false, tool: "project", pinned: true, document_width: null, detail_width: null, explorer_width: null, panel_width: null, lane_called: 0, lane_calls: 0, lane_called_side: "view",
+        device_id: "local", path: checkout.path, open: false, tray: { tab_id: "t1", shown: false, count: 0 }, tool: "project", document_width: null, explorer_width: null, panel_width: null, lane_called: 0, lane_calls: 0, lane_called_side: "view",
         layout: { root: { area: { id: "a1", active: null, displays: [] } }, active_area: "a1", limits: { areas: 6, depth: 3, displays: 32 }, display_count: 0 },
         agent_layout: { root: { area: { id: "g1", active: tabId, displays: [{ id: tabId }] } }, active_area: "g1", canvases: {}, limits: { areas: 6, depth: 3, displays: 16 }, display_count: 1 },
       } as never;
       rest.ui_state = { ...rest.ui_state, detail: { items: [{ kind: "record", session: world.recordSession }], shown: true } } as never;
     }
-    const usage: NodeUsage = ledgerScene({ node: "local", agents: AGENT_ADAPTERS.map((adapter) => ({ agent: adapter.herdr_kind, limits: { state: "unsupported" }, consumption: { state: "unsupported" } })), history: null }, "reference");
+    const usage: NodeUsage = ledgerScene({ node: "local", agents: AGENT_ADAPTERS.map((adapter) => ({ agent: adapter.agent_cli, limits: { state: "unsupported" }, consumption: { state: "unsupported" } })), history: null }, "reference");
     if (usage.history) usage.history.models = usage.agents.flatMap((row) => row.consumption.state === "reading" ? row.consumption.value.year.days.map((day) => ({ date: day.date, agent: row.agent, model: row.agent === "claude" ? "model-a" : "model-c", hide_ai: false, amount: day.amount })) : []);
     useShellStore.setState({ rest, usage: { nodes: [usage] }, agents: world.agents, focusedPaneId: world.recordPane, linkSummaries: world.linkSummaries, connection: "live", sessionRecord });
     useUiStore.setState({
       screen: state === "record" ? { kind: "workspace" } : { kind: "main" },
       overviewOpen: false,
       mainView: state === "projects" ? "projects" : (state === "work" || state === "mission-ask" || state === "focus") ? "work" : state === "history" ? "history" : state === "usage" ? "usage" : "backlog",
-      overview: { ...OVERVIEW_ENTRY, panel: state === "home-record" ? { kind: "record", session: world.recordSession } : state === "backlog-detail" ? { kind: "item", workspaceId: "hide", taskKey: hideKey(163) } : null },
+      overview: { ...OVERVIEW_ENTRY, ...(state === "backlog-missed" ? { open: [...OVERVIEW_ENTRY.open, MISSED_FOLD] } : {}), panel: state === "home-record" ? { kind: "record", session: world.recordSession } : state === "backlog-detail" ? { kind: "item", workspaceId: "hide", taskKey: hideKey(163) } : null },
       quickAdd: state === "backlog-add" ? { returnFocus: null } : null,
     });
     const root = document.documentElement;

@@ -1,0 +1,968 @@
+//! The commands an agent uses instead of the engine's own (PRD engine-bundle-1
+//! D-5, D-13): `hide pane read`, `hide agent read`, `hide pane send`,
+//! `hide pane open --beside` and `hide workspace purpose`.
+//!
+//! The daemon admits the caller through its pane proof, the runtime resolves
+//! the pane and the engine under its lock (`Runtime::prepare_pane_command`),
+//! and [`Prepared::run`] makes the engine calls on the caller's task, off the
+//! lock. They reach every pane of the machine they name, as the engine's commands
+//! did; a bare pane id is a pane of the caller's own machine.
+//!
+//! A guest's pane on this machine (`guest:<device id>:pane:<id>`, PRD
+//! device-connect-iroh D-77 (5)) is no pane of any engine the core has: a
+//! send types its text and Enter into it through the guest's tap, as this
+//! machine's screen does, and everything that would read the pane (a read,
+//! a named key, a paste) is refused with its reason.
+
+use std::thread;
+use std::time::{Duration, Instant};
+
+use schemars::JsonSchema;
+use serde::{Deserialize, Serialize};
+use serde_json::{Value, json};
+
+use crate::engine::keys::PaneKey;
+use crate::engine::{EngineError, SharedEngine, Wait};
+
+/// How many of a pane's last lines a read prints when it names none.
+pub const DEFAULT_LINES: u32 = 120;
+/// The most lines one read prints.
+pub const LINES_LIMIT: u32 = 2_000;
+/// The most text one `hide pane send` types: a letter's body limit.
+pub const TEXT_LIMIT: usize = crate::delivery::BODY_LIMIT;
+/// The most keys one `hide pane send` presses: enough to walk any menu an
+/// agent draws, few enough that a wrong loop cannot flood a pane.
+pub const KEYS_LIMIT: usize = 32;
+/// The most characters a checkout's purpose takes.
+pub const PURPOSE_CHARS: usize = 40;
+/// The longest command `hide pane open` types: under the fewest bytes of an
+/// unfinished line a supported terminal keeps before the shell reads it
+/// (macOS's 1,024), so the line reaches the shell whole with its Enter.
+pub const COMMAND_LIMIT: usize = 1_000;
+
+/// How long one engine call of these commands waits.
+const CALL_WAIT: Duration = Duration::from_secs(5);
+/// How long a pane `hide pane open` made gets for its shell to take the
+/// command: the shell alone holding the terminal, as an agent start waits.
+const SHELL_WAIT: Duration = Duration::from_secs(10);
+const SHELL_POLL: Duration = Duration::from_millis(100);
+
+/// One command, as the CLI sends it to the daemon.
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(tag = "op", rename_all = "snake_case", deny_unknown_fields)]
+pub enum PaneCommand {
+    /// `hide pane read <pane> [--lines N]`.
+    Read { pane: String, lines: u32 },
+    /// `hide pane read <pane> --source visible --format ansi`: the whole
+    /// visible screen, retaining its physical rows and styling.
+    ReadScreen { pane: String },
+    /// `hide agent read <agent> [--lines N]`: the agent by its name,
+    /// registration id or pane, as a letter's target is named.
+    AgentRead { agent: String, lines: u32 },
+    /// `hide pane send <pane> [<text>] [--key <name>]... [--enter]
+    /// [--paste]`: the text, then the keys in order, then Enter.
+    Send {
+        pane: String,
+        #[serde(default)]
+        text: Option<String>,
+        #[serde(default)]
+        keys: Vec<PaneKey>,
+        enter: bool,
+        /// The text goes in as one paste, line breaks and all, where the
+        /// pane's agent is known to take one (`Runtime::prepare_pane_command`).
+        #[serde(default)]
+        paste: bool,
+    },
+    /// `hide pane open --beside [--focus] -- <command>`: the words after
+    /// `--`, joined by spaces into the line the new pane's shell runs.
+    Open { command: String, focus: bool },
+    /// `hide workspace purpose <text>`: an empty text clears the purpose.
+    Purpose {
+        text: String,
+        /// The root of the Git checkout the command ran in, spelled as its
+        /// machine spells paths; none outside one, or from an older CLI,
+        /// names the caller's own checkout.
+        #[serde(default)]
+        checkout: Option<String>,
+    },
+}
+
+impl PaneCommand {
+    /// The command's own limits (D-13), checked by the CLI before it asks
+    /// the daemon and by the daemon again: the refusal's code.
+    pub fn check(&self) -> Result<(), &'static str> {
+        let key = |value: &str| crate::delivery::valid_key(value) && !value.starts_with('-');
+        let lines = |lines: u32| {
+            if (1..=LINES_LIMIT).contains(&lines) {
+                Ok(())
+            } else {
+                Err("lines_out_of_range")
+            }
+        };
+        match self {
+            Self::ReadScreen { pane } => {
+                if key(pane) {
+                    Ok(())
+                } else {
+                    Err("pane_unavailable")
+                }
+            }
+            Self::Read { pane, lines: count } => {
+                if !key(pane) {
+                    return Err("pane_unavailable");
+                }
+                lines(*count)
+            }
+            Self::AgentRead {
+                agent,
+                lines: count,
+            } => {
+                if !key(agent) {
+                    return Err("agent_unavailable");
+                }
+                lines(*count)
+            }
+            Self::Send {
+                pane,
+                text,
+                keys,
+                enter,
+                paste,
+            } => {
+                if !key(pane) {
+                    return Err("pane_unavailable");
+                }
+                match text {
+                    Some(text) => {
+                        if text.is_empty() {
+                            return Err("text_empty");
+                        }
+                        if text.len() > TEXT_LIMIT {
+                            return Err("text_too_long");
+                        }
+                        // A control byte would act as a key the caller did
+                        // not name: an Escape could end a paste early and a
+                        // line break submit part of the text. Only a paste
+                        // carries line breaks and tabs.
+                        let kept = |c: char| *paste && matches!(c, '\n' | '\r' | '\t');
+                        if text.chars().any(|c| c.is_control() && !kept(c)) {
+                            return Err("text_invalid");
+                        }
+                    }
+                    None if *paste => return Err("text_empty"),
+                    None if keys.is_empty() && !enter => return Err("nothing_to_send"),
+                    None => {}
+                }
+                if keys.len() > KEYS_LIMIT {
+                    return Err("too_many_keys");
+                }
+                Ok(())
+            }
+            Self::Open { command, .. } => {
+                if command.trim().is_empty() || command.chars().any(char::is_control) {
+                    return Err("command_invalid");
+                }
+                if command.len() > COMMAND_LIMIT {
+                    return Err("command_too_long");
+                }
+                Ok(())
+            }
+            Self::Purpose { text, .. } => {
+                let text = text.trim();
+                if text.chars().any(char::is_control) {
+                    return Err("purpose_invalid");
+                }
+                if text.chars().count() > PURPOSE_CHARS {
+                    return Err("purpose_too_long");
+                }
+                Ok(())
+            }
+        }
+    }
+
+    /// Whether the command fits its limits: what the daemon admits.
+    pub fn valid(&self) -> bool {
+        self.check().is_ok()
+    }
+}
+
+/// What the caller does about each refusal these commands give; `None` for
+/// the ones every pane-bound command gives, which the daemon words.
+pub fn next_action(code: &str) -> Option<&'static str> {
+    Some(match code {
+        "lines_out_of_range" => "Pass --lines from 1 to 2000",
+        "text_empty" => "Pass the text to type",
+        "nothing_to_send" => "Pass text, one or more --key <name>, or --enter",
+        "text_invalid" => {
+            "Pass one line of text without control characters; for several lines add --paste, and press keys with --key"
+        }
+        "too_many_keys" => {
+            "Press at most 32 keys at a time; split them into several hide pane send calls"
+        }
+        "paste_unsupported" => {
+            "This pane's program is not known to take a paste as one; send one line at a time, with --key enter between lines only if each line should be submitted"
+        }
+        "pane_asleep" => {
+            "The agent in that pane is asleep or waking; send it a letter with hide request send instead"
+        }
+        "composer_not_empty" => {
+            "Someone typed into the agent's input box and its text may be a person's draft; nothing was sent. Read the pane with hide pane read, and send again once the box is empty or submitted"
+        }
+        "operator_typing" => {
+            "Someone typed into the pane while the send was writing, so it stopped; sent says what landed. Read the pane with hide pane read before sending again"
+        }
+        "keys_not_sent" => {
+            "The text was typed but the keys were not pressed; read the pane with hide pane read before sending again"
+        }
+        "send_unconfirmed" => {
+            "The send was made but its answer was lost, so part or all of it may have landed; read the pane with hide pane read before sending again"
+        }
+        "text_too_long" => {
+            "Send at most 16 KiB at a time; split the text into several hide pane send calls"
+        }
+        "command_invalid" => "Pass the command after --, on one line",
+        "command_too_long" => {
+            "Put a command longer than 1000 bytes in a script and open the script"
+        }
+        "purpose_invalid" => "Write the purpose as one line of text",
+        "purpose_too_long" => "Write the purpose in 40 characters or fewer",
+        "pane_unavailable" => {
+            "Run hide ps for the panes there are and their ids; a bare id such as w1:p2 names a pane of your own machine, a pane of another machine is remote:<device id>:pane:<id>, and another machine's work running on this one is guest:<device id>:pane:<id> (hide device list shows the device ids and the guest panes)"
+        }
+        "guest_pane_read" => {
+            "This pane is another machine's work running here: this machine draws it in the Hide window but keeps no text of it. Read it on the machine it belongs to"
+        }
+        "guest_pane_keys" => {
+            "This pane is another machine's work running here: it takes text and --enter from this machine; a named key is encoded by the pane's own machine, so press it there or in the Hide window"
+        }
+        "agent_unavailable" => {
+            "Run hide ps for the agents there are, their names and panes; an agent of another machine is named by its registration id from hide agent list, a pane that is no registered agent by remote:<device id>:pane:<id>"
+        }
+        "target_ambiguous" => {
+            "Name the agent by its registration id or its pane, both shown by hide ps"
+        }
+        "pane_required" => "Run the command in a pane of Hide",
+        "caller_context_changed" => {
+            "Run hide workspace info and retry from the checkout you are in"
+        }
+        "purpose_no_workspace" => "Open the checkout in Hide and retry",
+        "purpose_checkout_unlisted" => {
+            "Hide lists this folder in no checkout of your pane's project yet; retry once its row shows in the sidebar, or run the command from a pane opened in it"
+        }
+        "pane_open_unconfirmed" => {
+            "Run hide ps to see whether the pane opened before you open another"
+        }
+        "shell_not_ready" => {
+            "The pane opened but its shell did not take the command; type it with hide pane send <pane> <command> --enter"
+        }
+        "engine_unavailable" | "purpose_unavailable" => {
+            "Retry; the reason is in Hide's diagnostic log"
+        }
+        _ => return None,
+    })
+}
+
+/// `hide pane read` and `hide agent read`: text in the requested form.
+#[derive(Debug, Serialize, JsonSchema)]
+pub struct PaneRead {
+    /// The pane read: a pane of the caller's own machine bare, as `hide ps`
+    /// lists it there (`w1:p2`), another machine's as
+    /// `remote:<device>:pane:<id>`.
+    pub pane: String,
+    pub text: String,
+    /// Whether the engine cut the answer short.
+    pub truncated: bool,
+}
+
+/// `hide pane send`: the pane typed into and what reached it. Each field
+/// says what the pane took, never what the program in the pane did with it:
+/// `enter_sent` is an Enter written, not a prompt accepted.
+#[derive(Debug, Serialize, JsonSchema)]
+pub struct PaneSent {
+    pub pane: String,
+    pub text_sent: bool,
+    /// The keys pressed, in order, by the names `--key` takes.
+    pub keys_sent: Vec<PaneKey>,
+    pub enter_sent: bool,
+}
+
+/// `hide pane open`: the pane made beside the caller's, and whether it took
+/// the keyboard focus.
+#[derive(Debug, Serialize, JsonSchema)]
+pub struct PaneOpened {
+    pub pane: String,
+    pub focused: bool,
+}
+
+/// `hide workspace purpose`: the purpose the checkout now shows.
+#[derive(Debug, Serialize, JsonSchema)]
+pub struct PurposeSet {
+    /// The folder of the checkout that shows it.
+    pub checkout: String,
+    /// The purpose, empty once cleared.
+    pub purpose: String,
+}
+
+/// The answer schemas of these commands, by the name the CLI contract gives
+/// each.
+pub fn answer_schemas() -> Vec<(&'static str, Value)> {
+    let schema = |root: schemars::schema::RootSchema| {
+        serde_json::to_value(root).expect("a schema serializes")
+    };
+    vec![
+        ("pane_read", schema(schemars::schema_for!(PaneRead))),
+        ("pane_sent", schema(schemars::schema_for!(PaneSent))),
+        ("pane_opened", schema(schemars::schema_for!(PaneOpened))),
+        ("purpose_set", schema(schemars::schema_for!(PurposeSet))),
+    ]
+}
+
+/// What the runtime resolved for one command: the engine of the machine it
+/// acts on and the engine's own pane or workspace ids.
+pub(crate) enum Step {
+    ReadScreen {
+        pane: String,
+        raw: String,
+    },
+    Read {
+        pane: String,
+        raw: String,
+        lines: u32,
+    },
+    Send {
+        pane: String,
+        raw: String,
+        text: Option<String>,
+        keys: Vec<PaneKey>,
+        enter: bool,
+        paste: bool,
+    },
+    /// A send into a guest's pane of this machine: its text and Enter, to
+    /// the guest's node through the routes this machine's screens type by.
+    GuestSend {
+        pane: String,
+        terminals: std::sync::Arc<dyn hide_node_link::terminal::TerminalRoutes>,
+        text: Option<String>,
+        enter: bool,
+    },
+    Open {
+        caller: String,
+        cwd: String,
+        command: String,
+        focus: bool,
+    },
+    /// The checkout row's Set purpose write (`worktree_control::write_purpose`)
+    /// for the checkout at `path`: with this machine's node for its Git, or
+    /// none for a device checkout, which keeps its purpose in the engine only.
+    Purpose {
+        request: crate::worktree_control::PurposeTaskRequest,
+        path: String,
+        git: Option<std::sync::Arc<dyn crate::node_access::NodeLink>>,
+        remote_target_id: Option<String>,
+    },
+}
+
+/// A command the runtime admitted, run off its lock.
+pub struct Prepared {
+    /// The engine of the machine the command acts on; none for a guest's
+    /// pane, which no engine of this core runs.
+    pub(crate) engine: Option<SharedEngine>,
+    pub(crate) step: Step,
+    /// The pane a send types into as the core names it: noted as input
+    /// routed to it only once a write was taken, since a failed or unknown
+    /// write must not count as the answer that allows typed input again
+    /// (`delivery::typed`), and the key of its input gate and person check.
+    pub(crate) noted: Option<String>,
+    /// The caller's pane, for the send's log record.
+    pub(crate) caller: String,
+    /// Admits a send's write to its pane (`input_gate`).
+    pub(crate) gate: Option<std::sync::Arc<crate::input_gate::PaneInputGate>>,
+    /// The kind of agent a send types into, whose composer is read for a
+    /// person's draft right before the write; none for a pane with no agent.
+    pub(crate) agent_kind: Option<String>,
+    pub(crate) runtime: std::sync::Weak<std::sync::Mutex<crate::runtime::Runtime>>,
+}
+
+impl Prepared {
+    /// Makes the command's engine calls on the caller's task: the answer,
+    /// or the refusal's code.
+    pub fn run(self) -> Result<Value, String> {
+        let Prepared {
+            engine,
+            step,
+            noted,
+            caller,
+            gate,
+            agent_kind,
+            runtime,
+        } = self;
+        let step = match step {
+            Step::GuestSend {
+                pane,
+                terminals,
+                text,
+                enter,
+            } => return send_to_guest(terminals.as_ref(), &caller, pane, text, enter),
+            step => step,
+        };
+        let engine = engine.ok_or_else(|| "engine_unavailable".to_owned())?;
+        let engine = engine.as_ref();
+        let wait = Wait::Each(CALL_WAIT);
+        let value = match step {
+            Step::GuestSend { .. } => unreachable!("answered above"),
+            Step::ReadScreen { pane, raw } => {
+                let read = engine
+                    .read_screen(wait, &raw)
+                    .map_err(|error| failed("read_screen", &raw, &error, "pane_unavailable"))?;
+                serde_json::to_value(PaneRead {
+                    pane,
+                    text: read.text,
+                    truncated: read.truncated,
+                })
+            }
+            Step::Read { pane, raw, lines } => {
+                let read = engine
+                    .read_pane(wait, &raw, "recent_unwrapped", lines)
+                    .map_err(|error| failed("read", &raw, &error, "pane_unavailable"))?;
+                serde_json::to_value(PaneRead {
+                    pane,
+                    text: read.text,
+                    truncated: read.truncated,
+                })
+            }
+            Step::Send {
+                pane,
+                raw,
+                text,
+                keys,
+                enter,
+                paste,
+            } => {
+                let send = Send {
+                    engine,
+                    wait,
+                    raw: &raw,
+                    noted: noted.as_deref(),
+                    gate: gate.as_ref(),
+                    agent_kind: agent_kind.as_deref(),
+                    runtime: &runtime,
+                };
+                let outcome = send.run(text.as_deref(), &keys, enter, paste);
+                let landed = match &outcome {
+                    Ok(landed) | Err((_, landed)) => *landed,
+                };
+                crate::diagnostic!(
+                    json!({"component":"pane_command","kind":"pane_command.sent",
+                    "caller":caller,"pane_id":noted.as_deref().unwrap_or(&raw),
+                    "text_bytes":text.as_ref().map_or(0, String::len),"keys":keys.len(),
+                    "enter":enter,"paste":paste,
+                    "outcome":outcome.as_ref().err().map_or("sent", |(code, _)| code.as_str()),
+                    "text_landed":landed.text,"keys_landed":landed.keys})
+                );
+                let sent = PaneSent {
+                    pane,
+                    text_sent: landed.text,
+                    keys_sent: if landed.keys { keys } else { Vec::new() },
+                    enter_sent: landed.keys && enter,
+                };
+                match outcome {
+                    Ok(_) => serde_json::to_value(sent),
+                    // What landed of a send that stopped partway is a field
+                    // of its refusal, never a guess for the caller to make.
+                    Err((code, _)) if PARTIAL.contains(&code.as_str()) => {
+                        return Err(crate::coordination::refusal(
+                            &code,
+                            &json!({"text_sent":sent.text_sent,"keys_sent":sent.keys_sent,
+                                "enter_sent":sent.enter_sent})
+                            .to_string(),
+                        ));
+                    }
+                    Err((code, _)) => return Err(code),
+                }
+            }
+            Step::Open {
+                caller,
+                cwd,
+                command,
+                focus,
+            } => {
+                let raw = engine
+                    .split_beside(wait, &caller, Some(&cwd), Default::default())
+                    .map_err(|error| {
+                        let unknown = if error.reply_unknown() {
+                            "pane_open_unconfirmed"
+                        } else {
+                            "pane_unavailable"
+                        };
+                        failed("open", &caller, &error, unknown)
+                    })?;
+                crate::diagnostic!(
+                    json!({"component":"pane_command","kind":"pane_command.opened",
+                    "pane_id":caller,"created":raw,"focus":focus})
+                );
+                wait_for_shell(engine, &raw)?;
+                engine
+                    .submit_text(wait, &raw, &command)
+                    .map_err(|error| failed("run", &raw, &error, "shell_not_ready"))?;
+                if focus {
+                    engine
+                        .focus_pane(wait, &raw)
+                        .map_err(|error| failed("focus", &raw, &error, "pane_unavailable"))?;
+                }
+                serde_json::to_value(PaneOpened {
+                    // The caller's machine numbers its own panes, so the
+                    // new one is told bare, as its own pane is.
+                    pane: raw,
+                    focused: focus,
+                })
+            }
+            Step::Purpose {
+                request,
+                path,
+                git,
+                remote_target_id,
+            } => {
+                let outcome = crate::worktree_control::write_checkout_purpose(
+                    engine,
+                    git.as_deref(),
+                    &request,
+                );
+                let purpose = request.purpose.clone();
+                let token_written = match outcome {
+                    Ok(token_written) => token_written,
+                    Err(detail) => {
+                        crate::diagnostic!(
+                            json!({"component":"pane_command","kind":"pane_command.failed",
+                            "step":"purpose","checkout_id":request.checkout_id,"message":detail})
+                        );
+                        return Err("purpose_unavailable".to_owned());
+                    }
+                };
+                if let Some(runtime) = runtime.upgrade() {
+                    runtime
+                        .lock()
+                        .unwrap_or_else(std::sync::PoisonError::into_inner)
+                        .show_checkout_purpose(
+                            &request.checkout_id,
+                            remote_target_id.as_deref(),
+                            purpose.clone(),
+                            token_written,
+                        );
+                }
+                serde_json::to_value(PurposeSet {
+                    checkout: path,
+                    purpose,
+                })
+            }
+        };
+        value.map_err(|_| "result_encoding_failed".to_owned())
+    }
+}
+
+/// One `hide pane send`'s writes, in order: the text, then the keys and the
+/// Enter in one call. Never more than one sender writes to a pane at a time,
+/// and the checks that refuse a send run right before its first write.
+struct Send<'a> {
+    engine: &'a dyn crate::engine::Engine,
+    wait: Wait,
+    raw: &'a str,
+    noted: Option<&'a str>,
+    gate: Option<&'a std::sync::Arc<crate::input_gate::PaneInputGate>>,
+    agent_kind: Option<&'a str>,
+    runtime: &'a std::sync::Weak<std::sync::Mutex<crate::runtime::Runtime>>,
+}
+
+/// One lock per stripe of panes, so two senders never interleave their
+/// writes to one pane; a fixed number, so the set never grows with panes.
+static SEND_STRIPES: [std::sync::Mutex<()>; 16] = [const { std::sync::Mutex::new(()) }; 16];
+
+/// The pane's input as a send last saw it: `At` the input generation it
+/// read or its own write left, `Moved` once someone else's input came
+/// meanwhile, and `Unfenced` for a pane Hide observes no agent in.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Fence {
+    Unfenced,
+    At(u64),
+    Moved,
+}
+
+/// What of one send landed: its text, then its keys and Enter (one write).
+#[derive(Clone, Copy, Default)]
+struct Landed {
+    text: bool,
+    keys: bool,
+}
+
+/// Types `text` and then Enter into the guest's pane `pane`, once the
+/// guest's node is there to take them. The bytes go as keys typed on this
+/// machine's screen go; nothing here reads the pane, so a send's checks of
+/// what is in it (a person's draft, someone typing) are not made, and the
+/// answer says what was handed to the node.
+fn send_to_guest(
+    terminals: &dyn hide_node_link::terminal::TerminalRoutes,
+    caller: &str,
+    pane: String,
+    text: Option<String>,
+    enter: bool,
+) -> Result<Value, String> {
+    let mut bytes = text.clone().map(String::into_bytes).unwrap_or_default();
+    if enter {
+        bytes.push(b'\r');
+    }
+    let permitted = hide_node_link::terminal::wait_for_input_permit(terminals, &pane, bytes.len());
+    crate::diagnostic!(
+        json!({"component":"pane_command","kind":"pane_command.sent",
+        "caller":caller,"pane_id":pane,
+        "text_bytes":text.as_ref().map_or(0, String::len),"keys":0,
+        "enter":enter,"paste":false,
+        "outcome":if permitted.is_ok() { "sent" } else { "pane_unavailable" },
+        "text_landed":permitted.is_ok() && text.is_some(),"keys_landed":permitted.is_ok() && enter})
+    );
+    permitted.map_err(|_| "pane_unavailable".to_owned())?;
+    terminals.key(
+        hide_node_link::terminal::KeyTarget::Pane(pane.clone()),
+        bytes,
+        crate::observed::now_unix_ms(),
+    );
+    serde_json::to_value(PaneSent {
+        pane,
+        text_sent: text.is_some(),
+        keys_sent: Vec::new(),
+        enter_sent: enter,
+    })
+    .map_err(|error| error.to_string())
+}
+
+/// The refusals of a send that may have landed part of itself; each carries
+/// what did land (`sent`) as its detail.
+pub const PARTIAL: [&str; 3] = ["keys_not_sent", "send_unconfirmed", "operator_typing"];
+
+impl Send<'_> {
+    /// What landed, or the refusal's code with what landed before it.
+    fn run(
+        &self,
+        text: Option<&str>,
+        keys: &[PaneKey],
+        enter: bool,
+        paste: bool,
+    ) -> Result<Landed, (String, Landed)> {
+        let mut landed = Landed::default();
+        let refused = |code: &str, landed: Landed| (code.to_owned(), landed);
+        let subject = self.noted.unwrap_or(self.raw);
+        let stripe = {
+            use std::hash::{Hash, Hasher};
+            let mut hasher = std::collections::hash_map::DefaultHasher::new();
+            subject.hash(&mut hasher);
+            (hasher.finish() % SEND_STRIPES.len() as u64) as usize
+        };
+        let _serial = SEND_STRIPES[stripe]
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        // Held across every write: the pane of an agent being put to sleep
+        // takes nothing, and the sleep waits for a write already admitted.
+        let _admitted = match self.gate {
+            Some(gate) => Some(
+                gate.admit(subject)
+                    .map_err(|_| refused("pane_asleep", landed))?,
+            ),
+            None => None,
+        };
+        // The pane's input as the send found it: input noted after this,
+        // during the composer read or a write, is someone else's, and the
+        // send stops before its next write (`operator_typing`).
+        let mut fence = self
+            .with_runtime(|runtime, pane| runtime.input_fence(pane))
+            .flatten()
+            .map_or(Fence::Unfenced, Fence::At);
+        // A person's draft is judged by the two rules a held letter is: the
+        // core's draft rule, input since the pane's last submission that no
+        // send wrote (`Observation::person_draft`), and the agent's composer
+        // read now (`composer::forced_clear`). Text read where no person can
+        // have made a draft is the agent's own screen, such as Codex's hooks
+        // review, whose `›` cursor reads as its composer, and a screen with
+        // no composer to read is the screen a send exists to answer.
+        if self
+            .with_runtime(|runtime, pane| runtime.person_draft(pane))
+            .unwrap_or(false)
+            && let Some(kind) = self.agent_kind
+            && crate::delivery::composer::forced_clear(self.engine, self.raw, kind)
+                == Err(crate::delivery::composer::NOT_EMPTY)
+        {
+            return Err(refused(crate::delivery::composer::NOT_EMPTY, landed));
+        }
+        if let Some(text) = text {
+            self.unmoved(fence).map_err(|code| refused(code, landed))?;
+            let written = if paste {
+                // As a terminal pastes: each line break a CR, so no program
+                // reads one as the LF some take for Enter.
+                let text = text.replace("\r\n", "\r").replace('\n', "\r");
+                self.engine.paste_text(self.wait, self.raw, &text)
+            } else {
+                self.engine.send_text(self.wait, self.raw, text)
+            };
+            fence = self.wrote(fence, &written);
+            written.map_err(|error| {
+                refused(&self.failed("text", &error, "pane_unavailable"), landed)
+            })?;
+            landed.text = true;
+            if fence == Fence::Moved {
+                return Err(refused("operator_typing", landed));
+            }
+        }
+        let mut pressed: Vec<PaneKey> = keys.to_vec();
+        if enter {
+            pressed.push(PaneKey::Enter);
+        }
+        if !pressed.is_empty() {
+            self.unmoved(fence).map_err(|code| refused(code, landed))?;
+            let written = self.engine.press_pane_keys(self.wait, self.raw, &pressed);
+            self.wrote(fence, &written);
+            let later = if landed.text {
+                "keys_not_sent"
+            } else {
+                "pane_unavailable"
+            };
+            written.map_err(|error| refused(&self.failed("keys", &error, later), landed))?;
+            landed.keys = true;
+        }
+        // Only a send that landed whole answered the agent's screen.
+        self.with_runtime(|runtime, pane| runtime.note_pane_send_answered(pane));
+        Ok(landed)
+    }
+
+    /// `act` on the runtime and the observed pane, when there are both.
+    fn with_runtime<T>(
+        &self,
+        act: impl FnOnce(&mut crate::runtime::Runtime, &str) -> T,
+    ) -> Option<T> {
+        let (pane, runtime) = (self.noted?, self.runtime.upgrade()?);
+        let mut runtime = runtime
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        Some(act(&mut runtime, pane))
+    }
+
+    /// Refuses the next write with `operator_typing` when input came to the
+    /// pane since `fence`.
+    fn unmoved(&self, fence: Fence) -> Result<(), &'static str> {
+        let fence = match fence {
+            Fence::Unfenced => return Ok(()),
+            Fence::Moved => return Err("operator_typing"),
+            Fence::At(fence) => fence,
+        };
+        let moved = self
+            .with_runtime(|runtime, pane| runtime.input_fence(pane).is_some_and(|now| now != fence))
+            .unwrap_or(false);
+        if moved {
+            Err("operator_typing")
+        } else {
+            Ok(())
+        }
+    }
+
+    /// Notes a write that engine took, or whose reply was lost and so may
+    /// have landed, as input the sender wrote after `fence`; a refused one
+    /// is none. The answer is the next write's fence, `Moved` once someone
+    /// else's input came during this one.
+    fn wrote(&self, fence: Fence, written: &Result<(), EngineError>) -> Fence {
+        let Fence::At(at) = fence else {
+            return fence;
+        };
+        if matches!(written, Err(error) if !error.reply_unknown()) {
+            return fence;
+        }
+        match self.with_runtime(|runtime, pane| runtime.note_pane_send_write(pane, at)) {
+            Some(Some(next)) => Fence::At(next),
+            Some(None) => Fence::Moved,
+            None => fence,
+        }
+    }
+
+    /// A write that failed: refused before anything landed is
+    /// `pane_unavailable`, after the text landed `later`, and with its answer
+    /// lost `send_unconfirmed`.
+    fn failed(&self, step: &str, error: &EngineError, later: &str) -> String {
+        let code = if error.reply_unknown() {
+            "send_unconfirmed"
+        } else {
+            later
+        };
+        failed(step, self.raw, error, code)
+    }
+}
+
+/// A failed engine call, logged with the pane or workspace it was about and
+/// never with text, answered by `code`.
+fn failed(step: &str, subject: &str, error: &EngineError, code: &str) -> String {
+    crate::diagnostic!(
+        json!({"component":"pane_command","kind":"pane_command.failed",
+        "step":step,"subject":subject,"code":code,"engine_code":error.code(),
+        "reply_unknown":error.reply_unknown(),"detail":error.to_string()})
+    );
+    code.to_owned()
+}
+
+/// Waits, within [`SHELL_WAIT`], until the new pane's shell alone holds its
+/// terminal, the moment a typed line reaches it whole.
+#[allow(clippy::disallowed_methods)] // bounded production polling between two engine reads
+fn wait_for_shell(engine: &dyn crate::engine::Engine, pane: &str) -> Result<(), String> {
+    let deadline = Instant::now() + SHELL_WAIT;
+    loop {
+        let ready = engine
+            .pane_processes(Wait::Each(CALL_WAIT), pane)
+            .is_ok_and(|group| group.shell_holds_terminal());
+        if ready {
+            return Ok(());
+        }
+        if Instant::now() >= deadline {
+            crate::diagnostic!(json!({"component":"pane_command",
+                "kind":"pane_command.shell_not_ready","pane_id":pane}));
+            return Err("shell_not_ready".to_owned());
+        }
+        thread::sleep(SHELL_POLL);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn each_limit_refuses_one_past_it_and_takes_the_limit_itself() {
+        let read = |lines| PaneCommand::Read {
+            pane: "w1:p2".into(),
+            lines,
+        };
+        assert_eq!(read(LINES_LIMIT).check(), Ok(()));
+        assert_eq!(read(LINES_LIMIT + 1).check(), Err("lines_out_of_range"));
+        assert_eq!(read(0).check(), Err("lines_out_of_range"));
+        let send = |text: String| PaneCommand::Send {
+            pane: "w1:p2".into(),
+            text: Some(text),
+            keys: Vec::new(),
+            enter: false,
+            paste: false,
+        };
+        assert_eq!(send("x".repeat(16 * 1024)).check(), Ok(()));
+        assert_eq!(
+            send("x".repeat(16 * 1024 + 1)).check(),
+            Err("text_too_long")
+        );
+        let purpose = |text: String| PaneCommand::Purpose {
+            text,
+            checkout: None,
+        };
+        assert_eq!(purpose("가".repeat(40)).check(), Ok(()));
+        assert_eq!(
+            purpose("  ".into()).check(),
+            Ok(()),
+            "an empty purpose clears it"
+        );
+        assert_eq!(purpose("가".repeat(41)).check(), Err("purpose_too_long"));
+        assert_eq!(purpose("one\ntwo".into()).check(), Err("purpose_invalid"));
+        let open = |command: String| PaneCommand::Open {
+            command,
+            focus: false,
+        };
+        assert_eq!(open("x".repeat(COMMAND_LIMIT)).check(), Ok(()));
+        assert_eq!(
+            open("x".repeat(COMMAND_LIMIT + 1)).check(),
+            Err("command_too_long")
+        );
+    }
+
+    /// A send is judged whole before anything is written: what it carries,
+    /// its control bytes and its key count.
+    #[test]
+    fn a_send_is_refused_whole_for_what_it_carries_before_any_write() {
+        let send = |text: Option<&str>, keys: usize, enter: bool, paste: bool| {
+            PaneCommand::Send {
+                pane: "w1:p2".into(),
+                text: text.map(str::to_owned),
+                keys: vec![PaneKey::Down; keys],
+                enter,
+                paste,
+            }
+            .check()
+        };
+        assert_eq!(send(None, 0, false, false), Err("nothing_to_send"));
+        assert_eq!(send(None, 0, true, false), Ok(()), "Enter alone");
+        assert_eq!(send(None, 1, false, false), Ok(()), "a key alone");
+        assert_eq!(send(None, KEYS_LIMIT, true, false), Ok(()));
+        assert_eq!(
+            send(None, KEYS_LIMIT + 1, false, false),
+            Err("too_many_keys")
+        );
+        assert_eq!(send(Some("yes"), 1, true, false), Ok(()));
+        // A line break, a tab or an Escape types a key nobody named.
+        for text in ["a\nb", "a\rb", "a\tb", "a\u{1b}b", "\u{1b}[201~"] {
+            assert_eq!(
+                send(Some(text), 0, false, false),
+                Err("text_invalid"),
+                "{text:?}"
+            );
+        }
+        // A paste keeps its line breaks and tabs, never an Escape that
+        // could end it early or another control byte.
+        assert_eq!(send(Some("a\nb\r\n\tc"), 0, false, true), Ok(()));
+        for text in ["a\u{1b}[201~b", "a\u{7}b", "a\u{9b}b"] {
+            assert_eq!(
+                send(Some(text), 0, false, true),
+                Err("text_invalid"),
+                "{text:?}"
+            );
+        }
+        assert_eq!(
+            send(None, 1, false, true),
+            Err("text_empty"),
+            "a paste of nothing"
+        );
+        assert_eq!(send(Some(""), 1, false, false), Err("text_empty"));
+    }
+
+    #[test]
+    fn a_pane_refusal_names_the_address_of_a_pane_on_another_machine() {
+        // A bare id names a pane of the caller's machine; the refusal is the
+        // only place an agent that pasted one from another machine learns why.
+        for code in ["pane_unavailable", "agent_unavailable"] {
+            let next = next_action(code).expect(code);
+            assert!(
+                next.contains("remote:<device id>:pane:<id>"),
+                "{code}: {next}"
+            );
+        }
+    }
+
+    #[test]
+    fn every_refusal_a_command_gives_names_its_own_next_step() {
+        assert_eq!(next_action("anything_else"), None);
+        for code in [
+            "lines_out_of_range",
+            "text_empty",
+            "text_too_long",
+            "command_invalid",
+            "command_too_long",
+            "purpose_invalid",
+            "purpose_too_long",
+            "pane_unavailable",
+            "agent_unavailable",
+            "target_ambiguous",
+            "pane_required",
+            "pane_open_unconfirmed",
+            "shell_not_ready",
+            "nothing_to_send",
+            "text_invalid",
+            "too_many_keys",
+            "paste_unsupported",
+            "pane_asleep",
+            "composer_not_empty",
+            "keys_not_sent",
+            "send_unconfirmed",
+            "operator_typing",
+            "guest_pane_read",
+            "guest_pane_keys",
+        ] {
+            assert!(next_action(code).is_some(), "{code}");
+        }
+    }
+}

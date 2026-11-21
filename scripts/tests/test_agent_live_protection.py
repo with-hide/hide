@@ -26,12 +26,19 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from agent_live_check.process_table import (BsdInfo, Process, ProcessTable, descendants, marked_descendants,
                                            procargs_owned, require_complete, snapshot, validate_linux_procfs)
 from agent_live_check.processes import (OwnedProcesses, ProcessError, ProcessSafetyError, RssSamples, guard,
-                                       control_plane, largest, linux_children_remain, signal_reserved_group)
+                                       control_plane, largest, linux_children_remain, reap_adopted,
+                                       signal_reserved_group)
 from agent_live_check.protection import ConfigGuard, ProtectionError, stamp, validate_isolation
 from agent_live_check.sandbox import WriteSandbox
 from agent_live_check.runtime import Runtime
-from agent_live_check.report import save
-from agent_live_check.cli import operator_routing, record_process_diagnostics, wrapper
+
+
+class Paneless(Runtime):
+    """A run that opened no pane, so its pane cleanup has nothing to end."""
+
+    def stop_panes(self):
+        pass
+from agent_journey.routes import operator_routing
 
 
 def procargs(*environment, argv=(b"fixture",), pointer_width=8):
@@ -393,7 +400,7 @@ raise SystemExit('FIFO was accepted as configuration')
         self.assertEqual(code, 0)
 
     def test_directory_cleanup_failure_still_removes_peer_and_restores_owner_limits(self):
-        runtime = Runtime.__new__(Runtime)
+        runtime = Paneless.__new__(Paneless)
         runtime.owner = OwnedProcesses()
         runtime.owner.cancelled.set()
         deadline = runtime.owner.deadline
@@ -419,7 +426,7 @@ raise SystemExit('FIFO was accepted as configuration')
         self.assertEqual(runtime.owner.deadline, deadline)
 
     def test_prior_missing_guardian_receipt_retains_runtime_folders(self):
-        runtime = Runtime.__new__(Runtime)
+        runtime = Paneless.__new__(Paneless)
         runtime.owner = OwnedProcesses(diagnostics=self.run / "guardians")
         runtime.state = self.run / "state"
         runtime.probe, runtime.short = self.run / "probe", self.run / "short"
@@ -436,44 +443,34 @@ raise SystemExit('FIFO was accepted as configuration')
         self.assertTrue(runtime.probe.exists())
         self.assertTrue(runtime.short.exists())
 
-    def test_refuses_operator_socket_state_home_and_unowned_short_directory(self):
-        daemon_home = self.run / "home"
-        state = self.run / "state"
-        valid_socket = self.run / "herdr.sock"
-        validate_isolation(self.run, daemon_home, valid_socket, state, self.home, None)
+    def test_state_lives_only_in_the_owned_private_short_root(self):
+        short = self.root / "short"
+        short.mkdir(mode=0o700)
+        home, state = self.run / "home", short / "state"
+        validate_isolation(self.run, home, state, self.home, short)
         cases = [
-            (daemon_home, self.home / ".config/herdr/herdr.sock", state),
-            (daemon_home, valid_socket, self.home / ".hide/state"),
-            (self.home, valid_socket, state),
-            (daemon_home, self.root / "short.sock", state),
-            (daemon_home, valid_socket, Path("relative-state")),
+            (self.home, state, short),
+            (self.root / "elsewhere", state, short),
+            (home, self.run / "state", short),
+            (home, Path("relative-state"), short),
         ]
-        for home, sock, private_state in cases:
-            with self.subTest(case=str(sock)):
+        for case_home, case_state, case_short in cases:
+            with self.subTest(home=str(case_home), state=str(case_state)):
                 with self.assertRaises(ProtectionError):
-                    validate_isolation(self.run, home, sock, private_state, self.home, None)
+                    validate_isolation(self.run, case_home, case_state, self.home, case_short)
+        if os.name != "nt":
+            state.symlink_to(self.home, target_is_directory=True)
+            with self.assertRaises(ProtectionError):
+                validate_isolation(self.run, home, state, self.home, short)
+            state.unlink()
+            short.chmod(0o755)
+            with self.assertRaises(ProtectionError):
+                validate_isolation(self.run, home, state, self.home, short)
 
 
 @unittest.skipUnless(sys.platform == "darwin" or sys.platform.startswith("linux"),
                      "process guardian supports macOS and Linux")
 class ProcessProtection(unittest.TestCase):
-    def test_claude_exec_boundary_removes_injected_config_root_without_replacing_home(self):
-        with tempfile.TemporaryDirectory() as name:
-            root = Path(name).resolve()
-            executable = root / "inert-cli"
-            executable.write_text("#!/bin/sh\n" +
-                                  "test -z \"${CLAUDE_CONFIG_DIR+x}\" || exit 31\n" +
-                                  "test \"$DISABLE_AUTOUPDATER:$DISABLE_TELEMETRY:$DISABLE_ERROR_REPORTING\" = 1:1:1 || exit 32\n" +
-                                  'test "$HOME" = "$EXPECTED_OWNED_HOME" || exit 33\n' +
-                                  "echo exec-boundary-confirmed\n")
-            executable.chmod(0o700)
-            runtime = SimpleNamespace(bin=root / "bin", fixture_bin=None)
-            target = wrapper(runtime, {"id": "claude-code", "executable": "claude"}, executable, None)
-            with OwnedProcesses() as owner:
-                code, output, error = owner.run([str(target)], env={**os.environ,
-                    "HOME": str(root / "home"), "EXPECTED_OWNED_HOME": str(root / "home"),
-                    "CLAUDE_CONFIG_DIR": str(root / "injected")}, check=False)
-            self.assertEqual((code, output.strip()), (0, "exec-boundary-confirmed"), error)
 
     @unittest.skipUnless(sys.platform == "darwin", "Darwin unreaped getpgid boundary")
     def test_fast_completed_child_keeps_cleanup_and_successful_exit(self):
@@ -566,85 +563,6 @@ class ProcessProtection(unittest.TestCase):
             receipt = json.loads(diagnostic.read_text())
             self.assertTrue(receipt["confirmed"])
             self.assertTrue(receipt["launch_timed_out"])
-
-    def test_unavailable_receipts_preserve_known_rss_counts_without_inventing_totals(self):
-        # A cleanup receipt failure must not erase a known controller count or
-        # turn an unavailable guardian total into zero (letter 2709, B8/B12).
-        for state in ("missing", "unconfirmed", "corrupt", "nested", "invalid_samples", "missing_omitted",
-                      "missing_unattributed", "invalid_unattributed", "invalid_identity"):
-            with self.subTest(state=state), tempfile.TemporaryDirectory() as name:
-                run = Path(name)
-                owner = OwnedProcesses(diagnostics=run / "diagnostics")
-                subject = Process(123, 2, 123, 10, -1, False, os.getuid())
-                for _ in range(2):
-                    owner.rss_samples.measure({123: subject})
-                receipt = run / "diagnostics/1.json"
-                valid = {"confirmed": True, "unattributed": [], "additional_records_omitted": False,
-                         "rss_samples": {"missed": 0, "max_consecutive_misses": 0, "consecutive_miss_limit": 3}}
-                receipt.write_text(json.dumps(valid))
-                owner.sequence = 1
-                owner.attribution_report()  # A prior complete result must not mask a later failure.
-                if state == "missing":
-                    receipt.unlink()
-                elif state == "corrupt":
-                    receipt.write_text("{")
-                elif state == "nested":
-                    receipt.write_text("[" * 32768 + "]" * 32768)
-                elif state == "unconfirmed":
-                    receipt.write_text(json.dumps({**valid, "confirmed": False}))
-                elif state == "invalid_samples":
-                    receipt.write_text(json.dumps({**valid, "rss_samples": {}}))
-                else:
-                    broken = dict(valid)
-                    if state.startswith("missing_"):
-                        del broken["additional_records_omitted" if state == "missing_omitted" else "unattributed"]
-                    else:
-                        broken["unattributed"] = None if state == "invalid_unattributed" else [{"pid": 1}]
-                    receipt.write_text(json.dumps(broken))
-                report = {"herdr": {}, "agents": [], "configuration": {}, "failures": [],
-                          "cleanup": {"confirmed": True}, "resources": {}}
-                record_process_diagnostics(owner, report)
-                self.assertFalse(report["cleanup"]["confirmed"])
-                self.assertEqual(len(report["failures"]), 1)
-                self.assertEqual(save(run, report), 2)
-                samples = json.loads((run / "report.json").read_text())["resources"]["rss_samples"]
-                self.assertEqual(samples["controller"]["missed"], 2)
-                self.assertEqual(samples["controller"]["max_consecutive_misses"], 2)
-                self.assertIsNone(samples["guardians"])
-                self.assertIsNone(samples["missed"])
-                self.assertIsNone(samples["max_consecutive_misses"])
-                self.assertIn('"guardians": null', (run / "report.md").read_text())
-
-    def test_final_report_retains_controller_and_guardian_rss_misses_after_failure(self):
-        # Letter 2709 requires all missed observations in the final report,
-        # including the controller's failed sample, independently of cleanup.
-        for controller_misses, guardian_misses in ((2, 0), (3, 1)):
-            with self.subTest(controller_misses=controller_misses), tempfile.TemporaryDirectory() as name:
-                run = Path(name)
-                owner = OwnedProcesses(diagnostics=run / "diagnostics")
-                subject = Process(123, 2, 123, 10, -1, False, os.getuid())
-                for index in range(controller_misses):
-                    if index == 2:
-                        with self.assertRaisesRegex(ProcessError, "rss_samples_unavailable"):
-                            owner.rss_samples.measure({123: subject})
-                    else:
-                        owner.rss_samples.measure({123: subject})
-                # A real private receipt file is the guardian/report boundary.
-                receipt = {"confirmed": True, "unattributed": [], "additional_records_omitted": False,
-                           "rss_samples": {"missed": guardian_misses, "max_consecutive_misses": guardian_misses,
-                                           "consecutive_miss_limit": 3}}
-                (run / "diagnostics/1.json").write_text(json.dumps(receipt))
-                owner.sequence = 1
-                report = {"herdr": {}, "agents": [], "configuration": {}, "failures": [], "resources": {},
-                          "cleanup": {"confirmed": True, "attribution": owner.attribution_report()}}
-                self.assertEqual(save(run, report), 3)
-                samples = json.loads((run / "report.json").read_text())["cleanup"]["attribution"]["rss_samples"]
-                self.assertEqual(samples["missed"], controller_misses + guardian_misses)
-                self.assertEqual(samples["max_consecutive_misses"], controller_misses)
-                self.assertEqual(samples["controller"]["missed"], controller_misses)
-                self.assertEqual(samples["guardians"]["missed"], guardian_misses)
-                self.assertEqual(samples["consecutive_miss_limit"], 3)
-                self.assertIn('"controller"', (run / "report.md").read_text())
 
     def test_rss_samples_bound_consecutive_misses_by_live_identity(self):
         # Letter 2709 supplies the oracle: two misses may recover, the third
@@ -1103,6 +1021,30 @@ else:raise RuntimeError("group_survived_reap")
             self.assertFalse(linux_children_remain())
 
 
+    @unittest.skipUnless(sys.platform.startswith("linux"), "only the Linux guardian is a subreaper")
+    def test_linux_adopted_children_are_reaped_as_they_exit_not_only_at_the_final_cleanup(self):
+        # An agent run ends hundreds of processes whose parent ended first.
+        # The guardian adopts each as a zombie, and the cleanup reaps at most
+        # MAX_DESCENDANTS + 1 in one pass, so a run that left more of them
+        # unreaped failed its cleanup although everything had ended.
+        with OwnedProcesses() as owner:
+            code, _, _ = owner.run([sys.executable, str(Path(__file__).with_name("orphan_batches.py"))],
+                                   env=dict(os.environ))
+        self.assertEqual(code, 0)
+
+    def test_linux_reaping_adopted_children_leaves_the_root_to_its_own_wait(self):
+        exited = SimpleNamespace(si_pid=222)
+        root = SimpleNamespace(si_pid=111)
+        with patch("agent_live_check.processes.os.waitid", side_effect=[exited, root]) as peek, \
+                patch("agent_live_check.processes.os.waitpid") as reap:
+            reap_adopted(111)
+        self.assertTrue(all(call.args[2] & os.WNOWAIT for call in peek.call_args_list))
+        reap.assert_called_once_with(222, os.WNOHANG | 0x40000000)
+        with patch("agent_live_check.processes.os.waitid", return_value=exited), \
+                patch("agent_live_check.processes.os.waitpid"):
+            with self.assertRaisesRegex(ProcessError, "adopted_child_reap_over_budget"):
+                reap_adopted(111)
+
     def test_readable_marked_double_fork_is_cleaned(self):
         with tempfile.TemporaryDirectory(prefix="agent-detach-") as name:
             receipt = Path(name) / "child.pid"
@@ -1196,7 +1138,7 @@ class NativeWriteProtection(unittest.TestCase):
             intermediate.parent.mkdir()
             intermediate.symlink_to(target)
             entry.symlink_to(intermediate)
-            config = root / "custom-xdg/herdr"
+            config = root / "custom-xdg/hide"
             config.mkdir(parents=True)
             config_file = config / "config.json"
             config_file.write_bytes(b"original-routing")
@@ -1207,8 +1149,8 @@ class NativeWriteProtection(unittest.TestCase):
                 listener.bind(str(endpoint))
                 identity = endpoint.stat().st_ino
                 sandbox = WriteSandbox(run, sockets, home, checkout=checkout,
-                                       routing=operator_routing({"HERDR_SOCKET_PATH": str(endpoint),
-                                                                 "XDG_CONFIG_HOME": str(config.parent)}),
+                                       routing=operator_routing({"HIDE_STATE_DIR": str(endpoint.parent),
+                                                                 "XDG_STATE_HOME": str(config.parent)}),
                                        executables=[entry])
                 program = ("from pathlib import Path\n"
                            f"for name in {[str(entry), str(intermediate), str(endpoint), str(config_file)]!r}:\n"
@@ -1243,12 +1185,17 @@ class NativeWriteProtection(unittest.TestCase):
                 listener.close()
 
     def test_other_process_control_arguments_and_mailbox_storage_are_denied(self):
+        for short_state in (False, True):
+            with self.subTest(short_state=short_state):
+                self.check_private_state(short_state)
+
+    def check_private_state(self, short_state):
         with tempfile.TemporaryDirectory(prefix="acl-", dir="/tmp") as name:
             root = Path(name).resolve()
             run, sockets, home = [root / key for key in ("run", "sockets", "operator")]
             for path in (run, sockets, home):
                 path.mkdir(mode=0o700)
-            state = run / "state"
+            state = (sockets if short_state else run) / "state"
             caps = state / "pane-capabilities"
             caps.mkdir(parents=True, mode=0o700)
             reference = caps / "own.json"
@@ -1256,7 +1203,7 @@ class NativeWriteProtection(unittest.TestCase):
             reference.chmod(0o600)
             mailbox = state / "mailbox.json"
             mailbox.write_text("fresh-test-marker")
-            guard = WriteSandbox(run, sockets, home, checkout=root / "candidate")
+            guard = WriteSandbox(run, sockets, home, state, checkout=root / "candidate")
             settings = guard.probe / "integration/.claude/settings.json"
             settings.parent.mkdir(parents=True, mode=0o700)
             settings.write_text("fixture-settings")
@@ -1279,6 +1226,9 @@ class NativeWriteProtection(unittest.TestCase):
                            f"\ntry: Path({str(mailbox)!r}).read_text()"
                            "\nexcept PermissionError: pass"
                            "\nelse: raise SystemExit(31)"
+                           f"\ntry: Path({str(mailbox)!r}).write_text('forbidden')"
+                           "\nexcept PermissionError: pass"
+                           "\nelse: raise SystemExit(34)"
                            f"\ntry: os.kill({standin.pid}, 0)"
                            "\nexcept PermissionError: pass"
                            "\nelse: raise SystemExit(32)"

@@ -2,15 +2,15 @@ import type { Actions } from "../actions";
 import { Group, Row } from "../components/settings-rows";
 import { useInterfaceTranslation } from "../i18n/client";
 import type { MissionStrength } from "../snapshot";
-import { CandidateAdd, CandidateRows, CapControl, CleanMergedControl, ConductorError, OtherVendorControl, ScopeControl, StrengthControl, useConductorEdit } from "./ConductorControls";
+import { CandidateAdd, CandidateRows, CapControl, CleanMergedControl, ConductorError, ScopeControl, StrengthControl, useConductorEdit } from "./ConductorControls";
 
 // Settings › Mission (PRD software-factory-conductor D-31, B48, B49): how
 // many agents a mission runs at once, how far a mission goes when it does not
 // say, whether a merged node's worktree is cleaned up (operator decision
 // 2026-11-02, every mission at once), the candidates a Conductor chooses its workers and checkers from, and
-// how strongly a new mission is checked. The controls are the Mission tool's
-// defaults' too (`ConductorControls.tsx`, PRD mission-tool D-03); this page
-// lays them out as settings rows.
+// how strongly a new mission is checked. The controls live in
+// `ConductorControls.tsx`; this page lays them out as settings rows, and the
+// mission screen's ⚙ opens it (PRD mission-screen B10).
 
 export function ConductorTab({ actions }: { actions: Actions }) {
   const { t } = useInterfaceTranslation();
@@ -32,7 +32,8 @@ export function ConductorTab({ actions }: { actions: Actions }) {
       <Group title={t("conductor.candidates")} action={<CandidateAdd settings={settings} send={send} />} note={t("conductor.footer")} data-conductor-candidates={String(settings.candidates.length)}>
         {settings.candidates.length > 0 ? (
           // One grid for the head and every row, so the effort column is as wide as its widest row and every row's columns line up.
-          <div className="grid grid-cols-[minmax(0,1.2fr)_minmax(0,1.3fr)_auto_minmax(0,1.4fr)_auto] gap-x-sm">
+          // The agent column is the widest: an item's name carries its profile (`Claude Code · opengateway`).
+          <div className="grid grid-cols-[minmax(0,2fr)_minmax(0,1fr)_auto_minmax(0,1fr)_auto] gap-x-sm">
             <div className="col-span-full grid grid-cols-subgrid items-center px-md py-xs text-caption text-muted-foreground">
               <span>{t("conductor.column.agent")}</span>
               <span>{t("conductor.column.model")}</span>
@@ -47,9 +48,6 @@ export function ConductorTab({ actions }: { actions: Actions }) {
       <Group title={t("conductor.verification")} note={t("conductor.verification.footer")} data-conductor-verification={settings.default_strength}>
         <Row label={t("conductor.strength")} detail={<StrengthTerms strength={settings.default_strength} />}>
           <StrengthControl settings={settings} send={send} />
-        </Row>
-        <Row label={t("conductor.otherVendor")}>
-          <OtherVendorControl settings={settings} send={send} />
         </Row>
       </Group>
     </div>

@@ -1,4 +1,4 @@
-//! Owner-thread wrapper around `herdr_core::Core`.
+//! Owner-thread wrapper around `hide_core::Core`.
 
 use std::sync::mpsc::{self, Receiver, Sender};
 use std::sync::{Arc, Mutex};
@@ -12,48 +12,51 @@ const CATALOG_WAIT: std::time::Duration = std::time::Duration::from_secs(10);
 const CATALOG_POLL: std::time::Duration = std::time::Duration::from_millis(250);
 /// How long `hide <path>` waits for its registration: a device's helper
 /// judges the folder within 15 s (`REGISTRABLE_TIMEOUT`), and this machine's
-/// opens a Herdr workspace, which answers in seconds.
+/// opens a workspace in the engine, which answers in seconds.
 pub(crate) const PROJECT_OPEN_WAIT: std::time::Duration = std::time::Duration::from_secs(30);
 /// How often `hide <path>` reads its receipt again while it waits.
 const PROJECT_OPEN_POLL: std::time::Duration = std::time::Duration::from_millis(100);
 
-use herdr_core::engine::EngineHandle;
-use herdr_core::node_access::NodeLink;
-use herdr_core::workspace_control::{
+use hide_core::engine::EngineHandle;
+use hide_core::node_access::NodeLink;
+use hide_core::workspace_control::{
     Action, ActionMaterial, ActionPreparation, ActionResult, Context, Query, QueryResult, Refusal,
 };
-use herdr_core::{Core, CoreOptions};
+use hide_core::{Core, CoreOptions};
 use hide_node::terminal::device::DeviceSink;
 use hide_node::terminal::engine_panes::LocalPanes;
 use hide_node::terminal::holder::{Holders, LocalTerminals};
 use hide_node::terminal::router::Router;
-use hide_node::terminal::{
-    Attacher, LocalAttacher, Mode, OutputSink, ReportSink, Service, SessionParts,
-};
+use hide_node::terminal::{OutputSink, ReportSink, Service};
 use tokio::sync::broadcast;
 
 use crate::terminal_hub::TerminalHub;
 
-pub type SnapshotReply = herdr_core::SnapshotDeltaPayload;
+pub type SnapshotReply = hide_core::SnapshotDeltaPayload;
 
 type MoveSourceAnswer =
-    Result<(herdr_core::MoveSource, serde_json::Value), herdr_core::MoveSourceRefusal>;
+    Result<(hide_core::MoveSource, serde_json::Value), hide_core::MoveSourceRefusal>;
 type ReleaseSourceAnswer =
-    Result<(herdr_core::ReleaseSource, serde_json::Value), herdr_core::MoveSourceRefusal>;
+    Result<(hide_core::ReleaseSource, serde_json::Value), hide_core::MoveSourceRefusal>;
+
+/// What a hook's answer is read from: Memory's scope or why there is none,
+/// the open questions' when the hook asks at a prompt, and the Project's
+/// other sessions' when it starts a session.
+pub type HookScope = (
+    Result<hide_core::memory_hook::Scope, &'static str>,
+    Option<hide_core::links::agent_asks::GiveScope>,
+    Option<hide_core::links::session_brief::BriefScope>,
+);
 
 enum Command {
-    ObservationPrepare {
-        device_id: String,
-        pane_id: String,
-        expected: Context,
-        terminal: String,
-        observation: hide_node_link::panes::DirectObservation,
-        start: bool,
-        deadline: std::time::Instant,
-        reply: Sender<Result<herdr_core::direct_observation::PreparedObservation, String>>,
-    },
+    /// A usage event the daemon observed outside the core (a phone's
+    /// pairing); the owner thread hands it to the statistics worker it owns.
+    ProductEvent(hide_core::product_analytics::Event),
+    /// The operator acted from a surface outside the core (a phone); the
+    /// core counts the first action of each UTC day.
+    OperatorActive(hide_core::product_analytics::ActiveSurface),
     DeliveryHuman {
-        reply: Sender<Result<herdr_core::delivery::worker::PreparedHuman, String>>,
+        reply: Sender<Result<hide_core::delivery::worker::PreparedHuman, String>>,
     },
     ReleaseEffects {
         reply: Sender<bool>,
@@ -63,28 +66,37 @@ enum Command {
         pane_id: String,
         expected: Context,
         hint: Option<String>,
-        command: herdr_core::delivery::Command,
-        reply: Sender<Result<herdr_core::delivery::worker::Prepared, String>>,
+        command: Box<hide_core::delivery::Command>,
+        reply: Sender<Result<hide_core::delivery::worker::Prepared, String>>,
+    },
+    /// A letter a guest's node kept while this core was away
+    /// (`crate::peer_inbox`).
+    KeptLetterPrepare {
+        device_id: String,
+        pane_id: String,
+        terminal_id: String,
+        command: Box<hide_core::delivery::Command>,
+        reply: Sender<Result<hide_core::delivery::worker::Prepared, String>>,
     },
     MemoryPrepare {
         device_id: String,
         pane_id: String,
         expected: Context,
-        command: herdr_core::memory_command::MemoryCommand,
-        reply: Sender<Result<herdr_core::memory_command::PreparedMemory, String>>,
+        command: hide_core::memory_command::MemoryCommand,
+        reply: Sender<Result<hide_core::memory_command::PreparedMemory, String>>,
     },
     PanePrepare {
         device_id: String,
         pane_id: String,
         expected: Context,
-        command: herdr_core::pane_command::PaneCommand,
-        reply: Sender<Result<herdr_core::pane_command::Prepared, String>>,
+        command: hide_core::pane_command::PaneCommand,
+        reply: Sender<Result<hide_core::pane_command::Prepared, String>>,
     },
     WorktreeRemove {
         device_id: String,
         pane_id: String,
         expected: Context,
-        command: herdr_core::worktree_command::WorktreeRemove,
+        command: hide_core::worktree_command::WorktreeRemove,
         reply: Sender<Result<u64, String>>,
     },
     WorktreeRemovalAnswer {
@@ -95,16 +107,16 @@ enum Command {
         device_id: String,
         pane_id: String,
         expected: Context,
-        command: herdr_core::missions::MissionCommand,
+        command: hide_core::missions::MissionCommand,
         reply: Sender<Result<serde_json::Value, String>>,
     },
     Plan {
         device_id: String,
         pane_id: String,
         expected: Context,
-        command: herdr_core::plans::PlanCommand,
-        proofs: herdr_core::plans::Proofs,
-        reply: Sender<Result<herdr_core::plans::PlanTurn, String>>,
+        command: hide_core::plans::PlanCommand,
+        proofs: hide_core::plans::Proofs,
+        reply: Sender<Result<hide_core::plans::PlanTurn, String>>,
     },
     PlanContext {
         device_id: String,
@@ -115,13 +127,37 @@ enum Command {
         device_id: String,
         pane_id: String,
         report: hide_node_link::panes::HookStatusReport,
+        lineage: Option<Vec<hide_agent_hooks::hook_request::ExecProcess>>,
         reply: Sender<Result<(), &'static str>>,
+    },
+    AgentExec {
+        device_id: String,
+        pane_id: String,
+        report: hide_core::engine::AgentExecReport,
+        reply: Sender<Result<(), &'static str>>,
+    },
+    ExecStart {
+        device_id: String,
+        pane_id: String,
+        attempt: String,
+        reply: Sender<Result<hide_core::ExecAsk, &'static str>>,
     },
     /// A read of the operator's agent definition folder, made off the owner
     /// thread with the development switch on.
     AgentDefinitions {
         home: std::path::PathBuf,
         read: Result<hide_agent_adapter::definition::Catalog, String>,
+    },
+    AgentProfile {
+        device_id: String,
+        command: hide_core::agent_profiles::ProfileCommand,
+        reply: Sender<Result<hide_core::agent_profiles::Prepared, String>>,
+    },
+    Store {
+        device_id: String,
+        pane_id: String,
+        command: hide_core::store_command::StoreCommand,
+        reply: Sender<Result<hide_core::store_command::Prepared, String>>,
     },
     AgentCatalog {
         device_id: String,
@@ -135,6 +171,17 @@ enum Command {
         pane_id: String,
         all: bool,
         reply: Sender<Result<serde_json::Value, String>>,
+    },
+    Access {
+        call: hide_core::access::Call,
+        reply: Sender<Result<serde_json::Value, String>>,
+    },
+    Automation {
+        call: hide_core::automations::Call,
+        reply: Sender<Result<serde_json::Value, String>>,
+    },
+    AutomationsOn {
+        reply: Sender<Arc<std::sync::atomic::AtomicBool>>,
     },
     AgentSleep {
         device_id: String,
@@ -154,26 +201,32 @@ enum Command {
     },
     Device {
         device_id: String,
-        command: herdr_core::device_command::DeviceCommand,
+        command: hide_core::device_command::DeviceCommand,
         reply: Sender<Result<serde_json::Value, String>>,
     },
     ProjectOpen {
         device_id: String,
         path: String,
         request_id: String,
-        unheld: herdr_core::project_open::Unheld,
+        unheld: hide_core::project_open::Unheld,
         reply: Sender<Result<(), String>>,
     },
     ProjectOpenReceipt {
         request_id: String,
-        reply: Sender<Option<herdr_core::project_open::ProjectOpenReceipt>>,
+        reply: Sender<Option<hide_core::project_open::ProjectOpenReceipt>>,
     },
     SetFileRoots {
         roots: Vec<(std::path::PathBuf, std::fs::File)>,
         reply: Sender<Result<(), String>>,
     },
     SetDesk {
-        platform: Arc<dyn herdr_core::desk::DeskPlatform>,
+        platform: Arc<dyn hide_core::desk::DeskPlatform>,
+    },
+    SetHerdrImport {
+        machine: Arc<dyn hide_core::herdr_import::Machine>,
+    },
+    HerdrImportShown {
+        reply: Sender<Option<hide_core::HerdrImportSnapshot>>,
     },
     Dispatch {
         event: Vec<u8>,
@@ -184,21 +237,40 @@ enum Command {
         reply: Sender<Result<Arc<dyn NodeLink>, String>>,
     },
     WorkspaceRemoteRoutes {
-        reply: Sender<Vec<herdr_core::WorkspaceRemoteRoute>>,
+        reply: Sender<Vec<hide_core::WorkspaceRemoteRoute>>,
+    },
+    RegisteredPaths {
+        device_id: String,
+        reply: Sender<Vec<String>>,
     },
     DeviceEngine {
         device_id: String,
         reply: Sender<Option<EngineHandle>>,
     },
+    /// The Views a pane's agent has open, for a phone's 볼 것 tab.
+    AgentLooks {
+        pane_id: String,
+        reply: Sender<hide_core::LookViews>,
+    },
+    /// The account a pane's agent runs in, for a phone's conversation.
+    PaneAccount {
+        pane_id: String,
+        reply: Sender<Option<hide_agent_adapter::AccountKey>>,
+    },
+    /// A checkout's change-list read, prepared under the lock; the Git read
+    /// runs where the caller runs it, never on the owner thread.
+    CheckoutChanges {
+        device_id: String,
+        checkout_path: String,
+        committed: bool,
+        reply: Sender<Result<hide_core::PreparedChanges, String>>,
+    },
     InputGate {
-        reply: Sender<Arc<herdr_core::input_gate::PaneInputGate>>,
+        reply: Sender<Arc<hide_core::input_gate::PaneInputGate>>,
     },
     InboundRefusal {
         node: String,
         reply: Sender<Option<String>>,
-    },
-    LinkedNodes {
-        reply: Sender<Vec<String>>,
     },
     ReleaseSource {
         node: String,
@@ -208,10 +280,14 @@ enum Command {
         device: String,
         reply: Sender<MoveSourceAnswer>,
     },
+    DeviceSwitchSource {
+        device: String,
+        reply: Sender<Result<hide_core::DeviceSwitchSource, &'static str>>,
+    },
     InboundNode {
         node: String,
         label: String,
-        arrived: herdr_core::remote::Arrived,
+        arrived: hide_core::remote::Arrived,
         reply: Sender<Result<(), String>>,
     },
     BrowserRouteSource {
@@ -219,7 +295,7 @@ enum Command {
         checkout_path: String,
         view_id: String,
         load: u64,
-        reply: Sender<Option<herdr_core::workspace_control::BrowserRouteSource>>,
+        reply: Sender<Option<hide_core::workspace_control::BrowserRouteSource>>,
     },
     WorkspaceQuery {
         device_id: String,
@@ -229,13 +305,23 @@ enum Command {
     },
     LinksScope {
         context: Context,
-        reply: Sender<Option<herdr_core::links::query::Scope>>,
+        reply: Sender<Option<hide_core::links::query::Scope>>,
     },
     /// `hide session`: the runtime's part, each asked once under its lock.
     Session(SessionAsk),
     MemoryScope {
         context: Context,
-        reply: Sender<Result<herdr_core::memory_hook::Scope, &'static str>>,
+        /// The pane and the prompt's session, when the hook asks at a prompt.
+        asks: Option<(String, String)>,
+        /// The pane and the session it starts, when the hook starts one.
+        brief: Option<(String, String)>,
+        reply: Sender<HookScope>,
+    },
+    FoldAsk {
+        device_id: String,
+        pane_id: String,
+        expected: Context,
+        reply: Sender<Result<hide_core::links::agent_asks::FoldScope, String>>,
     },
     WorkspaceAction {
         device_id: String,
@@ -263,7 +349,7 @@ enum Command {
 
 pub struct CoreHandle {
     /// The machine the core runs on, named in every key for this machine.
-    node: herdr_core::node::NodeId,
+    node: hide_core::node::NodeId,
     commands: Sender<Command>,
     pub notify: broadcast::Sender<()>,
     /// Every node's terminals: a screen's keys and views go here directly,
@@ -278,21 +364,21 @@ pub struct CoreHandle {
     /// session start reads without the owner thread.
     state_dir: std::path::PathBuf,
     /// The home whose agent definition folder is read at start and on each
-    /// `hide agent catalog`, with the development switch
-    /// (`crate::env::HIDE_DEV_PANE_HOLDER`) on only; `None` reads nothing
-    /// (PRD engine-bundle-3-core-owns B1, D-17).
-    definitions_home: Option<std::path::PathBuf>,
+    /// `hide agent catalog` (PRD engine-bundle-3-core-owns B1, D-17).
+    definitions_home: std::path::PathBuf,
     /// This machine's engine, the same one the core holds: a pane's proof
     /// and a phone's read ask it without the owner thread or the runtime
-    /// lock. `None` when the daemon runs without a Herdr server.
-    engine: Option<EngineHandle>,
-    /// This machine's pane holders, when the core's own engine runs them:
-    /// the daemon lives while one of their panes may still run (PRD
-    /// engine-bundle-3-core-owns D-10).
-    holders: Option<Arc<Holders>>,
+    /// lock.
+    engine: EngineHandle,
+    /// This machine's pane holders: the daemon lives while one of their
+    /// panes may still run (PRD engine-bundle-3-core-owns D-10).
+    holders: Arc<Holders>,
     /// What a shutdown ends, taken out by the first one, so a second
     /// shutdown or the `Drop` after it finds nothing left to close.
     running: Mutex<Option<Running>>,
+    /// Whether any automation is on: the daemon skips its idle exit while
+    /// one is (PRD automations D-19), read without the owner thread.
+    automations_on: Arc<std::sync::atomic::AtomicBool>,
 }
 
 /// The core's owner thread and this machine's terminal service, which
@@ -304,40 +390,21 @@ struct Running {
 }
 
 impl CoreHandle {
-    #[allow(clippy::too_many_arguments)] // identity facts and deadline cross the authenticated boundary intact
-    pub fn prepare_direct_observation(
-        &self,
-        device: &str,
-        pane: &str,
-        expected: &Context,
-        terminal: String,
-        observation: hide_node_link::panes::DirectObservation,
-        start: bool,
-        deadline: std::time::Instant,
-    ) -> Result<herdr_core::direct_observation::PreparedObservation, String> {
-        let (reply, result) = mpsc::channel();
-        self.commands
-            .send(Command::ObservationPrepare {
-                device_id: device.to_owned(),
-                pane_id: pane.to_owned(),
-                expected: expected.clone(),
-                terminal,
-                observation,
-                start,
-                deadline,
-                reply,
-            })
-            .map_err(|_| "observation_unavailable")?;
-        let left = deadline
-            .checked_duration_since(std::time::Instant::now())
-            .ok_or("observation_expired")?;
-        result
-            .recv_timeout(left)
-            .map_err(|_| "observation_expired")?
-    }
     /// The machine the core runs on.
-    pub fn node(&self) -> &herdr_core::node::NodeId {
+    pub fn node(&self) -> &hide_core::node::NodeId {
         &self.node
+    }
+
+    /// Counts a usage event the daemon observed outside the core; the
+    /// statistics worker drops it while usage statistics are off.
+    pub fn capture_product_event(&self, event: hide_core::product_analytics::Event) {
+        let _ = self.commands.send(Command::ProductEvent(event));
+    }
+
+    /// Tells the core the operator acted from `surface`; the core sends
+    /// `hide_active` for the first such action of a UTC day.
+    pub fn note_operator_active(&self, surface: hide_core::product_analytics::ActiveSurface) {
+        let _ = self.commands.send(Command::OperatorActive(surface));
     }
 
     /// The core's state folder.
@@ -347,7 +414,7 @@ impl CoreHandle {
 
     pub fn prepare_delivery_human(
         &self,
-    ) -> Result<herdr_core::delivery::worker::PreparedHuman, String> {
+    ) -> Result<hide_core::delivery::worker::PreparedHuman, String> {
         let (reply, result) = mpsc::channel();
         self.commands
             .send(Command::DeliveryHuman { reply })
@@ -373,8 +440,8 @@ impl CoreHandle {
         pane: &str,
         expected: &Context,
         hint: Option<String>,
-        command: herdr_core::delivery::Command,
-    ) -> Result<herdr_core::delivery::worker::Prepared, String> {
+        command: hide_core::delivery::Command,
+    ) -> Result<hide_core::delivery::worker::Prepared, String> {
         let (reply, result) = mpsc::channel();
         self.commands
             .send(Command::DeliveryPrepare {
@@ -382,7 +449,31 @@ impl CoreHandle {
                 pane_id: pane.to_owned(),
                 expected: expected.clone(),
                 hint,
-                command,
+                command: Box::new(command),
+                reply,
+            })
+            .map_err(|_| "delivery_unavailable".to_owned())?;
+        result
+            .recv()
+            .map_err(|_| "delivery_unavailable".to_owned())?
+    }
+
+    /// A letter a guest's node kept while this core was away, as the
+    /// command its sender would have run (`Core::prepare_kept_letter`).
+    pub fn prepare_kept_letter(
+        &self,
+        device: &str,
+        pane: &str,
+        terminal: &str,
+        command: hide_core::delivery::Command,
+    ) -> Result<hide_core::delivery::worker::Prepared, String> {
+        let (reply, result) = mpsc::channel();
+        self.commands
+            .send(Command::KeptLetterPrepare {
+                device_id: device.to_owned(),
+                pane_id: pane.to_owned(),
+                terminal_id: terminal.to_owned(),
+                command: Box::new(command),
                 reply,
             })
             .map_err(|_| "delivery_unavailable".to_owned())?;
@@ -398,8 +489,8 @@ impl CoreHandle {
         device: &str,
         pane: &str,
         expected: &Context,
-        command: herdr_core::memory_command::MemoryCommand,
-    ) -> Result<herdr_core::memory_command::PreparedMemory, String> {
+        command: hide_core::memory_command::MemoryCommand,
+    ) -> Result<hide_core::memory_command::PreparedMemory, String> {
         let (reply, result) = mpsc::channel();
         self.commands
             .send(Command::MemoryPrepare {
@@ -421,8 +512,8 @@ impl CoreHandle {
         device: &str,
         pane: &str,
         expected: &Context,
-        command: herdr_core::pane_command::PaneCommand,
-    ) -> Result<herdr_core::pane_command::Prepared, String> {
+        command: hide_core::pane_command::PaneCommand,
+    ) -> Result<hide_core::pane_command::Prepared, String> {
         let (reply, result) = mpsc::channel();
         self.commands
             .send(Command::PanePrepare {
@@ -447,7 +538,7 @@ impl CoreHandle {
         device: &str,
         pane: &str,
         expected: &Context,
-        command: herdr_core::worktree_command::WorktreeRemove,
+        command: hide_core::worktree_command::WorktreeRemove,
     ) -> Result<serde_json::Value, String> {
         let unavailable = || "worktree_remove_worker_unavailable".to_owned();
         // Subscribed before the start, so the change that ends the removal
@@ -465,7 +556,7 @@ impl CoreHandle {
             })
             .map_err(|_| unavailable())?;
         let id = result.recv().map_err(|_| unavailable())??;
-        let deadline = std::time::Instant::now() + herdr_core::worktree_command::REMOVE_WAIT;
+        let deadline = std::time::Instant::now() + hide_core::worktree_command::REMOVE_WAIT;
         loop {
             let (reply, result) = mpsc::channel();
             self.commands
@@ -489,7 +580,7 @@ impl CoreHandle {
         device: &str,
         pane: &str,
         expected: &Context,
-        command: herdr_core::missions::MissionCommand,
+        command: hide_core::missions::MissionCommand,
     ) -> Result<serde_json::Value, String> {
         let (reply, result) = mpsc::channel();
         self.commands
@@ -506,7 +597,7 @@ impl CoreHandle {
             .map_err(|_| "mission_unavailable".to_owned())?
     }
 
-    /// Runs a `hide plan` command on the owner thread. A change whose
+    /// Runs a `hide task` command on the owner thread. A change whose
     /// evidence needs reading (a step's pull request or file, PRD
     /// hide-plan-delegate D-19) has it read here, on the caller's request
     /// thread, and is asked again with what was read; a plan that moved in
@@ -517,9 +608,9 @@ impl CoreHandle {
         device: &str,
         pane: &str,
         expected: &Context,
-        command: herdr_core::plans::PlanCommand,
+        command: hide_core::plans::PlanCommand,
     ) -> Result<serde_json::Value, String> {
-        let mut proofs = herdr_core::plans::Proofs::default();
+        let mut proofs = hide_core::plans::Proofs::default();
         let mut owed = None;
         for _ in 0..3 {
             let (reply, result) = mpsc::channel();
@@ -534,8 +625,8 @@ impl CoreHandle {
                 })
                 .map_err(|_| "plan_unavailable".to_owned())?;
             match result.recv().map_err(|_| "plan_unavailable".to_owned())?? {
-                herdr_core::plans::PlanTurn::Answered { answer, .. } => return Ok(answer),
-                herdr_core::plans::PlanTurn::Prove(proof) => {
+                hide_core::plans::PlanTurn::Answered { answer, .. } => return Ok(answer),
+                hide_core::plans::PlanTurn::Prove(proof) => {
                     proof.run(&mut proofs);
                     owed = Some(proof);
                 }
@@ -573,6 +664,7 @@ impl CoreHandle {
         device: &str,
         pane: &str,
         report: hide_node_link::panes::HookStatusReport,
+        lineage: Option<Vec<hide_agent_hooks::hook_request::ExecProcess>>,
     ) -> Result<(), &'static str> {
         let (reply, result) = mpsc::channel();
         self.commands
@@ -580,10 +672,53 @@ impl CoreHandle {
                 device_id: device.to_owned(),
                 pane_id: pane.to_owned(),
                 report,
+                lineage,
                 reply,
             })
             .map_err(|_| "hook_status_unavailable")?;
         result.recv().map_err(|_| "hook_status_unavailable")?
+    }
+
+    /// What `hide agent exec` in a pane reported of its profile's start,
+    /// handed to the pane's engine on the owner thread.
+    pub fn agent_exec(
+        &self,
+        device: &str,
+        pane: &str,
+        report: hide_core::engine::AgentExecReport,
+    ) -> Result<(), &'static str> {
+        let (reply, result) = mpsc::channel();
+        self.commands
+            .send(Command::AgentExec {
+                device_id: device.to_owned(),
+                pane_id: pane.to_owned(),
+                report,
+                reply,
+            })
+            .map_err(|_| "agent_exec_unavailable")?;
+        result.recv().map_err(|_| "agent_exec_unavailable")?
+    }
+
+    /// What `hide agent exec` in a pane asks for its profile before it
+    /// checks its program: planned on the owner thread, then asked of the
+    /// pane's machine on the caller's thread, so no node call waits there.
+    pub fn exec_start(
+        &self,
+        device: &str,
+        pane: &str,
+        attempt: &str,
+    ) -> Result<hide_node_link::panes::ExecProfile, &'static str> {
+        let (reply, result) = mpsc::channel();
+        self.commands
+            .send(Command::ExecStart {
+                device_id: device.to_owned(),
+                pane_id: pane.to_owned(),
+                attempt: attempt.to_owned(),
+                reply,
+            })
+            .map_err(|_| "agent_exec_unavailable")?;
+        let ask = result.recv().map_err(|_| "agent_exec_unavailable")??;
+        Ok(ask.ask())
     }
 
     /// `hide agent catalog`, read on the owner thread. While the core says a
@@ -613,16 +748,14 @@ impl CoreHandle {
     }
 
     /// Read the operator's agent definition folder here, off the owner
-    /// thread and the runtime lock, and hand the result to the core; nothing
-    /// with the development switch off.
+    /// thread and the runtime lock, and hand the result to the core.
     fn read_agent_definitions(&self) {
-        if let Some(home) = &self.definitions_home {
-            let read = hide_kit::agent_definitions::read(home);
-            let _ = self.commands.send(Command::AgentDefinitions {
-                home: home.clone(),
-                read,
-            });
-        }
+        let home = &self.definitions_home;
+        let read = hide_kit::agent_definitions::read(home);
+        let _ = self.commands.send(Command::AgentDefinitions {
+            home: home.clone(),
+            read,
+        });
     }
 
     fn agent_catalog_once(
@@ -643,6 +776,48 @@ impl CoreHandle {
         result
             .recv()
             .map_err(|_| "catalog_unavailable".to_owned())?
+    }
+
+    /// `hide agent profile`, planned on the owner thread; the caller runs
+    /// the plan (`Prepared::run`) on its own.
+    pub fn prepare_agent_profile(
+        &self,
+        device: &str,
+        command: hide_core::agent_profiles::ProfileCommand,
+    ) -> Result<hide_core::agent_profiles::Prepared, String> {
+        let (reply, result) = mpsc::channel();
+        self.commands
+            .send(Command::AgentProfile {
+                device_id: device.to_owned(),
+                command,
+                reply,
+            })
+            .map_err(|_| hide_core::agent_profiles::UNANSWERED.to_owned())?;
+        result
+            .recv()
+            .map_err(|_| hide_core::agent_profiles::UNANSWERED.to_owned())?
+    }
+
+    /// `hide skill` / `hide mcp`, planned on the owner thread; the caller
+    /// waits on the plan (`Prepared::run`) on its own.
+    pub fn prepare_store(
+        &self,
+        device: &str,
+        pane: &str,
+        command: hide_core::store_command::StoreCommand,
+    ) -> Result<hide_core::store_command::Prepared, String> {
+        let (reply, result) = mpsc::channel();
+        self.commands
+            .send(Command::Store {
+                device_id: device.to_owned(),
+                pane_id: pane.to_owned(),
+                command,
+                reply,
+            })
+            .map_err(|_| hide_core::store_command::UNAVAILABLE.to_owned())?;
+        result
+            .recv()
+            .map_err(|_| hide_core::store_command::UNAVAILABLE.to_owned())?
     }
 
     /// `hide agent sleep`, run on the owner thread.
@@ -705,21 +880,50 @@ impl CoreHandle {
         result.recv().map_err(|_| "ps_unavailable".to_owned())?
     }
 
+    /// One call on the automations (PRD automations B10): `hide automation`,
+    /// a form's preview, or a phone's run and pause.
+    pub fn automation(
+        &self,
+        call: hide_core::automations::Call,
+    ) -> Result<serde_json::Value, String> {
+        let (reply, result) = mpsc::channel();
+        self.commands
+            .send(Command::Automation { call, reply })
+            .map_err(|_| "automations_unavailable".to_owned())?;
+        result
+            .recv()
+            .map_err(|_| "automations_unavailable".to_owned())?
+    }
+
+    /// Whether any automation is on (PRD automations D-19).
+    pub fn automations_on(&self) -> bool {
+        self.automations_on
+            .load(std::sync::atomic::Ordering::SeqCst)
+    }
+
+    /// One call for an external tool (PRD hide-external-control): its
+    /// request, status, leave, its key's proof or a command's check.
+    pub fn access(&self, call: hide_core::access::Call) -> Result<serde_json::Value, String> {
+        let (reply, result) = mpsc::channel();
+        self.commands
+            .send(Command::Access { call, reply })
+            .map_err(|_| "access_unavailable".to_owned())?;
+        result.recv().map_err(|_| "access_unavailable".to_owned())?
+    }
+
     /// `hide <path>` for a caller on `device`: started on the owner thread,
     /// then its receipt read again every `PROJECT_OPEN_POLL`, off the owner
     /// thread and the runtime lock, until it settles or `PROJECT_OPEN_WAIT`
     /// is over (`project_open_unconfirmed`). The same request id asked
     /// again joins its first receipt; `unheld` says whether a folder no
     /// registered checkout holds may be registered.
-    #[allow(clippy::disallowed_methods)] // a production wait for the registration, bounded by PROJECT_OPEN_WAIT
     pub fn project_open(
         &self,
         device: &str,
         path: &str,
         request_id: &str,
-        unheld: herdr_core::project_open::Unheld,
-    ) -> Result<herdr_core::project_open::ProjectOpenReceipt, String> {
-        use herdr_core::project_open::ProjectOpenReceipt;
+        unheld: hide_core::project_open::Unheld,
+    ) -> Result<hide_core::project_open::ProjectOpenReceipt, String> {
         let (reply, result) = mpsc::channel();
         self.commands
             .send(Command::ProjectOpen {
@@ -733,6 +937,41 @@ impl CoreHandle {
         result
             .recv()
             .map_err(|_| "project_open_unavailable".to_owned())??;
+        self.project_receipt(request_id)
+    }
+
+    /// Registers this machine's folder `path` as a project and brings
+    /// nothing forward, as a row of Add a project's importable list does
+    /// (`create_workspace` with a request id), then waits for its receipt
+    /// as [`Self::project_open`] does. The same request id asked again
+    /// joins its first receipt.
+    pub fn project_add(
+        &self,
+        path: &str,
+        label: &str,
+        request_id: &str,
+    ) -> Result<hide_core::project_open::ProjectOpenReceipt, String> {
+        let event = serde_json::json!({
+            "schema_version": hide_core::SCHEMA_VERSION,
+            "kind": "create_workspace",
+            "payload": {
+                "path": path, "label": label, "initialize_git": false,
+                "request_id": request_id,
+            },
+        });
+        self.dispatch(event.to_string().into_bytes())
+            .map_err(|_| "project_open_unavailable".to_owned())?;
+        self.project_receipt(request_id)
+    }
+
+    /// The receipt of the request `request_id` once it settles, read again
+    /// every `PROJECT_OPEN_POLL` until `PROJECT_OPEN_WAIT` is over.
+    #[allow(clippy::disallowed_methods)] // a production wait for the registration, bounded by PROJECT_OPEN_WAIT
+    fn project_receipt(
+        &self,
+        request_id: &str,
+    ) -> Result<hide_core::project_open::ProjectOpenReceipt, String> {
+        use hide_core::project_open::ProjectOpenReceipt;
         let deadline = std::time::Instant::now() + PROJECT_OPEN_WAIT;
         loop {
             let (reply, result) = mpsc::channel();
@@ -763,7 +1002,7 @@ impl CoreHandle {
     pub fn device_command(
         &self,
         device: &str,
-        command: herdr_core::device_command::DeviceCommand,
+        command: hide_core::device_command::DeviceCommand,
     ) -> Result<serde_json::Value, String> {
         let (reply, result) = mpsc::channel();
         self.commands
@@ -789,43 +1028,52 @@ impl CoreHandle {
     }
 
     /// Starts Desk with the identity and places hided gives its process.
-    pub fn set_desk(
-        &self,
-        platform: Arc<dyn herdr_core::desk::DeskPlatform>,
-    ) -> Result<(), String> {
+    pub fn set_desk(&self, platform: Arc<dyn hide_core::desk::DeskPlatform>) -> Result<(), String> {
         self.commands
             .send(Command::SetDesk { platform })
             .map_err(|_| "core owner thread is gone".to_owned())
     }
 
-    /// `own_engine` is the development switch (`crate::env::Env::own_engine`):
-    /// on, this machine's panes run in the node's holders under the core's
-    /// own engine, and `options` names no Herdr. `panes` is where each
-    /// device's node link sends its panes' proofs and command streams
-    /// (`node_panes`).
+    /// Has the core offer this machine's Herdr save to move into its own
+    /// engine (PRD engine-bundle-4-herdr-removal D-6 to D-8).
+    pub fn set_herdr_import(
+        &self,
+        machine: Arc<dyn hide_core::herdr_import::Machine>,
+    ) -> Result<(), String> {
+        self.commands
+            .send(Command::SetHerdrImport { machine })
+            .map_err(|_| "core owner thread is gone".to_owned())
+    }
+
+    /// What the core offers for this machine's Herdr save now (B17).
+    pub fn herdr_import_shown(&self) -> Result<Option<hide_core::HerdrImportSnapshot>, String> {
+        let (reply, rx) = mpsc::channel();
+        self.commands
+            .send(Command::HerdrImportShown { reply })
+            .map_err(|_| "core owner thread is gone".to_owned())?;
+        rx.recv()
+            .map_err(|_| "core owner thread dropped the Herdr import reply".to_owned())
+    }
+
+    /// This machine's panes run in the node's holders under the core's own
+    /// engine. `panes` is where each device's node link sends its panes'
+    /// proofs and command streams (`node_panes`).
     pub fn spawn(
         options: CoreOptions,
-        own_engine: bool,
         panes: hide_node::ssh::PaneEventsSlot,
+        peers: Option<Arc<dyn hide_node::ssh::host::peer::PeerDial>>,
     ) -> Result<Self, String> {
         let node = options.node_id.clone();
         let state_dir = std::path::Path::new(&options.app_state_path)
             .parent()
             .unwrap_or(std::path::Path::new("."))
             .to_path_buf();
-        let definitions_home = match crate::env::pane_holder_switch()? {
-            hide_node::terminal::holder::Switch::Off => None,
-            hide_node::terminal::holder::Switch::On => Some(match options.home.as_ref() {
-                Some(home) => std::path::PathBuf::from(home),
-                None => hide_platform::host::home_dir()
-                    .map_err(|error| format!("agent definitions need a home folder: {error}"))?,
-            }),
-        };
+        let definitions_home = core_home(&options)?;
         let (command_tx, command_rx) = mpsc::channel::<Command>();
         let (ready_tx, ready_rx) = mpsc::channel::<Result<(), String>>();
         let (notify_tx, _) = broadcast::channel(32);
         let notify_for_thread = notify_tx.clone();
-        let (reports, terminal_reports) = herdr_core::terminal_reports::terminal_reports();
+        let (reports, terminal_reports) = hide_core::terminal_reports::terminal_reports();
         let reports: Arc<dyn ReportSink> = Arc::new(reports);
         let hub = TerminalHub::new();
         let outputs = crate::relay::ScreenOutputs::new(Arc::clone(&hub));
@@ -834,12 +1082,17 @@ impl CoreHandle {
             holders,
         } = local_terminals(
             &options,
-            own_engine,
             Arc::clone(&outputs) as Arc<dyn OutputSink>,
             Arc::clone(&reports),
         )?;
         let pane_holders = holders.clone();
-        let engine = local_engine(&options, &state_dir, holders, &local)?;
+        // A holder that died without saying why is settled by a start of the
+        // daemon, which this one asks for (`holder_restart`).
+        holders.on_holder_lost(crate::holder_restart::on_holder_lost(state_dir.clone()));
+        // One node answers for this machine, to the core and to its engine
+        // alike, so the core's stop closes the one that owns the panes.
+        let own_node = Arc::new(own_node(&options, &state_dir, holders, &local)?);
+        let engine = local_engine(&options, &state_dir, Arc::clone(&own_node))?;
         let terminals = Arc::new(Router::new(
             Arc::clone(&local) as Arc<dyn hide_node_link::terminal::TerminalNode>,
             Arc::clone(&outputs) as Arc<dyn OutputSink>,
@@ -852,8 +1105,8 @@ impl CoreHandle {
             .spawn(move || {
                 owner_loop(
                     options,
-                    core_engine,
-                    panes,
+                    (own_node, core_engine),
+                    (panes, peers),
                     (routes, terminal_reports),
                     command_rx,
                     ready_tx,
@@ -864,6 +1117,14 @@ impl CoreHandle {
         ready_rx
             .recv()
             .map_err(|_| "core owner thread exited before ready".to_owned())??;
+        let automations_on = {
+            let (reply, rx) = mpsc::channel();
+            command_tx
+                .send(Command::AutomationsOn { reply })
+                .map_err(|_| "core owner thread is gone".to_owned())?;
+            rx.recv()
+                .map_err(|_| "core owner thread dropped the automations flag".to_owned())?
+        };
         let handle = Self {
             node,
             commands: command_tx,
@@ -876,14 +1137,15 @@ impl CoreHandle {
             engine,
             holders: pane_holders,
             running: Mutex::new(Some(Running { thread, local })),
+            automations_on,
         };
         handle.read_agent_definitions();
         Ok(handle)
     }
 
-    /// The core's input gate (`herdr_core::input_gate`), which a writer that
+    /// The core's input gate (`hide_core::input_gate`), which a writer that
     /// does not go through a node's terminal asks at the write.
-    pub fn input_gate(&self) -> Result<Arc<herdr_core::input_gate::PaneInputGate>, String> {
+    pub fn input_gate(&self) -> Result<Arc<hide_core::input_gate::PaneInputGate>, String> {
         let (reply, rx) = mpsc::channel();
         self.commands
             .send(Command::InputGate { reply })
@@ -914,7 +1176,21 @@ impl CoreHandle {
             .map_err(|_| "core owner thread dropped device-channel reply".to_owned())?
     }
 
-    pub fn workspace_remote_routes(&self) -> Result<Vec<herdr_core::WorkspaceRemoteRoute>, String> {
+    /// The paths of the projects registered on `device_id`; see
+    /// `Core::registered_paths`.
+    pub fn registered_paths(&self, device_id: &str) -> Result<Vec<String>, String> {
+        let (reply, rx) = mpsc::channel();
+        self.commands
+            .send(Command::RegisteredPaths {
+                device_id: device_id.to_owned(),
+                reply,
+            })
+            .map_err(|_| "core owner thread is gone".to_owned())?;
+        rx.recv()
+            .map_err(|_| "core owner thread dropped registered-paths reply".to_owned())
+    }
+
+    pub fn workspace_remote_routes(&self) -> Result<Vec<hide_core::WorkspaceRemoteRoute>, String> {
         let (reply, rx) = mpsc::channel();
         self.commands
             .send(Command::WorkspaceRemoteRoutes { reply })
@@ -923,15 +1199,61 @@ impl CoreHandle {
             .map_err(|_| "core owner thread dropped remote routes".to_owned())
     }
 
-    /// This machine's engine; `None` when the daemon runs without a Herdr
-    /// server.
-    pub fn engine(&self) -> Option<&EngineHandle> {
-        self.engine.as_ref()
+    /// This machine's engine.
+    pub fn engine(&self) -> &EngineHandle {
+        &self.engine
     }
 
-    /// The pane holders of the core's own engine; `None` for Herdr.
-    pub fn pane_holders(&self) -> Option<&Arc<Holders>> {
-        self.holders.as_ref()
+    /// This machine's pane holders, which the core's own engine runs.
+    pub fn pane_holders(&self) -> &Arc<Holders> {
+        &self.holders
+    }
+
+    /// The Views the agent in `pane_id` has open; see `Core::agent_looks`.
+    pub fn agent_looks(&self, pane_id: &str) -> Result<hide_core::LookViews, String> {
+        let (reply, rx) = mpsc::channel();
+        self.commands
+            .send(Command::AgentLooks {
+                pane_id: pane_id.to_owned(),
+                reply,
+            })
+            .map_err(|_| "core owner thread is gone".to_owned())?;
+        rx.recv()
+            .map_err(|_| "core owner thread dropped the looks reply".to_owned())
+    }
+
+    /// The account the agent in this machine's pane `pane_id` runs in;
+    /// see `Core::pane_account`. `None` while no row shows an agent there,
+    /// or when the owner thread is gone.
+    pub fn pane_account(&self, pane_id: &str) -> Option<hide_agent_adapter::AccountKey> {
+        let (reply, rx) = mpsc::channel();
+        self.commands
+            .send(Command::PaneAccount {
+                pane_id: pane_id.to_owned(),
+                reply,
+            })
+            .ok()?;
+        rx.recv().ok().flatten()
+    }
+
+    /// The prepared change-list read of a checkout; see
+    /// `Core::prepare_checkout_changes`.
+    pub fn prepare_checkout_changes(
+        &self,
+        device_id: &str,
+        checkout_path: &str,
+        committed: bool,
+    ) -> Result<hide_core::PreparedChanges, String> {
+        let (reply, rx) = mpsc::channel();
+        self.commands
+            .send(Command::CheckoutChanges {
+                device_id: device_id.to_owned(),
+                checkout_path: checkout_path.to_owned(),
+                committed,
+                reply,
+            })
+            .map_err(|_| "core_unavailable".to_owned())?;
+        rx.recv().map_err(|_| "core_unavailable".to_owned())?
     }
 
     /// The engine the core holds for a connected SSH device; see
@@ -948,17 +1270,6 @@ impl CoreHandle {
             .map_err(|_| "core owner thread dropped the device connection reply".to_owned())
     }
 
-    /// The nodes that dialed this core and are connected now: the machines
-    /// the operator works at (PRD core-host-node-remote-core D-18).
-    pub fn linked_nodes(&self) -> Result<Vec<String>, String> {
-        let (reply, rx) = mpsc::channel();
-        self.commands
-            .send(Command::LinkedNodes { reply })
-            .map_err(|_| "core owner thread is gone".to_owned())?;
-        rx.recv()
-            .map_err(|_| "core owner thread dropped the linked nodes".to_owned())
-    }
-
     /// What a move of the core to `device` is made from, and the device's
     /// label records (PRD core-host-node-move B4).
     pub fn release_source(&self, node: &str) -> Result<ReleaseSourceAnswer, String> {
@@ -971,6 +1282,22 @@ impl CoreHandle {
             .map_err(|_| "core owner thread is gone".to_owned())?;
         rx.recv()
             .map_err(|_| "core owner thread dropped the release source".to_owned())
+    }
+
+    /// What `device`'s switch to its machine's own connection starts from;
+    /// see `Core::device_switch_source`.
+    pub fn device_switch_source(
+        &self,
+        device: &str,
+    ) -> Result<hide_core::DeviceSwitchSource, &'static str> {
+        let (reply, rx) = mpsc::channel();
+        self.commands
+            .send(Command::DeviceSwitchSource {
+                device: device.to_owned(),
+                reply,
+            })
+            .map_err(|_| "hide_unavailable")?;
+        rx.recv().map_err(|_| "hide_unavailable")?
     }
 
     pub fn move_source(&self, device: &str) -> Result<MoveSourceAnswer, String> {
@@ -1009,7 +1336,7 @@ impl CoreHandle {
         &self,
         node: &str,
         label: &str,
-        arrived: herdr_core::remote::Arrived,
+        arrived: hide_core::remote::Arrived,
     ) -> Result<(), String> {
         let (reply, rx) = mpsc::channel();
         self.commands
@@ -1029,7 +1356,7 @@ impl CoreHandle {
         checkout_path: &str,
         view_id: &str,
         load: u64,
-    ) -> Result<Option<herdr_core::workspace_control::BrowserRouteSource>, String> {
+    ) -> Result<Option<hide_core::workspace_control::BrowserRouteSource>, String> {
         let (reply, rx) = mpsc::channel();
         self.commands
             .send(Command::BrowserRouteSource {
@@ -1048,23 +1375,56 @@ impl CoreHandle {
     /// as the core knows it now; the node call and the store read run on the
     /// caller's blocking task. The owner's answer is waited for until the
     /// hook's `deadline` at most, the one its node call and store read share.
-    pub fn memory_scope(
+    /// What a hook's answer is read from, in one trip to the owner thread:
+    /// Memory's scope, at a prompt the session's open questions' (`asks`
+    /// names the pane and the session the hook names) and at a session start
+    /// the Project's other sessions' (`brief`, the same pair).
+    pub fn hook_scope(
         &self,
         context: &Context,
+        asks: Option<(String, String)>,
+        brief: Option<(String, String)>,
         deadline: std::time::Instant,
-    ) -> Result<herdr_core::memory_hook::Scope, &'static str> {
+    ) -> HookScope {
         let (reply, rx) = mpsc::channel();
-        self.commands
+        let failed = |reason| (Err(reason), None, None);
+        if self
+            .commands
             .send(Command::MemoryScope {
                 context: context.clone(),
+                asks,
+                brief,
                 reply,
             })
-            .map_err(|_| "core_unavailable")?;
+            .is_err()
+        {
+            return failed("core_unavailable");
+        }
         match rx.recv_timeout(deadline.saturating_duration_since(std::time::Instant::now())) {
             Ok(scope) => scope,
-            Err(mpsc::RecvTimeoutError::Timeout) => Err("core_deadline"),
-            Err(mpsc::RecvTimeoutError::Disconnected) => Err("core_unavailable"),
+            Err(mpsc::RecvTimeoutError::Timeout) => failed("core_deadline"),
+            Err(mpsc::RecvTimeoutError::Disconnected) => failed("core_unavailable"),
         }
+    }
+
+    /// `hide session fold-ask`: the caller's own session and the link worker,
+    /// named on the owner thread; the fold runs on the caller's task.
+    pub fn fold_ask_scope(
+        &self,
+        device: &str,
+        pane: &str,
+        expected: &Context,
+    ) -> Result<hide_core::links::agent_asks::FoldScope, String> {
+        let (reply, rx) = mpsc::channel();
+        self.commands
+            .send(Command::FoldAsk {
+                device_id: device.to_owned(),
+                pane_id: pane.to_owned(),
+                expected: expected.clone(),
+                reply,
+            })
+            .map_err(|_| "ask_unavailable".to_owned())?;
+        rx.recv().map_err(|_| "ask_unavailable".to_owned())?
     }
 
     /// What a `hide session` command reads, as the core knows it now; the
@@ -1072,7 +1432,7 @@ impl CoreHandle {
     pub fn session_scope(
         &self,
         context: &Context,
-    ) -> Option<herdr_core::links::session_command::SessionScope> {
+    ) -> Option<hide_core::links::session_command::SessionScope> {
         let (reply, rx) = mpsc::channel();
         self.commands
             .send(Command::Session(SessionAsk::Scope {
@@ -1085,7 +1445,7 @@ impl CoreHandle {
 
     /// The Projects a `hide links` read may answer from, as the core knows
     /// them now; the read itself runs on the caller's blocking task.
-    pub fn links_scope(&self, context: &Context) -> Option<herdr_core::links::query::Scope> {
+    pub fn links_scope(&self, context: &Context) -> Option<hide_core::links::query::Scope> {
         let (reply, rx) = mpsc::channel();
         self.commands
             .send(Command::LinksScope {
@@ -1221,75 +1581,83 @@ impl Drop for CoreHandle {
     }
 }
 
-/// The engine that runs this machine's panes: with the development switch
-/// (`crate::env::HIDE_DEV_PANE_HOLDER`) on, the core's own engine over the
-/// node's pane holders, standing for this state folder's engine folder; off,
-/// the Herdr server at the configured socket, or none (PRD
-/// engine-bundle-3-core-owns D-5). A Herdr core over holder panes is not a
-/// mode: a socket beside the switch is refused.
+/// This machine's node: it answers for the core's home, keeps what it
+/// measured of each repository's worktrees and the View feedback in the
+/// state folder, installs the kit from the parts beside this program, and
+/// answers the core's own engine from the node's pane holders (PRD
+/// engine-bundle-3-core-owns D-5).
+fn own_node(
+    options: &CoreOptions,
+    state_dir: &std::path::Path,
+    holders: Arc<Holders>,
+    service: &Arc<Service>,
+) -> Result<hide_node::Local, String> {
+    let home = core_home(options)?;
+    let mut node = hide_node::Local::new(Some(home.clone()))
+        // What the node measured of each repository's worktrees outlives
+        // the daemon, in the core's state folder.
+        .keeping_worktree_facts_in(hide_kit::layout::worktree_facts(state_dir))
+        .keeping_feedback_in(state_dir.to_path_buf())
+        .with_panes(Arc::new(LocalPanes::for_account(
+            holders,
+            Arc::clone(service),
+            home.clone(),
+        )));
+    // The install kit's parts ship beside this binary: in the app bundle, or
+    // in the build folder a move or a core update placed in this account's
+    // helper root, which a moved core's login item runs. A daemon anywhere
+    // else, a development build among them, installs nothing (PRD
+    // device-parity D-19).
+    if let Ok(executable) = std::env::current_exe() {
+        node = node.with_kit(hide_host::serve::KitPlace::of_program(
+            &executable,
+            Some(&home),
+        ));
+    }
+    Ok(node)
+}
+
+/// The engine that runs this machine's panes: the core's own engine over
+/// `node`'s pane holders, standing for this state folder's engine folder
+/// (PRD engine-bundle-3-core-owns D-5).
 fn local_engine(
     options: &CoreOptions,
     state_dir: &std::path::Path,
-    holders: Option<Arc<Holders>>,
-    service: &Arc<Service>,
-) -> Result<Option<EngineHandle>, String> {
-    match (holders, options.herdr_socket_path.as_deref()) {
-        (Some(_), Some(_)) => Err(format!(
-            "{} runs the core's own engine, which takes no Herdr socket",
-            crate::env::HIDE_DEV_PANE_HOLDER
-        )),
-        (Some(holders), None) => {
-            let home = core_home(options)?;
-            // The engine's folders, Git and pane holders are this machine's,
-            // asked of a node answering for the core's home as the core's own
-            // node does, by the same requests a device's node answers.
-            let node = Arc::new(
-                hide_node::Local::new(Some(home.clone())).with_panes(Arc::new(
-                    LocalPanes::for_account(holders, Arc::clone(service), home.clone()),
-                )),
-            );
-            // The engine opens knowing the operator's agents, so the restore
-            // that starts with it resumes theirs too; a folder that cannot be
-            // read leaves the built-in ones, and the core's read logs why.
-            let definitions = hide_kit::agent_definitions::read(&home)
-                .unwrap_or_else(|_| hide_agent_adapter::definition::Catalog::read(Vec::new()));
-            EngineHandle::own(node, state_dir.to_path_buf(), home, definitions).map(Some)
-        }
-        (None, Some(socket)) => Ok(Some(EngineHandle::herdr(hide_node::herdr(
-            std::path::Path::new(socket),
-        )))),
-        (None, None) => Ok(None),
-    }
+    node: Arc<hide_node::Local>,
+) -> Result<EngineHandle, String> {
+    let home = core_home(options)?;
+    // The operator's agents are known as the engine opens, so the restore
+    // that starts with it resumes theirs too; a folder that cannot be read
+    // leaves the built-in ones, and the core's read logs why.
+    let definitions = hide_kit::agent_definitions::read(&home)
+        .unwrap_or_else(|_| hide_agent_adapter::definition::Catalog::read(Vec::new()));
+    // The installation whose panes this daemon starts, which its hooks' records
+    // folder is composed with; this process is where it is read, so the core
+    // is handed it rather than reaching for the machine itself.
+    let install = hide_host::kit::running_install().map(|install| install.id);
+    EngineHandle::own(node, state_dir.to_path_buf(), home, definitions, install)
 }
 
-/// This machine's terminal service: Herdr's sessions, or the pane holders
-/// when the development switch (`crate::env::HIDE_DEV_PANE_HOLDER`) is on,
-/// over the state folder's records, the holder beside this program, and on
-/// Windows the pinned ConPTY runtime beside it (`Holders::start_local`,
-/// which the node's measuring tools start too).
+/// This machine's terminal service over the pane holders, over the state
+/// folder's records, the holder beside this program, and on Windows the
+/// pinned ConPTY runtime beside it (`Holders::start_local`, which the node's
+/// measuring tools start too).
 fn local_terminals(
     options: &CoreOptions,
-    holders: bool,
     outputs: Arc<dyn OutputSink>,
     reports: Arc<dyn ReportSink>,
 ) -> Result<LocalTerminals, String> {
     use hide_node::terminal::holder::HolderFolders;
-    // Off, no holder is opened and neither folder is read.
-    let folders = match holders {
-        false => None,
-        true => {
-            let state_dir = std::path::Path::new(&options.app_state_path)
-                .parent()
-                .ok_or("the app state path has no folder")?
-                .to_path_buf();
-            Some((core_home(options)?, state_dir))
-        }
-    };
+    let state_dir = std::path::Path::new(&options.app_state_path)
+        .parent()
+        .ok_or("the app state path has no folder")?
+        .to_path_buf();
+    let home = core_home(options)?;
     Holders::start_local(
-        folders
-            .as_ref()
-            .map(|(home, state_dir)| HolderFolders { home, state_dir }),
-        local_attacher(options),
+        HolderFolders {
+            home: &home,
+            state_dir: &state_dir,
+        },
         outputs,
         reports,
     )
@@ -1305,99 +1673,59 @@ fn core_home(options: &CoreOptions) -> Result<std::path::PathBuf, String> {
     }
 }
 
-/// This machine's Herdr, through the official `herdr terminal session`
-/// client. A daemon with no Herdr server has no panes of its own, and an
-/// attach says so.
-fn local_attacher(options: &CoreOptions) -> Box<dyn Attacher> {
-    struct NoHerdr;
-    impl Attacher for NoHerdr {
-        fn open(&self, _: &str, _: Mode, _: u16, _: u16) -> Result<SessionParts, String> {
-            Err("This daemon runs without a Herdr server".to_owned())
-        }
-    }
-    match options.herdr_socket_path.as_deref() {
-        Some(socket) => Box::new(LocalAttacher::new(
-            options
-                .herdr_bin_path
-                .as_deref()
-                .map(std::path::PathBuf::from),
-            std::path::PathBuf::from(socket),
-        )),
-        None => Box::new(NoHerdr),
-    }
-}
-
 fn owner_loop(
     options: CoreOptions,
-    own_engine: Option<EngineHandle>,
-    panes: hide_node::ssh::PaneEventsSlot,
-    (terminals, terminal_reports): (Arc<Router>, herdr_core::terminal_reports::TerminalReports),
+    (own_node, own_engine): (Arc<hide_node::Local>, EngineHandle),
+    (panes, peers): (
+        hide_node::ssh::PaneEventsSlot,
+        Option<Arc<dyn hide_node::ssh::host::peer::PeerDial>>,
+    ),
+    (terminals, terminal_reports): (Arc<Router>, hide_core::terminal_reports::TerminalReports),
     commands: Receiver<Command>,
     ready: Sender<Result<(), String>>,
     notify: broadcast::Sender<()>,
 ) {
-    // The core's own node answers for the home the core reads and writes
-    // for: the configured one, else the process's, as the core decides.
+    // The home the core reads and writes for: the configured one, else the
+    // process's, as the core decides.
     let home = options
         .home
         .as_ref()
         .map(std::path::PathBuf::from)
-        .or_else(|| std::env::var_os("HOME").map(std::path::PathBuf::from));
-    let mut own_node = hide_node::Local::new(home.clone());
-    // What the node measured of each repository's worktrees outlives the
-    // daemon, in the core's state folder.
+        .or_else(|| hide_platform::host::home_dir().ok());
     let state_dir = std::path::Path::new(&options.app_state_path)
         .parent()
         .unwrap_or(std::path::Path::new("."))
         .to_path_buf();
-    own_node = own_node
-        .keeping_worktree_facts_in(hide_kit::layout::worktree_facts(&state_dir))
-        .keeping_feedback_in(state_dir.clone());
-    if let Some(socket) = options.herdr_socket_path.as_deref() {
-        own_node = own_node.with_herdr_socket(std::path::PathBuf::from(socket));
-    }
-    // The install kit's parts ship beside this binary: in the app bundle, or
-    // in the build folder a move or a core update placed in this account's
-    // helper root, which a moved core's login item runs. A daemon anywhere
-    // else, a development build among them, installs nothing (PRD
-    // device-parity D-19).
-    if let Ok(executable) = std::env::current_exe() {
-        own_node = own_node.with_kit(hide_host::serve::KitPlace::of_program(
-            &executable,
-            home.as_deref(),
-        ));
-    }
     // The program builds devices run, and the `hide` that answers ssh's
     // sign-in questions, ship beside this binary; a daemon anywhere else
     // carries none, which leaves each device's node `unsupported` with that
     // reason.
+    let device_home = match crate::env::device_home() {
+        Ok(home) => home,
+        Err(reason) => {
+            let _ = ready.send(Err(reason));
+            return;
+        }
+    };
     let devices = hide_node::ssh::Connector::new(
         std::env::current_exe()
             .ok()
             .and_then(|exe| exe.parent().map(std::path::Path::to_path_buf)),
-    )
-    .with_herdr_program(
-        options
-            .herdr_bin_path
-            .as_ref()
-            .map(std::path::PathBuf::from)
-            .unwrap_or_else(|| std::path::PathBuf::from("herdr")),
+        // A device of another platform gets this build's own release's kit.
+        crate::cli::RELEASE,
     )
     .with_pane_events(panes)
     .with_terminals(Arc::clone(&terminals) as Arc<dyn DeviceSink>)
-    // A core on its own engine runs every device's panes on it too, in pane
-    // holders the device's node runs, and puts no Herdr on the device (PRD
+    // Every device's panes run on the core's own engine too, in pane
+    // holders the device's node runs (PRD
     // engine-bundle-3-core-owns D-22).
-    .with_engine(
-        match own_engine
-            .as_ref()
-            .and_then(EngineHandle::own_scope)
-            .is_some()
-        {
-            true => hide_node::ssh::DeviceEngine::Holders,
-            false => hide_node::ssh::DeviceEngine::Herdr,
-        },
-    );
+    .with_device_home(device_home);
+    // Machines paired with this one are devices too (PRD
+    // device-connect-iroh D-61), reached on the connection the daemon keeps.
+    let devices = match peers {
+        Some(dial) => devices.with_peers(dial),
+        None => devices,
+    };
     // This PC's WSL distributions are devices too (PRD wsl-device D-01);
     // there is no WSL to reach on any other system.
     let devices = match hide_node::ssh::host::wsl::WslAccess::of_this_pc() {
@@ -1408,81 +1736,51 @@ fn owner_loop(
         match crate::product_analytics::Worker::start(home.as_deref(), &state_dir, token) {
             Ok(worker) => worker,
             Err(reason) => {
-                herdr_core::diagnostic!(
+                hide_core::diagnostic!(
                     serde_json::json!({ "component": "product_analytics", "kind": reason })
                 );
                 None
             }
         }
     });
-    // Only a daemon running from a desktop package with that package's own
-    // Herdr offers to move the operator's older server onto it (PRD
-    // herdr-takeover); any other installs one that finds nothing, so a
-    // Herdr step a packaged daemon saved still goes on.
-    let takeover = crate::herdr_handoff::LocalTakeover::for_daemon(
-        options.herdr_bin_path.as_deref().map(std::path::Path::new),
-        options
-            .herdr_socket_path
-            .as_deref()
-            .map(std::path::Path::new),
-        &state_dir,
-    );
     let Some(core) = Core::create_with_product_analytics(
         options,
-        std::sync::Arc::new(own_node),
-        own_engine,
+        own_node,
+        Some(own_engine),
         std::sync::Arc::new(devices),
         terminals,
         terminal_reports,
         analytics.as_ref().map(|worker| {
-            Arc::clone(&worker.client) as Arc<dyn herdr_core::product_analytics::Sink>
+            Arc::clone(&worker.client) as Arc<dyn hide_core::product_analytics::Sink>
         }),
     ) else {
         let _ = ready.send(Err(
-            "herdr-core create failed (check schema_version and paths)".to_owned(),
+            "hide-core create failed (check schema_version and paths)".to_owned(),
         ));
         return;
     };
     // After the core opened its Logs file: the SSH transport's records land
     // there too.
-    hide_node::diagnostics::install(herdr_core::diagnostics::emit);
+    hide_node::diagnostics::install(hide_core::diagnostics::emit);
     core.on_change(move || {
         let _ = notify.send(());
-    });
-    core.set_herdr_takeover(match takeover {
-        Some(takeover) => Arc::new(takeover),
-        None => Arc::new(crate::herdr_handoff::NoTakeover),
     });
     let _ = ready.send(Ok(()));
     let mut _held_roots = hide_node::HeldRoots::default();
     while let Ok(command) = commands.recv() {
         match command {
-            Command::ObservationPrepare {
-                device_id,
-                pane_id,
-                expected,
-                terminal,
-                observation,
-                start,
-                deadline,
-                reply,
-            } => {
-                let _ = reply.send(core.prepare_direct_observation(
-                    &device_id,
-                    &pane_id,
-                    &expected,
-                    &terminal,
-                    observation,
-                    start,
-                    deadline,
-                ));
-            }
             Command::DeliveryHuman { reply } => {
                 let _ = reply.send(core.prepare_delivery_human());
             }
             Command::ReleaseEffects { reply } => {
                 let _ = reply.send(core.release_effects());
             }
+            Command::ProductEvent(event) => {
+                if let Some(worker) = &analytics {
+                    hide_core::product_analytics::Sink::capture(&*worker.client, event);
+                }
+            }
+            Command::OperatorActive(surface) => core.note_operator_active(surface),
             Command::MemoryPrepare {
                 device_id,
                 pane_id,
@@ -1545,11 +1843,44 @@ fn owner_loop(
                 device_id,
                 pane_id,
                 report,
+                lineage,
                 reply,
             } => {
-                let _ = reply.send(core.hook_status(&device_id, &pane_id, &report));
+                let _ =
+                    reply.send(core.hook_status(&device_id, &pane_id, &report, lineage.as_deref()));
+            }
+            Command::AgentExec {
+                device_id,
+                pane_id,
+                report,
+                reply,
+            } => {
+                let _ = reply.send(core.agent_exec(&device_id, &pane_id, report));
+            }
+            Command::ExecStart {
+                device_id,
+                pane_id,
+                attempt,
+                reply,
+            } => {
+                let _ = reply.send(core.prepare_exec_start(&device_id, &pane_id, &attempt));
             }
             Command::AgentDefinitions { home, read } => core.set_agent_definitions(home, read),
+            Command::AgentProfile {
+                device_id,
+                command,
+                reply,
+            } => {
+                let _ = reply.send(core.prepare_agent_profile(&device_id, command));
+            }
+            Command::Store {
+                device_id,
+                pane_id,
+                command,
+                reply,
+            } => {
+                let _ = reply.send(core.prepare_store(&device_id, &pane_id, command));
+            }
             Command::AgentCatalog {
                 device_id,
                 machine,
@@ -1565,6 +1896,15 @@ fn owner_loop(
                 reply,
             } => {
                 let _ = reply.send(core.ps(&device_id, &pane_id, all));
+            }
+            Command::Access { call, reply } => {
+                let _ = reply.send(core.access(call));
+            }
+            Command::Automation { call, reply } => {
+                let _ = reply.send(core.automation(call));
+            }
+            Command::AutomationsOn { reply } => {
+                let _ = reply.send(core.automations_on());
             }
             Command::AgentSleep {
                 device_id,
@@ -1622,6 +1962,20 @@ fn owner_loop(
                 let _ = reply.send(core.project_open_receipt(&request_id));
             }
 
+            Command::KeptLetterPrepare {
+                device_id,
+                pane_id,
+                terminal_id,
+                command,
+                reply,
+            } => {
+                let _ = reply.send(core.prepare_kept_letter(
+                    &device_id,
+                    &pane_id,
+                    &terminal_id,
+                    *command,
+                ));
+            }
             Command::DeliveryPrepare {
                 device_id,
                 pane_id,
@@ -1635,15 +1989,19 @@ fn owner_loop(
                     &pane_id,
                     &expected,
                     hint.as_deref(),
-                    command,
+                    *command,
                 ));
             }
             Command::SetDesk { platform } => core.set_desk(platform),
+            Command::SetHerdrImport { machine } => core.set_herdr_import(machine),
+            Command::HerdrImportShown { reply } => {
+                let _ = reply.send(core.herdr_import_shown());
+            }
             Command::SetFileRoots { roots, reply } => {
                 // This node holds the opened roots while the core pins their
                 // identities; the previous set closes once it is replaced.
                 let (held, identities) = hide_node::hold_roots(roots);
-                core.set_file_roots(herdr_core::FileRoots::from_identities(identities));
+                core.set_file_roots(hide_core::FileRoots::from_identities(identities));
                 _held_roots = held;
                 let _ = reply.send(Ok(()));
             }
@@ -1654,11 +2012,32 @@ fn owner_loop(
             Command::DeviceChannel { device_id, reply } => {
                 let _ = reply.send(core.node_link(&device_id));
             }
+            Command::RegisteredPaths { device_id, reply } => {
+                let _ = reply.send(core.registered_paths(&device_id));
+            }
             Command::WorkspaceRemoteRoutes { reply } => {
                 let _ = reply.send(core.workspace_remote_routes());
             }
             Command::DeviceEngine { device_id, reply } => {
                 let _ = reply.send(core.device_engine(&device_id));
+            }
+            Command::AgentLooks { pane_id, reply } => {
+                let _ = reply.send(core.agent_looks(&pane_id));
+            }
+            Command::PaneAccount { pane_id, reply } => {
+                let _ = reply.send(core.pane_account(&pane_id));
+            }
+            Command::CheckoutChanges {
+                device_id,
+                checkout_path,
+                committed,
+                reply,
+            } => {
+                let _ = reply.send(core.prepare_checkout_changes(
+                    &device_id,
+                    &checkout_path,
+                    committed,
+                ));
             }
             Command::InputGate { reply } => {
                 let _ = reply.send(core.input_gate());
@@ -1666,11 +2045,11 @@ fn owner_loop(
             Command::InboundRefusal { node, reply } => {
                 let _ = reply.send(core.inbound_refusal(&node));
             }
-            Command::LinkedNodes { reply } => {
-                let _ = reply.send(core.linked_nodes());
-            }
             Command::MoveSource { device, reply } => {
                 let _ = reply.send(core.move_source(&device));
+            }
+            Command::DeviceSwitchSource { device, reply } => {
+                let _ = reply.send(core.device_switch_source(&device));
             }
             Command::ReleaseSource { node, reply } => {
                 let _ = reply.send(core.release_source(&node));
@@ -1722,8 +2101,26 @@ fn owner_loop(
                     let _ = reply.send(Box::new(core.session_record_pulls(*record)));
                 }
             },
-            Command::MemoryScope { context, reply } => {
-                let _ = reply.send(core.memory_scope(&context));
+            Command::MemoryScope {
+                context,
+                asks,
+                brief,
+                reply,
+            } => {
+                let give = asks.and_then(|(pane, session)| {
+                    core.asks_give_scope(&context.device_id, &pane, &session)
+                });
+                let brief =
+                    brief.and_then(|(pane, session)| core.brief_scope(&context, &pane, &session));
+                let _ = reply.send((core.memory_scope(&context), give, brief));
+            }
+            Command::FoldAsk {
+                device_id,
+                pane_id,
+                expected,
+                reply,
+            } => {
+                let _ = reply.send(core.fold_ask_scope(&device_id, &pane_id, &expected));
             }
             Command::WorkspaceAction {
                 device_id,
@@ -1773,15 +2170,13 @@ fn owner_loop(
 
 #[cfg(test)]
 impl CoreHandle {
-    /// A core with no Herdr and no registered checkout.
+    /// A core with no registered checkout.
     pub(crate) fn bare(directory: &std::path::Path) -> Self {
         Self::spawn(
-            herdr_core::CoreOptions {
+            hide_core::CoreOptions {
                 schema_version: crate::state_file::SCHEMA_VERSION,
                 home: None,
-                node_id: herdr_core::node::NodeId::parse("test-node").unwrap(),
-                herdr_socket_path: None,
-                herdr_bin_path: None,
+                node_id: hide_core::node::NodeId::parse("test-node").unwrap(),
                 app_state_path: directory.join("core-state.json").display().to_string(),
                 host_helper_root: None,
                 host_cli_dir: None,
@@ -1790,10 +2185,11 @@ impl CoreHandle {
                 local_issues_path: None,
                 effects_held: false,
                 machine_name: None,
+                windows_drives: None,
                 account_state_folder: false,
             },
-            false,
             Default::default(),
+            None,
         )
         .unwrap()
     }
@@ -1803,26 +2199,26 @@ impl CoreHandle {
 pub enum SessionAsk {
     Scope {
         context: Context,
-        reply: Sender<Option<herdr_core::links::session_command::SessionScope>>,
+        reply: Sender<Option<hide_core::links::session_command::SessionScope>>,
     },
     Agent {
         id: String,
-        reply: Sender<Option<herdr_core::links::ledger::SessionIdentity>>,
+        reply: Sender<Option<hide_core::links::ledger::SessionIdentity>>,
     },
     Facts {
-        sessions: Vec<herdr_core::links::ledger::SessionIdentity>,
-        reply: Sender<Vec<herdr_core::links::session_command::SessionFacts>>,
+        sessions: Vec<hide_core::links::ledger::SessionIdentity>,
+        reply: Sender<Vec<hide_core::links::session_command::SessionFacts>>,
     },
     Pulls {
-        record: Box<herdr_core::links::ledger::SessionRecord>,
-        reply: Sender<Box<herdr_core::links::ledger::SessionRecord>>,
+        record: Box<hide_core::links::ledger::SessionRecord>,
+        reply: Sender<Box<hide_core::links::ledger::SessionRecord>>,
     },
 }
 
 /// A `hide session` command's runtime part, asked of the core's owner
 /// thread from the caller's blocking task.
-impl herdr_core::links::session_command::SessionHost for CoreHandle {
-    fn agent_session(&self, id: &str) -> Option<herdr_core::links::ledger::SessionIdentity> {
+impl hide_core::links::session_command::SessionHost for CoreHandle {
+    fn agent_session(&self, id: &str) -> Option<hide_core::links::ledger::SessionIdentity> {
         let (reply, rx) = mpsc::channel();
         self.commands
             .send(Command::Session(SessionAsk::Agent {
@@ -1835,8 +2231,8 @@ impl herdr_core::links::session_command::SessionHost for CoreHandle {
 
     fn facts(
         &self,
-        sessions: Vec<herdr_core::links::ledger::SessionIdentity>,
-    ) -> Option<Vec<herdr_core::links::session_command::SessionFacts>> {
+        sessions: Vec<hide_core::links::ledger::SessionIdentity>,
+    ) -> Option<Vec<hide_core::links::session_command::SessionFacts>> {
         let (reply, rx) = mpsc::channel();
         self.commands
             .send(Command::Session(SessionAsk::Facts { sessions, reply }))
@@ -1846,8 +2242,8 @@ impl herdr_core::links::session_command::SessionHost for CoreHandle {
 
     fn lay_pulls(
         &self,
-        record: herdr_core::links::ledger::SessionRecord,
-    ) -> Option<herdr_core::links::ledger::SessionRecord> {
+        record: hide_core::links::ledger::SessionRecord,
+    ) -> Option<hide_core::links::ledger::SessionRecord> {
         let (reply, rx) = mpsc::channel();
         self.commands
             .send(Command::Session(SessionAsk::Pulls {
@@ -1879,6 +2275,36 @@ mod tests {
             Ok(())
         }
         fn end(&self, _reason: &str) {}
+    }
+
+    /// A core stopped in its process, as a Herdr move stops it before the
+    /// core role starts again, gives up this machine's panes: the next core
+    /// takes their ownership at once, or its engine never lays the panes out
+    /// again (the move's restored panes waited for an owner that never let
+    /// go).
+    #[test]
+    fn a_core_stopped_in_its_process_gives_up_the_panes_for_the_next_one() {
+        let directory = tempfile::tempdir().unwrap();
+        let panes =
+            || hide_kit::panes::Panes::open(directory.path(), directory.path(), |_| {}).unwrap();
+        let core = CoreHandle::bare(directory.path());
+        // The engine takes the panes as it opens, on a thread of its own.
+        let started = Instant::now();
+        while panes().acquire(Duration::ZERO).is_ok() {
+            assert!(
+                started.elapsed() < Duration::from_secs(10),
+                "the core's engine never took this machine's panes"
+            );
+            thread::yield_now();
+        }
+        // The daemon's stop ends the core while its routes still hold the
+        // handle, as `RunningDaemon` does.
+        core.shutdown();
+        assert!(
+            panes().acquire(Duration::from_secs(5)).is_ok(),
+            "the stopped core still owns this machine's panes"
+        );
+        drop(core);
     }
 
     /// Dropping the core's handle while a device's terminals are linked

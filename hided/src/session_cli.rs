@@ -1,16 +1,18 @@
 //! `hide session list|record|read` (PRD agent-session-read): the core
-//! answers one JSON value (`herdr_core::links::session_command`); this draws
+//! answers one JSON value (`hide_core::links::session_command`); this draws
 //! it as text for an agent to read, or prints it with `--json`. Both forms
 //! carry the same sessions, request numbers, source marks and omission
 //! counts (B19): a record past [`RECORD_TEXT_BYTES`] has its oldest flows
-//! folded before either form is printed (B7).
+//! folded before either form is printed (B7). `hide session fold-ask`
+//! folds one of the caller's own session's open questions
+//! (`hide_core::links::agent_asks`).
 
 use crate::env::Env;
-use herdr_core::links::session_command::SessionCommand;
+use hide_core::links::session_command::SessionCommand;
 use serde_json::{Value, json};
 use std::fmt::Write as _;
 
-pub const USAGE: &str = "hide session list [--since <n>m|h|d] [--limit <n>] [--json]\nhide session record <id> [--json]\nhide session read <id> --request <n> | --from <n> [--events <n>] [--json]";
+pub const USAGE: &str = "hide session list [--since <n>m|h|d] [--limit <n>] [--json]\nhide session record <id> [--json]\nhide session read <id> --request <n> | --from <n> [--events <n>] [--json]\nhide session fold-ask <id> --reason <text> [--json]";
 
 /// The most a record's text takes; past it the oldest flows fold (D-12).
 pub const RECORD_TEXT_BYTES: usize = 64 * 1024;
@@ -124,6 +126,38 @@ pub fn run(env: &Env, cli: &Cli) -> Result<(), String> {
     Ok(())
 }
 
+/// `hide session fold-ask <id> --reason <text>`: the question's id and the
+/// line saying what settled it, each one line.
+pub fn parse_fold_ask(args: &[String]) -> Result<(String, String), String> {
+    let text = |value: &String| {
+        (!value.trim().is_empty()
+            && !value.starts_with("--")
+            && !value.chars().any(char::is_control))
+        .then(|| value.clone())
+    };
+    let key = |value: &String| {
+        (value.len() <= 256 && !value.starts_with('-'))
+            .then(|| text(value))
+            .flatten()
+    };
+    match args {
+        [id, flag, reason] | [flag, reason, id] if flag == "--reason" => key(id).zip(text(reason)),
+        _ => None,
+    }
+    .ok_or_else(|| USAGE.to_owned())
+}
+
+/// Runs `hide session fold-ask`: folds one of the caller's session's open
+/// questions with its reason, printed in the same envelope as a `hide
+/// agent` answer.
+pub fn run_fold_ask(env: &Env, id: &str, reason: &str) -> Result<(), String> {
+    let result = (|| {
+        let mut credential = crate::workspace_cli::Credential::acquire(env)?;
+        crate::workspace_cli::request_fold_ask(&mut credential, id, reason)
+    })();
+    crate::agent_cli::print_answer(result)
+}
+
 /// The answer as text.
 pub fn draw(value: &Value) -> String {
     match value["verb"].as_str() {
@@ -138,7 +172,7 @@ pub fn draw(value: &Value) -> String {
 /// a space: a list or record line is one line, so a title cannot draw a
 /// line of its own, such as a forged `[AI 요약]` mark. A read's events keep
 /// their lines; they carry no marks.
-fn one_line(value: &Value) -> Value {
+pub(crate) fn one_line(value: &Value) -> Value {
     match value {
         Value::String(text) => Value::String(
             text.chars()
@@ -203,7 +237,7 @@ fn tag(source: &Value) -> &'static str {
     }
 }
 
-fn age(now: u64, at: &Value) -> String {
+pub(crate) fn age(now: u64, at: &Value) -> String {
     let Some(at) = at.as_u64() else {
         return "-".to_owned();
     };
@@ -515,13 +549,19 @@ fn draw_record(value: &Value) -> String {
             let _ = writeln!(text, "PR {omitted}개 더 있음");
         }
     }
-    if let Some(artifacts) = value["artifacts"]
+    if let Some(issues) = value["issues"]
         .as_array()
-        .filter(|artifacts| !artifacts.is_empty())
+        .filter(|issues| !issues.is_empty())
     {
-        let _ = writeln!(text, "\n## 결과물");
-        for artifact in artifacts {
-            let _ = writeln!(text, "- [AI 요약] {}", artifact.as_str().unwrap_or(""));
+        let _ = writeln!(text, "\n## 이슈");
+        for issue in issues {
+            let _ = writeln!(
+                text,
+                "- #{} {} ({})",
+                issue["number"],
+                issue["title"].as_str().unwrap_or(""),
+                issue["state"].as_str().unwrap_or("-"),
+            );
         }
     }
     if let Some(children) = value["children"]

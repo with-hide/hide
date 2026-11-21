@@ -1,0 +1,133 @@
+pub mod access;
+#[cfg(test)]
+mod agent_adapter_contract_tests;
+mod agent_find;
+pub mod agent_profiles;
+/// The one spelling of an id the core scopes to a device.
+pub use hide_node_link::address;
+pub mod agent_hooks;
+mod agent_permission;
+mod agent_sleep;
+mod agent_sleep_engine;
+mod agent_start;
+pub mod agent_state;
+mod ai;
+pub mod automations;
+mod changes;
+mod checkout_git;
+mod checkout_owner;
+mod checkout_start;
+mod codex_launch;
+mod composer_checks;
+mod composer_store;
+pub mod coordination;
+pub mod dag;
+pub mod delivery;
+pub mod desk;
+mod device_catalog;
+pub mod device_command;
+pub mod diagnostics;
+mod disk;
+mod display_text;
+pub mod domain;
+mod effects;
+pub mod engine;
+mod environment;
+mod fetch;
+mod files;
+pub use files::{FileRoots, inode_text};
+pub use fork::AGENT_NAME_LIMIT;
+mod agent_groups;
+mod agent_layout;
+pub mod find;
+pub mod fixture;
+mod fork;
+mod github;
+mod github_poll;
+mod github_store;
+pub mod global_instruction;
+pub mod guest_panes;
+mod handle;
+pub mod herdr_import;
+pub mod input_gate;
+pub mod issues;
+mod kit;
+mod labels;
+mod latest_file;
+pub mod launch;
+pub mod links;
+pub mod live;
+pub mod local_issues;
+pub mod memory_command;
+pub mod memory_hook;
+mod memory_pressure;
+pub mod mission_criteria;
+pub mod mission_events;
+mod mission_health;
+mod mission_store;
+pub mod missions;
+mod model;
+pub mod node;
+pub mod node_access;
+pub mod node_migration;
+mod observed;
+pub mod pane_command;
+mod pane_reopen;
+pub mod peer_machines;
+mod persistence;
+pub mod plans;
+mod ports;
+pub mod product_analytics;
+mod project_context;
+pub mod project_open;
+mod project_settings;
+mod reader;
+mod recent_closed;
+pub mod remote;
+mod request_view;
+mod runtime;
+pub mod schema;
+mod session_archive;
+mod session_excerpt;
+mod session_sync;
+mod sidebar;
+mod split_tree;
+mod start_claim;
+mod start_prompt;
+pub mod store_command;
+pub mod suggestions;
+pub mod tasks;
+mod terminal_attachments;
+pub mod terminal_reports;
+mod usage;
+pub mod usage_ledger;
+pub mod view_feedback;
+mod view_layout;
+pub mod workspace;
+pub mod workspace_control;
+pub mod workspace_views;
+pub(crate) mod worktree_cleanup;
+pub mod worktree_command;
+mod worktree_control;
+mod worktrees;
+mod zoneinfo;
+
+pub use ai::{
+    hide_ai_asks, hide_ai_asks_of_stored, hide_ai_ready_here, hide_ai_settings_path,
+    stored_hide_ai_settings,
+};
+pub use handle::{Core, ExecAsk, PreparedChanges};
+pub use model::{
+    ChangedFileStatus, LookChange, LookView, LookViews, RemoteFileListSnapshot,
+    RemoteSessionSnapshot, RemoteStatusSnapshot, RestSections, RightPanelSection,
+    SnapshotDeltaWire,
+};
+pub use model::{
+    CoreOptions, DeviceProblem, DeviceRegistration, HerdrImportSnapshot, LinkOrigin,
+    SCHEMA_VERSION, Snapshot, SnapshotDeltaPayload,
+};
+pub use runtime::WorkspaceRemoteRoute;
+pub use runtime::core_move::{MoveProject, MoveSource, MoveSourceRefusal, ReleaseSource};
+pub use runtime::device_switch::{DeviceSwitchSource, SWITCHED_PROJECTS};
+pub use runtime::serialize_snapshot_delta;
+pub use view_layout::DisplayKind;

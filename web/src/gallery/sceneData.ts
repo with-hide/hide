@@ -39,6 +39,8 @@ export type SceneFolds = {
   inactiveProjectsOpen: boolean;
   /** The No agents fold is open (`no_agents/local`, PRD sidebar-titlebar-refresh D-01). */
   noAgentsOpen: boolean;
+  /** The 정리할 것 fold is open (`cleanup/local`). */
+  cleanupOpen: boolean;
   /** Sleeping projects the operator opened (`asleep/<project>`, D-19); every other one starts folded. */
   asleepOpen: string[];
   /** The device the core has in front (`focus_device`); a rail tile changes it. */
@@ -53,6 +55,7 @@ export const REFERENCE_FOLDS: SceneFolds = {
   inactiveCheckoutsOpen: [],
   inactiveProjectsOpen: false,
   noAgentsOpen: false,
+  cleanupOpen: false,
   asleepOpen: [],
   frontDevice: "local",
 };
@@ -63,6 +66,14 @@ const NO_AGENT_PROJECTS = ["investment", "landing-page", "modakbul-site"];
 const SLEEPING_PROJECTS: Record<string, number> = { "codex-daemon-apply-spec": 4, "sticky-notes": 14 };
 
 const ROOT = "/work";
+
+/** The projects whose remote is on GitHub (`home_issues.repository`, which the project row's logo reads). */
+const GITHUB_REPOSITORIES: Record<string, string> = {
+  hide: "with-hide/hide",
+  sasu: "with-hide/sasu",
+  investment: "hoyeon/investment",
+  "landing-page": "hoyeon/landing-page",
+};
 
 const TITLES: Record<SceneContent, Record<string, string>> = {
   reference: {
@@ -176,7 +187,8 @@ export function checkout(spec: CheckoutSpec, nowSeconds: number): Checkout {
     github: { failure_category: null, available: true, loading: false, stale: false, last_success_at_unix_ms: nowSeconds * 1000 },
     tabs: panes.length ? [{ id: `${spec.id}:t1`, workspace_id: spec.workspace, checkout_id: spec.id, label: "1", sidebar: { manual_name: null, number: 1, named_by_operator: false }, empty: false, delegated: false, panes: panes.map(pane) }] : [],
     active_tab_id: panes.length ? `${spec.id}:t1` : null,
-    strip: [],
+    // The tab strip names the one tab, as the core does, so the strip never draws a blank tab beside its +.
+    strip: panes.length ? [{ id: `strip:${spec.id}:t1`, kind: "engine", source_id: `${spec.id}:t1`, label: "1", preview: false }] : [],
     next_tab_label: "2",
   };
 }
@@ -191,7 +203,7 @@ function pane(id: string) {
     id,
     device_id: "local",
     device_pane_id: id,
-    herdr_label: null,
+    engine_label: null,
     terminal_title: null,
     cwd: ROOT,
     status_code: "idle" as const,
@@ -213,6 +225,7 @@ export function workspace(id: string, extra: Partial<Workspace> & Pick<Workspace
     is_git: true,
     expanded: !folds.collapsedWorkspaces.includes(id),
     inactive_checkouts: { expanded: folds.inactiveCheckoutsOpen.includes(`${ROOT}/${id}`), checkout_ids: [] },
+    ...(GITHUB_REPOSITORIES[id] ? { home_issues: { repository: GITHUB_REPOSITORIES[id], issues: [], overflow: false } } : {}),
     ...extra,
     id,
   };
@@ -255,6 +268,12 @@ function ownPull(number: number, title: string, state: PullState): Pick<AgentRow
 }
 
 /** Fourteen settled worktrees behind hide's `Inactive 14`; `feat/ui` is where a1's first child works. */
+/** Merged branches whose worktrees wait to be removed: the core's cleanup candidates. */
+const CLEANUP = [
+  { branch: "mission29-core-open-f4b311a", number: 2201, age: 2 },
+  { branch: "fix/retire-home-session-refusals", number: 2285, age: 3 },
+  { branch: "feat/agent-profiles-read", number: 2270, age: 5 },
+];
 const INACTIVE = ["feat/ui", ...Array.from({ length: 13 }, (_, index) => `chore/cleanup-${index + 1}`)];
 
 /** The scene's snapshot and agents for one content set and one set of folds. */
@@ -272,6 +291,13 @@ export function sidebarScene(content: SceneContent, folds: SceneFolds, nowMs: nu
       status_code: "working",
       activity: "working",
       elapsed: "1m",
+      subagents: 3,
+      // What Claude Code's hook names of each, oldest first.
+      subagent_rows: [
+        { id: "a1-s1", kind: "Explore", task: "사이드바 트리 코드 찾기", started_unix_ms: nowMs - 6 * 60_000 },
+        { id: "a1-s2", kind: "Plan", task: "들여쓰기 고칠 방법 정리", started_unix_ms: nowMs - 3 * 60_000 },
+        { id: "a1-s3", kind: "general-purpose", task: "좁은 폭 화면 확인", started_unix_ms: nowMs - 60_000 },
+      ],
       lineage_child_pane_ids: A1_CHILDREN,
       lineage_collapsed: !unfolded("a1"),
       descendant_counts: { error: 0, approval: 1, question: 1, working: 1, done: 1 },
@@ -344,7 +370,12 @@ export function sidebarScene(content: SceneContent, folds: SceneFolds, nowMs: nu
     }),
     agent({ pane_id: "q1", identity_label: "브라우저 표시 확인", group: "needs_you", mark: "turn", status_code: "question", demand: "question", elapsed: "40m", detail: "주소 경계를 어디에 둘까요?" }),
     agent({ pane_id: "q2", identity_label: "검색 팔레트", group: "done", mark: "done", status_code: "done", activity: "stopped", elapsed: "1h" }),
-    agent({ pane_id: "e1", identity_label: "단축키 연결", group: "working", mark: "going", status_code: "working", activity: "working", elapsed: "2h" }),
+    agent({ pane_id: "e1", identity_label: "단축키 연결", group: "working", mark: "going", status_code: "working", activity: "working", elapsed: "2h", subagents: 6,
+      // Codex CLI names each by the path it gave it, without a kind; past the ones listed the rest are counted.
+      subagent_rows: [
+        { id: "e1-s1", task: "find shortcut handlers", started_unix_ms: nowMs - 9 * 60_000 },
+        { id: "e1-s2", task: "check key conflicts", started_unix_ms: nowMs - 4 * 60_000 },
+      ] }),
   ];
 
   if (devices !== "one") agents.push(...HOME_AGENTS[content]);
@@ -379,7 +410,7 @@ export function sidebarScene(content: SceneContent, folds: SceneFolds, nowMs: nu
     agent({ pane_id: "a1c8", identity_label: "문서 링크 점검", group: "seen", mark: "quiet", status_code: "idle", elapsed: "3h", delegated: true, lineage_parent_pane_id: "a1", lineage_depth: 1 }),
   );
 
-  const herdrCheckouts: Checkout[] = [
+  const hideCheckouts: Checkout[] = [
     checkout({ id: "hide:main", workspace: "hide", branch: "main", primary: true, age: 10, purpose: "사이드바 가독성 개선", panes: ["a1", ...A1_CHILDREN.filter((pane) => pane !== "a1c1"), "a1g1", "a1g2", "a2", "a2c1", "a2c2", "a3"], marks: { turn: 2, going: 3, quiet: 1 } }, now),
     checkout({ id: "hide:155", workspace: "hide", branch: "quick/155-browser-display", age: 40 * 60, purpose: issueTitle(155, "browser display (WebContentsView)"), panes: ["q1"], marks: { turn: 1 } }, now),
     checkout({ id: "hide:154", workspace: "hide", branch: "quick/154-search-palette", age: 3600, purpose: issueTitle(154, "⌘K search palette UI"), panes: ["q2"], marks: { done: 1 }, pr: { number: 154, title: "Search palette", badge: "open", is_draft: true, state: "draft" } }, now),
@@ -387,6 +418,9 @@ export function sidebarScene(content: SceneContent, folds: SceneFolds, nowMs: nu
     checkout({ id: "hide:ux", workspace: "hide", branch: "design/workspace-ux-proposal", age: 5 * 3600, purpose: "Workspace UX 제안과 상태 소유 정리" }, now),
     checkout({ id: "hide:fix", workspace: "hide", branch: "fix/registered-projects-only", age: 86400 }, now),
     checkout({ id: "hide:legacy", workspace: "hide", branch: "legacy-shell", exists: false }, now),
+    ...CLEANUP.map(({ branch, number, age }, index) =>
+      checkout({ id: `hide:cleanup-${index}`, workspace: "hide", branch, age: age * 86400, pr: { number, title: branch, badge: "merged", is_draft: false, state: "merged" } }, now),
+    ),
     ...INACTIVE.map((branch, index) =>
       checkout({ id: `hide:inactive-${index}`, workspace: "hide", branch, age: (8 + index) * 86400, ...(index === 0 ? { panes: ["a1c1"], marks: { going: 1 } } : {}) }, now),
     ),
@@ -397,8 +431,9 @@ export function sidebarScene(content: SceneContent, folds: SceneFolds, nowMs: nu
     workspace(
       "hide",
       {
-        checkouts: herdrCheckouts,
+        checkouts: hideCheckouts,
         inactive_checkouts: { expanded: folds.inactiveCheckoutsOpen.includes(`${ROOT}/hide`), checkout_ids: INACTIVE.map((_, index) => `hide:inactive-${index}`) },
+        session_folds: { empty: [], child_only: [], cleanup: CLEANUP.map((_, index) => `hide:cleanup-${index}`), empty_open: false, cleanup_open: folds.cleanupOpen, open_prs: 0 },
       },
       folds,
     ),
@@ -430,6 +465,7 @@ export function sidebarScene(content: SceneContent, folds: SceneFolds, nowMs: nu
   const world = devices !== "one" ? deviceWorld(content, workspaces, now, folds, devices === "busy") : null;
   const rest: SnapshotRest = {
     navigator: {
+      siblings_shown: 5,
       workspaces: world ? [...workspaces, world.home] : workspaces,
       inactive_projects: [{ device_id: "local", expanded: folds.inactiveProjectsOpen, project_ids: ["old-prototype", "dotfiles", "research-notes"] }],
       no_agent_projects: [{ device_id: "local", expanded: folds.noAgentsOpen, project_ids: NO_AGENT_PROJECTS }],
@@ -497,22 +533,22 @@ const BUSY_AGENTS: AgentRow[] = [
   agent({ pane_id: "remote:mini:working:2", identity_label: "로그 수집", agent_kind: "codex", group: "working", mark: "going", status_code: "working", activity: "working", elapsed: "2m" }),
 ];
 
-/** The registration the core keeps for a project on `deviceId`; `home` marks the device's Home. */
-function registrationOf(workspace: Workspace, deviceId: string, extra: { home?: boolean } = {}) {
-  return { id: workspace.id, label: workspace.label, path: workspace.path, device_id: deviceId, pinned: workspace.pinned, ...extra };
+/** The registration the core keeps for a project on `deviceId`. */
+function registrationOf(workspace: Workspace, deviceId: string) {
+  return { id: workspace.id, label: workspace.label, path: workspace.path, device_id: deviceId, pinned: workspace.pinned };
 }
 
 /**
- * The devices of the two-device scene: a Home on this Mac (its agents are the
- * Home row's children), a connected `mini` with its own project, Home and
- * agents, and a registered device that is not connected, named at length to
+ * The devices of the two-device scene: a folder project `hide` on this Mac
+ * (the Home an earlier release kept, now an ordinary project), a connected
+ * `mini` with its own projects and agents, and a registered device that is not connected, named at length to
  * try the rail's and the header's truncation.
  */
 function deviceWorld(content: SceneContent, workspaces: Workspace[], now: number, folds: SceneFolds, busy: boolean) {
   const offlineLabel = content === "long" ? "연구실 빌드 서버 자동화 장비 (긴 이름 확인용)" : "build-box";
   const home = workspace(
     "home",
-    { label: "hide", path: `${ROOT}/hide`, is_home: true, is_git: false, checkouts: [checkout({ id: "home:folder", workspace: "home", branch: null, folder: true, panes: ["h1", "h2"], marks: { turn: 1, quiet: 1 } }, now)] },
+    { label: "hide", path: `${ROOT}/hide`, is_git: false, checkouts: [checkout({ id: "home:folder", workspace: "home", branch: null, folder: true, panes: ["h1", "h2"], marks: { turn: 1, quiet: 1 } }, now)] },
     folds,
   );
   const remoteWorkspace = (id: string, label: string, extra: Partial<Workspace>, panes: string[]): Workspace => ({
@@ -525,7 +561,7 @@ function deviceWorld(content: SceneContent, workspaces: Workspace[], now: number
   const miniWorkspaces = [
     // Busy, the extra agents run in web too, so its Projects list raises them past the Needs You cap.
     remoteWorkspace("remote:mini:workspace:web", "web", {}, ["remote:mini:pane:1", "remote:mini:pane:2", ...(busy ? BUSY_AGENTS.map((row) => row.pane_id) : [])]),
-    { ...remoteWorkspace("remote:mini:workspace:home", "hide", { is_home: true, is_git: false }, []), path: "/Users/example/hide" },
+    { ...remoteWorkspace("remote:mini:workspace:home", "hide", { is_git: false }, []), path: "/Users/example/hide" },
   ];
   return {
     home,
@@ -535,16 +571,15 @@ function deviceWorld(content: SceneContent, workspaces: Workspace[], now: number
     ],
     registrations: [
       ...workspaces.map((row) => registrationOf(row, "local")),
-      registrationOf(home, "local", { home: true }),
+      registrationOf(home, "local"),
       registrationOf(miniWorkspaces[0]!, "mini"),
-      registrationOf(miniWorkspaces[1]!, "mini", { home: true }),
+      registrationOf(miniWorkspaces[1]!, "mini"),
     ],
     remote: [
       {
         target_id: "mini",
         state: "connected",
         message: null,
-        herdr_version: "0.9.1",
         session: {
           workspaces: miniWorkspaces,
           agents: (busy ? [...REMOTE_AGENTS[content], ...BUSY_AGENTS] : REMOTE_AGENTS[content]).map((row) => ({ ...row, device_id: "mini" })),
@@ -556,7 +591,7 @@ function deviceWorld(content: SceneContent, workspaces: Workspace[], now: number
           pane_layouts: [],
         },
       },
-      { target_id: OFFLINE_DEVICE, state: "not_connected", message: null, herdr_version: null, session: null },
+      { target_id: OFFLINE_DEVICE, state: "not_connected", message: null, session: null },
     ],
   };
 }
@@ -579,6 +614,7 @@ export function applyEvent(folds: SceneFolds, event: { kind: string; payload: Re
   const { kind, payload } = event;
   if (kind === "checkout_agents_toggle") return { ...folds, collapsedCheckouts: toggled(folds.collapsedCheckouts, String(payload.checkout_id)) };
   if (kind === "session_fold_toggle" && payload.key === "no_agents/local") return { ...folds, noAgentsOpen: !folds.noAgentsOpen };
+  if (kind === "session_fold_toggle" && payload.key === "cleanup/local") return { ...folds, cleanupOpen: !folds.cleanupOpen };
   if (kind === "project_checkouts_fold" && String(payload.workspace_id) in SLEEPING_PROJECTS) {
     const id = String(payload.workspace_id);
     const expanded = typeof payload.expanded === "boolean" ? payload.expanded : !folds.asleepOpen.includes(id);

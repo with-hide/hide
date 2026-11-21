@@ -14,10 +14,11 @@ import path from "node:path";
 import { pathToFileURL } from "node:url";
 import { app, BrowserWindow, clipboard, dialog, ipcMain, nativeImage, net, Notification, powerMonitor, screen, session, shell, type IpcMainEvent, type IpcMainInvokeEvent, type NativeImage } from "electron";
 import { DebUpdater, MacUpdater, NsisUpdater, RpmUpdater } from "electron-updater";
-import { CHECK_UPDATES_COMMAND, SETUP_COMMAND, type ExternalGrant, type HerdrRestart } from "../../../web/src/host";
+import { CHECK_UPDATES_COMMAND, SETUP_COMMAND, type ExternalGrant } from "../../../web/src/host";
 import { pageKeepsKeyboard } from "../../../web/src/shortcuts";
 import type { MenuCommand } from "./menu";
-import { BINDINGS_CHANNEL, COME_FORWARD_CHANNEL, DESK_CHANNEL, COMMAND_CHANNEL, EDITOR_AVAILABLE_CHANNEL, EDITOR_OPEN_CHANNEL, LANGUAGE_CHANNEL, NOTIFY_BADGE_CHANNEL, NOTIFY_CHANNEL, NOTIFY_OPEN_CHANNEL, NOTIFY_PERMISSION_CHANNEL, NOTIFY_SETTINGS_CHANNEL, NOTIFY_WITHDRAW_CHANNEL, OPEN_PATH_CHANNEL, EXTERNAL_DESCRIBE_CHANNEL, EXTERNAL_LIVE_CHANNEL, EXTERNAL_OPEN_CHANNEL, EXTERNAL_READ_CHANNEL, PICK_FOLDER_CHANNEL, PRACTICE_OPEN_CHANNEL, PROBE_PATHS_CHANNEL, HERDR_RESTART_CHANNEL, QUIT_CHANNEL, REVEAL_CHANNEL, UPDATE_CHECK_CHANNEL, UPDATE_PRERELEASE_CHANNEL, UPDATE_RESTART_CHANNEL, UPDATE_STATUS_CHANNEL, UPDATE_STATUS_GET_CHANNEL, WINDOW_CHROME_CHANNEL, WINDOW_CHROME_GET_CHANNEL } from "../channel";
+import { COMPUTER_USE_CHANNEL, COMPUTER_USE_GET_CHANNEL, BINDINGS_CHANNEL, COME_FORWARD_CHANNEL, DESK_CHANNEL, COMMAND_CHANNEL, EDITOR_AVAILABLE_CHANNEL, FIREWALL_ALLOW_CHANNEL, FIREWALL_STATE_CHANNEL, EDITOR_OPEN_CHANNEL, LANGUAGE_CHANNEL, NOTIFY_BADGE_CHANNEL, NOTIFY_CHANNEL, NOTIFY_OPEN_CHANNEL, NOTIFY_PERMISSION_CHANNEL, NOTIFY_SETTINGS_CHANNEL, NOTIFY_WITHDRAW_CHANNEL, OPEN_PATH_CHANNEL, EXTERNAL_DESCRIBE_CHANNEL, EXTERNAL_LIVE_CHANNEL, EXTERNAL_OPEN_CHANNEL, EXTERNAL_READ_CHANNEL, PICK_FOLDER_CHANNEL, PRACTICE_OPEN_CHANNEL, PROBE_PATHS_CHANNEL, REVEAL_CHANNEL, UPDATE_CHECK_CHANNEL, UPDATE_DISMISS_CHANNEL, UPDATE_PRERELEASE_CHANNEL, UPDATE_RESTART_CHANNEL, UPDATE_STATUS_CHANNEL, UPDATE_STATUS_GET_CHANNEL, WINDOW_CHROME_CHANNEL, WINDOW_CHROME_GET_CHANNEL } from "../channel";
+import { ComputerUse } from "./computerUse";
 import { BrowserViews, type ResolvedPage } from "./browser";
 import { practiceBounds, practiceUrl } from "./practice";
 import { BrowserCdpGateway, CdpActionUncertain, parseBrowserControlResult, type CdpAction, type CdpActionResult, type CdpScope } from "./browserCdp";
@@ -45,22 +46,25 @@ import {
 import type { DesktopEnv } from "./env";
 import { readJsonFile, writeJsonFile } from "./jsonFile";
 import type { HostLanguage } from "./language";
-import { chooseHerdr, ensureServer, parseServerStatus, restartServer, serverEnvironment, type HerdrChoice } from "./herdr";
 import { loadFailureFields, type HostLog } from "./log";
 import { redact } from "../../../web/src/redact";
-import { ChildRunner, executableFile, startDetached, type ChildResult } from "./spawn";
+import { ChildRunner, executableFile, type ChildResult } from "./spawn";
 import { fallbackScreen, fallbackScript, statusPageFile } from "./statusPage";
 import { MIN_SIZE, readWindowState, restoreBounds, windowStatePath, writeWindowState } from "./windowState";
 import { openRoute, probe, probeRequest } from "./localPath";
 import { ExternalFiles, agentOpen, clickedRoute } from "./externalFiles";
 import { WAKE_TIMEOUT_MS, wakeRequest, type WakeCause } from "./hideAiWake";
+import { inBackground } from "./inBackground";
 import { revealTarget } from "./reveal";
+import { externalLink } from "./externalLink";
 import { badgeRequest, ClickGate, KeptNotifications, launchedId, notifyRequest, OVERLAY_SIZE, overlayDot, toastXml, withdrawRequest } from "./notify";
 import { Editor } from "./editor";
 import { frameOptions, hidesTitleBar, windowChrome } from "./windowChrome";
+import type { FirewallAnswer, FirewallState } from "../../../web/src/host";
+import { allowFirewall, firewallState } from "./firewall";
 import { NOTIFICATION_SETTINGS_URL, NotificationPermissionReader } from "./notificationPermission";
 import { fromPage, toPage, WirePathError } from "./wirePath";
-import { AppUpdates, fetchReleases, macosLocation, readPackageType, readPrerelease, savePrerelease, updatesFile, updateSystem, type UpdateSystem, type UpdaterLike } from "./updater";
+import { AppUpdates, fetchReleases, macosLocation, readPackageType, readUpdateChoices, saveUpdateChoices, updatesFile, updateSystem, type UpdateSystem, type UpdaterLike } from "./updater";
 
 declare const __HIDE_BACKGROUND__: string;
 declare const __HIDE_WARNING__: string;
@@ -80,12 +84,8 @@ const HEALTH_INTERVAL_MS = 2_000;
 const HEALTH_TIMEOUT_MS = 1_500;
 const LOST_AFTER_MISSES = 2;
 const LOST_POLL_MS = 3_000;
-/** A started Herdr answered within 0.1 s in a 2026-09-29 run; restoring many panes can take longer. */
-const HERDR_START_WAIT_MS = 5_000;
-const HERDR_START_POLL_MS = 200;
 const STATUS_PAGE = statusPageFile(__dirname);
 const CLIPBOARD_PERMISSIONS = new Set(["clipboard-read", "clipboard-sanitized-write"]);
-const EXTERNAL_PROTOCOLS = new Set(["http:", "https:", "mailto:"]);
 
 export type HostState =
   | { kind: "connecting" }
@@ -145,15 +145,15 @@ export class DesktopHost {
   /** Set when the status page file would not load; every later status screen is the plain one (`statusPage.ts`). */
   private statusPageBroken = false;
   private readonly runner = new ChildRunner();
+  /** The firewall ask's own runner: its prompt may stay open for minutes, and must not hold the CLI's line. */
+  private readonly firewallRunner = new ChildRunner();
   /** Every CLI child runs through this chain, so the runner's cap of one is never crossed. */
   private cliChain: Promise<unknown> = Promise.resolve();
   private discovering: Promise<void> | null = null;
-  /** The one Herdr restart running (`listenHerdrRestart`). */
-  private herdrRestart: Promise<HerdrRestart> | null = null;
   private attempts = 0;
   private cli: { path: string; source: CliSource } | null = null;
   /**
-   * Where a packaged Windows app runs its daemon, CLI and Herdr from: this
+   * Where a packaged Windows app runs its daemon and CLI from: this
    * build's copy outside the install folder (`hide runtime prepare`; PRD
    * auto-update D-10), learned once per launch. Null until then, and always
    * null elsewhere, where the package's own resources folder is used.
@@ -187,6 +187,9 @@ export class DesktopHost {
   private readonly editor: Editor;
   /** This app's own updates; made at start, since electron-updater needs the app ready. */
   private updates: AppUpdates | null = null;
+  private readonly computerUse = new ComputerUse(powerMonitor, (inUse) => {
+    this.window?.webContents.send(COMPUTER_USE_CHANNEL, inUse);
+  });
 
   constructor(
     private readonly env: DesktopEnv,
@@ -234,14 +237,16 @@ export class DesktopHost {
     this.listenReveal();
     this.listenComeForward();
     this.listenPickFolder();
-    this.listenHerdrRestart();
-    this.listenQuit();
     this.listenLocalPaths();
     this.listenNotify();
     this.listenWindowChrome();
     this.listenEditor();
     this.listenPractice();
     this.listenWake();
+    ipcMain.on(COMPUTER_USE_GET_CHANNEL, (event: IpcMainEvent) => {
+      if (this.fromShell(event)) event.sender.send(COMPUTER_USE_CHANNEL, this.computerUse.current());
+    });
+    this.computerUse.start();
     // An optional feature: a failure to set it up is the log's, and the window opens regardless.
     try {
       this.startUpdates();
@@ -268,6 +273,7 @@ export class DesktopHost {
     if (this.quitting) return;
     this.quitting = true;
     this.stopWatch();
+    this.computerUse.stop();
     this.runner.stop();
     this.permission.stop();
     this.editor.stop();
@@ -303,7 +309,7 @@ export class DesktopHost {
   }
 
   /**
-   * Whether Settings › Desk has Desk on, which the shell reports as each
+   * Whether Settings › Labs › Desk has Desk on, which the shell reports as each
    * snapshot moves it (D-76). Only this window's page on the daemon origin is
    * heard, and only a boolean.
    */
@@ -454,6 +460,20 @@ export class DesktopHost {
       }
       this.log.event("notify.withdrawn", { asked: ids.length, closed });
     });
+    ipcMain.handle(FIREWALL_STATE_CHANNEL, (event: IpcMainInvokeEvent): Promise<FirewallState> | FirewallState => {
+      if (!this.fromShell(event) || !this.cli) return "unknown";
+      return firewallState(process.platform, this.cli.path, (file, args, timeoutMs) => this.runCli(file, args, timeoutMs));
+    });
+    ipcMain.handle(FIREWALL_ALLOW_CHANNEL, async (event: IpcMainInvokeEvent): Promise<FirewallAnswer> => {
+      if (!this.fromShell(event) || !this.cli) return "failed";
+      const answer = await allowFirewall(process.platform, this.cli.path, (file, args, timeoutMs) =>
+        this.firewallRunner.run(file, args, timeoutMs, this.childEnvironment()).catch(
+          (error: unknown): ChildResult => ({ code: null, signal: null, stdout: "", stderr: "", timedOut: false, spawnError: String(error) }),
+        ),
+      );
+      this.log.event("firewall.asked", { answer });
+      return answer;
+    });
     ipcMain.handle(NOTIFY_PERMISSION_CHANNEL, (event: IpcMainInvokeEvent) => {
       if (!this.fromShell(event)) {
         this.log.event("notify.permission_refused", { reason: "sender" });
@@ -546,7 +566,8 @@ export class DesktopHost {
 
   /**
    * This app's own updates (PRD auto-update): the updater, the status the
-   * shell draws, and the shell's check, Restart and preview switch. Only this
+   * shell draws, and the shell's check, Restart, preview switch and the
+   * ready card's close. Only this
    * window's page on the daemon origin is heard or told; a browser tab or the
    * phone has no bridge, so it shows none of it (B24).
    */
@@ -572,10 +593,10 @@ export class DesktopHost {
           const timer = setTimeout(run, ms);
           return () => clearTimeout(timer);
         },
-        savePrerelease: (on) => savePrerelease(file, on),
+        saveChoices: (choices) => saveUpdateChoices(file, choices),
       },
       this.log,
-      { prerelease: readPrerelease(file), feedOverride: this.env.updateFeedUrl },
+      { ...readUpdateChoices(file), feedOverride: this.env.updateFeedUrl },
     );
     this.updates = updates;
     updates.onChange((status) => {
@@ -592,7 +613,17 @@ export class DesktopHost {
     ipcMain.on(UPDATE_PRERELEASE_CHANNEL, (event: IpcMainEvent, reported: unknown) => {
       if (this.fromShell(event) && typeof reported === "boolean") updates.setPrerelease(reported);
     });
+    ipcMain.on(UPDATE_DISMISS_CHANNEL, (event: IpcMainEvent, version: unknown) => {
+      if (this.fromShell(event) && typeof version === "string") updates.dismiss(version);
+    });
+    // Coming back to the app looks again when the last look is an hour old.
+    app.on("browser-window-focus", () => updates.returned());
     updates.start();
+  }
+
+  /** The last window closed: true when a ready macOS update should be installed by quitting now. */
+  installOnWindowClose(): boolean {
+    return this.updates?.installOnWindowClose() ?? false;
   }
 
   /** electron-updater's updater for this system, its own log lines routed to the host log. */
@@ -656,77 +687,6 @@ export class DesktopHost {
       app.setBadgeCount(count);
       this.log.event("notify.badge", { count });
     }
-  }
-
-  /**
-   * Restarting the operator's Herdr server on this app's Herdr (PRD
-   * herdr-takeover B12, B13), asked by this window's shell after the operator
-   * confirmed what ends; one runs at a time and a second ask answers with it.
-   * Only a packaged app has a Herdr of its own to restart onto. A server that
-   * does not come back shows the status page's start failure, with Retry and
-   * Copy diagnostics, as a launch whose server does not start would.
-   */
-  private listenHerdrRestart(): void {
-    ipcMain.handle(HERDR_RESTART_CHANNEL, (event: IpcMainInvokeEvent) => {
-      if (!this.fromShell(event)) {
-        this.log.event("herdr.restart_refused", { reason: "sender" });
-        return "refused";
-      }
-      this.herdrRestart ??= this.restartHerdr().finally(() => {
-        this.herdrRestart = null;
-      });
-      return this.herdrRestart;
-    });
-  }
-
-  /** The Quit of the screen that holds Hide while Herdr speaks another protocol; only this window's shell is heard. */
-  private listenQuit(): void {
-    ipcMain.on(QUIT_CHANNEL, (event: IpcMainEvent) => {
-      if (!this.fromShell(event)) {
-        this.log.event("quit.refused", { reason: "sender" });
-        return;
-      }
-      this.log.event("quit.asked", {});
-      app.quit();
-    });
-  }
-
-  private async restartHerdr(): Promise<HerdrRestart> {
-    const herdr = this.herdr();
-    if (herdr.source !== "bundled" || herdr.path === null) {
-      this.log.event("herdr.restart_unavailable", { source: herdr.source });
-      return "unavailable";
-    }
-    const bin = herdr.path;
-    const env = serverEnvironment(this.childEnvironment());
-    const attempt = this.attempts;
-    const result = await restartServer({
-      stop: async () => {
-        const stopped = await this.runChild(bin, ["server", "stop"], STATUS_TIMEOUT_MS, env);
-        if (stopped.spawnError) return { failed: `herdr could not start: ${stopped.spawnError}` };
-        if (stopped.timedOut) return { failed: "herdr server stop timed out" };
-        return stopped.code === 0 ? { ok: true } : { failed: `herdr server stop exited ${stopped.code ?? stopped.signal ?? "without a code"}` };
-      },
-      status: (timeoutMs) => this.runChild(bin, ["status", "server", "--json"], timeoutMs, env).then(parseServerStatus),
-      start: () => startDetached(bin, ["server"], env),
-      sleep: (ms) => new Promise((resolve) => setTimeout(resolve, ms)),
-      now: Date.now,
-      stopped: () => this.quitting,
-      statusTimeoutMs: STATUS_TIMEOUT_MS,
-      waitMs: HERDR_START_WAIT_MS,
-      pollMs: HERDR_START_POLL_MS,
-    });
-    if (result.outcome === "restarted") {
-      this.log.event("herdr.server_restarted", { attempt, pid: result.pid, elapsed_ms: result.elapsedMs });
-      return "restarted";
-    }
-    if (result.outcome === "stop_failed") {
-      this.log.event("herdr.server_stop_failed", { attempt, detail: result.detail });
-      return "stop_failed";
-    }
-    this.log.event("herdr.server_restart_failed", { attempt, outcome: result.outcome, detail: result.detail });
-    this.fail(attempt, "start_failed", `herdr restart: ${result.detail}`);
-    return "failed";
   }
 
   /**
@@ -932,12 +892,9 @@ export class DesktopHost {
     const runtime = await this.prepareRuntime(attempt);
     if (runtime !== null) return this.fail(attempt, "start_failed", `runtime: ${runtime}`);
     if (this.quitting) return;
-    const herdr = this.herdr();
-    this.log.event("discovery.start", { attempt, trigger, herdr: herdr.source, replaced_pane_herdr: herdr.replacedPaneValue ?? undefined });
+    this.log.event("discovery.start", { attempt, trigger });
     const cli = await this.findCli(attempt);
     if (!cli) return this.fail(attempt, "cli_missing", "no executable hide CLI");
-    await this.ensureHerdrServer(attempt);
-    if (this.quitting) return;
     const connected = await this.runCli(cli.path, ["connect"], CONNECT_TIMEOUT_MS);
     for (const record of cliRecords(connected.stderr)) this.log.event(record.event, { attempt, ...record.fields });
     const answer = parseConnect(connected);
@@ -1006,7 +963,7 @@ export class DesktopHost {
   }
 
   /**
-   * The folder `hide`, `hided` and `herdr` run from in a packaged app: its
+   * The folder `hide` and `hided` run from in a packaged app: its
    * `Contents/Resources` or `resources`, or on Windows the build's runtime
    * copy once `prepareRuntime` found it.
    */
@@ -1017,8 +974,7 @@ export class DesktopHost {
   /**
    * A packaged Windows app's runtime copy (PRD auto-update D-10): the
    * installer stops every program under the install folder and Windows cannot
-   * replace a running file, so the daemon and the Herdr server must not run
-   * from there. Asked of the install folder's own `hide` once per launch;
+   * replace a running file, so the daemon must not run from there. Asked of the install folder's own `hide` once per launch;
    * what it could not remove of older copies goes to the log (D-11). Null
    * when the copy is ready or none is needed, else why it failed.
    */
@@ -1037,13 +993,7 @@ export class DesktopHost {
     return null;
   }
 
-  /** The Herdr a daemon started from here attaches pane terminals with; `herdr.ts` owns the rule. */
-  private herdr(): HerdrChoice {
-    return chooseHerdr({ bundledDir: this.bundledDir(), herdrBinPath: this.env.herdrBinPath, herdrPaneId: this.env.herdrPaneId });
-  }
-
   private childEnvironment(): Record<string, string | undefined> {
-    const herdr = this.herdr().path;
     // Finder supplies only launchd's system PATH. The CLI and any daemon it
     // starts need the same install folders we search for `hide`.
     const inherited = this.env.path ? this.env.path.split(path.delimiter) : systemDirs(this.env).dirs;
@@ -1051,39 +1001,7 @@ export class DesktopHost {
     // Windows names variables without regard to case, so the inherited `Path`
     // goes and this PATH is the child's only one.
     const passed = Object.entries(this.env.inherited).filter(([key]) => process.platform !== "win32" || key.toUpperCase() !== "PATH");
-    return { ...Object.fromEntries(passed), PATH: searchPath, ...(herdr ? { HERDR_BIN_PATH: herdr } : {}) };
-  }
-
-  /**
-   * Starts the Herdr this app bundles when no server answers on the socket
-   * its children would use, as `herdr` does when a terminal runs it: after a
-   * reboot nothing else starts one, and hided only reads a missing server as
-   * absent. A server that answers is never touched, and neither an unpackaged
-   * host nor an explicit HERDR_BIN_PATH override starts anything, so a
-   * development or e2e run keeps the server it made. A daemon on the core's
-   * own engine (HIDE_DEV_PANE_HOLDER=1) runs no Herdr, so none is started for
-   * it. Every failure goes to the log and the connect goes ahead, where the
-   * shell shows Herdr unreachable.
-   */
-  private async ensureHerdrServer(attempt: number): Promise<void> {
-    if (this.env.ownEngine) return;
-    const herdr = this.herdr();
-    if (herdr.source !== "bundled" || herdr.path === null) return;
-    const bin = herdr.path;
-    const env = serverEnvironment(this.childEnvironment());
-    const result = await ensureServer({
-      status: (timeoutMs) => this.runChild(bin, ["status", "server", "--json"], timeoutMs, env).then(parseServerStatus),
-      start: () => startDetached(bin, ["server"], env),
-      sleep: (ms) => new Promise((resolve) => setTimeout(resolve, ms)),
-      now: Date.now,
-      stopped: () => this.quitting,
-      statusTimeoutMs: STATUS_TIMEOUT_MS,
-      waitMs: HERDR_START_WAIT_MS,
-      pollMs: HERDR_START_POLL_MS,
-    });
-    if (result.outcome === "status_failed") this.log.event("herdr.status_failed", { attempt, detail: result.detail });
-    else if (result.outcome === "started") this.log.event("herdr.server_started", { attempt, pid: result.pid, elapsed_ms: result.elapsedMs });
-    else if (result.outcome === "start_failed") this.log.event("herdr.server_start_failed", { attempt, pid: result.pid, detail: result.detail, elapsed_ms: result.elapsedMs });
+    return { ...Object.fromEntries(passed), PATH: searchPath };
   }
 
   private runChild(file: string, args: readonly string[], timeoutMs: number, env: Record<string, string | undefined>): Promise<ChildResult> {
@@ -1129,12 +1047,14 @@ export class DesktopHost {
     if (current.kind !== "attached" || this.quitting) return;
     const request = wakeRequest(current, cause);
     if (!request) { this.log.event("hide_ai.wake_failed", { cause, reason: "credential" }); return; }
-    void fetch(request.url, { ...request.init, signal: AbortSignal.timeout(WAKE_TIMEOUT_MS) })
-      .then(async (response) => {
+    inBackground(
+      () => fetch(request.url, { ...request.init, signal: AbortSignal.timeout(WAKE_TIMEOUT_MS) }),
+      async (response) => {
         await response.arrayBuffer();
         if (!response.ok) this.log.event("hide_ai.wake_failed", { cause, status: response.status });
-      })
-      .catch(() => this.log.event("hide_ai.wake_failed", { cause, reason: "transport" }));
+      },
+      () => this.log.event("hide_ai.wake_failed", { cause, reason: "transport" }),
+    );
   }
 
   // --- following the daemon (B4) ---------------------------------------------
@@ -1568,9 +1488,9 @@ export class DesktopHost {
     // Decoration failure is diagnostic only. Accept a fixed event from our
     // local status document, never arbitrary renderer text or personal data.
     window.webContents.on("console-message", (details) => {
-      if (details.message === '{"event":"brand_owl.unavailable","scene":"startup","asset":"owl-roam"}'
+      if (details.message === '{"event":"brand_owl.unavailable","scene":"startup","asset":"owl-blink"}'
         && window.webContents.getURL().startsWith(pathToFileURL(STATUS_PAGE).href + "?")) {
-        this.log.event("brand_owl.unavailable", { scene: "startup", asset: "owl-roam" });
+        this.log.event("brand_owl.unavailable", { scene: "startup", asset: "owl-blink" });
       }
     });
     this.browsers?.attach(window);
@@ -1627,9 +1547,15 @@ export class DesktopHost {
     });
   }
 
+  /** The practice window's bounds against the main window, on the screen the main window is on. */
+  private practiceBounds() {
+    const main = this.window && !this.window.isDestroyed() ? this.window.getNormalBounds() : undefined;
+    return practiceBounds(main, (main ? screen.getDisplayMatching(main) : screen.getPrimaryDisplay()).workArea);
+  }
+
   private openPractice(url: string): void {
     const window = new BrowserWindow({
-      ...practiceBounds(this.window?.getNormalBounds()),
+      ...this.practiceBounds(),
       minWidth: MIN_SIZE.width,
       minHeight: MIN_SIZE.height,
       show: false,
@@ -1703,12 +1629,16 @@ export class DesktopHost {
     try { request = this.browserRouteRequest(workspace, id, load); }
     catch { return; }
     const { current, token, body } = request;
-    void fetch(`${current.origin}/browser-route`, {
-      method: "DELETE", headers: { Authorization: `Bearer ${token}`, "Content-Type": "application/json" },
-      body, signal: AbortSignal.timeout(3_000),
-    }).then((answer) => {
-      if (!answer.ok) this.log.event("browser.route_release_failed", { status: answer.status });
-    }).catch((error: unknown) => this.log.event("browser.route_release_failed", { detail: String(error) }));
+    inBackground(
+      () => fetch(`${current.origin}/browser-route`, {
+        method: "DELETE", headers: { Authorization: `Bearer ${token}`, "Content-Type": "application/json" },
+        body, signal: AbortSignal.timeout(3_000),
+      }),
+      (answer) => {
+        if (!answer.ok) this.log.event("browser.route_release_failed", { status: answer.status });
+      },
+      (error) => this.log.event("browser.route_release_failed", { detail: String(error) }),
+    );
   }
 
   /** An IPC message from the shell the daemon serves in this window's own frame; the status page and every browser page are refused. */
@@ -1726,19 +1656,13 @@ export class DesktopHost {
   }
 
   private openExternal(url: string): void {
-    let parsed: URL;
-    try {
-      parsed = new URL(url);
-    } catch {
-      this.log.event("link.refused", { reason: "unparsable" });
+    const link = externalLink(url);
+    if ("refused" in link) {
+      this.log.event("link.refused", link.refused === "unparsable" ? { reason: "unparsable" } : { protocol: link.protocol });
       return;
     }
-    if (!EXTERNAL_PROTOCOLS.has(parsed.protocol)) {
-      this.log.event("link.refused", { protocol: parsed.protocol });
-      return;
-    }
-    this.log.event("link.external", { protocol: parsed.protocol, host: parsed.host });
-    shell.openExternal(url).catch((error: unknown) => this.log.event("link.open_failed", { detail: String(error) }));
+    this.log.event("link.external", { protocol: link.protocol, host: link.host });
+    shell.openExternal(link.url).catch((error: unknown) => this.log.event("link.open_failed", { detail: String(error) }));
   }
 
   private guardNavigation(window: BrowserWindow): void {

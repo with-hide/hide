@@ -10,6 +10,7 @@ mod claude;
 mod codex;
 mod codex_home;
 mod grok;
+mod item;
 mod log;
 mod omp;
 mod pi;
@@ -32,13 +33,14 @@ pub use antigravity::{
 pub use claude::{ClaudeCliBackend, ClaudeConfig, USAGE_ENVIRONMENT, UsageError};
 pub use codex::{CodexAppServerBackend, CodexConfig};
 pub use grok::GrokCliBackend;
+pub use item::Item;
 pub use log::{AiLogEvent, AiLogSink, NoopLogSink};
 pub use omp::{OmpConfig, OmpSdkBackend};
 pub use pi::PiCliBackend;
 pub use process::ProcessMeasurement;
-pub use program::resolve_binary;
+pub use program::{ItemRun, Wrapper, resolve_start};
 pub use registry::{CLI_DEFAULT_MODEL, PROVIDERS, ProviderId, build_backend};
-pub use router::{AiRouter, Degraded, ProviderState, ProviderStatus, RouterConfig};
+pub use router::{AiRouter, Degraded, ProviderState, ProviderStatus, RouterConfig, SharedAccount};
 pub use settings::{AiSettings, FallbackEntry, FallbackRefusal};
 pub use text_cli::TextCliConfig;
 pub use turns::{
@@ -56,6 +58,59 @@ use std::time::Duration;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
+/// One model a provider offers: the name a start or a request passes as its
+/// model (`id`), and the name the provider itself shows for it where that
+/// differs (`label`), as Claude Code's `displayName` (PRD
+/// agent-profiles-phase2 B8). On the wire a model without a label is its
+/// name alone, as every list was before labels.
+#[derive(Clone, Debug, Eq, PartialEq, Deserialize, Serialize)]
+#[serde(from = "ModelWire", into = "ModelWire")]
+pub struct Model {
+    pub id: String,
+    pub label: Option<String>,
+}
+
+impl Model {
+    /// A model the provider names by its id alone.
+    pub fn plain(id: impl Into<String>) -> Self {
+        Self {
+            id: id.into(),
+            label: None,
+        }
+    }
+}
+
+#[derive(Deserialize, Serialize)]
+#[serde(untagged)]
+enum ModelWire {
+    Plain(String),
+    Labelled { id: String, label: String },
+}
+
+impl From<ModelWire> for Model {
+    fn from(wire: ModelWire) -> Self {
+        match wire {
+            ModelWire::Plain(id) => Self::plain(id),
+            ModelWire::Labelled { id, label } => Self {
+                id,
+                label: Some(label),
+            },
+        }
+    }
+}
+
+impl From<Model> for ModelWire {
+    fn from(model: Model) -> Self {
+        match model.label {
+            None => Self::Plain(model.id),
+            Some(label) => Self::Labelled {
+                id: model.id,
+                label,
+            },
+        }
+    }
+}
+
 /// What models a provider offers, or why that is not known.
 ///
 /// A provider that cannot be asked reports the reason rather than an empty
@@ -64,17 +119,23 @@ use serde_json::Value;
 #[derive(Clone, Debug, Eq, PartialEq, Deserialize, Serialize)]
 pub enum ModelCatalog {
     /// The list the provider's own CLI or account answered.
-    Offered(Vec<String>),
+    Offered(Vec<Model>),
     /// A documented list from a compatible peer, rather than the account's
     /// own answer. Kept readable for older node responses (B36).
-    Fixed(Vec<String>),
+    Fixed(Vec<Model>),
     Unknown {
         reason: String,
     },
 }
 
 impl ModelCatalog {
-    pub fn offered(&self) -> &[String] {
+    /// The list a provider answered with the names alone, as every provider
+    /// but Claude Code answers it.
+    pub fn plain<S: Into<String>>(ids: impl IntoIterator<Item = S>) -> Self {
+        Self::Offered(ids.into_iter().map(Model::plain).collect())
+    }
+
+    pub fn offered(&self) -> &[Model] {
         match self {
             Self::Offered(models) | Self::Fixed(models) => models,
             Self::Unknown { .. } => &[],
@@ -450,10 +511,6 @@ pub struct ModelTokens {
 /// joined another's flight is one execution and is told once. Implementations
 /// queue and return: the router calls this on the request's own thread.
 pub trait AiUsageSink: Send + Sync + fmt::Debug {
-    /// One backend execution, including retries and fallbacks, after admission.
-    /// No request or response content crosses this callback.
-    fn started(&self) {}
-
     /// `models` is empty for an attempt that was submitted and reported no
     /// usage (a timeout, a lost connection, a cancel or an unusable answer
     /// after the prompt went out, a provider whose usage is not read): an
@@ -496,6 +553,12 @@ impl CancelToken {
 
 pub trait AiBackend: Send + Sync {
     fn id(&self) -> ProviderId;
+    /// The agent item this backend runs as (PRD agent-profiles-phase2 D-07):
+    /// what the router keys its order, its caches and its parks by. A
+    /// backend of the built-in default profile is its agent's default item.
+    fn item(&self) -> Item {
+        Item::agent(self.id())
+    }
     /// Whether this backend owns a resident process whose descendants and
     /// size the router measures after each turn and holds to its caps. The
     /// backend declares it; the router never names a provider for it.

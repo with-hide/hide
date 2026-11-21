@@ -3,34 +3,28 @@
 // to bottom and moves nothing on them, releasing hides the numbers, ⌥n opens
 // the task at that number as one focus_pane, a number with no task sends
 // nothing, and the `프로젝트 | 태스크` switch decides which list the numbers
-// belong to. A private Herdr server, hided and Electron app.
+// belong to. A private engine, hided and Electron app.
 
 import { expect, type ElectronApplication, type Locator, type Page } from "@playwright/test";
-import { labelAgent, setFixtureLifecycle, startHerdr, type HerdrFixture } from "../../web/e2e/herdr-fixture";
+import { labelAgentPane, setAgentState } from "../../web/e2e/fixture-agents";
 import "../../web/src/host";
 import { countSent, enterWorkspace, screenshot } from "../../web/e2e/wire";
 import { quietFor } from "../../web/e2e/wait";
-import { hostLog, isolate, launchShell, test, type Isolated } from "./fixture";
+import { hostLog, launchShell, startStack, test, type Stack } from "./fixture";
 
-let herdr: HerdrFixture;
-let run: Isolated;
+let stack: Stack;
 let app: ElectronApplication | null = null;
 
-test.beforeAll(async () => {
-  herdr = await startHerdr();
-});
-test.afterAll(() => {
-  herdr?.stop();
-});
-test.beforeEach(() => {
-  run = isolate(herdr, "task-digits");
+// One stack per test: its panes belong to the daemon that made them.
+test.beforeEach(async () => {
+  stack = await startStack("task-digits");
 });
 test.afterEach(async () => {
   const info = test.info();
-  if (info.status !== info.expectedStatus) console.log(hostLog(run.env).map((line) => JSON.stringify(line)).join("\n"));
+  if (info.status !== info.expectedStatus) console.log(hostLog(stack.run.env).map((line) => JSON.stringify(line)).join("\n"));
   await app?.close().catch(() => undefined);
   app = null;
-  run.cleanup();
+  stack.stop();
 });
 
 /** The boxes of what must not move while a keycap shows, rounded to the device pixel. */
@@ -50,11 +44,11 @@ async function exactlyOnce(sent: Map<string, number>, kind: string, expected: nu
 
 test("⌥ numbers the 태스크 list's rows without moving them, ⌥n opens that task, and the switch decides which list is numbered", async () => {
   // A pane is a task once it carries a session, so both get one.
-  for (const [index, pane] of herdr.panes.entries()) {
-    labelAgent(herdr, pane, { task: `Task ${index + 1}`, progress: `Task ${index + 1} 진행 중` });
-    await setFixtureLifecycle(herdr, pane, "working");
+  for (const [index, pane] of stack.fixture.panes.entries()) {
+    await labelAgentPane(stack.fixture, stack.daemon, pane, { task: `Task ${index + 1}`, progress: `Task ${index + 1} 진행 중` });
+    await setAgentState(stack.daemon, pane, "working");
   }
-  const launched = await launchShell(run.env);
+  const launched = await launchShell(stack.run.env);
   app = launched.app;
   const page: Page = launched.page;
   const sent = countSent(page);

@@ -6,10 +6,10 @@ import path from "node:path";
 import { agentIn, openWorktree, viewPane, withControl } from "./daemon-actions";
 import { startFixture, type AgentFixture } from "./engine-fixture";
 import { agentReading, sessionIn, setAgentState, startAgentInProject, takeOverSession, type AgentState } from "./fixture-agents";
-import { claudeProjects, continueFixtureTranscript, writeFixtureTranscript, type FixtureLabel } from "./herdr-fixture";
+import { claudeProjects, continueFixtureTranscript, writeFixtureTranscript, type FixtureLabel } from "./pane-fixture";
 import { startHided, type Daemon } from "./hided-fixture";
 import { chord } from "./chords";
-import { chooseTheme, countSent, openTaskFolds, screenshot, showTasks } from "./wire";
+import { chooseTheme, countSent, hoverSettledTaskRow, openOtherCheckouts, openTaskFolds, screenshot, showTasks } from "./wire";
 import { quietFor, unchangedForFrames } from "./wait";
 
 test.describe.configure({ timeout: 240_000 });
@@ -30,7 +30,7 @@ async function agentInWorktree(fixture: AgentFixture, daemon: Daemon, name: stri
   git(path.join(fixture.root, "fixture"), ["worktree", "add", "-b", `prd/${name}`, dir]);
   return withControl(daemon, async (control) => {
     const agent = await startAgentInProject(fixture, daemon, await openWorktree(control, dir), label);
-    // The stand-in reads only once it runs, and on Herdr a pane no view has sized takes no keys. Showing its tab would
+    // The stand-in reads only once it runs, and a pane no view has sized takes no keys. Showing its tab would
     // mark what it says as seen, which is not the point of the tasks that wait for the operator.
     viewPane(control, agent.pane);
     await agentReading(fixture, agent.pane);
@@ -93,7 +93,7 @@ test("the 태스크 list groups the device's tasks, folds children and resting o
     await page.goto(`${daemon.origin}/#token=${daemon.token}`);
     await page.locator(`nav[data-sidebar] [data-agent-open="${parent}"]`).first().click();
     // The rail has no Work tool; after the viewing column's documents button, the Project tool comes first, then Memory (B23; lane-two-columns B2, B25).
-    await expect.poll(() => page.locator("[data-lane-tool]").evaluateAll((tools) => tools.map((tool) => tool.getAttribute("aria-label")))).toEqual(["Documents", "Project", "Hide AI", "Mission", "Explorer", "Changes"]);
+    await expect.poll(() => page.locator("[data-lane-tool]").evaluateAll((tools) => tools.map((tool) => tool.getAttribute("aria-label")))).toEqual(["Documents", "Project", "Hide AI", "Explorer", "Changes"]);
     const tasks = await showTasks(page);
     const row = (pane: string) => tasks.locator(`[data-task-row="${pane}"]`);
     const group = (name: string) => tasks.locator(`[data-task-group="${name}"]`);
@@ -101,8 +101,8 @@ test("the 태스크 list groups the device's tasks, folds children and resting o
     const ask = (pane: string) => group("needs_you").locator(`[data-task-row="${pane}"] [data-task-line="needs_you"]`);
     await expect(ask(asking)).toContainText("검증 명령을 승인해 주세요", { timeout: 30_000 });
     await expect(ask(question)).toContainText(QUESTION, { timeout: 30_000 });
-    // A parent waiting on its working child stands in 대기 (status-marks D-22, B32).
-    await expect(group("waiting").locator(`[data-task-row="${parent}"]`)).toBeVisible();
+    // A parent waiting on its working child stands in 작업 중, under the agents that work themselves.
+    await expect(group("working").locator(`[data-task-row="${parent}"]`)).toHaveAttribute("data-task-state", "waiting");
     await expect(row(child)).toHaveCount(0);
     // A folded parent counts no children (status-marks B35).
     await expect(row(parent).locator("[data-task-children]")).toHaveCount(0);
@@ -132,7 +132,7 @@ test("the 태스크 list groups the device's tasks, folds children and resting o
     await page.keyboard.press("ArrowDown");
     await expect(group("needs_you").locator('[data-task-focus="row"]').first()).toBeFocused();
     // B18: Resolve from the ⋯ menu is saved, and the row stays under 쉬는 중.
-    await row(stopped).hover();
+    await hoverSettledTaskRow(row(stopped), "resting");
     await tasks.locator(`[data-task-more="${stopped}"]`).click();
     await page.locator(`[data-task-menu="${stopped}"] [data-menu-item="resolve"]`).click();
     await expect.poll(resolved(daemon, stopped)).toBe(true);
@@ -144,8 +144,8 @@ test("the 태스크 list groups the device's tasks, folds children and resting o
     await expect(page.locator('[data-sidebar-lens="tasks"]')).toBeVisible();
     await showProjects(page);
     await expect(page.locator(`nav[data-sidebar] [data-pane="${parent}"]`).first()).toBeVisible();
-    // Its worktree has no unresolved agent, so it stands in the `Worktrees with no agents` fold, where the resolved row is dimmed under its tab.
-    await page.locator("nav[data-sidebar] [data-empty-worktrees]").click();
+    // Its worktree is not the project's main checkout, so it stands in the project's Checkouts fold, where the resolved row is dimmed under its tab.
+    await openOtherCheckouts(page.locator("nav[data-sidebar] [data-project]").filter({ has: page.locator("[data-other-checkouts]") }));
     await expect(page.locator(`nav[data-sidebar] [data-pane="${stopped}"]`).first()).toHaveClass(/opacity-\(--opacity-dimmed\)/);
     await showTasks(page);
     await openTaskFolds(page);
@@ -194,7 +194,7 @@ test("세션 닫기 in a task's ⋯ menu closes its pane, though its checkout is
     const tasks = await showTasks(page);
     await openTaskFolds(page);
     const row = tasks.locator(`[data-task-row="${behind}"]`);
-    await row.hover();
+    await hoverSettledTaskRow(row, "resting");
     await tasks.locator(`[data-task-more="${behind}"]`).click();
     await page.locator(`[data-task-menu="${behind}"] [data-menu-item="close"]`).click();
     await expect.poll(() => sent.get("close_pane")).toBe(1);

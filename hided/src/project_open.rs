@@ -1,4 +1,4 @@
-//! `hide <path>` in the daemon (`herdr_core::project_open`): one request
+//! `hide <path>` in the daemon (`hide_core::project_open`): one request
 //! names a folder on the caller's machine; it comes forward as a project,
 //! registered first through the same `create_workspace` the Add a project
 //! dialog sends, and every window of this machine is asked to come forward
@@ -21,7 +21,7 @@
 use std::time::Duration;
 
 use axum::extract::ws::{Message, WebSocket};
-use herdr_core::project_open::{ProjectOpenReceipt, Unheld, next_action, valid_path};
+use hide_core::project_open::{ProjectOpenReceipt, Unheld, next_action, valid_path};
 use serde_json::{Value, json};
 use std::sync::atomic::Ordering;
 
@@ -76,6 +76,50 @@ pub(crate) fn run(
     }
 }
 
+/// Registers this machine's folder `raw` as a project and brings nothing
+/// forward: what a machine switching a device to this one's own Hide asks
+/// for each project it had registered there (PRD device-connect-iroh D-48).
+/// The folder is judged on hided's `$HOME` line as a picked one is, so one
+/// the line would ask the operator about is refused as `hide <path>`
+/// refuses it; a folder inside a project that is registered already adds
+/// nothing. Blocks for up to `PROJECT_OPEN_WAIT`; runs off the async
+/// runtime.
+pub(crate) fn run_add(
+    core: &CoreHandle,
+    roots: &crate::RootFollower,
+    raw: &str,
+    request_id: &str,
+) -> Result<Value, Refused> {
+    let refused = |code: &str| (code.to_owned(), next_action(code));
+    if !valid_path(raw) {
+        return Err(refused("invalid_path"));
+    }
+    let (path, unheld) = admit(roots.boundary(), raw, || {
+        crate::server::roots_current(roots)
+    })
+    .map_err(|refusal| refused(refusal.code()))?;
+    if unheld == Unheld::Refuse {
+        return Ok(json!({"path": path, "added": false}));
+    }
+    let label = path
+        .trim_end_matches('/')
+        .rsplit('/')
+        .next()
+        .filter(|name| !name.is_empty())
+        .unwrap_or(&path)
+        .to_owned();
+    match core
+        .project_add(&path, &label, request_id)
+        .map_err(|code| refused(&code))?
+    {
+        ProjectOpenReceipt::Opened {
+            label, path, added, ..
+        } => Ok(json!({"label": label, "path": path, "added": added})),
+        ProjectOpenReceipt::Refused { reason } => Err(refused(&reason)),
+        ProjectOpenReceipt::Pending => Err(refused("project_open_unconfirmed")),
+    }
+}
+
 /// The spelling a folder of this machine reaches the core in, and whether
 /// the core may register it. The `$HOME` line Add a project's Browse folder
 /// meets comes first, so a folder under home registers as a picked one does.
@@ -95,7 +139,8 @@ fn admit(
     let unconfirmed = match boundary.resolve_registration(raw, None) {
         Ok(real) => return Ok((hide_platform::path::to_wire_lossy(&real), Unheld::Register)),
         Err(Unregistrable::Refused(Refusal::NeedsConfirmation))
-        | Err(Unregistrable::ConfirmProject(_)) => Refusal::NeedsConfirmation,
+        | Err(Unregistrable::ConfirmProject(_))
+        | Err(Unregistrable::ConfirmHome) => Refusal::NeedsConfirmation,
         Err(Unregistrable::Refused(refusal)) => return Err(refusal),
     };
     let held = match boundary
@@ -128,8 +173,11 @@ pub(crate) fn answer(request_id: &str, outcome: Result<Value, Refused>) -> Value
 
 /// The one request a `/ws` connection that proved the daemon's own token
 /// with `client_kind: "cli"` makes: `{type: "project_open", request_id,
-/// path}`, answered with a `workspace_result` as every scoped request is,
-/// then closed. It is never a screen: no snapshot, no terminal, no event.
+/// path}`, `{type: "project_add", request_id, path}` for a project that is
+/// only registered ([`run_add`]), or `{type: "herdr_import", request_id, yes}` for `hide import
+/// herdr` (`herdr_transition::cli_answer`), answered with a
+/// `workspace_result` as every scoped request is, then closed. It is never a
+/// screen: no snapshot, no terminal.
 pub(crate) async fn operator_request(mut socket: WebSocket, state: AppState, connection: u64) {
     let previous = state.clients.fetch_add(1, Ordering::SeqCst);
     if previous >= crate::state_file::MAX_CLIENTS {
@@ -154,13 +202,35 @@ pub(crate) async fn operator_request(mut socket: WebSocket, state: AppState, con
         .and_then(|value| value["request_id"].as_str())
         .filter(|id| crate::workspace_cli::valid_request_id(id))
         .map(str::to_owned);
+    let adding = request
+        .as_ref()
+        .is_some_and(|value| value["type"] == "project_add");
     let path = request
         .as_ref()
-        .filter(|value| value["type"] == "project_open")
+        .filter(|value| value["type"] == "project_open" || adding)
         .and_then(|value| value["path"].as_str())
         .map(str::to_owned);
-    let response = match (request_id, path) {
-        (Some(request_id), Some(path)) => {
+    let herdr_import = request
+        .as_ref()
+        .filter(|value| value["type"] == "herdr_import")
+        .map(|value| value["yes"] == true);
+    let response = match (request_id, path, herdr_import) {
+        (Some(request_id), None, Some(yes)) => {
+            let core = std::sync::Arc::clone(&state.core);
+            let outcome = tokio::task::spawn_blocking(move || {
+                crate::herdr_transition::cli_answer(&core, yes)
+            })
+            .await;
+            let outcome = match outcome {
+                Ok(Ok(result)) => Ok(result),
+                Ok(Err(_)) | Err(_) => Err((
+                    "herdr_import_unavailable".to_owned(),
+                    "Run the command again once Hide has started",
+                )),
+            };
+            answer(&request_id, outcome)
+        }
+        (Some(request_id), Some(path), None) => {
             let (core, roots, calls) = (
                 std::sync::Arc::clone(&state.core),
                 std::sync::Arc::clone(&state.roots),
@@ -169,6 +239,9 @@ pub(crate) async fn operator_request(mut socket: WebSocket, state: AppState, con
             let windows = state.renderers.load(Ordering::SeqCst);
             let id = request_id.clone();
             let outcome = tokio::task::spawn_blocking(move || {
+                if adding {
+                    return run_add(&core, &roots, &path, &id);
+                }
                 let device = roots.boundary().node().as_str().to_owned();
                 run(&core, &roots, &calls, windows, &device, &path, &id)
             })

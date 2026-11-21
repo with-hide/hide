@@ -3,7 +3,7 @@
 // B7, B13): two 제안 lines whose agents left a commit on a local branch of a
 // scratch repository with no remote, seeded into the daemon's own suggestion
 // store while it is down, the way a stopped agent leaves them. The core reads
-// each branch from git, the 보기 slot shows the branch and one file's diff,
+// each branch from git, a card tab shows the branch and one file's diff,
 // and `Merge into main` merges on the node without pushing. Nothing here is an
 // operator's checkout, app or store.
 
@@ -15,7 +15,7 @@ import { digest, git } from "./hide-ai-fixture";
 import { openProject, withControl } from "./daemon-actions";
 import { startEngine } from "./engine-fixture";
 import { startHided } from "./hided-fixture";
-import { countSent, showProjectMemory, showProjectRow } from "./wire";
+import { countSent, projectOpener, showProjectMemory, showProjectRow } from "./wire";
 
 test.describe.configure({ timeout: 240_000 });
 
@@ -88,20 +88,20 @@ async function open(page: Page, origin: string, token: string): Promise<void> {
   await page.goto(`${origin}/#token=${token}`);
 }
 
-test("a fix waits on its local branch, shows its files and diff in the 보기 slot, and merges into main on the press without a remote", async ({ page }) => {
+test("a fix waits on its local branch, shows its files and diff on a card tab, and merges into main on the press without a remote", async ({ page }) => {
   await page.setViewportSize({ width: 1440, height: 900 });
-  const herdr = await startEngine();
+  const engine = await startEngine();
   let daemon: Awaited<ReturnType<typeof startHided>> | null = null;
   try {
-    const repo = repository(herdr.root);
-    daemon = await startHided(herdr, "hide-ai-branch");
+    const repo = repository(engine.root);
+    daemon = await startHided(engine, "hide-ai-branch");
     await withControl(daemon, (control) => openProject(control, repo, "branchy"));
     const sent = new Map<string, Record<string, unknown>>();
     countSent(page, sent);
     await open(page, daemon.origin, daemon.token);
     const project = page.locator("[data-project]", { hasText: "branchy" });
     // Opening the Hide AI tool makes the Project's suggestion store; the lines are seeded into it while the core is down.
-    await (await showProjectRow(page, project.locator("[data-checkout]").first())).click();
+    await (await showProjectRow(page, projectOpener(project))).click({ position: { x: 12, y: 8 } });
     await showProjectMemory(page);
     await expect.poll(() => sent.get("memory_open")?.workspace_id).toBeTruthy();
     const lane = page.locator('[data-lane="memory"]');
@@ -109,9 +109,9 @@ test("a fix waits on its local branch, shows its files and diff in the 보기 sl
     const node = daemon.node;
     daemon = await daemon.restart((dir) => seedLines(path.join(dir, "suggestions.sqlite3"), `project:${digest(`${node}\0${repo}`)}`, node, repo));
     await open(page, daemon.origin, daemon.token);
-    await (await showProjectRow(page, project.locator("[data-checkout]").first())).click();
+    await (await showProjectRow(page, projectOpener(project))).click({ position: { x: 12, y: 8 } });
     await showProjectMemory(page);
-    const evidence = process.env.HIDE_E2E_SCREENSHOT_DIR ?? herdr.root;
+    const evidence = process.env.HIDE_E2E_SCREENSHOT_DIR ?? engine.root;
 
     // B3: the core read each branch from git, so the row is the operator's turn with the branch, its files and lines.
     const fix = lane.locator('[data-suggestion="s1"]');
@@ -123,16 +123,16 @@ test("a fix waits on its local branch, shows its files and diff in the 보기 sl
     await expect(fix.locator('[data-suggestion-open-pr="s1"]')).toHaveCount(0);
     await lane.screenshot({ path: path.join(evidence, "branch-row-ready.png") });
 
-    // B4: the card in the 보기 slot lists each file; a file opens its diff against main, read on the node.
+    // B4: the card tab lists each file; a file opens its diff against main, read on the node.
     await fix.locator('[data-suggestion-branch-view="s1"]').click();
-    const card = page.locator('[data-lane="detail"] [data-branch-card="s1"]');
+    const card = page.locator('[data-card] [data-branch-card="s1"]');
     await expect(card.locator("[data-branch-card-file]")).toHaveCount(2, { timeout: 20_000 });
     await expect(card).toContainText(FIX);
-    await page.locator('[data-lane="detail"]').screenshot({ path: path.join(evidence, "branch-card.png") });
+    await page.locator('[data-card]').screenshot({ path: path.join(evidence, "branch-card.png") });
     await card.locator('[data-branch-card-file="AGENTS.md"]').click();
-    const diff = page.locator('[data-lane="detail"] [data-branch-card-diff="AGENTS.md"]');
+    const diff = page.locator('[data-card] [data-branch-card-diff="AGENTS.md"]');
     await expect(diff.locator("[data-patch-view]")).toContainText("Run the linter before the tests.", { timeout: 20_000 });
-    await page.locator('[data-lane="detail"]').screenshot({ path: path.join(evidence, "branch-card-diff.png") });
+    await page.locator('[data-card]').screenshot({ path: path.join(evidence, "branch-card-diff.png") });
     // The checkout in front did not move for it.
     expect(head(repo, "HEAD")).toBe(head(repo, "main"));
 
@@ -159,6 +159,6 @@ test("a fix waits on its local branch, shows its files and diff in the 보기 sl
     expect(execFileSync("git", ["remote"], { cwd: repo, encoding: "utf8" }).trim()).toBe("");
   } finally {
     daemon?.stop();
-    herdr.stop();
+    engine.stop();
   }
 });

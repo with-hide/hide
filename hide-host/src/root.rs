@@ -87,6 +87,28 @@ pub fn identity_of(dir: &Dir) -> std::io::Result<RootIdentity> {
     })
 }
 
+/// An absolute path the core names on this machine: its wire spelling
+/// (`hide_platform::path::from_wire`), or a native absolute one, which a
+/// core on this same machine may still hand its own node. `None` for any
+/// other text. On macOS and Linux both are the same `/...` path.
+pub fn native_absolute(path: &str) -> Option<PathBuf> {
+    hide_platform::path::from_wire(path)
+        .ok()
+        .or_else(|| Some(PathBuf::from(path)).filter(|path| path.is_absolute()))
+}
+
+/// An absolute path of this machine as an answer carries it: the wire
+/// spelling, so a core on another system reads it as absolute and relates
+/// it to the others by names. On macOS and Linux it is the path's own text.
+pub fn wire(path: &Path) -> String {
+    hide_platform::path::to_wire_lossy(path)
+}
+
+/// [`wire`] for a path a program printed, such as Git's `C:/repo`.
+pub fn wire_text(path: &str) -> String {
+    wire(Path::new(path))
+}
+
 /// A path inside a root as the wire spells it (`hide_platform::path::RelPath`:
 /// `/`-separated names, no leading `/`, no `.` or `..`), as this machine
 /// names it below the root's handle. The empty string is the root itself.

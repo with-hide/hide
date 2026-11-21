@@ -2,7 +2,7 @@
 """The core decides and keeps state; it never touches a machine (PRD
 core-host-node D-21). Files, processes, the Herdr socket and session files
 are a node's, reached through `NodeLink`; this check fails when production
-code under `herdr-core/src` reaches one directly.
+code under `hide-core/src` reaches one directly.
 
 Test code is exempt: test-only files, a module file its parent declares
 behind `#[cfg(test)]`, and every item behind `#[cfg(test)]`. The core's own
@@ -20,7 +20,7 @@ sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent))
 import rust_scan  # noqa: E402
 
 ROOT = pathlib.Path(__file__).resolve().parent.parent
-CORE = ROOT / "herdr-core" / "src"
+CORE = ROOT / "hide-core" / "src"
 
 
 def scanned() -> list:
@@ -63,7 +63,7 @@ BANNED = [
 # with it (PRD core-host-node D-10), never a fact of the machine it runs on.
 # Each entry is the number of machine touches the file has and why.
 STORES = {
-    "herdr-core/src/persistence.rs": (
+    "hide-core/src/persistence.rs": (
         13,
         "the core's UI state file, including durable directory/write receipts "
         "with the durable writer's own access type, the state folder's identity "
@@ -71,67 +71,103 @@ STORES = {
         "write-error variants before sleeping-session effects, and a moved copy "
         "of it read to name what this build cannot read",
     ),
-    "herdr-core/src/workspace_views.rs": (6, "the core's saved View layouts"),
-    "herdr-core/src/delivery/ledger.rs": (
-        20,
-        "the core's delivery ledger, written with the durable writer's own access type",
+    "hide-core/src/workspace_views.rs": (6, "the core's saved View layouts"),
+    "hide-core/src/delivery/ledger.rs": (
+        15,
+        "the core's delivery ledger: its state folder's durability at start, "
+        "and the old JSON file builds before the store kept it in, read once",
     ),
-    "herdr-core/src/labels/store.rs": (3, "the core's agent label store"),
-    "herdr-core/src/labels/import.rs": (1, "reads the core's own earlier label store once"),
-    "herdr-core/src/links/store.rs": (6, "the core's link graph store"),
-    "herdr-core/src/suggestions/store.rs": (
+    "hide-core/src/delivery/store.rs": (
+        4,
+        "the core's delivery ledger store (letters, registrations, spawns), "
+        "made private, and the old JSON file beside it looked for to import",
+    ),
+    "hide-core/src/labels/store.rs": (3, "the core's agent label store"),
+    "hide-core/src/labels/import.rs": (1, "reads the core's own earlier label store once"),
+    "hide-core/src/links/store.rs": (6, "the core's link graph store"),
+    "hide-core/src/suggestions/store.rs": (
         4,
         "the core's suggestion store (records, notebooks, settings), set aside "
         "and rebuilt when it cannot be read",
     ),
-    "herdr-core/src/usage_ledger/store.rs": (1, "the core's usage ledger and retained daily totals"),
-    "herdr-core/src/local_issues.rs": (5, "the core's local issue store"),
-    "herdr-core/src/mission_events.rs": (
+    "hide-core/src/usage_ledger/store.rs": (1, "the core's usage ledger and retained daily totals"),
+    "hide-core/src/local_issues.rs": (5, "the core's local issue store"),
+    "hide-core/src/mission_events.rs": (
         4,
-        "the core's per-mission event logs beside missions.json, which a core move "
-        "copies; its folder is made, each log written, and an ended mission's log "
-        "deleted or swept; the same writer then writes missions.json itself, after "
-        "the logs it goes with",
+        "the core's per-mission event logs, which a core move copies; its folder "
+        "is made, each log written, and an ended mission's log deleted or swept; "
+        "the same writer then asks mission_store to write the mission files "
+        "after the logs they go with",
     ),
-    "herdr-core/src/latest_file.rs": (
-        6,
+    "hide-core/src/mission_store.rs": (
+        9,
+        "the core's mission bodies and index, split from missions.json: reads "
+        "the index, sweeps orphan bodies, creates the mission folder and "
+        "atomically replaces its private files; all move with the core, "
+        "and explicit shelf reads run outside the runtime lock; startup streams "
+        "and reconciles and trims index rows through the same writer before sweeping, "
+        "and committed shelf eviction also deletes its owned history",
+    ),
+    "hide-core/src/latest_file.rs": (
+        7,
         "the write and read of a core store that keeps only its latest value "
-        "(the saved GitHub answers, the panes held as a draft, the missions), "
-        "and the one copy a store keeps of the file a schema conversion read",
+        "(the saved GitHub answers, the panes held as a draft, the automations), "
+        "the one copy a store keeps of the file a schema conversion read, "
+        "and the file a store could not read set aside beside it",
     ),
-    "herdr-core/src/diagnostics.rs": (7, "the core's own log file"),
-    "herdr-core/src/engine/own/store.rs": (
+    "hide-core/src/diagnostics.rs": (7, "the core's own log file"),
+    "hide-core/src/engine/own/store.rs": (
         8,
         "the core's own engine's saved layout beside the core's state file "
         "(PRD engine-bundle-3-core-owns D-6): read, written with the durable "
         "writer's own access type, and a file it cannot use moved into its "
         "backups folder, the newest three kept",
     ),
-    "herdr-core/src/labels/mod.rs": (
+    "hide-core/src/herdr_import.rs": (
+        10,
+        "the core's record of a Herdr session's move beside the engine's saved "
+        "layout (PRD engine-bundle-4-herdr-removal D-25) and the save a "
+        "device's node read, kept there until the next start imports it, both "
+        "written with the durable writer's own access type; and the core's "
+        "delivery ledger, whose registrations the move hands over before the "
+        "core runs",
+    ),
+    "hide-core/src/labels/mod.rs": (
         1,
         "reads the operator's AI choice, a core store beside the core's "
         "state file (`hide_ai::settings`)",
     ),
-    "herdr-core/src/session_sync/coordinator.rs": (
+    "hide-core/src/session_sync/coordinator.rs": (
         2,
         "reads and writes the operator's AI choice, a core store beside the "
         "core's state file (`hide_ai::settings`)",
     ),
-    "herdr-core/src/node_migration.rs": (
-        15,
+    "hide-core/src/node_migration.rs": (
+        18,
         "converts the core's own stores to node ids once, where they were "
-        "written, before any link exists (PRD core-host-node D-10)",
+        "written, before any link exists (PRD core-host-node D-10), including "
+        "listing the split mission folder's bodies and index for rewriting, "
+        "and looks for the delivery ledger's store and its old file, which "
+        "it imports first and never writes",
     ),
-    "herdr-core/src/node_migration/copy.rs": (
-        61,
+    "hide-core/src/node_migration/copy.rs": (
+        62,
         "copies, places and sets aside the core's own stores for a move of "
         "the core (PRD core-host-node-move), run by the hided whose state "
         "folder holds them while no core runs on it; the retired "
         "session-search store moves read-only, kept for its retention "
-        "settings (PRD overview-device-tasks D-20), and a global instruction "
-        "kept through a link moves as the text the core reads through it",
+        "settings (PRD overview-device-tasks D-20), a global instruction "
+        "kept through a link moves as the text the core reads through it, "
+        "and the old delivery ledger file is checked only without its store",
     ),
-    "herdr-core/src/node_migration/reown.rs": (
+    "hide-core/src/node_migration/devices.rs": (
+        10,
+        "renames a dialed device an earlier build registered under its SSH "
+        "alias to its machine id in the core's own stores and its engine "
+        "folder, once, where they were written, before the core starts on "
+        "them, resuming from its journal beside them",
+    ),
+    "hide-core/src/node_migration/reown.rs": (
         4,
         "converts a moved copy of the core's own link and Project "
         "Memory stores to the receiving node's ids, before a core starts on "
@@ -139,12 +175,12 @@ STORES = {
         "the retired session-search store's retention to them (PRD "
         "overview-device-tasks D-20)",
     ),
-    "herdr-core/src/memory_hook.rs": (
+    "hide-core/src/memory_hook.rs": (
         1,
         "looks whether the core's Memory store exists before asking a node, "
         "a core store beside the core's state file",
     ),
-    "herdr-core/src/global_instruction.rs": (
+    "hide-core/src/global_instruction.rs": (
         16,
         "the Hide global instruction beside the core's state file, which a "
         "core move carries (`MOVES_WITH_CORE`): read as a regular file, a link "
@@ -160,7 +196,6 @@ LATER_LAYERS = {}
 
 # Fixtures that are built for tests and never shipped.
 FIXTURES = {
-    "herdr-core/src/bin/hide-fixture.rs": "the e2e fixture binary; the package ships none of herdr-core's binaries",
 }
 
 

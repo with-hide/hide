@@ -121,6 +121,7 @@ export type CommandId =
   | "open_file"
   | "toggle_left_sidebar"
   | "overview"
+  | "open_missions"
   | "sidebar_projects"
   | "add_backlog"
   | "toggle_device_rail"
@@ -142,7 +143,12 @@ export type CommandId =
   | "explorer_paste"
   | "split_right"
   | "split_down"
+  | "focus_pane_left"
+  | "focus_pane_right"
+  | "focus_pane_up"
+  | "focus_pane_down"
   | "toggle_zoom"
+  | "pair_view"
   | "toggle_plan"
   | "close_pane"
   | "text_larger"
@@ -175,7 +181,7 @@ export type AreaCommandId = (typeof AREA_COMMANDS)[number];
  * D-19, D-29): the lane opens on that tool, or closes when it already shows
  * it, as pressing the icon does. The checkout's tools take a letter of their
  * name (⇧⌘E Explorer, ⇧⌘G Changes), Alt+Shift with the same letter elsewhere
- * (PRD lane-two-columns D-08); the Project, Memory and Mission tools have no chord
+ * (PRD lane-two-columns D-08); the Project and Memory tools have no chord
  * until one is bound, because ⇧⌘L opens Memory without closing it
  * (`open_project_memory`) and ⇧⌘R the sidebar's PR list (`open_sidebar_prs`, B25).
  */
@@ -184,14 +190,12 @@ export const LANE_TOOL_COMMANDS: readonly LaneToolCommandId[] = TOOLS.map((tool)
 const LANE_TOOL_TITLES: Record<LaneToolCommandId, string> = {
   toggle_lane_project: "Toggle Project tool",
   toggle_lane_memory: "Toggle Hide AI tool",
-  toggle_lane_mission: "Toggle Mission tool",
   toggle_lane_explorer: "Toggle Explorer tool",
   toggle_lane_changes: "Toggle Changes tool",
 };
 const LANE_TOOL_CHORDS: Record<LaneToolCommandId, { browser: Chord | null; electron: Chord | null; moved: boolean }> = {
   toggle_lane_project: { browser: null, electron: null, moved: false },
   toggle_lane_memory: { browser: null, electron: null, moved: false },
-  toggle_lane_mission: { browser: null, electron: null, moved: false },
   toggle_lane_explorer: { browser: { code: "KeyE", meta: true, shift: true }, electron: { code: "KeyE", meta: true, shift: true }, moved: false },
   toggle_lane_changes: { browser: { code: "KeyG", meta: true, shift: true }, electron: { code: "KeyG", meta: true, shift: true }, moved: false },
 };
@@ -285,6 +289,8 @@ export const REGISTRY: readonly Command[] = [
   // Chrome keeps ⇧⌘B (bookmarks bar), so a browser tab turns the lens with ⌥⇧B (PRD sidebar-task-lens D-32).
   { id: "toggle_sidebar_lens", title: "Switch sidebar list", group: "Panels", browser: { code: "KeyB", alt: true, shift: true }, electron: { code: "KeyB", meta: true, shift: true }, moved: true },
   { id: "overview", title: "Overview", group: "Navigate", browser: { code: "KeyO", meta: true, shift: true }, electron: { code: "KeyO", meta: true, shift: true }, moved: false },
+  // No chord until the operator binds one, so no chord already taken moves (PRD mission-screen non-goals).
+  { id: "open_missions", title: "Open missions", group: "Navigate", browser: null, electron: null, moved: false },
   // Chrome keeps ⌘⇧M for the profile menu, so the browser form is ⌥⇧M (PRD overview-device-tasks B37).
   { id: "add_backlog", title: "Add to backlog", group: "Navigate", browser: { code: "KeyM", alt: true, shift: true }, electron: { code: "KeyM", meta: true, shift: true }, moved: true },
   { id: "sidebar_projects", title: "Focus sidebar", group: "Panels", browser: { code: "KeyP", meta: true, shift: true }, electron: { code: "KeyP", meta: true, shift: true }, moved: false },
@@ -302,12 +308,21 @@ export const REGISTRY: readonly Command[] = [
   { id: "keep_open", title: "Keep open", group: "Panes", browser: { code: "KeyK", meta: true, shift: true }, electron: { code: "KeyK", meta: true, shift: true }, moved: false },
   { id: "split_right", title: "Split right", group: "Panes", browser: { code: "KeyD", meta: true }, electron: { code: "KeyD", meta: true }, moved: false },
   { id: "split_down", title: "Split down", group: "Panes", browser: { code: "KeyD", meta: true, shift: true }, electron: { code: "KeyD", meta: true, shift: true }, moved: false },
+  { id: "focus_pane_left", title: "Focus pane left", group: "Panes", browser: { code: "ArrowLeft", meta: true, alt: true }, electron: { code: "ArrowLeft", meta: true, alt: true }, moved: false },
+  { id: "focus_pane_right", title: "Focus pane right", group: "Panes", browser: { code: "ArrowRight", meta: true, alt: true }, electron: { code: "ArrowRight", meta: true, alt: true }, moved: false },
+  { id: "focus_pane_up", title: "Focus pane up", group: "Panes", browser: { code: "ArrowUp", meta: true, alt: true }, electron: { code: "ArrowUp", meta: true, alt: true }, moved: false },
+  { id: "focus_pane_down", title: "Focus pane down", group: "Panes", browser: { code: "ArrowDown", meta: true, alt: true }, electron: { code: "ArrowDown", meta: true, alt: true }, moved: false },
   { id: "toggle_zoom", title: "Zoom pane", group: "Panes", browser: { code: "Enter", meta: true, shift: true }, electron: { code: "Enter", meta: true, shift: true }, moved: false },
+  // The focused pane beside its tab's desk, or the tab's own layout back
+  // (PRD lane-desk-pair-view B18, B26, D-24): ⌘. in both hosts and
+  // Ctrl+Shift+. on Windows and Linux by the rule; no shell, agent CLI or
+  // Chrome keeps either, and a View's comment chord is ⇧⌘., another key.
+  { id: "pair_view", title: "Pair view", group: "Panes", browser: { code: "Period", meta: true }, electron: { code: "Period", meta: true }, moved: false },
   // The focused pane's plan (PRD hide-plan B7), in the place the task list's
   // chord had: ⇧⌘U on macOS in both hosts, Alt+Shift+U on Windows and Linux
   // by the rule (⇧⌘L is the Memory tool, and Chrome keeps Alt+Shift+I); no
   // shell, agent CLI, Chrome or system keeps either.
-  { id: "toggle_plan", title: "Show plan", group: "Panes", browser: { code: "KeyU", meta: true, shift: true }, electron: { code: "KeyU", meta: true, shift: true }, moved: false },
+  { id: "toggle_plan", title: "Show task steps", group: "Panes", browser: { code: "KeyU", meta: true, shift: true }, electron: { code: "KeyU", meta: true, shift: true }, moved: false },
   { id: "close_pane", title: "Close pane", group: "Panes", browser: { code: "KeyW", alt: true, shift: true }, electron: { code: "KeyW", meta: true, shift: true }, moved: true },
   { id: "text_larger", title: "Larger text", group: "Panes", browser: { code: "Equal", meta: true }, electron: { code: "Equal", meta: true }, moved: false },
   { id: "text_smaller", title: "Smaller text", group: "Panes", browser: { code: "Minus", meta: true }, electron: { code: "Minus", meta: true }, moved: false },
@@ -339,6 +354,12 @@ export const REGISTRY: readonly Command[] = [
  * without it, and an operator's own binding replaces the entry.
  */
 export const PC_KEYS: Readonly<Partial<Record<CommandId, { chord?: Chord; browser?: Chord; passthrough?: Passthrough }>>> = {
+  // Directional terminal focus keeps Ctrl+Shift on Windows and Linux (Discussion 2055).
+  focus_pane_left: { chord: { code: "ArrowLeft", ctrl: true, shift: true } },
+  focus_pane_right: { chord: { code: "ArrowRight", ctrl: true, shift: true } },
+  focus_pane_up: { chord: { code: "ArrowUp", ctrl: true, shift: true } },
+  focus_pane_down: { chord: { code: "ArrowDown", ctrl: true, shift: true } },
+
   // Alt+Tab is the system's window switcher and never reaches an app, so the
   // cycle moves to ` under the rule (macOS keeps ⌘` for its own window cycle,
   // which is why it uses ⌥Tab). Going back adds Alt to the Ctrl+Shift the
@@ -502,7 +523,7 @@ export function matchHost(event: KeyEventLike, registry: readonly Command[], hos
 // honours the operator's existing shortcut settings).
 export const EDITABLE_PANE_COMMANDS: readonly CommandId[] = [
   "recent_area_tab", "previous_recent_area_tab", "next_tab", "previous_tab", "recent_panel", "previous_recent_panel",
-  "overview", "sidebar_projects",
+  "overview", "open_missions", "sidebar_projects",
   "toggle_device_rail",
   "toggle_sidebar_lens",
   ...LANE_TOOL_COMMANDS,
@@ -511,7 +532,12 @@ export const EDITABLE_PANE_COMMANDS: readonly CommandId[] = [
   "desk_terminal",
   "split_right",
   "split_down",
+  "focus_pane_left",
+  "focus_pane_right",
+  "focus_pane_up",
+  "focus_pane_down",
   "toggle_zoom",
+  "pair_view",
   "toggle_plan",
   "close_pane",
   "text_larger",
@@ -568,10 +594,15 @@ export function parseChord(text: string): Chord | null {
 }
 
 // The macOS set's keys: one printable ASCII key, named by the character it
-// types unshifted, or Return.
+// types unshifted, Return or a directional arrow.
 const MACOS_KEY_CODES: Readonly<Record<string, string>> = {
   tab: "Tab",
   return: "Enter",
+  left: "ArrowLeft",
+  right: "ArrowRight",
+  up: "ArrowUp",
+  down: "ArrowDown",
+
   "`": "Backquote",
   "-": "Minus",
   "=": "Equal",
@@ -728,10 +759,13 @@ const RETIRED_KEYS: readonly string[] = ["toggle_sidebar_view", "project_home", 
  * became the sidebar's PR list, and a chord the operator bound to it keeps
  * doing what it did, now there (PRD lane-two-columns B25). The new name, once
  * stored, wins over the old. `toggle_lane_memory` is a live command again,
- * so a chord stored under it toggles the Memory tool as it did before.
+ * so a chord stored under it toggles the Memory tool as it did before. The
+ * Mission tool became the mission screen, and a chord bound to it opens that
+ * screen (PRD mission-screen D-12, B21).
  */
 const RENAMED_KEYS: Readonly<Record<string, CommandId>> = {
   toggle_lane_prs: "open_sidebar_prs",
+  toggle_lane_mission: "open_missions",
 };
 
 /** The stored set with each renamed key under its command's own key on `host`. */
@@ -941,15 +975,19 @@ export function sheetRows(group: Command["group"], registry: readonly Command[],
   return rows;
 }
 
+export function isPaneFocusCommand(id: CommandId): boolean {
+  return id === "focus_pane_left" || id === "focus_pane_right" || id === "focus_pane_up" || id === "focus_pane_down";
+}
+
 /**
  * Commands that leave the operator where they work: pressed while a native
  * page holds the keyboard, the page keeps it, so the next key and the next
  * chord act on that page. Zoom pane in a page is Expand and Expand again
- * (`keyboard.ts`); any other command needs the shell's keyboard for the
- * surface it opens, or moves the keyboard itself.
+ * (`keyboard.ts`); terminal direction commands leave a page alone. Other
+ * commands need the shell's keyboard for the surface they open, or move it.
  */
 export function pageKeepsKeyboard(id: CommandId): boolean {
-  return id === "toggle_zoom";
+  return id === "toggle_zoom" || isPaneFocusCommand(id);
 }
 
 /** Held navigation commands bypass native menu accelerators and share release routing. */

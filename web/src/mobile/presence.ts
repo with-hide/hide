@@ -1,11 +1,11 @@
 import type { PairedHost } from "./hosts";
-import type { ServerFrame } from "./protocol";
+import { refusalOf, type ServerFrame } from "./protocol";
 import { RelaySocket } from "./relaySocket";
 
-export type Presence = { online: boolean; needs?: number; working?: number; lastSeen: number | null; protocolMismatch?: number };
+export type Presence = { online: boolean; needs?: number; working?: number; lastSeen: number | null; protocolMismatch?: number; revoked?: boolean };
 
-/** One list observer, owned by a visible picker; no commands or retained payloads. */
-export function watchHost(host: PairedHost, changed: (presence: Presence) => void): () => void {
+/** One list observer, owned by a visible picker; no commands or retained payloads. A revoked host is never watched. */
+export function watchHost(host: PairedHost & { credential: string }, changed: (presence: Presence) => void): () => void {
   let ended = false;
   let socket: RelaySocket | null = null;
   let timer: ReturnType<typeof setTimeout> | null = null;
@@ -17,6 +17,7 @@ export function watchHost(host: PairedHost, changed: (presence: Presence) => voi
     let heard = Date.now();
     let denied = false;
     let protocolMismatch: number | undefined;
+    let revoked = false;
     const ws = new RelaySocket(host, (protocol) => { denied = true; protocolMismatch = protocol; }, () => undefined);
     socket = ws;
     ws.onopen = () => ws.send(JSON.stringify({ client_kind: "phone", token: host.credential }));
@@ -28,7 +29,7 @@ export function watchHost(host: PairedHost, changed: (presence: Presence) => voi
         if (frame.type === "agents") changed({ online: true, lastSeen,
           needs: frame.groups.find((g) => g.group === "needs_you")?.count ?? 0,
           working: frame.groups.find((g) => g.group === "working")?.count ?? 0 });
-        if (frame.type === "refused") { denied = frame.reason !== "mobile_off"; ws.close(); }
+        if (frame.type === "refused") { denied = frame.reason !== "mobile_off"; revoked = refusalOf(frame.reason) === "revoked"; ws.close(); }
       } catch { ws.close(); }
     };
     const health = () => {
@@ -41,7 +42,7 @@ export function watchHost(host: PairedHost, changed: (presence: Presence) => voi
     timer = setTimeout(health, 10_000);
     ws.onclose = () => {
       clear(); socket = null;
-      changed({ online: false, lastSeen, protocolMismatch });
+      changed({ online: false, lastSeen, protocolMismatch, ...(revoked ? { revoked } : {}) });
       if (!ended && !denied) timer = setTimeout(open, Math.min(10_000, 1000 * 2 ** Math.min(attempt++, 4)) * (0.75 + Math.random() * 0.5));
     };
   };

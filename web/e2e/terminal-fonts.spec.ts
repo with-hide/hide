@@ -78,13 +78,13 @@ async function inkOf(page: Page, screen: Locator, grid: { cols: number; rows: nu
 }
 
 async function start(page: Page) {
-  const herdr = await startFixture();
+  const engine = await startFixture();
   let daemon: Daemon | undefined;
   const stop = () => {
-    try { daemon?.stop(); } finally { herdr.stop(); }
+    try { daemon?.stop(); } finally { engine.stop(); }
   };
   try {
-    daemon = await startHided(herdr, "terminal-fonts");
+    daemon = await startHided(engine, "terminal-fonts");
     await page.goto(`${daemon.origin}/?probe=1#token=${daemon.token}`);
     await enterWorkspace(page, "fixture");
     const view = page.locator('[data-pane-view][data-focused="true"]');

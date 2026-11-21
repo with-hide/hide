@@ -14,13 +14,13 @@ import { expect, test, type Locator, type Page } from "@playwright/test";
 import { execFileSync } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
-import { claudeProjects, type HerdrFixture } from "./herdr-fixture";
+import { claudeProjects } from "./pane-fixture";
 import { startEngine } from "./engine-fixture";
 import { openProject, withControl } from "./daemon-actions";
 import { OMP_ID, PI_ID, prepareNativeWriter } from "./session-reader-fixture";
 import { startHided, type Daemon } from "./hided-fixture";
 import { fixtureExecutable, fixtureProgram } from "./platform-fixture";
-import { countSent, screenshot, showProjectRow, showSidebarPrs } from "./wire";
+import { closeFrontCard, countSent, screenshot, showProjectRow, showSidebarPrs } from "./wire";
 import { chord } from "./chords";
 import { animationsFinished } from "./wait";
 import { initGithubRepository } from "./github-remote";
@@ -67,6 +67,7 @@ const [a, b] = args;
 if (a === "auth" && b === "status") process.exit(0);
 if (a === "api" && b === "user") { process.stdout.write("example-user\\n"); process.exit(0); }
 if (process.argv.slice(2).join(" ").includes("review-requested:@me")) { process.stdout.write("[]\\n"); process.exit(0); }
+if (process.argv.slice(2).join(" ").includes("HideHeadRuns")) { const repository = {}; for (let i = 0; i < process.argv.slice(2).join(" ").split("object(oid:").length - 1; i++) repository["c" + i] = { checkSuites: { totalCount: 0, nodes: [] } }; console.log(JSON.stringify({ data: { repository } })); process.exit(0); }
 if (process.argv.slice(2).join(" ").includes("HidePrFacts")) { process.stdout.write('{"data":{"repository":{"pullRequests":{"nodes":[]}}}}\\n'); process.exit(0); }
 if (a === "repo" && b === "view") { out({ nameWithOwner: "acme/repo", id: "R_fixture" }); process.exit(0); }
 if (a === "pr" && b === "list") { out(args.includes("merged") ? [] : ${JSON.stringify(pulls)}); process.exit(0); }
@@ -136,13 +137,14 @@ function writeSessions(projects: string, cwd: string): Record<string, string> {
  * record shows; the card keeps that line open while the app runs.
  */
 async function openCard(page: Page, number: number, fresh = true): Promise<Locator> {
-  if (fresh) await (await showProjectRow(page, page.locator("[data-project]", { hasText: "repo" }).locator("[data-checkout]").first())).click();
+  // The repository's own row opens its main checkout, whose row is drawn only while it holds an agent or the focus.
+  if (fresh) await (await showProjectRow(page, page.locator("[data-project]", { hasText: "repo" }).locator("[data-project-row]"))).click({ position: { x: 12, y: 8 } });
   await showSidebarPrs(page);
   // Waiting starts folded (B7); a group opens from its header.
   await page.locator('[data-pr-group] [data-pr-focus="group"]').first().waitFor({ timeout: 30_000 });
   for (const header of await page.locator('[data-pr-group][data-folded="true"] [data-pr-focus="group"]').all()) await header.click();
   await page.locator(`[data-pr-row="${number}"]`).click({ timeout: 30_000 });
-  const card = page.locator(`aside[data-lane="detail"] [data-pr-card="${number}"]`);
+  const card = page.locator(`[data-card] [data-pr-card="${number}"]`);
   // The timeline is never folded (PRD pr-card-and-session-record-redesign D-03).
   await card.locator("[data-pr-card-timeline]").waitFor({ timeout: 30_000 });
   return card;
@@ -206,20 +208,20 @@ test("a pull request's panel shows the sessions that made it and worked on it af
     await screenshot(page, "link-graph-panel-light");
 
     // An ended row's buttons take the time's place on the pointer; View
-    // conversation opens that session's record in the 보기 slot (B9, B10,
-    // B11; PRD sidebar-task-lens B47), and the slot's ← comes back to the card.
+    // conversation opens that session's record as a desk tab (B9, B10,
+    // B11; PRD sidebar-task-lens B47), and closing it comes back to the card.
     await maker.hover();
     await expect(maker.locator('[data-link-button="view"]')).toBeVisible();
     await expect(maker.locator('[data-link-button="resume"]')).toBeVisible();
     await maker.locator('[data-link-button="view"]').click();
-    await expect(page.locator('aside[data-lane="detail"] [data-session-record="lane"]')).toBeVisible({ timeout: 30_000 });
+    await expect(page.locator('[data-card] [data-session-record="lane"]')).toBeVisible({ timeout: 30_000 });
     await expect(page.locator("[data-overview-page]")).toHaveCount(0);
-    await page.locator("[data-detail-back]").click();
+    await closeFrontCard(page);
     await expect(panel).toBeVisible();
 
     // A session whose file is gone stays as a dim line, and Resume says why (B15);
     // the card reads the record again when it opens. The close chord, pressed
-    // with the keyboard in the lane (← took it), closes the slot as its ✕ does.
+    // with the keyboard in the lane, closes the card tab as its ✕ does.
     fs.rmSync(files["s-gone"]);
     await page.keyboard.press(chord("close_tab"));
     await expect(panel).toHaveCount(0);
@@ -264,7 +266,7 @@ test(`a ${kind} archive resume keeps its selected source and uses the current co
     git(repo, ["commit", "-m", "initial"]);
     git(repo, ["worktree", "add", "-b", BRANCH, tree]);
     // The writer reads only the run's root and HOME, which an engine without a CLI environment has as well.
-    const session = prepareNativeWriter({ root: engine.root, env: { HOME: path.join(engine.root, "home") } } as unknown as HerdrFixture, kind, tree);
+    const session = prepareNativeWriter({ root: engine.root, env: { HOME: path.join(engine.root, "home") } }, kind, tree);
     const source = fs.readFileSync(path.join(engine.root, `${kind}-session-seed.jsonl`), "utf8") + `${JSON.stringify({
       type: "message", id: "pr-tool-result", timestamp: at(CREATED + 1_000),
       message: { role: "toolResult", toolCallId: "pr-tool", toolName: "bash", isError: false,
@@ -291,10 +293,10 @@ test(`a ${kind} archive resume keeps its selected source and uses the current co
     await archived.hover();
     await expect(archived.locator('[data-link-button="view"]')).toBeVisible();
     await archived.locator('[data-link-button="view"]').click();
-    await expect(page.locator('aside[data-lane="detail"] [data-session-record="lane"]')).toBeVisible({ timeout: 30_000 });
+    await expect(page.locator('[data-card] [data-session-record="lane"]')).toBeVisible({ timeout: 30_000 });
     await screenshot(page, `${kind}-archive-record`);
-    // The record took the 보기 slot; its ← brings the card back.
-    await page.locator("[data-detail-back]").click();
+    // The record opened as a tab in front of the card; closing it brings the card back.
+    await closeFrontCard(page);
     await expect(panel.locator(`[data-pr-panel-worktree="${tree}"]`)).not.toHaveAttribute("data-removed", "true");
     await expect(panel.locator("[data-link-loading]")).toHaveCount(0, { timeout: 60_000 });
     // The card's own parts settle first: a failed part draws a line that moves the row under the pointer.

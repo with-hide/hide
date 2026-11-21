@@ -62,19 +62,14 @@ pub fn holds_package_runtime(dir: &Path) -> bool {
 }
 
 /// This machine's target for a desktop package whose resources are `kit_dir`.
-pub fn local_target(
-    kit_dir: &Path,
-    home: &Path,
-    herdr_socket: &Path,
-    stop: Arc<AtomicBool>,
-) -> KitTarget {
-    let herdr = kit_dir.join(format!("herdr{}", std::env::consts::EXE_SUFFIX));
+pub fn local_target(kit_dir: &Path, home: &Path, stop: Arc<AtomicBool>) -> KitTarget {
     let relocated = std::env::var_os("HCOORD_HOME")
         .filter(|value| !value.is_empty())
         .map(PathBuf::from);
     let login_shell = crate::agents::login_shell();
     KitTarget {
         home: home.to_path_buf(),
+        install: hide_agent_hooks::route::APP_INSTALL.to_owned(),
         kit_dir: kit_dir.to_path_buf(),
         cli_dir: home.join(".local").join("bin"),
         // A `hide` linked into a device helper root is Hide's too: this Mac
@@ -83,8 +78,6 @@ pub fn local_target(
             crate::layout::helper_root(home),
             crate::layout::legacy_helper_root(home),
         ],
-        herdr_socket: herdr_socket.to_path_buf(),
-        herdr_bin: herdr.is_file().then(|| herdr.clone()),
         codex: crate::agents::find(home, login_shell.as_deref(), &stop, "codex"),
         login_shell,
         legacy_coordination_home: relocated,
@@ -92,6 +85,8 @@ pub fn local_target(
         retirement_projects: Vec::new(),
         legacy: crate::legacy::local(home),
         stop,
+        profiles: None,
+        hooks_only: false,
     }
 }
 
@@ -128,11 +123,11 @@ mod tests {
         assert!(!holds_package_runtime(&aside), "a shell archive alone");
         std::fs::write(&daemon, "").unwrap();
         assert!(holds_package_runtime(&aside));
-        // A folder Herdr was installed into by itself, as Homebrew does.
+        // A folder another program was installed into by itself, as Homebrew does.
         let own = dir.path().join("homebrew/bin");
         std::fs::create_dir_all(&own).unwrap();
         std::fs::write(
-            own.join(format!("herdr{}", std::env::consts::EXE_SUFFIX)),
+            own.join(format!("tool{}", std::env::consts::EXE_SUFFIX)),
             "",
         )
         .unwrap();
@@ -145,7 +140,7 @@ mod tests {
         let copy = crate::layout::runtime_dir(dir.path(), "0.4.0-aaaaaaaaaaaa");
         std::fs::create_dir_all(&copy).unwrap();
         let daemon = copy.join(format!("hided{}", std::env::consts::EXE_SUFFIX));
-        for program in ["hided", "hide", "hide-agent-hooks", "herdr"] {
+        for program in ["hided", "hide", "hide-agent-hooks", "hide-holder"] {
             let file = format!("{program}{}", std::env::consts::EXE_SUFFIX);
             std::fs::write(copy.join(file), "").unwrap();
         }
@@ -171,27 +166,7 @@ mod tests {
         assert_eq!(bundled_kit_dir(&daemon), Some(resources.clone()));
         std::fs::remove_file(resources.join("app.asar")).unwrap();
         assert_eq!(bundled_kit_dir(&daemon), None);
-        let target = local_target(
-            &resources,
-            dir.path(),
-            Path::new("isolated.sock"),
-            Arc::default(),
-        );
+        let target = local_target(&resources, dir.path(), Arc::default());
         assert_eq!(target.cli_dir, dir.path().join(".local/bin"));
-        std::fs::write(
-            resources.join(format!("herdr{}", std::env::consts::EXE_SUFFIX)),
-            "",
-        )
-        .unwrap();
-        assert!(
-            local_target(
-                &resources,
-                dir.path(),
-                Path::new("isolated.sock"),
-                Arc::default()
-            )
-            .herdr_bin
-            .is_some()
-        );
     }
 }

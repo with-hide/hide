@@ -1,0 +1,2036 @@
+//! Each machine's install kit as the runtime holds it (PRD device-parity):
+//! what the last check of each machine found, the kit work each machine runs
+//! next, and the operator's Reinstall.
+//!
+//! This Mac's kit runs on its own worker (`crate::kit::KitPump`); a device's
+//! runs on its helper, called from a worker that exists while that device
+//! has work queued (`crate::kit::spawn_device_worker`). Nothing here touches
+//! a file or a process: a worker takes its job under the lock, runs it with
+//! the lock released, and hands the report back.
+
+use std::sync::Arc;
+use std::time::{Duration, Instant};
+
+use hide_kit::{ComponentId, KitReport, Scope};
+
+use super::Runtime;
+use super::hosts::HostPhase;
+use crate::model::{CodexDaemonOffSnapshot, KitAgentSnapshot, KitSnapshot, KitUnavailable};
+use crate::node_access::NodeLink;
+
+/// How often this Mac's kit is read again while Settings is on screen, so a
+/// part the operator removed by hand shows up without a relaunch.
+const LOCAL_STATUS_INTERVAL: Duration = Duration::from_secs(5);
+
+/// What a machine's kit worker is asked to do next.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(crate) enum KitJob {
+    Apply(Scope),
+    Status,
+}
+
+impl KitJob {
+    /// Two requests for one machine as one: an install answers a read too,
+    /// and a Reinstall does everything the connection pass does.
+    fn merge(self, later: KitJob) -> KitJob {
+        match (self, later) {
+            (KitJob::Apply(before), KitJob::Apply(after)) => {
+                KitJob::Apply(merge_scopes(Some(before), after))
+            }
+            (KitJob::Apply(scope), KitJob::Status) | (KitJob::Status, KitJob::Apply(scope)) => {
+                KitJob::Apply(scope)
+            }
+            (KitJob::Status, KitJob::Status) => KitJob::Status,
+        }
+    }
+}
+
+fn merge_scopes(before: Option<Scope>, after: Scope) -> Scope {
+    match before {
+        Some(before) => before.merge(after),
+        None => after,
+    }
+}
+
+/// A limit failure names its subject without copying or hashing an
+/// arbitrarily large external identifier under the runtime lock.
+fn diagnostic_identity(value: &str) -> serde_json::Value {
+    let mut end = value.len().min(128);
+    while !value.is_char_boundary(end) {
+        end -= 1;
+    }
+    serde_json::json!({
+        "prefix": &value[..end],
+        "bytes": value.len(),
+        "truncated": end != value.len(),
+    })
+}
+
+/// The machine's last report says Codex has not trusted Hide's hook, which
+/// only a pass asks again.
+fn trust_unrecorded(kit: &KitSnapshot) -> bool {
+    use super::start_hook::{HookRefusal, StartHook, piece_start};
+    kit.agents.iter().any(|agent| {
+        agent.hook.as_ref().map(piece_start) == Some(StartHook::Pass(HookRefusal::Untrusted))
+    })
+}
+
+/// A piece of the agent that waited for the agent to make its own folder
+/// in `old` can be put in now.
+fn folder_made(old: &KitAgentSnapshot, now: &KitAgentSnapshot) -> bool {
+    use super::start_hook::{HookRefusal, StartHook, piece_start};
+    let made = |old: Option<&crate::model::KitPieceSnapshot>,
+                now: Option<&crate::model::KitPieceSnapshot>| {
+        old.map(piece_start) == Some(StartHook::Pass(HookRefusal::NotSetUp))
+            && now.is_some_and(|piece| piece.state.needs_attention())
+    };
+    made(Some(&old.skill), Some(&now.skill)) || made(old.hook.as_ref(), now.hook.as_ref())
+}
+
+/// What a device's kit worker does on one call.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(crate) enum DeviceKitWork {
+    Job(KitJob),
+    /// Store work, once no kit job waits (`kit_store`).
+    Store(super::kit_store::StoreJob),
+    /// The device is being removed from Hide: its kit comes off (D-16).
+    Remove,
+}
+
+/// One kit call a device's worker makes, with what it needs from the
+/// runtime taken under the lock.
+pub(crate) struct DeviceKitCall {
+    pub(crate) work: DeviceKitWork,
+    pub(crate) channel: Arc<dyn NodeLink>,
+    pub(crate) cli_dir: String,
+    pub(crate) retirement_projects: Vec<String>,
+    /// The run of the shared-server turn-off this call carries, if any.
+    pub(crate) daemon_off_run: Option<u64>,
+    pub(crate) connect_attempt: Option<u64>,
+}
+
+/// What a node answered for its profiles (`crate::kit::read_profiles`).
+pub(crate) enum ProfilesRead {
+    Listed(hide_node_link::profiles::ProfileList),
+    /// The node predates profiles.
+    Unsupported,
+    Unreadable(String),
+}
+
+/// What a device's kit call answered.
+pub(crate) enum DeviceKitAnswer {
+    Report(Result<KitReport, String>),
+    Store(super::kit_store::StoreAnswered),
+    Removed(Result<hide_node_link::protocol::KitRemoved, String>),
+}
+
+/// Where one device stands with the first-run agent choice in this run.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(super) enum FirstRunChoice {
+    /// Its record waits for the choice and this run has not sent it.
+    Waiting,
+    /// This run sent it; a device that still waits after that is reported.
+    Sent,
+}
+
+/// Why Hide's kit does not run on a device.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(super) enum KitDeclined {
+    /// The operator has not allowed Hide's helper there.
+    NoConsent,
+    /// The consent was given to an older build's kit; Hide asks again. What
+    /// that build put there may still be in place.
+    ConsentOutdated,
+    /// This build has no helper for the device's platform.
+    Unsupported,
+}
+
+impl KitDeclined {
+    fn cause(&self) -> KitUnavailable {
+        match self {
+            Self::NoConsent => KitUnavailable::NoConsent,
+            Self::ConsentOutdated => KitUnavailable::ConsentOutdated,
+            Self::Unsupported => KitUnavailable::UnsupportedPlatform,
+        }
+    }
+
+    /// Whether Hide has certainly put no hook there: never allowed, or a
+    /// platform it has no helper for. An outdated consent may leave an
+    /// older build's hooks in place, so that answer stays unknown.
+    pub(super) fn installed_nothing(&self) -> bool {
+        !matches!(self, Self::ConsentOutdated)
+    }
+}
+
+/// What a removal leaves on a device whose helper is not connected (B24).
+const LEFT_ON_DEVICE: [&str; 3] = ["Hide's hook entries", "Hide's hide link", "the helper root"];
+
+impl Runtime {
+    /// Registered roots and the catalog's known checkouts, on this device only.
+    /// This copies paths; the kit inspects their run states outside the lock.
+    pub(crate) fn retirement_projects(&self, device_id: &str) -> Vec<String> {
+        let mut paths = self
+            .snapshot
+            .ui_state
+            .workspace_registrations
+            .iter()
+            .filter(|registration| registration.device_id == device_id)
+            .map(|registration| registration.path.clone())
+            .collect::<Vec<_>>();
+        let projects = self.snapshot.navigator.workspaces.iter().chain(
+            self.snapshot
+                .status
+                .remote
+                .iter()
+                .filter(|status| status.target_id == device_id)
+                .filter_map(|status| status.session.as_ref())
+                .flat_map(|session| session.workspaces.iter()),
+        );
+        for project in
+            projects.filter(|project| project.device_id == device_id && project.registered)
+        {
+            paths.extend(
+                project
+                    .checkouts
+                    .iter()
+                    .map(|checkout| checkout.path.clone()),
+            );
+        }
+        paths.sort();
+        paths.dedup();
+        paths
+    }
+
+    /// This Mac cannot run the kit at all, and its row says why (B11); a
+    /// first-run Continue waiting for that pass learns it did not run.
+    /// `detail` is what went wrong in the operator's terms; it goes to the
+    /// log, and the row words `cause`.
+    pub(crate) fn set_local_kit_unavailable(&mut self, cause: KitUnavailable, detail: &str) {
+        let node = self.node.clone();
+        self.start_pass_finished(node.as_str());
+        if self.set_kit_state(node.as_str(), KitSnapshot::unavailable(cause)) {
+            crate::diagnostic!(serde_json::json!({
+                "component": "kit",
+                "kind": "kit.unavailable",
+                "device_id": node.as_str(),
+                "cause": cause.as_str(),
+                "detail": detail,
+            }));
+        }
+        self.settle_first_run_apply();
+    }
+
+    /// The worker exists: the launch pass is its first job (B1, B10).
+    pub(crate) fn queue_local_kit_launch(&mut self) {
+        self.local_kit_pending = Some(Scope::automatic());
+        let node = self.node.clone();
+        self.set_kit_busy(node.as_str());
+    }
+
+    /// The next job for this Mac's kit worker: a queued install first, else
+    /// a re-read while Settings is on screen; off screen nothing is read.
+    pub(crate) fn take_local_kit_job(&mut self, now: Instant) -> Option<KitJob> {
+        if let Some(scope) = self.local_kit_pending.take() {
+            let node = self.node.clone();
+            self.start_pass_taken(node.as_str());
+            return Some(KitJob::Apply(scope));
+        }
+        if std::mem::take(&mut self.local_kit_check_requested)
+            || self.settings_observed() && self.local_kit_next_status.is_none_or(|next| now >= next)
+        {
+            self.local_kit_next_status = Some(now + LOCAL_STATUS_INTERVAL);
+            return Some(KitJob::Status);
+        }
+        None
+    }
+
+    /// A Settings tab showing the kit opened: this Mac and every connected
+    /// device are read once. A machine that cannot run the kit has nothing
+    /// to read, and one with work queued answers with that work. True when a
+    /// machine's `checking` flipped, so the caller announces it: a slow read
+    /// over a device must show as under way before it answers (B10).
+    /// A machine whose last pass could not have Codex trust Hide's hook is
+    /// checked with a pass, since only a pass asks Codex again and the
+    /// operator may have approved the hooks in Codex since (`hide_kit`'s
+    /// `codex_trust`); every other machine is read.
+    pub(super) fn request_kit_check(&mut self) -> bool {
+        let mut changed = false;
+        let node = self.node.clone();
+        if self
+            .kit_states
+            .get(node.as_str())
+            .is_none_or(|state| state.unavailable.is_none())
+        {
+            if self
+                .kit_states
+                .get(node.as_str())
+                .is_some_and(trust_unrecorded)
+            {
+                self.queue_kit_scope(node.as_str(), Scope::automatic());
+            } else {
+                self.local_kit_check_requested = true;
+            }
+            changed |= self.set_kit_checking(node.as_str());
+        }
+        let ready = self
+            .device_hosts
+            .iter()
+            .filter(|(_, host)| matches!(host.phase, HostPhase::Ready { .. }))
+            .map(|(device_id, _)| device_id.clone())
+            .collect::<Vec<_>>();
+        for device_id in ready {
+            if !self.device_kit_pending.contains_key(&device_id)
+                && !self.device_kit_running.contains(&device_id)
+            {
+                let job = if self
+                    .kit_states
+                    .get(&device_id)
+                    .is_some_and(trust_unrecorded)
+                {
+                    KitJob::Apply(Scope::automatic())
+                } else {
+                    KitJob::Status
+                };
+                self.queue_device_kit(&device_id, job);
+                changed |= self.set_kit_checking(&device_id);
+            }
+        }
+        changed
+    }
+
+    /// Has `machine`'s kit read once more, for a session that newly wears
+    /// the update badge (`sidebar::update_badged_sessions`): an agent started
+    /// again, perhaps after its update, which the read settles. A device
+    /// that is not connected, or has kit work queued or running, answers
+    /// with that work instead.
+    pub(super) fn request_machine_kit_read(&mut self, machine: &str) {
+        if machine == self.node.as_str() {
+            self.local_kit_check_requested = true;
+            return;
+        }
+        let ready = self
+            .device_hosts
+            .get(machine)
+            .is_some_and(|host| matches!(host.phase, HostPhase::Ready { .. }));
+        if ready
+            && !self.device_kit_pending.contains_key(machine)
+            && !self.device_kit_running.contains(machine)
+        {
+            self.queue_device_kit(machine, KitJob::Status);
+        }
+    }
+
+    /// A read asked with Check again is on its way: the machine's row shows
+    /// it until an answer lands, report or failure (B10). It publishes only
+    /// the flip, so a re-read every few seconds adds nothing while Settings
+    /// is open. True when the snapshot changed.
+    fn set_kit_checking(&mut self, device_id: &str) -> bool {
+        let mut state = self.kit_state(device_id);
+        state.checking = true;
+        state.check_failed = None;
+        self.set_kit_state(device_id, state)
+    }
+
+    fn diagnose_unknown_kit_agents(&mut self, device_id: &str, report: &KitReport) {
+        // Reports are external input. Bound both the count and retained text;
+        // crossing either bound is an explicit diagnostic, never growth.
+        const LIMIT: usize = 128;
+        const ID_BYTES: usize = 512;
+        for agent in &report.agents {
+            if hide_agent_adapter::adapter(&agent.id).is_some() {
+                continue;
+            }
+            if self
+                .unknown_kit_agents
+                .iter()
+                .any(|(device, id)| device == device_id && id == &agent.id)
+            {
+                continue;
+            }
+            if device_id.len() > ID_BYTES
+                || agent.id.len() > ID_BYTES
+                || self.unknown_kit_agents.len() >= LIMIT
+            {
+                if !self.unknown_kit_agents_limit_reported {
+                    self.unknown_kit_agents_limit_reported = true;
+                    crate::diagnostic!(serde_json::json!({
+                        "component": "kit", "kind": "unknown_agent.diagnostic_limit",
+                        "limit": LIMIT, "id_bytes": ID_BYTES,
+                        "device_id": diagnostic_identity(device_id),
+                        "agent_id": diagnostic_identity(&agent.id),
+                    }));
+                }
+                continue;
+            }
+            let key = (device_id.to_owned(), agent.id.clone());
+            if self.unknown_kit_agents.insert(key) {
+                crate::diagnostic!(serde_json::json!({
+                    "component": "kit", "kind": "unknown_agent.omitted",
+                    "device_id": device_id, "agent_id": agent.id,
+                }));
+            }
+        }
+    }
+
+    /// The kit's own sentence for each part and piece whose state or cause
+    /// changed since the machine's last report: the screen words the cause,
+    /// and this is where the path, the version or the io error is kept.
+    fn diagnose_kit_reasons(&self, device_id: &str, report: &KitReport) {
+        let before = self.kit_states.get(device_id);
+        for part in &report.components {
+            let Some(reason) = part.reason.as_deref() else {
+                continue;
+            };
+            let unchanged = before.is_some_and(|before| {
+                before.components.iter().any(|known| {
+                    known.id == part.id && known.state == part.state && known.why == part.why
+                })
+            });
+            if !unchanged {
+                crate::diagnostic!(serde_json::json!({
+                    "component": "kit",
+                    "kind": "part.reason",
+                    "device_id": device_id,
+                    "part": part.id.code(),
+                    "state": part.state,
+                    "cause": part.why.as_ref().map(|why| why.cause),
+                    "reason": reason,
+                }));
+            }
+        }
+        for agent in &report.agents {
+            let known =
+                before.and_then(|before| before.agents.iter().find(|row| row.id == agent.id));
+            let pieces = [
+                (
+                    "skill",
+                    Some(&agent.skill),
+                    known.map(|row| Some(&row.skill)),
+                ),
+                (
+                    "hook",
+                    agent.hook.as_ref(),
+                    known.map(|row| row.hook.as_ref()),
+                ),
+            ];
+            for (name, piece, known) in pieces {
+                let Some(piece) = piece else {
+                    continue;
+                };
+                let Some(reason) = piece.reason.as_deref() else {
+                    continue;
+                };
+                let unchanged = known
+                    .flatten()
+                    .is_some_and(|known| known.state == piece.state && known.why == piece.why);
+                if !unchanged {
+                    crate::diagnostic!(serde_json::json!({
+                        "component": "kit",
+                        "kind": "part.reason",
+                        "device_id": device_id,
+                        "agent": agent.id,
+                        "piece": name,
+                        "state": piece.state,
+                        "cause": piece.why.as_ref().map(|why| why.cause),
+                        "reason": reason,
+                    }));
+                }
+            }
+        }
+    }
+
+    /// Stores what a check or an install found on one machine. A report that
+    /// lands while an install is queued for that machine keeps it busy.
+    pub(crate) fn ingest_kit_report(&mut self, device_id: &str, report: &KitReport) -> bool {
+        self.start_pass_finished(device_id);
+        self.diagnose_unknown_kit_agents(device_id, report);
+        // What an older layout left (the standalone hcoord plugin, folders
+        // `~/.hide` replaced) is no part either (PRD hide-home-layout D-13).
+        let legacy = &report.legacy_retirement;
+        if !legacy.is_empty() {
+            crate::diagnostic!(serde_json::json!({
+                "component": "kit",
+                "kind": if legacy.failures.is_empty() { "legacy.retired" } else { "legacy.retire_incomplete" },
+                "device_id": device_id,
+                "removed": legacy.removed,
+                "failures": legacy.failures,
+            }));
+        }
+        let mut snapshot = KitSnapshot::from_report(report);
+        let store_before = self
+            .kit_states
+            .get(device_id)
+            .and_then(|state| state.store.clone());
+        self.store_from_kit_report(device_id, store_before.as_ref(), &mut snapshot);
+        // The list is the node's to answer; a pass judges the profiles in it.
+        snapshot.profiles = self
+            .kit_states
+            .get(device_id)
+            .and_then(|state| state.profiles.clone());
+        if let Some(profiles) = snapshot.profiles.as_mut() {
+            profiles.judged(&report.profiles);
+        }
+        self.diagnose_kit_reasons(device_id, report);
+        self.install_updated_agents(device_id, &snapshot);
+        snapshot.busy = self.kit_install_queued(device_id);
+        // A refusal reaches the operator once per change, not on every read
+        // while Settings is open: the kit's own words go to the log, and the
+        // first run opens with it (`decide_agent_onboarding`).
+        let refusal_new = snapshot.refused.is_some()
+            && self
+                .kit_states
+                .get(device_id)
+                .and_then(|state| state.refused.as_ref())
+                != snapshot.refused.as_ref();
+        if let Some(refusal) = report.refused.as_ref().filter(|_| refusal_new) {
+            crate::diagnostic!(serde_json::json!({
+                "component": "kit",
+                "kind": "kit.refused",
+                "device_id": device_id,
+                "cause": refusal.cause,
+                "path": refusal.path,
+                "variable": refusal.variable,
+                "detail": refusal.detail,
+            }));
+        }
+        let mut changed = self.decide_agent_onboarding(device_id, report, refusal_new);
+        // A daemon answer the kit could not read reads as no answer; the log
+        // keeps it when it appears or changes, not on every read (B13).
+        let unreadable_before = self
+            .kit_states
+            .get(device_id)
+            .and_then(|state| state.codex_daemon_unreadable.as_deref());
+        if let Some(reason) = report.codex_daemon_unreadable.as_deref()
+            && unreadable_before != Some(reason)
+        {
+            crate::diagnostic!(serde_json::json!({
+                "component": "kit",
+                "kind": "codex_daemon.unreadable",
+                "device_id": device_id,
+                "reason": reason,
+            }));
+        }
+        // Every Codex start on this machine is refused while its Codex is
+        // unread (`codex_launch::CAPABILITY_UNKNOWN`); why goes to the log
+        // when it appears or changes, as the cause and exit code alone.
+        let unread_before = self
+            .kit_states
+            .get(device_id)
+            .and_then(|state| state.codex_capability_unread);
+        if let Some(failure) = report.codex_capability_unread
+            && unread_before != Some(failure)
+        {
+            crate::diagnostic!(serde_json::json!({
+                "component": "kit",
+                "kind": "codex_capability_unread",
+                "device_id": device_id,
+                "agent": "codex",
+                "failure": failure,
+            }));
+        }
+        // Only the pass that carried the operator's request answers it; a
+        // read that lands before or after keeps what the last one said.
+        match &report.codex_daemon_off {
+            Some(outcome) => {
+                crate::diagnostic!(serde_json::json!({
+                    "component": "kit",
+                    "kind": "codex_daemon_off.answered",
+                    "device_id": device_id,
+                    "outcome": outcome,
+                }));
+            }
+            None => {
+                snapshot.codex_daemon_off = self
+                    .kit_states
+                    .get(device_id)
+                    .and_then(|state| state.codex_daemon_off);
+            }
+        }
+        changed |= self.set_kit_state(device_id, snapshot);
+        if device_id == self.node.as_str() {
+            changed |= self.settle_first_run_apply();
+        }
+        changed
+    }
+
+    /// Whether a kit answer for `device_id` is followed by a read of its
+    /// profiles: after every pass, which may have settled a removal, and
+    /// after a read until a list was read once. A read's judgment of each
+    /// profile comes with the kit's own report.
+    pub(crate) fn profiles_due(&self, device_id: &str, job: &KitJob) -> bool {
+        matches!(job, KitJob::Apply(_))
+            || self
+                .kit_states
+                .get(device_id)
+                .is_none_or(|state| state.profiles.is_none())
+    }
+
+    /// What the node of `device_id` answered for its profiles. A list that
+    /// cannot be read keeps the last one and says so; why goes to the log.
+    pub(crate) fn ingest_profiles(&mut self, device_id: &str, read: ProfilesRead) -> bool {
+        // A device that went while the read ran keeps no kit state.
+        if device_id != self.node.as_str()
+            && (!self.device_registration_exists(device_id) || self.device_kit_removing(device_id))
+        {
+            return false;
+        }
+        let mut state = self.kit_state(device_id);
+        let profiles = match read {
+            ProfilesRead::Listed(list) => {
+                self.wrapper_folders.retain(|(machine, id), _| {
+                    machine != device_id || list.profiles.iter().any(|profile| profile.id.0 == *id)
+                });
+                if let Some(reason) = &list.unjudged {
+                    crate::diagnostic!(serde_json::json!({
+                        "component": "kit",
+                        "kind": "profiles.unjudged",
+                        "device_id": device_id,
+                        "reason": reason,
+                    }));
+                }
+                // What the list says of the removals under way
+                // (`launch::holds`).
+                self.profile_holds.listed(device_id, list.version, |id| {
+                    list.profiles
+                        .iter()
+                        .find(|profile| profile.id == *id)
+                        .map(|profile| profile.removing)
+                });
+                crate::model::ProfilesSnapshot::from_list(&list)
+            }
+            ProfilesRead::Unsupported => crate::model::ProfilesSnapshot::unsupported(),
+            ProfilesRead::Unreadable(reason) => {
+                crate::diagnostic!(serde_json::json!({
+                    "component": "kit",
+                    "kind": "profiles.unreadable",
+                    "device_id": device_id,
+                    "reason": reason,
+                }));
+                let mut kept = state
+                    .profiles
+                    .clone()
+                    .unwrap_or_else(crate::model::ProfilesSnapshot::unsupported);
+                kept.state = crate::model::ProfilesState::Unreadable;
+                kept
+            }
+        };
+        let moved = profiles.state == crate::model::ProfilesState::Listed
+            && state
+                .profiles
+                .as_ref()
+                .is_none_or(|before| before.version != profiles.version);
+        state.profiles = Some(profiles);
+        let listed = self.set_kit_state(device_id, state);
+        if moved {
+            self.store_profiles_moved(device_id);
+        }
+        // A pane's reported account is matched against the list it has now.
+        self.refresh_reported_accounts() || listed
+    }
+
+    /// An agent that is on, whose pieces waited on something the operator
+    /// does outside Hide and no longer do, with a piece still to put in,
+    /// gets it on the pass this queues, without a press: a read only judges,
+    /// and the next install would otherwise wait for a launch or a
+    /// Reinstall. The waits are a copy older than the agent's minimum, until
+    /// it is updated (docs/agent-hooks.md, Updating an agent that is too
+    /// old), and a folder the agent makes at its first start or sign-in,
+    /// which its hook and skill go into (docs/agent-hooks.md, What the kit
+    /// puts down). A pass that installed them leaves nothing to repair, so it
+    /// queues nothing more.
+    fn install_updated_agents(&mut self, device_id: &str, snapshot: &KitSnapshot) {
+        let Some(before) = self.kit_states.get(device_id) else {
+            return;
+        };
+        let lifted = |ended: fn(&KitAgentSnapshot, &KitAgentSnapshot) -> bool| {
+            snapshot
+                .agents
+                .iter()
+                .filter(|agent| {
+                    agent.enabled
+                        && agent.needs_attention()
+                        && before
+                            .agents
+                            .iter()
+                            .any(|old| old.id == agent.id && ended(old, agent))
+                })
+                .map(|agent| agent.id.clone())
+                .collect::<Vec<_>>()
+        };
+        let updated = lifted(|old, now| old.update.is_some() && now.update.is_none());
+        let folders = lifted(folder_made);
+        for (kind, agents) in [
+            ("kit.agent_updated", &updated),
+            ("kit.agent_folder_created", &folders),
+        ] {
+            if !agents.is_empty() {
+                crate::diagnostic!(serde_json::json!({
+                    "component": "kit",
+                    "kind": kind,
+                    "device_id": device_id,
+                    "agents": agents,
+                }));
+            }
+        }
+        if !updated.is_empty() || !folders.is_empty() {
+            self.queue_kit_scope(device_id, Scope::automatic());
+        }
+    }
+
+    /// What a machine's kit report says about the first-run agent choice.
+    ///
+    /// The kit's record is the one place that knows whether a machine was
+    /// asked and answered (`held_for_onboarding`); `ui_state.agent_onboarding`
+    /// follows it for this Mac and keeps the answer given, which is the choice
+    /// a device that connects later receives. This Mac's record waiting asks;
+    /// a record that never waited is an existing install, which is never
+    /// asked and keeps what it has on as the saved choice. A device whose own
+    /// record waits, once this Mac has answered, gets that choice sent once
+    /// per run by its own detection; before that nothing is installed there.
+    fn decide_agent_onboarding(
+        &mut self,
+        device_id: &str,
+        report: &KitReport,
+        refusal_new: bool,
+    ) -> bool {
+        use crate::model::AgentOnboarding;
+        // A pass that stopped before changing anything says nothing about the
+        // record. On a Mac no pass has ever answered for, it is still the
+        // first run: the wizard opens with a refusal that is new, so the
+        // operator learns why nothing was set up (design principle 13), and
+        // stays closed once they closed it until the refusal changes or Hide
+        // starts again.
+        if report.refused.is_some() {
+            let opened = refusal_new
+                && device_id == self.node.as_str()
+                && self.snapshot.ui_state.agent_onboarding.is_none()
+                && self.open_first_run();
+            if opened {
+                self.persist_ui_state();
+            }
+            return opened;
+        }
+        // A helper that predates agents lists none and says nothing about the
+        // record either.
+        if report.agents.is_empty() {
+            return false;
+        }
+        if device_id != self.node.as_str() {
+            if !report.held_for_onboarding {
+                self.device_first_run_choice.remove(device_id);
+                return false;
+            }
+            self.device_first_run_choice
+                .entry(device_id.to_owned())
+                .or_insert(FirstRunChoice::Waiting);
+            if self.snapshot.ui_state.agent_onboarding == Some(AgentOnboarding::Done) {
+                self.send_first_run_choice(device_id);
+            }
+            return false;
+        }
+        let before = self.snapshot.ui_state.agent_onboarding;
+        let after = if report.held_for_onboarding {
+            // An Apply just pressed has its install queued here: a report that
+            // was already on its way says the old thing and must not bring
+            // the question back for a moment.
+            if before == Some(AgentOnboarding::Done) && self.local_kit_pending.is_some() {
+                return false;
+            }
+            AgentOnboarding::Pending
+        } else {
+            AgentOnboarding::Done
+        };
+        // A record that waits is a first run: the wizard opens with the
+        // question as its first step (PRD first-run-onboarding D-08).
+        let opened = after == AgentOnboarding::Pending && self.open_first_run();
+        if before == Some(after) {
+            if opened {
+                self.persist_ui_state();
+            }
+            return opened;
+        }
+        self.snapshot.ui_state.agent_onboarding = Some(after);
+        if after == AgentOnboarding::Done && before != Some(AgentOnboarding::Done) {
+            // Never asked, or answered outside this app: what it has on today
+            // is the choice a device added later receives, so that device
+            // gets no less than before the choice existed.
+            self.snapshot.ui_state.agent_onboarding_agents = report
+                .agents
+                .iter()
+                .filter(|agent| agent.enabled)
+                .map(|agent| agent.id.clone())
+                .collect();
+            self.send_first_run_choice_to_waiting_devices();
+        }
+        self.persist_ui_state();
+        true
+    }
+
+    /// Sends the saved choice to a device that waits for it, once per run;
+    /// a second report from the same device that still waits is a failure
+    /// to answer, logged and not retried (engineering rules 11 and 15).
+    fn send_first_run_choice(&mut self, device_id: &str) {
+        if self.device_first_run_choice.get(device_id) == Some(&FirstRunChoice::Sent) {
+            crate::diagnostic!(serde_json::json!({
+                "component": "kit",
+                "kind": "first_run_choice.unanswered",
+                "device_id": device_id,
+            }));
+            return;
+        }
+        self.device_first_run_choice
+            .insert(device_id.to_owned(), FirstRunChoice::Sent);
+        let agents = self.snapshot.ui_state.agent_onboarding_agents.clone();
+        self.queue_device_kit(
+            device_id,
+            KitJob::Apply(Scope::first_run(agents.iter().map(String::as_str))),
+        );
+    }
+
+    /// A choice that was queued for a device and did not run is unsent again.
+    fn reopen_first_run_choice(&mut self, device_id: &str) {
+        if let Some(state) = self.device_first_run_choice.get_mut(device_id) {
+            *state = FirstRunChoice::Waiting;
+        }
+    }
+
+    fn send_first_run_choice_to_waiting_devices(&mut self) {
+        let waiting = self
+            .device_first_run_choice
+            .iter()
+            .filter(|(_, state)| **state == FirstRunChoice::Waiting)
+            .map(|(device_id, _)| device_id.clone())
+            .collect::<Vec<_>>();
+        for device_id in waiting {
+            self.send_first_run_choice(&device_id);
+        }
+    }
+
+    /// The wizard's first step was continued with `agents` on (PRD
+    /// first-run-onboarding B10, B45). While this Mac's record waits it is the
+    /// first-run answer: the agents left on are switched on here and on every
+    /// device that waits for it, each by its own detection, and the choice is
+    /// kept for devices that connect later. After that, from a step reopened
+    /// by a failed apply or by Help > Set up Hide, it switches each agent
+    /// installed here the way Settings > Agents does, so only a changed agent
+    /// moves. A press while the last one's pass still runs is that intent.
+    pub(super) fn apply_agent_onboarding(&mut self, agents: Vec<String>, finish: bool) -> bool {
+        if let Some(unknown) = agents
+            .iter()
+            .find(|agent| hide_kit::agents::adapter(agent).is_none())
+        {
+            self.set_error(
+                "kit.unknown_agent",
+                format!("{unknown} is not an agent Hide knows"),
+                false,
+            );
+            return true;
+        }
+        if self.first_run_apply_in_flight() {
+            return false;
+        }
+        let mut agents = agents;
+        agents.sort();
+        agents.dedup();
+        let answer =
+            self.snapshot.ui_state.agent_onboarding == Some(crate::model::AgentOnboarding::Pending);
+        let node = self.node.clone();
+        let view = self.kit_view(node.as_str());
+        if view.refused.is_some() {
+            // The pass stopped before changing anything, so the step drew no
+            // tile and there is no choice to record: Try again runs the same
+            // pass, which checks again what stopped it, and its answer brings
+            // the tiles or the refusal back.
+            crate::diagnostic!(serde_json::json!({
+                "component": "first_run",
+                "kind": "first_run.retry_refused",
+                "answer": answer,
+            }));
+            return self.queue_kit_scope(node.as_str(), Scope::automatic());
+        }
+        if let Some(reason) = view.unavailable {
+            // Nothing can be written here, and the step may not even have
+            // drawn a tile, so the press records and queues nothing: the first
+            // run's question stays open and the agents are read again (B12).
+            // The step itself says why, so nothing reaches a banner (B44).
+            crate::diagnostic!(serde_json::json!({
+                "component": "first_run",
+                "kind": "first_run.apply_kit_unavailable",
+                "answer": answer,
+                "reason": reason,
+            }));
+            self.local_kit_check_requested = true;
+            return true;
+        }
+        // The next newly connected device receives the most recently accepted
+        // choice, including a choice revised in Help after first run ended.
+        let preference_changed = self.snapshot.ui_state.agent_onboarding_agents != agents;
+        if preference_changed {
+            self.snapshot.ui_state.agent_onboarding_agents = agents.clone();
+            self.persist_ui_state();
+        }
+        let changed = if answer {
+            self.finish_agent_onboarding(agents.clone())
+        } else {
+            self.switch_agents_here(&agents)
+        };
+        preference_changed | changed | self.wait_for_first_run_apply(agents, finish, answer)
+    }
+
+    /// Switches every agent installed on this Mac to what `on` says, through
+    /// the per-agent path Settings > Agents uses; the caller has checked that
+    /// the kit can run here.
+    fn switch_agents_here(&mut self, on: &[String]) -> bool {
+        let node = self.node.clone();
+        let view = self.kit_view(node.as_str());
+        // Decided before anything is queued: a queued switch marks the row
+        // busy, which would make every later agent of the same press read as
+        // undecided and be sent again.
+        let moves: Vec<(String, bool)> = view
+            .agents
+            .iter()
+            .filter(|row| row.availability == hide_kit::Availability::Available)
+            .filter_map(|row| {
+                let wanted = on.contains(&row.id);
+                let now = self
+                    .queued_agent_choice(node.as_str(), &row.id)
+                    .unwrap_or(row.enabled);
+                (wanted != now || wanted && row.needs_attention()).then(|| (row.id.clone(), wanted))
+            })
+            .collect();
+        let mut changed = false;
+        for (agent, wanted) in moves {
+            changed |= self.request_kit_agent_set(node.as_str(), &agent, wanted);
+        }
+        changed
+    }
+
+    /// Ends the first-run choice with `agents` on; only a pending choice can
+    /// end, so a second Apply or a stale client changes nothing
+    /// (engineering rule 11). The choice reads as made at once; this Mac's
+    /// record confirms it, and says otherwise (the question comes back) when
+    /// it could not be saved.
+    pub(super) fn finish_agent_onboarding(&mut self, agents: Vec<String>) -> bool {
+        use crate::model::AgentOnboarding;
+        if self.snapshot.ui_state.agent_onboarding != Some(AgentOnboarding::Pending) {
+            return false;
+        }
+        self.snapshot.ui_state.agent_onboarding = Some(AgentOnboarding::Done);
+        self.snapshot.ui_state.agent_onboarding_agents = agents.clone();
+        self.persist_ui_state();
+        let node = self.node.clone();
+        self.queue_kit_scope(
+            node.as_str(),
+            Scope::first_run(agents.iter().map(String::as_str)),
+        );
+        self.send_first_run_choice_to_waiting_devices();
+        true
+    }
+
+    fn kit_install_queued(&self, device_id: &str) -> bool {
+        if device_id == self.node.as_str() {
+            self.local_kit_pending.is_some()
+        } else {
+            matches!(
+                self.device_kit_pending.get(device_id),
+                Some(KitJob::Apply(_))
+            )
+        }
+    }
+
+    /// The operator pressed Reinstall on a machine's row: every part that is
+    /// outdated, missing, removed or failed is installed again, and the parts
+    /// in place are not touched (B8, B9).
+    pub(super) fn request_kit_reinstall(
+        &mut self,
+        device_id: &str,
+        only: Option<&[ComponentId]>,
+        only_agents: Option<&[String]>,
+    ) -> bool {
+        if device_id != self.node.as_str() && !self.device_registration_exists(device_id) {
+            self.set_error(
+                "kit.unknown_machine",
+                format!("Device {device_id} is not registered"),
+                false,
+            );
+            return true;
+        }
+        let state = self.kit_view(device_id);
+        if let Some(cause) = state.unavailable {
+            self.set_error("kit.unavailable", cause.as_str(), false);
+            return true;
+        }
+        // A refused pass needs another automatic pass even when each
+        // individual kit part is installed.
+        if state.refused.is_some() {
+            if !state.busy
+                && self
+                    .link_origin(device_id)
+                    .is_some_and(crate::model::LinkOrigin::core_redials)
+            {
+                self.begin_device_connect(device_id);
+                if let Some(HostPhase::Ready { platform, .. }) =
+                    self.device_hosts.get(device_id).map(|host| &host.phase)
+                {
+                    let platform = platform.clone();
+                    if let Some((os, arch)) = platform.split_once(' ') {
+                        self.device_connect_platform(device_id, os, arch);
+                    }
+                }
+            }
+            return self.queue_kit_scope(device_id, Scope::automatic());
+        }
+        // Naming parts or agents narrows the repair to what is named.
+        let named = only.is_some() || only_agents.is_some();
+        let parts = state
+            .components
+            .iter()
+            .filter(|part| part.state.needs_attention())
+            .filter(|part| match only {
+                Some(only) => only.contains(&part.id),
+                None => !named,
+            })
+            .map(|part| part.id)
+            .collect::<Vec<_>>();
+        let agents = state
+            .agents
+            .iter()
+            .filter(|agent| agent.needs_attention())
+            .filter(|agent| match only_agents {
+                Some(only) => only.contains(&agent.id),
+                None => !named,
+            })
+            .map(|agent| agent.id.as_str())
+            .collect::<Vec<_>>();
+        // A second press after the first one repaired everything is the same
+        // intent, already met (engineering rule 11).
+        if parts.is_empty() && agents.is_empty() {
+            return false;
+        }
+        let scope = Scope::reinstall(parts).merge(Scope::agents(agents, []));
+        self.queue_kit_scope(device_id, scope)
+    }
+
+    /// The operator switched an agent on or off from its row (issue #517).
+    /// An agent already where the switch puts it, or that is not set up on
+    /// that machine, is the same intent, already met (engineering rule 11).
+    pub(super) fn request_kit_agent_set(
+        &mut self,
+        device_id: &str,
+        agent: &str,
+        enabled: bool,
+    ) -> bool {
+        if hide_kit::agents::adapter(agent).is_none() {
+            self.set_error(
+                "kit.unknown_agent",
+                format!("{agent} is not an agent Hide knows"),
+                false,
+            );
+            return true;
+        }
+        if device_id != self.node.as_str() && !self.device_registration_exists(device_id) {
+            self.set_error(
+                "kit.unknown_machine",
+                format!("Device {device_id} is not registered"),
+                false,
+            );
+            return true;
+        }
+        let state = self.kit_view(device_id);
+        if let Some(cause) = state.unavailable {
+            self.set_error("kit.unavailable", cause.as_str(), false);
+            return true;
+        }
+        let Some(now) = state.agents.iter().find(|row| row.id == agent) else {
+            return false;
+        };
+        // The latest intent wins (engineering rule 11): what is queued for
+        // this agent decides, and while an install runs the last report is
+        // older than that install, so it decides nothing.
+        let already = match self.queued_agent_choice(device_id, agent) {
+            Some(queued) => queued == enabled,
+            None if state.busy => false,
+            None if enabled => {
+                // Nothing to switch on where the agent is not set up; an agent
+                // that is on and has nothing to repair is met.
+                now.availability != hide_kit::Availability::Available
+                    || (now.enabled && !now.needs_attention())
+            }
+            None => !now.enabled,
+        };
+        if enabled && now.availability != hide_kit::Availability::Available {
+            return false;
+        }
+        if already {
+            return false;
+        }
+        let scope = if enabled {
+            Scope::agents([agent], [])
+        } else {
+            Scope::agents([], [agent])
+        };
+        self.queue_kit_scope(device_id, scope)
+    }
+
+    /// What the work still queued for a machine says about one agent's
+    /// switch: `Some(true)` on, `Some(false)` off, `None` when it says nothing.
+    fn queued_agent_choice(&self, device_id: &str, agent: &str) -> Option<bool> {
+        let scope = if device_id == self.node.as_str() {
+            self.local_kit_pending.as_ref()
+        } else {
+            match self.device_kit_pending.get(device_id) {
+                Some(KitJob::Apply(scope)) => Some(scope),
+                _ => None,
+            }
+        }?;
+        if scope.agent_off.contains(agent) {
+            Some(false)
+        } else if scope.agent_on.contains(agent) {
+            Some(true)
+        } else {
+            None
+        }
+    }
+
+    /// The operator confirmed turning Codex's shared server off on a machine,
+    /// from a not connected pane's popover (PRD settings-cleanup B27;
+    /// codex-daemon-apply D-11, B1-B3): the pass turns autostart off and
+    /// stops the daemon that is running. The same request while one is
+    /// running is the same intent, and a machine whose Codex starts no shared
+    /// server and has none answering has nothing to turn off (engineering
+    /// rule 11). The answer comes back in the report of the pass that carried
+    /// it, as `codex_daemon_off`.
+    pub(super) fn request_codex_daemon_disable(&mut self, device_id: &str) -> bool {
+        if device_id != self.node.as_str() && !self.device_registration_exists(device_id) {
+            self.set_error(
+                "kit.unknown_machine",
+                format!("Device {device_id} is not registered"),
+                false,
+            );
+            return true;
+        }
+        let state = self.kit_view(device_id);
+        if let Some(cause) = state.unavailable {
+            self.set_error("kit.unavailable", cause.as_str(), false);
+            return true;
+        }
+        if state.codex_daemon_off == Some(CodexDaemonOffSnapshot::Pending) {
+            return false;
+        }
+        if !state.shares_codex_server() {
+            crate::diagnostic!(serde_json::json!({
+                "component": "kit",
+                "kind": "codex_daemon_off.ignored",
+                "device_id": device_id,
+                "codex_daemon_on": state.codex_daemon_on,
+                "codex_daemon_running": state.codex_daemon_running,
+            }));
+            return false;
+        }
+        // The confirmation named what disconnects now. A stop held for a
+        // later helper connection would end sessions it never named, so a
+        // device takes it only over the connection it was confirmed on
+        // (design principle 13: the refusal goes to the log).
+        if device_id != self.node.as_str()
+            && !matches!(
+                self.device_hosts.get(device_id).map(|host| &host.phase),
+                Some(HostPhase::Ready { host, .. }) if host.closed_reason().is_none()
+            )
+        {
+            crate::diagnostic!(serde_json::json!({
+                "component": "kit",
+                "kind": "codex_daemon_off.refused",
+                "device_id": device_id,
+                "reason": "helper_not_connected",
+            }));
+            return false;
+        }
+        crate::diagnostic!(serde_json::json!({
+            "component": "kit",
+            "kind": "codex_daemon_off.requested",
+            "device_id": device_id,
+        }));
+        self.queue_kit_scope(device_id, Scope::codex_daemon_off());
+        let mut state = self.kit_state(device_id);
+        state.codex_daemon_off = Some(CodexDaemonOffSnapshot::Pending);
+        self.set_kit_state(device_id, state);
+        true
+    }
+
+    /// A request that cannot be answered, because the helper it waits for
+    /// is gone or its call never ran, ends as a failure the pane can say.
+    fn end_codex_daemon_off_unanswered(&mut self, device_id: &str) {
+        let mut state = self.kit_state(device_id);
+        if state.codex_daemon_off == Some(CodexDaemonOffSnapshot::Pending) {
+            state.codex_daemon_off = Some(CodexDaemonOffSnapshot::Failed {
+                reason: crate::model::CodexDaemonOffFailure::Unreachable,
+            });
+            self.set_kit_state(device_id, state);
+        }
+    }
+
+    /// Queues a Reinstall of `parts` on one machine.
+    pub(super) fn queue_kit_reinstall(&mut self, device_id: &str, parts: Vec<ComponentId>) -> bool {
+        self.queue_kit_scope(device_id, Scope::reinstall(parts))
+    }
+
+    pub(super) fn queue_kit_scope(&mut self, device_id: &str, scope: Scope) -> bool {
+        if device_id != self.node.as_str() {
+            self.queue_device_kit(device_id, KitJob::Apply(scope));
+            return true;
+        }
+        let merged = merge_scopes(self.local_kit_pending.take(), scope);
+        self.local_kit_pending = Some(merged);
+        let node = self.node.clone();
+        self.set_kit_busy(node.as_str());
+        true
+    }
+
+    /// Queues kit work for a device and starts its worker when its helper is
+    /// connected. A device that is not connected yet is asked to connect,
+    /// and the work runs when it does; its row is busy only while the work
+    /// can actually run.
+    pub(super) fn queue_device_kit(&mut self, device_id: &str, job: KitJob) {
+        let merged = match self.device_kit_pending.remove(device_id) {
+            Some(before) => before.merge(job),
+            None => job,
+        };
+        let installs = matches!(merged, KitJob::Apply(_));
+        self.device_kit_pending.insert(device_id.to_owned(), merged);
+        let reachable = |runtime: &Runtime| {
+            matches!(
+                runtime.device_hosts.get(device_id).map(|host| &host.phase),
+                Some(HostPhase::Ready { .. } | HostPhase::Connecting)
+            )
+        };
+        if !reachable(self) {
+            self.start_device_host(device_id, super::hosts::HostAttempt::Background);
+        }
+        if installs && reachable(self) {
+            self.set_kit_busy(device_id);
+        }
+        self.start_device_kit(device_id);
+    }
+
+    /// Starts the device's kit worker when it has work, its helper is
+    /// connected and no worker runs for it yet.
+    pub(super) fn start_device_kit(&mut self, device_id: &str) {
+        let removal = self.device_kit_removals.contains_key(device_id);
+        let queued = (self.device_kit_pending.contains_key(device_id)
+            || self.stores.device_queued(device_id))
+            && matches!(
+                self.device_hosts.get(device_id).map(|host| &host.phase),
+                Some(HostPhase::Ready { .. })
+            );
+        if self.device_kit_running.contains(device_id) || !(removal || queued) {
+            return;
+        }
+        if !self.spawn_device_kit_worker(device_id) {
+            self.fail_device_connect_before_link(
+                device_id,
+                crate::product_analytics::DeviceFailure::WorkerUnavailable,
+            );
+            self.clear_kit_busy(device_id);
+        }
+    }
+
+    /// One worker per device, so its kit calls run one at a time and a
+    /// removal never runs beside an install on the same helper.
+    fn spawn_device_kit_worker(&mut self, device_id: &str) -> bool {
+        let Some(context) = self.worker_context.clone() else {
+            return false;
+        };
+        self.device_kit_running.insert(device_id.to_owned());
+        match crate::kit::spawn_device_worker(
+            context.runtime,
+            context.notifier,
+            device_id.to_owned(),
+        ) {
+            Ok(()) => true,
+            Err(error) => {
+                self.device_kit_running.remove(device_id);
+                crate::diagnostic!(serde_json::json!({
+                    "component": "kit",
+                    "kind": "worker.spawn_failed",
+                    "device_id": device_id,
+                    "error": error.to_string(),
+                }));
+                false
+            }
+        }
+    }
+
+    /// The device is being removed: with its helper connected, Hide's parts
+    /// come off it on the device's kit worker, after any kit call already
+    /// running there, and the helper connection closes after that. Without
+    /// one, or while another registration still reaches the same account,
+    /// what stays on the device is recorded (B23, B24). Answers why the kit
+    /// stays when the removal was not started.
+    pub(super) fn queue_device_kit_removal(
+        &mut self,
+        registration: &crate::model::DeviceRegistration,
+    ) -> Result<(), &'static str> {
+        let device_id = registration.id.as_str();
+        self.device_kit_pending.remove(device_id);
+        self.forget_store(device_id);
+        self.forget_start_passes(device_id);
+        self.kit_states.remove(device_id);
+        self.refresh_ai_items();
+        let left = |reason: &'static str| {
+            crate::diagnostic!(serde_json::json!({
+                "component": "kit",
+                "kind": "device.kit_left",
+                "device_id": device_id,
+                "reason": reason,
+                "left": LEFT_ON_DEVICE,
+            }));
+            Err(reason)
+        };
+        if !registration.origin.removes_kit() {
+            return left("the machine runs Hide itself and connects to the core again");
+        }
+        if self.registration_sharing_account(registration).is_some() {
+            return left("another registered device reaches the same account on that machine");
+        }
+        let channel =
+            self.device_hosts.get_mut(device_id).and_then(|host| {
+                match std::mem::replace(&mut host.phase, HostPhase::NotAllowed) {
+                    HostPhase::Ready { host: channel, .. } if channel.closed_reason().is_none() => {
+                        Some(channel)
+                    }
+                    other => {
+                        host.phase = other;
+                        None
+                    }
+                }
+            });
+        let Some(channel) = channel else {
+            return left("its helper was not connected");
+        };
+        self.device_kit_removals.insert(
+            device_id.to_owned(),
+            DeviceKitCall {
+                work: DeviceKitWork::Remove,
+                channel: Arc::clone(&channel),
+                cli_dir: registration
+                    .host_consent
+                    .as_ref()
+                    .and_then(|consent| consent.cli_dir.clone())
+                    .unwrap_or_else(|| self.host_cli_dir.clone()),
+                retirement_projects: Vec::new(),
+                daemon_off_run: None,
+                connect_attempt: None,
+            },
+        );
+        self.device_kit_removing.insert(device_id.to_owned());
+        if !self.device_kit_running.contains(device_id) && !self.spawn_device_kit_worker(device_id)
+        {
+            self.device_kit_removals.remove(device_id);
+            self.device_kit_removing.remove(device_id);
+            channel.close("device removed");
+            return left("the kit worker could not start");
+        }
+        Ok(())
+    }
+
+    /// Whether Hide is still taking its kit off a removed device; a new
+    /// connection to it waits, so the removal never deletes what the new
+    /// connection installs.
+    pub(super) fn device_kit_removing(&self, device_id: &str) -> bool {
+        self.device_kit_removing.contains(device_id)
+    }
+
+    /// The device's next kit call, or `None` when its worker should stop:
+    /// nothing is queued, or the helper is no longer connected (the work
+    /// then waits for the next connection).
+    pub(crate) fn take_device_kit_call(&mut self, device_id: &str) -> Option<DeviceKitCall> {
+        if let Some(removal) = self.device_kit_removals.remove(device_id) {
+            return Some(removal);
+        }
+        let channel = match self.device_hosts.get(device_id).map(|host| &host.phase) {
+            Some(HostPhase::Ready { host, .. }) if host.closed_reason().is_none() => {
+                Arc::clone(host)
+            }
+            _ => {
+                self.device_kit_running.remove(device_id);
+                self.clear_kit_busy(device_id);
+                return None;
+            }
+        };
+        let registration = self
+            .snapshot
+            .ui_state
+            .device_registrations
+            .iter()
+            .find(|registration| registration.id == device_id)
+            .cloned();
+        let Some(registration) = registration else {
+            self.device_kit_running.remove(device_id);
+            return None;
+        };
+        // A node that dials in has no consent, so it links `hide` where a
+        // device would by default, in its own home.
+        let cli_dir = registration
+            .host_consent
+            .and_then(|consent| consent.cli_dir)
+            .unwrap_or_else(|| self.host_cli_dir.clone());
+        let Some(job) = self.device_kit_pending.remove(device_id) else {
+            // The store's work runs once no kit job waits.
+            let Some(store) = self.take_device_store_job(device_id) else {
+                self.device_kit_running.remove(device_id);
+                return None;
+            };
+            return Some(DeviceKitCall {
+                work: DeviceKitWork::Store(store),
+                channel,
+                cli_dir,
+                retirement_projects: Vec::new(),
+                daemon_off_run: None,
+                connect_attempt: None,
+            });
+        };
+        if matches!(job, KitJob::Apply(_)) {
+            self.start_pass_taken(device_id);
+        }
+        let daemon_off_run =
+            matches!(&job, KitJob::Apply(scope) if scope.codex_daemon_off).then(|| {
+                self.codex_daemon_off_runs += 1;
+                self.codex_daemon_off_running
+                    .insert(device_id.to_owned(), self.codex_daemon_off_runs);
+                self.codex_daemon_off_runs
+            });
+        Some(DeviceKitCall {
+            connect_attempt: matches!(&job, KitJob::Apply(_))
+                .then(|| self.claim_device_connect_kit(device_id))
+                .flatten(),
+            work: DeviceKitWork::Job(job),
+            channel,
+            cli_dir,
+            retirement_projects: self.retirement_projects(device_id),
+            daemon_off_run,
+        })
+    }
+
+    /// Stores what a device's kit call answered. A call that failed keeps
+    /// what the device last reported; a device never read says why it could
+    /// not be, until the next connection or Settings reads it again.
+    pub(crate) fn ingest_device_kit_answer(
+        &mut self,
+        device_id: &str,
+        answer: DeviceKitAnswer,
+        daemon_off_run: Option<u64>,
+    ) -> bool {
+        // Only the turn-off that still runs is settled by its answer; one the
+        // device was forgotten under, or that a newer run replaced, settled
+        // already, and its answer changes nothing now.
+        let current = daemon_off_run.is_some()
+            && self.codex_daemon_off_running.get(device_id) == daemon_off_run.as_ref();
+        if current {
+            self.codex_daemon_off_running.remove(device_id);
+        }
+        // A start waiting on the pass this call ran reads the answer, or
+        // the device gone, from here on.
+        if let DeviceKitAnswer::Report(_) = &answer {
+            self.start_pass_finished(device_id);
+        }
+        let answer = match answer {
+            DeviceKitAnswer::Report(Ok(mut report)) if daemon_off_run.is_some() && !current => {
+                report.codex_daemon_off = None;
+                DeviceKitAnswer::Report(Ok(report))
+            }
+            answer => answer,
+        };
+        if let DeviceKitAnswer::Report(_) | DeviceKitAnswer::Store(_) = &answer
+            && (!self.device_registration_exists(device_id) || self.device_kit_removing(device_id))
+        {
+            // The device went while the call ran: its kit state went with it,
+            // and a late answer must not bring it back for a device added
+            // again under the same id.
+            return false;
+        }
+        match answer {
+            DeviceKitAnswer::Removed(removed) => self.ingest_device_kit_removal(device_id, removed),
+            DeviceKitAnswer::Store(answered) => self.ingest_store_answer(device_id, answered),
+            DeviceKitAnswer::Report(Ok(report)) => self.ingest_kit_report(device_id, &report),
+            DeviceKitAnswer::Report(Err(reason)) => {
+                // The call never ran to a report, so the choice it carried
+                // was not delivered: the next report that waits sends it again.
+                self.reopen_first_run_choice(device_id);
+                crate::diagnostic!(serde_json::json!({
+                    "component": "kit",
+                    "kind": "device.call_failed",
+                    "device_id": device_id,
+                    "reason": reason,
+                }));
+                let mut state = self.kit_state(device_id);
+                state.busy = self.kit_install_queued(device_id);
+                state.checking = false;
+                state.check_failed = Some(crate::model::KitCheckFailure::ReadFailed);
+                if state.components.is_empty() {
+                    state.unavailable = Some(KitUnavailable::Unreadable);
+                }
+                // Only the call that carried the current request ends it.
+                if current && state.codex_daemon_off == Some(CodexDaemonOffSnapshot::Pending) {
+                    state.codex_daemon_off = Some(CodexDaemonOffSnapshot::Failed {
+                        reason: crate::model::CodexDaemonOffFailure::Unreachable,
+                    });
+                }
+                self.set_kit_state(device_id, state)
+            }
+        }
+    }
+
+    /// Records what a removal took off a device and what stayed (B23, B24).
+    /// A device added again while it ran connects now.
+    fn ingest_device_kit_removal(
+        &mut self,
+        device_id: &str,
+        removed: Result<hide_node_link::protocol::KitRemoved, String>,
+    ) -> bool {
+        match removed {
+            Ok(removed) => crate::diagnostic!(serde_json::json!({
+                "component": "kit",
+                "kind": "device.kit_removed",
+                "device_id": device_id,
+                "components": removed.kit.components.iter().map(|(id, outcome)| {
+                    serde_json::json!({ "id": id.code(), "outcome": outcome })
+                }).collect::<Vec<_>>(),
+                // The agents' hooks and skill stubs, a failed one included.
+                "agents": removed.kit.agents.iter().map(|(piece, outcome)| {
+                    serde_json::json!({ "piece": piece, "outcome": outcome })
+                }).collect::<Vec<_>>(),
+                "helper_root": removed.helper_root,
+            })),
+            Err(reason) => crate::diagnostic!(serde_json::json!({
+                "component": "kit",
+                "kind": "device.kit_left",
+                "device_id": device_id,
+                "reason": reason,
+                "left": LEFT_ON_DEVICE,
+            })),
+        }
+        self.device_kit_removing.remove(device_id);
+        self.device_registration_exists(device_id)
+            && self.start_device_host(device_id, super::hosts::HostAttempt::Background)
+    }
+
+    /// The helper connection a device's turn-off was confirmed on ended
+    /// before its worker took it: the request leaves the queue, never sent
+    /// on a later connection, and ends as unreachable so the popover can try
+    /// again (PRD codex-daemon-apply B11). Other queued work stays for the
+    /// next connection.
+    pub(super) fn drop_queued_codex_daemon_off(&mut self, device_id: &str) {
+        let Some(KitJob::Apply(scope)) = self.device_kit_pending.get(device_id) else {
+            return;
+        };
+        if !scope.codex_daemon_off {
+            return;
+        }
+        let rest = Scope {
+            codex_daemon_off: false,
+            ..scope.clone()
+        };
+        // A turn-off alone leaves nothing to run; the next connection queues
+        // its own pass.
+        if rest.is_automatic() {
+            self.device_kit_pending.remove(device_id);
+            self.clear_kit_busy(device_id);
+        } else {
+            self.device_kit_pending
+                .insert(device_id.to_owned(), KitJob::Apply(rest));
+        }
+        crate::diagnostic!(serde_json::json!({
+            "component": "kit",
+            "kind": "codex_daemon_off.dropped",
+            "device_id": device_id,
+            "reason": "the helper connection ended before the request ran",
+        }));
+        self.end_codex_daemon_off_unanswered(device_id);
+    }
+
+    /// Queued work cannot run now: the row stops saying it is working.
+    pub(super) fn clear_kit_busy(&mut self, device_id: &str) {
+        let mut state = self.kit_state(device_id);
+        if state.busy || state.checking {
+            state.busy = false;
+            state.checking = false;
+            self.set_kit_state(device_id, state);
+        }
+        if device_id == self.node.as_str() {
+            self.settle_memory_hook_preparation();
+        }
+    }
+
+    /// The device's consent was withdrawn or the device is going away:
+    /// nothing queued for it runs.
+    pub(super) fn forget_device_kit_work(&mut self, device_id: &str) {
+        self.forget_device_connect(device_id);
+        self.device_kit_pending.remove(device_id);
+        self.forget_store(device_id);
+        self.forget_start_passes(device_id);
+        self.codex_daemon_off_running.remove(device_id);
+        self.end_codex_daemon_off_unanswered(device_id);
+        self.reopen_first_run_choice(device_id);
+        self.clear_kit_busy(device_id);
+        self.update_badges.remove(device_id);
+    }
+
+    /// The hook parts of this Mac that a Reinstall would repair, for
+    /// Memory's "update hooks".
+    pub(super) fn local_hook_parts_to_repair(&self) -> Vec<ComponentId> {
+        self.kit_states
+            .get(self.node.as_str())
+            .map(|state| {
+                state
+                    .components
+                    .iter()
+                    .filter(|part| {
+                        matches!(
+                            part.id,
+                            ComponentId::ClaudeCodeHook | ComponentId::CodexHook
+                        ) && part.state.needs_attention()
+                    })
+                    .map(|part| part.id)
+                    .collect()
+            })
+            .unwrap_or_default()
+    }
+
+    /// How many of each agent's sessions run on one machine now (PRD
+    /// settings-cleanup B16, B19).
+    ///
+    /// Only the sessions that exist now are counted: the walk is over the
+    /// panes the snapshot holds, so a closed session leaves the count on the
+    /// next pass and nothing accumulates per session (D-23). A sleeping agent
+    /// has ended its process, so its pane holds no running session. The work
+    /// is one pass over the machine's panes each time the agent lineage pass
+    /// or a device's session republishes, not a per-tick cost.
+    fn agent_sessions(&self, device_id: &str) -> std::collections::BTreeMap<&'static str, u32> {
+        let mut sessions: std::collections::BTreeMap<&'static str, u32> =
+            hide_agent_adapter::ADAPTERS
+                .iter()
+                .filter(|adapter| {
+                    adapter
+                        .session
+                        .is_some_and(|format| format.has_session_file())
+                })
+                .map(|adapter| (adapter.id, 0))
+                .collect();
+        for (_, agent) in self.running_agent_panes(device_id) {
+            if let Some(count) = sessions.get_mut(agent) {
+                *count += 1;
+            }
+        }
+        sessions
+    }
+
+    /// The panes of `device_id` that run an agent Hide has an adapter for
+    /// and that is awake, each with the agent's id.
+    pub(super) fn running_agent_panes(&self, device_id: &str) -> Vec<(String, &'static str)> {
+        let remote = self
+            .snapshot
+            .status
+            .remote
+            .iter()
+            .find(|status| status.target_id == device_id)
+            .and_then(|status| status.session.as_ref());
+        let (workspaces, agents) = if device_id == self.node.as_str() {
+            (
+                &self.snapshot.navigator.workspaces,
+                &self.snapshot.navigator.agents,
+            )
+        } else if let Some(session) = remote {
+            (&session.workspaces, &session.agents)
+        } else {
+            return Vec::new();
+        };
+        let panes = workspaces
+            .iter()
+            .flat_map(|workspace| workspace.checkouts.iter())
+            .flat_map(|checkout| checkout.tabs.iter())
+            .flat_map(|tab| tab.panes.iter());
+        let mut running = Vec::new();
+        for pane in panes {
+            let local_pane = !crate::address::is_device_scoped(&pane.id);
+            if (device_id == self.node.as_str()) != local_pane {
+                continue;
+            }
+            let Some(agent) = agents
+                .iter()
+                .find(|agent| agent.pane_id == pane.id && agent.sleep.is_none())
+            else {
+                continue;
+            };
+            if let Some(adapter) = hide_agent_adapter::adapter(&agent.agent_kind) {
+                running.push((pane.id.clone(), adapter.id));
+            }
+        }
+        running
+    }
+
+    /// Puts [`Self::agent_sessions`] on a kit snapshot's agent rows; an agent
+    /// whose sessions Hide does not read keeps `None`.
+    fn fill_agent_sessions(&self, device_id: &str, kit: &mut KitSnapshot) {
+        let sessions = self.agent_sessions(device_id);
+        for agent in &mut kit.agents {
+            agent.sessions = sessions.get(agent.id.as_str()).copied();
+        }
+    }
+
+    /// Recounts every machine's sessions onto its kit rows after the panes
+    /// changed; returns whether any count moved.
+    pub(super) fn refresh_agent_sessions(&mut self) -> bool {
+        let ids = self
+            .snapshot
+            .navigator
+            .devices
+            .iter()
+            .map(|device| device.id.clone())
+            .collect::<Vec<_>>();
+        let mut changed = false;
+        for id in ids {
+            let sessions = self.agent_sessions(&id);
+            let new_session = self.store_new_session(&id);
+            let Some(device) = self
+                .snapshot
+                .navigator
+                .devices
+                .iter_mut()
+                .find(|device| device.id == id)
+            else {
+                continue;
+            };
+            for agent in &mut device.kit.agents {
+                let next = sessions.get(agent.id.as_str()).copied();
+                if agent.sessions != next {
+                    agent.sessions = next;
+                    changed = true;
+                }
+            }
+            if device.kit.store_new_session != new_session {
+                device.kit.store_new_session = new_session;
+                changed = true;
+            }
+        }
+        changed
+    }
+
+    /// A machine's kit as its row shows it. A device the helper may not be
+    /// installed on, or whose platform this build does not carry, installs
+    /// nothing and says why (B17, B21); otherwise its last report stands.
+    pub(super) fn kit_view(&self, device_id: &str) -> KitSnapshot {
+        let mut view = self.kit_view_without_sessions(device_id);
+        self.fill_agent_sessions(device_id, &mut view);
+        view
+    }
+
+    fn kit_view_without_sessions(&self, device_id: &str) -> KitSnapshot {
+        if device_id == self.node.as_str() {
+            return self.kit_state(device_id);
+        }
+        let mut view = match self.device_kit_declined(device_id) {
+            Some(declined) => KitSnapshot::unavailable(declined.cause()),
+            None => self.kit_state(device_id),
+        };
+        view.shares_account_with = self
+            .snapshot
+            .ui_state
+            .device_registrations
+            .iter()
+            .find(|registration| registration.id == device_id)
+            .and_then(|registration| self.registration_sharing_account(registration))
+            .map(|other| other.label.clone());
+        view
+    }
+
+    /// Why Hide's kit does not run on a device now, if it does not.
+    pub(super) fn device_kit_declined(&self, device_id: &str) -> Option<KitDeclined> {
+        let host = self.host_snapshot(device_id);
+        match (host.consent.as_str(), host.state.as_str()) {
+            ("none", _) => Some(KitDeclined::NoConsent),
+            ("outdated", _) => Some(KitDeclined::ConsentOutdated),
+            (_, "unsupported") => Some(KitDeclined::Unsupported),
+            _ => None,
+        }
+    }
+
+    /// Another registration that reaches the same account on the same
+    /// machine (`HostIdentity::same_account`), as two registrations for two
+    /// aliases of one machine do, including one whose consent was carried to a
+    /// machine id beside one still from before contract 4. The hooks, the
+    /// `hide` link and the helper root belong to that account, not to one
+    /// registration, so removing one of them leaves those for the other.
+    fn registration_sharing_account(
+        &self,
+        registration: &crate::model::DeviceRegistration,
+    ) -> Option<&crate::model::DeviceRegistration> {
+        fn account(
+            registration: &crate::model::DeviceRegistration,
+        ) -> Option<&hide_node_link::device::HostIdentity> {
+            registration.host_consent.as_ref()?.identity.as_ref()
+        }
+        let own = account(registration)?;
+        self.snapshot
+            .ui_state
+            .device_registrations
+            .iter()
+            .find(|other| {
+                other.id != registration.id
+                    && account(other).is_some_and(|theirs| own.same_account(theirs))
+            })
+    }
+
+    /// What a Codex start on this machine passes about the shared daemon,
+    /// from its kit's last report (PRD overview-request-view D-20).
+    pub(super) fn codex_daemon(&self, device_id: &str) -> crate::codex_launch::CodexDaemon {
+        self.kit_states
+            .get(device_id)
+            .map(crate::codex_launch::CodexDaemon::from_kit)
+            .unwrap_or_default()
+    }
+
+    /// [`Self::codex_daemon`] for the machine a pane id belongs to.
+    pub(super) fn codex_daemon_for_pane(&self, pane_id: &str) -> crate::codex_launch::CodexDaemon {
+        let device = crate::address::pane_device(pane_id).unwrap_or(self.node.as_str());
+        self.codex_daemon(device)
+    }
+
+    pub(super) fn kit_state(&self, device_id: &str) -> KitSnapshot {
+        self.kit_states.get(device_id).cloned().unwrap_or_default()
+    }
+
+    fn set_kit_busy(&mut self, device_id: &str) {
+        let mut state = self.kit_state(device_id);
+        state.busy = true;
+        self.set_kit_state(device_id, state);
+    }
+
+    pub(super) fn set_kit_state(&mut self, device_id: &str, snapshot: KitSnapshot) -> bool {
+        if self.kit_states.get(device_id) == Some(&snapshot) {
+            return false;
+        }
+        let judged_before = self.kit_states.get(device_id).map(pane_judgement_inputs);
+        let judged_now = pane_judgement_inputs(&snapshot);
+        self.kit_states.insert(device_id.to_owned(), snapshot);
+        self.refresh_start_profiles();
+        self.refresh_ai_items();
+        self.refresh_device_snapshots();
+        // A device's agent panes are judged against its kit.
+        if device_id != self.node.as_str() {
+            self.refresh_device_catalog(device_id);
+        } else if judged_before.as_ref() != Some(&judged_now) {
+            // A Codex pane's reason for not being connected follows the
+            // shared server (its setting, or a daemon that still answers), and
+            // an OpenCode, Grok or Cursor pane's count follows its agent's
+            // hook piece, so
+            // the panes are judged again at once.
+            self.sync_pane_lineage();
+        }
+        // Desk's bar lists the agents switched on here (PRD Desk D-79).
+        if device_id == self.node.as_str() {
+            self.desk_catalog_moved();
+        }
+        true
+    }
+}
+
+/// What of a machine's kit the judgement of its panes reads: the Codex
+/// shared server, the state of each agent's hook piece and the update its
+/// copy needs, for an agent that is on.
+type PaneJudgementInputs = (
+    bool,
+    Vec<(
+        String,
+        Option<hide_kit::ComponentState>,
+        Option<hide_kit::AgentUpdate>,
+    )>,
+);
+
+fn pane_judgement_inputs(kit: &KitSnapshot) -> PaneJudgementInputs {
+    (
+        kit.shares_codex_server(),
+        kit.agents
+            .iter()
+            .map(|agent| {
+                (
+                    agent.id.clone(),
+                    agent.hook.as_ref().map(|hook| hook.state),
+                    agent.update.clone().filter(|_| agent.enabled),
+                )
+            })
+            .collect(),
+    )
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn unknown(id: &str) -> hide_kit::AgentReport {
+        hide_kit::AgentReport {
+            id: id.into(),
+            label: id.into(),
+            availability: hide_kit::Availability::Available,
+            enabled: false,
+            chosen: false,
+            skill: hide_kit::PieceReport {
+                state: hide_kit::ComponentState::Installed,
+                reason: None,
+                why: None,
+                location: None,
+            },
+            hook: None,
+            update: None,
+            doc_url: String::new(),
+        }
+    }
+
+    #[test]
+    fn an_unknown_helper_agent_is_diagnosed_once_for_each_device() {
+        let mut runtime = super::super::tests::runtime();
+        let report = KitReport {
+            agents: vec![unknown("future-agent")],
+            ..Default::default()
+        };
+        let (_, records) = crate::diagnostics::capture(|| {
+            for device in ["device-a", "device-a", "device-b", "device-b"] {
+                runtime.diagnose_unknown_kit_agents(device, &report);
+            }
+        });
+        let unknown: Vec<_> = records
+            .iter()
+            .filter(|record| record["kind"] == "unknown_agent.omitted")
+            .collect();
+        assert_eq!(unknown.len(), 2);
+        assert_eq!(unknown[0]["device_id"], "device-a");
+        assert_eq!(unknown[1]["device_id"], "device-b");
+        assert!(
+            unknown
+                .iter()
+                .all(|record| record["agent_id"] == "future-agent")
+        );
+    }
+
+    #[test]
+    fn unknown_agent_diagnostics_have_a_reported_count_and_text_bound() {
+        let mut runtime = super::super::tests::runtime();
+        let report = KitReport {
+            agents: (0..129)
+                .map(|index| unknown(&format!("future-{index}")))
+                .collect(),
+            ..Default::default()
+        };
+        let (_, records) = crate::diagnostics::capture(|| {
+            runtime.diagnose_unknown_kit_agents("device", &report);
+            runtime.diagnose_unknown_kit_agents("device", &report);
+        });
+        assert_eq!(runtime.unknown_kit_agents.len(), 128);
+        assert_eq!(
+            records
+                .iter()
+                .filter(|record| record["kind"] == "unknown_agent.omitted")
+                .count(),
+            128
+        );
+        assert_eq!(
+            records
+                .iter()
+                .filter(|record| record["kind"] == "unknown_agent.diagnostic_limit")
+                .count(),
+            1
+        );
+        let limit = records
+            .iter()
+            .find(|record| record["kind"] == "unknown_agent.diagnostic_limit")
+            .unwrap();
+        assert_eq!(
+            limit["device_id"],
+            serde_json::json!({"prefix": "device", "bytes": 6, "truncated": false})
+        );
+        assert_eq!(
+            limit["agent_id"],
+            serde_json::json!({"prefix": "future-128", "bytes": 10, "truncated": false})
+        );
+        let mut runtime = super::super::tests::runtime();
+        let report = KitReport {
+            agents: vec![unknown(&"x".repeat(513))],
+            ..Default::default()
+        };
+        let (_, records) =
+            crate::diagnostics::capture(|| runtime.diagnose_unknown_kit_agents("device", &report));
+        assert!(runtime.unknown_kit_agents.is_empty());
+        assert_eq!(records.len(), 1);
+        assert_eq!(records[0]["kind"], "unknown_agent.diagnostic_limit");
+        assert_eq!(records[0]["agent_id"]["bytes"], 513);
+        assert_eq!(records[0]["agent_id"]["prefix"], "x".repeat(128));
+        assert_eq!(records[0]["agent_id"]["truncated"], true);
+    }
+
+    #[test]
+    fn unknown_identity_boundary_is_inclusive_and_failure_references_are_utf8_safe() {
+        let mut runtime = super::super::tests::runtime();
+        let report = KitReport {
+            agents: vec![unknown(&"x".repeat(512))],
+            ..Default::default()
+        };
+        let (_, records) =
+            crate::diagnostics::capture(|| runtime.diagnose_unknown_kit_agents("device", &report));
+        assert_eq!(runtime.unknown_kit_agents.len(), 1);
+        assert_eq!(records[0]["kind"], "unknown_agent.omitted");
+        assert_eq!(records[0]["agent_id"], "x".repeat(512));
+
+        let mut runtime = super::super::tests::runtime();
+        let device = "기".repeat(200);
+        let report = KitReport {
+            agents: vec![unknown(&"가".repeat(200))],
+            ..Default::default()
+        };
+        let (_, records) = crate::diagnostics::capture(|| {
+            runtime.diagnose_unknown_kit_agents(&device, &report);
+            runtime.diagnose_unknown_kit_agents(&device, &report);
+        });
+        assert!(runtime.unknown_kit_agents.is_empty());
+        assert_eq!(records.len(), 1);
+        assert_eq!(
+            records[0]["device_id"],
+            serde_json::json!({"prefix": "기".repeat(42), "bytes": 600, "truncated": true})
+        );
+        assert_eq!(
+            records[0]["agent_id"],
+            serde_json::json!({"prefix": "가".repeat(42), "bytes": 600, "truncated": true})
+        );
+    }
+
+    #[test]
+    fn requests_for_one_machine_merge_into_the_widest() {
+        let reinstall =
+            |parts: &[ComponentId]| KitJob::Apply(Scope::reinstall(parts.iter().copied()));
+        assert_eq!(
+            KitJob::Status.merge(KitJob::Apply(Scope::automatic())),
+            KitJob::Apply(Scope::automatic())
+        );
+        assert_eq!(
+            KitJob::Apply(Scope::automatic()).merge(KitJob::Status),
+            KitJob::Apply(Scope::automatic())
+        );
+        assert_eq!(
+            reinstall(&[ComponentId::CoordinationRetirement])
+                .merge(KitJob::Apply(Scope::automatic())),
+            reinstall(&[ComponentId::CoordinationRetirement])
+        );
+        assert_eq!(
+            reinstall(&[ComponentId::CoordinationRetirement]).merge(reinstall(&[
+                ComponentId::Cli,
+                ComponentId::CoordinationRetirement
+            ])),
+            reinstall(&[ComponentId::Cli, ComponentId::CoordinationRetirement])
+        );
+        assert_eq!(KitJob::Status.merge(KitJob::Status), KitJob::Status);
+        // The operator's later switch wins for the agent it names.
+        assert_eq!(
+            KitJob::Apply(Scope::agents([], ["pi"]))
+                .merge(KitJob::Apply(Scope::agents(["pi"], []))),
+            KitJob::Apply(Scope::agents(["pi"], []))
+        );
+    }
+}

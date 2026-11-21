@@ -59,6 +59,10 @@ def suites(lane):
 
 WEB_LINUX = ("web-e2e.yml", "ubuntu-latest", "", 6, False)
 WEB_MACOS = ("web-e2e.yml", "macos-15", "@platform", 1, False)
+# The pull request's Windows lane shards the `@platform` suite by this system's
+# own durations; the nightly's OS-only dispatch keeps the single job it
+# always ran, since a hand run is about one system's suite, not its queue time.
+WEB_WINDOWS_VERIFY = ("web-e2e.yml", "windows-latest", "@platform", 3, False)
 WEB_WINDOWS = ("web-e2e.yml", "windows-latest", "@platform", 1, False)
 DESKTOP_MACOS = ("desktop-e2e.yml", "macos-15", "", 2, False)
 DESKTOP_LINUX = ("desktop-e2e.yml", "ubuntu-latest", "@platform", 1, True)
@@ -67,7 +71,7 @@ DESKTOP_WINDOWS = ("desktop-e2e.yml", "windows-latest", "@platform", 1, True)
 
 class NightlyRouting(unittest.TestCase):
     def test_schedule_and_all_run_each_suite_once(self):
-        expected = Counter([WEB_LINUX, WEB_MACOS, WEB_WINDOWS, DESKTOP_MACOS, DESKTOP_LINUX, DESKTOP_WINDOWS])
+        expected = Counter([WEB_LINUX, WEB_MACOS, WEB_WINDOWS_VERIFY, DESKTOP_MACOS, DESKTOP_LINUX, DESKTOP_WINDOWS])
         for lane in ("", "all"):
             with self.subTest(lane=lane or "schedule"):
                 self.assertEqual(suites(lane), expected)

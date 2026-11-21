@@ -59,6 +59,12 @@ class ProcessError(RuntimeError):
     pass
 
 
+class Cancelled(RuntimeError):
+    """The run's owner was cancelled (Ctrl-C or a stop). Not a `ProcessError`:
+    a catch of one never concludes a cell from the other, so a wait that sees
+    the cancel raises this and every catcher lets it end the run."""
+
+
 class ProcessSafetyError(ProcessError):
     """A guardian or cleanup failure that must end the measurement."""
 
@@ -219,6 +225,24 @@ def linux_children_remain():
     raise ProcessError("adopted_child_reap_over_budget")
 
 
+def reap_adopted(root):
+    """Linux: the guardian is a subreaper (`prctl(PR_SET_CHILD_SUBREAPER)`), so
+    every owned process whose parent ended becomes its child and stays a
+    zombie until it is waited. Waiting them as they exit keeps what is left
+    for the final cleanup to what ended in that cleanup, never to every
+    adopted process of a run that lasted an hour. `root` is the native root
+    Popen waits for: it is only looked at (WNOWAIT), never reaped here."""
+    for _ in range(MAX_DESCENDANTS + 1):
+        try:
+            done = os.waitid(os.P_ALL, 0, os.WEXITED | os.WNOHANG | os.WNOWAIT | 0x40000000)
+            if done is None or done.si_pid == root:
+                return
+            os.waitpid(done.si_pid, os.WNOHANG | 0x40000000)
+        except ChildProcessError:
+            return
+    raise ProcessError("adopted_child_reap_over_budget")
+
+
 def job_over_budget(job):
     """Windows: why `job` must end, measured as the Unix guardian measures its
     group: the resident memory (working set) of its processes summed against
@@ -274,8 +298,10 @@ class OwnedProcesses:
 
         def admit():
             now = time.monotonic()
-            if self.cancelled.is_set() or now >= self.deadline:
-                raise ProcessError("run_cancelled_or_timed_out")
+            if self.cancelled.is_set():
+                raise Cancelled("run_cancelled")
+            if now >= self.deadline:
+                raise ProcessError("run_timed_out")
             if now >= launch_deadline:
                 raise ProcessError("command_timeout")
 
@@ -409,7 +435,7 @@ class OwnedProcesses:
             if over.is_set():
                 raise ProcessError("command_output_over_budget")
             if self.cancelled.is_set():
-                raise ProcessError("run_cancelled")
+                raise Cancelled("run_cancelled")
             if time.monotonic() >= end:
                 raise ProcessError("command_timeout")
         if over.is_set():
@@ -435,7 +461,7 @@ class OwnedProcesses:
                         selector.register(stream, selectors.EVENT_READ, index)
                     while selector.get_map():
                         if self.cancelled.is_set():
-                            raise ProcessError("run_cancelled")
+                            raise Cancelled("run_cancelled")
                         if time.monotonic() >= end:
                             raise ProcessError("command_timeout")
                         for key, _ in selector.select(POLL_SECONDS):
@@ -867,6 +893,8 @@ def guard(reader: int, argv: list[str], diagnostic: str = "", family: str = "",
             if rss > MAX_RSS_BYTES:
                 raise ProcessError("owned_processes_over_budget:" + json.dumps(
                     {"descendants": len(table), "rss_bytes": rss, "largest": largest(table)}, separators=(",", ":")))
+            if sys.platform.startswith("linux"):
+                reap_adopted(child.pid)
             root = table.get(child.pid)
             if root is None:
                 raise ProcessError("unreaped_owned_root_missing")
@@ -880,7 +908,7 @@ def guard(reader: int, argv: list[str], diagnostic: str = "", family: str = "",
             exit_watch.wait(POLL_SECONDS, cancelled)
     except BaseException as error:
         if (child is None and launch_deadline is not None and time.monotonic() >= launch_deadline
-                and isinstance(error, ProcessError) and str(error) in ("command_timeout", "run_cancelled_or_timed_out")):
+                and isinstance(error, ProcessError) and str(error) == "command_timeout"):
             # Nothing launched; this is the controller's expired operation,
             # not a failed resource guardian. The empty cleanup is receipted.
             launch_timed_out = True

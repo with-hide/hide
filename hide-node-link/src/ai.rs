@@ -20,6 +20,14 @@ pub struct BackendSpec {
     pub instance: u64,
     pub provider: ProviderId,
     pub model: String,
+    /// The node's profile of the provider's agent the backend runs as (PRD
+    /// agent-profiles-phase2 D-09): the node resolves it from its own
+    /// profile file as a start of it would run, its account's and its own
+    /// variables and its wrapper, so the core never names an account's
+    /// folder. `None` is the agent's built-in default profile, and is left
+    /// off the wire as an older core wrote it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub profile: Option<hide_agent_adapter::ProfileId>,
 }
 
 /// An answer and the log events the backend wrote since the last answer.

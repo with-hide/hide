@@ -1,15 +1,18 @@
 import { BaseEdge, EdgeLabelRenderer, Handle, Position, useReactFlow, type Edge, type EdgeProps, type Node, type NodeProps } from "@xyflow/react";
-import { ChevronsDownUpIcon, GitBranchIcon, MailIcon, TerminalIcon } from "lucide-react";
-import { useId } from "react";
+import { ChevronsDownUpIcon, GitBranchIcon, MailIcon, PlusIcon } from "lucide-react";
+import { useId, type FocusEvent } from "react";
 import { AgentMark } from "./AgentMark";
-import { badgeParts, lineParts, markName, rowAccessibleName, rowLine, sidebarLine } from "./agentRow";
+import { agentWithProfile, badgeParts, lineParts, markName, rowAccessibleName, rowLine, sidebarLine } from "./agentRow";
 import { AgentRecordTitle } from "./components/agent-record-title";
 import { AskLine } from "./components/agent-tree";
+import { ToolLed } from "./components/tool-mark";
 import { RevisitStar, starred } from "./components/revisit-mark";
 import { RowLineText } from "./components/row-line-text";
 import { StatusMark } from "./components/status-mark";
+import { Button } from "./components/ui/button";
 import { Hint } from "./components/ui/tooltip";
 import { useInterfaceTranslation } from "./i18n/client";
+import { cn } from "./lib/utils";
 import type { GraphAgent, GraphProject, ProjectSummary } from "./overviewGraphModel";
 import type { ProjectAccent } from "./overviewGraphLines";
 import type { AgentRow } from "./snapshot";
@@ -28,21 +31,36 @@ function useRevealNode(id: string) {
   };
 }
 
-export type OperatorNode = Node<{ label: string }, "operator">;
+/** A map control's focus handler: reached from the keyboard, its node comes into view as a session's does. */
+function useRevealOnKeyboardFocus(id: string) {
+  const reveal = useRevealNode(id);
+  return (event: FocusEvent<HTMLElement>) => { if (event.currentTarget.matches(":focus-visible")) reveal(event.currentTarget); };
+}
+
+/**
+ * The map's centre: the operator (`나`), whose `start` opens the start panel on no project, as ⌘K's Start an agent
+ * does (issue 2514), or in an external tool's cell the tool, drawn with its rail tile's letters and no `+`, since
+ * what the operator starts is never the tool's work (PRD hide-external-control B40).
+ */
+export type OperatorNode = Node<{ label: string; glyph: string; tool: string | null; startLabel: string; start: (() => void) | null }, "operator">;
+/** The dashed circle where a project's next session would stand; pressing it starts one there (issue 2514). */
+export type StartSlotNode = Node<{ workspaceId: string; label: string; accent: ProjectAccent; muted: boolean; start: (workspaceId: string) => void }, "start">;
+/** The map's Add project place, in free space among the projects (issue 2514). */
+export type AddProjectNode = Node<{ label: string; add: () => void }, "addProject">;
 /** A project's name above its sessions, in the project's color; dragging it moves the whole project. */
 /** `muted`: the side column's search found nothing of this project. */
 export type ProjectNode = Node<{ group: GraphProject; accent: ProjectAccent; current: boolean; emphasized: boolean; muted: boolean; fold: (id: string) => void; point: (id: string | null) => void }, "project">;
 /** The soft light behind a project's sessions, fading to nothing at its edge. */
 export type GlowNode = Node<{ accent: ProjectAccent; emphasized: boolean }, "glow">;
 /** A folded project: one circle with its name and counts. */
-export type ClusterNode = Node<{ summary: ProjectSummary; accent: ProjectAccent; orb: number; emphasized: boolean; muted: boolean; unfold: (id: string) => void; point: (id: string | null) => void }, "cluster">;
+export type ClusterNode = Node<{ summary: ProjectSummary; accent: ProjectAccent; orb: number; emphasized: boolean; muted: boolean; unfold: (id: string) => void; point: (id: string | null) => void; start: ((workspaceId: string) => void) | null }, "cluster">;
 export type TeamNode = Node<{ path: string; width: number; height: number; selected: boolean }, "team">;
 /** A team root's fold: how many descendants, their states, and whether they are folded away. */
 export type TeamFold = { count: number; turn: number; going: number; done: number; folded: boolean; toggle: () => void };
 export type SessionNode = Node<{ row: GraphAgent; root: boolean; branch: string | null; context: boolean; muted: boolean; highlighted: boolean; current: boolean; team: TeamFold | null; highlight: (id: string | null, focus: boolean) => void; choose: (id: string, target: HTMLElement) => void }, "session">;
 /** A straight relationship between two orbs, already trimmed to their edges; it carries no words. */
-/** A line's letters and Herdr inputs, summed over both directions, and its hint saying them per direction. */
-export type ExchangeBadge = { letters: number; direct: number; label: string };
+/** A line's letters and typed inputs, summed over both directions, and its hint saying them per direction. */
+export type ExchangeBadge = { letters: number; label: string };
 export type LineEdge = Edge<{ x1: number; y1: number; x2: number; y2: number; exchange?: ExchangeBadge }, "line">;
 
 /** Handles are invisible routing anchors; no connection can be edited. */
@@ -73,8 +91,40 @@ export function GraphLine({ agent, className }: { agent: AgentRow; className?: s
   return line ? <RowLineText data-agent-line={line.mode} parts={lineParts(t, agent, line)} className={className} /> : null;
 }
 
-export function OperatorGraphNode({ data }: NodeProps<OperatorNode>) {
-  return <div className="og-operator" role="img" aria-label={data.label}><Ports /><span aria-hidden="true">{data.label}</span></div>;
+// The `+` controls below on nodes that do not drag leave `nopan` off: a drag that starts on one pans the map,
+// and the map's pan swallows the click that would follow it, as a drag across the canvas does (issue 2514).
+export function OperatorGraphNode({ id, data }: NodeProps<OperatorNode>) {
+  const reveal = useRevealOnKeyboardFocus(id);
+  // The circle is a picture; only its `+` badge on the rim is pressed.
+  return <div className="og-operator" data-graph-center={data.tool ?? "operator"}><Ports /><span role="img" aria-label={data.label}><span aria-hidden="true">{data.glyph}</span></span>
+    {data.start ? <Hint label={data.startLabel}><Button variant="secondary" size="inline" className="og-operator-start nodrag" aria-label={data.startLabel} data-graph-operator-start="true" onFocus={reveal} onClick={data.start}><PlusIcon aria-hidden="true" /></Button></Hint> : null}
+  </div>;
+}
+
+/** Same size as a root session's circle, dashed and faint, so it never reads as a session; no line ties it to anyone. */
+export function StartSlotGraphNode({ id, data }: NodeProps<StartSlotNode>) {
+  const reveal = useRevealOnKeyboardFocus(id);
+  return <div className="og-start-slot" data-accent={data.accent} data-muted={data.muted}>
+    <Hint label={data.label}><Button variant="ghost" size="inline" className="og-start-slot-orb nodrag" aria-label={data.label} data-graph-start-slot={data.workspaceId} onFocus={reveal} onClick={() => data.start(data.workspaceId)}><PlusIcon aria-hidden="true" /></Button></Hint>
+  </div>;
+}
+
+/** A dashed, rounded place with its words; pressing it is the sidebar's Add project. */
+export function AddProjectGraphNode({ id, data }: NodeProps<AddProjectNode>) {
+  const reveal = useRevealOnKeyboardFocus(id);
+  return <Button variant="ghost" size="inline" className="og-add-project nodrag" data-graph-add-project="true" onFocus={reveal} onClick={data.add}><PlusIcon aria-hidden="true" />{data.label}</Button>;
+}
+
+/** A folded project's `+` beside its name, as the sidebar's project row has it: the start panel on that project.
+ * Like the folded circle it is one of the project's drag handles, so a drag from it moves the project and the
+ * drag swallows the click; a draggable node never pans the map. */
+function ProjectStartButton({ nodeId, workspaceId, label, start }: { nodeId: string; workspaceId: string; label: string; start: (workspaceId: string) => void }) {
+  const { t } = useInterfaceTranslation();
+  const reveal = useRevealOnKeyboardFocus(nodeId);
+  const name = t("sidebar.startAgentIn", { name: label });
+  return <Hint label={name}>
+    <Button variant="ghost" size="inline" className="og-project-start og-cluster-drag nopan" aria-label={name} data-graph-project-start={workspaceId} onFocus={reveal} onClick={() => start(workspaceId)}><PlusIcon aria-hidden="true" /></Button>
+  </Hint>;
 }
 
 export function ProjectGraphNode({ data }: NodeProps<ProjectNode>) {
@@ -100,14 +150,14 @@ export function GlowGraphNode({ id, data, width, height }: NodeProps<GlowNode>) 
 /** A folded project stands as one circle in its project's colour, with its glow and its name at the
  * expanded size; the operator's turn inside is a badge on the circle, so the border keeps the colour.
  * Choosing it unfolds the project, dragging it moves the project. */
-export function ClusterGraphNode({ data }: NodeProps<ClusterNode>) {
+export function ClusterGraphNode({ id, data }: NodeProps<ClusterNode>) {
   const { t } = useInterfaceTranslation();
   const { summary } = data;
   const label = summary.project.workspace.label;
   return <div className="og-cluster" data-graph-cluster={summary.project.workspace.id} data-accent={data.accent} data-emphasized={data.emphasized} data-muted={data.muted} onPointerEnter={() => data.point(summary.id)} onPointerLeave={() => data.point(null)} onFocus={() => data.point(summary.id)} onBlur={() => data.point(null)}>
     <Ports />
     <button type="button" className="og-cluster-orb og-cluster-drag nopan" style={{ width: data.orb, height: data.orb }} aria-label={t("overviewGraph.unfoldProject", { project: label, count: summary.sessions })} onClick={() => { data.point(null); data.unfold(summary.id); }}>{summary.sessions}{summary.turn > 0 ? <span className="og-orb-state"><StatusMark mark="turn" /></span> : null}</button>
-    <strong>{label}</strong>
+    <span className="og-cluster-name"><strong>{label}</strong>{data.start ? <ProjectStartButton nodeId={id} workspaceId={summary.project.workspace.id} label={label} start={data.start} /> : null}</span>
     <GraphStateCounts summary={summary} />
   </div>;
 }
@@ -127,17 +177,30 @@ export function SessionGraphNode({ id, data, selected }: NodeProps<SessionNode>)
     <Ports />
     <button type="button" className="og-session-target nopan" aria-label={[rowAccessibleName(t, row.agent, row.device), starred(row.agent) ? t("taskLens.revisit.starred") : null, data.current ? t("overviewGraph.currentPane") : null, data.context ? t("overviewGraph.context") : null, launch ? t("overviewGraph.launchModel", { model: launch }) : null, branch].filter(Boolean).join(", ")} aria-pressed={selected} onPointerEnter={() => highlight(row.id, false)} onPointerLeave={() => highlight(null, false)} onFocus={(event) => { if (event.currentTarget.matches(":focus-visible")) reveal(event.currentTarget); highlight(row.id, true); }} onBlur={() => highlight(null, true)} onClick={(event) => choose(row.id, event.currentTarget)}>
       {/* A delegated session is the same circle, smaller (its size comes from data-root). */}
-      <span className="og-orb og-session-drag" title={t("overviewGraph.dragSession", { session: row.agent.identity_label })}><AgentMark kind={row.agent.agent_kind} className="og-provider" /><span className="og-orb-state"><StatusMark mark={row.agent.mark} /></span></span>
+      <span className="og-orb og-session-drag" title={[t("overviewGraph.dragSession", { session: row.agent.identity_label }), row.agent.profile ? agentWithProfile(t, row.agent) : null].filter(Boolean).join("\n")}><AgentMark kind={row.agent.agent_kind} profile={row.agent.profile} className="og-provider" /><span className="og-orb-state"><StatusMark mark={row.agent.mark} human={row.agent.human_turn !== undefined} /></span><SubagentOrbit count={row.agent.subagents} /></span>
       <strong className="og-session-title"><AgentRecordTitle agent={row.agent} />{starred(row.agent) ? <RevisitStar className="ml-xxs" /> : null}</strong>
       {launch ? <span className="og-session-launch" aria-hidden="true">{launch}</span> : null}
       {branch ? <span className="og-session-branch" aria-hidden="true"><GitBranchIcon aria-hidden="true" /><span>{branch}</span></span> : null}
-      {root || asking ? <GraphLine agent={row.agent} className={asking ? "og-session-line og-asking" : "og-session-line"} /> : null}
+      {/* A tool's agent leads its line with the tool's name, as its sidebar row does (PRD hide-external-control B31); never inside the tool's own cell. */}
+      {root || asking ? <ToolLed tool={row.agent.tool} className={cn("og-session-line", asking && "og-asking")}><GraphLine agent={row.agent} /></ToolLed> : null}
     </button>
     {team ? <button type="button" className="og-team-chip nodrag nopan" data-folded={team.folded} data-turn={team.turn > 0} aria-expanded={!team.folded} aria-label={t(team.folded ? "overviewGraph.unfoldTeam" : "overviewGraph.foldTeam", { count: team.count })} onClick={team.toggle}>
       <span>{team.folded ? `+${team.count}` : team.count}</span>
       {team.folded ? <span className="og-team-states">{badgeParts({ turn: team.turn, going: team.going, done: team.done }).map((part) => <StatusMark key={part.state} mark={part.mark} />)}</span> : null}
     </button> : null}
   </div>;
+}
+
+/** The most subagent dots one circle carries; the session's name and hint say the exact count. */
+export const ORBIT_DOTS_SHOWN = 8;
+
+/** One small dot per subagent the session runs, evenly spaced round its circle and turning slowly; nothing for none (docs/UI_BEHAVIOR.md, Subagents). */
+function SubagentOrbit({ count }: { count: number | undefined }) {
+  if (!count) return null;
+  const shown = Math.min(count, ORBIT_DOTS_SHOWN);
+  return <span aria-hidden="true" className="og-orbit" data-graph-subagents={count}>
+    {Array.from({ length: shown }, (_, index) => <i key={index} style={{ ["--og-orbit-angle" as string]: `${(360 / shown) * index}deg` }} />)}
+  </span>;
 }
 
 export function LineGraphEdge(props: EdgeProps<LineEdge>) {
@@ -151,12 +214,11 @@ export function LineGraphEdge(props: EdgeProps<LineEdge>) {
   </>;
 }
 
-/** The badge at a line's middle: an envelope with its letters, a prompt with its Herdr inputs, each only when nonzero. */
-function ExchangeCount({ letters, direct, label, x, y }: ExchangeBadge & { x: number; y: number }) {
+/** The badge at a line's middle: an envelope with its letters. */
+function ExchangeCount({ letters, label, x, y }: ExchangeBadge & { x: number; y: number }) {
   return <Hint label={label} contentClassName="whitespace-pre-line">
     <span role="img" className="og-exchange nodrag nopan" style={{ transform: `translate(-50%, -50%) translate(${x}px, ${y}px)` }} data-graph-exchange="true">
-      {letters ? <span><MailIcon aria-hidden="true" />{letters}</span> : null}
-      {direct ? <span><TerminalIcon aria-hidden="true" />{direct}</span> : null}
+      <span><MailIcon aria-hidden="true" />{letters}</span>
     </span>
   </Hint>;
 }

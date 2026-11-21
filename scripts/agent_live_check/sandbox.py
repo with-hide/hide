@@ -69,7 +69,7 @@ class WriteSandbox:
         self.sockets = sockets.resolve()
         self.probe = self.run / "probe"
         self.state = (state or self.run / "state").resolve()
-        if not beneath(self.state, self.run):
+        if not beneath(self.state, self.run) and self.state != self.sockets / "state":
             raise ProtectionError("sandbox_state_outside_run")
         self.temp = self.run / "agent-tmp"
         self.declared_proof = self.temp / "guard-declared-config"
@@ -79,7 +79,7 @@ class WriteSandbox:
         if any(not beneath(path, operator_home) or path.is_symlink() for path in protected):
             raise ProtectionError("protected_configuration_outside_operator_home_or_link")
         quote = lambda value: json.dumps(str(value), ensure_ascii=True)
-        controls = [checkout.resolve(), self.run, operator_home / ".hide",
+        controls = [checkout.resolve(), self.run, self.state, operator_home / ".hide",
                     operator_home / ".local/state/hide", operator_home / ".local/share/hide",
                     operator_home / ".config/herdr", Path("/Applications/hide.app"),
                     *(routing or []), *(executables or [])]
@@ -155,6 +155,9 @@ class WriteSandbox:
             for name in (".agents", ".claude", ".claude.json", ".codex", ".gemini", ".grok", ".omp", ".pi",
                          ".config/opencode", ".local/share/opencode", "Library/Keychains"):
                 rules.append(f"(deny file-read* file-test-existence file-write* (subpath {quote(operator_home / name)}))")
+        # A native holder's short socket state shares the socket root, not
+        # its writable permission. Only issued references are granted below.
+        rules.append(f"(deny file-read* file-write* (subpath {quote(self.state)}))")
         self.profile = self.run / ("fake-write-guard.sb" if fake_private else "native-write-guard.sb")
         self.rules = rules
         self.references = set()

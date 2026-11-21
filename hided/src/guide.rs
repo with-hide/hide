@@ -24,6 +24,23 @@ mod tests {
         assert_eq!(TEXT.matches(SESSION_RULES).count(), 1);
         let guide = text();
         assert_eq!(guide.matches(hide_agent_hooks::PURPOSE_CONTEXT).count(), 1);
+        // A pane pasted from another machine is read by its full address.
+        assert!(guide.contains("remote:<device id>:pane:<id>"));
+        // B9: the top-level guide routes planning to missions; workers keep
+        // their node steps in the mission guide.
+        assert!(!guide.contains("hide task help"));
+        assert!(guide.contains("run `hide mission help`"));
+        assert!(guide.contains("A worker or reviewer of a mission node"));
+        assert!(guide.contains("run `hide issue help` and follow it"));
+        for rule in [
+            "explicitly asks for, invokes with `/hide-mission`",
+            "without asking which way to work again",
+            "first ask in one line: Shall I run this as a mission, or do it directly?",
+            "Wait for the operator's answer and follow it",
+            "With none of these signals, work directly without asking",
+        ] {
+            assert!(guide.contains(rule), "{rule}");
+        }
     }
 
     #[test]
@@ -36,14 +53,64 @@ mod tests {
         assert!(TEXT.contains(crate::session_cli::USAGE));
     }
 
+    /// An agent asked for a repeated task finds the automation command and
+    /// its guide (PRD automations B9).
+    #[test]
+    fn the_guide_routes_a_repeated_task_to_an_automation() {
+        let guide = text();
+        assert!(guide.contains("## Automations"));
+        assert!(guide.contains("Run `hide automation help` first"));
+        assert!(guide.contains(
+            "hide automation add --name <name> --task <text> --schedule <when> --kind <kind>"
+        ));
+    }
+
+    #[test]
+    fn the_guide_spells_hide_agent_profile_as_the_command_parses_it() {
+        assert!(TEXT.contains(crate::profile_cli::USAGE));
+    }
+
     #[test]
     fn the_guide_spells_hide_device_as_the_command_parses_it() {
         assert!(TEXT.contains(crate::device_cli::USAGE));
     }
 
     #[test]
+    fn the_guide_spells_hide_access_as_the_command_parses_it() {
+        assert!(TEXT.contains(crate::access_cli::USAGE));
+    }
+
+    #[test]
     fn the_guide_spells_hide_pane_as_the_command_parses_it() {
         assert!(TEXT.contains(crate::pane_cli::USAGE));
+    }
+
+    /// The guide teaches a step only a person takes by the command that
+    /// declares it, and parses as the CLI does (PRD ask-human B27).
+    #[test]
+    fn the_guide_teaches_ask_human_in_place_of_leaving_a_login() {
+        assert!(!TEXT.contains("Leave a login to the operator."));
+        for example in [
+            "hide agent ask-human auth https://github.com/login",
+            "hide agent ask-human --clear",
+        ] {
+            assert!(TEXT.contains(example), "{example}");
+            let args: Vec<String> = example.split(' ').skip(1).map(str::to_owned).collect();
+            crate::cli_contract::admit(&args).unwrap();
+            crate::agent_cli::parse(args[1..].iter()).unwrap();
+        }
+    }
+
+    /// The guide names the fold of a settled question as the CLI parses it.
+    #[test]
+    fn the_guide_teaches_folding_a_settled_question() {
+        let example = "hide session fold-ask <id> --reason \"<what settled it>\"";
+        assert!(TEXT.contains(example), "{example}");
+        let args: Vec<String> = ["session", "fold-ask", "missed-3-0", "--reason", "settled"]
+            .map(str::to_owned)
+            .to_vec();
+        crate::cli_contract::admit(&args).unwrap();
+        crate::session_cli::parse_fold_ask(&args[2..]).unwrap();
     }
 
     #[test]
@@ -61,6 +128,7 @@ mod tests {
             ),
             ("hide guide", text()),
             ("hide mission help", crate::mission_cli::HELP.to_owned()),
+            ("hide issue help", crate::issue_cli::HELP.to_owned()),
         ]
     }
 

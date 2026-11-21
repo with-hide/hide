@@ -40,7 +40,7 @@ const state = (pending: boolean, agents: KitAgent[], providers: ReturnType<typeo
 });
 
 /** What the gate sent for the operator's choice: the sign-in probe it asks for while open is not part of it. */
-const choices = (events: Parameters<DispatchFn>[0][]) => events.filter((event) => !["ai_settings", "first_run_draft", "herdr_profiles_list"].includes(event.kind));
+const choices = (events: Parameters<DispatchFn>[0][]) => events.filter((event) => !["ai_settings", "first_run_draft", "machine_profiles_list"].includes(event.kind));
 
 const tile = (id: string, on: string) => document.querySelector(`[data-onboarding-tile="${id}:${on}"]`) as HTMLElement | null;
 const continueButton = () => document.querySelector("[data-onboarding-apply]") as HTMLButtonElement;
@@ -82,7 +82,7 @@ it("opens a remote project's first agent from that device's kit, regardless of l
   const next = state(false, AGENTS, [provider("claude", "Claude Code", "claude-code", true)]);
   Object.assign(next.rest.ui_state, { first_run: { version: 1, step: "project" }, first_run_choices: { project_device: "build" }, workspace_registrations: [] });
   Object.assign(next.rest.navigator, { focused_device_id: "build" });
-  next.rest.navigator.devices.push({ id: "build", kind: "remote", label: "Build server", kit: { agents: [agent("opencode", "OpenCode", "available"), agent("claude-code", "Claude Code", "not_installed")].map((row) => ({ ...row, enabled: true })), components: [], busy: false } } as never);
+  next.rest.navigator.devices.push({ id: "build", kind: "remote", state: "ready", label: "Build server", kit: { agents: [agent("opencode", "OpenCode", "available"), agent("claude-code", "Claude Code", "not_installed")].map((row) => ({ ...row, enabled: true })), components: [], busy: false } } as never);
   const { events, unmount } = await mount(next);
   await act(async () => way("project").click());
   await act(async () => useShellStore.setState((current) => ({ revision: current.revision + 1, rest: { ...current.rest, ui_state: { ...current.rest?.ui_state, workspace_registrations: [{ id: "remote-project", label: "project", path: "~/project", device_id: "build" }] } } }) as never));
@@ -114,7 +114,7 @@ it("asks how to start with two ways and Skip for now, and no choice to confirm",
   await unmount();
 });
 
-it("practice first ends the wizard and opens the practice window on chapter 0", async () => {
+it("practice first ends the wizard and opens the practice window on the mission flow", async () => {
   const openPractice = vi.fn();
   window.hideHost = { kind: "electron", platform: "darwin", openPractice } as never;
   const { events, unmount } = await mount(startStep());
@@ -162,7 +162,7 @@ it("keeps a credentialed clone URL in the open form and sends it only for explic
     first_run: { version: 1, step: "project" },
     first_run_choices: { project_form: { view: "clone", url: "https://example.test/repo.git", parent: "~/work" } },
   });
-  Object.assign(next, { cloneTarget: { parent: "~/work", name: "repo", path: "~/work/repo", reason: null } });
+  Object.assign(next, { cloneTarget: { device_id: next.rest.navigator.devices[0]!.id, parent: "~/work", name: "repo", path: "~/work/repo", reason: null } });
   const { events, unmount } = await mount(next);
   const input = document.querySelector<HTMLInputElement>("[data-clone-url]")!;
   const raw = "https://alice:private-token@example.test/repo.git";
@@ -260,11 +260,11 @@ it("lists under What changes where Hide writes for each agent left on, and the h
   const { unmount } = await mount(state(true, located));
   await act(async () => { (document.querySelector("[data-first-run-what-changes]") as HTMLElement).click(); });
   const rows = () => [...document.querySelectorAll("[data-first-run-change]")].map((row) => row.getAttribute("data-first-run-change"));
-  expect(rows()).toEqual(["/Users/me/.claude-code/skills/hide", "/Users/me/.codex/skills/hide", "cli"]);
+  expect(rows()).toEqual(["~/.claude-code/skills/hide", "~/.codex/skills/hide", "cli"]);
   // The path and the agents it is for; no piece is named.
-  expect(document.querySelector('[data-first-run-change="/Users/me/.codex/skills/hide"]')?.textContent).toBe("/Users/me/.codex/skills/hideCodex");
+  expect(document.querySelector('[data-first-run-change="~/.codex/skills/hide"]')?.textContent).toBe("~/.codex/skills/hideCodex");
   await act(async () => { tile("codex", "on")!.click(); });
-  expect(rows()).toEqual(["/Users/me/.claude-code/skills/hide", "cli"]);
+  expect(rows()).toEqual(["~/.claude-code/skills/hide", "cli"]);
   await unmount();
 });
 
@@ -293,7 +293,7 @@ it("reopened from Help, walks to Devices when the device list was cut short and 
   window.hideHost = { kind: "electron", platform: "darwin", notificationPermission: async () => "not_determined" } as never;
   for (const [truncated, after] of [[true, "devices"], [false, "notifications"]] as const) {
     const next = state(false, enabled);
-    Object.assign(next.rest.status, { herdr_profiles: { state: "ready", error: null, profiles: [], truncated } });
+    Object.assign(next.rest.status, { machine_profiles: { state: "ready", error: null, profiles: [], truncated } });
     const { unmount } = await mount(next);
     await act(async () => { useSetupWalk.getState().open(); });
     await act(async () => { continueButton().click(); });

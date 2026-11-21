@@ -2,11 +2,8 @@
 //! `remote_delivery` and `node_contract` modules use, and the fake
 //! `tailscale`; declared once, so the binary compiles each once.
 
-pub mod core_move;
 pub mod fake_tailscale;
-pub mod remote_core;
 pub mod remote_delivery;
 pub mod run;
-pub mod screen;
 pub mod shipped;
 pub mod sshd;

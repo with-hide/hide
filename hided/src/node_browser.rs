@@ -97,7 +97,7 @@ impl NodeBrowser {
         tickets.retain(|_, ticket| ticket.issued.elapsed() < TICKET_LIFE);
         let slot = Arc::clone(&self.relays).try_acquire_owned().ok();
         if slot.is_none() {
-            herdr_core::diagnostic!(json!({
+            hide_core::diagnostic!(json!({
                 "component": "node_browser",
                 "kind": "relay.cap_reached",
                 "cap": MAX_RELAYS,
@@ -231,7 +231,7 @@ impl NodeBrowser {
                         }
                         Err(reason) => {
                             if failure.as_ref() != Some(&reason) {
-                                herdr_core::diagnostic!(json!({
+                                hide_core::diagnostic!(json!({
                                     "component": "node_browser",
                                     "kind": "announce.failed",
                                     "generation": generation,
@@ -335,7 +335,7 @@ fn announce(link: &LiveLink, owners: &[i32]) -> Result<(), String> {
 }
 
 fn failure(status: StatusCode, (reason, next_action): Failure) -> Response {
-    herdr_core::diagnostic!(json!({
+    hide_core::diagnostic!(json!({
         "component": "node_browser",
         "kind": "request.refused",
         "reason": reason,

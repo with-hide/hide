@@ -21,11 +21,11 @@ import sys
 ROOT = pathlib.Path(__file__).resolve().parent.parent
 
 # Production trees whose crates may build a Hide AI request.
-TREES = ["herdr-core/src", "hided/src", "hide-memory/src", "hide-kit/src", "hide-host/src"]
+TREES = ["hide-core/src", "hided/src", "hide-memory/src", "hide-kit/src", "hide-host/src"]
 
 # Files whose prompts another file sends, with that file.
 PROMPT_ONLY = {
-    "herdr-core/src/runtime/memory_promotion.rs": "the first prompt of a Memory promotion's agent, whose reasons the operator reads",
+    "hide-core/src/runtime/memory_promotion.rs": "the first prompt of a Memory promotion's agent, whose reasons the operator reads",
 }
 
 # Text in a prompt source that is not a Hide AI prompt, by the number of

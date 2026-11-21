@@ -601,13 +601,16 @@ fn catch_base_up(
     let refused = |merge| Ok(Some(MergePushOutcome::NotMerged { merge }));
     match holder(root, base)? {
         Holder::Gone => refused(stopped(MergeStep::WorktreeMissing)),
-        Holder::Worktree(worktree) => match catch_up(&worktree, local)? {
+        Holder::Worktree(worktree) => match catch_up(&worktree, local, None)? {
             CatchUpOutcome::Updated { .. } | CatchUpOutcome::AlreadyCurrent { .. } => Ok(None),
             CatchUpOutcome::Diverged => Ok(Some(MergePushOutcome::BaseDiverged {
                 commits: own_commits(root, upstream, local)?,
             })),
             CatchUpOutcome::NoUpstream => Ok(Some(MergePushOutcome::NoUpstream)),
-            CatchUpOutcome::HeadMoved => refused(MergeOutcome::BaseMoved),
+            // No branch is named here, so `OtherBranch` is never answered.
+            CatchUpOutcome::HeadMoved | CatchUpOutcome::OtherBranch { .. } => {
+                refused(MergeOutcome::BaseMoved)
+            }
             CatchUpOutcome::InProgress => refused(dirty([])),
             CatchUpOutcome::Dirty { files, .. } => refused(dirty(files)),
         },
@@ -910,18 +913,24 @@ fn keep_on_new_branch(root: &Path, name: &str, commit: &str) -> HostResult<Optio
     Ok(None)
 }
 
-/// The commit the upstream of the branch checked out in `worktree` points
-/// at, or `None` when `HEAD` is detached, the branch has no upstream, or the
-/// upstream ref is gone.
-fn upstream_commit(worktree: &Path) -> HostResult<Option<String>> {
+/// The branch `HEAD` has out in `worktree`, as its full ref, or `None` when
+/// it is detached.
+fn head_branch(worktree: &Path) -> HostResult<Option<String>> {
     let args = ["symbolic-ref", "--quiet", "HEAD"];
     let output = run(worktree, &args)?;
-    let branch = match output.status.code() {
-        Some(0) => String::from_utf8_lossy(&output.stdout).trim().to_owned(),
-        Some(1) => return Ok(None),
-        _ => return Err(describe(&args, &output)),
-    };
-    let upstream = read_text(worktree, &["for-each-ref", "--format=%(upstream)", &branch])?;
+    match output.status.code() {
+        Some(0) => Ok(Some(
+            String::from_utf8_lossy(&output.stdout).trim().to_owned(),
+        )),
+        Some(1) => Ok(None),
+        _ => Err(describe(&args, &output)),
+    }
+}
+
+/// The commit the upstream of `branch` (a full ref) points at, or `None`
+/// when the branch has no upstream or the upstream ref is gone.
+fn upstream_commit(worktree: &Path, branch: &str) -> HostResult<Option<String>> {
+    let upstream = read_text(worktree, &["for-each-ref", "--format=%(upstream)", branch])?;
     if upstream.is_empty() {
         return Ok(None);
     }
@@ -947,15 +956,30 @@ fn dirty_catch_up(paths: BTreeSet<String>) -> CatchUpOutcome {
 /// Moves the branch checked out in `worktree` to its upstream as last
 /// fetched, fast-forward only: never a fetch, a merge commit or a rebase.
 /// `head` is the commit the operator was shown; a `HEAD` that moved since is
-/// left alone. Every refusal is decided before the write, as a merge's are,
-/// and git's own fast-forward refuses an ignored file that appears after.
-pub fn catch_up(worktree: &Path, head: &str) -> HostResult<CatchUpOutcome> {
-    check_catch_up(head).map_err(invalid)?;
+/// left alone, and so, with `branch`, is one that has another branch out.
+/// Every refusal is decided before the write, as a merge's are, and git's
+/// own fast-forward refuses an ignored file that appears after.
+pub fn catch_up(worktree: &Path, head: &str, branch: Option<&str>) -> HostResult<CatchUpOutcome> {
+    check_catch_up(head, branch).map_err(invalid)?;
     let current = read_text(worktree, &["rev-parse", "--verify", "HEAD"])?;
     if current != head {
         return Ok(CatchUpOutcome::HeadMoved);
     }
-    let Some(upstream) = upstream_commit(worktree)? else {
+    let held = head_branch(worktree)?;
+    if let Some(branch) = branch {
+        let short = held
+            .as_deref()
+            .map(|full| full.strip_prefix("refs/heads/").unwrap_or(full));
+        if short != Some(branch) {
+            return Ok(CatchUpOutcome::OtherBranch {
+                branch: short.map(str::to_owned),
+            });
+        }
+    }
+    let Some(held) = held else {
+        return Ok(CatchUpOutcome::NoUpstream);
+    };
+    let Some(upstream) = upstream_commit(worktree, &held)? else {
         return Ok(CatchUpOutcome::NoUpstream);
     };
     let unknown = || failed("git could not tell how the branch and its upstream relate");

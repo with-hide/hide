@@ -3,7 +3,7 @@
 //! reads; other commands use `/ws`.
 //!
 //! A caller is bound one of two ways. A process descending from the shell
-//! Herdr runs for the named pane gets a pane-bound capability that records
+//! the pane's holder runs for the named pane gets a pane-bound capability that records
 //! the pane's terminal identity and shell birth and dies with the pane. A
 //! local process that is not such a descendant (a Codex tool shell run by
 //! the shared `codex app-server` daemon, whose parent is launchd) is bound
@@ -21,23 +21,35 @@ use std::sync::Mutex;
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::time::{Duration, Instant};
 
-use herdr_core::address;
-use herdr_core::engine::EngineHandle;
-use herdr_core::workspace_control::{Caller, Context, Query, checkout_caller_id};
+use hide_agent_hooks::hook_request::install::{self, PaneRequest};
+use hide_core::address;
+use hide_core::engine::EngineHandle;
+use hide_core::workspace_control::{Caller, Context, Query, checkout_caller_id};
 use hide_node::pane_proof::{PaneIdentity, caller_directory, descends_from, process_start};
 use hide_node::ssh::RemoteHost;
 use hide_node_link::panes::StreamCaller;
 use hide_node_link::protocol::Call;
 use hide_platform::fs::private;
-use serde::{Deserialize, Serialize};
 use serde_json::json;
 
+use crate::accepting::{CloseOnDrop, accept_until_closed, park_unless_closed};
 use crate::core::CoreHandle;
 use crate::state_file::new_token;
 
-const MAX_CAPABILITIES: usize = 64;
+/// Live capabilities this daemon holds at once: every agent pane holds one
+/// for as long as it runs, so the cap sits well above the panes an operator
+/// keeps open (missions run past a hundred). A capability is a small entry
+/// and, for a local pane, one reference file of about a hundred bytes.
+const MAX_CAPABILITIES: usize = 1024;
 const CAPABILITY_LIFETIME: Duration = Duration::from_secs(8 * 60 * 60);
-pub use hide_node_link::panes::{CHECKOUT_NEXT_ACTION, PANE_NEXT_ACTION, refusal_next_action};
+pub use hide_node_link::panes::{CHECKOUT_NEXT_ACTION, PANE_NEXT_ACTION};
+
+/// What a bootstrap or credential refusal says to do: an external tool's
+/// in its own words, any other as the node words it.
+pub fn refusal_next_action(reason: &str) -> &'static str {
+    crate::access::next_action(reason)
+        .unwrap_or_else(|| hide_node_link::panes::refusal_next_action(reason))
+}
 const UNCLAIMED_LIFETIME: Duration = Duration::from_secs(30);
 const MAX_BOOTSTRAPS: usize = 8;
 const BOOTSTRAP_TIMEOUT: Duration = Duration::from_secs(5);
@@ -57,6 +69,12 @@ enum Binding {
     Desk {
         pid: i32,
         started: u64,
+    },
+    /// An external tool's command (PRD hide-external-control): its key
+    /// proved connection `connection` at bootstrap, and every command asks
+    /// the core again whether that connection stands and at which level.
+    Access {
+        connection: String,
     },
 }
 
@@ -78,14 +96,32 @@ pub struct Capability {
     claimed: bool,
     path: PathBuf,
     remote: Option<RemoteCapability>,
+    /// An external tool's level, as the core answered it for this command
+    /// ([`Registry::validate`]); `None` for every other caller.
+    access_level: Option<hide_core::access::Level>,
 }
 
 impl Capability {
+    /// The level an external tool's command runs at, which the command
+    /// boundary judges it by (`server::ScopedRequest::access_need`).
+    pub(crate) fn access_level(&self) -> Option<hide_core::access::Level> {
+        self.access_level
+    }
+
+    /// The shell a pane-bound credential was proved against; none for any
+    /// other binding.
+    fn pane_shell(&self) -> Option<i32> {
+        match &self.binding {
+            Binding::Pane { shell_pid, .. } => Some(*shell_pid),
+            Binding::Checkout | Binding::Desk { .. } | Binding::Access { .. } => None,
+        }
+    }
+
     /// Only a pane-bound credential carries an attested terminal identity.
     pub(crate) fn pane_terminal(&self) -> Option<&str> {
         match &self.binding {
             Binding::Pane { terminal_id, .. } => Some(terminal_id),
-            Binding::Checkout | Binding::Desk { .. } => None,
+            Binding::Checkout | Binding::Desk { .. } | Binding::Access { .. } => None,
         }
     }
 
@@ -126,6 +162,10 @@ impl Capability {
             Binding::Pane { .. } => ("pane_changed", PANE_NEXT_ACTION),
             Binding::Checkout => ("checkout_not_registered", CHECKOUT_NEXT_ACTION),
             Binding::Desk { .. } => ("desk_not_running", DESK_NEXT_ACTION),
+            Binding::Access { .. } => (
+                hide_core::access::Ended::Revoked.reason(),
+                crate::access::REVOKED_NEXT_ACTION,
+            ),
         }
     }
 }
@@ -198,6 +238,19 @@ fn pane_binding(identity: PaneIdentity) -> Binding {
     }
 }
 
+/// A caller turned away because the registry is full: its hooks cannot
+/// register it or record its prompts, which the operator otherwise sees only
+/// as input not confirmed, so the refusal is logged.
+fn note_capability_limit(pane_id: &str, live: usize) {
+    hide_core::diagnostic!(json!({
+        "component": "pane_auth",
+        "kind": "pane_auth.capability_limit",
+        "pane_id": pane_id,
+        "live": live,
+        "limit": MAX_CAPABILITIES,
+    }));
+}
+
 fn entry_alive(entry: &Capability) -> bool {
     if let Binding::Desk { pid, started } = entry.binding {
         return entry.path.is_file()
@@ -221,7 +274,7 @@ fn entry_alive(entry: &Capability) -> bool {
             shell_started,
             ..
         } => process_start(*shell_pid) == Some(*shell_started),
-        Binding::Checkout | Binding::Desk { .. } => true,
+        Binding::Checkout | Binding::Desk { .. } | Binding::Access { .. } => true,
     };
     entry.path.is_file()
         && shell_alive
@@ -244,24 +297,7 @@ fn remove_local_reference(entry: &Capability) {
     }
 }
 
-/// What a reference file holds: the credential, and the way to the daemon
-/// that issued it.
-#[derive(Serialize, Deserialize)]
-pub struct Reference {
-    pub token: String,
-    #[serde(flatten)]
-    pub route: Route,
-}
-
-/// How a command reaches the daemon that issued its credential: this
-/// machine's loopback port, or, on a device, the node socket whose link to
-/// that daemon carries the command (`hide_host::panes`).
-#[derive(Serialize, Deserialize)]
-#[serde(untagged)]
-pub enum Route {
-    Daemon { port: u16, origin_port: u16 },
-    Node { socket: String },
-}
+pub use hide_agent_hooks::hook_request::{Reference, Route};
 
 pub struct Registry {
     directory: PathBuf,
@@ -339,6 +375,7 @@ impl Registry {
             return Ok((existing.path.clone(), false, token.clone()));
         }
         if entries.len() >= MAX_CAPABILITIES {
+            note_capability_limit(&attestation.pane_id, entries.len());
             return Err("capability_limit");
         }
         let token = new_token();
@@ -370,6 +407,7 @@ impl Registry {
                 claimed: false,
                 path: path.clone(),
                 remote: None,
+                access_level: None,
             },
         );
         Ok((path, true, token))
@@ -401,6 +439,7 @@ impl Registry {
             return Ok((token.clone(), false));
         }
         if entries.len() >= MAX_CAPABILITIES {
+            note_capability_limit(&attestation.pane_id, entries.len());
             return Err("capability_limit");
         }
         let token = new_token();
@@ -421,6 +460,7 @@ impl Registry {
                     link: grant.link,
                     source_pane_id: grant.source_pane_id,
                 }),
+                access_level: None,
             },
         );
         Ok((token, true))
@@ -436,7 +476,7 @@ impl Registry {
         context: Context,
     ) -> Result<PathBuf, &'static str> {
         let attestation = Attestation {
-            pane_id: herdr_core::workspace_control::DESK_CALLER.to_owned(),
+            pane_id: hide_core::workspace_control::DESK_CALLER.to_owned(),
             context,
             binding: Binding::Desk { pid: 0, started: 0 },
         };
@@ -517,7 +557,7 @@ impl Registry {
         request_id: &str,
     ) -> Result<Option<Capability>, &'static str> {
         let Some(cap) = self.get(token) else {
-            herdr_core::diagnostic!(json!({
+            hide_core::diagnostic!(json!({
                 "component": "node_panes",
                 "kind": "hook.reference_missing",
                 "node": node,
@@ -568,7 +608,7 @@ impl Registry {
     pub fn validate(
         &self,
         token: &str,
-        herdr: Option<&EngineHandle>,
+        engine: Option<&EngineHandle>,
         core: &CoreHandle,
         attested: Option<&StreamAttestation>,
     ) -> Result<Capability, &'static str> {
@@ -577,6 +617,24 @@ impl Registry {
         // checked; the core checks that Desk still runs it.
         if matches!(cap.binding, Binding::Desk { .. }) {
             return Ok(cap);
+        }
+        // An external tool's connection is asked again for each command, so
+        // a disconnect or a level the operator changed holds from the next
+        // one (PRD hide-external-control B12, B13).
+        if let Binding::Access { connection } = &cap.binding {
+            return match core.access(hide_core::access::Call::Check {
+                id: connection.clone(),
+            }) {
+                Ok(answer) => {
+                    cap.access_level = serde_json::from_value(answer["level"].clone()).ok();
+                    cap.access_level.map(|_| cap).ok_or("access_unavailable")
+                }
+                Err(reason) => {
+                    self.revoke(token);
+                    crate::access::note("access.credential_refused", Some(connection), &reason);
+                    Err(crate::access::static_reason(&reason))
+                }
+            };
         }
         if cap.binding == Binding::Checkout {
             // Only registration and connection are rechecked: the checkout
@@ -638,7 +696,7 @@ impl Registry {
                 binding,
             }
         } else {
-            let engine = herdr.ok_or("pane_unavailable")?;
+            let engine = engine.ok_or("pane_unavailable")?;
             inspect_pane(&cap.pane_id, engine, core).inspect_err(|_| self.revoke(token))?
         };
         if actual.context != cap.context || actual.binding != cap.binding {
@@ -736,17 +794,13 @@ impl Drop for Registry {
     }
 }
 
-/// A bootstrap request has no authority until the kernel peer PID is shown
-/// to be a descendant of the shell Herdr owns for this pane, or, failing
-/// that, to have its working directory inside a registered checkout. The
-/// pane id may be absent for a caller that has none.
-#[derive(Deserialize)]
-pub struct BootstrapRequest {
-    #[serde(default)]
-    pub pane_id: String,
-    pub nonce: String,
-    #[serde(default)]
-    pub one_shot: bool,
+/// The installation this daemon is (`hide_host::kit::running_install`), the
+/// one its own panes name; `None` for a build run from anywhere else, whose
+/// panes name none.
+fn own_install() -> Option<&'static str> {
+    static OWN: std::sync::OnceLock<Option<String>> = std::sync::OnceLock::new();
+    OWN.get_or_init(|| hide_host::kit::running_install().map(|install| install.id))
+        .as_deref()
 }
 
 #[derive(Clone, Debug)]
@@ -773,31 +827,57 @@ impl Attestation {
     }
 }
 
-/// The bootstrap's attestation. The pane path runs unchanged first; any
-/// pane failure, including a Herdr socket hided never had, hands the caller
+/// The bootstrap's attestation: a request ([`PaneRequest`]) has no authority
+/// until the kernel peer PID is shown to be a descendant of the shell the
+/// engine owns for its pane, or, failing that, to have its working directory
+/// inside a registered checkout. The pane path runs unchanged first; any
+/// pane failure, including an engine hided never had, hands the caller
 /// to the checkout fallback, whose reason is the bootstrap's answer when it
 /// fails too. Returns the pane reason alongside a checkout-bound attestation.
 // Only the Unix bootstrap socket serves it (`serve`); its tests run everywhere.
 #[cfg_attr(not(unix), allow(dead_code))]
 fn attest_bootstrap(
     peer: i32,
-    request: &BootstrapRequest,
-    herdr: Option<&EngineHandle>,
+    request: &PaneRequest,
+    engine: Option<&EngineHandle>,
     core: &CoreHandle,
+    own: Option<&str>,
 ) -> Result<(Attestation, Option<&'static str>), &'static str> {
-    // The encoded checkout caller is hided's own key for the core; a request
-    // never names one, whatever Herdr's pane namespace holds in the future.
-    if matches!(Caller::parse(&request.pane_id), Caller::Checkout { .. }) {
+    // The encoded checkout and tool callers are hided's own keys for the
+    // core; a request never names one, whatever the engine's pane namespace
+    // holds in the future.
+    if matches!(
+        Caller::parse(&request.pane_id),
+        Caller::Checkout { .. } | Caller::Access { .. }
+    ) {
         return Err("invalid_request");
     }
+    install::refuse_other(request, own)?;
     let pane = if request.pane_id.is_empty() {
         Err("pane_not_connected")
     } else {
-        match herdr {
+        match engine {
             Some(engine) => attest_local(peer, &request.pane_id, engine, core),
             None => Err("pane_unavailable"),
         }
     };
+    // A pane of the Herdr save that is not moved yet is no pane of this
+    // core's, and its caller is not handed to its checkout either: it runs
+    // in Herdr, beside the engine (PRD engine-bundle-4-herdr-removal D-7,
+    // B10).
+    if pane.is_err()
+        && hide_core::herdr_import::holds(
+            &hide_kit::layout::engine_dir(core.state_dir()),
+            &request.pane_id,
+        )
+    {
+        hide_core::diagnostic!(json!({
+            "component": "pane_auth",
+            "kind": "pane_auth.pane_not_moved",
+            "pane_id": request.pane_id,
+        }));
+        return Err("pane_not_moved");
+    }
     match pane {
         Ok(attestation) => Ok((attestation, None)),
         Err(pane_reason) => attest_checkout(peer, &request.nonce, core)
@@ -814,6 +894,64 @@ fn attest_bootstrap(
                 );
             }),
     }
+}
+
+/// Binds an external tool's command to the connection its key proves (PRD
+/// hide-external-control B18): the core compares the key's hash and names
+/// the connection, and the folder the command runs in gives its Workspace
+/// commands a checkout when one is registered there (D-28). The tool names
+/// that folder itself (`named`), since Windows reports no other process's
+/// working folder; its word gives it nothing a `cd` would not, because the
+/// key, not the folder, is what proves the tool. Without one the kernel's
+/// answer is read, and a folder no checkout holds, or none at all, leaves
+/// the tool its connection alone.
+pub(crate) fn attest_access(
+    peer: i32,
+    key_sha256: String,
+    named: Option<&str>,
+    core: &CoreHandle,
+) -> Result<Attestation, String> {
+    let proved = core.access(hide_core::access::Call::Prove { key_sha256 })?;
+    let connection = proved["id"]
+        .as_str()
+        .filter(|id| !id.is_empty())
+        .ok_or("access_unavailable")?
+        .to_owned();
+    let node = core.node();
+    let folder = match named {
+        Some(named) => hide_platform::fs::identity::canonical(Path::new(named))
+            .ok()
+            .and_then(|folder| hide_platform::path::to_wire(&folder).ok()),
+        None => caller_directory(peer).ok(),
+    };
+    let caller_id = hide_core::workspace_control::access_caller_id(&connection, folder.as_deref());
+    let context = folder
+        .and_then(|_| {
+            core.workspace_query(node.as_str(), &caller_id, Query::Info)
+                .ok()
+                .map(|answer| answer.context)
+        })
+        .unwrap_or_else(|| hide_core::access::access_context(node.as_str(), &connection));
+    Ok(Attestation {
+        pane_id: caller_id,
+        context,
+        binding: Binding::Access { connection },
+    })
+}
+
+/// Issues an external tool's one-shot credential for the command `holder`
+/// runs: a tool keeps no reference between commands, so each command
+/// proves its key again.
+pub(crate) fn issue_access(
+    registry: &Registry,
+    attestation: &Attestation,
+    nonce: &str,
+    port: u16,
+    holder: (i32, u64),
+) -> Result<PathBuf, &'static str> {
+    registry
+        .issue_with_token(attestation, nonce, port, Some(holder))
+        .map(|(path, _, _)| path)
 }
 
 /// Binds a local caller that is not a pane descendant to the registered,
@@ -853,7 +991,7 @@ fn note_checkout_capability(
     reason: Option<&str>,
     pane_reason: Option<&str>,
 ) {
-    herdr_core::diagnostic!(json!({
+    hide_core::diagnostic!(json!({
         "component": "pane_auth",
         "kind": kind,
         "stage": stage,
@@ -971,7 +1109,7 @@ fn inspect_pane(
 /// core's own engine names when the shell started, from the pane's record
 /// (PRD engine-bundle-3-core-owns D-9): a pid the system has given another
 /// process since is not that pane's shell, and is refused `pane_changed`.
-fn proved_shell(proof: &herdr_core::engine::PaneProof) -> Result<Binding, &'static str> {
+fn proved_shell(proof: &hide_core::engine::PaneProof) -> Result<Binding, &'static str> {
     let shell_started = process_start(proof.shell_pid).ok_or("pane_unavailable")?;
     if proof
         .shell_started
@@ -988,7 +1126,7 @@ fn proved_shell(proof: &herdr_core::engine::PaneProof) -> Result<Binding, &'stat
 
 /// Whether the process `peer` runs in the pane `binding` proves: it is the
 /// pane's shell or descends from it, however deep (an agent the shell runs,
-/// and a `hide` command that agent runs), the way a Herdr pane's caller is
+/// and a `hide` command that agent runs), the way a Herdr pane's caller was
 /// found.
 fn caller_in_pane(peer: i32, binding: &Binding) -> Result<(), &'static str> {
     let Binding::Pane { shell_pid, .. } = binding else {
@@ -1010,53 +1148,63 @@ pub fn bind(state_dir: &Path) -> Result<(BootstrapListener, PathBuf), String> {
     hide_node::pane_proof::bind(state_dir, new_token)
 }
 
+/// What the bootstrap socket answers with.
+pub struct Answering {
+    pub registry: Arc<Registry>,
+    pub core: Arc<CoreHandle>,
+    pub engine: Option<EngineHandle>,
+    pub port: u16,
+    pub desktop_renderers: Arc<AtomicUsize>,
+    /// What `hide device` asks about pairing (`crate::pairing`).
+    pub pairing: Arc<crate::pairing::Pairing>,
+    /// What the listener's accept thread does, for `/health`.
+    pub health: Arc<crate::accepting::ListenerHealth>,
+}
+
 /// Answers bootstrap requests until `shutdown`. The listener accepts on a
-/// thread of its own, because an accept blocks; the closer frees it when the
-/// daemon stops, and a failed accept ends the bootstrap with a diagnostic.
+/// thread of its own, because an accept blocks; a failed accept is tried
+/// again (`crate::accepting`), and the closer frees the thread when the
+/// daemon stops.
 pub async fn serve(
     listener: BootstrapListener,
-    registry: Arc<Registry>,
-    core: Arc<CoreHandle>,
-    herdr: Option<EngineHandle>,
-    port: u16,
+    answering: Answering,
     shutdown: crate::ending::Ending,
-    desktop_renderers: Arc<AtomicUsize>,
 ) {
     use tokio::sync::Semaphore;
-    // Closed however this future ends, a drop included, so the accept
-    // thread never outlives it.
-    let closing = CloseOnDrop {
-        closer: listener.closer(),
-        closed: Arc::new(AtomicBool::new(false)),
-    };
-    let closed = Arc::clone(&closing.closed);
+    let Answering {
+        registry,
+        core,
+        engine,
+        port,
+        desktop_renderers,
+        pairing,
+        health,
+    } = answering;
+    let mut closing = CloseOnDrop::new(listener.closer());
     let (accepted, mut arrivals) = tokio::sync::mpsc::channel(MAX_BOOTSTRAPS);
-    let accepting = std::thread::Builder::new()
-        .name("pane-bootstrap-accept".to_owned())
-        .spawn(move || {
-            loop {
-                match listener.accept() {
-                    Ok(stream) => {
-                        if accepted.blocking_send(Ok(stream)).is_err() {
-                            return;
-                        }
-                    }
-                    Err(error)
-                        if error.kind() == std::io::ErrorKind::ConnectionAborted
-                            && closed.load(Ordering::SeqCst) =>
-                    {
-                        return;
-                    }
-                    Err(error) => {
-                        let _ = accepted.blocking_send(Err(error));
-                        return;
-                    }
-                }
-            }
-        });
-    if let Err(error) = accepting {
-        note_bootstrap_stopped(&error);
-        return;
+    let accepting = {
+        let closed = closing.closed();
+        let health = Arc::clone(&health);
+        std::thread::Builder::new()
+            .name("pane-bootstrap-accept".to_owned())
+            .spawn(move || {
+                accept_until_closed(
+                    || listener.accept(),
+                    &accepted,
+                    &closed,
+                    &health,
+                    ("pane_auth", "bootstrap.accept_failed"),
+                    |wait| park_unless_closed(wait, &closed),
+                );
+            })
+    };
+    match accepting {
+        Ok(thread) => closing.wakes(thread.thread().clone()),
+        Err(error) => {
+            health.stopped();
+            note_bootstrap_stopped(&error.to_string());
+            return;
+        }
     }
     let limit = Arc::new(Semaphore::new(MAX_BOOTSTRAPS));
     let mut sweep = tokio::time::interval(Duration::from_secs(5));
@@ -1071,56 +1219,44 @@ pub async fn serve(
             }
             () = shutdown.ended() => break,
         };
-        let stream = match arrival {
-            Some(Ok(stream)) => stream,
-            Some(Err(error)) => {
-                note_bootstrap_stopped(&error);
-                break;
-            }
-            None => break,
+        let Some(stream) = arrival else {
+            // The accept thread ended though the listener is open.
+            health.stopped();
+            note_bootstrap_stopped("the accept thread ended");
+            break;
         };
         let Ok(permit) = Arc::clone(&limit).try_acquire_owned() else {
             continue;
         };
         let registry = Arc::clone(&registry);
         let core = Arc::clone(&core);
-        let herdr = herdr.clone();
+        let engine = engine.clone();
         let desktop_renderers = Arc::clone(&desktop_renderers);
+        let pairing = Arc::clone(&pairing);
+        let runtime = tokio::runtime::Handle::current();
         tokio::task::spawn_blocking(move || {
             let _permit = permit;
             answer_bootstrap(
                 stream,
                 &registry,
                 &core,
-                herdr.as_ref(),
+                engine.as_ref(),
                 port,
                 desktop_renderers.load(Ordering::SeqCst) > 0,
+                Some((&pairing, &runtime)),
             );
         });
     }
 }
 
-struct CloseOnDrop {
-    closer: hide_platform::ipc::ListenerCloser,
-    /// Set before the close, so the accept thread tells its own stop from an
-    /// accept that failed.
-    closed: Arc<AtomicBool>,
-}
-
-impl Drop for CloseOnDrop {
-    fn drop(&mut self) {
-        self.closed.store(true, Ordering::SeqCst);
-        self.closer.close();
-    }
-}
-
-/// The bootstrap listener stopped accepting for a reason other than the
-/// daemon's own stop; panes cannot get a capability until hided restarts.
-fn note_bootstrap_stopped(error: &std::io::Error) {
-    herdr_core::diagnostic!(json!({
+/// The bootstrap listener stopped for a reason other than the daemon's own
+/// stop; panes cannot get a capability until hided restarts, and `/health`
+/// says so.
+fn note_bootstrap_stopped(message: &str) {
+    hide_core::diagnostic!(json!({
         "component": "pane_auth",
         "kind": "bootstrap.stopped",
-        "message": error.to_string(),
+        "message": message,
     }));
 }
 
@@ -1130,9 +1266,10 @@ fn answer_bootstrap(
     mut stream: hide_platform::ipc::LocalStream,
     registry: &Registry,
     core: &CoreHandle,
-    herdr: Option<&EngineHandle>,
+    engine: Option<&EngineHandle>,
     port: u16,
     desktop: bool,
+    pairing: Option<(&Arc<crate::pairing::Pairing>, &tokio::runtime::Handle)>,
 ) {
     use std::io::{BufRead, BufReader};
     let Some(peer) = stream
@@ -1152,22 +1289,66 @@ fn answer_bootstrap(
         .take(hide_node_link::panes::HOOK_REQUEST_LIMIT as u64 + 1)
         .read_line(&mut line)
         .map_err(|_| "invalid_request");
-    if read.is_ok()
-        && let Ok(value) = serde_json::from_str::<serde_json::Value>(&line)
-        && value.get("hook").is_some()
+    let parsed = read
+        .ok()
+        .and_then(|_| serde_json::from_str::<PaneRequest>(&line).ok());
+    // An external tool's ask is answered in this one exchange (PRD
+    // hide-external-control): its request, status or leave, or the one-shot
+    // credential a command of it runs on.
+    if let Some(request) = &parsed
+        && let Some(ask) = &request.access
+        && line.len() <= 4096
+    {
+        let (answer, issued) =
+            crate::access::answer_bootstrap(peer, request, ask, registry, core, engine, port);
+        let mut answer = answer;
+        if answer["ok"] == true {
+            install::stamp(&mut answer, own_install());
+        }
+        if writeln!(stream, "{answer}").is_err()
+            && let Some(path) = issued
+            && let Ok(bytes) = fs::read(path)
+            && let Ok(reference) = serde_json::from_slice::<Reference>(&bytes)
+        {
+            registry.revoke(&reference.token);
+        }
+        return;
+    }
+    // What `hide device` asks about pairing (PRD device-connect-iroh B1,
+    // B24, B52): answered in this one exchange, and what only the operator
+    // may ask is refused to a caller the kernel places in a pane.
+    if let Some(request) = &parsed
+        && let Some(ask) = &request.device
+        && line.len() <= 4096
+    {
+        let answer = match (
+            pairing,
+            serde_json::from_value::<crate::pairing::Ask>(ask.clone()),
+        ) {
+            (Some((pairing, runtime)), Ok(ask)) => {
+                let caller = if crate::access::in_a_pane(peer, request, engine, core) {
+                    crate::pairing::Caller::Pane
+                } else {
+                    crate::pairing::Caller::Operator
+                };
+                runtime.block_on(pairing.ask(ask, caller))
+            }
+            _ => crate::pairing::refused("invalid_request"),
+        };
+        let _ = writeln!(stream, "{answer}");
+        return;
+    }
+    if let Some(request) = &parsed
+        && let Some(hook) = &request.hook
     {
         let result = (|| {
             if line.len() > hide_node_link::panes::HOOK_REQUEST_LIMIT {
                 return Err("invalid_request");
             }
-            let request: BootstrapRequest =
-                serde_json::from_value(value.clone()).map_err(|_| "invalid_request")?;
-            let hook: hide_node_link::panes::HookRequest =
-                serde_json::from_value(value["hook"].clone()).map_err(|_| "invalid_request")?;
-            if request.one_shot != hook.command.one_shot() || !crate::hook_request::valid(&hook) {
+            if request.one_shot != hook.command.one_shot() || !crate::hook_request::valid(hook) {
                 return Err("invalid_request");
             }
-            let (attestation, _) = attest_bootstrap(peer, &request, herdr, core)?;
+            let (attestation, _) = attest_bootstrap(peer, request, engine, core, own_install())?;
             let holder = if request.one_shot {
                 Some((peer, process_start(peer).ok_or("caller_unavailable")?))
             } else {
@@ -1176,16 +1357,39 @@ fn answer_bootstrap(
             let (path, issued_new, token) =
                 registry.issue_with_token(&attestation, &request.nonce, port, holder)?;
             let token = crate::hook_request::Token(registry, token, issued_new);
-            let cap = registry.validate(&token.1, herdr, core, None)?;
+            let cap = registry.validate(&token.1, engine, core, None)?;
             if let Some(named) = hook.token.as_deref()
                 && registry.get(named).is_some()
             {
-                let prior = registry.validate(named, herdr, core, None)?;
+                let prior = registry.validate(named, engine, core, None)?;
                 if !cap.same_identity(&prior) {
                     return Err("pane_changed");
                 }
             }
-            let mut answer = crate::hook_request::answer(core, &cap, &hook, desktop);
+            // An executor's report is taken only from that attempt's
+            // executor, as this machine's kernel names the connection's
+            // process.
+            let executor = match &hook.command {
+                hide_node_link::panes::HookCommand::AgentExec { attempt, .. } => Some(
+                    hide_agent_hooks::hook_request::executor_process(peer as u32, attempt)?,
+                ),
+                _ => None,
+            };
+            // A status report is judged by the processes between the
+            // connection's process and the pane's shell
+            // (`Engine::hook_session`).
+            let lineage = match (&hook.command, cap.pane_shell()) {
+                (hide_node_link::panes::HookCommand::Status { .. }, Some(shell)) => {
+                    hide_node::pane_proof::lineage(peer, shell)
+                }
+                _ => None,
+            };
+            let mut answer =
+                crate::hook_request::answer(core, &cap, hook, executor, lineage, desktop);
+            install::stamp(&mut answer, own_install());
+            if answer.to_string().len() + 1 > hide_node_link::panes::HOOK_RESPONSE_LIMIT {
+                return Err("response_too_large");
+            }
             if !request.one_shot && answer["ok"] == true {
                 answer["reference"] = json!(
                     hide_platform::path::to_wire(&path).map_err(|_| "reference_unavailable")?
@@ -1221,11 +1425,10 @@ fn answer_bootstrap(
                 Err("invalid_request")
             }
         })
-        .and_then(|_| {
-            serde_json::from_str::<BootstrapRequest>(&line).map_err(|_| "invalid_request")
-        })
+        .and(parsed.ok_or("invalid_request"))
         .and_then(|request| {
-            let (attestation, pane_reason) = attest_bootstrap(peer, &request, herdr, core)?;
+            let (attestation, pane_reason) =
+                attest_bootstrap(peer, &request, engine, core, own_install())?;
             let holder = if request.one_shot {
                 Some((peer, process_start(peer).ok_or("caller_unavailable")?))
             } else {
@@ -1250,12 +1453,18 @@ fn answer_bootstrap(
         });
     // The reference crosses in the wire spelling, as the device bridge's
     // does; one without it is refused and withdrawn like an undelivered one.
+    // The answer names this daemon's installation, which a caller that named
+    // one requires (`workspace_cli::read_bootstrap_answer`).
     let wire = match &result {
         Ok((path, _)) => hide_platform::path::to_wire(path).ok(),
         Err(_) => None,
     };
     let answer = match (&result, &wire) {
-        (Ok(_), Some(reference)) => json!({"ok": true, "reference": reference}),
+        (Ok(_), Some(reference)) => {
+            let mut answer = json!({"ok": true, "reference": reference});
+            install::stamp(&mut answer, own_install());
+            answer
+        }
         (Ok(_), None) => json!({"ok": false, "reason": "reference_unavailable"}),
         (Err(reason), _) => json!({"ok": false, "reason": reason}),
     };
@@ -1345,7 +1554,7 @@ mod tests {
     #[test]
     fn a_pane_s_caller_is_any_descendant_of_its_recorded_shell_and_nothing_else() {
         let tree = PaneTree::start();
-        let proof = |shell_started| herdr_core::engine::PaneProof {
+        let proof = |shell_started| hide_core::engine::PaneProof {
             pane_id: "w1:p1".to_owned(),
             terminal_id: "w1:p1".to_owned(),
             shell_pid: tree.shell(),
@@ -1368,7 +1577,7 @@ mod tests {
             Err("pane_changed"),
             "a pid whose start the record does not name is another process"
         );
-        // Herdr names only the pid; the system's start time binds it.
+        // A proof that names only the pid: the system's start time binds it.
         assert!(proved_shell(&proof(None)).is_ok());
     }
 
@@ -1802,7 +2011,7 @@ mod tests {
     fn a_desk_capability_holds_while_its_process_runs_and_ends_when_revoked() {
         let directory = tempfile::tempdir().unwrap();
         let registry = Registry::new(directory.path()).unwrap();
-        let context = herdr_core::desk::desk_context("local");
+        let context = hide_core::desk::desk_context("local");
         let nonce = "0123456789abcdef0123456789abcdef";
         let path = registry.issue_desk(nonce, 12345, context.clone()).unwrap();
         let reference: Reference = serde_json::from_slice(&fs::read(&path).unwrap()).unwrap();
@@ -1815,7 +2024,7 @@ mod tests {
         let capability = registry.get(&token).unwrap();
         assert_eq!(
             capability.pane_id,
-            herdr_core::workspace_control::DESK_CALLER
+            hide_core::workspace_control::DESK_CALLER
         );
         assert_eq!(capability.context, context);
         assert!(!capability.one_shot);
@@ -1835,6 +2044,47 @@ mod tests {
         let reference: Reference = serde_json::from_slice(&fs::read(&path).unwrap()).unwrap();
         registry.bind_desk(&path, pid, 1).unwrap();
         assert!(registry.get(&reference.token).is_none());
+    }
+
+    /// C24: a hook's own reports (`status`, `agent exec`) need an attested
+    /// pane terminal, which no checkout, Desk or tool credential carries.
+    #[test]
+    fn only_a_pane_credential_names_a_terminal_a_hook_report_is_about() {
+        let pid = std::process::id() as i32;
+        let terminal = |binding: Binding| {
+            Capability {
+                pane_id: "w1:p1".into(),
+                caller_alias: "w1:p1".into(),
+                context: hide_core::desk::desk_context("local"),
+                binding,
+                one_shot: true,
+                holder: None,
+                created: Instant::now(),
+                claimed: false,
+                path: PathBuf::new(),
+                remote: None,
+                access_level: None,
+            }
+            .pane_terminal()
+            .map(str::to_owned)
+        };
+        assert_eq!(
+            terminal(Binding::Pane {
+                terminal_id: "terminal-1".into(),
+                shell_pid: pid,
+                shell_started: 1,
+            }),
+            Some("terminal-1".to_owned())
+        );
+        for binding in [
+            Binding::Checkout,
+            Binding::Desk { pid, started: 1 },
+            Binding::Access {
+                connection: "0123456789abcdef".into(),
+            },
+        ] {
+            assert_eq!(terminal(binding), None);
+        }
     }
 
     #[test]
@@ -1963,31 +2213,39 @@ mod tests {
     // Windows cannot read a process's working directory (`cwd_of`).
     #[cfg(unix)]
     #[test]
-    fn bootstrap_without_a_herdr_socket_still_reaches_the_checkout_fallback() {
+    fn bootstrap_without_an_engine_socket_still_reaches_the_checkout_fallback() {
         let directory = tempfile::tempdir().unwrap();
         let core = CoreHandle::bare(directory.path());
         let peer = std::process::id() as i32;
-        let request = |pane_id: &str| BootstrapRequest {
+        let request = |pane_id: &str| PaneRequest {
+            access: None,
+            device: None,
             pane_id: pane_id.to_owned(),
             nonce: format!("{:032x}", 7),
             one_shot: true,
+            hook: None,
+            install: None,
         };
-        // A stale pane id with no Herdr socket used to answer pane_unavailable
+        // A stale pane id with no engine used to answer pane_unavailable
         // before the fallback ran; the fallback's own answer is the proof it ran
         // (this test's cwd is inside no registered checkout).
         assert_eq!(
-            attest_bootstrap(peer, &request("w9J:p17"), None, &core).unwrap_err(),
+            attest_bootstrap(peer, &request("w9J:p17"), None, &core, None).unwrap_err(),
             "checkout_not_registered"
         );
         assert_eq!(
-            attest_bootstrap(peer, &request(""), None, &core).unwrap_err(),
+            attest_bootstrap(peer, &request(""), None, &core, None).unwrap_err(),
             "checkout_not_registered"
         );
-        // A request cannot name the core's encoded checkout caller itself.
-        assert_eq!(
-            attest_bootstrap(peer, &request("checkout:abcd:/tmp"), None, &core).unwrap_err(),
-            "invalid_request"
-        );
+        // A request cannot name the core's encoded checkout caller, or a
+        // tool's, itself (C4).
+        for named in ["checkout:abcd:/tmp", "access:0123456789abcdef"] {
+            assert_eq!(
+                attest_bootstrap(peer, &request(named), None, &core, None).unwrap_err(),
+                "invalid_request",
+                "{named}"
+            );
+        }
         // An unreadable caller fails closed before any lookup.
         assert_eq!(
             attest_checkout(i32::MAX, &format!("{:032x}", 8), &core).unwrap_err(),

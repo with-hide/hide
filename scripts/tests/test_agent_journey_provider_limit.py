@@ -103,15 +103,16 @@ class RefusedCell(unittest.TestCase):
 
     def settled(self, verdict):
         with tempfile.TemporaryDirectory() as folder:
-            def command(argv, check=True):
-                return 0, "screen\n", ""
-            runtime = SimpleNamespace(run=Path(folder), command=command,
+            def read_pane(pane, *, lines):
+                return "screen\n"
+            controller = SimpleNamespace(read_pane=read_pane)
+            runtime = SimpleNamespace(run=Path(folder),
                                       owner=SimpleNamespace(cancelled=threading.Event()))
             table = {"codex": {name: {"status": cells.PENDING} for name in ("resume", "title")}}
             record = {}
-            journey = Journey(runtime, None, None, table, {"id": "codex", "herdr_kind": "codex", "model_flag": []},
+            journey = Journey(runtime, None, controller, table, {"id": "codex", "agent_cli": "codex", "model_flag": []},
                               Path("/repo"), record, None, branch="b", created=[], sessions=Path(folder),
-                              route={}, composer_judge=None)
+                              route={}, composer_judge=None, failure_logs=None)
             journey.pane, journey.session = "w1:p1", THREAD
             journey.provider_mark = journey.mark_provider()
             log(Path(folder) / ".codex", [retry(REFUSED)])
@@ -130,7 +131,7 @@ class RefusedCell(unittest.TestCase):
 
     def test_a_start_whose_emitter_failed_beside_an_unanswered_turn_stays_the_emitters_failure(self):
         unanswered = cells.turn_verdict([], [{"role": "user", "text": "go"}], "JOURNEY-1")
-        emitter = cells.emitter_verdict(None, "herdr:codex")
+        emitter = cells.emitter_verdict(None)
         verdict = cells.start_verdict((cells.PASS, "spawned"), unanswered, emitter)
         self.assertEqual(cells.kind(unanswered), cells.NO_ANSWER)
         table, record = self.settled(verdict)

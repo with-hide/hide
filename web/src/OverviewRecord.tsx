@@ -18,7 +18,7 @@ import { useUiStore, type OverviewPanel } from "./ui";
 /**
  * A session's record beside the Overview's tabs (PRD overview-device-tasks
  * D-07, B16-B21; PRD sidebar-task-lens B17, B40): the same record the lane's
- * 보기 slot draws, at Home where no Workspace is in front, under the panel's
+ * desk draws, at Home where no Workspace is in front, under the panel's
  * own head of ✕ and the ways to the work. A record of a task whose root runs
  * on another device than the one the Overview shows carries the note that
  * says whose task it is (B14).

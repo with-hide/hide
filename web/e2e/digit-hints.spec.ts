@@ -14,14 +14,14 @@ test.describe.configure({ timeout: 120_000 });
 
 test("no keycap on a ⌘ or ⌥ hold, nothing on ⌘2 or ⌥2, and the sheet says so", async ({ page }) => {
   await page.setViewportSize({ width: 1440, height: 900 });
-  const herdr = await startFixture();
+  const engine = await startFixture();
   let daemon: Daemon | null = null;
   try {
-    daemon = await startHided(herdr, "digit-hints");
+    daemon = await startHided(engine, "digit-hints");
     // A second tab, with the first still the one shown.
     const made = await withControl(daemon, async (control) => {
-      const second = await newTab(control, herdr, "second");
-      await focusTab(control, herdr, herdr.tab);
+      const second = await newTab(control, engine, "second");
+      await focusTab(control, engine, engine.tab);
       return second;
     });
     const sent = countSent(page);
@@ -29,7 +29,7 @@ test("no keycap on a ⌘ or ⌥ hold, nothing on ⌘2 or ⌥2, and the sheet say
     await enterWorkspace(page, "fixture");
     const canvas = page.locator("[data-canvas]").first();
     await expect(page.locator(`[data-tab="${made.tab}"]`)).toBeVisible();
-    await expect(canvas).toHaveAttribute("data-canvas", herdr.tab);
+    await expect(canvas).toHaveAttribute("data-canvas", engine.tab);
     await page.locator("[data-pane-view] .xterm-helper-textarea").first().focus();
 
     // B3: a hold reveals nothing here, on either modifier.
@@ -53,7 +53,7 @@ test("no keycap on a ⌘ or ⌥ hold, nothing on ⌘2 or ⌥2, and the sheet say
     expect(sent.get("focus_pane") ?? 0).toBe(0);
     expect(sent.get("focus_device") ?? 0).toBe(0);
     expect(sent.get("agent_layout") ?? 0).toBe(0);
-    await expect(canvas).toHaveAttribute("data-canvas", herdr.tab);
+    await expect(canvas).toHaveAttribute("data-canvas", engine.tab);
 
     // B3, B4: the sheet names every family, without a chord.
     await page.keyboard.press(chord("shortcuts"));
@@ -72,6 +72,6 @@ test("no keycap on a ⌘ or ⌥ hold, nothing on ⌘2 or ⌥2, and the sheet say
     await expect(sheet).toHaveCount(0);
   } finally {
     daemon?.stop();
-    herdr.stop();
+    engine.stop();
   }
 });

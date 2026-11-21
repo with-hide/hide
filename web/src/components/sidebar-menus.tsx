@@ -5,14 +5,16 @@ import { commandLabel } from "../shortcutLabels";
 import { Button } from "./ui/button";
 import { Hint } from "./ui/tooltip";
 import { HelpMenu } from "./help-menu";
+import { UpdateReadyButton } from "./update-ready";
 import { ViewMenu } from "./view-menu";
 import { hintSide, type MenuPlace } from "./menu-place";
 
-/** View, Help and Settings, in that order, as one group wherever they stand. */
+/** A ready update's ↑, then View, Help and Settings, in that order, as one group wherever they stand. */
 export function SidebarMenus({ actions, place }: { actions: Actions; place: MenuPlace }) {
   const { t } = useInterfaceTranslation();
   return (
     <>
+      <UpdateReadyButton actions={actions} place={place} />
       <ViewMenu actions={actions} place={place} />
       <HelpMenu actions={actions} place={place} />
       <Hint label={`${t("common.settings")} (${commandLabel("settings")})`} side={hintSide(place)}>

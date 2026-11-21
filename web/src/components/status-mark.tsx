@@ -10,8 +10,10 @@ import { Hint } from "./ui/tooltip";
  * lists agents (docs/status-model.md, One meaning across surfaces). The core
  * names the mark; this draws it. The shapes differ without their
  * colours: the operator's turn is a `!` in a warning badge, a View to look
- * at the same badge with an eye (PRD unseen-agent-views D-15), in progress is a
- * static three-quarter ring (dashed while it waits on proven work, D-25), to read is a small dot (green only when the label
+ * at the same badge with an eye (PRD unseen-agent-views D-15), a person's turn
+ * the agent declared the same badge with a key (`human`, PRD ask-human D-09), in progress is a
+ * three-quarter ring that turns while the agent works (operator decision 2026-11-13, replacing
+ * D-02) and stands cut into dashes while it waits on proven work (D-25), to read is a small dot (green only when the label
  * read the turn as finished), and quiet, an agent at rest, a faint hollow ring
  * smaller and thinner than the in-progress one (sidebar-quiet-mark-indent D-02).
  * An agent Hide put to sleep keeps a grey moon, the one shape outside the four
@@ -22,36 +24,47 @@ import { Hint } from "./ui/tooltip";
  * `label`, the mark's words, so its hover and accessible name tell a waiting
  * ring from a working one (B36).
  */
-export function StatusMark({ mark, label, read = false, className, ...rest }: { mark: RowMark | null; label?: string; read?: boolean } & HTMLAttributes<HTMLSpanElement>) {
+/** A filled badge (the operator's turn, a View to look at, a person's step) carries more weight than an outline at the same size, so it is drawn a little smaller inside the same box, about its centre. */
+const FILLED_VIEW = "-1 -1 14 14";
+
+export function StatusMark({ mark, label, read = false, human = false, className, ...rest }: { mark: RowMark | null; label?: string; read?: boolean; human?: boolean } & HTMLAttributes<HTMLSpanElement>) {
   const shape = (
     <span
       {...(label ? { role: "img", "aria-label": label } : { "aria-hidden": true })}
       data-mark={mark ?? undefined}
       data-mark-read={read ? "true" : undefined}
+      data-mark-human={human && mark !== null ? "true" : undefined}
       className={cn("inline-flex size-(--size-agent-mark) shrink-0 items-center justify-center", className)}
       {...rest}
     >
-      {mark === "turn" && read ? (
+      {human && mark !== null ? (
+        <svg viewBox={read ? "0 0 12 12" : FILLED_VIEW} className="size-full">
+          {/* A step only a person can take: the same badge, a key in place of the `!`, on the declaring row whatever its own mark (PRD ask-human D-09, B14); read, it is hollow as a read `!` is. */}
+          {read ? <circle cx="6" cy="6" r="5.35" fill="none" strokeWidth="1.3" className="stroke-warning" /> : <circle cx="6" cy="6" r="6" className="fill-warning" />}
+          <circle cx="4.3" cy="6" r="1.7" fill="none" strokeWidth="1.2" className={read ? "stroke-warning" : "stroke-status-foreground"} />
+          <path d="M5.9 5.4h3.9v1.2h-.6v1.4H8.1V6.6H5.9z" className={read ? "fill-warning" : "fill-status-foreground"} />
+        </svg>
+      ) : mark === "turn" && read ? (
         <svg viewBox="0 0 12 12" className="size-full">
           {/* An ask the operator read and has not answered: the same `!`, hollow (needs-you-cleanup B10). */}
           <circle cx="6" cy="6" r="5.35" fill="none" strokeWidth="1.3" className="stroke-warning" />
           <path d="M5.3 3.1h1.4l-.23 4.1h-.94zM5.3 8.1h1.4v1.3H5.3z" className="fill-warning" />
         </svg>
       ) : mark === "turn" ? (
-        <svg viewBox="0 0 12 12" className="size-full">
+        <svg viewBox={FILLED_VIEW} className="size-full">
           <circle cx="6" cy="6" r="6" className="fill-warning" />
           <path d="M5.25 2.6h1.5l-.25 4.6h-1zM5.25 8.2h1.5v1.4h-1.5z" className="fill-status-foreground" />
         </svg>
       ) : mark === "look" ? (
-        <svg viewBox="0 0 12 12" className="size-full">
+        <svg viewBox={FILLED_VIEW} className="size-full">
           {/* The operator's turn to look at a View: the same badge, an eye in place of the `!` (PRD unseen-agent-views D-15). */}
           <circle cx="6" cy="6" r="6" className="fill-warning" />
           <path d="M2.2 6C3.1 4.3 4.4 3.4 6 3.4S8.9 4.3 9.8 6C8.9 7.7 7.6 8.6 6 8.6S3.1 7.7 2.2 6Z" className="fill-status-foreground" />
           <circle cx="6" cy="6" r="1.25" className="fill-warning" />
         </svg>
       ) : mark === "going" || mark === "waiting" ? (
-        <svg viewBox="0 0 12 12" className="size-full">
-          {/* Three quarters from three o'clock round to twelve; it does not turn (D-02). Waiting cuts it into five dashes (D-25). */}
+        <svg viewBox="0 0 12 12" className={cn("size-full", mark === "going" && "motion-safe:animate-working-turn")}>
+          {/* Three quarters from three o'clock round to twelve; it turns while the agent works, a reduced-motion setting holding it still. Waiting cuts it into five dashes and stands still (D-25). */}
           <path d="M10.05 6A4.05 4.05 0 1 1 6 1.95" fill="none" strokeWidth="1.9" className="stroke-agent-working" {...(mark === "waiting" ? { pathLength: 19, strokeDasharray: "2.2 2" } : {})} />
         </svg>
       ) : mark === "done" || mark === "unread" ? (

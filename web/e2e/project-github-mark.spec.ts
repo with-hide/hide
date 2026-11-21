@@ -35,6 +35,7 @@ const answers = { "pr list": "[]", "repo view": '{"nameWithOwner":"acme/repo"}',
 if (key === "auth status") process.exit(0);
 if (key === "api user") { console.log("example-user"); process.exit(0); }
 if (process.argv.slice(2).join(" ").includes("review-requested:@me")) { console.log("[]"); process.exit(0); }
+if (process.argv.slice(2).join(" ").includes("HideHeadRuns")) { const repository = {}; for (let i = 0; i < process.argv.slice(2).join(" ").split("object(oid:").length - 1; i++) repository["c" + i] = { checkSuites: { totalCount: 0, nodes: [] } }; console.log(JSON.stringify({ data: { repository } })); process.exit(0); }
 if (process.argv.slice(2).join(" ").includes("HidePrFacts")) { console.log('{"data":{"repository":{"pullRequests":{"nodes":[]}}}}'); process.exit(0); }
 if (key in answers) { console.log(answers[key]); process.exit(0); }
 console.error("unsupported: " + process.argv.slice(2).join(" "));
@@ -75,6 +76,8 @@ test("a GitHub project's row ends in the repository's mark, a folder's in none, 
     const mark = project.locator("[data-project-github]");
 
     // The mark is named after the repository GitHub answered for, once it has; the folder never has one.
+    // It waits for the pointer, as the row's + and ⋯ do, so the pointer goes onto the row first.
+    await project.locator("[data-project-row]").hover({ position: { x: 12, y: 8 } });
     await expect(mark).toBeVisible({ timeout: 30_000 });
     await expect(mark).toHaveAccessibleName("Open acme/repo on GitHub");
     await expect(folder.locator("[data-checkout]")).toBeVisible();
@@ -85,13 +88,16 @@ test("a GitHub project's row ends in the repository's mark, a folder's in none, 
     await expect(project.locator("[data-project-row]")).toHaveAccessibleName("repo");
 
     // The mark stays while the pointer is on the row, where the row's + and ⋯ show.
-    await project.locator("[data-project-row]").hover();
+    await project.locator("[data-project-row]").hover({ position: { x: 12, y: 8 } });
     await expect(project.locator("[data-row-actions]")).toHaveCSS("opacity", "1");
     await expect(mark).toHaveCSS("opacity", "1");
     await rest(page);
+    // Away from the row, the mark waits unseen with the + and ⋯ it stands beside.
+    await expect(project.locator("[data-row-actions]")).toHaveCSS("opacity", "0");
 
     // ⌘ asks for the default browser: the repository opens there and the project is neither opened nor selected.
     const before = new Map(sent);
+    await project.locator("[data-project-row]").hover({ position: { x: 12, y: 8 } });
     const popup = page.context().waitForEvent("page");
     await mark.click({ modifiers: ["ControlOrMeta"] });
     const opened = await popup;

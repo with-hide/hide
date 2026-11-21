@@ -3,7 +3,7 @@ import { describe, expect, it } from "vitest";
 import { between, cloud, communicationLines, exchangeLines, hull, lineageLines, projectAccent, teamOutline, turnLines } from "./overviewGraphLines";
 import type { Communication } from "./overviewGraphModel";
 
-const pair = (source: string, target: string, letters = 1): Communication => ({ id: `pair:${source}:${target}`, source, target, letters, direct: letters ? 0 : 1, directions: [{ from: source, to: target, letters, direct: letters ? 0 : 1 }] });
+const pair = (source: string, target: string, letters = 1): Communication => ({ id: `pair:${source}:${target}`, source, target, letters, directions: [{ from: source, to: target, letters }] });
 // Two teams: a with child a1, b with child b1.
 const teams = new Map([["a", "a"], ["a1", "a"], ["b", "b"], ["b1", "b"]]);
 const drawn = () => true;
@@ -28,16 +28,16 @@ describe("work map lines", () => {
 
   it("folds pairs onto their drawn ends with summed counts per direction, badged only where chosen or pointed", () => {
     const pairs: Communication[] = [
-      { id: "pair:a1:b", source: "a1", target: "b", letters: 2, direct: 1, directions: [{ from: "a1", to: "b", letters: 2, direct: 0 }, { from: "b", to: "a1", letters: 0, direct: 1 }] },
-      { id: "pair:a:b", source: "a", target: "b", letters: 1, direct: 0, directions: [{ from: "a", to: "b", letters: 1, direct: 0 }] },
-      { id: "pair:a:a1", source: "a", target: "a1", letters: 4, direct: 0, directions: [{ from: "a", to: "a1", letters: 4, direct: 0 }] },
+      { id: "pair:a1:b", source: "a1", target: "b", letters: 3, directions: [{ from: "a1", to: "b", letters: 2 }, { from: "b", to: "a1", letters: 1 }] },
+      { id: "pair:a:b", source: "a", target: "b", letters: 1, directions: [{ from: "a", to: "b", letters: 1 }] },
+      { id: "pair:a:a1", source: "a", target: "a1", letters: 4, directions: [{ from: "a", to: "a1", letters: 4 }] },
     ];
     // a1 is folded into its root a, so all three pairs land on a and b, and a with itself draws nothing.
     const drawnAs = (id: string) => (id === "a1" ? "a" : id);
     const state = { ...idle, teams: new Map([["a", "a"], ["a1", "a"], ["b", "b"]]) };
     const [line, ...rest] = exchangeLines(communicationLines(pairs, drawn, state), drawnAs, state);
     expect(rest).toEqual([]);
-    expect(line).toMatchObject({ from: "a", to: "b", letters: 3, direct: 1, badged: false, directions: [{ from: "a", to: "b", letters: 3, direct: 0 }, { from: "b", to: "a", letters: 0, direct: 1 }] });
+    expect(line).toMatchObject({ from: "a", to: "b", letters: 4, badged: false, directions: [{ from: "a", to: "b", letters: 3 }, { from: "b", to: "a", letters: 1 }] });
     // Choosing the folded child or pointing at either end badges the line; another session does not.
     expect(exchangeLines(communicationLines(pairs, drawn, state), drawnAs, { selection: "a1", pointed: null })[0]!.badged).toBe(true);
     expect(exchangeLines(communicationLines(pairs, drawn, state), drawnAs, { selection: null, pointed: "b" })[0]!.badged).toBe(true);

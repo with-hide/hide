@@ -30,12 +30,9 @@ ROOT = Path(__file__).resolve().parent.parent.parent
 RESOLVER = 'scripts/toolchain-env.sh'
 
 # The resolver is sourced, so it does not invoke cargo itself and is not a
-# caller. `bump-herdr.sh` and `install-local-runtime.sh` are operator commands run from
-# a login shell, never under a verification HOME.
+# caller.
 EXEMPT = {
     RESOLVER,
-    'scripts/bump-herdr.sh',
-    'scripts/install-local-runtime.sh',
 }
 
 CARGO_CALL = re.compile(r'(?:^|[|;&(]|\bexec |\bthen |\$\()\s*cargo\b')

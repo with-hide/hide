@@ -1,18 +1,19 @@
-// Real core, private state and pinned Herdr. Memory UI has no platform-specific behavior.
+// Real core, private state and a private engine. Memory UI has no platform-specific behavior.
 import { execFileSync } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
 import { expect, type ElectronApplication } from "@playwright/test";
-import { startHerdr } from "../../web/e2e/herdr-fixture";
-import { countSent, setLanePinned, showProjectMemory, showProjectRow } from "../../web/e2e/wire";
-import { isolate, launch, fitWindow, screenshot, test } from "./fixture";
+import { openProject, withControl } from "../../web/e2e/daemon-actions";
+import { countSent, showProjectMemory, showProjectRow } from "../../web/e2e/wire";
+import { fitWindow, launchShell, screenshot, startStack, test } from "./fixture";
 import { seedReconciliation } from "./memory-reconcile-fixture";
 import { progressGithub } from "./memory-progress-fixture";
 
 test("the Hide AI tool's Memory tab compares sources and reads at its minimum width in all four languages", async () => {
-  const herdr = await startHerdr({ agents: false });
-  const run = isolate(herdr, "memory-docs");
-  progressGithub(herdr);
+  const stack = await startStack("memory-docs", { agents: false });
+  const { fixture, run, daemon } = stack;
+  // The fake gh is a file on the daemon's PATH, which it looks up when it asks GitHub.
+  progressGithub(fixture);
   let app: ElectronApplication | null = null;
   try {
     const repo = path.join(run.env.HOME!, "projects", "sample");
@@ -22,12 +23,12 @@ test("the Hide AI tool's Memory tab compares sources and reads at its minimum wi
     execFileSync("git", ["add", "AGENTS.md"], { cwd: repo });
     execFileSync("git", ["-c", "user.name=Fixture", "-c", "user.email=fixture@example.invalid", "commit", "-qm", "Initial guide"], { cwd: repo });
     execFileSync("git", ["remote", "add", "origin", "https://github.com/acme/memory-fixture.git"], { cwd: repo });
-    herdr.run(["workspace", "create", "--cwd", repo, "--label", "sample", "--env", `PATH=${herdr.fixturePath}`, "--no-focus"]);
-    const launched = await launch(run.env);
+    await withControl(daemon, (control) => openProject(control, repo, "sample"));
+    const launched = await launchShell(run.env);
     app = launched.app;
     const page = launched.page;
     countSent(page);
-    await (await showProjectRow(page, page.locator("[data-project]", { hasText: "sample" }).locator("[data-checkout]").first())).click();
+    await (await showProjectRow(page, page.locator("[data-project]", { hasText: "sample" }).locator("[data-checkout]").first())).click({ position: { x: 12, y: 8 } });
     await showProjectMemory(page);
     await page.locator('[data-lane="memory"] [data-hide-ai-tool-tab="memory"]').click();
     await expect(page.locator('[data-memory="off"]')).toBeVisible();
@@ -46,7 +47,7 @@ test("the Hide AI tool's Memory tab compares sources and reads at its minimum wi
     await expect(tab.locator("[data-memory-pr-group]")).toHaveCount(0);
     await expect(tab).toContainText("Personal");
     await expect(tab).toContainText("Outdated");
-    const facts = { home: run.env.HOME, state: run.env.HIDE_STATE_DIR, socket: herdr.socket, fixture: "invented cards and scripted GitHub facts; no network", daemonPid: run.daemonPid(), capture: "candidate-window renderer via its own CDP; no OS capture" };
+    const facts = { home: run.env.HOME, state: run.env.HIDE_STATE_DIR, fixture: "invented cards and scripted GitHub facts; no network", daemonPid: run.daemonPid(), capture: "candidate-window renderer via its own CDP; no OS capture" };
     const candidate = await app.evaluate(({ BrowserWindow }) => ({ pid: process.pid, executable: process.execPath, windows: BrowserWindow.getAllWindows().length, visible: BrowserWindow.getAllWindows()[0]?.isVisible() }));
     expect(candidate.windows).toBe(1);
     if (process.env.HIDE_E2E_SCREENSHOT_DIR) fs.writeFileSync(path.join(process.env.HIDE_E2E_SCREENSHOT_DIR, "candidate.json"), JSON.stringify({ candidate, ...facts }, null, 2));
@@ -58,17 +59,16 @@ test("the Hide AI tool's Memory tab compares sources and reads at its minimum wi
     await screenshot(page, "memory-compare-dark");
     await tab.locator('[data-memory-compare="2"]').click();
     // Return to this Memory, then the light/narrow state.
-    await (await showProjectRow(page, page.locator("[data-project]", { hasText: "sample" }).locator("[data-checkout]").first())).click();
+    await (await showProjectRow(page, page.locator("[data-project]", { hasText: "sample" }).locator("[data-checkout]").first())).click({ position: { x: 12, y: 8 } });
     await showProjectMemory(page);
     await page.evaluate(() => { document.documentElement.classList.remove("dark"); document.documentElement.classList.add("light"); });
     await fitWindow(app, { width: 900, height: 760 });
     await showProjectMemory(page);
     await screenshot(page, "memory-compact-light-narrow");
-    // Pinned, the lane has a divider that proves its minimum width (PRD
-    // right-lane B6).
+    // The lane's edge divider proves its minimum width (PRD right-lane B6;
+    // lane-two-columns B17).
     await fitWindow(app, { width: 1440, height: 900 });
     await showProjectMemory(page);
-    await setLanePinned(page, true);
     const divider = page.locator('[data-lane-divider="lane"]');
     for (let step = 0; step < 6; step++) await divider.press("ArrowRight");
     await expect.poll(() => page.locator("[data-lane-frame]").evaluate((element) => Math.round(element.getBoundingClientRect().width))).toBe(360);
@@ -100,7 +100,6 @@ test("the Hide AI tool's Memory tab compares sources and reads at its minimum wi
     await expect.poll(() => tab.evaluate((element) => element.scrollWidth <= element.clientWidth)).toBe(true);
   } finally {
     if (app) await app.close();
-    run.cleanup();
-    herdr.stop();
+    stack.stop();
   }
 });

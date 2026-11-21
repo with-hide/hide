@@ -24,10 +24,10 @@ function savedChoice(file: string): unknown {
 
 test("product usage defaults on and an opt-out stays off after a daemon restart @platform", async ({ page }) => {
   test.setTimeout(120_000);
-  const herdr = await startFixture({ agents: false });
+  const engine = await startFixture({ agents: false });
   let daemon: Daemon | null = null;
   try {
-    daemon = await startHided(herdr, "product-analytics");
+    daemon = await startHided(engine, "product-analytics");
     expect(fs.existsSync(path.join(daemon.home, ".hide", "product-analytics-disabled"))).toBe(true);
     await page.goto(`${daemon.origin}/#token=${daemon.token}`);
     await enterWorkspace(page, "fixture");
@@ -57,6 +57,6 @@ test("product usage defaults on and an opt-out stays off after a daemon restart 
     expect(fs.existsSync(path.join(daemon.stateDir, "product-analytics-id"))).toBe(false);
   } finally {
     daemon?.stop();
-    herdr.stop();
+    engine.stop();
   }
 });

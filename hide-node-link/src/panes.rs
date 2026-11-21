@@ -5,20 +5,31 @@
 //! travel the same link as a stream, so a device pane needs no other
 //! connection to the core.
 
-pub use hide_agent_hooks::observation::{
-    DirectObservation, ITEM_LIMIT as OBSERVATION_ITEM_LIMIT,
-    RECIPIENT_LIMIT as OBSERVATION_RECIPIENT_LIMIT, SEND_BUDGET as OBSERVATION_SEND_BUDGET,
+pub use hide_agent_hooks::report::{
+    HookCounts, HookRefusal, HookStatusReport, HookSubagent, HookTurn, RefusalKind,
 };
-pub use hide_agent_hooks::report::{HookCounts, HookStatusReport, HookTurn};
 use serde::{Deserialize, Serialize};
 
 /// Recovery advice shared by local and device pane refusals.
 pub const CHECKOUT_NEXT_ACTION: &str = "Run the command from a shell inside a registered project checkout, or reconnect Hide, and retry";
 pub const PANE_NEXT_ACTION: &str = "Reconnect the pane and retry";
+/// A Herdr pane whose workspace is not moved into Hide's own engine yet
+/// (PRD engine-bundle-4-herdr-removal B10).
+pub const PANE_NOT_MOVED_NEXT_ACTION: &str = "This pane still runs in Herdr: import the Herdr session from Hide's window, then run the command in the imported pane";
 
+/// What a pane's caller can do about a node's or daemon's refusal; the
+/// installation rule's own refusals say theirs
+/// (`hide_agent_hooks::hook_request::install::next_action`).
 pub fn refusal_next_action(reason: &str) -> &'static str {
+    if let Some(next_action) = hide_agent_hooks::hook_request::install::next_action(reason) {
+        return next_action;
+    }
     match reason {
         "checkout_not_registered" | "caller_unavailable" => CHECKOUT_NEXT_ACTION,
+        "pane_not_moved" => PANE_NOT_MOVED_NEXT_ACTION,
+        crate::holders::PANE_STARTING => {
+            "The pane's program is still starting; run the same command again in a moment"
+        }
         _ => PANE_NEXT_ACTION,
     }
 }
@@ -44,10 +55,6 @@ pub const MAX_STREAMS: usize = 8;
 pub const MAX_CHUNK: usize = 48 * 1024;
 /// Chunks the core holds for one stream before the stream is ended.
 pub const MAX_PENDING_CHUNKS: usize = 64;
-/// Herdr streams one link carries at once (PRD core-host-node-remote-core
-/// D-20): the session subscription, controls, doorbell, find and phone
-/// reply of a node that dialed its core each hold one while they run.
-pub const MAX_HERDR_STREAMS: usize = 32;
 /// Browser relay streams one link carries at once (B15): as many as the
 /// core relays `hide browser` commands at once.
 pub const MAX_BROWSER_STREAMS: usize = 4;
@@ -68,7 +75,7 @@ pub const HEARTBEAT: std::time::Duration = std::time::Duration::from_secs(10);
 /// the link as gone: three heartbeats.
 pub const HEARTBEAT_LIMIT: std::time::Duration = std::time::Duration::from_secs(30);
 
-/// Which shell a pane runs, as its Herdr terminal and the shell's pid and
+/// Which shell a pane runs, as its terminal and the shell's pid and
 /// start: the identity a bootstrap checks a caller against.
 #[derive(Clone, Debug, Eq, PartialEq, Deserialize, Serialize)]
 pub struct PaneIdentity {
@@ -77,77 +84,12 @@ pub struct PaneIdentity {
     pub shell_started: u64,
 }
 
-/// Where a runtime hook can hand letters to its model.
-#[derive(Clone, Copy, Debug, Default, Eq, PartialEq, Deserialize, Serialize)]
-#[serde(rename_all = "snake_case")]
-pub enum PullPoint {
-    #[default]
-    Prompt,
-    Tool,
-    TurnEnd,
-}
-
-/// The only commands admitted by a hook's proof-and-answer exchange.
-/// Keeping this separate from Workspace commands prevents this transport
-/// from acquiring dispatch, browser, or letter-confirmation authority.
-#[derive(Clone, Debug, Eq, PartialEq, Deserialize, Serialize)]
-#[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
-pub enum HookCommand {
-    WorkspaceInfo {},
-    /// Metadata-only passive observation; never dispatches input or letters.
-    Observation {
-        observation: DirectObservation,
-    },
-    /// The same metadata for an agent the caller started through Herdr
-    /// directly: at most an origin, never a parent, watch or letter.
-    StartObservation {
-        observation: DirectObservation,
-    },
-    LetterPull {
-        prompt_digest: Option<String>,
-        session: Option<String>,
-        #[serde(default)]
-        point: PullPoint,
-        /// Set by a `hide` that confirms a whole letter bundle; a device kit
-        /// older than bundles leaves it out and is handed its letters as
-        /// before (`docs/delivery.md`, One bundle per handover).
-        #[serde(default)]
-        bundle: bool,
-    },
-    Memory {
-        event: String,
-        runtime: String,
-        session: String,
-        #[serde(default)]
-        prompt: String,
-    },
-    /// What the pane's agent hook observed: its turn and its subagent
-    /// counts, for the core's status judgement (PRD engine-bundle-1 D-7).
-    /// Metadata only; it never dispatches input or letters.
-    Status {
-        report: HookStatusReport,
-    },
-}
-
-impl HookCommand {
-    /// Only session guidance keeps a reference for the commands it advertises.
-    pub fn one_shot(&self) -> bool {
-        !matches!(self, Self::WorkspaceInfo {})
-    }
-}
-
-#[derive(Clone, Debug, Eq, PartialEq, Deserialize, Serialize)]
-#[serde(deny_unknown_fields)]
-pub struct HookRequest {
-    pub request_id: String,
-    pub command: HookCommand,
-    /// A named reference constrains the fresh proof; it never substitutes
-    /// for the node's kernel check of the caller.
-    pub token: Option<String>,
-}
-
-pub const HOOK_REQUEST_LIMIT: usize = 16 * 1024;
-pub const HOOK_RESPONSE_LIMIT: usize = 64 * 1024;
+// A hook's proof-and-answer exchange is spoken by the hook itself, so its
+// types are the hook crate's (`hide_agent_hooks::hook_request`).
+pub use hide_agent_hooks::hook_request::{
+    AGENT_EXEC_FAILURE_LIMIT, AgentExecEvent, ExecProcess, ExecProfile, ExecStart,
+    HOOK_REQUEST_LIMIT, HOOK_RESPONSE_LIMIT, HookCommand, HookRequest, PullPoint,
+};
 
 /// What a node tells the core without being asked: one JSON line with an
 /// `event` field and no `id`.
@@ -166,6 +108,19 @@ pub enum NodeEvent {
         one_shot: bool,
         #[serde(default, skip_serializing_if = "Option::is_none")]
         hook: Option<HookRequest>,
+        /// For a `hook` that is `HookCommand::AgentExec`, the process that
+        /// sent it, which the node's kernel says is that attempt's executor
+        /// (`hide_agent_hooks::hook_request::executor_process`); none for
+        /// every other request.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        executor: Option<ExecProcess>,
+        /// For a `hook` that is `HookCommand::Status`, the processes from the
+        /// one that sent it up to the pane's shell, as the node's kernel
+        /// names them (`hide_host::pane_peer::lineage`); none for every
+        /// other request, from a node built before it, and when the system
+        /// could not show them.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        lineage: Option<Vec<ExecProcess>>,
     },
     /// A process that is in no pane the node can prove asked for a
     /// credential, and the node's kernel says its working directory is
@@ -212,8 +167,8 @@ pub enum NodeEvent {
     /// [`HEARTBEAT`], so the attach role on the core's machine ends a link
     /// whose node fell silent (PRD core-host-node-remote-core B20).
     Ping,
-    /// Base64 bytes the node read from a stream's end (its Herdr or its
-    /// browser relay) on a stream the core opened with `link_open`.
+    /// Base64 bytes the node read from a stream's end (the
+    /// browser relay or a loopback server) on a stream the core opened with `link_open`.
     LinkData { stream: u64, data: String },
     /// A stream's end closed a stream the core opened, or the node did at
     /// one of its caps; `reason` says which, never what the stream carried.
@@ -231,7 +186,7 @@ pub enum NodeEvent {
 /// Who opened a stream, as the node proved it when the stream opened: the
 /// process using a credential the node issued for `pane_id`,
 /// descended from that pane's shell, whose identity the node read from its
-/// Herdr then. The core checks the stream's command against it rather than
+/// pane holder then. The core checks the stream's command against it rather than
 /// asking [`crate::protocol::Call::PaneInspect`], and only for a credential
 /// the same link vouched for the same pane.
 #[derive(Clone, Debug, Eq, PartialEq, Deserialize, Serialize)]
@@ -273,7 +228,7 @@ pub enum ProofAnswer {
     },
 }
 
-/// What `Call::PanesStart` answers: where the node's bootstrap socket is.
+/// What `Call::HoldersStart` answers: where the node's bootstrap socket is.
 #[derive(Clone, Debug, Eq, PartialEq, Deserialize, Serialize)]
 pub struct PanesStarted {
     pub socket: String,

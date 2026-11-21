@@ -34,6 +34,15 @@ PATCH = """--- a/vendor/libghostty-vt/include/vt.h
  int answer(void);
 +int question(void);
 """
+# Hide's own patch, in the shape of `hide-vt/patches/`: paths under the tree.
+HIDE_PATCH = """--- a/include/vt.h
++++ b/include/vt.h
+@@ -1,2 +1,3 @@
+ int answer(void);
+ int question(void);
++int hide(void);
+"""
+HIDE_PATCHED = PATCHED + 'int hide(void);\n'
 # Answers the three calls the script makes of Zig: its version, a project
 # manifest to add packages to, and a fetch of none.
 STAND_IN_ZIG = b"""#!/bin/sh
@@ -81,7 +90,7 @@ class PrepareVtInputsTest(unittest.TestCase):
         path.write_bytes(data)
         return path.as_uri(), sha256(data)
 
-    def manifest(self, header: str, zig_sha: str | None = None) -> Path:
+    def manifest(self, header: str, zig_sha: str | None = None, hide_patch_sha: str | None = None) -> Path:
         zig = tar_bytes({'zig-stand-in/zig': STAND_IN_ZIG}, 'w:xz', {'zig-stand-in/zig'})
         zig_url, zig_digest = self.publish('zig.tar.xz', zig)
         source = tar_bytes({
@@ -97,9 +106,12 @@ class PrepareVtInputsTest(unittest.TestCase):
                 'url': source_url, 'sha256': source_digest, 'root': 'herdr-pin',
                 'tree': 'vendor/libghostty-vt', 'files': {},
                 'patches': {'vendor/patches/libghostty-vt/0001-question.patch': sha256(PATCH.encode())},
+                'hide_patches': {'patches/0001-hide.patch': hide_patch_sha or sha256(HIDE_PATCH.encode())},
             },
             'packages': [],
         }
+        (self.work / 'patches').mkdir(exist_ok=True)
+        (self.work / 'patches' / '0001-hide.patch').write_text(HIDE_PATCH)
         path = self.work / 'build-inputs.json'
         path.write_text(json.dumps(pins))
         return path
@@ -127,6 +139,15 @@ class PrepareVtInputsTest(unittest.TestCase):
         self.assertIn('0001-question.patch is not applied', str(refusal.exception))
         self.assertEqual(self.entries(), [])
 
+    def test_a_hide_patch_whose_digest_differs_is_refused_and_leaves_nothing(self):
+        manifest = self.manifest(PATCHED, hide_patch_sha='0' * 64)
+
+        with self.assertRaises(prepare_vt_inputs.Refused) as refusal:
+            prepare_vt_inputs.prepare(True, manifest)
+
+        self.assertIn('patches/0001-hide.patch has sha256', str(refusal.exception))
+        self.assertEqual(self.entries(), [])
+
     def test_a_ready_entry_is_reused_without_downloading(self):
         manifest = self.manifest(PATCHED)
         first = prepare_vt_inputs.prepare(True, manifest)
@@ -136,7 +157,7 @@ class PrepareVtInputsTest(unittest.TestCase):
         second = prepare_vt_inputs.prepare(True, manifest)
 
         self.assertEqual(first, second)
-        self.assertEqual((first / 'source' / 'include' / 'vt.h').read_text(), PATCHED)
+        self.assertEqual((first / 'source' / 'include' / 'vt.h').read_text(), HIDE_PATCHED)
         self.assertEqual(json.loads((first / 'ready.json').read_text())['zig'], '0.16.0')
 
     def test_only_the_three_most_recent_entries_are_kept(self):

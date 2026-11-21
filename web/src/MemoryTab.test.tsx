@@ -112,8 +112,8 @@ describe("the Memory tab", () => {
     expect(sent("memory_open")).toEqual([{ workspace_id: "p" }]);
   });
 
-  it("counts the open documents on the rail while they show as well as while they are folded (PRD lane-two-columns B2)", async () => {
-    const withViews = { ...rest, workspace_view: { ...(rest.workspace_view ?? {}), device_id: "local", path: "/p", open: true, documents: true, tool: "explorer", pinned: false, document_width: null, detail_width: null, explorer_width: null, panel_width: null, lane_called: 0, lane_calls: 0, lane_called_side: "view", layout: { root: { area: { id: "a1", active: null, displays: [] } }, active_area: "a1", display_count: 2, limits: { max_view_areas: 6, max_split_depth: 3, max_displays: 32 } } } } as unknown as SnapshotRest;
+  it("counts the front tab's desk on the rail while it shows as well as while it is folded (PRD lane-two-columns B2; lane-desk-pair-view D-29)", async () => {
+    const withViews = { ...rest, workspace_view: { ...(rest.workspace_view ?? {}), device_id: "local", path: "/p", open: true, tray: { tab_id: "t1", shown: true, count: 2 }, tool: "explorer", document_width: null, explorer_width: null, panel_width: null, lane_called: 0, lane_calls: 0, lane_called_side: "view", layout: { root: { area: { id: "a1", active: null, displays: [] } }, active_area: "a1", display_count: 2, limits: { max_view_areas: 6, max_split_depth: 3, max_displays: 32 } } } } as unknown as SnapshotRest;
     const actions = createActions((event) => { events.push(event); return accepted; });
     for (const view of ["documents", "none"] as const) {
       await act(async () => {

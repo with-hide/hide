@@ -35,6 +35,10 @@ jobs:
       - uses: pnpm/action-setup@v6
         with:
           version: 10
+      # The relay WebAssembly's binding tool, restored never saved here (`.github/actions/relay-tools`).
+      - uses: ./.github/actions/relay-tools
+        with:
+          save: false
       - name: Native and WASM vectors and TypeScript cross-decryption
         timeout-minutes: 15
         run: bash scripts/check-relay-protocol.sh
@@ -58,7 +62,7 @@ jobs:
           client-id: ${{ vars.HIDE_ISSUES_APP_CLIENT_ID }}
           private-key: ${{ secrets.HIDE_ISSUES_APP_KEY }}
           owner: with-hide
-          repositories: hide,hide-private
+          repositories: hide
       - name: Report flaky and failed tests
         if: ${{ !cancelled() }}
         continue-on-error: true

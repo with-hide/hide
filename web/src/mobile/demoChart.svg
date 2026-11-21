@@ -1,0 +1,7 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="960" height="560" viewBox="0 0 240 140">
+<rect width="240" height="140" fill="white"/>
+<text x="10" y="16" font-size="8" font-family="sans-serif" fill="black">{{title}}</text>
+<g stroke="lightgray" stroke-width=".5"><path d="M10 40H230M10 70H230M10 100H230"/></g>
+<path d="M10 100C60 70 120 66 230 36" fill="none" stroke="orangered" stroke-width="1.5"/>
+<path d="M10 104C80 90 150 92 230 90" fill="none" stroke="royalblue" stroke-width="1.5"/>
+</svg>

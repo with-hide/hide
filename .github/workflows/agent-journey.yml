@@ -104,7 +104,7 @@ jobs:
     # Every job's cap is at least the sum of its steps' caps, so a step that
     # times out still leaves the report's upload its time
     # (scripts/tests/test_agent_journey_workflow.py).
-    timeout-minutes: 95
+    timeout-minutes: 105
     strategy:
       fail-fast: false
       matrix:
@@ -115,13 +115,18 @@ jobs:
       run:
         shell: bash
     env:
-      HERDR_PLATFORM: ${{ fromJSON('{"linux":"linux-x86_64","macos":"macos-aarch64"}')[matrix.system] }}
       RUN_DIR: agents/runs/agent-journey-fixture-${{ matrix.system }}
     steps:
       - uses: actions/checkout@v7
         timeout-minutes: 5
         with:
           ref: ${{ inputs.source-sha || github.sha }}
+      # hide-vt's prepared inputs and Zig's caches, saved on main by the vt lane,
+      # so this job reaches no package host (#2631).
+      - uses: ./.github/actions/vt-cache
+        timeout-minutes: 5
+        with:
+          save: false
       # Reads the workspace set another lane saves (docs/BUILD.md, "CI's Rust caches").
       - uses: ./.github/actions/rust-cache
         timeout-minutes: 10
@@ -129,11 +134,15 @@ jobs:
           set: workspace
           save: false
       - name: Install zsh on Linux
-        # Every private pane starts from SHELL=/bin/zsh, and the Herdr fetch
-        # script is zsh; the Linux image has neither.
+        # Every private pane starts from SHELL=/bin/zsh; the Linux image has none.
         if: runner.os == 'Linux'
+        # The step keeps the 5 minutes it had, which the job's cap is summed
+        # from; the mirror gets 3 of them, the cache and dpkg the rest.
         timeout-minutes: 5
-        run: sudo apt-get install -y --no-install-recommends zsh
+        uses: ./.github/actions/apt-install
+        with:
+          packages: zsh
+          minutes: 3
       - name: Build hided, hide, the hooks, Hide's conversation reader and the composer judge
         timeout-minutes: 25
         run: |
@@ -141,10 +150,9 @@ jobs:
           bash scripts/verify-cargo.sh build -p hide-session --example journey_conversation
           bash scripts/verify-cargo.sh build -p hide-memory --example journey_memory
           bash scripts/verify-cargo.sh build -p hide-agent-adapter --example journey_composer
-      - name: Fetch the pinned Herdr runtime
-        id: herdr
-        timeout-minutes: 5
-        run: echo "bin=$(zsh scripts/fetch-herdr-runtime.sh --platform "$HERDR_PLATFORM")" >> "$GITHUB_OUTPUT"
+      - name: Build the native pane holder
+        timeout-minutes: 10
+        run: bash scripts/verify-cargo.sh build -p hide-holder --bin hide-holder
       - name: Build the Claude and Codex stand-ins and the controller's spawn provider
         timeout-minutes: 5
         run: |
@@ -163,7 +171,7 @@ jobs:
           set +e
           python3 scripts/agent-journey-check.py --mode ci \
             --fixture-bin "$RUNNER_TEMP/journey-shims" --controller-provider "$RUNNER_TEMP/journey-controller/claude" \
-            --herdr-bin "${{ steps.herdr.outputs.bin }}" --run-dir "$RUN_DIR"
+            --run-dir "$RUN_DIR"
           echo "exit=$?" >> "$GITHUB_OUTPUT"
       - name: The lane's verdict
         timeout-minutes: 2
@@ -235,7 +243,7 @@ jobs:
     # Seven agents of eleven cells each, about 4 to 7 minutes an agent on
     # macOS and up to 9 on Windows (2026-10-18), inside the journey step's 85;
     # the job's cap is its steps' caps summed.
-    timeout-minutes: 171
+    timeout-minutes: 186
     strategy:
       fail-fast: false
       matrix:
@@ -244,7 +252,6 @@ jobs:
       run:
         shell: bash
     env:
-      HERDR_PLATFORM: ${{ fromJSON('{"linux":"linux-x86_64","macos":"macos-aarch64","windows":"windows-x86_64"}')[matrix.system] }}
       RUN_DIR: agents/runs/agent-journey-fake-${{ matrix.system }}
       # Every active adapter unless the caller named some (agent-canary.yml's pinned rerun).
       AGENTS: ${{ inputs.agents }}
@@ -260,6 +267,12 @@ jobs:
         with:
           ref: ${{ inputs.source-sha || github.sha }}
           persist-credentials: false
+      # hide-vt's prepared inputs and Zig's caches, saved on main by the vt lane,
+      # so this job reaches no package host (#2631).
+      - uses: ./.github/actions/vt-cache
+        timeout-minutes: 5
+        with:
+          save: false
       - uses: ./.github/actions/rust-cache
         timeout-minutes: 10
         with:
@@ -276,8 +289,13 @@ jobs:
           python-version: "3.12"
       - name: Install zsh on Linux
         if: runner.os == 'Linux'
+        # The step keeps the 5 minutes it had, which the job's cap is summed
+        # from; the mirror gets 3 of them, the cache and dpkg the rest.
         timeout-minutes: 5
-        run: sudo apt-get install -y --no-install-recommends zsh
+        uses: ./.github/actions/apt-install
+        with:
+          packages: zsh
+          minutes: 3
       - name: Measure the CLI versions the caller named
         # The install, the report's version check and the lane's verdict all
         # read this table instead of the pins (scripts/agent_journey/clis.py).
@@ -298,16 +316,15 @@ jobs:
           bash scripts/verify-cargo.sh build -p hide-session --example journey_conversation
           bash scripts/verify-cargo.sh build -p hide-memory --example journey_memory
           bash scripts/verify-cargo.sh build -p hide-agent-adapter --example journey_composer
-      - name: Fetch the pinned Herdr runtime
-        id: herdr
+      - name: Build the native pane holder
+        timeout-minutes: 10
+        run: bash scripts/verify-cargo.sh build -p hide-holder --bin hide-holder
+      - name: Fetch the pane holder's pinned ConPTY runtime
+        # A Windows holder runs its pane on the pinned OpenConsole, which the
+        # journey's package carries beside it.
+        if: runner.os == 'Windows'
         timeout-minutes: 5
-        run: |
-          if [[ "$RUNNER_OS" == Windows ]]; then
-            bin=$(pwsh -NoProfile -File scripts/fetch-herdr-runtime.ps1 | tr -d '\r')
-          else
-            bin=$(zsh scripts/fetch-herdr-runtime.sh --platform "$HERDR_PLATFORM")
-          fi
-          echo "bin=$bin" >> "$GITHUB_OUTPUT"
+        run: python scripts/fetch-conpty.py --out target/debug/holder-conpty
       - name: Build the controller's spawn provider
         timeout-minutes: 5
         # Before the run, as the stand-ins are: a Windows link can outlast the
@@ -334,7 +351,7 @@ jobs:
           if [[ -n "$AGENTS" ]]; then selection=(--agents "$AGENTS"); fi
           "$PYTHON" scripts/agent-journey-check.py --mode ci --fake-model "${selection[@]}" \
             --controller-provider "${{ steps.controller.outputs.provider }}" \
-            --herdr-bin "${{ steps.herdr.outputs.bin }}" --run-dir "$RUN_DIR"
+            --run-dir "$RUN_DIR"
           echo "journey exit $?"
       - name: The lane's verdict
         timeout-minutes: 2

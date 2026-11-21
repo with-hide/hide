@@ -6,15 +6,15 @@ import { createActions } from "./actions";
 import { FirstRunDevices } from "./FirstRunDevices";
 import { TooltipProvider } from "./components/ui/tooltip";
 import { Dialog, DialogContent } from "./components/ui/dialog";
-import type { HerdrProfile, HerdrProfiles } from "./snapshot";
+import type { MachineProfile, MachineProfiles } from "./snapshot";
 import { useShellStore } from "./store";
 import type { DispatchFn } from "./ws";
 
 vi.hoisted(() => { HTMLCanvasElement.prototype.getContext = () => null; });
 
-const profile = (id: string, patch: Partial<HerdrProfile> = {}): HerdrProfile => ({ id, label: id, target: `${id}@server.example`, session: "work", herdr: true, ssh_host: null, address: null, enabled: true, added_as: null, problem: null, device_id: null, connect_state: "saved", connect_refusal: null, ...patch });
+const profile = (id: string, patch: Partial<MachineProfile> = {}): MachineProfile => ({ id, label: id, target: id, ssh_host: id, address: `${id}@server.example:22`, added_as: null, problem: null, device_id: null, connect_state: "saved", connect_refusal: null, ...patch });
 
-async function mount(profiles: HerdrProfiles, devices: string[] | null = []) {
+async function mount(profiles: MachineProfiles, devices: string[] | null = []) {
   vi.stubGlobal("IS_REACT_ACT_ENVIRONMENT", true);
   const events: Parameters<DispatchFn>[0][] = [];
   const actions = createActions((event) => { events.push(event); return true; });
@@ -25,14 +25,14 @@ async function mount(profiles: HerdrProfiles, devices: string[] | null = []) {
   const back = vi.fn();
   const next = vi.fn();
   await act(async () => {
-    useShellStore.setState({ revision: 1, rest: { ui_state: { first_run_choices: { devices } }, status: { herdr_profiles: profiles } } } as never);
+    useShellStore.setState({ revision: 1, rest: { ui_state: { first_run_choices: { devices } }, status: { machine_profiles: profiles } } } as never);
     root.render(<TooltipProvider><Dialog open><DialogContent aria-describedby={undefined}><FirstRunDevices actions={actions} primary={{ current: null }} onBack={back} onNext={next} /></DialogContent></Dialog></TooltipProvider>);
   });
   return { events, back, next, unmount: async () => { await act(async () => root.unmount()); container.remove(); useShellStore.setState(saved, true); } };
 }
 const button = (name: string) => document.querySelector<HTMLButtonElement>(`[data-first-run-${name}]`)!;
 
-it("continues without connecting when the operator leaves every saved profile unchecked", async () => {
+it("continues without connecting when the operator leaves every machine unchecked", async () => {
   const view = await mount({ state: "ready", error: null, truncated: false, profiles: [profile("one")] });
   try {
     const checkbox = document.querySelector<HTMLButtonElement>("#herdr-profile-one")!;
@@ -41,14 +41,14 @@ it("continues without connecting when the operator leaves every saved profile un
     expect(checkbox.getAttribute("data-state")).toBe("unchecked");
     await act(async () => button("device-connect").click());
     expect(view.next).toHaveBeenCalledOnce();
-    expect(view.events.some((event) => event.kind === "herdr_profile_connect")).toBe(false);
+    expect(view.events.some((event) => event.kind === "machine_profile_connect")).toBe(false);
   } finally {
     await view.unmount();
   }
 });
 
-it("requires a selection and explicit Connect, and never selects a disabled or already-added profile", async () => {
-  const view = await mount({ state: "ready", error: null, truncated: false, profiles: [profile("one"), profile("off", { enabled: false, problem: "disabled" }), profile("old", { added_as: "Already here", device_id: "existing", connect_state: "added" })] });
+it("requires a selection and explicit Connect, and never selects an unavailable or already-added machine", async () => {
+  const view = await mount({ state: "ready", error: null, truncated: false, profiles: [profile("one"), profile("off", { problem: "ssh_failed" }), profile("old", { added_as: "Already here", device_id: "existing", connect_state: "added" })] });
   expect(view.events).toEqual([]);
   expect(document.querySelectorAll('[role="checkbox"][data-state="checked"]')).toHaveLength(0);
   expect(document.querySelector<HTMLButtonElement>('#herdr-profile-off')?.disabled).toBe(true);
@@ -56,23 +56,23 @@ it("requires a selection and explicit Connect, and never selects a disabled or a
   await act(async () => document.querySelector<HTMLButtonElement>('#herdr-profile-one')!.click());
   expect(view.events.map((event) => event.kind)).toEqual(["first_run_draft"]);
   await act(async () => button("device-connect").click());
-  expect(view.events.at(-1)).toEqual({ schema_version: 2, kind: "herdr_profile_connect", payload: { profile_id: "one", host_consent: true } });
+  expect(view.events.at(-1)).toEqual({ schema_version: 2, kind: "machine_profile_connect", payload: { profile_id: "one", host_consent: true } });
   // While it connects the main button is Next: nothing holds the way on, and a second press connects nothing.
   expect(button("device-connect").textContent).toBe("Continue");
   await act(async () => button("back").click());
   expect(view.back).toHaveBeenCalledOnce();
-  expect(view.events.filter((event) => event.kind === "herdr_profile_connect")).toHaveLength(1);
+  expect(view.events.filter((event) => event.kind === "machine_profile_connect")).toHaveLength(1);
   await view.unmount();
 });
 
-it("keeps loading and a failed read distinct from an empty result, and Retry only reads saved configuration", async () => {
+it("keeps loading and a failed read distinct from an empty result, and Retry only reads the configuration again", async () => {
   for (const state of ["loading", "failed"] as const) {
     const view = await mount({ state, error: state === "failed" ? "unavailable" : null, profiles: [], truncated: false });
     expect(view.next).not.toHaveBeenCalled();
     expect(document.querySelector(`[data-first-run-devices="${state}"]`)).not.toBeNull();
     if (state === "failed") {
       await act(async () => button("devices-retry").click());
-      expect(view.events.map((event) => event.kind)).toEqual(["herdr_profiles_list"]);
+      expect(view.events.map((event) => event.kind)).toEqual(["machine_profiles_list"]);
     }
     await view.unmount();
   }
@@ -84,23 +84,23 @@ it("keeps loading and a failed read distinct from an empty result, and Retry onl
 it("keeps a successful device while Retry sends only the failed selected profile", async () => {
   const rows = [profile("ok", { device_id: "dev-ok", added_as: "OK", connect_state: "connected" }), profile("bad", { device_id: "dev-bad", added_as: "Bad", connect_state: "failed" })];
   const view = await mount({ state: "ready", error: null, profiles: rows, truncated: false }, ["ok", "bad"]);
-  await act(async () => useShellStore.setState({ revision: 2, rest: { ui_state: { first_run_choices: { devices: ["ok", "bad"] } }, status: { herdr_profiles: { state: "ready", profiles: rows }, remote: [{ target_id: "dev-ok", state: "connected" }, { target_id: "dev-bad", state: "error" }] }, navigator: { devices: [{ id: "dev-ok", kit: { agents: [], components: [], busy: false } }] } } } as never));
+  await act(async () => useShellStore.setState({ revision: 2, rest: { ui_state: { first_run_choices: { devices: ["ok", "bad"] } }, status: { machine_profiles: { state: "ready", profiles: rows }, remote: [{ target_id: "dev-ok", state: "connected" }, { target_id: "dev-bad", state: "error" }] }, navigator: { devices: [{ id: "dev-ok", kit: { agents: [], components: [], busy: false } }] } } } as never));
   expect(document.querySelector('[data-first-run-device="ok"]')?.getAttribute("data-device-state")).toBe("connected");
   expect(document.querySelector('[data-first-run-device="bad"]')?.getAttribute("data-device-state")).toBe("failed");
   await act(async () => button("device-retry=\"bad\"").click());
-  expect(view.events.filter((event) => event.kind === "herdr_profile_connect").map((event) => event.payload)).toEqual([{ profile_id: "bad", host_consent: true }]);
+  expect(view.events.filter((event) => event.kind === "machine_profile_connect").map((event) => event.payload)).toEqual([{ profile_id: "bad", host_consent: true }]);
   await view.unmount();
 });
 
 it("follows a recovered live connection over an earlier profile failure while keeping current failures actionable", async () => {
   const row = profile("recovered", { device_id: "dev", added_as: "Recovered", connect_state: "failed" });
-  const profiles: HerdrProfiles = { state: "ready", error: null, profiles: [row], truncated: false };
+  const profiles: MachineProfiles = { state: "ready", error: null, profiles: [row], truncated: false };
   const view = await mount(profiles, [row.id]);
   const update = async (remoteState: string, failedKit = false) => act(async () => useShellStore.setState((current) => ({
     revision: current.revision + 1,
     rest: {
       ui_state: { first_run_choices: { devices: [row.id] } },
-      status: { herdr_profiles: profiles, remote: [{ target_id: "dev", state: remoteState }] },
+      status: { machine_profiles: profiles, remote: [{ target_id: "dev", state: remoteState }] },
       navigator: { devices: [{ id: "dev", kit: { agents: [], components: [{ id: "helper", state: failedKit ? "failed" : "installed" }], busy: false } }] },
     },
   }) as never));
@@ -131,7 +131,7 @@ it("words Hide's own refusal to connect a profile from its code", async () => {
 
 // PRD wsl-device B1, B2, B29: this PC's default WSL distribution is the step's row, checked until the
 // operator unchecks it; only Connect sends it, and a WSL 1 one shows the command that switches it instead.
-const wslRow = (distro: string, patch: Partial<HerdrProfile> = {}) => profile(`wsl:${distro}`, { label: `WSL ${distro}`, target: distro, session: "default", wsl_distro: distro, ...patch });
+const wslRow = (distro: string, patch: Partial<MachineProfile> = {}) => profile(`wsl:${distro}`, { label: `WSL ${distro}`, target: distro, ssh_host: null, address: null, wsl_distro: distro, ...patch });
 
 it("checks this PC's default WSL distribution and sends it only when Connect is pressed (B1, B2)", async () => {
   const view = await mount({ state: "ready", error: null, truncated: false, profiles: [wslRow("Ubuntu"), profile("one")] }, null);
@@ -139,9 +139,8 @@ it("checks this PC's default WSL distribution and sends it only when Connect is 
     const row = document.querySelector('[data-first-run-wsl="Ubuntu"]')!;
     expect(row.textContent).toContain("WSL Ubuntu");
     expect(row.textContent).toContain("This PC (WSL)");
-    // A WSL row is no Herdr profile: no target or session line, and no "Saved in Herdr".
-    expect(row.textContent).not.toContain("Session");
-    expect(row.textContent).not.toContain("Saved in Herdr");
+    // A WSL row says where it is, not an address.
+    expect(row.textContent).not.toContain("Ubuntu@");
     const box = document.querySelector<HTMLButtonElement>("#herdr-profile-wsl\\:Ubuntu")!;
     expect(box.getAttribute("aria-label")).toBe("WSL Ubuntu · This PC (WSL)");
     expect(box.getAttribute("data-state")).toBe("checked");
@@ -150,7 +149,7 @@ it("checks this PC's default WSL distribution and sends it only when Connect is 
     // Showing the step sends nothing: nothing is installed before the press.
     expect(view.events).toEqual([]);
     await act(async () => button("device-connect").click());
-    expect(view.events).toEqual([{ schema_version: 2, kind: "herdr_profile_connect", payload: { profile_id: "wsl:Ubuntu", host_consent: true } }]);
+    expect(view.events).toEqual([{ schema_version: 2, kind: "machine_profile_connect", payload: { profile_id: "wsl:Ubuntu", host_consent: true } }]);
   } finally {
     await view.unmount();
   }
@@ -166,7 +165,7 @@ it("keeps the WSL row unchecked once the operator unchecked it, across a reload 
   expect(document.querySelector("#herdr-profile-wsl\\:Ubuntu")?.getAttribute("data-state")).toBe("unchecked");
   await act(async () => button("device-connect").click());
   expect(again.next).toHaveBeenCalledOnce();
-  expect(again.events.some((event) => event.kind === "herdr_profile_connect")).toBe(false);
+  expect(again.events.some((event) => event.kind === "machine_profile_connect")).toBe(false);
   await again.unmount();
 });
 
@@ -178,7 +177,7 @@ it("shows a WSL 1 or unfinished distribution as not connectable, with the comman
   expect(document.querySelector('[data-first-run-wsl-command="Legacy"]')?.textContent).toBe("wsl --set-version Legacy 2");
   expect(document.querySelector('[data-first-run-wsl-problem="wsl1"]')?.textContent).toContain("Runs on WSL 1");
   await act(async () => button("device-connect").click());
-  expect(view.events.some((event) => event.kind === "herdr_profile_connect")).toBe(false);
+  expect(view.events.some((event) => event.kind === "machine_profile_connect")).toBe(false);
   expect(view.next).toHaveBeenCalledOnce();
   await view.unmount();
   const fresh = await mount({ state: "ready", error: null, truncated: false, profiles: [wslRow("Fresh", { problem: "setup_unfinished" })] }, null);
@@ -195,35 +194,26 @@ it("titles the step the same with or without Herdr, and starts every row uncheck
   await view.unmount();
 });
 
-const host = (alias: string, patch: Partial<HerdrProfile> = {}) => profile(`ssh:${alias}`, { label: alias, target: alias, session: "default", herdr: false, ssh_host: alias, address: `me@${alias}.example:22`, ...patch });
+const host = (alias: string, patch: Partial<MachineProfile> = {}) => profile(`ssh:${alias}`, { label: alias, target: alias, ssh_host: alias, address: `me@${alias}.example:22`, ...patch });
 const device = (id: string, patch: Record<string, unknown> = {}) => ({ id, label: id, kind: "remote", state: "unavailable", message: null, ssh_alias: id, agent_count: 0, test: null, problem: null, sign_in: null, ...patch });
 /** The store as the core reports it after the step's Connect added `rows`' devices. */
-const after = async (rows: HerdrProfile[], devices: ReturnType<typeof device>[], remote: { target_id: string; state: string }[]) => act(async () => useShellStore.setState((current) => ({
+const after = async (rows: MachineProfile[], devices: ReturnType<typeof device>[], remote: { target_id: string; state: string }[]) => act(async () => useShellStore.setState((current) => ({
   revision: current.revision + 1,
-  rest: { ui_state: { first_run_choices: { devices: rows.map((row) => row.id) } }, status: { herdr_profiles: { state: "ready", error: null, truncated: false, profiles: rows }, remote }, navigator: { devices } },
+  rest: { ui_state: { first_run_choices: { devices: rows.map((row) => row.id) } }, status: { machine_profiles: { state: "ready", error: null, truncated: false, profiles: rows }, remote }, navigator: { devices } },
 }) as never));
 
-it("shows a machine only the ssh config names, with its address and source, and connects it", async () => {
+it("shows a machine the ssh config names, with its address, and connects it", async () => {
   const view = await mount({ state: "ready", error: null, truncated: false, profiles: [host("config-ubuntu")] }, null);
   try {
     expect(view.next).not.toHaveBeenCalled();
     const row = document.querySelector('[data-first-run-device="ssh:config-ubuntu"]')!;
     expect(row.textContent).toContain("me@config-ubuntu.example:22");
-    expect([...row.querySelectorAll("[data-first-run-device-source]")].map((chip) => chip.textContent)).toEqual(["ssh config"]);
     await act(async () => document.querySelector<HTMLButtonElement>("#herdr-profile-ssh\\:config-ubuntu")!.click());
     await act(async () => button("device-connect").click());
-    expect(view.events.at(-1)).toEqual({ schema_version: 2, kind: "herdr_profile_connect", payload: { profile_id: "ssh:config-ubuntu", host_consent: true } });
+    expect(view.events.at(-1)).toEqual({ schema_version: 2, kind: "machine_profile_connect", payload: { profile_id: "ssh:config-ubuntu", host_consent: true } });
   } finally {
     await view.unmount();
   }
-});
-
-it("draws a machine that is both a Host and a saved profile as one row with both sources", async () => {
-  const view = await mount({ state: "ready", error: null, truncated: false, profiles: [profile("mini-main", { label: "mini", target: "mini", session: "main", ssh_host: "mini", address: "alice@mini.example:22" })] }, null);
-  const chips = [...document.querySelectorAll('[data-first-run-device="mini-main"] [data-first-run-device-source]')].map((chip) => chip.textContent);
-  expect(chips).toEqual(["ssh config", "Saved in Herdr · Session main"]);
-  expect(document.querySelectorAll("[data-first-run-device]")).toHaveLength(1);
-  await view.unmount();
 });
 
 it("answers what ssh asks on the row, and a failure shows the device row's state and action", async () => {

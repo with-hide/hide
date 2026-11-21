@@ -9,7 +9,7 @@
 //! | Event | Hide's answer |
 //! | --- | --- |
 //! | `SessionStart` (the first prompt of a conversation, never a resume) | the guidance and the Memory index, as an injected system message |
-//! | `PreInvocation` (every model call; `invocationNum` 0 is a prompt's first) | the prompt's Memory cards and the pane's letters, the same way |
+//! | `PreInvocation` (every model call; `invocationNum` 0 is a prompt's first) | the prompt's Memory cards and the pane's letters, the same way; a subagent's counts it working |
 //! | `PreToolUse` | `{"decision":"deny","reason"}` for a refused call, `{"decision":"ask"}` on every other path |
 //! | `Stop` (one per turn of each conversation) | nothing; a subagent's own stop counts it done |
 //!
@@ -29,10 +29,16 @@
 //! question before Hide's own commands either.
 //!
 //! A subagent is a conversation of its own in the same process and pane,
-//! with its own `SessionStart` and `Stop` and no parent field. Its transcript
-//! opens with the message its parent sent it (`[Message] ... sender=<parent
-//! conversation id> ...`), which is how a start or a stop is told from the
-//! pane's own conversation ([`root_of`]).
+//! with its own `SessionStart`, `PreInvocation` and `Stop` and no parent
+//! field. Its transcript opens with the message its parent sent it
+//! (`[Message] ... sender=<parent conversation id> ...`), after any steps a
+//! hook injected at its start, which is how its events are told from the
+//! pane's own conversation ([`root_of`]). agy 1.4.0 wrote that message as the
+//! subagent's `SessionStart` ran; agy 1.5.9 writes it only after the
+//! subagent's first model call, and names every event of a conversation its
+//! operator never prompted with an empty `lastUserInput`, which is how a
+//! subagent is known before its parent is ([`Event::prompted`], measured
+//! 2026-11-15).
 
 use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
@@ -77,6 +83,14 @@ pub struct Event {
     /// `invocationNum` of an invocation event: 0 for a prompt's first model
     /// call.
     pub invocation: Option<u64>,
+    /// Whether the operator prompted the conversation: `lastUserInput` is
+    /// the operator's latest prompt in each event of the pane's own
+    /// conversation and empty in each of a subagent's, which only its
+    /// parent's message started. `None` from an agy that sends no such field.
+    pub prompted: Option<bool>,
+    /// That prompt's text, with agy's `<USER_REQUEST>` wrapper taken off
+    /// ([`request_text`]); `None` when the event carries none.
+    pub prompt: Option<String>,
 }
 
 impl Event {
@@ -87,6 +101,7 @@ impl Event {
         struct Input {
             conversation_id: Option<String>,
             invocation_num: Option<u64>,
+            last_user_input: Option<String>,
         }
         let Some(input) = (!truncated)
             .then(|| serde_json::from_slice::<Input>(payload).ok())
@@ -97,6 +112,14 @@ impl Event {
         Self {
             conversation: input.conversation_id.filter(|id| valid_conversation(id)),
             invocation: input.invocation_num,
+            prompted: input
+                .last_user_input
+                .as_ref()
+                .map(|input| !input.is_empty()),
+            prompt: input
+                .last_user_input
+                .map(|input| request_text(&input))
+                .filter(|prompt| !prompt.is_empty()),
         }
     }
 }
@@ -110,11 +133,6 @@ pub fn valid_conversation(id: &str) -> bool {
         })
 }
 
-/// agy's own folder of conversations, under the account's home.
-pub fn app_data(home: &Path) -> PathBuf {
-    hide_agent_adapter::antigravity_app_data(home)
-}
-
 /// The transcript agy writes for `conversation`. The path is built from the
 /// id rather than read from the payload's `transcriptPath`, so a hook never
 /// opens a file outside agy's own folder.
@@ -122,9 +140,13 @@ pub fn transcript(home: &Path, conversation: &str) -> PathBuf {
     hide_session::antigravity::transcript(home, conversation)
 }
 
-/// How much of a transcript's first line is read; the parent's message
-/// opens it and its first few hundred bytes hold the sender.
-const FIRST_LINE_LIMIT: usize = 64 * 1024;
+/// How much of a transcript's opening is read: the steps hooks injected at
+/// the start, each at most about 48 KiB ([`INJECT_LIMIT`] for Hide's), and
+/// then the parent's message.
+const OPENING_LIMIT: u64 = 256 * 1024;
+
+/// The most opening steps read for the parent's message.
+const OPENING_STEPS: usize = 8;
 
 /// The most subagent levels followed up to the pane's own conversation; agy
 /// nests far fewer, and a longer chain is cut rather than walked.
@@ -132,11 +154,12 @@ const NESTING_LIMIT: usize = 8;
 
 /// The pane's own conversation above a subagent `conversation`: its parent,
 /// or for a subagent a subagent started, the first conversation up the chain
-/// that no other started. `None` for a conversation of its own. Each parent
-/// is read from its transcript's first step. A subagent's `SessionStart`
-/// runs as agy writes that step (both stamped the same second), so a start
-/// waits until `deadline` for the line to appear; the parents above it are
-/// already written.
+/// that no other started. `None` for a conversation of its own, and for a
+/// subagent whose parent's message is not written yet. Each parent is read
+/// from its transcript's opening. In agy 1.4.0 a subagent's `SessionStart`
+/// runs as agy writes that message (both stamped the same second), so a start
+/// waits until `deadline` for it to appear; the parents above it are already
+/// written.
 pub fn root_of(home: &Path, conversation: &str, deadline: Instant) -> Option<String> {
     let mut root = parent_of(home, conversation, deadline)?;
     let mut seen = vec![conversation.to_owned(), root.clone()];
@@ -160,32 +183,70 @@ pub fn root_of(home: &Path, conversation: &str, deadline: Instant) -> Option<Str
 fn parent_of(home: &Path, conversation: &str, deadline: Instant) -> Option<String> {
     let path = transcript(home, conversation);
     loop {
-        match first_line(&path) {
-            Some(line) => return sender(&line).filter(|parent| parent != conversation),
-            None if Instant::now() < deadline => std::thread::sleep(Duration::from_millis(20)),
-            None => return None,
+        match opening(&path) {
+            Opening::Message(message) => {
+                return sender(&message).filter(|parent| parent != conversation);
+            }
+            Opening::Own => return None,
+            Opening::Unwritten if Instant::now() < deadline => {
+                std::thread::sleep(Duration::from_millis(20));
+            }
+            Opening::Unwritten => return None,
         }
     }
 }
 
-/// The transcript's first complete line, when there is one.
-fn first_line(path: &Path) -> Option<String> {
-    hide_session::read_first_record(path, FIRST_LINE_LIMIT as u64)
-        .ok()
-        .flatten()
+/// What the parent asked subagent `conversation` to do: the `content=` of the
+/// `[Message]` that opens its transcript; none for a conversation of its own
+/// or one whose message is not written yet.
+pub fn subagent_task(home: &Path, conversation: &str) -> Option<String> {
+    let Opening::Message(message) = opening(&transcript(home, conversation)) else {
+        return None;
+    };
+    sender(&message)?;
+    let task = &message[message.find(" content=")? + " content=".len()..];
+    let task = task.split("</SYSTEM_MESSAGE>").next().unwrap_or(task);
+    crate::report::subagent_words(task, crate::report::SUBAGENT_TASK_LIMIT)
 }
 
-/// The `sender=<id>` of the `[Message]` a parent conversation sends its
-/// subagent, when `line` is that step.
-fn sender(line: &str) -> Option<String> {
-    let step: Value = serde_json::from_str(line).ok()?;
-    if step.get("step_index").and_then(Value::as_u64) != Some(0)
-        || step.get("type").and_then(Value::as_str) != Some("SYSTEM_MESSAGE")
-    {
-        return None;
+/// How a transcript opens.
+enum Opening {
+    /// With a parent's message, from its `[Message]` on: a subagent's.
+    Message(String),
+    /// With a step that is no system message, such as the operator's prompt:
+    /// a conversation of its own.
+    Own,
+    /// With nothing yet, or only the steps hooks injected at its start.
+    Unwritten,
+}
+
+/// The parent's message among the system messages that open the transcript:
+/// agy's own (`source` `SYSTEM`), past those a hook injected (`SYSTEM_SDK`).
+fn opening(path: &Path) -> Opening {
+    let steps =
+        hide_session::read_first_records(path, OPENING_LIMIT, OPENING_STEPS).unwrap_or_default();
+    for line in steps {
+        let Ok(step) = serde_json::from_str::<Value>(&line) else {
+            return Opening::Own;
+        };
+        if step.get("type").and_then(Value::as_str) != Some("SYSTEM_MESSAGE") {
+            return Opening::Own;
+        }
+        let content = step
+            .get("content")
+            .and_then(Value::as_str)
+            .unwrap_or_default();
+        if step.get("source").and_then(Value::as_str) == Some("SYSTEM")
+            && let Some(at) = content.find("[Message]")
+        {
+            return Opening::Message(content[at..].to_owned());
+        }
     }
-    let content = step.get("content").and_then(Value::as_str)?;
-    let message = &content[content.find("[Message]")?..];
+    Opening::Unwritten
+}
+
+/// The `sender=<id>` of the `[Message]` a parent conversation sent.
+fn sender(message: &str) -> Option<String> {
     let start = message.find(" sender=")? + " sender=".len();
     let id = message.get(start..start + 36)?;
     valid_conversation(id).then(|| id.to_owned())
@@ -285,6 +346,46 @@ mod tests {
         assert_eq!(Event::read(whole.as_bytes(), true), Event::default());
     }
 
+    #[test]
+    fn an_event_says_whether_the_operator_prompted_its_conversation() {
+        let read = |input: Value| {
+            Event::read(
+                json!({"conversationId": PARENT, "lastUserInput": input})
+                    .to_string()
+                    .as_bytes(),
+                false,
+            )
+            .prompted
+        };
+        assert_eq!(read(json!("Fix the test")), Some(true));
+        // agy 1.5.9 sends a subagent's every event an empty one.
+        assert_eq!(read(json!("")), Some(false));
+        // An agy older than the field says nothing either way.
+        assert_eq!(read(Value::Null), None);
+    }
+
+    /// The prompt hook names the prompt it runs for by its digest, so the
+    /// core knows a bell's turn from the operator's own (with-hide/hide#2580).
+    #[test]
+    fn an_event_carries_the_prompt_it_runs_for() {
+        let read = |input: Value| {
+            Event::read(
+                json!({"conversationId": PARENT, "invocationNum": 0, "lastUserInput": input})
+                    .to_string()
+                    .as_bytes(),
+                false,
+            )
+            .prompt
+        };
+        assert_eq!(read(json!("Fix the test")).as_deref(), Some("Fix the test"));
+        assert_eq!(
+            read(json!("<USER_REQUEST>\nFix the test\n</USER_REQUEST>")).as_deref(),
+            Some("Fix the test")
+        );
+        assert_eq!(read(json!("")), None);
+        assert_eq!(read(Value::Null), None);
+    }
+
     /// The first step agy writes for a subagent `parent` started.
     fn started_by(parent: &str) -> Value {
         json!({
@@ -305,7 +406,7 @@ mod tests {
             ],
         );
         // A subagent the subagent started counts under the pane's own
-        // conversation, the one Herdr reports for the pane.
+        // conversation, the one the pane's agent reports.
         let grandchild = "c0c0c0c0-0000-4000-8000-000000000003";
         write_transcript(home.path(), grandchild, &[started_by(CHILD)]);
         let now = Instant::now();
@@ -315,6 +416,13 @@ mod tests {
             Some(PARENT)
         );
         assert_eq!(root_of(home.path(), PARENT, now), None);
+        // What the parent asked is the message's words; the parent's own
+        // conversation was asked nothing.
+        assert_eq!(
+            subagent_task(home.path(), CHILD).as_deref(),
+            Some("Run it.")
+        );
+        assert_eq!(subagent_task(home.path(), PARENT), None);
         // No transcript before the deadline: a conversation of its own.
         let missing = "00000000-0000-4000-8000-000000000000";
         let waited = Instant::now();
@@ -323,6 +431,46 @@ mod tests {
             None
         );
         assert!(waited.elapsed() >= Duration::from_millis(60));
+    }
+
+    #[test]
+    fn a_subagent_is_told_past_the_steps_hooks_injected_at_its_start() {
+        let home = tempfile::tempdir().unwrap();
+        // agy 1.5.9: what a hook injected at the subagent's start comes
+        // first, and the parent's message lands only after its first model
+        // call.
+        let injected = json!({
+            "step_index": 0, "source": "SYSTEM_SDK", "type": "SYSTEM_MESSAGE",
+            "content": "<SYSTEM_MESSAGE>\nThe following system message was injected by a SessionStart hook:\nInside Hide\n</SYSTEM_MESSAGE>",
+        });
+        write_transcript(home.path(), CHILD, std::slice::from_ref(&injected));
+        let now = Instant::now();
+        assert_eq!(root_of(home.path(), CHILD, now), None);
+        assert_eq!(subagent_task(home.path(), CHILD), None);
+
+        let mut message = started_by(PARENT);
+        message["step_index"] = json!(1);
+        write_transcript(home.path(), CHILD, &[injected, message]);
+        assert_eq!(root_of(home.path(), CHILD, now).as_deref(), Some(PARENT));
+        assert_eq!(
+            subagent_task(home.path(), CHILD).as_deref(),
+            Some("Run it.")
+        );
+
+        // The pane's own conversation opens with the operator's prompt, and
+        // the replies its subagents send it later name no parent of it.
+        let mut reply = started_by(CHILD);
+        reply["step_index"] = json!(6);
+        write_transcript(
+            home.path(),
+            PARENT,
+            &[
+                json!({"step_index": 0, "source": "USER_EXPLICIT", "type": "USER_INPUT", "content": "<USER_REQUEST>\nhi\n</USER_REQUEST>"}),
+                reply,
+            ],
+        );
+        assert_eq!(root_of(home.path(), PARENT, now), None);
+        assert_eq!(subagent_task(home.path(), PARENT), None);
     }
 
     #[test]

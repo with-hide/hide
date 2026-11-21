@@ -3,38 +3,43 @@
 //! crate and all its dependencies again; docs/BUILD.md, "One integration
 //! test binary per crate", owns the rule.
 
+mod access;
+mod agent_exec;
+mod always_on_update;
+mod arguments;
+mod automations;
 mod browser_control;
 mod closed_stdout;
 mod connect_build;
 mod connect_stop;
-mod core_move;
 mod core_move_checks;
-mod device_bootstrap;
 mod device_own_engine;
+mod fixtures;
+mod guest_node;
 mod handshake;
-mod held_letter_notice;
-mod herdr_handoff;
 mod mobile;
 mod mobile_relay;
 mod node_contract;
+#[cfg(unix)]
 mod node_home;
 mod node_link_facts;
 mod node_owner;
 mod node_session_activity;
+mod old_state_folder;
 mod opener_lifecycle;
-#[path = "support/private_herdr.rs"]
-mod private_herdr;
-mod real_herdr;
-mod remote_core;
+mod pairing;
 mod remote_delivery;
-mod responsive_state;
 mod seat;
 mod shell_exec;
+#[allow(dead_code)] // `hide agent exec` needs only the table form.
+#[path = "../../../hide-agent-hooks/tests/it/stand_in_daemon.rs"]
+mod stand_in_daemon;
 #[allow(dead_code)] // This fixture needs readiness only, not stand-in placement.
 #[path = "../../../hide-platform/tests/it/stand_ins.rs"]
 mod stand_ins;
+mod stress_gate_canary;
 #[cfg(unix)]
 mod support;
 mod system_ssh;
-mod terminal_children;
+mod windows_ssh_device;
 mod wsl_device;

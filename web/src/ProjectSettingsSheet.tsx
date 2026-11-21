@@ -1,6 +1,8 @@
 import { BrainIcon, FolderGit2Icon, FolderIcon, GitBranchIcon, LinkIcon, XIcon } from "lucide-react";
 import { useEffect, useRef, useState, type ReactNode } from "react";
 import type { Actions } from "./actions";
+import { projectAccountChoices } from "./agentProfiles";
+import { ProjectAgentAccounts } from "./components/agent-profiles";
 import { Group, Note, Row, Status, Value } from "./components/settings-rows";
 import { Button } from "./components/ui/button";
 import { Dialog, DialogContent, DialogTitle } from "./components/ui/dialog";
@@ -32,7 +34,7 @@ function ProjectSettingsBody({ target, actions, initialPage }: { target: Project
   const { t } = useInterfaceTranslation();
   const rest = useShellStore((state) => state.rest);
   const live = useShellStore((state) => state.connection === "live");
-  const current = catalogWorkspaces(rest).find((row) => row.device_id === target.deviceId && row.path === target.root && !row.is_home) ?? null;
+  const current = catalogWorkspaces(rest).find((row) => row.device_id === target.deviceId && row.path === target.root) ?? null;
   const lastWorkspace = useRef(current);
   if (current) lastWorkspace.current = current;
   const workspace = current ?? lastWorkspace.current;
@@ -64,6 +66,9 @@ function ProjectSettingsBody({ target, actions, initialPage }: { target: Project
     setIntent({ id, field, part, patch, state: sent ? "pending" : "failed" });
   };
   const guardrails = projectGuardrails(record);
+  // Working style › Agent accounts (PRD agent-profiles B15): each agent the project's machine keeps profiles for.
+  const machine = rest?.navigator?.devices?.find((device) => device.id === target.deviceId);
+  const agentAccounts = projectAccountChoices(machine, record?.agent_profiles);
   // A receipt read back without its intent (the dialog reopened) is shown beside the control it moved.
   const receiptPart = (patch: ProjectSettingsPatch | undefined) => patch?.guardrails ? guardPartOf(patch.guardrails, guardrails) : undefined;
   const stateFor = (field: keyof ProjectSettingsPatch, part?: GuardPart): ReactNode => {
@@ -130,7 +135,7 @@ function ProjectSettingsBody({ target, actions, initialPage }: { target: Project
             <p className="flex items-start gap-xs text-body font-medium" data-project-settings-name="true">{workspace?.is_git ? <FolderGit2Icon aria-hidden="true" className="size-(--size-icon) shrink-0" /> : <FolderIcon aria-hidden="true" className="size-(--size-icon) shrink-0" />}<span className="line-clamp-2 min-w-0 break-words" title={workspace?.label ?? target.label}>{workspace?.label ?? target.label}</span></p>
             <p className="line-clamp-2 break-all font-mono text-caption text-muted-foreground" title={target.root}>{target.root}</p>
           </div>
-          <TabsList aria-label={t("projectSettings.section")} className="min-h-0 w-full flex-1 flex-col items-stretch justify-start gap-xxs rounded-none bg-transparent p-none">
+          <TabsList variant="nav" aria-label={t("projectSettings.section")} className="min-h-0 w-full flex-1 flex-col items-stretch justify-start gap-xxs rounded-none bg-transparent p-none">
             {PAGES.map(({ id, icon: Icon }) => <TabsTrigger key={id} value={id} className="min-h-(--size-control) w-full shrink-0 justify-start gap-sm whitespace-normal rounded-xs px-sm py-xs text-body data-[state=active]:bg-accent data-[state=active]:shadow-none"><Icon aria-hidden="true" className="size-(--size-icon) shrink-0" />{t(`projectSettings.${id}`)}</TabsTrigger>)}
           </TabsList>
           <p className="shrink-0 break-words px-sm pt-sm text-caption text-muted-foreground">{t("projectSettings.scope")}</p>
@@ -187,6 +192,9 @@ function ProjectSettingsBody({ target, actions, initialPage }: { target: Project
                     <Switch aria-label={t("projectSettings.autoFetch")} checked={workspace?.is_git ? record?.auto_fetch ?? true : false} disabled={blocked || !workspace?.is_git} onCheckedChange={(checked) => save("auto_fetch", { auto_fetch: checked })} />
                   </Row>
                 </Group>
+                <ProjectAgentAccounts rows={agentAccounts} disabled={blocked}
+                  onChange={(agent, profile) => save("agent_profiles", { agent_profiles: { [agent]: profile } })}
+                  status={(agent) => (intent?.field === "agent_profiles" ? agent in (intent.patch.agent_profiles ?? {}) : write?.patch?.agent_profiles && agent in write.patch.agent_profiles) ? stateFor("agent_profiles") : null} />
                 <ProjectGuardrails rules={guardrails} isGit={workspace?.is_git ?? false} base={workspace ? guardedBase(rest, workspace, record) : null} disabled={blocked}
                   unguarded={unguardedAgents(rest?.navigator?.devices?.find((device) => device.id === target.deviceId)?.kit?.agents)}
                   save={(part, rules: Guardrails) => save("guardrails", { guardrails: rules }, part)} stateFor={(part) => stateFor("guardrails", part)}

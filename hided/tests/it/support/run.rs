@@ -168,13 +168,13 @@ mod tests {
         fs::copy(&program, root.join("c/home/helper/hided")).unwrap();
         fs::write(root.join("c/home/gh"), "#!/bin/sh\nexit 0\n").unwrap();
         fs::write(root.join("c/empty"), "").unwrap();
-        std::os::unix::fs::symlink(&program, root.join("c/home/herdr")).unwrap();
+        std::os::unix::fs::symlink(&program, root.join("c/home/linked")).unwrap();
         finish(&mut run, Err(anyhow!("the helper never became ready"))).unwrap_err();
         assert!(root.join("evidence").is_file());
         assert!(root.join("c/home/gh").is_file());
         assert!(root.join("c/empty").is_file());
         assert!(!root.join("c/home/helper/hided").exists());
-        assert!(fs::symlink_metadata(root.join("c/home/herdr")).is_ok());
+        assert!(fs::symlink_metadata(root.join("c/home/linked")).is_ok());
         assert!(program.is_file(), "a link's target is not the run's");
     }
 

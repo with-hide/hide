@@ -6,6 +6,139 @@ use hide_agent_adapter::definition::{
 };
 use hide_agent_adapter::{ADAPTERS, AgentId};
 
+#[test]
+fn credential_paths_are_declared_for_every_agent_whose_login_is_read() {
+    use hide_agent_adapter::AccountPath::{Login, Usage};
+    let expected: &[(&str, _, &[&str])] = &[
+        ("codex", Login, &["/OPENAI_API_KEY", "/tokens/access_token"]),
+        (
+            "claude-code",
+            Usage,
+            &["/claudeAiOauth/accessToken", "/claudeAiOauth/refreshToken"],
+        ),
+        (
+            "pi",
+            Login,
+            &["/*/key", "/*/env", "/*/access", "/*/refresh"],
+        ),
+        (
+            "grok",
+            Login,
+            &["/*/key", "/*/access_token", "/*/refresh_token"],
+        ),
+    ];
+    for adapter in ADAPTERS {
+        let actual = adapter.account_rule().and_then(|rule| rule.login.as_ref());
+        match expected.iter().find(|(id, _, _)| *id == adapter.id) {
+            Some((_, at, any)) => {
+                let actual = actual.expect(adapter.id);
+                assert_eq!(actual.at, *at);
+                assert_eq!(actual.any, *any);
+            }
+            None => assert!(actual.is_none(), "{}", adapter.id),
+        }
+    }
+}
+
+#[test]
+fn login_rules_reject_unbounded_paths_and_invalid_pointers() {
+    let builtin = include_str!("../../agents/codex.toml");
+    let account =
+        &builtin[builtin.find("[account]").unwrap()..builtin.find("\n[screen]\n").unwrap()];
+    let base = format!(
+        "schema = 1\nid = \"credential-test\"\nname = \"C\"\nexecutables = [\"credential-test\"]\nhooks = \"none\"\n{account}"
+    );
+    let valid = Catalog::read(vec![text("credential-test.toml", &base)]);
+    assert!(valid.rejected.is_empty(), "{:?}", valid.rejected);
+    let original = "at = \"login\"\nany = [\"/OPENAI_API_KEY\", \"/tokens/access_token\"]";
+    for bad in [
+        "at = \"sessions\"\nany = [\"/token\"]".to_owned(),
+        "at = \"login\"\nany = []".to_owned(),
+        "at = \"login\"\nany = [\"token\"]".to_owned(),
+        "at = \"login\"\nany = [\"/token/*/value\"]".to_owned(),
+        "at = \"login\"\nany = [\"/bad~2escape\"]".to_owned(),
+        format!("at = \"login\"\nany = [\"/{}\"]", "a".repeat(256)),
+        format!("at = \"login\"\nany = [{}]", ["\"/token\""; 17].join(",")),
+    ] {
+        let written = base.replace(original, &bad);
+        assert_ne!(written, base);
+        assert!(
+            Catalog::read(vec![text("credential-test.toml", &written)])
+                .rejected
+                .iter()
+                .any(|row| row.reason.contains("account.login")),
+            "{bad}"
+        );
+    }
+}
+
+#[test]
+fn built_in_package_identities_match_their_install_routes() {
+    use hide_agent_adapter::InstallMethod;
+    for adapter in ADAPTERS {
+        let installed: std::collections::BTreeSet<_> = adapter
+            .updates
+            .iter()
+            .filter_map(|route| match route.method {
+                InstallMethod::Npm(name) | InstallMethod::Bun(name) => Some(name),
+                _ => None,
+            })
+            .collect();
+        let declared: std::collections::BTreeSet<_> = builtin(adapter.id)
+            .unwrap()
+            .packages
+            .iter()
+            .map(String::as_str)
+            .collect();
+        assert_eq!(declared, installed, "{}", adapter.id);
+    }
+}
+
+#[test]
+fn package_identities_are_full_names_and_a_bad_file_is_left_out_alone() {
+    let file = |id: &str, package: &str| {
+        format!(
+            "schema = 1\nid = {id:?}\nname = {id:?}\nexecutables = [{id:?}]\nhooks = \"none\"\npackages = [{package:?}]\n"
+        )
+    };
+    for bad in [
+        "",
+        "@scope",
+        "@/name",
+        "@scope/",
+        "@scope/name/extra",
+        "../name",
+        "name@1",
+        "Name",
+        "name with space",
+        "C:\\name",
+    ] {
+        let catalog = Catalog::read(vec![
+            text("bad.toml", &file("bad", bad)),
+            text("good.toml", &file("good", "@local/good")),
+        ]);
+        assert_eq!(catalog.rejected.len(), 1, "{bad:?}");
+        assert_eq!(catalog.rejected[0].file, "bad.toml");
+        assert!(catalog.rejected[0].reason.contains("package"));
+        assert_eq!(
+            catalog.definitions.last().unwrap().packages,
+            ["@local/good"]
+        );
+    }
+    let catalog = Catalog::read(vec![
+        text("first.toml", &file("first", "@local/shared")),
+        text("second.toml", &file("second", "@local/shared")),
+        text("third.toml", &file("third", "@other/shared")),
+    ]);
+    assert_eq!(catalog.rejected.len(), 1);
+    assert!(
+        catalog.rejected[0]
+            .reason
+            .contains("package @local/shared is taken by first")
+    );
+    assert_eq!(catalog.definitions.last().unwrap().id, "third");
+}
+
 fn text(name: &str, text: &str) -> UserFile {
     UserFile::Text {
         name: name.to_owned(),
@@ -93,17 +226,29 @@ fn each_agent_with_hides_features_takes_its_identity_from_its_definition() {
         let definition =
             builtin(adapter.id).unwrap_or_else(|| panic!("{}: no definition", adapter.id));
         assert_eq!(definition.hooks, hooks, "{}", adapter.id);
+        // The account read alone is the one the whole file holds.
+        assert_eq!(
+            adapter.account_rule(),
+            definition.account.as_ref(),
+            "{}",
+            adapter.id
+        );
         assert_eq!(definition.name, adapter.label);
         assert_eq!(definition.executables, adapter.executables);
         assert_eq!(definition.aliases, adapter.aliases);
+        // The definition's `home` and its default account's own folder are
+        // one folder; retired Cursor keeps no account (PRD agent-profiles D-25).
+        if key == AgentId::Cursor {
+            assert!(definition.account.is_none());
+            continue;
+        }
         assert_eq!(
-            definition.home.as_deref(),
-            Some(adapter.folder)
-                .map(|parts| parts
-                    .iter()
-                    .map(|part| part.to_string())
-                    .collect::<Vec<_>>())
-                .as_deref()
+            definition.home,
+            definition.account.as_ref().and_then(|rule| {
+                hide_agent_adapter::default_folder(rule, hide_agent_adapter::AccountPath::State)
+            }),
+            "{}",
+            adapter.id
         );
         if let Some(dialect) = adapter.resume {
             let session = definition
@@ -165,6 +310,67 @@ fn a_file_with_a_built_in_id_replaces_only_its_screen_rules() {
     let screen = pi.screen.as_ref().unwrap();
     assert_eq!(screen.source, Source::User("pi.toml".into()));
     assert_eq!(screen.rules.version().as_str(), "1");
+}
+
+#[test]
+fn a_starts_ready_rule_is_an_idle_rule_of_the_screen_rules_the_agent_ends_up_with() {
+    let opencode = builtin("opencode").unwrap();
+    assert_eq!(opencode.start_ready.as_deref(), Some("model_line_idle"));
+    let model_line = "\n[[screen.rules]]\nid = \"model_line_idle\"\nstate = \"idle\"\ncontains = [\"build ·\"]\n";
+    let busy = "\n[[screen.rules]]\nid = \"busy\"\nstate = \"working\"\ncontains = [\"busy\"]\n";
+    let new_agent =
+        "schema = 1\nid = \"mine\"\nname = \"Mine\"\nexecutables = [\"mine\"]\nhooks = \"none\"\n";
+    let catalog = Catalog::read(vec![
+        // Rules without the ready rule would hold every start to its deadline.
+        text(
+            "opencode-a.toml",
+            &format!("schema = 1\nid = \"opencode\"\n{RULES}"),
+        ),
+        text(
+            "opencode-b.toml",
+            &format!("schema = 1\nid = \"opencode\"\n{RULES}{model_line}"),
+        ),
+        text(
+            "copy.toml",
+            "schema = 1\nid = \"copy\"\nname = \"Copy\"\nbased_on = \"opencode\"\nexecutables = [\"copy\"]\n",
+        ),
+        text(
+            "mine.toml",
+            &format!("{new_agent}[start]\nready = \"ready\"\n{RULES}"),
+        ),
+        text(
+            "busy.toml",
+            &format!(
+                "{}[start]\nready = \"busy\"\n{RULES}{busy}",
+                new_agent.replace("mine", "busy")
+            ),
+        ),
+    ]);
+    let reasons: Vec<&str> = catalog
+        .rejected
+        .iter()
+        .map(|rejected| rejected.reason.as_str())
+        .collect();
+    assert_eq!(
+        reasons,
+        [
+            "opencode-a.toml: start.ready names screen rule \"model_line_idle\", which [screen] does not have",
+            "busy.toml: start.ready names screen rule \"busy\", which is not an idle rule",
+        ]
+    );
+    let find = |id: &str| {
+        catalog
+            .definitions
+            .iter()
+            .find(|definition| definition.id == id)
+            .unwrap()
+    };
+    assert_eq!(
+        find("opencode").screen.as_ref().unwrap().source,
+        Source::User("opencode-b.toml".into())
+    );
+    assert_eq!(find("copy").start_ready.as_deref(), Some("model_line_idle"));
+    assert_eq!(find("mine").start_ready.as_deref(), Some("ready"));
 }
 
 #[test]
@@ -366,4 +572,116 @@ fn each_unusable_file_is_left_out_alone_with_one_line_naming_it() {
         );
     }
     assert_eq!(MAX_USER_FILES, 64);
+}
+
+/// `[account]` is checked like every field (PRD agent-profiles D-12): each
+/// place named, `false` for none, only skills shared, variables declared,
+/// and a copy or a built-in's screen file never moves an account.
+#[test]
+fn an_account_rule_names_every_place_and_only_its_own_variables() {
+    let head =
+        "schema = 1\nid = \"acct\"\nname = \"A\"\nexecutables = [\"acct\"]\nhooks = \"none\"\n";
+    let all = |state: &str, skills: &str| {
+        format!(
+            "[account]\nby = \"folder\"\n[account.vars]\nACCT_HOME = {{ default = \"~/.acct\", profile = \"{{account}}\" }}\n[account.paths]\nhooks = false\nhook_trust = false\nplugins = false\nskills = {skills}\nfolder_trust = false\nsessions = \"{{ACCT_HOME}}/sessions\"\nlogin = false\nstate = {state}\nusage = false\nmcp = false\n"
+        )
+    };
+    let good = all("\"{ACCT_HOME}\"", "\"shared\"");
+    let catalog = Catalog::read(vec![text("acct.toml", &format!("{head}{good}"))]);
+    assert!(catalog.rejected.is_empty(), "{:?}", catalog.rejected);
+    let cases: Vec<(String, &str)> = vec![
+        (good.replace("usage = false\n", ""), "not a definition file"),
+        (good.replace("mcp = false\n", ""), "not a definition file"),
+        (
+            good.replace("mcp = false\n", "mcp = \"~/.acct/mcp.json\"\n"),
+            "mcp_format names the shape of .paths.mcp",
+        ),
+        (
+            format!("{good}mcp_format = \"claude\"\n"),
+            "mcp_format is for an agent whose .paths.mcp is a file",
+        ),
+        (
+            good.replace(
+                "mcp = false\n",
+                "mcp = \"~/.acct/mcp.json\"\nmcp_format = \"vscode\"\n",
+            ),
+            "not a definition file",
+        ),
+        (format!("{good}unknown = false\n"), "not a definition file"),
+        (
+            all("\"shared\"", "false"),
+            "account.paths.state cannot be shared",
+        ),
+        (
+            all("true", "false"),
+            "account.paths.state is a place, or false for none",
+        ),
+        (
+            all("\"{OTHER_HOME}/x\"", "false"),
+            "names {OTHER_HOME}, which .vars does not",
+        ),
+        (
+            all("\"~/../x\"", "false"),
+            "holds a folder name that is not plain",
+        ),
+        (all("\"/abs\"", "false"), "does not start at ~"),
+        (
+            all("\"{account}/x\"", "false"),
+            "only a folder account's profile has",
+        ),
+        (
+            good.replace("ACCT_HOME = ", "HIDE_HOME = ")
+                .replace("{ACCT_HOME}", "{HIDE_HOME}"),
+            "is not an agent's own variable name",
+        ),
+        (
+            good.replace("by = \"folder\"", "by = \"none\""),
+            "by = \"none\" says why in reason",
+        ),
+        (
+            format!("{good}[account.forbid]\nvars = [\"ACCT_HOME\"]\n"),
+            "is not a variable name apart from .vars",
+        ),
+    ];
+    for (account, reason) in cases {
+        let catalog = Catalog::read(vec![text("acct.toml", &format!("{head}{account}"))]);
+        assert_eq!(catalog.rejected.len(), 1, "{account}");
+        assert!(
+            catalog.rejected[0].reason.contains(reason),
+            "{} does not say {reason}",
+            catalog.rejected[0].reason
+        );
+    }
+    let copy = Catalog::read(vec![text(
+        "mycodex.toml",
+        &format!(
+            "schema = 1\nid = \"mycodex\"\nname = \"M\"\nbased_on = \"codex\"\nexecutables = [\"mycodex\"]\n{good}"
+        ),
+    )]);
+    assert!(
+        copy.rejected[0]
+            .reason
+            .contains("account comes from based_on codex"),
+        "{:?}",
+        copy.rejected
+    );
+    let plain_copy = Catalog::read(vec![text(
+        "mycodex.toml",
+        "schema = 1\nid = \"mycodex\"\nname = \"M\"\nbased_on = \"codex\"\nexecutables = [\"mycodex\"]\n",
+    )]);
+    let mine = plain_copy
+        .definitions
+        .iter()
+        .find(|definition| definition.id == "mycodex")
+        .unwrap();
+    assert_eq!(mine.account, builtin("codex").unwrap().account);
+    let screen = Catalog::read(vec![text(
+        "codex.toml",
+        &format!("schema = 1\nid = \"codex\"\n{good}"),
+    )]);
+    assert!(
+        screen.rejected[0].reason.contains("not account"),
+        "{:?}",
+        screen.rejected
+    );
 }

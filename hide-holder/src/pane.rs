@@ -22,13 +22,16 @@ use std::time::{Duration, Instant};
 
 use hide_holder_protocol::{
     Answer, Appearance, Key, MAX_READ_BYTES, Modifiers, Mouse, MouseAction, MouseButton, Scroll,
-    Size, Theme,
+    Size, Theme, styled,
 };
 use hide_vt::{ActiveScreen, DefaultColor, RgbColor, Terminal};
 
 use crate::answers::{self, Mark, Scanner};
 use crate::osc::{OscState, parse_reported_cwd};
 use crate::screen::{Capture, Defaults, Frame};
+
+// A write the parser takes always fits the message that carries it.
+const _: () = assert!(hide_vt::MAX_CLIPBOARD_BYTES == hide_holder_protocol::MAX_CLIPBOARD);
 
 /// The parser's scrollback budget, libghostty's approximate bytes (PRD
 /// engine-bundle-2-pane-holder D-17).
@@ -39,6 +42,14 @@ const SCROLLBACK_BYTES: usize = 2 * 1024 * 1024;
 /// last time it turned it on, so a program that begins each frame with it
 /// is waited on per frame.
 pub const SYNC_LIMIT: Duration = Duration::from_secs(1);
+
+/// The pixel size, width and height, the holder gives a cell. It stands in
+/// for the screen's, which the holder never knows and which differs per
+/// screen that draws the pane: the cell and text-area pixel questions
+/// (XTWINOPS 14t, 16t) are answered with it, and a program that asks for
+/// pointer events in pixels (mode 1016) is told them in it, so the two
+/// agree. Claude Code asks for pixels to hear a drag past the pane's edge.
+pub const CELL_PIXELS: (u32, u32) = (10, 20);
 
 /// What a wheel turned into.
 pub enum Wheel {
@@ -73,6 +84,13 @@ pub struct Pane {
     cwd: Option<PathBuf>,
     /// The bells the program rang since the pane began.
     bells: u64,
+    /// The text the program last wrote to the clipboard (OSC 52) and no
+    /// connection has taken yet: only the latest, since each write replaces
+    /// the clipboard.
+    clipboard: Option<Vec<u8>>,
+    /// The cell of the last pointer event reported in cells, so a motion
+    /// that stays in it is not reported again, as Ghostty reports motion.
+    reported_cell: Option<(u16, u16)>,
 }
 
 /// What the pane's facts are made from, read under the pane's lock.
@@ -83,8 +101,9 @@ pub struct Observed {
     pub bells: u64,
     pub prompts: u64,
     pub bracketed_paste: bool,
+    pub alternate_screen: bool,
     /// The screen's last rows as the screen rules read them: as many as it
-    /// has rows, as Herdr reads an agent's screen; empty when not asked.
+    /// has rows, as an agent's screen is read; empty when not asked.
     pub screen: String,
     /// The title and progress the screen rules read.
     pub rules_title: String,
@@ -97,6 +116,9 @@ impl Pane {
     pub fn new(size: Size, theme: Option<&Theme>) -> Result<Self, String> {
         let mut terminal = Terminal::new(size.cols, size.rows, SCROLLBACK_BYTES)
             .map_err(|error| format!("the terminal parser: {error}"))?;
+        terminal
+            .resize(size.cols, size.rows, CELL_PIXELS.0, CELL_PIXELS.1)
+            .map_err(|error| format!("the terminal parser's cell size: {error}"))?;
         let replies = Arc::new(Mutex::new(Vec::new()));
         terminal
             .set_write_pty_callback({
@@ -133,6 +155,8 @@ impl Pane {
             osc: OscState::default(),
             cwd: None,
             bells: 0,
+            clipboard: None,
+            reported_cell: None,
         };
         let theme = theme.cloned().unwrap_or(Theme {
             foreground: None,
@@ -168,13 +192,6 @@ impl Pane {
             self.terminal.write(&bytes[start..end]);
             self.take_replies(answers);
             match mark {
-                Mark::SizeQuery => {
-                    let (rows, cols) = (
-                        self.terminal.rows().unwrap_or(0),
-                        self.terminal.cols().unwrap_or(0),
-                    );
-                    answers.extend_from_slice(format!("\x1b[8;{rows};{cols}t").as_bytes());
-                }
                 Mark::CursorShape(shape) => self.shaped = shape != 0,
                 Mark::Reset => self.shaped = false,
                 Mark::SyncStart => self.sync_since = Some(now),
@@ -197,10 +214,10 @@ impl Pane {
         };
     }
 
-    /// Takes what the parser collected of the output for the facts: the
-    /// bells, the last whole folder the shell reported (a relative one
-    /// names no folder), and the clipboard writes, which no node is sent
-    /// and which would otherwise grow with every one.
+    /// Takes what the parser collected of the output: the bells and the
+    /// last whole folder the shell reported (a relative one names no
+    /// folder) for the facts, and the last clipboard write for the screen
+    /// ([`Pane::take_clipboard`]).
     fn take_reports(&mut self) {
         self.bells = self
             .bells
@@ -214,7 +231,15 @@ impl Pane {
         {
             self.cwd = Some(cwd);
         }
-        let _ = self.terminal.take_clipboard_writes();
+        if let Some(copied) = self.terminal.take_clipboard_writes().pop() {
+            self.clipboard = Some(copied);
+        }
+    }
+
+    /// The text the program last wrote to the clipboard since this was last
+    /// asked, once.
+    pub fn take_clipboard(&mut self) -> Option<Vec<u8>> {
+        self.clipboard.take()
     }
 
     /// What the pane's facts are made from now; the screen's text only when
@@ -234,6 +259,7 @@ impl Pane {
             bells: self.bells,
             prompts: self.osc.prompts(),
             bracketed_paste: self.terminal.mode_get(hide_vt::MODE_BRACKETED_PASTE)?,
+            alternate_screen: self.terminal.active_screen()? != ActiveScreen::Primary,
             screen,
             rules_title: self.osc.rules_title().to_owned(),
             progress: self.osc.progress().to_owned(),
@@ -262,6 +288,12 @@ impl Pane {
         self.sync_since.map(|since| since + SYNC_LIMIT)
     }
 
+    /// Says nothing of which rows soft-wrap; see [`Capture::without_wraps`].
+    #[cfg_attr(not(windows), allow(dead_code))] // only a Windows holder drops them
+    pub fn without_wraps(&mut self) {
+        self.capture.without_wraps();
+    }
+
     /// The screen as it is now; `everything` reads every row again.
     pub fn take(&mut self, everything: bool) -> Result<Frame, hide_vt::Error> {
         let everything = everything || std::mem::take(&mut self.everything);
@@ -269,11 +301,13 @@ impl Pane {
             .take(&self.terminal, &self.defaults, self.shaped, everything)
     }
 
-    /// Resizes the parser; answers what it says of the new size, which with
-    /// no pixel size known is nothing (D-9).
+    /// Resizes the parser, its cells [`CELL_PIXELS`] each; answers what it
+    /// says of the new size (D-9).
     pub fn resize(&mut self, size: Size, answers: &mut Vec<u8>) -> Result<(), hide_vt::Error> {
         self.everything = true;
-        let resized = self.terminal.resize(size.cols, size.rows, 0, 0);
+        let resized = self
+            .terminal
+            .resize(size.cols, size.rows, CELL_PIXELS.0, CELL_PIXELS.1);
         self.take_replies(answers);
         resized
     }
@@ -336,9 +370,9 @@ impl Pane {
 
     /// Named keys as the program asked to be told of them now: an arrow in
     /// application cursor mode, Escape under a keyboard protocol. Built as
-    /// Herdr builds a named key's event for its pane (`encode_terminal_key`),
-    /// with macOS Option kept as Alt; none of these keys is a chord Herdr's
-    /// legacy-shell table changes.
+    /// the terminal encodes a named key's event (derived from Herdr's
+    /// `encode_terminal_key`), with macOS Option kept as Alt; none of these
+    /// keys is a chord the legacy-shell table changes.
     pub fn keys(&self, keys: &[Key]) -> Result<Vec<u8>, hide_vt::Error> {
         use hide_vt::ffi;
         let mut encoder = hide_vt::KeyEncoder::new()?;
@@ -372,8 +406,8 @@ impl Pane {
     }
 
     /// A pointer event as the program asked to be told of it, or `None` when
-    /// it tracks no mouse, or asked for pixels, which are not known.
-    pub fn mouse(&self, mouse: &Mouse) -> Result<Option<Vec<u8>>, hide_vt::Error> {
+    /// it tracks no mouse.
+    pub fn mouse(&mut self, mouse: &Mouse) -> Result<Option<Vec<u8>>, hide_vt::Error> {
         let button = mouse.button.map(|button| match button {
             MouseButton::Left => hide_vt::MOUSE_BUTTON_LEFT,
             MouseButton::Middle => hide_vt::MOUSE_BUTTON_MIDDLE,
@@ -384,26 +418,53 @@ impl Pane {
             MouseAction::Release => hide_vt::MOUSE_ACTION_RELEASE,
             MouseAction::Motion => hide_vt::MOUSE_ACTION_MOTION,
         };
-        self.report(action, button, (mouse.col, mouse.row), mouse.modifiers)
+        self.report(
+            action,
+            button,
+            (mouse.col, mouse.row),
+            mouse.outside,
+            mouse.modifiers,
+        )
     }
 
+    /// Encodes a pointer event at `cell`, or at `outside` when a held button
+    /// dragged the pointer past the grid: in pixels for a program that asked
+    /// for them (mode 1016), where a position past the edge is told as it is,
+    /// negative or past the last pixel, as Ghostty tells a drag out of its
+    /// surface; in cells otherwise, at the grid's cell nearest it.
     fn report(
-        &self,
+        &mut self,
         action: hide_vt::ffi::GhosttyMouseAction,
         button: Option<hide_vt::ffi::GhosttyMouseButton>,
         (col, row): (u16, u16),
+        outside: Option<(i32, i32)>,
         modifiers: Modifiers,
     ) -> Result<Option<Vec<u8>>, hide_vt::Error> {
-        if !self.terminal.mouse_tracking_enabled()?
-            || self.terminal.mode_get(hide_vt::MODE_MOUSE_SGR_PIXELS)?
-        {
+        if !self.terminal.mouse_tracking_enabled()? {
             return Ok(None);
         }
+        // ConPTY's input parser drops a pointer report with a coordinate
+        // below zero, a release too, which would leave the program's button
+        // held, so a Windows pane is told the grid's nearest cell
+        // (docs/INSTALL.md, What each system supports).
+        #[cfg(windows)]
+        let outside: Option<(i32, i32)> = {
+            let _ = outside;
+            None
+        };
         let cols = self.terminal.cols()?;
         let rows = self.terminal.rows()?;
+        let cell = (
+            col.min(cols.saturating_sub(1)),
+            row.min(rows.saturating_sub(1)),
+        );
+        let pixels = self.terminal.mode_get(hide_vt::MODE_MOUSE_SGR_PIXELS)?;
+        let motion = action == hide_vt::MOUSE_ACTION_MOTION;
+        if !pixels && motion && self.reported_cell == Some(cell) {
+            return Ok(None);
+        }
         let mut encoder = hide_vt::MouseEncoder::new()?;
         encoder.set_from_terminal(&self.terminal);
-        encoder.set_size(u32::from(cols), u32::from(rows), 1, 1);
         let mut event = hide_vt::MouseEvent::new()?;
         event.set_action(action);
         match button {
@@ -411,15 +472,43 @@ impl Pane {
             None => event.clear_button(),
         }
         event.set_mods(mods(modifiers));
-        event.set_position(
-            f32::from(col.min(cols.saturating_sub(1))),
-            f32::from(row.min(rows.saturating_sub(1))),
-        );
+        if pixels {
+            let (width, height) = CELL_PIXELS;
+            encoder.set_size(
+                u32::from(cols) * width,
+                u32::from(rows) * height,
+                width,
+                height,
+            );
+            // Past the edge, a motion is reported only while a button is
+            // held, as Ghostty reports a drag out of its surface.
+            encoder.set_any_button_pressed(motion && button.is_some());
+            // A cell past the edge is held to a grid's reach either side, so
+            // its pixel always fits the report.
+            let reach = i32::from(u16::MAX);
+            let (x, y) = outside.map_or((i32::from(cell.0), i32::from(cell.1)), |(x, y)| {
+                (x.clamp(-reach, reach), y.clamp(-reach, reach))
+            });
+            // The middle of the cell.
+            event.set_position(
+                (x as f32 + 0.5) * width as f32,
+                (y as f32 + 0.5) * height as f32,
+            );
+        } else {
+            encoder.set_size(u32::from(cols), u32::from(rows), 1, 1);
+            event.set_position(f32::from(cell.0), f32::from(cell.1));
+        }
         let bytes = encoder.encode(&event)?;
-        Ok((!bytes.is_empty()).then_some(bytes))
+        if bytes.is_empty() {
+            return Ok(None);
+        }
+        if !pixels {
+            self.reported_cell = Some(cell);
+        }
+        Ok(Some(bytes))
     }
 
-    /// A wheel, as Herdr routes it: a report to a program that tracks the
+    /// A wheel: a report to a program that tracks the
     /// mouse, an arrow key on the alternate screen with mode 1007, or else
     /// the screen moves through its scrollback.
     pub fn scroll(&mut self, scroll: &Scroll) -> Result<Wheel, hide_vt::Error> {
@@ -438,6 +527,7 @@ impl Pane {
                     hide_vt::MOUSE_ACTION_PRESS,
                     Some(button),
                     scroll.cell.unwrap_or((0, 0)),
+                    None,
                     scroll.modifiers,
                 )? {
                     Some(bytes) => Wheel::Input(bytes),
@@ -490,7 +580,7 @@ impl Pane {
     }
 
     /// Where the screen is in its scrollback, in rows above the bottom
-    /// (Herdr's `pane.get` scroll metrics).
+    /// (the scroll metrics a client reads).
     pub fn scroll_position(&self) -> Result<Answer, hide_vt::Error> {
         let (offset_from_bottom, max_offset_from_bottom) = self.position()?;
         Ok(Answer::Scroll {
@@ -500,7 +590,7 @@ impl Pane {
     }
 
     /// Moves the screen to `offset_from_bottom` rows above the bottom, past
-    /// the top clamped to it (Herdr's `pane.scroll`); answers where it is
+    /// the top clamped to it; answers where it is
     /// then and whether it moved.
     pub fn scroll_to(&mut self, offset_from_bottom: u64) -> Result<(Answer, bool), hide_vt::Error> {
         let (before, max) = self.position()?;
@@ -524,7 +614,7 @@ impl Pane {
         Ok((max.saturating_sub(bar.offset) as u64, max as u64))
     }
 
-    /// The last `lines` rows as text with soft wraps joined (Herdr's recent
+    /// The last `lines` rows as text with soft wraps joined (the
     /// unwrapped read), cut from the oldest side to [`MAX_READ_BYTES`]. The
     /// screen's scroll position is not touched: rows are read by their place
     /// in the whole screen.
@@ -534,7 +624,7 @@ impl Pane {
     }
 
     /// The rows the screen shows now, wherever the screen connection
-    /// scrolled it, as text with soft wraps joined (Herdr's `visible` read),
+    /// scrolled it, as text with soft wraps joined,
     /// cut as a read is. The scroll position is not touched.
     pub fn read_visible(&self) -> Result<Answer, hide_vt::Error> {
         let rows = self.terminal.rows()?;
@@ -552,9 +642,8 @@ impl Pane {
     }
 
     /// The rows the screen shows now, wherever the screen connection
-    /// scrolled it, with their styling as escape sequences (Herdr's
-    /// `visible_ansi`), cut as a read is. The scroll position is not
-    /// touched.
+    /// scrolled it, with their styling as escape sequences, cut as a read is.
+    /// The scroll position is not touched.
     pub fn read_screen(&self) -> Result<Answer, hide_vt::Error> {
         let rows = self.terminal.rows()?;
         let cols = self.terminal.cols()?;
@@ -567,9 +656,11 @@ impl Pane {
         Ok(styled(text, false))
     }
 
-    /// The rows [`Pane::read`] reads, as the terminal drew them, soft wraps
-    /// kept, with their styling as escape sequences (Herdr's
-    /// `recent_ansi_snapshot`), cut as a read is.
+    /// The rows [`Pane::read`] reads with soft wraps joined, so a reader
+    /// narrower than the pane wraps each line at its own width, with their
+    /// styling as escape sequences, cut to [`MAX_READ_BYTES`] by
+    /// [`newest_rows`]. The first line may be the end of one that began
+    /// above the rows read.
     pub fn read_rows(&self, lines: u16) -> Result<Answer, hide_vt::Error> {
         let cols = self.terminal.cols()?;
         let Some((start, end)) = self.recent_range(usize::from(lines))? else {
@@ -579,9 +670,9 @@ impl Pane {
             (0, start as u32),
             (cols.saturating_sub(1), end as u32),
             false,
-            false,
+            true,
         )?;
-        Ok(styled(text, start > 0))
+        Ok(newest_rows(text, start > 0))
     }
 
     /// [`Pane::read`]'s text, and whether rows were left out.
@@ -609,7 +700,7 @@ impl Pane {
         Ok((text, truncated))
     }
 
-    /// Herdr's `ghostty_recent_read_range`: on the alternate screen its last
+    /// Derived from Herdr's `ghostty_recent_read_range`: on the alternate screen its last
     /// rows; on the primary one, rows up to the last that has text or the
     /// cursor's, whichever is lower.
     fn recent_range(&self, lines: usize) -> Result<Option<(usize, usize)>, hide_vt::Error> {
@@ -647,8 +738,8 @@ impl Pane {
     }
 }
 
-/// A styled read cut to [`MAX_READ_BYTES`] from the oldest side, at a row's
-/// start, so no escape sequence is cut in two.
+/// A styled read of the screen cut to [`MAX_READ_BYTES`] from the oldest
+/// side, at a row's start, so no escape sequence is cut in two.
 fn styled(mut text: String, mut truncated: bool) -> Answer {
     if text.len() > MAX_READ_BYTES {
         let cut = text.len() - MAX_READ_BYTES;
@@ -659,6 +750,26 @@ fn styled(mut text: String, mut truncated: bool) -> Answer {
         truncated = true;
     }
     Answer::Text { text, truncated }
+}
+
+/// The last rows' styled read cut to [`MAX_READ_BYTES`] from the oldest side
+/// ([`styled::newest_bytes`]): its lines are joined, so one may be longer
+/// than the bound and a cut at a line's start could leave nothing; this one
+/// keeps the newest bytes, from a character or a whole sequence, with the
+/// style in effect there opened again, and at least `MAX_READ_BYTES -
+/// CUT_SLACK` of them, so a reader whose own bound is smaller always cuts
+/// too.
+fn newest_rows(text: String, truncated: bool) -> Answer {
+    // A read within the bound, every poll's usual case, is handed on as it
+    // is: no walk over it and no copy.
+    if text.len() <= MAX_READ_BYTES {
+        return Answer::Text { text, truncated };
+    }
+    let (text, _) = styled::newest_bytes(&text, MAX_READ_BYTES, &str::len);
+    Answer::Text {
+        text,
+        truncated: true,
+    }
 }
 
 fn mods(modifiers: Modifiers) -> u16 {
@@ -756,7 +867,7 @@ mod tests {
         );
         assert_eq!(
             asked,
-            "\x1b[1;1R\x1b[?62;22c\x1b[>1;0;0c\x1bP!|00000000\x1b\\\x1b[8;24;80t\
+            "\x1b[1;1R\x1b[?62;22c\x1b[>1;0;0c\x1bP!|00000000\x1b\\\x1b[8;24;80t\x1b[4;480;800t\x1b[6;20;10t\
              \x1b]10;rgb:ffff/ffff/ffff\x07\x1b]4;1;rgb:cccc/6666/6666\x07\x1bP1+r544E=787465726D2D323536636F6C6F72\x1b\\\
              \x1bP1+r5463\x1b\\\x1bP>|libghostty\x1b\\\x1b[?2004;2$y"
         );
@@ -772,9 +883,14 @@ mod tests {
     }
 
     #[test]
-    fn pixel_questions_go_unanswered_while_the_cell_size_is_unknown() {
+    fn pixel_questions_are_answered_with_the_stand_in_cell_size() {
         let mut pane = pane();
-        assert_eq!(answers(&mut pane, &[b"\x1b[14t\x1b[16t\x1b[?2048h"]), "");
+        // 80 by 24 cells of 10 by 20 pixels; a size report (mode 2048)
+        // stays unsent.
+        assert_eq!(
+            answers(&mut pane, &[b"\x1b[14t\x1b[16t\x1b[?2048h"]),
+            "\x1b[4;480;800t\x1b[6;20;10t"
+        );
         let mut resized = Vec::new();
         pane.resize(
             Size {
@@ -785,7 +901,10 @@ mod tests {
         )
         .unwrap();
         assert!(resized.is_empty(), "{resized:?}");
-        assert_eq!(answers(&mut pane, &[b"\x1b[18t"]), "\x1b[8;30;100t");
+        assert_eq!(
+            answers(&mut pane, &[b"\x1b[18t\x1b[14t"]),
+            "\x1b[8;30;100t\x1b[4;600;1000t"
+        );
     }
 
     #[test]
@@ -874,6 +993,15 @@ mod tests {
             col,
             row,
             modifiers: Modifiers::default(),
+            outside: None,
+        }
+    }
+
+    fn drag(col: u16, row: u16, outside: Option<(i32, i32)>) -> Mouse {
+        Mouse {
+            action: MouseAction::Motion,
+            outside,
+            ..press(col, row)
         }
     }
 
@@ -894,9 +1022,47 @@ mod tests {
             pane.mouse(&press(3, 4)).unwrap().as_deref(),
             Some(&b"\x1b[<0;4;5M"[..])
         );
-        // Pixels the holder does not know.
-        answers(&mut pane, &[b"\x1b[?1016h"]);
-        assert_eq!(pane.mouse(&press(3, 4)).unwrap(), None);
+    }
+
+    #[test]
+    fn a_program_that_asks_for_pixels_hears_a_drag_past_the_edge_in_pixels() {
+        let mut pane = pane();
+        answers(&mut pane, &[b"\x1b[?1002h\x1b[?1006h\x1b[?1016h"]);
+        let said = |pane: &mut Pane, mouse: &Mouse| {
+            String::from_utf8(pane.mouse(mouse).unwrap().unwrap()).unwrap()
+        };
+        // A cell is 10 by 20 pixels, told at its middle; past the edge on
+        // Windows, at the grid's nearest cell, since ConPTY drops the rest.
+        assert_eq!(said(&mut pane, &press(3, 4)), "\x1b[<0;35;90M");
+        let (above, further, below) = if cfg!(windows) {
+            ("\x1b[<32;45;10M", "\x1b[<32;45;10M", "\x1b[<32;795;470M")
+        } else {
+            ("\x1b[<32;45;-50M", "\x1b[<32;45;-70M", "\x1b[<32;855;610M")
+        };
+        assert_eq!(said(&mut pane, &drag(4, 0, Some((4, -3)))), above);
+        assert_eq!(said(&mut pane, &drag(4, 0, Some((4, -4)))), further);
+        assert_eq!(said(&mut pane, &drag(79, 23, Some((85, 30)))), below);
+        let release = Mouse {
+            action: MouseAction::Release,
+            ..press(5, 6)
+        };
+        assert_eq!(said(&mut pane, &release), "\x1b[<0;55;130m");
+    }
+
+    #[test]
+    fn a_drag_past_the_edge_is_told_in_cells_once_at_the_nearest_cell() {
+        let mut pane = pane();
+        answers(&mut pane, &[b"\x1b[?1002h\x1b[?1006h"]);
+        assert!(pane.mouse(&press(4, 1)).unwrap().is_some());
+        assert_eq!(
+            pane.mouse(&drag(4, 0, Some((4, -1)))).unwrap().as_deref(),
+            Some(&b"\x1b[<32;5;1M"[..])
+        );
+        assert_eq!(pane.mouse(&drag(4, 0, Some((4, -2)))).unwrap(), None);
+        assert_eq!(
+            pane.mouse(&drag(4, 1, None)).unwrap().as_deref(),
+            Some(&b"\x1b[<32;5;2M"[..])
+        );
     }
 
     fn wheel_input(pane: &mut Pane, lines: i16) -> Option<Vec<u8>> {
@@ -991,6 +1157,134 @@ mod tests {
             panic!("not a text");
         };
         assert_eq!((text.as_str(), truncated), ("two", true));
+    }
+
+    #[test]
+    fn a_styled_read_of_the_last_rows_joins_soft_wraps_and_keeps_the_color() {
+        let mut pane = Pane::new(Size { rows: 6, cols: 20 }, None).unwrap();
+        // 50 colored characters fold over three 20-column rows; the short
+        // line after it ended with a line break of its own.
+        let long = format!("{}{}", "a".repeat(25), "b".repeat(25));
+        answers(
+            &mut pane,
+            &[format!("\x1b[31m{long}\x1b[0m\r\nshort").as_bytes()],
+        );
+        let Answer::Text { text, truncated } = pane.read_rows(6).unwrap() else {
+            panic!("not a text");
+        };
+        assert!(!truncated, "{text:?}");
+        let plain: Vec<String> = text.lines().map(strip_escapes).collect();
+        assert_eq!(plain, vec![long.clone(), "short".to_owned()], "{text:?}");
+        let first = text.lines().next().unwrap();
+        assert!(
+            first.contains("\x1b[31m") || first.contains("\x1b[38;5;1m"),
+            "the color was lost: {text:?}"
+        );
+    }
+
+    /// One soft-wrapped line over a 200-row by 300-column screen whose every
+    /// character changes between two 24-bit colors, which the formatter
+    /// writes as about 1.2 MiB: past the read's bound with no line break to
+    /// cut at.
+    fn one_wide_colored_line() -> String {
+        (0..60_000)
+            .map(|cell| {
+                if cell % 2 == 0 {
+                    "\x1b[38;2;255;0;0mx"
+                } else {
+                    "\x1b[38;2;0;0;255my"
+                }
+            })
+            .collect()
+    }
+
+    /// What a cut read of the last rows must be: within the bound and short
+    /// of it by less than the slack, ending with `newest`, and opening with
+    /// a whole style, the color its first character was drawn in.
+    fn assert_cut_keeps_the_newest(pane: &Pane, newest: &str) {
+        let Answer::Text { text, truncated } = pane.read_rows(2000).unwrap() else {
+            panic!("not a text");
+        };
+        assert!(truncated);
+        assert!(text.len() <= MAX_READ_BYTES, "{}", text.len());
+        assert!(
+            text.len() + styled::CUT_SLACK > MAX_READ_BYTES,
+            "a cut read kept only {} bytes",
+            text.len()
+        );
+        assert!(
+            strip_escapes(&text).trim_end().ends_with(newest),
+            "{:?}",
+            &text[text.len() - 64..]
+        );
+        let first = text.find(['x', 'y']).unwrap();
+        let opened = &text[..first];
+        assert!(opened.starts_with('\x1b'), "{opened:?}");
+        let color = if text[first..].starts_with('x') {
+            "38;2;255;0;0m"
+        } else {
+            "38;2;0;0;255m"
+        };
+        assert!(opened.contains(color), "{opened:?}");
+    }
+
+    #[test]
+    fn a_read_of_one_line_past_the_bound_keeps_its_newest_part_in_its_color() {
+        let mut pane = Pane::new(
+            Size {
+                rows: 200,
+                cols: 300,
+            },
+            None,
+        )
+        .unwrap();
+        answers(
+            &mut pane,
+            &[format!("{}END", one_wide_colored_line()).as_bytes()],
+        );
+        assert_cut_keeps_the_newest(&pane, "END");
+    }
+
+    /// A line past the bound above a short newest one: the cut keeps the
+    /// newest line and fills the bound from the long one, so a reader
+    /// whose own bound is smaller sees that it was cut.
+    #[test]
+    fn a_read_of_a_long_old_line_and_a_short_newest_one_keeps_both() {
+        let mut pane = Pane::new(
+            Size {
+                rows: 200,
+                cols: 300,
+            },
+            None,
+        )
+        .unwrap();
+        answers(
+            &mut pane,
+            &[format!("{}\x1b[0m\r\nEND", one_wide_colored_line()).as_bytes()],
+        );
+        assert_cut_keeps_the_newest(&pane, "\nEND");
+    }
+
+    /// `text` without its escape sequences (CSI and the line's `\r`).
+    fn strip_escapes(text: &str) -> String {
+        let mut plain = String::new();
+        let mut chars = text.chars();
+        while let Some(ch) = chars.next() {
+            match ch {
+                '\x1b' => {
+                    if chars.next() == Some('[') {
+                        for end in chars.by_ref() {
+                            if ('@'..='~').contains(&end) {
+                                break;
+                            }
+                        }
+                    }
+                }
+                '\r' => {}
+                other => plain.push(other),
+            }
+        }
+        plain
     }
 
     /// The rows a read gives as line numbers, in order: each row of

@@ -1,0 +1,6590 @@
+//! A Conductor's mission (PRD software-factory-conductor D-02, D-22): one
+//! agent session plans a piece of work with the operator, starts the workers
+//! that carry it out, replans by what it is told, and reports. The core keeps
+//! the record so that it outlives the Conductor's pane (D-11) and draws it in
+//! the 보기 slot as a map (D-14).
+//!
+//! The record is the core's: the Conductor changes it only through the
+//! pane-bound `hide mission` commands (D-23), each one event applied under
+//! the runtime lock, and the files are written by the missions' save thread
+//! (`mission_events::MissionEventStore`). What a node should do next, how a failure is retried and
+//! when to ask the operator are the Conductor's judgement (D-37); the record
+//! holds only the facts the map shows and the contracts Hide enforces: one
+//! Conductor per mission, no worker before the plan is approved, and the
+//! mission's concurrency cap (D-45).
+//!
+//! Since schema 2 every node carries its finish lines
+//! (`mission_criteria`, PRD mission-map-git-criteria D-09), and the core
+//! refuses a node's done and a mission's close while a line is unmet
+//! (D-12). A mission read from a schema 1 book is `exempt` from that gate
+//! (D-19) and keeps the sentence it had as its node's one line.
+//!
+//! Since schema 4 a node may carry one `human` line, the place the operator
+//! looks before it is done (PRD mission-human-gate D-02); a schema 3 book
+//! has none and reads as it was.
+
+use std::collections::{BTreeMap, BTreeSet};
+
+use serde::{Deserialize, Deserializer, Serialize};
+
+use crate::delivery::Actor;
+use crate::mission_criteria::{CheckInput, Criterion};
+
+pub(crate) const SCHEMA_VERSION: u32 = 4;
+/// The schema before node criteria, read and converted (D-19).
+pub(crate) const SCHEMA_BEFORE_CRITERIA: u32 = 1;
+/// The schema before a node's three states and its pull request list (PRD
+/// mission-node-simple D-16).
+pub(crate) const SCHEMA_BEFORE_SIMPLE: u32 = 2;
+/// The schema before a node's human gate (PRD mission-human-gate D-02): a
+/// book of it has no `human` line and reads unchanged, but a build that knows
+/// only it cannot read a gate, so it reads no schema 4 book.
+const SCHEMA_BEFORE_GATES: u32 = 3;
+/// Answered decisions a mission keeps for a skip of a protected line; past
+/// this the oldest goes and is logged.
+pub const DECIDED_LIMIT: usize = 32;
+/// Nodes in one mission's plan, the cap every dependency graph shares.
+pub use crate::dag::NODE_LIMIT;
+/// The highest concurrency cap a mission or the settings may name.
+pub const CAP_LIMIT: u8 = 16;
+/// The concurrency cap a fresh install starts with (D-08).
+pub const DEFAULT_CAP: u8 = 4;
+/// Worker candidates in Settings › Mission (D-31).
+pub const CANDIDATE_LIMIT: usize = 16;
+/// Dependencies one node may name.
+const DEPENDENCY_LIMIT: usize = 16;
+/// Issue numbers and paths a node may declare it touches (B6).
+const TOUCH_LIMIT: usize = 32;
+const TITLE_LIMIT: usize = 200;
+const LINE_LIMIT: usize = 600;
+/// Steps a node's plan entry names: as many as a worker's own `hide task`
+/// plan takes, which starts from them.
+pub const STEP_LIMIT: usize = 8;
+/// A step's longest line, counted in characters: a card shows it whole.
+pub const STEP_CHARS: usize = 80;
+/// A record's summary, one line the map shows whole, counted in characters.
+const SUMMARY_LIMIT: usize = 160;
+const REPORT_LIMIT: usize = 16 * 1024;
+/// Choices one decision offers the operator (PRD mission-plan-visibility
+/// B32), each short enough to be a button.
+pub const OPTION_LIMIT: usize = 5;
+const OPTION_TEXT_LIMIT: usize = 120;
+/// The longest answer the operator writes in the banner (B27), counted in
+/// characters as the banner counts them.
+pub const ANSWER_LIMIT: usize = 500;
+
+/// The operator's written answer as a Conductor receives it: one line without
+/// the spaces around it, not empty and at most `ANSWER_LIMIT` characters, or
+/// `None`. The one judgement the core and a phone's request both make, so the
+/// two cannot take different answers.
+pub fn answer_text(text: &str) -> Option<String> {
+    let text = text.trim();
+    (!text.is_empty()
+        && text.chars().count() <= ANSWER_LIMIT
+        && !text.chars().any(char::is_control))
+    .then(|| text.to_owned())
+}
+/// What a start reads of one mission's file, or of the book builds before
+/// the mission folder kept (`mission_store`).
+pub(crate) const READ_CAP: u64 = 8 * 1024 * 1024;
+/// The size a change may bring one mission's saved file to: under the read
+/// cap with room for the file's own framing, so what is written is always
+/// read back.
+const WRITE_BUDGET: usize = 7 * 1024 * 1024;
+
+/// Where a mission stands. A cancelled mission is an end that nothing
+/// reopens (D-51); a done one reopens on a further instruction or a change
+/// to one of its pull requests (D-12, D-39).
+#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum MissionStatus {
+    Planning,
+    Running,
+    /// A PR-scope mission whose report is given while a stack still waits
+    /// for the operator's merge (D-28, B41).
+    MergeWait,
+    Done,
+    Cancelled,
+}
+
+impl MissionStatus {
+    /// Whether the mission still runs work, which is when its cap applies.
+    pub fn open(self) -> bool {
+        matches!(self, Self::Planning | Self::Running | Self::MergeWait)
+    }
+
+    /// Whether a node's attention still reaches someone: an open mission's,
+    /// and a done one's, so a raise it still holds keeps reaching the
+    /// operator after the close; a cancelled mission asks nothing.
+    pub(crate) fn asks(self) -> bool {
+        self.open() || self == Self::Done
+    }
+}
+
+/// How far the mission goes (D-04, D-05): up to ready pull requests or
+/// branches, or through the merge into main.
+#[derive(Clone, Copy, Debug, Default, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum MissionScope {
+    #[default]
+    Pr,
+    Merge,
+}
+
+/// The kinds of node, each finished by its own rule (D-15; PRD node-presets
+/// D-01): a code node (`change`) leaves a branch; a general node leaves a
+/// line, and its `preset` says what kind of work it is; an external node is
+/// a pull request or a branch outside the mission that Hide watches until it
+/// reaches main (PRD mission-map-git-criteria D-20).
+///
+/// A book or a plan written before general nodes names `research` or
+/// `verify` here: a book is read as a general node with that preset
+/// (`convert_old_kinds`), a plan as `PlanKind` names it.
+#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum NodeKind {
+    Change,
+    General,
+    External,
+}
+
+/// What a general node's work is (PRD node-presets D-02), the defaults it
+/// starts with read from its row of `PRESETS`.
+#[derive(Clone, Copy, Debug, Deserialize, Eq, Ord, PartialEq, PartialOrd, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum Preset {
+    Research,
+    Verify,
+    Deploy,
+}
+
+/// When a node's gate asks the operator (PRD node-presets D-06): once the
+/// Conductor shows its screens or the node's own lines are met, before its
+/// CI and checkers (`end`, the gate of PRD mission-human-gate, as the
+/// operator decided 2026-11-14), or before its work starts, once every node
+/// it depends on is done (`start`).
+#[derive(Clone, Copy, Debug, Default, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum GateWhen {
+    Start,
+    #[default]
+    End,
+}
+
+impl GateWhen {
+    pub fn is_end(&self) -> bool {
+        *self == Self::End
+    }
+}
+
+/// One row of `PRESETS`: the preset's name key, which the wire and the
+/// screens' words name it by, the name `hide mission show` says, the icon
+/// key its card draws, and the gate a node of it is planned with when the
+/// plan names none.
+#[derive(Debug, Eq, PartialEq)]
+pub struct PresetRow {
+    pub preset: Option<Preset>,
+    pub key: &'static str,
+    pub word: &'static str,
+    pub icon: &'static str,
+    pub gate: Option<(&'static str, GateWhen)>,
+}
+
+/// The general node's presets, and the row of a general node with none, the
+/// one table the plan's intake, the snapshot and the CLI read (PRD
+/// node-presets D-02, D-06, D-07).
+pub const PRESETS: [PresetRow; 4] = [
+    PresetRow {
+        preset: Some(Preset::Research),
+        key: "research",
+        word: "리서치",
+        icon: "search",
+        gate: None,
+    },
+    PresetRow {
+        preset: Some(Preset::Verify),
+        key: "verify",
+        word: "검증",
+        icon: "shield-check",
+        gate: None,
+    },
+    PresetRow {
+        preset: Some(Preset::Deploy),
+        key: "deploy",
+        word: "배포·출시",
+        icon: "rocket",
+        // It is hard to undo, so the operator looks before it starts.
+        gate: Some(("배포해도 될지", GateWhen::Start)),
+    },
+    PresetRow {
+        preset: None,
+        key: "general",
+        word: "일반",
+        icon: "file-text",
+        gate: None,
+    },
+];
+
+/// The row of a general node of `preset`, or of one with none.
+pub fn preset_row(preset: Option<Preset>) -> &'static PresetRow {
+    PRESETS
+        .iter()
+        .find(|row| row.preset == preset)
+        .expect("PRESETS has a row for every preset and for none")
+}
+
+/// A node's kind as a plan names it: the three kinds, and `research` and
+/// `verify`, the kinds before general nodes (PRD node-presets D-05), each
+/// read as a general node with that preset.
+#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum PlanKind {
+    Change,
+    General,
+    External,
+    Research,
+    Verify,
+}
+
+impl PlanKind {
+    pub fn kind(self) -> NodeKind {
+        match self {
+            Self::Change => NodeKind::Change,
+            Self::General | Self::Research | Self::Verify => NodeKind::General,
+            Self::External => NodeKind::External,
+        }
+    }
+
+    /// The preset an old kind name stands for.
+    fn preset(self) -> Option<Preset> {
+        match self {
+            Self::Research => Some(Preset::Research),
+            Self::Verify => Some(Preset::Verify),
+            Self::Change | Self::General | Self::External => None,
+        }
+    }
+}
+
+impl From<NodeKind> for PlanKind {
+    fn from(kind: NodeKind) -> Self {
+        match kind {
+            NodeKind::Change => Self::Change,
+            NodeKind::General => Self::General,
+            NodeKind::External => Self::External,
+        }
+    }
+}
+
+/// What an external node watches (D-20, B19).
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "snake_case", deny_unknown_fields)]
+pub enum External {
+    Pr(u32),
+    Branch(String),
+}
+
+/// How a change node reaches main (D-16).
+#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum Delivery {
+    Pr,
+    Direct,
+}
+
+/// A node's state, one of three the map shows (PRD mission-node-simple
+/// D-01, D-16): waiting to start, in progress (writing code, CI, review and
+/// the merge wait alike), done; and left out by a replan. What waits on
+/// someone is the node's `attention`, never a state of its own.
+#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum NodeStatus {
+    Planned,
+    Working,
+    Done,
+    /// Left out of the mission by a replan (D-30) or by the operator.
+    Dropped,
+}
+
+impl NodeStatus {
+    pub(crate) fn finished(self) -> bool {
+        matches!(self, Self::Done | Self::Dropped)
+    }
+
+    /// The statuses a Conductor's `hide mission node --status` sets (D-16):
+    /// a plan sets `planned`.
+    pub const SET_BY_CONDUCTOR: [NodeStatus; 3] = [Self::Working, Self::Done, Self::Dropped];
+
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Planned => "planned",
+            Self::Working => "working",
+            Self::Done => "done",
+            Self::Dropped => "dropped",
+        }
+    }
+}
+
+/// Why a node cannot start, derived from its dependencies (D-46, B51).
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum Blocked {
+    UpstreamDropped,
+}
+
+/// Who a node waits on (D-02, D-05).
+#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum AttentionTo {
+    Conductor,
+    Operator,
+}
+
+/// Who or what a mission node waits on now, decided once by the
+/// mission's view (`runtime::missions`) so `hide mission show`'s list, its
+/// node and the map's card read the same answer.
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+pub enum WaitingOn {
+    /// Its raise, on whom it reached and why.
+    Attention {
+        to: AttentionTo,
+        reason: AttentionReason,
+    },
+    /// The operator's answer to the decision that stopped it.
+    Decision,
+    /// A node it depends on was dropped.
+    Blocked,
+    /// The dependencies it names that are not met
+    /// (`Mission::dependency_met`), in its order, each written as the plan
+    /// wrote it: `<node>`, or `<node>:<line>` for a finish line of it.
+    Nodes {
+        keys: Vec<Dependency>,
+    },
+    /// Nothing before it: it waits to be started.
+    Start,
+    /// Its worker: a line failed, or its first open line is the worker's.
+    Worker,
+    Review,
+    Verify,
+    Ci,
+    /// The merge of its pull request.
+    Merge,
+    /// The merge of the pull request under it first: it stacks on `node`
+    /// (`Mission::stacks_on`), whose work has not reached main.
+    Below {
+        node: String,
+    },
+    /// Every line is met and nothing waits on GitHub: the Conductor's move.
+    Conductor,
+}
+
+/// Why a node waits on someone to look (PRD mission-node-simple D-04): the
+/// one `!` its card carries, and the line its hover and the operator's
+/// item say.
+#[derive(Clone, Copy, Debug, Deserialize, Eq, Hash, Ord, PartialEq, PartialOrd, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum AttentionReason {
+    /// Every pull request is merged but a finish line is missing or failed
+    /// (B6, B13).
+    MergedUnproven,
+    /// The worker ended with the node not done (B11).
+    WorkerEnded,
+    /// A pull request closed without its merge and no other is open (B12).
+    PrClosed,
+    /// The worker opened a pull request no node holds (B9).
+    UnplannedPr,
+    /// The Conductor recorded the node failed before this change (B26).
+    ConductorFailed,
+    /// A sleeping worker's wake for its pull request was refused (B10).
+    WakeRefused,
+    /// Hide could not close the mission with every node finished (B19).
+    CloseRefused,
+    /// A node's human gate waits on the operator and no Conductor stands to
+    /// ask it on its row (PRD mission-human-gate D-23): the mission's own
+    /// item, answered on the decision card.
+    HumanGate,
+    /// The node could start, nothing holds it, and it was not started
+    /// (`mission_health::stall_acts`).
+    NotStarted,
+    /// A stopped warning its Conductor was sent stood with
+    /// nothing moving (`mission_health::stall_acts`, `WarningKind::stalls`):
+    /// raised to the Conductor as every other stall is.
+    WarningStood,
+    /// The node's pull request waited on CI, a review or the merge for longer
+    /// than any of those takes (`mission_health::stall_acts`).
+    WaitStood,
+}
+
+impl AttentionReason {
+    /// A reason only the operator can settle reaches them at once (B26): a
+    /// planned human gate with no Conductor to ask it (PRD
+    /// mission-human-gate) and a failure recorded before schema 3. Every
+    /// other raise is the Conductor's to settle and never reaches the
+    /// operator by itself; a mission whose Conductor does not settle its
+    /// raises is the operator's once, through the safety net
+    /// (`mission_health::safety_net`, hide-private docs/missions.md, the
+    /// principle of 2026-11-11).
+    pub fn operator_first(self) -> bool {
+        matches!(self, Self::ConductorFailed | Self::HumanGate)
+    }
+
+    /// The operator's choices for a raise of this reason, in the order the
+    /// screen draws them (B15, B16): `leave` first while a Conductor holds
+    /// the mission, which hands the raise to it, or for an unplanned pull
+    /// request, which it leaves outside the nodes; then what the reason
+    /// takes; `drop` last, which the screen sends only on a second press. A
+    /// failed Conductor's raise has no one to hand it to. A refused close
+    /// has its one way out first (`done`, which closes the mission as done
+    /// with the empty lines passed on the operator's word) and no `drop`,
+    /// since every node's work is finished. The one list the view sends and
+    /// the operator's answer is checked against.
+    pub fn choices(self, conductor: bool) -> Vec<OperatorAction> {
+        use OperatorAction::{Attach, Done, Drop, Leave, Resume};
+        let own: &[OperatorAction] = match self {
+            Self::MergedUnproven | Self::CloseRefused => &[Done],
+            Self::WorkerEnded
+            | Self::PrClosed
+            | Self::WakeRefused
+            | Self::NotStarted
+            | Self::WarningStood
+            | Self::WaitStood => &[Drop],
+            Self::UnplannedPr => &[Attach],
+            Self::ConductorFailed => &[Resume, Drop],
+            // Answered on the gate's decision card, never past it here.
+            Self::HumanGate => return Vec::new(),
+        };
+        let leave = self == Self::UnplannedPr || (conductor && self != Self::ConductorFailed);
+        let leave = leave.then_some(Leave).into_iter();
+        if self == Self::CloseRefused {
+            return own.iter().copied().chain(leave).collect();
+        }
+        leave.chain(own.iter().copied()).collect()
+    }
+
+    /// A move that did not come (`mission_health::stalls`): raised once
+    /// while it stands, and again as a new one, with its own letter, once it
+    /// went and stands again.
+    pub fn stall(self) -> bool {
+        matches!(
+            self,
+            Self::NotStarted | Self::WarningStood | Self::WaitStood
+        )
+    }
+
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::MergedUnproven => "merged_unproven",
+            Self::WorkerEnded => "worker_ended",
+            Self::PrClosed => "pr_closed",
+            Self::UnplannedPr => "unplanned_pr",
+            Self::ConductorFailed => "conductor_failed",
+            Self::WakeRefused => "wake_refused",
+            Self::CloseRefused => "close_refused",
+            Self::HumanGate => "human_gate",
+            Self::NotStarted => "not_started",
+            Self::WarningStood => "warning_stood",
+            Self::WaitStood => "wait_stood",
+        }
+    }
+}
+
+/// What waits on someone for a node (D-02, D-05): raised at `since` to the
+/// Conductor, or to the operator for a reason only they settle
+/// (`AttentionReason::operator_first`). A book from before keeps an
+/// `operator_at_unix_ms` on a raise its ten minutes handed to the operator;
+/// it is not read, so that raise is the Conductor's again.
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+pub struct Attention {
+    pub reason: AttentionReason,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub pr: Option<u32>,
+    /// The worker registration it is about, for a worker that ended.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub agent: Option<String>,
+    /// The mission's count of raises, which names this one in its letters.
+    pub key: u64,
+    pub since_unix_ms: u64,
+    /// The operator was told outside Needs You, because no row stood to lay
+    /// it on, or the safety net it holds up was: once per cause, kept
+    /// across a restart.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub notified: bool,
+}
+
+impl Attention {
+    /// The cause it was raised for: the same cause is raised once (B14,
+    /// B27), whoever settles it.
+    pub fn cause(&self) -> String {
+        cause_key(self.reason, self.pr, self.agent.as_deref())
+    }
+}
+
+pub(crate) fn cause_key(reason: AttentionReason, pr: Option<u32>, agent: Option<&str>) -> String {
+    let mut key = reason.as_str().to_owned();
+    if let Some(pr) = pr {
+        key.push_str(&format!(":{pr}"));
+    }
+    if let Some(agent) = agent {
+        key.push(':');
+        key.push_str(agent);
+    }
+    key
+}
+
+/// Why Hide woke a sleeping worker (D-13).
+#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum FixReason {
+    CiFailed,
+    Conflict,
+    ChangesRequested,
+}
+
+impl FixReason {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::CiFailed => "ci_failed",
+            Self::Conflict => "conflict",
+            Self::ChangesRequested => "changes_requested",
+        }
+    }
+}
+
+/// One wake Hide sent a worker, kept so the same fact wakes once (B10,
+/// B27): a pull request, its reason and the head it was read on.
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+pub struct Woken {
+    pub pr: u32,
+    pub why: FixReason,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub head: Option<String>,
+}
+
+/// What a node's warning is about (with-hide/hide-private#552): a sign that
+/// its worker is stuck, for its Conductor to judge whether to hand the node
+/// to a fresh worker. A warning goes to the Conductor alone, never to the
+/// operator, and is no attention: it waits on no one's choice.
+#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum WarningKind {
+    /// The review or verification line failed
+    /// `mission_health::REVIEW_FAILS_THAT_WARN` times in a row
+    /// (`MissionNode::review_fails`).
+    ReviewFails,
+    /// Its worker's program runs, its turn ended and it waits on nothing
+    /// (`mission_health::stopped_worker`), for
+    /// `mission_health::STOPPED_THAT_WARNS_MS` (hide-private
+    /// docs/missions.md, A stopped worker).
+    Stopped,
+}
+
+impl WarningKind {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::ReviewFails => "review_fails",
+            Self::Stopped => "stopped",
+        }
+    }
+
+    /// Whether the warning, still standing after its letter, is raised as a
+    /// stall (`warning_stood`): the one rule raising and keeping that stall
+    /// read. A warning the worker's own move takes off (the stopped worker at
+    /// work again) stands only while no move came. A failed review
+    /// or verification goes only once that line passes, which a worker fixing the findings
+    /// does not reach for a whole round, so standing says nothing of a move:
+    /// it stays the Conductor's warning and never reaches the operator.
+    pub fn stalls(self) -> bool {
+        !matches!(self, Self::ReviewFails)
+    }
+}
+
+/// Why a node's worker stopped, as its agent's hook reported the turn's
+/// end: the provider refused it for the account's usage limit, or failed or
+/// refused it otherwise (an API error). `line` is the agent's own first line
+/// for it, a limit's reset time included when the agent gave one. A stop
+/// with no cause has none of these.
+#[derive(Clone, Debug, Deserialize, Eq, Hash, Ord, PartialEq, PartialOrd, Serialize)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+pub enum StopCause {
+    Limit { line: String },
+    Error { line: String },
+}
+
+impl StopCause {
+    pub(crate) fn of(refused: &hide_node_link::panes::HookRefusal) -> Self {
+        let line = refused.line.clone();
+        match refused.kind {
+            hide_node_link::panes::RefusalKind::Limit => Self::Limit { line },
+            hide_node_link::panes::RefusalKind::Error => Self::Error { line },
+        }
+    }
+}
+
+/// A warning a node carries now: raised once with one letter to its
+/// Conductor, and gone when its fact goes (the review passes, the worker
+/// moves, the node finishes or waits, `Mission::wait_of`).
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+pub struct NodeWarning {
+    pub kind: WarningKind,
+    /// The fact it stands on, which keys its letter: for failed reviews when
+    /// the failure that reached the count was recorded, for a stopped worker
+    /// when its stop was first seen.
+    pub from_unix_ms: u64,
+    /// When Hide raised it.
+    pub since_unix_ms: u64,
+    /// When its letter joined the Conductor's queue; none while the queue
+    /// was full, so each evaluation after asks again until it is told.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub told_unix_ms: Option<u64>,
+    /// A stopped worker's cause, as it stood when the warning rose, which
+    /// its letter carries.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub cause: Option<StopCause>,
+}
+
+/// What Hide itself did to a node last (D-07, D-15): the card's small Hide
+/// mark and the panel's line.
+#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum HideAction {
+    /// Finished the node: its pull requests and lines met.
+    Done,
+    /// Attached a follow-up pull request of the node's branch.
+    Attached,
+    /// Woke the sleeping worker about its pull request.
+    Woke,
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+pub struct HideMark {
+    pub action: HideAction,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub pr: Option<u32>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub why: Option<FixReason>,
+    pub at_unix_ms: u64,
+}
+
+/// What the operator chose for a node that waits on them (B15, B16).
+#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum OperatorAction {
+    /// 끝으로: past the lines left open, as the operator's decision; for a
+    /// refused close, 완료로 닫기, which does it for every finished node and
+    /// closes the mission.
+    Done,
+    /// 노드 제외.
+    Drop,
+    /// 노드에 붙이기: the unplanned pull request joins the node.
+    Attach,
+    /// Conductor에게 맡기기, or 그대로 두기 with no Conductor: settles the
+    /// raise and leaves the rest to the Conductor.
+    Leave,
+    /// 다시 진행: the node works again.
+    Resume,
+}
+
+impl OperatorAction {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Done => "done",
+            Self::Drop => "drop",
+            Self::Attach => "attach",
+            Self::Leave => "leave",
+            Self::Resume => "resume",
+        }
+    }
+}
+
+/// The agent item the plan assigns to a node or to one of its checkers
+/// (D-08, D-34): the agent, its profile, its model and its effort.
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct Worker {
+    pub agent: String,
+    /// The profile, by its id on the mission's machine, as a candidate names
+    /// one (`Candidate::profile`); `None` for the agent's built-in default,
+    /// which is left out of what is kept, so a plan of built-in defaults
+    /// only is the bytes a build before it wrote and reads. A plan names it
+    /// by the name `--profile` takes, which the core turns into its id
+    /// (`Runtime::plan_profiles`) before the plan is applied. A build before
+    /// it refuses a book that names one (`deny_unknown_fields`):
+    /// `docs/INSTALL.md`, What each system supports, says so.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub profile: Option<hide_agent_adapter::ProfileId>,
+    #[serde(default)]
+    pub model: Option<String>,
+    /// None leaves the effort to the agent's default; `effort_auto` says
+    /// the Conductor chose it rather than the operator's candidate.
+    #[serde(default)]
+    pub effort: Option<String>,
+    #[serde(default)]
+    pub effort_auto: bool,
+}
+
+/// The GitHub facts of a node's pull request as Hide last told the
+/// Conductor about them, so a restart neither repeats nor misses a wake
+/// (D-39, engineering #11).
+#[derive(Clone, Debug, Default, Deserialize, Eq, PartialEq, Serialize)]
+pub struct PrSeen {
+    /// The pull request these facts are about.
+    #[serde(default)]
+    pub number: u32,
+    #[serde(default)]
+    pub head: Option<String>,
+    #[serde(default)]
+    pub merged: bool,
+    #[serde(default)]
+    pub changes_requested: bool,
+    /// Closed without its merge: nothing is left to wait on.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub closed: bool,
+    /// The CI results the Conductor was told on `head`, each once for good
+    /// (at most one of each); a new head empties it, so its results are
+    /// news again.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub ci_told: Vec<CiResult>,
+}
+
+/// What a pull request's CI ended as on one head commit: its checks as the
+/// pull request list judges them (`github::runs`), the node's `ci` line's
+/// value.
+#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum CiResult {
+    Passed,
+    /// Every run of a workflow was cancelled and none replaced it.
+    Cancelled,
+    Failed,
+}
+
+impl CiResult {
+    pub(crate) fn as_str(self) -> &'static str {
+        match self {
+            Self::Passed => "passed",
+            Self::Cancelled => "cancelled",
+            Self::Failed => "failed",
+        }
+    }
+}
+
+/// The checks a CI letter names at most; past it, it counts the rest.
+pub const CI_FAILED_NAMED: usize = 8;
+
+/// A CI result as its letter tells it (`WakeEvent::Ci`).
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+pub struct CiNews {
+    pub result: CiResult,
+    /// The checks that failed, by the name GitHub shows, at most
+    /// `CI_FAILED_NAMED`.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub failed: Vec<String>,
+    /// How many more failed than `failed` names.
+    #[serde(default)]
+    pub more: usize,
+}
+
+/// One change of a node's pull request the Conductor is still to be told
+/// about. It stays in the record until its letter is in the Conductor's
+/// inbox, so a failed send, a crash or no Conductor present delays the wake
+/// and never loses it (D-39, engineering #11).
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+pub struct PendingWake {
+    /// The mission's count of wakes, which names the wake in the record
+    /// while its letter is sent; its letter's intent is `key`.
+    pub seq: u64,
+    pub node: String,
+    /// The pull request the news is about; none for an outside branch.
+    pub pr: Option<u32>,
+    pub event: WakeEvent,
+    #[serde(default)]
+    pub head: Option<String>,
+    /// The worker registration the letter goes to; none for the Conductor
+    /// (D-13).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub to: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub reason: Option<AttentionReason>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub why: Option<FixReason>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub action: Option<OperatorAction>,
+    /// What a `warning` wake warns of.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub warning: Option<WarningKind>,
+    /// The CI result a `ci` wake tells, on `head`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub ci: Option<CiNews>,
+    /// The finish line a `line_met` or `line_reopened` wake is about,
+    /// `<node>:<line>`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub line: Option<Dependency>,
+    /// The facts the wake stands on (`MissionEvent::id`'s kind of key), its
+    /// letter's intent with the mission and the recipient: the same facts
+    /// evaluated again, after a restart or a lost save, are the same letter
+    /// (B27, engineering #11). None for a wake recorded before keys, whose
+    /// intent names `seq`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub key: Option<String>,
+    /// Since when the node's cell has stood unresolved: set when a standing
+    /// fact is recorded and kept while another standing fact of the node
+    /// updates it, so the safety net counts the cell's 20 minutes, not the
+    /// last update's (PRD letters-missions-simplify D-23, B15). None for
+    /// news, and for a book from before cells until its load sets it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub since_unix_ms: Option<u64>,
+    /// The operator was told of this standing cell by the safety net's
+    /// notice, as a raise's `Attention::notified` says for a raise.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub notified: bool,
+    /// The `seq` of the first wake of the node's cell for this recipient
+    /// that still stands with it: the cell's episode, kept while a fact
+    /// updates it, new once every wake of the cell went (a recurrence,
+    /// which rings again). None on a book from before it: its own `seq`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub opened_seq: Option<u64>,
+}
+
+impl PendingWake {
+    /// Whether the wake tells a state that stands until its cause goes (a
+    /// raise, a warning, a CI that did not pass, a review asking for
+    /// changes, an outside pull request closed unmerged), rather than news
+    /// its receiver reads once (`runtime::status_cells`). A worker's wake is
+    /// news: it asks the worker to act, and the worker's own move answers it.
+    pub(crate) fn standing(&self) -> bool {
+        self.to.is_none()
+            && match self.event {
+                WakeEvent::Attention
+                | WakeEvent::Warning
+                | WakeEvent::ChangesRequested
+                | WakeEvent::OutsideFailed => true,
+                WakeEvent::Ci => self
+                    .ci
+                    .as_ref()
+                    .is_some_and(|ci| ci.result != CiResult::Passed),
+                _ => false,
+            }
+    }
+
+    /// Whether `other` is about the same subject for the same receiver: the
+    /// node (or the mission itself) and the worker it goes to, if any.
+    pub(crate) fn same_cell(&self, other: &Self) -> bool {
+        self.node == other.node && self.to == other.to
+    }
+}
+
+#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum WakeEvent {
+    Merged,
+    ChangesRequested,
+    /// A new head commit, which a build before CI letters told; a book from
+    /// then may still hold one waiting, sent as it was. None is recorded now:
+    /// the head's CI result (`Ci`) names the commit.
+    NewHead,
+    /// An open pull request's CI ended on its head; `ci` says how.
+    Ci,
+    /// An outside node's pull request merged or its branch reached main, so
+    /// the nodes waiting on it can start (B19).
+    OutsideDone,
+    /// An outside pull request closed without a merge (B20).
+    OutsideFailed,
+    /// The Conductor's own conversation came back in another pane and
+    /// conducts the mission again (PRD mission-tool D-11, B14): a resumed
+    /// conversation gets no prompt of its own, so this letter tells it to
+    /// read the mission and go on.
+    Resumed,
+    /// The operator asked from the map to end the mission (`미션 종료`):
+    /// the Conductor asks about its open pull requests and cancels it.
+    EndAsked,
+    /// A node waits on the Conductor to look (PRD mission-node-simple
+    /// D-05); `reason` says why.
+    Attention,
+    /// The operator settled what waited on a node; `action` says how (B17).
+    Resolved,
+    /// Hide closed the mission with every node finished (B18).
+    Closed,
+    /// The operator opened the closed mission again from the map (B18).
+    Reopened,
+    /// A sleeping worker's pull request needs it; `why` says what (B10).
+    Fix,
+    /// A node shows signs its worker is stuck; `warning` says which
+    /// (with-hide/hide-private#552).
+    Warning,
+    /// The operator asked for something to look at before answering the
+    /// open question (`자료 요청`).
+    MaterialAsked,
+    /// The operator passed a node's human gate (PRD mission-human-gate
+    /// D-11); its words are on the line.
+    GatePassed,
+    /// The operator's answer to a node's gate sent it back with their words
+    /// as a defect: to the Conductor, and to the node's worker (`to`).
+    GateFix,
+    /// The finish line `line` names is met and the node could start now,
+    /// stacked on the node that line is of (`Mission::stacks_on`).
+    LineMet,
+    /// Finish line `line` of the node opened again (failed, reopened, or a
+    /// check passed on a commit its work folder left, `Criterion::shown`)
+    /// after nodes that wait on it started; they go on.
+    LineReopened,
+}
+
+impl WakeEvent {
+    pub(crate) fn as_str(self) -> &'static str {
+        match self {
+            Self::Merged => "merged",
+            Self::ChangesRequested => "changes_requested",
+            Self::NewHead => "new_head",
+            Self::Ci => "ci",
+            Self::OutsideDone => "outside_done",
+            Self::OutsideFailed => "outside_failed",
+            Self::Resumed => "resumed",
+            Self::EndAsked => "end_asked",
+            Self::Attention => "attention",
+            Self::Resolved => "resolved",
+            Self::Closed => "closed",
+            Self::Fix => "fix",
+            Self::Reopened => "reopened",
+            Self::Warning => "warning",
+            Self::MaterialAsked => "material_asked",
+            Self::GatePassed => "gate_passed",
+            Self::GateFix => "gate_fix",
+            Self::LineMet => "line_met",
+            Self::LineReopened => "line_reopened",
+        }
+    }
+}
+
+/// A verify node's result (PRD mission-plan-visibility B33).
+#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum Verdict {
+    Pass,
+    Fail,
+}
+
+/// How many of a verify node's checks passed.
+#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct Checks {
+    pub passed: u32,
+    pub total: u32,
+}
+
+/// What the Conductor asks the operator beside its question (PRD
+/// mission-plan-visibility D-13, B25, B32). `key` names this question, so an
+/// answer to one the Conductor has since changed is refused (B26).
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+pub struct Question {
+    pub key: u64,
+    #[serde(default)]
+    pub why: Option<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub options: Vec<String>,
+    /// The recommended option, counted from 1 as the command names it.
+    #[serde(default)]
+    pub recommend: Option<u8>,
+    /// The node the decision stopped.
+    #[serde(default)]
+    pub node: Option<String>,
+    /// The other nodes the decision is about, beside `node`
+    /// (`hide mission decide --node <key>...`): while it is open they wait
+    /// on the operator's answer (`Mission::deciding_on`), and its card names
+    /// them.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub nodes: Vec<String>,
+    pub asked_at_unix_ms: u64,
+    /// The Views the Conductor linked to this question: the ones `--show`
+    /// named and the ones it opened since the question before was asked
+    /// that were still open, oldest first, at most [`VIEW_LINK_LIMIT`]. The map lists them with the node's
+    /// own (`MissionNode::views`) under the question.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub views: Vec<ViewLink>,
+    /// The operator asked the Conductor for something to look at before
+    /// answering (`볼 자료 요청`): asked once per question.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub material_asked: bool,
+}
+
+impl Question {
+    /// Whether the question is about node `key`: the node it stopped or
+    /// one of the others it names.
+    pub fn names(&self, key: &str) -> bool {
+        self.node.as_deref() == Some(key) || self.nodes.iter().any(|node| node == key)
+    }
+}
+
+/// The most Views one question or one node links; past it the oldest goes.
+pub const VIEW_LINK_LIMIT: usize = 16;
+/// The longest `decide --show` value: a View id, or a path the CLI opens as
+/// a View before the core sees it.
+const SHOW_LIMIT: usize = 4096;
+
+/// A View a decision shows the operator to look at, by the checkout that
+/// holds it: a link is a fact recorded when the View was opened or named,
+/// never a guess from its name or its time.
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+pub struct ViewLink {
+    pub device_id: String,
+    pub checkout_path: String,
+    pub display_id: String,
+    /// The node's attempt the View was opened in (`MissionNode::attempts`);
+    /// a question's own link keeps 0.
+    #[serde(default, skip_serializing_if = "is_zero")]
+    pub attempt: u8,
+    /// When it was opened or named, which orders a question's opened Views
+    /// newest first.
+    #[serde(default, skip_serializing_if = "is_zero_u64")]
+    pub at_unix_ms: u64,
+    /// On a question: the stopped node's worker, or an agent under it,
+    /// opened it, where every other link is the Conductor's.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub worker: bool,
+    /// What the View was when it was linked, so a row keeps it after the
+    /// View closes and opens it again from here: a question's when the
+    /// decision linked it (PRD mission-human-gate D-20), a node's when its
+    /// worker opened it (its `결과`, with-hide/hide#2637). Absent on the
+    /// Conductor's own link, on a link recorded before it was kept, and for
+    /// a View no address can open again (an outside file's grant).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub kept: Option<KeptView>,
+}
+
+/// The longest page or file name a link keeps; a row shows far fewer.
+const KEPT_LABEL_LIMIT: usize = 256;
+
+/// A linked View's kind, name and address, as the decision linked it.
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+pub struct KeptView {
+    pub kind: crate::view_layout::DisplayKind,
+    pub label: String,
+    /// A file's or a diff's path, or a page's address.
+    pub address: String,
+    /// The Changes group a diff compares against.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub committed: bool,
+    /// The agent that had it open when the decision linked it, which the
+    /// View opened again is stamped with, so it is listed in that agent's
+    /// 볼 것 as before; none for the operator's own.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub opener: Option<crate::view_feedback::Opener>,
+}
+
+impl KeptView {
+    /// What `display`, titled `label`, can be opened again from; none for
+    /// an outside file, which no address names, or an address past
+    /// [`SHOW_LIMIT`].
+    pub fn of(display: &crate::view_layout::Display, label: String) -> Option<Self> {
+        use crate::view_layout::DisplayKind;
+        let address = match display.kind {
+            DisplayKind::File | DisplayKind::Diff => display.path.clone(),
+            DisplayKind::Browser => display.url.clone()?,
+            // A card names no View to open again: the mission's own map does.
+            DisplayKind::External | DisplayKind::Card => return None,
+        };
+        if address.is_empty() || address.len() > SHOW_LIMIT {
+            return None;
+        }
+        Some(Self {
+            kind: display.kind,
+            label: label.chars().take(KEPT_LABEL_LIMIT).collect(),
+            address,
+            committed: display.committed.unwrap_or(false),
+            opener: display.opener.clone(),
+        })
+    }
+
+    /// Whether `display` shows what this kept: the same document, or the
+    /// same page address.
+    pub fn shown_by(&self, display: &crate::view_layout::Display) -> bool {
+        use crate::view_layout::DisplayKind;
+        match self.kind {
+            DisplayKind::Browser => {
+                display.kind == DisplayKind::Browser
+                    && display.url.as_deref() == Some(self.address.as_str())
+            }
+            DisplayKind::File | DisplayKind::Diff => {
+                display.shows(&self.address, self.kind, Some(self.committed))
+            }
+            DisplayKind::External | DisplayKind::Card => false,
+        }
+    }
+}
+
+impl ViewLink {
+    pub fn same_view(&self, other: &Self) -> bool {
+        self.device_id == other.device_id
+            && self.checkout_path == other.checkout_path
+            && self.display_id == other.display_id
+    }
+
+    /// The name a decision card's row asks for this link by: it tells two
+    /// checkouts' Views with the same display id apart without saying
+    /// either path, which a phone never receives.
+    pub fn token(&self) -> String {
+        use sha2::{Digest, Sha256};
+        let digest = Sha256::digest(
+            format!(
+                "{}\0{}\0{}",
+                self.device_id, self.checkout_path, self.display_id
+            )
+            .as_bytes(),
+        );
+        digest[..8]
+            .iter()
+            .map(|byte| format!("{byte:02x}"))
+            .collect()
+    }
+}
+
+/// Adds `link` to `links` as the newest, once: the same View again moves
+/// to the end, and the oldest goes past [`VIEW_LINK_LIMIT`]. Whether the
+/// list changed.
+pub fn push_view_link(links: &mut Vec<ViewLink>, link: ViewLink) -> bool {
+    if links
+        .last()
+        .is_some_and(|last| last.same_view(&link) && last.attempt == link.attempt)
+    {
+        return false;
+    }
+    links.retain(|known| !known.same_view(&link));
+    links.push(link);
+    if links.len() > VIEW_LINK_LIMIT {
+        links.remove(0);
+    }
+    true
+}
+
+/// The operator's answer to the question with `key`, from the banner (B26):
+/// kept until it is typed into the Conductor's conversation, so a restart
+/// neither loses nor repeats it (engineering #11); typing it takes the
+/// decision away with it (B29).
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+pub struct Answer {
+    pub key: u64,
+    pub text: String,
+    /// The option it chose, counted from 1; none for a written answer.
+    #[serde(default)]
+    pub option: Option<u8>,
+    pub at_unix_ms: u64,
+    /// Read only from a book written while a typed answer stayed until the
+    /// Conductor cleared its decision: reading the book settles that
+    /// decision (`settle_typed_answers`), so it is never typed again.
+    #[serde(default, skip_serializing)]
+    pub delivered: bool,
+    /// Typing it may have reached the conversation without the engine saying so:
+    /// it is not typed again until the operator sends it again (B26).
+    #[serde(default)]
+    pub unconfirmed: bool,
+}
+
+/// Why the operator's last answer from the banner did not reach the
+/// Conductor (B28, B39).
+#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum AnswerFailure {
+    /// No Conductor runs the mission to read it.
+    ConductorGone,
+    /// The device the mission's project is on does not answer.
+    DeviceDisconnected,
+    /// Typing it into the conversation failed.
+    SendFailed,
+    /// The answer waits on the Conductor's session, which Hide cannot read,
+    /// so it cannot tell when the answer would not interrupt. Never stored:
+    /// shown while the answer waits on it.
+    SessionUnreadable,
+}
+
+/// Wakes a mission keeps unsent; past this the oldest is dropped and
+/// logged, and the Conductor's own `hide mission show` still reads the
+/// pull request as it is.
+pub const PENDING_WAKE_LIMIT: usize = 32;
+
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+pub struct MissionNode {
+    pub key: String,
+    pub title: String,
+    pub kind: NodeKind,
+    /// A general node's preset, none on every other node (PRD node-presets
+    /// D-02).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub preset: Option<Preset>,
+    #[serde(default)]
+    pub depends_on: Vec<Dependency>,
+    pub status: NodeStatus,
+    #[serde(default)]
+    pub delivery: Option<Delivery>,
+    #[serde(default)]
+    pub worker: Option<Worker>,
+    /// The worker's registration in the delivery ledger, once spawned.
+    #[serde(default)]
+    pub agent_id: Option<String>,
+    /// The node's pull requests, the current one last (D-10): the one the
+    /// Conductor named and the follow-ups of its branch Hide attached. The
+    /// node is done when every one is (D-11).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub prs: Vec<u32>,
+    /// The pull request a stacked one is based on (B15).
+    #[serde(default)]
+    pub base_pr: Option<u32>,
+    #[serde(default)]
+    pub branch: Option<String>,
+    #[serde(default)]
+    pub attempts: u8,
+    /// The Views the node's worker and the agents under it opened, each with
+    /// the attempt it was opened in; a decision that stops the node lists
+    /// the current attempt's.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub views: Vec<ViewLink>,
+    /// What the node does now, its conclusion or its verification result.
+    #[serde(default)]
+    pub line: Option<String>,
+    /// The first line of its worker's last `report` letter to the
+    /// Conductor, which a done node's `결과` shows as its conclusion while
+    /// `line` is none (with-hide/hide#2637); replaced by the next report,
+    /// at most [`LINE_LIMIT`] bytes.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub reported: Option<String>,
+    /// What a replan changed in this node and why (B18).
+    #[serde(default)]
+    pub change: Option<String>,
+    #[serde(default)]
+    pub review: Option<String>,
+    /// The node's finish lines (PRD mission-map-git-criteria D-09).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub criteria: Vec<Criterion>,
+    /// How the Conductor planned the node's work, a few lines it wrote with
+    /// the plan: the worker's own plan starts from them and, once it
+    /// exists, replaces them on the map (never a second list).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub steps: Vec<String>,
+    /// The first prompt the node's worker was spawned on, kept when the
+    /// Conductor binds the worker: the delivery ledger lets its letter go a
+    /// day after it finished, and the panel shows the brief as long as the
+    /// node is on the map. At most the ledger's letter size.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub brief: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub external: Option<External>,
+    /// How often a later node's defect opened it again (D-21).
+    #[serde(default, skip_serializing_if = "is_zero")]
+    pub reopened: u8,
+    #[serde(default)]
+    pub issues: Vec<u32>,
+    #[serde(default)]
+    pub paths: Vec<String>,
+    #[serde(default)]
+    pub started_at_unix_ms: Option<u64>,
+    #[serde(default)]
+    pub finished_at_unix_ms: Option<u64>,
+    /// What GitHub last said of each of `prs`.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub pr_seen: Vec<PrSeen>,
+    /// A direct change's commit on main (B22, B33).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub commit: Option<String>,
+    /// The checkout on the mission's machine the node's check command last
+    /// passed or failed in: its head now is what the line is compared with,
+    /// whoever works the node then (B7, D-16). Read through `check_folder`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub folder: Option<String>,
+    /// The machine and path of the checkout on another machine the check
+    /// command last ran in, in place of `folder`, which then stays empty: a
+    /// build from before workers ran elsewhere does not know this field, so
+    /// it reads the check as open, never a device's path as one on the
+    /// mission's machine.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub remote_folder: Option<(String, String)>,
+    /// The commit the node's work folder was on when it was done, for a
+    /// node without a pull request: the commit its check command is judged
+    /// against from then on, because the folder keeps moving after a finish
+    /// (the worker merges into main, later commits, the folder goes away)
+    /// and a finish does not lose its proof to that. Gone once the node is
+    /// not done; a node done before this field existed has none, and its
+    /// check is judged against the folder as before.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub done_head: Option<String>,
+    /// The proof that a direct change's branch is in main, which a mission
+    /// waiting for its branches waits on (B17, B18): of that branch only,
+    /// while the node stays done.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub in_main: Option<Landed>,
+    /// An outside branch's head when Hide last read it with commits main
+    /// lacks: work of its own, which makes the node done once main holds
+    /// it. A branch only cut from main has none (B19).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub branch_ahead: Option<String>,
+    /// An outside node's read round, from its mission's `round_seq`: a new
+    /// one each time it names another branch or goes back to work after it
+    /// settled, so a read asked in an earlier round is dropped. Apart from
+    /// `round`, the work round Hide's act keys name.
+    #[serde(default, skip_serializing_if = "is_zero_u64")]
+    pub outside_round: u64,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub verdict: Option<Verdict>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub checks: Option<Checks>,
+    /// What waits on someone to look (D-02).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub attention: Option<Attention>,
+    /// The causes already raised once (`Attention::cause`), so a settled
+    /// one is not raised again (B14, B27); at most `HANDLED_LIMIT`.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub handled: Vec<String>,
+    /// The mark a person left by taking the node back to work from a
+    /// finish (`resumed_cause`), kept apart from `handled` so a full cause
+    /// list never loses it (B16).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub resumed: Option<String>,
+    /// How often the node went back to work from a finish: the keys of
+    /// Hide's acts on it name it, so an act of a later round is its own
+    /// (`MissionEvent::id`, B27).
+    #[serde(default, skip_serializing_if = "is_zero_u32")]
+    pub round: u32,
+    /// What Hide itself did to the node last (D-07, D-15).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub hide: Option<HideMark>,
+    /// Its finish-line dependencies (`<node>:<line>`) Hide last saw met, so
+    /// that a line passing is told once and a line opening again after is
+    /// told once (`runtime::mission_health::follow_lines`); at most its own
+    /// dependencies.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub lines_met: Vec<Dependency>,
+    /// The wakes Hide sent the sleeping worker (B10); at most `WOKEN_LIMIT`.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub woken: Vec<Woken>,
+    /// What the node's worker was proven launched with, kept with the
+    /// registration it was proven for, so the map names what ran after the
+    /// worker's pane is gone and never another session's launch in the same
+    /// pane (`Runtime::record_node_launches`).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub launched: Option<NodeLaunch>,
+    /// When Hide read a new head on one of the node's pull requests last,
+    /// the first head it read of one included: the node's last push as
+    /// GitHub shows it, a move that settles a pull request's long wait
+    /// (`WaitStood`). A book from before it has none.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub pushed_at_unix_ms: Option<u64>,
+    /// When the node last went to work, from planned or from a finish: a
+    /// node back at work counts its time of work from then. A book
+    /// from before it has none, and `started_at_unix_ms` stands in.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub worked_at_unix_ms: Option<u64>,
+    /// When the lines its worker answers (`CriterionKind::worker_answers`)
+    /// first all stood passed or skipped: where its own work ended and the
+    /// review, CI and fix rounds began, the split of the node's time
+    /// (`hide mission show`, the map's panel), counted from
+    /// `worked_at_unix_ms`. Set once a run of its work, on the record or
+    /// skip that met the last of them; going back to work from a finish
+    /// starts the next run (`back_to_work`). A book from before it has none,
+    /// and a node whose lines were already met then never gets one.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub own_met_at_unix_ms: Option<u64>,
+    /// The warnings the node carries now, at most one of each kind.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub warnings: Vec<NodeWarning>,
+    /// The Conductor holds this node, not yet started, on purpose: why and
+    /// until when, at most `DELAY_LIMIT_MINUTES` (`hide mission node --hold
+    /// --for`). No stall is raised on it, it cannot start, and it ends by
+    /// itself (`Runtime::stall_missions`).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub hold: Option<NodeHold>,
+    /// The plan has the operator merge this node's pull request, against a
+    /// mission whose scope has the Conductor merge (PRD mission-destination
+    /// D-10): why, in one line. The node is done once its pull request is
+    /// ready, and the merge is left to the operator (`Mission::operator_merges`).
+    /// None for every node of a mission written before it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub operator_merge: Option<String>,
+}
+
+/// The longest reason a plan gives for the operator merging a node
+/// (`MissionNode::operator_merge`): one line, as long as a gate's.
+pub const OPERATOR_MERGE_CHARS: usize = 80;
+
+/// Why and until when a node is held (`MissionNode::hold`).
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+pub struct NodeHold {
+    pub why: String,
+    pub until_unix_ms: u64,
+}
+
+/// A node's wait as every screen draws it (`Mission::wait_of`): why, until
+/// when, and whether it is the mission's delay rather than the node's own
+/// hold.
+#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
+pub struct NodeWait {
+    pub why: String,
+    pub until_unix_ms: u64,
+    pub mission: bool,
+}
+
+/// A hold as a command asks for it: why, and for how many minutes.
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct HoldInput {
+    pub why: String,
+    pub for_minutes: u32,
+}
+
+/// The agent item, model and effort Hide started a node's worker with,
+/// proven for one registration: its pane's launch record named the
+/// registration's own conversation.
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+pub struct NodeLaunch {
+    /// The worker's registration the launch was proven for.
+    pub agent_id: String,
+    /// The agent kind, in the engine's spelling.
+    pub agent: String,
+    /// The profile it started with (PRD agent-profiles-phase2 B12); none
+    /// for the built-in default, as in every launch recorded before it. A
+    /// build before it reads a launch without it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub profile: Option<NodeProfile>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub model: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub effort: Option<String>,
+}
+
+/// A profile a node's worker started with: its id on the worker's machine,
+/// by which the map names it as it is called now, and its name then, which
+/// the map shows once the profile is gone (B23) and `hide mission show`
+/// prints. Never its account.
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+pub struct NodeProfile {
+    pub id: hide_agent_adapter::ProfileId,
+    pub name: String,
+}
+
+/// Causes a node remembers as raised; past this a new cause is refused
+/// with what it would have done, and none is forgotten.
+pub const HANDLED_LIMIT: usize = 128;
+/// Worker wakes a node remembers, one per pull request and reason; past
+/// this a new one is refused.
+pub const WOKEN_LIMIT: usize = 32;
+
+impl MissionNode {
+    /// The node's current pull request: the last one it holds.
+    pub fn current_pr(&self) -> Option<u32> {
+        self.prs.last().copied()
+    }
+
+    /// Whether the node was started: past planned, or a planned node that
+    /// already names its worker, pull request or branch, whatever its status
+    /// still says.
+    pub(crate) fn started(&self) -> bool {
+        self.status != NodeStatus::Planned
+            || self.agent_id.is_some()
+            || !self.prs.is_empty()
+            || self.branch.is_some()
+    }
+
+    /// Whether the node is at work: started, and not dropped, so a dropped
+    /// node taken back to work starts again (PRD node-presets D-06).
+    pub(crate) fn at_work(&self) -> bool {
+        self.started() && self.status != NodeStatus::Dropped
+    }
+
+    /// Why no worker may start on the node now: it is held, or its start
+    /// gate waits on the operator (PRD node-presets D-06).
+    pub(crate) fn start_refusal(&self) -> Option<String> {
+        let code = if self.hold.is_some() {
+            "mission_node_held"
+        } else if self.waits_to_start() {
+            "mission_gate_before_start"
+        } else {
+            return None;
+        };
+        Some(crate::coordination::refusal(code, &self.key))
+    }
+
+    /// Whether the node has a start gate the operator has not passed (PRD
+    /// node-presets D-06): no worker may be bound to it yet.
+    pub(crate) fn waits_to_start(&self) -> bool {
+        crate::mission_criteria::gate(&self.criteria).is_some_and(|line| {
+            line.when == GateWhen::Start
+                && line.state != crate::mission_criteria::CriterionState::Pass
+        })
+    }
+
+    /// The registrations the Conductor bound as checkers to the node's lines
+    /// (a reviewer or a verifier), once each.
+    pub(crate) fn checker_agents(&self) -> impl Iterator<Item = &str> {
+        self.criteria
+            .iter()
+            .flat_map(|line| line.checkers.iter())
+            .filter_map(|checker| checker.agent_id.as_deref())
+    }
+
+    /// The registrations bound to the node: its worker and its checkers.
+    fn bound_agents(&self) -> impl Iterator<Item = &str> {
+        self.agent_id
+            .as_deref()
+            .into_iter()
+            .chain(self.checker_agents())
+    }
+
+    /// Whether the node's worker and checkers may run on another machine
+    /// than the mission's: only a change that reaches main through a pull
+    /// request, whose work GitHub carries back. A direct change's branch
+    /// would stay on that machine, and a research or verify node answers
+    /// on the mission's.
+    pub fn runs_elsewhere(&self) -> bool {
+        self.kind == NodeKind::Change && self.delivery == Some(Delivery::Pr)
+    }
+
+    /// The machine and path of the checkout the node's check command last
+    /// ran in: `folder` on `mission_device`, or `remote_folder`.
+    pub(crate) fn check_folder<'a>(
+        &'a self,
+        mission_device: &'a str,
+    ) -> Option<(&'a str, &'a str)> {
+        match &self.remote_folder {
+            Some((device, path)) => Some((device, path)),
+            None => Some((mission_device, self.folder.as_deref()?)),
+        }
+    }
+
+    /// Records the checkout the check command ran in, `folder` on the
+    /// mission's machine and `remote_folder` on another; answers whether it
+    /// is another one than before.
+    pub(crate) fn set_check_folder(
+        &mut self,
+        mission_device: &str,
+        device: &str,
+        path: &str,
+    ) -> bool {
+        let moved = self.check_folder(mission_device) != Some((device, path));
+        let remote = device != mission_device;
+        self.folder = (!remote).then(|| path.to_owned());
+        self.remote_folder = remote.then(|| (device.to_owned(), path.to_owned()));
+        moved
+    }
+
+    /// Forgets the checkout the check command ran in.
+    pub(crate) fn clear_check_folder(&mut self) {
+        self.folder = None;
+        self.remote_folder = None;
+    }
+
+    pub fn seen(&self, number: u32) -> Option<&PrSeen> {
+        self.pr_seen.iter().find(|seen| seen.number == number)
+    }
+
+    /// Makes `number` the node's current pull request, keeping the others.
+    pub(crate) fn attach_pr(&mut self, number: u32) {
+        self.prs.retain(|pr| *pr != number);
+        self.prs.push(number);
+    }
+
+    /// Gives a node with a pull request its CI line, open until GitHub's
+    /// checks are read (`mission_criteria::ensure_ci_line`); an external node,
+    /// which Hide finishes itself, has none. Whether the line was made.
+    pub(crate) fn ensure_ci_line(&mut self) -> bool {
+        self.kind != NodeKind::External
+            && self.current_pr().is_some()
+            && crate::mission_criteria::ensure_ci_line(&mut self.criteria).1
+    }
+
+    /// The mark a person leaves by taking the node back to work from done
+    /// or dropped: Hide does not finish it again on the facts it was taken
+    /// back on, only once it holds another pull request or a line is
+    /// recorded again (B7, B16).
+    pub(crate) fn resumed_cause(&self) -> String {
+        let prs: Vec<String> = self.prs.iter().map(u32::to_string).collect();
+        let lines: Vec<String> = self
+            .criteria
+            .iter()
+            .map(|line| {
+                format!(
+                    "{}={}@{}",
+                    line.key,
+                    line.state.as_str(),
+                    line.by.as_ref().map_or(0, |by| by.at_unix_ms)
+                )
+            })
+            .collect();
+        format!("{}|{}", prs.join(","), lines.join(","))
+    }
+
+    /// Whether a person took the node back to work on the facts it holds
+    /// now.
+    pub(crate) fn resumed_on_these_facts(&self) -> bool {
+        self.resumed
+            .as_deref()
+            .is_some_and(|mark| mark == self.resumed_cause())
+    }
+
+    /// Remembers `cause` as raised; whether it is remembered. Past
+    /// `HANDLED_LIMIT` nothing is forgotten and the new cause is not
+    /// admitted, so its caller refuses what it would have done rather than
+    /// do it with no memory of it (engineering #11, #15).
+    #[must_use]
+    pub(crate) fn note_handled(&mut self, cause: String) -> bool {
+        if self.handled.contains(&cause) {
+            return true;
+        }
+        if self.handled.len() >= HANDLED_LIMIT {
+            crate::diagnostic!(serde_json::json!({
+                "component": "missions", "kind": "mission.handled_full",
+                "node": self.key, "cap": HANDLED_LIMIT,
+            }));
+            return false;
+        }
+        self.handled.push(cause);
+        true
+    }
+
+    /// The node goes back to work from a finish at `now`: a new round for
+    /// the keys of Hide's acts (B27), the time its work counts from, and no showing of its gate, which was of the work that
+    /// ended (`Criterion::shown`).
+    pub(crate) fn back_to_work(&mut self, now: u64) {
+        self.round = self.round.saturating_add(1);
+        self.worked_at_unix_ms = Some(now);
+        // Its time splits again from here: work until its lines stand met
+        // again, now when nothing of its own is left open.
+        self.own_met_at_unix_ms = self.own_lines_met().then_some(now);
+        self.done_head = None;
+        for line in &mut self.criteria {
+            line.shown.clear();
+        }
+    }
+
+    /// When the node last moved its pull requests: its last push, or when
+    /// it went to work if that is later. None for a node that never worked.
+    pub fn quiet_since(&self) -> Option<u64> {
+        let worked = self.worked_at_unix_ms.or(self.started_at_unix_ms);
+        match (self.pushed_at_unix_ms, worked) {
+            (Some(pushed), Some(worked)) => Some(pushed.max(worked)),
+            (pushed, worked) => pushed.or(worked),
+        }
+    }
+
+    /// Whether every line its worker answers stands passed or skipped, with
+    /// at least one such line.
+    pub(crate) fn own_lines_met(&self) -> bool {
+        let mut own = self
+            .criteria
+            .iter()
+            .filter(|line| line.kind.worker_answers())
+            .peekable();
+        own.peek().is_some()
+            && own.all(|line| {
+                matches!(
+                    line.state,
+                    crate::mission_criteria::CriterionState::Pass
+                        | crate::mission_criteria::CriterionState::Skipped
+                )
+            })
+    }
+
+    /// Stamps `own_met_at_unix_ms` at `now` when a record or skip met the
+    /// last of its worker's lines, which were not all met before it
+    /// (`was_met`): a node whose lines a book from before it already held
+    /// met gets no stamp, rather than one at a later record's time.
+    pub(crate) fn note_own_met(&mut self, was_met: bool, now: u64) {
+        if self.own_met_at_unix_ms.is_none() && !was_met && self.own_lines_met() {
+            self.own_met_at_unix_ms = Some(now);
+        }
+    }
+
+    /// The node's review rounds line (`Criterion::rounds`): the review or
+    /// verification line past `limit` (`Criterion::past_limit`), a failed
+    /// one first and then the one with more rounds, else the one with the
+    /// most rounds; none
+    /// before any checker answered. The one rule the limit's warning, its
+    /// letter and the screens that count rounds read.
+    pub fn review_line(&self, limit: u32) -> Option<&crate::mission_criteria::Criterion> {
+        let lines = || {
+            self.criteria
+                .iter()
+                .filter(|line| line.kind.checker_judges() && line.rounds > 0)
+        };
+        lines()
+            .filter(|line| line.past_limit(limit))
+            .max_by_key(|line| {
+                (
+                    line.state == crate::mission_criteria::CriterionState::Fail,
+                    line.rounds,
+                )
+            })
+            .or_else(|| lines().max_by_key(|line| line.rounds))
+    }
+}
+
+/// The session that conducts a mission (D-23). `actor` is the delivery
+/// identity a command is checked against; `session` names the native
+/// conversation, which the archive deletes the mission with (D-22).
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+pub struct Conductor {
+    pub actor: Actor,
+    #[serde(default)]
+    pub session: Option<crate::links::ledger::SessionIdentity>,
+    #[serde(default)]
+    pub agent_id: Option<String>,
+    /// The profile the session's start ran with, as its pane's launch record
+    /// kept it, which 이어받기's resume of the session runs with again
+    /// (PRD agent-profiles D-27); `None` for the built-in default, as for
+    /// every mission recorded before profiles, unless `profile_unknown`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub profile: Option<crate::launch::LaunchProfile>,
+    /// No launch record describes the session's start (a Conductor started
+    /// by hand), so the account it runs in is not known: 이어받기 asks the
+    /// session's machine, as a resume that names the session by id alone
+    /// does, never assuming the built-in default.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub profile_unknown: bool,
+}
+
+fn is_zero(value: &u8) -> bool {
+    *value == 0
+}
+
+/// A question the operator answered that named a node: the decision a skip
+/// of that node's check command or CI rests on (D-13, B12).
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+pub struct Decided {
+    pub key: u64,
+    pub node: String,
+}
+
+/// The line a closing pull added to a mission's report.
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+pub struct FolderLine {
+    pub text: String,
+    /// The checkout held the destination when the line was written: the
+    /// pull brought it there or found it there.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub current: bool,
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+pub struct Mission {
+    pub id: String,
+    pub title: String,
+    /// The main worktree of the project the mission belongs to, on
+    /// `device_id`, the key GitHub answers are read by.
+    pub project: String,
+    /// The catalog project the map's pull request cards open in. A core
+    /// move that finds the registration gone writes `null`, which reads as
+    /// none rather than making the whole book unreadable.
+    #[serde(default, deserialize_with = "null_is_empty")]
+    pub workspace_id: String,
+    /// The checkout the mission was created in, where a takeover starts.
+    #[serde(default)]
+    pub checkout_path: String,
+    /// Made in a project that is a plain folder, not a Git repository
+    /// (with-hide/hide#2478): `project` is that folder, and the plan holds
+    /// general nodes only (`mission_needs_git`). A build before it drops the
+    /// field and takes the mission as a Git project's.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub plain_folder: bool,
+    pub device_id: String,
+    pub conductor: Conductor,
+    pub status: MissionStatus,
+    pub scope: MissionScope,
+    /// The branch the mission's results go to (PRD mission-destination
+    /// D-02): its changes start from it, a `direct` change is merged into
+    /// it, and whether a change is in is asked of it. None for a mission
+    /// written before it, or made while the project's branches were not
+    /// read yet, which stands for the project's default branch (D-09).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub destination: Option<String>,
+    pub cap: u8,
+    /// Settings › Mission's worker candidates when the mission was
+    /// created (D-34, B48), which it keeps: Settings' candidates as they
+    /// are now admit beside them (`Runtime::mission_candidates`), so one
+    /// removed there stays admitted here. A book written before them has
+    /// none, which admits any agent.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub candidates: Vec<Candidate>,
+    /// How strongly the Conductor has the nodes checked: Settings ›
+    /// Conductor's default when the mission was created, then what its plan
+    /// names. None for a mission from before it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub strength: Option<Strength>,
+    /// The review and verify defaults a mission created before verification
+    /// strength recorded (PRD mission-map-git-criteria D-22), kept as
+    /// written for its Conductor to read; no mission records them now.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub checkers: Option<serde_json::Value>,
+    /// Made before node criteria: no node needs one and nothing is gated
+    /// on them (D-19, B23).
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub exempt: bool,
+    /// The answered questions that named a node, newest last.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub decided: Vec<Decided>,
+    #[serde(default)]
+    pub nodes: Vec<MissionNode>,
+    /// The order the plan merges in, by node key (D-09).
+    #[serde(default)]
+    pub merge_order: Vec<String>,
+    /// The plan's check command (D-26).
+    #[serde(default)]
+    pub check: Option<String>,
+    /// The GitHub account the plan uses, as `gh auth status` named it (D-54).
+    #[serde(default)]
+    pub github: Option<String>,
+    /// What the operator has to decide now; the map's one line (B17).
+    #[serde(default)]
+    pub decision: Option<String>,
+    /// What the Conductor said beside that line; none for a mission written
+    /// before it, whose decision is a line alone.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub question: Option<Question>,
+    /// How many questions this mission has asked; the next one's key.
+    #[serde(default)]
+    pub question_seq: u64,
+    /// The Views its Conductor opened since its last question was asked,
+    /// or since it was created, oldest first, at most [`VIEW_LINK_LIMIT`]:
+    /// the next question takes the ones still open (`mission_views`).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub conductor_views: Vec<ViewLink>,
+    /// The operator's answer from the banner to the current question.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub answer: Option<Answer>,
+    /// Why the last answer from the banner did not reach the Conductor,
+    /// shown once beside the question until the next answer (B28).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub answer_failed: Option<AnswerFailure>,
+    /// Why new nodes wait on usage (B13).
+    #[serde(default)]
+    pub delay: Option<String>,
+    /// When `delay` ends by itself: a hold always has an end, at most
+    /// `DELAY_LIMIT_MINUTES` after it was set, so a mission never rests
+    /// unseen behind one. A delay a build before this kept, with no end,
+    /// is given one `DELAY_LIMIT_MINUTES` after this build first reads it
+    /// (`Runtime::warn_missions`).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub delay_until_unix_ms: Option<u64>,
+    /// When the operator put the mission's 내 차례 row away
+    /// (`mission_put_away`): the mission stays out of its device's Needs You
+    /// until something asks them that was raised after this, so a put-away
+    /// row never hides a newer turn (operator decision 2026-11-20).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub put_away_unix_ms: Option<u64>,
+    #[serde(default)]
+    pub report: Option<String>,
+    /// The line about the operator's checkout Hide added to `report` when
+    /// the mission closed (`runtime/mission_pull.rs`, PRD
+    /// mission-destination D-28), so a later close replaces it rather than
+    /// adding a second. A build from before it ignores and drops it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub folder_line: Option<FolderLine>,
+    pub created_at_unix_ms: u64,
+    pub updated_at_unix_ms: u64,
+    #[serde(default)]
+    pub started_at_unix_ms: Option<u64>,
+    #[serde(default)]
+    pub closed_at_unix_ms: Option<u64>,
+    /// The wakes not yet in the Conductor's inbox, oldest first.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub wakes: Vec<PendingWake>,
+    /// How many wakes this mission has had; the next one's `seq`.
+    #[serde(default)]
+    pub wake_seq: u64,
+    /// The last round given to one of its outside nodes
+    /// (`MissionNode::round`), never given again.
+    #[serde(default, skip_serializing_if = "is_zero_u64")]
+    pub round_seq: u64,
+    /// When the operator asked the Conductor to end the mission (`미션
+    /// 종료`), until it closes; a second press asks nothing more.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub end_asked_at_unix_ms: Option<u64>,
+    /// The count of raises, which keys each `Attention`.
+    #[serde(default, skip_serializing_if = "is_zero_u64")]
+    pub attention_seq: u64,
+    /// The nodes as a reopen found them (`Mission::node_marks`): Hide does
+    /// not close the mission again on them, only once a node moved (PRD
+    /// mission-node-simple B18).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub reopened_on: Option<String>,
+    /// The operator's one handover of a Conductor that is still there
+    /// (B15): good for one `hide mission take --handover` from the session
+    /// it was made for, while the Conductor it was made on holds the
+    /// mission.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub handover: Option<Handover>,
+}
+
+/// How long the operator's handover waits for the session it started.
+pub const HANDOVER_TTL_MS: u64 = 10 * 60_000;
+
+/// The longest a mission's delay holds: one day, after which the mission
+/// goes on and a node still not started is a stall (`mission_health`).
+pub const DELAY_LIMIT_MINUTES: u32 = 24 * 60;
+
+/// Whether `token` can name a handover: 16 to 64 letters, digits and `-`.
+pub(crate) fn valid_handover(token: &str) -> bool {
+    (16..=64).contains(&token.len())
+        && token
+            .bytes()
+            .all(|byte| byte.is_ascii_alphanumeric() || byte == b'-')
+}
+
+/// The operator's choice to hand a mission whose Conductor is still there
+/// to a new session (PRD mission-node-simple B15).
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+pub struct Handover {
+    /// The secret the new session's take names; only that session was
+    /// told it.
+    pub token: String,
+    /// The Conductor it was made on; another one holding the mission by
+    /// then voids it.
+    pub from: Actor,
+    pub at_unix_ms: u64,
+}
+
+fn is_zero_u64(value: &u64) -> bool {
+    *value == 0
+}
+
+fn is_zero_u32(value: &u32) -> bool {
+    *value == 0
+}
+
+impl Mission {
+    /// The (checker registration, Conductor) pairs of `node`: the checkers
+    /// bound to its lines, each with this mission's Conductor. A letter from
+    /// one to the other is what `hide mission show <node>` lists for its
+    /// worker (with-hide/hide-private#668), and one the worker reads
+    /// (`MissionBook::node_letters_read_by`).
+    pub(crate) fn checker_letters<'a>(
+        &'a self,
+        node: &'a MissionNode,
+    ) -> impl Iterator<Item = (&'a str, &'a Actor)> {
+        node.checker_agents()
+            .map(|checker| (checker, &self.conductor.actor))
+    }
+
+    /// Each node's key, status and pull requests, which a reopen keeps so
+    /// the mission is not closed again until one of them moves.
+    pub(crate) fn node_marks(&self) -> String {
+        self.nodes
+            .iter()
+            .map(|node| {
+                let prs: Vec<String> = node.prs.iter().map(u32::to_string).collect();
+                format!("{}={}:{}", node.key, node.status.as_str(), prs.join(","))
+            })
+            .collect::<Vec<_>>()
+            .join(";")
+    }
+
+    pub(crate) fn node(&self, key: &str) -> Option<&MissionNode> {
+        self.nodes.iter().find(|node| node.key == key)
+    }
+
+    /// Whether the operator, not the Conductor, merges `node`'s pull
+    /// request (PRD mission-destination D-10, D-35): every one of a mission
+    /// whose scope ends at ready pull requests, and one the plan gave the
+    /// operator in a mission that goes through the merge. Such a node is
+    /// done once its pull request is ready, and its merge is left. The one
+    /// rule the done check, the map and `hide mission show` read.
+    pub(crate) fn operator_merges(&self, node: &MissionNode) -> bool {
+        self.scope == MissionScope::Pr || node.operator_merge.is_some()
+    }
+
+    /// What the node waits on now that its Conductor set on purpose (PRD
+    /// letters-missions-simplify D-07, B21): its own hold (`hide mission node
+    /// --hold`), else the mission's delay (`hide mission delay`), which holds
+    /// every node of an open mission that is not done or dropped. The one
+    /// state the map, the phone and `hide mission show` draw as `기다리는 중 ·
+    /// 이유 · 언제까지`, and the one rule that keeps every warning and stall
+    /// off the node while it holds (`mission_health::stall_excused`). It ends
+    /// by itself at `until_unix_ms` (`Runtime::stall_missions`). A worker's
+    /// sleep is not one: its card says asleep.
+    pub(crate) fn wait_of(&self, node: &MissionNode) -> Option<NodeWait> {
+        if !self.status.open() || matches!(node.status, NodeStatus::Done | NodeStatus::Dropped) {
+            return None;
+        }
+        if let Some(hold) = &node.hold {
+            return Some(NodeWait {
+                why: hold.why.clone(),
+                until_unix_ms: hold.until_unix_ms,
+                mission: false,
+            });
+        }
+        Some(NodeWait {
+            why: self.delay.clone()?,
+            until_unix_ms: self.delay_until_unix_ms?,
+            mission: true,
+        })
+    }
+
+    /// Whether the open decision is about node `key` (`Question::names`):
+    /// its raises then wait on the operator's answer with the Conductor.
+    pub(crate) fn deciding_on(&self, key: &str) -> bool {
+        self.decision.is_some()
+            && self
+                .question
+                .as_ref()
+                .is_some_and(|question| question.names(key))
+    }
+
+    /// The pull-request change `node`, itself one, starts on by one of its
+    /// finish lines (`<node>:<line>`) rather than by its merge: `node`'s
+    /// branch starts from that node's branch and its pull request takes
+    /// that branch as its base. A plan names at most one node by a line
+    /// (`mission_dependency_stack_split`); none when it names none, or when
+    /// either node opens no pull request.
+    pub(crate) fn stacks_on(&self, node: &MissionNode) -> Option<&MissionNode> {
+        if !pull_change(node) {
+            return None;
+        }
+        node.depends_on
+            .iter()
+            .find(|dependency| dependency.line.is_some())
+            .and_then(|dependency| self.node(&dependency.node))
+            .filter(|lower| pull_change(lower))
+    }
+
+    /// When `key`, a dependency of a node of this mission, is met: `None`
+    /// while it is not, else when, which is none when the record cannot say
+    /// (a key naming no node holds nothing back, and a book may keep no
+    /// finish time). A plain key is met when its node is done, at its
+    /// finish, and `<node>:<line>` then at the line's record if it came
+    /// first; `<node>:<line>` also when that line is met now as its owner
+    /// shows it (`Criterion::met` against the node's heads, read into
+    /// `lines` by `Runtime::lines_now`), at the line's record, so a check
+    /// line passed on an older commit is open again. A dropped node meets
+    /// nothing. The one rule a planned node waits by (`waiting_on`), could
+    /// start by (`mission_health::could_start`) and is told about by
+    /// (`mission_health::follow_lines`).
+    pub(crate) fn dependency_met(
+        &self,
+        key: &Dependency,
+        lines: &[LinesNow],
+    ) -> Option<Option<u64>> {
+        let Some(at) = self.nodes.iter().position(|node| node.key == key.node) else {
+            return Some(None);
+        };
+        let before = &self.nodes[at];
+        let recorded = |line: &str| {
+            let known = before.criteria.iter().find(|known| known.key == line)?;
+            known.by.as_ref().map(|by| by.at_unix_ms)
+        };
+        match before.status {
+            // A line of a node done stays met when it was recorded, so the
+            // wait of the node behind it does not move to the finish.
+            NodeStatus::Done => {
+                let line = key.line.as_deref().and_then(recorded);
+                return Some(match (line, before.finished_at_unix_ms) {
+                    (Some(line), Some(finished)) => Some(line.min(finished)),
+                    (line, finished) => line.or(finished),
+                });
+            }
+            NodeStatus::Dropped => return None,
+            NodeStatus::Planned | NodeStatus::Working => {}
+        }
+        let line = key.line.as_deref()?;
+        let known = before.criteria.iter().find(|known| known.key == line)?;
+        // A node `lines` was not read for shows no line met.
+        let open = lines
+            .get(at)
+            .is_none_or(|now| now.unmet.iter().any(|unmet| unmet == line));
+        (!open).then(|| known.by.as_ref().map(|by| by.at_unix_ms))
+    }
+
+    /// The node a spawn's intent names as its worker's,
+    /// `<mission id>:<node key>` (`hide mission help`); none for another
+    /// intent, such as a checker's.
+    pub(crate) fn intent_node(&self, intent: &str) -> Option<&MissionNode> {
+        intent
+            .strip_prefix(&self.id)
+            .and_then(|rest| rest.strip_prefix(':'))
+            .and_then(|key| self.node(key))
+    }
+
+    /// Why each node cannot start, from a dropped node anywhere upstream of
+    /// it.
+    pub(crate) fn blocked(&self) -> BTreeMap<String, Blocked> {
+        let mut out = BTreeMap::new();
+        for node in &self.nodes {
+            if node.status.finished() {
+                continue;
+            }
+            let mut found = None;
+            crate::dag::walk_upstream(&self.nodes, node, |upstream| match upstream.status {
+                // A dropped node is the one cause; the first ends the walk.
+                NodeStatus::Dropped => {
+                    found = Some(Blocked::UpstreamDropped);
+                    crate::dag::Step::Stop
+                }
+                _ => crate::dag::Step::Continue,
+            });
+            if let Some(found) = found {
+                out.insert(node.key.clone(), found);
+            }
+        }
+        out
+    }
+}
+
+impl crate::dag::Node for MissionNode {
+    fn key(&self) -> &str {
+        &self.key
+    }
+    fn depends_on(&self) -> impl Iterator<Item = &str> {
+        self.depends_on
+            .iter()
+            .map(|dependency| dependency.node.as_str())
+    }
+}
+
+impl crate::dag::Node for NodeInput {
+    fn key(&self) -> &str {
+        &self.key
+    }
+    fn depends_on(&self) -> impl Iterator<Item = &str> {
+        self.depends_on
+            .iter()
+            .map(|dependency| dependency.node.as_str())
+    }
+}
+
+/// Whether `node` is a change that reaches its destination through a pull
+/// request, the only node a stack holds.
+fn pull_change(node: &MissionNode) -> bool {
+    node.kind == NodeKind::Change && node.delivery == Some(Delivery::Pr)
+}
+
+/// A node's finish lines as their owner shows them now
+/// (`Runtime::lines_now`), which a dependency on one of them reads
+/// (`Mission::dependency_met`).
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub(crate) struct LinesNow {
+    /// The keys of its lines not met now (`Runtime::node_unmet`).
+    pub unmet: Vec<String>,
+    /// Hide read the commit its work folder is on: a check line it cannot
+    /// read shows open, which is not known to be open again.
+    pub head_read: bool,
+}
+
+/// One entry of a node's `depends_on`, written as the plan wrote it: another
+/// node, `<node>`, met once that node is done, or one finish line of it,
+/// `<node>:<line>`, met once that line is met, or the node is done
+/// (`Mission::dependency_met`). A node key has no `:`, so each text reads one
+/// way, and a plan of plain keys reads and writes as it did.
+#[derive(Clone, Debug, Deserialize, Eq, Ord, PartialEq, PartialOrd, Serialize)]
+#[serde(from = "String", into = "String")]
+pub struct Dependency {
+    pub node: String,
+    pub line: Option<String>,
+}
+
+impl From<String> for Dependency {
+    fn from(text: String) -> Self {
+        match text.split_once(':') {
+            Some((node, line)) => Self {
+                node: node.to_owned(),
+                line: Some(line.to_owned()),
+            },
+            None => Self {
+                node: text,
+                line: None,
+            },
+        }
+    }
+}
+
+impl From<&str> for Dependency {
+    fn from(text: &str) -> Self {
+        Self::from(text.to_owned())
+    }
+}
+
+impl From<Dependency> for String {
+    fn from(dependency: Dependency) -> Self {
+        dependency.to_string()
+    }
+}
+
+impl std::fmt::Display for Dependency {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match &self.line {
+            Some(line) => write!(f, "{}:{line}", self.node),
+            None => f.write_str(&self.node),
+        }
+    }
+}
+
+/// Settings › Mission (D-31): the values a new plan starts from. A plan
+/// changed in conversation keeps its own values (B3, B48); a worker
+/// candidate added or changed, the cleanup of merged worktrees and the way
+/// every mission's map is drawn apply to every mission at once
+/// (`Runtime::mission_candidates` for the candidates).
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct ConductorSettings {
+    #[serde(default = "default_cap")]
+    pub concurrency: u8,
+    #[serde(default)]
+    pub default_scope: MissionScope,
+    #[serde(default)]
+    pub candidates: Vec<Candidate>,
+    /// How strongly a new mission's nodes are checked.
+    #[serde(default)]
+    pub default_strength: Strength,
+    /// Remove a done node's worktree once its pull request merged, when the
+    /// tree is clean and nothing runs in it (`runtime/mission_cleanup.rs`).
+    /// Read live by every mission; a value kept before it reads as on.
+    #[serde(default = "default_clean_merged")]
+    pub clean_merged: bool,
+    /// Which way every mission's map runs, chosen on the map itself. Left
+    /// out while it is the default, so a build from before it still reads
+    /// the rest of Settings › Mission until the operator turns a map.
+    #[serde(default, skip_serializing_if = "MapFlow::is_down")]
+    pub map_flow: MapFlow,
+}
+
+/// Which way a mission's map runs: the work a node waits on above it
+/// (`down`), or to its left (`across`), for a mission whose many
+/// independent nodes would draw one row too wide to read.
+#[derive(Clone, Copy, Debug, Default, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum MapFlow {
+    #[default]
+    Down,
+    Across,
+}
+
+impl MapFlow {
+    fn is_down(&self) -> bool {
+        *self == Self::Down
+    }
+}
+
+impl Default for ConductorSettings {
+    fn default() -> Self {
+        Self {
+            concurrency: DEFAULT_CAP,
+            default_scope: MissionScope::Pr,
+            candidates: Vec::new(),
+            default_strength: Strength::Normal,
+            clean_merged: default_clean_merged(),
+            map_flow: MapFlow::Down,
+        }
+    }
+}
+
+/// How strongly the Conductor has a mission's nodes checked: which nodes
+/// get a review or a run-it check, which the Conductor follows by `hide
+/// mission help`, and how many review rounds a node gets
+/// (`Strength::review_rounds`), which Hide counts. A mission from before it
+/// counts as `Normal`.
+#[derive(Clone, Copy, Debug, Default, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum Strength {
+    Fast,
+    #[default]
+    Normal,
+    Thorough,
+}
+
+impl Strength {
+    /// Its stored spelling, which the Conductor's plan names.
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Fast => "fast",
+            Self::Normal => "normal",
+            Self::Thorough => "thorough",
+        }
+    }
+
+    /// The review rounds a node's review or verification gets at this
+    /// strength (`Criterion::rounds`): a review and its re-reviews. When the
+    /// round at the limit fails, its Conductor is told once to move the
+    /// ordinary and minor findings to follow-up issues and skip the line
+    /// (`mission_health::warn_acts`). The one place these numbers live;
+    /// `hide mission help` (Verification strength) says the same.
+    pub fn review_rounds(self) -> u32 {
+        match self {
+            Self::Fast => 1,
+            Self::Normal => 3,
+            Self::Thorough => 4,
+        }
+    }
+}
+
+fn default_clean_merged() -> bool {
+    true
+}
+
+fn default_cap() -> u8 {
+    DEFAULT_CAP
+}
+
+/// One worker candidate (D-31, D-34): an agent item (the agent and one of
+/// its profiles on the mission's machine, PRD agent-profiles-phase2 D-08),
+/// its model or the CLI's default, a fixed effort or none for the Conductor
+/// to choose, and what it is for.
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct Candidate {
+    pub agent: String,
+    /// The profile, by its id on the mission's machine; `None` for the
+    /// agent's built-in default, which is left out of what is kept, so a
+    /// value of built-in defaults only is the bytes a build before profiles
+    /// wrote and reads (B14). A build before it refuses a value that names
+    /// one (`deny_unknown_fields`): `docs/INSTALL.md`, What each system
+    /// supports, says so.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub profile: Option<hide_agent_adapter::ProfileId>,
+    #[serde(default)]
+    pub model: Option<String>,
+    #[serde(default)]
+    pub effort: Option<String>,
+    #[serde(default)]
+    pub purpose: String,
+}
+
+impl Candidate {
+    /// Whether a worker started as `target` with `launch` is this candidate
+    /// (D-34, PRD agent-profiles-phase2 D-08, B13): the same agent and
+    /// profile, the one the start actually runs with (`launch::pick`'s
+    /// answer, never the profile the spawn named alone), its model where the
+    /// candidate fixes one or the CLI's default where it names none, and its
+    /// effort only where the candidate fixes one; an automatic effort is the
+    /// Conductor's choice.
+    pub(crate) fn admits(
+        &self,
+        target: &hide_agent_adapter::LaunchTarget,
+        launch: &hide_agent_adapter::LaunchChoice,
+    ) -> bool {
+        hide_agent_adapter::canonical_kind(&self.agent)
+            == hide_agent_adapter::canonical_kind(&target.kind)
+            && self.profile_id() == target.profile
+            && self.model == launch.model
+            && self
+                .effort
+                .as_ref()
+                .is_none_or(|effort| launch.effort.as_ref() == Some(effort))
+    }
+
+    /// The profile the candidate names, the built-in default for none.
+    pub(crate) fn profile_id(&self) -> hide_agent_adapter::ProfileId {
+        item_profile(self.profile.as_ref())
+    }
+
+    /// The row as it is kept: the built-in default named by its id is the
+    /// one left out, so both spellings are one row.
+    fn kept(mut self) -> Self {
+        self.profile = self.profile.filter(|id| !id.is_default());
+        self
+    }
+}
+
+/// The profile an item names, the built-in default for none.
+fn item_profile(profile: Option<&hide_agent_adapter::ProfileId>) -> hide_agent_adapter::ProfileId {
+    profile
+        .cloned()
+        .unwrap_or_else(hide_agent_adapter::ProfileId::default_profile)
+}
+
+impl Worker {
+    /// The item the plan names, as a start of it is asked for: its agent and
+    /// its profile, the built-in default for none.
+    pub(crate) fn target(&self) -> hide_agent_adapter::LaunchTarget {
+        hide_agent_adapter::LaunchTarget {
+            kind: self.agent.clone(),
+            profile: item_profile(self.profile.as_ref()),
+        }
+    }
+
+    /// Whether `candidate` admits this planned worker, by the test a start is
+    /// judged by (`Candidate::admits`) with the plan's item, model and effort
+    /// as the start's. A plan names the model of every worker that takes
+    /// one (`mission_model_missing`), so a model it names as the agent's
+    /// `cli_default_model` is the CLI's default to a candidate that keeps it.
+    pub(crate) fn admitted_by(&self, candidate: &Candidate) -> bool {
+        let cli_default =
+            candidate.model.is_none() && self.model.as_deref() == cli_default_model(&self.agent);
+        let launch = hide_agent_adapter::LaunchChoice {
+            model: self.model.clone().filter(|_| !cli_default),
+            effort: self.effort.clone(),
+        };
+        candidate.admits(&self.target(), &launch)
+    }
+}
+
+impl ConductorSettings {
+    /// Checks a value before it is kept: a cap in range, known agents, and
+    /// each model and effort one the agent takes.
+    pub(crate) fn validate(&self) -> Result<(), String> {
+        if !(1..=CAP_LIMIT).contains(&self.concurrency) {
+            return Err("conductor_settings.cap_out_of_range".into());
+        }
+        if self.candidates.len() > CANDIDATE_LIMIT {
+            return Err("conductor_settings.too_many_candidates".into());
+        }
+        for candidate in &self.candidates {
+            check_worker(
+                &candidate.agent,
+                candidate.model.as_deref(),
+                candidate.effort.as_deref(),
+            )
+            .map_err(|code| format!("conductor_settings.{code}"))?;
+            if candidate
+                .profile
+                .as_ref()
+                .is_some_and(|id| !crate::project_settings::valid_profile_id(&id.0))
+            {
+                return Err("conductor_settings.profile_invalid".into());
+            }
+            if candidate.purpose.len() > LINE_LIMIT
+                || candidate.purpose.chars().any(char::is_control)
+            {
+                return Err("conductor_settings.purpose_invalid".into());
+            }
+        }
+        Ok(())
+    }
+
+    /// The value an edit keeps: each row as it is kept, then checked
+    /// (`validate`).
+    pub(crate) fn edited(mut self) -> Result<Self, String> {
+        self.candidates = self.candidates.into_iter().map(Candidate::kept).collect();
+        self.validate()?;
+        Ok(self)
+    }
+
+    /// Reads the value `core-state.json` keeps. Fields a value kept by an
+    /// earlier build may carry are left behind: `checkers`, the review and
+    /// verify defaults from before verification strength (such a value reads
+    /// as `normal`); `warn_review_fails` and `warn_quiet_minutes`, which
+    /// nothing could change from their defaults and which are now fixed
+    /// (`mission_health::REVIEW_FAILS_THAT_WARN`, `QUIET_THAT_WARNS_MS`); and
+    /// `other_vendor`, the switch Settings › Mission had for a checker of
+    /// another kind than the worker, which the Conductor now always prefers
+    /// by `hide mission help`.
+    pub(crate) fn from_stored(mut value: serde_json::Value) -> Result<Self, String> {
+        if let Some(fields) = value.as_object_mut() {
+            for field in [
+                "checkers",
+                "warn_review_fails",
+                "warn_quiet_minutes",
+                "other_vendor",
+            ] {
+                fields.remove(field);
+            }
+        }
+        serde_json::from_value(value).map_err(|error| error.to_string())
+    }
+}
+
+/// Whether `agent` takes a model at its start, by its own declaration.
+pub(crate) fn takes_model(agent: &str) -> bool {
+    hide_agent_adapter::adapter(agent)
+        .and_then(|row| row.start)
+        .is_some_and(|dialect| !dialect.options().model.is_empty())
+}
+
+/// The model `agent` runs with when a start names none, as Hide AI measured
+/// it, which `hide agent catalog` offers as `cli_default_model` so a plan
+/// can name one while the list is unread; none for an agent that takes no
+/// model or whose own CLI keeps that default.
+pub(crate) fn cli_default_model(agent: &str) -> Option<&'static str> {
+    let adapter = hide_agent_adapter::adapter(agent)?;
+    takes_model(agent)
+        .then(|| hide_ai::ProviderId::for_agent(adapter.id))
+        .flatten()
+        .map(hide_ai::ProviderId::default_model)
+        .filter(|model| !model.is_empty())
+}
+
+/// Whether `agent` is an agent Hide starts, and `model` and `effort` are
+/// values it takes, by the agent's own declaration.
+pub(crate) fn check_worker(
+    agent: &str,
+    model: Option<&str>,
+    effort: Option<&str>,
+) -> Result<(), String> {
+    let Some(dialect) = hide_agent_adapter::adapter(agent).and_then(|row| row.start) else {
+        return Err("agent_unknown".into());
+    };
+    let options = dialect.options();
+    if model
+        .is_some_and(|model| options.model.is_empty() || !hide_agent_adapter::valid_model(model))
+    {
+        return Err("model_invalid".into());
+    }
+    if effort.is_some_and(|effort| !options.efforts.contains(&effort)) {
+        return Err("effort_invalid".into());
+    }
+    Ok(())
+}
+
+/// Every mission the core keeps, and the next id to give: the missions it
+/// holds whole, and the closed ones it keeps on disk only (`shelved`,
+/// `mission_store`), each by its index line.
+#[derive(Clone, Debug, Default, Deserialize, Eq, PartialEq, Serialize)]
+pub struct MissionBook {
+    #[serde(default)]
+    pub missions: Vec<Mission>,
+    #[serde(default)]
+    pub next: u64,
+    /// The closed missions past `mission_store::LOADED_CLOSED_LIMIT`,
+    /// oldest gone first: their files stay, and `hide mission show` and
+    /// `reopen` read one back. Never in a file's book.
+    #[serde(skip)]
+    pub shelved: Vec<MissionLine>,
+}
+
+/// What the mission folder's index says of one mission without its body:
+/// its CLI list fields, whether it may be shelved, how old its close is,
+/// and the Conductor session it is deleted with (D-22). A line changes with a create, a
+/// status, a close, a take, an ask on a closed mission and a delete, so a
+/// node's change rewrites the mission's file alone.
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+pub struct MissionLine {
+    pub id: String,
+    pub title: String,
+    pub project: String,
+    pub device_id: String,
+    pub conductor: Conductor,
+    pub status: MissionStatus,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub closed_at_unix_ms: Option<u64>,
+    /// A done mission whose node or decision still asks someone: it stays
+    /// loaded, so what it asks keeps reaching the operator.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub asks: bool,
+}
+
+impl MissionLine {
+    pub(crate) fn of(mission: &Mission) -> Self {
+        Self {
+            id: mission.id.clone(),
+            title: mission.title.clone(),
+            project: mission.project.clone(),
+            device_id: mission.device_id.clone(),
+            conductor: mission.conductor.clone(),
+            status: mission.status,
+            closed_at_unix_ms: mission.closed_at_unix_ms,
+            asks: mission.status == MissionStatus::Done
+                && (mission.decision.is_some()
+                    || mission.nodes.iter().any(|node| node.attention.is_some())),
+        }
+    }
+
+    /// Finished and asking no one: what may be shelved (engineering #15).
+    pub(crate) fn at_rest(&self) -> bool {
+        !self.status.open() && !self.asks
+    }
+
+    /// When it closed, for shelving the oldest first; a closed mission
+    /// recorded without the time is the oldest.
+    pub(crate) fn closed_order(&self) -> (u64, u64) {
+        (
+            self.closed_at_unix_ms.unwrap_or(0),
+            mission_number(&self.id),
+        )
+    }
+}
+
+/// The number in a mission's id (`MissionBook::allocate`), 0 for an id of
+/// another form.
+pub(crate) fn mission_number(id: &str) -> u64 {
+    id.strip_prefix("mission-")
+        .and_then(|number| number.parse().ok())
+        .unwrap_or(0)
+}
+
+impl MissionBook {
+    /// The worker registered as `worker` sent its `report` letter `body`
+    /// to `recipient`: a node it works whose mission `recipient` conducts
+    /// keeps the letter's first line that says anything, at most
+    /// [`LINE_LIMIT`] bytes, as its `reported` conclusion, in place of the
+    /// last one (with-hide/hide#2637). Whether a node changed.
+    pub(crate) fn note_worker_report(
+        &mut self,
+        worker: &str,
+        recipient: &crate::delivery::Actor,
+        body: &str,
+    ) -> bool {
+        let Some(line) = report_line(body) else {
+            return false;
+        };
+        let mut changed = false;
+        for mission in &mut self.missions {
+            if !mission.conductor.actor.same_identity(recipient) {
+                continue;
+            }
+            for node in &mut mission.nodes {
+                if node.agent_id.as_deref() == Some(worker)
+                    && node.reported.as_deref() != Some(line.as_str())
+                {
+                    node.reported = Some(line.clone());
+                    changed = true;
+                }
+            }
+        }
+        changed
+    }
+
+    /// The line of a shelved mission `id`.
+    pub(crate) fn shelf(&self, id: &str) -> Option<&MissionLine> {
+        self.shelved.iter().find(|line| line.id == id)
+    }
+
+    pub(crate) fn get(&self, id: &str) -> Option<&Mission> {
+        self.missions.iter().find(|mission| mission.id == id)
+    }
+
+    pub(crate) fn get_mut(&mut self, id: &str) -> Option<&mut Mission> {
+        self.missions.iter_mut().find(|mission| mission.id == id)
+    }
+
+    /// The other registrations bound to the nodes registration `reader` is
+    /// bound to, as their worker or a checker of one of their lines, each
+    /// with the Conductor of its mission: the pairs whose letters, either
+    /// way, `reader` may read (`hide request show`). A Conductor points a
+    /// node's reviewer at the worker's design and its verifier at the
+    /// review by the letter's id, so each of them reads what the others of
+    /// its node exchanged with the Conductor (with-hide/hide#2298,
+    /// with-hide/hide-private#656).
+    pub(crate) fn node_letters_read_by<'a>(
+        &'a self,
+        reader: &'a str,
+    ) -> impl Iterator<Item = (&'a str, &'a Actor)> {
+        self.missions
+            .iter()
+            .flat_map(|mission| mission.nodes.iter().map(move |node| (mission, node)))
+            .filter(move |(_, node)| node.bound_agents().any(|agent| agent == reader))
+            .flat_map(move |(mission, node)| {
+                node.bound_agents()
+                    .filter(move |agent| *agent != reader)
+                    .map(move |agent| (agent, &mission.conductor.actor))
+            })
+    }
+
+    /// The mission `actor` conducts and still runs, if any.
+    pub(crate) fn conducted_open(&self, actor: &Actor) -> Option<&Mission> {
+        self.missions
+            .iter()
+            .find(|mission| mission.status.open() && mission.conductor.actor.same_identity(actor))
+    }
+
+    /// The mission a command from `actor` means when it names none: the one
+    /// it conducts that still runs, else its newest done one.
+    pub(crate) fn conducted(&self, actor: &Actor) -> Option<&Mission> {
+        self.conducted_open(actor).or_else(|| {
+            self.missions
+                .iter()
+                .filter(|mission| {
+                    mission.status == MissionStatus::Done
+                        && mission.conductor.actor.same_identity(actor)
+                })
+                .max_by_key(|mission| mission.updated_at_unix_ms)
+        })
+    }
+
+    pub(crate) fn allocate(&mut self) -> String {
+        self.next += 1;
+        format!("mission-{}", self.next)
+    }
+}
+
+/// A command a Conductor's pane sends (`hide mission …`). A command that
+/// names no mission means the one the caller conducts.
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(tag = "op", rename_all = "snake_case", deny_unknown_fields)]
+pub enum MissionCommand {
+    Create {
+        title: String,
+        #[serde(default)]
+        scope: Option<MissionScope>,
+        #[serde(default)]
+        cap: Option<u8>,
+        #[serde(default)]
+        github: Option<String>,
+    },
+    Plan {
+        #[serde(default)]
+        mission: Option<String>,
+        plan: PlanInput,
+    },
+    Node {
+        #[serde(default)]
+        mission: Option<String>,
+        node: String,
+        patch: Box<NodePatch>,
+    },
+    Start {
+        #[serde(default)]
+        mission: Option<String>,
+    },
+    /// Sets or clears the operator's one line (B17), with its reason,
+    /// choices, recommended choice and stopped node (B32).
+    Decide {
+        #[serde(default)]
+        mission: Option<String>,
+        /// Named every time: `null` clears, so a request that leaves it
+        /// out is refused rather than read as a clear.
+        #[serde(deserialize_with = "present")]
+        line: Option<String>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        why: Option<String>,
+        #[serde(default, skip_serializing_if = "Vec::is_empty")]
+        options: Vec<String>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        recommend: Option<u8>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        node: Option<String>,
+        /// The other nodes the question is about, beside `node`.
+        #[serde(default, skip_serializing_if = "Vec::is_empty")]
+        nodes: Vec<String>,
+        /// Views of the Conductor's checkout to show with the question, by
+        /// id; the CLI opens a path as a View first and sends its id.
+        #[serde(default, skip_serializing_if = "Vec::is_empty")]
+        show: Vec<String>,
+    },
+    /// Sets or clears why new nodes wait on usage (B13), for at most
+    /// `DELAY_LIMIT_MINUTES`.
+    Delay {
+        #[serde(default)]
+        mission: Option<String>,
+        /// Named every time: `null` clears, so a request that leaves it
+        /// out is refused rather than read as a clear.
+        #[serde(deserialize_with = "present")]
+        line: Option<String>,
+        /// How long the delay holds, in minutes: required with a line,
+        /// absent with a clear.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        for_minutes: Option<u32>,
+    },
+    Close {
+        #[serde(default)]
+        mission: Option<String>,
+        end: MissionEnd,
+        #[serde(default)]
+        report: Option<String>,
+    },
+    Reopen {
+        #[serde(default)]
+        mission: Option<String>,
+    },
+    /// The owner's result for one finish line of a node (PRD
+    /// mission-map-git-criteria D-23, B5): the node's worker, a checker the
+    /// Conductor bound, or the Conductor for a node it works itself.
+    Record {
+        #[serde(default)]
+        mission: Option<String>,
+        node: String,
+        line: String,
+        pass: bool,
+        /// The one line the result rests on, which every record carries
+        /// (B5); a frame without one is the core's own refusal, with its
+        /// way on, rather than one it cannot read.
+        #[serde(default)]
+        evidence: String,
+        /// The result in one short line of the operator's words, which the
+        /// map shows before the evidence.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        summary: Option<String>,
+        /// The commit a check command ran on.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        commit: Option<String>,
+        /// This run is the rerun of a failure on the same commit (D-14).
+        #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+        rerun: bool,
+    },
+    /// The Conductor goes past a line with its reason (B11, B12); a check
+    /// command or CI line also names the operator's answered decision.
+    Skip {
+        #[serde(default)]
+        mission: Option<String>,
+        node: String,
+        line: String,
+        reason: String,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        decision: Option<u64>,
+    },
+    /// The Conductor relays the operator's answer to `node`'s human gate,
+    /// given in its pane, with their words quoted (PRD mission-human-gate
+    /// D-21): `pass` passes it, otherwise the words go back as a defect.
+    Gate {
+        #[serde(default)]
+        mission: Option<String>,
+        node: String,
+        pass: bool,
+        said: String,
+    },
+    /// The Conductor shows the operator what `node`'s gate looks at while
+    /// the node still works, with the Views it names (`hide mission gate
+    /// <node> --show`, operator decision 2026-11-14): the gate asks on the
+    /// map from then, as it does once the node's own lines are met.
+    GateShow {
+        #[serde(default)]
+        mission: Option<String>,
+        node: String,
+        show: Vec<String>,
+    },
+    /// A later node found a defect in `node`: it works again with the
+    /// defect as a line of its own (D-21, B21).
+    Defect {
+        #[serde(default)]
+        mission: Option<String>,
+        node: String,
+        found_by: String,
+        line: String,
+    },
+    Take {
+        mission: String,
+        /// The operator's handover of a Conductor that is still there
+        /// (`Mission::handover`), named by the session it was made for.
+        #[serde(default)]
+        handover: Option<String>,
+    },
+    /// The mission's view, or with `node` that node's with its worker's
+    /// newest letters (with-hide/hide-private#552).
+    Show {
+        #[serde(default)]
+        mission: Option<String>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        node: Option<String>,
+    },
+    List,
+    Settings,
+}
+
+impl MissionCommand {
+    /// Whether the command can change the record; the others only read it.
+    pub(crate) fn mutates(&self) -> bool {
+        !matches!(self, Self::Show { .. } | Self::List | Self::Settings)
+    }
+
+    /// A command small enough and well-formed enough to take to the core.
+    pub fn valid(&self) -> bool {
+        let id_ok = |id: &Option<String>| id.as_deref().is_none_or(valid_key);
+        match self {
+            Self::Create { title, github, .. } => {
+                valid_text(title, TITLE_LIMIT)
+                    && github.as_deref().is_none_or(|g| valid_text(g, TITLE_LIMIT))
+            }
+            Self::Plan { mission, .. } | Self::Start { mission } | Self::Reopen { mission } => {
+                id_ok(mission)
+            }
+            Self::Show { mission, node } => id_ok(mission) && id_ok(node),
+            Self::Node { mission, node, .. } => id_ok(mission) && valid_key(node),
+            Self::Record {
+                mission,
+                node,
+                line,
+                evidence,
+                commit,
+                ..
+            } => {
+                // A blank line is the core's own refusal, with its way on.
+                id_ok(mission)
+                    && valid_key(node)
+                    && valid_key(line)
+                    && (evidence.trim().is_empty() || valid_text(evidence, LINE_LIMIT))
+                    && commit.as_deref().is_none_or(valid_commit)
+            }
+            Self::Skip {
+                mission,
+                node,
+                line,
+                reason,
+                ..
+            } => id_ok(mission) && valid_key(node) && valid_key(line) && reason.len() <= LINE_LIMIT,
+            Self::Defect {
+                mission,
+                node,
+                found_by,
+                line,
+            } => {
+                id_ok(mission)
+                    && valid_key(node)
+                    && valid_key(found_by)
+                    && valid_text(line, LINE_LIMIT)
+            }
+            // Words left out are the core's own refusal, with its way on.
+            Self::Gate {
+                mission,
+                node,
+                said,
+                ..
+            } => id_ok(mission) && valid_key(node) && said.len() <= LINE_LIMIT,
+            Self::GateShow {
+                mission,
+                node,
+                show,
+            } => {
+                id_ok(mission)
+                    && valid_key(node)
+                    && !show.is_empty()
+                    && show.len() <= VIEW_LINK_LIMIT
+                    && show
+                        .iter()
+                        .all(|value| valid_text(value, SHOW_LIMIT) && !value.contains(['\n', '\t']))
+            }
+            Self::Decide {
+                mission,
+                line,
+                why,
+                options,
+                node,
+                nodes,
+                show,
+                ..
+            } => {
+                // The choices' count and length are refused with their own
+                // reasons (`check_question`); here only a frame no command
+                // could mean is.
+                id_ok(mission)
+                    && line
+                        .as_deref()
+                        .is_none_or(|line| valid_text(line, LINE_LIMIT))
+                    && valid_line(why, LINE_LIMIT)
+                    && options.len() <= NODE_LIMIT
+                    && node.as_deref().is_none_or(valid_key)
+                    && nodes.len() < NODE_LIMIT
+                    && nodes.iter().all(|key| valid_key(key))
+                    && show.len() <= VIEW_LINK_LIMIT
+                    && show
+                        .iter()
+                        .all(|value| valid_text(value, SHOW_LIMIT) && !value.contains(['\n', '\t']))
+            }
+            Self::Delay {
+                mission,
+                line,
+                for_minutes,
+            } => {
+                id_ok(mission)
+                    && line
+                        .as_deref()
+                        .is_none_or(|line| valid_text(line, LINE_LIMIT))
+                    && match (line, for_minutes) {
+                        (Some(_), Some(minutes)) => (1..=DELAY_LIMIT_MINUTES).contains(minutes),
+                        (None, None) => true,
+                        _ => false,
+                    }
+            }
+            Self::Close {
+                mission, report, ..
+            } => {
+                id_ok(mission)
+                    && report
+                        .as_deref()
+                        .is_none_or(|report| valid_text(report, REPORT_LIMIT))
+            }
+            // A token that names no handover is refused by the take itself
+            // (`mission_conducted`).
+            Self::Take { mission, handover } => {
+                valid_key(mission) && handover.as_deref().is_none_or(|token| token.len() <= 64)
+            }
+            Self::List | Self::Settings => true,
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum MissionEnd {
+    Done,
+    MergeWait,
+    Cancelled,
+}
+
+/// A whole plan, which replaces the one before it (D-10): a node keeps what
+/// its worker did when its key stays, a planned node that is left out goes,
+/// and a node that already ran must be dropped first rather than vanish.
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct PlanInput {
+    #[serde(default)]
+    pub title: Option<String>,
+    #[serde(default)]
+    pub scope: Option<MissionScope>,
+    /// The branch the results go to (`Mission::destination`); left out, the
+    /// mission keeps the one it has.
+    #[serde(default)]
+    pub destination: Option<String>,
+    #[serde(default)]
+    pub cap: Option<u8>,
+    #[serde(default)]
+    pub github: Option<String>,
+    #[serde(default)]
+    pub check: Option<String>,
+    /// The verification strength the Conductor proposes or the operator
+    /// asked for, with why in one line when it changes.
+    #[serde(default)]
+    pub strength: Option<Strength>,
+    #[serde(default)]
+    pub strength_why: Option<String>,
+    #[serde(default)]
+    pub merge_order: Vec<String>,
+    pub nodes: Vec<NodeInput>,
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct NodeInput {
+    pub key: String,
+    pub title: String,
+    /// Read through `NodeInput::kind`, which takes the kinds before general
+    /// nodes too.
+    pub kind: PlanKind,
+    /// A general node's preset (PRD node-presets D-02); read through
+    /// `NodeInput::preset`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub preset: Option<Preset>,
+    #[serde(default)]
+    pub depends_on: Vec<Dependency>,
+    #[serde(default)]
+    pub delivery: Option<Delivery>,
+    #[serde(default)]
+    pub worker: Option<Worker>,
+    /// The node's own finish lines, at most three (PRD
+    /// mission-map-git-criteria D-09). One sentence, as a plan written
+    /// before them names it, is one line.
+    #[serde(default, deserialize_with = "lines")]
+    pub criteria: Vec<String>,
+    /// How the node's work goes, three to five short lines (at most
+    /// `STEP_LIMIT`, each `STEP_CHARS` characters). Left out, a replan keeps
+    /// the lines the node has; an empty list clears them.
+    #[serde(default)]
+    pub steps: Option<Vec<String>>,
+    /// The reviews and verifications other agents give (D-07).
+    #[serde(default)]
+    pub checks: Vec<CheckInput>,
+    /// What an external node watches (D-20).
+    #[serde(default)]
+    pub external: Option<External>,
+    #[serde(default)]
+    pub issues: Vec<u32>,
+    #[serde(default)]
+    pub paths: Vec<String>,
+    /// What a replan changed here and why (B18).
+    #[serde(default)]
+    pub change: Option<String>,
+    /// The place the operator looks, in at most `GATE_CHARS` characters
+    /// (PRD mission-human-gate D-01, D-13), before the node is done or,
+    /// with `when: start`, before it starts (PRD node-presets D-06): one
+    /// text, `{"look": …, "when": …}`, or a list a node may hold one of.
+    /// Left out, a replan keeps the gate the node has, and a new node, or one
+    /// whose preset changes, takes its new preset's (`PresetRow::gate`), none
+    /// included; `null` or an empty list takes it away, so a gate left out is
+    /// never written as `null`.
+    #[serde(
+        default,
+        deserialize_with = "gate_input",
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub gate: Option<Vec<GateInput>>,
+    /// The operator merges this node's pull request, and why in one line
+    /// of at most `OPERATOR_MERGE_CHARS` characters (PRD mission-destination
+    /// D-10). Left out, a replan keeps what the node has; `null` gives the
+    /// merge back to the mission's scope.
+    #[serde(
+        default,
+        deserialize_with = "double",
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub operator_merge: Option<Option<String>>,
+}
+
+/// A node's gate as a plan names it: what to look at, and when.
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct GateInput {
+    pub look: String,
+    #[serde(default, skip_serializing_if = "GateWhen::is_end")]
+    pub when: GateWhen,
+}
+
+impl NodeInput {
+    /// The node's kind, an old kind name read as the general node it is now.
+    pub fn kind(&self) -> NodeKind {
+        self.kind.kind()
+    }
+
+    /// The node's preset: the one it names, or the one its old kind name
+    /// stands for.
+    pub fn preset(&self) -> Option<Preset> {
+        self.preset.or(self.kind.preset())
+    }
+}
+
+/// A change to one node. An absent field is kept, `null` clears it, so a
+/// field the sender leaves unset is never written: `null` would clear it.
+#[derive(Clone, Debug, Default, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct NodePatch {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub status: Option<NodeStatus>,
+    #[serde(
+        default,
+        deserialize_with = "double",
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub agent_id: Option<Option<String>>,
+    #[serde(
+        default,
+        deserialize_with = "double",
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub pr: Option<Option<u32>>,
+    #[serde(
+        default,
+        deserialize_with = "double",
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub base_pr: Option<Option<u32>>,
+    #[serde(
+        default,
+        deserialize_with = "double",
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub branch: Option<Option<String>>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub attempts: Option<u8>,
+    #[serde(
+        default,
+        deserialize_with = "double",
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub line: Option<Option<String>>,
+    #[serde(
+        default,
+        deserialize_with = "double",
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub change: Option<Option<String>>,
+    #[serde(
+        default,
+        deserialize_with = "double",
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub review: Option<Option<String>>,
+    #[serde(
+        default,
+        deserialize_with = "double",
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub worker: Option<Option<Worker>>,
+    /// A direct change's commit on main (B33).
+    #[serde(
+        default,
+        deserialize_with = "double",
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub commit: Option<Option<String>>,
+    #[serde(
+        default,
+        deserialize_with = "double",
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub verdict: Option<Option<Verdict>>,
+    #[serde(
+        default,
+        deserialize_with = "double",
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub checks: Option<Option<Checks>>,
+    /// The registration the Conductor started as the node's next reviewer
+    /// or verifier (PRD mission-map-git-criteria B3, B4).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub reviewer: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub verifier: Option<String>,
+    /// Holds the node, not yet started (`MissionNode::hold`); `null` lifts it.
+    #[serde(
+        default,
+        deserialize_with = "double",
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub hold: Option<Option<HoldInput>>,
+}
+
+impl NodePatch {
+    /// Whether it sets only what a node's worker may set on its own node
+    /// (with-hide/hide#2302): the pull request and the branch it delivers
+    /// on, and the node's one line. Its status, stack base, agents, words
+    /// and verdicts stay its Conductor's.
+    pub fn workers_own(&self) -> bool {
+        let Self {
+            status,
+            agent_id,
+            pr: _,
+            base_pr,
+            branch: _,
+            attempts,
+            line: _,
+            change,
+            review,
+            worker,
+            commit,
+            verdict,
+            checks,
+            reviewer,
+            verifier,
+            hold,
+        } = self;
+        hold.is_none()
+            && status.is_none()
+            && agent_id.is_none()
+            && base_pr.is_none()
+            && attempts.is_none()
+            && change.is_none()
+            && review.is_none()
+            && worker.is_none()
+            && commit.is_none()
+            && verdict.is_none()
+            && checks.is_none()
+            && reviewer.is_none()
+            && verifier.is_none()
+    }
+}
+
+/// A node's criteria: a list of lines, one sentence, or none.
+fn lines<'de, D: Deserializer<'de>>(deserializer: D) -> Result<Vec<String>, D::Error> {
+    #[derive(Deserialize)]
+    #[serde(untagged)]
+    enum Lines {
+        One(String),
+        Many(Vec<String>),
+    }
+    Ok(match Option::<Lines>::deserialize(deserializer)? {
+        None => Vec::new(),
+        Some(Lines::One(line)) => vec![line],
+        Some(Lines::Many(lines)) => lines,
+    })
+}
+
+/// A node's gate as the plan names it, present: one text or
+/// `{"look": …, "when": …}`, a list of them, or `null` for none.
+fn gate_input<'de, D: Deserializer<'de>>(
+    deserializer: D,
+) -> Result<Option<Vec<GateInput>>, D::Error> {
+    #[derive(Deserialize)]
+    #[serde(untagged)]
+    enum One {
+        Text(String),
+        Gate(GateInput),
+    }
+    impl From<One> for GateInput {
+        fn from(one: One) -> Self {
+            match one {
+                One::Text(look) => GateInput {
+                    look,
+                    when: GateWhen::End,
+                },
+                One::Gate(gate) => gate,
+            }
+        }
+    }
+    #[derive(Deserialize)]
+    #[serde(untagged)]
+    enum Gates {
+        One(One),
+        Many(Vec<One>),
+    }
+    Ok(Some(match Option::<Gates>::deserialize(deserializer)? {
+        None => Vec::new(),
+        Some(Gates::One(one)) => vec![one.into()],
+        Some(Gates::Many(many)) => many.into_iter().map(Into::into).collect(),
+    }))
+}
+
+fn null_is_empty<'de, D: Deserializer<'de>>(deserializer: D) -> Result<String, D::Error> {
+    Option::<String>::deserialize(deserializer).map(Option::unwrap_or_default)
+}
+
+fn present<'de, D: Deserializer<'de>, T: Deserialize<'de>>(
+    deserializer: D,
+) -> Result<Option<T>, D::Error> {
+    Option::<T>::deserialize(deserializer)
+}
+
+fn double<'de, D: Deserializer<'de>, T: Deserialize<'de>>(
+    deserializer: D,
+) -> Result<Option<Option<T>>, D::Error> {
+    Option::<T>::deserialize(deserializer).map(Some)
+}
+
+pub use crate::dag::valid_key;
+
+fn valid_text(value: &str, limit: usize) -> bool {
+    !value.trim().is_empty()
+        && value.len() <= limit
+        && !value
+            .chars()
+            .any(|c| c.is_control() && c != '\n' && c != '\t')
+}
+
+/// A report's conclusion: its first line with anything but blanks and
+/// control characters, cut at a character boundary to [`LINE_LIMIT`] bytes.
+fn report_line(body: &str) -> Option<String> {
+    let line = body.lines().find_map(|line| {
+        let line: String = line.chars().filter(|c| !c.is_control()).collect();
+        let line = line.trim();
+        (!line.is_empty()).then(|| line.to_owned())
+    })?;
+    let mut end = line.len().min(LINE_LIMIT);
+    while !line.is_char_boundary(end) {
+        end -= 1;
+    }
+    Some(line[..end].trim_end().to_owned())
+}
+
+fn valid_line(value: &Option<String>, limit: usize) -> bool {
+    value
+        .as_deref()
+        .is_none_or(|value| valid_text(value, limit))
+}
+
+/// Whether `question` is the one `node`'s gate is asked by (PRD
+/// mission-human-gate D-09): the question names the node, and the node's
+/// gate line names the question.
+pub(crate) fn asks_gate(question: Option<&Question>, node: &MissionNode) -> bool {
+    let Some(line) = crate::mission_criteria::gate(&node.criteria) else {
+        return false;
+    };
+    question.is_some_and(|question| {
+        line.asked == Some(question.key) && question.node.as_deref() == Some(node.key.as_str())
+    })
+}
+
+/// The node whose gate the mission's open decision asks, if it asks one.
+pub(crate) fn gate_asked(mission: &Mission) -> Option<&MissionNode> {
+    let question = mission.question.as_ref()?;
+    mission.decision.as_ref()?;
+    mission
+        .nodes
+        .iter()
+        .find(|node| asks_gate(Some(question), node))
+}
+
+/// The plan `input` would make of `mission`, or why it is refused.
+pub(crate) fn apply_plan(
+    mission: &Mission,
+    input: &PlanInput,
+    now: u64,
+) -> Result<Mission, String> {
+    if input.nodes.len() > NODE_LIMIT {
+        return Err("mission_too_many_nodes".into());
+    }
+    if !valid_line(&input.title, TITLE_LIMIT)
+        || !valid_line(&input.github, TITLE_LIMIT)
+        || !valid_line(&input.check, LINE_LIMIT)
+        || !valid_line(&input.strength_why, LINE_LIMIT)
+    {
+        return Err("mission_text_invalid".into());
+    }
+    if input
+        .destination
+        .as_deref()
+        .is_some_and(|branch| !valid_destination(branch))
+    {
+        return Err("mission_destination_invalid".into());
+    }
+    // A plain folder has no branch to send results to (with-hide/hide#2478).
+    if mission.plain_folder && input.destination.is_some() {
+        return Err("mission_needs_git".into());
+    }
+    if input.cap.is_some_and(|cap| !(1..=CAP_LIMIT).contains(&cap)) {
+        return Err("mission_cap_out_of_range".into());
+    }
+    let mut keys = BTreeSet::new();
+    for node in &input.nodes {
+        if crate::dag::admit_key(&mut keys, &node.key).is_err() {
+            return Err("mission_node_key_invalid".into());
+        }
+        if !valid_text(&node.title, TITLE_LIMIT)
+            || node
+                .criteria
+                .iter()
+                .any(|line| !valid_text(line, LINE_LIMIT))
+            || !valid_line(&node.change, LINE_LIMIT)
+            || node.depends_on.len() > DEPENDENCY_LIMIT
+            || node.issues.len() > TOUCH_LIMIT
+            || node.paths.len() > TOUCH_LIMIT
+            || node.paths.iter().any(|path| !valid_text(path, LINE_LIMIT))
+        {
+            return Err("mission_text_invalid".into());
+        }
+        check_node_kind(node)?;
+        // A code node works on a branch and a waiting node waits on a pull
+        // request or a branch; a plain folder has neither, so its mission
+        // runs general nodes only, in the folder itself (with-hide/hide#2478).
+        if mission.plain_folder && node.kind() != NodeKind::General {
+            return Err(crate::coordination::refusal("mission_needs_git", &node.key));
+        }
+        if node.criteria.len() > crate::mission_criteria::OWN_LIMIT {
+            return Err(crate::coordination::refusal(
+                "mission_criteria_too_many",
+                &node.key,
+            ));
+        }
+        if node.criteria.is_empty() && node.kind() != NodeKind::External && !mission.exempt {
+            return Err(crate::coordination::refusal(
+                "mission_criteria_missing",
+                &node.key,
+            ));
+        }
+        if node.steps.as_ref().is_some_and(|steps| !valid_steps(steps)) {
+            return Err(crate::coordination::refusal(
+                "mission_steps_invalid",
+                &node.key,
+            ));
+        }
+        check_gate(mission, node)?;
+        check_operator_merge(mission, input, node)?;
+        check_checkers(node)?;
+        if node.kind() == NodeKind::Change && node.delivery.is_none() {
+            return Err("mission_delivery_required".into());
+        }
+        if node.kind() != NodeKind::Change && node.delivery.is_some() {
+            return Err("mission_delivery_invalid".into());
+        }
+        if let Some(worker) = &node.worker {
+            check_worker(
+                &worker.agent,
+                worker.model.as_deref(),
+                worker.effort.as_deref(),
+            )
+            .map_err(|code| format!("mission_{code}"))?;
+            // A worker that takes a model names one, so the map and the
+            // start never read an empty choice; an agent that takes none
+            // keeps `null` (PRD mission fixes (b)).
+            if worker.model.is_none() && takes_model(&worker.agent) {
+                return Err("mission_model_missing".into());
+            }
+        }
+    }
+    // A node stacks on one branch: its finish-line dependencies name one node.
+    for node in &input.nodes {
+        let mut by_line = node
+            .depends_on
+            .iter()
+            .filter(|dependency| dependency.line.is_some())
+            .map(|dependency| dependency.node.as_str());
+        if let Some(first) = by_line.next()
+            && by_line.any(|other| other != first)
+        {
+            return Err(crate::coordination::refusal(
+                "mission_dependency_stack_split",
+                &node.key,
+            ));
+        }
+    }
+    let edges = crate::dag::check_edges(&input.nodes);
+    if let Err(crate::dag::Refusal::Unknown { node, dependency }) = &edges {
+        return Err(crate::coordination::refusal(
+            "mission_dependency_unknown",
+            &format!("{node} → {dependency}"),
+        ));
+    }
+    // Each node at most once, so the order is never longer than the plan.
+    let mut ordered = BTreeSet::new();
+    if input
+        .merge_order
+        .iter()
+        .any(|key| !keys.contains(key.as_str()) || !ordered.insert(key.as_str()))
+    {
+        return Err("mission_dependency_unknown".into());
+    }
+    if edges.is_err() {
+        return Err("mission_dependency_cycle".into());
+    }
+    // A stacked pull request merges after the one under it; a node the
+    // order leaves out merges after every node it names
+    // (`mission_landing::landing_order`).
+    let merged_at = |key: &str| input.merge_order.iter().position(|named| named == key);
+    for node in &input.nodes {
+        if let Some(lower) = node
+            .depends_on
+            .iter()
+            .find(|dependency| dependency.line.is_some())
+            && let Some(upper) = merged_at(&node.key)
+            && merged_at(&lower.node).is_none_or(|below| upper < below)
+        {
+            return Err(crate::coordination::refusal(
+                "mission_merge_order_stack",
+                &node.key,
+            ));
+        }
+    }
+    // A node that ran keeps its record; one that is gone from the plan must
+    // be dropped first, so a replan cannot hide work that was done (B28).
+    for node in &mission.nodes {
+        if node.started() && !keys.contains(node.key.as_str()) {
+            return Err("mission_node_in_progress".into());
+        }
+    }
+    let mut next = mission.clone();
+    if input.check.is_some() {
+        next.check.clone_from(&input.check);
+    }
+    let with_check = next.check.is_some() && !mission.exempt;
+    let same_check = next.check == mission.check;
+    next.nodes = input
+        .nodes
+        .iter()
+        .map(|input| {
+            let mut node = mission.node(&input.key).cloned().unwrap_or(MissionNode {
+                key: input.key.clone(),
+                title: input.title.clone(),
+                kind: input.kind(),
+                preset: None,
+                depends_on: Vec::new(),
+                status: NodeStatus::Planned,
+                delivery: None,
+                worker: None,
+                agent_id: None,
+                prs: Vec::new(),
+                base_pr: None,
+                branch: None,
+                attempts: 0,
+                views: Vec::new(),
+                line: None,
+                reported: None,
+                change: None,
+                review: None,
+                criteria: Vec::new(),
+                steps: Vec::new(),
+                brief: None,
+                external: None,
+                reopened: 0,
+                issues: Vec::new(),
+                paths: Vec::new(),
+                started_at_unix_ms: None,
+                finished_at_unix_ms: None,
+                pr_seen: Vec::new(),
+                commit: None,
+                folder: None,
+                remote_folder: None,
+                done_head: None,
+                in_main: None,
+                branch_ahead: None,
+                outside_round: 0,
+                verdict: None,
+                checks: None,
+                attention: None,
+                handled: Vec::new(),
+                resumed: None,
+                round: 0,
+                hide: None,
+                woken: Vec::new(),
+                lines_met: Vec::new(),
+                launched: None,
+                pushed_at_unix_ms: None,
+                worked_at_unix_ms: None,
+                own_met_at_unix_ms: None,
+                warnings: Vec::new(),
+                hold: None,
+                operator_merge: None,
+            });
+            // The node's gate, worked out before the node takes the plan's
+            // kind and preset, which it is judged against.
+            let gate = planned_gate(mission, input);
+            node.title.clone_from(&input.title);
+            node.kind = input.kind();
+            node.preset = input.preset();
+            // A node planned as outside work loses its hold: outside work
+            // moves it, and no hold can stop that.
+            if node.kind == NodeKind::External {
+                node.hold = None;
+            }
+            node.depends_on.clone_from(&input.depends_on);
+            node.delivery = input.delivery;
+            node.worker.clone_from(&input.worker);
+            node.criteria = crate::mission_criteria::plan_lines(
+                &node.criteria,
+                &input.criteria,
+                &input.checks,
+                with_check && input.kind() == NodeKind::Change,
+                same_check,
+            );
+            // A gate changed or taken away takes its raise with it, so the
+            // gate the plan names now is raised anew when it waits.
+            if let Some(gate) = &gate
+                && crate::mission_criteria::set_gate(
+                    &mut node.criteria,
+                    gate.first().map(|gate| (gate.look.trim(), gate.when)),
+                )
+                && node
+                    .attention
+                    .as_ref()
+                    .is_some_and(|attention| attention.reason == AttentionReason::HumanGate)
+            {
+                node.attention = None;
+                let cause = cause_key(AttentionReason::HumanGate, None, None);
+                node.handled.retain(|handled| *handled != cause);
+            }
+            if let Some(steps) = &input.steps {
+                node.steps = steps.iter().map(|step| step.trim().to_owned()).collect();
+            }
+            if let Some(merge) = &input.operator_merge {
+                node.operator_merge = merge.as_deref().map(|why| why.trim().to_owned());
+            }
+            node.external.clone_from(&input.external);
+            node.issues.clone_from(&input.issues);
+            node.paths.clone_from(&input.paths);
+            if input.change.is_some() {
+                node.change.clone_from(&input.change);
+            }
+            node
+        })
+        .collect();
+    // A finish line a node waits on is one its node has after this plan.
+    for node in &next.nodes {
+        for dependency in &node.depends_on {
+            if let Some(line) = &dependency.line
+                && next
+                    .node(&dependency.node)
+                    .is_none_or(|lower| !lower.criteria.iter().any(|known| known.key == *line))
+            {
+                return Err(crate::coordination::refusal(
+                    "mission_dependency_line_unknown",
+                    &format!("{} → {dependency}", node.key),
+                ));
+            }
+        }
+    }
+    // The question a gate asked goes with that gate when the plan changes
+    // or takes it away, so the next gate can ask; a question of the
+    // Conductor's own stays (PRD mission-human-gate D-15, B14).
+    if let Some(owner) = gate_asked(mission)
+        && next
+            .node(&owner.key)
+            .is_none_or(|node| !asks_gate(next.question.as_ref(), node))
+    {
+        next.decision = None;
+        next.question = None;
+        next.answer = None;
+        next.answer_failed = None;
+    }
+    next.merge_order.clone_from(&input.merge_order);
+    if let Some(title) = &input.title {
+        next.title.clone_from(title);
+    }
+    if let Some(scope) = input.scope {
+        next.scope = scope;
+    }
+    if let Some(cap) = input.cap {
+        next.cap = cap;
+    }
+    if input.strength.is_some() {
+        next.strength = input.strength;
+    }
+    if input.github.is_some() {
+        next.github.clone_from(&input.github);
+    }
+    if input.destination.is_some() && input.destination != next.destination {
+        next.destination.clone_from(&input.destination);
+        // What Hide read of each branch was read against the destination
+        // before; the next read answers for this one.
+        for node in &mut next.nodes {
+            node.in_main = None;
+        }
+    }
+    next.updated_at_unix_ms = now;
+    Ok(next)
+}
+
+/// Whether `branch` can name a destination: one line that Git takes as a
+/// branch and never as an option, a range or a remote's copy, since Hide
+/// reads `<branch>` and `origin/<branch>` itself.
+fn valid_destination(branch: &str) -> bool {
+    valid_text(branch, TITLE_LIMIT)
+        && branch == branch.trim()
+        && !branch.starts_with('-')
+        && !branch.contains("..")
+        && !branch.chars().any(char::is_whitespace)
+        && !branch.starts_with("origin/")
+        && branch != "HEAD"
+}
+
+/// A node's steps: at most `STEP_LIMIT`, each one line of text.
+fn valid_steps(steps: &[String]) -> bool {
+    steps.len() <= STEP_LIMIT
+        && steps.iter().all(|step| {
+            let step = step.trim();
+            !step.is_empty()
+                && step.chars().count() <= STEP_CHARS
+                && !step.chars().any(char::is_control)
+        })
+}
+
+/// A node's gate as the plan names it (PRD mission-human-gate D-13, D-15):
+/// at most one, one line of at most `GATE_CHARS` characters, and none on a
+/// node already done, whose work the operator can no longer look at before
+/// it finishes; a mission made before node criteria gates nothing, so it
+/// takes none.
+///
+/// A start gate (PRD node-presets D-06) asks before the node's worker is
+/// bound, so a plan cannot put one on a node that already started
+/// (`mission_gate_node_started`), whether it names it or the node's preset
+/// brings it.
+fn check_gate(mission: &Mission, node: &NodeInput) -> Result<(), String> {
+    let refused = |code: &str| Err(crate::coordination::refusal(code, &node.key));
+    let before = mission.node(&node.key);
+    let Some(gate) = planned_gate(mission, node) else {
+        return Ok(());
+    };
+    if gate.len() > 1 {
+        return refused("mission_gate_too_many");
+    }
+    let gate = gate.first();
+    let text = gate.map(|gate| gate.look.trim());
+    if let Some(text) = text {
+        if text.is_empty() || text.chars().any(char::is_control) {
+            return refused("mission_gate_invalid");
+        }
+        if text.chars().count() > crate::mission_criteria::GATE_CHARS {
+            return refused("mission_gate_too_long");
+        }
+        if mission.exempt {
+            return refused("mission_gate_exempt");
+        }
+    }
+    let now = before
+        .and_then(|before| crate::mission_criteria::gate(&before.criteria))
+        .map(|line| (line.text.as_deref(), line.when));
+    let next = gate.map(|gate| (Some(gate.look.trim()), gate.when));
+    let done = before.is_some_and(|before| before.status == NodeStatus::Done);
+    if done && now != next {
+        return refused("mission_gate_node_done");
+    }
+    if next.is_some_and(|(_, when)| when == GateWhen::Start)
+        && now != next
+        && before.is_some_and(MissionNode::started)
+    {
+        return refused("mission_gate_node_started");
+    }
+    Ok(())
+}
+
+/// The gate a plan gives `node`, or none to keep the one it has: the gate it
+/// names; left out, its preset's (`PresetRow::gate`, none included) for a
+/// node new to the plan or one whose preset changes (PRD node-presets D-06,
+/// D-07), so a node moved off `deploy` loses its start gate and one moved
+/// onto it gains one. A node's preset is its general node's preset, so a
+/// move between a general node and another kind changes it.
+fn planned_gate(mission: &Mission, node: &NodeInput) -> Option<Vec<GateInput>> {
+    if node.gate.is_some() {
+        return node.gate.clone();
+    }
+    let preset =
+        |kind: NodeKind, preset: Option<Preset>| (kind == NodeKind::General).then_some(preset);
+    let next = preset(node.kind(), node.preset());
+    if mission.exempt
+        || mission
+            .node(&node.key)
+            .is_some_and(|before| preset(before.kind, before.preset) == next)
+    {
+        return None;
+    }
+    let gate = next.and_then(|preset| preset_row(preset).gate);
+    Some(
+        gate.into_iter()
+            .map(|(look, when)| GateInput {
+                look: look.to_owned(),
+                when,
+            })
+            .collect(),
+    )
+}
+
+/// Who merges a node as the plan leaves it (PRD mission-destination D-10):
+/// the operator only for a change delivered by pull request, in a mission
+/// whose scope has the Conductor merge (with scope `pr` every such node is
+/// the operator's already), with why in one line. What a replan leaves out
+/// is what the node has, so it is judged too.
+fn check_operator_merge(
+    mission: &Mission,
+    input: &PlanInput,
+    node: &NodeInput,
+) -> Result<(), String> {
+    let why = match &node.operator_merge {
+        Some(merge) => merge.as_deref(),
+        None => mission
+            .node(&node.key)
+            .and_then(|before| before.operator_merge.as_deref()),
+    };
+    let Some(why) = why.map(str::trim) else {
+        return Ok(());
+    };
+    let scope = input.scope.unwrap_or(mission.scope);
+    if why.is_empty()
+        || why.chars().any(char::is_control)
+        || why.chars().count() > OPERATOR_MERGE_CHARS
+        || node.kind() != NodeKind::Change
+        || node.delivery != Some(Delivery::Pr)
+        || scope != MissionScope::Merge
+    {
+        return Err(crate::coordination::refusal(
+            "mission_operator_merge_invalid",
+            &node.key,
+        ));
+    }
+    Ok(())
+}
+
+/// An external node names one pull request or branch and nothing a worker
+/// would do (B19); no other node names one. A preset is a general node's,
+/// and an old kind name stands for its own preset only (PRD node-presets
+/// D-02, D-05).
+fn check_node_kind(node: &NodeInput) -> Result<(), String> {
+    if (node.preset.is_some() && node.kind() != NodeKind::General)
+        || node
+            .kind
+            .preset()
+            .is_some_and(|old| node.preset.is_some_and(|named| named != old))
+    {
+        return Err(crate::coordination::refusal(
+            "mission_preset_invalid",
+            &node.key,
+        ));
+    }
+    let external = node.kind() == NodeKind::External;
+    let named = match &node.external {
+        None => false,
+        Some(External::Pr(number)) => *number > 0,
+        Some(External::Branch(branch)) => {
+            valid_text(branch, TITLE_LIMIT) && !branch.chars().any(char::is_whitespace)
+        }
+    };
+    let bare = node.worker.is_none()
+        && node.delivery.is_none()
+        && node.criteria.is_empty()
+        && node.steps.as_ref().is_none_or(Vec::is_empty)
+        && node.checks.is_empty()
+        && node.gate.as_ref().is_none_or(Vec::is_empty);
+    if external != node.external.is_some() || (external && (!named || !bare)) {
+        return Err(crate::coordination::refusal(
+            "mission_external_invalid",
+            &node.key,
+        ));
+    }
+    Ok(())
+}
+
+/// A node's reviews and verifications: each kind at most once, each with
+/// one to `CHECKER_LIMIT` agents the machine takes (B3).
+fn check_checkers(node: &NodeInput) -> Result<(), String> {
+    let mut kinds = BTreeSet::new();
+    for check in &node.checks {
+        if !kinds.insert(check.kind.kind() as u8)
+            || check.by.is_empty()
+            || check.by.len() > crate::mission_criteria::CHECKER_LIMIT
+        {
+            return Err(crate::coordination::refusal(
+                "mission_checkers_invalid",
+                &node.key,
+            ));
+        }
+        for worker in &check.by {
+            check_worker(
+                &worker.agent,
+                worker.model.as_deref(),
+                worker.effort.as_deref(),
+            )
+            .map_err(|code| format!("mission_{code}"))?;
+            if worker.model.is_none() && takes_model(&worker.agent) {
+                return Err("mission_model_missing".into());
+            }
+        }
+    }
+    Ok(())
+}
+
+/// `patch` applied to `node`, or why it is refused.
+pub(crate) fn apply_patch(
+    node: &MissionNode,
+    patch: &NodePatch,
+    now: u64,
+) -> Result<MissionNode, String> {
+    let text_ok = |value: &Option<Option<String>>| {
+        value
+            .as_ref()
+            .is_none_or(|value| valid_line(value, LINE_LIMIT))
+    };
+    if !text_ok(&patch.line) || !text_ok(&patch.change) || !text_ok(&patch.review) {
+        return Err("mission_text_invalid".into());
+    }
+    if patch
+        .branch
+        .as_ref()
+        .is_some_and(|branch| !valid_line(branch, TITLE_LIMIT))
+        || patch.agent_id.as_ref().is_some_and(|id| {
+            id.as_deref()
+                .is_some_and(|id| !crate::delivery::valid_key(id))
+        })
+    {
+        return Err("mission_text_invalid".into());
+    }
+    // A commit is a direct change's (B33) and a verdict a general node's
+    // (PRD node-presets D-04).
+    let direct = node.kind == NodeKind::Change && node.delivery == Some(Delivery::Direct);
+    if (patch.commit.is_some() && !direct)
+        || ((patch.verdict.is_some() || patch.checks.is_some()) && node.kind != NodeKind::General)
+    {
+        return Err("mission_field_kind_invalid".into());
+    }
+    if patch.commit.as_ref().is_some_and(|commit| {
+        commit
+            .as_deref()
+            .is_some_and(|commit| !valid_commit(commit))
+    }) {
+        return Err("mission_commit_invalid".into());
+    }
+    if patch.checks.as_ref().is_some_and(|checks| {
+        checks.is_some_and(|checks| checks.total == 0 || checks.passed > checks.total)
+    }) {
+        return Err("mission_checks_invalid".into());
+    }
+    if let Some(Some(worker)) = &patch.worker {
+        check_worker(
+            &worker.agent,
+            worker.model.as_deref(),
+            worker.effort.as_deref(),
+        )
+        .map_err(|code| format!("mission_{code}"))?;
+    }
+    // An external node is done when Hide reads it in main (B19).
+    if node.kind == NodeKind::External
+        && (patch.status == Some(NodeStatus::Done)
+            || patch.worker.is_some()
+            || patch.agent_id.is_some())
+    {
+        return Err(crate::coordination::refusal(
+            "mission_external_invalid",
+            &node.key,
+        ));
+    }
+    if let Some(Some(hold)) = &patch.hold {
+        // An outside node moves on outside work, which no hold can stop.
+        if node.kind == NodeKind::External {
+            return Err(crate::coordination::refusal(
+                "mission_external_invalid",
+                &node.key,
+            ));
+        }
+        if !valid_line(&Some(hold.why.clone()), LINE_LIMIT)
+            || !(1..=DELAY_LIMIT_MINUTES).contains(&hold.for_minutes)
+        {
+            return Err("mission_text_invalid".into());
+        }
+        if node.started() {
+            return Err(crate::coordination::refusal(
+                "mission_node_started",
+                &node.key,
+            ));
+        }
+    }
+    let mut next = node.clone();
+    match &patch.hold {
+        Some(Some(hold)) => {
+            next.hold = Some(NodeHold {
+                why: hold.why.trim().to_owned(),
+                until_unix_ms: now + u64::from(hold.for_minutes) * 60_000,
+            });
+        }
+        Some(None) => next.hold = None,
+        None => {}
+    }
+    macro_rules! take {
+        ($field:ident) => {
+            if let Some(value) = &patch.$field {
+                next.$field.clone_from(value);
+            }
+        };
+    }
+    take!(agent_id);
+    // `--pr <n>` makes `n` the node's current pull request beside those it
+    // holds; `--no-pr` lets go of every one.
+    match patch.pr {
+        Some(Some(number)) => next.attach_pr(number),
+        Some(None) => next.prs.clear(),
+        None => {}
+    }
+    take!(base_pr);
+    take!(branch);
+    take!(line);
+    take!(change);
+    take!(review);
+    take!(worker);
+    take!(commit);
+    take!(verdict);
+    take!(checks);
+    // A pull request the node no longer holds keeps no record; a new one
+    // starts its own wakes from what GitHub says now.
+    let held = next.prs.clone();
+    next.pr_seen.retain(|seen| held.contains(&seen.number));
+    if let Some(attempts) = patch.attempts {
+        next.attempts = attempts;
+    }
+    // A planned node the patch names a worker, a pull request or a branch
+    // for has started, so it is at work: the map, the warnings and the
+    // stalls read a node's work from its status, and a worker bound with no
+    // `--status working` ran drawn as not started and watched by none of
+    // them.
+    let status = patch.status.or_else(|| {
+        (next.status == NodeStatus::Planned && next.started()).then_some(NodeStatus::Working)
+    });
+    if let Some(status) = status {
+        if status == NodeStatus::Working && next.started_at_unix_ms.is_none() {
+            next.started_at_unix_ms = Some(now);
+        }
+        if status == NodeStatus::Working && next.status != NodeStatus::Working {
+            next.worked_at_unix_ms = Some(now);
+        }
+        if status.finished() && !next.status.finished() {
+            next.finished_at_unix_ms = Some(now);
+        } else if !status.finished() {
+            next.finished_at_unix_ms = None;
+        }
+        next.status = status;
+    }
+    // A branch read in main proves that branch for that finish only: another
+    // branch, or the node at work again, waits for a read of its own (B17).
+    if next.branch != node.branch || next.status != NodeStatus::Done {
+        next.in_main = None;
+    }
+    // The proof frozen at a finish goes with it: work taken up again is
+    // judged against its folder, and a fresh check.
+    if next.status != NodeStatus::Done {
+        next.done_head = None;
+    }
+    // A held node starts only once its hold is lifted, and one behind a
+    // start gate once the operator passed it (PRD node-presets D-06): judged
+    // as the patch leaves it, so a dropped node taken back to work starts
+    // again, while a node already at work is not stopped.
+    if next.hold.is_some() && next.started() {
+        return Err(crate::coordination::refusal("mission_node_held", &node.key));
+    }
+    if !node.at_work() && next.at_work() && next.waits_to_start() {
+        return Err(crate::coordination::refusal(
+            "mission_gate_before_start",
+            &node.key,
+        ));
+    }
+    Ok(next)
+}
+
+/// A direct change's branch as Hide last read it in main: the branch, and
+/// its commit then, which is in main.
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+pub struct Landed {
+    pub branch: String,
+    pub commit: String,
+}
+
+/// A record's summary as the book keeps it: trimmed, none when blank, and
+/// refused when it is not one line within `SUMMARY_LIMIT` characters.
+pub(crate) fn summary_line(summary: Option<String>) -> Result<Option<String>, String> {
+    let Some(summary) = summary.map(|summary| summary.trim().to_owned()) else {
+        return Ok(None);
+    };
+    if summary.is_empty() {
+        return Ok(None);
+    }
+    if summary.chars().count() > SUMMARY_LIMIT || summary.chars().any(char::is_control) {
+        return Err("mission_summary_invalid".into());
+    }
+    Ok(Some(summary))
+}
+
+/// A commit as Git names one: 7 to 64 hexadecimal digits.
+pub fn valid_commit(value: &str) -> bool {
+    (7..=64).contains(&value.len()) && value.bytes().all(|byte| byte.is_ascii_hexdigit())
+}
+
+/// The question a `decide` asks, or why it is refused (B32): its choices
+/// within their count and length, a recommendation that names one of them,
+/// and a node of the plan. A clear carries nothing beside it.
+pub(crate) fn check_question(
+    mission: &Mission,
+    line: Option<&str>,
+    why: Option<&str>,
+    options: &[String],
+    recommend: Option<u8>,
+    node: Option<&str>,
+    nodes: &[String],
+) -> Result<(), String> {
+    if line.is_none()
+        && (why.is_some()
+            || !options.is_empty()
+            || recommend.is_some()
+            || node.is_some()
+            || !nodes.is_empty())
+    {
+        return Err("mission_question_without_line".into());
+    }
+    if options.len() > OPTION_LIMIT {
+        return Err("mission_options_too_many".into());
+    }
+    if options
+        .iter()
+        .any(|option| !valid_text(option, OPTION_TEXT_LIMIT) || option.contains('\n'))
+    {
+        return Err("mission_option_invalid".into());
+    }
+    if recommend.is_some_and(|choice| choice == 0 || usize::from(choice) > options.len()) {
+        return Err("mission_recommend_invalid".into());
+    }
+    if node.is_some_and(|key| mission.node(key).is_none())
+        || nodes.iter().any(|key| mission.node(key).is_none())
+    {
+        return Err("mission_node_unknown".into());
+    }
+    // The others are named beside the node it stopped, each once.
+    let mut named: Vec<&str> = node
+        .into_iter()
+        .chain(nodes.iter().map(String::as_str))
+        .collect();
+    let count = named.len();
+    named.sort_unstable();
+    named.dedup();
+    if (node.is_none() && !nodes.is_empty()) || named.len() != count {
+        return Err("mission_question_nodes_invalid".into());
+    }
+    Ok(())
+}
+
+/// Where another open mission touches the same issue or path as one of this
+/// mission's nodes (D-18, B6): `(other mission, its title, what overlaps)`.
+pub(crate) fn overlaps(book: &MissionBook, mission: &Mission) -> Vec<Overlap> {
+    let mut out = Vec::new();
+    for other in &book.missions {
+        // A path names a project on one machine only.
+        if other.id == mission.id
+            || !other.status.open()
+            || other.project != mission.project
+            || other.device_id != mission.device_id
+        {
+            continue;
+        }
+        let issues: BTreeSet<u32> = other
+            .nodes
+            .iter()
+            .filter(|node| node.status != NodeStatus::Dropped)
+            .flat_map(|node| node.issues.iter().copied())
+            .collect();
+        let paths: Vec<&str> = other
+            .nodes
+            .iter()
+            .filter(|node| node.status != NodeStatus::Dropped)
+            .flat_map(|node| node.paths.iter().map(String::as_str))
+            .collect();
+        let mut shared_issues = BTreeSet::new();
+        let mut shared_paths = BTreeSet::new();
+        for node in &mission.nodes {
+            shared_issues.extend(
+                node.issues
+                    .iter()
+                    .copied()
+                    .filter(|issue| issues.contains(issue)),
+            );
+            for path in &node.paths {
+                if paths.iter().any(|theirs| overlapping(path, theirs)) {
+                    shared_paths.insert(path.clone());
+                }
+            }
+        }
+        if !shared_issues.is_empty() || !shared_paths.is_empty() {
+            out.push(Overlap {
+                mission: other.id.clone(),
+                title: other.title.clone(),
+                issues: shared_issues.into_iter().collect(),
+                paths: shared_paths.into_iter().collect(),
+            });
+        }
+    }
+    out
+}
+
+/// Whether two declared paths name the same file or one holds the other.
+fn overlapping(a: &str, b: &str) -> bool {
+    let a = a.trim_end_matches('/');
+    let b = b.trim_end_matches('/');
+    a == b
+        || a.strip_prefix(b).is_some_and(|rest| rest.starts_with('/'))
+        || b.strip_prefix(a).is_some_and(|rest| rest.starts_with('/'))
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
+pub struct Overlap {
+    pub mission: String,
+    pub title: String,
+    pub issues: Vec<u32>,
+    pub paths: Vec<String>,
+}
+
+/// What an agent should do after a refusal, by its code.
+pub fn next_action(code: &str) -> &'static str {
+    match code {
+        "mission_unknown" => "Run hide mission list to see the missions of this project",
+        "mission_none" => "Start one with hide mission create --title <title>",
+        "mission_conducted" => {
+            "Another session conducts this mission; ask the operator before taking it over"
+        }
+        "mission_not_conductor" => {
+            "Only the mission's Conductor can change it, but a node's worker sets its own node's --pr, --branch and --line; take it over with hide mission take <id> once it has none"
+        }
+        "mission_already_conducting" => {
+            "Close or cancel the mission you conduct before creating another"
+        }
+        "mission_cancelled" => "A cancelled mission does not reopen; create a new mission",
+        "mission_closed" => "Reopen the mission with hide mission reopen before changing it",
+        "mission_not_started" => {
+            "Show the plan to the operator and run hide mission start after they approve it"
+        }
+        "mission_no_nodes" => "Set a plan with hide mission plan before starting",
+        "mission_full" => {
+            "Shorten this mission plan or its recorded text; a mission file must fit its save budget"
+        }
+        "mission_show_unknown" => {
+            "Name a View of your own checkout from hide view list, or give --show a path to open"
+        }
+        "mission_too_many_nodes" => "Plan at most 64 nodes; merge or split the work differently",
+        "mission_node_unknown" => "Run hide mission show to see the plan's node keys",
+        "mission_ambiguous" => {
+            "You work or check nodes of more than one open mission: name the one you mean with --mission <id> (hide mission list)"
+        }
+        "mission_node_in_progress" => {
+            "Drop the node with hide mission node <key> --status dropped before removing it from the plan"
+        }
+        "mission_dependency_unknown" | "mission_dependency_cycle" => {
+            "Check depends_on and merge_order: they must name other nodes of the plan, merge_order each at most once, without a cycle"
+        }
+        "mission_dependency_line_unknown" => {
+            "Name a finish line the node has, as <node>:<line> with a key hide mission show <node> lists (c1, check, review, verify); a line Hide adds later, such as ci, cannot be named before it exists"
+        }
+        "mission_dependency_stack_split" => {
+            "A node stacks on one node only: name finish lines of one node in depends_on, and wait on any other by its key alone"
+        }
+        "mission_merge_order_stack" => {
+            "Name the node a stacked node waits on by a line before it in merge_order, or leave both out: a stacked pull request merges after the one under it, and a node merge_order leaves out merges after every node it names"
+        }
+        "mission_delivery_required" | "mission_delivery_invalid" => {
+            "Give each change node a delivery (pr or direct) and no other node one"
+        }
+        "mission_cap_out_of_range" => "Use a concurrency cap from 1 to 16",
+        "mission_agent_unknown" | "mission_model_invalid" | "mission_effort_invalid" => {
+            "Run hide agent catalog to see the agents, models and efforts this machine takes"
+        }
+        "mission_model_missing" => {
+            "Name the model of every worker that takes one: fill it from the candidate's fixed model, your choice from the catalog, or the catalog's cli_default_model"
+        }
+        "mission_question_nodes_invalid" => {
+            "Name the node the decision stopped with the first --node, and each other node it is about once after it"
+        }
+        "mission_question_without_line" => {
+            "Give --why, --option, --recommend, --node and --show with --line; --clear takes none of them"
+        }
+        "mission_options_too_many" => "Offer at most 5 options; leave the rest to the conversation",
+        "mission_option_invalid" => "Write each option as one line of at most 120 characters",
+        "mission_recommend_invalid" => {
+            "Recommend an option by its number, counted from 1 in the order of --option"
+        }
+        "mission_field_kind_invalid" => {
+            "Record --commit on a direct change node and --verdict or --checks on a general node"
+        }
+        "mission_preset_invalid" => {
+            "Give a preset only to a general node (\"kind\": \"general\", \"preset\": \"research\", \"verify\" or \"deploy\"); an old kind name (\"research\", \"verify\") stands for its own preset"
+        }
+        "mission_gate_before_start" => {
+            "The node's start gate waits on the operator: start its worker once they pass it on the map, or relay their go with hide mission gate <node> --pass --said <their words>; after a fix they asked for, make it and record its line, and the gate asks again; a dropped node's gate cannot ask, so plan its work again as a new node with a new key, whose start gate asks, or, on the operator's word only, give the dropped node \"gate\": null"
+        }
+        "mission_gate_node_started" => {
+            "A start gate asks before the node's worker is bound, and this node already started: give it an end gate, or none with \"gate\": null"
+        }
+        "mission_commit_invalid" => "Give the commit as 7 to 64 hexadecimal digits",
+        "mission_checks_invalid" => {
+            "Give --checks as <passed>/<total> with total above 0 and passed at most total"
+        }
+        "mission_destination_invalid" => {
+            "Name the plan's destination as one branch name, such as feat/login, with no remote before it"
+        }
+        "mission_text_invalid" | "mission_plan_invalid" => {
+            "Check the command's text and JSON and retry"
+        }
+        "mission_criteria_missing" => {
+            "Give the node one to three criteria of its own in its plan entry (\"criteria\": [\"...\"]); an external node takes none"
+        }
+        "mission_criteria_too_many" => {
+            "Give the node at most three criteria of its own; Hide adds the check command, CI and the reviews itself"
+        }
+        "mission_steps_invalid" => {
+            "Give the node at most 8 steps in its plan entry (\"steps\": [\"...\"]), three to five usually, each one line of at most 80 characters with no line break"
+        }
+        "mission_checkers_invalid" => {
+            "Name each of review and verify at most once per node, each with one to five agents in \"by\""
+        }
+        "mission_node_held" => {
+            "The node is held: lift it with `hide mission node <key> --no-hold` before you start it"
+        }
+        "mission_node_started" => {
+            "Only a node not yet started can be held; a node at work that waits on something says so in its line"
+        }
+        "mission_external_invalid" => {
+            "An external node names one pull request (\"external\": {\"pr\": <n>}) or branch (\"external\": {\"branch\": \"<name>\"}) and no worker, delivery, criteria or checks; Hide marks it done when it reaches main, and you can only drop it"
+        }
+        "mission_checker_is_worker" => {
+            "A node's checker is another agent than its worker: start a new agent for the review or verification and bind that one"
+        }
+        "mission_checker_unknown" => {
+            "Bind a checker the node's plan names: its review or verify lists an unbound agent of the same kind as the registration (hide mission show)"
+        }
+        "mission_criterion_unknown" => {
+            "Run hide mission show to see the node's lines and their keys (c1, check, ci, review, verify, d1…)"
+        }
+        "mission_criterion_not_yours" => {
+            "Record only your own lines: a worker its node's own lines, check command and defects, a checker its review or verification; Hide records the CI, and the Conductor can only skip"
+        }
+        "participant_session_changed" => {
+            "Your pane's registration belongs to an earlier agent session than the one running in it now, so this session cannot record the line: tell your Conductor, who starts a new agent for the line with hide agent spawn and a new intent and binds the id it answers"
+        }
+        "participant_registering" => {
+            "The spawn that started you is still registering you: run the same record again in a few seconds"
+        }
+        "participant_unavailable" => {
+            "Your pane has no registration: tell your Conductor, who starts the line's agent with hide agent spawn until it answers an agent id and binds that one"
+        }
+        "ledger_unavailable" => {
+            "Stop and tell the operator: Hide could not read its agent ledger (the reason is in Hide's diagnostic log); retry once Hide reads it again"
+        }
+        "mission_commit_required" => {
+            "Give --commit <sha>: the commit the check command ran on, or the head of the pull request a review or verification read (git rev-parse HEAD in the worktree it read)"
+        }
+        "mission_rerun_spent" => {
+            "This commit already had its one rerun: fix the failure, commit, and run the check again on the new commit"
+        }
+        "mission_summary_invalid" => {
+            "Give --summary as one line of at most 160 characters in the operator's language: what the result means for them, the details staying in --evidence"
+        }
+        "mission_evidence_missing" => {
+            "Give --evidence with the one line the result rests on: the command and what it printed, or what the review read"
+        }
+        "mission_checkout_unknown" => {
+            "Record the check command from a pane in the checkout it ran in: Hide holds the line against that checkout's later commits"
+        }
+        "mission_machine_unavailable" => {
+            "That agent's machine is not connected: reconnect it in Settings > Devices and bind again, or bind an agent that runs on the project's machine"
+        }
+        "mission_machine_no_repository" => {
+            "Hide knows no project of the mission's GitHub repository on that agent's machine: register a checkout of it there as a project, or wait while GitHub is still being read for that project or for the mission's own, then bind again"
+        }
+        "mission_machine_node_refused" => {
+            "On another machine than the project's, a mission runs only a pull-request change node's worker and its checkers: start this node's worker or checker on the project's machine, or bind one that runs there"
+        }
+        "mission_skip_reason_missing" => "Give the reason with --reason <text>",
+        "mission_criteria_protected" => {
+            "A failed CI line is skipped only on the operator's answer: run the CI again, or ask with hide mission decide --line <question> --node <key> and once answered skip with --decision <its key>"
+        }
+        "mission_criteria_unmet" => {
+            "Finish the remaining lines first: have the owner finish the check and record it, skip a line with hide mission skip <node> <line> --reason <text>, or ask the operator with hide mission decide --node <key>"
+        }
+        "mission_nodes_unfinished" => {
+            "Every node is done or dropped before the mission closes as done or merge_wait: finish them, drop them with hide mission node <key> --status dropped, or close as cancelled"
+        }
+        "mission_gate_too_many" => {
+            "Give the node at most one gate (\"gate\": \"<what the operator looks at>\"): the one place they look before it is done"
+        }
+        "mission_gate_too_long" | "mission_gate_invalid" => {
+            "Write the gate as one line of at most 80 characters naming what the operator looks at, such as the map screen"
+        }
+        "mission_operator_merge_invalid" => {
+            "Give \"operator_merge\" only to a change delivered by pull request in a mission whose scope is merge, as one line of at most 80 characters saying why the operator merges it; with scope pr every pull request is the operator's already, and null gives the node back to the scope"
+        }
+        "mission_gate_exempt" => {
+            "A mission made before node criteria takes no gate: ask the operator with hide mission decide instead"
+        }
+        "mission_gate_node_done" => {
+            "A done node's gate cannot change, since the operator can no longer look before it finishes: put the check on a node not yet done"
+        }
+        "mission_gate_operator_only" => {
+            "A gate passes only on the operator's answer: they answer on the decision card or the phone, or you relay what they said in your pane with hide mission gate <node> --pass|--fix --said \"<their words>\""
+        }
+        "mission_gate_words_missing" => {
+            "Quote the operator's own words with --said \"<what they said>\"; a gate never passes or reopens without them"
+        }
+        "mission_gate_none" => "The node has no gate; hide mission show <node> lists its lines",
+        "mission_gate_not_open" => {
+            "The node's gate does not take this answer now: a fix waits until the gate asks, once you show its screens with --show or the node's own lines are met; an early pass or a --show needs an end gate on a node working in a running mission; or it already passed (hide mission show <node>)"
+        }
+        "mission_gate_passed" => {
+            "The node's gate passed already, so screens shown for it reach no one: show what changed after the operator's OK with your next report, or ask them again with hide mission decide --line <question> --node <key> --show <path>"
+        }
+        "mission_defects_too_many" => {
+            "The node holds 16 defects; ask the operator how to go on with it"
+        }
+        "mission_candidate_refused" => {
+            "The worker is none of the candidates this mission admits: the ones in Settings > Mission when it was created and the ones there now. Run hide mission settings and plan or start it as one of them: its agent with the candidate's profile, its fixed model or the CLI's default, its fixed effort. A plan's worker names the candidate's --profile value as profile. A node's worker (--intent <mission>:<node>) spawned without --profile starts as its plan names it, the built-in default for none; a checker or any other spawn without --profile takes your own profile when it is your kind of agent, else the project's choice, so start it with --profile set to the candidate's profile value. To use another agent item, ask the operator to add it in Settings > Mission, which applies to this mission at once. The words after this name the item it would have started, after its node for a plan"
+        }
+        "mission_profile_unknown" => {
+            "Name the worker's profile as hide agent catalog lists it for that agent (its profile value), or leave profile out for the agent's built-in default"
+        }
+        "mission_cap_reached" => {
+            "Wait for a worker to finish (end its registration with hide agent end <id>) and retry; a start that failed stops counting after 10 minutes"
+        }
+        "mission_projects_loading" => {
+            "Retry in a few seconds; Hide is still reading that machine's projects"
+        }
+        "mission_project_unknown" => {
+            "Run the command from a pane in a checkout of a registered project"
+        }
+        "mission_needs_git" => {
+            "This mission's project is a plain folder, not a Git repository: a code node (change) works on a branch and a waiting node (external) waits on a pull request or a branch, so both need a Git repository, and so does a destination branch. Plan the work as general nodes (kind general, with a preset or none), which run in the folder itself; for code work, make the project a Git repository and create the mission again"
+        }
+        "mission_unavailable" => {
+            "Stop and tell the operator: Hide could not read its mission record (the reason is in Hide's diagnostic log); it is kept as it is, and Hide reads it again when it restarts"
+        }
+        "agent_pane_required" => "Run the command from an agent's pane",
+        "native_identity_required" => "Retry after the agent's session is observed",
+        "caller_context_changed" => "Run hide workspace info and retry",
+        _ => "Retry; the reason is in Hide's diagnostic log",
+    }
+}
+
+#[derive(Deserialize, Serialize)]
+struct Stored {
+    schema_version: u32,
+    #[serde(flatten)]
+    book: MissionBook,
+}
+
+/// One mission's file: a book of that one mission in the book's schema, so
+/// it is read, and an older schema converted, as a book is, and every key a
+/// core move or a device rename rewrites in a book (`node_migration`'s
+/// `/missions/*/…` rows) is where it is in the book.
+#[derive(Serialize)]
+struct StoredMission<'a> {
+    schema_version: u32,
+    missions: [&'a Mission; 1],
+}
+
+pub(crate) fn encode_mission(mission: &Mission) -> Result<Vec<u8>, String> {
+    serde_json::to_vec(&StoredMission {
+        schema_version: SCHEMA_VERSION,
+        missions: [mission],
+    })
+    .map_err(|error| format!("could not be encoded: {error}"))
+}
+
+/// A book read back, and the schema it was written in.
+pub(crate) struct Decoded {
+    pub(crate) book: MissionBook,
+    pub(crate) from: u32,
+}
+
+pub(crate) fn decode(bytes: &[u8]) -> Result<Decoded, String> {
+    let decoded = |error: serde_json::Error| format!("could not be decoded: {error}");
+    let mut value: serde_json::Value = serde_json::from_slice(bytes).map_err(decoded)?;
+    let from = value
+        .get("schema_version")
+        .and_then(serde_json::Value::as_u64)
+        .and_then(|version| u32::try_from(version).ok())
+        .ok_or("has no schema version")?;
+    match from {
+        // A schema 3 book holds no human line: every node reads with no
+        // gate, as it ran before.
+        SCHEMA_VERSION | SCHEMA_BEFORE_GATES => {}
+        SCHEMA_BEFORE_SIMPLE => convert_before_simple(&mut value)?,
+        SCHEMA_BEFORE_CRITERIA => {
+            convert_before_criteria(&mut value)?;
+            convert_before_simple(&mut value)?;
+        }
+        other => {
+            return Err(format!(
+                "has schema version {other}, expected {SCHEMA_VERSION}"
+            ));
+        }
+    }
+    convert_old_kinds(&mut value)?;
+    drop_no_push(&mut value);
+    let mut stored: Stored = serde_json::from_value(value).map_err(decoded)?;
+    for line in stored
+        .book
+        .missions
+        .iter_mut()
+        .flat_map(|mission| mission.nodes.iter_mut())
+        .flat_map(|node| node.criteria.iter_mut())
+    {
+        line.carry_spent_rerun();
+        line.count_tally();
+    }
+    if stored
+        .book
+        .missions
+        .iter()
+        .any(|mission| mission.nodes.len() > NODE_LIMIT)
+    {
+        return Err("holds a mission with more nodes than the limit allows".to_owned());
+    }
+    Ok(Decoded {
+        book: stored.book,
+        from,
+    })
+}
+
+/// A book written before general nodes, in any schema, read as this build
+/// writes it (PRD node-presets D-05, B7): a `research` or `verify` node is a
+/// general node with that preset, and is written so at its mission's next
+/// save. The schema stays: a build that reads the mission folder keeps a
+/// file it cannot read as it is (`mission_store`), so only a mission with a
+/// general node is hidden from it.
+fn convert_old_kinds(value: &mut serde_json::Value) -> Result<(), String> {
+    let Some(missions) = value
+        .get_mut("missions")
+        .and_then(serde_json::Value::as_array_mut)
+    else {
+        return Ok(());
+    };
+    let nodes = missions.iter_mut().filter_map(|mission| {
+        mission
+            .get_mut("nodes")
+            .and_then(serde_json::Value::as_array_mut)
+    });
+    for node in nodes.flatten() {
+        let node = node
+            .as_object_mut()
+            .ok_or("has a node that is not an object")?;
+        let preset = match node.get("kind").and_then(serde_json::Value::as_str) {
+            Some("research") => "research",
+            Some("verify") => "verify",
+            _ => continue,
+        };
+        node.insert("kind".into(), "general".into());
+        node.entry("preset").or_insert_with(|| preset.into());
+    }
+    Ok(())
+}
+
+/// A book written while a node could warn of no push, in any schema, read
+/// as this build writes it (PRD letters-missions-simplify D-32): that
+/// warning and the letter waiting to tell it are gone, so a node that stood
+/// warned reads as warned of nothing. The schema stays, as for
+/// `convert_old_kinds`: a build from before reads the book this one writes,
+/// a node with no `no_push` warning being one it knows.
+fn drop_no_push(value: &mut serde_json::Value) {
+    let retired = |item: &serde_json::Value, field: &str| {
+        item.get(field).and_then(serde_json::Value::as_str) == Some("no_push")
+    };
+    let missions = value
+        .get_mut("missions")
+        .and_then(serde_json::Value::as_array_mut)
+        .into_iter()
+        .flatten();
+    for mission in missions {
+        if let Some(wakes) = mission
+            .get_mut("wakes")
+            .and_then(serde_json::Value::as_array_mut)
+        {
+            wakes.retain(|wake| !retired(wake, "warning"));
+        }
+        let nodes = mission
+            .get_mut("nodes")
+            .and_then(serde_json::Value::as_array_mut)
+            .into_iter()
+            .flatten();
+        for node in nodes {
+            if let Some(warnings) = node
+                .get_mut("warnings")
+                .and_then(serde_json::Value::as_array_mut)
+            {
+                warnings.retain(|warning| !retired(warning, "kind"));
+            }
+        }
+    }
+}
+
+/// A schema 1 book as schema 2 reads it (D-19, B23): every mission was made
+/// before node criteria and is exempt from their gate, and a node's one
+/// sentence, where it had one, is its one line.
+fn convert_before_criteria(value: &mut serde_json::Value) -> Result<(), String> {
+    let missions = match value.get_mut("missions") {
+        None | Some(serde_json::Value::Null) => return Ok(()),
+        Some(serde_json::Value::Array(missions)) => missions,
+        Some(_) => return Err("has a mission list that is not a list".to_owned()),
+    };
+    for mission in missions {
+        let mission = mission
+            .as_object_mut()
+            .ok_or("has a mission that is not an object")?;
+        mission.insert("exempt".into(), serde_json::Value::Bool(true));
+        let Some(nodes) = mission
+            .get_mut("nodes")
+            .and_then(serde_json::Value::as_array_mut)
+        else {
+            continue;
+        };
+        for node in nodes {
+            let node = node
+                .as_object_mut()
+                .ok_or("has a node that is not an object")?;
+            let lines = match node.remove("criteria") {
+                None | Some(serde_json::Value::Null) => Vec::new(),
+                Some(serde_json::Value::String(text)) => {
+                    let mut line =
+                        Criterion::new("c1", crate::mission_criteria::CriterionKind::Own);
+                    line.text = Some(text);
+                    vec![line]
+                }
+                Some(_) => return Err("has a node criteria that is not a sentence".to_owned()),
+            };
+            node.insert(
+                "criteria".into(),
+                serde_json::to_value(lines).map_err(|error| error.to_string())?,
+            );
+        }
+    }
+    Ok(())
+}
+
+/// A schema 2 book as schema 3 reads it (PRD mission-node-simple D-16,
+/// B26), once: a node in review or held is in progress, one waiting has not
+/// started, and one the Conductor recorded failed is in progress with the
+/// operator asked to look, since the Conductor already let it go. A node's
+/// one pull request is its list, and what GitHub said of it names it.
+fn convert_before_simple(value: &mut serde_json::Value) -> Result<(), String> {
+    let missions = match value.get_mut("missions") {
+        None | Some(serde_json::Value::Null) => return Ok(()),
+        Some(serde_json::Value::Array(missions)) => missions,
+        Some(_) => return Err("has a mission list that is not a list".to_owned()),
+    };
+    for mission in missions {
+        let mission = mission
+            .as_object_mut()
+            .ok_or("has a mission that is not an object")?;
+        let at = mission
+            .get("updated_at_unix_ms")
+            .and_then(serde_json::Value::as_u64)
+            .unwrap_or(0);
+        let mut seq = mission
+            .get("attention_seq")
+            .and_then(serde_json::Value::as_u64)
+            .unwrap_or(0);
+        let Some(nodes) = mission
+            .get_mut("nodes")
+            .and_then(serde_json::Value::as_array_mut)
+        else {
+            continue;
+        };
+        for node in nodes {
+            let node = node
+                .as_object_mut()
+                .ok_or("has a node that is not an object")?;
+            let status = node
+                .get("status")
+                .and_then(serde_json::Value::as_str)
+                .ok_or("has a node with no status")?
+                .to_owned();
+            let next = match status.as_str() {
+                "planned" | "waiting" => "planned",
+                "working" | "review" | "held" | "failed" => "working",
+                "done" => "done",
+                "dropped" => "dropped",
+                other => return Err(format!("has a node status {other} it does not know")),
+            };
+            node.insert("status".into(), next.into());
+            // A schema 2 node's `round` is an outside node's read round
+            // (#1961); schema 3 names that `outside_round` and counts the
+            // work rounds in `round` from none.
+            if let Some(round) = node.remove("round") {
+                node.insert("outside_round".into(), round);
+            }
+            // In a closed mission too: the failure is the operator's to
+            // read, and the mission's Needs You carries it once it asks.
+            if status == "failed" {
+                seq += 1;
+                let attention = Attention {
+                    reason: AttentionReason::ConductorFailed,
+                    pr: None,
+                    agent: None,
+                    key: seq,
+                    since_unix_ms: at,
+                    notified: false,
+                };
+                node.insert(
+                    "attention".into(),
+                    serde_json::to_value(attention).map_err(|error| error.to_string())?,
+                );
+                node.insert("finished_at_unix_ms".into(), serde_json::Value::Null);
+            }
+            let pr = match node.remove("pr") {
+                None | Some(serde_json::Value::Null) => None,
+                Some(serde_json::Value::Number(number)) => Some(
+                    number
+                        .as_u64()
+                        .and_then(|number| u32::try_from(number).ok())
+                        .ok_or("has a pull request number out of range")?,
+                ),
+                Some(_) => return Err("has a pull request that is not a number".to_owned()),
+            };
+            node.insert(
+                "prs".into(),
+                serde_json::Value::Array(pr.into_iter().map(Into::into).collect()),
+            );
+            let seen = match (node.remove("pr_seen"), pr) {
+                (Some(serde_json::Value::Object(mut seen)), Some(pr)) => {
+                    seen.insert("number".into(), pr.into());
+                    vec![serde_json::Value::Object(seen)]
+                }
+                _ => Vec::new(),
+            };
+            node.insert("pr_seen".into(), serde_json::Value::Array(seen));
+        }
+        if seq > 0 {
+            mission.insert("attention_seq".into(), seq.into());
+        }
+    }
+    Ok(())
+}
+
+/// The size of one mission as its file would be saved, counted without
+/// keeping the bytes and stopped just past `limit`, so a check costs at most
+/// that much encoding.
+fn saved_size(mission: &Mission, limit: usize) -> usize {
+    struct Counter(usize, usize);
+    impl std::io::Write for Counter {
+        fn write(&mut self, bytes: &[u8]) -> std::io::Result<usize> {
+            self.0 += bytes.len();
+            if self.0 > self.1 {
+                return Err(std::io::Error::other("over budget"));
+            }
+            Ok(bytes.len())
+        }
+        fn flush(&mut self) -> std::io::Result<()> {
+            Ok(())
+        }
+    }
+    let mut counter = Counter(0, limit);
+    let _ = serde_json::to_writer(&mut counter, mission);
+    counter.0
+}
+
+/// Whether one mission, as its file would be saved, stays within what a
+/// start reads back.
+pub(crate) fn fits(mission: &Mission) -> bool {
+    saved_size(mission, WRITE_BUDGET) <= WRITE_BUDGET
+}
+
+/// Whether a change from `before` to `after` may be kept: each mission it
+/// changed stays in its file's budget, or is made smaller when it was
+/// already past it, so a close or a smaller plan is never refused. Other
+/// missions are not counted: each has a file of its own.
+pub(crate) fn may_keep(before: &MissionBook, after: &MissionBook) -> bool {
+    // A mission past the budget came from a file the read cap let in, so
+    // both are counted to just past that cap.
+    let limit = READ_CAP as usize;
+    after
+        .missions
+        .iter()
+        .all(|mission| match before.get(&mission.id) {
+            Some(was) if was == mission => true,
+            Some(was) => fits(mission) || saved_size(mission, limit) < saved_size(was, limit),
+            None => fits(mission),
+        })
+}
+
+#[cfg(test)]
+pub(crate) mod tests {
+    use crate::mission_store::{MissionStore, Restored};
+
+    /// B15, B16 (with-hide/hide#2227): `leave` comes first while a Conductor
+    /// holds the mission, and for an unplanned pull request also without
+    /// one; `drop` comes last; a failed Conductor's raise is never handed on.
+    #[test]
+    fn each_raise_offers_its_choices_handing_it_on_first_and_dropping_last() {
+        use OperatorAction::{Attach, Done, Drop, Leave, Resume};
+        assert_eq!(AttentionReason::WorkerEnded.choices(true), [Leave, Drop]);
+        assert_eq!(AttentionReason::WorkerEnded.choices(false), [Drop]);
+        assert_eq!(AttentionReason::MergedUnproven.choices(true), [Leave, Done]);
+        assert_eq!(AttentionReason::UnplannedPr.choices(false), [Leave, Attach]);
+        assert_eq!(
+            AttentionReason::ConductorFailed.choices(true),
+            [Resume, Drop]
+        );
+        // A refused close closes as done first, hands on after, and never
+        // drops a node whose work is finished.
+        assert_eq!(AttentionReason::CloseRefused.choices(true), [Done, Leave]);
+        assert_eq!(AttentionReason::CloseRefused.choices(false), [Done]);
+    }
+    use super::*;
+
+    #[test]
+    fn a_written_answer_is_judged_after_the_spaces_around_it_go() {
+        let full = "가".repeat(ANSWER_LIMIT);
+        assert_eq!(answer_text(&format!("  {full} \n")), Some(full.clone()));
+        assert_eq!(
+            answer_text(" merge after lunch\t"),
+            Some("merge after lunch".into())
+        );
+        for refused in [
+            String::new(),
+            " \n ".into(),
+            "two\nlines".into(),
+            "bell\u{7}".into(),
+            format!("{full}가"),
+        ] {
+            assert_eq!(answer_text(&refused), None, "{refused:?}");
+        }
+    }
+
+    fn actor(pane: &str) -> Actor {
+        Actor {
+            pane_id: pane.into(),
+            name: "conductor".into(),
+            kind: "claude".into(),
+            device_id: "node-a".into(),
+            session: Some("s".into()),
+        }
+    }
+
+    pub(crate) fn mission() -> Mission {
+        Mission {
+            id: "mission-1".into(),
+            title: "issues".into(),
+            project: "/repo".into(),
+            workspace_id: "ws-1".into(),
+            checkout_path: "/repo".into(),
+            plain_folder: false,
+            device_id: "node-a".into(),
+            conductor: Conductor {
+                actor: actor("w1:p1"),
+                session: None,
+                agent_id: None,
+                profile: None,
+                profile_unknown: false,
+            },
+            status: MissionStatus::Planning,
+            scope: MissionScope::Pr,
+            destination: None,
+            cap: 4,
+            candidates: Vec::new(),
+            strength: None,
+            checkers: None,
+            exempt: false,
+            decided: Vec::new(),
+            nodes: Vec::new(),
+            merge_order: Vec::new(),
+            check: None,
+            github: None,
+            decision: None,
+            question: None,
+            question_seq: 0,
+            conductor_views: Vec::new(),
+            answer: None,
+            answer_failed: None,
+            delay: None,
+            delay_until_unix_ms: None,
+            put_away_unix_ms: None,
+            report: None,
+            folder_line: None,
+            created_at_unix_ms: 1,
+            updated_at_unix_ms: 1,
+            started_at_unix_ms: None,
+            closed_at_unix_ms: None,
+            wakes: Vec::new(),
+            wake_seq: 0,
+            round_seq: 0,
+            end_asked_at_unix_ms: None,
+            attention_seq: 0,
+            reopened_on: None,
+            handover: None,
+        }
+    }
+
+    /// A change is only kept when the file of each mission it changed stays
+    /// under what a start reads back, so a file Hide writes never comes back
+    /// unreadable; the other missions' files are not counted.
+    #[test]
+    fn a_mission_past_what_a_start_reads_back_does_not_fit() {
+        let mut large = mission();
+        large.report = Some("x".repeat(WRITE_BUDGET / 2));
+        assert!(fits(&large));
+        let mut book = MissionBook::default();
+        book.missions.push(large.clone());
+        // Another mission as large has a file of its own.
+        let mut other = large.clone();
+        other.id = "mission-2".into();
+        let before = book.clone();
+        book.missions.push(other);
+        assert!(may_keep(&before, &book));
+        // One mission past the budget is not kept.
+        let mut grown = book.clone();
+        grown.missions[0].title = "y".repeat(WRITE_BUDGET / 2 + 1);
+        assert!(!fits(&grown.missions[0]));
+        assert!(!may_keep(&book, &grown));
+        // A change that makes a mission already past the budget smaller is
+        // kept.
+        let mut smaller = grown.clone();
+        smaller.missions[0].report = Some("x".into());
+        assert!(
+            fits(&smaller.missions[0])
+                || saved_size(&smaller.missions[0], READ_CAP as usize)
+                    < saved_size(&grown.missions[0], READ_CAP as usize)
+        );
+        assert!(may_keep(&grown, &smaller));
+        // A move that finds a mission's registration gone writes null.
+        let mut stored = serde_json::to_value(&book.missions[0]).unwrap();
+        stored["workspace_id"] = serde_json::Value::Null;
+        // A book saved while the first plan still opened the map carries
+        // its `opened` mark, which reads as nothing now (mission-pane-chip D-11).
+        stored["opened"] = serde_json::Value::Bool(true);
+        let read: Mission = serde_json::from_value(stored).unwrap();
+        assert_eq!(read.workspace_id, "");
+        assert!((WRITE_BUDGET as u64) < READ_CAP);
+    }
+
+    pub(crate) fn node(key: &str, kind: NodeKind, depends: &[&str]) -> NodeInput {
+        NodeInput {
+            key: key.into(),
+            title: format!("node {key}"),
+            kind: kind.into(),
+            preset: None,
+            depends_on: depends.iter().map(|key| Dependency::from(*key)).collect(),
+            delivery: (kind == NodeKind::Change).then_some(Delivery::Pr),
+            worker: None,
+            criteria: vec![format!("{key} works")],
+            steps: None,
+            checks: Vec::new(),
+            external: None,
+            issues: Vec::new(),
+            paths: Vec::new(),
+            change: None,
+            gate: None,
+            operator_merge: None,
+        }
+    }
+
+    pub(crate) fn plan(nodes: Vec<NodeInput>) -> PlanInput {
+        PlanInput {
+            title: None,
+            scope: None,
+            destination: None,
+            cap: None,
+            github: None,
+            check: None,
+            strength: None,
+            strength_why: None,
+            merge_order: Vec::new(),
+            nodes,
+        }
+    }
+
+    #[test]
+    fn a_plan_with_a_cycle_or_an_unknown_dependency_is_refused() {
+        let cycle = plan(vec![
+            node("a", NodeKind::Change, &["b"]),
+            node("b", NodeKind::Change, &["a"]),
+        ]);
+        assert_eq!(
+            apply_plan(&mission(), &cycle, 2).unwrap_err(),
+            "mission_dependency_cycle"
+        );
+        let unknown = plan(vec![node("a", NodeKind::Change, &["z"])]);
+        assert_eq!(
+            crate::coordination::split_refusal(&apply_plan(&mission(), &unknown, 2).unwrap_err()),
+            ("mission_dependency_unknown", Some("a → z"))
+        );
+        let mut repeated = plan(vec![node("a", NodeKind::Change, &[])]);
+        repeated.merge_order = vec!["a".into(), "a".into()];
+        assert_eq!(
+            apply_plan(&mission(), &repeated, 2).unwrap_err(),
+            "mission_dependency_unknown"
+        );
+    }
+
+    /// mission-82: a dependency on one finish line of another node is
+    /// `<node>:<line>`; a line the node does not have, line dependencies on
+    /// two nodes, or a merge order that puts a stacked node first are
+    /// refused, each naming where.
+    #[test]
+    fn a_dependency_on_a_finish_line_names_a_line_of_one_node_and_merges_after_it() {
+        let refused = |plan: PlanInput| {
+            let code = apply_plan(&mission(), &plan, 2).unwrap_err();
+            let (code, detail) = crate::coordination::split_refusal(&code);
+            (code.to_owned(), detail.map(str::to_owned))
+        };
+        let stacked = plan(vec![
+            node("core", NodeKind::Change, &[]),
+            node("host", NodeKind::Change, &["core:c1"]),
+        ]);
+        let planned = apply_plan(&mission(), &stacked, 2).unwrap();
+        assert_eq!(
+            planned.nodes[1].depends_on,
+            vec![Dependency {
+                node: "core".into(),
+                line: Some("c1".into())
+            }]
+        );
+        assert_eq!(
+            refused(plan(vec![
+                node("core", NodeKind::Change, &[]),
+                node("host", NodeKind::Change, &["core:c9"]),
+            ])),
+            (
+                "mission_dependency_line_unknown".into(),
+                Some("host → core:c9".into())
+            )
+        );
+        assert_eq!(
+            refused(plan(vec![node("host", NodeKind::Change, &["gone:c1"])])),
+            (
+                "mission_dependency_unknown".into(),
+                Some("host → gone".into())
+            )
+        );
+        assert_eq!(
+            refused(plan(vec![
+                node("core", NodeKind::Change, &[]),
+                node("wire", NodeKind::Change, &[]),
+                node("host", NodeKind::Change, &["core:c1", "wire:c1"]),
+            ])),
+            ("mission_dependency_stack_split".into(), Some("host".into()))
+        );
+        let mut upside_down = stacked.clone();
+        upside_down.merge_order = vec!["host".into(), "core".into()];
+        assert_eq!(
+            refused(upside_down),
+            ("mission_merge_order_stack".into(), Some("host".into()))
+        );
+        let mut lower_left_out = stacked.clone();
+        lower_left_out.merge_order = vec!["host".into()];
+        assert_eq!(
+            refused(lower_left_out),
+            ("mission_merge_order_stack".into(), Some("host".into()))
+        );
+        let mut both_left_out = stacked.clone();
+        both_left_out.merge_order = Vec::new();
+        assert!(apply_plan(&mission(), &both_left_out, 2).is_ok());
+        let mut in_order = stacked;
+        in_order.merge_order = vec!["core".into(), "host".into()];
+        assert!(apply_plan(&mission(), &in_order, 2).is_ok());
+    }
+
+    /// A dependency on a line reads the line as its owner shows it now
+    /// (`LinesNow`, so a check passed on a commit the folder left is not
+    /// met), a dropped node meets nothing, and only a pull-request change
+    /// stacks, on a pull-request change.
+    #[test]
+    fn a_line_dependency_reads_the_line_as_shown_and_stacks_only_pull_requests() {
+        let mut planned = apply_plan(
+            &mission(),
+            &plan(vec![
+                node("core", NodeKind::Change, &[]),
+                node("host", NodeKind::Change, &["core:c1"]),
+                node("note", NodeKind::General, &["core:c1"]),
+            ]),
+            2,
+        )
+        .unwrap();
+        planned.nodes[0].criteria[0].state = crate::mission_criteria::CriterionState::Pass;
+        let key = Dependency::from("core:c1");
+        let shown = |unmet: &[&str]| {
+            let core = LinesNow {
+                unmet: unmet.iter().map(|key| (*key).to_owned()).collect(),
+                head_read: true,
+            };
+            vec![core, LinesNow::default(), LinesNow::default()]
+        };
+        assert!(planned.dependency_met(&key, &shown(&[])).is_some());
+        assert_eq!(planned.dependency_met(&key, &shown(&["c1"])), None);
+        // Met at the line's record, and still then once its node is done.
+        planned.nodes[0].criteria[0].by = Some(crate::mission_criteria::Recorded {
+            role: crate::mission_criteria::Role::Worker,
+            name: "core".into(),
+            agent_id: None,
+            at_unix_ms: 40,
+        });
+        assert_eq!(planned.dependency_met(&key, &shown(&[])), Some(Some(40)));
+        planned.nodes[0].status = NodeStatus::Done;
+        planned.nodes[0].finished_at_unix_ms = Some(90);
+        assert_eq!(planned.dependency_met(&key, &[]), Some(Some(40)));
+        assert_eq!(
+            planned.dependency_met(&Dependency::from("core"), &[]),
+            Some(Some(90))
+        );
+        planned.nodes[0].finished_at_unix_ms = None;
+        planned.nodes[0].status = NodeStatus::Working;
+        assert_eq!(planned.dependency_met(&key, &[]), None, "a node not read");
+        planned.nodes[0].status = NodeStatus::Dropped;
+        assert_eq!(planned.dependency_met(&key, &shown(&[])), None);
+        planned.nodes[0].status = NodeStatus::Working;
+
+        let on = |mission: &Mission, at: usize| {
+            mission
+                .stacks_on(&mission.nodes[at])
+                .map(|lower| lower.key.clone())
+        };
+        assert_eq!(on(&planned, 1).as_deref(), Some("core"));
+        assert_eq!(on(&planned, 2), None, "a general node has no branch");
+        planned.nodes[1].delivery = Some(Delivery::Direct);
+        assert_eq!(
+            on(&planned, 1),
+            None,
+            "a direct change opens no pull request"
+        );
+        planned.nodes[1].delivery = Some(Delivery::Pr);
+        planned.nodes[0].delivery = Some(Delivery::Direct);
+        assert_eq!(on(&planned, 1), None, "nothing to stack on");
+    }
+
+    /// mission-82 c2: a node written with plain keys reads and writes its
+    /// `depends_on` as it was, with nothing added, and a line key keeps its
+    /// spelling.
+    #[test]
+    fn a_plan_of_plain_keys_reads_and_writes_as_before() {
+        let written = serde_json::json!({"key": "b", "title": "B", "kind": "change", "depends_on": ["a"],
+            "status": "planned", "delivery": "pr"});
+        let node: MissionNode = serde_json::from_value(written).unwrap();
+        assert_eq!(node.depends_on, vec![Dependency::from("a")]);
+        let back = serde_json::to_value(&node).unwrap();
+        assert_eq!(back["depends_on"], serde_json::json!(["a"]));
+        assert!(back.get("lines_met").is_none());
+        let lines: Vec<Dependency> =
+            serde_json::from_value(serde_json::json!(["a", "core:c1"])).unwrap();
+        assert_eq!(serde_json::to_string(&lines).unwrap(), r#"["a","core:c1"]"#);
+    }
+
+    #[test]
+    fn only_a_change_node_carries_a_delivery() {
+        let mut research = node("r", NodeKind::General, &[]);
+        research.delivery = Some(Delivery::Pr);
+        assert_eq!(
+            apply_plan(&mission(), &plan(vec![research]), 2).unwrap_err(),
+            "mission_delivery_invalid"
+        );
+        let mut change = node("c", NodeKind::Change, &[]);
+        change.delivery = None;
+        assert_eq!(
+            apply_plan(&mission(), &plan(vec![change]), 2).unwrap_err(),
+            "mission_delivery_required"
+        );
+    }
+
+    #[test]
+    fn a_replan_keeps_what_a_node_did_and_refuses_to_drop_a_running_node_silently() {
+        let first = apply_plan(
+            &mission(),
+            &plan(vec![
+                node("a", NodeKind::Change, &[]),
+                node("b", NodeKind::Change, &["a"]),
+            ]),
+            2,
+        )
+        .unwrap();
+        let mut running = first.clone();
+        running.nodes[0] = apply_patch(
+            &running.nodes[0],
+            &NodePatch {
+                status: Some(NodeStatus::Working),
+                pr: Some(Some(7)),
+                ..NodePatch::default()
+            },
+            3,
+        )
+        .unwrap();
+        let again = apply_plan(
+            &running,
+            &plan(vec![
+                node("a", NodeKind::Change, &[]),
+                node("c", NodeKind::General, &[]),
+            ]),
+            4,
+        )
+        .unwrap();
+        assert_eq!(again.nodes[0].prs, vec![7]);
+        assert_eq!(again.nodes[0].status, NodeStatus::Working);
+        assert!(again.node("b").is_none(), "a planned node left out goes");
+        let without = apply_plan(&running, &plan(vec![node("c", NodeKind::General, &[])]), 4);
+        assert_eq!(without.unwrap_err(), "mission_node_in_progress");
+        // A node whose status still says planned but that names its pull
+        // request ran too.
+        let mut named = first.clone();
+        named.nodes[1].prs = vec![8];
+        let dropped = apply_plan(&named, &plan(vec![node("a", NodeKind::Change, &[])]), 4);
+        assert_eq!(dropped.unwrap_err(), "mission_node_in_progress");
+    }
+
+    #[test]
+    fn a_dropped_node_holds_everything_downstream_of_it() {
+        let mut m = apply_plan(
+            &mission(),
+            &plan(vec![
+                node("a", NodeKind::Change, &[]),
+                node("b", NodeKind::Change, &["a"]),
+                node("c", NodeKind::General, &["b"]),
+                node("d", NodeKind::Change, &[]),
+            ]),
+            2,
+        )
+        .unwrap();
+        assert!(m.blocked().is_empty());
+        m.nodes[0].status = NodeStatus::Dropped;
+        let blocked = m.blocked();
+        assert_eq!(blocked.get("b"), Some(&Blocked::UpstreamDropped));
+        assert_eq!(blocked.get("c"), Some(&Blocked::UpstreamDropped));
+        assert_eq!(blocked.get("d"), None);
+    }
+
+    #[test]
+    fn a_decision_or_delay_without_its_line_is_refused_and_null_clears() {
+        for op in ["decide", "delay"] {
+            assert!(
+                serde_json::from_value::<MissionCommand>(serde_json::json!({"op": op})).is_err()
+            );
+            assert!(
+                serde_json::from_value::<MissionCommand>(
+                    serde_json::json!({"op": op, "line": null})
+                )
+                .is_ok()
+            );
+        }
+    }
+
+    #[test]
+    fn a_patch_null_clears_and_an_absent_field_is_kept() {
+        let m = apply_plan(&mission(), &plan(vec![node("a", NodeKind::Change, &[])]), 2).unwrap();
+        let set: NodePatch =
+            serde_json::from_value(serde_json::json!({"line": "running tests", "pr": 3})).unwrap();
+        let after = apply_patch(&m.nodes[0], &set, 3).unwrap();
+        assert_eq!(after.line.as_deref(), Some("running tests"));
+        let clear: NodePatch = serde_json::from_value(serde_json::json!({"line": null})).unwrap();
+        let cleared = apply_patch(&after, &clear, 4).unwrap();
+        assert_eq!(cleared.line, None);
+        assert_eq!(cleared.prs, vec![3]);
+    }
+
+    #[test]
+    fn a_patch_sent_as_the_cli_sends_it_keeps_what_it_does_not_name() {
+        let mut planned = node("a", NodeKind::Change, &[]);
+        planned.worker = Some(Worker {
+            agent: "claude".into(),
+            profile: None,
+            model: Some("opus".into()),
+            effort: None,
+            effort_auto: false,
+        });
+        let m = apply_plan(&mission(), &plan(vec![planned]), 2).unwrap();
+        // The CLI builds the patch in Rust and the daemon reads it back from JSON.
+        let wire = |patch: NodePatch| -> NodePatch {
+            serde_json::from_value(serde_json::to_value(patch).unwrap()).unwrap()
+        };
+        let set = wire(NodePatch {
+            pr: Some(Some(3)),
+            agent_id: Some(Some("agent-3".into())),
+            ..Default::default()
+        });
+        let after = apply_patch(&m.nodes[0], &set, 3).unwrap();
+        let status = wire(NodePatch {
+            status: Some(NodeStatus::Working),
+            ..Default::default()
+        });
+        let reviewed = apply_patch(&after, &status, 4).unwrap();
+        assert_eq!(
+            reviewed.worker.as_ref().map(|worker| worker.agent.as_str()),
+            Some("claude")
+        );
+        assert_eq!(reviewed.prs, vec![3]);
+        assert_eq!(reviewed.agent_id.as_deref(), Some("agent-3"));
+        let cleared = apply_patch(
+            &reviewed,
+            &wire(NodePatch {
+                pr: Some(None),
+                ..Default::default()
+            }),
+            5,
+        )
+        .unwrap();
+        assert!(cleared.prs.is_empty());
+        assert_eq!(cleared.agent_id.as_deref(), Some("agent-3"));
+    }
+
+    /// D-10: `--pr` adds a pull request as the node's current one and keeps
+    /// the others; naming one it holds makes it current again.
+    #[test]
+    fn a_named_pull_request_joins_the_node_as_its_current_one() {
+        let m = apply_plan(&mission(), &plan(vec![node("a", NodeKind::Change, &[])]), 2).unwrap();
+        let name = |pr: u32| NodePatch {
+            pr: Some(Some(pr)),
+            ..Default::default()
+        };
+        let one = apply_patch(&m.nodes[0], &name(3), 3).unwrap();
+        let two = apply_patch(&one, &name(5), 4).unwrap();
+        assert_eq!((two.prs.clone(), two.current_pr()), (vec![3, 5], Some(5)));
+        let back = apply_patch(&two, &name(3), 5).unwrap();
+        assert_eq!((back.prs.clone(), back.current_pr()), (vec![5, 3], Some(3)));
+    }
+
+    #[test]
+    fn another_open_mission_on_the_same_issue_or_folder_is_an_overlap() {
+        let mut book = MissionBook::default();
+        let mut other = mission();
+        other.id = "mission-2".into();
+        other.title = "other".into();
+        other.status = MissionStatus::Running;
+        let mut theirs = node("x", NodeKind::Change, &[]);
+        theirs.issues = vec![12];
+        theirs.paths = vec!["web/src".into()];
+        other = apply_plan(&other, &plan(vec![theirs]), 2).unwrap();
+        book.missions.push(other);
+        let mut mine = node("y", NodeKind::Change, &[]);
+        mine.paths = vec!["web/src/App.tsx".into()];
+        let m = apply_plan(&mission(), &plan(vec![mine]), 2).unwrap();
+        let found = overlaps(&book, &m);
+        assert_eq!(found.len(), 1);
+        assert_eq!(found[0].paths, vec!["web/src/App.tsx".to_owned()]);
+        // The same path on another machine is another folder.
+        let mut elsewhere = m.clone();
+        elsewhere.device_id = "node-b".into();
+        assert!(overlaps(&book, &elsewhere).is_empty());
+        let mut unrelated = node("z", NodeKind::Change, &[]);
+        unrelated.paths = vec!["web/srcs".into()];
+        let m = apply_plan(&mission(), &plan(vec![unrelated]), 2).unwrap();
+        assert!(overlaps(&book, &m).is_empty());
+    }
+
+    #[test]
+    fn a_mission_past_its_node_limit_or_of_another_version_is_not_used() {
+        let mut over = mission();
+        over.nodes = (0..=NODE_LIMIT)
+            .map(|index| {
+                apply_plan(
+                    &mission(),
+                    &plan(vec![node(&format!("n{index}"), NodeKind::Change, &[])]),
+                    2,
+                )
+                .unwrap()
+                .nodes
+                .remove(0)
+            })
+            .collect();
+        assert!(decode(&encode_mission(&over).unwrap()).is_err());
+        let other = serde_json::to_vec(
+            &serde_json::json!({"schema_version": 99, "missions": [], "next": 0}),
+        )
+        .unwrap();
+        assert!(decode(&other).is_err());
+        assert_eq!(
+            saved_again(&MissionBook {
+                missions: vec![mission()],
+                ..MissionBook::default()
+            }),
+            vec![mission()]
+        );
+    }
+
+    /// What the mission folder writes of `book` reads back as it: each
+    /// mission's file in the current schema.
+    fn saved_again(book: &MissionBook) -> Vec<Mission> {
+        book.missions
+            .iter()
+            .map(|mission| {
+                let again = decode(&encode_mission(mission).unwrap()).unwrap();
+                assert_eq!(again.from, SCHEMA_VERSION);
+                let [one]: [Mission; 1] = again.book.missions.try_into().unwrap();
+                one
+            })
+            .collect()
+    }
+
+    #[test]
+    fn a_plan_keeps_a_nodes_steps_and_refuses_too_many_or_unreadable_ones() {
+        let refused = |plan: PlanInput| {
+            let code = apply_plan(&mission(), &plan, 2).unwrap_err();
+            crate::coordination::split_refusal(&code).0.to_owned()
+        };
+        let with = |steps: Vec<String>| {
+            let mut one = node("a", NodeKind::Change, &[]);
+            one.steps = Some(steps);
+            plan(vec![one])
+        };
+        let lines = |count: usize| (0..count).map(|n| format!("step {n}")).collect::<Vec<_>>();
+        let planned = apply_plan(&mission(), &with(lines(STEP_LIMIT)), 2).unwrap();
+        assert_eq!(planned.nodes[0].steps, lines(STEP_LIMIT));
+        assert_eq!(
+            refused(with(lines(STEP_LIMIT + 1))),
+            "mission_steps_invalid"
+        );
+        assert_eq!(
+            refused(with(vec!["x".repeat(STEP_CHARS + 1)])),
+            "mission_steps_invalid"
+        );
+        assert_eq!(refused(with(vec!["  ".into()])), "mission_steps_invalid");
+        assert_eq!(refused(with(vec!["a\nb".into()])), "mission_steps_invalid");
+        // The limit counts characters, so a Korean line of the same length fits.
+        assert!(apply_plan(&mission(), &with(vec!["가".repeat(STEP_CHARS)]), 2).is_ok());
+        // A replan that leaves the steps out keeps them; an empty list clears them.
+        let kept = apply_plan(&planned, &plan(vec![node("a", NodeKind::Change, &[])]), 3).unwrap();
+        assert_eq!(kept.nodes[0].steps, lines(STEP_LIMIT));
+        let cleared = apply_plan(&planned, &with(Vec::new()), 3).unwrap();
+        assert!(cleared.nodes[0].steps.is_empty());
+        // An outside node has no work to plan.
+        let mut outside = node("pr", NodeKind::External, &[]);
+        outside.delivery = None;
+        outside.criteria.clear();
+        outside.external = Some(External::Pr(7));
+        outside.steps = Some(lines(3));
+        assert_eq!(refused(plan(vec![outside])), "mission_external_invalid");
+    }
+
+    #[test]
+    fn a_plan_names_one_to_three_criteria_per_node_and_an_external_node_none() {
+        let refused = |plan: PlanInput| {
+            let code = apply_plan(&mission(), &plan, 2).unwrap_err();
+            crate::coordination::split_refusal(&code).0.to_owned()
+        };
+        let mut bare = node("a", NodeKind::Change, &[]);
+        bare.criteria.clear();
+        assert_eq!(
+            refused(plan(vec![bare.clone()])),
+            "mission_criteria_missing"
+        );
+        let mut four = node("a", NodeKind::Change, &[]);
+        four.criteria = vec!["1".into(), "2".into(), "3".into(), "4".into()];
+        assert_eq!(refused(plan(vec![four])), "mission_criteria_too_many");
+        // A mission made before criteria plans as it did.
+        let mut old = mission();
+        old.exempt = true;
+        assert!(apply_plan(&old, &plan(vec![bare]), 2).is_ok());
+        let mut external = node("pr", NodeKind::External, &[]);
+        external.delivery = None;
+        external.criteria.clear();
+        external.external = Some(External::Pr(1232));
+        let mut with_worker = external.clone();
+        with_worker.criteria = vec!["x".into()];
+        assert_eq!(refused(plan(vec![with_worker])), "mission_external_invalid");
+        let mut unnamed = external.clone();
+        unnamed.external = None;
+        assert_eq!(refused(plan(vec![unnamed])), "mission_external_invalid");
+        let mut named = node("a", NodeKind::Change, &["pr"]);
+        named.external = Some(External::Branch("feat/x".into()));
+        assert_eq!(
+            refused(plan(vec![external.clone(), named])),
+            "mission_external_invalid"
+        );
+        let waits = node("a", NodeKind::Change, &["pr"]);
+        let planned = apply_plan(&mission(), &plan(vec![external, waits]), 2).unwrap();
+        assert!(planned.nodes[0].criteria.is_empty());
+        // Each of review and verify at most once.
+        let mut twice = node("a", NodeKind::Change, &[]);
+        let review = CheckInput {
+            kind: crate::mission_criteria::CheckKind::Review,
+            rule: crate::mission_criteria::Rule::All,
+            by: vec![Worker {
+                agent: "codex".into(),
+                profile: None,
+                model: Some("gpt-6-astra".into()),
+                effort: None,
+                effort_auto: false,
+            }],
+        };
+        twice.checks = vec![review.clone(), review];
+        assert_eq!(refused(plan(vec![twice])), "mission_checkers_invalid");
+    }
+
+    #[test]
+    fn a_plan_with_a_check_command_adds_it_to_change_nodes_and_keeps_what_was_recorded() {
+        let mut input = plan(vec![
+            node("a", NodeKind::Change, &[]),
+            node("r", NodeKind::General, &[]),
+        ]);
+        input.check = Some("cargo test".into());
+        let mut planned = apply_plan(&mission(), &input, 2).unwrap();
+        let keys = |node: &MissionNode| -> Vec<String> {
+            node.criteria.iter().map(|line| line.key.clone()).collect()
+        };
+        assert_eq!(keys(&planned.nodes[0]), ["c1", "check"]);
+        assert_eq!(keys(&planned.nodes[1]), ["c1"]);
+        planned.nodes[0].criteria[0].state = crate::mission_criteria::CriterionState::Pass;
+        // A plan given as one sentence, as one written before criteria is.
+        let again: NodeInput = serde_json::from_value(serde_json::json!({
+            "key": "a", "title": "node a", "kind": "change", "delivery": "pr",
+            "criteria": "a works"
+        }))
+        .unwrap();
+        let replanned = apply_plan(&planned, &plan(vec![again]), 3).unwrap();
+        assert_eq!(
+            replanned.nodes[0].criteria[0].state,
+            crate::mission_criteria::CriterionState::Pass
+        );
+    }
+
+    /// with-hide/hide#2080 review: a ci line an earlier build saved with its
+    /// rerun spent (failed, its rerun counted) had sent its node back, so
+    /// after a restart a later failure on that head does not send it again.
+    #[test]
+    fn a_ci_line_saved_spent_before_a_restart_does_not_send_its_node_back_again() {
+        let head = "a".repeat(40);
+        let planned =
+            apply_plan(&mission(), &plan(vec![node("a", NodeKind::Change, &[])]), 2).unwrap();
+        let mut value = serde_json::to_value(Stored {
+            schema_version: SCHEMA_VERSION,
+            book: MissionBook {
+                missions: vec![planned],
+                next: 2,
+                shelved: Vec::new(),
+            },
+        })
+        .unwrap();
+        value["missions"][0]["nodes"][0]["criteria"]
+            .as_array_mut()
+            .unwrap()
+            .push(serde_json::json!({
+                "key": "ci", "kind": "ci", "state": "fail", "commit": head, "reruns": 1
+            }));
+        let folder = tempfile::tempdir().unwrap();
+        let path = folder.path().join("missions.json");
+        std::fs::write(&path, serde_json::to_vec(&value).unwrap()).unwrap();
+        let Restored::Moving(mut book) = MissionStore::new(folder.path()).restore() else {
+            panic!("the book reads");
+        };
+        let line = book.missions[0].nodes[0]
+            .criteria
+            .iter_mut()
+            .find(|line| line.key == "ci")
+            .expect("the ci line");
+        line.read_ci(&head, crate::model::CiEnd::Ended(CiResult::Passed), 1);
+        line.read_ci(&head, crate::model::CiEnd::Running, 2);
+        assert!(
+            !line
+                .read_ci(&head, crate::model::CiEnd::Ended(CiResult::Failed), 3)
+                .spent
+        );
+    }
+
+    /// D-19, B23: a schema 1 book reads as exempt missions whose node keeps
+    /// its sentence as its one line, and its file is copied aside once.
+    #[test]
+    fn a_schema_one_book_is_converted_and_its_file_kept_aside() {
+        let mut node = serde_json::to_value(mission()).unwrap();
+        node["nodes"] = serde_json::json!([
+            {"key": "a", "title": "A", "kind": "change", "depends_on": [], "status": "done",
+             "delivery": "pr", "worker": null, "agent_id": null, "pr": 3, "base_pr": null,
+             "branch": null, "attempts": 0, "line": null, "change": null, "review": null,
+             "criteria": "CI and review", "issues": [], "paths": [],
+             "started_at_unix_ms": null, "finished_at_unix_ms": null, "pr_seen": null},
+            {"key": "b", "title": "B", "kind": "research", "depends_on": [], "status": "planned",
+             "criteria": null}
+        ]);
+        let mut v1 = node.clone();
+        v1.as_object_mut().unwrap().remove("exempt");
+        let bytes = serde_json::to_vec(
+            &serde_json::json!({"schema_version": 1, "next": 1, "missions": [v1]}),
+        )
+        .unwrap();
+        let folder = tempfile::tempdir().unwrap();
+        let path = folder.path().join("missions.json");
+        std::fs::write(&path, &bytes).unwrap();
+        let store = MissionStore::new(folder.path());
+        let Restored::Moving(book) = store.restore() else {
+            panic!("a schema 1 book reads");
+        };
+        let read = &book.missions[0];
+        assert!(read.exempt);
+        assert_eq!(read.nodes[0].criteria.len(), 1);
+        assert_eq!(
+            read.nodes[0].criteria[0].text.as_deref(),
+            Some("CI and review")
+        );
+        assert!(read.nodes[1].criteria.is_empty());
+        let backup = hide_kit::layout::missions_before_criteria(folder.path());
+        assert_eq!(std::fs::read(&backup).unwrap(), bytes);
+        // The first copy is the one kept.
+        std::fs::write(&path, b"{\"schema_version\": 1, \"missions\": []}").unwrap();
+        assert!(matches!(store.restore(), Restored::Moving(_)));
+        assert_eq!(std::fs::read(&backup).unwrap(), bytes);
+        // What is saved is the current schema and reads back the same.
+        assert_eq!(saved_again(&book), book.missions);
+    }
+
+    /// PRD mission-node-simple D-16, B26: a schema 2 book reads in the
+    /// three states once: review and held are in progress, waiting is not
+    /// started, failed is in progress with the operator asked to look; a
+    /// node's one pull request becomes its list, and the file is copied
+    /// aside once.
+    #[test]
+    fn a_schema_two_book_moves_to_three_states_and_a_pull_request_list() {
+        let mut stored = serde_json::to_value(mission()).unwrap();
+        stored.as_object_mut().unwrap().remove("attention_seq");
+        stored["updated_at_unix_ms"] = serde_json::json!(50);
+        let node = |key: &str, status: &str| {
+            serde_json::json!({"key": key, "title": key, "kind": "change", "status": status,
+                "delivery": "pr", "pr": null, "pr_seen": null})
+        };
+        let mut merged = node("m", "review");
+        merged["pr"] = serde_json::json!(7);
+        merged["pr_seen"] = serde_json::json!({"head": "abc", "merged": true});
+        // An outside read round of schema 2 (#1961) is not a work round.
+        merged["round"] = serde_json::json!(4);
+        stored["nodes"] = serde_json::json!([
+            merged,
+            node("h", "held"),
+            node("w", "waiting"),
+            node("f", "failed"),
+            node("d", "done"),
+        ]);
+        let bytes = serde_json::to_vec(
+            &serde_json::json!({"schema_version": 2, "next": 1, "missions": [stored]}),
+        )
+        .unwrap();
+        let folder = tempfile::tempdir().unwrap();
+        let path = folder.path().join("missions.json");
+        std::fs::write(&path, &bytes).unwrap();
+        let store = MissionStore::new(folder.path());
+        let Restored::Moving(book) = store.restore() else {
+            panic!("a schema 2 book reads");
+        };
+        let read = &book.missions[0];
+        assert_eq!((read.nodes[0].outside_round, read.nodes[0].round), (4, 0));
+        let statuses: Vec<NodeStatus> = read.nodes.iter().map(|node| node.status).collect();
+        assert_eq!(
+            statuses,
+            [
+                NodeStatus::Working,
+                NodeStatus::Working,
+                NodeStatus::Planned,
+                NodeStatus::Working,
+                NodeStatus::Done,
+            ]
+        );
+        assert_eq!(read.nodes[0].prs, vec![7]);
+        assert_eq!(read.nodes[0].seen(7).map(|seen| seen.merged), Some(true));
+        let failed = read.nodes[3]
+            .attention
+            .as_ref()
+            .expect("a failed node asks the operator");
+        assert_eq!(
+            (failed.reason, failed.since_unix_ms, failed.key),
+            (AttentionReason::ConductorFailed, 50, 1)
+        );
+        assert!(failed.reason.operator_first());
+        assert_eq!(read.attention_seq, 1);
+        assert!(
+            read.nodes
+                .iter()
+                .filter(|node| node.key != "f")
+                .all(|node| node.attention.is_none())
+        );
+        let backup = hide_kit::layout::missions_before_simple(folder.path());
+        assert_eq!(std::fs::read(&backup).unwrap(), bytes);
+        // Saved again it is schema 3, and it is not moved a second time.
+        assert_eq!(saved_again(&book), book.missions);
+    }
+
+    /// PRD mission-human-gate D-02, B12: a schema 3 book, written before a
+    /// node could carry a gate, reads with no gate and as it was, its file
+    /// copied aside once, and is written back as the current schema, which
+    /// reads the same again.
+    #[test]
+    fn a_schema_three_book_reads_with_no_gate_and_is_kept_aside_once() {
+        let mut stored = serde_json::to_value(mission()).unwrap();
+        stored["nodes"] = serde_json::json!([{"key": "fix", "title": "Fix it",
+            "kind": "change", "status": "working", "delivery": "pr",
+            "criteria": [{"key": "c1", "kind": "own", "text": "it works", "state": "pass"}]}]);
+        let bytes = serde_json::to_vec(
+            &serde_json::json!({"schema_version": 3, "next": 1, "missions": [stored]}),
+        )
+        .unwrap();
+        let folder = tempfile::tempdir().unwrap();
+        let path = folder.path().join("missions.json");
+        std::fs::write(&path, &bytes).unwrap();
+        let store = MissionStore::new(folder.path());
+        let Restored::Moving(book) = store.restore() else {
+            panic!("a schema 3 book reads");
+        };
+        let node = &book.missions[0].nodes[0];
+        assert_eq!(node.status, NodeStatus::Working);
+        assert_eq!(
+            node.criteria
+                .iter()
+                .map(|line| (line.key.as_str(), line.state))
+                .collect::<Vec<_>>(),
+            [("c1", crate::mission_criteria::CriterionState::Pass)]
+        );
+        assert!(crate::mission_criteria::gate(&node.criteria).is_none());
+        let backup = hide_kit::layout::missions_before_gates(folder.path());
+        assert_eq!(std::fs::read(&backup).unwrap(), bytes);
+        std::fs::write(&path, b"{\"schema_version\": 3, \"missions\": []}").unwrap();
+        assert!(matches!(store.restore(), Restored::Moving(_)));
+        assert_eq!(
+            std::fs::read(&backup).unwrap(),
+            bytes,
+            "the first copy is kept"
+        );
+        assert_eq!(saved_again(&book), book.missions);
+    }
+
+    /// PRD mission-human-gate D-13, D-15, B3: a plan names at most one gate
+    /// per node, of at most 80 characters, on a node that is not done and
+    /// not outside; left out a replan keeps it, `null` takes it away, and
+    /// what is refused names its reason and the node.
+    #[test]
+    fn a_plan_names_one_short_gate_per_node_not_yet_done() {
+        let gated = |gate: serde_json::Value| {
+            let mut fix = serde_json::to_value(node("fix", NodeKind::Change, &[])).unwrap();
+            fix["gate"] = gate;
+            plan(vec![serde_json::from_value(fix).unwrap()])
+        };
+        let refused = |mission: &Mission, gate: serde_json::Value| {
+            crate::coordination::split_refusal(&apply_plan(mission, &gated(gate), 2).unwrap_err())
+                .0
+                .to_owned()
+        };
+        let base = mission();
+        let at = "가".repeat(crate::mission_criteria::GATE_CHARS);
+        let planned = apply_plan(&base, &gated(serde_json::json!(at)), 2).unwrap();
+        let line = crate::mission_criteria::gate(&planned.nodes[0].criteria).unwrap();
+        assert_eq!(
+            (line.key.as_str(), line.text.as_deref(), line.state),
+            (
+                "human",
+                Some(at.as_str()),
+                crate::mission_criteria::CriterionState::Open
+            )
+        );
+        assert_eq!(
+            refused(&base, serde_json::json!(format!("{at}가"))),
+            "mission_gate_too_long"
+        );
+        assert_eq!(
+            refused(&base, serde_json::json!(["the map", "the panel"])),
+            "mission_gate_too_many"
+        );
+        assert_eq!(
+            refused(&base, serde_json::json!("  ")),
+            "mission_gate_invalid"
+        );
+        let mut exempt = base.clone();
+        exempt.exempt = true;
+        assert_eq!(
+            refused(&exempt, serde_json::json!("the map")),
+            "mission_gate_exempt"
+        );
+        // Left out, a replan keeps it; null takes it away.
+        let kept =
+            apply_plan(&planned, &plan(vec![node("fix", NodeKind::Change, &[])]), 3).unwrap();
+        assert_eq!(kept.nodes[0].criteria, planned.nodes[0].criteria);
+        let cleared = apply_plan(&planned, &gated(serde_json::Value::Null), 3).unwrap();
+        assert!(crate::mission_criteria::gate(&cleared.nodes[0].criteria).is_none());
+        // A done node keeps the gate it has and takes no other.
+        let mut done = planned.clone();
+        done.nodes[0].status = NodeStatus::Done;
+        assert!(apply_plan(&done, &gated(serde_json::json!(at)), 3).is_ok());
+        assert_eq!(
+            refused(&done, serde_json::json!("the panel")),
+            "mission_gate_node_done"
+        );
+        assert_eq!(
+            refused(&done, serde_json::Value::Null),
+            "mission_gate_node_done"
+        );
+        // An outside node names nothing a person or a worker does.
+        let mut outside = serde_json::to_value(node("up", NodeKind::External, &[])).unwrap();
+        outside["delivery"] = serde_json::Value::Null;
+        outside["criteria"] = serde_json::json!([]);
+        outside["external"] = serde_json::json!({"pr": 4});
+        outside["gate"] = serde_json::json!("the map");
+        assert_eq!(
+            crate::coordination::split_refusal(
+                &apply_plan(
+                    &base,
+                    &plan(vec![serde_json::from_value(outside).unwrap()]),
+                    2
+                )
+                .unwrap_err()
+            )
+            .0,
+            "mission_external_invalid"
+        );
+    }
+
+    /// PRD letters-missions-simplify D-32: a book a build kept while a node
+    /// could warn of no push reads with that warning and its waiting letter
+    /// gone and every other warning and letter as it was, in the schema it
+    /// was written in.
+    #[test]
+    fn a_book_that_kept_a_no_push_warning_reads_without_it() {
+        let mut stored = serde_json::to_value(mission()).unwrap();
+        stored["nodes"] = serde_json::json!([
+            {"key": "fix", "title": "Fix it", "kind": "change", "status": "working", "delivery": "pr",
+             "warnings": [
+                {"kind": "no_push", "from_unix_ms": 1, "since_unix_ms": 2, "told_unix_ms": 2},
+                {"kind": "stopped", "from_unix_ms": 3, "since_unix_ms": 4}]}]);
+        stored["wakes"] = serde_json::json!([
+            {"seq": 1, "node": "fix", "event": "warning", "warning": "no_push"},
+            {"seq": 2, "node": "fix", "event": "warning", "warning": "stopped"}]);
+        let bytes = serde_json::to_vec(
+            &serde_json::json!({"schema_version": SCHEMA_VERSION, "next": 1, "missions": [stored]}),
+        )
+        .unwrap();
+        let read = decode(&bytes).unwrap().book.missions.remove(0);
+        let kinds: Vec<_> = read.nodes[0].warnings.iter().map(|w| w.kind).collect();
+        assert_eq!(kinds, [WarningKind::Stopped]);
+        let wakes: Vec<_> = read.wakes.iter().map(|wake| wake.seq).collect();
+        assert_eq!(wakes, [2]);
+    }
+
+    /// PRD node-presets D-05, B7: a book written before general nodes, of
+    /// any schema, reads its research and verify nodes as general nodes
+    /// with those presets, with the same state, line and verdict, and is
+    /// written with the new names, which read back the same.
+    #[test]
+    fn a_book_from_before_general_nodes_reads_its_research_and_verify_as_presets() {
+        let mut stored = serde_json::to_value(mission()).unwrap();
+        stored["nodes"] = serde_json::json!([
+            {"key": "cause", "title": "Find the cause", "kind": "research", "status": "done",
+             "line": "the lock is let go first",
+             "criteria": [{"key": "c1", "kind": "own", "text": "named", "state": "pass"}]},
+            {"key": "together", "title": "Check together", "kind": "verify", "status": "working",
+             "verdict": "pass", "checks": {"passed": 7, "total": 7},
+             "criteria": [{"key": "c1", "kind": "own", "text": "both load", "state": "open"}]},
+            {"key": "fix", "title": "Fix it", "kind": "change", "status": "planned", "delivery": "pr",
+             "criteria": [{"key": "c1", "kind": "own", "text": "it works", "state": "open"}]}]);
+        for schema in [SCHEMA_VERSION, SCHEMA_BEFORE_GATES] {
+            let bytes = serde_json::to_vec(
+                &serde_json::json!({"schema_version": schema, "next": 1, "missions": [stored]}),
+            )
+            .unwrap();
+            let read = decode(&bytes).unwrap().book.missions.remove(0);
+            let nodes: Vec<_> = read
+                .nodes
+                .iter()
+                .map(|node| (node.key.as_str(), node.kind, node.preset, node.status))
+                .collect();
+            assert_eq!(
+                nodes,
+                [
+                    (
+                        "cause",
+                        NodeKind::General,
+                        Some(Preset::Research),
+                        NodeStatus::Done
+                    ),
+                    (
+                        "together",
+                        NodeKind::General,
+                        Some(Preset::Verify),
+                        NodeStatus::Working
+                    ),
+                    ("fix", NodeKind::Change, None, NodeStatus::Planned),
+                ],
+                "schema {schema}"
+            );
+            assert_eq!(
+                read.nodes[0].line.as_deref(),
+                Some("the lock is let go first")
+            );
+            assert_eq!(
+                (read.nodes[1].verdict, read.nodes[1].checks),
+                (
+                    Some(Verdict::Pass),
+                    Some(Checks {
+                        passed: 7,
+                        total: 7
+                    })
+                )
+            );
+            let written = encode_mission(&read).unwrap();
+            let raw: serde_json::Value = serde_json::from_slice(&written).unwrap();
+            let kinds: Vec<_> = raw["missions"][0]["nodes"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .map(|node| (node["kind"].clone(), node.get("preset").cloned()))
+                .collect();
+            assert_eq!(
+                kinds,
+                [
+                    ("general".into(), Some("research".into())),
+                    ("general".into(), Some("verify".into())),
+                    ("change".into(), None),
+                ]
+            );
+            assert_eq!(decode(&written).unwrap().book.missions, [read]);
+        }
+    }
+
+    /// PRD node-presets D-01, D-02, D-05, B8: a plan names a general node
+    /// with its preset, or with the kinds before them, each read as a
+    /// general node with that preset; a preset is a general node's alone,
+    /// and an old kind stands for its own preset only.
+    #[test]
+    fn a_plan_reads_old_kind_names_as_general_nodes_with_their_presets() {
+        let planned = |nodes: serde_json::Value| -> Result<Mission, String> {
+            let nodes: Vec<serde_json::Value> = nodes
+                .as_array()
+                .unwrap()
+                .iter()
+                .map(|extra| {
+                    let mut node = serde_json::to_value(node(
+                        extra["key"].as_str().unwrap(),
+                        NodeKind::General,
+                        &[],
+                    ))
+                    .unwrap();
+                    node["delivery"] = serde_json::Value::Null;
+                    for (name, value) in extra.as_object().unwrap() {
+                        node[name] = value.clone();
+                    }
+                    node
+                })
+                .collect();
+            let input: PlanInput =
+                serde_json::from_value(serde_json::json!({"nodes": nodes})).unwrap();
+            apply_plan(&mission(), &input, 2)
+        };
+        let read = planned(serde_json::json!([
+            {"key": "a", "kind": "research"},
+            {"key": "b", "kind": "verify"},
+            {"key": "c", "kind": "general", "preset": "research"},
+            {"key": "d", "kind": "general"},
+            {"key": "e", "kind": "research", "preset": "research"},
+        ]))
+        .unwrap();
+        let kinds: Vec<_> = read
+            .nodes
+            .iter()
+            .map(|node| (node.kind, node.preset))
+            .collect();
+        assert_eq!(
+            kinds,
+            [
+                (NodeKind::General, Some(Preset::Research)),
+                (NodeKind::General, Some(Preset::Verify)),
+                (NodeKind::General, Some(Preset::Research)),
+                (NodeKind::General, None),
+                (NodeKind::General, Some(Preset::Research)),
+            ]
+        );
+        let refused = |nodes| {
+            crate::coordination::split_refusal(&planned(nodes).unwrap_err())
+                .0
+                .to_owned()
+        };
+        assert_eq!(
+            refused(serde_json::json!([{"key": "a", "kind": "verify", "preset": "deploy"}])),
+            "mission_preset_invalid"
+        );
+        assert_eq!(
+            refused(serde_json::json!([
+                {"key": "a", "kind": "change", "delivery": "pr", "preset": "research"}
+            ])),
+            "mission_preset_invalid"
+        );
+    }
+
+    /// PRD node-presets D-06, D-07, B3, B4: a deploy node is planned with
+    /// its preset's start gate when the plan names none, which a replan
+    /// keeps, `null` takes away and a change of preset replaces with the new
+    /// preset's, none included; a start gate is written with its `when`
+    /// and an end gate as before; and no start gate, named or brought by a
+    /// preset, goes on a node that already started.
+    #[test]
+    fn a_deploy_node_is_planned_with_a_start_gate_that_null_takes_away() {
+        let general = |preset: Option<&str>, gate: Option<serde_json::Value>| {
+            let mut ship = serde_json::to_value(node("ship", NodeKind::General, &[])).unwrap();
+            ship["delivery"] = serde_json::Value::Null;
+            ship["preset"] = serde_json::json!(preset);
+            if let Some(gate) = gate {
+                ship["gate"] = gate;
+            }
+            plan(vec![serde_json::from_value(ship).unwrap()])
+        };
+        let gate_of = |mission: &Mission| {
+            crate::mission_criteria::gate(&mission.nodes[0].criteria)
+                .map(|line| (line.text.clone().unwrap(), line.when))
+        };
+        let planned = apply_plan(&mission(), &general(Some("deploy"), None), 2).unwrap();
+        assert_eq!(
+            gate_of(&planned),
+            Some(("배포해도 될지".to_owned(), GateWhen::Start))
+        );
+        let stored = serde_json::to_value(&planned).unwrap();
+        assert_eq!(stored["nodes"][0]["criteria"][1]["when"], "start");
+        let kept = apply_plan(&planned, &general(Some("deploy"), None), 3).unwrap();
+        assert_eq!(kept.nodes[0].criteria, planned.nodes[0].criteria);
+        let off = apply_plan(
+            &mission(),
+            &general(Some("deploy"), Some(serde_json::Value::Null)),
+            2,
+        )
+        .unwrap();
+        assert_eq!(gate_of(&off), None);
+        assert!(!off.nodes[0].waits_to_start());
+        // Its preset changed and its gate left out, a node takes the new
+        // preset's: none off `deploy`, the start gate again back onto it.
+        let research = apply_plan(&planned, &general(Some("research"), None), 3).unwrap();
+        assert_eq!(gate_of(&research), None);
+        let again = apply_plan(&research, &general(Some("deploy"), None), 4).unwrap();
+        assert_eq!(
+            gate_of(&again),
+            Some(("배포해도 될지".to_owned(), GateWhen::Start))
+        );
+        // A gate the plan names stays across the change.
+        let named = apply_plan(
+            &planned,
+            &general(
+                Some("research"),
+                Some(serde_json::json!({"look": "배포해도 될지", "when": "start"})),
+            ),
+            3,
+        )
+        .unwrap();
+        assert_eq!(
+            gate_of(&named),
+            Some(("배포해도 될지".to_owned(), GateWhen::Start))
+        );
+        // A gate of one's own words, at the start or at the end.
+        let own = apply_plan(
+            &mission(),
+            &general(
+                None,
+                Some(serde_json::json!({"look": "릴리스 노트", "when": "start"})),
+            ),
+            2,
+        )
+        .unwrap();
+        assert_eq!(
+            gate_of(&own),
+            Some(("릴리스 노트".to_owned(), GateWhen::Start))
+        );
+        let end = apply_plan(
+            &mission(),
+            &general(Some("deploy"), Some(serde_json::json!("배포된 화면"))),
+            2,
+        )
+        .unwrap();
+        assert_eq!(
+            gate_of(&end),
+            Some(("배포된 화면".to_owned(), GateWhen::End))
+        );
+        let stored = serde_json::to_value(&end).unwrap();
+        assert!(stored["nodes"][0]["criteria"][1].get("when").is_none());
+        // A node already started takes no start gate, named or by its preset.
+        let mut started = apply_plan(&mission(), &general(None, None), 2).unwrap();
+        started.nodes[0].agent_id = Some("agent-1".into());
+        let refused = |input: &PlanInput| {
+            crate::coordination::split_refusal(&apply_plan(&started, input, 3).unwrap_err())
+                .0
+                .to_owned()
+        };
+        assert_eq!(
+            refused(&general(Some("deploy"), None)),
+            "mission_gate_node_started"
+        );
+        assert_eq!(
+            refused(&general(
+                None,
+                Some(serde_json::json!({"look": "릴리스 노트", "when": "start"}))
+            )),
+            "mission_gate_node_started"
+        );
+        assert!(
+            apply_plan(
+                &started,
+                &general(Some("deploy"), Some(serde_json::Value::Null)),
+                3
+            )
+            .is_ok()
+        );
+        assert!(
+            apply_plan(
+                &started,
+                &general(None, Some(serde_json::json!("배포된 화면"))),
+                3
+            )
+            .is_ok()
+        );
+    }
+
+    /// PRD node-presets D-04, D-06, B2, B3: a verdict is recorded on every
+    /// general node and on no code node; a node behind a start gate takes
+    /// no worker and no start until the operator passed it, judged as the
+    /// change leaves it: it may be dropped, and dropped it goes back to work
+    /// only once a replan took its gate away, while a node already at work
+    /// is not stopped.
+    #[test]
+    fn every_general_node_records_a_verdict_and_a_start_gate_holds_its_worker() {
+        let verdict = NodePatch {
+            verdict: Some(Some(Verdict::Fail)),
+            checks: Some(Some(Checks {
+                passed: 5,
+                total: 7,
+            })),
+            ..NodePatch::default()
+        };
+        let planned = apply_plan(
+            &mission(),
+            &plan(vec![
+                node("look", NodeKind::General, &[]),
+                node("fix", NodeKind::Change, &[]),
+            ]),
+            2,
+        )
+        .unwrap();
+        let general = apply_patch(&planned.nodes[0], &verdict, 3).unwrap();
+        assert_eq!(general.verdict, Some(Verdict::Fail));
+        assert_eq!(
+            apply_patch(&planned.nodes[1], &verdict, 3).unwrap_err(),
+            "mission_field_kind_invalid"
+        );
+
+        let mut ship = serde_json::to_value(node("ship", NodeKind::General, &[])).unwrap();
+        ship["preset"] = serde_json::json!("deploy");
+        let gated = apply_plan(
+            &mission(),
+            &plan(vec![serde_json::from_value(ship.clone()).unwrap()]),
+            2,
+        )
+        .unwrap();
+        let node = &gated.nodes[0];
+        let refused = |patch: NodePatch| {
+            crate::coordination::split_refusal(&apply_patch(node, &patch, 3).unwrap_err())
+                .0
+                .to_owned()
+        };
+        assert_eq!(
+            refused(NodePatch {
+                agent_id: Some(Some("agent-1".into())),
+                ..NodePatch::default()
+            }),
+            "mission_gate_before_start"
+        );
+        assert_eq!(
+            refused(NodePatch {
+                status: Some(NodeStatus::Working),
+                ..NodePatch::default()
+            }),
+            "mission_gate_before_start"
+        );
+        let dropped = apply_patch(
+            node,
+            &NodePatch {
+                status: Some(NodeStatus::Dropped),
+                ..NodePatch::default()
+            },
+            3,
+        )
+        .unwrap();
+        let back = NodePatch {
+            agent_id: Some(Some("agent-1".into())),
+            status: Some(NodeStatus::Working),
+            ..NodePatch::default()
+        };
+        assert_eq!(
+            crate::coordination::split_refusal(&apply_patch(&dropped, &back, 4).unwrap_err()).0,
+            "mission_gate_before_start"
+        );
+        let mut was_dropped = gated.clone();
+        was_dropped.nodes[0] = dropped;
+        ship["gate"] = serde_json::Value::Null;
+        let ungated = apply_plan(
+            &was_dropped,
+            &plan(vec![serde_json::from_value(ship).unwrap()]),
+            5,
+        )
+        .unwrap();
+        assert!(apply_patch(&ungated.nodes[0], &back, 6).is_ok());
+        let mut at_work = node.clone();
+        at_work.status = NodeStatus::Working;
+        assert!(
+            apply_patch(
+                &at_work,
+                &NodePatch {
+                    agent_id: Some(Some("agent-1".into())),
+                    ..NodePatch::default()
+                },
+                4
+            )
+            .is_ok()
+        );
+        let mut passed = node.clone();
+        passed
+            .criteria
+            .iter_mut()
+            .find(|line| line.kind == crate::mission_criteria::CriterionKind::Human)
+            .unwrap()
+            .pass_gate(
+                "계속 진행".into(),
+                crate::mission_criteria::GateVia::Card,
+                3,
+            );
+        assert!(!passed.waits_to_start());
+        let bound = apply_patch(
+            &passed,
+            &NodePatch {
+                agent_id: Some(Some("agent-1".into())),
+                status: Some(NodeStatus::Working),
+                ..NodePatch::default()
+            },
+            4,
+        )
+        .unwrap();
+        assert_eq!(bound.agent_id.as_deref(), Some("agent-1"));
+    }
+
+    /// A planned node whose worker, pull request or branch is named has
+    /// started, so it is at work without `--status working`: a node bound
+    /// with `--agent-id` alone ran a live worker drawn as not started, out
+    /// of every warning's reach.
+    #[test]
+    fn a_planned_node_named_its_worker_pr_or_branch_is_at_work() {
+        let planned = apply_plan(
+            &mission(),
+            &plan(vec![node("fix", NodeKind::Change, &[])]),
+            2,
+        )
+        .unwrap();
+        let fix = &planned.nodes[0];
+        for patch in [
+            NodePatch {
+                agent_id: Some(Some("agent-1".into())),
+                ..NodePatch::default()
+            },
+            NodePatch {
+                pr: Some(Some(7)),
+                ..NodePatch::default()
+            },
+            NodePatch {
+                branch: Some(Some("fix/a".into())),
+                ..NodePatch::default()
+            },
+        ] {
+            let started = apply_patch(fix, &patch, 3).unwrap();
+            assert_eq!(started.status, NodeStatus::Working, "{patch:?}");
+            assert_eq!(started.started_at_unix_ms, Some(3));
+            assert_eq!(started.worked_at_unix_ms, Some(3));
+        }
+        let noted = apply_patch(
+            fix,
+            &NodePatch {
+                line: Some(Some("brief ready".into())),
+                ..NodePatch::default()
+            },
+            3,
+        )
+        .unwrap();
+        assert_eq!(noted.status, NodeStatus::Planned);
+    }
+
+    /// PRD mission-node-simple D-16, B26: a failed node of a closed
+    /// mission keeps its meaning too, in progress with the operator asked.
+    #[test]
+    fn a_closed_missions_failed_node_reads_as_in_progress_with_the_operator_asked() {
+        let mut stored = serde_json::to_value(mission()).unwrap();
+        stored["status"] = serde_json::json!("done");
+        stored["updated_at_unix_ms"] = serde_json::json!(50);
+        stored["nodes"] = serde_json::json!([{"key": "f", "title": "f", "kind": "change",
+            "status": "failed", "delivery": "pr", "pr": null, "pr_seen": null}]);
+        let book = serde_json::json!({"schema_version": 2, "next": 1, "missions": [stored]});
+        let read = decode(&serde_json::to_vec(&book).unwrap()).unwrap().book;
+        let node = &read.missions[0].nodes[0];
+        assert_eq!(node.status, NodeStatus::Working);
+        assert_eq!(
+            node.attention.as_ref().map(|attention| attention.reason),
+            Some(AttentionReason::ConductorFailed)
+        );
+    }
+
+    /// PRD mission-node-simple B26: an old book whose copy cannot be kept
+    /// is not read as converted, so nothing writes the new schema over it.
+    #[cfg(unix)]
+    #[test]
+    fn an_old_book_whose_copy_cannot_be_kept_is_left_as_it_is() {
+        use std::os::unix::fs::PermissionsExt;
+        let bytes = serde_json::to_vec(
+            &serde_json::json!({"schema_version": 2, "next": 1, "missions": []}),
+        )
+        .unwrap();
+        let folder = tempfile::tempdir().unwrap();
+        let path = folder.path().join("missions.json");
+        std::fs::write(&path, &bytes).unwrap();
+        std::fs::set_permissions(folder.path(), std::fs::Permissions::from_mode(0o500)).unwrap();
+        // An account that writes past permissions cannot fail the copy.
+        if std::fs::write(folder.path().join("probe"), b"").is_ok() {
+            std::fs::set_permissions(folder.path(), std::fs::Permissions::from_mode(0o700))
+                .unwrap();
+            return;
+        }
+        let restored = MissionStore::new(folder.path()).restore();
+        std::fs::set_permissions(folder.path(), std::fs::Permissions::from_mode(0o700)).unwrap();
+        assert!(matches!(restored, Restored::Unreadable(_)));
+        assert_eq!(std::fs::read(&path).unwrap(), bytes);
+    }
+
+    /// B14, B27: a cause raised once is never forgotten; past the cap a new
+    /// one is not remembered, and a newer resume mark replaces the older.
+    #[test]
+    fn a_node_forgets_no_cause_it_raised_and_refuses_one_it_cannot_remember() {
+        let one = |key: &str| {
+            apply_plan(&mission(), &plan(vec![node(key, NodeKind::Change, &[])]), 2)
+                .unwrap()
+                .nodes[0]
+                .clone()
+        };
+        let mut node = one("a");
+        for index in 0..HANDLED_LIMIT {
+            assert!(node.note_handled(format!("cause:{index}")));
+        }
+        assert!(!node.note_handled("cause:new".to_owned()));
+        assert!(node.note_handled("cause:0".to_owned()));
+        assert_eq!(node.handled.len(), HANDLED_LIMIT);
+        assert_eq!(node.handled[0], "cause:0");
+        // The resume mark does not live among the causes: a full list keeps
+        // it, and a newer one replaces it.
+        node.resumed = Some(node.resumed_cause());
+        assert!(node.resumed_on_these_facts());
+        node.prs = vec![7];
+        assert!(!node.resumed_on_these_facts());
+        // Back to work, Hide's acts of the next finish are a new round.
+        let mut node = one("b");
+        node.back_to_work(5);
+        assert_eq!(node.round, 1);
+    }
+
+    /// mission-82 review O5: a node back at work from a finish splits its
+    /// time again from then, so the time it stood done is neither work nor
+    /// review: its own lines all met, its work is already done; a defect
+    /// left open, its work runs until that line is met.
+    #[test]
+    fn a_node_back_at_work_from_a_finish_splits_its_time_again_from_then() {
+        use crate::mission_criteria::{Criterion, CriterionKind, CriterionState};
+        let mut node = apply_plan(&mission(), &plan(vec![node("a", NodeKind::Change, &[])]), 2)
+            .unwrap()
+            .nodes[0]
+            .clone();
+        for line in node
+            .criteria
+            .iter_mut()
+            .filter(|line| line.kind.worker_answers())
+        {
+            line.state = CriterionState::Pass;
+        }
+        node.own_met_at_unix_ms = Some(3);
+        node.back_to_work(50);
+        assert_eq!(
+            (node.worked_at_unix_ms, node.own_met_at_unix_ms),
+            (Some(50), Some(50))
+        );
+        node.criteria
+            .push(Criterion::new("d1", CriterionKind::Defect));
+        node.back_to_work(90);
+        assert_eq!(
+            (node.worked_at_unix_ms, node.own_met_at_unix_ms),
+            (Some(90), None)
+        );
+        node.criteria.last_mut().unwrap().state = CriterionState::Pass;
+        node.note_own_met(false, 120);
+        assert_eq!(node.own_met_at_unix_ms, Some(120));
+    }
+
+    /// A mission created before verification strength keeps the checkers
+    /// it recorded, as written, and has no strength until a plan names one.
+    #[test]
+    fn a_mission_from_before_strength_keeps_its_recorded_checkers() {
+        let recorded = serde_json::json!({
+            "review": {"mode": "one", "rule": "all", "count": 2, "agent": "codex",
+                       "model": null, "effort": "high", "other_vendor": false},
+            "verify": {"mode": "none", "rule": "all", "count": 2, "agent": null,
+                       "model": null, "effort": null, "other_vendor": true},
+        });
+        let mut stored = serde_json::to_value(mission()).unwrap();
+        stored["checkers"] = recorded.clone();
+        let read: Mission = serde_json::from_value(stored.clone()).unwrap();
+        assert_eq!(read.strength, None);
+        assert_eq!(serde_json::to_value(&read).unwrap(), stored);
+        let mut input = plan(Vec::new());
+        input.strength = Some(Strength::Thorough);
+        let planned = apply_plan(&read, &input, 2).unwrap();
+        assert_eq!(planned.strength, Some(Strength::Thorough));
+        assert_eq!(planned.checkers, Some(recorded));
+    }
+
+    /// PRD mission-destination B15, D-10: a node recorded before the
+    /// operator's merge has no such field, reads with none and is written
+    /// back as it was, so its scope alone says who merges; only a node the
+    /// plan gave the operator carries the field, which a build before it
+    /// skips as a field it does not know.
+    #[test]
+    fn a_node_from_before_the_operators_merge_reads_and_writes_as_it_was() {
+        let mut planned = mission();
+        planned.scope = MissionScope::Merge;
+        let planned =
+            apply_plan(&planned, &plan(vec![node("a", NodeKind::Change, &[])]), 2).unwrap();
+        let stored = serde_json::to_value(&planned).unwrap();
+        assert!(
+            stored["nodes"][0].get("operator_merge").is_none(),
+            "{stored}"
+        );
+        let read: Mission = serde_json::from_value(stored.clone()).unwrap();
+        assert_eq!(read.nodes[0].operator_merge, None);
+        assert!(!read.operator_merges(&read.nodes[0]));
+        assert_eq!(serde_json::to_value(&read).unwrap(), stored);
+
+        let mut input = node("a", NodeKind::Change, &[]);
+        input.operator_merge = Some(Some("직접 보고 머지".into()));
+        let mine = apply_plan(&read, &plan(vec![input]), 3).unwrap();
+        assert!(mine.operator_merges(&mine.nodes[0]));
+        let written = serde_json::to_value(&mine).unwrap();
+        assert_eq!(written["nodes"][0]["operator_merge"], "직접 보고 머지");
+    }
+
+    /// A question's View link recorded before links kept their View, or
+    /// before they kept its agent, reads with nothing kept and writes back as
+    /// it was, without a schema raise (PRD mission-human-gate D-20).
+    #[test]
+    fn a_view_link_recorded_before_links_kept_their_view_reads_as_it_was() {
+        let recorded = serde_json::json!({
+            "device_id": "local", "checkout_path": "/repo", "display_id": "d3",
+            "at_unix_ms": 10,
+        });
+        let read: ViewLink = serde_json::from_value(recorded.clone()).unwrap();
+        assert_eq!(read.kept, None);
+        assert_eq!(serde_json::to_value(&read).unwrap(), recorded);
+        let kept = ViewLink {
+            kept: Some(KeptView {
+                kind: crate::view_layout::DisplayKind::Diff,
+                label: "a.rs".into(),
+                address: "/repo/a.rs".into(),
+                committed: true,
+                opener: None,
+            }),
+            ..read
+        };
+        let written = serde_json::to_value(&kept).unwrap();
+        assert_eq!(
+            written["kept"],
+            serde_json::json!({"kind": "diff", "label": "a.rs", "address": "/repo/a.rs", "committed": true})
+        );
+        assert_eq!(serde_json::from_value::<ViewLink>(written).unwrap(), kept);
+
+        // A link kept before it kept its View's agent reads with none and
+        // writes back as it was; one that kept it keeps every field.
+        let before_opener = serde_json::json!({
+            "device_id": "local", "checkout_path": "/repo", "display_id": "d3", "at_unix_ms": 10,
+            "kept": {"kind": "file", "label": "notes.md", "address": "/repo/notes.md"},
+        });
+        let read: ViewLink = serde_json::from_value(before_opener.clone()).unwrap();
+        assert_eq!(read.kept.as_ref().unwrap().opener, None);
+        assert_eq!(serde_json::to_value(&read).unwrap(), before_opener);
+        let opener = serde_json::json!({
+            "device_id": "mini", "terminal_id": "t-4", "session": "s-digest", "resume": "s-1",
+            "provider": "claude", "name": "dev-a",
+        });
+        let mut with_opener = before_opener;
+        with_opener["kept"]["opener"] = opener.clone();
+        let read: ViewLink = serde_json::from_value(with_opener.clone()).unwrap();
+        let kept_opener = read.kept.as_ref().unwrap().opener.as_ref().unwrap();
+        assert_eq!(
+            (
+                kept_opener.device_id.as_str(),
+                kept_opener.terminal_id.as_str(),
+                kept_opener.session.as_deref()
+            ),
+            ("mini", "t-4", Some("s-digest"))
+        );
+        assert_eq!(serde_json::to_value(&read).unwrap(), with_opener);
+    }
+
+    #[test]
+    fn settings_refuse_an_agent_or_effort_the_agent_does_not_take() {
+        let mut settings = ConductorSettings::default();
+        assert!(settings.validate().is_ok());
+        settings.concurrency = 0;
+        assert!(settings.validate().is_err());
+        settings.concurrency = 4;
+        settings.candidates.push(Candidate {
+            agent: "opencode".into(),
+            profile: None,
+            model: None,
+            effort: Some("high".into()),
+            purpose: String::new(),
+        });
+        assert_eq!(
+            settings.validate().unwrap_err(),
+            "conductor_settings.effort_invalid"
+        );
+        settings.candidates[0] = Candidate {
+            agent: "claude".into(),
+            profile: None,
+            model: Some("opus".into()),
+            effort: Some("high".into()),
+            purpose: "screens".into(),
+        };
+        assert!(settings.validate().is_ok());
+    }
+
+    /// A candidate kept before profiles names its agent alone and reads as
+    /// the agent's built-in default item, written back byte for byte, in
+    /// Settings › Mission and in the copy a mission keeps (PRD
+    /// agent-profiles-phase2 B14, D-12); one that names a profile keeps it,
+    /// and the built-in default named by its id is kept as no profile.
+    #[test]
+    fn a_candidate_kept_before_profiles_reads_as_its_agents_built_in_default() {
+        let kept = r#"{"agent":"claude","model":"opus","effort":null,"purpose":"changes"}"#;
+        let candidate: Candidate = serde_json::from_str(kept).unwrap();
+        assert_eq!(
+            candidate.profile_id(),
+            hide_agent_adapter::ProfileId::default_profile()
+        );
+        assert_eq!(serde_json::to_string(&candidate).unwrap(), kept);
+        let mut stored = serde_json::to_value(mission()).unwrap();
+        stored["candidates"] =
+            serde_json::json!([serde_json::from_str::<serde_json::Value>(kept).unwrap()]);
+        let copied: Mission = serde_json::from_value(stored.clone()).unwrap();
+        assert_eq!(copied.candidates, vec![candidate.clone()]);
+        assert_eq!(serde_json::to_value(&copied).unwrap(), stored);
+
+        let work =
+            r#"{"agent":"claude","profile":"p-work","model":null,"effort":null,"purpose":""}"#;
+        let named: Candidate = serde_json::from_str(work).unwrap();
+        assert_eq!(named.profile_id().0, "p-work");
+        assert_eq!(serde_json::to_string(&named).unwrap(), work);
+
+        let mut settings = ConductorSettings::default();
+        settings.candidates.push(Candidate {
+            profile: Some(hide_agent_adapter::ProfileId::default_profile()),
+            ..candidate.clone()
+        });
+        let edited = settings.edited().unwrap();
+        assert_eq!(edited.candidates, vec![candidate]);
+    }
+
+    /// A Conductor recorded before profiles names none and reads as the
+    /// built-in default's; one that names a profile keeps it (PRD
+    /// agent-profiles D-27). An older build reads both, the field unknown to
+    /// it left out.
+    #[test]
+    fn a_conductor_recorded_before_profiles_reads_as_the_built_in_default() {
+        let old = serde_json::json!({"actor": serde_json::to_value(actor("w1:p1")).unwrap()});
+        let conductor: Conductor = serde_json::from_value(old).unwrap();
+        assert_eq!(conductor.profile, None);
+        assert!(
+            serde_json::to_value(&conductor)
+                .unwrap()
+                .get("profile")
+                .is_none()
+        );
+
+        let work = Conductor {
+            profile: Some(crate::launch::LaunchProfile {
+                id: hide_agent_adapter::ProfileId("p-work".into()),
+                name: "work".into(),
+                account: hide_agent_adapter::AccountKey::Folder("/accounts/work".into()),
+            }),
+            ..conductor.clone()
+        };
+        let saved = serde_json::to_value(&work).unwrap();
+        assert_eq!(serde_json::from_value::<Conductor>(saved).unwrap(), work);
+        assert!(!conductor.profile_unknown, "a mission kept before profiles");
+        let unknown = Conductor {
+            profile_unknown: true,
+            ..conductor
+        };
+        let saved = serde_json::to_value(&unknown).unwrap();
+        assert_eq!(saved["profile_unknown"], true);
+        assert_eq!(serde_json::from_value::<Conductor>(saved).unwrap(), unknown);
+    }
+}

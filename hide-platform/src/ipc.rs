@@ -1,10 +1,9 @@
 //! Local streams between processes of one account: a Unix domain socket on
 //! macOS and Linux, a named pipe on Windows, behind one type.
 //!
-//! The address is a filesystem path on every system, because that is how
-//! Herdr names its socket. On Windows the path is also the pipe's name (the
-//! pipe is `\\.\pipe\<path>`, which is how Herdr's own client reaches its
-//! server) and a small marker file is kept at the path while the listener
+//! The address is a filesystem path on every system, so one name works on
+//! all three. On Windows the path is also the pipe's name (the pipe is
+//! `\\.\pipe\<path>`) and a small marker file is kept at the path while the listener
 //! lives, so "does the path exist" means the same as it does for a socket
 //! file.
 //!
@@ -90,13 +89,18 @@ fn leftover_connect_error(kind: io::ErrorKind) -> bool {
 #[cfg(windows)]
 const CONNECT_BOUND: Duration = Duration::from_secs(2);
 
+/// The connections a Windows listener holds that no `accept` has taken: its
+/// queue, the one its accept thread hands on, and its listening instances; a
+/// connect past them waits for an instance.
+#[cfg(windows)]
+pub const HELD_UNACCEPTED: usize = sys::QUEUE + 1 + sys::INSTANCES;
+
 #[cfg(unix)]
 fn endpoint_name(path: &Path) -> io::Result<Name<'_>> {
     path.to_fs_name::<GenericFilePath>()
 }
 
-/// The pipe a path names: `\\.\pipe\<path>`, as Herdr's client reaches its
-/// server.
+/// The pipe a path names: `\\.\pipe\<path>`.
 #[cfg(windows)]
 fn pipe_name(path: &Path) -> String {
     format!(r"\\.\pipe\{}", path.to_string_lossy())
@@ -205,9 +209,11 @@ impl LocalStream {
     /// Connects to the listener at `path` for one exchange that must be over
     /// by `deadline`, which then bounds every later read and write on this
     /// handle ([`set_deadline`](Self::set_deadline)). Answers as
-    /// [`connect`](Self::connect) does, except that a Windows connect waits
-    /// for a busy listener no later than the deadline, and a deadline already
-    /// passed is `TimedOut` before anything is tried.
+    /// [`connect`](Self::connect) does, except that the connect itself waits
+    /// for a busy listener (a Windows pipe with no free instance, a Unix
+    /// listener whose backlog is full) no later than the deadline and then
+    /// answers `TimedOut`, and a deadline already passed is `TimedOut` before
+    /// anything is tried.
     pub fn connect_until(path: &Path, deadline: Instant) -> io::Result<Self> {
         let left = deadline.saturating_duration_since(Instant::now());
         if left.is_zero() {
@@ -390,6 +396,9 @@ impl LocalListener {
     /// connect (a listener of a build that took no lock); what a dead
     /// listener left at the path is replaced.
     pub fn bind(path: &Path) -> io::Result<Self> {
+        // Before any folder or lock is made, so a path the system cannot
+        // address fails whole and names itself.
+        sys::check_path(path)?;
         if let Some(parent) = path.parent() {
             fs::create_dir_all(parent)?;
         }
@@ -466,6 +475,15 @@ impl Drop for LocalListener {
             let _ = fs::remove_file(&self.path);
         }
     }
+}
+
+/// Whether this system can address a local endpoint at `path`: refused, with
+/// the path, its length and the limit in the reason, where a Unix socket
+/// address cannot hold it; a Windows pipe has no such limit. For a caller
+/// that decides where an endpoint goes before the program that binds it
+/// starts.
+pub fn check_path(path: &Path) -> io::Result<()> {
+    sys::check_path(path)
 }
 
 /// Whether the entry at `path` has the kind a local listener leaves: a socket
@@ -726,9 +744,141 @@ mod sys {
 
     use super::*;
 
-    /// A Unix connect never waits, so it has no use for `_wait`.
-    pub(super) fn connect(path: &Path, _wait: Option<Duration>) -> io::Result<RawStream> {
-        RawStream::connect(endpoint_name(path)?)
+    /// A connect with no `wait` blocks as the system's does: on Linux, until
+    /// a listener whose backlog is full takes it. With one it never waits
+    /// longer than `wait` and then ends `TimedOut`, as a Windows connect to a
+    /// busy pipe does.
+    ///
+    /// The bounded connect is a blocking one, on Linux on a socket whose
+    /// send timeout is `wait`, which Linux's connect waits for a full backlog
+    /// by. macOS refuses a full backlog at once, so it sets none: it refuses
+    /// every socket option once the peer has closed, which a listener that
+    /// answers and closes the connection at once does before the connect is
+    /// back (with-hide/hide-private#616). It is not
+    /// interprocess's nonblocking connect: on Linux a full backlog answers a
+    /// nonblocking connect `EAGAIN`, no connect is under way, and that
+    /// connect waits for the socket to be writable, which an unconnected one
+    /// is at once, so it hands back a stream that never connected.
+    pub(super) fn connect(path: &Path, wait: Option<Duration>) -> io::Result<RawStream> {
+        check_path(path)?;
+        let Some(wait) = wait else {
+            return RawStream::connect(endpoint_name(path)?);
+        };
+        connect_within(path, wait)
+            .map(|socket| interprocess::os::unix::uds_local_socket::Stream::from(socket).into())
+    }
+
+    fn connect_within(path: &Path, wait: Duration) -> io::Result<std::os::fd::OwnedFd> {
+        use std::os::fd::{FromRawFd, OwnedFd};
+        use std::os::unix::ffi::OsStrExt;
+
+        let bytes = path.as_os_str().as_bytes();
+        // SAFETY: an all-zero `sockaddr_un` is a valid, empty address.
+        let mut address: libc::sockaddr_un = unsafe { std::mem::zeroed() };
+        if bytes.is_empty() || bytes.contains(&0) {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidInput,
+                "a socket path must be a non-empty name with no NUL byte",
+            ));
+        }
+        address.sun_family = libc::AF_UNIX as libc::sa_family_t;
+        for (slot, byte) in address.sun_path.iter_mut().zip(bytes) {
+            *slot = *byte as libc::c_char;
+        }
+        // Where the system can, the socket is close-on-exec from the moment
+        // it exists, so a program another thread starts never inherits it.
+        #[cfg(not(target_vendor = "apple"))]
+        let kind = libc::SOCK_STREAM | libc::SOCK_CLOEXEC;
+        #[cfg(target_vendor = "apple")]
+        let kind = libc::SOCK_STREAM;
+        // SAFETY: a plain socket call; the descriptor is owned at once.
+        let fd = unsafe { libc::socket(libc::AF_UNIX, kind, 0) };
+        if fd < 0 {
+            return Err(io::Error::last_os_error());
+        }
+        // SAFETY: `fd` was just created and nothing else owns it.
+        let socket = unsafe { OwnedFd::from_raw_fd(fd) };
+        // macOS has no atomic flag; interprocess sets it the same way there.
+        // SAFETY: a flag call on the descriptor `socket` owns.
+        #[cfg(target_vendor = "apple")]
+        if unsafe { libc::fcntl(fd, libc::F_SETFD, libc::FD_CLOEXEC) } != 0 {
+            return Err(io::Error::last_os_error());
+        }
+        #[cfg(not(target_vendor = "apple"))]
+        set_send_timeout(fd, Some(wait))?;
+        #[cfg(target_vendor = "apple")]
+        let _ = wait;
+        let length = std::mem::size_of::<libc::sockaddr_un>() as libc::socklen_t;
+        // SAFETY: the address is filled within its size and outlives the call.
+        if unsafe { libc::connect(fd, (&raw const address).cast(), length) } != 0 {
+            let error = io::Error::last_os_error();
+            return Err(match error.raw_os_error() {
+                // The send timeout ran out while the backlog stayed full.
+                Some(libc::EAGAIN | libc::EINPROGRESS) => io::ErrorKind::TimedOut.into(),
+                // A signal ended the wait; the deadline's own clock is the
+                // caller's, who asks again only while time is left.
+                Some(libc::EINTR) => io::ErrorKind::Interrupted.into(),
+                _ => error,
+            });
+        }
+        // The stream's writes are bounded by its own deadline, not this one.
+        #[cfg(not(target_vendor = "apple"))]
+        set_send_timeout(fd, None)?;
+        Ok(socket)
+    }
+
+    #[cfg(not(target_vendor = "apple"))]
+    fn set_send_timeout(fd: libc::c_int, timeout: Option<Duration>) -> io::Result<()> {
+        // A zero `timeval` is no timeout, so a wait under a microsecond is
+        // rounded up to one.
+        let timeout = timeout.map(|timeout| timeout.max(Duration::from_micros(1)));
+        let value = libc::timeval {
+            tv_sec: timeout.map_or(0, |timeout| {
+                libc::time_t::try_from(timeout.as_secs()).unwrap_or(libc::time_t::MAX)
+            }),
+            // Under a million, which `suseconds_t` holds on every system (an
+            // `i32` on macOS, an `i64` on Linux).
+            tv_usec: timeout.map_or(0, |timeout| timeout.subsec_micros() as libc::suseconds_t),
+        };
+        // SAFETY: `value` is a `timeval` that outlives the call.
+        let set = unsafe {
+            libc::setsockopt(
+                fd,
+                libc::SOL_SOCKET,
+                libc::SO_SNDTIMEO,
+                (&raw const value).cast(),
+                std::mem::size_of::<libc::timeval>() as libc::socklen_t,
+            )
+        };
+        if set == 0 {
+            Ok(())
+        } else {
+            Err(io::Error::last_os_error())
+        }
+    }
+
+    /// Refuses a path a socket address cannot hold, with the path, its length
+    /// and the limit in the reason. The address holds `sun_path` bytes and a
+    /// terminating NUL (104 on macOS, 108 on Linux), and the system's own
+    /// refusal names none of it. A path never moves to another place here: a
+    /// caller that owns the folder shortens it.
+    pub(super) fn check_path(path: &Path) -> io::Result<()> {
+        use std::os::unix::ffi::OsStrExt;
+
+        // SAFETY: an all-zero `sockaddr_un` is a valid, empty address.
+        let address: libc::sockaddr_un = unsafe { std::mem::zeroed() };
+        let capacity = address.sun_path.len();
+        let length = path.as_os_str().as_bytes().len();
+        if length >= capacity {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidInput,
+                format!(
+                    "the socket path {} is {length} bytes, and a Unix socket path (sun_path) must be shorter than {capacity}",
+                    path.display()
+                ),
+            ));
+        }
+        Ok(())
     }
 
     /// A listener leaves a socket; a regular file or directory is not its.
@@ -1048,7 +1198,7 @@ mod sys {
 
     /// Connects with a bounded wait, `CONNECT_BOUND` or `wait` if that is
     /// shorter: the default of `connect` waits for ever for a pipe whose
-    /// instances are all busy, which is how Herdr's own probe avoids it too.
+    /// instances are all busy, so every connection is bounded.
     pub(super) fn connect(path: &Path, wait: Option<Duration>) -> io::Result<RawStream> {
         use interprocess::ConnectWaitMode;
         use interprocess::os::windows::named_pipe::{DuplexPipeStream, pipe_mode::Bytes};
@@ -1314,6 +1464,11 @@ mod sys {
         }
     }
 
+    /// A named pipe has no address limit like a Unix socket's.
+    pub(super) fn check_path(_path: &Path) -> io::Result<()> {
+        Ok(())
+    }
+
     /// The marker file is the only thing a listener leaves on Windows.
     pub(super) fn is_leftover_kind(metadata: &fs::Metadata) -> bool {
         metadata.file_type().is_file()
@@ -1499,10 +1654,10 @@ mod sys {
     /// already left, so with one instance (what `interprocess`'s listener
     /// keeps) a client that came and went blocked every connect behind it
     /// (#315). With several, the others still answer while one is replaced.
-    const INSTANCES: usize = 4;
+    pub(super) const INSTANCES: usize = 4;
     /// Connections served but not yet accepted, as a socket's backlog; past
     /// it the accept thread waits and the instances fill up.
-    const QUEUE: usize = 64;
+    pub(super) const QUEUE: usize = 64;
     /// What `interprocess` asked for; the system grows the buffer as needed.
     const BUFFER_HINT: u32 = 512;
 

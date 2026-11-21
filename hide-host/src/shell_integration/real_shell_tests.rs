@@ -18,17 +18,10 @@ fn shell(variable: &str) -> PathBuf {
     )
 }
 
-/// Where a shell runs: in a Herdr pane, whose binary is a script that
-/// records the marks reported, or outside one, on the core's own engine.
-#[derive(Clone, Copy, PartialEq)]
-enum Pane {
-    Herdr,
-    Own,
-}
-
 /// A shell started with `args` and `env` from the integration, reading
-/// `commands` on its input. Answers what the user's files, the mark and the
-/// commands wrote, in order, then the marks reported.
+/// `commands` on its input. Answers what the user's files and the commands
+/// wrote to the log, in order, and what the shell wrote to its screen.
+#[allow(clippy::disallowed_methods)] // env_clear: the shell starts with only what the integration gives it (Unix only)
 fn run(
     bin: &Path,
     args: &[&str],
@@ -36,39 +29,12 @@ fn run(
     env: &BTreeMap<String, String>,
     commands: &str,
 ) -> (String, String) {
-    run_in(Pane::Herdr, bin, args, home, env, commands).0
-}
-
-/// [`run`] in `pane`, with what the shell wrote to its output.
-#[allow(clippy::disallowed_methods)] // env_clear: the shell starts with only what the integration gives it (Unix only)
-fn run_in(
-    pane: Pane,
-    bin: &Path,
-    args: &[&str],
-    home: &Path,
-    env: &BTreeMap<String, String>,
-    commands: &str,
-) -> ((String, String), String) {
-    let mark = home.join("mark.sh");
-    std::fs::write(
-        &mark,
-        "#!/bin/sh\necho mark >> \"$HOME/log\"\necho \"$@\" >> \"$HOME/mark\"\n",
-    )
-    .unwrap();
-    std::fs::set_permissions(&mark, std::os::unix::fs::PermissionsExt::from_mode(0o755)).unwrap();
-    let mut command = Command::new(bin);
-    command
+    let mut child = Command::new(bin)
         .args(args)
         .env_clear()
         .env("HOME", home)
         .env("PATH", "/usr/bin:/bin")
-        .env("TERM", "dumb");
-    if pane == Pane::Herdr {
-        command
-            .env("HERDR_BIN_PATH", &mark)
-            .env("HERDR_PANE_ID", "w1:p1");
-    }
-    let mut child = command
+        .env("TERM", "dumb")
         .envs(env)
         .current_dir(home)
         .stdin(Stdio::piped())
@@ -84,21 +50,30 @@ fn run_in(
         .unwrap();
     let output = child.wait_with_output().unwrap();
     assert!(output.status.success());
-    let read = |name: &str| {
-        let text = std::fs::read_to_string(home.join(name)).unwrap_or_default();
-        let _ = std::fs::remove_file(home.join(name));
-        text.replace(&home.display().to_string(), "~")
-    };
+    let log = std::fs::read_to_string(home.join("log")).unwrap_or_default();
+    let _ = std::fs::remove_file(home.join("log"));
     (
-        (read("log"), read("mark")),
+        log.replace(&home.display().to_string(), "~"),
         String::from_utf8_lossy(&output.stdout).into_owned(),
     )
 }
 
-/// The prompt mark a shell outside Herdr writes on its screen.
+/// The prompt mark a shell writes on its screen.
 const SCREEN_MARK: &str = "\u{1b}]133;A\u{7}";
 
-const MARK: &str = "pane report-metadata w1:p1 --source hide:shell --token hide_prompt=1\n";
+/// What each of the user's files writes on the screen as it runs.
+const FILE_RAN: &str = "user-file-ran";
+
+/// Asserts the shell marked its first prompt on its screen exactly once,
+/// after every one of the user's files ran.
+fn assert_marked_after_files(screen: &str) {
+    assert_eq!(screen.matches(SCREEN_MARK).count(), 1, "{screen:?}");
+    let mark = screen.find(SCREEN_MARK).unwrap();
+    assert!(
+        screen.rfind(FILE_RAN).is_none_or(|ran| ran < mark),
+        "the mark came before a file of the user's: {screen:?}"
+    );
+}
 
 fn user(shell: &Path, zdotdir: Option<&Path>) -> UserShell {
     UserShell {
@@ -115,7 +90,7 @@ fn user_files(folder: &Path, names: &[&str], seen: &str, declare: &str) {
         let variable = name.trim_start_matches('.').replace('.', "_");
         std::fs::write(
             folder.join(name),
-            format!("echo \"{name} {seen}\" >> \"$HOME/log\"\n{declare} from_{variable}\nfrom_{variable}[a]=1\n"),
+            format!("echo \"{name} {seen}\" >> \"$HOME/log\"\necho {FILE_RAN}\n{declare} from_{variable}\nfrom_{variable}[a]=1\n"),
         )
         .unwrap();
     }
@@ -138,24 +113,24 @@ fn zsh_reads_the_users_files_in_its_own_order_and_gives_their_environment_back()
 
     // A login shell, the pane's on macOS: all four, in zsh's order, then the
     // mark.
-    let (log, mark) = run(&zsh, &["-i", "-l"], &home, &env, ZSH_AFTER);
+    let (log, screen) = run(&zsh, &["-i", "-l"], &home, &env, ZSH_AFTER);
     assert_eq!(
         log,
-        ".zshenv unset\n.zprofile unset\n.zshrc unset\n.zlogin unset\nmark\nafter unset  0 association association\n"
+        ".zshenv unset\n.zprofile unset\n.zshrc unset\n.zlogin unset\nafter unset  0 association association\n"
     );
-    assert_eq!(mark, MARK);
+    assert_marked_after_files(&screen);
 
     // An interactive shell that is not a login shell, the pane's on Linux,
     // reads two.
-    let (log, mark) = run(&zsh, &["-i"], &home, &env, ZSH_AFTER);
+    let (log, screen) = run(&zsh, &["-i"], &home, &env, ZSH_AFTER);
     assert_eq!(
         log,
-        ".zshenv unset\n.zshrc unset\nmark\nafter unset  0 association association\n"
+        ".zshenv unset\n.zshrc unset\nafter unset  0 association association\n"
     );
-    assert_eq!(mark, MARK);
+    assert_marked_after_files(&screen);
 
     // A command reads only .zshenv, gets everything back, and marks nothing.
-    let (log, mark) = run(
+    let (log, screen) = run(
         &zsh,
         &["-c", ZSH_AFTER.trim_end_matches("exit\n")],
         &home,
@@ -163,7 +138,7 @@ fn zsh_reads_the_users_files_in_its_own_order_and_gives_their_environment_back()
         "",
     );
     assert_eq!(log, ".zshenv unset\nafter unset  0 association \n");
-    assert_eq!(mark, "");
+    assert!(!screen.contains(SCREEN_MARK), "{screen:?}");
 
     // A user whose own ZDOTDIR is set gets it back, exported, and their
     // files are read from it.
@@ -173,12 +148,12 @@ fn zsh_reads_the_users_files_in_its_own_order_and_gives_their_environment_back()
         .unwrap()
         .unwrap()
         .env;
-    let (log, mark) = run(&zsh, &["-i", "-l"], &home, &env, ZSH_AFTER);
+    let (log, screen) = run(&zsh, &["-i", "-l"], &home, &env, ZSH_AFTER);
     assert_eq!(
         log,
-        ".zshenv ~/z\n.zprofile ~/z\n.zshrc ~/z\n.zlogin ~/z\nmark\nafter ~/z scalar-export 0 association association\n"
+        ".zshenv ~/z\n.zprofile ~/z\n.zshrc ~/z\n.zlogin ~/z\nafter ~/z scalar-export 0 association association\n"
     );
-    assert_eq!(mark, MARK);
+    assert_marked_after_files(&screen);
 }
 
 const BASH_AFTER: &str = "echo \"after ${PROMPT_COMMAND-unset} ${from_bashrc[a]-} ${from_bash_profile[a]-} ${from_profile[a]-}\" >> \"$HOME/log\"\nexit\n";
@@ -197,7 +172,7 @@ fn bash_reads_the_users_files_in_its_own_order_then_marks() {
         let init = init.parent().unwrap().join(file);
         (home, init)
     };
-    // As Herdr runs it, interactive, with the init file the launch names.
+    // Interactive, with the init file the launch names.
     let run_with = |home: &Path, init: &Path| {
         run(
             &bash,
@@ -210,6 +185,7 @@ fn bash_reads_the_users_files_in_its_own_order_then_marks() {
 
     // Standing for a login shell (macOS): the first of the user's login
     // files, after /etc/profile, then the mark; ~/.bashrc only through it.
+    // Hide's folder report is the one PROMPT_COMMAND.
     let (home, init) = folder("login.bash");
     user_files(
         home.path(),
@@ -217,16 +193,17 @@ fn bash_reads_the_users_files_in_its_own_order_then_marks() {
         "login",
         "declare -a",
     );
-    let (log, mark) = run_with(home.path(), &init);
-    assert_eq!(log, ".bash_profile login\nmark\nafter unset  1 \n");
-    assert_eq!(mark, MARK);
+    let (log, screen) = run_with(home.path(), &init);
+    assert_eq!(log, ".bash_profile login\nafter __hide_cwd  1 \n");
+    assert_marked_after_files(&screen);
     std::fs::remove_file(home.path().join(".bash_profile")).unwrap();
     std::fs::remove_file(home.path().join(".bash_login")).unwrap();
-    let (log, _) = run_with(home.path(), &init);
-    assert_eq!(log, ".profile login\nmark\nafter unset   1\n");
+    let (log, screen) = run_with(home.path(), &init);
+    assert_eq!(log, ".profile login\nafter __hide_cwd   1\n");
+    assert_marked_after_files(&screen);
 
     // Not a login shell (Linux): ~/.bashrc, whose PROMPT_COMMAND, set or
-    // appended to, is the user's own.
+    // appended to, stays the user's first.
     let (home, init) = folder("interactive.bash");
     user_files(home.path(), &[".bashrc"], "rc", "declare -a");
     std::fs::write(
@@ -235,9 +212,9 @@ fn bash_reads_the_users_files_in_its_own_order_then_marks() {
             + "PROMPT_COMMAND=\"${PROMPT_COMMAND:+$PROMPT_COMMAND;}true\"\n",
     )
     .unwrap();
-    let (log, mark) = run_with(home.path(), &init);
-    assert_eq!(log, ".bashrc rc\nmark\nafter true 1  \n");
-    assert_eq!(mark, MARK);
+    let (log, screen) = run_with(home.path(), &init);
+    assert_eq!(log, ".bashrc rc\nafter true 1  \n");
+    assert_marked_after_files(&screen);
 }
 
 #[test]
@@ -248,29 +225,32 @@ fn fish_marks_after_its_configuration() {
     let home = home.path().canonicalize().unwrap();
     let config = home.join(".config/fish");
     std::fs::create_dir_all(&config).unwrap();
-    std::fs::write(config.join("config.fish"), "echo config >> $HOME/log\n").unwrap();
+    std::fs::write(
+        config.join("config.fish"),
+        format!("echo config >> $HOME/log\necho {FILE_RAN}\n"),
+    )
+    .unwrap();
     let launch = install(&home.join("hide"), &user(&fish, None))
         .unwrap()
         .unwrap();
     let mut args: Vec<&str> = launch.command[1..].iter().map(String::as_str).collect();
     args.push("-i");
-    let (log, mark) = run(
+    let (log, screen) = run(
         &fish,
         &args,
         &home,
         &launch.env,
         "echo after >> $HOME/log\nexit\n",
     );
-    assert_eq!(log, "config\nmark\nafter\n");
-    assert_eq!(mark, MARK);
+    assert_eq!(log, "config\nafter\n");
+    assert_marked_after_files(&screen);
 }
 
-/// Outside a Herdr pane, on the core's own engine, each shell marks its first
-/// prompt on its screen once, after the user's files, and reports nothing to
-/// Herdr; in a Herdr pane it writes no screen mark.
+/// Each shell marks its first prompt on its screen once, after the user's
+/// files, and not again at later prompts.
 #[test]
 #[ignore = "needs zsh, bash and fish: set HIDE_TEST_ZSH_BIN, HIDE_TEST_BASH_BIN and HIDE_TEST_FISH_BIN and run with --ignored"]
-fn outside_herdr_each_shell_marks_its_first_prompt_on_its_screen_once() {
+fn each_shell_marks_its_first_prompt_on_its_screen_once() {
     let home = tempfile::tempdir().unwrap();
     let home = home.path().canonicalize().unwrap();
     let launches = [
@@ -289,27 +269,21 @@ fn outside_herdr_each_shell_marks_its_first_prompt_on_its_screen_once() {
         let mut args: Vec<&str> = launch.command[1..].iter().map(String::as_str).collect();
         args.push("-i");
         let after = "echo after >> \"$HOME/log\"\nexit\n";
-        let ((log, reported), screen) = run_in(Pane::Own, bin, &args, &home, &launch.env, after);
-        assert_eq!(reported, "", "{bin:?} reports nothing outside Herdr");
+        let (log, screen) = run(bin, &args, &home, &launch.env, after);
         assert_eq!(log, "after\n", "{bin:?}");
         assert_eq!(
             screen.matches(SCREEN_MARK).count(),
             1,
             "{bin:?}: {screen:?}"
         );
-        let ((_, reported), screen) = run_in(Pane::Herdr, bin, &args, &home, &launch.env, after);
-        assert_eq!(reported, MARK, "{bin:?}");
-        assert!(!screen.contains(SCREEN_MARK), "{bin:?}: {screen:?}");
     }
 }
 
-/// Outside Herdr each shell says its folder on its screen (OSC 7) as it
-/// starts and after a `cd`, a `%` in a name spelled `%25`, for the pane's
-/// holder; in a Herdr pane, which reads the folder from the process, it says
-/// nothing of it.
+/// Each shell says its folder on its screen (OSC 7) as it starts and after a
+/// `cd`, a `%` in a name spelled `%25`, for the pane's holder.
 #[test]
 #[ignore = "needs zsh, bash and fish: set HIDE_TEST_ZSH_BIN, HIDE_TEST_BASH_BIN and HIDE_TEST_FISH_BIN and run with --ignored"]
-fn outside_herdr_each_shell_says_its_folder_on_its_screen() {
+fn each_shell_says_its_folder_on_its_screen() {
     let home = tempfile::tempdir().unwrap();
     let home = home.path().canonicalize().unwrap();
     std::fs::create_dir(home.join("a b%c")).unwrap();
@@ -326,7 +300,7 @@ fn outside_herdr_each_shell_says_its_folder_on_its_screen() {
         let mut args: Vec<&str> = launch.command[1..].iter().map(String::as_str).collect();
         args.push("-i");
         let after = "cd 'a b%c'\necho after >> \"$HOME/log\"\nexit\n";
-        let (_, screen) = run_in(Pane::Own, &bin, &args, &home, &launch.env, after);
+        let (_, screen) = run(&bin, &args, &home, &launch.env, after);
         assert!(
             screen.contains(&said(home.display().to_string())),
             "{variable}: {screen:?}"
@@ -335,8 +309,6 @@ fn outside_herdr_each_shell_says_its_folder_on_its_screen() {
             screen.contains(&said(format!("{}/a b%25c", home.display()))),
             "{variable}: {screen:?}"
         );
-        let (_, screen) = run_in(Pane::Herdr, &bin, &args, &home, &launch.env, after);
-        assert!(!screen.contains("\u{1b}]7;"), "{variable}: {screen:?}");
     }
 }
 
@@ -345,7 +317,7 @@ fn outside_herdr_each_shell_says_its_folder_on_its_screen() {
 /// all of them, not inside the first.
 #[test]
 #[ignore = "needs bash 5.1 or later: set HIDE_TEST_BASH_BIN and run with --ignored"]
-fn outside_herdr_bash_keeps_every_prompt_command_the_user_set() {
+fn bash_keeps_every_prompt_command_the_user_set() {
     let home = tempfile::tempdir().unwrap();
     let home = home.path().canonicalize().unwrap();
     let rc = "user_one() { echo one >> \"$HOME/log\"; }\nuser_two() { echo two >> \"$HOME/log\"; echo user-two-ran; }\nPROMPT_COMMAND=(user_one user_two)\n";
@@ -358,8 +330,7 @@ fn outside_herdr_bash_keeps_every_prompt_command_the_user_set() {
         .unwrap();
     let mut args: Vec<&str> = launch.command[1..].iter().map(String::as_str).collect();
     args.push("-i");
-    let ((log, _), screen) = run_in(
-        Pane::Own,
+    let (log, screen) = run(
         &bin,
         &args,
         &home,

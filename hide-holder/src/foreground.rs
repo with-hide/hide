@@ -11,7 +11,10 @@
 //! `executables` recognize it (PRD engine-bundle-3-core-owns D-21): the
 //! leader of the terminal's foreground group, or its first member once the
 //! leader has ended, when the group is not the pane's own program's, named
-//! by its file, or by the script a runtime (node, bun, deno, python) runs. The system is asked once per process: a process is
+//! by its file, or by the script a runtime (node, bun, deno, python) runs.
+//! On Windows the platform can name that script's installed npm package,
+//! which the core resolves through its agent definitions after the name.
+//! The system is asked once per process: a process is
 //! known again by its pid and the name the system gives it, which an `exec`
 //! changes.
 
@@ -25,8 +28,8 @@ pub struct Foreground {
 
 impl Foreground {
     /// The program in the foreground of a terminal whose group is `group`,
-    /// or none while `shell`, the pane's program, holds it or the system
-    /// cannot say.
+    /// none while `shell`, the pane's program, holds it, or why the system
+    /// could not say, which is never read as the shell holding it.
     ///
     /// It is read each time the pane's facts are, up to 60 times a second
     /// while the program writes, so it asks the system one name in the
@@ -34,39 +37,90 @@ impl Foreground {
     /// its group is the shell's, and any other group's leader is its
     /// program. Only a group whose leader has ended is listed, which on
     /// Linux reads the whole process table.
-    pub fn program(&mut self, shell: u32, group: Result<u32, Unknown>) -> Option<Program> {
-        let group = group.ok()?;
+    pub fn program(
+        &mut self,
+        shell: u32,
+        group: Result<u32, Unknown>,
+        log: &crate::log::Log,
+    ) -> Result<Option<Program>, Unread> {
+        let group = group.map_err(Unread::Group)?;
         if group == shell {
-            return None;
+            return Ok(None);
         }
         let key = match hide_platform::process::name_of(group) {
             Ok(name) => (group, name),
             Err(_) => {
-                let mut members = hide_platform::process::group_members(group).ok()?;
+                let mut members = hide_platform::process::group_members(group)
+                    .map_err(|error| Unread::Members(error.kind()))?;
                 if members.contains(&shell) {
-                    return None;
+                    return Ok(None);
                 }
                 members.sort_unstable();
-                let pid = *members.first()?;
-                (pid, hide_platform::process::name_of(pid).ok()?)
+                // A group whose last member ended since the terminal named
+                // it is read again with the next facts.
+                let pid = *members
+                    .first()
+                    .ok_or(Unread::Members(std::io::ErrorKind::NotFound))?;
+                let name = hide_platform::process::name_of(pid)
+                    .map_err(|error| Unread::Name(error.kind()))?;
+                (pid, name)
             }
         };
         let pid = key.0;
         if let Some((known, program)) = &self.known
             && *known == key
         {
-            return Some(program.clone());
+            return Ok(Some(program.clone()));
         }
-        // A system that keeps no arguments (Windows) or a process gone
-        // since leaves them empty.
-        let argv = bounded(hide_platform::process::argv_of(pid).unwrap_or_default());
+        // A failed read still leaves the system's process name and a
+        // busy terminal. Report it once for this cached process, without
+        // persisting its arguments or a path from them.
+        let argv = bounded(match hide_platform::process::argv_of(pid) {
+            Ok(argv) => argv,
+            Err(error) => {
+                log.event(
+                    "holder.foreground_arguments_unreadable",
+                    &[
+                        ("pid", pid.into()),
+                        ("error_kind", format!("{:?}", error.kind()).into()),
+                    ],
+                );
+                Vec::new()
+            }
+        });
+        let name = program_name(&key.1, &argv);
+        let package =
+            runtime_script(&key.1, &argv).and_then(hide_platform::process::package_of_script);
         let program = Program {
             pid,
-            name: program_name(&key.1, &argv),
+            name,
+            package,
             argv,
         };
         self.known = Some((key, program.clone()));
-        Some(program)
+        Ok(Some(program))
+    }
+}
+
+/// Why the system could not say what holds a terminal.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Unread {
+    /// The terminal's foreground group, the system's error when it gave one.
+    Group(Unknown),
+    /// The members of a group whose leader has ended.
+    Members(std::io::ErrorKind),
+    /// The name of the group's first member.
+    Name(std::io::ErrorKind),
+}
+
+impl Unread {
+    /// The reason as the holder's log names it.
+    pub fn reason(self) -> String {
+        match self {
+            Self::Group(unknown) => format!("group_{unknown:?}"),
+            Self::Members(kind) => format!("members_{kind:?}"),
+            Self::Name(kind) => format!("name_{kind:?}"),
+        }
     }
 }
 
@@ -86,22 +140,29 @@ fn bounded(argv: Vec<String>) -> Vec<String> {
 /// the system's name for it when it has none, without `.exe`; for a runtime
 /// that runs a script, the script's file name without its extension.
 pub fn program_name(system_name: &str, argv: &[String]) -> String {
+    let name = executable_name(system_name, argv);
+    match runtime_script(system_name, argv) {
+        Some(script) => without_extension(path_basename(script)).to_owned(),
+        None => name.to_owned(),
+    }
+}
+
+fn executable_name<'a>(system_name: &'a str, argv: &'a [String]) -> &'a str {
     let program = argv
         .first()
         .map(String::as_str)
         .filter(|first| !first.is_empty())
         .unwrap_or(system_name);
-    let name = without_exe(path_basename(program));
-    let runtime = name.to_lowercase();
-    let script = match runtime.as_str() {
+    without_exe(path_basename(program))
+}
+
+fn runtime_script<'a>(system_name: &str, argv: &'a [String]) -> Option<&'a str> {
+    let runtime = executable_name(system_name, argv).to_lowercase();
+    match runtime.as_str() {
         "node" | "bun" => script_arg(argv, &["-e", "--eval", "-p", "--print"], &[], false),
         "deno" => script_arg(argv, &["-e", "--eval"], &[], true),
         runtime if is_python_runtime(runtime) => script_arg(argv, &["-c"], &["-m"], false),
         _ => None,
-    };
-    match script {
-        Some(script) => without_extension(path_basename(script)).to_owned(),
-        None => name.to_owned(),
     }
 }
 
@@ -217,6 +278,23 @@ mod tests {
     fn name(system: &str, argv: &[&str]) -> String {
         let argv: Vec<String> = argv.iter().map(|arg| (*arg).to_owned()).collect();
         program_name(system, &argv)
+    }
+
+    /// A terminal whose foreground the system could not name is unread,
+    /// never the pane's own program holding it: read as the shell, it would
+    /// end the agent the pane runs (Windows reads a console's foreground
+    /// from a process table it can fail to read).
+    #[test]
+    fn a_foreground_the_system_cannot_name_is_unread_not_the_shell() {
+        let log = crate::log::Log::open(None, "p").unwrap();
+        let mut foreground = Foreground::default();
+        for unknown in [Unknown::Unreadable, Unknown::NoGroup] {
+            assert_eq!(
+                foreground.program(41, Err(unknown), &log),
+                Err(Unread::Group(unknown))
+            );
+        }
+        assert_eq!(foreground.program(41, Ok(41), &log), Ok(None));
     }
 
     #[test]

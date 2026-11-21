@@ -48,7 +48,7 @@ it("invites only an operator with no practice progress who never closed it, proj
   }
 });
 
-it("opens the practice window on chapter 0, and its × tells the core to close it for good", async () => {
+it("opens the practice window on the mission flow, and its × tells the core to close it for good", async () => {
   const openPractice = vi.fn();
   window.hideHost = { kind: "electron", platform: "darwin", openPractice } as never;
   const { container, events, unmount } = await render({});

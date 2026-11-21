@@ -10,7 +10,7 @@ use hide_platform::fs::identity;
 use hide_platform::path::{self, PathError, RelPath};
 
 /// A checkout folder with a cased name and `src/main.rs` in it, spelled
-/// without a `\\?\` prefix (the spelling a shell and Herdr report).
+/// without a `\\?\` prefix (the spelling a shell and the engine report).
 fn checkout() -> (tempfile::TempDir, PathBuf) {
     let dir = tempfile::tempdir().unwrap();
     let root = identity::canonical(dir.path()).unwrap().join("Checkout");
@@ -46,6 +46,24 @@ fn a_root_spelled_with_the_long_path_prefix_relates_to_its_short_spelling() {
             .as_str(),
         "src/main.rs"
     );
+}
+
+#[test]
+fn a_native_remainder_keeps_parent_components_for_its_reader_to_refuse() {
+    let (_dir, root) = checkout();
+    let resolved = fs::canonicalize(&root).unwrap();
+    let remainder = Path::new("src").join("..").join("src").join("main.rs");
+    let requested = root.join(&remainder);
+    for anchor in [&root, &resolved] {
+        assert_eq!(
+            path::strip_prefix(anchor, &requested),
+            Ok(remainder.as_path())
+        );
+        assert_eq!(
+            path::relative(anchor, &requested),
+            Err(PathError::NotNormal)
+        );
+    }
 }
 
 #[test]
@@ -152,5 +170,27 @@ fn a_shell_word_on_a_drive_mount_names_that_drive() {
         ("/1/x", None),
     ] {
         assert_eq!(path::shell_drive_path(word).as_deref(), native, "{word}");
+    }
+}
+
+/// A folder's parent is read from its spelling on every system: a root keeps
+/// its `/`, a drive's `C:/` too on a machine whose paths have no drives, and
+/// a root has none.
+#[test]
+fn a_wire_spelling_s_parent_keeps_its_root_whatever_system_reads_it() {
+    for (wire, parent) in [
+        ("/work/repo", Some("/work")),
+        ("/work/repo/", Some("/work")),
+        ("/work", Some("/")),
+        ("/", None),
+        ("C:/work/repo", Some("C:/work")),
+        ("C:/work", Some("C:/")),
+        ("C:/", None),
+        ("//server/share/work", Some("//server/share")),
+        ("//server/share", None),
+        ("src/main.rs", Some("src")),
+        ("src", None),
+    ] {
+        assert_eq!(path::wire_parent(wire), parent, "{wire}");
     }
 }

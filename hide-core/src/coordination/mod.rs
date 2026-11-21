@@ -1,0 +1,6970 @@
+//! Persistent participant identities and resumable child creation. The delivery
+//! store is the sole writer; native I/O is performed by request workers.
+
+mod end;
+pub(crate) mod executor;
+pub mod human_turn;
+pub(crate) mod identity_wait;
+pub(crate) mod lineage;
+pub(crate) mod naming;
+pub(crate) mod room;
+pub(crate) mod started;
+
+pub(crate) use room::{Held, Holds, dropped, shed_finished_briefs};
+
+use crate::delivery::answer::{AgentView, Connection, RegisterCheck, Runtime};
+use crate::delivery::{Actor, ledger::Ledger, watch};
+use serde::{Deserialize, Serialize};
+use serde_json::{Value, json};
+
+/// Separates a refusal code from the detail its next action names. A control
+/// character, because no code and no sentence of a refusal holds one.
+const DETAIL: char = '\u{1f}';
+
+/// A refusal code with the detail its next action names (the device ids a
+/// caller could have used, or how long a shell that had not finished
+/// starting was waited for, with its last line); the daemon splits them again with
+/// [`split_refusal`] and answers the code alone.
+pub(crate) fn refusal(code: &str, detail: &str) -> String {
+    format!("{code}{DETAIL}{detail}")
+}
+
+/// A spawn's `shell_starting` refusal: how long its new shell was waited
+/// for, in whole seconds, and the screen's last line when there was one.
+pub(crate) fn shell_starting_refusal(waited: std::time::Duration, screen: Option<&str>) -> String {
+    let seconds = crate::agent_start::whole_seconds(waited);
+    refusal(
+        crate::agent_start::SHELL_STARTING,
+        &format!("{seconds}{DETAIL}{}", screen.unwrap_or_default()),
+    )
+}
+
+/// The seconds a `shell_starting` refusal's shell was waited for and the
+/// screen's last line, read from its detail.
+pub fn shell_starting_detail(detail: &str) -> (Option<u64>, Option<&str>) {
+    let (seconds, screen) = detail.split_once(DETAIL).unwrap_or(("", detail));
+    (
+        seconds.parse().ok(),
+        Some(screen).filter(|line| !line.is_empty()),
+    )
+}
+
+/// The code of a refusal and the detail it carries, if any.
+pub fn split_refusal(refusal: &str) -> (&str, Option<&str>) {
+    // Only the refusals that build a detail carry one, so text from a device
+    // that happens to hold the separator is never read as a next action.
+    match refusal.split_once(DETAIL) {
+        Some((
+            code @ ("machine_unknown"
+            | "keys_not_sent"
+            | "send_unconfirmed"
+            | "operator_typing"
+            | crate::agent_start::SHELL_STARTING
+            | hide_node_link::holders::HOLDER_CAP_REFUSAL
+            | "card_not_processed"
+            | "mission_cap_reached"
+            | "mission_candidate_refused"
+            | "mission_profile_unknown"
+            | "mission_conducted"
+            | "mission_criteria_missing"
+            | "mission_criteria_too_many"
+            | "mission_dependency_unknown"
+            | "mission_dependency_line_unknown"
+            | "mission_dependency_stack_split"
+            | "mission_merge_order_stack"
+            | "mission_steps_invalid"
+            | "mission_criteria_unmet"
+            | "mission_criteria_protected"
+            | "mission_checkers_invalid"
+            | "mission_checker_is_worker"
+            | "mission_external_invalid"
+            | "mission_gate_too_many"
+            | "mission_gate_invalid"
+            | "mission_gate_too_long"
+            | "mission_gate_exempt"
+            | "mission_gate_node_done"
+            | "mission_gate_node_started"
+            | "mission_gate_before_start"
+            | "mission_node_held"
+            | "mission_node_started"
+            | "mission_preset_invalid"
+            | "mission_needs_git"
+            | "mission_gate_operator_only"
+            | "mission_gate_none"
+            | "mission_gate_not_open"
+            | "mission_gate_passed"
+            | "mission_machine_node_refused"
+            | "mission_machine_no_repository"
+            | "mission_nodes_unfinished"
+            | "plan_invalid"
+            | "plan_candidate_refused"
+            | "plan_order_refused"
+            | "plan_too_large"
+            | "plan_node_unknown"
+            | "plan_node_finished"
+            | "plan_evidence_missing"
+            | "plan_pr_not_yours"
+            | "plan_pr_unconfirmed"
+            | "plan_file_outside"
+            | "plan_file_missing"
+            | "plan_file_unconfirmed"
+            | "plan_report_missing"
+            | "plan_delegate_full"
+            | "native_identity_unavailable"
+            | "brief_not_submitted"
+            | "agent_not_started"
+            | "pane_busy"
+            | crate::launch::PROFILE_GONE
+            | crate::launch::PROFILES_UNSUPPORTED
+            | crate::launch::PROFILE_REFUSED
+            | crate::launch::PROFILE_UNANSWERED
+            | crate::launch::PROFILE_UNCONFIRMED),
+            detail,
+        )) => (code, Some(detail)),
+        Some((code, detail))
+            if crate::worktree_command::DETAILED.contains(&code)
+                || crate::agent_profiles::DETAILED.contains(&code)
+                || crate::links::session_command::DETAILED.contains(&code)
+                || crate::store_command::DETAILED.contains(&code) =>
+        {
+            (code, Some(detail))
+        }
+        _ => (refusal, None),
+    }
+}
+
+/// The refusals of a spawn that stopped partway after it made its pane,
+/// whose detail names the spawn and the pane as JSON `{"id","pane"}`
+/// (`executor::incomplete_spawn`).
+pub const INCOMPLETE_SPAWN: [&str; 4] = [
+    "native_identity_unavailable",
+    "brief_not_submitted",
+    "agent_not_started",
+    "pane_busy",
+];
+
+/// The refusal of a spawn whose folder's workspace is closing its last pane:
+/// the engine took no tab there and started nothing, and the same intent
+/// asked once that workspace is gone opens the folder again.
+pub const WORKSPACE_CLOSING: &str = "workspace_closing";
+
+/// The refusal of a spawn whose folder its machine reads as gone: nothing
+/// was started there, and nothing anywhere else in its place.
+pub const FOLDER_GONE: &str = "spawn_folder_unreadable";
+
+pub(crate) const AGENT_LIMIT: usize = 2048;
+pub(crate) const SPAWN_LIMIT: usize = 4096;
+
+// One per request, made and consumed by its caller and never kept in bulk
+// (a reservation keeps a `SpawnRecord`), so a spawn's size is not worth a box.
+#[allow(clippy::large_enum_variant)]
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "action", rename_all = "snake_case", deny_unknown_fields)]
+pub enum Command {
+    /// Registers the caller's own session from what the engine reports of its
+    /// pane, or answers the registration it already has: `hide mission
+    /// take` asks it first, so the former Conductor's children have a
+    /// registration to move to (PRD software-factory-conductor B43).
+    RegisterSelf {
+        project: Option<String>,
+    },
+    Register {
+        check: bool,
+        /// The caller's own machine when given; absent means the machine
+        /// the caller's pane capability already names.
+        machine: Option<String>,
+        host_scope: String,
+        session: String,
+        instance: String,
+        name: String,
+        pane: String,
+        parent: Option<String>,
+        project: Option<String>,
+    },
+    /// Every registration, or with `live` only those not ended: running or
+    /// asleep. Left out on the wire when false, so a plain list reads as it
+    /// always did.
+    List {
+        #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+        live: bool,
+    },
+    Show {
+        id: String,
+    },
+    /// The caller declares that its next step is one only a person can
+    /// take (`hide agent ask-human <kind> <place>`, PRD ask-human): `kind`
+    /// is `auth` or `permission`, `place` where the person acts.
+    AskHuman {
+        kind: String,
+        place: String,
+    },
+    /// The caller takes its declaration down (`hide agent ask-human --clear`).
+    AskHumanClear,
+    /// Ends the registration and, unless `keep_pane`, closes the pane its
+    /// agent ran in, which ends the pane's holder, its shell, the agent and
+    /// everything under it; the agent's conversation is kept in the session
+    /// archive for 이어가기 (`coordination::end`).
+    End {
+        id: String,
+        actor: Option<String>,
+        #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+        keep_pane: bool,
+    },
+    Spawn {
+        parent: Option<String>,
+        /// The device the child is created on; absent means the caller's own.
+        /// `repo` and `path` are that device's paths.
+        machine: Option<String>,
+        name: String,
+        intent: String,
+        kind: String,
+        /// The Git repository the child works in a worktree of, on `branch`;
+        /// with no `branch`, the plain-folder project it works in, itself
+        /// (with-hide/hide#2479). None asks for the caller's own checkout,
+        /// which only a plain folder's agent may (`Runtime::spawn_place`);
+        /// the core names it before the spawn is reserved.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        repo: Option<String>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        branch: Option<String>,
+        path: Option<String>,
+        /// The agent's own arguments for this start only.
+        args: Vec<String>,
+        /// The model and effort the child starts with, which every restart
+        /// Hide makes of it (a wake, a fork, a reopen) starts it with again.
+        #[serde(
+            default,
+            skip_serializing_if = "hide_agent_adapter::LaunchChoice::is_default"
+        )]
+        launch: hide_agent_adapter::LaunchChoice,
+        /// The profile the child runs with, by its name on the child's
+        /// machine (`hide agent spawn --profile`, PRD agent-profiles B16);
+        /// none picks it (`launch::pick`). Part of the intent like `launch`.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        profile: Option<String>,
+        /// What Hide asked the child to do, for the screen to name it. Only
+        /// Hide's own identity may give one.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        task: Option<SpawnTask>,
+        /// The child's first prompt, which Hide submits once the agent takes
+        /// input and records as a delivered letter under the spawn's intent,
+        /// so the child starts on it without a person typing. Part of the
+        /// intent like `args`.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        brief: Option<String>,
+        /// The child's pane opens beside the caller's, in the caller's tab,
+        /// instead of in a tab of its own; only for the caller's own checkout
+        /// on the caller's own device. Part of the intent like `brief`.
+        #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+        beside: bool,
+        /// The mission this spawn starts a worker of, and its cap (PRD
+        /// software-factory-conductor D-45). Only the core sets it, from the
+        /// caller's mission; no command names it.
+        #[serde(default, skip_deserializing, skip_serializing_if = "Option::is_none")]
+        mission: Option<Box<crate::runtime::missions::MissionAdmission>>,
+        /// The step of the caller's own plan the child is handed (`hide
+        /// agent spawn --plan-node <key>`, PRD hide-plan-delegate B1): the
+        /// core makes the intent from it.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        plan_node: Option<String>,
+        /// The plan step this spawn's child works on, and the main's plan
+        /// children asleep now. Only the core sets it, from `plan_node`.
+        #[serde(default, skip_deserializing, skip_serializing_if = "Option::is_none")]
+        plan: Option<Box<PlanAdmission>>,
+        /// The agent item the spawn starts with, when an admission judged
+        /// it (Settings › Mission's candidates, PRD agent-profiles-phase2
+        /// D-08, B13). Only the core sets it, never on the wire.
+        #[serde(skip)]
+        pick: Option<Picked>,
+    },
+}
+
+/// The item the core picked for a spawn when it admitted it
+/// (`Runtime::spawn_request`, under the lock its admissions run under):
+/// the start takes this one rather than picking again, so a project's or
+/// a profile's change between the two never starts an item the admission
+/// did not judge.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Picked(pub(crate) Box<crate::launch::Request>);
+
+/// The step of a main's plan a spawn's child works on (PRD
+/// hide-plan-delegate D-24), saved with the spawn from its reservation on.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct PlanLink {
+    /// The plan's instance (`Plan::id`).
+    pub plan: String,
+    pub step: String,
+    pub attempt: u32,
+    /// The main's session, whose plans' children share one cap (D-15).
+    pub parent_session: crate::links::ledger::SessionIdentity,
+}
+
+/// A spawn admitted as a plan step's child: its link, and the main's plan
+/// children asleep or closed now, which hold no place under the cap.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct PlanAdmission {
+    pub link: PlanLink,
+    pub asleep: Vec<String>,
+}
+
+/// The intent a plan step's spawn is made under: one per plan, step and
+/// attempt, so the same command again finds the same child and another
+/// attempt starts a new one (B8, engineering #11).
+pub fn plan_intent(link: &PlanLink) -> String {
+    format!("plan:{}:{}:{}", link.plan, link.step, link.attempt)
+}
+
+/// The children `session`'s plans have now (D-15): spawns made for one of
+/// its steps whose child has neither ended nor is among `asleep`, and those
+/// still being made, which will be one. A start still childless past the
+/// mission's hold stopped partway and holds no place.
+pub(crate) fn plan_children(
+    ledger: &Ledger,
+    session: &crate::links::ledger::SessionIdentity,
+    asleep: &[String],
+    now: u64,
+) -> usize {
+    ledger
+        .spawns
+        .iter()
+        .filter(|spawn| {
+            spawn
+                .plan
+                .as_ref()
+                .is_some_and(|link| link.parent_session == *session)
+        })
+        .filter(|spawn| match &spawn.child {
+            None => {
+                !spawn.completed
+                    && now.saturating_sub(spawn.reserved_at_unix_ms) < MISSION_RESERVATION_HOLD_MS
+            }
+            Some(child) => at_work(ledger, child).is_some_and(|agent| !asleep.contains(&agent.id)),
+        })
+        .count()
+}
+
+/// Refuses a spawn whose mission has its cap of workers, or whose main's
+/// plans have `PLAN_DELEGATE_LIMIT` children, counted with the reservations
+/// under the same ledger write, so two starts at once never share the last
+/// place (D-29, plan B5); a plan child asleep holds no place.
+fn spawn_cap(
+    ledger: &Ledger,
+    mission: Option<&crate::runtime::missions::MissionAdmission>,
+    plan: Option<&PlanAdmission>,
+    now: u64,
+) -> Result<(), String> {
+    if let Some(admission) = mission
+        && mission_workers(ledger, &admission.mission, &admission.closed, now)
+            >= usize::from(admission.cap)
+    {
+        return Err(refusal("mission_cap_reached", &admission.cap.to_string()));
+    }
+    if let Some(admission) = plan
+        && plan_children(
+            ledger,
+            &admission.link.parent_session,
+            &admission.asleep,
+            now,
+        ) >= crate::plans::PLAN_DELEGATE_LIMIT
+    {
+        return Err(refusal(
+            "plan_delegate_full",
+            &crate::plans::PLAN_DELEGATE_LIMIT.to_string(),
+        ));
+    }
+    Ok(())
+}
+
+/// How long a spawn waits for its agent to take input before the brief is
+/// submitted: the TUI of a started agent takes seconds to draw its prompt,
+/// and a trust question at startup holds it longer.
+pub(crate) const BRIEF_READY_WAIT: std::time::Duration = std::time::Duration::from_secs(30);
+/// How long a spawn on the caller's own machine has to answer. The CLI
+/// waits this, and an ordinary command's wait for the answer to come back,
+/// and the spawn's new shell gets what is left of it, at most
+/// `agent_start::SHELL_WAIT`, to finish starting: a shell stopped in its
+/// startup files is answered as `shell_starting` while the caller still
+/// waits, rather than as a timeout whose spawn holds the spawn lock. The
+/// waits after the start (the agent's session, the agent taking its brief,
+/// at most [`BRIEF_READY_WAIT`]) take what is left after that, so a slow
+/// shell and a slow agent together are still answered in time.
+pub const SPAWN_ANSWER_WAIT: std::time::Duration = std::time::Duration::from_secs(45);
+/// [`SPAWN_ANSWER_WAIT`] for a spawn on a connected device, whose checks,
+/// worktree, tab and start are each a round trip over SSH.
+pub const DEVICE_SPAWN_ANSWER_WAIT: std::time::Duration = std::time::Duration::from_secs(60);
+/// The wait the engine is asked for on each call that reads or closes a
+/// pane a spawn or an end made. The core's own engine answers a read from
+/// its topology and bounds a close by the pane's end on its node
+/// ([`END_ANSWER_WAIT`]), so this bounds no call of its own.
+pub(crate) const PANE_WAIT: std::time::Duration = std::time::Duration::from_secs(5);
+/// What `hide agent end` takes beyond an ordinary command: the end of its
+/// pane on the pane's node, this machine's or a device's, which ends the
+/// holder's tree and, when that tree ignores it, its pids
+/// (`hide_node_link::link_panes::END_WAIT`). Its other steps read the
+/// ledger and the topology. The CLI waits this and an ordinary command's
+/// wait.
+pub const END_ANSWER_WAIT: std::time::Duration = hide_node_link::link_panes::END_WAIT;
+
+/// How long a spawn waits for the pass it asked of its child's machine's
+/// kit before it makes anything (`runtime::start_hook`). A pass asks Codex
+/// to trust Hide's hooks, which is bounded at 19 s
+/// (`hide_agent_hooks::codex_trust`), and reads each agent once; a kit that
+/// is still busy past this, waiting on another kit's account lock or on a
+/// slow device, has the spawn refused so the same command asks again,
+/// rather than held for the 90 s that lock allows. The `hide` CLI's spawn
+/// exchange adds it to its own wait, so this refusal arrives before the
+/// exchange gives up.
+pub const HOOK_PASS_WAIT: std::time::Duration = std::time::Duration::from_secs(30);
+
+/// How long a mission's spawn with no child yet counts as a worker being
+/// made. A start takes seconds to a minute or two; one still childless past
+/// this failed and was left (a retry under a new intent is its own spawn),
+/// so it stops holding a place under the cap.
+pub(crate) const MISSION_RESERVATION_HOLD_MS: u64 = 10 * 60 * 1000;
+
+/// The workers a mission has now (D-29): spawns made for it whose child has
+/// neither ended nor is among `closed` (its pane closed, held for Reopen
+/// closed), and those still being made, which will be one.
+pub(crate) fn mission_workers(
+    ledger: &Ledger,
+    mission: &str,
+    closed: &[String],
+    now: u64,
+) -> usize {
+    ledger
+        .spawns
+        .iter()
+        .filter(|spawn| spawn.mission.as_deref() == Some(mission))
+        .filter(|spawn| match &spawn.child {
+            None => {
+                !spawn.completed
+                    && now.saturating_sub(spawn.reserved_at_unix_ms) < MISSION_RESERVATION_HOLD_MS
+            }
+            Some(child) => at_work(ledger, child).is_some_and(|agent| !closed.contains(&agent.id)),
+        })
+        .count()
+}
+
+/// The live registration at the work a spawn started `child` for: the child
+/// itself, or the agent that took its pane over (`succeed`). The spawn's
+/// receipt keeps naming the child it started, whose parent and origin it
+/// was made with; whoever counts the work now reads it through here.
+pub(crate) fn at_work<'a>(ledger: &'a Ledger, child: &str) -> Option<&'a AgentRecord> {
+    live_successor(ledger, child).and_then(Result::ok)
+}
+
+/// The earliest time after `now` a mission's worker still being made stops
+/// counting against its cap, so a count read now holds until then.
+pub(crate) fn mission_reservations_end(ledger: &Ledger, now: u64) -> u64 {
+    ledger
+        .spawns
+        .iter()
+        .filter(|spawn| spawn.mission.is_some() && spawn.child.is_none() && !spawn.completed)
+        .map(|spawn| {
+            spawn
+                .reserved_at_unix_ms
+                .saturating_add(MISSION_RESERVATION_HOLD_MS)
+        })
+        .filter(|end| *end > now)
+        .min()
+        .unwrap_or(u64::MAX)
+}
+
+/// The serialized value of a Memory card's promotion into the repository.
+pub const MEMORY_PROMOTE_TASK: &str = "memory_promote";
+/// The serialized value of a 제안 line's application.
+pub const SUGGESTION_APPLY_TASK: &str = "suggestion_apply";
+/// The serialized value of an automation's run (PRD automations).
+pub const AUTOMATION_TASK: &str = "automation";
+
+/// What Hide started an agent for. Every kind Hide knows names the screen that
+/// owns its progress, its home, in one exhaustive match, so a kind added
+/// without a home does not compile (PRD hide-ai-work-home D-10, B22).
+///
+/// The ledger outlives a build: a kind another build wrote reads as
+/// `Unknown` and never fails the ledger's load (D-19). The serialized value
+/// of a known kind is its code, unchanged.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum TaskKind {
+    /// A Memory card's promotion into the repository.
+    MemoryPromote,
+    /// A 제안 line's fix, as a pull request or an issue (PRD
+    /// hide-ai-suggestions B11-B14).
+    SuggestionApply,
+    /// An automation's run (PRD automations D-11); the target is the
+    /// automation's id.
+    Automation,
+    /// A kind this build has no home for, with the value as written.
+    Unknown(String),
+}
+
+/// The screen that owns what a Hide-started agent does: it shows the
+/// progress, opens the agent's pane and cleans up after the work.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum TaskHome {
+    /// The Hide AI tool's 제안 tab, on the row the task's target names: a
+    /// notebook line (`s12`), or a Memory card on its way into the
+    /// repository's documents (`m72`), which the tab took over from the
+    /// Memory tab (PRD hide-ai-suggestions D-02).
+    Suggestions,
+    /// The automation screen, on the automation the task's target names
+    /// (PRD automations D-11): its run list shows the work and opens its
+    /// terminal. Unlike the 제안 tab's work, a View the agent opened calls
+    /// the operator too (B15).
+    Automations,
+}
+
+impl TaskHome {
+    /// Whether a View the agent opened and the operator has not looked at
+    /// brings its row to Needs You (PRD automations B15): the automation's
+    /// home shows no result of its own, so what its run opened is the
+    /// result.
+    pub fn calls_on_look(self) -> bool {
+        matches!(self, Self::Automations)
+    }
+}
+
+impl TaskKind {
+    pub fn from_code(code: &str) -> Self {
+        match code {
+            MEMORY_PROMOTE_TASK => Self::MemoryPromote,
+            SUGGESTION_APPLY_TASK => Self::SuggestionApply,
+            AUTOMATION_TASK => Self::Automation,
+            // A code this build does not know is shown and logged, never
+            // acted on, so only a short printable form of it is kept.
+            other => Self::Unknown(
+                other
+                    .chars()
+                    .filter(|character| !character.is_control())
+                    .take(64)
+                    .collect(),
+            ),
+        }
+    }
+
+    pub fn as_str(&self) -> &str {
+        match self {
+            Self::MemoryPromote => MEMORY_PROMOTE_TASK,
+            Self::SuggestionApply => SUGGESTION_APPLY_TASK,
+            Self::Automation => AUTOMATION_TASK,
+            Self::Unknown(code) => code,
+        }
+    }
+
+    /// The kind's home; none for a kind this build does not know, whose
+    /// agent is then an operator's row (D-19).
+    pub fn home(&self) -> Option<TaskHome> {
+        match self {
+            Self::MemoryPromote | Self::SuggestionApply => Some(TaskHome::Suggestions),
+            Self::Automation => Some(TaskHome::Automations),
+            Self::Unknown(_) => None,
+        }
+    }
+}
+
+impl Serialize for TaskKind {
+    fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        serializer.serialize_str(self.as_str())
+    }
+}
+
+impl<'de> Deserialize<'de> for TaskKind {
+    fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        String::deserialize(deserializer).map(|code| Self::from_code(&code))
+    }
+}
+
+/// The work Hide started an agent for, as codes the screen words in the
+/// operator's language (`memory_promote` and the card `m72`), never as a
+/// sentence. `target` is the thing the work is about, when it has one.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct SpawnTask {
+    pub kind: TaskKind,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub target: Option<String>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(from = "AgentRecordOnDisk", into = "AgentRecordOnDisk")]
+pub struct AgentRecord {
+    pub id: String,
+    /// The name the agent registered under; none when it never had one of its
+    /// own. A pane id is never a name (`AgentRecord::forget_pane_name`). On
+    /// disk the field is always a string, so a build before this one reads the
+    /// ledger: an unnamed record is written under its registration id.
+    pub name: Option<String>,
+    pub machine: String,
+    pub host_scope: String,
+    pub native_machine: String,
+    pub session: String,
+    pub instance: String,
+    /// The engine's terminal incarnation, retained when a move changes the public pane id.
+    pub terminal_id: Option<String>,
+    pub pane: String,
+    pub parent: Option<String>,
+    /// Provenance only for handoffs and forks; delegated provenance is the
+    /// parent. A fork's origin is the source it was forked from, which its
+    /// pane's fork mark names (`lineage::FORK_KEYS`).
+    #[serde(default)]
+    pub origin: Option<String>,
+    pub project: Option<String>,
+    pub actor: Actor,
+    pub ended: bool,
+    /// Made by Fork agent: the conversation is another execution's, resumed
+    /// as a new session. The registration owns the fact, so it follows the
+    /// registration to the pane that wakes it. A fork made before forks were
+    /// the operator's roots has a parent and carries no mark.
+    #[serde(default)]
+    pub forked: bool,
+    /// The registration that took this one's place when it ended: the next
+    /// agent in its pane (PRD letters-missions-simplify D-02, B2), which was
+    /// handed its pending letters, children, watches and mission roles
+    /// (`succeed`). An answer to this agent goes there (`live_successor`).
+    pub successor: Option<String>,
+}
+
+/// `AgentRecord` as the ledger file spells it, with the wire name in `name`.
+#[derive(Serialize, Deserialize)]
+struct AgentRecordOnDisk {
+    id: String,
+    name: String,
+    machine: String,
+    host_scope: String,
+    native_machine: String,
+    session: String,
+    instance: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    terminal_id: Option<String>,
+    pane: String,
+    parent: Option<String>,
+    #[serde(default)]
+    origin: Option<String>,
+    project: Option<String>,
+    actor: Actor,
+    ended: bool,
+    #[serde(default)]
+    forked: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    successor: Option<String>,
+}
+
+impl From<AgentRecord> for AgentRecordOnDisk {
+    fn from(record: AgentRecord) -> Self {
+        Self {
+            name: record.wire_name().to_owned(),
+            id: record.id,
+            machine: record.machine,
+            host_scope: record.host_scope,
+            native_machine: record.native_machine,
+            session: record.session,
+            instance: record.instance,
+            terminal_id: record.terminal_id,
+            pane: record.pane,
+            parent: record.parent,
+            origin: record.origin,
+            project: record.project,
+            actor: record.actor,
+            ended: record.ended,
+            forked: record.forked,
+            successor: record.successor,
+        }
+    }
+}
+
+/// A name equal to the record's own id or to its pane is no name: the first is
+/// how an unnamed record is written, the second how an earlier build wrote a
+/// parent the engine never named.
+impl From<AgentRecordOnDisk> for AgentRecord {
+    fn from(disk: AgentRecordOnDisk) -> Self {
+        let mut record = Self {
+            name: Some(disk.name),
+            id: disk.id,
+            machine: disk.machine,
+            host_scope: disk.host_scope,
+            native_machine: disk.native_machine,
+            session: disk.session,
+            instance: disk.instance,
+            terminal_id: disk.terminal_id,
+            pane: disk.pane,
+            parent: disk.parent,
+            origin: disk.origin,
+            project: disk.project,
+            actor: disk.actor,
+            ended: disk.ended,
+            forked: disk.forked,
+            successor: disk.successor,
+        };
+        record.forget_pane_name();
+        record
+    }
+}
+
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum SpawnMode {
+    #[default]
+    Delegation,
+    Handoff,
+}
+
+impl SpawnMode {
+    fn responsibility(self, caller: &str) -> Option<String> {
+        (self == Self::Delegation).then(|| caller.to_owned())
+    }
+
+    fn origin(self, caller: &str) -> Option<String> {
+        (self == Self::Handoff).then(|| caller.to_owned())
+    }
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct SpawnRecord {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub seed_tab: Option<naming::SeedTab>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub names: Option<naming::Names>,
+    pub id: String,
+    /// The caller authorizes the receipt, including a parentless handoff.
+    pub parent: String,
+    #[serde(default)]
+    pub mode: SpawnMode,
+    /// The device the child lives on when it is not the caller's own. It is
+    /// part of the intent: the same intent never reaches two devices.
+    #[serde(default)]
+    pub machine: Option<String>,
+    pub intent: String,
+    pub name: String,
+    pub kind: String,
+    pub repo: String,
+    /// The branch of `repo` the child's worktree has out; `branch()` reads
+    /// it. A folder spawn has none and repeats `repo` here, so a build
+    /// before folder spawns, which needs a branch on every record, still
+    /// reads the ledger; it never starts that record again.
+    pub branch: String,
+    /// The child works in the plain folder `repo` itself, on no branch
+    /// (with-hide/hide#2479).
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub folder: bool,
+    pub requested_path: Option<String>,
+    pub args: Vec<String>,
+    /// Part of the intent like `args`; a record written before it existed
+    /// has the CLI's defaults.
+    #[serde(
+        default,
+        skip_serializing_if = "hide_agent_adapter::LaunchChoice::is_default"
+    )]
+    pub launch: hide_agent_adapter::LaunchChoice,
+    pub path: Option<String>,
+    /// The spawn made the worktree at `path` (`executor::made_by_spawn`, or
+    /// the create branch), rather than starting in one that was already the
+    /// operator's or in the repository's own folder; a record written
+    /// before it existed reads false. Only such a checkout is a tool's own
+    /// (PRD hide-external-control B26, `started::hide_started`).
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub made: bool,
+    pub pane: Option<String>,
+    /// The engine terminal `pane` ran when the spawn recorded it. A pane id
+    /// can name another pane later, so only this proves the pane is the
+    /// spawn's own; a record written before it existed has none.
+    #[serde(default)]
+    pub terminal: Option<String>,
+    /// How many starts the engine took for this spawn's agent in `pane`: the first
+    /// one, and at most one more when the first ended at the shell with no
+    /// agent (`executor::spawn`).
+    #[serde(default)]
+    pub typed: u32,
+    /// The shell `pane` was launched with Hide's integration in, by program
+    /// name, so every start in it waits for that shell's first prompt; none
+    /// when the pane runs the engine's own shell.
+    #[serde(default)]
+    pub shell: Option<String>,
+    pub child: Option<String>,
+    // Completion and the initial watch are one durable store transaction.
+    // Later report/end/watch-stop events never invalidate this receipt.
+    #[serde(default)]
+    pub completed: bool,
+    #[serde(default)]
+    pub auto_watch_id: Option<String>,
+    /// What Hide started the child for; absent for every other spawn.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub task: Option<SpawnTask>,
+    /// The mission the child is a worker of, counted against its cap.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub mission: Option<String>,
+    /// The plan step the child works on, counted against its main's cap.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub plan: Option<PlanLink>,
+    /// The child's first prompt (`Command::Spawn::brief`), part of the
+    /// intent; the letter made of it when the child binds carries the same
+    /// text.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub brief: Option<String>,
+    /// The SHA-256 of the brief, in hex, in its place once the spawn is
+    /// completed and its child ended (`SpawnRecord::shed_brief`): what a
+    /// spawn asked again compares, the text no longer kept. A build before
+    /// it reads such a record as one without a brief.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub brief_sha256: Option<String>,
+    /// Whether the brief was submitted to the agent, so a retry after it
+    /// never submits it twice (engineering #11).
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub briefed: bool,
+    /// The brief's typings and the agent's record of it
+    /// (`delivery::typed`); absent until the first typing is reserved, and
+    /// on every record written before typed input was confirmed.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub brief_input: Option<crate::delivery::typed::TypedInput>,
+    /// The words the spawn's start added to carry its brief, saved with
+    /// `BriefLaunched` before the first start: a start typed again carries
+    /// these same words, never a decision made again. Empty for a brief that
+    /// rides no start, and on a record an earlier build wrote.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub launch_words: Vec<String>,
+    /// The child's pane was split beside the caller's (`Command::Spawn::
+    /// beside`), part of the intent. Delegated-child relocation leaves the
+    /// child of such a spawn in the caller's tab.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub beside: bool,
+    /// When the spawn was reserved; a record written before it existed has
+    /// 0.
+    #[serde(default, skip_serializing_if = "is_zero")]
+    pub reserved_at_unix_ms: u64,
+    /// The profile the spawn named (`Command::Spawn::profile`), part of the
+    /// intent; none on a spawn that named none and every earlier record.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub profile: Option<String>,
+    /// The profile the engine took the child's start with, which the child's
+    /// pane record keeps for every restart Hide makes of it (D-27); none for
+    /// the built-in default.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub started_profile: Option<crate::launch::LaunchProfile>,
+}
+
+/// What became of a spawn's brief, read from the facts its record keeps,
+/// each written before the effect it names: `BriefTyping` before the send
+/// (an attempt, its answer not yet saved), `Briefed` or `BriefUnsent` after
+/// it, `BriefLaunched` before the start that carries it, `BriefConfirmed`
+/// when the agent's own record shows it. It is never stored on its own, so
+/// it cannot disagree with those facts; everything that asks what became of
+/// the brief (its first letter, whether the spawn may complete, whether it
+/// is typed, the logs of its agent's end) reads it here.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum BriefPhase {
+    /// The spawn has no brief.
+    None,
+    /// Nothing went in: never tried, or a send that was refused before it
+    /// typed anything (`BriefUnsent`).
+    NotTyped,
+    /// A send was reserved and its outcome not saved: it may have arrived.
+    Sending,
+    /// Typed into the pane, with no record of it from the agent yet.
+    Typed,
+    /// Sent through a queue an earlier build used, with no record yet.
+    Queued,
+    /// The send's answer was lost: it counts as sent.
+    Lost,
+    /// Carried by the agent's start as its prompt argument.
+    Launched,
+    /// The agent's own record shows it.
+    Confirmed,
+}
+
+impl BriefPhase {
+    /// The word a log gives for it; never "undelivered" for a brief that
+    /// may have arrived.
+    pub(crate) fn word(self) -> &'static str {
+        match self {
+            Self::None => "none",
+            Self::NotTyped => "not_typed",
+            Self::Sending => "sending_unconfirmed",
+            Self::Typed => "typed_unconfirmed",
+            Self::Queued => "queued_unconfirmed",
+            Self::Lost => "lost_unconfirmed",
+            Self::Launched => "launched_unconfirmed",
+            Self::Confirmed => "confirmed",
+        }
+    }
+
+    /// Whether the brief went in, settled so: the spawn records its first
+    /// letter once its child is bound. A send whose outcome is not saved yet
+    /// is not, since it may still be refused.
+    pub(crate) fn went_in(self) -> bool {
+        matches!(
+            self,
+            Self::Typed | Self::Queued | Self::Lost | Self::Launched | Self::Confirmed
+        )
+    }
+
+    /// Whether nothing is left for the spawn to do with its brief, so binding
+    /// its child completes it.
+    pub(crate) fn settled(self) -> bool {
+        self == Self::None || self.went_in()
+    }
+}
+
+impl SpawnRecord {
+    /// The branch the child's worktree has out; none when the child works
+    /// in a plain folder.
+    pub(crate) fn branch(&self) -> Option<&str> {
+        (!self.folder).then_some(self.branch.as_str())
+    }
+
+    /// Whether the spawn was asked with `brief`: the text it keeps, or,
+    /// once it let the text go, its digest.
+    pub(crate) fn asked_with(&self, brief: Option<&str>) -> bool {
+        match (&self.brief_sha256, brief) {
+            (Some(digest), Some(brief)) => *digest == brief_digest(brief),
+            (Some(_), None) => false,
+            (None, brief) => self.brief.as_deref() == brief,
+        }
+    }
+
+    /// Whether the record still holds its brief's text or launch words.
+    pub(crate) fn carries_brief(&self) -> bool {
+        self.brief.is_some() || !self.launch_words.is_empty()
+    }
+
+    /// Lets the brief's text and launch words go, keeping the brief's
+    /// digest (`room::shed_finished_briefs` says when).
+    pub(crate) fn shed_brief(&mut self) {
+        if let Some(brief) = self.brief.take() {
+            self.brief_sha256 = Some(brief_digest(&brief));
+        }
+        self.launch_words = Vec::new();
+    }
+
+    /// What became of the spawn's brief ([`BriefPhase`]).
+    pub(crate) fn brief_phase(&self) -> BriefPhase {
+        use crate::delivery::typed::SendRoute;
+        if self.brief.is_none() && self.brief_sha256.is_none() {
+            return BriefPhase::None;
+        }
+        match &self.brief_input {
+            Some(input) if input.confirmed_at_unix_ms.is_some() => BriefPhase::Confirmed,
+            Some(input) => match (input.route, self.briefed) {
+                (SendRoute::Launch, _) => BriefPhase::Launched,
+                (SendRoute::Lost, true) => BriefPhase::Lost,
+                (SendRoute::Lost, false) => BriefPhase::Sending,
+                (SendRoute::Typed, true) => BriefPhase::Typed,
+                (SendRoute::Channel, true) => BriefPhase::Queued,
+                (SendRoute::Typed | SendRoute::Channel, false) => BriefPhase::NotTyped,
+            },
+            // A record an earlier build wrote before it kept the typing.
+            None if self.briefed => BriefPhase::Typed,
+            None => BriefPhase::NotTyped,
+        }
+    }
+}
+
+/// A brief's SHA-256 in lowercase hex, as a spawn record keeps it.
+fn brief_digest(brief: &str) -> String {
+    use sha2::{Digest, Sha256};
+    format!("{:x}", Sha256::digest(brief.as_bytes()))
+}
+
+fn spawn_json(ledger: &Ledger, id: &str) -> Result<Value, String> {
+    ledger
+        .spawns
+        .iter()
+        .find(|spawn| spawn.id == id)
+        .map(|spawn| json!(spawn))
+        .ok_or_else(|| "spawn_unavailable".into())
+}
+
+/// Records the first letter under spawn `id`'s intent once its child is bound
+/// and its brief went in, whichever came first: the brief the agent read,
+/// delivered, so the ledger and the wake-up line carry what the child was
+/// started on, and a letter the parent sends later under the same intent is
+/// this one. A letter the parent already holds under that intent stays as
+/// it is, so asking again never writes over it.
+///
+/// Hide's record of the brief (`Briefed`, `BriefConfirmed` under its input
+/// authority) can arrive after the parent ended. The fact is saved then, and
+/// the letter is not written: an ended parent sends nothing new, and a
+/// request from it would open an answer wait no one ends. Its registration
+/// is still read as the sender of a letter it already holds. A live parent's
+/// letter refused (capacity, an invalid actor) refuses the transition, as
+/// it always did.
+fn first_letter(ledger: &mut Ledger, id: &str, now: u64) -> Result<(), String> {
+    let spawn = ledger
+        .spawns
+        .iter()
+        .find(|spawn| spawn.id == id)
+        .ok_or("spawn_unavailable")?;
+    let Some(brief) = spawn.brief.clone() else {
+        return Ok(());
+    };
+    if !spawn.brief_phase().went_in() {
+        return Ok(());
+    }
+    let Some(child) = spawn
+        .child
+        .as_ref()
+        .and_then(|child| ledger.agents.iter().find(|record| &record.id == child))
+        .map(|record| record.actor.clone())
+    else {
+        return Ok(());
+    };
+    let intent = spawn.intent.clone();
+    let sender = match resolve_actor(ledger, &spawn.parent) {
+        Some(parent) => parent.clone(),
+        None => {
+            let reason = match past_record(ledger, &spawn.parent) {
+                Some(parent) if !parent.ended => return Err("parent_unavailable".into()),
+                Some(parent) => {
+                    if crate::delivery::mailbox::existing_intent(
+                        ledger,
+                        &parent.actor,
+                        &intent,
+                        now,
+                    )
+                    .is_some()
+                    {
+                        return Ok(());
+                    }
+                    "parent_ended"
+                }
+                None => "parent_unregistered",
+            };
+            crate::diagnostic!(json!({
+                "component": "spawn", "kind": "spawn.first_letter_skipped",
+                "spawn": id, "reason": reason,
+            }));
+            return Ok(());
+        }
+    };
+    if crate::delivery::mailbox::existing_intent(ledger, &sender, &intent, now).is_some() {
+        return Ok(());
+    }
+    let letter = crate::delivery::mailbox::send(
+        ledger, &sender, &child, &intent, &brief, "request", None, now,
+    )?;
+    let letter = ledger
+        .letters
+        .iter_mut()
+        .find(|stored| stored.id == letter.id)
+        .ok_or("letter_unavailable")?;
+    letter.state = crate::delivery::ledger::State::Delivered;
+    letter.hook_confirmed = Some(true);
+    letter.bell_sent = true;
+    Ok(())
+}
+
+fn is_zero(value: &u64) -> bool {
+    *value == 0
+}
+
+/// Whether `caller` is Hide's own identity for typed input, the only one
+/// that reports a brief's record or its notice (`delivery::typed`).
+fn input_authority(caller: &Actor) -> bool {
+    caller.hide_itself()
+        && caller.name
+            == format!(
+                "{}{}",
+                crate::delivery::HIDE_PREFIX,
+                crate::delivery::typed::INPUT_ROLE
+            )
+}
+
+pub(crate) enum Mutation {
+    /// The caller's own declaration (`human_turn::declare`): a kind and a
+    /// place, or none to clear it.
+    AskHuman {
+        turn: Option<(human_turn::HumanKind, String)>,
+    },
+    /// The operator settled declaration `id` (`human_turn::settle`).
+    SettleHuman {
+        id: String,
+        by: human_turn::Settled,
+    },
+    Register {
+        record: AgentRecord,
+        check: bool,
+    },
+    End {
+        id: String,
+        actor: Option<String>,
+    },
+    Reserve {
+        parent: String,
+        command: Command,
+    },
+    /// The spawn's brief was sent to its agent, and how
+    /// (`delivery::typed::SendRoute`): by its parent at the spawn, or by Hide
+    /// when it sends a brief again.
+    Briefed {
+        id: String,
+        route: crate::delivery::typed::SendRoute,
+    },
+    /// One typing of the spawn's brief is reserved before it is typed
+    /// (`delivery::typed`): the spawn's first, by its parent, or a later
+    /// one, by Hide once someone answered the agent's screen. Until the
+    /// send's outcome is saved (`Briefed`, `BriefUnsent`) the brief's route
+    /// reads `lost`, so a save that never lands cannot allow a second send.
+    BriefTyping {
+        id: String,
+    },
+    /// The typing `BriefTyping` reserved sent nothing (the engine refused it):
+    /// the brief's route is `typed` again, and the attempt stays spent.
+    BriefUnsent {
+        id: String,
+    },
+    /// The spawn's brief rides its start as the start's prompt argument
+    /// (`AgentApi::LaunchPrompt`), saved before the start is typed: the
+    /// brief counts as submitted, its one sending is spent, and it is never
+    /// typed or typed again (`delivery::ladder`). `words` are what the start
+    /// adds to carry it, kept from the first such mutation on. Saved again
+    /// once the started agent is seen taking it (`ladder::took_launch`), it
+    /// starts the clock its record is owed by (`typed_at_unix_ms`) there, the
+    /// launched brief's typing.
+    BriefLaunched {
+        id: String,
+        words: Vec<String>,
+    },
+    /// The agent recorded the brief: its prompt hook's digest, or the user
+    /// message in its session file. Hide's own identity reports it.
+    BriefConfirmed {
+        id: String,
+    },
+    /// Hide told the spawn's parent that typing `attempt` was not taken.
+    BriefNoticed {
+        id: String,
+        attempt: u8,
+    },
+    Advance {
+        seed_tab: Option<naming::SeedTab>,
+        id: String,
+        path: Option<String>,
+        /// The spawn made the checkout at `path` (`SpawnRecord::made`).
+        made: bool,
+        pane: Option<String>,
+        /// The terminal `pane` runs, recorded with it.
+        terminal: Option<String>,
+        /// The integrated shell `pane` runs, recorded with it.
+        shell: Option<String>,
+        child: Option<String>,
+    },
+    /// The engine named the spawn's pane before starting anything in it
+    /// (PRD engine-bundle-3-core-owns D-11, `engine::Placement`): the record
+    /// names `pane` from now on. A pane the same placement named earlier
+    /// (the seed of a workspace a tab then replaces) gives way to it; a
+    /// spawn whose agent was typed or bound keeps its pane.
+    Place {
+        id: String,
+        pane: String,
+    },
+    /// The pane [`Mutation::Place`] named never ran: the record names no
+    /// pane again, unless it names another one by now.
+    Withdraw {
+        id: String,
+        pane: String,
+    },
+    /// The engine took a start of the spawn's agent in its pane, with the
+    /// profile `profile` (none for the built-in default).
+    Typed {
+        id: String,
+        profile: Option<crate::launch::LaunchProfile>,
+    },
+    BindChild {
+        id: String,
+        record: AgentRecord,
+    },
+    Complete {
+        id: String,
+    },
+    /// The agent the engine took a start of has not shown its session yet: the
+    /// registration waits for it (`identity_wait`).
+    AwaitIdentity {
+        wait: identity_wait::IdentityWait,
+    },
+    /// A session took `mission` over (PRD software-factory-conductor B43):
+    /// its workers, and every other child of the registration `former` that
+    /// conducted it before, their starts and the watches on them become
+    /// those of the registration `conductor`. Only Hide's own identity asks
+    /// it, from the mission's takeover.
+    AdoptMissionWorkers {
+        mission: String,
+        conductor: String,
+        former: Option<String>,
+    },
+    /// A Conductor's conversation came back in a pane that has no
+    /// registration of its own: the pane is registered as `heir` says, an
+    /// operator's root as `hide mission take` registers it, converging on
+    /// one it already has, and is handed the workers and every other child
+    /// of the registration `former` as `AdoptMissionWorkers` hands them.
+    /// Only Hide's own identity asks it, from the mission's move to that
+    /// pane.
+    AdoptMissionWorkersAsHeir {
+        mission: String,
+        heir: Box<AgentRecord>,
+        former: String,
+    },
+}
+
+impl AgentRecord {
+    /// The registration's pane as the core and the screen name it: the
+    /// engine's own id on the core's node `node`, `remote:<device>:pane:<id>`
+    /// on a device. Every place that shows the operator where a registration
+    /// is, or finds its agent row, takes it from here, never from `pane`,
+    /// which is the device's own id (with-hide/hide-private#679).
+    pub(crate) fn pane_on(&self, node: &str) -> String {
+        crate::address::pane_id_on(node, &self.machine, &self.pane)
+    }
+
+    /// The name this agent has on the wire and in the ledger: the name it
+    /// registered under, else its registration id, which is stable and which
+    /// `hide request send` and `--parent` already resolve. Never a pane id and
+    /// never a title, so a letter's envelope names its sender the way the
+    /// label worker later names that sender's work (`wire_name`).
+    pub fn wire_name(&self) -> &str {
+        self.name.as_deref().unwrap_or(&self.id)
+    }
+
+    /// The name a person reads first for this agent: the one it registered
+    /// under, unless Hide made it up for its pane (`hide-claude-w1-p2`, a wake
+    /// or a fork name), which only spells a pane id; the caller then names it
+    /// by its title, else its runtime (`docs/delivery.md`, Names on the wire
+    /// and on screen).
+    pub(crate) fn screen_name(&self) -> Option<&str> {
+        self.name.as_deref().filter(|name| {
+            ![self.pane.as_str(), self.actor.pane_id.as_str()]
+                .iter()
+                .any(|pane| crate::fork::hide_made_name(name, &self.actor.kind, pane))
+        })
+    }
+
+    /// A record written while a pane id was taken for a name, or under its own
+    /// registration id, reads as having none. Reading does it, so no migration
+    /// is needed: the next save writes the record in its current shape.
+    fn forget_pane_name(&mut self) {
+        // A Factory's or Hide's own identity is named by its code-owned name,
+        // which is also its pane.
+        if !self.actor.code_owned()
+            && self.name.as_deref().is_some_and(|name| {
+                name == self.pane
+                    || name == self.actor.pane_id
+                    || (!self.id.is_empty() && name == self.id)
+            })
+        {
+            self.name = None;
+        }
+    }
+}
+
+/// The one name `actor` goes by in the ledger and on the wire: its live
+/// registration's `wire_name`, else, for a pane that never registered, the
+/// only identifier the engine gave it. The writing side (a letter's or a watch's
+/// endpoints) and the reading side (`parent_name` in the lineage facts) both
+/// take it from here, so the envelope header and the name it is later matched
+/// against cannot drift.
+pub(crate) fn wire_name(ledger: &Ledger, actor: &Actor) -> String {
+    ledger
+        .agents
+        .iter()
+        .rev()
+        .find(|record| !record.ended && record.actor.same_identity(actor))
+        .map_or_else(
+            || actor.name.clone(),
+            |record| record.wire_name().to_owned(),
+        )
+}
+
+/// `actor` as the ledger stores it: under its `wire_name`.
+pub(crate) fn named(ledger: &Ledger, actor: &Actor) -> Actor {
+    Actor {
+        name: wire_name(ledger, actor),
+        ..actor.clone()
+    }
+}
+
+pub fn resolve_actor<'a>(ledger: &'a Ledger, key: &str) -> Option<&'a Actor> {
+    resolve_by(ledger, |record| {
+        record.id == key
+            || record.name.as_deref() == Some(key)
+            || record.actor.pane_id == key
+            || record.pane == key
+    })
+}
+
+/// The live registration whose registration id or name is `key`, never one
+/// that only sits in a pane called `key`: a pane id is per machine, so a
+/// caller that names a pane resolves it against its own machine's panes.
+pub(crate) fn resolve_registered<'a>(ledger: &'a Ledger, key: &str) -> Option<&'a Actor> {
+    registered_record(ledger, key).map(|record| &record.actor)
+}
+
+/// The id of the live registration `actor` is, if any.
+pub(crate) fn registered_id(ledger: &Ledger, actor: &Actor) -> Option<String> {
+    ledger
+        .agents
+        .iter()
+        .find(|record| !record.ended && record.actor.same_identity(actor))
+        .map(|record| record.id.clone())
+}
+
+/// Where registration `id` stands now: the live registration that runs in its
+/// place, itself or the last of its successors (`succeed`), or, when that
+/// line ended with no agent after it, the last registration in it. None for
+/// an id the ledger does not hold.
+pub(crate) fn live_successor<'a>(
+    ledger: &'a Ledger,
+    id: &str,
+) -> Option<Result<&'a AgentRecord, &'a AgentRecord>> {
+    let first = ledger.agents.iter().find(|record| record.id == id)?;
+    let last = line(first, ledger.agents.len(), |next| {
+        ledger.agents.iter().find(|record| record.id == next)
+    })
+    .last()
+    .unwrap_or(first);
+    Some(if last.ended { Err(last) } else { Ok(last) })
+}
+
+/// The registrations of `first`'s line, in order: `first`, then each one
+/// that took the place of the one before (`succeed`), up to the first live
+/// one, found by `find`. At most `limit` steps, which bounds a ledger edited
+/// by hand into a loop.
+pub(crate) fn line<'a>(
+    first: &'a AgentRecord,
+    limit: usize,
+    find: impl Fn(&str) -> Option<&'a AgentRecord>,
+) -> impl Iterator<Item = &'a AgentRecord> {
+    let mut steps = 0;
+    std::iter::successors(Some(first), move |record| {
+        steps += 1;
+        if !record.ended || steps > limit {
+            return None;
+        }
+        record.successor.as_deref().and_then(&find)
+    })
+}
+
+/// The live registration [`resolve_registered`] finds, whole.
+pub(crate) fn registered_record<'a>(ledger: &'a Ledger, key: &str) -> Option<&'a AgentRecord> {
+    record_by(ledger, |record| {
+        record.id == key || record.name.as_deref() == Some(key)
+    })
+}
+
+fn resolve_by(ledger: &Ledger, is: impl Fn(&AgentRecord) -> bool) -> Option<&Actor> {
+    record_by(ledger, is).map(|record| &record.actor)
+}
+
+/// The registration `key` named when it was recorded, ended or not: by its
+/// id, else the one record the keys [`resolve_actor`] reads name. It says
+/// who did something in the past, never who may act now.
+fn past_record<'a>(ledger: &'a Ledger, key: &str) -> Option<&'a AgentRecord> {
+    if let Some(record) = ledger.agents.iter().find(|record| record.id == key) {
+        return Some(record);
+    }
+    let mut found = ledger.agents.iter().filter(|record| {
+        record.name.as_deref() == Some(key) || record.actor.pane_id == key || record.pane == key
+    });
+    let first = found.next()?;
+    found.next().is_none().then_some(first)
+}
+
+/// The registration `hide agent show` reads for a `key` that is no id: the
+/// one live registration named `key` or sitting in `pane` (the key as the
+/// caller's machine names a pane), as a letter's recipient is named, else
+/// the last that was and has ended, so an agent that ended is answered
+/// `ended` rather than unknown. Two live ones are `target_ambiguous`.
+pub(crate) fn shown_record<'a>(
+    ledger: &'a Ledger,
+    key: &str,
+    pane: &str,
+) -> Result<Option<&'a AgentRecord>, &'static str> {
+    let named =
+        |record: &&AgentRecord| record.name.as_deref() == Some(key) || record.actor.pane_id == pane;
+    let mut live = ledger
+        .agents
+        .iter()
+        .filter(|record| !record.ended)
+        .filter(named);
+    match (live.next(), live.next()) {
+        (Some(_), Some(_)) => Err("target_ambiguous"),
+        (Some(record), None) => Ok(Some(record)),
+        (None, _) => Ok(ledger.agents.iter().rev().find(named)),
+    }
+}
+
+fn record_by(ledger: &Ledger, is: impl Fn(&AgentRecord) -> bool) -> Option<&AgentRecord> {
+    let mut found = ledger
+        .agents
+        .iter()
+        .filter(|record| !record.ended && is(record));
+    let first = found.next()?;
+    found.next().is_none().then_some(first)
+}
+
+/// What a caller does about each refusal `hide agent sleep` gives.
+pub fn sleep_next_action(code: &str) -> &'static str {
+    match code {
+        "agent_sleep_unsupported" => {
+            "This kind of agent cannot sleep; leave it, or end its registration with hide agent end"
+        }
+        "agent_sleep_core_machine_only" => {
+            "This kind of agent sleeps only on the machine Hide's core runs on"
+        }
+        "agent_sleep_working" => "The agent is working; ask again once its turn ends",
+        "agent_sleep_waiting_for_you" => {
+            "The agent is waiting for the operator; ask again once the operator has answered it"
+        }
+        "agent_sleep_activity_unknown" => {
+            "Hide cannot tell whether the agent rests; ask again once its row shows it idle"
+        }
+        "agent_sleep_no_conversation" => {
+            "The agent has reported no conversation to resume yet; ask again after its first turn"
+        }
+        "agent_sleep_on_screen" => {
+            "The operator has the agent on screen; ask again once it is off screen"
+        }
+        "agent_sleep_waking" => "The agent is waking; ask again once it is awake",
+        "agent_sleep_unreachable" => {
+            "Hide has no live engine connection to the agent's machine; retry once it reconnects"
+        }
+        "agent_sleep_not_started" | "agent_sleep_busy" => {
+            "The agent's pane is busy with another change; retry in a moment"
+        }
+        "agent_ended" => "The registration has ended; there is no agent to put to sleep",
+        "agent_unavailable" => {
+            "Check the id with hide agent list; the agent must still run in its registered pane"
+        }
+        "parent_authority_required" => {
+            "Only the agent itself or its parent can put it to sleep; ask its parent"
+        }
+        "actor_identity_conflict" => "--actor must name your own registration; leave it out",
+        "agent_pane_required" => "Run hide agent sleep from an agent's own Hide pane",
+        _ => "Retry; the reason is in Hide's diagnostic log",
+    }
+}
+
+/// What a caller does about each refusal `hide agent archive` gives: the
+/// screen's `archive.*` error kinds written with an underscore for the dot,
+/// then the codes for who may ask and for which registration.
+pub fn archive_next_action(code: &str) -> &'static str {
+    match code {
+        "archive_confirmation_required" => {
+            "The session is working; ask the operator to archive it from Hide's screen, where they confirm stopping the work"
+        }
+        "archive_not_offered" => {
+            "This agent's work is kept by its own home; there is nothing to archive"
+        }
+        "archive_delegated" => {
+            "A delegated session is archived with its root session; archive the root instead"
+        }
+        "archive_device_disconnected" => {
+            "The agent's device is not connected; ask again once it reconnects"
+        }
+        "archive_session_unknown" => {
+            "Hide has not seen the agent's conversation yet; ask again after its first turn"
+        }
+        "archive_status_unknown" => {
+            "Hide cannot tell whether an agent in the session is working; ask again once its row shows its state"
+        }
+        "archive_target_unknown" => {
+            "The agent's pane is no longer open; check the id with hide agent list"
+        }
+        "archive_too_many" => {
+            "The session has too many agents to archive at once; nothing was closed"
+        }
+        "archive_busy" => "Closes are already running; ask again once they finish",
+        "archive_context_unavailable" => {
+            "The session's checkout is not listed in Hide; ask again once it is"
+        }
+        "archive_full" => {
+            "Hide's archive is full; the operator deletes archived sessions on its screen"
+        }
+        "agent_ended" => "The registration has ended; there is no session to archive",
+        "agent_unavailable" => {
+            "Check the id with hide agent list; the agent must still run in its registered pane"
+        }
+        "parent_authority_required" => {
+            "Only the agent itself or its parent can archive it; ask its parent or the operator"
+        }
+        "actor_identity_conflict" => "--actor must name your own registration; leave it out",
+        "agent_pane_required" => "Run hide agent archive from an agent's own Hide pane",
+        _ => "Retry; the reason is in Hide's diagnostic log",
+    }
+}
+
+/// The id `hide agent show` and `--parent` take for the caller itself.
+pub const HERE: &str = "here";
+
+/// The recipient `hide request send` takes for the sender's own parent; it
+/// wins over an agent that registered under the same name.
+pub const PARENT: &str = "parent";
+
+/// The caller's live registrations: the records not ended whose actor is
+/// the caller's attested pane, device and session. `--parent here` takes
+/// the first; `here` refuses more than one.
+pub(crate) fn live_self<'a>(
+    ledger: &'a Ledger,
+    caller: &'a Actor,
+) -> impl Iterator<Item = &'a AgentRecord> {
+    ledger
+        .agents
+        .iter()
+        .filter(move |record| !record.ended && record.actor.same_identity(caller))
+}
+
+/// An earlier attempt of `intent` by the spawn's parent: `parent`, or the
+/// caller's first live registration for none or `here`. Every check of a
+/// spawn judges a retry by what that attempt already did (engineering 11).
+pub(crate) fn earlier_spawn<'a>(
+    ledger: &'a Ledger,
+    caller: &'a Actor,
+    parent: Option<&str>,
+    intent: &str,
+) -> Option<&'a SpawnRecord> {
+    let parent = match parent.filter(|parent| *parent != HERE) {
+        Some(parent) => parent,
+        None => live_self(ledger, caller).next()?.id.as_str(),
+    };
+    ledger
+        .spawns
+        .iter()
+        .find(|record| record.parent == parent && record.intent == intent)
+}
+
+/// The caller's own registration, by the same match as `--parent here`,
+/// refusing two. It never registers. A caller with no such record learns
+/// which of the ways it has none at `now`: its record ended, its pane's live
+/// record belongs to another session (the pane's agent session changed), the
+/// spawn that started it has not registered it yet ([`registering`]), or
+/// there is none.
+pub(crate) fn here<'a>(
+    ledger: &'a Ledger,
+    caller: &'a Actor,
+    now: u64,
+) -> Result<&'a AgentRecord, &'static str> {
+    let mut live = live_self(ledger, caller);
+    match (live.next(), live.next()) {
+        (Some(record), None) => return Ok(record),
+        (Some(_), Some(_)) => return Err("ambiguous_participant"),
+        _ => {}
+    }
+    if ledger
+        .agents
+        .iter()
+        .any(|record| record.ended && record.actor.same_identity(caller))
+    {
+        Err("participant_ended")
+    } else if ledger.agents.iter().any(|record| {
+        !record.ended
+            && record.actor.pane_id == caller.pane_id
+            && record.actor.device_id == caller.device_id
+    }) {
+        Err("participant_session_changed")
+    } else if registering(ledger, caller, now) {
+        Err("participant_registering")
+    } else {
+        Err("participant_unavailable")
+    }
+}
+
+/// Whether the caller is the agent a spawn started and has not bound yet: the
+/// agent under the spawn's name in the pane the spawn placed, on the child's
+/// machine, while the spawn is younger than the time its caller waits for its
+/// answer ([`SPAWN_ANSWER_WAIT`], [`DEVICE_SPAWN_ANSWER_WAIT`] on a device).
+/// Such a spawn binds its child within that time, so the caller is told to
+/// ask again shortly; past it, the spawn is not going to answer, and the
+/// caller is no one as before. A pane id can name another pane later, so the
+/// agent's name is matched too. `reserved_at_unix_ms` is written after the
+/// spawn's hook wait and again at each step it places, so the bound covers
+/// the whole of the spawn's answer time.
+fn registering(ledger: &Ledger, caller: &Actor, now: u64) -> bool {
+    let pane =
+        crate::address::pane_of(&caller.pane_id, &caller.device_id).unwrap_or(&caller.pane_id);
+    ledger.spawns.iter().any(|spawn| {
+        let wait = if spawn.machine.is_some() {
+            DEVICE_SPAWN_ANSWER_WAIT
+        } else {
+            SPAWN_ANSWER_WAIT
+        };
+        !spawn.completed
+            && spawn.child.is_none()
+            && spawn.name == caller.name
+            && spawn.pane.as_deref() == Some(pane)
+            && spawn_machine(ledger, spawn) == Some(caller.device_id.as_str())
+            && u128::from(now.saturating_sub(spawn.reserved_at_unix_ms)) < wait.as_millis()
+    })
+}
+
+/// The live registrations whose agent Hide put to sleep, and those whose
+/// pane was closed for Reopen closed, by id, as the runtime reads them under
+/// its lock (`Runtime::sleeping_registrations`), and the profile each live
+/// agent runs with, as its row names it (`Runtime::registration_profiles`).
+#[derive(Clone, Debug, Default, Eq, PartialEq)]
+pub(crate) struct RegistrationFacts {
+    pub(crate) asleep: std::collections::BTreeSet<String>,
+    pub(crate) closed: std::collections::BTreeSet<String>,
+    pub(crate) profiles: std::collections::BTreeMap<String, String>,
+}
+
+impl RegistrationFacts {
+    /// For an answer about a registration its own running agent just made,
+    /// or one just ended: neither is asleep, and its row is not read.
+    pub(crate) const NONE: Self = Self {
+        asleep: std::collections::BTreeSet::new(),
+        closed: std::collections::BTreeSet::new(),
+        profiles: std::collections::BTreeMap::new(),
+    };
+}
+
+/// Where a registration's agent is in its life: ended with its record,
+/// asleep while Hide holds it asleep, closed while its pane is closed and
+/// Reopen closed can bring it back, running otherwise. The one decision
+/// `hide agent list`, `hide agent show` and `hide ps` answer from.
+pub(crate) fn life(record: &AgentRecord, sleeping: &RegistrationFacts) -> Runtime {
+    if record.ended {
+        Runtime::Ended
+    } else if sleeping.asleep.contains(&record.id) {
+        Runtime::Asleep
+    } else if sleeping.closed.contains(&record.id) {
+        Runtime::Closed
+    } else {
+        Runtime::Running
+    }
+}
+
+pub(crate) fn view(record: &AgentRecord, ledger: &Ledger, sleeping: &RegistrationFacts) -> Value {
+    json!(agent_view(record, ledger, sleeping))
+}
+
+/// The name of the external tool whose connection started `record`, read
+/// from the origin record its start names (PRD hide-external-control B31).
+pub(crate) fn origin_tool(record: &AgentRecord, ledger: &Ledger) -> Option<String> {
+    let origin = record.origin.as_deref()?;
+    ledger
+        .agents
+        .iter()
+        .find(|agent| agent.id == origin)?
+        .actor
+        .access_name()
+        .map(str::to_owned)
+}
+
+pub(crate) fn agent_view(
+    record: &AgentRecord,
+    ledger: &Ledger,
+    sleeping: &RegistrationFacts,
+) -> AgentView {
+    let runtime = life(record, sleeping);
+    AgentView {
+        names: ledger
+            .spawns
+            .iter()
+            .find(|spawn| spawn.child.as_deref() == Some(&record.id))
+            .and_then(|spawn| spawn.names.clone()),
+        id: record.id.clone(),
+        name: record.wire_name().to_owned(),
+        machine: record.machine.clone(),
+        host_scope: record.host_scope.clone(),
+        session: record.session.clone(),
+        instance: record.instance.clone(),
+        pane: record.pane.clone(),
+        parent: record.parent.clone(),
+        origin: record.origin.clone().or_else(|| record.parent.clone()),
+        origin_tool: origin_tool(record, ledger),
+        project: record.project.clone(),
+        profile: sleeping.profiles.get(&record.id).cloned(),
+        runtime,
+        // Only a running agent has a connection; a sleeping one has none
+        // until it wakes (status-model.md, Not connected).
+        connection: if runtime == Runtime::Running {
+            Connection::Connected
+        } else {
+            Connection::Disconnected
+        },
+        registered: !record.ended,
+        watch: ledger
+            .watches
+            .iter()
+            .find(|watch| watch.target.same_identity(&record.actor))
+            .cloned(),
+    }
+}
+
+fn key(value: &str) -> bool {
+    crate::delivery::valid_key(value)
+}
+
+/// Whether a registration can keep `value` as its pane's native session, as
+/// the engine reports it: an id, or for Pi and omp the session file's path, which a
+/// deep checkout makes longer than a key. The engine keeps a path of up to
+/// `SESSION_LIMIT` bytes, and so does the ledger. The one rule for a
+/// registration's session, asked when the record is made and again when the
+/// ledger is saved or read.
+pub(crate) fn kept_session(value: &str) -> Result<(), &'static str> {
+    if value.len() > crate::delivery::SESSION_LIMIT {
+        return Err(SESSION_TOO_LONG);
+    }
+    if value.is_empty() || value.chars().any(char::is_control) {
+        return Err("invalid_registration");
+    }
+    Ok(())
+}
+
+/// The refusal of a registration whose pane reports a session past what the
+/// ledger keeps, given when the record is made rather than when the whole
+/// ledger fails to save.
+pub(crate) const SESSION_TOO_LONG: &str = "session_too_long";
+
+pub(crate) fn validate_records(ledger: &Ledger) -> Result<(), String> {
+    if ledger.agents.len() > AGENT_LIMIT || ledger.spawns.len() > SPAWN_LIMIT {
+        return Err("capacity".into());
+    }
+    let mut ids = std::collections::HashSet::new();
+    for record in &ledger.agents {
+        if !ids.insert(record.id.as_str())
+            || !key(&record.id)
+            || !record.id.starts_with("agent-")
+            || record.name.as_deref().is_some_and(|name| !key(name))
+            || record
+                .terminal_id
+                .as_deref()
+                .is_some_and(|terminal| !key(terminal))
+            || ![
+                &record.machine,
+                &record.host_scope,
+                &record.native_machine,
+                &record.instance,
+                &record.pane,
+            ]
+            .into_iter()
+            .all(|s| key(s))
+            || kept_session(&record.session).is_err()
+            || !record.actor.valid()
+            || record.actor.device_id != record.machine
+            || record.actor.session != crate::engine::tokens::session_digest(&record.session)
+            || record.origin.as_ref().is_some_and(|origin| {
+                record.parent.is_some()
+                    || origin == &record.id
+                    || !ledger.agents.iter().any(|record| &record.id == origin)
+            })
+            || record.parent.as_ref().is_some_and(|parent| {
+                parent == &record.id || !ledger.agents.iter().any(|record| &record.id == parent)
+            })
+            // Only an ended registration has a successor, and never itself.
+            || record
+                .successor
+                .as_ref()
+                .is_some_and(|successor| !record.ended || successor == &record.id || !key(successor))
+        {
+            return Err("ledger_unavailable".into());
+        }
+    }
+    for record in &ledger.spawns {
+        if !ids.insert(record.id.as_str())
+            || !key(&record.id)
+            || !record.id.starts_with("spawn-")
+            || ![
+                &record.parent,
+                &record.intent,
+                &record.name,
+                &record.kind,
+                &record.repo,
+                &record.branch,
+            ]
+            .into_iter()
+            .all(|s| key(s))
+            || record
+                .machine
+                .as_deref()
+                .is_some_and(|machine| !key(machine))
+            || !ledger
+                .agents
+                .iter()
+                .any(|parent| parent.id == record.parent)
+            || record.child.as_ref().is_some_and(|id| {
+                !ledger.agents.iter().any(|child| {
+                    &child.id == id
+                        && child.parent == record.mode.responsibility(&record.parent)
+                        && child.origin == record.mode.origin(&record.parent)
+                        && record.pane.as_ref() == Some(&child.pane)
+                        && Some(child.machine.as_str()) == spawn_machine(ledger, record)
+                })
+            })
+            || (record.completed
+                && (record.path.is_none() || record.pane.is_none() || record.child.is_none()))
+            || record.auto_watch_id.as_ref().is_some_and(|id| {
+                !record.completed
+                    || record.mode == SpawnMode::Handoff
+                    || !key(id)
+                    || !id.starts_with("watch-")
+            })
+            || record.args.len() > 128
+            || record.args.iter().map(String::len).sum::<usize>() > 8192
+            || record.brief_sha256.as_deref().is_some_and(|digest| {
+                record.brief.is_some()
+                    || digest.len() != 64
+                    || !digest
+                        .bytes()
+                        .all(|byte| matches!(byte, b'0'..=b'9' | b'a'..=b'f'))
+            })
+            || record.task.as_ref().is_some_and(|task| {
+                record.mode != SpawnMode::Handoff
+                    || task.target.as_deref().is_some_and(|target| !key(target))
+            })
+        {
+            return Err("ledger_unavailable".into());
+        }
+    }
+    if ledger.identity_waits.len() > identity_wait::LIMIT {
+        return Err("capacity".into());
+    }
+    for wait in &ledger.identity_waits {
+        if !ids.insert(wait.id.as_str())
+            || !wait.id.starts_with("wait-")
+            || ![&wait.id, &wait.machine, &wait.pane, &wait.name, &wait.kind]
+                .into_iter()
+                .all(|s| key(s))
+            || !match &wait.owed {
+                identity_wait::Owed::Spawn { spawn } => {
+                    ledger.spawns.iter().any(|record| &record.id == spawn)
+                }
+                identity_wait::Owed::Fork { origin } => {
+                    ledger.agents.iter().any(|record| &record.id == origin)
+                }
+            }
+        {
+            return Err("ledger_unavailable".into());
+        }
+    }
+    Ok(())
+}
+
+/// [`apply_with`] for a ledger whose records no book outside it holds.
+#[cfg(test)]
+pub(crate) fn apply(
+    ledger: &mut Ledger,
+    caller: &Actor,
+    mutation: &Mutation,
+    now: u64,
+) -> Result<Value, String> {
+    apply_with(ledger, caller, mutation, now, &Held::default())
+}
+
+/// Applies `mutation` for `caller`. A registration or spawn that finds the
+/// ledger full makes room by dropping what has finished and nothing names,
+/// reading what the core's books hold from `holds` only then (`room`).
+pub(crate) fn apply_with(
+    ledger: &mut Ledger,
+    caller: &Actor,
+    mutation: &Mutation,
+    now: u64,
+    holds: &dyn Holds,
+) -> Result<Value, String> {
+    match mutation {
+        Mutation::AskHuman { turn } => human_turn::declare(ledger, caller, turn.as_ref(), now),
+        Mutation::SettleHuman { id, by } => human_turn::settle(ledger, caller, id, *by),
+        Mutation::Register { record, check } => {
+            validate_registration_name(caller, record)?;
+            let callers_own = |id: &String| {
+                ledger
+                    .agents
+                    .iter()
+                    .any(|p| &p.id == id && !p.ended && p.actor.same_identity(caller))
+            };
+            // A fork is the operator's root, so it has no parent; the source
+            // that asked for it registers it and is named as its origin.
+            let forked_by_caller = record.forked
+                && record.parent.is_none()
+                && record.origin.as_ref().is_some_and(callers_own);
+            if record.parent.as_ref().is_some_and(|id| !callers_own(id))
+                || (record.parent.is_none()
+                    && !record.actor.same_identity(caller)
+                    && !forked_by_caller)
+            {
+                return Err("parent_authority_required".into());
+            }
+            // Registration has no provenance input but a fork's, which only
+            // the core's own Fork agent sets (`executor::link_fork`). A
+            // handoff's own retry keeps its stored origin; binding a spawn
+            // still compares the complete immutable identity through the
+            // strict insertion path.
+            let mut registration = record.clone();
+            if registration.origin.is_none()
+                && let Some(existing) = ledger
+                    .agents
+                    .iter()
+                    .find(|existing| !existing.ended && existing.actor.same_identity(&record.actor))
+            {
+                registration.origin = existing.origin.clone();
+            }
+            insert_record(ledger, &registration, *check, holds)
+        }
+        Mutation::End { id, actor } => {
+            let record = ledger
+                .agents
+                .iter()
+                .find(|record| &record.id == id)
+                .ok_or("agent_unavailable")?;
+            let parent = record
+                .parent
+                .as_ref()
+                .and_then(|id| resolve_actor(ledger, id));
+            // An external tool at Act does what the operator does (PRD
+            // hide-external-control D-27): it may end any agent, which
+            // its connection's standing was checked for before this ran.
+            if !record.actor.same_identity(caller)
+                && !parent.is_some_and(|parent| parent.same_identity(caller))
+                && caller.access_connection().is_none()
+            {
+                return Err("parent_authority_required".into());
+            }
+            if actor.as_ref().is_some_and(|id| {
+                !resolve_actor(ledger, id).is_some_and(|actor| actor.same_identity(caller))
+            }) {
+                return Err("actor_identity_conflict".into());
+            }
+            if let Some(connection) = caller.access_connection() {
+                // Who ended it, by the tool's connection (B31).
+                crate::diagnostic!(json!({
+                    "component": "coordination",
+                    "kind": "agent.ended_by_tool",
+                    "agent_id": id,
+                    "connection_id": connection,
+                    "by": caller.name,
+                }));
+            }
+            end_record(ledger, id, now);
+            Ok(view(
+                ledger
+                    .agents
+                    .iter()
+                    .find(|record| &record.id == id)
+                    .ok_or("agent_unavailable")?,
+                ledger,
+                &RegistrationFacts::NONE,
+            ))
+        }
+        Mutation::Reserve { parent, command } => {
+            let Command::Spawn {
+                machine,
+                name,
+                intent,
+                kind,
+                repo,
+                branch,
+                path,
+                args,
+                launch,
+                profile,
+                task,
+                brief,
+                beside,
+                mission,
+                plan,
+                ..
+            } = command
+            else {
+                return Err("invalid_spawn".into());
+            };
+            // The core names the place before it reserves one: the caller's
+            // own folder too (`Runtime::spawn_place`).
+            let Some(repo) = repo else {
+                return Err("invalid_spawn".into());
+            };
+            // The core makes a plan step's intent; one asked under another
+            // was not admitted by it.
+            if plan
+                .as_ref()
+                .is_some_and(|plan| *intent != plan_intent(&plan.link))
+            {
+                return Err("invalid_spawn".into());
+            }
+            if brief.as_ref().is_some_and(|brief| {
+                brief.trim().is_empty() || brief.len() > crate::delivery::BODY_LIMIT
+            }) {
+                return Err("invalid_brief".into());
+            }
+            let mode = if matches!(
+                command,
+                Command::Spawn {
+                    parent: Some(_),
+                    ..
+                }
+            ) {
+                SpawnMode::Delegation
+            } else {
+                SpawnMode::Handoff
+            };
+            if !resolve_actor(ledger, parent).is_some_and(|parent| parent.same_identity(caller)) {
+                return Err("parent_authority_required".into());
+            }
+            // The screen names a task as Hide's own work, so only Hide's own
+            // identity may give one, and only on a handoff.
+            if task.as_ref().is_some_and(|task| {
+                mode != SpawnMode::Handoff
+                    || !caller.hide_itself()
+                    || task.target.as_deref().is_some_and(|target| !key(target))
+            }) {
+                return Err("task_reserved".into());
+            }
+            // A new start needs a home to show its progress in; only an
+            // old record may carry a kind this build does not know (D-19).
+            if task.as_ref().is_some_and(|task| task.kind.home().is_none()) {
+                return Err("task_kind_unknown".into());
+            }
+            // The mission's Conductor now may have taken it over from the
+            // one that started its workers, as a session that registered
+            // only to start this: its workers become its own first, so this
+            // start finds the worker it already has (B43).
+            if let Some(admission) = mission {
+                adopt_mission_workers(ledger, &admission.mission, parent, None)?;
+            }
+            // A mission's or plan step's start asked again after it stopped
+            // holding its place takes one again under its cap, or waits, so a
+            // start that comes back late never runs one past it (engineering
+            // #15).
+            if let Some(record) = ledger
+                .spawns
+                .iter()
+                .find(|record| &record.parent == parent && &record.intent == intent)
+                && record.child.is_none()
+                && !record.completed
+                && now.saturating_sub(record.reserved_at_unix_ms) >= MISSION_RESERVATION_HOLD_MS
+            {
+                let mission = mission.as_deref().filter(|admission| {
+                    record.mission.as_deref() == Some(admission.mission.as_str())
+                });
+                spawn_cap(ledger, mission, plan.as_deref(), now)?;
+            }
+            if let Some(record) = ledger
+                .spawns
+                .iter_mut()
+                .find(|record| &record.parent == parent && &record.intent == intent)
+            {
+                // A spawn reserved before tasks existed carries none, and the
+                // same intent asked again with one is the same spawn: it
+                // takes the task up, so a start in flight across an upgrade
+                // converges instead of failing (engineering #11).
+                let task_agrees = record.task == *task || record.task.is_none();
+                if record.machine != *machine
+                    || record.name != *name
+                    || hide_agent_adapter::canonical_kind(&record.kind)
+                        != hide_agent_adapter::canonical_kind(kind)
+                    || record.repo != *repo
+                    || record.branch() != branch.as_deref()
+                    || record.requested_path != *path
+                    || record.mode != mode
+                    || record.args != *args
+                    || record.launch != *launch
+                    || record.profile != *profile
+                    || !record.asked_with(brief.as_deref())
+                    || record.beside != *beside
+                    || !task_agrees
+                {
+                    return Err("intent_conflict".into());
+                }
+                if record.task.is_none() {
+                    record.task.clone_from(task);
+                }
+                if (record.mission.is_some() || record.plan.is_some())
+                    && record.child.is_none()
+                    && !record.completed
+                {
+                    record.reserved_at_unix_ms = now;
+                }
+                return Ok(json!(record));
+            }
+            // A new worker past its mission's cap, or a plan's new child past
+            // its main's, waits; the same intent asked again above still
+            // answers the spawn it made.
+            spawn_cap(ledger, mission.as_deref(), plan.as_deref(), now)?;
+            room::for_spawn(ledger, holds)?;
+            let record = SpawnRecord {
+                seed_tab: None,
+                names: Some(naming::Names::default()),
+                id: allocate(ledger, "spawn")?,
+                parent: parent.clone(),
+                mode,
+                machine: machine.clone(),
+                intent: intent.clone(),
+                name: name.clone(),
+                kind: kind.clone(),
+                repo: repo.clone(),
+                branch: branch.clone().unwrap_or_else(|| repo.clone()),
+                folder: branch.is_none(),
+                requested_path: path.clone(),
+                args: args.clone(),
+                launch: launch.clone(),
+                path: None,
+                made: false,
+                pane: None,
+                terminal: None,
+                typed: 0,
+                shell: None,
+                child: None,
+                completed: false,
+                auto_watch_id: None,
+                task: task.clone(),
+                mission: mission.as_ref().map(|admission| admission.mission.clone()),
+                plan: plan.as_ref().map(|admission| admission.link.clone()),
+                brief: brief.clone(),
+                brief_sha256: None,
+                briefed: false,
+                brief_input: None,
+                launch_words: Vec::new(),
+                beside: *beside,
+                reserved_at_unix_ms: now,
+                profile: profile.clone(),
+                started_profile: None,
+            };
+            ledger.spawns.push(record.clone());
+            Ok(json!(record))
+        }
+        Mutation::Briefed { id, route } => {
+            let parent = ledger
+                .spawns
+                .iter()
+                .find(|record| &record.id == id)
+                .ok_or("spawn_unavailable")?
+                .parent
+                .clone();
+            if !input_authority(caller)
+                && !resolve_actor(ledger, &parent)
+                    .is_some_and(|parent| parent.same_identity(caller))
+            {
+                return Err("parent_authority_required".into());
+            }
+            let record = ledger
+                .spawns
+                .iter_mut()
+                .find(|record| &record.id == id)
+                .ok_or("spawn_unavailable")?;
+            if record.pane.is_none() || record.typed == 0 || record.brief.is_none() {
+                return Err("spawn_incomplete".into());
+            }
+            if let Some(input) = record.brief_input.as_mut() {
+                input.route = *route;
+            }
+            record.briefed = true;
+            first_letter(ledger, id, now)?;
+            spawn_json(ledger, id)
+        }
+        Mutation::BriefTyping { id } => {
+            let parent = ledger
+                .spawns
+                .iter()
+                .find(|record| &record.id == id)
+                .ok_or("spawn_unavailable")?
+                .parent
+                .clone();
+            if !input_authority(caller)
+                && !resolve_actor(ledger, &parent)
+                    .is_some_and(|parent| parent.same_identity(caller))
+            {
+                return Err("parent_authority_required".into());
+            }
+            let record = ledger
+                .spawns
+                .iter_mut()
+                .find(|record| &record.id == id)
+                .ok_or("spawn_unavailable")?;
+            if record.pane.is_none() || record.typed == 0 || record.brief.is_none() {
+                return Err("spawn_incomplete".into());
+            }
+            let input = record.brief_input.get_or_insert_with(Default::default);
+            if input.confirmed_at_unix_ms.is_some() {
+                return Err("brief_confirmed".into());
+            }
+            // A brief its start holds, or whose send lost its answer, may
+            // already be with the agent: nothing sends it again, whoever
+            // asks (engineering principle 11).
+            match input.route {
+                crate::delivery::typed::SendRoute::Launch => return Err("brief_launched".into()),
+                crate::delivery::typed::SendRoute::Lost => return Err("brief_send_lost".into()),
+                crate::delivery::typed::SendRoute::Typed
+                | crate::delivery::typed::SendRoute::Channel => {}
+            }
+            if input.attempts >= crate::delivery::typed::INPUT_ATTEMPTS {
+                return Err("brief_attempts_spent".into());
+            }
+            input.attempts += 1;
+            input.typed_at_unix_ms = now;
+            if input.attempts == 1 {
+                input.first_typed_at_unix_ms = now;
+            }
+            // The send may arrive whatever becomes of its answer; the
+            // outcome saved after it corrects the route.
+            input.route = crate::delivery::typed::SendRoute::Lost;
+            Ok(json!(record))
+        }
+        Mutation::BriefUnsent { id } => {
+            let parent = ledger
+                .spawns
+                .iter()
+                .find(|record| &record.id == id)
+                .ok_or("spawn_unavailable")?
+                .parent
+                .clone();
+            if !input_authority(caller)
+                && !resolve_actor(ledger, &parent)
+                    .is_some_and(|parent| parent.same_identity(caller))
+            {
+                return Err("parent_authority_required".into());
+            }
+            let record = ledger
+                .spawns
+                .iter_mut()
+                .find(|record| &record.id == id)
+                .ok_or("spawn_unavailable")?;
+            record.brief_input.as_mut().ok_or("spawn_incomplete")?.route =
+                crate::delivery::typed::SendRoute::Typed;
+            Ok(json!(record))
+        }
+        Mutation::BriefLaunched { id, words } => {
+            let parent = ledger
+                .spawns
+                .iter()
+                .find(|record| &record.id == id)
+                .ok_or("spawn_unavailable")?
+                .parent
+                .clone();
+            if !resolve_actor(ledger, &parent).is_some_and(|parent| parent.same_identity(caller)) {
+                return Err("parent_authority_required".into());
+            }
+            let record = ledger
+                .spawns
+                .iter_mut()
+                .find(|record| &record.id == id)
+                .ok_or("spawn_unavailable")?;
+            if record.pane.is_none() || record.brief.is_none() {
+                return Err("spawn_incomplete".into());
+            }
+            let input = record.brief_input.get_or_insert_with(Default::default);
+            let launched = input.route == crate::delivery::typed::SendRoute::Launch;
+            if input.attempts > 0 && !launched {
+                // Sent once already: a start may not carry it as well.
+                return Err("brief_typed".into());
+            }
+            if !launched {
+                input.attempts = 1;
+                input.typed_at_unix_ms = now;
+                input.first_typed_at_unix_ms = now;
+                input.route = crate::delivery::typed::SendRoute::Launch;
+                record.launch_words = words.clone();
+            } else if input.confirmed_at_unix_ms.is_none() {
+                input.typed_at_unix_ms = now;
+            }
+            record.briefed = true;
+            Ok(json!(record))
+        }
+        Mutation::BriefConfirmed { id } => {
+            if !input_authority(caller) {
+                return Err("caller_identity_conflict".into());
+            }
+            let record = ledger
+                .spawns
+                .iter_mut()
+                .find(|record| &record.id == id)
+                .ok_or("spawn_unavailable")?;
+            let input = record.brief_input.as_mut().ok_or("brief_not_typed")?;
+            // A record of any typing ends it once; a late one changes nothing.
+            input.confirmed_at_unix_ms.get_or_insert(now);
+            first_letter(ledger, id, now)?;
+            spawn_json(ledger, id)
+        }
+        Mutation::BriefNoticed { id, attempt } => {
+            if !input_authority(caller) {
+                return Err("caller_identity_conflict".into());
+            }
+            let record = ledger
+                .spawns
+                .iter_mut()
+                .find(|record| &record.id == id)
+                .ok_or("spawn_unavailable")?;
+            let input = record.brief_input.as_mut().ok_or("brief_not_typed")?;
+            if *attempt > input.noticed && *attempt <= input.attempts {
+                input.noticed = *attempt;
+                input.noticed_at_unix_ms = now;
+            }
+            Ok(json!(record))
+        }
+        Mutation::Advance {
+            seed_tab,
+            id,
+            path,
+            made,
+            pane,
+            terminal,
+            shell,
+            child,
+        } => {
+            let parent = ledger
+                .spawns
+                .iter()
+                .find(|record| &record.id == id)
+                .ok_or("spawn_unavailable")?
+                .parent
+                .clone();
+            if !resolve_actor(ledger, &parent).is_some_and(|parent| parent.same_identity(caller)) {
+                return Err("parent_authority_required".into());
+            }
+            let record = ledger
+                .spawns
+                .iter_mut()
+                .find(|record| &record.id == id)
+                .ok_or("spawn_unavailable")?;
+            if [
+                (record.path.as_ref(), path.as_ref()),
+                (record.pane.as_ref(), pane.as_ref()),
+                (record.terminal.as_ref(), terminal.as_ref()),
+                (record.child.as_ref(), child.as_ref()),
+            ]
+            .into_iter()
+            .any(|(stored, next)| {
+                stored
+                    .zip(next)
+                    .is_some_and(|(stored, next)| stored != next)
+            }) {
+                return Err("intent_conflict".into());
+            }
+            if [
+                (record.path.as_ref(), path.as_ref()),
+                (record.pane.as_ref(), pane.as_ref()),
+                (record.terminal.as_ref(), terminal.as_ref()),
+            ]
+            .into_iter()
+            .any(|(previous, next)| next.is_some() && previous != next)
+            {
+                ledger.spawn_placement_revision = ledger
+                    .spawn_placement_revision
+                    .checked_add(1)
+                    .ok_or("capacity")?;
+            }
+            if let Some(seed) = seed_tab {
+                if record.seed_tab.as_ref().is_some_and(|old| old != seed) {
+                    return Err("intent_conflict".into());
+                }
+                record.seed_tab = Some(seed.clone());
+            }
+            // A step forward keeps a mission's start holding its place.
+            record.reserved_at_unix_ms = now;
+            if path.is_some() {
+                record.path = path.clone();
+                record.made |= *made;
+            };
+            if pane.is_some() {
+                record.pane = pane.clone()
+            };
+            if terminal.is_some() {
+                record.terminal = terminal.clone()
+            };
+            if shell.is_some() {
+                record.shell = shell.clone()
+            };
+            if child.is_some() {
+                record.child = child.clone()
+            };
+            Ok(json!(record))
+        }
+        Mutation::Place { id, pane } | Mutation::Withdraw { id, pane } => {
+            let parent = ledger
+                .spawns
+                .iter()
+                .find(|record| &record.id == id)
+                .ok_or("spawn_unavailable")?
+                .parent
+                .clone();
+            if !resolve_actor(ledger, &parent).is_some_and(|parent| parent.same_identity(caller)) {
+                return Err("parent_authority_required".into());
+            }
+            let record = ledger
+                .spawns
+                .iter_mut()
+                .find(|record| &record.id == id)
+                .ok_or("spawn_unavailable")?;
+            let placing = matches!(mutation, Mutation::Place { .. });
+            let moves = if placing {
+                if record.child.is_some() || record.typed > 0 {
+                    // Its agent runs in the pane it names; nothing replaces it.
+                    return Err("intent_conflict".into());
+                }
+                record.pane.as_ref() != Some(pane)
+            } else {
+                record.child.is_none() && record.pane.as_ref() == Some(pane)
+            };
+            if moves {
+                record.pane = placing.then(|| pane.clone());
+                record.terminal = None;
+                ledger.spawn_placement_revision = ledger
+                    .spawn_placement_revision
+                    .checked_add(1)
+                    .ok_or("capacity")?;
+            }
+            let record = ledger
+                .spawns
+                .iter()
+                .find(|record| &record.id == id)
+                .ok_or("spawn_unavailable")?;
+            Ok(json!(record))
+        }
+        Mutation::Typed { id, profile } => {
+            let parent = ledger
+                .spawns
+                .iter()
+                .find(|record| &record.id == id)
+                .ok_or("spawn_unavailable")?
+                .parent
+                .clone();
+            if !resolve_actor(ledger, &parent).is_some_and(|parent| parent.same_identity(caller)) {
+                return Err("parent_authority_required".into());
+            }
+            let record = ledger
+                .spawns
+                .iter_mut()
+                .find(|record| &record.id == id)
+                .ok_or("spawn_unavailable")?;
+            if record.pane.is_none() || record.child.is_some() {
+                return Err("spawn_incomplete".into());
+            }
+            record.typed = record.typed.saturating_add(1);
+            record.started_profile.clone_from(profile);
+            Ok(json!(record))
+        }
+        Mutation::BindChild { id, record } => {
+            let spawn = ledger
+                .spawns
+                .iter()
+                .find(|spawn| &spawn.id == id)
+                .ok_or("spawn_unavailable")?
+                .clone();
+            if !resolve_actor(ledger, &spawn.parent)
+                .is_some_and(|parent| parent.same_identity(caller))
+            {
+                return Err("parent_authority_required".into());
+            }
+            if record.parent != spawn.mode.responsibility(&spawn.parent)
+                || record.origin != spawn.mode.origin(&spawn.parent)
+                || Some(record.machine.as_str()) != spawn_machine(ledger, &spawn)
+                || spawn.pane.as_ref() != Some(&record.pane)
+                || record.name.as_deref() != Some(spawn.name.as_str())
+                || hide_agent_adapter::canonical_kind(&record.actor.kind)
+                    != hide_agent_adapter::canonical_kind(&spawn.kind)
+                || record.project != spawn.path
+            {
+                return Err("child_identity_changed".into());
+            }
+            validate_registration_name(caller, record)?;
+            let existing = if let Some(child) = &spawn.child {
+                Some(
+                    ledger
+                        .agents
+                        .iter()
+                        .find(|record| &record.id == child)
+                        .ok_or("child_unavailable")?,
+                )
+            } else {
+                // Recovery may find a registration installed before an older
+                // interrupted binding. Its end state remains authoritative.
+                ledger
+                    .agents
+                    .iter()
+                    .find(|old| old.actor.same_identity(&record.actor))
+            };
+            let child = if let Some(existing) = existing {
+                if !existing.actor.same_identity(&record.actor)
+                    || existing.parent != record.parent
+                    || existing.origin != record.origin
+                    || existing.name != record.name
+                {
+                    return Err("child_identity_changed".into());
+                }
+                existing.id.clone()
+            } else {
+                insert_record(ledger, record, false, holds)?["id"]
+                    .as_str()
+                    .ok_or("child_unavailable")?
+                    .to_owned()
+            };
+            // Registering and binding the child share the worker's one commit,
+            // so a retry cannot lose the ended child's identity between them.
+            let spawn = ledger
+                .spawns
+                .iter_mut()
+                .find(|spawn| &spawn.id == id)
+                .ok_or("spawn_unavailable")?;
+            spawn.child = Some(child);
+            first_letter(ledger, id, now)?;
+            let spawn = ledger
+                .spawns
+                .iter()
+                .find(|spawn| &spawn.id == id)
+                .ok_or("spawn_unavailable")?;
+            Ok(json!(spawn))
+        }
+        Mutation::Complete { id } => {
+            let spawn = ledger
+                .spawns
+                .iter()
+                .find(|spawn| &spawn.id == id)
+                .ok_or("spawn_unavailable")?
+                .clone();
+            let parent = resolve_actor(ledger, &spawn.parent)
+                .ok_or("parent_unavailable")?
+                .clone();
+            if !parent.same_identity(caller) {
+                return Err("parent_authority_required".into());
+            }
+            if spawn.completed {
+                return Ok(json!(spawn));
+            }
+            if spawn.path.is_none() || spawn.pane.is_none() {
+                return Err("spawn_incomplete".into());
+            }
+            let child = spawn
+                .child
+                .as_ref()
+                .and_then(|id| ledger.agents.iter().find(|child| &child.id == id))
+                .ok_or("child_unavailable")?
+                .clone();
+            // A child can finish while its immediate token write is still
+            // returning. Confirmed completion remains authoritative even
+            // when the initial watch has not been installed yet.
+            let reported_complete = ledger.letters.iter().any(|letter| {
+                letter.kind == "report"
+                    && letter.sender.same_identity(&child.actor)
+                    && letter.recipient.same_identity(&parent)
+                    && letter.intake_confirmed()
+            });
+            let auto_watch_id =
+                if spawn.mode == SpawnMode::Delegation && !child.ended && !reported_complete {
+                    Some(watch::start(ledger, &parent, &child.actor, now)?.id)
+                } else {
+                    None
+                };
+            let spawn = ledger
+                .spawns
+                .iter_mut()
+                .find(|spawn| &spawn.id == id)
+                .ok_or("spawn_unavailable")?;
+            spawn.completed = true;
+            spawn.auto_watch_id = auto_watch_id;
+            Ok(json!(spawn))
+        }
+        Mutation::AwaitIdentity { wait } => identity_wait::reserve(ledger, caller, wait),
+        Mutation::AdoptMissionWorkers {
+            mission,
+            conductor,
+            former,
+        } => {
+            if !caller.hide_itself() {
+                return Err("parent_authority_required".into());
+            }
+            let moved = adopt_mission_workers(ledger, mission, conductor, former.as_deref())?;
+            Ok(json!({"moved": moved}))
+        }
+        Mutation::AdoptMissionWorkersAsHeir {
+            mission,
+            heir,
+            former,
+        } => {
+            if !caller.hide_itself() {
+                return Err("parent_authority_required".into());
+            }
+            if heir.parent.is_some() || heir.origin.is_some() || heir.forked {
+                return Err("invalid_registration".into());
+            }
+            kept_session(&heir.session)?;
+            validate_registration_name(&heir.actor, heir)?;
+            let registered = insert_record(ledger, heir, false, holds).and_then(|view| {
+                view["id"]
+                    .as_str()
+                    .map(str::to_owned)
+                    .ok_or_else(|| "agent_unavailable".into())
+            });
+            let adopted = registered.and_then(|conductor| {
+                adopt_mission_workers(ledger, mission, &conductor, Some(former))
+                    .map(|moved| json!({"id": conductor, "moved": moved}))
+            });
+            // Posted with no one waiting on its answer, so a refusal is said here.
+            adopted.inspect_err(|code| {
+                crate::diagnostic!(json!({
+                    "component": "missions", "kind": "mission.adopt_failed",
+                    "mission": mission, "pane": heir.actor.pane_id, "code": code,
+                }));
+            })
+        }
+    }
+}
+
+/// Makes the registration `conductor`, which conducts `mission` now, the
+/// parent of each of the mission's worker starts another registration made,
+/// and of every child the registration `former` that conducted it before
+/// has, started by a spawn or not, with the child's own record (its parent,
+/// or its origin when it was started without one) and the watches on it, so
+/// its retries, reports and warnings are the new Conductor's (PRD
+/// software-factory-conductor B43). A start it already asked under the same
+/// intent keeps its own record, and a child the new Conductor descends from
+/// stays where it is, so no session becomes its own ancestor.
+fn adopt_mission_workers(
+    ledger: &mut Ledger,
+    mission: &str,
+    conductor: &str,
+    former: Option<&str>,
+) -> Result<usize, String> {
+    let heir = ledger
+        .agents
+        .iter()
+        .find(|record| record.id == conductor && !record.ended)
+        .ok_or("agent_unavailable")?
+        .actor
+        .clone();
+    let heir = named(ledger, &heir);
+    let former = former.filter(|former| *former != conductor);
+    // The new Conductor and the registrations above it, bounded by the
+    // ledger's own size so a damaged chain cannot loop.
+    let mut lineage = std::collections::HashSet::from([conductor.to_owned()]);
+    let mut at = conductor.to_owned();
+    for _ in 0..ledger.agents.len() {
+        let Some(parent) = ledger
+            .agents
+            .iter()
+            .find(|record| record.id == at)
+            .and_then(|record| record.parent.clone().or_else(|| record.origin.clone()))
+        else {
+            break;
+        };
+        if !lineage.insert(parent.clone()) {
+            break;
+        }
+        at = parent;
+    }
+    let mut moved = 0;
+    for index in 0..ledger.spawns.len() {
+        let spawn = &ledger.spawns[index];
+        let ours = spawn.mission.as_deref() == Some(mission)
+            || former.is_some_and(|former| spawn.parent == former);
+        if !ours
+            || spawn.parent == conductor
+            || spawn
+                .child
+                .as_ref()
+                .is_some_and(|child| lineage.contains(child))
+        {
+            continue;
+        }
+        if ledger
+            .spawns
+            .iter()
+            .any(|other| other.parent == conductor && other.intent == spawn.intent)
+        {
+            continue;
+        }
+        let parent = spawn.parent.clone();
+        let child = spawn.child.clone();
+        let auto_watch = spawn.auto_watch_id.clone();
+        ledger.spawns[index].parent = conductor.to_owned();
+        moved += 1;
+        if let Some(child) = child {
+            hand_child(
+                ledger,
+                &child,
+                &parent,
+                conductor,
+                &heir,
+                auto_watch.as_deref(),
+            );
+        }
+    }
+    // A child of the former Conductor that no start carries: one started
+    // through the engine directly, or registered with it as its parent. A child a
+    // start carries moved with its start above, or stays with it.
+    if let Some(former) = former {
+        let loose: Vec<String> = ledger
+            .agents
+            .iter()
+            .filter(|record| {
+                (record.parent.as_deref() == Some(former)
+                    || record.origin.as_deref() == Some(former))
+                    && !lineage.contains(&record.id)
+                    && !ledger
+                        .spawns
+                        .iter()
+                        .any(|spawn| spawn.child.as_ref() == Some(&record.id))
+            })
+            .map(|record| record.id.clone())
+            .collect();
+        for child in loose {
+            hand_child(ledger, &child, former, conductor, &heir, None);
+            moved += 1;
+        }
+    }
+    if moved > 0 {
+        crate::diagnostic!(json!({
+            "component": "missions", "kind": "mission.workers_adopted",
+            "mission": mission, "conductor": conductor, "count": moved,
+        }));
+    }
+    Ok(moved)
+}
+
+/// Moves the record of `child`, whose parent or origin is `former`, to
+/// `conductor`, and the watches `former` kept on it (its spawn's
+/// `auto_watch`, or any `former` started on it) to `heir`.
+fn hand_child(
+    ledger: &mut Ledger,
+    child: &str,
+    former: &str,
+    conductor: &str,
+    heir: &Actor,
+    auto_watch: Option<&str>,
+) {
+    let former_actor = ledger
+        .agents
+        .iter()
+        .find(|record| record.id == former)
+        .map(|record| record.actor.clone());
+    let mut child_actor = None;
+    if let Some(record) = ledger.agents.iter_mut().find(|record| record.id == child) {
+        if record.parent.as_deref() == Some(former) {
+            record.parent = Some(conductor.to_owned());
+        }
+        if record.origin.as_deref() == Some(former) {
+            record.origin = Some(conductor.to_owned());
+        }
+        child_actor = Some(record.actor.clone());
+    }
+    for watch in &mut ledger.watches {
+        let on_child = auto_watch == Some(watch.id.as_str())
+            || (child_actor
+                .as_ref()
+                .is_some_and(|actor| actor.same_identity(&watch.target))
+                && former_actor
+                    .as_ref()
+                    .is_some_and(|actor| actor.same_identity(&watch.parent)));
+        if on_child && !watch.parent.same_identity(heir) {
+            watch.generation = watch.generation.saturating_add(1);
+            watch.parent = heir.clone();
+        }
+    }
+}
+
+/// The device a spawn's child lives on: the one the caller named, else the
+/// caller's own, which its parent registration names.
+fn spawn_machine<'a>(ledger: &'a Ledger, spawn: &'a SpawnRecord) -> Option<&'a str> {
+    spawn.machine.as_deref().or_else(|| {
+        ledger
+            .agents
+            .iter()
+            .find(|parent| parent.id == spawn.parent)
+            .map(|parent| parent.machine.as_str())
+    })
+}
+
+fn validate_registration_name(caller: &Actor, record: &AgentRecord) -> Result<(), String> {
+    // Only a Factory registers under its own reserved name (D-14).
+    if (record.actor.code_owned() && !record.actor.same_identity(caller))
+        || (!record.actor.code_owned()
+            && (record
+                .name
+                .as_deref()
+                .is_some_and(crate::delivery::reserved_name)
+                || crate::delivery::reserved_name(&record.pane)))
+    {
+        return Err("reserved_name".into());
+    }
+
+    Ok(())
+}
+
+fn insert_record(
+    ledger: &mut Ledger,
+    record: &AgentRecord,
+    check: bool,
+    holds: &dyn Holds,
+) -> Result<Value, String> {
+    if let Some(existing) = ledger
+        .agents
+        .iter()
+        .find(|existing| !existing.ended && existing.actor.same_identity(&record.actor))
+    {
+        if existing.parent != record.parent
+            || existing.origin != record.origin
+            || existing.name != record.name
+        {
+            return Err("registration_conflict".into());
+        }
+        // The caller is that registration's own running agent.
+        return Ok(view(existing, ledger, &RegistrationFacts::NONE));
+    }
+    if ledger.agents.iter().any(|existing| {
+        !existing.ended
+            && existing.machine == record.machine
+            && existing.host_scope == record.host_scope
+            && record.name.is_some()
+            && existing.name == record.name
+    }) {
+        return Err("name_in_use".into());
+    }
+    if check {
+        return Ok(json!(RegisterCheck {
+            registered: false,
+            name: record.name.clone().ok_or("invalid_registration")?,
+            pane: record.pane.clone(),
+        }));
+    }
+    room::for_agent(ledger, holds)?;
+    let mut record = record.clone();
+    record.id = allocate(ledger, "agent")?;
+    ledger.agents.push(record.clone());
+    Ok(view(&record, ledger, &RegistrationFacts::NONE))
+}
+
+/// Registers the agent of `record`, a party of a letter about to be kept,
+/// unless it has a live registration already (`Authority::registers`). Two
+/// letters between the same agents converge on the one record.
+pub(crate) fn register_party(
+    ledger: &mut Ledger,
+    record: &AgentRecord,
+    holds: &dyn Holds,
+) -> Result<(), String> {
+    if registered_id(ledger, &record.actor).is_some() {
+        return Ok(());
+    }
+    insert_record(ledger, record, false, holds).map(drop)
+}
+
+/// Whether `actor` is an external tool whose connection `connections`, the
+/// ids the access list holds, no longer has (PRD hide-external-control
+/// D-23). A View only connection is still held: its tool keeps what it has.
+fn tool_gone(actor: &Actor, connections: &[String]) -> bool {
+    actor
+        .access_connection()
+        .is_some_and(|id| !connections.iter().any(|held| held == id))
+}
+
+/// Whether the ledger holds anything of a tool no longer connected that
+/// [`end_gone_tools`] ends: a live record, a watch it keeps or that watches
+/// it, or an answer owed on a letter to or from it.
+pub(crate) fn tools_left_behind(ledger: &Ledger, connections: &[String]) -> bool {
+    ledger
+        .agents
+        .iter()
+        .any(|record| !record.ended && tool_gone(&record.actor, connections))
+        || ledger.watches.iter().any(|watch| {
+            tool_gone(&watch.parent, connections) || tool_gone(&watch.target, connections)
+        })
+        || ledger.letters.iter().any(|letter| {
+            letter.waiting_answer
+                && !letter.awaiting_intake()
+                && (tool_gone(&letter.sender, connections)
+                    || tool_gone(&letter.recipient, connections))
+        })
+}
+
+/// Ends what tools no longer connected keep in the ledger (D-23): their
+/// origin records, the watches they keep or that watch them, and the answer
+/// waits of their letters. The store's upkeep runs it before every batch
+/// with the list as the core holds it, so a disconnect, a leave or a stop
+/// between them converges without a request of its own. Whether it changed
+/// anything.
+pub(crate) fn end_gone_tools(ledger: &mut Ledger, connections: &[String], now: u64) -> bool {
+    if !tools_left_behind(ledger, connections) {
+        return false;
+    }
+    ledger.watches.retain(|watch| {
+        !tool_gone(&watch.parent, connections) && !tool_gone(&watch.target, connections)
+    });
+    let ended: Vec<String> = ledger
+        .agents
+        .iter()
+        .filter(|record| !record.ended && tool_gone(&record.actor, connections))
+        .map(|record| record.id.clone())
+        .collect();
+    for id in &ended {
+        end_record(ledger, id, now);
+    }
+    // A tool's letter waits for an answer it can no longer read, with or
+    // without an origin record of the tool.
+    let mut parties: Vec<Actor> = Vec::new();
+    for letter in &ledger.letters {
+        for party in [&letter.sender, &letter.recipient] {
+            if letter.waiting_answer
+                && tool_gone(party, connections)
+                && !parties.iter().any(|known| known.same_identity(party))
+            {
+                parties.push(party.clone());
+            }
+        }
+    }
+    for party in &parties {
+        ledger.end_answer_waits_of(party, now);
+    }
+    crate::diagnostic!(json!({
+        "component": "coordination",
+        "kind": "access.tools_ended",
+        "records": ended,
+        "parties": parties.len(),
+    }));
+    true
+}
+
+/// Ends a registration that no agent took over, the watches on it, the
+/// letters still waiting for it (`no_recipient`, B2) and the answer waits of
+/// the letters it sent or received, in one transition. Returns whether it was
+/// live. An agent that takes its pane over ends it through [`succeed`].
+fn end_record(ledger: &mut Ledger, id: &str, now: u64) -> bool {
+    let Some(record) = ledger.agents.iter_mut().find(|record| record.id == id) else {
+        return false;
+    };
+    let live = !std::mem::replace(&mut record.ended, true);
+    let target = record.actor.clone();
+    human_turn::end(ledger, id);
+    ledger
+        .watches
+        .retain(|watch| !watch.target.same_identity(&target));
+    if live {
+        ledger.end_letters_to(id, &target, now);
+        ledger.end_answer_waits_of(&target, now);
+    }
+    live
+}
+
+/// Why the core ended a registration whose pane the engine no longer has.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum PaneGone {
+    /// The pane was in the host's previous in-sync read and is not in this
+    /// one: the engine closed it, or moved it to another tab under a new id.
+    Left,
+    /// The registration was made before this read's snapshot was asked for,
+    /// and the snapshot lacks its pane.
+    Absent,
+    /// The pane is there, a shell: its engine restored it after a restart
+    /// and did not resume the agent that ran in it, and no resume will be
+    /// typed (`ProjectionState::not_resumed`).
+    NotResumed,
+}
+
+impl PaneGone {
+    pub(crate) fn reason(self) -> &'static str {
+        match self {
+            Self::Left => "pane_left",
+            Self::Absent => "pane_absent",
+            Self::NotResumed => "agent_not_resumed",
+        }
+    }
+}
+
+/// One host's engine panes as its last whole-session read listed them. Only a
+/// read of a fresh `session.snapshot` publishes, so a pane missing from it is
+/// closed; a host that is unreachable publishes nothing, and a stale read only
+/// ever lists more panes than exist.
+pub(crate) struct PaneRead {
+    /// The local engine's socket path a local read came from; none for a remote
+    /// device.
+    pub(crate) host_scope: Option<String>,
+    /// The ledger's `next_id` before the snapshot was asked for: a
+    /// registration below it existed, with its pane, before that snapshot.
+    /// `None` until a snapshot is asked for with the ledger available.
+    pub(crate) floor: Option<u64>,
+    /// `None` until the snapshot's first publish.
+    pub(crate) panes: Option<std::collections::HashSet<String>>,
+}
+
+/// The live registrations on `device` whose panes the new read lacks, given
+/// the panes of the read before it. A registration made after the snapshot
+/// was asked for, whose pane no read has listed yet, is left alone: its pane
+/// may be one the read has not heard about.
+pub(crate) fn gone_registrations(
+    ledger: &Ledger,
+    device: &str,
+    read: &PaneRead,
+    previous: Option<&std::collections::HashSet<String>>,
+) -> Vec<(String, PaneGone)> {
+    let Some(panes) = &read.panes else {
+        return Vec::new();
+    };
+    ledger
+        .agents
+        .iter()
+        .filter(|record| {
+            !record.ended
+                && !record.actor.code_owned()
+                && record.actor.device_id == device
+                && read
+                    .host_scope
+                    .as_ref()
+                    .is_none_or(|scope| *scope == record.host_scope)
+                && !panes.contains(&record.pane)
+        })
+        .filter_map(|record| {
+            if previous.is_some_and(|previous| previous.contains(&record.pane)) {
+                return Some((record.id.clone(), PaneGone::Left));
+            }
+            let sequence = record
+                .id
+                .strip_prefix("agent-")
+                .and_then(|value| value.parse::<u64>().ok())?;
+            read.floor
+                .is_some_and(|floor| sequence < floor)
+                .then(|| (record.id.clone(), PaneGone::Absent))
+        })
+        .collect()
+}
+
+/// The live registrations on `device` whose agent a restore did not resume
+/// (`left`, the panes' engine says are shells now), none of which runs: the
+/// registration on each such pane, unless an agent shows in that pane now
+/// (`shown`, the panes of the same read that list one) or the registration
+/// belongs to another conversation than the one that was not resumed, which
+/// both name. A registration on another engine of the same machine is not
+/// judged by this one's read (`host_scope`, as [`gone_registrations`]).
+pub(crate) fn not_resumed_registrations(
+    ledger: &Ledger,
+    device: &str,
+    host_scope: Option<&str>,
+    left: &[crate::session_sync::NotResumed],
+    shown: &std::collections::HashSet<&str>,
+) -> Vec<(String, PaneGone)> {
+    ledger
+        .agents
+        .iter()
+        .filter(|record| {
+            !record.ended
+                && !record.actor.code_owned()
+                && record.actor.device_id == device
+                && host_scope.is_none_or(|scope| scope == record.host_scope)
+                && !shown.contains(record.pane.as_str())
+        })
+        .filter(|record| {
+            left.iter().any(|left| {
+                left.pane_id == record.pane
+                    && match (&left.session, &record.actor.session) {
+                        (Some(session), Some(registered)) => {
+                            crate::engine::tokens::session_digest(session).as_ref()
+                                == Some(registered)
+                        }
+                        _ => true,
+                    }
+            })
+        })
+        .map(|record| (record.id.clone(), PaneGone::NotResumed))
+        .collect()
+}
+
+/// Ends each registration the core found gone that is still live, with the
+/// watches on it. Returns the ones it ended.
+pub(crate) fn end_gone(
+    ledger: &mut Ledger,
+    gone: &std::collections::BTreeMap<String, PaneGone>,
+    now: u64,
+) -> Vec<(AgentRecord, PaneGone)> {
+    let mut ended = Vec::new();
+    for (id, reason) in gone {
+        if ledger
+            .agents
+            .iter()
+            .any(|record| &record.id == id && !record.ended)
+            && end_record(ledger, id, now)
+            && let Some(record) = ledger.agents.iter().find(|record| &record.id == id)
+        {
+            ended.push((record.clone(), *reason));
+        }
+    }
+    ended
+}
+
+/// A sleeping session's registration continued by the pane that woke it.
+/// The core started the wake and saved which registration the sleep held,
+/// so the registration, its letters and its watch move to the new pane's
+/// execution rather than ending with the old pane and being made again.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) struct Rebind {
+    /// The execution the registration was held by when its pane closed.
+    pub(crate) from: Actor,
+    /// The woken pane's execution, as the engine reports it now.
+    pub(crate) to: Actor,
+    /// The engine's own id of the woken pane, which a local actor spells the same.
+    pub(crate) pane: String,
+    pub(crate) terminal_id: Option<String>,
+}
+
+/// Points each registration at the pane that woke it, with the letters,
+/// watches and spawn receipt that address it. Only a live registration still
+/// held by `from` moves, and never onto a pane another registration holds.
+/// The letters follow the registration by its id (`Letter::to`, `from`); a
+/// letter an older build wrote with none follows the agent it named. A letter
+/// whose bells were spent gets them again: its agent runs anew. Returns the
+/// registrations it moved.
+pub(crate) fn rebind(
+    ledger: &mut Ledger,
+    rebinds: &std::collections::BTreeMap<String, Rebind>,
+) -> Vec<(String, Actor)> {
+    let mut moved = Vec::new();
+    for (id, rebind) in rebinds {
+        let held = ledger.agents.iter().any(|record| {
+            &record.id == id && !record.ended && record.actor.same_identity(&rebind.from)
+        });
+        let taken = ledger.agents.iter().any(|record| {
+            &record.id != id
+                && !record.ended
+                && (record.actor.same_identity(&rebind.to) || record.pane == rebind.pane)
+        });
+        if !held || taken {
+            continue;
+        }
+        let Some(record) = ledger.agents.iter_mut().find(|record| &record.id == id) else {
+            continue;
+        };
+        if record.instance == record.pane {
+            record.instance = rebind.pane.clone();
+        }
+        let old_pane = std::mem::replace(&mut record.pane, rebind.pane.clone());
+        record.terminal_id.clone_from(&rebind.terminal_id);
+        record.actor = rebind.to.clone();
+        for letter in &mut ledger.letters {
+            if names(letter.to.as_deref(), &letter.recipient, id, &rebind.from) {
+                letter.recipient = rebind.to.clone();
+                if letter.state == crate::delivery::ledger::State::Pending {
+                    letter.renew_bells();
+                }
+            }
+            if names(letter.from.as_deref(), &letter.sender, id, &rebind.from) {
+                letter.sender = rebind.to.clone();
+            }
+            if let Some(warning) = letter.watch_warning.as_mut()
+                && warning.target.same_identity(&rebind.from)
+            {
+                warning.target = rebind.to.clone();
+            }
+        }
+        for watch in &mut ledger.watches {
+            for party in [&mut watch.parent, &mut watch.target] {
+                if party.same_identity(&rebind.from) {
+                    *party = rebind.to.clone();
+                }
+            }
+        }
+        for spawn in &mut ledger.spawns {
+            if spawn.child.as_ref() == Some(id) && spawn.pane.as_deref() == Some(old_pane.as_str())
+            {
+                spawn.pane = Some(rebind.pane.clone());
+            }
+        }
+        moved.push((id.clone(), rebind.from.clone()));
+    }
+    moved
+}
+
+/// Whether a letter's party, kept as registration `party` and `actor`, is
+/// the registration `id` that ran as `as_actor`: by the id the letter names,
+/// or, for a letter written with none, by the agent.
+fn names(party: Option<&str>, actor: &Actor, id: &str, as_actor: &Actor) -> bool {
+    match party {
+        Some(party) => party == id,
+        None => actor.same_identity(as_actor),
+    }
+}
+
+/// A registration whose pane runs another conversation now, as the runtime
+/// read it (`Runtime::observe_successions`): a new one started in the same
+/// pane, or one resumed under another session. The agent there takes its
+/// place (PRD letters-missions-simplify D-02, B2).
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) struct Succession {
+    /// The agent the pane runs now, as a registration of it reads
+    /// (`executor::registration`): its live record when it has one, else
+    /// this one is made for it.
+    pub(crate) successor: AgentRecord,
+}
+
+/// Hands each registration in `successions` over to the agent its pane runs
+/// now, in one place for every way an agent ends with another after it in
+/// its pane: the old registration ends naming its successor, and the next
+/// agent takes its pending letters (rung and handed to it afresh), the
+/// answers its open letters wait for, its children and their spawn
+/// receipts, the watches it kept or that were kept on it, and its parent
+/// (`hand_over`), so whoever answered for the old agent answers for the next
+/// (PRD letters-missions-simplify D-24). A letter the
+/// old agent took in and still owed an answer to ends that wait, since the
+/// new conversation never read it. The runtime moves mission roles once the
+/// ledger shows the successor (`Runtime::follow_successors`). Only a live
+/// registration in the same pane of the same machine is taken over, by
+/// another agent; a ledger with no room for the successor's record leaves
+/// the old one as it is, to be taken over by a later pass. Returns the pairs
+/// it handed over.
+pub(crate) fn succeed(
+    ledger: &mut Ledger,
+    successions: &std::collections::BTreeMap<String, Succession>,
+    now: u64,
+    holds: &dyn Holds,
+) -> Vec<(String, String)> {
+    let mut succeeded = Vec::new();
+    for (former, succession) in successions {
+        let Some(old) = ledger
+            .agents
+            .iter()
+            .find(|record| &record.id == former && !record.ended)
+            .cloned()
+        else {
+            continue;
+        };
+        let next = &succession.successor;
+        if next.machine != old.machine
+            || next.pane != old.pane
+            || next.actor.same_identity(&old.actor)
+            || next.actor.require_native_identity().is_err()
+        {
+            continue;
+        }
+        let Some(successor) = successor_of(ledger, &old, next, holds) else {
+            continue;
+        };
+        hand_over(ledger, &old, &successor, now);
+        succeeded.push((former.clone(), successor));
+    }
+    succeeded
+}
+
+/// The id of the registration that takes `old`'s place: the live record of
+/// `next`'s agent, or one made for it (`hand_over` gives it what `old`
+/// held, its parent too). `old` is ended first, so the next
+/// agent may take its name; none, with `old` left live, when the ledger has
+/// no room for a new record.
+fn successor_of(
+    ledger: &mut Ledger,
+    old: &AgentRecord,
+    next: &AgentRecord,
+    holds: &dyn Holds,
+) -> Option<String> {
+    let set_ended = |ledger: &mut Ledger, ended: bool| {
+        if let Some(record) = ledger.agents.iter_mut().find(|record| record.id == old.id) {
+            record.ended = ended;
+        }
+    };
+    set_ended(ledger, true);
+    if let Some(existing) = ledger
+        .agents
+        .iter()
+        .find(|record| !record.ended && record.actor.same_identity(&next.actor))
+    {
+        return Some(existing.id.clone());
+    }
+    let mut record = next.clone();
+    record.project = record.project.or_else(|| old.project.clone());
+    record.ended = false;
+    record.successor = None;
+    let id = room::for_agent(ledger, holds)
+        .and_then(|()| allocate(ledger, "agent"))
+        .inspect_err(|code| {
+            crate::diagnostic!(
+                json!({"component":"coordination","kind":"agent.succession_refused",
+                "agent_id":old.id,"pane_id":old.pane,"code":code})
+            );
+        })
+        .ok();
+    let Some(id) = id else {
+        set_ended(ledger, false);
+        return None;
+    };
+    record.id = id.clone();
+    ledger.agents.push(record);
+    Some(id)
+}
+
+/// Gives `successor` what the ended registration `old` held (`succeed`).
+fn hand_over(ledger: &mut Ledger, old: &AgentRecord, successor: &str, now: u64) {
+    let Some(heir) = ledger
+        .agents
+        .iter()
+        .find(|record| record.id == successor)
+        .map(|record| record.actor.clone())
+    else {
+        return;
+    };
+    let heir = named(ledger, &heir);
+    if let Some(record) = ledger.agents.iter_mut().find(|record| record.id == old.id) {
+        record.successor = Some(successor.to_owned());
+    }
+    // It answers to whoever the old agent answered to: a mission worker's
+    // successor is its Conductor's child, an operator's root stays a root.
+    // An agent that came with a parent or an origin of its own keeps it.
+    if let Some(record) = ledger
+        .agents
+        .iter_mut()
+        .find(|record| record.id == successor)
+        && record.parent.is_none()
+        && record.origin.is_none()
+        && old.parent.as_deref() != Some(successor)
+    {
+        record.parent = old.parent.clone();
+    }
+    human_turn::end(ledger, &old.id);
+    for letter in &mut ledger.letters {
+        if letter.state == crate::delivery::ledger::State::Pending
+            && names(letter.to.as_deref(), &letter.recipient, &old.id, &old.actor)
+        {
+            letter.hand_to(successor, heir.clone());
+        }
+        if letter.open() && names(letter.from.as_deref(), &letter.sender, &old.id, &old.actor) {
+            letter.from = Some(successor.to_owned());
+            letter.sender = heir.clone();
+        }
+    }
+    // A request the old agent took in and owed an answer to was read by a
+    // conversation that is over.
+    ledger.end_answer_waits_of(&old.actor, now);
+    let intents: Vec<String> = ledger
+        .spawns
+        .iter()
+        .filter(|spawn| spawn.parent == successor)
+        .map(|spawn| spawn.intent.clone())
+        .collect();
+    for spawn in &mut ledger.spawns {
+        // A start the successor asked under the same intent keeps its own.
+        if spawn.parent == old.id && !intents.contains(&spawn.intent) {
+            spawn.parent = successor.to_owned();
+        }
+    }
+    for record in &mut ledger.agents {
+        if record.id == successor {
+            continue;
+        }
+        if record.parent.as_deref() == Some(old.id.as_str()) {
+            record.parent = Some(successor.to_owned());
+        }
+        if record.origin.as_deref() == Some(old.id.as_str()) {
+            record.origin = Some(successor.to_owned());
+        }
+    }
+    for watch in &mut ledger.watches {
+        let mut moved = false;
+        for party in [&mut watch.parent, &mut watch.target] {
+            if party.same_identity(&old.actor) {
+                *party = heir.clone();
+                moved = true;
+            }
+        }
+        if moved {
+            watch.generation = watch.generation.saturating_add(1);
+        }
+    }
+}
+
+/// The machines whose panes carry lineage tokens a handover of the
+/// registrations `handed_over` changed (`hand_over`): each one's own, which
+/// its successor runs in now, and those of the registrations whose parent,
+/// or whose fork's source, is that successor, the children it took, on
+/// whichever machine they run.
+pub(crate) fn handover_machines(
+    ledger: &Ledger,
+    handed_over: &std::collections::BTreeSet<String>,
+) -> std::collections::BTreeSet<String> {
+    let successors: std::collections::BTreeSet<&str> = ledger
+        .agents
+        .iter()
+        .filter(|record| handed_over.contains(&record.id))
+        .filter_map(|record| record.successor.as_deref())
+        .collect();
+    ledger
+        .agents
+        .iter()
+        .filter(|record| {
+            successors.contains(record.id.as_str())
+                || [&record.parent, &record.origin]
+                    .into_iter()
+                    .flatten()
+                    .any(|id| successors.contains(id.as_str()))
+        })
+        .map(|record| record.machine.clone())
+        .collect()
+}
+
+fn allocate(ledger: &mut Ledger, prefix: &str) -> Result<String, String> {
+    let id = ledger.next_id;
+    ledger.next_id = id.checked_add(1).ok_or("capacity")?;
+    Ok(format!("{prefix}-{id}"))
+}
+
+#[cfg(test)]
+pub(crate) use executor::{SPAWN, SPAWN_TURN};
+pub(crate) use executor::{link_fork, run};
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    fn record(pane: &str, session: &str, parent: Option<String>) -> AgentRecord {
+        AgentRecord {
+            id: String::new(),
+            // A pane id is no name, so a fixture's agent has its own.
+            name: Some(format!("{pane}-agent")),
+            machine: "local".into(),
+            host_scope: "fixture-scope".into(),
+            native_machine: "fixture-machine".into(),
+            session: session.into(),
+            instance: format!("terminal-{pane}"),
+            pane: pane.into(),
+            parent,
+            origin: None,
+            project: None,
+            actor: Actor {
+                pane_id: pane.into(),
+                name: pane.into(),
+                kind: "codex".into(),
+                device_id: "local".into(),
+                session: crate::engine::tokens::session_digest(session),
+            },
+            ended: false,
+            terminal_id: None,
+            forked: false,
+            successor: None,
+        }
+    }
+    fn register(ledger: &mut Ledger, record: AgentRecord, caller: &Actor) -> String {
+        apply(
+            ledger,
+            caller,
+            &Mutation::Register {
+                record,
+                check: false,
+            },
+            1,
+        )
+        .unwrap()["id"]
+            .as_str()
+            .unwrap()
+            .into()
+    }
+    /// D-23: what a tool whose connection is gone keeps ends, its origin
+    /// record, the watch it keeps and its letter's answer wait, while a tool
+    /// still connected (at any level) and the agent it watches are
+    /// untouched; run again it changes nothing.
+    #[test]
+    fn ending_tools_ends_only_what_tools_no_longer_connected_keep() {
+        let mut ledger = Ledger::default();
+        let gone = Actor::access("00000000000000a1", "gone", "local");
+        let kept = Actor::access("00000000000000a2", "kept", "local");
+        let worker = record("worker", "worker-session", None);
+        let worker_id = register(&mut ledger, worker.clone(), &worker.actor);
+        let tool_record = |actor: &Actor| AgentRecord {
+            id: String::new(),
+            name: Some(actor.name.clone()),
+            machine: "local".into(),
+            host_scope: actor.kind.clone(),
+            native_machine: actor.kind.clone(),
+            session: actor.name.clone(),
+            instance: actor.pane_id.clone(),
+            pane: actor.pane_id.clone(),
+            parent: None,
+            origin: None,
+            project: None,
+            actor: actor.clone(),
+            ended: false,
+            terminal_id: None,
+            forked: false,
+            successor: None,
+        };
+        let gone_id = register(&mut ledger, tool_record(&gone), &gone);
+        let kept_id = register(&mut ledger, tool_record(&kept), &kept);
+        for tool in [&gone, &kept] {
+            crate::delivery::watch::start(&mut ledger, tool, &worker.actor, 1).unwrap();
+        }
+        let asked = crate::delivery::mailbox::send(
+            &mut ledger,
+            &gone,
+            &worker.actor,
+            "look",
+            "please look",
+            "request",
+            None,
+            1,
+        )
+        .unwrap();
+        // The worker took it in: its answer is owed from now on.
+        let taken = ledger
+            .letters
+            .iter_mut()
+            .find(|letter| letter.id == asked.id && letter.waiting_answer)
+            .unwrap();
+        taken.state = crate::delivery::ledger::State::Delivered;
+
+        let connections = vec!["00000000000000a2".to_owned()];
+        assert!(tools_left_behind(&ledger, &connections));
+        assert!(end_gone_tools(&mut ledger, &connections, 2));
+        let ended = |ledger: &Ledger, id: &str| {
+            ledger
+                .agents
+                .iter()
+                .find(|record| record.id == id)
+                .unwrap()
+                .ended
+        };
+        assert!(ended(&ledger, &gone_id));
+        assert!(!ended(&ledger, &kept_id));
+        assert!(!ended(&ledger, &worker_id));
+        assert_eq!(ledger.watches.len(), 1);
+        assert!(ledger.watches[0].parent.same_identity(&kept));
+        let letter = ledger
+            .letters
+            .iter()
+            .find(|letter| letter.id == asked.id)
+            .unwrap();
+        assert!(!letter.waiting_answer);
+
+        assert!(!tools_left_behind(&ledger, &connections));
+        assert!(!end_gone_tools(&mut ledger, &connections, 3));
+        assert_eq!(ledger.watches.len(), 1);
+    }
+
+    /// A watch is all a tool left: it still counts as left behind, and goes.
+    #[test]
+    fn a_gone_tools_watch_alone_is_left_behind_and_ends() {
+        let mut ledger = Ledger::default();
+        let gone = Actor::access("00000000000000a1", "gone", "local");
+        let worker = record("worker", "worker-session", None);
+        register(&mut ledger, worker.clone(), &worker.actor);
+        crate::delivery::watch::start(&mut ledger, &gone, &worker.actor, 1).unwrap();
+        assert!(tools_left_behind(&ledger, &[]));
+        assert!(end_gone_tools(&mut ledger, &[], 2));
+        assert!(ledger.watches.is_empty());
+        assert!(!tools_left_behind(&ledger, &[]));
+    }
+
+    /// A registration an earlier build made for a parent the engine never named
+    /// holds its pane id as its name. Reading the ledger gives it none, so
+    /// it is called by its registration id and by its screen title, never by
+    /// the pane, and a name that is not a pane id is left alone.
+    #[test]
+    fn a_legacy_record_holding_a_pane_id_as_its_name_reads_as_unnamed() {
+        let root = tempfile::tempdir().unwrap();
+        let path = root.path().join("delivery.sqlite3");
+        let mut ledger = Ledger::default();
+        let (legacy, named) = (
+            {
+                let mut legacy = record("w9J:p9R", "legacy-native", None);
+                legacy.name = Some("w9J:p9R".into());
+                legacy
+            },
+            {
+                let mut named = record("w9J:p9S", "named-native", None);
+                named.name = Some("lead".into());
+                named
+            },
+        );
+        let caller = legacy.actor.clone();
+        let legacy_id = register_as(&mut ledger, legacy, &caller).unwrap()["id"]
+            .as_str()
+            .unwrap()
+            .to_owned();
+        // The shape an earlier build wrote.
+        assert_eq!(ledger.agents[0].name.as_deref(), Some("w9J:p9R"));
+        let caller = named.actor.clone();
+        let named_id = register_as(&mut ledger, named, &caller).unwrap()["id"]
+            .as_str()
+            .unwrap()
+            .to_owned();
+        crate::delivery::store::save(&path, &ledger).unwrap();
+        let loaded = crate::delivery::store::load(&path).unwrap();
+        let by_id = |id: &str| loaded.agents.iter().find(|record| record.id == id).unwrap();
+        assert_eq!(by_id(&legacy_id).name, None);
+        assert_eq!(by_id(&legacy_id).wire_name(), legacy_id);
+        assert_eq!(by_id(&named_id).wire_name(), "lead");
+        assert_eq!(
+            wire_name(&loaded, &by_id(&legacy_id).actor),
+            legacy_id,
+            "the writing side names it the same way"
+        );
+        assert!(
+            resolve_actor(&loaded, "w9J:p9R").is_some(),
+            "its pane still addresses it"
+        );
+    }
+
+    /// A build before this one reads the ledger this one writes: `name` is a
+    /// string on every record, the registration id for one with no name.
+    #[test]
+    fn an_unnamed_record_is_written_in_the_shape_an_older_build_reads() {
+        #[derive(Deserialize)]
+        #[allow(dead_code)]
+        struct PreviousRecord {
+            id: String,
+            name: String,
+            machine: String,
+            host_scope: String,
+            native_machine: String,
+            session: String,
+            instance: String,
+            pane: String,
+            parent: Option<String>,
+            #[serde(default)]
+            origin: Option<String>,
+            project: Option<String>,
+            actor: Actor,
+            ended: bool,
+            #[serde(default)]
+            forked: bool,
+        }
+        let mut unnamed = record("lead", "lead-native", None);
+        unnamed.id = "agent-7".into();
+        unnamed.name = None;
+        let mut named = record("worker", "worker-native", None);
+        named.id = "agent-8".into();
+        named.name = Some("worker-agent".into());
+        for (record, written) in [(unnamed, "agent-7"), (named, "worker-agent")] {
+            let json = serde_json::to_value(&record).unwrap();
+            assert_eq!(json["name"], written);
+            let previous: PreviousRecord = serde_json::from_value(json.clone()).unwrap();
+            assert_eq!(previous.name, written);
+            assert_eq!(serde_json::from_value::<AgentRecord>(json).unwrap(), record);
+        }
+    }
+
+    pub(super) fn command(intent: &str) -> Command {
+        Command::Spawn {
+            pick: None,
+            mission: None,
+            plan_node: None,
+            plan: None,
+            parent: Some("here".into()),
+            machine: None,
+            name: "worker".into(),
+            intent: intent.into(),
+            kind: "codex".into(),
+            repo: Some("/fixture".into()),
+            branch: Some("topic".into()),
+            path: None,
+            args: vec!["--model".into(), "fixture model".into()],
+            launch: Default::default(),
+            task: None,
+            brief: None,
+            beside: false,
+            profile: None,
+        }
+    }
+    fn register_as(
+        ledger: &mut Ledger,
+        record: AgentRecord,
+        caller: &Actor,
+    ) -> Result<Value, String> {
+        apply(
+            ledger,
+            caller,
+            &Mutation::Register {
+                record,
+                check: false,
+            },
+            1,
+        )
+    }
+
+    // PRD fork-operator-root B1, B19: the source registers its fork as the
+    // operator's root, and `hide agent show` names the source as its origin.
+    #[test]
+    fn a_fork_registers_as_a_root_whose_origin_is_its_source() {
+        let mut ledger = Ledger::default();
+        let source = record("pane-a", "session-a", None);
+        let other = record("pane-b", "session-b", None);
+        let source_id = register(&mut ledger, source.clone(), &source.actor);
+        register(&mut ledger, other.clone(), &other.actor);
+        let fork = || {
+            let mut fork = record("pane-c", "session-c", None);
+            fork.origin = Some(source_id.clone());
+            fork.forked = true;
+            fork
+        };
+        // Only the source itself vouches for its fork.
+        let before = ledger.clone();
+        assert_eq!(
+            register_as(&mut ledger, fork(), &other.actor).unwrap_err(),
+            "parent_authority_required"
+        );
+        assert_eq!(ledger, before);
+        let id = register(&mut ledger, fork(), &source.actor);
+        let fork = ledger.agents.iter().find(|record| record.id == id).unwrap();
+        let shown = view(fork, &ledger, &RegistrationFacts::NONE);
+        assert!(shown["parent"].is_null());
+        assert_eq!(shown["origin"], source_id);
+        // Without the fork's provenance, the source is not the new pane.
+        let mut stranger = record("pane-d", "session-d", None);
+        stranger.origin = Some(source_id.clone());
+        assert_eq!(
+            register_as(&mut ledger, stranger, &source.actor).unwrap_err(),
+            "parent_authority_required"
+        );
+    }
+
+    /// Both ways a registration ends, `hide agent end` and the core finding
+    /// its pane gone, end the answer waits of the letters it sent or received.
+    #[test]
+    fn a_registration_that_ends_ends_the_answer_waits_of_its_letters() {
+        for by_pane in [false, true] {
+            let mut ledger = Ledger::default();
+            let (a, b, c) = (
+                record("pane-a", "session-a", None),
+                record("pane-b", "session-b", None),
+                record("pane-c", "session-c", None),
+            );
+            register(&mut ledger, a.clone(), &a.actor);
+            let b_id = register(&mut ledger, b.clone(), &b.actor);
+            register(&mut ledger, c.clone(), &c.actor);
+            let ask = |ledger: &mut Ledger, from: &Actor, to: &Actor, intent: &str| {
+                let id = crate::delivery::mailbox::send(
+                    ledger, from, to, intent, "body", "request", None, 2,
+                )
+                .unwrap()
+                .id;
+                // The recipient took it in; a letter still awaiting intake
+                // is left to the delivery deadline.
+                crate::delivery::mailbox::apply(
+                    ledger,
+                    to,
+                    None,
+                    &crate::delivery::Command::Confirm {
+                        ids: vec![id.clone()],
+                    },
+                    2,
+                )
+                .unwrap();
+                id
+            };
+            let to_b = ask(&mut ledger, &a.actor, &b.actor, "to-b");
+            let from_b = ask(&mut ledger, &b.actor, &c.actor, "from-b");
+            let elsewhere = ask(&mut ledger, &a.actor, &c.actor, "elsewhere");
+            if by_pane {
+                let gone = [(b_id, PaneGone::Left)].into();
+                assert_eq!(end_gone(&mut ledger, &gone, 10).len(), 1);
+            } else {
+                apply(
+                    &mut ledger,
+                    &b.actor,
+                    &Mutation::End {
+                        id: b_id,
+                        actor: None,
+                    },
+                    10,
+                )
+                .unwrap();
+            }
+            let wait = |id: &str| {
+                let letter = ledger.letters.iter().find(|l| l.id == id).unwrap();
+                (letter.waiting_answer, letter.answer_wait_ended)
+            };
+            let ended = (
+                false,
+                Some(crate::delivery::ledger::AnswerWaitEnd::PartyEnded),
+            );
+            assert_eq!(wait(&to_b), ended, "by_pane={by_pane}");
+            assert_eq!(wait(&from_b), ended, "by_pane={by_pane}");
+            assert_eq!(wait(&elsewhere), (true, None), "by_pane={by_pane}");
+        }
+    }
+
+    /// Repeating `hide agent end` on a registration that already ended must not
+    /// end the waits of the live registration that took its pane and session.
+    #[test]
+    fn ending_an_already_ended_registration_again_leaves_the_new_ones_waits() {
+        let mut ledger = Ledger::default();
+        let (a, b) = (
+            record("pane-a", "session-a", None),
+            record("pane-b", "session-b", None),
+        );
+        register(&mut ledger, a.clone(), &a.actor);
+        let old = register(&mut ledger, b.clone(), &b.actor);
+        let end = |ledger: &mut Ledger, id: &str, now: u64| {
+            apply(
+                ledger,
+                &b.actor,
+                &Mutation::End {
+                    id: id.into(),
+                    actor: None,
+                },
+                now,
+            )
+            .unwrap()
+        };
+        end(&mut ledger, &old, 3);
+        let renewed = register(&mut ledger, b.clone(), &b.actor);
+        assert_ne!(renewed, old);
+        let id = crate::delivery::mailbox::send(
+            &mut ledger,
+            &a.actor,
+            &b.actor,
+            "ask",
+            "body",
+            "request",
+            None,
+            4,
+        )
+        .unwrap()
+        .id;
+        crate::delivery::mailbox::apply(
+            &mut ledger,
+            &b.actor,
+            None,
+            &crate::delivery::Command::Confirm {
+                ids: vec![id.clone()],
+            },
+            4,
+        )
+        .unwrap();
+        end(&mut ledger, &old, 5);
+        let letter = ledger.letters.iter().find(|l| l.id == id).unwrap();
+        assert!(letter.waiting_answer && letter.answer_wait_ended.is_none());
+        end(&mut ledger, &renewed, 6);
+        assert!(!ledger.letters[0].waiting_answer);
+    }
+
+    /// `here` is the caller's own live registration, and a caller with
+    /// none learns why: ended, its pane's session moved on, or never there.
+    #[test]
+    fn here_is_the_callers_own_live_registration() {
+        let mut ledger = Ledger::default();
+        let observer = record("observer", "observer-session", None);
+        let caller = observer.actor.clone();
+        assert_eq!(
+            here(&ledger, &caller, 0).err(),
+            Some("participant_unavailable")
+        );
+        let id = register(&mut ledger, observer, &caller);
+        let child = record("child", "child-session", Some(id.clone()));
+        let child_actor = child.actor.clone();
+        register(&mut ledger, child, &caller);
+        assert_eq!(here(&ledger, &caller, 0).unwrap().id, id);
+        assert_eq!(
+            here(&ledger, &child_actor, 0).unwrap().name.as_deref(),
+            Some("child-agent")
+        );
+        // A remote participant on a pane of the same name is not this caller.
+        let mut remote = caller.clone();
+        remote.device_id = "mini".into();
+        assert_eq!(
+            here(&ledger, &remote, 0).err(),
+            Some("participant_unavailable")
+        );
+        // The pane's session moved on: its record belongs to the old one.
+        let mut handed_off = caller.clone();
+        handed_off.session = crate::engine::tokens::session_digest("observer-after-compaction");
+        assert_eq!(
+            here(&ledger, &handed_off, 0).err(),
+            Some("participant_session_changed")
+        );
+        ledger
+            .agents
+            .iter_mut()
+            .find(|record| record.id == id)
+            .unwrap()
+            .ended = true;
+        assert_eq!(here(&ledger, &caller, 0).err(), Some("participant_ended"));
+        let mut twice = ledger.agents[1].clone();
+        twice.id = "agent-copy".into();
+        ledger.agents.push(twice);
+        assert_eq!(
+            here(&ledger, &child_actor, 0).err(),
+            Some("ambiguous_participant")
+        );
+    }
+
+    /// The agent a spawn started and has not bound yet, under the spawn's
+    /// name in the pane it placed on the child's machine, is told its
+    /// registration is under way until the spawn is as old as its caller's
+    /// answer wait (45 s here, 60 s on a device), then that it is no one;
+    /// another agent in that pane, or the same pane id on another machine, is
+    /// no one at once, and once bound the caller is the child.
+    #[test]
+    fn a_caller_its_spawn_has_not_bound_is_registering_only_within_the_answer_wait() {
+        const AT: u64 = 1_000;
+        let mut ledger = Ledger::default();
+        let parent = record("parent", "parent-session", None);
+        let actor = parent.actor.clone();
+        let parent_id = register(&mut ledger, parent, &actor);
+        let mut started = |intent: &str, machine: Option<&str>, pane: &str| {
+            let mut spawn = command(intent);
+            if let Command::Spawn { machine: on, .. } = &mut spawn {
+                *on = machine.map(str::to_owned);
+            }
+            let reserve = Mutation::Reserve {
+                parent: parent_id.clone(),
+                command: spawn,
+            };
+            let id = apply(&mut ledger, &actor, &reserve, AT).unwrap()["id"]
+                .as_str()
+                .unwrap()
+                .to_owned();
+            for step in [
+                Mutation::Place {
+                    id: id.clone(),
+                    pane: pane.into(),
+                },
+                Mutation::Typed {
+                    id: id.clone(),
+                    profile: None,
+                },
+            ] {
+                apply(&mut ledger, &actor, &step, AT).unwrap();
+            }
+            id
+        };
+        let local_spawn = started("here", None, "w1:p1");
+        started("there", Some("mini"), "w2:p1");
+        // The started agents as the engine lists them, under the spawn's name.
+        let child = Actor {
+            pane_id: "w1:p1".into(),
+            name: "worker".into(),
+            kind: "codex".into(),
+            device_id: "local".into(),
+            session: crate::engine::tokens::session_digest("child-session"),
+        };
+        let device_child = Actor {
+            pane_id: crate::address::scoped_pane_id("mini", "w2:p1"),
+            device_id: "mini".into(),
+            ..child.clone()
+        };
+        let wait = |ms: u64| AT + ms;
+        assert_eq!(
+            here(&ledger, &child, wait(44_999)).err(),
+            Some("participant_registering")
+        );
+        assert_eq!(
+            here(&ledger, &child, wait(45_000)).err(),
+            Some("participant_unavailable")
+        );
+        assert_eq!(
+            here(&ledger, &device_child, wait(59_999)).err(),
+            Some("participant_registering")
+        );
+        assert_eq!(
+            here(&ledger, &device_child, wait(60_000)).err(),
+            Some("participant_unavailable")
+        );
+        let stranger = Actor {
+            name: "someone-else".into(),
+            ..child.clone()
+        };
+        let elsewhere = Actor {
+            pane_id: crate::address::scoped_pane_id("mini", "w1:p1"),
+            device_id: "mini".into(),
+            ..child.clone()
+        };
+        for caller in [&stranger, &elsewhere] {
+            assert_eq!(
+                here(&ledger, caller, AT).err(),
+                Some("participant_unavailable"),
+                "{caller:?}"
+            );
+        }
+        let bound = AgentRecord {
+            name: Some("worker".into()),
+            actor: child.clone(),
+            ..record("w1:p1", "child-session", Some(parent_id.clone()))
+        };
+        apply(
+            &mut ledger,
+            &actor,
+            &Mutation::BindChild {
+                id: local_spawn,
+                record: bound,
+            },
+            AT,
+        )
+        .unwrap();
+        assert_eq!(
+            here(&ledger, &child, wait(45_000))
+                .unwrap()
+                .parent
+                .as_deref(),
+            Some(parent_id.as_str())
+        );
+    }
+
+    #[test]
+    fn registration_check_is_read_only_and_execution_identity_replays_after_reload() {
+        let mut ledger = Ledger::default();
+        let parent = record("parent", "native-parent", None);
+        let actor = parent.actor.clone();
+        let before = ledger.clone();
+        apply(
+            &mut ledger,
+            &actor,
+            &Mutation::Register {
+                record: parent.clone(),
+                check: true,
+            },
+            1,
+        )
+        .unwrap();
+        assert_eq!(ledger, before);
+        let id = register(&mut ledger, parent.clone(), &actor);
+        assert_eq!(resolve_actor(&ledger, &id), Some(&actor));
+        let bytes = ledger.bytes().unwrap();
+        let mut restored: Ledger = serde_json::from_slice(&bytes).unwrap();
+        restored.validate().unwrap();
+        assert_eq!(register(&mut restored, parent, &actor), id);
+        assert_eq!(restored.agents.len(), 1);
+        let child = record("child", "native-child", Some(id.clone()));
+        let child_id = register(&mut restored, child, &actor);
+        assert_eq!(
+            restored
+                .agents
+                .iter()
+                .find(|record| record.id == child_id)
+                .unwrap()
+                .parent,
+            Some(id)
+        );
+    }
+    /// A mission's workers past its cap are refused with the cap named,
+    /// while asking again for a worker it already has still answers it, and
+    /// an ended worker frees its place (PRD software-factory-conductor B12).
+    #[test]
+    fn a_mission_spawn_past_its_cap_is_refused_and_an_ended_worker_frees_a_place() {
+        let mut ledger = Ledger::default();
+        let conductor = record("conductor", "native-conductor", None);
+        let caller = conductor.actor.clone();
+        let id = register(&mut ledger, conductor, &caller);
+        let worker = |intent: &str| {
+            let mut spawn = command(intent);
+            if let Command::Spawn { mission: slot, .. } = &mut spawn {
+                *slot = Some(Box::new(crate::runtime::missions::MissionAdmission {
+                    mission: "mission-1".into(),
+                    cap: 1,
+                    destination: None,
+                    closed: Vec::new(),
+                    ..Default::default()
+                }));
+            }
+            Mutation::Reserve {
+                parent: id.clone(),
+                command: spawn,
+            }
+        };
+        let first = apply(&mut ledger, &caller, &worker("mission-1:a"), 2).unwrap();
+        assert_eq!(first["mission"], "mission-1");
+        assert_eq!(mission_workers(&ledger, "mission-1", &[], 6), 1);
+        let refused = apply(&mut ledger, &caller, &worker("mission-1:b"), 3).unwrap_err();
+        assert_eq!(split_refusal(&refused), ("mission_cap_reached", Some("1")));
+        assert_eq!(
+            apply(&mut ledger, &caller, &worker("mission-1:a"), 4).unwrap()["id"],
+            first["id"]
+        );
+        // Another mission and an ordinary spawn are not counted here.
+        assert_eq!(mission_workers(&ledger, "mission-2", &[], 6), 0);
+        apply(
+            &mut ledger,
+            &caller,
+            &Mutation::Reserve {
+                parent: id.clone(),
+                command: command("plain"),
+            },
+            5,
+        )
+        .unwrap();
+        assert_eq!(mission_workers(&ledger, "mission-1", &[], 6), 1);
+        // The worker came up and then ended: its place is free again.
+        let child = register(
+            &mut ledger,
+            record("child", "native-child", Some(id.clone())),
+            &caller,
+        );
+        let spawn = ledger
+            .spawns
+            .iter_mut()
+            .find(|spawn| spawn.intent == "mission-1:a")
+            .unwrap();
+        spawn.child = Some(child.clone());
+        spawn.completed = true;
+        assert_eq!(mission_workers(&ledger, "mission-1", &[], 6), 1);
+        // A worker whose pane was closed for Reopen closed holds no place.
+        assert_eq!(
+            mission_workers(&ledger, "mission-1", std::slice::from_ref(&child), 6),
+            0
+        );
+        ledger
+            .agents
+            .iter_mut()
+            .find(|agent| agent.id == child)
+            .unwrap()
+            .ended = true;
+        assert_eq!(mission_workers(&ledger, "mission-1", &[], 6), 0);
+        apply(&mut ledger, &caller, &worker("mission-1:b"), 6).unwrap();
+        // A start that never produced its worker stops holding the place
+        // once it is long past, so a retry under a new intent can start.
+        let later = 6 + MISSION_RESERVATION_HOLD_MS;
+        assert_eq!(mission_workers(&ledger, "mission-1", &[], later - 1), 1);
+        assert_eq!(mission_workers(&ledger, "mission-1", &[], later), 0);
+        apply(&mut ledger, &caller, &worker("mission-1:c"), later).unwrap();
+        // The start that stopped holding its place comes back while `c` holds
+        // the one place: it waits rather than run a second worker, and takes
+        // the place again once `c` is gone.
+        assert_eq!(
+            split_refusal(&apply(&mut ledger, &caller, &worker("mission-1:b"), later).unwrap_err()),
+            ("mission_cap_reached", Some("1"))
+        );
+        let gone = later + MISSION_RESERVATION_HOLD_MS;
+        apply(&mut ledger, &caller, &worker("mission-1:b"), gone).unwrap();
+        assert_eq!(mission_workers(&ledger, "mission-1", &[], gone), 1);
+    }
+    /// B2: a mission's worker whose pane starts another conversation keeps
+    /// its place under the cap in the agent after it, while the spawn's
+    /// receipt keeps naming the worker it started; the ledger saves and
+    /// reads back so, and a second worker is refused.
+    #[test]
+    fn a_mission_worker_taken_over_in_its_pane_still_holds_its_place() {
+        let mut ledger = Ledger::default();
+        let conductor = record("conductor", "native-conductor", None);
+        let caller = conductor.actor.clone();
+        let id = register(&mut ledger, conductor, &caller);
+        let worker = |intent: &str| {
+            let mut spawn = command(intent);
+            if let Command::Spawn { mission: slot, .. } = &mut spawn {
+                *slot = Some(Box::new(crate::runtime::missions::MissionAdmission {
+                    mission: "mission-1".into(),
+                    cap: 1,
+                    ..Default::default()
+                }));
+            }
+            Mutation::Reserve {
+                parent: id.clone(),
+                command: spawn,
+            }
+        };
+        apply(&mut ledger, &caller, &worker("mission-1:a"), 2).unwrap();
+        let child = register(
+            &mut ledger,
+            record("child", "native-child", Some(id.clone())),
+            &caller,
+        );
+        let spawn = ledger
+            .spawns
+            .iter_mut()
+            .find(|spawn| spawn.intent == "mission-1:a")
+            .unwrap();
+        spawn.child = Some(child.clone());
+        spawn.completed = true;
+        spawn.pane = Some("child".into());
+        spawn.path = Some("/work/child".into());
+        ledger.validate().unwrap();
+        let next = record("child", "another-conversation", None);
+        let successions =
+            std::collections::BTreeMap::from([(child.clone(), Succession { successor: next })]);
+        let succeeded = succeed(&mut ledger, &successions, 3, &Held::default());
+        assert_eq!(succeeded.len(), 1);
+        let heir = &succeeded[0].1;
+        assert_eq!(
+            ledger.spawns[0].child.as_deref(),
+            Some(child.as_str()),
+            "the receipt names the worker it started"
+        );
+        assert_eq!(at_work(&ledger, &child).map(|agent| &agent.id), Some(heir));
+        ledger.validate().unwrap();
+        let root = tempfile::tempdir().unwrap();
+        let path = hide_kit::layout::delivery_store(root.path());
+        let (mut store, empty, _) = crate::delivery::store::LedgerStore::open(&path).unwrap();
+        store.write(&empty, &ledger).unwrap();
+        drop(store);
+        let (_, read, _) = crate::delivery::store::LedgerStore::open(&path).unwrap();
+        assert_eq!(read, ledger);
+        assert_eq!(mission_workers(&read, "mission-1", &[], 4), 1);
+        let refused = apply(&mut ledger, &caller, &worker("mission-1:b"), 4).unwrap_err();
+        assert_eq!(split_refusal(&refused), ("mission_cap_reached", Some("1")));
+    }
+
+    /// A main's plans hand steps to at most three children at once, counted
+    /// at the reserve with the starts still being made, so a fourth start is
+    /// refused whatever the order; the same start asked again still answers
+    /// its spawn, and a child that ended or sleeps frees its place (PRD
+    /// hide-plan-delegate B5).
+    #[test]
+    fn a_mains_fourth_plan_child_is_refused_until_one_ends_or_sleeps() {
+        let mut ledger = Ledger::default();
+        let main = record("main", "native-main", None);
+        let caller = main.actor.clone();
+        let id = register(&mut ledger, main, &caller);
+        let session = crate::links::ledger::SessionIdentity {
+            device_id: "mac".into(),
+            agent: "codex".into(),
+            session_id: "native-main".into(),
+        };
+        let step = |key: &str, asleep: &[&str]| {
+            let link = PlanLink {
+                plan: "1000".into(),
+                step: key.into(),
+                attempt: 1,
+                parent_session: session.clone(),
+            };
+            let mut spawn = command(&plan_intent(&link));
+            if let Command::Spawn { plan: slot, .. } = &mut spawn {
+                *slot = Some(Box::new(PlanAdmission {
+                    link,
+                    asleep: asleep.iter().map(|id| (*id).to_owned()).collect(),
+                }));
+            }
+            Mutation::Reserve {
+                parent: id.clone(),
+                command: spawn,
+            }
+        };
+        let first = apply(&mut ledger, &caller, &step("a", &[]), 2).unwrap();
+        assert_eq!(first["plan"]["step"], "a");
+        assert_eq!(first["intent"], "plan:1000:a:1");
+        apply(&mut ledger, &caller, &step("b", &[]), 3).unwrap();
+        apply(&mut ledger, &caller, &step("c", &[]), 4).unwrap();
+        assert_eq!(
+            split_refusal(&apply(&mut ledger, &caller, &step("d", &[]), 5).unwrap_err()),
+            ("plan_delegate_full", Some("3"))
+        );
+        // The same start again is the spawn it made, not a fourth.
+        assert_eq!(
+            apply(&mut ledger, &caller, &step("a", &[]), 6).unwrap()["id"],
+            first["id"]
+        );
+        // An intent the core did not make for the step is refused.
+        let mut forged = step("d", &[]);
+        if let Mutation::Reserve {
+            command: Command::Spawn { intent, .. },
+            ..
+        } = &mut forged
+        {
+            *intent = "plan:1000:d:9".into();
+        }
+        assert_eq!(
+            apply(&mut ledger, &caller, &forged, 7).unwrap_err(),
+            "invalid_spawn"
+        );
+        // `a`'s child came up: it counts while it runs, not once it sleeps
+        // or ends.
+        let child = register(
+            &mut ledger,
+            record("child", "native-child", Some(id.clone())),
+            &caller,
+        );
+        let spawn = ledger
+            .spawns
+            .iter_mut()
+            .find(|spawn| spawn.intent == "plan:1000:a:1")
+            .unwrap();
+        spawn.child = Some(child.clone());
+        spawn.completed = true;
+        assert_eq!(plan_children(&ledger, &session, &[], 8), 3);
+        assert_eq!(
+            plan_children(&ledger, &session, std::slice::from_ref(&child), 8),
+            2
+        );
+        apply(&mut ledger, &caller, &step("d", &[&child]), 9).unwrap();
+        assert_eq!(
+            split_refusal(&apply(&mut ledger, &caller, &step("e", &[&child]), 10).unwrap_err()),
+            ("plan_delegate_full", Some("3"))
+        );
+        ledger
+            .agents
+            .iter_mut()
+            .find(|agent| agent.id == child)
+            .unwrap()
+            .ended = true;
+        assert_eq!(plan_children(&ledger, &session, &[], 11), 3);
+        // Another main's plans have their own places.
+        let other = crate::links::ledger::SessionIdentity {
+            session_id: "native-other".into(),
+            ..session.clone()
+        };
+        assert_eq!(plan_children(&ledger, &other, &[], 11), 0);
+    }
+
+    /// A session that takes a mission over gets its workers: asking a start
+    /// again under the same intent answers the worker it already has, the
+    /// worker is its child, and the watch on the worker, which a report
+    /// ends and warnings go to, is its own (B43).
+    #[test]
+    fn a_mission_taken_over_hands_its_workers_to_the_new_conductor() {
+        let mut ledger = Ledger::default();
+        let former = record("former", "native-former", None);
+        let former_actor = former.actor.clone();
+        let former_id = register(&mut ledger, former, &former_actor);
+        let worker_spawn = || {
+            let mut spawn = command("mission-1:api");
+            if let Command::Spawn { mission: slot, .. } = &mut spawn {
+                *slot = Some(Box::new(crate::runtime::missions::MissionAdmission {
+                    mission: "mission-1".into(),
+                    cap: 2,
+                    destination: None,
+                    closed: Vec::new(),
+                    ..Default::default()
+                }));
+            }
+            spawn
+        };
+        let first = apply(
+            &mut ledger,
+            &former_actor,
+            &Mutation::Reserve {
+                parent: former_id.clone(),
+                command: worker_spawn(),
+            },
+            2,
+        )
+        .unwrap();
+        let child = register(
+            &mut ledger,
+            record("worker", "native-worker", Some(former_id.clone())),
+            &former_actor,
+        );
+        let child_actor = ledger
+            .agents
+            .iter()
+            .find(|agent| agent.id == child)
+            .unwrap()
+            .actor
+            .clone();
+        let watch = watch::start(&mut ledger, &former_actor, &child_actor, 3).unwrap();
+        let spawn = ledger
+            .spawns
+            .iter_mut()
+            .find(|spawn| spawn.intent == "mission-1:api")
+            .unwrap();
+        spawn.child = Some(child.clone());
+        spawn.completed = true;
+        spawn.auto_watch_id = Some(watch.id.clone());
+        // The former Conductor's pane is gone; another session registers.
+        ledger
+            .agents
+            .iter_mut()
+            .find(|agent| agent.id == former_id)
+            .unwrap()
+            .ended = true;
+        let heir = record("heir", "native-heir", None);
+        let heir_actor = heir.actor.clone();
+        let heir_id = register(&mut ledger, heir, &heir_actor);
+
+        let adopt = Mutation::AdoptMissionWorkers {
+            mission: "mission-1".into(),
+            conductor: heir_id.clone(),
+            former: None,
+        };
+        assert_eq!(
+            apply(&mut ledger, &heir_actor, &adopt, 4).unwrap_err(),
+            "parent_authority_required",
+            "only Hide hands workers over"
+        );
+        let hide = Actor::hide("conductor", "node");
+        assert_eq!(apply(&mut ledger, &hide, &adopt, 4).unwrap()["moved"], 1);
+
+        let again = apply(
+            &mut ledger,
+            &heir_actor,
+            &Mutation::Reserve {
+                parent: heir_id.clone(),
+                command: worker_spawn(),
+            },
+            5,
+        )
+        .unwrap();
+        assert_eq!(again["id"], first["id"], "the same worker, not a second");
+        assert_eq!(again["child"], child.as_str());
+        let worker = ledger
+            .agents
+            .iter()
+            .find(|agent| agent.id == child)
+            .unwrap();
+        assert_eq!(worker.parent.as_deref(), Some(heir_id.as_str()));
+        let moved = ledger.watches.iter().find(|w| w.id == watch.id).unwrap();
+        assert!(moved.parent.same_identity(&heir_actor));
+        assert!(moved.generation > watch.generation);
+        // Asked again, nothing moves twice.
+        assert_eq!(apply(&mut ledger, &hide, &adopt, 6).unwrap()["moved"], 0);
+    }
+
+    /// A takeover hands over the former Conductor's whole family, not only
+    /// its mission's workers: a child it started outside the mission and
+    /// one registered under it become the new Conductor's with the watches
+    /// on them, while the child the new Conductor itself descends from stays,
+    /// so no session becomes its own ancestor (B43).
+    #[test]
+    fn a_mission_taken_over_hands_every_child_of_the_former_conductor() {
+        let mut ledger = Ledger::default();
+        let former = record("former", "native-former", None);
+        let former_actor = former.actor.clone();
+        let former_id = register(&mut ledger, former, &former_actor);
+        apply(
+            &mut ledger,
+            &former_actor,
+            &Mutation::Reserve {
+                parent: former_id.clone(),
+                command: command("research"),
+            },
+            2,
+        )
+        .unwrap();
+        let research_record = record("research", "native-research", Some(former_id.clone()));
+        let research_actor = research_record.actor.clone();
+        let research = register(&mut ledger, research_record, &former_actor);
+        let watch = watch::start(&mut ledger, &former_actor, &research_actor, 3).unwrap();
+        let spawn = ledger
+            .spawns
+            .iter_mut()
+            .find(|spawn| spawn.intent == "research")
+            .unwrap();
+        spawn.child = Some(research.clone());
+        spawn.pane = Some("research".into());
+        spawn.path = Some("/fixture/research".into());
+        spawn.completed = true;
+        spawn.auto_watch_id = Some(watch.id.clone());
+        let loose = register(
+            &mut ledger,
+            record("loose", "native-loose", Some(former_id.clone())),
+            &former_actor,
+        );
+        let lead_record = record("lead", "native-lead", Some(former_id.clone()));
+        let lead_actor = lead_record.actor.clone();
+        let lead = register(&mut ledger, lead_record, &former_actor);
+        let heir = record("heir", "native-heir", Some(lead.clone()));
+        let heir_actor = heir.actor.clone();
+        let heir_id = register(&mut ledger, heir, &lead_actor);
+        validate_records(&ledger).unwrap();
+
+        let hide = Actor::hide("conductor", "node");
+        let adopt = Mutation::AdoptMissionWorkers {
+            mission: "mission-1".into(),
+            conductor: heir_id.clone(),
+            former: Some(former_id.clone()),
+        };
+        assert_eq!(apply(&mut ledger, &hide, &adopt, 4).unwrap()["moved"], 2);
+        validate_records(&ledger).unwrap();
+        let parent_of = |ledger: &Ledger, id: &str| {
+            ledger
+                .agents
+                .iter()
+                .find(|agent| agent.id == id)
+                .unwrap()
+                .parent
+                .clone()
+        };
+        assert_eq!(parent_of(&ledger, &research), Some(heir_id.clone()));
+        assert_eq!(parent_of(&ledger, &loose), Some(heir_id.clone()));
+        assert_eq!(parent_of(&ledger, &lead), Some(former_id.clone()));
+        let spawn = ledger
+            .spawns
+            .iter()
+            .find(|spawn| spawn.intent == "research")
+            .unwrap();
+        assert_eq!(spawn.parent, heir_id);
+        let moved = ledger.watches.iter().find(|w| w.id == watch.id).unwrap();
+        assert!(moved.parent.same_identity(&heir_actor));
+        assert!(moved.generation > watch.generation);
+        assert_eq!(apply(&mut ledger, &hide, &adopt, 5).unwrap()["moved"], 0);
+    }
+
+    /// The session that took a mission over may register only to start a
+    /// worker: that start hands it the workers first, one started without a
+    /// parent included, so a retry under the same intent is the worker it
+    /// already has and the ledger stays valid.
+    #[test]
+    fn a_new_conductors_first_start_takes_the_missions_workers() {
+        let mut ledger = Ledger::default();
+        let former = record("former", "native-former", None);
+        let former_actor = former.actor.clone();
+        let former_id = register(&mut ledger, former, &former_actor);
+        let handoff = |mission: &str| {
+            let mut spawn = command("mission-1:docs");
+            if let Command::Spawn {
+                mission: slot,
+                parent,
+                ..
+            } = &mut spawn
+            {
+                *parent = None;
+                *slot = Some(Box::new(crate::runtime::missions::MissionAdmission {
+                    mission: mission.into(),
+                    cap: 2,
+                    destination: None,
+                    closed: Vec::new(),
+                    ..Default::default()
+                }));
+            }
+            spawn
+        };
+        let first = apply(
+            &mut ledger,
+            &former_actor,
+            &Mutation::Reserve {
+                parent: former_id.clone(),
+                command: handoff("mission-1"),
+            },
+            2,
+        )
+        .unwrap();
+        let child_record = record("docs", "native-docs", None);
+        let child_actor = child_record.actor.clone();
+        let child = register(&mut ledger, child_record, &child_actor);
+        ledger
+            .agents
+            .iter_mut()
+            .find(|agent| agent.id == child)
+            .unwrap()
+            .origin = Some(former_id.clone());
+        let spawn = ledger
+            .spawns
+            .iter_mut()
+            .find(|spawn| spawn.intent == "mission-1:docs")
+            .unwrap();
+        spawn.child = Some(child.clone());
+        spawn.pane = Some("docs".into());
+        spawn.path = Some("/fixture/docs".into());
+        spawn.completed = true;
+        validate_records(&ledger).unwrap();
+        ledger
+            .agents
+            .iter_mut()
+            .find(|agent| agent.id == former_id)
+            .unwrap()
+            .ended = true;
+        let heir = record("heir", "native-heir", None);
+        let heir_actor = heir.actor.clone();
+        let heir_id = register(&mut ledger, heir, &heir_actor);
+
+        let again = apply(
+            &mut ledger,
+            &heir_actor,
+            &Mutation::Reserve {
+                parent: heir_id.clone(),
+                command: handoff("mission-1"),
+            },
+            3,
+        )
+        .unwrap();
+        assert_eq!(again["id"], first["id"]);
+        let worker = ledger
+            .agents
+            .iter()
+            .find(|agent| agent.id == child)
+            .unwrap();
+        assert_eq!(worker.origin.as_deref(), Some(heir_id.as_str()));
+        validate_records(&ledger).unwrap();
+    }
+
+    #[test]
+    fn a_parent_intent_has_one_durable_child_and_other_parents_have_their_own() {
+        let mut ledger = Ledger::default();
+        let one = record("one", "native-one", None);
+        let caller_one = one.actor.clone();
+        let id_one = register(&mut ledger, one, &caller_one);
+        let two = record("two", "native-two", None);
+        let caller_two = two.actor.clone();
+        let id_two = register(&mut ledger, two, &caller_two);
+        let reserve = Mutation::Reserve {
+            parent: id_one.clone(),
+            command: command("same"),
+        };
+        let first = apply(&mut ledger, &caller_one, &reserve, 2).unwrap();
+        let bytes = ledger.bytes().unwrap();
+        let mut restored: Ledger = serde_json::from_slice(&bytes).unwrap();
+        assert_eq!(
+            apply(&mut restored, &caller_one, &reserve, 3).unwrap(),
+            first
+        );
+        let second = apply(
+            &mut restored,
+            &caller_two,
+            &Mutation::Reserve {
+                parent: id_two,
+                command: command("same"),
+            },
+            3,
+        )
+        .unwrap();
+        assert_ne!(first["id"], second["id"]);
+        assert_eq!(restored.spawns.len(), 2);
+        let id = first["id"].as_str().unwrap().to_owned();
+        apply(
+            &mut restored,
+            &caller_one,
+            &Mutation::Advance {
+                seed_tab: None,
+                id: id.clone(),
+                path: Some("/fixture/topic".into()),
+                made: false,
+                pane: Some("child-pane".into()),
+                terminal: None,
+                shell: None,
+                child: None,
+            },
+            4,
+        )
+        .unwrap();
+        assert_eq!(
+            apply(&mut restored, &caller_one, &reserve, 5).unwrap()["pane"],
+            "child-pane"
+        );
+        assert!(
+            apply(
+                &mut restored,
+                &caller_two,
+                &Mutation::Advance {
+                    seed_tab: None,
+                    id,
+                    path: None,
+                    made: false,
+                    pane: Some("wrong".into()),
+                    terminal: None,
+                    shell: None,
+                    child: None
+                },
+                5
+            )
+            .is_err()
+        );
+    }
+    #[test]
+    fn ending_a_child_requires_its_parent_and_stops_the_matching_watch() {
+        let mut ledger = Ledger::default();
+        let parent = record("parent", "native-parent", None);
+        let actor = parent.actor.clone();
+        let id = register(&mut ledger, parent, &actor);
+        let child = record("child", "native-child", Some(id.clone()));
+        let child_id = register(&mut ledger, child, &actor);
+        let target = resolve_actor(&ledger, &child_id).unwrap().clone();
+        watch::start(&mut ledger, &actor, &target, 2).unwrap();
+        assert_eq!(ledger.watches.len(), 1);
+        let stranger = record("stranger", "native-stranger", None).actor;
+        assert!(
+            apply(
+                &mut ledger,
+                &stranger,
+                &Mutation::End {
+                    id: child_id.clone(),
+                    actor: None
+                },
+                3
+            )
+            .is_err()
+        );
+        apply(
+            &mut ledger,
+            &actor,
+            &Mutation::End {
+                id: child_id.clone(),
+                actor: Some(id),
+            },
+            3,
+        )
+        .unwrap();
+        assert!(ledger.watches.is_empty());
+        assert!(resolve_actor(&ledger, &child_id).is_none());
+        assert!(
+            ledger
+                .agents
+                .iter()
+                .find(|record| record.id == child_id)
+                .unwrap()
+                .ended
+        );
+    }
+    #[test]
+    fn changed_intent_payload_or_invalid_persisted_session_is_refused() {
+        let mut ledger = Ledger::default();
+        let parent = record("parent", "session", None);
+        let actor = parent.actor.clone();
+        let id = register(&mut ledger, parent, &actor);
+        apply(
+            &mut ledger,
+            &actor,
+            &Mutation::Reserve {
+                parent: id.clone(),
+                command: command("key"),
+            },
+            1,
+        )
+        .unwrap();
+        let mut changed = command("key");
+        if let Command::Spawn { parent, .. } = &mut changed {
+            *parent = None;
+        }
+        assert_eq!(
+            apply(
+                &mut ledger,
+                &actor,
+                &Mutation::Reserve {
+                    parent: id,
+                    command: changed
+                },
+                1
+            )
+            .unwrap_err(),
+            "intent_conflict"
+        );
+        ledger.agents[0].session = "replaced".into();
+        assert!(ledger.bytes().is_err());
+    }
+    fn pending_spawn() -> (Ledger, Actor, String, String, AgentRecord) {
+        pending_spawn_mode(SpawnMode::Delegation, "local")
+    }
+
+    fn pending_spawn_mode(
+        mode: SpawnMode,
+        device: &str,
+    ) -> (Ledger, Actor, String, String, AgentRecord) {
+        let mut ledger = Ledger::default();
+        let mut parent = record("parent", "native-parent", None);
+        parent.machine = device.into();
+        parent.actor.device_id = device.into();
+        let actor = parent.actor.clone();
+        let parent_id = register(&mut ledger, parent, &actor);
+        let mut command = command("once");
+        if mode == SpawnMode::Handoff
+            && let Command::Spawn { parent, .. } = &mut command
+        {
+            *parent = None;
+        }
+        let reserved = apply(
+            &mut ledger,
+            &actor,
+            &Mutation::Reserve {
+                parent: parent_id.clone(),
+                command,
+            },
+            1,
+        )
+        .unwrap();
+        let id = reserved["id"].as_str().unwrap().to_owned();
+        apply(
+            &mut ledger,
+            &actor,
+            &Mutation::Advance {
+                seed_tab: None,
+                id: id.clone(),
+                path: Some("/fixture/topic".into()),
+                made: false,
+                pane: Some("worker-pane".into()),
+                terminal: None,
+                shell: None,
+                child: None,
+            },
+            2,
+        )
+        .unwrap();
+        let mut child = record(
+            "worker-pane",
+            "native-child",
+            mode.responsibility(&parent_id),
+        );
+        child.name = Some("worker".into());
+        child.origin = mode.origin(&parent_id);
+        child.machine = device.into();
+        child.actor.device_id = device.into();
+        child.project = Some("/fixture/topic".into());
+        (ledger, actor, parent_id, id, child)
+    }
+
+    /// A pending spawn with a brief, its agent's start typed: what is left is
+    /// the brief's own transitions and the child's bind.
+    fn briefed_spawn() -> (Ledger, Actor, String, AgentRecord) {
+        let (mut ledger, parent, _, spawn, child) = pending_spawn();
+        ledger.spawns[0].brief = Some("Node api: add the call.".into());
+        apply(
+            &mut ledger,
+            &parent,
+            &Mutation::Typed {
+                id: spawn.clone(),
+                profile: None,
+            },
+            2,
+        )
+        .unwrap();
+        (ledger, parent, spawn, child)
+    }
+
+    /// A spawn's record keeps the profile the spawn named apart from the
+    /// one its start took (PRD agent-profiles D-27): a spawn that named none
+    /// and started with its parent's profile records only what started, and
+    /// a spawn on the built-in default records neither, so its record reads
+    /// as one written before profiles.
+    #[test]
+    fn a_spawn_record_keeps_what_it_named_apart_from_the_profile_it_started_with() {
+        let (mut ledger, parent, _, spawn, _) = pending_spawn();
+        let fields = |ledger: &Ledger| {
+            let record = serde_json::to_value(&ledger.spawns[0]).unwrap();
+            (
+                record.get("profile").cloned(),
+                record.get("started_profile").cloned(),
+            )
+        };
+        assert_eq!(fields(&ledger), (None, None));
+        let team = crate::launch::LaunchProfile {
+            id: hide_agent_adapter::ProfileId("p-team".into()),
+            name: "team".into(),
+            account: hide_agent_adapter::AccountKey::Folder("/accounts/team".into()),
+        };
+        apply(
+            &mut ledger,
+            &parent,
+            &Mutation::Typed {
+                id: spawn,
+                profile: Some(team.clone()),
+            },
+            2,
+        )
+        .unwrap();
+        let (named, started) = fields(&ledger);
+        assert_eq!(named, None);
+        assert_eq!(
+            serde_json::from_value::<crate::launch::LaunchProfile>(started.unwrap()).unwrap(),
+            team
+        );
+    }
+
+    fn phase_of(ledger: &Ledger) -> BriefPhase {
+        ledger.spawns[0].brief_phase()
+    }
+
+    fn step(ledger: &mut Ledger, caller: &Actor, mutation: Mutation) {
+        apply(ledger, caller, &mutation, 3).unwrap();
+    }
+
+    /// with-hide/hide-private#717 review R2: the brief's phase is read from
+    /// the facts written before each effect, the agent's record first, so a
+    /// send reserved but not saved is one that may have arrived, a refused
+    /// one is not typed, a record that arrived before the send's outcome was
+    /// saved is confirmed, and a record an earlier build wrote keeps the
+    /// brief it submitted.
+    #[test]
+    fn a_briefs_phase_is_read_from_the_facts_written_before_each_effect() {
+        let input = Actor::hide(crate::delivery::typed::INPUT_ROLE, "node");
+        let (mut ledger, parent, spawn, _) = briefed_spawn();
+        assert_eq!(phase_of(&ledger), BriefPhase::NotTyped);
+        step(
+            &mut ledger,
+            &parent,
+            Mutation::BriefTyping { id: spawn.clone() },
+        );
+        assert_eq!(phase_of(&ledger), BriefPhase::Sending);
+        assert!(!phase_of(&ledger).went_in() && !phase_of(&ledger).settled());
+        step(
+            &mut ledger,
+            &input,
+            Mutation::BriefConfirmed { id: spawn.clone() },
+        );
+        assert!(!ledger.spawns[0].briefed);
+        assert_eq!(phase_of(&ledger), BriefPhase::Confirmed);
+
+        let (mut ledger, parent, spawn, _) = briefed_spawn();
+        step(
+            &mut ledger,
+            &parent,
+            Mutation::BriefTyping { id: spawn.clone() },
+        );
+        step(
+            &mut ledger,
+            &parent,
+            Mutation::BriefUnsent { id: spawn.clone() },
+        );
+        assert_eq!(phase_of(&ledger), BriefPhase::NotTyped);
+        assert_eq!(phase_of(&ledger).word(), "not_typed");
+
+        for (route, phase) in [
+            (crate::delivery::typed::SendRoute::Lost, BriefPhase::Lost),
+            (crate::delivery::typed::SendRoute::Typed, BriefPhase::Typed),
+        ] {
+            let (mut ledger, parent, spawn, _) = briefed_spawn();
+            step(
+                &mut ledger,
+                &parent,
+                Mutation::BriefTyping { id: spawn.clone() },
+            );
+            step(
+                &mut ledger,
+                &parent,
+                Mutation::Briefed {
+                    id: spawn.clone(),
+                    route,
+                },
+            );
+            assert_eq!(phase_of(&ledger), phase);
+            assert!(phase.went_in() && phase.settled());
+        }
+
+        let (mut ledger, parent, spawn, _) = briefed_spawn();
+        step(
+            &mut ledger,
+            &parent,
+            Mutation::BriefLaunched {
+                id: spawn.clone(),
+                words: vec!["brief".into()],
+            },
+        );
+        assert_eq!(phase_of(&ledger), BriefPhase::Launched);
+
+        let (mut ledger, _, _, _) = briefed_spawn();
+        ledger.spawns[0].briefed = true;
+        ledger.spawns[0].brief_input = None;
+        assert_eq!(
+            phase_of(&ledger),
+            BriefPhase::Typed,
+            "an earlier build's record"
+        );
+        ledger.spawns[0].brief = None;
+        assert_eq!(phase_of(&ledger), BriefPhase::None);
+        assert!(BriefPhase::None.settled() && !BriefPhase::None.went_in());
+    }
+
+    fn intent_letters(ledger: &Ledger) -> Vec<crate::delivery::ledger::Letter> {
+        let intent = &ledger.spawns[0].intent;
+        ledger
+            .letters
+            .iter()
+            .filter(|letter| &letter.intent == intent)
+            .cloned()
+            .collect()
+    }
+
+    /// with-hide/hide-private#717 review R1: the brief the child read is the
+    /// first letter under the spawn's intent exactly once, whether the child
+    /// was bound before the brief went in (a question held the brief) or
+    /// after, and binding again, saving the send again or its record leaves
+    /// that letter as it is; a letter the parent already sent under the
+    /// intent is never written over.
+    #[test]
+    fn the_briefs_first_letter_is_written_once_whether_the_bind_or_the_brief_comes_first() {
+        let input = Actor::hide(crate::delivery::typed::INPUT_ROLE, "node");
+        let briefed = |spawn: &str| Mutation::Briefed {
+            id: spawn.to_owned(),
+            route: crate::delivery::typed::SendRoute::Typed,
+        };
+        let bind = |spawn: &str, child: &AgentRecord| Mutation::BindChild {
+            id: spawn.to_owned(),
+            record: child.clone(),
+        };
+
+        // Bound first, while the brief waits.
+        let (mut ledger, parent, spawn, child) = briefed_spawn();
+        step(&mut ledger, &parent, bind(&spawn, &child));
+        assert!(intent_letters(&ledger).is_empty());
+        step(
+            &mut ledger,
+            &parent,
+            Mutation::BriefTyping { id: spawn.clone() },
+        );
+        assert!(
+            intent_letters(&ledger).is_empty(),
+            "a send not saved may be refused"
+        );
+        step(&mut ledger, &parent, briefed(&spawn));
+        let letters = intent_letters(&ledger);
+        assert_eq!(letters.len(), 1);
+        assert_eq!(letters[0].body, "Node api: add the call.");
+        assert_eq!(letters[0].state, crate::delivery::ledger::State::Delivered);
+        assert_eq!(letters[0].hook_confirmed, Some(true));
+        step(&mut ledger, &parent, bind(&spawn, &child));
+        step(&mut ledger, &parent, briefed(&spawn));
+        step(
+            &mut ledger,
+            &input,
+            Mutation::BriefConfirmed { id: spawn.clone() },
+        );
+        step(
+            &mut ledger,
+            &parent,
+            Mutation::Complete { id: spawn.clone() },
+        );
+        assert_eq!(intent_letters(&ledger), letters);
+
+        // The brief first, bound after.
+        let (mut ledger, parent, spawn, child) = briefed_spawn();
+        step(
+            &mut ledger,
+            &parent,
+            Mutation::BriefTyping { id: spawn.clone() },
+        );
+        step(&mut ledger, &parent, briefed(&spawn));
+        assert!(
+            intent_letters(&ledger).is_empty(),
+            "no child to address yet"
+        );
+        step(&mut ledger, &parent, bind(&spawn, &child));
+        assert_eq!(intent_letters(&ledger).len(), 1);
+
+        // A letter the parent sent under the intent stays its own.
+        let (mut ledger, parent, spawn, child) = briefed_spawn();
+        step(&mut ledger, &parent, bind(&spawn, &child));
+        let intent = ledger.spawns[0].intent.clone();
+        crate::delivery::mailbox::send(
+            &mut ledger,
+            &parent,
+            &child.actor,
+            &intent,
+            "the parent's own",
+            "request",
+            None,
+            3,
+        )
+        .unwrap();
+        let before = intent_letters(&ledger);
+        step(
+            &mut ledger,
+            &parent,
+            Mutation::BriefTyping { id: spawn.clone() },
+        );
+        step(&mut ledger, &parent, briefed(&spawn));
+        assert_eq!(intent_letters(&ledger), before);
+    }
+
+    /// #717 review R3: Hide's record of a brief that arrives after the parent
+    /// ended is saved. The first letter the parent already holds stays as it
+    /// is; with none, no letter is written, and the log says the parent
+    /// ended. A live parent's letter that is refused still refuses the
+    /// record, as before.
+    #[test]
+    fn a_briefs_record_after_its_parent_ended_is_kept_and_writes_no_new_letter() {
+        let input = Actor::hide(crate::delivery::typed::INPUT_ROLE, "node");
+        let end_parent = |ledger: &mut Ledger, parent: &Actor| {
+            let id = ledger.spawns[0].parent.clone();
+            step(ledger, parent, Mutation::End { id, actor: None });
+            assert!(resolve_actor(ledger, &ledger.spawns[0].parent).is_none());
+        };
+        let confirmed = |ledger: &Ledger| {
+            ledger.spawns[0]
+                .brief_input
+                .as_ref()
+                .and_then(|input| input.confirmed_at_unix_ms)
+        };
+        let skipped = |logged: &[Value]| {
+            logged
+                .iter()
+                .filter(|record| record["kind"] == "spawn.first_letter_skipped")
+                .map(|record| record["reason"].as_str().unwrap().to_owned())
+                .collect::<Vec<_>>()
+        };
+
+        // Completed with its first letter; the parent ended before the
+        // agent's record arrived.
+        let (mut ledger, parent, spawn, child) = briefed_spawn();
+        step(
+            &mut ledger,
+            &parent,
+            Mutation::BriefTyping { id: spawn.clone() },
+        );
+        step(
+            &mut ledger,
+            &parent,
+            Mutation::Briefed {
+                id: spawn.clone(),
+                route: crate::delivery::typed::SendRoute::Typed,
+            },
+        );
+        step(
+            &mut ledger,
+            &parent,
+            Mutation::BindChild {
+                id: spawn.clone(),
+                record: child.clone(),
+            },
+        );
+        assert_eq!(intent_letters(&ledger).len(), 1);
+        end_parent(&mut ledger, &parent);
+        let letters = intent_letters(&ledger);
+        let (_, logged) = crate::diagnostics::capture(|| {
+            for _ in 0..2 {
+                step(
+                    &mut ledger,
+                    &input,
+                    Mutation::BriefConfirmed { id: spawn.clone() },
+                );
+            }
+        });
+        assert!(confirmed(&ledger).is_some());
+        assert_eq!(intent_letters(&ledger), letters);
+        assert!(skipped(&logged).is_empty(), "the letter is there");
+
+        // Bound before the brief went in; the parent ended after the typing
+        // was reserved, before its outcome or the agent's record was saved.
+        for phase in [BriefPhase::Confirmed, BriefPhase::Typed] {
+            let record = |id| match phase {
+                BriefPhase::Confirmed => Mutation::BriefConfirmed { id },
+                _ => Mutation::Briefed {
+                    id,
+                    route: crate::delivery::typed::SendRoute::Typed,
+                },
+            };
+            let (mut ledger, parent, spawn, child) = briefed_spawn();
+            step(
+                &mut ledger,
+                &parent,
+                Mutation::BindChild {
+                    id: spawn.clone(),
+                    record: child,
+                },
+            );
+            step(
+                &mut ledger,
+                &parent,
+                Mutation::BriefTyping { id: spawn.clone() },
+            );
+            end_parent(&mut ledger, &parent);
+            let (_, logged) = crate::diagnostics::capture(|| {
+                step(&mut ledger, &input, record(spawn.clone()));
+            });
+            assert_eq!(phase_of(&ledger), phase);
+            assert!(intent_letters(&ledger).is_empty());
+            assert!(ledger.letters.iter().all(|letter| !letter.waiting_answer));
+            assert_eq!(skipped(&logged), ["parent_ended"]);
+        }
+
+        // A parent whose registration is gone is told apart in the log.
+        let (mut ledger, parent, spawn, child) = briefed_spawn();
+        step(
+            &mut ledger,
+            &parent,
+            Mutation::BindChild {
+                id: spawn.clone(),
+                record: child,
+            },
+        );
+        step(
+            &mut ledger,
+            &parent,
+            Mutation::BriefTyping { id: spawn.clone() },
+        );
+        let parent_id = ledger.spawns[0].parent.clone();
+        ledger.agents.retain(|record| record.id != parent_id);
+        let (_, logged) = crate::diagnostics::capture(|| {
+            step(
+                &mut ledger,
+                &input,
+                Mutation::BriefConfirmed { id: spawn.clone() },
+            );
+        });
+        assert!(confirmed(&ledger).is_some());
+        assert_eq!(skipped(&logged), ["parent_unregistered"]);
+
+        // A live parent's letter refused refuses the record.
+        let (mut ledger, parent, spawn, child) = briefed_spawn();
+        ledger.spawns[0].brief = Some("x".repeat(crate::delivery::BODY_LIMIT + 1));
+        step(
+            &mut ledger,
+            &parent,
+            Mutation::BindChild {
+                id: spawn.clone(),
+                record: child,
+            },
+        );
+        step(
+            &mut ledger,
+            &parent,
+            Mutation::BriefTyping { id: spawn.clone() },
+        );
+        assert_eq!(
+            apply(
+                &mut ledger,
+                &input,
+                &Mutation::BriefConfirmed { id: spawn.clone() },
+                3
+            )
+            .unwrap_err(),
+            "capacity"
+        );
+    }
+
+    /// PRD engine-bundle-3-core-owns D-11: the engine names a spawn's pane
+    /// before anything runs there; a later pane of the same placement (a tab
+    /// that replaces its workspace's seed) takes its place, a pane that never
+    /// ran is withdrawn, and once the agent was typed the pane stays.
+    #[test]
+    fn a_placed_pane_is_named_until_withdrawn_and_kept_once_its_agent_was_typed() {
+        let mut ledger = Ledger::default();
+        let parent = record("parent", "native-parent", None);
+        let actor = parent.actor.clone();
+        let parent_id = register(&mut ledger, parent, &actor);
+        let reserved = apply(
+            &mut ledger,
+            &actor,
+            &Mutation::Reserve {
+                parent: parent_id,
+                command: command("placed"),
+            },
+            1,
+        )
+        .unwrap();
+        let id = reserved["id"].as_str().unwrap().to_owned();
+        let place = |pane: &str| Mutation::Place {
+            id: id.clone(),
+            pane: pane.into(),
+        };
+        let withdraw = |pane: &str| Mutation::Withdraw {
+            id: id.clone(),
+            pane: pane.into(),
+        };
+        let pane = |ledger: &Ledger| ledger.spawns[0].pane.clone();
+
+        apply(&mut ledger, &actor, &place("w1:p1"), 2).unwrap();
+        assert_eq!(pane(&ledger).as_deref(), Some("w1:p1"));
+        apply(&mut ledger, &actor, &place("w1:p2"), 3).unwrap();
+        assert_eq!(pane(&ledger).as_deref(), Some("w1:p2"), "the replacing tab");
+        apply(&mut ledger, &actor, &withdraw("w1:p1"), 4).unwrap();
+        assert_eq!(
+            pane(&ledger).as_deref(),
+            Some("w1:p2"),
+            "a pane given way already is not the one taken back"
+        );
+        apply(&mut ledger, &actor, &withdraw("w1:p2"), 5).unwrap();
+        assert_eq!(pane(&ledger), None, "the pane that never ran is no one's");
+
+        apply(&mut ledger, &actor, &place("w1:p3"), 6).unwrap();
+        apply(
+            &mut ledger,
+            &actor,
+            &Mutation::Typed {
+                id: id.clone(),
+                profile: None,
+            },
+            7,
+        )
+        .unwrap();
+        assert_eq!(
+            apply(&mut ledger, &actor, &place("w1:p4"), 8).unwrap_err(),
+            "intent_conflict"
+        );
+        assert_eq!(pane(&ledger).as_deref(), Some("w1:p3"));
+
+        let stranger = record("stranger", "native-stranger", None).actor;
+        assert_eq!(
+            apply(&mut ledger, &stranger, &withdraw("w1:p3"), 9).unwrap_err(),
+            "parent_authority_required"
+        );
+    }
+
+    /// A brief whose send lost its answer, or that its start carried, may
+    /// already be with the agent: once it is saved so, no caller can reserve
+    /// another typing of it, its parent's retry and Hide's own alike.
+    #[test]
+    fn a_launched_or_lost_brief_refuses_every_later_typing() {
+        // `None`: the send's outcome was never saved after its reservation.
+        for (route, refusal) in [
+            (
+                Some(crate::delivery::typed::SendRoute::Lost),
+                "brief_send_lost",
+            ),
+            (
+                Some(crate::delivery::typed::SendRoute::Launch),
+                "brief_launched",
+            ),
+            (None, "brief_send_lost"),
+        ] {
+            let mut ledger = Ledger::default();
+            let parent = record("parent", "native-parent", None);
+            let actor = parent.actor.clone();
+            let parent_id = register(&mut ledger, parent, &actor);
+            let mut spawn_command = command("mission-1:api");
+            if let Command::Spawn { brief, .. } = &mut spawn_command {
+                *brief = Some("Node api: add the call.".into());
+            }
+            let spawn = apply(
+                &mut ledger,
+                &actor,
+                &Mutation::Reserve {
+                    parent: parent_id,
+                    command: spawn_command,
+                },
+                1,
+            )
+            .unwrap()["id"]
+                .as_str()
+                .unwrap()
+                .to_owned();
+            apply(
+                &mut ledger,
+                &actor,
+                &Mutation::Advance {
+                    seed_tab: None,
+                    id: spawn.clone(),
+                    path: Some("/fixture/topic".into()),
+                    made: false,
+                    pane: Some("worker-pane".into()),
+                    terminal: None,
+                    shell: None,
+                    child: None,
+                },
+                2,
+            )
+            .unwrap();
+            apply(
+                &mut ledger,
+                &actor,
+                &Mutation::Typed {
+                    id: spawn.clone(),
+                    profile: None,
+                },
+                2,
+            )
+            .unwrap();
+            if route == Some(crate::delivery::typed::SendRoute::Launch) {
+                apply(
+                    &mut ledger,
+                    &actor,
+                    &Mutation::BriefLaunched {
+                        id: spawn.clone(),
+                        words: vec!["--".into(), "brief".into()],
+                    },
+                    3,
+                )
+                .unwrap();
+            } else {
+                apply(
+                    &mut ledger,
+                    &actor,
+                    &Mutation::BriefTyping { id: spawn.clone() },
+                    3,
+                )
+                .unwrap();
+                if let Some(route) = route {
+                    let saved = apply(
+                        &mut ledger,
+                        &actor,
+                        &Mutation::Briefed {
+                            id: spawn.clone(),
+                            route,
+                        },
+                        3,
+                    )
+                    .unwrap();
+                    assert_eq!(saved["briefed"], true, "a lost send counts as sent");
+                }
+            }
+            let input = Actor::hide(crate::delivery::typed::INPUT_ROLE, "node");
+            for caller in [&actor, &input] {
+                assert_eq!(
+                    apply(
+                        &mut ledger,
+                        caller,
+                        &Mutation::BriefTyping { id: spawn.clone() },
+                        4
+                    )
+                    .unwrap_err(),
+                    refusal
+                );
+            }
+            if route.is_none() {
+                // A typing that sent nothing gives the brief back to typing.
+                apply(
+                    &mut ledger,
+                    &input,
+                    &Mutation::BriefUnsent { id: spawn.clone() },
+                    5,
+                )
+                .unwrap();
+                let again = apply(
+                    &mut ledger,
+                    &input,
+                    &Mutation::BriefTyping { id: spawn.clone() },
+                    6,
+                )
+                .unwrap();
+                assert_eq!(again["brief_input"]["attempts"], 2);
+            }
+        }
+    }
+
+    /// A spawn's brief is part of its intent, is marked submitted once so a
+    /// retry never types it twice, and becomes the child's first letter when
+    /// the child binds: delivered and confirmed under the spawn's intent,
+    /// from the parent, so the ledger and a later wake carry it.
+    /// Each typing of a brief is reserved before it is typed, at most three,
+    /// only by the spawn's parent or Hide's own input identity; the agent's
+    /// record ends it whichever typing it records, and a late record or a
+    /// late typing changes nothing more (`delivery::typed`, engineering #11).
+    #[test]
+    fn a_briefs_typings_are_capped_and_its_record_ends_them_once() {
+        let mut ledger = Ledger::default();
+        let parent = record("parent", "native-parent", None);
+        let actor = parent.actor.clone();
+        let parent_id = register(&mut ledger, parent, &actor);
+        let mut spawn_command = command("mission-1:api");
+        if let Command::Spawn { brief, .. } = &mut spawn_command {
+            *brief = Some("Node api: add the call.".into());
+        }
+        let spawn = apply(
+            &mut ledger,
+            &actor,
+            &Mutation::Reserve {
+                parent: parent_id,
+                command: spawn_command,
+            },
+            1,
+        )
+        .unwrap()["id"]
+            .as_str()
+            .unwrap()
+            .to_owned();
+        // One typing: reserved, sent, and its outcome saved as typed.
+        let typing = |ledger: &mut Ledger, caller: &Actor, now: u64| {
+            let reserved = apply(
+                ledger,
+                caller,
+                &Mutation::BriefTyping { id: spawn.clone() },
+                now,
+            )?;
+            apply(
+                ledger,
+                caller,
+                &Mutation::Briefed {
+                    id: spawn.clone(),
+                    route: crate::delivery::typed::SendRoute::Typed,
+                },
+                now,
+            )?;
+            Ok::<_, String>(reserved)
+        };
+        assert_eq!(
+            typing(&mut ledger, &actor, 2).unwrap_err(),
+            "spawn_incomplete",
+            "nothing is typed before the agent was started"
+        );
+        for mutation in [
+            Mutation::Advance {
+                seed_tab: None,
+                id: spawn.clone(),
+                path: Some("/fixture/topic".into()),
+                made: false,
+                pane: Some("worker-pane".into()),
+                terminal: None,
+                shell: None,
+                child: None,
+            },
+            Mutation::Typed {
+                id: spawn.clone(),
+                profile: None,
+            },
+        ] {
+            apply(&mut ledger, &actor, &mutation, 2).unwrap();
+        }
+        let input = Actor::hide(crate::delivery::typed::INPUT_ROLE, "node");
+        let stranger = record("stranger", "native-stranger", None).actor;
+        assert_eq!(
+            typing(&mut ledger, &stranger, 3).unwrap_err(),
+            "parent_authority_required"
+        );
+        let first = typing(&mut ledger, &actor, 3).unwrap();
+        assert_eq!(first["brief_input"]["attempts"], 1);
+        assert_eq!(first["brief_input"]["typed_at_unix_ms"], 3);
+        typing(&mut ledger, &input, 4).unwrap();
+        typing(&mut ledger, &input, 5).unwrap();
+        assert_eq!(
+            typing(&mut ledger, &input, 6).unwrap_err(),
+            "brief_attempts_spent",
+            "a fourth typing is refused"
+        );
+        // Only Hide's own identity reports the record or the notice.
+        for mutation in [
+            Mutation::BriefConfirmed { id: spawn.clone() },
+            Mutation::BriefNoticed {
+                id: spawn.clone(),
+                attempt: 1,
+            },
+        ] {
+            assert_eq!(
+                apply(&mut ledger, &actor, &mutation, 7).unwrap_err(),
+                "caller_identity_conflict"
+            );
+        }
+        let noticed = apply(
+            &mut ledger,
+            &input,
+            &Mutation::BriefNoticed {
+                id: spawn.clone(),
+                attempt: 3,
+            },
+            7,
+        )
+        .unwrap();
+        assert_eq!(noticed["brief_input"]["noticed"], 3);
+        // A notice of an earlier typing that lands late moves nothing back.
+        let late = apply(
+            &mut ledger,
+            &input,
+            &Mutation::BriefNoticed {
+                id: spawn.clone(),
+                attempt: 1,
+            },
+            8,
+        )
+        .unwrap();
+        assert_eq!(late["brief_input"]["noticed"], 3);
+        assert_eq!(late["brief_input"]["noticed_at_unix_ms"], 7);
+        let confirmed = apply(
+            &mut ledger,
+            &input,
+            &Mutation::BriefConfirmed { id: spawn.clone() },
+            9,
+        )
+        .unwrap();
+        assert_eq!(confirmed["brief_input"]["confirmed_at_unix_ms"], 9);
+        // The record of an earlier typing arriving later keeps the first.
+        let again = apply(
+            &mut ledger,
+            &input,
+            &Mutation::BriefConfirmed { id: spawn.clone() },
+            10,
+        )
+        .unwrap();
+        assert_eq!(again["brief_input"]["confirmed_at_unix_ms"], 9);
+    }
+
+    #[test]
+    fn a_spawns_brief_is_one_delivered_letter_under_its_intent() {
+        let mut ledger = Ledger::default();
+        let parent = record("parent", "native-parent", None);
+        let actor = parent.actor.clone();
+        let parent_id = register(&mut ledger, parent, &actor);
+        let briefed = |brief: &str| {
+            let mut command = command("mission-1:api");
+            if let Command::Spawn { brief: slot, .. } = &mut command {
+                *slot = Some(brief.into());
+            }
+            command
+        };
+        let reserve = |ledger: &mut Ledger, command: Command, now: u64| {
+            apply(
+                ledger,
+                &actor,
+                &Mutation::Reserve {
+                    parent: parent_id.clone(),
+                    command,
+                },
+                now,
+            )
+        };
+        assert_eq!(
+            reserve(&mut ledger, briefed("  \n"), 1).unwrap_err(),
+            "invalid_brief"
+        );
+        assert_eq!(
+            reserve(
+                &mut ledger,
+                briefed(&"x".repeat(crate::delivery::BODY_LIMIT + 1)),
+                1
+            )
+            .unwrap_err(),
+            "invalid_brief"
+        );
+        let reserved = reserve(
+            &mut ledger,
+            briefed("Node api: add the call.\nReport by letter."),
+            1,
+        )
+        .unwrap();
+        let spawn = reserved["id"].as_str().unwrap().to_owned();
+        assert_eq!(
+            reserved["brief"],
+            "Node api: add the call.\nReport by letter."
+        );
+        assert!(
+            reserved["briefed"].is_null(),
+            "not submitted yet: {reserved}"
+        );
+        assert_eq!(
+            reserve(&mut ledger, briefed("Another brief."), 2).unwrap_err(),
+            "intent_conflict"
+        );
+        assert_eq!(
+            reserve(&mut ledger, command("mission-1:api"), 2).unwrap_err(),
+            "intent_conflict",
+            "the same intent without the brief is another spawn"
+        );
+        // Nothing is marked submitted before the agent was started.
+        assert_eq!(
+            apply(
+                &mut ledger,
+                &actor,
+                &Mutation::Briefed {
+                    id: spawn.clone(),
+                    route: Default::default()
+                },
+                2
+            )
+            .unwrap_err(),
+            "spawn_incomplete"
+        );
+        apply(
+            &mut ledger,
+            &actor,
+            &Mutation::Advance {
+                seed_tab: None,
+                id: spawn.clone(),
+                path: Some("/fixture/topic".into()),
+                made: false,
+                pane: Some("worker-pane".into()),
+                terminal: None,
+                shell: None,
+                child: None,
+            },
+            2,
+        )
+        .unwrap();
+        apply(
+            &mut ledger,
+            &actor,
+            &Mutation::Typed {
+                id: spawn.clone(),
+                profile: None,
+            },
+            3,
+        )
+        .unwrap();
+        let marked = apply(
+            &mut ledger,
+            &actor,
+            &Mutation::Briefed {
+                id: spawn.clone(),
+                route: Default::default(),
+            },
+            3,
+        )
+        .unwrap();
+        assert_eq!(marked["briefed"], true);
+        assert!(
+            ledger.letters.is_empty(),
+            "no letter before the child is known"
+        );
+
+        let mut child = record("worker-pane", "native-child", Some(parent_id.clone()));
+        child.name = Some("worker".into());
+        child.project = Some("/fixture/topic".into());
+        let bound = apply(
+            &mut ledger,
+            &actor,
+            &Mutation::BindChild {
+                id: spawn.clone(),
+                record: child.clone(),
+            },
+            4,
+        )
+        .unwrap();
+        let child_id = bound["child"].as_str().unwrap().to_owned();
+        assert_eq!(ledger.letters.len(), 1);
+        let letter = &ledger.letters[0];
+        assert_eq!(letter.intent, "mission-1:api");
+        assert_eq!(letter.kind, "request");
+        assert_eq!(letter.body, "Node api: add the call.\nReport by letter.");
+        assert!(letter.sender.same_identity(&actor));
+        assert!(letter.recipient.same_identity(&child.actor));
+        assert_eq!(letter.state, crate::delivery::ledger::State::Delivered);
+        assert_eq!(letter.hook_confirmed, Some(true));
+        assert!(letter.bell_sent);
+        assert_eq!(letter.created_at_unix_ms, 4);
+        // Bound again on a retry, the letter is not made twice.
+        let again = apply(
+            &mut ledger,
+            &actor,
+            &Mutation::BindChild {
+                id: spawn.clone(),
+                record: child,
+            },
+            5,
+        )
+        .unwrap();
+        assert_eq!(again["child"], child_id);
+        assert_eq!(ledger.letters.len(), 1);
+        // A spawn without a brief makes no letter.
+        let (mut plain, caller, _, plain_spawn, plain_child) = pending_spawn();
+        apply(
+            &mut plain,
+            &caller,
+            &Mutation::BindChild {
+                id: plain_spawn,
+                record: plain_child,
+            },
+            3,
+        )
+        .unwrap();
+        assert!(plain.letters.is_empty());
+        ledger.validate().unwrap();
+    }
+
+    #[test]
+    fn both_spawn_modes_bind_and_replay_known_agent_spellings() {
+        // B5/D-08 applies to native observations and retries of the same intent.
+        for mode in [SpawnMode::Delegation, SpawnMode::Handoff] {
+            for (requested, reported) in [
+                ("CODEX", "codex"),
+                ("codex", " Codex"),
+                ("claude_code", "CLAUDE"),
+            ] {
+                let (mut ledger, caller, parent, spawn, mut child) =
+                    pending_spawn_mode(mode, "local");
+                ledger.spawns[0].kind = requested.into();
+                child.actor.kind = reported.into();
+                let bound = apply(
+                    &mut ledger,
+                    &caller,
+                    &Mutation::BindChild {
+                        id: spawn.clone(),
+                        record: child,
+                    },
+                    3,
+                )
+                .unwrap();
+                let registered = ledger
+                    .agents
+                    .iter()
+                    .find(|record| Some(record.id.as_str()) == bound["child"].as_str())
+                    .unwrap();
+                assert_eq!(registered.actor.kind, reported);
+                assert_eq!(registered.parent, mode.responsibility(&parent));
+                assert_eq!(registered.origin, mode.origin(&parent));
+                let mut retry = command("once");
+                if let Command::Spawn { kind, parent, .. } = &mut retry {
+                    *kind = reported.into();
+                    if mode == SpawnMode::Handoff {
+                        *parent = None;
+                    }
+                }
+                let replay = apply(
+                    &mut ledger,
+                    &caller,
+                    &Mutation::Reserve {
+                        parent,
+                        command: retry,
+                    },
+                    4,
+                )
+                .unwrap();
+                assert_eq!(replay["id"], spawn);
+                assert_eq!(replay["kind"], requested);
+                assert_eq!(ledger.spawns.len(), 1);
+            }
+        }
+    }
+
+    /// Pi and omp name a session by its file, in a folder named after the
+    /// checkout's path, so a child in a deep checkout reports a session far
+    /// past a key's 256 bytes; it binds and reads back like any other, up to
+    /// the engine's own 4096-byte bound for a session path.
+    #[test]
+    fn a_child_whose_session_is_a_deep_session_file_binds_and_reads_back() {
+        let file = "2026-10-18T00-00-00-000Z_0199f0aa-1111-7222-8333-444455556666.jsonl";
+        let folder = "--fixture-home-projects-a-very-deep-checkout-path--";
+        let deep = format!("/fixture/home/.pi/agent/sessions/{folder}/{file}");
+        let longest = format!(
+            "/{}/{file}",
+            "x".repeat(crate::delivery::SESSION_LIMIT - file.len() - 2)
+        );
+        for session in [
+            deep.clone(),
+            format!("{}{deep}", "/deep".repeat(60)),
+            longest,
+        ] {
+            let (mut ledger, caller, parent, spawn, mut child) = pending_spawn();
+            ledger.spawns[0].kind = "pi".into();
+            child.session = session.clone();
+            child.actor.kind = "pi".into();
+            child.actor.session = crate::engine::tokens::session_digest(&session);
+            let bound = apply(
+                &mut ledger,
+                &caller,
+                &Mutation::BindChild {
+                    id: spawn,
+                    record: child,
+                },
+                3,
+            )
+            .unwrap_or_else(|error| panic!("{} bytes: {error}", session.len()));
+            let bytes = ledger
+                .bytes()
+                .unwrap_or_else(|error| panic!("{} bytes: {error}", session.len()));
+            let mut read: Ledger = serde_json::from_slice(&bytes).unwrap();
+            read.validate().unwrap();
+            let registered = read
+                .agents
+                .iter_mut()
+                .find(|record| Some(record.id.as_str()) == bound["child"].as_str())
+                .unwrap();
+            assert_eq!(registered.session, session);
+            assert_eq!(registered.parent.as_ref(), Some(&parent));
+            let past = format!("{session}{}", "x".repeat(crate::delivery::SESSION_LIMIT));
+            registered.session = past[..=crate::delivery::SESSION_LIMIT].to_owned();
+            registered.actor.session = crate::engine::tokens::session_digest(&registered.session);
+            assert!(read.bytes().is_err());
+        }
+    }
+
+    /// A kind this build does not know keeps only a short printable form.
+    #[test]
+    fn an_unknown_task_kind_is_kept_short_and_printable() {
+        let long = format!("future\u{7}_kind\n{}", "x".repeat(200));
+        let TaskKind::Unknown(kept) = TaskKind::from_code(&long) else {
+            panic!("a kind with no home is unknown");
+        };
+        assert_eq!(kept.chars().count(), 64);
+        assert!(kept.starts_with("future_kind"));
+        assert!(!kept.chars().any(char::is_control));
+        assert_eq!(
+            TaskKind::from_code("memory_promote"),
+            TaskKind::MemoryPromote
+        );
+    }
+
+    #[test]
+    fn spawn_binding_keeps_other_agents_and_unknown_spellings_distinct() {
+        for mode in [SpawnMode::Delegation, SpawnMode::Handoff] {
+            for (requested, reported) in [("codex", "claude"), ("future", "FUTURE")] {
+                let (mut ledger, caller, parent, spawn, mut child) =
+                    pending_spawn_mode(mode, "local");
+                ledger.spawns[0].kind = requested.into();
+                child.actor.kind = reported.into();
+                assert_eq!(
+                    apply(
+                        &mut ledger,
+                        &caller,
+                        &Mutation::BindChild {
+                            id: spawn,
+                            record: child,
+                        },
+                        3
+                    ),
+                    Err("child_identity_changed".into())
+                );
+                assert_eq!(ledger.agents.len(), 1);
+                assert!(ledger.spawns[0].child.is_none());
+                let mut retry = command("once");
+                if let Command::Spawn { kind, parent, .. } = &mut retry {
+                    *kind = reported.into();
+                    if mode == SpawnMode::Handoff {
+                        *parent = None;
+                    }
+                }
+                assert_eq!(
+                    apply(
+                        &mut ledger,
+                        &caller,
+                        &Mutation::Reserve {
+                            parent,
+                            command: retry
+                        },
+                        4
+                    ),
+                    Err("intent_conflict".into())
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn pane_retirement_preserves_spawn_receipts_and_responsibility() {
+        for device in ["local", "connected-device"] {
+            for mode in [SpawnMode::Delegation, SpawnMode::Handoff] {
+                let (mut ledger, caller, origin, spawn, child) = pending_spawn_mode(mode, device);
+                let expected_parent = match mode {
+                    SpawnMode::Delegation => Some(origin.clone()),
+                    SpawnMode::Handoff => None,
+                };
+                let scope = child.host_scope.clone();
+                let child_actor = child.actor.clone();
+                let bound = apply(
+                    &mut ledger,
+                    &caller,
+                    &Mutation::BindChild {
+                        id: spawn.clone(),
+                        record: child,
+                    },
+                    3,
+                )
+                .unwrap();
+                let child_id = bound["child"].as_str().unwrap().to_owned();
+                let complete = Mutation::Complete { id: spawn };
+                let receipt = apply(&mut ledger, &caller, &complete, 4).unwrap();
+                assert_eq!(
+                    receipt["auto_watch_id"].is_null(),
+                    mode == SpawnMode::Handoff
+                );
+                if mode == SpawnMode::Handoff {
+                    watch::start(&mut ledger, &caller, &child_actor, 5).unwrap();
+                }
+                let live = ledger.clone();
+                let read = PaneRead {
+                    host_scope: Some(scope.clone()),
+                    floor: Some(ledger.next_id),
+                    panes: Some([caller.pane_id.clone()].into()),
+                };
+                let gone = gone_registrations(&ledger, device, &read, None)
+                    .into_iter()
+                    .collect();
+                assert_eq!(end_gone(&mut ledger, &gone, 1).len(), 1);
+                let ended = ledger.agents.iter().find(|r| r.id == child_id).unwrap();
+                assert!(ended.ended);
+                assert_eq!(ended.parent, expected_parent);
+                assert_eq!(
+                    view(ended, &ledger, &RegistrationFacts::NONE)["origin"],
+                    origin
+                );
+                assert!(ledger.watches.is_empty());
+                assert!(!ledger.agents.iter().find(|r| r.id == origin).unwrap().ended);
+                let mut restored: Ledger =
+                    serde_json::from_slice(&ledger.bytes().unwrap()).unwrap();
+                let before = restored.clone();
+                assert_eq!(
+                    apply(&mut restored, &caller, &complete, 6).unwrap(),
+                    receipt
+                );
+                assert_eq!(restored, before);
+
+                // Losing the spawner's pane ends that registration alone;
+                // provenance and responsibility are not cascade authority.
+                let mut ledger = live;
+                let read = PaneRead {
+                    host_scope: Some(scope),
+                    floor: Some(ledger.next_id),
+                    panes: Some([child_actor.pane_id.clone()].into()),
+                };
+                let gone = gone_registrations(&ledger, device, &read, None)
+                    .into_iter()
+                    .collect();
+                assert_eq!(end_gone(&mut ledger, &gone, 1).len(), 1);
+                assert!(ledger.agents.iter().find(|r| r.id == origin).unwrap().ended);
+                let child = ledger.agents.iter().find(|r| r.id == child_id).unwrap();
+                assert!(!child.ended);
+                assert_eq!(child.parent, expected_parent);
+                assert_eq!(
+                    view(child, &ledger, &RegistrationFacts::NONE)["origin"],
+                    origin
+                );
+                assert_eq!(ledger.watches.len(), 1);
+            }
+        }
+    }
+
+    #[test]
+    fn handoff_is_an_independent_root_with_provenance_and_only_self_end_authority() {
+        use crate::delivery::mailbox;
+        for device in ["local", "connected-device"] {
+            let (ledger, actor, origin, spawn, child) =
+                pending_spawn_mode(SpawnMode::Handoff, device);
+            let child_actor = child.actor.clone();
+            let mut ledger: Ledger = serde_json::from_slice(&ledger.bytes().unwrap()).unwrap();
+            let before = ledger.clone();
+            assert_eq!(
+                apply(
+                    &mut ledger,
+                    &actor,
+                    &Mutation::Reserve {
+                        parent: origin.clone(),
+                        command: command("once")
+                    },
+                    3
+                )
+                .unwrap_err(),
+                "intent_conflict"
+            );
+            assert_eq!(ledger, before);
+            let bind = Mutation::BindChild {
+                id: spawn.clone(),
+                record: child,
+            };
+            let bound = apply(&mut ledger, &actor, &bind, 3).unwrap();
+            let child = bound["child"].as_str().unwrap().to_owned();
+            let complete = Mutation::Complete { id: spawn };
+            let receipt = apply(&mut ledger, &actor, &complete, 4).unwrap();
+            assert!(receipt["auto_watch_id"].is_null());
+            let child_view = view(
+                ledger
+                    .agents
+                    .iter()
+                    .find(|record| record.id == child)
+                    .unwrap(),
+                &ledger,
+                &RegistrationFacts::NONE,
+            );
+            assert!(child_view["parent"].is_null());
+            assert_eq!(child_view["origin"], origin);
+            assert!(child_view["watch"].is_null());
+            assert!(view(&ledger.agents[0], &ledger, &RegistrationFacts::NONE)["origin"].is_null());
+            let before = ledger.clone();
+            assert_eq!(
+                apply(
+                    &mut ledger,
+                    &actor,
+                    &Mutation::End {
+                        id: child.clone(),
+                        actor: None
+                    },
+                    5
+                )
+                .unwrap_err(),
+                "parent_authority_required"
+            );
+            assert_eq!(ledger, before);
+            mailbox::send(
+                &mut ledger,
+                &child_actor,
+                &actor,
+                "report",
+                "finished",
+                "report",
+                None,
+                6,
+            )
+            .unwrap();
+            let manual = watch::start(&mut ledger, &actor, &child_actor, 7).unwrap();
+            let mut restored: Ledger = serde_json::from_slice(&ledger.bytes().unwrap()).unwrap();
+            assert_eq!(
+                apply(&mut restored, &actor, &bind, 8).unwrap()["child"],
+                child
+            );
+            assert_eq!(apply(&mut restored, &actor, &complete, 8).unwrap(), receipt);
+            assert_eq!(restored.watches[0].id, manual.id);
+            apply(
+                &mut restored,
+                &actor,
+                &Mutation::End {
+                    id: origin.clone(),
+                    actor: None,
+                },
+                9,
+            )
+            .unwrap();
+            let live = restored
+                .agents
+                .iter()
+                .find(|record| record.id == child)
+                .unwrap();
+            assert!(!live.ended);
+            assert_eq!(
+                view(live, &restored, &RegistrationFacts::NONE)["origin"],
+                origin
+            );
+            apply(
+                &mut restored,
+                &child_actor,
+                &Mutation::End {
+                    id: child,
+                    actor: None,
+                },
+                10,
+            )
+            .unwrap();
+            assert!(restored.watches.is_empty());
+        }
+    }
+
+    #[test]
+    fn handoff_self_registration_preserves_provenance_without_transferring_responsibility() {
+        let (mut ledger, caller, origin, spawn, child) =
+            pending_spawn_mode(SpawnMode::Handoff, "local");
+        let mut registration = child.clone();
+        registration.origin = None; // The public register command has no origin input.
+        let id = apply(
+            &mut ledger,
+            &caller,
+            &Mutation::BindChild {
+                id: spawn,
+                record: child,
+            },
+            3,
+        )
+        .unwrap()["child"]
+            .as_str()
+            .unwrap()
+            .to_owned();
+        let before = ledger.clone();
+        for check in [false, true] {
+            let reply = apply(
+                &mut ledger,
+                &registration.actor,
+                &Mutation::Register {
+                    record: registration.clone(),
+                    check,
+                },
+                4,
+            )
+            .unwrap();
+            assert_eq!(reply["id"], id);
+            assert_eq!(reply["origin"], origin);
+            assert!(reply["parent"].is_null());
+            assert_eq!(ledger, before);
+            for changed in [
+                AgentRecord {
+                    name: Some("changed".into()),
+                    ..registration.clone()
+                },
+                AgentRecord {
+                    parent: Some(origin.clone()),
+                    ..registration.clone()
+                },
+                AgentRecord {
+                    origin: Some("someone-else".into()),
+                    ..registration.clone()
+                },
+            ] {
+                assert!(
+                    apply(
+                        &mut ledger,
+                        &registration.actor,
+                        &Mutation::Register {
+                            record: changed,
+                            check
+                        },
+                        5,
+                    )
+                    .is_err()
+                );
+                assert_eq!(ledger, before);
+            }
+        }
+    }
+
+    #[test]
+    fn version_one_ledger_without_mode_or_origin_preserves_delegation_and_watches() {
+        let (mut ledger, actor, parent, spawn, child) = pending_spawn();
+        apply(
+            &mut ledger,
+            &actor,
+            &Mutation::BindChild {
+                id: spawn.clone(),
+                record: child,
+            },
+            3,
+        )
+        .unwrap();
+        let complete = Mutation::Complete { id: spawn };
+        let receipt = apply(&mut ledger, &actor, &complete, 4).unwrap();
+        let mut legacy = serde_json::to_value(&ledger).unwrap();
+        for record in legacy["agents"].as_array_mut().unwrap() {
+            record.as_object_mut().unwrap().remove("origin");
+        }
+        for record in legacy["spawns"].as_array_mut().unwrap() {
+            record.as_object_mut().unwrap().remove("mode");
+            record["no_watch"] = json!(false);
+        }
+        let mut restored: Ledger = serde_json::from_value(legacy).unwrap();
+        restored.validate().unwrap();
+        assert_eq!(restored, ledger);
+        assert_eq!(restored.spawns[0].mode, SpawnMode::Delegation);
+        assert_eq!(
+            view(&restored.agents[1], &restored, &RegistrationFacts::NONE)["origin"],
+            parent
+        );
+        let before = restored.clone();
+        assert_eq!(apply(&mut restored, &actor, &complete, 5).unwrap(), receipt);
+        assert_eq!(restored, before);
+
+        // Completed old opt-outs remain completed without installing a watch.
+        let mut legacy = serde_json::to_value(&ledger).unwrap();
+        legacy["watches"] = json!([]);
+        legacy["spawns"][0].as_object_mut().unwrap().remove("mode");
+        legacy["spawns"][0]["no_watch"] = json!(true);
+        legacy["spawns"][0]["auto_watch_id"] = Value::Null;
+        let mut restored: Ledger = serde_json::from_value(legacy).unwrap();
+        restored.validate().unwrap();
+        let before = restored.clone();
+        let receipt = apply(&mut restored, &actor, &complete, 5).unwrap();
+        assert!(receipt["auto_watch_id"].is_null());
+        assert_eq!(restored, before);
+    }
+
+    #[test]
+    fn handoff_receipt_requires_its_caller_at_every_transition() {
+        let (mut ledger, _, caller, spawn, child) = pending_spawn_mode(SpawnMode::Handoff, "local");
+        let stranger = record("stranger", "native-stranger", None).actor;
+        for mutation in [
+            Mutation::Reserve {
+                parent: caller,
+                command: command("once"),
+            },
+            Mutation::Advance {
+                seed_tab: None,
+                id: spawn.clone(),
+                path: Some("/fixture/topic".into()),
+                made: false,
+                pane: None,
+                terminal: None,
+                shell: None,
+                child: None,
+            },
+            Mutation::BindChild {
+                id: spawn.clone(),
+                record: child,
+            },
+            Mutation::Complete { id: spawn },
+        ] {
+            let before = ledger.clone();
+            assert_eq!(
+                apply(&mut ledger, &stranger, &mutation, 3).unwrap_err(),
+                "parent_authority_required"
+            );
+            assert_eq!(ledger, before);
+        }
+    }
+
+    #[test]
+    fn interrupted_child_binding_preserves_an_end_and_completion_receipt_after_reload() {
+        let (mut ledger, actor, parent, spawn, child) = pending_spawn();
+        let bind = Mutation::BindChild {
+            id: spawn.clone(),
+            record: child,
+        };
+        let bound = apply(&mut ledger, &actor, &bind, 3).unwrap();
+        let child = bound["child"].as_str().unwrap().to_owned();
+        apply(
+            &mut ledger,
+            &actor,
+            &Mutation::End {
+                id: child.clone(),
+                actor: Some(parent),
+            },
+            4,
+        )
+        .unwrap();
+        let mut restored: Ledger = serde_json::from_slice(&ledger.bytes().unwrap()).unwrap();
+        let next_id = restored.next_id;
+        assert_eq!(
+            apply(&mut restored, &actor, &bind, 5).unwrap()["child"],
+            child
+        );
+        let complete = Mutation::Complete { id: spawn };
+        let receipt = apply(&mut restored, &actor, &complete, 6).unwrap();
+        assert_eq!(receipt["completed"], true);
+        assert!(receipt["auto_watch_id"].is_null());
+        assert!(resolve_actor(&restored, &child).is_none());
+        assert!(restored.watches.is_empty());
+        assert_eq!(restored.agents.len(), 2);
+        assert_eq!(restored.next_id, next_id);
+        let mut restored: Ledger = serde_json::from_slice(&restored.bytes().unwrap()).unwrap();
+        let before = restored.clone();
+        assert_eq!(apply(&mut restored, &actor, &complete, 7).unwrap(), receipt);
+        assert_eq!(restored, before);
+    }
+
+    #[test]
+    fn completion_and_initial_watch_commit_together_and_failure_is_resumable() {
+        let (mut ledger, actor, _, spawn, child) = pending_spawn();
+        apply(
+            &mut ledger,
+            &actor,
+            &Mutation::BindChild {
+                id: spawn.clone(),
+                record: child,
+            },
+            3,
+        )
+        .unwrap();
+        for index in 0..crate::delivery::WATCH_LIMIT {
+            let target = record(&format!("other-{index}"), "session", None).actor;
+            watch::start(&mut ledger, &actor, &target, 4).unwrap();
+        }
+        let complete = Mutation::Complete { id: spawn };
+        let before = ledger.clone();
+        assert_eq!(
+            apply(&mut ledger, &actor, &complete, 5).unwrap_err(),
+            "capacity"
+        );
+        assert_eq!(ledger, before);
+        let released = ledger.watches[0].id.clone();
+        watch::stop(&mut ledger, &actor, &released).unwrap();
+        let receipt = apply(&mut ledger, &actor, &complete, 6).unwrap();
+        let id = receipt["auto_watch_id"].as_str().unwrap();
+        assert_eq!(receipt["completed"], true);
+        assert!(ledger.watches.iter().any(|watch| watch.id == id));
+        let mut restored: Ledger = serde_json::from_slice(&ledger.bytes().unwrap()).unwrap();
+        watch::stop(&mut restored, &actor, id).unwrap();
+        let before = restored.clone();
+        assert_eq!(apply(&mut restored, &actor, &complete, 7).unwrap(), receipt);
+        assert_eq!(restored, before);
+    }
+    #[test]
+    fn report_confirmed_before_spawn_completion_prevents_initial_watch_installation() {
+        use crate::delivery::mailbox;
+        for acknowledged in [false, true] {
+            let (mut ledger, actor, _, spawn, child) = pending_spawn();
+            let child_actor = child.actor.clone();
+            apply(
+                &mut ledger,
+                &actor,
+                &Mutation::BindChild {
+                    id: spawn.clone(),
+                    record: child,
+                },
+                3,
+            )
+            .unwrap();
+            let report = crate::delivery::mailbox::send(
+                &mut ledger,
+                &child_actor,
+                &actor,
+                "done",
+                "completed",
+                "report",
+                None,
+                4,
+            )
+            .unwrap();
+            mailbox::apply(
+                &mut ledger,
+                &actor,
+                None,
+                &mailbox::Command::Confirm {
+                    ids: vec![report.id.clone()],
+                },
+                5,
+            )
+            .unwrap();
+            if acknowledged {
+                mailbox::apply(
+                    &mut ledger,
+                    &actor,
+                    None,
+                    &mailbox::Command::Ack { id: report.id },
+                    6,
+                )
+                .unwrap();
+            }
+            let mut restored: Ledger = serde_json::from_slice(&ledger.bytes().unwrap()).unwrap();
+            let complete = Mutation::Complete { id: spawn };
+            let receipt = apply(&mut restored, &actor, &complete, 7).unwrap();
+            assert!(restored.watches.is_empty());
+            assert_eq!(receipt["completed"], true);
+            assert!(receipt["auto_watch_id"].is_null());
+            let before = restored.clone();
+            assert_eq!(apply(&mut restored, &actor, &complete, 8).unwrap(), receipt);
+            assert_eq!(restored, before);
+            // Only an explicit watch start opens a fresh observation after a
+            // confirmed report; completing this intent does not remove it.
+            let watch = watch::start(&mut restored, &actor, &child_actor, 9).unwrap();
+            apply(&mut restored, &actor, &complete, 10).unwrap();
+            assert_eq!(restored.watches[0].id, watch.id);
+        }
+    }
+
+    #[test]
+    fn pending_report_installs_initial_watch_then_confirmation_closes_it() {
+        use crate::delivery::mailbox;
+        let (mut ledger, actor, _, spawn, child) = pending_spawn();
+        let child_actor = child.actor.clone();
+        apply(
+            &mut ledger,
+            &actor,
+            &Mutation::BindChild {
+                id: spawn.clone(),
+                record: child,
+            },
+            3,
+        )
+        .unwrap();
+        let report = crate::delivery::mailbox::send(
+            &mut ledger,
+            &child_actor,
+            &actor,
+            "done",
+            "completed",
+            "report",
+            None,
+            4,
+        )
+        .unwrap();
+        let complete = Mutation::Complete { id: spawn };
+        let receipt = apply(&mut ledger, &actor, &complete, 5).unwrap();
+        assert_eq!(ledger.watches.len(), 1);
+        assert_eq!(receipt["auto_watch_id"], ledger.watches[0].id);
+        mailbox::apply(
+            &mut ledger,
+            &actor,
+            None,
+            &mailbox::Command::Confirm {
+                ids: vec![report.id],
+            },
+            6,
+        )
+        .unwrap();
+        assert!(ledger.watches.is_empty());
+        let mut restored: Ledger = serde_json::from_slice(&ledger.bytes().unwrap()).unwrap();
+        let before = restored.clone();
+        assert_eq!(apply(&mut restored, &actor, &complete, 7).unwrap(), receipt);
+        assert_eq!(restored, before);
+    }
+
+    #[test]
+    fn acknowledged_report_prevents_the_initial_watch_unless_its_receipt_is_unknown() {
+        use crate::delivery::mailbox;
+        // An acknowledgement now is the receipt; one a build before this
+        // left without a receipt (`false`) or with none recorded (`null`)
+        // proves nothing until actual confirmation.
+        for receipt in [Some(true), Some(false), None] {
+            let (mut ledger, parent, _, spawn, child) = pending_spawn();
+            let child_actor = child.actor.clone();
+            apply(
+                &mut ledger,
+                &parent,
+                &Mutation::BindChild {
+                    id: spawn.clone(),
+                    record: child,
+                },
+                3,
+            )
+            .unwrap();
+            let report = crate::delivery::mailbox::send(
+                &mut ledger,
+                &child_actor,
+                &parent,
+                "done",
+                "completed",
+                "report",
+                None,
+                4,
+            )
+            .unwrap();
+            let intake = mailbox::pull(&ledger, &parent).unwrap();
+            assert_eq!(intake.ids.as_slice(), std::slice::from_ref(&report.id));
+            assert_eq!(
+                mailbox::apply(
+                    &mut ledger,
+                    &parent,
+                    None,
+                    &mailbox::Command::Ack {
+                        id: report.id.clone()
+                    },
+                    5,
+                )
+                .unwrap()["hook_confirmed"],
+                true
+            );
+            ledger.letters[0].hook_confirmed = receipt;
+            ledger.letters[0].finished_at_unix_ms = (receipt != Some(false)).then_some(5);
+            let mut restored: Ledger = serde_json::from_slice(&ledger.bytes().unwrap()).unwrap();
+            let complete = Mutation::Complete { id: spawn };
+            let receipt_known = receipt == Some(true);
+            let completed = apply(&mut restored, &parent, &complete, 6).unwrap();
+            assert_eq!(restored.watches.len(), usize::from(!receipt_known));
+            if receipt_known {
+                assert!(completed["auto_watch_id"].is_null());
+                continue;
+            }
+            assert_eq!(completed["auto_watch_id"], restored.watches[0].id);
+            let confirm = mailbox::Command::Confirm { ids: intake.ids };
+            mailbox::apply(&mut restored, &parent, None, &confirm, 7).unwrap();
+            assert!(restored.watches.is_empty());
+            let rearmed = watch::start(&mut restored, &parent, &child_actor, 8).unwrap();
+            let mut restored: Ledger = serde_json::from_slice(&restored.bytes().unwrap()).unwrap();
+            let before = restored.clone();
+            assert_eq!(
+                apply(&mut restored, &parent, &complete, 9).unwrap(),
+                completed
+            );
+            mailbox::apply(&mut restored, &parent, None, &confirm, 10).unwrap();
+            assert_eq!(restored, before);
+            assert_eq!(restored.watches[0].id, rearmed.id);
+        }
+    }
+
+    fn woken(from: &Actor, pane: &str) -> Rebind {
+        Rebind {
+            from: from.clone(),
+            to: Actor {
+                pane_id: pane.into(),
+                ..from.clone()
+            },
+            pane: pane.into(),
+            terminal_id: None,
+        }
+    }
+
+    #[test]
+    fn a_woken_pane_takes_over_the_registration_its_letters_watch_and_spawn_receipt() {
+        let (mut ledger, parent, _, spawn, child) = pending_spawn();
+        let from = child.actor.clone();
+        let bound = Mutation::BindChild {
+            id: spawn.clone(),
+            record: child,
+        };
+        apply(&mut ledger, &parent, &bound, 3).unwrap();
+        let watch = watch::start(&mut ledger, &parent, &from, 4).unwrap();
+        let ask = crate::delivery::mailbox::send(
+            &mut ledger,
+            &parent,
+            &from,
+            "ask",
+            "body",
+            "request",
+            None,
+            5,
+        )
+        .unwrap();
+        let report = crate::delivery::mailbox::send(
+            &mut ledger,
+            &from,
+            &parent,
+            "done",
+            "body",
+            "report",
+            None,
+            6,
+        )
+        .unwrap();
+        let record = ledger
+            .agents
+            .iter()
+            .find(|r| r.actor == from)
+            .unwrap()
+            .clone();
+        let before = ledger.clone();
+
+        let rebinds =
+            std::collections::BTreeMap::from([(record.id.clone(), woken(&from, "woken"))]);
+        assert_eq!(
+            rebind(&mut ledger, &rebinds),
+            [(record.id.clone(), from.clone())]
+        );
+
+        let moved = ledger.agents.iter().find(|r| r.id == record.id).unwrap();
+        assert_eq!(moved.pane, "woken");
+        assert_eq!(moved.actor.pane_id, "woken");
+        assert_eq!(moved.actor.session, from.session);
+        // Who it is and who is responsible for it do not move.
+        assert_eq!(
+            (&moved.id, &moved.name, &moved.parent, moved.ended),
+            (&record.id, &record.name, &record.parent, false)
+        );
+        let to = &moved.actor;
+        let ledger_watch = ledger.watches.iter().find(|w| w.id == watch.id).unwrap();
+        // They follow the registration by identity; the names they carry are
+        // the wire names they were written with.
+        assert!(
+            ledger_watch.target.same_identity(to) && ledger_watch.parent.same_identity(&parent)
+        );
+        let letter = |id: &str| ledger.letters.iter().find(|l| l.id == id).unwrap();
+        assert!(letter(&ask.id).recipient.same_identity(to));
+        assert!(letter(&report.id).sender.same_identity(to));
+        assert_eq!(
+            ledger
+                .spawns
+                .iter()
+                .find(|s| s.id == spawn)
+                .unwrap()
+                .pane
+                .as_deref(),
+            Some("woken")
+        );
+        ledger.validate().unwrap();
+        assert_eq!(ledger.watches.len(), before.watches.len());
+        // Moving it again is no change: the registration is no longer held
+        // by the execution the move names.
+        let settled = ledger.clone();
+        assert!(rebind(&mut ledger, &rebinds).is_empty());
+        assert_eq!(ledger, settled);
+    }
+
+    #[test]
+    fn a_registration_ended_or_pane_taken_by_another_registration_does_not_move() {
+        let (mut ledger, parent, _, spawn, child) = pending_spawn();
+        let from = child.actor.clone();
+        let bound = Mutation::BindChild {
+            id: spawn,
+            record: child,
+        };
+        apply(&mut ledger, &parent, &bound, 3).unwrap();
+        let id = ledger
+            .agents
+            .iter()
+            .find(|r| r.actor == from)
+            .unwrap()
+            .id
+            .clone();
+        // Another live registration already sits on the woken pane.
+        let other = register(
+            &mut ledger,
+            record("woken", "other-session", None),
+            &Actor {
+                pane_id: "woken".into(),
+                name: "woken".into(),
+                kind: "codex".into(),
+                device_id: "local".into(),
+                session: crate::engine::tokens::session_digest("other-session"),
+            },
+        );
+        let before = ledger.clone();
+        let rebinds = std::collections::BTreeMap::from([(id.clone(), woken(&from, "woken"))]);
+        assert!(rebind(&mut ledger, &rebinds).is_empty());
+        assert_eq!(ledger, before);
+        assert!(!other.is_empty());
+        // An ended registration is not revived by a late move.
+        end_record(&mut ledger, &id, 9);
+        ledger.agents.retain(|r| r.pane != "woken");
+        let ended = ledger.clone();
+        assert!(rebind(&mut ledger, &rebinds).is_empty());
+        assert_eq!(ledger, ended);
+    }
+
+    /// The registrations of a parent `p1` and its child, an agent `x` beside
+    /// them, and the parent's watch on the child, for a succession.
+    fn succession_fixture() -> (Ledger, AgentRecord, AgentRecord, Actor) {
+        let mut ledger = Ledger::default();
+        let parent = record("p1", "first-conversation", None);
+        let parent_id = register(&mut ledger, parent.clone(), &parent.actor);
+        let child = record("c1", "child-conversation", Some(parent_id.clone()));
+        register(&mut ledger, child.clone(), &parent.actor);
+        let other = record("x1", "other-conversation", None);
+        register(&mut ledger, other.clone(), &other.actor);
+        watch::start(&mut ledger, &parent.actor, &child.actor, 2).unwrap();
+        let find = |actor: &Actor| {
+            ledger
+                .agents
+                .iter()
+                .find(|record| record.actor.same_identity(actor))
+                .unwrap()
+                .clone()
+        };
+        let (parent, child) = (find(&parent.actor), find(&child.actor));
+        (ledger, parent, child, other.actor)
+    }
+
+    fn letter_of<'a>(ledger: &'a Ledger, id: &str) -> &'a crate::delivery::ledger::Letter {
+        ledger
+            .letters
+            .iter()
+            .find(|letter| letter.id == id)
+            .unwrap()
+    }
+
+    /// B1, B2: a new conversation in a pane takes the registration there
+    /// over: the old one ends naming its successor, and the next agent
+    /// takes its pending letters (rung afresh), the answers its letters
+    /// wait for, its children with their spawn receipts, its watches and
+    /// its parent. A request it had already taken in stops
+    /// waiting for its answer. Run again it changes nothing.
+    #[test]
+    fn a_new_conversation_in_a_pane_takes_over_its_registration() {
+        let (mut ledger, parent, child, other) = succession_fixture();
+        let send = |ledger: &mut Ledger, from: &Actor, to: &Actor, intent: &str| {
+            crate::delivery::mailbox::send(ledger, from, to, intent, "body", "request", None, 3)
+                .unwrap()
+                .id
+        };
+        let waiting = send(&mut ledger, &other, &parent.actor, "waiting");
+        let asked = send(&mut ledger, &parent.actor, &other, "asked");
+        let taken = send(&mut ledger, &other, &parent.actor, "taken");
+        {
+            let letter = ledger.letters.iter_mut().find(|l| l.id == waiting).unwrap();
+            letter.bell_attempts = Some(3);
+            letter.bell_ended = Some(3);
+            letter.bell_sent = true;
+            let taken = ledger.letters.iter_mut().find(|l| l.id == taken).unwrap();
+            taken.state = crate::delivery::ledger::State::Delivered;
+            taken.hook_confirmed = Some(true);
+        }
+        assert_eq!(letter_of(&ledger, &waiting).to.as_ref(), Some(&parent.id));
+        let next = record("p1", "second-conversation", None);
+        let successions = std::collections::BTreeMap::from([(
+            parent.id.clone(),
+            Succession {
+                successor: next.clone(),
+            },
+        )]);
+        let succeeded = succeed(&mut ledger, &successions, 5, &Held::default());
+        assert_eq!(succeeded.len(), 1);
+        let heir = succeeded[0].1.clone();
+        assert_eq!(succeeded[0].0, parent.id);
+        let former = ledger.agents.iter().find(|r| r.id == parent.id).unwrap();
+        assert!(former.ended);
+        assert_eq!(former.successor.as_ref(), Some(&heir));
+        let successor = ledger.agents.iter().find(|r| r.id == heir).unwrap();
+        assert!(!successor.ended && successor.actor.same_identity(&next.actor));
+        assert_eq!(successor.name, next.name, "the next agent takes its name");
+        // Its pending letter is the next agent's, rung as a new letter is.
+        let handed = letter_of(&ledger, &waiting);
+        assert_eq!(handed.to.as_ref(), Some(&heir));
+        assert!(handed.recipient.same_identity(&next.actor));
+        assert_eq!(
+            (handed.state, handed.attempts(), handed.bell_sent),
+            (crate::delivery::ledger::State::Pending, 0, false)
+        );
+        // The answer its open request waits for comes to the next agent.
+        let open = letter_of(&ledger, &asked);
+        assert_eq!(open.from.as_ref(), Some(&heir));
+        assert!(open.sender.same_identity(&next.actor) && open.waiting_answer);
+        // A request the old conversation took in waits no more.
+        assert!(!letter_of(&ledger, &taken).waiting_answer);
+        let child = ledger.agents.iter().find(|r| r.id == child.id).unwrap();
+        assert_eq!(child.parent.as_ref(), Some(&heir));
+        assert!(ledger.watches[0].parent.same_identity(&next.actor));
+        ledger.validate().unwrap();
+        let settled = ledger.clone();
+        assert!(succeed(&mut ledger, &successions, 6, &Held::default()).is_empty());
+        assert_eq!(ledger, settled);
+    }
+
+    /// PRD letters-missions-simplify D-24, B2: the next agent in a pane
+    /// answers to whoever the old one answered to, so a mission worker's
+    /// successor is its Conductor's child; an operator's root is succeeded by
+    /// a root, and one that came with an origin of its own (a fork) keeps
+    /// that and takes no parent.
+    #[test]
+    fn a_successor_answers_to_whoever_its_pane_answered_to() {
+        let heir_of = |ledger: &mut Ledger, former: &AgentRecord, next: AgentRecord| {
+            let successions = std::collections::BTreeMap::from([(
+                former.id.clone(),
+                Succession { successor: next },
+            )]);
+            let succeeded = succeed(ledger, &successions, 5, &Held::default());
+            assert_eq!(succeeded.len(), 1);
+            ledger.validate().unwrap();
+            ledger
+                .agents
+                .iter()
+                .find(|record| record.id == succeeded[0].1)
+                .unwrap()
+                .clone()
+        };
+        let (mut ledger, parent, child, _) = succession_fixture();
+        let heir = heir_of(&mut ledger, &child, record("c1", "child-second", None));
+        assert_eq!(heir.parent.as_ref(), Some(&parent.id));
+        assert_eq!(heir.origin, None);
+        assert!(ledger.watches[0].target.same_identity(&heir.actor));
+
+        let (mut ledger, ..) = succession_fixture();
+        let root = ledger
+            .agents
+            .iter()
+            .find(|record| record.pane == "x1")
+            .unwrap()
+            .clone();
+        let heir = heir_of(&mut ledger, &root, record("x1", "other-second", None));
+        assert_eq!((heir.parent, heir.origin), (None, None));
+
+        let (mut ledger, parent, child, _) = succession_fixture();
+        let mut fork = record("c1", "child-forked", None);
+        fork.origin = Some(parent.id.clone());
+        fork.forked = true;
+        let heir = heir_of(&mut ledger, &child, fork);
+        assert_eq!((heir.parent, heir.origin), (None, Some(parent.id)));
+        assert!(heir.forked);
+    }
+
+    /// PRD letters-missions-simplify D-24: a handover asks a session read of
+    /// every machine whose pane tokens it changed: the successor's own and
+    /// each machine a child it took or a fork of it runs on; a root with no
+    /// children asks only its own.
+    #[test]
+    fn a_handover_reads_every_machine_its_lineage_moved_on() {
+        let (mut ledger, parent, child, _) = succession_fixture();
+        let child_record = ledger
+            .agents
+            .iter_mut()
+            .find(|record| record.id == child.id)
+            .unwrap();
+        child_record.machine = "device-b".into();
+        let mut fork = record("f1", "fork-conversation", None);
+        fork.machine = "device-c".into();
+        fork.origin = Some(parent.id.clone());
+        fork.forked = true;
+        fork.id = "agent-90".into();
+        ledger.agents.push(fork);
+        let successions = std::collections::BTreeMap::from([(
+            parent.id.clone(),
+            Succession {
+                successor: record("p1", "second-conversation", None),
+            },
+        )]);
+        assert_eq!(
+            succeed(&mut ledger, &successions, 5, &Held::default()).len(),
+            1
+        );
+        let handed = std::collections::BTreeSet::from([parent.id.clone()]);
+        assert_eq!(
+            handover_machines(&ledger, &handed),
+            ["device-b", "device-c", "local"].map(str::to_owned).into(),
+        );
+
+        let (mut ledger, ..) = succession_fixture();
+        let root = ledger
+            .agents
+            .iter()
+            .find(|record| record.pane == "x1")
+            .unwrap()
+            .clone();
+        let successions = std::collections::BTreeMap::from([(
+            root.id.clone(),
+            Succession {
+                successor: record("x1", "other-second", None),
+            },
+        )]);
+        succeed(&mut ledger, &successions, 5, &Held::default());
+        let handed = std::collections::BTreeSet::from([root.id]);
+        assert_eq!(
+            handover_machines(&ledger, &handed),
+            ["local".to_owned()].into()
+        );
+    }
+
+    /// Only another agent in the same pane of the same machine takes a
+    /// registration over: one in another pane, or the same conversation,
+    /// takes nothing.
+    #[test]
+    fn only_another_agent_in_the_same_pane_takes_a_registration_over() {
+        let (mut ledger, parent, ..) = succession_fixture();
+        let before = ledger.clone();
+        let mut elsewhere = record("p9", "second-conversation", None);
+        elsewhere.machine = "local".into();
+        for successor in [elsewhere, record("p1", "first-conversation", None)] {
+            let successions =
+                std::collections::BTreeMap::from([(parent.id.clone(), Succession { successor })]);
+            assert!(succeed(&mut ledger, &successions, 5, &Held::default()).is_empty());
+            assert_eq!(ledger, before);
+        }
+    }
+
+    /// B2, B7: an agent that ends with no agent after it in its pane ends
+    /// the letters still waiting for it with no recipient, which its sender
+    /// gets back; one a hook already handed it ends delivered.
+    #[test]
+    fn a_registration_with_no_successor_ends_its_waiting_letters_with_no_recipient() {
+        let (mut ledger, parent, _, other) = succession_fixture();
+        let send = |ledger: &mut Ledger, intent: &str| {
+            crate::delivery::mailbox::send(
+                ledger,
+                &other,
+                &parent.actor,
+                intent,
+                "body",
+                "request",
+                None,
+                3,
+            )
+            .unwrap()
+            .id
+        };
+        let waiting = send(&mut ledger, "waiting");
+        let handed = send(&mut ledger, "handed");
+        ledger
+            .letters
+            .iter_mut()
+            .find(|letter| letter.id == handed)
+            .unwrap()
+            .handed = true;
+        assert!(end_record(&mut ledger, &parent.id, 9));
+        use crate::delivery::ledger::State;
+        assert_eq!(letter_of(&ledger, &waiting).state, State::NoRecipient);
+        assert!(!letter_of(&ledger, &waiting).waiting_answer);
+        assert_eq!(letter_of(&ledger, &handed).state, State::Delivered);
+        let inbox = crate::delivery::mailbox::apply(
+            &mut ledger,
+            &other,
+            None,
+            &crate::delivery::Command::Inbox { bundle: true },
+            10,
+        )
+        .unwrap();
+        assert_eq!(inbox["returned"][0]["id"], waiting.as_str());
+        assert_eq!(inbox["returned"][0]["state"], "no_recipient");
+    }
+
+    /// An answer goes to the agent that runs in its asker's place now; an
+    /// asker with no agent after it gets it back as no recipient.
+    #[test]
+    fn a_reply_follows_its_askers_successor() {
+        let (mut ledger, parent, _, other) = succession_fixture();
+        let ask = |ledger: &mut Ledger, intent: &str| {
+            crate::delivery::mailbox::send(
+                ledger,
+                &parent.actor,
+                &other,
+                intent,
+                "body",
+                "request",
+                None,
+                3,
+            )
+            .unwrap()
+            .id
+        };
+        let reply = |ledger: &mut Ledger, id: &str| {
+            let letter = ledger.letters.iter_mut().find(|l| l.id == id).unwrap();
+            letter.state = crate::delivery::ledger::State::Delivered;
+            letter.hook_confirmed = Some(true);
+            crate::delivery::mailbox::apply(
+                ledger,
+                &other,
+                None,
+                &crate::delivery::Command::Reply {
+                    id: id.into(),
+                    intent: format!("answer-{id}"),
+                    body: "answer".into(),
+                    now: false,
+                },
+                4,
+            )
+            .unwrap()
+        };
+        let first = ask(&mut ledger, "first");
+        let next = record("p1", "second-conversation", None);
+        let successions = std::collections::BTreeMap::from([(
+            parent.id.clone(),
+            Succession {
+                successor: next.clone(),
+            },
+        )]);
+        let heir = succeed(&mut ledger, &successions, 5, &Held::default())[0]
+            .1
+            .clone();
+        let answered = reply(&mut ledger, &first);
+        assert_eq!(answered["to"], heir.as_str());
+        assert_eq!(answered["recipient"]["session"], json!(next.actor.session));
+        assert_eq!(answered["state"], "pending");
+        // The next agent ends with none after it: an answer to it comes back.
+        let second = ask(&mut ledger, "second");
+        let second_letter = ledger.letters.iter_mut().find(|l| l.id == second).unwrap();
+        second_letter.sender = next.actor.clone();
+        second_letter.from = Some(heir.clone());
+        assert!(end_record(&mut ledger, &heir, 6));
+        let returned = reply(&mut ledger, &second);
+        assert_eq!(returned["state"], "no_recipient");
+    }
+
+    /// B6: a letter whose bells were spent on its agent gets them again once
+    /// that agent runs anew in another pane.
+    #[test]
+    fn a_moved_registration_gets_its_spent_letters_bells_again() {
+        let (mut ledger, parent, _, other) = succession_fixture();
+        let id = crate::delivery::mailbox::send(
+            &mut ledger,
+            &other,
+            &parent.actor,
+            "spent",
+            "body",
+            "request",
+            None,
+            3,
+        )
+        .unwrap()
+        .id;
+        let letter = ledger.letters.iter_mut().find(|l| l.id == id).unwrap();
+        letter.bell_attempts = Some(3);
+        letter.bell_ended = Some(3);
+        let rebinds =
+            std::collections::BTreeMap::from([(parent.id.clone(), woken(&parent.actor, "woken"))]);
+        assert_eq!(rebind(&mut ledger, &rebinds).len(), 1);
+        let letter = letter_of(&ledger, &id);
+        assert_eq!(letter.attempts(), 0);
+        assert_eq!(letter.recipient.pane_id, "woken");
+    }
+
+    /// B3: a letter between agents with no registration registers them
+    /// first, so it names the registrations it is between; a second letter
+    /// converges on the same records.
+    #[test]
+    fn a_letter_registers_its_unregistered_parties_once() {
+        let mut ledger = Ledger::default();
+        let (a, b) = (
+            record("a1", "a-session", None),
+            record("b1", "b-session", None),
+        );
+        for (intent, body) in [("one", "first"), ("two", "second")] {
+            for party in [&a, &b] {
+                register_party(&mut ledger, party, &Held::default()).unwrap();
+            }
+            let letter = crate::delivery::mailbox::send(
+                &mut ledger,
+                &a.actor,
+                &b.actor,
+                intent,
+                body,
+                "request",
+                None,
+                1,
+            )
+            .unwrap();
+            assert_eq!(letter.from, registered_id(&ledger, &a.actor));
+            assert_eq!(letter.to, registered_id(&ledger, &b.actor));
+            assert!(letter.to.is_some());
+        }
+        assert_eq!(ledger.agents.len(), 2);
+    }
+}

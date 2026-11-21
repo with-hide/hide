@@ -1,7 +1,8 @@
 //! Starting an agent from the phone (PRD home-device-rail D-24, D-25).
 //!
 //! The start sheet reads a catalog built from the core's snapshot: every
-//! device's Home and checkouts as targets, the two agent kinds with the
+//! device's checkouts as targets (none for a device with no project: the
+//! sheet then says to add one on the computer), the two agent kinds with the
 //! models the provider catalog lists, and the choice the last start
 //! remembered. A target travels as an id; the folder it names stays here in
 //! `Catalog::routes` and never reaches the phone. `start_agent` resolves the
@@ -19,8 +20,8 @@ use serde_json::{Value, json};
 /// The agent kinds a phone may start; `terminal` is a desktop-only start.
 pub const KINDS: [&str; hide_agent_adapter::START_KINDS.len()] = hide_agent_adapter::START_KINDS;
 /// How long a start may wait for the core's creation receipt: longer than a
-/// device's Home sync (30 s) plus opening its tab, so a slow start is not
-/// reported as lost while it still runs.
+/// opening its tab on a slow device, so a slow start is not reported as lost
+/// while it still runs.
 pub const ANSWER_LIMIT: Duration = Duration::from_secs(90);
 /// How many start request ids per phone are remembered to refuse a repeat.
 const REMEMBERED_STARTS: usize = 64;
@@ -37,12 +38,11 @@ const REPEAT_POLL: Duration = Duration::from_millis(100);
 /// One place a start can go, as the phone sees it.
 #[derive(Clone, Debug, Eq, PartialEq, Serialize)]
 pub struct Target {
-    /// `home:<device_id>` for a device's Home, else the checkout's id.
+    /// The checkout's id.
     pub id: String,
     pub device_id: String,
-    /// The place on the device (`project · branch`, or a folder's name);
-    /// `None` is the device's Home, which the phone names in its language.
-    pub place: Option<String>,
+    /// The place on the device (`project · branch`, or a folder's name).
+    pub place: String,
     /// The device's name; `None` is the core's own machine, which the phone
     /// names in its language from the catalog's `core_platform`.
     pub device_label: Option<String>,
@@ -54,8 +54,7 @@ pub struct Target {
 struct Route {
     /// `None` is this Mac.
     device_id: Option<String>,
-    /// `None` is the device's Home.
-    checkout_path: Option<String>,
+    checkout_path: String,
 }
 
 /// What the start sheet reads; equal catalogs are not sent twice.
@@ -69,6 +68,8 @@ pub struct Catalog {
     kinds: Vec<Value>,
     remembered: Value,
     routes: HashMap<String, Route>,
+    /// Whether places past `MAX_TARGETS` were left out.
+    capped: bool,
 }
 
 fn str_of<'a>(value: &'a Value, field: &str) -> &'a str {
@@ -83,6 +84,17 @@ fn array_of(value: Option<&Value>) -> &[Value] {
 }
 
 impl Catalog {
+    /// Reports the cap when `self` first leaves places out after `before`
+    /// did not: the catalog is built again on every snapshot change, and a
+    /// steady over-cap list logs one line, not one per build.
+    pub fn report_cap(&self, before: &Self) {
+        if self.capped && !before.capped {
+            hide_core::diagnostic!(json!({
+                "component": "mobile_phone", "kind": "start.targets_capped", "cap": MAX_TARGETS,
+            }));
+        }
+    }
+
     /// The catalog of a merged `rest` section; `node` is the core's own
     /// machine.
     pub fn of(rest: &Value, node: &str) -> Self {
@@ -156,11 +168,9 @@ impl Catalog {
         workspaces: &[&Value],
     ) {
         let route_device = (!local).then(|| device_id.to_owned());
-        let push = |catalog: &mut Self, id: String, place: Option<String>, path: Option<String>| {
+        let push = |catalog: &mut Self, id: String, place: String, path: String| {
             if catalog.targets.len() >= MAX_TARGETS {
-                herdr_core::diagnostic!(json!({
-                    "component": "mobile_phone", "kind": "start.targets_capped", "cap": MAX_TARGETS,
-                }));
+                catalog.capped = true;
                 return;
             }
             if catalog.routes.contains_key(&id) {
@@ -181,11 +191,10 @@ impl Catalog {
                 connected,
             });
         };
-        push(self, home_id(device_id), None, None);
-        for workspace in workspaces {
-            if workspace.get("is_home").and_then(Value::as_bool) == Some(true) {
-                continue;
-            }
+        for workspace in workspaces
+            .iter()
+            .filter(|workspace| hide_core::agent_state::phone::listed_project(workspace))
+        {
             let checkouts = array_of(workspace.get("checkouts"));
             let folder = workspace.get("is_git").and_then(Value::as_bool) != Some(true)
                 && checkouts.len() == 1;
@@ -209,7 +218,7 @@ impl Catalog {
                         .unwrap_or_else(|| str_of(checkout, "label"));
                     format!("{} · {branch}", str_of(workspace, "label"))
                 };
-                push(self, id.to_owned(), Some(label), Some(path.to_owned()));
+                push(self, id.to_owned(), label, path.to_owned());
             }
         }
     }
@@ -226,10 +235,6 @@ impl Catalog {
     }
 }
 
-fn home_id(device_id: &str) -> String {
-    format!("home:{device_id}")
-}
-
 /// How the core answered one start request.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum Answer {
@@ -241,8 +246,13 @@ pub enum Answer {
 /// the last error, each with the request id it answers.
 pub fn answers_of(rest: &Value, node: &str) -> Vec<(String, Answer)> {
     let mut answers = Vec::new();
+    // An agent start, or a new worktree made with an agent in it (a pull
+    // request handed over where no checkout holds its branch): both answer by
+    // the request id they carry, with the pane the agent runs in.
     if let Some(operation) = rest.get("task_operation").filter(|op| op.is_object())
-        && str_of(operation, "kind") == "agent_start"
+        && (str_of(operation, "kind") == "agent_start"
+            || (str_of(operation, "kind") == "worktree_create"
+                && !str_of(operation, "agent_kind").is_empty()))
     {
         let request_id = str_of(operation, "request_id");
         let answer = match (str_of(operation, "phase"), str_of(operation, "agent_phase")) {
@@ -313,7 +323,7 @@ pub struct Request<'a> {
     pub model: Option<&'a str>,
 }
 
-fn prompt_problem(text: &str) -> Option<&'static str> {
+pub(super) fn prompt_problem(text: &str) -> Option<&'static str> {
     if text.trim().is_empty() {
         return Some("empty");
     }
@@ -329,6 +339,13 @@ fn prompt_problem(text: &str) -> Option<&'static str> {
     None
 }
 
+/// Whether a model name is one a phone may send: short, with no control character.
+pub(super) fn model_valid(model: &str) -> bool {
+    !model.is_empty()
+        && model.chars().count() <= MAX_MODEL_CHARS
+        && !model.chars().any(char::is_control)
+}
+
 /// The core event for one request, or why it is not one.
 fn event(request: &Request<'_>, catalog: &Catalog) -> Result<Value, &'static str> {
     if let Some(problem) = prompt_problem(request.text) {
@@ -342,9 +359,7 @@ fn event(request: &Request<'_>, catalog: &Catalog) -> Result<Value, &'static str
         return Err("unknown_target");
     };
     if let Some(model) = request.model
-        && (model.is_empty()
-            || model.chars().count() > MAX_MODEL_CHARS
-            || model.chars().any(char::is_control))
+        && !model_valid(model)
     {
         return Err("unknown_model");
     }
@@ -362,10 +377,7 @@ fn event(request: &Request<'_>, catalog: &Catalog) -> Result<Value, &'static str
     if let Some(device_id) = &route.device_id {
         payload["device_id"] = json!(device_id);
     }
-    match &route.checkout_path {
-        Some(path) => payload["checkout_path"] = json!(path),
-        None => payload["home"] = json!(true),
-    }
+    payload["checkout_path"] = json!(route.checkout_path);
     Ok(json!({
         "schema_version": crate::state_file::SCHEMA_VERSION,
         "kind": "agent_start_in_checkout",
@@ -393,6 +405,7 @@ type Seen = HashMap<String, VecDeque<(String, Option<Value>)>>;
 #[derive(Default)]
 pub struct Desk {
     seen: std::sync::Mutex<Seen>,
+    accepted: Option<Box<dyn Fn() + Send + Sync>>,
 }
 
 enum Claim {
@@ -401,6 +414,13 @@ enum Claim {
 }
 
 impl Desk {
+    pub fn new(accepted: impl Fn() + Send + Sync + 'static) -> Self {
+        Self {
+            accepted: Some(Box::new(accepted)),
+            ..Self::default()
+        }
+    }
+
     fn lock(&self) -> std::sync::MutexGuard<'_, Seen> {
         self.seen
             .lock()
@@ -430,7 +450,12 @@ impl Desk {
         match answer {
             Some(answer) => {
                 if let Some(entry) = ids.iter_mut().find(|(id, _)| id == request_id) {
+                    let first_success = answer["ok"] == true
+                        && entry.1.as_ref().is_none_or(|old| old["ok"] != true);
                     entry.1 = Some(answer.clone());
+                    if first_success && let Some(accepted) = &self.accepted {
+                        accepted();
+                    }
                 }
             }
             None => ids.retain(|(id, _)| id != request_id),
@@ -448,9 +473,32 @@ impl Desk {
         limit: Duration,
         dispatch: impl FnOnce(Vec<u8>) -> Result<(), String> + Send + 'static,
     ) -> Value {
-        let request_id = request.request_id;
+        let event = event(&request, catalog);
+        self.start_event(
+            phone_id,
+            request.request_id,
+            event,
+            answers,
+            limit,
+            dispatch,
+        )
+        .await
+    }
+
+    /// A start whose core event is already built (a pull request's hand-over
+    /// is `pr_delegate`, not `agent_start_in_checkout`): claimed by its request
+    /// id, dispatched once and followed to the core's answer the same way.
+    pub async fn start_event(
+        &self,
+        phone_id: &str,
+        request_id: &str,
+        event: Result<Value, &'static str>,
+        answers: tokio::sync::watch::Receiver<Answers>,
+        limit: Duration,
+        dispatch: impl FnOnce(Vec<u8>) -> Result<(), String> + Send + 'static,
+    ) -> Value {
         let reply = |ok: bool, reason: Option<&str>| json!({"type": "start_result", "request_id": request_id, "ok": ok, "reason": reason});
-        let event = match event(&request, catalog) {
+        let event = match event {
             Ok(event) => event,
             Err(problem) => return reply(false, Some(problem)),
         };
@@ -469,7 +517,7 @@ impl Desk {
             .await
             .unwrap_or_else(|error| Err(error.to_string()));
         if let Err(message) = sent {
-            herdr_core::diagnostic!(json!({
+            hide_core::diagnostic!(json!({
                 "component": "mobile_phone", "kind": "start.dispatch_failed", "phone_id": phone_id, "message": message,
             }));
             self.settle(phone_id, request_id, None);
@@ -517,7 +565,7 @@ impl Desk {
             }
             Answer::Failed { reason } => reply(false, Some(reason)),
         };
-        herdr_core::diagnostic!(json!({
+        hide_core::diagnostic!(json!({
             "component": "mobile_phone", "kind": "start.answered", "phone_id": phone_id,
             "request_id": request_id, "ok": frame["ok"],
             "reason": frame["reason"],
@@ -562,6 +610,74 @@ mod tests {
     use std::sync::Arc;
     use std::sync::atomic::{AtomicUsize, Ordering};
 
+    #[tokio::test]
+    async fn only_a_first_successful_start_receipt_takes_phone_routing() {
+        let desktop = Arc::new(crate::desktop_notices::DesktopNotices::default());
+        let t = std::time::Instant::now();
+        desktop.set_waiting(1, true);
+        desktop.activity_at(1, true, t);
+        let desk = Desk::new({
+            let desktop = Arc::clone(&desktop);
+            move || desktop.phone_input(t + Duration::from_secs(2))
+        });
+        let answers = tokio::sync::watch::channel(Arc::new(vec![
+            (
+                "bad".to_owned(),
+                Answer::Failed {
+                    reason: "refused".to_owned(),
+                },
+            ),
+            (
+                "good".to_owned(),
+                Answer::Started {
+                    device_id: "mini".to_owned(),
+                    pane_id: "pane".to_owned(),
+                },
+            ),
+        ]))
+        .1;
+        let failed = desk
+            .start_event(
+                "phone",
+                "bad",
+                Ok(json!({})),
+                answers.clone(),
+                ANSWER_LIMIT,
+                |_| Ok(()),
+            )
+            .await;
+        assert_eq!(failed["ok"], false);
+        assert!(desktop.rests_phone(), "a refused start never takes over");
+        let started = desk
+            .start_event(
+                "phone",
+                "good",
+                Ok(json!({})),
+                answers.clone(),
+                ANSWER_LIMIT,
+                |_| Ok(()),
+            )
+            .await;
+        assert_eq!(started["ok"], true);
+        assert!(!desktop.rests_phone(), "a successful start takes over");
+        desktop.activity_at(1, true, t + Duration::from_secs(3));
+        let repeated = desk
+            .start_event(
+                "phone",
+                "good",
+                Ok(json!({})),
+                answers,
+                ANSWER_LIMIT,
+                |_| panic!("a duplicate never dispatches"),
+            )
+            .await;
+        assert_eq!(repeated, started);
+        assert!(
+            desktop.rests_phone(),
+            "its duplicate cannot take over again"
+        );
+    }
+
     fn rest() -> Value {
         json!({
             "navigator": {
@@ -571,8 +687,6 @@ mod tests {
                     {"id": "off", "label": "off", "kind": "remote", "state": "disabled"},
                 ],
                 "workspaces": [
-                    {"id": "w-home", "label": "hide", "is_home": true, "path": "/Users/example/hide",
-                     "checkouts": [{"id": "c-home", "path": "/Users/example/hide", "label": "hide"}]},
                     {"id": "w1", "label": "hide", "is_git": true, "path": "/Users/example/projects/hide",
                      "checkouts": [
                         {"id": "c1", "path": "/Users/example/projects/hide", "label": "main", "branch": "main"},
@@ -597,27 +711,40 @@ mod tests {
         })
     }
 
+    /// An automation's own folder is a project the core keeps off every
+    /// list (PRD automations B30): the phone's start sheet offers no place
+    /// in it.
     #[test]
-    fn targets_are_this_mac_first_then_devices_with_home_leading_each() {
+    fn an_unlisted_project_is_no_start_target() {
+        let mut rest = rest();
+        rest["navigator"]["workspaces"]
+            .as_array_mut()
+            .unwrap()
+            .push(json!({"id": "w3", "label": "automations", "is_git": false, "unlisted": true,
+                "path": "/Users/example/hide/automations/a",
+                "checkouts": [{"id": "c5", "path": "/Users/example/hide/automations/a", "label": "a"}]}));
+        let ids: Vec<_> = Catalog::of(&rest, "local")
+            .targets
+            .iter()
+            .map(|t| t.id.clone())
+            .collect();
+        assert_eq!(ids, ["c1", "c2", "c4", "rc1"]);
+    }
+
+    #[test]
+    fn targets_are_this_mac_first_then_devices_and_no_device_has_a_home_target() {
         let catalog = Catalog::of(&rest(), "local");
         let ids: Vec<_> = catalog.targets.iter().map(|t| t.id.as_str()).collect();
-        assert_eq!(ids, ["home:local", "c1", "c2", "c4", "home:mini", "rc1"]);
-        let places: Vec<_> = catalog.targets.iter().map(|t| t.place.as_deref()).collect();
+        assert_eq!(ids, ["c1", "c2", "c4", "rc1"]);
+        let places: Vec<_> = catalog.targets.iter().map(|t| t.place.as_str()).collect();
         assert_eq!(
             places,
-            [
-                None,
-                Some("hide · main"),
-                Some("hide · prd/a"),
-                Some("notes"),
-                None,
-                Some("contong · main")
-            ]
+            ["hide · main", "hide · prd/a", "notes", "contong · main"]
         );
         assert_eq!(catalog.targets[0].device_label, None);
         assert_eq!(catalog.core_platform.as_deref(), Some("windows x86_64"));
         assert_eq!(catalog.frame()["core_platform"], "windows x86_64");
-        assert_eq!(catalog.targets[4].device_label.as_deref(), Some("mini"));
+        assert_eq!(catalog.targets[3].device_label.as_deref(), Some("mini"));
         assert!(catalog.targets.iter().all(|target| target.connected));
     }
 
@@ -626,11 +753,7 @@ mod tests {
         let mut value = rest();
         value["status"]["remote"][0]["state"] = json!("unreachable");
         let catalog = Catalog::of(&value, "local");
-        let mini = catalog
-            .targets
-            .iter()
-            .find(|t| t.id == "home:mini")
-            .unwrap();
+        let mini = catalog.targets.iter().find(|t| t.id == "rc1").unwrap();
         assert!(!mini.connected);
     }
 
@@ -655,10 +778,9 @@ mod tests {
         let empty = Catalog::of(&json!({}), "local").frame();
         assert_eq!(empty["remembered"], json!({"kind": null, "models": {}}));
         assert_eq!(empty["kinds"][0]["models"], json!([]));
-        assert_eq!(
-            empty["targets"].as_array().unwrap().len(),
-            1,
-            "This Mac's Home is always a target"
+        assert!(
+            empty["targets"].as_array().unwrap().is_empty(),
+            "a device with no project has no target"
         );
     }
 
@@ -692,14 +814,14 @@ mod tests {
     }
 
     #[test]
-    fn home_targets_carry_home_and_no_folder() {
+    fn the_old_home_target_ids_lead_nowhere() {
         let catalog = Catalog::of(&rest(), "local");
-        let local = event(&request("home:local", None), &catalog).unwrap();
-        assert_eq!(local["payload"]["home"], true);
-        assert!(local["payload"].get("device_id").is_none());
-        assert!(local["payload"].get("checkout_path").is_none());
-        let remote = event(&request("home:mini", None), &catalog).unwrap();
-        assert_eq!(remote["payload"]["device_id"], "mini");
+        for old in ["home:local", "home:mini"] {
+            assert_eq!(
+                event(&request(old, None), &catalog).unwrap_err(),
+                "unknown_target"
+            );
+        }
     }
 
     #[test]
@@ -790,7 +912,28 @@ mod tests {
             &json!({"task_operation": {"kind": "worktree_create", "phase": "ready", "request_id": "r4"}}),
             "local",
         );
-        assert!(other.is_empty());
+        assert!(
+            other.is_empty(),
+            "a worktree made with no agent is no start"
+        );
+        let handed = answers_of(
+            &json!({"task_operation": {
+                "kind": "worktree_create", "agent_kind": "claude", "phase": "ready", "request_id": "r6",
+                "pane_id": "w2:p1", "device_id": null,
+            }}),
+            "local",
+        );
+        assert_eq!(
+            handed,
+            [(
+                "r6".to_owned(),
+                Answer::Started {
+                    device_id: "local".into(),
+                    pane_id: "w2:p1".into()
+                }
+            )],
+            "a worktree made for a hand-over answers as the agent start it is"
+        );
         let refused = answers_of(
             &json!({"status": {"last_error": {"kind": "task_operation.busy", "request_id": "r5"}}}),
             "local",

@@ -89,7 +89,7 @@ it.each([
   }
 });
 
-// One list per session (docs/status-model.md): a closed pull request stays in
+// One list per session (with-hide/hide-private docs/task-identity.md): a closed pull request stays in
 // the list, dimmed, after the merged ones, and the mark counts it.
 it("keeps a closed PR in the list, dimmed, and counts it", async () => {
   vi.stubGlobal("IS_REACT_ACT_ENVIRONMENT", true);

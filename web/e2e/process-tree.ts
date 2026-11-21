@@ -10,8 +10,8 @@ export type WindowsProcess = { id: number; created: string };
 /**
  * `pid` and its live descendants, as `tool` (`hide-processes`) lists them.
  * Windows keeps a running executable and a process's working folder locked,
- * and a pane's processes can outlive the Herdr server that started them, so a
- * fixture lists its tree before it stops the server and ends what is left with
+ * and a pane's processes can outlive the engine that started them, so a
+ * fixture lists its tree before it stops the engine and ends what is left with
  * `endWindowsTree`.
  */
 export function listWindowsTree(tool: string, pid: number): WindowsProcess[] {

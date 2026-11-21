@@ -40,10 +40,12 @@ export type AgentScope = {
   overview_needs_you: number;
   /** On a device's scope, the missions that are their own Needs You item (no Conductor or worker row carries what waits on the operator, PRD mission-node-simple B14), oldest first; counted in `overview_needs_you` and `groups.needs_you`. Absent when there are none. */
   mission_asks?: string[];
+  /** On the scope of the machine that runs them, the automations stopped for a person to fix, each its own Needs You line (PRD automations D-12, B23), oldest first; counted in `overview_needs_you` and `groups.needs_you` as a mission's own ask is. Absent when there are none. */
+  automation_asks?: string[];
   has_working: boolean;
   relations: Record<string, { issues: string[]; project_id: string; checkout_id: string; rows: { pane_id: string; occurrence: number; depth: number; tag: "here" | "parent" | null; caption_parent: string | null }[] }[]>;
   listed: { pane_id: string; device_id: string; device_label: string | null; remote: boolean; index: number }[];
-  places: Record<string, { project_id: string; checkout_id: string; kind: "home" | "folder" | "checkout" }>;
+  places: Record<string, { project_id: string; checkout_id: string; kind: "folder" | "checkout" }>;
   places_live: boolean;
   /** A project's or, on a device's scope, every project's tasks (`agent_scope.tasks`, PRD overview-device-tasks D-05, sidebar-task-lens D-40); absent while there are none. */
   tasks?: ProjectTasksScope;
@@ -170,6 +172,35 @@ export type ProjectTasksScope = {
   incoming?: IncomingTaskScope[];
   needs_you: number;
   recency: string;
+};
+
+/**
+ * An external tool's cell beside the devices (PRD hide-external-control D-45,
+ * D-46, D-47): one per tool connected at Act, with only the work it keeps.
+ * `turn` is its grey number, what waits on the tool's answer, never counted
+ * in the operator's Needs You, badge or notices (B41).
+ */
+export type ToolCell = {
+  connection: string;
+  name: string;
+  turn: number;
+  /** The tool's work per device that holds any: its 태스크 cards, the Overview's members and the checkouts its sessions work in. */
+  devices: { device_id: string; tasks: ProjectTasksScope; members: AgentScope["members"]; checkouts?: ToolCheckout[] }[];
+  /** The tool's missions that are their own ask, oldest first. */
+  mission_asks?: string[];
+};
+
+/**
+ * A checkout that holds a session an external tool keeps (`ToolCheckout`):
+ * the tree of the tool's sessions there, by the rule of a checkout's own
+ * `sidebar_tree`, and the marks its row's badge counts. The cell's 프로젝트
+ * tab draws these in place of the operator's (operator decision 2026-11-15).
+ */
+export type ToolCheckout = {
+  project_id: string;
+  checkout_id: string;
+  sidebar_tree: AgentTreeScope;
+  marks: MarkCounts;
 };
 
 /** Why a pull request stands where it does, as a kind the web words (`Reason`, PRD work-tab-pr-lens D-16). */

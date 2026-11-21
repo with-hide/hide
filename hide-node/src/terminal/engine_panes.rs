@@ -5,25 +5,27 @@
 //! with Hide's shell integration ([`PaneShell::Account`]), as a tab Hide
 //! opens does, so it says its folder and marks its prompt on its screen.
 //!
-//! Only a daemon with the development switch on builds one, beside the
-//! holders [`Holders::start_local`] opened; with it off nothing here runs.
+//! A daemon builds one beside the holders [`Holders::start_local`] opened.
 
 use std::ffi::OsString;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
+use hide_host::kit::PaneInstall;
 use hide_host::shell_integration::{ShellLaunch, ShellReadiness, UserShell};
 
 use super::Service;
-use super::holder::Holders;
-use super::input::Typed;
+use super::holder::{Holders, Renewal};
+use super::input::{Typed, Typist};
 use hide_holder_protocol::record::Phase;
 use hide_holder_protocol::{Answer, Appearance, Foreground, OpenError, Size, Theme};
 use hide_kit::panes::{CloseError, StartRefusal, StartRequest, Started};
 use hide_node_link::holders::{
-    HolderError, HolderForeground, HolderIntent, HolderProcesses, HolderProof, HolderRecovery,
-    HolderRequest, HolderReservation, HolderScroll, HolderStart, PaneEnded, PaneFactsSink,
-    PaneHolders, PaneInput, ScreenRules, StyledRead, UNSUPPORTED_HOLDER,
+    HolderError, HolderForeground, HolderIntent, HolderProcess, HolderProcesses, HolderProof,
+    HolderRecovery, HolderRenewal, HolderRequest, HolderReservation, HolderScroll, HolderStart,
+    PANE_NOT_RUNNING, PANE_STARTING, PaneEnded, PaneFactsSink, PaneHolders, PaneInput,
+    RENEWAL_BUSY, RENEWAL_LOST, RENEWAL_PANE_CLOSED, RENEWAL_UNSETTLED, ScreenRules, StyledRead,
+    UNSUPPORTED_HOLDER,
 };
 
 /// This machine's holders and the service that shows their screens.
@@ -31,7 +33,13 @@ pub struct LocalPanes {
     holders: Arc<Holders>,
     service: Arc<Service>,
     shell: PaneShell,
+    install: Option<PaneInstall>,
     owner: Option<Arc<hide_kit::panes::Owner>>,
+    /// Whether each ask for what the start found, after the first, looks
+    /// at every record again ([`LocalPanes::scanning_again`]).
+    scans_again: bool,
+    /// How many times the owner was asked what its start found.
+    asked: std::sync::atomic::AtomicUsize,
 }
 
 /// How a pane started with no program runs this machine's shell.
@@ -40,7 +48,7 @@ pub enum PaneShell {
     /// The account's shell with Hide's shell integration, prepared for each
     /// pane as the node prepares it for a tab Hide opens
     /// (`hide_host::shell_integration::prepare`): a pane on the core's own
-    /// engine has no Herdr to read its folder from its process, so its shell
+    /// engine learns its folder from its shell, which
     /// says it on the screen.
     Account { home: PathBuf, user: UserShell },
     /// This command line, with no integration (the engine contract's).
@@ -72,30 +80,48 @@ impl PaneShell {
 
 impl LocalPanes {
     /// The panes of `holders`, attached to `service`; a pane started with no
-    /// program runs `shell`.
+    /// program runs `shell`. Its panes name no installation.
     pub fn new(holders: Arc<Holders>, service: Arc<Service>, shell: PaneShell) -> Self {
         holders.own_every_pane();
         Self {
             holders,
             service,
             shell,
+            install: None,
             owner: None,
+            scans_again: false,
+            asked: Default::default(),
         }
+    }
+
+    /// For a node that outlives its links: one ownership serves every link,
+    /// so each link's ask for what the start found, after the first, looks
+    /// at every record again and answers what is there now, in place of
+    /// what the node's own start found before panes started and ended.
+    pub fn scanning_again(mut self) -> Self {
+        self.scans_again = true;
+        self
     }
 
     /// The panes of `holders` on the account `home` belongs to: a pane with
     /// no program of its own runs the account's shell with Hide's
     /// integration, as the node prepares it for a tab. What this machine's
     /// engine and a device's node both run.
+    /// Every such pane names the Hide installation this program belongs to,
+    /// so a hook entry or a `hide` command another installation wrote leaves
+    /// the pane to this one's (docs/agent-hooks.md, More than one Hide on an
+    /// account).
     pub fn for_account(holders: Arc<Holders>, service: Arc<Service>, home: PathBuf) -> Self {
-        Self::new(
+        let mut panes = Self::new(
             holders,
             service,
             PaneShell::Account {
                 home,
                 user: hide_host::shell_integration::UserShell::of_process(),
             },
-        )
+        );
+        panes.install = hide_host::kit::running_install();
+        panes
     }
 
     fn expand(&self, start: &HolderStart) -> Result<StartRequest, HolderError> {
@@ -140,27 +166,37 @@ impl LocalPanes {
                 code: "invalid_cwd".to_owned(),
                 message: format!("{} is not a folder path: {error}", start.cwd),
             })?;
+        // The shell's own variables, then the caller's, then the pane's own
+        // name for itself and its installation, which no caller's variable
+        // replaces (PRD engine-bundle-3-core-owns D-9): the holder removes
+        // every Herdr variable, so a process in the pane names this pane
+        // alone.
+        let mut env: Vec<(OsString, OsString)> = env
+            .into_iter()
+            .chain(
+                start
+                    .env
+                    .iter()
+                    .map(|(name, value)| (OsString::from(name), OsString::from(value))),
+            )
+            .chain([(
+                OsString::from(hide_node_link::holders::PANE_ID_VARIABLE),
+                OsString::from(&start.pane),
+            )])
+            .chain(self.install.iter().flat_map(PaneInstall::variables))
+            .collect();
+        if let Some(folder) = self
+            .install
+            .as_ref()
+            .and_then(|install| install.path_first.as_deref())
+        {
+            put_first_on_path(&mut env, folder, std::env::var_os("PATH"))?;
+        }
         Ok(StartRequest {
             pane: start.pane.clone(),
             program,
             cwd,
-            // The shell's own variables, then the caller's, then the pane's
-            // own name for itself, which no caller's variable replaces (PRD
-            // engine-bundle-3-core-owns D-9): the holder removes every
-            // Herdr variable, so a process in the pane names this pane alone.
-            env: env
-                .into_iter()
-                .chain(
-                    start
-                        .env
-                        .iter()
-                        .map(|(name, value)| (OsString::from(name), OsString::from(value))),
-                )
-                .chain([(
-                    OsString::from(hide_node_link::holders::PANE_ID_VARIABLE),
-                    OsString::from(&start.pane),
-                )])
-                .collect(),
+            env,
             size,
             // The screen's colors reach a holder by a theme message once a
             // screen draws it; until then its color answers are the xterm
@@ -196,6 +232,65 @@ impl LocalPanes {
     }
 }
 
+/// Puts `folder` first on the `PATH` in `env`: the last one `env` names,
+/// in any case of the name as Windows reads it, else `inherited`, the one
+/// the pane would inherit. The folder appears once, so a pane started from a
+/// shell of the same installation, whose `PATH` already holds it, does not
+/// grow. A folder `PATH` cannot hold is refused.
+fn put_first_on_path(
+    env: &mut Vec<(OsString, OsString)>,
+    folder: &Path,
+    inherited: Option<OsString>,
+) -> Result<(), HolderError> {
+    let is_path = |name: &OsString| {
+        name.to_str()
+            .is_some_and(|name| name.eq_ignore_ascii_case("PATH"))
+    };
+    let named = env
+        .iter()
+        .rev()
+        .find(|(name, _)| is_path(name))
+        .map(|(_, value)| value.clone())
+        .or(inherited);
+    // Windows compares folder names without case.
+    let same = |other: &Path| {
+        other == folder
+            || other
+                .to_string_lossy()
+                .eq_ignore_ascii_case(&folder.to_string_lossy())
+    };
+    let folders = std::iter::once(folder.to_path_buf()).chain(
+        named
+            .iter()
+            .flat_map(std::env::split_paths)
+            .filter(|other| !same(other)),
+    );
+    let path = std::env::join_paths(folders).map_err(|error| HolderError::Refused {
+        code: "invalid_path".to_owned(),
+        message: format!("{} cannot go on a PATH: {error}", folder.display()),
+    })?;
+    env.retain(|(name, _)| !is_path(name));
+    env.push((OsString::from("PATH"), path));
+    Ok(())
+}
+
+/// The folders the foreground members other than the pane's `shell` work in,
+/// each once, as this machine observes them; `None` when one of them could
+/// not be read. A member that ended since the holder listed it works nowhere.
+fn program_folders(shell: u32, members: impl Iterator<Item = u32>) -> Option<Vec<String>> {
+    let mut folders = Vec::new();
+    for pid in members.filter(|pid| *pid != shell) {
+        match hide_platform::process::observed_cwd_of(pid) {
+            Ok(folder) => folders.push(hide_platform::path::to_wire(&folder).ok()?),
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+            Err(_) => return None,
+        }
+    }
+    folders.sort();
+    folders.dedup();
+    Some(folders)
+}
+
 impl PaneHolders for LocalPanes {
     fn own(
         self: Arc<Self>,
@@ -220,7 +315,10 @@ impl PaneHolders for LocalPanes {
             holders: Arc::clone(&self.holders),
             service: Arc::clone(&self.service),
             shell: self.shell.clone(),
+            install: self.install.clone(),
             owner: Some(owner),
+            scans_again: self.scans_again,
+            asked: Default::default(),
         }))
     }
 
@@ -311,6 +409,47 @@ impl PaneHolders for LocalPanes {
             .map_err(start_refusal)
     }
 
+    fn renew(
+        &self,
+        start: &HolderStart,
+        request: HolderRequest,
+    ) -> Result<HolderRenewal, HolderError> {
+        if start.program.is_some() {
+            return Err(HolderError::Refused {
+                code: "invalid_program".to_owned(),
+                message: "only a shell pane's holder is renewed".to_owned(),
+            });
+        }
+        let intent = start.intent()?;
+        let guard = self.admit(request, &intent)?;
+        match self.holders.renew(&guard, &self.service, &intent, || {
+            self.expand(start).map_err(|error| format!("{error:?}"))
+        }) {
+            Renewal::Current => Ok(HolderRenewal::Current),
+            Renewal::Renewed { from, to } => Ok(HolderRenewal::Renewed { from, to }),
+            Renewal::Kept { code, message } => Ok(HolderRenewal::Kept {
+                code: code.to_owned(),
+                message,
+            }),
+            Renewal::Closed(message) => Err(HolderError::Refused {
+                code: RENEWAL_PANE_CLOSED.to_owned(),
+                message,
+            }),
+            Renewal::Busy(message) => Err(HolderError::Refused {
+                code: RENEWAL_BUSY.to_owned(),
+                message,
+            }),
+            Renewal::Lost(message) => Err(HolderError::Refused {
+                code: RENEWAL_LOST.to_owned(),
+                message,
+            }),
+            Renewal::Unsettled(message) => Err(HolderError::Refused {
+                code: RENEWAL_UNSETTLED.to_owned(),
+                message,
+            }),
+        }
+    }
+
     fn shell_launch(&self) -> Option<ShellLaunch> {
         self.shell
             .launch()
@@ -372,13 +511,18 @@ impl PaneHolders for LocalPanes {
         }
     }
 
-    fn processes(&self, pane: &str) -> Result<HolderProcesses, HolderError> {
-        match self.holders.processes(pane).map_err(ask_error)? {
+    fn processes(
+        &self,
+        pane: &str,
+        within: std::time::Duration,
+    ) -> Result<HolderProcesses, HolderError> {
+        match self.holders.processes(pane, within).map_err(ask_error)? {
             Answer::Processes { shell, foreground } => Ok(HolderProcesses {
                 shell,
                 foreground: match foreground {
                     Foreground::Known { group, members } => Some(HolderForeground {
                         group,
+                        folders: program_folders(shell, members.iter().map(|member| member.pid)),
                         members: members
                             .into_iter()
                             .map(|member| (member.pid, member.name.unwrap_or_default()))
@@ -389,6 +533,37 @@ impl PaneHolders for LocalPanes {
             }),
             other => Err(misanswered(pane, "a process ask", &other)),
         }
+    }
+
+    fn process(
+        &self,
+        pane: &str,
+        pid: u32,
+        _within: std::time::Duration,
+    ) -> Result<Option<HolderProcess>, HolderError> {
+        use hide_platform::process;
+        // The pane's program as its record names it, which no holder
+        // answer can vouch for; the process is read only while it runs under
+        // that program, and only as one process: its start read on both
+        // sides of the other reads, so a pid that changed hands in between
+        // reads as none.
+        let shell = self.proof(pane)?.program;
+        let Ok(started) = process::start_time(pid) else {
+            return Ok(None);
+        };
+        if !process::descends_from(pid, shell) {
+            return Ok(None);
+        }
+        let parent = process::parent_of(pid).ok();
+        let argv = process::argv_of(pid).unwrap_or_default();
+        if process::start_time(pid).ok() != Some(started) {
+            return Ok(None);
+        }
+        Ok(Some(HolderProcess {
+            started,
+            parent,
+            argv: bounded_arguments(argv),
+        }))
     }
 
     fn proof(&self, pane: &str) -> Result<HolderProof, HolderError> {
@@ -407,26 +582,62 @@ impl PaneHolders for LocalPanes {
                 program: program.pid,
                 started: program.started,
             }),
+            (Phase::Reserved | Phase::Preparing, _, None) => Err(HolderError::Refused {
+                code: PANE_STARTING.to_owned(),
+                message: format!("pane {pane}'s program is starting"),
+            }),
             (phase, _, _) => Err(HolderError::Refused {
-                code: "pane_not_running".to_owned(),
+                code: PANE_NOT_RUNNING.to_owned(),
                 message: format!("pane {pane}'s record is {phase:?}, not running"),
             }),
         }
     }
 
+    fn proof_once_started(
+        &self,
+        pane: &str,
+        within: std::time::Duration,
+    ) -> Result<HolderProof, HolderError> {
+        match self.proof(pane) {
+            Err(HolderError::Refused { code, .. }) if code == PANE_STARTING => {
+                // Taken first, so logging adds nothing to the wait.
+                let deadline = std::time::Instant::now() + within;
+                crate::diagnostic!(serde_json::json!({
+                    "component": "pane_holder",
+                    "kind": "pane.proof.start_wait",
+                    "pane_id": pane,
+                    "within_ms": u64::try_from(within.as_millis()).unwrap_or(u64::MAX),
+                }));
+                // The node's start settles only after the holder wrote the
+                // program and `running`; the record answers either way.
+                self.holders.wait_settled(pane, deadline);
+                self.proof(pane)
+            }
+            answer => answer,
+        }
+    }
+
     fn input(&self, pane: &str, input: PaneInput) -> Result<(), HolderError> {
-        self.service.type_input(pane, typed(input))
+        self.service.type_input(pane, typed(input), Typist::Engine)
+    }
+
+    fn sleeper_input(&self, pane: &str, input: PaneInput) -> Result<(), HolderError> {
+        self.service.type_input(pane, typed(input), Typist::Sleeper)
     }
 
     fn letter(
         &self,
         pane: &str,
-        body: PaneInput,
+        text: Vec<PaneInput>,
         submit: PaneInput,
         gap: std::time::Duration,
     ) -> Result<(), HolderError> {
-        self.service
-            .type_letter(pane, typed(body), typed(submit), gap)
+        self.service.type_letter(
+            pane,
+            text.into_iter().map(typed).collect(),
+            typed(submit),
+            gap,
+        )
     }
 
     fn watch_ends(&self, ended: PaneEnded) {
@@ -442,6 +653,18 @@ impl PaneHolders for LocalPanes {
     }
 
     fn recovered(&self, timeout: std::time::Duration) -> Result<HolderRecovery, HolderError> {
+        let asked = self
+            .asked
+            .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        if self.scans_again
+            && asked > 0
+            && let Some(owner) = &self.owner
+            && !self.holders.recover(owner, &self.service).complete
+        {
+            return Err(HolderError::Unreachable {
+                message: "the node could not complete its pane record scan".to_owned(),
+            });
+        }
         self.holders
             .recovered(timeout)
             .ok_or_else(|| HolderError::Refused {
@@ -463,7 +686,7 @@ fn shell_after_notice(shell: &[OsString], notice: &str) -> Vec<OsString> {
     if cfg!(windows) {
         let write = format!(
             "Write-Host {}",
-            hide_shell::quote::powershell_single_quoted(&line)
+            hide_shell::Syntax::PowerShell.single_quoted(&line)
         );
         let mut program = shell.to_vec();
         // A shell started with a command of its own (the integration's)
@@ -509,7 +732,7 @@ fn typed(input: PaneInput) -> Typed {
 fn start_refusal(refusal: StartRefusal) -> HolderError {
     let code = match &refusal {
         StartRefusal::InvalidPane(_) => "invalid_pane",
-        StartRefusal::Cap { .. } => "holder_cap",
+        StartRefusal::Cap { .. } => hide_node_link::holders::HOLDER_CAP_REFUSAL,
         StartRefusal::Conflict(_) => "pane_conflict",
         StartRefusal::RecordUnreadable(_) => "record_unreadable",
         StartRefusal::OtherOwner(_) => "other_owner",
@@ -561,5 +784,65 @@ fn ask_error(error: OpenError) -> HolderError {
         error => HolderError::Unreachable {
             message: error.to_string(),
         },
+    }
+}
+
+/// The first [`MAX_FOREGROUND_ARGS`] arguments that fit in
+/// [`MAX_FOREGROUND_ARGV_BYTES`], as a pane's foreground program carries
+/// them.
+fn bounded_arguments(argv: Vec<String>) -> Vec<String> {
+    use hide_node_link::holders::{MAX_FOREGROUND_ARGS, MAX_FOREGROUND_ARGV_BYTES};
+    let mut total = 0;
+    argv.into_iter()
+        .take(MAX_FOREGROUND_ARGS)
+        .take_while(|argument| {
+            total += argument.len();
+            total <= MAX_FOREGROUND_ARGV_BYTES
+        })
+        .collect()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// A pane of an installation that names a folder finds that folder first
+    /// on its `PATH`, ahead of the caller's or the inherited one, whatever
+    /// case the caller wrote the name in, and the rest of the `PATH` stays.
+    #[test]
+    fn the_installation_s_folder_comes_first_on_the_pane_s_path() {
+        let folder = std::env::temp_dir().join("hide-current");
+        let first = std::env::temp_dir().join("first");
+        let second = std::env::temp_dir().join("second");
+        let joined = |folders: &[&PathBuf]| std::env::join_paths(folders).unwrap();
+
+        let mut env = vec![
+            (OsString::from("Path"), joined(&[&first, &second])),
+            (OsString::from("HOME"), OsString::from("home")),
+        ];
+        put_first_on_path(&mut env, &folder, Some(joined(&[&second]))).unwrap();
+        assert_eq!(
+            env,
+            [
+                (OsString::from("HOME"), OsString::from("home")),
+                (OsString::from("PATH"), joined(&[&folder, &first, &second])),
+            ]
+        );
+
+        let mut env = Vec::new();
+        put_first_on_path(&mut env, &folder, Some(joined(&[&second]))).unwrap();
+        assert_eq!(env, [(OsString::from("PATH"), joined(&[&folder, &second]))]);
+
+        let mut env = Vec::new();
+        put_first_on_path(&mut env, &folder, None).unwrap();
+        assert_eq!(env, [(OsString::from("PATH"), joined(&[&folder]))]);
+
+        // A pane started inside one of this installation's panes.
+        let mut env = vec![(OsString::from("PATH"), joined(&[&first, &folder, &second]))];
+        put_first_on_path(&mut env, &folder, None).unwrap();
+        assert_eq!(
+            env,
+            [(OsString::from("PATH"), joined(&[&folder, &first, &second]))]
+        );
     }
 }

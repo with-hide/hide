@@ -1,24 +1,139 @@
 //! How a shell reads one command line: its simple commands as words with
-//! quoting removed, split at `&&`, `||`, `;`, `|`, `&`, a newline and a
-//! parenthesis, with redirections, heredoc bodies and comments set aside;
-//! the commands a heredoc body substitutes when its end word is unquoted
-//! are kept, since the shell runs them.
+//! quoting removed, split at its command separators, with redirections,
+//! heredoc bodies and comments set aside. The shell is named by its
+//! [`Syntax`], a POSIX shell's or PowerShell's, and every difference between
+//! the two (the escape character, the quotes, the separators) is read here:
+//! a caller gets the same words whichever shell the line was written for.
+//! In a POSIX line the commands a heredoc body substitutes when its end word
+//! is unquoted are kept, since the shell runs them.
 //!
 //! The hooks read an agent's shell call through it before the call runs
-//! (`hide-agent-hooks`: the spawn guard, the guardrails, the observation and
-//! the plan record), and the session reader reads the calls a session file
+//! (`hide-agent-hooks`: the opener guard, the guardrails and the plan
+//! record), and the session reader reads the calls a session file
 //! recorded through it (`hide-session`, the pull requests a call names). It
 //! reads text only: it starts nothing, opens nothing and keeps no state.
 //! [`quote`] is the other direction, how a word is written for a shell to
 //! read it back.
 
+mod powershell;
 pub mod quote;
 
+/// The syntax of the shell that reads a line: the one place a shell's kind
+/// is named, for reading a line ([`shell_line`]) and for writing a word
+/// ([`Syntax::single_quoted`]).
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum Syntax {
+    /// sh, bash, zsh and fish, Git Bash on Windows included: `\` escapes the
+    /// next character.
+    Posix,
+    /// Windows PowerShell and PowerShell 7: `` ` `` escapes, `\` is a plain
+    /// character, and a single-quoted string ends only at an undoubled quote.
+    PowerShell,
+}
+
+impl Syntax {
+    /// The syntax of the shell a program name names (`pwsh`, `powershell.exe`,
+    /// `/bin/zsh`, `-bash` as a login shell's), in any case. cmd.exe reads
+    /// neither syntax, so it has none.
+    pub fn of_program(name: &str) -> Option<Self> {
+        // A shell's name is matched without case, as PowerShell finds a
+        // program.
+        match Self::PowerShell.program(name).trim_start_matches('-') {
+            "pwsh" | "powershell" => Some(Self::PowerShell),
+            "cmd" => None,
+            _ => Some(Self::Posix),
+        }
+    }
+
+    /// A word as a path with `/` between its names. PowerShell takes `\`
+    /// and `/` alike as the separator on every system (`about_Path_Syntax`;
+    /// pwsh on macOS and Linux turns `\` into `/`), so `.\.env` is `./.env`,
+    /// `C:\repo` is `C:/repo` and `~\.ssh` is `~/.ssh`; a POSIX word is the
+    /// path as written.
+    pub fn path_word(self, word: &str) -> std::borrow::Cow<'_, str> {
+        match self {
+            Self::PowerShell if word.contains('\\') => word.replace('\\', "/").into(),
+            _ => word.into(),
+        }
+    }
+
+    /// The parts of one command word that may name a path, the word itself
+    /// first: the value of a `--name=value` or `NAME=value` word in both
+    /// shells, and in PowerShell also the value of a `-Name:value`
+    /// parameter (`-LiteralPath:.\.env`) and each item of a comma-separated
+    /// array (`README.md,.env`, `about_Parameters`, `about_Arrays`). A
+    /// variable in a value is left in it: neither shell's value is known
+    /// before it runs.
+    pub fn path_values(self, word: &str) -> Vec<&str> {
+        let mut values = vec![word];
+        if let Some((_, value)) = word.split_once('=') {
+            values.push(value);
+        }
+        if self == Self::PowerShell {
+            if word.starts_with('-')
+                && let Some((_, value)) = word.split_once(':')
+            {
+                values.push(value);
+            }
+            let items: Vec<&str> = values
+                .iter()
+                .filter(|value| value.contains(','))
+                .flat_map(|value| value.split(','))
+                .collect();
+            values.extend(items);
+        }
+        values
+    }
+
+    /// The name a command word calls, as this shell finds it: the word's
+    /// file name without `.exe`, and in PowerShell in lower case, since
+    /// PowerShell finds a cmdlet, an alias and on Windows a program without
+    /// case (`Set-Location`, `CD`, `Git.exe`). The one place a command's
+    /// name is read from its word.
+    pub fn program(self, word: &str) -> String {
+        let name = word.rsplit(['/', '\\']).next().unwrap_or(word);
+        let name = match self {
+            Self::Posix => name.to_owned(),
+            Self::PowerShell => name.to_lowercase(),
+        };
+        // `.exe` is four ASCII bytes, so cutting them keeps a character whole.
+        if name.to_ascii_lowercase().ends_with(".exe") {
+            name[..name.len() - 4].to_owned()
+        } else {
+            name
+        }
+    }
+
+    /// Whether `program`, a name [`Syntax::program`] gave, moves the
+    /// shell's working folder for the commands after it, and where it goes
+    /// when it names no folder: `cd` and `pushd`, and in PowerShell also
+    /// `Set-Location` with its aliases `sl` and `chdir`, and `Push-Location`
+    /// (`about_Aliases`). A bare `cd` or `Set-Location` goes home, as a
+    /// POSIX shell and PowerShell 7 do; Windows PowerShell 5.1 stays.
+    pub fn changes_folder(self, program: &str) -> Option<BareFolder> {
+        match (self, program) {
+            (_, "cd") => Some(BareFolder::Home),
+            (_, "pushd") => Some(BareFolder::Stays),
+            (Self::PowerShell, "chdir" | "sl" | "set-location") => Some(BareFolder::Home),
+            (Self::PowerShell, "push-location") => Some(BareFolder::Stays),
+            _ => None,
+        }
+    }
+}
+
+/// Where a command that moves the working folder goes when it names no
+/// folder ([`Syntax::changes_folder`]).
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum BareFolder {
+    Home,
+    Stays,
+}
+
 /// The simple commands of a shell line, each as its words with quoting
-/// removed. A substitution (`$(...)`, `` `...` ``) stays inside its word as
-/// the text it was written with: it is not parsed.
-pub fn simple_commands(text: &str) -> Vec<Vec<String>> {
-    Lexer::new(text).run().commands
+/// removed. A substitution (`$(...)`, a POSIX `` `...` ``) stays inside its
+/// word as the text it was written with: it is not parsed.
+pub fn simple_commands(text: &str, syntax: Syntax) -> Vec<Vec<String>> {
+    shell_line(text, syntax).commands
 }
 
 /// A shell line as [`simple_commands`] reads it, with the file each
@@ -57,6 +172,25 @@ pub struct ShellLine {
     pub functions: bool,
 }
 
+impl ShellLine {
+    /// A line with no commands: what a line the shell refuses to run reads as.
+    fn empty() -> Self {
+        Self {
+            commands: Vec::new(),
+            targets: Vec::new(),
+            writes: Vec::new(),
+            conditional: Vec::new(),
+            substitutions: Vec::new(),
+            fallback: false,
+            backquoted: Vec::new(),
+            joins: Vec::new(),
+            scopes: Vec::new(),
+            bodies: Vec::new(),
+            functions: false,
+        }
+    }
+}
+
 /// How a command follows the one before it.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum Join {
@@ -71,8 +205,14 @@ pub enum Join {
     Pipe,
 }
 
-pub fn shell_line(text: &str) -> ShellLine {
-    Lexer::new(text).run()
+/// A line as `syntax`'s shell reads it. A line the shell would refuse to run
+/// (a quote, a substitution or a here-string it ends inside) reads as no
+/// commands at all.
+pub fn shell_line(text: &str, syntax: Syntax) -> ShellLine {
+    match syntax {
+        Syntax::Posix => Lexer::new(text).run(),
+        Syntax::PowerShell => powershell::read(text),
+    }
 }
 
 struct Lexer {
@@ -289,19 +429,7 @@ impl Lexer {
         }
         self.end_command();
         if self.unclosed {
-            return ShellLine {
-                commands: Vec::new(),
-                targets: Vec::new(),
-                writes: Vec::new(),
-                conditional: Vec::new(),
-                substitutions: Vec::new(),
-                fallback: false,
-                backquoted: Vec::new(),
-                joins: Vec::new(),
-                scopes: Vec::new(),
-                bodies: Vec::new(),
-                functions: false,
-            };
+            return ShellLine::empty();
         }
         ShellLine {
             commands: self.commands,
@@ -781,6 +909,17 @@ pub fn is_assignment(word: &str) -> bool {
     })
 }
 
+/// A command's words from its program on: without the `NAME=value` words a
+/// shell takes as the environment of the command that follows and the prefix
+/// words [`is_prefix`] names.
+pub fn command_words(words: &[String], compound: bool) -> &[String] {
+    let at = words
+        .iter()
+        .position(|word| !is_assignment(word) && !is_prefix(word, compound))
+        .unwrap_or(words.len());
+    &words[at..]
+}
+
 /// Words a shell puts before a command without changing which command runs:
 /// the keywords that open a compound command's body, and the wrappers that
 /// run the next word as it is.
@@ -799,16 +938,24 @@ mod tests {
 
     #[test]
     fn a_backquoted_command_is_kept_and_a_single_quoted_backtick_is_not() {
-        let line = shell_line("echo `rm -rf \\`x\\` build` \"$(date) `whoami`\" 'say `hi`'");
+        let line = shell_line(
+            "echo `rm -rf \\`x\\` build` \"$(date) `whoami`\" 'say `hi`'",
+            Syntax::Posix,
+        );
         assert_eq!(line.backquoted, ["rm -rf `x` build", "whoami"]);
         assert_eq!(line.substitutions, [(false, "date".to_owned())]);
-        assert!(shell_line("echo `unclosed").backquoted.is_empty());
+        assert!(
+            shell_line("echo `unclosed", Syntax::Posix)
+                .backquoted
+                .is_empty()
+        );
     }
 
     #[test]
     fn each_command_keeps_how_it_follows_the_last_and_the_subshells_it_runs_in() {
         let line = shell_line(
             "cd /a && (cd /b; ls) || rm x | wc -l\nf() { cd /c; }\nwhile true; do cd ..; done",
+            Syntax::Posix,
         );
         assert_eq!(
             line.joins,
@@ -837,13 +984,15 @@ mod tests {
             ]
         );
         assert!(line.functions);
-        assert!(!shell_line("cd /a && ls").functions);
+        assert!(!shell_line("cd /a && ls", Syntax::Posix).functions);
     }
 
     #[test]
     fn a_heredoc_body_substitutes_only_when_its_end_word_is_unquoted() {
-        let line =
-            shell_line("cat <<EOF\n$(date) `whoami` \\$(not)\nEOF\ncat <<'EOF'\n$(kept)\nEOF\n");
+        let line = shell_line(
+            "cat <<EOF\n$(date) `whoami` \\$(not)\nEOF\ncat <<'EOF'\n$(kept)\nEOF\n",
+            Syntax::Posix,
+        );
         assert_eq!(line.substitutions, [(false, "date".to_owned())]);
         assert_eq!(line.backquoted, ["whoami"]);
     }
@@ -852,6 +1001,7 @@ mod tests {
     fn a_redirection_that_writes_keeps_its_target_apart_from_one_that_reads() {
         let line = shell_line(
             "cat < in.txt > out.txt 2>> log; echo x &> both; sort <> rw; echo y >| forced 2>&1",
+            Syntax::Posix,
         );
         assert_eq!(
             line.writes,
@@ -864,6 +1014,339 @@ mod tests {
             ]
         );
         assert_eq!(line.targets.len(), 6);
-        assert!(shell_line("cat <<< text < in").writes.is_empty());
+        assert!(
+            shell_line("cat <<< text < in", Syntax::Posix)
+                .writes
+                .is_empty()
+        );
+    }
+
+    fn words(line: &str, syntax: Syntax) -> Vec<Vec<String>> {
+        simple_commands(line, syntax)
+    }
+
+    /// A line's commands, each as its words.
+    type Commands<'a> = &'a [&'a [&'a str]];
+
+    fn owned(commands: Commands) -> Vec<Vec<String>> {
+        commands
+            .iter()
+            .map(|command| command.iter().map(|word| (*word).to_owned()).collect())
+            .collect()
+    }
+
+    /// One line, two shells: the words each reads, from each shell's own
+    /// quoting and escaping rules (POSIX: Shell Command Language 2.2;
+    /// PowerShell: about_Quoting_Rules, about_Special_Characters,
+    /// about_Parsing, about_Comments, about_Pipeline_Chain_Operators).
+    #[test]
+    fn the_same_line_reads_as_the_shell_that_runs_it_reads_it() {
+        let table: &[(&str, Commands, Commands)] = &[
+            (
+                r"ii .\out.png",
+                &[&["ii", ".out.png"]],
+                &[&["ii", r".\out.png"]],
+            ),
+            (
+                r"Start-Process .\report.html",
+                &[&["Start-Process", ".report.html"]],
+                &[&["Start-Process", r".\report.html"]],
+            ),
+            (
+                r"Invoke-Item 'C:\a b\x.png'",
+                &[&["Invoke-Item", r"C:\a b\x.png"]],
+                &[&["Invoke-Item", r"C:\a b\x.png"]],
+            ),
+            (
+                r#"Invoke-Item "C:\a b\x.png""#,
+                &[&["Invoke-Item", r"C:\a b\x.png"]],
+                &[&["Invoke-Item", r"C:\a b\x.png"]],
+            ),
+            // A backslash escapes in POSIX; a backtick escapes in PowerShell.
+            (r"echo a\ b", &[&["echo", "a b"]], &[&["echo", r"a\", "b"]]),
+            // A backtick opens a POSIX substitution, here never closed.
+            ("echo a` b", &[], &[&["echo", "a b"]]),
+            // A quote inside single quotes: POSIX ends and reopens, PowerShell doubles.
+            ("echo 'it''s'", &[&["echo", "its"]], &[&["echo", "it's"]]),
+            (
+                "echo \u{2018}it\u{2019}\u{2019}s\u{2019}",
+                &[&["echo", "\u{2018}it\u{2019}\u{2019}s\u{2019}"]],
+                &[&["echo", "it\u{2019}s"]],
+            ),
+            (
+                r#"echo "say ""hi"" `$x""#,
+                &[],
+                &[&["echo", r#"say "hi" $x"#]],
+            ),
+            // Separators.
+            (
+                "a; b && c || d | e",
+                &[&["a"], &["b"], &["c"], &["d"], &["e"]],
+                &[&["a"], &["b"], &["c"], &["d"], &["e"]],
+            ),
+            // `&` before a command is PowerShell's call operator.
+            (
+                r"& 'C:\Program Files\x.exe' run",
+                &[&[r"C:\Program Files\x.exe", "run"]],
+                &[&[r"C:\Program Files\x.exe", "run"]],
+            ),
+            (
+                "start x.html &",
+                &[&["start", "x.html"]],
+                &[&["start", "x.html"]],
+            ),
+            ("ls # ii x.png", &[&["ls"]], &[&["ls"]]),
+            (
+                r"ii $(Join-Path $env:TEMP x.png)",
+                &[&["ii", "$(Join-Path $env:TEMP x.png)"]],
+                &[&["ii", "$(Join-Path $env:TEMP x.png)"]],
+            ),
+            // Redirections name their file apart from the words.
+            (r"ls > .\out.txt 2>&1", &[&["ls"]], &[&["ls"]]),
+        ];
+        // PowerShell's own forms.
+        let powershell_only: &[(&str, Commands)] = &[
+            // A statement's condition and its block are commands of their own.
+            (
+                r"if (Test-Path x) { ii .\a.png } else { echo no }",
+                &[&["Test-Path", "x"], &["ii", r".\a.png"], &["echo", "no"]],
+            ),
+            ("<# ii x.png #> ls", &[&["ls"]]),
+            (r"ii ${env:TEMP}\x.png", &[&["ii", r"${env:TEMP}\x.png"]]),
+            // A here-string is one word, its lines no commands.
+            (
+                "Set-Content a.txt @'\nii x.png; rm y\n'@",
+                &[&["Set-Content", "a.txt", "ii x.png; rm y"]],
+            ),
+            (
+                "ii x.png `\n  -Verb open",
+                &[&["ii", "x.png", "-Verb", "open"]],
+            ),
+            // A backtick before a Windows line end continues the line too.
+            (
+                "Start-Process `\r\n .\\x.html",
+                &[&["Start-Process", r".\x.html"]],
+            ),
+            (
+                "try { ii .\\a.png } catch { echo no } finally { ls }",
+                &[&["ii", r".\a.png"], &["echo", "no"], &["ls"]],
+            ),
+            (
+                "foreach ($f in $files) { ii $f }",
+                &[&["$f", "in", "$files"], &["ii", "$f"]],
+            ),
+            (
+                "Set-Content a.txt @\"\r\nii x.png; rm y\r\n\"@",
+                &[&["Set-Content", "a.txt", "ii x.png; rm y"]],
+            ),
+            // An assignment runs the command after it.
+            ("$r = git push --force", &[&["git", "push", "--force"]]),
+            ("$r=git push", &[&["git", "push"]]),
+            ("$a = $b += git commit", &[&["git", "commit"]]),
+            ("${my r} = git push", &[&["git", "push"]]),
+            ("$env:X = 1", &[&["1"]]),
+            ("$r = (git push)", &[&["git", "push"]]),
+            ("$r =git push --force", &[&["git", "push", "--force"]]),
+            ("[string]$r = git push", &[&["git", "push"]]),
+            ("[int[]]$r=git push", &[&["git", "push"]]),
+            ("$a, $b = git push", &[&["git", "push"]]),
+            ("$a,$b=git push", &[&["git", "push"]]),
+            ("[int]$a , $b = git push", &[&["git", "push"]]),
+            ("[int] $r = git push", &[&["git", "push"]]),
+            ("$r.x = git push", &[&["git", "push"]]),
+            ("$h['k'] = git push", &[&["git", "push"]]),
+            ("$h['a=b'] += git push", &[&["git", "push"]]),
+            // A comparison, a static call and a variable alone run as written.
+            ("$r == 1", &[&["$r", "==", "1"]]),
+            ("$r -eq 1", &[&["$r", "-eq", "1"]]),
+            ("$a, $b", &[&["$a,", "$b"]]),
+            ("[IO.File]::Exists('x')", &[&["[IO.File]::Exists"], &["x"]]),
+            ("$r", &[&["$r"]]),
+            // PowerShell reads the typographic double quotes as `\"`.
+            (
+                "ii \u{201C}C:\\a b\\x.png\u{201D}",
+                &[&["ii", r"C:\a b\x.png"]],
+            ),
+            (
+                "echo \u{201E}say \u{201D}\u{201D}hi\u{201C}\u{201C}\u{201D}",
+                &[&["echo", "say \u{201D}hi\u{201C}"]],
+            ),
+        ];
+        for (line, posix, powershell) in table {
+            assert_eq!(
+                words(line, Syntax::Posix),
+                owned(posix),
+                "{line:?} in POSIX"
+            );
+            assert_eq!(
+                words(line, Syntax::PowerShell),
+                owned(powershell),
+                "{line:?} in PowerShell"
+            );
+        }
+        for (line, powershell) in powershell_only {
+            assert_eq!(
+                words(line, Syntax::PowerShell),
+                owned(powershell),
+                "{line:?} in PowerShell"
+            );
+        }
+    }
+
+    #[test]
+    fn a_word_names_its_path_and_its_program_as_the_shell_reads_them() {
+        let ps = Syntax::PowerShell;
+        for (word, path) in [
+            (r".\.env", "./.env"),
+            (r"C:\repo\.env", "C:/repo/.env"),
+            (r"~\.ssh\id", "~/.ssh/id"),
+            ("src/a.rs", "src/a.rs"),
+        ] {
+            assert_eq!(ps.path_word(word), path, "{word}");
+        }
+        assert_eq!(Syntax::Posix.path_word(r"a\b"), r"a\b");
+        for (word, posix, powershell) in [
+            ("git", "git", "git"),
+            ("Git.EXE", "Git", "git"),
+            (r"C:\Program Files\Git\cmd\git.exe", "git", "git"),
+            ("/usr/bin/gh", "gh", "gh"),
+            ("Set-Location", "Set-Location", "set-location"),
+        ] {
+            assert_eq!(Syntax::Posix.program(word), posix, "{word}");
+            assert_eq!(ps.program(word), powershell, "{word}");
+        }
+        for (program, bare) in [("cd", BareFolder::Home), ("pushd", BareFolder::Stays)] {
+            assert_eq!(Syntax::Posix.changes_folder(program), Some(bare));
+            assert_eq!(ps.changes_folder(program), Some(bare));
+        }
+        for (program, bare) in [
+            ("set-location", BareFolder::Home),
+            ("sl", BareFolder::Home),
+            ("chdir", BareFolder::Home),
+            ("push-location", BareFolder::Stays),
+        ] {
+            assert_eq!(ps.changes_folder(program), Some(bare), "{program}");
+            assert_eq!(Syntax::Posix.changes_folder(program), None, "{program}");
+        }
+        assert_eq!(ps.changes_folder("get-content"), None);
+        // The values a word passes: `=` in both shells, `-Name:` and arrays
+        // in PowerShell.
+        for (word, posix, powershell) in [
+            (
+                "--env-file=.env",
+                &["--env-file=.env", ".env"][..],
+                &["--env-file=.env", ".env"][..],
+            ),
+            (
+                r"-LiteralPath:.\.env",
+                &[r"-LiteralPath:.\.env"][..],
+                &[r"-LiteralPath:.\.env", r".\.env"][..],
+            ),
+            (
+                "a.txt,.env",
+                &["a.txt,.env"][..],
+                &["a.txt,.env", "a.txt", ".env"][..],
+            ),
+            ("C:\\x", &["C:\\x"][..], &["C:\\x"][..]),
+        ] {
+            assert_eq!(Syntax::Posix.path_values(word), posix, "{word}");
+            assert_eq!(ps.path_values(word), powershell, "{word}");
+        }
+    }
+
+    #[test]
+    fn a_powershell_line_powershell_refuses_to_parse_reads_as_no_commands() {
+        for line in [
+            "ii 'x.png",
+            r#"ii "x.png"#,
+            "ii $(Join-Path a x.png",
+            "if ($x) { ii x.png",
+            "ii x.png }",
+            "ii (x.png",
+            "ii x.png)",
+            "Set-Content a @'\nii x.png",
+            "<# ii x.png",
+            "ii ${env:TEMP",
+            "Get-Content < in.txt",
+        ] {
+            assert_eq!(
+                words(line, Syntax::PowerShell),
+                Vec::<Vec<String>>::new(),
+                "{line:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn a_powershell_line_keeps_how_its_commands_run() {
+        let line = shell_line(
+            "a && b || c | d\nif (e) { f }\nfunction g { h }\nls > .\\o.txt 2>> e.log *> all; $(k)",
+            Syntax::PowerShell,
+        );
+        assert_eq!(
+            line.commands
+                .iter()
+                .map(|words| words[0].as_str())
+                .collect::<Vec<_>>(),
+            ["a", "b", "c", "d", "e", "f", "function", "h", "ls", "$(k)"]
+        );
+        assert_eq!(
+            line.joins,
+            [
+                Join::List,
+                Join::And,
+                Join::Or,
+                Join::Pipe,
+                Join::List,
+                Join::List,
+                Join::List,
+                Join::List,
+                Join::List,
+                Join::List,
+            ]
+        );
+        assert_eq!(
+            line.conditional,
+            [
+                false, true, true, true, false, true, false, true, false, false
+            ]
+        );
+        assert_eq!(
+            line.bodies,
+            [
+                false, false, false, false, false, true, false, true, false, false
+            ]
+        );
+        assert!(line.fallback && line.functions);
+        assert!(line.scopes.iter().all(Vec::is_empty));
+        assert!(line.backquoted.is_empty());
+        assert_eq!(
+            line.writes,
+            [
+                (8, r".\o.txt".to_owned()),
+                (8, "e.log".to_owned()),
+                (8, "all".to_owned()),
+            ]
+        );
+        assert_eq!(line.substitutions, [(false, "k".to_owned())]);
+    }
+
+    #[test]
+    fn a_program_name_names_its_shell() {
+        for (name, syntax) in [
+            ("pwsh", Some(Syntax::PowerShell)),
+            (
+                r"C:\Windows\System32\WindowsPowerShell\v1.0\powershell.exe",
+                Some(Syntax::PowerShell),
+            ),
+            ("PowerShell.EXE", Some(Syntax::PowerShell)),
+            ("/bin/zsh", Some(Syntax::Posix)),
+            ("-bash", Some(Syntax::Posix)),
+            (r"C:\Program Files\Git\bin\bash.exe", Some(Syntax::Posix)),
+            ("cmd.exe", None),
+            ("CMD", None),
+        ] {
+            assert_eq!(Syntax::of_program(name), syntax, "{name}");
+        }
     }
 }

@@ -8,9 +8,8 @@ import { CLOSED_SHEET, applyFrame, patch, usePhone } from "./store";
 const FRAME = `{
   "type": "start_catalog",
   "targets": [
-    {"id": "home:local", "device_id": "local", "place": null, "device_label": null, "connected": true},
     {"id": "c1", "device_id": "local", "place": "hide · main", "device_label": null, "connected": true},
-    {"id": "home:mini", "device_id": "mini", "place": null, "device_label": "mini", "connected": false}
+    {"id": "rc1", "device_id": "mini", "place": "contong · main", "device_label": "mini", "connected": false}
   ],
   "core_platform": "macos aarch64",
   "kinds": [
@@ -25,11 +24,11 @@ const korean = initializeInterfaceI18n("ko").getFixedT(null, "translation");
 const english = initializeInterfaceI18n("en").getFixedT(null, "translation");
 
 describe("selectionOf", () => {
-  it("defaults to This Mac's Home with the remembered kind and its model", () => {
+  it("defaults to the first target with the remembered kind and its model", () => {
     const selection = selectionOf(catalog, NO_CHOICE);
-    expect(selection.target?.id).toBe("home:local");
-    expect(targetText(english, selection.target!, catalog.core_platform)).toBe("This Mac · Home");
-    expect(targetText(korean, selection.target!, catalog.core_platform)).toBe("이 Mac · 홈");
+    expect(selection.target?.id).toBe("c1");
+    expect(targetText(english, selection.target!, catalog.core_platform)).toBe("This Mac · hide · main");
+    expect(targetText(korean, selection.target!, catalog.core_platform)).toBe("이 Mac · hide · main");
     expect(selection.kind).toBe("codex");
     // Codex lists no model: the select is disabled on the default.
     expect(modelsOf(selection)).toEqual([]);
@@ -37,12 +36,12 @@ describe("selectionOf", () => {
   });
 
   it("names the core's machine as its system does, in the phone's language", () => {
-    const home = catalog.targets[0]!;
-    expect(targetText(english, home, "windows x86_64")).toBe("This PC · Home");
-    expect(targetText(korean, home, "windows x86_64")).toBe("이 PC · 홈");
-    expect(targetText(korean, home, "linux x86_64")).toBe("이 컴퓨터 · 홈");
+    const local = catalog.targets[0]!;
+    expect(targetText(english, local, "windows x86_64")).toBe("This PC · hide · main");
+    expect(targetText(korean, local, "windows x86_64")).toBe("이 PC · hide · main");
+    expect(targetText(korean, local, "linux x86_64")).toBe("이 컴퓨터 · hide · main");
     // A registered device keeps the name it was registered under.
-    expect(targetText(korean, catalog.targets[2]!, "windows x86_64")).toBe("mini · 홈");
+    expect(targetText(korean, catalog.targets[1]!, "windows x86_64")).toBe("mini · contong · main");
   });
 
   it("follows the operator's changes over the remembered choice", () => {
@@ -54,7 +53,7 @@ describe("selectionOf", () => {
 
   it("keeps a model the catalog no longer lists, and drops a target that left it", () => {
     expect(selectionOf(catalog, { target: "gone", kind: "claude", model: "haiku" })).toMatchObject({ model: "haiku" });
-    expect(selectionOf(catalog, { target: "gone", kind: null, model: undefined }).target?.id).toBe("home:local");
+    expect(selectionOf(catalog, { target: "gone", kind: null, model: undefined }).target?.id).toBe("c1");
   });
 
   it("shows the remembered model while the catalog is missing", () => {
@@ -78,7 +77,6 @@ describe("startProblem", () => {
 describe("startFailure", () => {
   it("names the core's refusals and never shows a raw kind", () => {
     expect(noticeText(korean, startFailure("task_operation.busy"))).toContain("시작하는 중");
-    expect(noticeText(korean, startFailure("home.conflict"))).toContain("~/hide");
     expect(noticeText(korean, startFailure("something.new"))).toBe("시작하지 못했어요. 다시 시도하세요.");
     expect(noticeText(korean, startFailure(null))).toBe("시작하지 못했어요. 다시 시도하세요.");
   });
@@ -89,7 +87,7 @@ describe("the store", () => {
 
   it("keeps the catalog frame hided sends", () => {
     applyFrame(JSON.parse(FRAME) as ServerFrame);
-    expect(usePhone.getState().startCatalog?.targets.map((target) => target.id)).toEqual(["home:local", "c1", "home:mini"]);
+    expect(usePhone.getState().startCatalog?.targets.map((target) => target.id)).toEqual(["c1", "rc1"]);
     expect(usePhone.getState().startCatalog?.remembered.kind).toBe("codex");
   });
 });
@@ -97,6 +95,6 @@ describe("the store", () => {
 describe("mayHaveStarted", () => {
   it("keeps the request id only while the outcome is unknown, so a tap after a refusal is a new start", () => {
     for (const reason of ["timeout", "in_flight", "offline"]) expect(mayHaveStarted(reason)).toBe(true);
-    for (const reason of ["task_operation.busy", "home.conflict", "agent_failed", "start_failed", "unknown_target", null]) expect(mayHaveStarted(reason)).toBe(false);
+    for (const reason of ["task_operation.busy", "agent_failed", "start_failed", "unknown_target", null]) expect(mayHaveStarted(reason)).toBe(false);
   });
 });

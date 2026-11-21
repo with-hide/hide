@@ -49,6 +49,7 @@ A screenshot exemption names its concrete reason in the pull request for the rev
 
 Add a token with both Dark (`value`) and Light (`light`) colors when it is a color.
 Use `hide` only when the Hide palette differs, and use aliases instead of restating an existing value.
+A neutral or status color also names its palette step under `palette` (`{"value": "--gray-17", "light": "--gray-100"}`, plus `hide` when the token has one); add a step with `"type": "palette"` and its OKLCH only when no existing step fits.
 Regenerate the web outputs and use the token through Tailwind classes or CSS custom properties.
 Remove a token once no consumer needs it.
 For a reusable component, extend the existing part and its gallery states before introducing a sibling implementation.
@@ -64,7 +65,7 @@ The public `design-contract.yml` workflow runs this same entrypoint and the cont
 - `check-agent-logos.mjs` checks bundled agent marks against their public registries and asset manifest.
 - `check-ui-parts.mjs` refuses a raw control or layer outside `web/src/components/ui` beyond each file's count in `scripts/ui-parts-baseline.json`, and asks for `--update` when a count went down ([DESIGN_GUIDE.md](DESIGN_GUIDE.md#three-rules)).
 
-`node --test scripts/tests/token-contrast.test.mjs scripts/tests/design-contract.test.mjs scripts/tests/ui-parts.test.mjs` checks contrast policy, staged-source isolation and the part-count ratchet.
+`node --test scripts/tests/token-contrast.test.mjs scripts/tests/design-contract.test.mjs scripts/tests/gen-tokens.test.mjs scripts/tests/ui-parts.test.mjs` checks contrast policy, staged-source isolation, palette-step generation and the part-count ratchet.
 The opt-in `.githooks/pre-commit` invokes `node scripts/check-design-contract.mjs --staged`.
 That mode reads staged checker modules, tokens, web sources and agent registries into a temporary directory without changing the index or working tree.
 Stage the checker and inputs together; an unstaged repair must never make a broken staged candidate pass.

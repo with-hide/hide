@@ -1,0 +1,23 @@
+---
+title: hide docs
+description: How to run agents in hide, from the first ten minutes to missions, letters and your phone.
+template: splash
+hero:
+  tagline: Agents do the work. You make the calls. Start here.
+  actions:
+    - text: Start
+      link: /docs/start/overview/
+      icon: right-arrow
+    - text: Try a guide
+      link: /docs/guides/answer-only-what-needs-you/
+      variant: minimal
+---
+
+import { Card, CardGrid } from "@astrojs/starlight/components";
+
+<CardGrid>
+  <Card title="Start" icon="rocket">Install hide and run your first agents.</Card>
+  <Card title="Guides" icon="open-book">Pick the thing you want to do, then follow the steps.</Card>
+  <Card title="Features" icon="puzzle">What each part of hide is, and how to read it.</Card>
+  <Card title="Reference" icon="list-format">Commands, shortcuts and files, to look things up.</Card>
+</CardGrid>

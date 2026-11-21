@@ -6,7 +6,7 @@ import { AgentMark } from "../AgentMark";
 import { useInterfaceTranslation } from "../i18n/client";
 import { cn } from "../lib/utils";
 import { RunText, useRunWords } from "../missionParts";
-import { conductorState, conductorUnanswered, type ConductorState } from "../missions";
+import { conductorState, type ConductorState } from "../missions";
 import { allAgents, agentsByPane } from "../paneAgents";
 import type { Mission } from "../snapshot";
 import { useShellStore } from "../store";
@@ -16,10 +16,9 @@ import { Button } from "./ui/button";
 // B13): its agent's mark, `Conductor`, the model its pane was launched with,
 // its state, and `터미널로 ›`, which brings its pane forward with the keyboard
 // in it, on whichever device it runs. An open mission no Conductor holds
-// shows `Conductor 없음` and `이어받기` instead, and a Conductor that let a
-// raise reach the operator unanswered keeps its row with `이어받기` beside
-// `터미널로` (PRD mission-node-simple B15). No record button: the task row
-// and the Overview open the record.
+// shows `Conductor 없음` and `지휘 다시 열기` instead, unless raises stand:
+// the safety net card under it then says both. No record button: the task
+// row and the Overview open the record.
 
 const STATE_WORD: Record<Exclude<ConductorState, "gone" | "unknown">, MessageKey> = {
   working: "mission.conductor.state.working",
@@ -30,8 +29,12 @@ const STATE_WORD: Record<Exclude<ConductorState, "gone" | "unknown">, MessageKey
 
 const STATE_TONE: Partial<Record<ConductorState, string>> = { working: "text-mission-working", deciding: "text-mission-hold" };
 
-/** The row under a work page's head that names who does the work: a mission's Conductor, a plan's own session. */
-export const OWNER_ROW = "mx-md mb-sm flex min-w-0 items-center gap-sm rounded-md border border-border bg-card px-sm py-xs text-body";
+/**
+ * The row under a work page's head that names who does the work: a mission's
+ * Conductor, a plan's own session. One line of words on the page, with no box
+ * of its own: the head above and the list below already set it apart.
+ */
+export const OWNER_ROW = "mx-md mb-sm flex min-w-0 items-center gap-sm text-body";
 
 export function ConductorRow({ mission, actions }: { mission: Mission; actions: Actions }) {
   const { t } = useInterfaceTranslation();
@@ -39,11 +42,13 @@ export function ConductorRow({ mission, actions }: { mission: Mission; actions: 
   const remote = useShellStore((s) => s.rest?.status?.remote);
   const row = useMemo(() => agentsByPane(allAgents(local, remote)).get(mission.conductor.pane_id) ?? null, [local, remote, mission.conductor.pane_id]);
   const state = conductorState(mission, row);
-  // Only the launch Hide proved for the Conductor's pane names its model; the plan names none for it.
-  const run = useRunWords(mission, mission.conductor.pane_id, mission.device_id, null);
+  // Only the launch Hide proved for the Conductor's pane names its model, by the name its item's list shows; the plan names none for it.
+  const run = useRunWords(mission, mission.conductor.pane_id, mission.device_id, null, mission.conductor.agent_kind);
   if (!state) return null;
   const frame = OWNER_ROW;
   if (state === "gone") {
+    // With raises standing, the safety net card under it says there is no Conductor and holds 지휘 다시 열기, so this row steps aside.
+    if (mission.safety_net) return null;
     return (
       <div className={frame} data-mission-conductor="gone">
         <span aria-hidden="true" className="size-(--size-agent-mark) shrink-0 rounded-full border border-dashed border-muted-foreground" />
@@ -56,7 +61,7 @@ export function ConductorRow({ mission, actions }: { mission: Mission; actions: 
   const terminal = t("mission.toTerminal");
   return (
     <div className={frame} data-mission-conductor={state}>
-      <AgentMark kind={mission.conductor.agent_kind} />
+      <AgentMark kind={mission.conductor.agent_kind} profile={row?.profile} />
       <span className="shrink-0 font-semibold">{t("mission.conductor")}</span>
       <span className="flex min-w-0 flex-1 items-center gap-xs text-caption text-muted-foreground">
         {run ? <RunText run={run} className="min-w-0 shrink" /> : null}
@@ -72,7 +77,6 @@ export function ConductorRow({ mission, actions }: { mission: Mission; actions: 
       >
         {terminal}
       </Button>
-      {conductorUnanswered(mission) ? <MissionTakeOver mission={mission} actions={actions} /> : null}
     </div>
   );
 }

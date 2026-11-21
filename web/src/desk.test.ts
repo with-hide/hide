@@ -99,7 +99,7 @@ describe("a thread's turns (B25, B26)", () => {
         text("agent_message_chunk", "볼게요"),
         { sessionUpdate: "tool_call", toolCallId: "e", title: "a.ts", kind: "edit", status: "completed" },
         { sessionUpdate: "tool_call", toolCallId: "x", title: "Bash", kind: "execute", status: "completed", rawInput: { command: "pnpm test" } },
-        { sessionUpdate: "tool_call", toolCallId: "p", title: "Bash", kind: "execute", rawInput: { command: "hide plan set" } },
+        { sessionUpdate: "tool_call", toolCallId: "p", title: "Bash", kind: "execute", rawInput: { command: "hide task set" } },
         { sessionUpdate: "tool_call", toolCallId: "l", title: "Bash", kind: "execute", rawInput: { command: "hide request send worker" } },
         text("agent_message_chunk", "고쳤어요"),
         text("user_message_chunk", "고마워"),

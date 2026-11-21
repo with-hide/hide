@@ -11,7 +11,7 @@
 //! of this account reach it; they are inside the core's trust boundary
 //! already (they can read its screen token). On it, the core and the node
 //! first trade one line each: the core names its node and build, the node
-//! names its own and its Herdr socket. A different build, this machine's own
+//! names its own. A different build, this machine's own
 //! node id, a device this core dials, or a node whose earlier link stands is
 //! refused with a reason line. Otherwise the core answers with the relay
 //! grant for the node's screens and the stream becomes the node's link.
@@ -25,7 +25,7 @@ use std::collections::{HashMap, HashSet};
 use std::ffi::OsString;
 use std::io::{BufRead, BufReader, Read, Write};
 use std::path::{Path, PathBuf};
-use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
@@ -37,6 +37,7 @@ use hide_platform::ipc::LocalStream;
 use serde::{Deserialize, Serialize};
 use serde_json::json;
 
+use crate::accepting::{CloseOnDrop, ListenerHealth, accept_until_closed, park_unless_closed};
 use crate::core::CoreHandle;
 use crate::relay::RelayRequests;
 use crate::state_file::new_token;
@@ -59,9 +60,6 @@ const GRANT_BIND_WAIT: Duration = Duration::from_secs(10);
 const STALE_PROBE: Duration = Duration::from_secs(3);
 /// How long a grant handed to a node may wait for its link to be taken.
 const UNBOUND_GRANT_LIFETIME: Duration = Duration::from_secs(60);
-/// The wait after an accept that failed, doubling to [`ACCEPT_RETRY_MAX`].
-const ACCEPT_RETRY_FIRST: Duration = Duration::from_millis(100);
-const ACCEPT_RETRY_MAX: Duration = Duration::from_secs(5);
 
 /// Why the attach role reached no core on its machine; the node reports it
 /// as the reason it waits.
@@ -137,7 +135,6 @@ pub struct NodeHello {
     pub node: String,
     pub label: String,
     pub build: String,
-    pub herdr_socket: String,
     /// The node build's version and order (`build_order`).
     #[serde(default)]
     pub release: crate::build_order::Release,
@@ -382,28 +379,39 @@ impl Drop for AttachingNode<'_> {
     }
 }
 
-/// Takes nodes' links on `listener` until `shutdown`.
+/// Takes nodes' links on `listener` until `shutdown`, saying in `health`
+/// what its accept thread does.
 pub async fn serve(
     listener: BootstrapListener,
     service: Arc<AttachService>,
+    health: Arc<ListenerHealth>,
     shutdown: crate::ending::Ending,
 ) {
-    // Closed however this future ends, a drop included, so the accept
-    // thread never outlives it.
-    let closing = CloseOnDrop {
-        closer: listener.closer(),
-        closed: Arc::new(AtomicBool::new(false)),
-    };
+    let mut closing = CloseOnDrop::new(listener.closer());
     let (accepted, mut arrivals) = tokio::sync::mpsc::channel(MAX_ATTACHING);
     let accepting = {
-        let closed = Arc::clone(&closing.closed);
+        let closed = closing.closed();
+        let health = Arc::clone(&health);
         std::thread::Builder::new()
             .name("node-attach-accept".to_owned())
-            .spawn(move || accept_nodes(&listener, &accepted, &closed))
+            .spawn(move || {
+                accept_until_closed(
+                    || listener.accept(),
+                    &accepted,
+                    &closed,
+                    &health,
+                    ("node_link", "attach.accept_failed"),
+                    |wait| park_unless_closed(wait, &closed),
+                );
+            })
     };
-    if let Err(error) = accepting {
-        attach_stopped(&error.to_string());
-        return;
+    match accepting {
+        Ok(thread) => closing.wakes(thread.thread().clone()),
+        Err(error) => {
+            health.stopped();
+            attach_stopped(&error.to_string());
+            return;
+        }
     }
     let limit = Arc::new(tokio::sync::Semaphore::new(MAX_ATTACHING));
     loop {
@@ -412,12 +420,15 @@ pub async fn serve(
             () = shutdown.ended() => break,
         };
         let Some(stream) = arrival else {
+            // The accept thread ended though the listener is open.
+            health.stopped();
+            attach_stopped("the accept thread ended");
             break;
         };
         // The folder admits only this account already; a peer the system
         // cannot name, or names as another account, is not taken either.
         if !stream.peer_is_this_account().unwrap_or(false) {
-            herdr_core::diagnostic!(json!({
+            hide_core::diagnostic!(json!({
                 "component": "node_link",
                 "kind": "attach.refused",
                 "reason": "other_account",
@@ -425,7 +436,7 @@ pub async fn serve(
             continue;
         }
         let Ok(permit) = Arc::clone(&limit).try_acquire_owned() else {
-            herdr_core::diagnostic!(json!({
+            hide_core::diagnostic!(json!({
                 "component": "node_link",
                 "kind": "attach.busy",
                 "cap": MAX_ATTACHING,
@@ -440,56 +451,8 @@ pub async fn serve(
     }
 }
 
-/// Accepts nodes until the listener is closed. An accept that fails (out of
-/// descriptors, a peer gone before it was taken) is logged and tried again
-/// after a bounded wait, so one failure never ends the attach service while
-/// its record still tells nodes a core runs here.
-#[allow(clippy::disallowed_methods)] // a production wait between accepts, not test code
-fn accept_nodes(
-    listener: &BootstrapListener,
-    accepted: &tokio::sync::mpsc::Sender<LocalStream>,
-    closed: &AtomicBool,
-) {
-    let mut wait = ACCEPT_RETRY_FIRST;
-    loop {
-        match listener.accept() {
-            Ok(stream) => {
-                wait = ACCEPT_RETRY_FIRST;
-                if accepted.blocking_send(stream).is_err() {
-                    return;
-                }
-            }
-            Err(_) if closed.load(Ordering::SeqCst) => return,
-            Err(error) => {
-                herdr_core::diagnostic!(json!({
-                    "component": "node_link",
-                    "kind": "attach.accept_failed",
-                    "message": error.to_string(),
-                    "retry_ms": wait.as_millis() as u64,
-                }));
-                std::thread::sleep(wait);
-                wait = (wait * 2).min(ACCEPT_RETRY_MAX);
-            }
-        }
-    }
-}
-
-struct CloseOnDrop {
-    closer: hide_platform::ipc::ListenerCloser,
-    /// Set before the close, so the accept thread tells its own stop from an
-    /// accept that failed.
-    closed: Arc<AtomicBool>,
-}
-
-impl Drop for CloseOnDrop {
-    fn drop(&mut self) {
-        self.closed.store(true, Ordering::SeqCst);
-        self.closer.close();
-    }
-}
-
 fn attach_stopped(message: &str) {
-    herdr_core::diagnostic!(json!({
+    hide_core::diagnostic!(json!({
         "component": "node_link",
         "kind": "attach.stopped",
         "message": message,
@@ -541,7 +504,7 @@ fn take_link(stream: LocalStream, service: &AttachService) {
                 service
                     .moves
                     .release(&request.intent, &request.target, RELEASE_ANSWER_WITHIN);
-            herdr_core::diagnostic!(json!({
+            hide_core::diagnostic!(json!({
                 "component": "core_move",
                 "kind": "release.asked",
                 "intent": request.intent,
@@ -565,7 +528,7 @@ fn take_link(stream: LocalStream, service: &AttachService) {
         }
     };
     let refuse = |writer: &mut LocalStream, reason: &str| {
-        herdr_core::diagnostic!(json!({
+        hide_core::diagnostic!(json!({
             "component": "node_link",
             "kind": "attach.refused",
             "node": node.node,
@@ -630,14 +593,14 @@ fn take_link(stream: LocalStream, service: &AttachService) {
         return;
     }
     // From here the stream carries the node's link and its screens'
-    // streams (`link_mux`); nothing of the handshake is left unread, since
+    // streams (`hide_peer::mux`); nothing of the handshake is left unread, since
     // the node writes nothing more until it reads the acceptance.
     drop(reader);
     drop(writer);
     let _ = stream.set_read_timeout(None);
     // The connection ends when `served` drops: on a failure below, or once
     // the core is done with the link.
-    let (served, stream) = match crate::link_mux::serve(stream) {
+    let (served, stream) = match hide_peer::mux::serve(stream) {
         Ok(served) => served,
         Err(error) => {
             service.grants.revoke(&relay_token);
@@ -649,7 +612,6 @@ fn take_link(stream: LocalStream, service: &AttachService) {
         InboundNode {
             node: node.node.clone(),
             label: node.label.clone(),
-            herdr_socket: node.herdr_socket.clone(),
         },
         stream,
         Some(hide_node::ssh::host::PaneHook {
@@ -687,7 +649,7 @@ fn take_link(stream: LocalStream, service: &AttachService) {
         .core
         .accept_inbound_node(&node.node, &node.label, arrived)
     {
-        Ok(()) => herdr_core::diagnostic!(json!({
+        Ok(()) => hide_core::diagnostic!(json!({
             "component": "node_link",
             "kind": "attach.linked",
             "node": node.node,
@@ -697,7 +659,7 @@ fn take_link(stream: LocalStream, service: &AttachService) {
         // The transport was dropped with the refusal, which closed the link.
         Err(reason) => {
             service.grants.revoke(&relay_token);
-            herdr_core::diagnostic!(json!({
+            hide_core::diagnostic!(json!({
                 "component": "node_link",
                 "kind": "attach.refused",
                 "node": node.node,
@@ -726,7 +688,7 @@ fn standing_refusal(service: &AttachService, node: &str) -> Option<String> {
     match earlier.call(hide_node_link::protocol::Call::Hello, STALE_PROBE) {
         Ok(_) => Some(reason),
         Err(error) => {
-            herdr_core::diagnostic!(json!({
+            hide_core::diagnostic!(json!({
                 "component": "node_link",
                 "kind": "attach.superseded",
                 "node": node,
@@ -739,7 +701,7 @@ fn standing_refusal(service: &AttachService, node: &str) -> Option<String> {
 }
 
 fn attach_failed(node: &str, message: &str) {
-    herdr_core::diagnostic!(json!({
+    hide_core::diagnostic!(json!({
         "component": "node_link",
         "kind": "attach.failed",
         "node": node,

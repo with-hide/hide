@@ -1,7 +1,7 @@
 import { sectionTree, sectionCount, directChildren, unfoldedRows } from "../test/legacyRowTree";
 import { legacyAgentRow } from "../test/legacyAgentRow";
 import { describe, expect, it } from "vitest";
-import { asksOperator, badgeParts, badgeWords, branchChip, forkLabel, lineParts, lineText, markWords, rowAccessibleName, rowDimmed, lineShownAtRest, lineTone, markTone, rowLine, sidebarLine, treeLine } from "./agentRow";
+import { projectTreeLine, asksOperator, badgeParts, badgeWords, branchChip, forkLabel, lineParts, lineText, markWords, rowAccessibleName, rowDimmed, lineShownAtRest, lineTone, markTone, rowLine, sidebarLine, treeLine } from "./agentRow";
 import { createInterfaceI18n } from "./i18n/instance";
 import type { AgentRow } from "./snapshot";
 
@@ -85,10 +85,22 @@ describe("the mark and the badge (status-marks D-01, D-02, B19)", () => {
     expect(markWords(t, { mark: "unknown", status_code: "unknown" })).toBe("상태 모름");
     // A finished turn names the tasks it left (B27); a sleeping row says only its own words (B31).
     expect(markWords(t, { mark: "done", status_code: "done", background_left: 2 })).toBe("읽을 것 · 끝남 · 백그라운드 2개 남음");
+    // A finished root names the children still working under it.
+    expect(markWords(t, { mark: "done", status_code: "done", children_left: 2 })).toBe("읽을 것 · 끝남 · 자식 2개 작업 중");
+    // So does one whose session still runs subagents, and a resting one names them in its wait (operator decision 2026-11-14).
+    expect(markWords(t, { mark: "done", status_code: "done", subagents_left: 2 })).toBe("읽을 것 · 끝남 · 서브에이전트 2개 남음");
+    expect(markWords(t, { mark: "waiting", status_code: "waiting", wait: "subagents", wait_count: 2 })).toBe("진행 중 · 서브에이전트 2개 기다림");
+    expect(markWords(t, { mark: "waiting", status_code: "waiting", wait: "children", wait_count: 1, wait_subagents: 2 })).toBe("진행 중 · 자식 1개 · 서브에이전트 2개 기다림");
     expect(markWords(t, { mark: "asleep", status_code: "sleeping" })).toBe("재움 · 열면 깨어남");
+    // Slept for memory, it says so; a waking row says only that it wakes.
+    expect(markWords(t, { mark: "asleep", status_code: "sleeping", sleep: { cause: "memory_pressure" } })).toBe("재움 · 메모리 부족 · 열면 깨어남");
+    expect(markWords(t, { mark: "asleep", status_code: "waking", sleep: { cause: "memory_pressure" } })).toBe("깨우는 중");
     // In progress names nothing more while the agent works, and its wait while it waits (D-25, B36).
     expect(markWords(t, { mark: "going", status_code: "working" })).toBe("진행 중");
     expect(markWords(t, { mark: "waiting", status_code: "waiting" })).toBe("진행 중 · 대기");
+    // A delegated child's own request waits on its parent's answer and names it (B24).
+    expect(markWords(t, { mark: "waiting", status_code: "error" })).toBe("진행 중 · 막힘");
+    expect(markWords(t, { mark: "waiting", status_code: "question" })).toBe("진행 중 · 질문");
   });
 });
 
@@ -105,6 +117,13 @@ describe("the row's accessible name", () => {
     const { t } = await createInterfaceI18n("en");
     const child = row("child", { identity_label: "웹 디자인 시스템 리셋 구현", delegated: true, lineage_worktree_badge: "web-design-system-reset", detail: "토큰 이관 중" });
     expect(rowAccessibleName(t, child, "mini")).toBe("웹 디자인 시스템 리셋 구현, mini, web-design-system-reset, Claude Code, In progress, 토큰 이관 중");
+  });
+
+  // PRD agent-profiles B17: the badge on a profile agent's logo is read out as its agent and profile, the title as the default's.
+  it("names a profile agent's profile after its agent, and a default agent by its agent alone", async () => {
+    const { t } = await createInterfaceI18n("en");
+    expect(rowAccessibleName(t, row("b", { identity_label: "Claude", profile: "work", detail: null }), null)).toBe("Claude, Claude Code · work, In progress");
+    expect(rowAccessibleName(t, row("a", { identity_label: "Claude", detail: null }), null)).toBe("Claude, Claude Code, In progress");
   });
 });
 
@@ -213,19 +232,27 @@ describe("the line's words (status-marks D-04, B7, B10, B13, B16)", () => {
     unproven.state = { ...unproven.state, line: { text: "결과 기다리는 중", mode: "waiting", tone: { kind: "subtle", read: false } } };
     expect(lineText(t, unproven, sidebarLine(unproven)!)).toBe("대기 · 결과 기다리는 중");
     expect(treeLine(said)).toMatchObject({ mode: "waiting" });
+    // The project tree keeps a row to one line, so a waiting row's sentence stays in its hint.
+    expect(projectTreeLine(said)).toBeNull();
     // A working row says its sentence alone, and a tree row draws none of it.
     const working = row("x", { detail: "파서 고치는 중", unread: true });
     expect(lineText(t, working, sidebarLine(working)!)).toBe("파서 고치는 중");
     expect(treeLine(working)).toBeNull();
-    const waiting = (wait: AgentRow["wait"], pull_request?: number) => {
-      const agent = row("w", { activity: "stopped", status_code: "waiting", wait, descendant_counts: { error: 0, approval: 0, question: 0, working: 2, done: 0 } });
+    const waiting = (wait: AgentRow["wait"], wait_count?: number, pull_request?: number, wait_subagents?: number) => {
+      const agent = row("w", { activity: "stopped", status_code: "waiting", wait, wait_count, wait_subagents, subagents: wait_subagents });
       agent.state = { ...agent.state, line: { text: "", mode: "waiting", tone: { kind: "subtle", read: false }, pull_request } };
       return lineText(t, agent, sidebarLine(agent)!);
     };
-    expect(waiting("checks", 1846)).toBe("CI 기다림 · PR #1846");
-    expect(waiting("children")).toBe("자식 기다림 · 자식 2개 작업 중");
+    // Every wait says how many it waits on but running checks, which name their pull request (operator decision 2026-11-14).
+    expect(waiting("checks", undefined, 1846)).toBe("CI 기다림 · PR #1846");
+    expect(waiting("children", 2)).toBe("자식 2개 기다림");
+    expect(waiting("subagents", 3)).toBe("서브에이전트 3개 기다림");
+    expect(waiting("background", 1)).toBe("백그라운드 1개 기다림");
+    expect(waiting("reply", 2)).toBe("답장 2개 기다림");
+    // Children and the row's own subagents together are one wait.
+    expect(waiting("children", 1, undefined, 2)).toBe("자식 1개 · 서브에이전트 2개 기다림");
+    // A count the core did not send says the cause alone, never zero.
     expect(waiting("background")).toBe("백그라운드 기다림");
-    expect(waiting("reply")).toBe("답장 기다림");
     const en = (await createInterfaceI18n("en")).t;
     const checks = row("c", { activity: "stopped", status_code: "waiting", wait: "checks" });
     checks.state = { ...checks.state, line: { text: "", mode: "waiting", tone: { kind: "subtle", read: false }, pull_request: 12 } };
@@ -235,8 +262,8 @@ describe("the line's words (status-marks D-04, B7, B10, B13, B16)", () => {
   it("words a question the core asks for the agent from its subject, in the interface language (hide-plan B14)", async () => {
     const review = row("r", { status_code: "question", demand: "question", group: "needs_you", mark: "turn", detail: null });
     review.state = { ...review.state, line: { text: "", mode: "request", tone: { kind: "warning", read: false }, subject: { cause: "plan_review", steps: 4 } } };
-    expect(lineText((await createInterfaceI18n("en")).t, review, sidebarLine(review)!)).toBe("Question · Plan review · 4 steps");
-    expect(lineText((await createInterfaceI18n("ko")).t, review, sidebarLine(review)!)).toBe("질문 · 계획 검토 · 4단계");
+    expect(lineText((await createInterfaceI18n("en")).t, review, sidebarLine(review)!)).toBe("Task steps review · 4 steps");
+    expect(lineText((await createInterfaceI18n("ko")).t, review, sidebarLine(review)!)).toBe("작업 단계 검토 · 4단계");
   });
 
   it("ends a finished turn's line with the tasks it left, kept apart from the sentence a narrow row cuts (D-19, B27)", async () => {
@@ -244,6 +271,16 @@ describe("the line's words (status-marks D-04, B7, B10, B13, B16)", () => {
     const left = row("d", { activity: "stopped", mark: "done", status_code: "done", group: "done", unread: true, detail: "배포 시작함", background_left: 2 });
     expect(lineParts(t, left, sidebarLine(left)!)).toEqual({ lead: "끝남", text: "배포 시작함", tail: "백그라운드 2" });
     expect(lineText(t, left, sidebarLine(left)!)).toBe("끝남 · 배포 시작함 · 백그라운드 2");
+  });
+
+  it("ends a finished root's line with the children still working, kept apart from the sentence a narrow row cuts", async () => {
+    const { t } = await createInterfaceI18n("ko");
+    const root = row("r", { activity: "stopped", mark: "done", status_code: "done", group: "done", unread: true, detail: "질문에 답함", children_left: 2 });
+    expect(lineParts(t, root, sidebarLine(root)!)).toEqual({ lead: "끝남", text: "질문에 답함", tail: "자식 2개 작업 중" });
+    expect(lineText(t, root, sidebarLine(root)!)).toBe("끝남 · 질문에 답함 · 자식 2개 작업 중");
+    expect(lineText(t, { ...root, children_left: 1 }, sidebarLine(root)!)).toBe("끝남 · 질문에 답함 · 자식 1개 작업 중");
+    // Subagents its session still runs end the line the same way (operator decision 2026-11-14).
+    expect(lineParts(t, { ...root, children_left: 0, subagents_left: 2 }, sidebarLine(root)!)).toEqual({ lead: "끝남", text: "질문에 답함", tail: "서브 2개 남음" });
   });
 
   it("draws a sleeping row with its moon and no line, and a waking or failed one with its words, none dimmed (D-21, B31)", async () => {
@@ -328,6 +365,22 @@ describe("a View to look at (PRD unseen-agent-views D-05, D-14, D-18)", () => {
   it("gives the line to a question on the same row and ends it with the count", async () => {
     const { t } = await createInterfaceI18n("ko");
     const asking = row("q", { demand: "question", activity: "stopped", status_code: "question", detail: "배포할까요?", group: "needs_you", emphasized: true, unread: true, mark: "turn", look: look(2) });
-    expect(lineText(t, asking, sidebarLine(asking)!)).toBe("질문 · 배포할까요? · 볼 것 2");
+    expect(lineText(t, asking, sidebarLine(asking)!)).toBe("배포할까요? · 볼 것 2");
+  });
+});
+
+// docs/status-model.md, A question still waiting: the questions a session put
+// to the operator are counted in its pane head and listed in its turn card,
+// never on a row; a row asks only once one of them is laid as its ask.
+describe("questions still waiting on the operator", () => {
+  const session = { device_id: "local", agent: "claude", session_id: "s" };
+  const open_asks = { session, items: [{ id: "m1", text: "스테이징 먼저?", at_unix_ms: 1 }, { id: "m2", text: "영문 사업자명", at_unix_ms: 2 }] };
+
+  it("leaves a working row's line and its words for assistive technology as they are", async () => {
+    const { t } = await createInterfaceI18n("ko");
+    const working = row("w", { group: "working", activity: "working", open_asks });
+    const line = { mode: "quiet", text: "TestFlight 진행 중" } as const;
+    expect(lineParts(t, working, line)).toEqual({ lead: null, text: "TestFlight 진행 중", tail: null });
+    expect(lineText(t, working, line)).toBe("TestFlight 진행 중");
   });
 });

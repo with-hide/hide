@@ -84,7 +84,7 @@ describe("보관됨", () => {
   });
 
   it("keeps a project whose sessions are all archived, its fold closed until opened", () => {
-    const list = taskList({ projects: [] } as never, new Map(), [project], "project", [archived("a1")]);
+    const list = taskList({ projects: [] } as never, "local", new Map(), [project], "project", [archived("a1")]);
     expect(list.groups.map((group) => [group.project?.id, group.archived.map((entry) => entry.row.id)])).toEqual([["w1", ["a1"]]]);
     const key = list.groups[0]!.key;
     expect(taskSections(list, "project", new Set()).sections[0]!.archived).toEqual([]);
@@ -92,7 +92,7 @@ describe("보관됨", () => {
   });
 
   it("stands at the very bottom in 상태별", () => {
-    const list = taskList({ projects: [] } as never, new Map(), [project], "status", [archived("a1")]);
+    const list = taskList({ projects: [] } as never, "local", new Map(), [project], "status", [archived("a1")]);
     expect(list.archived.map((entry) => entry.row.id)).toEqual(["a1"]);
     expect(taskSections(list, "status", new Set([taskFoldKey("archived", "")])).archived).toHaveLength(1);
   });

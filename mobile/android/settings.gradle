@@ -1,0 +1,5 @@
+include ':app'
+
+// Written by `cap sync android`: the Capacitor library from mobile/node_modules, and nothing else
+// (mobile/scripts/check-versions.mjs refuses any other project in it).
+apply from: 'capacitor.settings.gradle'

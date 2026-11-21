@@ -20,15 +20,26 @@ platforms = [
 # Cargo.lock decides the version either way, and a range leaves this crate
 # unchanged by the patch and minor bumps Dependabot proposes each week.
 
-# The operating-system layer and the Herdr client stay off the shared feature
-# set: the OS contract lanes build and test exactly these two crates, which
-# would otherwise compile tokio, hyper and schemars for nothing. The terminal
+# The operating-system layer stays off the shared feature set: the OS
+# contract lanes build and test exactly that crate, which would otherwise
+# compile tokio, hyper and schemars for nothing. The terminal
 # parser stays off it for the same reason: the vt lane builds it alone. The
 # pane holder that links it, and the protocol it speaks, stay off it too: a
 # holder runs for as long as its pane and carries its few dependencies only,
 # the screen rules it will evaluate among them.
+# What two machines say to each other stays off it as well: its four
+# dependencies are all the contract file is written from
+# (contracts/README.md, Peer link).
 # Their own dependencies still count toward everyone else's features.
+#
+# The iroh transport, `hide-peer-iroh`, is on it: what iroh turns on in the
+# crates everything shares (tokio, syn, tower, hyper-util, once_cell) would
+# otherwise differ between a `--workspace` command and a `-p` one, and each
+# would build nearly every crate again. A crate only the transport reaches
+# must not be listed, or every member would build it;
+# `scripts/check-iroh-stays-behind-the-seam.py` fails when one is, and it
+# then goes under `third-party` below.
 [final-excludes]
 # The relay protocol also builds for browsers; the native workspace feature
 # union includes OS-only crates which cannot enter that WASM module.
-workspace-members = ["hide-platform", "hide-herdr-client", "hide-vt", "hide-holder", "hide-holder-protocol", "hide-screen-rules", "hide-relay-protocol"]
+workspace-members = ["hide-platform", "hide-vt", "hide-holder", "hide-holder-protocol", "hide-screen-rules", "hide-relay-protocol", "hide-peer-protocol"]

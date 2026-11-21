@@ -12,7 +12,8 @@ import { configureFileBytes } from "./fileBytes";
 import { installKeyboard, observeRecent, reconcileHeldCycle } from "./keyboard";
 import { noteOperatorPointer, observeInputRequests } from "./keyTarget";
 import { OverviewModal, OverviewPage } from "./Overview";
-import { AgentCloseNotice, ConfirmClose, ConfirmTrash, ConfirmViewsClose, CycleOverlay, NoticeBar } from "./Overlays";
+import { AgentCloseNotice, ConfirmClose, ConfirmTrash, ConfirmViewsClose, CycleOverlay, NoticeToasts } from "./Overlays";
+import { ToastStack } from "./components/ui/toast";
 import { ConfirmArchive, ConfirmArchiveDelete } from "./ArchiveDialogs";
 import { QuickAdd } from "./QuickAdd";
 import { Palette } from "./Palette";
@@ -20,10 +21,10 @@ import { usePracticeChannel } from "./practice/channel";
 import { installProbe, probeEnabled } from "./probe";
 import { configurePaneVisits, expectPane, expectSurface, focusSignature } from "./recent";
 import { FirstRunWizard } from "./FirstRunWizard";
-import { HerdrGate } from "./HerdrTakeover";
-import { herdrGate } from "./herdrTakeoverRules";
 import { useAgentNotifications } from "./agentNotices";
 import { useFetchLook, useGithubLook } from "./githubLook";
+import { PairingDialogs } from "./PairingDialogs";
+import { DeviceSwitchDialogs, DeviceSwitchStrip } from "./settings/DeviceSwitch";
 import { SettingsGate } from "./SettingsSheet";
 import { StartPanelHost } from "./StartPanel";
 import { GroupNameDialog } from "./AgentGroupControls";
@@ -38,16 +39,21 @@ import { focusedRemoteDevice, frontCheckout } from "./snapshot";
 import { OPEN_ANSWER_TIMEOUT_MS, openingProgress, startupScreen, waitingForSavedWorkspace } from "./navigation";
 import { START_ANSWER_TIMEOUT_MS } from "./startAnswer";
 import { useShellStore } from "./store";
+import { takeProgramCopy } from "./clipboard";
 import { AddProjectDialog } from "./AddProjectDialog";
 import { WorkspaceDialogs, WorkspaceNotices } from "./WorkspaceDialogs";
 import { applyEditorTheme } from "./editor/theme";
-import { applyTerminalFontFamily, applyTerminalFontSize, applyTerminalTheme, attachedPaneIds, feedChunks, liveTerminalIds, resetAllTerminals, retainTerminals, terminalFor, terminalSelectionText } from "./terminals";
+import { applyTerminalFontFamily, applyTerminalFontSize, applyTerminalTheme, attachedPaneIds, feedChunks, liveTerminalIds, resetAllTerminals, retainTerminals, terminalFor, terminalSelectionText, terminalShown } from "./terminals";
 import { PALETTE_HIDE_CLASS, primaryValue, readColorTheme, readTheme, resolveTheme } from "./theme";
 import { TooltipProvider } from "./components/ui/tooltip";
 import { useUsageWindowHint } from "./components/usage";
 import { useUiStore } from "./ui";
 import { WorkspaceScreen } from "./WorkspaceScreen";
 import { DeskScreen } from "./DeskScreen";
+import { MissionScreen } from "./MissionScreen";
+import { AutomationScreen } from "./AutomationScreen";
+import { configureAutomationCalls } from "./automationCall";
+import { OpeningStatus } from "./OpeningStatus";
 import { connectShell, type DispatchFn } from "./ws";
 
 const noop: DispatchFn = () => {};
@@ -69,9 +75,11 @@ export function App() {
         if (full) resetAllTerminals();
         feedChunks(chunks);
       },
+      onCopy: (copy) => void takeProgramCopy(copy, { inFront: document.hasFocus(), shows: terminalShown }, actions.copyText, (message) => useShellStore.getState().noteDiagnostic(message)),
     });
     dispatchRef.current = session.dispatch;
     configureFileBytes(session.dispatch);
+    configureAutomationCalls(session.dispatch);
     configurePaneVisits(actions.paneVisit);
     const keyboard = installKeyboard(actions);
     if (probeEnabled()) {
@@ -129,8 +137,8 @@ export function App() {
       const waiting = state.rest?.workspace_view?.agent_layout?.waiting ?? 0;
       const previouslyWaiting = previous.rest?.workspace_view?.agent_layout?.waiting ?? 0;
       if (waiting !== previouslyWaiting || state.rest?.workspace_view?.path !== previous.rest?.workspace_view?.path) {
-        if (waiting > 0) useUiStore.getState().setNotice({ text: agentCapacityNotice(waiting), refreshable: false });
-        else if (previouslyWaiting > 0 && useUiStore.getState().notice?.text === agentCapacityNotice(previouslyWaiting)) useUiStore.getState().setNotice(null);
+        if (waiting > 0) useUiStore.getState().showNotice({ level: "important", key: "agent_capacity", text: agentCapacityNotice(waiting), refreshable: false });
+        else if (previouslyWaiting > 0) useUiStore.getState().dismissNotices((notice) => notice.key === "agent_capacity");
       }
       // A refused commit brings nothing forward, so the next surface in use is a visit again.
       if (fresh) {
@@ -259,13 +267,15 @@ export function App() {
   // Each part fails on its own and this component, which owns the socket,
   // stays mounted (`RenderBoundary`). A notice, an overlay or the browser
   // displays' bridge that cannot draw is left out on its own, since nothing
-  // in its place would be something to act on.
+  // in its place would be something to act on. The connection badge runs the
+  // window's width under the top row, because while it shows the whole window
+  // waits on the core; every other notice stands in the window's corner,
+  // newest nearest the corner.
   const notices: [string, ReactNode][] = [
-    ["connection", <ConnectionBadge actions={actions} />],
-    ["notice", <NoticeBar actions={actions} />],
     ["agent_close_notice", <AgentCloseNotice actions={actions} />],
     ["draft_recovery", <DraftRecoveryLine actions={actions} />],
     ["workspace_notices", <WorkspaceNotices actions={actions} />],
+    ["notice", <NoticeToasts actions={actions} />],
   ];
   const overlays: [string, ReactNode][] = [
     ["overview", <OverviewModal actions={actions} />],
@@ -282,32 +292,13 @@ export function App() {
     ["inline_starts", <InlineStartHost />],
     ["shortcuts", <ShortcutSheetGate actions={actions} />],
     ["settings", <SettingsGate actions={actions} />],
+    ["pairing", <PairingDialogs actions={actions} />],
+    ["device_switch_dialogs", <DeviceSwitchDialogs actions={actions} />],
     ["first_run", <FirstRunWizard actions={actions} />],
     ["workspace_dialogs", <WorkspaceDialogs actions={actions} />],
     ["add_project", <AddProjectDialog actions={actions} />],
     ["browser", <BrowserHost actions={actions} />],
   ];
-  // A Herdr on another protocol holds all of Hide: the screen that says so is drawn in place of the shell, so no
-  // window, menu item or key opens a workspace on a server Hide cannot use (PRD herdr-takeover).
-  const gate = useShellStore((s) => herdrGate(s.rest));
-  // A failure of something tried on that server, before the screen came or while it stood, is not one to act on
-  // once it goes.
-  useEffect(() => {
-    useUiStore.getState().setNotice(null);
-  }, [gate]);
-  if (gate) {
-    return (
-      <TooltipProvider>
-        <InterfaceLanguageBoundary />
-        <RenderBoundary region="herdr_gate" fallback={<ShellFailed />}>
-          <div className="flex h-full flex-col bg-background text-foreground" data-herdr-gate-screen={gate}>
-            <header className="window-drag h-(--size-tab-strip) shrink-0" />
-            <HerdrGate actions={actions} gate={gate} />
-          </div>
-        </RenderBoundary>
-      </TooltipProvider>
-    );
-  }
   const leftOut = ([region, node]: [string, ReactNode]) => (
     <RenderBoundary key={region} region={region} fallback={null}>
       {node}
@@ -321,7 +312,8 @@ export function App() {
           <RenderBoundary region="title" fallback={<TitleRowFailed />}>
             <TitleRow actions={actions} />
           </RenderBoundary>
-          {notices.map(leftOut)}
+          {leftOut(["connection", <ConnectionBadge actions={actions} />])}
+          {leftOut(["device_switch", <DeviceSwitchStrip actions={actions} />])}
           <div className="flex min-h-0 flex-1">
             <RenderBoundary region="sidebar" fallback={<SidebarFailed />}>
               <Sidebar actions={actions} />
@@ -332,6 +324,7 @@ export function App() {
               </RenderBoundary>
             </main>
           </div>
+          <ToastStack>{notices.map(leftOut)}</ToastStack>
           {overlays.map(leftOut)}
         </div>
       </RenderBoundary>
@@ -358,7 +351,7 @@ function CenterScreen({ actions }: { actions: Actions }) {
   const front = useShellStore((s) => frontCheckout(s.rest)?.id ?? null);
   const hasView = useShellStore((s) => Boolean(s.rest?.workspace_view));
   const first = useShellStore((s) => startupScreen(s.rest, front !== null));
-  const restoring = useShellStore((s) => waitingForSavedWorkspace(s.rest) && s.rest?.status?.herdr?.state === "connected");
+  const restoring = useShellStore((s) => waitingForSavedWorkspace(s.rest) && s.rest?.status?.engine?.state === "connected");
   const loaded = useShellStore((s) => s.rest !== null);
   const remoteFront = useShellStore((s) => focusedRemoteDevice(s.rest) !== null);
   const opening = useUiStore((s) => s.opening);
@@ -396,7 +389,7 @@ function CenterScreen({ actions }: { actions: Actions }) {
       const failure = translate("shell.openTimeout");
       if (store.screen?.kind !== "workspace") return store.setOpening({ ...opening, failure });
       store.setOpening(null);
-      store.setNotice({ text: translate("shell.notOpened", { reason: failure }), refreshable: false });
+      store.showNotice({ level: "info", text: translate("shell.notOpened", { reason: failure }), refreshable: false });
     }, "startRequestId" in opening.target ? START_ANSWER_TIMEOUT_MS : OPEN_ANSWER_TIMEOUT_MS);
     return () => window.clearTimeout(timer);
   }, [opening]);
@@ -406,10 +399,10 @@ function CenterScreen({ actions }: { actions: Actions }) {
       useUiStore.getState().setScreen({ kind: first });
       return undefined;
     }
-    // A connected Herdr's saved choice is still being restored, rather than
+    // A connected engine's saved choice is still being restored, rather than
     // an unanswered connection. Its catalog/View decides when it settles.
     if (restoring) return undefined;
-    // A Herdr or a device that never answers must not hold the page on a
+    // An engine or a device that never answers must not hold the page on a
     // blank screen; a device gets longer, since it is reached over SSH.
     const timer = window.setTimeout(() => {
       if (useUiStore.getState().screen === null) useUiStore.getState().setScreen({ kind: "main" });
@@ -423,7 +416,13 @@ function CenterScreen({ actions }: { actions: Actions }) {
       </div>
     );
   }
-  if (screen.kind === "desk") return <DeskScreen actions={actions} />;
   if (screen.kind === "workspace" && front && hasView) return <WorkspaceScreen actions={actions} />;
-  return <OverviewPage actions={actions} />;
+  // An open pressed on any other screen says here that it is on its way, or
+  // why it did not come (B2, B21; issue 2505).
+  return (
+    <>
+      <OpeningStatus actions={actions} />
+      {screen.kind === "desk" ? <DeskScreen actions={actions} /> : screen.kind === "missions" ? <MissionScreen actions={actions} /> : screen.kind === "automations" ? <AutomationScreen actions={actions} /> : <OverviewPage actions={actions} />}
+    </>
+  );
 }

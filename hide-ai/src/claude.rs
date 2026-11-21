@@ -31,12 +31,12 @@ use std::time::{Duration, Instant};
 
 use serde_json::Value;
 
-use crate::program::Program;
+use crate::program::{ItemRun, Program};
 use crate::runner::{self, Environment, Run, Spec};
 use crate::text_cli::{json_from_text, system_with_schema};
 use crate::{
     AiBackend, AiError, AiRequest, AiResponse, AiUsage, AnswerMode, Availability, CancelToken,
-    ModelCatalog, ModelTokens, ProviderId,
+    Model, ModelCatalog, ModelTokens, ProviderId,
 };
 
 /// The default for background features. With thinking off (see
@@ -59,6 +59,21 @@ pub const DEFAULT_MODEL: &str = "sonnet";
 /// tokens for a 60 token answer, measured 2026-10-16 on claude 2.1.301), which
 /// the attempt line's `thinking_tokens` shows.
 pub const THINKING_OFF: (&str, &str) = ("MAX_THINKING_TOKENS", "0");
+
+/// The variable and value that write a model turn's prompt cache for five
+/// minutes instead of an hour.
+///
+/// Every request is a new child with its own transcript, so of what a turn
+/// writes to the cache only the fixed prefix (the system prompt and the
+/// schema) is ever read again; the transcript is written and never read. On
+/// a subscription the CLI writes for an hour, which the API prices at twice
+/// the input rate, and five minutes at 1.25 times. Measured 2026-11-11 on
+/// claude 2.1.322 with claude-haiku-5-5: a second call with the same system
+/// prompt read the 2,281-token prefix and wrote its 3,472-token transcript,
+/// and with this variable wrote its transcript as five-minute writes. It is
+/// set on the child whatever the operator's environment says, like
+/// [`THINKING_OFF`].
+pub const PROMPT_CACHE_TTL: (&str, &str) = ("CLAUDE_CODE_PROMPT_CACHE_TTL", "5m");
 
 /// How long the account's model list is kept before the CLI is asked again.
 /// Settings reads the list while the Hide AI tab is on screen, and a model list
@@ -84,7 +99,7 @@ const USAGE_TIMEOUT: Duration = Duration::from_secs(30);
 /// variables Node and the CLI read there instead (`USERPROFILE`,
 /// `SystemRoot`, `APPDATA`, the standard system folders, and
 /// `CLAUDE_CODE_GIT_BASH_PATH` for the Git Bash the CLI needs). Everything else is withheld on purpose:
-/// without `HERDR_ENV` the operator's Herdr and hide hooks exit early, and
+/// without a pane's identity (`HIDE_PANE_ID`, or `HERDR_ENV`) the operator's hooks exit early, and
 /// without `CLAUDECODE` the CLI does not think it is nested.
 pub const USAGE_ENVIRONMENT: &[&str] = hide_platform::process::LOGIN_CHILD_VARIABLES;
 
@@ -103,6 +118,10 @@ pub struct ClaudeConfig {
     /// choose it, such as a test with a stand-in login shell, gives one built
     /// by `hide_platform::programs::cli_path_with`.
     pub search_path: Option<OsString>,
+    /// The item this backend runs as: its account's and profile's variables
+    /// and its wrapper, for every child it starts (PRD agent-profiles-phase2
+    /// D-09). The default is the built-in default profile.
+    pub run: ItemRun,
 }
 
 impl Default for ClaudeConfig {
@@ -112,6 +131,7 @@ impl Default for ClaudeConfig {
             model: DEFAULT_MODEL.to_owned(),
             cwd: std::env::temp_dir(),
             search_path: None,
+            run: ItemRun::default(),
         }
     }
 }
@@ -139,7 +159,7 @@ pub enum UsageError {
 pub struct ClaudeCliBackend {
     config: ClaudeConfig,
     /// The account's model list and when it was read.
-    models: Mutex<Option<(Instant, Vec<String>)>>,
+    models: Mutex<Option<(Instant, Vec<Model>)>>,
 }
 
 impl ClaudeCliBackend {
@@ -227,7 +247,20 @@ impl ClaudeCliBackend {
     /// `/cost` text instead, so "logged out" is the caller's reading of the
     /// text, not a class this function can name.
     pub fn usage_text(&self, cancel: &CancelToken) -> Result<String, UsageError> {
+        self.usage_text_in(&[], cancel)
+    }
+
+    /// [`Self::usage_text`] of the account the variables `set` name (a
+    /// profile's `CLAUDE_CONFIG_DIR`, PRD agent-profiles B23), set on the
+    /// child alone.
+    pub fn usage_text_in(
+        &self,
+        set: &[(&str, String)],
+        cancel: &CancelToken,
+    ) -> Result<String, UsageError> {
         let binary = self.resolved_binary().ok_or(UsageError::NotInstalled)?;
+        let mut variables = self.config.run.set();
+        variables.extend(set.iter().cloned());
         let run = runner::run(
             &Spec {
                 binary: &binary,
@@ -235,7 +268,7 @@ impl ClaudeCliBackend {
                 cwd: &self.config.cwd,
                 stdin: None,
                 environment: Environment::Login,
-                set: &[],
+                set: &variables,
                 deadline: USAGE_TIMEOUT,
             },
             cancel,
@@ -250,10 +283,7 @@ impl ClaudeCliBackend {
         if !run.succeeded() {
             return Err(UsageError::Failed(format!("usage_exit_{}", run.exit())));
         }
-        let frame = match serde_json::from_str::<Value>(run.stdout.trim()) {
-            Ok(frame) if frame.get("type").and_then(Value::as_str) == Some("result") => frame,
-            _ => return Err(UsageError::NoResultFrame),
-        };
+        let frame = result_frame(&run.stdout).ok_or(UsageError::NoResultFrame)?;
         if frame.get("is_error").and_then(Value::as_bool) == Some(true) {
             return Err(UsageError::Failed("usage_is_error".to_owned()));
         }
@@ -265,7 +295,9 @@ impl ClaudeCliBackend {
     }
 
     fn resolved_binary(&self) -> Option<Program> {
-        Program::resolve(&self.config.binary, self.config.search_path.as_deref())
+        self.config
+            .run
+            .program(&self.config.binary, self.config.search_path.as_deref())
     }
 
     /// The argument vector the account's model list is asked with: the
@@ -294,12 +326,14 @@ impl ClaudeCliBackend {
     /// The one line written to the child's stdin for [`Self::models_arguments`].
     const INITIALIZE_REQUEST: &'static str = r#"{"type":"control_request","request_id":"hide-models","request":{"subtype":"initialize"}}"#;
 
-    /// Asks the CLI which models the logged-in account can use.
+    /// Asks the CLI which models the logged-in account can use, in the
+    /// item's own environment: the variables of its account and profile, and
+    /// its wrapper, which is what moves the list to a gateway's models.
     ///
     /// The `initialize` answer also carries the account (an email, an
-    /// organization, the plan): only the model names are read from it, and
+    /// organization, the plan): only the models' names are read from it, and
     /// neither the answer nor any part of it is logged or returned.
-    fn read_models(&self, binary: &Program) -> Result<Vec<String>, String> {
+    fn read_models(&self, binary: &Program) -> Result<Vec<Model>, String> {
         let mut input = Self::INITIALIZE_REQUEST.to_owned();
         input.push('\n');
         let run = runner::run(
@@ -309,7 +343,7 @@ impl ClaudeCliBackend {
                 cwd: &self.config.cwd,
                 stdin: Some(&input),
                 environment: Environment::Inherit,
-                set: &[],
+                set: &self.config.run.set(),
                 deadline: MODELS_TIMEOUT,
             },
             &CancelToken::new(),
@@ -320,10 +354,17 @@ impl ClaudeCliBackend {
     }
 }
 
-/// The model names in the `initialize` control response, in the order the CLI
+/// The models in the `initialize` control response, in the order the CLI
 /// lists them, without `default`: that is the CLI choosing for the account,
 /// which the shell offers as "CLI default" (no `--model`) instead.
-fn parse_models(stdout: &str) -> Option<Vec<String>> {
+///
+/// Each is its `value`, which `--model` takes, and its `displayName`, which
+/// the CLI's own menu shows. Behind a gateway the CLI names the gateway's
+/// model there (`ANTHROPIC_DEFAULT_SONNET_MODEL` set makes `sonnet` show as
+/// that model, measured 2026-11-10 on claude 2.1.319), so two values can show
+/// one name: the first of them stands for it, since either runs that model
+/// (PRD agent-profiles-phase2 B8).
+fn parse_models(stdout: &str) -> Option<Vec<Model>> {
     let frame = stdout.lines().find_map(|line| {
         let frame = serde_json::from_str::<Value>(line.trim()).ok()?;
         (frame.get("type").and_then(Value::as_str) == Some("control_response")).then_some(frame)
@@ -333,13 +374,32 @@ fn parse_models(stdout: &str) -> Option<Vec<String>> {
         return None;
     }
     let models = response.get("response")?.get("models")?.as_array()?;
-    let names: Vec<String> = models
-        .iter()
-        .filter_map(|model| model.get("value").and_then(Value::as_str))
-        .filter(|name| *name != "default")
-        .map(str::to_owned)
-        .collect();
-    (!names.is_empty()).then_some(names)
+    let mut listed: Vec<Model> = Vec::new();
+    for model in models {
+        let Some(id) = model.get("value").and_then(Value::as_str) else {
+            continue;
+        };
+        if id == "default" {
+            continue;
+        }
+        let label = model
+            .get("displayName")
+            .and_then(Value::as_str)
+            .map(str::trim)
+            .filter(|label| !label.is_empty() && *label != id);
+        let shown = label.unwrap_or(id);
+        if listed
+            .iter()
+            .any(|seen| seen.label.as_deref().unwrap_or(&seen.id) == shown)
+        {
+            continue;
+        }
+        listed.push(Model {
+            id: id.to_owned(),
+            label: label.map(str::to_owned),
+        });
+    }
+    (!listed.is_empty()).then_some(listed)
 }
 
 impl AiBackend for ClaudeCliBackend {
@@ -360,7 +420,7 @@ impl AiBackend for ClaudeCliBackend {
                 cwd: &self.config.cwd,
                 stdin: None,
                 environment: Environment::Inherit,
-                set: &[],
+                set: &self.config.run.set(),
                 deadline: AUTH_TIMEOUT,
             },
             &CancelToken::new(),
@@ -420,7 +480,13 @@ impl AiBackend for ClaudeCliBackend {
         let binary = self
             .resolved_binary()
             .ok_or_else(|| AiError::ProviderUnavailable("claude_not_installed".to_owned()))?;
-        let thinking_off = [(THINKING_OFF.0, THINKING_OFF.1.to_owned())];
+        let mut variables = self.config.run.set();
+        variables.push((PROMPT_CACHE_TTL.0, PROMPT_CACHE_TTL.1.to_owned()));
+        // Print mode thinks by default; see `THINKING_OFF`. A picked effort
+        // is a request for thinking, so it is left on.
+        if request.effort(ProviderId::CLAUDE).is_none() {
+            variables.push((THINKING_OFF.0, THINKING_OFF.1.to_owned()));
+        }
         let (system, schema) = match request.answer {
             AnswerMode::Schema => (
                 request.system_prompt().into_owned(),
@@ -443,13 +509,7 @@ impl AiBackend for ClaudeCliBackend {
                 cwd: &self.config.cwd,
                 stdin: Some(&request.input),
                 environment: Environment::Inherit,
-                // Print mode thinks by default; see `THINKING_OFF`. A picked
-                // effort is a request for thinking, so it is left on.
-                set: if request.effort(ProviderId::CLAUDE).is_some() {
-                    &[]
-                } else {
-                    &thinking_off
-                },
+                set: &variables,
                 deadline: request.deadline,
             },
             cancel,
@@ -459,18 +519,37 @@ impl AiBackend for ClaudeCliBackend {
     }
 }
 
+/// The `result` frame of one finished print-mode run, whichever shape its
+/// stdout has.
+///
+/// `--output-format json` prints the frame as one object, unless the account's
+/// global config (`~/.claude.json`, the `/config` "Verbose output" toggle) has
+/// `verbose` on: then the same flag prints every event of the run as a JSON
+/// array (`system/init`, the messages, then `result`). `--setting-sources ''`
+/// does not drop that config, and `--verbose` can only turn it on, so no
+/// argument vector pins the shape. Measured 2026-11-05 on claude 2.1.316 to
+/// 2.1.318: both shapes carry the same `result` frame, last in the array.
+/// Reading only the object made every usage read and every label of such an
+/// account end as `no_result_frame` with exit 0 (with-hide/hide#1942).
+///
+/// `None` is stdout that is not JSON, or has no `result` frame.
+fn result_frame(stdout: &str) -> Option<Value> {
+    let is_result = |frame: &Value| frame.get("type").and_then(Value::as_str) == Some("result");
+    match serde_json::from_str::<Value>(stdout.trim()).ok()? {
+        Value::Array(events) => events.into_iter().rev().find(is_result),
+        frame => is_result(&frame).then_some(frame),
+    }
+}
+
 /// Turns one finished child into the answer or the failure it reported.
 fn answer(run: &Run, mode: AnswerMode) -> Result<AiResponse, AiError> {
-    let frame = match serde_json::from_str::<Value>(run.stdout.trim()) {
-        Ok(frame) if frame.get("type").and_then(Value::as_str) == Some("result") => frame,
-        // The child ran, so the prompt was submitted, and without a result
-        // frame nothing says whether the turn completed.
-        _ => {
-            return Err(AiError::CompletionUnknown(format!(
-                "claude_no_result_frame:exit={}",
-                run.exit()
-            )));
-        }
+    // The child ran, so the prompt was submitted, and without a result frame
+    // nothing says whether the turn completed.
+    let Some(frame) = result_frame(&run.stdout) else {
+        return Err(AiError::CompletionUnknown(format!(
+            "claude_no_result_frame:exit={}",
+            run.exit()
+        )));
     };
     let failed = frame.get("is_error").and_then(Value::as_bool) == Some(true) || !run.succeeded();
     if failed {
@@ -988,8 +1067,45 @@ mod tests {
         });
         let stdout = format!("{}\n", answer);
         let models = parse_models(&stdout).unwrap();
-        assert_eq!(models, ["opus", "sonnet"]);
-        assert!(!models.iter().any(|model| model.contains("example")));
+        assert_eq!(models, [Model::plain("opus"), Model::plain("sonnet")]);
+        assert!(!format!("{models:?}").contains("example"));
+    }
+
+    /// What claude 2.1.319 answered on 2026-11-10 with a gateway's
+    /// variables set (`ANTHROPIC_BASE_URL`, the three
+    /// `ANTHROPIC_DEFAULT_*_MODEL` and `ANTHROPIC_CUSTOM_MODEL_OPTION`): the
+    /// aliases keep their values and show the gateway's models. A start
+    /// passes the value and the menu shows the name, once per name (B8).
+    #[test]
+    fn a_gateways_models_show_their_names_once_and_run_by_their_values() {
+        let answer = json!({
+            "type": "control_response",
+            "response": {
+                "subtype": "success",
+                "request_id": "hide-models",
+                "response": {"models": [
+                    {"value": "default", "displayName": "Default (recommended)"},
+                    {"value": "opus", "displayName": "glm-4.6"},
+                    {"value": "fable", "displayName": "Fable"},
+                    {"value": "sonnet", "displayName": "glm-4.6"},
+                    {"value": "haiku", "displayName": "deepseek-chat"},
+                    {"value": "deepseek-reasoner", "displayName": "deepseek-reasoner"}
+                ]}
+            }
+        });
+        let labelled = |id: &str, label: &str| Model {
+            id: id.to_owned(),
+            label: Some(label.to_owned()),
+        };
+        assert_eq!(
+            parse_models(&format!("{answer}\n")).unwrap(),
+            [
+                labelled("opus", "glm-4.6"),
+                labelled("fable", "Fable"),
+                labelled("haiku", "deepseek-chat"),
+                Model::plain("deepseek-reasoner"),
+            ]
+        );
     }
 
     #[test]
@@ -1002,6 +1118,41 @@ mod tests {
             r#"{"type":"control_response","response":{"subtype":"success","response":{"models":[]}}}"#,
         ] {
             assert_eq!(parse_models(stdout), None, "{stdout}");
+        }
+    }
+
+    /// One object and the verbose array carry the same frame; the array's
+    /// other events are never taken for it.
+    #[test]
+    fn the_result_frame_is_read_from_an_object_and_from_a_verbose_array() {
+        let result = json!({"type": "result", "subtype": "success", "result": "x"});
+        let events = json!([
+            {"type": "system", "subtype": "init", "result": "not this"},
+            {"type": "assistant", "message": {"content": []}},
+            result,
+        ]);
+        assert_eq!(result_frame(&result.to_string()), Some(result.clone()));
+        assert_eq!(result_frame(&format!("{events}\n")), Some(result.clone()));
+        // Only the last result counts when a run printed more than one.
+        let first = json!({"type": "result", "result": "first"});
+        assert_eq!(
+            result_frame(&json!([first, result]).to_string()),
+            Some(result)
+        );
+    }
+
+    #[test]
+    fn stdout_without_a_result_frame_has_none() {
+        for stdout in [
+            "",
+            "Loading...",
+            "[]",
+            r#"{"type":"system","subtype":"init"}"#,
+            r#"[{"type":"system","subtype":"init"},{"type":"assistant"}]"#,
+            r#""result""#,
+            r#"[{"type":"result"} trailing"#,
+        ] {
+            assert_eq!(result_frame(stdout), None, "{stdout}");
         }
     }
 }

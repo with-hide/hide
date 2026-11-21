@@ -6,10 +6,12 @@
 // desktop host, attached to that daemon.
 
 import { expect, type ElectronApplication } from "@playwright/test";
-import { spawn, spawnSync, type ChildProcess } from "node:child_process";
+import { spawn, type ChildProcess } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
-import { startHerdr } from "../../web/e2e/herdr-fixture";
+import { openProject } from "../../web/e2e/daemon-actions";
+import { startEngine } from "../../web/e2e/engine-fixture";
+import { connectStateDir, useControl } from "../../web/e2e/hided-control.mjs";
 import { enterWorkspace } from "../../web/e2e/wire";
 import {
   claudeSettings, codexDaemonWritten, codexHooks, readSettings, seedAgentFiles,
@@ -20,7 +22,6 @@ test.describe.configure({ timeout: 300_000 });
 test.skip(!process.env.HIDE_E2E_APP, "a packaged hide.app is required");
 
 const PARTS = ["cli", "claude_code_hook", "codex_hook", "coordination_retirement"];
-const LABELS_ID = "hide.agent-context-labels";
 
 type Applied = { kind?: string; device_id?: string; components?: { id: string; state: string; reason: string | null }[] };
 
@@ -34,7 +35,7 @@ test("the app's daemon installs this Mac's kit into its HOME at launch and chang
   const bundle = fs.realpathSync(process.env.HIDE_E2E_APP!);
   if (bundle.startsWith("/Applications/")) throw new Error("HIDE_E2E_APP must name a build, never the operator's installed app");
   const resources = path.join(bundle, "Contents", "Resources");
-  const local = await startHerdr({ agents: false });
+  const local = await startEngine();
   const run = isolate(local, "lk");
   // The release daemon and the host's discovery CLI must come from this bundle.
   run.env.HIDE_CLI_PATH = path.join(resources, "hide");
@@ -53,6 +54,8 @@ test("the app's daemon installs this Mac's kit into its HOME at launch and chang
   const errors: unknown[] = [];
   try {
     await expect.poll(() => run.hide(["status", "--json"]).stdout.includes('"running":true'), { timeout: 30_000 }).toBe(true);
+    // The project the window opens below, made through the bundle's daemon as the web shell makes it.
+    await useControl(await connectStateDir(run.env.HIDE_STATE_DIR!), (control) => openProject(control, path.join(local.root, "fixture"), "fixture"));
     // B1: the first launch installs every part, asking nothing.
     await expect.poll(() => applied(daemonLog, nodeOf(run.env)).length, { timeout: 120_000 }).toBeGreaterThan(0);
     expect(applied(daemonLog, nodeOf(run.env))[0]!.components).toEqual(PARTS.map((id) => expect.objectContaining({ id, state: "installed" })));
@@ -65,10 +68,6 @@ test("the app's daemon installs this Mac's kit into its HOME at launch and chang
       expect(now.hooks.SessionStart).toEqual(expect.arrayContaining(before.hooks.SessionStart!));
       expect({ ...now, hooks: undefined }).toEqual({ ...before, hooks: undefined });
     }
-    const plugins = spawnSync(local.bin, ["plugin", "list", "--json"], { env: local.env, encoding: "utf8", timeout: 10_000 });
-    // Labels are hided's own now; the kit links no plugin (PRD labels-in-hided B2).
-    expect(plugins.status, plugins.stderr).toBe(0);
-    expect(plugins.stdout).not.toContain(LABELS_ID);
 
     app = await relaunch(run.env);
     const page = await shellPage(app);

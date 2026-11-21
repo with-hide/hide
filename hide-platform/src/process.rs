@@ -5,7 +5,10 @@
 //! so ending it ends everything it started, and dropping the owner ends it
 //! too (engineering rule 14; practice `process.md`). On Windows the job also
 //! ends the child when the owner dies without running a destructor
-//! (`KILL_ON_JOB_CLOSE`). [`OwnedChild::spawn_guarded`] adds an acknowledged
+//! (`KILL_ON_JOB_CLOSE`). A resident child ([`start_resident`]) the owned
+//! child starts leaves its group on Unix; on Windows only an owned child
+//! started to place one ([`OwnedChild::spawn_letting_residents_leave`]) lets
+//! it leave the job, and every other start inside stays in it. [`OwnedChild::spawn_guarded`] adds an acknowledged
 //! independent Unix owner channel for cooperative children that retain an
 //! [`OwnerWatch`], without using or replacing stdin.
 //!
@@ -33,6 +36,10 @@
 //!   memory, reading the kernel's tables and forking nothing.
 //! - [`run_to_end`] answers a child's exit code and capped output, or ends the
 //!   child's whole tree when its deadline passes or the caller stops waiting.
+//! - [`raise_open_file_limit`] lifts this process's soft open-file limit to
+//!   the most the system takes, and a resident child starts with the limit
+//!   this process started with; [`keep_starting_open_file_limit`] starts any
+//!   other child with it too.
 //! - [`set_output_aside`] keeps this process's own output, when the system
 //!   appends it to a file, to that file and the one set aside before it.
 //! - A pid that names no process a caller may signal (0 and 1) is refused with
@@ -48,8 +55,13 @@ use std::path::{Path, PathBuf};
 use std::process::{Child, ChildStderr, ChildStdin, ChildStdout, Command, ExitStatus};
 use std::time::{Duration, Instant};
 
+#[cfg(windows)]
+pub mod console_input;
+mod open_files;
 mod resident;
 mod session;
+
+pub use open_files::{OpenFileLimit, keep_starting_open_file_limit, raise_open_file_limit};
 
 pub use resident::{
     JobLimits, LENT_KEY, Lent, MAX_LENT, Resident, ResidentCommand, Taken, own_job, start_resident,
@@ -209,6 +221,39 @@ pub fn exec_login_shell(shell: &Path) -> io::Result<std::convert::Infallible> {
     }
 }
 
+/// Runs `command` as this process's own program, what a pane's start line
+/// does through `hide agent exec` to start an agent with its profile's
+/// variables (docs/ARCHITECTURE.md, Starting an agent with a profile). The
+/// caller invokes it at its entry point, before any thread starts.
+///
+/// On Unix this process becomes the program (`CommandExt::exec`, which looks
+/// a bare name up on the `PATH` the command will run with), so its pid,
+/// process group, signals and exit code are the program's own, as when the
+/// shell started it; success never returns. Windows replaces no process: the
+/// program runs as this process's one child, in a job that ends with this
+/// process, so ending it, or the console closing, ends the program's whole
+/// tree; this process takes no Ctrl-C or Ctrl-Break of its own, which reach
+/// the program in its console group as before, waits for the program, and
+/// answers its exit code for the caller to exit with.
+///
+/// `spawned` runs on Windows alone, with the program's pid, once the program
+/// is in the job and resumed, the point past which nothing of its start can
+/// fail; while it runs the program's process is held, so the pid is still
+/// the program's. Unix never runs it: what follows a successful
+/// replacement is the program, never this caller.
+pub fn hand_over(mut command: Command, spawned: impl FnOnce(u32)) -> io::Result<i32> {
+    #[cfg(unix)]
+    {
+        use std::os::unix::process::CommandExt;
+        let _ = spawned;
+        Err(command.exec())
+    }
+    #[cfg(windows)]
+    {
+        sys::hand_over(&mut command, spawned)
+    }
+}
+
 /// Runtime-injected launch metadata, never an operator setting: optional for
 /// standalone commands, required by a guarded Unix launch. The value names
 /// one inherited stream-socket descriptor >= 3; malformed values fail before
@@ -218,6 +263,20 @@ pub fn exec_login_shell(shell: &Path) -> io::Result<std::convert::Infallible> {
 /// handle before returning. Neither key is a security authority for callers
 /// that control this account's launch environment.
 pub const OWNER_LAUNCH_KEYS: &[&str] = &["HIDE_PROCESS_OWNER_FD", "HIDE_PROCESS_OWNER_JOB"];
+
+/// The prefix of the operator's own Herdr pane identity (`HERDR_PANE_ID`,
+/// `HERDR_SOCKET_PATH` and the rest). A Hide pane is no Herdr pane, and a
+/// program that read one would act on the Herdr the operator runs, so every
+/// pane and every child Hide starts withholds these variables. The one rule
+/// the copies in the holder, desk, node and core share; see
+/// [`is_foreign_pane_identity`].
+pub const FOREIGN_PANE_IDENTITY: &str = "HERDR_";
+
+/// Whether the variable `name` is part of the foreign pane identity, ignoring
+/// case as a Windows variable name does.
+pub fn is_foreign_pane_identity(name: &str) -> bool {
+    name.to_ascii_uppercase().starts_with(FOREIGN_PANE_IDENTITY)
+}
 
 /// The variables a child that has to find the account's own login receives
 /// from this process, and nothing else: what locates the account (its home
@@ -476,7 +535,25 @@ impl OwnedChild {
     /// The caller sets the program, arguments, environment and stdio first; on
     /// Windows the creation flags are replaced by the ones the job needs.
     pub fn spawn(command: &mut Command) -> io::Result<Self> {
-        let (child, tie) = sys::spawn(command, None)?;
+        let (child, tie) = sys::spawn(command, None, false)?;
+        Ok(Self {
+            child,
+            tie,
+            tied: false,
+            ended: false,
+            reaped: false,
+            released: false,
+            bounded_drop: false,
+        })
+    }
+
+    /// [`Self::spawn`] for a program whose work is to start a resident child
+    /// ([`start_resident`]) that outlives it, such as `hided core-update`,
+    /// which starts the core it updates to: on Windows its job lets a start
+    /// that asks to leave it go, as a resident leaves the group on Unix.
+    /// Every other process it starts stays in the job and ends with it.
+    pub fn spawn_letting_residents_leave(command: &mut Command) -> io::Result<Self> {
+        let (child, tie) = sys::spawn(command, None, true)?;
         Ok(Self {
             child,
             tie,
@@ -534,7 +611,7 @@ impl OwnedChild {
     /// existing non-inherited kill-on-close job. Runtime stdin is untouched.
     /// An uncooperative Unix program cannot return guarded success.
     pub fn spawn_guarded(mut command: Command, deadline: Instant) -> io::Result<Self> {
-        let (child, tie) = sys::spawn(&mut command, Some(deadline))?;
+        let (child, tie) = sys::spawn(&mut command, Some(deadline), false)?;
         Ok(Self {
             child,
             tie,
@@ -955,6 +1032,21 @@ pub fn run_to_end(
     run_owned(command, deadline, stop, OwnedChild::spawn)
 }
 
+/// [`run_to_end`] for a program whose work is to start a resident child
+/// that outlives it ([`OwnedChild::spawn_letting_residents_leave`]).
+pub fn run_to_end_letting_residents_leave(
+    command: &mut Command,
+    deadline: std::time::Duration,
+    stop: &std::sync::atomic::AtomicBool,
+) -> Result<Finished, RunFailure> {
+    run_owned(
+        command,
+        deadline,
+        stop,
+        OwnedChild::spawn_letting_residents_leave,
+    )
+}
+
 /// [`run_to_end`] with the child started tied to this process
 /// ([`OwnedChild::spawn_tied`]), so its tree also ends when this process
 /// ends without returning here: for a long run a daemon starts that must not
@@ -1264,10 +1356,49 @@ pub fn descends_from(pid: u32, ancestor: u32) -> bool {
     false
 }
 
+/// The processes from `pid` up to `ancestor`, both included, each with when
+/// it started ([`start_time`]), by the walk [`descends_from`] makes. `None`
+/// when that walk would answer `false`, when a process on it is gone before
+/// its start is read, or when a parent reads as having started after its
+/// child, which means its pid now names a later process: a lineage that
+/// cannot be shown is not claimed.
+pub fn lineage(pid: u32, ancestor: u32) -> Option<Vec<(u32, u64)>> {
+    let mut current = (pid, start_time(pid).ok()?);
+    let mut lineage = Vec::new();
+    for _ in 0..=MAX_DEPTH {
+        lineage.push(current);
+        if current.0 == ancestor {
+            return Some(lineage);
+        }
+        if current.0 <= 1 {
+            return None;
+        }
+        let parent = parent_of(current.0)
+            .ok()
+            .filter(|parent| *parent != current.0)?;
+        let started = start_time(parent)
+            .ok()
+            .filter(|started| *started <= current.1)?;
+        current = (parent, started);
+    }
+    None
+}
+
 /// When `pid` started, as a number only comparable with another start time of
-/// the same system. `NotFound` when `pid` does not exist.
+/// the same system. `NotFound` when `pid` does not exist, which is never
+/// while [`is_alive`] still counts it: a process this no longer answers for
+/// has let go of everything it held. A Unix zombie keeps its start time until
+/// it is reaped.
 pub fn start_time(pid: u32) -> io::Result<u64> {
     sys::start_time(pid)
+}
+
+/// How much processor time `pid` has used so far, in user and kernel mode
+/// together. Read beside the time a process has run, it says whether a
+/// process that missed a deadline was working or waiting. `NotFound` when
+/// `pid` does not exist.
+pub fn cpu_time(pid: u32) -> io::Result<Duration> {
+    sys::cpu_time(pid)
 }
 
 /// The directory `pid` is working in, as the kernel reports it. `NotFound`
@@ -1277,6 +1408,24 @@ pub fn cwd_of(pid: u32) -> io::Result<PathBuf> {
     sys::cwd_of(pid)
 }
 
+/// The directory `pid` works in, as far as this system lets another process
+/// see it: the kernel's answer ([`cwd_of`]) on macOS and Linux, and on
+/// Windows, which has no such query, the directory the process's own
+/// parameters hold, observed as a listener owner's is
+/// ([`crate::listeners`]). It is fit to refuse removing a folder a program
+/// works in, never to prove who a caller is. `NotFound` when the process is
+/// gone, `PermissionDenied` when the system refuses to say.
+pub fn observed_cwd_of(pid: u32) -> io::Result<PathBuf> {
+    #[cfg(windows)]
+    {
+        crate::listeners::observe_cwd(pid).map(|cwd| cwd.as_path().to_path_buf())
+    }
+    #[cfg(not(windows))]
+    {
+        cwd_of(pid)
+    }
+}
+
 /// The name of the program `pid` runs, as the system lists it: the file name
 /// of its image on Windows, the command name elsewhere, which Linux keeps to
 /// its first 15 bytes. `NotFound` when the process is gone.
@@ -1284,33 +1433,168 @@ pub fn name_of(pid: u32) -> io::Result<String> {
     sys::name_of(pid)
 }
 
+/// The installed npm package a runtime's script belongs to: the package
+/// under the nearest `node_modules` in its path, scoped or not, so a
+/// generic script name such as `cli.js` still says which program it is.
+/// Windows runs an npm launcher's script with no exec from the launcher,
+/// and a program started as `node …/node_modules/<package>/dist/cli.js`
+/// names only `cli` anywhere. A path with `.` or `..` in it, or with no
+/// file under its package, names none. No file is read.
+pub fn package_of_script(script: &str) -> Option<String> {
+    let parts: Vec<_> = script
+        .split(['/', '\\'])
+        .filter(|part| !part.is_empty())
+        .collect();
+    if parts.iter().any(|part| matches!(*part, "." | "..")) {
+        return None;
+    }
+    let at = parts
+        .iter()
+        .rposition(|part| part.eq_ignore_ascii_case("node_modules"))?;
+    let package = parts.get(at + 1)?;
+    let (package, first_script) = if package.starts_with('@') {
+        (format!("{package}/{}", parts.get(at + 2)?), at + 3)
+    } else {
+        ((*package).to_owned(), at + 2)
+    };
+    // npm's own bound on a package name.
+    if package.len() > 214 || first_script >= parts.len() {
+        return None;
+    }
+    Some(package)
+}
+
 /// The arguments `pid` was started with, its program first, as the system
 /// keeps them: the kernel's copy of the start's arguments on macOS
 /// (`KERN_PROCARGS2`), `/proc/<pid>/cmdline` on Linux, where a program that
 /// rewrote its arguments reads as it rewrote them and a process that has
-/// ended but not been reaped has none. `NotFound` when the process is gone,
+/// ended but not been reaped has none, and the native command-line query
+/// on Windows, parsed by the system's quote/backslash rules.
+/// `NotFound` when the process is gone,
 /// `PermissionDenied` when the system will not say (another account's
-/// process on macOS), `Unsupported` on Windows, which keeps a process's
-/// command line only inside the process.
+/// process on macOS). Windows bounds the command line to its system limit
+/// and reports a failed or unstable read instead of empty arguments.
 pub fn argv_of(pid: u32) -> io::Result<Vec<String>> {
     sys::argv_of(pid)
 }
 
 /// The processes in process group `group`, zombies included, as one look at
 /// the system's process table finds them: a terminal's foreground is a
-/// group (`tcgetpgrp`). `Unsupported` on Windows, which has no process
-/// groups a terminal names.
+/// group (`tcgetpgrp`). Windows keeps no process group, so there the group
+/// is the job its first process leads ([`console_foreground`]): that
+/// process and every process under it, as [`terminate_group`] ends it.
+/// `NotFound` on Windows when the leader has ended.
 pub fn group_members(group: u32) -> io::Result<Vec<u32>> {
     #[cfg(unix)]
     return sys::group_members(group);
     #[cfg(windows)]
     {
-        let _ = group;
-        Err(io::Error::new(
-            io::ErrorKind::Unsupported,
-            "Windows has no process group a terminal names",
-        ))
+        if !sys::is_alive(group) {
+            return Err(io::Error::new(
+                io::ErrorKind::NotFound,
+                format!("process {group} has ended"),
+            ));
+        }
+        let mut members = vec![group];
+        members.extend(
+            descendants(group)?
+                .into_iter()
+                .filter(|pid| !is_console_host(*pid)),
+        );
+        Ok(members)
     }
+}
+
+/// The console host programs Windows starts for a console, which run no
+/// program of the console's own: a console process that made a new console
+/// gets one as its child.
+#[cfg(windows)]
+const CONSOLE_HOSTS: [&str; 2] = ["conhost.exe", "OpenConsole.exe"];
+
+/// Whether `pid` runs a console host ([`CONSOLE_HOSTS`]), named as Windows
+/// names programs, without case. A process gone since is none.
+#[cfg(windows)]
+fn is_console_host(pid: u32) -> bool {
+    name_of(pid).is_ok_and(|name| {
+        CONSOLE_HOSTS
+            .iter()
+            .any(|host| host.eq_ignore_ascii_case(&name))
+    })
+}
+
+/// The process that stands in for the foreground group of the console whose
+/// program is `shell`, on Windows, which names no foreground for a console:
+/// the oldest process `shell` started that still runs, the program the
+/// shell runs now (a line typed into it starts one, and the shell waits on
+/// it), or `shell` itself while it runs none; a console host is never it.
+/// A single-child cmd or PowerShell wrapper is followed to the program it
+/// waits for; any other program leads its descendants ([`group_members`]).
+/// An unreadable process table or live child identity is an error, never
+/// evidence that the shell runs alone. A Windows pane's foreground
+/// is read the same way, from the shell down. `NotFound`
+/// when `shell` has ended.
+#[cfg(windows)]
+pub fn console_foreground(shell: u32) -> io::Result<u32> {
+    let shell_started = start_time(shell)?;
+    let walk = sys::Walk::new()?;
+    let mut oldest = None;
+    // A walk used to end a tree may leave an unreadable row alone. A
+    // readiness proof cannot: skipping that child would type into a busy
+    // pane. Propagate uncertainty, which the holder reports as unreadable.
+    for child in walk.child_identities(shell)? {
+        let (child, started) = child?;
+        if !is_console_host(child) {
+            oldest = Some(oldest.map_or((started, child), |previous| {
+                std::cmp::min(previous, (started, child))
+            }));
+        }
+    }
+    let mut foreground = oldest.map_or(shell, |(_, child)| child);
+    // npm's .cmd launcher and an explicit PowerShell -File wrapper stay
+    // alive while their program runs, and so does Hide's own start of an
+    // agent with a profile (`hide agent exec`, [`hand_over`]), which on
+    // Windows waits for its program as its one child. Follow only an
+    // unambiguous chain of those, never a runtime's helpers or an
+    // agent-specific name.
+    for depth in 0..MAX_DEPTH {
+        if foreground == shell {
+            break;
+        }
+        let name = name_of(foreground)?;
+        if !["cmd.exe", "powershell.exe", "pwsh.exe", "hide.exe"]
+            .iter()
+            .any(|wrapper| wrapper.eq_ignore_ascii_case(&name))
+        {
+            break;
+        }
+        let children: Vec<_> = walk
+            .child_identities(foreground)?
+            .into_iter()
+            .collect::<io::Result<Vec<_>>>()?
+            .into_iter()
+            .map(|(pid, _)| pid)
+            .filter(|child| !is_console_host(*child))
+            .collect();
+        if children.len() != 1 {
+            break;
+        }
+        if depth + 1 == MAX_DEPTH || children[0] == foreground || children[0] == shell {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidData,
+                "console shell wrapper chain exceeds its depth limit",
+            ));
+        }
+        foreground = children[0];
+    }
+    // The shell's start is read again, so a shell that ended during the
+    // look, and whose pid another process took, is not answered for.
+    if start_time(shell)? != shell_started {
+        return Err(io::Error::new(
+            io::ErrorKind::NotFound,
+            format!("process {shell} has ended"),
+        ));
+    }
+    Ok(foreground)
 }
 
 /// The program file a process runs, as the kernel keeps it.
@@ -1386,6 +1670,24 @@ pub enum LineInput {
     Console,
 }
 
+/// How the terminal whose pseudoterminal master the caller holds takes input
+/// now, read as [`line_input`] reads a process's terminal, from the master's
+/// own descriptor, so a pane's holder asks its terminal without finding it
+/// again by pid. `None` on Windows: a pseudoconsole keeps its program's
+/// console input mode (`ENABLE_LINE_INPUT`) inside the console host, which
+/// the holder of its master has no handle to ask; a process attached to that
+/// console can, which [`console_input`] runs as a helper.
+#[cfg(unix)]
+pub fn master_line_input(master: std::os::fd::BorrowedFd<'_>) -> io::Result<Option<LineInput>> {
+    sys::input_of_descriptor(std::os::fd::AsRawFd::as_raw_fd(&master)).map(Some)
+}
+
+/// See the Unix form: Windows' pseudoconsole cannot say.
+#[cfg(windows)]
+pub fn master_line_input(_master: ()) -> io::Result<Option<LineInput>> {
+    Ok(None)
+}
+
 /// How the controlling terminal of `pid` takes input now. `NotFound` when
 /// the process is gone or controls no terminal; `PermissionDenied` when the
 /// terminal is not this account's to read.
@@ -1406,6 +1708,55 @@ pub fn measure_tree(pid: u32) -> io::Result<TreeMeasure> {
         descendants: descendants.len(),
         rss_bytes,
     })
+}
+
+/// A process as it was recorded: its pid and the start time
+/// [`start_time`] read for it then, so a later process that took the pid is
+/// never taken for it.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct Recorded {
+    pub pid: u32,
+    pub started: u64,
+}
+
+/// Whether ending the terminal session of a pane, whose holder is `holder`
+/// and whose program is `shell`, would end no process but `shell` itself
+/// (with-hide/hide-private#646), judged by the set the holder's end ends
+/// ([`Session::end`]): on Unix every member of the session the shell leads,
+/// so a job in the background, or one left behind when the process that
+/// started it exited, counts as the shell's foreground program does; on
+/// Windows every process of the kill-on-close job the holder holds the shell
+/// in, a console host aside, read through a copy of the holder's own handle
+/// to it, since the job has no name and its handle is never inherited.
+///
+/// A holder or shell that is not the recorded process, a job that cannot be
+/// found or read, and a look at the process table that cannot be made are
+/// errors, never evidence that the shell runs alone. On Windows the copy of
+/// the job's handle is closed before this returns; a holder that ended
+/// meanwhile has its job, and what it holds, ended when that copy closes.
+pub fn runs_alone(holder: Recorded, shell: Recorded) -> io::Result<bool> {
+    #[cfg(windows)]
+    {
+        let members = sys::held_job_members(holder, shell)?;
+        Ok(members
+            .iter()
+            .all(|member| *member == shell.pid || is_console_host(*member)))
+    }
+    #[cfg(unix)]
+    {
+        // The holder's end ends the session its shell leads, whichever
+        // holder holds it.
+        let _ = holder;
+        let session = Session::left_by(shell.pid, shell.started)?;
+        let members = session.members()?;
+        if !members.contains(&shell.pid) {
+            return Err(io::Error::new(
+                io::ErrorKind::NotFound,
+                format!("{} is not the recorded shell, or has ended", shell.pid),
+            ));
+        }
+        Ok(members.iter().all(|member| *member == shell.pid))
+    }
 }
 
 /// Every process under `root`, parents before children, read from one look
@@ -1692,7 +2043,8 @@ mod sys {
                 Ok(())
             });
         }
-        let (mut child, mut tie) = spawn(&mut supervisor, None).map_err(supervisor_failed)?;
+        let (mut child, mut tie) =
+            spawn(&mut supervisor, None, false).map_err(supervisor_failed)?;
         drop(reader);
         drop(diagnostics);
         tie.supervisor = Some(Box::new(Supervisor {
@@ -2117,12 +2469,13 @@ mod sys {
             reserved_more: [u64; 2],
         }
         const PROC_PIDUNIQIDENTIFIERINFO: libc::c_int = 17;
+        let raw = system_pid(pid)?;
         let mut info = Identifiers::default();
         let size = std::mem::size_of::<Identifiers>() as libc::c_int;
         // SAFETY: the buffer is a value we own of the size we pass.
         let written = unsafe {
             libc::proc_pidinfo(
-                pid as libc::c_int,
+                raw,
                 PROC_PIDUNIQIDENTIFIERINFO,
                 0,
                 (&mut info as *mut Identifiers).cast(),
@@ -2708,9 +3061,12 @@ mod sys {
         }
     }
 
+    // A resident leaves the group on its own (`setsid`): there is nothing
+    // to let.
     pub(super) fn spawn(
         command: &mut Command,
         deadline: Option<Instant>,
+        _residents_leave: bool,
     ) -> io::Result<(Child, Tie)> {
         for key in OWNER_LAUNCH_KEYS {
             command.env_remove(key);
@@ -3024,22 +3380,20 @@ mod sys {
         // standard library opens its own descriptors close-on-exec. What the
         // parent was lent by its supervisor is neither, so it is marked here.
         command.process_group(0);
-        // `sysconf` is not on POSIX's list of calls safe between fork and
-        // exec, so the bound is read here, before the fork, and the child only
-        // uses the number.
-        let limit = fallback_limit();
+        let mut inherited = Inherited::prepare();
         // SAFETY: after fork the closure calls only `fcntl`, which POSIX lists
-        // as async-signal-safe, and `syscall`, the bare system-call entry:
-        // neither allocates or takes a lock, and it touches no memory this
-        // process shares with the child.
-        unsafe { command.pre_exec(move || mark_inherited_descriptors(limit)) };
+        // as async-signal-safe, `getpid`, and bare system-call entries
+        // (`syscall`, and `proc_pidinfo`, libproc's wrapper of one): none
+        // allocates or takes a lock, and the only memory written is the
+        // child's own copy of the listing buffer prepared before the fork.
+        unsafe { command.pre_exec(move || inherited.mark()) };
         Ok(())
     }
 
     /// The descriptor value below which the fallback scan marks: the open-file
     /// limit, or the bound when the limit is indeterminate (`sysconf` answers
     /// -1) or larger than the bound.
-    pub(super) fn fallback_limit() -> libc::c_int {
+    fn fallback_limit() -> libc::c_int {
         // SAFETY: `sysconf` takes an integer and has no memory effects.
         let table = unsafe { libc::sysconf(libc::_SC_OPEN_MAX) };
         if table <= 0 {
@@ -3051,40 +3405,148 @@ mod sys {
         }
     }
 
-    /// Marks every descriptor above the standard three close-on-exec, so the
-    /// exec that follows drops them. Marking, not closing: the standard
-    /// library reports a failed exec to its parent through a descriptor in
-    /// this range that must survive until the exec. `limit` is where the
-    /// fallback scan stops, computed before the fork.
-    pub(super) fn mark_inherited_descriptors(limit: libc::c_int) -> io::Result<()> {
-        #[cfg(target_os = "linux")]
-        {
-            // `close_range` with CLOSE_RANGE_CLOEXEC marks the whole range in
-            // one call (Linux 5.11). An older kernel answers ENOSYS or EINVAL.
-            const CLOSE_RANGE_CLOEXEC: libc::c_uint = 4;
-            // SAFETY: the call takes three integers and has no memory effects.
-            let marked = unsafe {
-                libc::syscall(
-                    libc::SYS_close_range,
-                    3 as libc::c_uint,
-                    libc::c_uint::MAX,
-                    CLOSE_RANGE_CLOEXEC,
-                )
+    /// Entries the descriptor listing keeps beyond the table's size when it
+    /// was prepared, for what other threads open before the fork; a listing
+    /// that fills its buffer anyway is not trusted and the scan runs.
+    #[cfg(target_os = "macos")]
+    const LISTING_SPARE: usize = 64;
+
+    /// What a child marks close-on-exec between its fork and its exec,
+    /// prepared before the fork: nothing may be allocated there and
+    /// `sysconf` is not on POSIX's list of calls safe there, so the fallback
+    /// scan's bound and, on macOS, the buffer the open descriptors are
+    /// listed into are made here, and the child only uses them.
+    pub(super) struct Inherited {
+        limit: libc::c_int,
+        #[cfg(target_os = "macos")]
+        listing: Vec<libc::proc_fdinfo>,
+    }
+
+    impl Inherited {
+        pub(super) fn prepare() -> Self {
+            #[cfg(target_os = "macos")]
+            let listing = {
+                // SAFETY: a null buffer asks only for the size the list
+                // takes now; nothing is written.
+                let needed = unsafe {
+                    libc::proc_pidinfo(
+                        libc::getpid(),
+                        libc::PROC_PIDLISTFDS,
+                        0,
+                        std::ptr::null_mut(),
+                        0,
+                    )
+                };
+                let entries =
+                    usize::try_from(needed).unwrap_or(0) / std::mem::size_of::<libc::proc_fdinfo>();
+                vec![
+                    libc::proc_fdinfo {
+                        proc_fd: 0,
+                        proc_fdtype: 0,
+                    };
+                    entries + LISTING_SPARE
+                ]
             };
-            if marked == 0 {
+            Self {
+                limit: fallback_limit(),
+                #[cfg(target_os = "macos")]
+                listing,
+            }
+        }
+
+        /// Marks every descriptor above the standard three close-on-exec, so
+        /// the exec that follows drops them. Marking, not closing: the
+        /// standard library reports a failed exec to its parent through a
+        /// descriptor in this range that must survive until the exec. Linux
+        /// marks the range in one call and macOS marks only the descriptors
+        /// the child holds, as the kernel lists them: a scan of every number
+        /// up to the limit cost a start about 7 ms there (65,536 `fcntl`s),
+        /// against microseconds for the list. Either falls back to the scan.
+        pub(super) fn mark(&mut self) -> io::Result<()> {
+            #[cfg(target_os = "linux")]
+            {
+                // `close_range` with CLOSE_RANGE_CLOEXEC marks the whole
+                // range in one call (Linux 5.11). An older kernel answers
+                // ENOSYS or EINVAL.
+                const CLOSE_RANGE_CLOEXEC: libc::c_uint = 4;
+                // SAFETY: the call takes three integers and has no memory
+                // effects.
+                let marked = unsafe {
+                    libc::syscall(
+                        libc::SYS_close_range,
+                        3 as libc::c_uint,
+                        libc::c_uint::MAX,
+                        CLOSE_RANGE_CLOEXEC,
+                    )
+                };
+                if marked == 0 {
+                    return Ok(());
+                }
+            }
+            #[cfg(target_os = "macos")]
+            if self.mark_listed() {
                 return Ok(());
             }
+            for descriptor in 3..self.limit {
+                mark_close_on_exec(descriptor);
+            }
+            Ok(())
         }
-        for descriptor in 3..limit {
-            // SAFETY: `fcntl` on a descriptor number this process may not
-            // hold fails with EBADF and does nothing else.
-            let flags = unsafe { libc::fcntl(descriptor, libc::F_GETFD) };
+
+        /// Marks the descriptors the kernel lists for this process, and says
+        /// whether the list was whole.
+        #[cfg(target_os = "macos")]
+        fn mark_listed(&mut self) -> bool {
+            let entry = std::mem::size_of::<libc::proc_fdinfo>();
+            let Ok(capacity) = libc::c_int::try_from(self.listing.len() * entry) else {
+                return false;
+            };
+            // SAFETY: `proc_pidinfo` is libproc's wrapper of the bare
+            // `proc_info` system call: it writes at most `capacity` bytes into
+            // this process's own buffer and takes no lock.
+            let written = unsafe {
+                libc::proc_pidinfo(
+                    libc::getpid(),
+                    libc::PROC_PIDLISTFDS,
+                    0,
+                    self.listing.as_mut_ptr().cast(),
+                    capacity,
+                )
+            };
+            // Nothing written is a failure; a full buffer may be cut short.
+            if written <= 0 || written >= capacity {
+                return false;
+            }
+            for listed in &self.listing[..written as usize / entry] {
+                if listed.proc_fd >= 3 {
+                    mark_close_on_exec(listed.proc_fd);
+                }
+            }
+            true
+        }
+    }
+
+    fn mark_close_on_exec(descriptor: libc::c_int) {
+        // SAFETY: `fcntl` on a descriptor number this process may not hold
+        // fails with EBADF and does nothing else; the flag is the only thing
+        // set.
+        unsafe {
+            let flags = libc::fcntl(descriptor, libc::F_GETFD);
             if flags >= 0 && flags & libc::FD_CLOEXEC == 0 {
-                // SAFETY: as above; the flag is the only thing set.
-                unsafe { libc::fcntl(descriptor, libc::F_SETFD, flags | libc::FD_CLOEXEC) };
+                libc::fcntl(descriptor, libc::F_SETFD, flags | libc::FD_CLOEXEC);
             }
         }
-        Ok(())
+    }
+
+    /// `pid` as the system's own pid type, for every read about a process.
+    /// A `pid_t` is signed, so a pid above `i32::MAX` names no process the
+    /// system could have started: it is `NotFound`, the answer Linux's
+    /// `/proc` and Windows give for it, never a negative pid handed to the
+    /// kernel, which reads that as a group or refuses it as invalid input.
+    fn system_pid(pid: u32) -> io::Result<libc::pid_t> {
+        libc::pid_t::try_from(pid).map_err(|_| {
+            io::Error::new(io::ErrorKind::NotFound, format!("no process has pid {pid}"))
+        })
     }
 
     /// Signals `target` (a pid, or a negative group id), where the process
@@ -3306,8 +3768,11 @@ mod sys {
     /// The processes whose group is `group`, zombies included.
     #[cfg(target_os = "macos")]
     pub(super) fn group_members(group: u32) -> io::Result<Vec<u32>> {
-        let group = libc::pid_t::try_from(group)
-            .map_err(|_| io::Error::from(io::ErrorKind::InvalidInput))?;
+        // A group id is its leader's pid: one the system cannot hold leads
+        // no group, as Linux finds no member of it.
+        let Ok(group) = system_pid(group) else {
+            return Ok(Vec::new());
+        };
         // `proc_listpgrppids` counts pids, as `proc_listchildpids` does (see
         // `Walk::children_of`).
         // SAFETY: the first call asks for the size with a null buffer; the
@@ -3395,7 +3860,7 @@ mod sys {
     }
 
     pub(super) fn is_alive(pid: u32) -> bool {
-        let Ok(raw) = libc::pid_t::try_from(pid) else {
+        let Ok(raw) = system_pid(pid) else {
             return false;
         };
         // SAFETY: signal 0 only checks that the process exists and may be
@@ -3413,48 +3878,13 @@ mod sys {
     /// `ps` reads it.
     #[cfg(target_os = "macos")]
     fn is_zombie(pid: u32) -> bool {
-        // The head of `struct extern_proc` (`sys/proc.h`) through `p_stat`:
-        // libc declares no `kinfo_proc` for Apple targets.
-        #[repr(C)]
-        struct ExternProcHead {
-            p_un: [usize; 2],
-            p_vmspace: usize,
-            p_sigacts: usize,
-            p_flag: libc::c_int,
-            p_stat: libc::c_char,
+        match mac::listed(pid) {
+            // A process reaped between the caller's signal 0 and this read
+            // is no longer listed, and has ended too.
+            Ok(None) => true,
+            Ok(Some(listed)) => listed.p_stat as u32 == libc::SZOMB,
+            Err(_) => false,
         }
-        // `sizeof(struct kinfo_proc)` on 64-bit macOS.
-        const KINFO_PROC: usize = 648;
-        let Ok(pid) = libc::c_int::try_from(pid) else {
-            return false;
-        };
-        let mut name = [libc::CTL_KERN, libc::KERN_PROC, libc::KERN_PROC_PID, pid];
-        let mut buffer = [0u64; KINFO_PROC / 8];
-        let mut size = KINFO_PROC;
-        // SAFETY: the name is four ints, and the buffer is valid and aligned
-        // for `size` bytes and read only after `sysctl` fills all of them.
-        let read = unsafe {
-            libc::sysctl(
-                name.as_mut_ptr(),
-                name.len() as libc::c_uint,
-                buffer.as_mut_ptr().cast(),
-                &mut size,
-                std::ptr::null_mut(),
-                0,
-            )
-        };
-        // A process reaped between the caller's signal 0 and this read is
-        // no longer listed, and has ended too.
-        if read == 0 && size == 0 {
-            return true;
-        }
-        if read != 0 || size != KINFO_PROC {
-            return false;
-        }
-        // SAFETY: the buffer holds a whole `kinfo_proc`, which starts with the
-        // `extern_proc` this head is a prefix of.
-        let head = unsafe { &*buffer.as_ptr().cast::<ExternProcHead>() };
-        head.p_stat as u32 == libc::SZOMB
     }
 
     /// Whether the system lists `pid` as ended and waiting to be reaped
@@ -3480,6 +3910,74 @@ mod sys {
     #[cfg(target_os = "macos")]
     mod mac {
         use super::*;
+
+        /// The head of `struct extern_proc` (`sys/proc.h`) through `p_stat`:
+        /// libc declares no `kinfo_proc` for Apple targets. `p_un` is a
+        /// union whose `p_starttime` (a `timeval`) is what a listed process
+        /// keeps of its start.
+        #[repr(C)]
+        pub(in super::super) struct Listed {
+            p_un: [usize; 2],
+            p_vmspace: usize,
+            p_sigacts: usize,
+            p_flag: libc::c_int,
+            pub(in super::super) p_stat: libc::c_char,
+        }
+
+        impl Listed {
+            /// When the process started, in microseconds, as
+            /// `proc_pidinfo`'s `pbi_start_tvsec` and `pbi_start_tvusec`
+            /// say it: both are the kernel's `p_start`.
+            pub(in super::super) fn started(&self) -> u64 {
+                let seconds = self.p_un[0] as u64;
+                // `tv_usec` is a 32-bit `suseconds_t` at the start of the
+                // second word.
+                let micros = u64::from(self.p_un[1] as u32);
+                seconds * 1_000_000 + micros
+            }
+        }
+
+        /// `pid`'s entry in the process table, which lists a process from
+        /// its start until it is reaped, through its end: `proc_pidinfo`
+        /// stops answering once its task is gone, while the process is still
+        /// on its way out and holds what it held (with-hide/hide-private#585).
+        /// `None` when the table no longer lists it.
+        pub(in super::super) fn listed(pid: u32) -> io::Result<Option<Listed>> {
+            // `sizeof(struct kinfo_proc)` on 64-bit macOS.
+            const KINFO_PROC: usize = 648;
+            let pid = system_pid(pid)?;
+            let mut name = [libc::CTL_KERN, libc::KERN_PROC, libc::KERN_PROC_PID, pid];
+            let mut buffer = [0u64; KINFO_PROC / 8];
+            let mut size = KINFO_PROC;
+            // SAFETY: the name is four ints, and the buffer is valid and
+            // aligned for `size` bytes and read only after `sysctl` fills all
+            // of them.
+            let read = unsafe {
+                libc::sysctl(
+                    name.as_mut_ptr(),
+                    name.len() as libc::c_uint,
+                    buffer.as_mut_ptr().cast(),
+                    &mut size,
+                    std::ptr::null_mut(),
+                    0,
+                )
+            };
+            if read != 0 {
+                return Err(io::Error::last_os_error());
+            }
+            if size == 0 {
+                return Ok(None);
+            }
+            if size != KINFO_PROC {
+                return Err(io::Error::other(format!(
+                    "the process table answered {size} bytes for process {pid}, not a kinfo_proc's {KINFO_PROC}"
+                )));
+            }
+            // SAFETY: the buffer holds a whole `kinfo_proc`, which starts
+            // with the `extern_proc` this head is a prefix of, and is aligned
+            // for its words.
+            Ok(Some(unsafe { buffer.as_ptr().cast::<Listed>().read() }))
+        }
 
         pub(in super::super) fn error_for_missing_info() -> io::Error {
             let error = io::Error::last_os_error();
@@ -3536,6 +4034,7 @@ mod sys {
         /// The region of `pid`'s memory at `address`, or the next one above
         /// it, with the file it maps (an empty path when it maps none).
         pub(in super::super) fn region_at(pid: u32, address: u64) -> io::Result<RegionWithPath> {
+            let raw = system_pid(pid)?;
             // SAFETY: an all-zero region structure is a valid value.
             let mut region: RegionWithPath = unsafe { std::mem::zeroed() };
             let size = std::mem::size_of::<RegionWithPath>() as libc::c_int;
@@ -3543,7 +4042,7 @@ mod sys {
             // `proc_pidinfo` reports that it filled the whole structure.
             let written = unsafe {
                 libc::proc_pidinfo(
-                    pid as libc::c_int,
+                    raw,
                     PROC_PIDREGIONPATHINFO,
                     address,
                     (&mut region as *mut RegionWithPath).cast(),
@@ -3558,6 +4057,7 @@ mod sys {
         }
 
         pub(in super::super) fn bsd_info(pid: u32) -> io::Result<libc::proc_bsdinfo> {
+            let raw = system_pid(pid)?;
             // SAFETY: an all-zero `proc_bsdinfo` is a valid value.
             let mut info: libc::proc_bsdinfo = unsafe { std::mem::zeroed() };
             let size = std::mem::size_of::<libc::proc_bsdinfo>() as libc::c_int;
@@ -3565,7 +4065,7 @@ mod sys {
             // `proc_pidinfo` reports that it filled the whole structure.
             let written = unsafe {
                 libc::proc_pidinfo(
-                    pid as libc::c_int,
+                    raw,
                     libc::PROC_PIDTBSDINFO,
                     0,
                     (&mut info as *mut libc::proc_bsdinfo).cast(),
@@ -3657,11 +4157,19 @@ mod sys {
     }
 
     fn input_of(terminal: &std::fs::File) -> io::Result<super::LineInput> {
+        input_of_descriptor(terminal.as_raw_fd())
+    }
+
+    /// The input mode of the terminal open on `descriptor`, which the caller
+    /// keeps open for the call.
+    pub(super) fn input_of_descriptor(
+        descriptor: std::os::fd::RawFd,
+    ) -> io::Result<super::LineInput> {
         // SAFETY: an all-zero `termios` is a valid value for the call to fill.
         let mut attributes: libc::termios = unsafe { std::mem::zeroed() };
-        // SAFETY: the descriptor stays open for the call and the structure is
-        // valid for writes.
-        if unsafe { libc::tcgetattr(terminal.as_raw_fd(), &mut attributes) } != 0 {
+        // SAFETY: the caller keeps the descriptor open for the call and the
+        // structure is valid for writes.
+        if unsafe { libc::tcgetattr(descriptor, &mut attributes) } != 0 {
             return Err(io::Error::last_os_error());
         }
         Ok(if attributes.c_lflag & libc::ICANON != 0 {
@@ -3720,7 +4228,9 @@ mod sys {
 
     #[cfg(target_os = "macos")]
     pub(super) fn start_time(pid: u32) -> io::Result<u64> {
-        mac::bsd_info(pid).map(|info| info.pbi_start_tvsec * 1_000_000 + info.pbi_start_tvusec)
+        mac::listed(pid)?
+            .map(|listed| listed.started())
+            .ok_or_else(|| io::ErrorKind::NotFound.into())
     }
 
     #[cfg(target_os = "macos")]
@@ -3746,8 +4256,7 @@ mod sys {
 
     #[cfg(target_os = "macos")]
     pub(super) fn argv_of(pid: u32) -> io::Result<Vec<String>> {
-        let target = libc::c_int::try_from(pid)
-            .map_err(|_| io::Error::new(io::ErrorKind::NotFound, "no such process"))?;
+        let target = system_pid(pid)?;
         let mut name = [libc::CTL_KERN, libc::KERN_ARGMAX];
         let mut most: libc::c_int = 0;
         let mut size = std::mem::size_of::<libc::c_int>();
@@ -3822,6 +4331,7 @@ mod sys {
     pub(super) fn cwd_of(pid: u32) -> io::Result<PathBuf> {
         use std::os::unix::ffi::OsStringExt;
 
+        let raw = system_pid(pid)?;
         // SAFETY: an all-zero `proc_vnodepathinfo` is a valid value.
         let mut info: libc::proc_vnodepathinfo = unsafe { std::mem::zeroed() };
         let size = std::mem::size_of::<libc::proc_vnodepathinfo>() as libc::c_int;
@@ -3829,7 +4339,7 @@ mod sys {
         // `proc_pidinfo` reports that it filled the whole structure.
         let written = unsafe {
             libc::proc_pidinfo(
-                pid as libc::c_int,
+                raw,
                 libc::PROC_PIDVNODEPATHINFO,
                 0,
                 (&mut info as *mut libc::proc_vnodepathinfo).cast(),
@@ -3864,16 +4374,12 @@ mod sys {
     pub(super) fn image_of(pid: u32) -> io::Result<super::Image> {
         use std::os::unix::ffi::OsStringExt;
 
+        let raw = system_pid(pid)?;
         let mut buffer = vec![0_u8; libc::PROC_PIDPATHINFO_MAXSIZE as usize];
         // SAFETY: the buffer is valid for the length passed, and only the
         // bytes the call reports are read.
-        let length = unsafe {
-            libc::proc_pidpath(
-                pid as libc::c_int,
-                buffer.as_mut_ptr().cast(),
-                buffer.len() as u32,
-            )
-        };
+        let length =
+            unsafe { libc::proc_pidpath(raw, buffer.as_mut_ptr().cast(), buffer.len() as u32) };
         if length <= 0 {
             return Err(mac::error_for_missing_info());
         }
@@ -3911,7 +4417,9 @@ mod sys {
     }
 
     #[cfg(target_os = "macos")]
-    pub(super) fn rss(pid: u32) -> io::Result<u64> {
+    #[allow(deprecated)] // libc's mach_timebase_info, which the mach2 crate would only repeat
+    pub(super) fn cpu_time(pid: u32) -> io::Result<Duration> {
+        let raw = system_pid(pid)?;
         // SAFETY: an all-zero `proc_taskinfo` is a valid value.
         let mut info: libc::proc_taskinfo = unsafe { std::mem::zeroed() };
         let size = std::mem::size_of::<libc::proc_taskinfo>() as libc::c_int;
@@ -3919,7 +4427,44 @@ mod sys {
         // own, and reports how many it wrote.
         let written = unsafe {
             libc::proc_pidinfo(
-                pid as libc::c_int,
+                raw,
+                libc::PROC_PIDTASKINFO,
+                0,
+                (&mut info as *mut libc::proc_taskinfo).cast(),
+                size,
+            )
+        };
+        if written != size {
+            return Err(mac::error_for_missing_info());
+        }
+        // The totals are in the machine's absolute time units, which are
+        // nanoseconds on Intel and not on Apple silicon.
+        let mut timebase = libc::mach_timebase_info { numer: 0, denom: 0 };
+        // SAFETY: `timebase` is writable.
+        let read = unsafe { libc::mach_timebase_info(&mut timebase) };
+        if read != 0 || timebase.denom == 0 {
+            return Err(io::Error::other(
+                "the machine's time base could not be read",
+            ));
+        }
+        let units = u128::from(info.pti_total_user) + u128::from(info.pti_total_system);
+        let nanos = units * u128::from(timebase.numer) / u128::from(timebase.denom);
+        Ok(Duration::from_nanos(
+            u64::try_from(nanos).unwrap_or(u64::MAX),
+        ))
+    }
+
+    #[cfg(target_os = "macos")]
+    pub(super) fn rss(pid: u32) -> io::Result<u64> {
+        let raw = system_pid(pid)?;
+        // SAFETY: an all-zero `proc_taskinfo` is a valid value.
+        let mut info: libc::proc_taskinfo = unsafe { std::mem::zeroed() };
+        let size = std::mem::size_of::<libc::proc_taskinfo>() as libc::c_int;
+        // SAFETY: `proc_pidinfo` writes at most `size` bytes into a value we
+        // own, and reports how many it wrote.
+        let written = unsafe {
+            libc::proc_pidinfo(
+                raw,
                 libc::PROC_PIDTASKINFO,
                 0,
                 (&mut info as *mut libc::proc_taskinfo).cast(),
@@ -3993,11 +4538,14 @@ mod sys {
             // returning). That differs from `proc_listpids`, which returns
             // bytes. Reading the count as bytes and dividing again made three
             // children measure as zero (2026-09-20).
+            let Ok(raw) = system_pid(pid) else {
+                return Vec::new();
+            };
             // SAFETY: the first call asks for the size with a null buffer;
             // the second writes at most `capacity` ints into a buffer we own.
             // Both are the documented `proc_listchildpids` contract.
             unsafe {
-                let needed = libc::proc_listchildpids(pid as libc::c_int, std::ptr::null_mut(), 0);
+                let needed = libc::proc_listchildpids(raw, std::ptr::null_mut(), 0);
                 if needed <= 0 {
                     return Vec::new();
                 }
@@ -4005,11 +4553,7 @@ mod sys {
                 let capacity = needed as usize + 16;
                 let mut buffer = vec![0i32; capacity];
                 let byte_len = (capacity * std::mem::size_of::<i32>()) as libc::c_int;
-                let written = libc::proc_listchildpids(
-                    pid as libc::c_int,
-                    buffer.as_mut_ptr().cast(),
-                    byte_len,
-                );
+                let written = libc::proc_listchildpids(raw, buffer.as_mut_ptr().cast(), byte_len);
                 if written <= 0 {
                     return Vec::new();
                 }
@@ -4069,6 +4613,21 @@ mod sys {
     #[cfg(target_os = "linux")]
     pub(super) fn start_time(pid: u32) -> io::Result<u64> {
         linux::field(&linux::fields(pid)?, 19)
+    }
+
+    #[cfg(target_os = "linux")]
+    pub(super) fn cpu_time(pid: u32) -> io::Result<Duration> {
+        // `utime` and `stime`, in clock ticks.
+        let fields = linux::fields(pid)?;
+        let ticks = linux::field::<u64>(&fields, 11)? + linux::field::<u64>(&fields, 12)?;
+        // SAFETY: a plain call.
+        let per_second = unsafe { libc::sysconf(libc::_SC_CLK_TCK) };
+        if per_second <= 0 {
+            return Err(io::Error::last_os_error());
+        }
+        Ok(Duration::from_nanos(
+            ticks.saturating_mul(1_000_000_000) / per_second as u64,
+        ))
     }
 
     #[cfg(target_os = "linux")]
@@ -4586,9 +5145,10 @@ mod sys {
     use std::os::windows::process::CommandExt;
 
     use windows_sys::Win32::Foundation::{
-        CloseHandle, DUPLICATE_SAME_ACCESS, DuplicateHandle, ERROR_ALREADY_EXISTS, FILETIME,
-        GetHandleInformation, GetLastError, HANDLE, HANDLE_FLAG_INHERIT, INVALID_HANDLE_VALUE,
-        STILL_ACTIVE, SetHandleInformation, WAIT_OBJECT_0, WAIT_TIMEOUT,
+        CloseHandle, DUPLICATE_SAME_ACCESS, DuplicateHandle, ERROR_ACCESS_DENIED,
+        ERROR_ALREADY_EXISTS, FILETIME, GetHandleInformation, GetLastError, HANDLE,
+        HANDLE_FLAG_INHERIT, INVALID_HANDLE_VALUE, STILL_ACTIVE, SetHandleInformation,
+        WAIT_OBJECT_0, WAIT_TIMEOUT,
     };
     use windows_sys::Win32::System::Console::{
         GetConsoleCP, GetStdHandle, STD_ERROR_HANDLE, STD_INPUT_HANDLE, STD_OUTPUT_HANDLE,
@@ -4599,7 +5159,7 @@ mod sys {
     };
     use windows_sys::Win32::System::IO::{CreateIoCompletionPort, GetQueuedCompletionStatus};
     use windows_sys::Win32::System::JobObjects::{
-        AssignProcessToJobObject, CreateJobObjectW, IsProcessInJob,
+        AssignProcessToJobObject, CreateJobObjectW, IsProcessInJob, JOB_OBJECT_LIMIT_BREAKAWAY_OK,
         JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE, JOBOBJECT_ASSOCIATE_COMPLETION_PORT,
         JOBOBJECT_BASIC_ACCOUNTING_INFORMATION, JOBOBJECT_EXTENDED_LIMIT_INFORMATION,
         JobObjectAssociateCompletionPortInformation, JobObjectBasicAccountingInformation,
@@ -4657,18 +5217,79 @@ mod sys {
         Ok(Owned(handle))
     }
 
-    /// Like [`open`], but a process that has exited is `NotFound` even while
-    /// some handle keeps its object alive: it is gone for every purpose of the
-    /// caller, as a reaped Unix process is.
+    /// Like [`open`], but a process that has ended ([`ended`]) is `NotFound`
+    /// even while some handle keeps its object: it is gone for every purpose
+    /// of the caller, as a reaped Unix process is. It is the end
+    /// [`is_alive`] reads, so a process that answers here counts as alive
+    /// there: between setting a process's exit code and signalling its
+    /// object the system closes the handles it held, and a caller told it
+    /// had ended by the exit code met its socket still held
+    /// (with-hide/hide-private#585).
     fn open_live(pid: u32, access: u32) -> io::Result<Owned> {
-        let process = open(pid, access | PROCESS_QUERY_LIMITED_INFORMATION)?;
-        let mut code = 0u32;
-        // SAFETY: the handle is open and `code` is writable.
-        let read = unsafe { GetExitCodeProcess(process.0, &mut code) };
-        if read != 0 && code != STILL_ACTIVE as u32 {
+        let process = open_waitable(pid, access)?;
+        if ended(&process)? {
             return Err(io::ErrorKind::NotFound.into());
         }
         Ok(process)
+    }
+
+    /// `pid` opened with `access`, the query right and the right to wait on
+    /// it; a process that refuses the wait, as one of another account may,
+    /// is opened without it, and [`ended`] reads its exit code.
+    fn open_waitable(pid: u32, access: u32) -> io::Result<Owned> {
+        match open(
+            pid,
+            access | PROCESS_QUERY_LIMITED_INFORMATION | PROCESS_SYNCHRONIZE,
+        ) {
+            Err(error) if error.kind() == io::ErrorKind::PermissionDenied => {
+                open(pid, access | PROCESS_QUERY_LIMITED_INFORMATION)
+            }
+            opened => opened,
+        }
+    }
+
+    /// Whether the process behind `process` has ended: its object is
+    /// signalled. The system ends a process after `TerminateProcess`
+    /// returns, sets its exit code, closes its handles, and signals its
+    /// object last, and Microsoft documents the wait on it as the way to be
+    /// sure; a test told by the exit code that a process had ended was
+    /// refused a folder it had used (with-hide/hide-private#327). Only a
+    /// handle without the right to wait ([`open_waitable`]) is read by its
+    /// exit code. A wait or a read that fails is the error.
+    fn ended(process: &Owned) -> io::Result<bool> {
+        match signalled(process) {
+            Err(error) if error.raw_os_error() == Some(ERROR_ACCESS_DENIED as i32) => {
+                end_begun(process)
+            }
+            answer => answer,
+        }
+    }
+
+    /// Whether the process behind `process` has begun to end: its exit code
+    /// is set. It has then been told to end and will, though it may still
+    /// hold what it held ([`ended`]).
+    fn end_begun(process: &Owned) -> io::Result<bool> {
+        let mut code = 0u32;
+        // SAFETY: the handle is open and `code` is writable.
+        if unsafe { GetExitCodeProcess(process.0, &mut code) } == 0 {
+            return Err(io::Error::last_os_error());
+        }
+        Ok(code != STILL_ACTIVE as u32)
+    }
+
+    /// Ends the process behind `process`. One whose end has begun has what
+    /// was asked: the system refuses to end it again with access denied.
+    fn end(process: &Owned) -> io::Result<()> {
+        // SAFETY: the handle is open with the access the call needs.
+        if unsafe { TerminateProcess(process.0, 1) } != 0 {
+            return Ok(());
+        }
+        // The refusal is the answer unless the exit code says the end began.
+        let error = io::Error::last_os_error();
+        if matches!(end_begun(process), Ok(true)) {
+            return Ok(());
+        }
+        Err(error)
     }
 
     /// The job a child lives in. Closing it ends everything still in it.
@@ -4735,9 +5356,70 @@ mod sys {
         down: Option<String>,
     }
 
+    /// Ctrl-C and Ctrl-Break are the program's: this process handles them as
+    /// done, so they never end it before its child. A handler routine is not
+    /// inherited, so the child keeps the console's default. Every other event
+    /// (the console closing) takes the default, which ends this process and
+    /// with it the job.
+    unsafe extern "system" fn child_takes_interrupts(event: u32) -> windows_sys::core::BOOL {
+        use windows_sys::Win32::System::Console::{CTRL_BREAK_EVENT, CTRL_C_EVENT};
+        windows_sys::core::BOOL::from(event == CTRL_C_EVENT || event == CTRL_BREAK_EVENT)
+    }
+
+    /// [`super::hand_over`] on Windows: the program, started suspended so it
+    /// cannot start a process of its own before it is in the job, in a
+    /// kill-on-close job only this process holds, in this process's console
+    /// group, waited for.
+    pub(super) fn hand_over(command: &mut Command, spawned: impl FnOnce(u32)) -> io::Result<i32> {
+        use windows_sys::Win32::System::Console::SetConsoleCtrlHandler;
+        // SAFETY: an all-zero limit structure is a valid value.
+        let mut limits: JOBOBJECT_EXTENDED_LIMIT_INFORMATION = unsafe { std::mem::zeroed() };
+        limits.BasicLimitInformation.LimitFlags = JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE;
+        // SAFETY: attributes and name may be null.
+        let job = unsafe { CreateJobObjectW(std::ptr::null(), std::ptr::null()) };
+        if job.is_null() {
+            return Err(io::Error::last_os_error());
+        }
+        let job = Owned(job);
+        // SAFETY: `limits` is valid for the size passed.
+        let set = unsafe {
+            SetInformationJobObject(
+                job.0,
+                JobObjectExtendedLimitInformation,
+                (&limits as *const JOBOBJECT_EXTENDED_LIMIT_INFORMATION).cast(),
+                std::mem::size_of::<JOBOBJECT_EXTENDED_LIMIT_INFORMATION>() as u32,
+            )
+        };
+        if set == 0 {
+            return Err(io::Error::last_os_error());
+        }
+        // SAFETY: the handler is a function that lives as long as the program.
+        if unsafe { SetConsoleCtrlHandler(Some(child_takes_interrupts), 1) } == 0 {
+            return Err(io::Error::last_os_error());
+        }
+        command.creation_flags(CREATE_SUSPENDED);
+        let mut child = command.spawn()?;
+        // SAFETY: both handles are open; the child's is owned by `child`.
+        let tied = if unsafe { AssignProcessToJobObject(job.0, child.as_raw_handle()) } == 0 {
+            Err(io::Error::last_os_error())
+        } else {
+            resume(child.id())
+        };
+        if let Err(error) = tied {
+            let _ = child.kill();
+            let _ = child.wait();
+            return Err(error);
+        }
+        spawned(child.id());
+        let status = child.wait()?;
+        // Windows always has a code; the job closes with this process.
+        Ok(status.code().unwrap_or(1))
+    }
+
     pub(super) fn spawn(
         command: &mut Command,
         deadline: Option<Instant>,
+        residents_leave: bool,
     ) -> io::Result<(Child, Tie)> {
         for key in OWNER_LAUNCH_KEYS {
             command.env_remove(key);
@@ -4747,7 +5429,15 @@ mod sys {
         }
         // SAFETY: an all-zero limit structure is a valid value.
         let mut limits: JOBOBJECT_EXTENDED_LIMIT_INFORMATION = unsafe { std::mem::zeroed() };
-        limits.BasicLimitInformation.LimitFlags = JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE;
+        // A child started to place a resident lets a start that asks to
+        // leave the job (`start_resident`) go, as a resident leaves the
+        // process group on Unix; every other process stays in it.
+        limits.BasicLimitInformation.LimitFlags = JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE
+            | if residents_leave {
+                JOB_OBJECT_LIMIT_BREAKAWAY_OK
+            } else {
+                0
+            };
         static NEXT_JOB: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
         let name = deadline.map(|_| {
             format!(
@@ -5078,7 +5768,7 @@ mod sys {
         command: &mut Command,
         end_limit: Duration,
     ) -> io::Result<(Child, Tie)> {
-        let (child, mut tie) = spawn(command, None)?;
+        let (child, mut tie) = spawn(command, None, false)?;
         tie.2 = Some(end_limit);
         Ok((child, tie))
     }
@@ -5163,32 +5853,10 @@ mod sys {
             (self.0).0.0.cast()
         }
 
-        /// The processes the job counts as running.
+        /// The processes the job counts as running, at most
+        /// [`SESSION_PIDS_CAP`] of them.
         pub(super) fn pids(&self) -> io::Result<Vec<u32>> {
-            #[repr(C)]
-            struct List {
-                assigned: u32,
-                listed: u32,
-                ids: [usize; SESSION_PIDS_CAP],
-            }
-            // SAFETY: an all-zero list is a valid value.
-            let mut list: Box<List> = Box::new(unsafe { std::mem::zeroed() });
-            // SAFETY: the job handle is open and `list` is valid for the
-            // size passed.
-            let queried = unsafe {
-                QueryInformationJobObject(
-                    (self.0).0.0,
-                    JobObjectBasicProcessIdList,
-                    (&mut *list as *mut List).cast(),
-                    std::mem::size_of::<List>() as u32,
-                    std::ptr::null_mut(),
-                )
-            };
-            if queried == 0 {
-                return Err(io::Error::last_os_error());
-            }
-            let listed = (list.listed as usize).min(SESSION_PIDS_CAP);
-            Ok(list.ids[..listed].iter().map(|id| *id as u32).collect())
+            job_pids((self.0).0.0).map(|(_, pids)| pids)
         }
 
         pub(super) fn end(&mut self, limit: Duration) -> io::Result<super::SessionEnd> {
@@ -5200,6 +5868,181 @@ mod sys {
                 Err(error) => Err(error),
             }
         }
+    }
+
+    /// The most handles of a holder read to find its job; a holder with
+    /// more is refused rather than read in part.
+    const HELD_HANDLES_CAP: usize = 65_536;
+
+    /// `ProcessHandleInformation`, which lists a process's handles
+    /// (Windows 8 and later).
+    const PROCESS_HANDLE_INFORMATION: u32 = 51;
+
+    /// One entry of `PROCESS_HANDLE_SNAPSHOT_INFORMATION`.
+    #[repr(C)]
+    #[derive(Clone, Copy)]
+    struct HandleEntry {
+        handle: HANDLE,
+        handle_count: usize,
+        pointer_count: usize,
+        granted_access: u32,
+        object_type_index: u32,
+        attributes: u32,
+        reserved: u32,
+    }
+
+    /// The members of every job `holder` holds `shell` in, read through a
+    /// copy of the holder's own handle to it ([`super::runs_alone`]). Each
+    /// process is opened and checked against its recorded start time first,
+    /// so a pid another process took is refused; a handle the holder closed
+    /// or reused meanwhile is no job holding the shell and is passed over.
+    /// No such job, or one whose list is longer than is read, is an error.
+    pub(super) fn held_job_members(
+        holder: super::Recorded,
+        shell: super::Recorded,
+    ) -> io::Result<Vec<u32>> {
+        use windows_sys::Win32::System::Threading::{
+            PROCESS_DUP_HANDLE, PROCESS_QUERY_INFORMATION,
+        };
+        let recorded = |process: &Owned, recorded: super::Recorded| -> io::Result<()> {
+            if started_at(process)? == recorded.started {
+                Ok(())
+            } else {
+                Err(io::Error::new(
+                    io::ErrorKind::NotFound,
+                    format!("{} is not the recorded process", recorded.pid),
+                ))
+            }
+        };
+        let holding = open_live(holder.pid, PROCESS_QUERY_INFORMATION | PROCESS_DUP_HANDLE)?;
+        recorded(&holding, holder)?;
+        let program = open_live(shell.pid, PROCESS_QUERY_LIMITED_INFORMATION)?;
+        recorded(&program, shell)?;
+        let query = crate::windows_process::nt_query()?;
+        let header = 2 * std::mem::size_of::<usize>();
+        let mut size = header + 64 * std::mem::size_of::<HandleEntry>();
+        let max = header + HELD_HANDLES_CAP * std::mem::size_of::<HandleEntry>();
+        let buffer = loop {
+            // usize words keep the entries aligned.
+            let mut buffer = vec![0usize; size.div_ceil(std::mem::size_of::<usize>())];
+            let mut needed = 0u32;
+            // SAFETY: the buffer is writable for the size passed, and the
+            // call writes `needed` only.
+            let status = unsafe {
+                query(
+                    holding.0,
+                    PROCESS_HANDLE_INFORMATION,
+                    buffer.as_mut_ptr().cast(),
+                    u32::try_from(buffer.len() * std::mem::size_of::<usize>()).unwrap_or(u32::MAX),
+                    &mut needed,
+                )
+            };
+            if status >= 0 {
+                break buffer;
+            }
+            // STATUS_INFO_LENGTH_MISMATCH: the table grew past the buffer.
+            if status != 0xc000_0004_u32 as i32 || size >= max {
+                return Err(io::Error::other(format!(
+                    "the handles of {} could not be read: status {status:#x}",
+                    holder.pid
+                )));
+            }
+            size = (needed as usize).max(size * 2).min(max);
+        };
+        let count = buffer[0];
+        if count > HELD_HANDLES_CAP
+            || header + count * std::mem::size_of::<HandleEntry>()
+                > buffer.len() * std::mem::size_of::<usize>()
+        {
+            return Err(io::Error::other(format!(
+                "{} holds {count} handles, more than are read",
+                holder.pid
+            )));
+        }
+        // SAFETY: the call wrote `count` entries after the two-word header,
+        // inside the buffer, as checked above; the buffer is usize-aligned.
+        let entries = unsafe {
+            std::slice::from_raw_parts(buffer.as_ptr().add(2).cast::<HandleEntry>(), count)
+        };
+        let mut members = Vec::new();
+        let mut found = false;
+        for entry in entries {
+            let mut copy: HANDLE = std::ptr::null_mut();
+            // SAFETY: both process handles are open; `copy` is writable. A
+            // handle that is no job, or no longer open, fails or is passed
+            // over below.
+            let copied = unsafe {
+                DuplicateHandle(
+                    holding.0,
+                    entry.handle,
+                    GetCurrentProcess(),
+                    &mut copy,
+                    JOB_OBJECT_QUERY,
+                    0,
+                    0,
+                )
+            };
+            if copied == 0 {
+                continue;
+            }
+            let copy = Owned(copy);
+            let mut holds = 0;
+            // SAFETY: both handles are open; a handle that is no job makes
+            // the call fail.
+            if unsafe { IsProcessInJob(program.0, copy.0, &mut holds) } == 0 || holds == 0 {
+                continue;
+            }
+            found = true;
+            let (running, pids) = job_pids(copy.0)?;
+            if running > pids.len() {
+                return Err(io::Error::other(format!(
+                    "a job of {} runs {running} processes, more than are read",
+                    holder.pid
+                )));
+            }
+            members.extend(pids);
+        }
+        if !found {
+            return Err(io::Error::other(format!(
+                "{} holds no job that holds {}",
+                holder.pid, shell.pid
+            )));
+        }
+        members.sort_unstable();
+        members.dedup();
+        Ok(members)
+    }
+
+    /// How many processes the job behind `job` counts as running, and the
+    /// first [`SESSION_PIDS_CAP`] of them.
+    fn job_pids(job: HANDLE) -> io::Result<(usize, Vec<u32>)> {
+        #[repr(C)]
+        struct List {
+            assigned: u32,
+            listed: u32,
+            ids: [usize; SESSION_PIDS_CAP],
+        }
+        // SAFETY: an all-zero list is a valid value.
+        let mut list: Box<List> = Box::new(unsafe { std::mem::zeroed() });
+        // SAFETY: the job handle is open and `list` is valid for the size
+        // passed.
+        let queried = unsafe {
+            QueryInformationJobObject(
+                job,
+                JobObjectBasicProcessIdList,
+                (&mut *list as *mut List).cast(),
+                std::mem::size_of::<List>() as u32,
+                std::ptr::null_mut(),
+            )
+        };
+        if queried == 0 {
+            return Err(io::Error::last_os_error());
+        }
+        let listed = (list.listed as usize).min(SESSION_PIDS_CAP);
+        Ok((
+            list.assigned as usize,
+            list.ids[..listed].iter().map(|id| *id as u32).collect(),
+        ))
     }
 
     /// A Windows process leaves nothing to reap: closing its handle is all.
@@ -5658,17 +6501,11 @@ mod sys {
     }
 
     pub(super) fn terminate(pid: u32) -> io::Result<()> {
-        let process = open_live(pid, PROCESS_TERMINATE)?;
-        // SAFETY: the handle is open with the access the call needs.
-        if unsafe { TerminateProcess(process.0, 1) } == 0 {
-            return Err(io::Error::last_os_error());
-        }
-        Ok(())
+        end(&open_live(pid, PROCESS_TERMINATE)?)
     }
 
     /// Windows keeps no process group: a terminal's foreground job is named
-    /// by its first process, which stands in for the group (Herdr's
-    /// `foreground_process_group_id` there), so the job is that process and
+    /// by its first process, which stands in for the group, so the job is that process and
     /// everything under it. No signal asks a process on another console to
     /// end, so each ends at once, as `terminate` ends one.
     pub(super) fn terminate_group(leader: u32) -> io::Result<super::GroupEnd> {
@@ -5714,18 +6551,9 @@ mod sys {
             })
         }
 
-        /// Ends the process; one that has already ended has what was asked.
+        /// Ends the process; one whose end has begun has what was asked.
         fn end(&self) -> io::Result<()> {
-            // SAFETY: the handle is open with the access the call needs.
-            if unsafe { TerminateProcess(self.process.0, 1) } != 0 {
-                return Ok(());
-            }
-            // An ended process refuses the call with access denied.
-            let error = io::Error::last_os_error();
-            if running(&self.process) {
-                return Err(error);
-            }
-            Ok(())
+            end(&self.process)
         }
     }
 
@@ -5793,14 +6621,6 @@ mod sys {
         Ok((members, left))
     }
 
-    /// Whether the process behind `process` has not yet ended.
-    fn running(process: &Owned) -> bool {
-        let mut code = 0u32;
-        // SAFETY: the handle is open and `code` is writable.
-        let read = unsafe { GetExitCodeProcess(process.0, &mut code) };
-        read == 0 || code == STILL_ACTIVE as u32
-    }
-
     /// When the process behind `process` started.
     fn started_at(process: &Owned) -> io::Result<u64> {
         let zero = FILETIME {
@@ -5818,53 +6638,51 @@ mod sys {
         Ok((u64::from(created.dwHighDateTime) << 32) | u64::from(created.dwLowDateTime))
     }
 
-    /// A process has ended once its object is signalled: the system ends a
-    /// process after `TerminateProcess` returns, closes its handles, and
-    /// signals its object last, and Microsoft documents the wait on it as the
-    /// way to be sure. A test told by the exit code that a process had ended
-    /// was refused a folder it had used (with-hide/hide-private#327). Only a
-    /// process that refuses to be waited on is read by its exit code. A wait
-    /// or a read that fails confirms nothing, so the process still counts and
-    /// the failure is logged.
+    /// A process counts until it has ended ([`ended`]), as [`open_live`]
+    /// reads it. A wait or a read that fails confirms nothing, so the
+    /// process still counts and the failure is logged.
     pub(super) fn is_alive(pid: u32) -> bool {
-        match open(pid, PROCESS_QUERY_LIMITED_INFORMATION | PROCESS_SYNCHRONIZE) {
-            Ok(process) => signalled(&process).map_or_else(
+        match open_waitable(pid, 0) {
+            Ok(process) => ended(&process).map_or_else(
                 |error| {
                     diagnose(&format!(
-                        "process.alive_unconfirmed pid={pid} step=wait error={error}\n"
+                        "process.alive_unconfirmed pid={pid} error={error}\n"
                     ));
                     true
                 },
                 |ended| !ended,
             ),
-            Err(error) if error.kind() == io::ErrorKind::PermissionDenied => {
-                match open(pid, PROCESS_QUERY_LIMITED_INFORMATION) {
-                    Ok(process) => still_active(pid, &process),
-                    // A process of another account refuses the query and exists.
-                    Err(error) => error.kind() == io::ErrorKind::PermissionDenied,
-                }
-            }
-            Err(_) => false,
+            // A process of another account refuses the query and exists.
+            Err(error) => error.kind() == io::ErrorKind::PermissionDenied,
         }
-    }
-
-    /// Whether the exit code `process` reads says it has not ended; one
-    /// that cannot be read says nothing, so the process still counts.
-    fn still_active(pid: u32, process: &Owned) -> bool {
-        let mut code = 0u32;
-        // SAFETY: the handle is open and `code` is writable.
-        if unsafe { GetExitCodeProcess(process.0, &mut code) } == 0 {
-            let error = io::Error::last_os_error();
-            diagnose(&format!(
-                "process.alive_unconfirmed pid={pid} step=exit_code error={error}\n"
-            ));
-            return true;
-        }
-        code == STILL_ACTIVE as u32
     }
 
     pub(super) fn start_time(pid: u32) -> io::Result<u64> {
         started_at(&open_live(pid, PROCESS_QUERY_LIMITED_INFORMATION)?)
+    }
+
+    pub(super) fn cpu_time(pid: u32) -> io::Result<Duration> {
+        let process = open_live(pid, PROCESS_QUERY_LIMITED_INFORMATION)?;
+        let zero = FILETIME {
+            dwLowDateTime: 0,
+            dwHighDateTime: 0,
+        };
+        let (mut created, mut exited, mut kernel, mut user) = (zero, zero, zero, zero);
+        // SAFETY: the handle is open and every output is writable.
+        let read = unsafe {
+            GetProcessTimes(process.0, &mut created, &mut exited, &mut kernel, &mut user)
+        };
+        if read == 0 {
+            return Err(io::Error::last_os_error());
+        }
+        // Both are counts of 100 ns.
+        let units =
+            |time: FILETIME| (u64::from(time.dwHighDateTime) << 32) | u64::from(time.dwLowDateTime);
+        Ok(Duration::from_nanos(
+            units(kernel)
+                .saturating_add(units(user))
+                .saturating_mul(100),
+        ))
     }
 
     pub(super) fn name_of(pid: u32) -> io::Result<String> {
@@ -5889,11 +6707,13 @@ mod sys {
         ))
     }
 
-    pub(super) fn argv_of(_: u32) -> io::Result<Vec<String>> {
-        Err(io::Error::new(
-            io::ErrorKind::Unsupported,
-            "Windows keeps a process's command line only inside the process",
-        ))
+    pub(super) fn argv_of(pid: u32) -> io::Result<Vec<String>> {
+        let process = open_live(pid, PROCESS_QUERY_LIMITED_INFORMATION)?;
+        let argv = crate::windows_process::argv(process.0)?;
+        if ended(&process)? {
+            return Err(io::ErrorKind::NotFound.into());
+        }
+        Ok(argv)
     }
 
     /// The path `pid` was started from, as the system names it.
@@ -6016,6 +6836,11 @@ mod sys {
             // SAFETY: as for the first call.
             more = unsafe { Process32NextW(snapshot.0, &mut entry) } != 0;
         }
+        let error = io::Error::last_os_error();
+        if error.raw_os_error() != Some(windows_sys::Win32::Foundation::ERROR_NO_MORE_FILES as i32)
+        {
+            return Err(error);
+        }
         Ok(table)
     }
 
@@ -6033,17 +6858,35 @@ mod sys {
             })
         }
 
+        /// A shell is idle only after every listed child's identity has
+        /// been checked. An exited child is absent, an unreadable one is
+        /// unknown, and a child older than this parent belongs to an old
+        /// holder of its pid.
+        pub(super) fn child_identities(&self, pid: u32) -> io::Result<Vec<io::Result<(u32, u64)>>> {
+            let parent_started = start_time(pid)?;
+            let mut children = Vec::new();
+            for &(child, parent) in &self.table {
+                if parent != pid {
+                    continue;
+                }
+                match start_time(child) {
+                    Ok(started) if started >= parent_started => children.push(Ok((child, started))),
+                    Ok(_) => {}
+                    Err(error) if error.kind() == io::ErrorKind::NotFound => {}
+                    Err(error) => children.push(Err(error)),
+                }
+            }
+            Ok(children)
+        }
+
         /// A row whose start, or whose parent's, cannot be read is no child:
         /// it cannot be told from a later process holding an ended one's pid.
         pub(super) fn children_of(&mut self, pid: u32) -> Vec<u32> {
-            let Ok(parent_started) = start_time(pid) else {
-                return Vec::new();
-            };
-            self.table
-                .iter()
-                .filter(|(_, parent)| *parent == pid)
-                .map(|(child, _)| *child)
-                .filter(|child| start_time(*child).is_ok_and(|child| child >= parent_started))
+            self.child_identities(pid)
+                .unwrap_or_default()
+                .into_iter()
+                .filter_map(Result::ok)
+                .map(|(pid, _)| pid)
                 .collect()
         }
     }

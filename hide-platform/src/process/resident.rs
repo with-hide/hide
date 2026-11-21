@@ -10,13 +10,17 @@
 //! - Unix: in a session of its own, so no terminal the starter controls can
 //!   reach it, started through an intermediate process that exits at once, so
 //!   the child is no child of the starter's and can never take a controlling
-//!   terminal; every signal at its default and none blocked; standard
-//!   streams on `/dev/null`; and no descriptor of the starter's but the ones
-//!   it is lent.
+//!   terminal; every signal at its default and none blocked; the open-file
+//!   limit the starter started with, before it raised its own
+//!   ([`super::raise_open_file_limit`]); standard streams on `/dev/null`; and
+//!   no descriptor of the starter's but the ones it is lent.
 //! - Windows: out of the starter's own job object
 //!   (`CREATE_BREAKAWAY_FROM_JOB`), which is refused when that job does not
 //!   allow it or the child is found in it still, rather than started into
-//!   the job the starter's owner ends it with; with no console; and with
+//!   the job the starter's owner ends it with. A job that neither lets a
+//!   process leave nor ends its processes when it closes, as a CI runner's
+//!   is, keeps the child instead: closing it ends nothing. With no
+//!   console; and with
 //!   only the handles it is lent, named on a handle list, so no other handle
 //!   of the starter's reaches it whatever other threads start meanwhile. A
 //!   job above the starter's that keeps the child is allowed, since the
@@ -110,8 +114,9 @@ impl ResidentCommand {
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct Resident {
     pub pid: u32,
-    /// Windows: the child left the starter's own job, but a job above it
-    /// holds the child still and ends it when that job is closed. Always
+    /// Windows: a job holds the child still: one above the starter's own
+    /// job, which ends it when that job is closed, or the starter's own
+    /// when that job lets no process leave and ends none on close. Always
     /// false on Unix.
     pub outer_job: bool,
 }
@@ -173,6 +178,8 @@ pub fn own_job() -> io::Result<Option<JobLimits>> {
 ///
 /// On Windows a start the starter's own job keeps is refused with
 /// `PermissionDenied` and that job's limits: the child would end with it.
+/// A job that lets no process leave and ends none when it closes keeps the
+/// child, said in [`Resident::outer_job`].
 pub fn start_resident(command: &ResidentCommand, lent: &[Lent<'_>]) -> io::Result<Resident> {
     if lent.len() > MAX_LENT {
         return Err(io::Error::new(
@@ -302,13 +309,15 @@ mod sys {
         // The intermediate process writes the resident's pid here and exits.
         let (mut report_read, report_write) = std::io::pipe()?;
         let report = report_write.as_raw_fd();
-        // `sysconf` is not on POSIX's list of calls safe between fork and
-        // exec, so the bound is read here and the child only uses the number.
-        let limit = super::super::sys::fallback_limit();
+        let mut inherited = super::super::sys::Inherited::prepare();
+        // The limit this process started with, read before the fork.
+        let starting_limit = super::super::open_files::starting_limit();
         // SAFETY: after each fork the closure calls only functions POSIX lists
         // as async-signal-safe (`setsid`, `fork`, `write`, `_exit`,
-        // `sigaction`, `sigprocmask`, `fcntl`, `dup2`, `close`) and the
-        // bare system-call entry; it allocates nothing and takes no lock.
+        // `sigaction`, `sigprocmask`, `fcntl`, `dup2`, `close`, `getpid`) and
+        // bare system-call entries (`syscall`, `proc_pidinfo`, `setrlimit`); it allocates
+        // nothing, takes no lock, and writes only its own copy of the
+        // listing buffer prepared before the fork.
         unsafe {
             command.pre_exec(move || {
                 if libc::setsid() == -1 {
@@ -340,7 +349,7 @@ mod sys {
                 let mut none: libc::sigset_t = std::mem::zeroed();
                 libc::sigemptyset(&mut none);
                 libc::sigprocmask(libc::SIG_SETMASK, &none, std::ptr::null_mut());
-                super::super::sys::mark_inherited_descriptors(limit)?;
+                inherited.mark()?;
                 // Each lent descriptor is first copied above the names it
                 // will take, so placing one never overwrites another.
                 let mut copies = [-1 as RawFd; MAX_LENT];
@@ -360,6 +369,16 @@ mod sys {
                         return Err(io::Error::last_os_error());
                     }
                     libc::close(*copy);
+                }
+                // The open-file limit the starter raised for itself goes back
+                // to the one it started with, since a resident's programs are
+                // the operator's (`open_files`). Last, once every copy above
+                // is made: a starter holding more descriptors than that limit
+                // leaves no free number below it until the exec closes them.
+                if let Some(limit) = &starting_limit
+                    && libc::setrlimit(libc::RLIMIT_NOFILE, limit) == -1
+                {
+                    return Err(io::Error::last_os_error());
                 }
                 Ok(())
             })
@@ -494,7 +513,11 @@ mod sys {
         startup.lpAttributeList = attributes.as_ptr();
         // SAFETY: an all-zero process information is a valid value.
         let mut info: PROCESS_INFORMATION = unsafe { std::mem::zeroed() };
-        let flags = CREATE_BREAKAWAY_FROM_JOB
+        // A job that lets no process leave and ends none when it closes
+        // keeps the child: closing it ends nothing, so its owner ending the
+        // starter does not end the child.
+        let kept = own.is_some_and(|own| !own.breakaway_ok() && !own.kill_on_close());
+        let flags = if kept { 0 } else { CREATE_BREAKAWAY_FROM_JOB }
             | DETACHED_PROCESS
             | CREATE_NEW_PROCESS_GROUP
             | CREATE_SUSPENDED
@@ -537,9 +560,10 @@ mod sys {
         let process = Closing(info.hProcess);
         let thread = Closing(info.hThread);
         // Where the child is decides before it runs: in the starter's own
-        // job it ends with the starter's owner, so it is refused; in a job
-        // above that one only, it runs and the caller is told.
-        let placed = placement(process.0, info.dwProcessId, own);
+        // job it ends with the starter's owner, so it is refused, unless that
+        // job keeps it (`kept`); in a job above that one only, it runs and
+        // the caller is told.
+        let placed = placement(process.0, info.dwProcessId, own.filter(|_| !kept));
         let outer_job = match placed {
             Ok(outer_job) => outer_job,
             Err(refusal) => {

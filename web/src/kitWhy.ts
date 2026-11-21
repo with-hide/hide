@@ -1,6 +1,6 @@
 import type { TFunction } from "i18next";
 import type { MessageKey } from "./i18n/catalogs";
-import type { HerdrProfileRefusal, KitUnavailable, KitWhy } from "./snapshot";
+import type { MachineProfileRefusal, KitUnavailable, KitWhy } from "./snapshot";
 
 type Translate = TFunction<"translation">;
 
@@ -16,6 +16,7 @@ const WHY_KEYS = new Map<string, { plain?: MessageKey; at?: MessageKey }>([
   ["no_helper", { at: "kitWhy.no_helperAt" }],
   ["unreadable", { plain: "kitWhy.unreadable", at: "kitWhy.unreadableAt" }],
   ["other_program", { at: "kitWhy.other_programAt" }],
+  ["other_install", { at: "kitWhy.other_installAt" }],
   ["foreign", { at: "kitWhy.foreignAt" }],
   ["agent_absent", { plain: "kitWhy.agent_absent" }],
   ["not_created_yet", { plain: "kitWhy.not_created_yet", at: "kitWhy.not_created_yetAt" }],
@@ -27,8 +28,6 @@ const WHY_KEYS = new Map<string, { plain?: MessageKey; at?: MessageKey }>([
   ["not_changed", { plain: "kitWhy.not_changed" }],
   ["codex_untrusted", { plain: "kitWhy.codex_untrusted" }],
   ["record_unsaved", { plain: "kitWhy.record_unsaved" }],
-  ["herdr_absent", { plain: "kitWhy.herdr_absent" }],
-  ["update_herdr", { plain: "kitWhy.update_herdr" }],
   ["retirement_pending", { plain: "kitWhy.retirement_pending" }],
 ]);
 
@@ -56,18 +55,16 @@ const UNAVAILABLE_KEYS = new Map<KitUnavailable, MessageKey>([
   ["unreadable", "kitUnavailable.unreadable"],
 ]);
 
-const PROFILE_REFUSAL_KEYS = new Map<HerdrProfileRefusal, MessageKey>([
-  ["no_consent", "herdrProfileRefusal.no_consent"],
-  ["disabled", "herdrProfileRefusal.disabled"],
-  ["invalid_target", "herdrProfileRefusal.invalid_target"],
-  ["discovery_pending", "herdrProfileRefusal.discovery_pending"],
-  ["device_limit", "herdrProfileRefusal.device_limit"],
-  ["profile_moved", "herdrProfileRefusal.profile_moved"],
+const PROFILE_REFUSAL_KEYS = new Map<MachineProfileRefusal, MessageKey>([
+  ["no_consent", "profileRefusal.no_consent"],
+  ["invalid_target", "profileRefusal.invalid_target"],
+  ["discovery_pending", "profileRefusal.discovery_pending"],
+  ["device_limit", "profileRefusal.device_limit"],
 ]);
 
-/** Why Hide declined to connect a saved Herdr profile; a code this build does not know gets the general sentence. */
-export function profileRefusalText(refusal: HerdrProfileRefusal, t: Translate): string {
-  return t(PROFILE_REFUSAL_KEYS.get(refusal) ?? "herdrProfileRefusal.other");
+/** Why Hide declined to connect a first-run machine; a code this build does not know gets the general sentence. */
+export function profileRefusalText(refusal: MachineProfileRefusal, t: Translate): string {
+  return t(PROFILE_REFUSAL_KEYS.get(refusal) ?? "profileRefusal.other");
 }
 
 /** Why a machine's kit does not run at all; a code this build does not know gets the general sentence. */

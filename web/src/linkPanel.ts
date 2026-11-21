@@ -82,7 +82,7 @@ export function viewBlock(line: LinkedSession, devices: readonly Device[] | unde
 /** The agents Hide starts with a resume (D-10, D-42). */
 export function resumeProvider(agent: string): ProviderKind | null {
   const row = agentAdapter(agent);
-  return row?.can_resume ? row.herdr_kind as ProviderKind : null;
+  return row?.can_resume ? row.agent_cli as ProviderKind : null;
 }
 
 export function resumable(agent: string): boolean {

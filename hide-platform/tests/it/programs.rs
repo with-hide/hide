@@ -94,6 +94,45 @@ fn the_copy_the_login_shell_finds_wins_over_an_older_one_in_an_install_folder() 
     assert_eq!(String::from_utf8_lossy(&output.stdout), "new\n");
 }
 
+/// A profile's program is refused before its start is typed when it cannot
+/// start: a script whose interpreter is not there passes a look at its file
+/// alone and then fails in the pane (with-hide/hide#2281 review).
+#[test]
+fn a_script_runs_only_when_its_interpreter_is_a_program_too() {
+    let root = tempfile::tempdir().unwrap();
+    let bin = root.path().join("bin");
+    let search = bin.clone().into_os_string();
+    let interpreter = program(&bin, "hide-fixture-interpreter");
+    let script = |name: &str, first: &str| {
+        let path = program(root.path(), name);
+        fs::write(&path, format!("{first}\n")).unwrap();
+        path
+    };
+
+    let by_file = script("by-file", &format!("#!{}", interpreter.display()));
+    let by_name = script(
+        "by-name",
+        "#!/usr/bin/env -S hide-fixture-interpreter --flag",
+    );
+    let gone_file = script("gone-file", "#!/nowhere/interpreter");
+    let gone_name = script("gone-name", "#!/usr/bin/env hide-fixture-missing");
+    let not_run = program(root.path(), "not-run");
+    fs::set_permissions(&not_run, fs::Permissions::from_mode(0o644)).unwrap();
+
+    assert_eq!(programs::runnable(&by_file, Some(&search)), Ok(()));
+    assert_eq!(programs::runnable(&by_name, Some(&search)), Ok(()));
+    let refused = |path: &Path| programs::runnable(path, Some(&search)).unwrap_err();
+    assert!(refused(&gone_file).contains("/nowhere/interpreter"));
+    assert!(refused(&gone_name).contains("hide-fixture-missing"));
+    assert!(refused(&not_run).contains("not a program this account may run"));
+    assert!(refused(&root.path().join("absent")).contains("not a file"));
+    assert!(programs::Program::at(&gone_name, search.clone()).is_err());
+    assert_eq!(
+        programs::Program::at(&by_name, search.clone()).map(|found| found.path().to_owned()),
+        Ok(by_name)
+    );
+}
+
 /// Every crate looks for a program through this module, so no product code
 /// builds a search of its own: a search that skipped the login shell once
 /// found an older Codex in `~/.local/bin` before the nvm Codex the operator's

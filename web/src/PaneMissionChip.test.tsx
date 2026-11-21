@@ -40,7 +40,7 @@ afterEach(() => {
 const SESSION = { device_id: "mac", agent: "claude", session_id: "s-1" };
 
 function node(key: string, extra: Partial<MissionNode> = {}): MissionNode {
-  return { key, title: `${key} title`, kind: "change", depends_on: [], status: "planned", blocked: null, delivery: "pr", worker: null, agent_id: null, pane_id: null, machine: null, pr: null, base_pr: null, branch: null, pr_state: null, pr_url: null, stage: null, attempts: 0, line: null, change: null, review: null, criteria: [], criteria_met: 0, criteria_skipped: 0, external: null, unread: false, reopened: 0, started_at_unix_ms: null, finished_at_unix_ms: null, commit: null, landing: null, verdict: null, checks: null, attention: null, hide: null, ...extra, prs: extra.prs ?? (extra.pr != null ? [{ number: extra.pr, state: extra.pr_state ?? null, url: extra.pr_url ?? null }] : []) };
+  return { key, title: `${key} title`, kind: "change", depends_on: [], status: "planned", blocked: null, delivery: "pr", worker: null, agent_id: null, pane_id: null, machine: null, pr: null, base_pr: null, branch: null, pr_state: null, pr_url: null, stage: null, attempts: 0, line: null, change: null, review: null, criteria: [], criteria_met: 0, criteria_skipped: 0, steps: [], brief_bytes: null, external: null, unread: false, reopened: 0, started_at_unix_ms: null, finished_at_unix_ms: null, commit: null, landing: null, verdict: null, checks: null, attention: null, hide: null, ...extra, prs: extra.prs ?? (extra.pr != null ? [{ number: extra.pr, state: extra.pr_state ?? null, url: extra.pr_url ?? null }] : []) };
 }
 
 /** A pull request number and how the card writes it, built so no literal reads as a colour. */
@@ -49,7 +49,7 @@ const PR_TEXT = `#${PR}`;
 const NODES = [node("spec", { status: "done" }), node("api", { status: "working", pr: PR, depends_on: ["spec"] }), node("ui", { depends_on: ["api"] })];
 
 function mission(extra: Partial<Mission> = {}): Mission {
-  return { id: "mission-1", title: "Ship the API", workspace_id: "w", project: "/repo", checkout_path: "/repo", device_id: "mac", status: "running", scope: "pr", cap: 4, exempt: false, strength: null, other_vendor: null, conductor: { pane_id: "p1", name: "conductor", agent_kind: "claude", session: SESSION, present: true, takes_answers: true }, nodes: NODES, merge_order: [], landing_order: [], stack_waiting: 0, check: null, github: null, decision: null, question: null, answer: null, answer_failed: null, delay: null, report: null, created_at_unix_ms: 1, started_at_unix_ms: 1, closed_at_unix_ms: null, running: 1, stale: false, github_stale: false, github_read_at_unix_ms: null, ...extra };
+  return { id: "mission-1", title: "Ship the API", workspace_id: "w", project: "/repo", checkout_path: "/repo", device_id: "mac", status: "running", scope: "pr", cap: 4, exempt: false, strength: null, conductor: { pane_id: "p1", name: "conductor", agent_kind: "claude", session: SESSION, present: true, takes_answers: true }, nodes: NODES, merge_order: [], landing_order: [], stack_waiting: 0, check: null, github: null, decision: null, question: null, answer: null, answer_failed: null, delay: null, report: null, created_at_unix_ms: 1, started_at_unix_ms: 1, closed_at_unix_ms: null, running: 1, stale: false, github_stale: false, github_read_at_unix_ms: null, ...extra };
 }
 
 function agent(pane: string): AgentRow {
@@ -88,25 +88,31 @@ async function mount(missions: Mission[], { pane = "p1", plans = [] as PlanView[
   return { container, actions, events, chip, popover, press, escape, unmount: async () => { await act(async () => root.unmount()); } };
 }
 
+const MARK_TONE: Record<string, string> = { planning: "waiting", running: "working", turn: "hold", merge_wait: "review", done: "done", cancelled: "cancelled" };
+
 it("reads each state in words with a cell per node, in the plan chip's place, and a pane that conducts nothing keeps its plan chip (B8, B36, PRD mission-pane-chip B1, B2, B17)", async () => {
   const allDone = NODES.map((row) => ({ ...row, status: "done" as const }));
   const cases: [Partial<Mission>, string, string, string | undefined][] = [
-    [{ status: "planning", nodes: [] }, "planning", "Planning", undefined],
-    [{}, "running", "Mission1/3", "done working waiting"],
+    // The mission's number (`M1` for `mission-1`) stands where the word "Mission" stood, then a dot, then the state word or the progress.
+    [{ status: "planning", nodes: [] }, "planning", "M1 · Planning", undefined],
+    [{}, "running", "M1 · 1/3", "done working waiting"],
     // A decision keeps the progress and adds `!` in its colour (needs-you-cleanup B6).
-    [{ decision: "Which base for the screen PR?" }, "decision", "!Mission1/3", "done working waiting"],
-    [{ status: "merge_wait" }, "merge_wait", "Waiting to merge", "done working waiting"],
-    [{ status: "done", nodes: allDone, closed_at_unix_ms: 9 }, "done", "Mission3/3", "done done done"],
-    [{ status: "cancelled", closed_at_unix_ms: 9 }, "cancelled", "Cancelled", "done cancelled cancelled"],
+    [{ decision: "Which base for the screen PR?" }, "turn", "! M1 · 1/3", "done working waiting"],
+    [{ status: "merge_wait" }, "merge_wait", "M1 · Waiting to merge", "done working waiting"],
+    [{ status: "done", nodes: allDone, closed_at_unix_ms: 9 }, "done", "M1 · 3/3", "done done done"],
+    [{ status: "cancelled", closed_at_unix_ms: 9 }, "cancelled", "M1 · Cancelled", "done cancelled cancelled"],
   ];
   for (const [extra, state, text, cells] of cases) {
     const view = await mount([mission(extra)], { plans: [plan()] });
     try {
-      expect([view.chip()?.dataset.missionChipState, view.chip()?.textContent]).toEqual([state, text]);
+      const words = [...view.chip()!.children].map((part) => part.textContent).filter(Boolean).join(" ");
+      expect([view.chip()?.dataset.missionChipState, words]).toEqual([state, text]);
       // One cell per node in the plan, in its state's colour; no cell before the first plan.
       expect(view.chip()?.querySelector<HTMLElement>("[data-progress-cells]")?.dataset.progressCells).toBe(cells);
+      // The mark wears the colour every mission chip wears (operator decision 2026-11-20).
+      expect(view.chip()?.querySelector<HTMLElement>("[data-mission-chip-tone]")?.dataset.missionChipTone).toBe(MARK_TONE[state]);
       // A decision and a done mission keep their colour while the popover is open.
-      if (state === "decision") expect(view.chip()?.className).toContain("data-[state=open]:text-mission-hold");
+      if (state === "turn") expect(view.chip()?.className).toContain("data-[state=open]:text-mission-hold");
       if (state === "done") expect(view.chip()?.className).toContain("data-[state=open]:text-mission-done");
       expect(view.chip()?.getAttribute("aria-label")).toMatch(/^Mission Ship the API · /);
       // The name says the exact count and the node at work, since the cells are not read out.
@@ -119,6 +125,12 @@ it("reads each state in words with a cell per node, in the plan chip's place, an
     expect(other.chip()).toBeNull();
     expect(other.container.textContent).toBe("");
   } finally { await other.unmount(); }
+  // An id the core gave no number keeps the word; the chip never makes one up.
+  const unnumbered = await mount([mission({ id: "imported" })]);
+  try {
+    expect(unnumbered.chip()?.querySelector("[data-mission-number]")).toBeNull();
+    expect(unnumbered.chip()?.textContent).toBe("Mission1/3");
+  } finally { await unnumbered.unmount(); }
   const unreadable = await mount([mission()]);
   try {
     await act(async () => useShellStore.setState({ rest: { ...snapshot([mission()]), missions: { items: [mission()], failed: "unreadable" } } as unknown as SnapshotRest }));
@@ -126,7 +138,19 @@ it("reads each state in words with a cell per node, in the plan chip's place, an
   } finally { await unreadable.unmount(); }
 });
 
-it("shows its popover on focus or pointing without taking the keyboard, and a press opens the mission's map in the 보기 slot instead of pinning (B3)", async () => {
+it("marks a mission delay with a grey pause and says its reason and how long it still holds in the chip's name, the time gone once its end has passed", async () => {
+  const held = await mount([mission({ delay: "disk low", delay_until_unix_ms: Date.now() + 40 * 60_000 })]);
+  try {
+    expect(held.chip()?.querySelector("[data-mission-chip-delay]")).not.toBeNull();
+    expect(held.chip()?.getAttribute("aria-label")).toMatch(/New work held · disk low · \S+ now api title$/);
+  } finally { await held.unmount(); }
+  const past = await mount([mission({ delay: "disk low", delay_until_unix_ms: Date.now() - 60_000 })]);
+  try {
+    expect(past.chip()?.getAttribute("aria-label")).toMatch(/New work held · disk low now api title$/);
+  } finally { await past.unmount(); }
+});
+
+it("shows its popover on focus or pointing without taking the keyboard, and a press opens the mission on the mission screen instead of pinning (B3; PRD mission-screen B12, B14)", async () => {
   const view = await mount([mission()]);
   try {
     expect(view.popover()).toBeNull();
@@ -145,11 +169,12 @@ it("shows its popover on focus or pointing without taking the keyboard, and a pr
     expect(view.popover()).not.toBeNull();
     await act(async () => { vi.advanceTimersByTime(1); });
     expect(view.popover()).toBeNull();
-    // A press (Enter and Space on the focused button are presses too) opens the map and closes the popover.
+    // A press (Enter and Space on the focused button are presses too) opens the mission's card as a card tab on a desk beside the pane, and closes the popover.
     await point("pointerover", null);
     expect(view.popover()).not.toBeNull();
     await act(async () => view.chip()!.click());
-    expect(view.events.at(-1)).toEqual({ schema_version: 2, kind: "detail_open", payload: { item: { kind: "mission", mission: "mission-1" } } });
+    expect(useUiStore.getState().screen).not.toEqual({ kind: "missions" });
+    expect(view.events.filter((event) => event.kind === "detail_open").map((event) => event.payload)).toEqual([{ item: { kind: "mission", mission: "mission-1" }, at: "owner" }]);
     expect([useUiStore.getState().planPane, view.popover()]).toEqual([null, null]);
     expect(view.chip()!.hasAttribute("aria-pressed")).toBe(false);
   } finally { await view.unmount(); }
@@ -172,7 +197,7 @@ it("lists the nodes a worker is at with their step, one tally line and no map or
   const nodes = [
     node("spec", { status: "done" }),
     node("api", { status: "working", pr: PR, stage: 2, depends_on: ["spec"] }),
-    node("probe", { kind: "research", delivery: null, status: "working", depends_on: ["spec"] }),
+    node("probe", { kind: "general", preset: "research", delivery: null, status: "working", depends_on: ["spec"] }),
     node("ui", { depends_on: ["api"] }),
     node("later"),
   ];
@@ -180,16 +205,24 @@ it("lists the nodes a worker is at with their step, one tally line and no map or
   try {
     await act(async () => view.actions.togglePlanChip());
     const popover = view.popover()!;
-    expect(popover.querySelector("[data-mission-mini-head]")?.textContent).toBe("Mission1/5");
+    expect(popover.querySelector("[data-mission-mini-title]")?.textContent).toBe("Ship the API");
+    expect(popover.querySelector("[data-mission-number]")?.textContent).toBe("M1");
+    expect(popover.querySelector("[data-mission-mini-head] [data-progress-cells]")).not.toBeNull();
+    expect(popover.querySelector("[data-mission-mini-head]")?.textContent).toContain("Running1/51 done · 2 next");
     const rows = [...popover.querySelectorAll<HTMLElement>("[data-mission-mini-node]")].map((row) => [row.dataset.missionMiniNode, row.textContent]);
     expect(rows).toEqual([["api", `api title${PR_TEXT}PR`], ["probe", "probe titleResearch"]]);
     expect(popover.querySelector("[data-mission-mini-tally]")?.textContent).toBe("1 done · 2 next");
-    // The map is drawn only in the 보기 slot, and the record opens from the pane menu and the sidebar.
+    // The map is drawn only as a card tab on a desk, and the record opens from the pane menu and the sidebar.
     expect(popover.querySelector("[data-dependency-node]")).toBeNull();
     expect(popover.textContent).not.toContain("record");
-    // No `Larger`: the head's end says the chip itself opens the map.
-    expect(popover.querySelector("button:not([data-mission-mini-conversation])")).toBeNull();
-    expect(popover.querySelector("[data-mission-mini-open]")?.textContent).toBe("Click for the map");
+    // The one thing to press is the last row, `Open the map`, and it opens the map as the chip does.
+    expect([...popover.querySelectorAll("button:not([data-mission-mini-conversation])")].map((button) => button.getAttribute("data-mission-mini-open"))).toEqual(["true"]);
+    expect(popover.querySelector("[data-mission-popover]")?.lastElementChild?.getAttribute("data-mission-mini-open")).toBe("true");
+    expect(popover.querySelector("[data-mission-mini-open]")?.textContent).toBe("Open the map");
+    // Pressing it opens the mission's card as a card tab on a desk and closes the popover, as the chip's own press does.
+    await view.press("[data-mission-mini-open]");
+    expect(view.events.filter((event) => event.kind === "detail_open").map((event) => event.payload)).toEqual([{ item: { kind: "mission", mission: "mission-1" }, at: "owner" }]);
+    expect(view.popover()).toBeNull();
   } finally { await view.unmount(); }
 });
 
@@ -198,15 +231,16 @@ it("shows a finished mission's time, the report's first two lines and at most th
   const nodes = [
     node("one", { status: "done", pr: PR, pr_state: "merged" }),
     node("two", { status: "done", delivery: "direct", branch: "fix/tab" }),
-    node("three", { status: "done", kind: "research", delivery: null, line: "the cell resets first" }),
-    node("four", { status: "done", kind: "verify", delivery: null, line: "6 of 6 pass" }),
-    node("five", { status: "done", kind: "research", delivery: null }),
+    node("three", { status: "done", kind: "general", preset: "research", delivery: null, line: "the cell resets first" }),
+    node("four", { status: "done", kind: "general", preset: "verify", delivery: null, line: "6 of 6 pass" }),
+    node("five", { status: "done", kind: "general", preset: "research", delivery: null }),
   ];
   const done = await mount([mission({ status: "done", nodes, started_at_unix_ms: 0, closed_at_unix_ms: 3 * hour, report: "# All merged\n\n- [ ] One step left for later\n\n**Third** line." })]);
   try {
     await act(async () => done.actions.togglePlanChip());
     const popover = done.popover()!;
     expect(popover.querySelector("[data-mission-mini-head]")?.textContent).toBe("Finished· 3h");
+    expect(popover.querySelector("[data-mission-mini-title]")?.textContent).toBe("Ship the API");
     // The Conductor's Markdown is quoted as its words: no `#`, no `- [ ]`.
     expect([...popover.querySelectorAll("[data-mission-mini-report] p")].map((line) => line.textContent)).toEqual(["All merged", "One step left for later"]);
     const results = [...popover.querySelectorAll<HTMLElement>("[data-mission-mini-result]")].map((row) => row.dataset.missionMiniResult);
@@ -231,7 +265,7 @@ it("leads with the decision and its way to the conversation, which brings the Co
   try {
     await act(async () => view.actions.togglePlanChip());
     const map = view.popover()!;
-    expect(map.querySelector("[data-mission-mini-head]")?.textContent).toBe("Mission1/3");
+    expect(map.querySelector("[data-mission-mini-head]")?.textContent).toContain("Running1/3");
     expect(map.querySelector("[data-mission-mini-decision]")?.textContent).toBe("! Which base for the screen PR?Go to terminal");
     await view.press("[data-mission-mini-conversation]");
     expect(view.events.at(-1)).toMatchObject({ kind: "focus_pane", payload: { pane_id: "p1" } });

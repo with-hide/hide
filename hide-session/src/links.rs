@@ -13,7 +13,10 @@
 //! (the last one per branch span and the one before each pull request
 //! address) leave this module.
 
-use crate::{EventKind, PrSighting, pull_request_addresses};
+use crate::account::Accounts;
+use crate::{EventKind, PrSighting, call_shell, pull_request_addresses};
+use hide_agent_adapter::HookDialect;
+use hide_shell::Syntax;
 use serde_json::Value;
 
 /// A request is kept to this many characters (D-40).
@@ -182,12 +185,13 @@ impl LinkAccumulator {
         self.made_here.clear();
     }
 
-    /// A call `id` that makes a pull request, when it does.
-    fn call_made(&mut self, id: Option<&str>, name: Option<&str>, input: &Value) {
+    /// A call `id`, read in `syntax`, that makes a pull request, when it
+    /// does.
+    fn call_made(&mut self, id: Option<&str>, name: Option<&str>, input: &Value, syntax: Syntax) {
         let Some(id) = id.filter(|id| !id.is_empty()) else {
             return;
         };
-        if !crate::named_prs::creates_pull_request(name, input)
+        if !crate::named_prs::creates_pull_request(name, input, syntax)
             || self.creating.iter().any(|kept| kept == id)
         {
             return;
@@ -352,14 +356,19 @@ impl LinkAccumulator {
         }
     }
 
-    /// Every tool call among `calls`, each `(input, folder)`.
-    fn calls<'a>(&mut self, calls: impl Iterator<Item = (&'a Value, Option<&'a str>)>, at: u64) {
-        for (input, folder) in calls {
-            let named = crate::named_prs::tool_call(input, folder);
+    /// Every tool call among `calls`, each `(input, folder, syntax)`, the
+    /// last the syntax of the shell that ran it (`crate::call_shell`).
+    fn calls<'a>(
+        &mut self,
+        calls: impl Iterator<Item = (&'a Value, Option<&'a str>, Syntax)>,
+        at: u64,
+    ) {
+        for (input, folder, syntax) in calls {
+            let named = crate::named_prs::tool_call(input, folder, syntax);
             if !named.is_empty() {
                 self.named(named, at);
             }
-            if crate::named_prs::runs_git_commit(input) {
+            if crate::named_prs::runs_git_commit(input, syntax) {
                 self.committed(at);
             }
         }
@@ -478,22 +487,28 @@ pub(crate) fn claude_line(item: &Value, offset: u64, links: &mut LinkAccumulator
         match item.get("type").and_then(Value::as_str) {
             Some("assistant") => {
                 let folder = item.get("cwd").and_then(Value::as_str);
-                let uses: Vec<&Value> = blocks
+                let uses: Vec<(&Value, Syntax)> = blocks
                     .filter(|block| block.get("type").and_then(Value::as_str) == Some("tool_use"))
+                    .map(|block| {
+                        let tool = block.get("name").and_then(Value::as_str);
+                        let syntax =
+                            call_shell::syntax(HookDialect::ClaudeCode, tool.unwrap_or_default());
+                        (block, syntax)
+                    })
                     .collect();
-                for block in &uses {
+                for (block, syntax) in &uses {
                     if let Some(input) = block.get("input") {
                         links.call_made(
                             block.get("id").and_then(Value::as_str),
                             block.get("name").and_then(Value::as_str),
                             input,
+                            *syntax,
                         );
                     }
                 }
                 let calls = uses
                     .into_iter()
-                    .filter_map(|block| block.get("input"))
-                    .map(|input| (input, folder));
+                    .filter_map(|(block, syntax)| Some((block.get("input")?, folder, syntax)));
                 links.calls(calls, at);
             }
             Some("user") => {
@@ -536,15 +551,22 @@ pub(crate) fn pi_line(item: &Value, offset: u64, links: &mut LinkAccumulator) {
                     .flatten()
                     .filter(|block| block["type"] == "toolCall")
                     .collect();
+                let syntax = |block: &Value| {
+                    call_shell::syntax(HookDialect::Pi, block["name"].as_str().unwrap_or_default())
+                };
                 for block in &uses {
                     if let Some(input) = block.get("arguments") {
-                        links.call_made(block["id"].as_str(), block["name"].as_str(), input);
+                        links.call_made(
+                            block["id"].as_str(),
+                            block["name"].as_str(),
+                            input,
+                            syntax(block),
+                        );
                     }
                 }
                 let calls = uses
                     .into_iter()
-                    .filter_map(|block| block.get("arguments"))
-                    .map(|input| (input, None));
+                    .filter_map(|block| Some((block.get("arguments")?, None, syntax(block))));
                 links.calls(calls, at);
             }
             Some("toolResult") => {
@@ -566,6 +588,7 @@ pub(crate) fn pi_line(item: &Value, offset: u64, links: &mut LinkAccumulator) {
                     && crate::named_prs::creates_pull_request(
                         None,
                         &serde_json::json!({ "command": command }),
+                        call_shell::syntax(HookDialect::Pi, "bash"),
                     )
                 {
                     links.made_now(crate::named_prs::created_addresses(&[output]), at);
@@ -592,8 +615,9 @@ pub(crate) fn grok_line(item: &Value, _offset: u64, links: &mut LinkAccumulator)
         match update.get("sessionUpdate").and_then(Value::as_str) {
             Some("tool_call") => {
                 if let Some(input) = update.get("rawInput") {
-                    links.call_made(id, None, input);
-                    links.calls(std::iter::once((input, None)), at);
+                    let syntax = call_shell::syntax(HookDialect::Grok, "run_terminal_command");
+                    links.call_made(id, None, input, syntax);
+                    links.calls(std::iter::once((input, None, syntax)), at);
                 }
             }
             Some("tool_call_update") if crate::grok::terminal(update) => {
@@ -619,7 +643,10 @@ pub(crate) fn antigravity_line(item: &Value, _offset: u64, links: &mut LinkAccum
             .into_iter()
             .flatten()
             .filter_map(|call| call.get("args"))
-            .map(|input| (input, None));
+            .map(|input| {
+                let syntax = call_shell::syntax(HookDialect::Antigravity, "run_command");
+                (input, None, syntax)
+            });
         links.calls(calls, at);
     }
 }
@@ -693,20 +720,19 @@ pub(crate) fn codex_line(item: &Value, _offset: u64, links: &mut LinkAccumulator
                 .and_then(Value::as_str)
                 .and_then(|text| serde_json::from_str::<Value>(text).ok())
             {
-                links.call_made(
-                    call_id(payload),
-                    payload
-                        .and_then(|payload| payload.get("name"))
-                        .and_then(Value::as_str),
-                    &input,
-                );
-                links.calls(std::iter::once((&input, None)), at);
+                let name = payload
+                    .and_then(|payload| payload.get("name"))
+                    .and_then(Value::as_str);
+                let syntax = call_shell::syntax(HookDialect::Codex, name.unwrap_or_default());
+                links.call_made(call_id(payload), name, &input, syntax);
+                links.calls(std::iter::once((&input, None, syntax)), at);
             }
         }
         Some("local_shell_call") => {
             if let Some(action) = payload.and_then(|payload| payload.get("action")) {
-                links.call_made(call_id(payload), None, action);
-                links.calls(std::iter::once((action, None)), at);
+                let syntax = call_shell::syntax(HookDialect::Codex, "local_shell");
+                links.call_made(call_id(payload), None, action, syntax);
+                links.calls(std::iter::once((action, None, syntax)), at);
             }
         }
         Some("function_call_output" | "custom_tool_call_output") => {
@@ -782,12 +808,13 @@ pub struct ReadAnswer {
     pub error: Option<String>,
 }
 
-/// The session files under `home` modified at or after `since_unix_ms` and,
-/// with `until_unix_ms`, at or before it, newest first, at most
-/// [`CANDIDATE_LIMIT`]. A full page may hide older files: the caller asks
-/// again with `until_unix_ms` at the page's oldest time.
+/// The session files of every account the node registered (`accounts`)
+/// modified at or after `since_unix_ms` and, with `until_unix_ms`, at or
+/// before it, newest first, at most [`CANDIDATE_LIMIT`]. A full page may
+/// hide older files: the caller asks again with `until_unix_ms` at the
+/// page's oldest time.
 pub fn candidates(
-    home: &std::path::Path,
+    accounts: &Accounts,
     since_unix_ms: u64,
     until_unix_ms: Option<u64>,
 ) -> Result<Vec<Candidate>, String> {
@@ -797,37 +824,22 @@ pub fn candidates(
     };
     let mut found = Vec::new();
     let mut visited = 0_usize;
-    walk(
-        &home.join(crate::CLAUDE_SESSIONS),
-        crate::Agent::Claude,
-        3,
-        window,
-        &mut found,
-        &mut visited,
-    )?;
-    walk(
-        &home.join(crate::CODEX_SESSIONS),
-        crate::Agent::Codex,
-        4,
-        window,
-        &mut found,
-        &mut visited,
-    )?;
-    opencode_candidates(home, window, &mut found)?;
-    for agent in [crate::Agent::Pi, crate::Agent::Omp] {
-        if let Ok(root) = crate::native_file::root(home, agent) {
-            walk(&root, agent, 1, window, &mut found, &mut visited)?;
+    for (agent, depth) in [(crate::Agent::Claude, 3), (crate::Agent::Codex, 4)] {
+        for root in crate::session_roots(accounts, agent) {
+            walk(&root, agent, depth, window, &mut found, &mut visited)?;
         }
     }
-    if let Ok(root) = crate::native_file::root(home, crate::Agent::Grok) {
-        walk(
-            &root,
-            crate::Agent::Grok,
-            2,
-            window,
-            &mut found,
-            &mut visited,
-        )?;
+    for (_, accounts) in accounts.each(crate::Agent::OpenCode) {
+        opencode_candidates(&accounts, window, &mut found)?;
+    }
+    for (agent, depth) in [
+        (crate::Agent::Pi, 1),
+        (crate::Agent::Omp, 1),
+        (crate::Agent::Grok, 2),
+    ] {
+        for root in crate::native_file::roots(accounts, agent) {
+            walk(&root, agent, depth, window, &mut found, &mut visited)?;
+        }
     }
     found.sort_by(|left, right| {
         right
@@ -919,15 +931,15 @@ fn modified_ms(metadata: &std::fs::Metadata) -> u64 {
 pub const OPENCODE_PREFIX: &str = "opencode/";
 
 fn opencode_candidates(
-    home: &std::path::Path,
+    accounts: &Accounts,
     window: Window,
     found: &mut Vec<Candidate>,
 ) -> Result<(), String> {
-    let path = crate::opencode::database_path(home)?;
+    let path = crate::opencode::database_path(accounts)?;
     if !path.is_file() {
         return Ok(());
     }
-    let rows = crate::opencode::with_read(home, |connection, schema| {
+    let rows = crate::opencode::with_read(accounts, |connection, schema| {
         connection
         .prepare(&format!(
             "SELECT id, time_updated, (SELECT count(*) FROM {messages} WHERE session_id = {sessions}.id) \
@@ -971,18 +983,18 @@ fn opencode_candidates(
 }
 
 /// Read each file from its checkpoint, at most [`READ_FILE_LIMIT`] files
-/// and one read's budget each. A path outside the agent's own transcript
-/// root under `home` is refused, so a request can never make the reader open
-/// a file elsewhere.
-pub fn read(home: &std::path::Path, requests: &[ReadRequest]) -> Vec<ReadAnswer> {
+/// and one read's budget each. A path outside the agent's transcript roots
+/// in every account the node registered (`accounts`) is refused, so a
+/// request can never make the reader open a file elsewhere.
+pub fn read(accounts: &Accounts, requests: &[ReadRequest]) -> Vec<ReadAnswer> {
     requests
         .iter()
         .take(READ_FILE_LIMIT)
-        .map(|request| read_one(home, request))
+        .map(|request| read_one(accounts, request))
         .collect()
 }
 
-fn read_one(home: &std::path::Path, request: &ReadRequest) -> ReadAnswer {
+fn read_one(accounts: &Accounts, request: &ReadRequest) -> ReadAnswer {
     let mut answer = ReadAnswer {
         agent: request.agent,
         path: request.path.clone(),
@@ -993,10 +1005,10 @@ fn read_one(home: &std::path::Path, request: &ReadRequest) -> ReadAnswer {
         error: None,
     };
     if request.agent == crate::Agent::OpenCode {
-        read_opencode(home, request, &mut answer);
+        read_opencode(accounts, request, &mut answer);
         return answer;
     }
-    let path = match inside_root(home, request.agent, std::path::Path::new(&request.path)) {
+    let path = match inside_root(accounts, request.agent, std::path::Path::new(&request.path)) {
         Ok(path) => path,
         Err(code) => {
             answer.error = Some(code);
@@ -1010,7 +1022,7 @@ fn read_one(home: &std::path::Path, request: &ReadRequest) -> ReadAnswer {
     let pi_before = if request.agent.requires_native_file_proof() {
         match crate::source::facts::header(request.agent, &path).and_then(|header| {
             crate::confirm_session_file(
-                home,
+                accounts,
                 request.agent,
                 &path,
                 Some(&header.id),
@@ -1033,7 +1045,7 @@ fn read_one(home: &std::path::Path, request: &ReadRequest) -> ReadAnswer {
             let mut facts = parsed.links;
             if let Some((header, before)) = pi_before {
                 let after = crate::confirm_session_file(
-                    home,
+                    accounts,
                     request.agent,
                     &path,
                     Some(&header.id),
@@ -1081,11 +1093,11 @@ fn read_one(home: &std::path::Path, request: &ReadRequest) -> ReadAnswer {
 
 /// [`crate::inside_session_root`] for one agent, as a read answer's error.
 fn inside_root(
-    home: &std::path::Path,
+    accounts: &Accounts,
     agent: crate::Agent,
     path: &std::path::Path,
 ) -> Result<std::path::PathBuf, String> {
-    crate::inside_session_root(home, &[agent], path).map_err(|refusal| {
+    crate::inside_session_root(accounts, &[agent], path).map_err(|refusal| {
         match refusal {
             crate::RootRefusal::Unsupported => "session_kind_unsupported",
             crate::RootRefusal::Outside => "links_session_outside_roots",
@@ -1096,7 +1108,10 @@ fn inside_root(
     })
 }
 
-fn read_opencode(home: &std::path::Path, request: &ReadRequest, answer: &mut ReadAnswer) {
+/// An OpenCode session's link line, read in the account whose database
+/// holds the session: `opencode/<id>` names no account, and a session id is
+/// OpenCode's own, unique to the session.
+fn read_opencode(accounts: &Accounts, request: &ReadRequest, answer: &mut ReadAnswer) {
     let Some(id) = request.path.strip_prefix(OPENCODE_PREFIX) else {
         answer.error = Some("links_session_outside_roots".to_owned());
         return;
@@ -1106,6 +1121,7 @@ fn read_opencode(home: &std::path::Path, request: &ReadRequest, answer: &mut Rea
         reference_kind: "id".to_owned(),
         reference_value: id.to_owned(),
         cwd: None,
+        account: hide_agent_adapter::AccountKey::Default,
         checkpoint: request.checkpoint.clone(),
         subagents: Default::default(),
         turns: None,
@@ -1113,8 +1129,22 @@ fn read_opencode(home: &std::path::Path, request: &ReadRequest, answer: &mut Rea
     };
     // A link line is each session as its own row records it, a subagent's
     // child session included; it never joins the root's conversation.
+    let mut read = None;
+    for (_, accounts) in accounts.each(crate::Agent::OpenCode) {
+        let found =
+            crate::opencode::read_links(&accounts, &label, crate::opencode::Owner::Recorded);
+        let missing = found
+            .as_ref()
+            .is_err_and(|refusal| refusal.reason() == "session_file_missing");
+        if read.is_none() || !missing {
+            read = Some(found);
+        }
+        if !missing {
+            break;
+        }
+    }
     let (transcript, proven, named, committed_at) =
-        match crate::opencode::read_links(home, &label, crate::opencode::Owner::Recorded) {
+        match read.unwrap_or_else(|| Err("links_session_outside_roots".into())) {
             Ok(read) => read,
             Err(refusal) => {
                 answer.error = Some(refusal.into());

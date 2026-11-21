@@ -1,5 +1,5 @@
-// The sidebar's width (PRD sidebar-typography B10-B12) on an isolated pinned
-// Herdr and hided: the right edge drags between 220 and 440 and stops there,
+// The sidebar's width (PRD sidebar-typography B10-B12) on an isolated
+// engine and hided: the right edge drags between 220 and 440 and stops there,
 // the nav alone follows the pointer while the center and its terminal stay
 // put, one ui_state_update lands the width on release, a reload keeps it, and
 // a double-click returns it to 292. Captures land in HIDE_E2E_SCREENSHOT_DIR.
@@ -33,10 +33,10 @@ async function dragEdge(page: Page, edge: Locator, dx: number): Promise<() => Pr
 
 test("the sidebar's edge drags between its bounds, lands once, survives a reload and resets on a double-click", async ({ page }) => {
   await page.setViewportSize({ width: 1400, height: 900 });
-  const herdr = await startFixture();
-  const daemon = await startHided(herdr, "sidebar-width");
+  const engine = await startFixture();
+  const daemon = await startHided(engine, "sidebar-width");
   try {
-    const folder = path.join(herdr.root, "notes");
+    const folder = path.join(engine.root, "notes");
     fs.mkdirSync(folder);
     const opened = await withControl(daemon, (control) => openProject(control, folder, "notes"));
 
@@ -48,7 +48,7 @@ test("the sidebar's edge drags between its bounds, lands once, survives a reload
     const edge = page.locator("[data-sidebar-edge]");
     const main = page.locator("main");
     // Open the folder's Workspace so a terminal sits beside the sidebar.
-    await (await showProjectRow(page, page.locator("[data-project]", { hasText: /^notes/ }).locator("[data-checkout]"))).click();
+    await (await showProjectRow(page, page.locator("[data-project]", { hasText: /^notes/ }).locator("[data-checkout]"))).click({ position: { x: 12, y: 8 } });
     await expect(page.locator("[data-workspace-screen]")).toBeVisible();
     await expect(page.locator(".xterm").first()).toBeVisible({ timeout: 20_000 });
     // The notes shell has drawn its prompt, so the terminal is settled before the first resize count.
@@ -110,6 +110,6 @@ test("the sidebar's edge drags between its bounds, lands once, survives a reload
     await expect.poll(() => width(nav)).toBe(292 + RAIL);
   } finally {
     await daemon.stop();
-    await herdr.stop();
+    await engine.stop();
   }
 });

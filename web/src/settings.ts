@@ -2,19 +2,21 @@
 // the core or the daemon reported, and what the copied diagnostics carry.
 // Nothing here reads the store, so every rule is tested without a browser.
 
+import { engineStateText } from "./coreError";
 import type { TFunction } from "i18next";
 import type { DaemonInfo } from "./store";
 import type { MessageKey } from "./i18n/catalogs";
 import type { AccentName } from "./theme";
 import { kitWhyText } from "./kitWhy";
-import type { AgentRow, CoreDiagnostic, Device, DeviceHost, DeviceProblem, EnvironmentStatus, GithubFailureCategory, HerdrStatus, KitComponent, KitRefusal, RemoteStatus, TaskSource, Workspace } from "./snapshot";
+import type { AgentRow, CoreDiagnostic, Device, DeviceHost, DeviceProblem, EnvironmentStatus, GithubFailureCategory, EngineStatus, KitComponent, KitRefusal, RemoteStatus, TaskSource, Workspace } from "./snapshot";
 import { readsHere } from "./devices";
+import { GH_REFUSAL_KEY, isGhRefusal } from "./githubFailure";
 import { registeredName } from "./screenMachine";
 import { redact } from "./redact";
 
 type Translate = TFunction<"translation">;
 
-export type SettingsTab = "general" | "notifications" | "usage" | "devices" | "shortcuts" | "agents" | "hideAi" | "desk" | "conductor" | "mobile" | "github" | "about" | "privacy";
+export type SettingsTab = "general" | "notifications" | "usage" | "devices" | "shortcuts" | "agents" | "skills" | "hideAi" | "conductor" | "mobile" | "externalTools" | "github" | "labs" | "about" | "privacy";
 
 /**
  * The Settings list, top to bottom (PRD settings-left-nav B2): the App group,
@@ -23,23 +25,25 @@ export type SettingsTab = "general" | "notifications" | "usage" | "devices" | "s
  */
 export const SETTINGS_GROUPS: readonly { id: "app" | "machine"; tabs: readonly SettingsTab[] }[] = [
   { id: "app", tabs: ["general", "notifications", "usage", "devices", "shortcuts"] },
-  { id: "machine", tabs: ["agents", "hideAi", "desk", "conductor", "mobile", "github"] },
+  { id: "machine", tabs: ["agents", "skills", "hideAi", "conductor", "mobile", "externalTools", "github", "labs"] },
 ];
 
 /**
- * The Sleep idle agents choices (PRD agent-sleep D-10), in the hours the core
- * accepts; Never is the default and sends null. `unit` is how the choice reads.
+ * The Sleep idle agents choices, in the hours the core accepts; 12 hours is
+ * the default, and Never sends null.
  */
-export const SLEEP_AFTER_CHOICES: readonly { id: string; hours: number | null; unit: "hours" | "days" }[] = [
-  { id: "never", hours: null, unit: "hours" },
-  { id: "12", hours: 12, unit: "hours" },
-  { id: "24", hours: 24, unit: "hours" },
-  { id: "72", hours: 72, unit: "days" },
+export const SLEEP_AFTER_CHOICES: readonly { id: string; hours: number | null }[] = [
+  { id: "never", hours: null },
+  { id: "1", hours: 1 },
+  { id: "2", hours: 2 },
+  { id: "4", hours: 4 },
+  { id: "12", hours: 12 },
+  { id: "24", hours: 24 },
 ];
 
 export function sleepAfterLabel(choice: (typeof SLEEP_AFTER_CHOICES)[number], t: Translate): string {
   if (choice.hours === null) return t("settings.sleep.never");
-  return choice.unit === "days" ? t("settings.sleep.days", { days: choice.hours / 24 }) : t("settings.sleep.hours", { hours: choice.hours });
+  return t("settings.sleep.hours", { count: choice.hours });
 }
 
 /** The chosen Sleep idle agents choice; a value this build does not offer reads as Never. */
@@ -71,14 +75,13 @@ export function githubAccess(workspaces: readonly Workspace[], devices: readonly
     .filter((status) => status !== undefined);
   if (statuses.some((status) => status.last_success_at_unix_ms != null && !status.stale)) return { state: "connected" };
   const failure =
-    statuses.find((status) => status.failure_category === "not_installed" || status.failure_category === "not_logged_in") ??
+    statuses.find((status) => isGhRefusal(status.failure_category)) ??
     statuses.find((status) => status.failure_category != null && status.failure_category !== "no_github_remote");
   return failure?.failure_category ? { state: "failed", category: failure.failure_category } : null;
 }
 
 const GH_FAILURE_KEY: Partial<Record<GithubFailureCategory, MessageKey>> = {
-  not_installed: "issueSettings.ghNotInstalled",
-  not_logged_in: "issueSettings.ghNotLoggedIn",
+  ...GH_REFUSAL_KEY,
   network_or_rate_limit: "issueSettings.readFailed",
 };
 
@@ -193,28 +196,12 @@ export function environmentTone(state: string, required: boolean): "ok" | "warn"
   return "ok";
 }
 
-/** One line for the Herdr connection, from the core's own state words. */
-export function herdrLine(herdr: HerdrStatus | undefined, t: Translate): { text: string; tone: "ok" | "warn" | "error" } {
-  const state = herdr?.state;
+/** One line for the terminal engine's connection, from the core's own state words. */
+export function engineLine(engine: EngineStatus | undefined, t: Translate): { text: string; tone: "ok" | "warn" | "error" } {
+  const state = engine?.state;
   if (!state) return { text: t("settings.unavailable"), tone: "warn" };
   if (state === "connected") return { text: t("common.connected"), tone: "ok" };
-  if (herdr?.expected_protocol != null && herdr.received_protocol != null && herdr.expected_protocol !== herdr.received_protocol) {
-    return { text: t("settings.protocolMismatch", { received: String(herdr.received_protocol), expected: String(herdr.expected_protocol) }), tone: "error" };
-  }
-  return { text: state.replace(/_/g, " "), tone: "warn" };
-}
-
-/**
- * The Herdr protocol row of the details: the number the running Herdr speaks
- * while it matches what this build requires, and both numbers only when they
- * differ, so a healthy connection shows one real value (B5).
- */
-export function herdrProtocolText(herdr: HerdrStatus | undefined, t: Translate): { text: string; matches: boolean } {
-  const received = herdr?.received_protocol;
-  if (received == null) return { text: t("settings.unavailable"), matches: true };
-  const expected = herdr?.expected_protocol;
-  if (expected == null || expected === received) return { text: String(received), matches: true };
-  return { text: t("settings.protocolValue", { received: String(received), expected: String(expected) }), matches: false };
+  return { text: engineStateText(state, t), tone: "warn" };
 }
 
 /**
@@ -237,17 +224,16 @@ export function deviceLine(device: Device, remote: RemoteStatus | undefined, t: 
 
 /**
  * The line under a device's name (B54): its SSH alias, the platform its helper
- * runs on and the Herdr version it reported, in that order. Nothing here is
+ * runs on, in that order. Nothing here is
  * read on this machine, so a fact the device has not reported is left out
  * rather than filled in; this machine has no alias to show.
  */
-export function deviceSubtitle(device: Device, remote: RemoteStatus | undefined, t: Translate, coreName?: string): string {
+export function deviceSubtitle(device: Device, t: Translate, coreName?: string): string {
   if (device.kind !== "remote") return t("devices.localAlias");
   const parts: string[] = [device.ssh_alias ?? registeredName(device)];
   // A WSL distribution is named where it is, the core's PC, in place of its Linux platform (PRD wsl-device B5).
   if (device.wsl_distro && coreName) parts.push(coreName);
   else if (device.host?.state === "ready" && device.host.platform) parts.push(device.host.platform);
-  if (remote?.herdr_version) parts.push(`Herdr ${remote.herdr_version}`);
   return parts.join(" · ");
 }
 
@@ -357,7 +343,6 @@ export function hostLine(host: DeviceHost | undefined, t: Translate): { text: st
 export function kitConsentTerms(helperRoot: string | null, cliDir: string | null, t: Translate): string[] {
   return [
     t("devices.terms.copy", { root: helperRoot ?? t("devices.helperFolder") }),
-    t("devices.terms.herdr"),
     t("devices.terms.configure", { cliDir: cliDir ?? t("devices.commandFolder") }),
     t("devices.terms.runtime"),
     t("devices.terms.confirm"),
@@ -463,15 +448,6 @@ export function kitRefusalLine(refusal: KitRefusal, t: Translate): string {
   }
 }
 
-/** A device Herdr socket must be an absolute single-line path on that device, or left empty. */
-export function socketProblem(path: string, t: Translate): string | null {
-  const trimmed = path.trim();
-  if (!trimmed) return null;
-  // eslint-disable-next-line no-control-regex
-  if (!trimmed.startsWith("/") || trimmed === "/" || /[\u0000-\u001f]/.test(trimmed)) return t("devices.socketInvalid");
-  return null;
-}
-
 /**
  * Whether Retry is offered: a registered SSH device that is not connected and
  * not mid-attempt, which one waiting on a sign-in is. A changed server key has
@@ -479,27 +455,6 @@ export function socketProblem(path: string, t: Translate): string | null {
  */
 export function canRetryDevice(device: Device, remote: RemoteStatus | undefined): boolean {
   return device.kind === "remote" && device.state !== "ready" && device.sign_in == null && retryCanHelp(device.problem) && deviceState(device, remote).tone !== "pending";
-}
-
-/**
- * The id a new device registers under: the alias folded to the core's id
- * shape, with a numeric suffix when an existing device already holds it.
- * `local`, the id the core's own machine had before it was named by its
- * node id, is refused by the core and never offered.
- */
-export function deviceIdFor(alias: string, existing: readonly string[]): string {
-  const base =
-    alias
-      .trim()
-      .toLowerCase()
-      .replace(/[^a-z0-9_-]+/g, "-")
-      .replace(/^-+|-+$/g, "") || "device";
-  const taken = new Set(existing);
-  if (!taken.has(base) && base !== "local") return base;
-  for (let index = 2; ; index += 1) {
-    const candidate = `${base}-${index}`;
-    if (!taken.has(candidate)) return candidate;
-  }
 }
 
 /**
@@ -560,7 +515,7 @@ export function draftExported(exported: ReadonlyMap<string, string>, current: (t
 export type DiagnosticsInput = {
   daemon: DaemonInfo | null;
   connection: string;
-  herdr: HerdrStatus | undefined;
+  engine: EngineStatus | undefined;
   environment: EnvironmentStatus[];
   diagnostics: CoreDiagnostic[];
   lastError: { kind: string; message: string } | null | undefined;
@@ -571,12 +526,12 @@ export type DiagnosticsInput = {
  * Copy diagnostics' input from what the stores hold, the same for Settings'
  * About and the sidebar's Help menu (PRD sidebar-titlebar-refresh D-12).
  */
-export function diagnosticsInputOf(state: { daemon: DaemonInfo | null; connection: string; rest: { status?: { herdr?: HerdrStatus; environment?: EnvironmentStatus[]; diagnostics?: CoreDiagnostic[]; last_error?: { kind: string; message: string } | null } } | null }, userAgent: string): DiagnosticsInput {
+export function diagnosticsInputOf(state: { daemon: DaemonInfo | null; connection: string; rest: { status?: { engine?: EngineStatus; environment?: EnvironmentStatus[]; diagnostics?: CoreDiagnostic[]; last_error?: { kind: string; message: string } | null } } | null }, userAgent: string): DiagnosticsInput {
   const status = state.rest?.status;
   return {
     daemon: state.daemon,
     connection: state.connection,
-    herdr: status?.herdr,
+    engine: status?.engine,
     environment: status?.environment ?? [],
     diagnostics: status?.diagnostics ?? [],
     lastError: status?.last_error,
@@ -588,7 +543,7 @@ export function diagnosticsInputOf(state: { daemon: DaemonInfo | null; connectio
 export const COPIED_DIAGNOSTICS = 40;
 
 /**
- * The text Copy diagnostics puts on the clipboard: daemon identity, Herdr
+ * The text Copy diagnostics puts on the clipboard: daemon identity, engine
  * state, environment checks and the core's own recent diagnostics. It never
  * carries the page token, terminal output or anything the operator typed into
  * a pane: none of those are inputs here, and every line is redacted anyway.
@@ -598,9 +553,7 @@ export function diagnosticsText(input: DiagnosticsInput): string {
   const daemon = input.daemon;
   lines.push(`daemon: ${daemon ? `hided ${daemon.version} pid ${daemon.pid} schema ${daemon.schema_version}` : "unavailable"}`);
   lines.push(`state: ${shown(daemon?.core_state_path)}`);
-  lines.push(`herdr binary: ${shown(daemon?.herdr_bin_path)}`);
-  lines.push(`herdr socket: ${shown(input.herdr?.socket_path ?? daemon?.herdr_socket_path)}`);
-  lines.push(`herdr: ${shown(input.herdr?.state)} version ${shown(input.herdr?.received_version)} protocol ${shown(input.herdr?.received_protocol)}/${shown(input.herdr?.expected_protocol)}`);
+  lines.push(`engine: ${shown(input.engine?.state)}`);
   lines.push(`connection: ${input.connection}`);
   lines.push(`browser: ${input.userAgent}`);
   for (const row of input.environment) lines.push(`env ${row.key}: ${row.state}${row.message ? ` - ${row.message}` : ""}`);

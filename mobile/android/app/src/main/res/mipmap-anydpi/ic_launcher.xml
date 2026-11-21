@@ -1,0 +1,7 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- The iOS app's icon art (mobile/ios/App/App/Assets.xcassets/AppIcon.appiconset) inside the adaptive icon's safe
+     zone, its edges carried out to the layer's border so no mask shape shows where the art ends. -->
+<adaptive-icon xmlns:android="http://schemas.android.com/apk/res/android">
+    <background android:drawable="@color/ic_launcher_background" />
+    <foreground android:drawable="@mipmap/ic_launcher_foreground" />
+</adaptive-icon>

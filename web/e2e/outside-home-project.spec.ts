@@ -1,5 +1,5 @@
 // A project outside the daemon's home on this machine (PRD wsl-device B15,
-// B19-B21), against a private Herdr and hided: it is registered only once
+// B19-B21), against a private engine and hided: it is registered only once
 // confirmed, removing it removes that permission so adding it again asks
 // again, and once registered it makes, selects and reads a worktree like a
 // project inside home.
@@ -10,7 +10,7 @@ import path from "node:path";
 import { dumpOnFailure } from "./failure-dump";
 import { startFixture } from "./engine-fixture";
 import { asFirstRun, startHided, type Daemon } from "./hided-fixture";
-import { sendEvent, showExplorer } from "./wire";
+import { openOtherCheckouts, sendEvent, showExplorer } from "./wire";
 import { toPage } from "../../desktop/src/main/wirePath";
 
 test.describe.configure({ timeout: 180_000 });
@@ -45,25 +45,41 @@ function watchCore(page: Page): Seen {
   return seen;
 }
 
-/** The worktrees Git lists for `repo`, other than `repo` itself. */
+/**
+ * The worktrees Git lists for `repo`, other than `repo` itself.
+ *
+ * `git worktree add` writes `.git/worktrees/<name>/` a file at a time, so a
+ * read that lands inside it fails on the entry it has not finished yet
+ * (`fatal: failed to read .git/worktrees/<name>/commondir`). That is a state
+ * to wait for rather than a failure of the run: this answers the worktrees it
+ * could read, and the poll below keeps reading until Git lists the one it
+ * made. Every other failure is the test's and is rethrown.
+ */
 function worktreesOf(repo: string): string[] {
-  return git(repo, ["worktree", "list", "--porcelain"]).split("\n").filter((line) => line.startsWith("worktree ")).map((line) => line.slice("worktree ".length)).filter((folder) => fs.realpathSync.native(folder) !== repo);
+  let listing: string;
+  try {
+    listing = git(repo, ["worktree", "list", "--porcelain"]);
+  } catch (error) {
+    if (/failed to read .*\/commondir/.test(String(error))) return [];
+    throw error;
+  }
+  return listing.split("\n").filter((line) => line.startsWith("worktree ")).map((line) => line.slice("worktree ".length)).filter((folder) => fs.realpathSync.native(folder) !== repo);
 }
 
 test("a project outside home is asked about again after its removal, and its worktree is made, selected and read", async ({ page }) => {
   await page.setViewportSize({ width: 1400, height: 900 });
-  const herdr = await startFixture();
+  const engine = await startFixture();
   let daemon: Daemon | null = null;
   try {
     // The fixture root is not the daemon's home, so this repository is outside it.
-    const folder = path.join(herdr.root, "outside-repo");
+    const folder = path.join(engine.root, "outside-repo");
     fs.mkdirSync(folder);
     const repo = fs.realpathSync.native(folder);
     git(repo, ["init", "-q"]);
     fs.writeFileSync(path.join(repo, "README.md"), "# outside\n");
     git(repo, ["add", "README.md"]);
     git(repo, ["commit", "-q", "-m", "initial"]);
-    daemon = await asFirstRun(await startHided(herdr, "outside-home-project"));
+    daemon = await asFirstRun(await startHided(engine, "outside-home-project"));
     expect(path.relative(daemon.home, repo).startsWith("..")).toBe(true);
     const registered = watchCore(page);
     await page.goto(`${daemon.origin}/#token=${daemon.token}`);
@@ -85,7 +101,7 @@ test("a project outside home is asked about again after its removal, and its wor
     // B20: removing it removes the permission, so adding it again asks again.
     // Removal closes the panes the core lists under the project, so it waits
     // for the first one: removed before the core had published it, the
-    // project lost its registration with Herdr's workspace still open there
+    // project lost its registration with its workspace still open there
     // (with-hide/hide-private#311).
     const id = await project.first().getAttribute("data-project");
     await expect.poll(() => registered.paned.has(id!), { timeout: 30_000 }).toBe(true);
@@ -97,7 +113,7 @@ test("a project outside home is asked about again after its removal, and its wor
     await sendEvent(page, daemon, "create_workspace", add(true));
     await expect.poll(() => registered.paths, { timeout: 30_000 }).toContain(toPage(repo));
 
-    // B19: the registered project makes a worktree where Herdr puts one,
+    // B19: the registered project makes a worktree where Hide puts one,
     // lists it under itself, and its files are read once it is selected.
     // The core reads a project's worktrees off its lock after registering it,
     // and a worktree asked for before that read is refused as one to ask for
@@ -114,8 +130,9 @@ test("a project outside home is asked about again after its removal, and its wor
     }, { timeout: 60_000 }).toBe(1);
     const worktree = project.locator("[data-checkout-row]").filter({ has: page.locator(`[data-checkout][aria-label^="${BRANCH}"]`) });
     // The made worktree comes forward as the front checkout once the core
-    // lists its pane, so it stands on its own line rather than in the fold of
-    // worktrees with no agents (docs/ARCHITECTURE.md, a created worktree's pane).
+    // lists its pane (docs/ARCHITECTURE.md, a created worktree's pane); it is
+    // not the project's main checkout, so its row waits in the project's Checkouts fold.
+    await openOtherCheckouts(project);
     await expect(worktree).toBeVisible({ timeout: 60_000 });
     const [made] = worktreesOf(repo);
     await worktree.locator("[data-checkout]").first().click();
@@ -123,6 +140,6 @@ test("a project outside home is asked about again after its removal, and its wor
     await expect(page.locator(`[data-explorer-row="${toPage(fs.realpathSync.native(made))}/README.md"]`)).toBeVisible({ timeout: 30_000 });
   } finally {
     daemon?.stop();
-    herdr.stop();
+    engine.stop();
   }
 });

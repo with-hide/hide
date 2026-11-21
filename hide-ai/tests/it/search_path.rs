@@ -120,6 +120,7 @@ fn pi(stage: &Stage, search_path: Option<OsString>, binary: Option<PathBuf>) -> 
         model: String::new(),
         cwd: stage.root.clone(),
         search_path,
+        run: hide_ai::ItemRun::default(),
     })
 }
 

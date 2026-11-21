@@ -1,9 +1,9 @@
-// A session's own plan as the operator meets it, on an isolated pinned Herdr
-// and hided (PRD hide-plan B4-B7, B11, B13, B14): the real `hide plan`
+// A session's own plan as the operator meets it, on an isolated engine
+// and hided (PRD hide-plan B4-B7, B11, B13, B14): the real `hide task`
 // commands from the agent's own pane change the core's record, a plan put up
 // for review asks the operator on the pane's band and the chip says Review,
 // the agent's approval clears both, a working step takes the pane's second
-// line, and the chip's map opens large in the 보기 slot.
+// line, and the chip's map opens large as a desk tab.
 
 import { expect, test } from "@playwright/test";
 import { spawnSync } from "node:child_process";
@@ -19,7 +19,7 @@ test.describe.configure({ timeout: 120_000 });
 
 type Answer = { ok: boolean; reason?: string; result?: Record<string, unknown> };
 
-/** One `hide plan` command run as the agent; every one here is expected to succeed. */
+/** One `hide task` command run as the agent; every one here is expected to succeed. */
 async function plan(hide: (args: string[]) => Promise<HideAnswer>, args: string[]): Promise<Answer> {
   const ran = await hide(["plan", ...args]);
   const line = ran.out.trim().split("\n").at(-1) ?? "";
@@ -37,26 +37,26 @@ const PLAN = {
   ],
 };
 
-test("a plan put up for review asks on the pane, the agent's approval clears it, and its steps draw on the chip and in the 보기 slot", async ({ page }) => {
+test("a plan put up for review asks on the pane, the agent's approval clears it, and its steps draw on the chip and on the desk", async ({ page }) => {
   await page.setViewportSize({ width: 1600, height: 1000 });
-  const herdr = await startFixture({ agents: false });
+  const engine = await startFixture({ agents: false });
   let daemon: Daemon | null = null;
   try {
-    const repoDir = path.join(herdr.root, "plan-repo");
+    const repoDir = path.join(engine.root, "plan-repo");
     fs.mkdirSync(repoDir);
     const repo = fs.realpathSync(repoDir);
     for (const args of [["init", "-q", "-b", "main"], ["-c", "user.name=Fixture", "-c", "user.email=fixture@example.invalid", "commit", "-q", "--allow-empty", "-m", "baseline"]]) {
       const git = spawnSync("git", ["-C", repo, ...args], { encoding: "utf8" });
       expect(git.status, git.stderr).toBe(0);
     }
-    daemon = await startHided(herdr, "plan-review");
+    daemon = await startHided(engine, "plan-review");
     // The agent starts before the page shows the pane, so the pane is sized first.
     const { pane } = await withControl(daemon, async (control) => {
       const opened = await openProject(control, repo, "plan-repo");
       viewPane(control, opened.pane);
       return opened;
     });
-    const agent = await agentPane(herdr, daemon.stateDir, pane);
+    const agent = await agentPane(engine, daemon.stateDir, pane);
     await page.goto(`${daemon.origin}/#token=${daemon.token}`);
     await enterWorkspace(page, "plan-repo");
 
@@ -67,7 +67,7 @@ test("a plan put up for review asks on the pane, the agent's approval clears it,
     await expect(chip).toHaveText("Review");
     // The review is the agent's question: the pane's ask band says it, in
     // the interface language, from the subject the core sent (B14).
-    await expect(page.locator('[data-pane-header-band="answer"]')).toContainText("Plan review · 4 steps");
+    await expect(page.locator('[data-pane-header-band="answer"]')).toContainText("Task steps review · 4 steps");
     // The visible pane has read the core's question: the project tree is quiet,
     // while the header and the read task card keep the request until answered.
     const sidebar = page.locator("[data-sidebar-content]").first();
@@ -75,15 +75,15 @@ test("a plan put up for review asks on the pane, the agent's approval clears it,
     const tasks = await showTasks(page);
     const task = tasks.locator(`[data-task-row="${pane}"]`);
     await expect(task).toHaveAttribute("data-task-read", "true");
-    await expect(task).toContainText("Plan review · 4 steps");
-    // Putting a plan up opens no 보기 slot by itself (D-29).
-    await expect(page.locator('aside[data-detail="plan"]')).toHaveCount(0);
+    await expect(task).toContainText("Task steps review · 4 steps");
+    // Putting a plan up opens no card by itself (D-29).
+    await expect(page.locator('[data-card="plan"]')).toHaveCount(0);
 
     await plan(agent, ["approve"]);
     await expect(chip).toHaveAttribute("data-plan-chip-state", "running");
-    await expect(chip).toHaveText("Plan1/4");
+    await expect(chip).toHaveText("Task steps1/4");
     await expect(page.locator('[data-pane-header-band="answer"]')).toHaveCount(0);
-    await expect(sidebar).not.toContainText("Plan review");
+    await expect(sidebar).not.toContainText("Task steps review");
 
     await plan(agent, ["node", "core", "--status", "working", "--line", "이벤트 쓰는 중"]);
     // The working step and its line take the pane's second line (B7).
@@ -92,9 +92,9 @@ test("a plan put up for review asks on the pane, the agent's approval clears it,
     const refused = JSON.parse((await agent(["plan", "node", "web", "--status", "done"])).out.trim().split("\n").at(-1)!) as Answer;
     expect([refused.ok, refused.reason]).toEqual([false, "plan_order_refused"]);
     await plan(agent, ["node", "core", "--status", "done"]);
-    await expect(chip).toHaveText("Plan2/4");
+    await expect(chip).toHaveText("Task steps2/4");
 
-    // The chip's popover is the checklist; Larger draws the map in the 보기 slot (PRD mission-plan-visibility B3, D-07).
+    // The chip's popover is the checklist; Larger draws the map as a desk tab (PRD mission-plan-visibility B3, D-07).
     await chip.hover();
     const popover = page.locator("[data-pane-plan]");
     await expect(popover.locator("[data-plan-row]")).toHaveCount(4);
@@ -102,7 +102,7 @@ test("a plan put up for review asks on the pane, the agent's approval clears it,
     await expect(popover.locator("[data-plan-graph]")).toHaveCount(0);
     await screenshot(page, "plan-chip-popover");
     await popover.locator("[data-pane-plan-large]").click();
-    const map = page.locator('aside[data-detail="plan"]');
+    const map = page.locator('[data-card="plan"]');
     await expect(map).toBeVisible();
     await expect(map.locator('[data-plan-graph="large"] [data-plan-step]')).toHaveCount(4);
     await expect(map.locator("[data-plan-banner]")).toHaveCount(0);
@@ -116,6 +116,6 @@ test("a plan put up for review asks on the pane, the agent's approval clears it,
     await expect(chip).toHaveCount(0);
   } finally {
     daemon?.stop();
-    herdr.stop();
+    engine.stop();
   }
 });

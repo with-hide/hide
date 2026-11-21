@@ -49,7 +49,7 @@ export const Usage = memo(function Usage({ actions }: { actions: Actions }) {
     return () => { window.clearInterval(timer); actions.observeUsage({ usage_popover_open: false }); };
   }, [actions, open]);
   const chips = usageChips(rows, prefs, now);
-  const visible = AGENT_ADAPTERS.filter((adapter) => hasLimits(adapter) && !prefs.hidden.includes(adapter.herdr_kind));
+  const visible = AGENT_ADAPTERS.filter((adapter) => hasLimits(adapter) && !prefs.hidden.includes(adapter.agent_cli));
   if (!chips.length && !node?.history) return null;
   return <Popover open={open} onOpenChange={(next) => { setNow(Date.now()); setOpen(next); }}>
     <PopoverAnchor asChild><div className="flex min-w-0 flex-wrap gap-xs" data-usage-chips="true">
@@ -80,9 +80,9 @@ export const Usage = memo(function Usage({ actions }: { actions: Actions }) {
       </div>
       {node ? <UsageHistory node={node} surface="popover" outline={outline} onHistory={() => { afterClose.current = () => actions.openUsageHistory(); setOpen(false); }}>
         <div className="usage-limits flex flex-col gap-md">
-        {visible.map((adapter) => <div key={adapter.id} className="flex flex-col gap-xs" data-usage-row={adapter.herdr_kind}>
-        <div className="flex items-center gap-xs text-caption font-semibold"><AgentMark kind={adapter.herdr_kind} />{adapter.label}</div>
-        <UsageWindows agent={adapter.herdr_kind} cell={rows.find((row) => row.agent === adapter.herdr_kind)?.limits} now={now} onOutline={setOutline} compact />
+        {visible.map((adapter) => <div key={adapter.id} className="flex flex-col gap-xs" data-usage-row={adapter.agent_cli}>
+        <div className="flex items-center gap-xs text-caption font-semibold"><AgentMark kind={adapter.agent_cli} />{adapter.label}</div>
+        <UsageWindows agent={adapter.agent_cli} cell={rows.find((row) => row.agent === adapter.agent_cli)?.limits} now={now} onOutline={setOutline} compact />
       </div>)}
         </div>
       </UsageHistory> : null}
@@ -99,20 +99,28 @@ export function UsageWindows({ agent, cell, now, onOutline, compact = false }: {
     {cell.state === "unavailable" && cell.cause === "not_installed" ? <p>{t("usage.notInstalled", { command: agent })}</p> : null}
   </div>;
   const windows = WINDOW_ORDER.flatMap((kind) => cell.value.windows.filter((window) => window.kind === kind).sort((a, b) => Number(a.scope.kind === "model") - Number(b.scope.kind === "model")));
-  return windows.map((window) => <UsageLine key={`${window.kind}-${window.scope.kind === "model" ? window.scope.label : "all"}`} window={window} now={now} onOutline={onOutline} compact={compact} />);
+  // A model's window under its account window says its reset only where it
+  // differs from the line above: the same countdown twice only crowds the row.
+  const countdown = (window: WindowReading) => window.outcome.state === "open" ? resetCountdown(window.outcome.resets_at_s, now, t) : null;
+  const parentReset = new Map(windows.filter((window) => window.scope.kind !== "model").map((window) => [window.kind, countdown(window)]));
+  return windows.map((window) => {
+    const reset = countdown(window);
+    const shown = window.scope.kind === "model" && reset === parentReset.get(window.kind) ? null : reset;
+    return <UsageLine key={`${window.kind}-${window.scope.kind === "model" ? window.scope.label : "all"}`} window={window} reset={shown} now={now} onOutline={onOutline} compact={compact} />;
+  });
 }
 
-function UsageLine({ window, now, onOutline, compact }: { window: WindowReading; now: number; onOutline?: (window: UsageOutline) => void; compact: boolean }) {
+function UsageLine({ window, reset, now, onOutline, compact }: { window: WindowReading; reset: string | null; now: number; onOutline?: (window: UsageOutline) => void; compact: boolean }) {
   const { t } = useInterfaceTranslation();
   const percent = windowPercent(window, now);
   if (["expired", "not_offered", "unreadable"].includes(window.outcome.state) || (window.outcome.state === "open" && percent === null)) return null;
   const bucket = window.scope.kind === "model";
   return <div onMouseEnter={() => onOutline?.(window.kind === "monthly" ? null : window.kind)} onMouseLeave={() => onOutline?.(null)} className={cn("flex flex-col gap-xs", bucket && "pl-md")} data-usage-window-row={window.kind} data-usage-bucket={window.scope.kind === "model" ? window.scope.label : undefined}>
-    <div className="flex flex-wrap items-baseline gap-xs">
-      <span className="min-w-0 break-words text-caption font-medium text-subtle-foreground">{window.scope.kind === "model" ? `└ ${window.scope.label}` : windowLabel(window.kind, t)}</span>
-      {window.outcome.state === "open" ? <span className="font-mono text-micro text-muted-foreground" data-usage-reset="true">· {resetCountdown(window.outcome.resets_at_s, now, t)}</span> : null}
+    <div className="flex items-baseline gap-xs">
+      <span className="min-w-0 truncate text-caption font-medium text-subtle-foreground" title={window.scope.kind === "model" ? window.scope.label : undefined}>{window.scope.kind === "model" ? `└ ${window.scope.label}` : windowLabel(window.kind, t)}</span>
+      {reset ? <span className="shrink-0 whitespace-nowrap font-mono text-micro text-muted-foreground" data-usage-reset="true">· {reset}</span> : null}
       {compact && percent !== null ? <div aria-hidden="true" className="ml-auto h-xs w-(--size-control-lg) shrink-0 overflow-hidden rounded-full bg-border"><div className={cn("h-full rounded-full", FILL_TONE[usageTone(percent)])} style={{ width: `${Math.min(Math.max(percent, 0), 100)}%` }} /></div> : null}
-      <span className={cn(compact ? "font-mono text-caption font-semibold" : "ml-auto font-mono text-caption font-semibold", TEXT_TONE[usageTone(percent)])} data-usage-value="true">{percent !== null ? percentLabel(percent) : t("usage.notStarted")}</span>
+      <span className={cn(compact ? "shrink-0 font-mono text-caption font-semibold" : "ml-auto shrink-0 font-mono text-caption font-semibold", TEXT_TONE[usageTone(percent)])} data-usage-value="true">{percent !== null ? percentLabel(percent) : t("usage.notStarted")}</span>
     </div>
     {!compact && percent !== null ? <div aria-hidden="true" className="h-xs overflow-hidden rounded-full bg-border"><div className={cn("h-full rounded-full", FILL_TONE[usageTone(percent)])} style={{ width: `${Math.min(Math.max(percent, 0), 100)}%` }} /></div> : null}
   </div>;

@@ -2,33 +2,25 @@
 // agent-logo-view-mode B13-B17): the logos arrive with the number keycaps on
 // the same hold, move nothing, leave with the release, with another key or when
 // the window loses focus, and a shown mode keeps its logos through the hold.
-// A private Herdr server, hided and Electron app.
+// A private engine, hided and Electron app.
 
 import { expect, type ElectronApplication, type Locator, type Page } from "@playwright/test";
-import { startHerdr, type HerdrFixture } from "../../web/e2e/herdr-fixture";
 import "../../web/src/host";
 import { enterWorkspace, screenshot } from "../../web/e2e/wire";
-import { hostLog, isolate, launchShell, test, type Isolated } from "./fixture";
+import { hostLog, launchShell, startStack, test, type Stack } from "./fixture";
 
-let herdr: HerdrFixture;
-let run: Isolated;
+let stack: Stack;
 let app: ElectronApplication | null = null;
 
-test.beforeAll(async () => {
-  herdr = await startHerdr();
-});
-test.afterAll(() => {
-  herdr?.stop();
-});
-test.beforeEach(() => {
-  run = isolate(herdr, "logo-peek");
+test.beforeEach(async () => {
+  stack = await startStack("logo-peek");
 });
 test.afterEach(async () => {
   const info = test.info();
-  if (info.status !== info.expectedStatus) console.log(hostLog(run.env).map((line) => JSON.stringify(line)).join("\n"));
+  if (info.status !== info.expectedStatus) console.log(hostLog(stack.run.env).map((line) => JSON.stringify(line)).join("\n"));
   await app?.close().catch(() => undefined);
   app = null;
-  run.cleanup();
+  stack.stop();
 });
 
 /** The boxes of what must not move while the logos peek, rounded to the device pixel. */
@@ -40,7 +32,7 @@ async function boxes(locators: Locator[]): Promise<string[]> {
 }
 
 test("⌥ shows the logos with the keycaps while hidden, and a key, a blur or the release ends it", async () => {
-  const launched = await launchShell(run.env);
+  const launched = await launchShell(stack.run.env);
   app = launched.app;
   const page: Page = launched.page;
   await page.reload();

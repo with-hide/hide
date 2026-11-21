@@ -1,14 +1,13 @@
 import { expect, type ElectronApplication } from "@playwright/test";
-import { startHerdr } from "../../web/e2e/herdr-fixture";
 import { enterWorkspace } from "../../web/e2e/wire";
-import { isolate, launchShell, test } from "./fixture";
+import { launchShell, startStack, test } from "./fixture";
 import { captureElectronWindow } from "./electron-window";
 import { captureNativeWindow } from "./native-window";
 
-test("sidebar tab segments use the candidate window's real tab", { tag: "@platform" }, async () => {
+test("a lone tab with agents draws its rows, and no guide, in the candidate window", { tag: "@platform" }, async () => {
   // A private desktop host, local stream and state file on each system.
-  const herdr = await startHerdr();
-  const run = isolate(herdr, "sidebar-tab-groups");
+  const stack = await startStack("sidebar-tab-groups");
+  const { fixture, run } = stack;
   let app: ElectronApplication | undefined;
   try {
     const launched = await launchShell(run.env);
@@ -16,19 +15,17 @@ test("sidebar tab segments use the candidate window's real tab", { tag: "@platfo
     const page = launched.page;
     await page.reload();
     await enterWorkspace(page, "fixture");
-    const glyph = page.locator(`[data-sidebar-tab="${herdr.tab}"]`);
-    const rows = page.locator(`[data-sidebar-tab-group="${herdr.tab}"] [data-agent-open]`);
-    await expect(glyph).toHaveAccessibleName("Tab 1, 2 agents");
+    const rows = page.locator(`[data-sidebar-tab-group="${fixture.tab}"] [data-agent-open]`);
+    // The fixture closes Add project's shell, so its checkout holds one tab: a lone tab draws its rows, no guide and no line.
     await expect(rows).toHaveCount(2);
-    await expect(page.locator(`[data-sidebar-tab-guide="${herdr.tab}"]`)).toHaveCount(1);
-    await captureElectronWindow(app, "sidebar-native-segments", { build: "worktree debug candidate", daemonPid: run.daemonPid(), privateSocket: herdr.socket });
-    await captureNativeWindow(app, "sidebar-compositor-segments", { method: "screencapture exact candidate window without activation", build: "worktree debug candidate", daemonPid: run.daemonPid(), privateSocket: herdr.socket, limits: "native keyboard and IME not exercised" });
-    await glyph.click();
-    await expect(page.locator(`[data-tab="${herdr.tab}"]`).first()).toHaveAttribute("aria-selected", "true");
-    await expect(rows).toHaveCount(2);
+    await expect(page.locator(`[data-sidebar-tab-guide="${fixture.tab}"]`)).toHaveCount(0);
+    await expect(page.locator(`[data-sidebar-tab="${fixture.tab}"]`)).toHaveCount(0);
+    await captureElectronWindow(app, "sidebar-native-segments", { build: "worktree debug candidate", daemonPid: run.daemonPid() });
+    await captureNativeWindow(app, "sidebar-compositor-segments", { method: "screencapture exact candidate window without activation", build: "worktree debug candidate", daemonPid: run.daemonPid(), limits: "native keyboard and IME not exercised" });
+    await rows.first().click();
+    await expect(page.locator(`[data-tab="${fixture.tab}"]`).first()).toHaveAttribute("aria-selected", "true");
   } finally {
     if (app) await app.close();
-    run.cleanup();
-    herdr.stop();
+    stack.stop();
   }
 });

@@ -1,0 +1,1 @@
+terminal,developer,AI,pull request,mission,notifications,review,monitor,assistant,automation,git

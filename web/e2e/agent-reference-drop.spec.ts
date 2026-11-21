@@ -2,9 +2,10 @@
 // `@<name> (pane <id> · <task>)`, and a sidebar agent row dropped on another
 // pane's terminal types that same reference and a space into the agent's
 // PTY there, never Enter, and focuses it; a drop on the agent's own pane types
-// nothing. A pane's header @ lists the other agents on its device and types the
-// one chosen into its own prompt the same way. Captures of the menu and the @
-// list land in HIDE_E2E_SCREENSHOT_DIR.
+// nothing. A pane's @, an item of its pane menu (PRD lane-desk-pair-view
+// B21), lists the other agents on its device and types the one chosen into its
+// own prompt the same way. Captures of the menu and the @ list land in
+// HIDE_E2E_SCREENSHOT_DIR.
 
 import { expect, test, type Page } from "@playwright/test";
 import fs from "node:fs";
@@ -33,10 +34,10 @@ function dragRowOnto(page: Page, row: string, pane: string): Promise<void> {
 test("an agent row dropped on another terminal types its reference there and nothing on its own pane", async ({ page }) => {
   await page.setViewportSize({ width: 1400, height: 900 });
   // Both fixture panes run the fake agent, whose input log is what its PTY received.
-  const herdr = await startFixture();
-  const daemon = await startHided(herdr, "agent-reference-drop").catch((error) => { herdr.stop(); throw error; });
+  const engine = await startFixture();
+  const daemon = await startHided(engine, "agent-reference-drop").catch((error) => { engine.stop(); throw error; });
   try {
-    const [target, agent] = herdr.panes;
+    const [target, agent] = engine.panes;
     await page.context().grantPermissions(["clipboard-read", "clipboard-write"], { origin: daemon.origin });
     await page.goto(`${daemon.origin}/#token=${daemon.token}`);
     await enterWorkspace(page, "fixture");
@@ -53,7 +54,7 @@ test("an agent row dropped on another terminal types its reference there and not
     const reference = await copied();
 
     const read = (log: string) => (fs.existsSync(log) ? fs.readFileSync(log, "utf8") : "");
-    const [targetLog, agentLog] = herdr.inputLogs.map((log) => ({ log, before: read(log).length }));
+    const [targetLog, agentLog] = engine.inputLogs.map((log) => ({ log, before: read(log).length }));
     // A drag with the real pointer: the mouse events around it must not end it early.
     await page.locator(`nav[data-sidebar] [data-agent-open="${agent}"]`).dragTo(page.locator(`[data-pane-view="${target}"] [data-terminal-host]`));
     await expect.poll(() => read(targetLog!.log).slice(targetLog!.before)).toContain(`${reference} `);
@@ -69,37 +70,46 @@ test("an agent row dropped on another terminal types its reference there and not
     await expect(page.locator(`[data-pane-view="${target}"]`)).toHaveAttribute("data-focused", "true");
   } finally {
     daemon.stop();
-    herdr.stop();
+    engine.stop();
   }
 });
 
-test("a pane's @ lists the other agents and types the chosen one's reference into that pane", async ({ page }) => {
+test("a pane's @ is an item of its pane menu, lists the other agents and types the chosen one's reference into that pane, and the head's grip and zoom show where the keyboard is", async ({ page }) => {
   await page.setViewportSize({ width: 1400, height: 900 });
-  const herdr = await startFixture();
-  const daemon = await startHided(herdr, "agent-reference-mention").catch((error) => { herdr.stop(); throw error; });
+  const engine = await startFixture();
+  const daemon = await startHided(engine, "agent-reference-mention").catch((error) => { engine.stop(); throw error; });
   try {
-    const [target, agent] = herdr.panes;
+    const [target, agent] = engine.panes;
     await page.goto(`${daemon.origin}/#token=${daemon.token}`);
     await enterWorkspace(page, "fixture");
     await expect(page.locator(`nav[data-sidebar] [data-agent-open="${agent}"]`)).toBeVisible({ timeout: 30_000 });
     const read = (log: string) => (fs.existsSync(log) ? fs.readFileSync(log, "utf8") : "");
-    const [targetLog, agentLog] = herdr.inputLogs.map((log) => ({ log, before: read(log).length }));
+    const [targetLog, agentLog] = engine.inputLogs.map((log) => ({ log, before: read(log).length }));
 
-    const mention = page.locator(`[data-pane-mention="${target}"]`);
+    // The head draws no @ of its own: its right side is ◧, zoom, … and ✕.
+    const head = page.locator(`[data-pane-view="${target}"] > header`);
+    await expect(head.locator("[data-pane-mention]")).toHaveCount(0);
+    const more = page.locator(`[data-pane-menu="${target}"]`);
     const list = page.locator(`[data-pane-mention-list="${target}"]`);
-    // The @ opens and closes its list, and Escape hands the keyboard back to it.
-    await mention.click();
-    await expect(list).toBeVisible();
-    await mention.click();
-    await expect(list).toHaveCount(0);
-    await mention.click();
-    await expect(list.locator("input")).toBeFocused();
+    const openMention = async () => {
+      await more.click();
+      await page.getByRole("menuitem", { name: "Talk to another agent" }).click();
+      await expect(list.locator("input")).toBeFocused();
+    };
+    // Chosen from the menu, the @ list opens under the `…`, and Escape hands the keyboard back to it.
+    await openMention();
+    const [listBox, moreBox] = await Promise.all([list.boundingBox(), more.boundingBox()]);
+    expect(listBox!.y).toBeGreaterThanOrEqual(moreBox!.y + moreBox!.height - 1);
     await page.keyboard.press("Escape");
     await expect(list).toHaveCount(0);
-    await expect(mention).toBeFocused();
+    await expect(more).toBeFocused();
+    // A press on another pane closes it and leaves the keyboard where the press landed.
+    await openMention();
+    await page.locator(`[data-pane-view="${agent}"] [data-terminal-host]`).click({ position: { x: 20, y: 200 } });
+    await expect(list).toHaveCount(0);
+    await expect(page.locator(`[data-pane-view="${agent}"] .xterm-helper-textarea`)).toBeFocused();
 
-    await mention.click();
-    await expect(list.locator("input")).toBeFocused();
+    await openMention();
     await expect(list.locator(`[data-pane-mention-choice="${agent}"]`)).toBeVisible();
     // The pane's own agent is not offered: its reference would name it to itself.
     await expect(list.locator(`[data-pane-mention-choice="${target}"]`)).toHaveCount(0);
@@ -114,39 +124,29 @@ test("a pane's @ lists the other agents and types the chosen one's reference int
     expect(read(agentLog!.log).slice(agentLog!.before)).toBe("");
     await expect(page.locator(`[data-pane-view="${target}"] .xterm-helper-textarea`)).toBeFocused();
 
-    // The grip, @ and zoom show on the pane that holds the keyboard; on the other pane only
-    // while its header is pointed at or its @ list is open, and nothing in that row moves when they show.
+    // The grip and zoom show on the pane that holds the keyboard; on the other pane only while its
+    // header is pointed at or focused, and nothing in that row moves when they show. ◧'s place beside
+    // the zoom is pair-view.spec.ts's: these agents opened nothing, so they draw none (D-49).
     const grip = (pane: string) => page.locator(`[data-pane-view="${pane}"] [data-pane-move-grip]`);
     const zoom = (pane: string) => page.locator(`[data-pane-view="${pane}"] [data-pane-zoom="false"]`);
-    const at = (pane: string) => page.locator(`[data-pane-view="${pane}"] [data-pane-mention]`);
     await expect(grip(target!)).toHaveCSS("opacity", "1");
-    await expect(at(target!)).toHaveCSS("opacity", "1");
     await expect(zoom(target!)).toHaveCSS("opacity", "1");
     await page.mouse.move(1, 1);
     await expect(grip(agent!)).toHaveCSS("opacity", "0");
-    await expect(at(agent!)).toHaveCSS("opacity", "0");
     await expect(zoom(agent!)).toHaveCSS("opacity", "0");
     const other = page.locator(`[data-pane-view="${agent}"] > header`);
-    const places = () => Promise.all([other.locator("[data-pane-move-title]").first().boundingBox(), other.locator("[data-pane-mention]").boundingBox()]);
+    const places = () => Promise.all([other.locator("[data-pane-move-title]").first().boundingBox(), other.locator("[data-pane-zoom]").boundingBox()]);
     const before = await places();
     await other.locator("[data-pane-move-title]").first().hover();
     await expect(grip(agent!)).toHaveCSS("opacity", "1");
-    await expect(at(agent!)).toHaveCSS("opacity", "1");
     await expect(zoom(agent!)).toHaveCSS("opacity", "1");
     expect(await places()).toEqual(before);
-    // The keyboard reaching a hidden @ draws it.
+    // The keyboard reaching a hidden zoom draws it.
     await page.mouse.move(1, 1);
-    await at(agent!).focus();
-    await expect(at(agent!)).toHaveCSS("opacity", "1");
-    // An open list keeps its @ drawn after the pointer leaves the header for the list.
-    await at(agent!).click();
-    const otherList = page.locator(`[data-pane-mention-list="${agent}"]`);
-    await otherList.hover();
-    await expect(at(agent!)).toHaveCSS("opacity", "1");
-    await page.keyboard.press("Escape");
-    await expect(otherList).toHaveCount(0);
+    await zoom(agent!).focus();
+    await expect(zoom(agent!)).toHaveCSS("opacity", "1");
   } finally {
     daemon.stop();
-    herdr.stop();
+    engine.stop();
   }
 });

@@ -18,7 +18,7 @@ function Keycap({ number, className, ...props }: ComponentProps<"kbd"> & { numbe
       data-keycap={number}
       aria-hidden="true"
       className={cn(
-        "pointer-events-none absolute right-xxs top-xxs z-10 inline-flex h-(--size-keycap-height) min-w-(--size-keycap-height) select-none items-center justify-center rounded-xs border border-border bg-popover px-xxs font-mono text-caption font-medium leading-none text-popover-foreground shadow-sm",
+        "pointer-events-none absolute right-xxs top-xxs z-10 inline-flex h-(--size-keycap-height) min-w-(--size-keycap-height) select-none items-center justify-center rounded-xs border border-border bg-popover px-xxs font-mono text-caption font-medium leading-none text-popover-foreground shadow-raised",
         className,
       )}
       {...props}

@@ -2,7 +2,7 @@
 //! Desk D-53, D-79).
 //!
 //! The list is Hide's catalog (`hide_agent_adapter::ADAPTERS`, the agents
-//! Hide can start), each named by its Herdr name, so an agent the catalog
+//! Hide can start), each named by its agent name, so an agent the catalog
 //! gains is Desk's once its ACP route and ask mode are declared here; the
 //! match below is exhaustive, so a new agent cannot be added without that
 //! decision. Each speaks ACP one of two ways:
@@ -44,7 +44,7 @@
 //!   and only a Grok home of Desk's own changes that, which would leave
 //!   Grok's sign-in apart from the operator's (D-81).
 //!
-//! Hide answers each request from Settings › Desk › 권한
+//! Hide answers each request from Settings › Labs › Desk › 권한
 //! ([`crate::permission`]); what an agent runs without asking whatever a
 //! row says is declared by [`AdapterId::always_runs`] and shown on that row.
 
@@ -58,7 +58,7 @@ use serde_json::{Value, json};
 use crate::permission::Row;
 
 /// One of the catalog's agents Desk speaks ACP with, named on the wire and in
-/// Desk's store by its Herdr name (`claude`, `codex`, `pi`, `opencode`,
+/// Desk's store by its agent name (`claude`, `codex`, `pi`, `opencode`,
 /// `omp`, `agy`, `grok`).
 #[derive(Clone, Copy, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
 pub struct AdapterId(AgentId);
@@ -142,7 +142,7 @@ impl AdapterId {
     }
 
     pub fn as_str(self) -> &'static str {
-        self.catalog().herdr.name
+        self.catalog().engine_kind
     }
 
     pub fn parse(id: &str) -> Option<Self> {
@@ -178,7 +178,7 @@ impl AdapterId {
         }
     }
 
-    /// The rows of Settings › Desk › 권한 this agent runs without asking,
+    /// The rows of Settings › Labs › Desk › 권한 this agent runs without asking,
     /// whatever the row says (D-82): what it runs there never reaches Hide,
     /// so the row shows it. Codex reads inside its read-only sandbox, which
     /// asks only to leave it; OpenCode's configuration, omp's mode and
@@ -477,7 +477,7 @@ mod tests {
     use super::*;
 
     #[test]
-    fn desk_speaks_with_every_agent_the_catalog_can_start_by_its_herdr_name() {
+    fn desk_speaks_with_every_agent_the_catalog_can_start_by_its_engine_kind() {
         let names: Vec<&str> = AdapterId::all().map(AdapterId::as_str).collect();
         assert_eq!(
             names,

@@ -1,6 +1,6 @@
 import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it } from "vitest";
-import { RailTileView, type Tile } from "./components/device-rail";
+import { RailTileView, ToolTileView, type Tile } from "./components/device-rail";
 import { TooltipProvider } from "./components/ui/tooltip";
 import { sidebarBody, type TileCounts } from "./devices";
 import type { SnapshotRest } from "./snapshot";
@@ -49,12 +49,10 @@ describe("a rail tile (quick device-rail-slack)", () => {
   const mini: Tile = { id: "mini", label: "Mac mini", icon: "remote", core: false };
   const off: Tile = { id: "build-box", label: OFF.label, icon: "remote", core: false };
 
-  it("crowns the core's machine in the bottom-left corner beside its other marks, and says core after its name (PRD core-host-node-move N1)", () => {
+  it("draws no crown on any tile, the core's machine included (PRD device-connect-iroh D-80)", () => {
     const html = view({ tile: { ...mini, core: true }, counts: { needs_you: 3, done: 0 } });
-    expect(tile(html)).toContain('aria-label="Mac mini, core, Needs You 3"');
-    expect(html).toContain('data-rail-crown="true"');
+    expect(html).not.toContain("data-rail-crown");
     expect(marks(html)).toEqual([["needs_you", "3"]]);
-    expect(view({ tile: mini })).not.toContain("data-rail-crown");
   });
 
   it("is a focusable button whose name carries the device and each count it marks (B4)", () => {
@@ -115,5 +113,35 @@ describe("a rail tile (quick device-rail-slack)", () => {
     expect(html).not.toContain("data-rail-badge");
     expect(html).toMatch(/opacity-\(--opacity-dimmed\)[^>]*data-rail-glyph|data-rail-glyph[^>]*opacity-\(--opacity-dimmed\)/);
     expect(tile(html)).toContain('aria-label="연구실 빌드 서버 자동화 장비, Not connected"');
+  });
+});
+
+describe("a tool's tile (PRD hide-external-control D-50, B39, B41)", () => {
+  const tool = (turn: number, selected = false) => renderToStaticMarkup(
+    <TooltipProvider>
+      <ToolTileView name="nightly" turn={turn} connection="c0ffee00c0ffee00" selected={selected} onSelect={() => undefined} />
+    </TooltipProvider>,
+  );
+  const button = (html: string) => html.match(/<button[^>]*data-rail-tool[^>]*>/)?.[0] ?? "";
+
+  it("letters the tool, names it an external tool and carries what waits on the tool in a grey number", () => {
+    const html = tool(3);
+    expect(html).toMatch(/data-rail-glyph="true"[^>]*>N</);
+    expect(button(html)).toContain('aria-label="nightly, External tool, Tool&#x27;s turn 3"');
+    expect(marks(html)).toEqual([["tool_turn", "3"]]);
+    expect(html).toContain("bg-muted-foreground");
+    expect(html).not.toContain("bg-warning");
+  });
+
+  it("reads 9+ from ten and draws no number when nothing waits on the tool", () => {
+    expect(marks(tool(10))).toEqual([["tool_turn", "9+"]]);
+    expect(marks(tool(0))).toEqual([]);
+    expect(button(tool(0))).toContain('aria-label="nightly, External tool"');
+  });
+
+  it("is a ring, not a device's filled square, and rings as selected while its cell is in front", () => {
+    expect(button(tool(0))).toContain("rounded-full");
+    expect(button(tool(0))).not.toContain("bg-secondary");
+    expect(button(tool(0, true))).toContain('aria-pressed="true"');
   });
 });

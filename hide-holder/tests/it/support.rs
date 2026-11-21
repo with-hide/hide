@@ -22,7 +22,7 @@ use hide_platform::process::{ResidentCommand, is_alive, kill_tree, start_residen
 pub const HANG_LIMIT: Duration = Duration::from_secs(30);
 
 /// The variable naming the pinned ConPTY runtime folder on Windows: the
-/// `conpty` folder beside the pinned Herdr's `herdr.exe`.
+/// `holder-conpty` folder a package or `scripts/fetch-conpty.py --out` provides.
 pub const CONPTY_VARIABLE: &str = "HIDE_HOLDER_CONPTY";
 
 /// The role a pane's program plays, read by `role::play`.
@@ -34,6 +34,10 @@ pub const SCRIPT: &str = "HIDE_HOLDER_TEST_SCRIPT";
 /// Debug holders only: the file the holder writes nothing to its program
 /// until it exists (`hide-holder/src/holder.rs`, `HOLD_WRITES`).
 pub const HOLD_WRITES: &str = "HIDE_HOLDER_TEST_HOLD_WRITES";
+/// Debug holders only: the file the holder runs its program without writing
+/// `running` into its record until it exists (`hide-holder/src/holder.rs`,
+/// `HOLD_RUNNING`).
+pub const HOLD_RUNNING: &str = "HIDE_HOLDER_TEST_HOLD_RUNNING";
 
 /// A private HOME for one test.
 pub struct Home {
@@ -41,10 +45,18 @@ pub struct Home {
 }
 
 impl Home {
+    /// Short whatever `TMPDIR` is: a pane's socket sits below this folder, a
+    /// Unix socket path holds 104 bytes on macOS, and a runner's own `TMPDIR`
+    /// or a deep one takes the rest (docs/TESTING.md, Writing a Rust test,
+    /// rule 7). Windows names a pipe and has no such limit.
     pub fn new() -> Self {
-        Self {
-            dir: tempfile::Builder::new().prefix("hh").tempdir().unwrap(),
-        }
+        let mut home = tempfile::Builder::new();
+        home.prefix("hh");
+        #[cfg(unix)]
+        let home = home.tempdir_in("/tmp");
+        #[cfg(not(unix))]
+        let home = home.tempdir();
+        Self { dir: home.unwrap() }
     }
 
     pub fn path(&self) -> &Path {
@@ -150,13 +162,27 @@ impl Running {
         is_alive(pid).then_some(Self { pid, started })
     }
 
+    /// `identity`'s process, named as the records name it.
+    pub fn named(identity: hide_holder_protocol::record::Identity) -> Self {
+        Self {
+            pid: identity.pid,
+            started: identity.started,
+        }
+    }
+
     pub fn is_running(&self) -> bool {
         is_alive(self.pid) && start_time(self.pid).ok() == Some(self.started)
     }
 
+    /// Waits until the system counts the process ended, as a start's and a
+    /// reconcile's checks (`is_alive`) count it, not only until its start
+    /// time stops answering: on Windows the exit code is set first, and the
+    /// process still holds its handles (its listening socket, its job's
+    /// members) until its object is signalled a moment later
+    /// (with-hide/hide-private#399, #403).
     pub fn wait_gone(&self) {
         wait_until(&format!("the end of process {}", self.pid), || {
-            !self.is_running()
+            !is_alive(self.pid) || start_time(self.pid).is_ok_and(|started| started != self.started)
         });
     }
 }
@@ -381,6 +407,57 @@ pub fn wait_until(what: &str, mut done: impl FnMut() -> bool) {
     }
 }
 
+/// Whether the system reports `pid` stopped: `SIGSTOP` asked for it, and the
+/// kernel has taken the process off a processor, so it drains nothing more.
+///
+/// A signal asks for a stop and takes effect when the process next runs, so a
+/// caller that means to write to what a process reads has to wait for this
+/// state rather than for the signal's return. Unix only: nothing stops a
+/// process this way on Windows.
+#[cfg(unix)]
+#[allow(
+    clippy::disallowed_methods,
+    reason = "a bounded poll for a process's state"
+)]
+pub fn stopped(pid: u32) -> bool {
+    #[cfg(target_vendor = "apple")]
+    {
+        // SAFETY: `proc_pidinfo` fills the `proc_bsdinfo` sized by its own
+        // length argument, for a pid the caller owns.
+        let mut info: libc::proc_bsdinfo = unsafe { std::mem::zeroed() };
+        let size = std::mem::size_of::<libc::proc_bsdinfo>() as libc::c_int;
+        let filled = unsafe {
+            libc::proc_pidinfo(
+                pid as libc::c_int,
+                libc::PROC_PIDTBSDINFO,
+                0,
+                (&raw mut info).cast(),
+                size,
+            )
+        };
+        // Only a structure the system filled says anything: a process it does
+        // not know has no state to report.
+        filled == size && info.pbi_status == libc::SSTOP
+    }
+    #[cfg(target_os = "linux")]
+    {
+        // `/proc/<pid>/stat` puts the state after the command name, which may
+        // hold spaces and parentheses, so the fields start after the last one.
+        let Ok(stat) = std::fs::read_to_string(format!("/proc/{pid}/stat")) else {
+            return false;
+        };
+        let Some(after) = stat.rfind(')').map(|end| &stat[end + 1..]) else {
+            return false;
+        };
+        after.split_whitespace().next() == Some("T")
+    }
+    #[cfg(not(any(target_vendor = "apple", target_os = "linux")))]
+    {
+        let _ = pid;
+        false
+    }
+}
+
 fn first_line(reader: impl std::io::Read + Send + 'static) -> String {
     let (sender, heard) = mpsc::channel();
     thread::spawn(move || {
@@ -415,6 +492,8 @@ pub struct Connection {
     heard: mpsc::Receiver<HolderMessage>,
     pub fragments: Vec<Fragment>,
     pub notices: Vec<Notice>,
+    /// What the program wrote to the clipboard, as the holder sent it.
+    pub clipboards: Vec<Vec<u8>>,
     pub closed: Option<Closed>,
 }
 
@@ -437,6 +516,7 @@ impl Connection {
             heard,
             fragments: Vec::new(),
             notices: Vec::new(),
+            clipboards: Vec::new(),
             closed: None,
         }
     }
@@ -453,6 +533,14 @@ impl Connection {
             }
             Ok(HolderMessage::Notice(notice)) => {
                 self.notices.push(notice);
+                true
+            }
+            Ok(HolderMessage::Clipboard(text)) => {
+                assert!(
+                    self.welcome.sends.contains(&Capability::Clipboard),
+                    "a clipboard write to a node that did not accept it"
+                );
+                self.clipboards.push(text);
                 true
             }
             Ok(HolderMessage::Closed(closed)) => {
@@ -579,6 +667,22 @@ impl Script {
     /// What the program was sent, as it came.
     pub fn heard(&self) -> Vec<u8> {
         std::fs::read(self.folder.join("heard")).unwrap_or_default()
+    }
+
+    /// When the program read the byte at `offset` of what it was sent.
+    #[cfg(unix)] // its one test reads a Unix program's bytes as sent
+    pub fn heard_at(&self, offset: usize) -> std::time::SystemTime {
+        let times = std::fs::read_to_string(self.folder.join("heard.times")).unwrap_or_default();
+        let mut seen = 0;
+        for line in times.lines() {
+            let (at, count) = line.split_once(' ').unwrap();
+            seen += count.parse::<usize>().unwrap();
+            if seen > offset {
+                let at: u64 = at.parse::<u128>().unwrap().try_into().unwrap();
+                return std::time::UNIX_EPOCH + Duration::from_nanos(at);
+            }
+        }
+        panic!("the program was not sent byte {offset}");
     }
 
     /// Waits until the program was sent `expected`, and nothing else. On

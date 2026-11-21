@@ -1,4 +1,4 @@
-use std::sync::mpsc::{Receiver, Sender, channel};
+use std::sync::mpsc::{Receiver, channel};
 
 use hide_host::serve::Terminals;
 use hide_node_link::terminal::GridSize;
@@ -68,7 +68,6 @@ fn a_device_past_its_unsent_reports_keeps_each_panes_last_state() {
     }
     let state = PaneTerminalState {
         state: "controlling".into(),
-        mode: Some("control".into()),
         generation: 3,
         attempt: 1,
         message: None,
@@ -188,29 +187,16 @@ fn a_devices_diagnostic_keeps_its_plain_fields_cut_to_size() {
     );
 }
 
-fn node(socket_seen: Sender<String>) -> (NodeTerminals, Receiver<Opened>) {
+/// A device node whose service runs over the fake attacher, as
+/// [`NodeTerminals::start_holders`] starts it over the node's holders.
+fn node() -> (NodeTerminals, Receiver<Opened>) {
     let (opened_tx, opened) = channel();
-    let attacher = Arc::new(FakeAttacher {
+    let attacher = FakeAttacher {
         opened: Mutex::new(opened_tx),
         refuse: Mutex::new(None),
-    });
-    let socket_seen = Mutex::new(socket_seen);
-    let node = NodeTerminals::with_attacher(Box::new(move |socket: &str| {
-        socket_seen.lock().unwrap().send(socket.to_owned()).unwrap();
-        struct Shared(Arc<FakeAttacher>);
-        impl super::super::Attacher for Shared {
-            fn open(
-                &self,
-                pane: &str,
-                mode: super::super::Mode,
-                rows: u16,
-                cols: u16,
-            ) -> Result<super::super::SessionParts, String> {
-                self.0.open(pane, mode, rows, cols)
-            }
-        }
-        Box::new(Shared(Arc::clone(&attacher)))
-    }));
+    };
+    let node = NodeTerminals::new();
+    node.start_service(Box::new(attacher)).unwrap();
     (node, opened)
 }
 
@@ -226,14 +212,114 @@ fn attach(node: &NodeTerminals, opened: &Receiver<Opened>, pane: &str) -> Opened
     opened.recv_timeout(WAIT).expect("the pane attached")
 }
 
+/// What a resident node's tap was handed, in order.
+#[derive(Default)]
+struct TapSeen(Mutex<Vec<(String, Vec<u8>)>>);
+
+impl OutputSink for TapSeen {
+    fn output(&self, pane: &str, bytes: &[u8], _full: bool) {
+        lock(&self.0).push((pane.to_owned(), bytes.to_vec()));
+    }
+    fn forget(&self, _pane: &str) {}
+    fn clipboard(&self, _pane: &str, _text: &[u8]) {}
+}
+
+impl TapSeen {
+    fn saw(&self, pane: &str, bytes: &[u8]) -> bool {
+        lock(&self.0)
+            .iter()
+            .any(|(seen, data)| seen == pane && data.ends_with(bytes))
+    }
+}
+
+/// PRD device-connect-iroh D-77 (5): a guest's node keeps a session on
+/// every pane for the host's tap, so its core's attach and release only say
+/// whether the pane goes up the link.
+#[test]
+fn a_resident_nodes_pane_goes_up_only_while_its_core_has_it_attached() {
+    let (opened_tx, opened) = channel();
+    let tap = Arc::new(TapSeen::default());
+    let node = NodeTerminals::resident(
+        Arc::clone(&tap) as Arc<dyn OutputSink>,
+        ResidentFolders {
+            state_dir: std::path::PathBuf::new(),
+            holders_home: std::path::PathBuf::new(),
+        },
+    );
+    node.start_service(Box::new(FakeAttacher {
+        opened: Mutex::new(opened_tx),
+        refuse: Mutex::new(None),
+    }))
+    .unwrap();
+    // The node's own session, as its tap takes one on a pane that runs. A
+    // pane's holder attaches at its own size; this attacher has none, so
+    // the size is given here.
+    TerminalNode::control(
+        &node,
+        TerminalControl::Attach {
+            pane: "w1:p1".into(),
+            size: Some(SIZE),
+            manual: false,
+        },
+    );
+    let pane = opened.recv_timeout(WAIT).expect("the node attached");
+    pane.frame(SIZE, true, b"\x1bcfor the host");
+    wait_for(|| tap.saw("w1:p1", b"for the host"));
+    assert!(
+        lock(&node.uplink.state).panes.is_empty(),
+        "a pane the core never attached went up the link"
+    );
+
+    // No link took a line yet, so nothing the node reported waits for one:
+    // a node that runs on with its guest away keeps nothing for a core
+    // that is not there, and its diagnostics go to its host's log.
+    {
+        let state = lock(&node.uplink.state);
+        assert!(state.stopped && state.reports.is_empty() && state.diagnostics.is_empty());
+    }
+
+    // The guest's core links and attaches it: the pane is drawn whole for
+    // it too.
+    node.relink();
+    node.line(
+        down(TerminalControl::Attach {
+            pane: "w1:p1".into(),
+            size: Some(SIZE),
+            manual: false,
+        })
+        .trim_ascii_end(),
+    );
+    pane.frame(SIZE, true, b"\x1bcfor both");
+    let went_up = loop {
+        if let TerminalUp::Output(output) = up(&node.next_up().unwrap()) {
+            break output;
+        }
+    };
+    assert_eq!(went_up.pane, "w1:p1");
+    assert!(went_up.full);
+    assert!(tap.saw("w1:p1", b"for both"));
+
+    // The core releases it: nothing more goes up, and the session stays,
+    // so the host's screen still draws the pane and types into it.
+    node.line(
+        down(TerminalControl::Release {
+            pane: "w1:p1".into(),
+            message: String::new(),
+        })
+        .trim_ascii_end(),
+    );
+    pane.frame(SIZE, false, b"after the release");
+    wait_for(|| tap.saw("w1:p1", b"after the release"));
+    assert!(lock(&node.uplink.state).panes.is_empty());
+    TerminalNode::key(&node, KeyTarget::Pane("w1:p1".into()), b"typed".to_vec(), 1);
+    assert_eq!(pane.next_input(), b"typed");
+}
+
 /// D-18, B18: one pane flooding its output holds neither another pane's
 /// keys nor its frames.
 #[test]
 fn a_flooding_pane_holds_back_neither_another_panes_keys_nor_its_frames() {
-    let (socket_tx, socket) = channel();
-    let (node, opened) = node(socket_tx);
-    node.start("/tmp/herdr.sock").unwrap();
-    assert_eq!(socket.recv().unwrap(), "/tmp/herdr.sock");
+    let (node, opened) = node();
     let flooding = attach(&node, &opened, "w1:p1");
     let quiet = attach(&node, &opened, "w1:p2");
     flooding.frame(SIZE, true, b"start");
@@ -381,6 +467,7 @@ type HeardOutput = (String, String, Vec<u8>, bool);
 #[derive(Default)]
 struct Heard {
     output: Mutex<Vec<HeardOutput>>,
+    copied: Mutex<Vec<(String, String, Vec<u8>)>>,
     reports: Mutex<Vec<(String, TerminalReport)>>,
 }
 
@@ -390,6 +477,13 @@ impl DeviceSink for Heard {
             .lock()
             .unwrap()
             .push((device.into(), pane.into(), bytes.to_vec(), full));
+    }
+
+    fn clipboard(&self, device: &str, pane: &str, text: &[u8]) {
+        self.copied
+            .lock()
+            .unwrap()
+            .push((device.into(), pane.into(), text.to_vec()));
     }
 
     fn report(&self, device: &str, report: TerminalReport) {
@@ -420,7 +514,6 @@ fn wait_for(mut done: impl FnMut() -> bool) {
 fn controlling() -> PaneTerminalState {
     PaneTerminalState {
         state: "controlling".into(),
-        mode: Some("control".into()),
         generation: 4,
         attempt: 1,
         message: None,
@@ -958,7 +1051,6 @@ fn a_devices_notes_count_against_the_record_cap_and_its_states_do_not() {
                 pane: "w1:p1".into(),
                 state: PaneTerminalState {
                     state: "live".into(),
-                    mode: None,
                     generation: 1,
                     attempt: 1,
                     message: None,
@@ -1219,4 +1311,104 @@ fn pending_device_permissions_expire_without_new_input_and_end_with_the_link() {
             wait_for(|| link.ended.lock().unwrap().is_some());
         }
     }
+}
+
+/// with-hide/hide-private#659: a device's copies go up ahead of every pane's
+/// waiting output, the latest of each pane in the order written, so a
+/// hidden pane's copy never pushes out the shown one's; none is kept for
+/// later: a link that stops drawing the node's panes, or a pane forgotten,
+/// drops it.
+#[test]
+fn a_devices_copy_goes_up_once_ahead_of_output_and_only_the_latest() {
+    let uplink = Uplink::default();
+    uplink.push_output("w1:p1", b"waiting", false);
+    uplink.push_clipboard("w1:p1", b"older");
+    uplink.push_clipboard("w1:p2", b"hidden");
+    uplink.push_clipboard("w1:p1", b"latest");
+    let mut copies = Vec::new();
+    for _ in 0..2 {
+        let (line, _) = uplink.next().unwrap();
+        let TerminalUp::Clipboard(copied) = up(&line.unwrap()) else {
+            panic!("the copies go first");
+        };
+        copies.push((copied.pane.clone(), copied.text().unwrap()));
+    }
+    assert_eq!(
+        copies,
+        [
+            ("w1:p2".to_owned(), b"hidden".to_vec()),
+            ("w1:p1".to_owned(), b"latest".to_vec())
+        ]
+    );
+    let (line, _) = uplink.next().unwrap();
+    assert!(matches!(up(&line.unwrap()), TerminalUp::Output(_)));
+
+    uplink.push_clipboard("w1:p1", b"forgotten");
+    uplink.forget("w1:p1");
+    uplink.push_clipboard("w1:p2", b"withheld");
+    uplink.withhold(true);
+    uplink.push_clipboard("w1:p2", b"while withheld");
+    uplink.withhold(false);
+    uplink.push_output("w1:p2", b"after", true);
+    let (line, _) = uplink.next().unwrap();
+    assert!(matches!(up(&line.unwrap()), TerminalUp::Output(_)));
+}
+
+/// The core takes a device's copy for its hub decoded and named by device,
+/// and refuses one past the bound a holder keeps without ending the link.
+#[test]
+fn a_devices_copy_reaches_the_hub_and_one_past_the_bound_is_refused() {
+    let ((), records) = crate::diagnostics::capture(|| {
+        let (proxy, _link, heard) = proxy();
+        let inbound = proxy.inbound();
+        inbound(
+            &line_of(TerminalUp::Clipboard(TerminalClipboard::new(
+                "w1:p1", b"copied",
+            )))
+            .unwrap(),
+        );
+        let past = vec![b'x'; hide_holder_protocol::MAX_CLIPBOARD + 1];
+        inbound(
+            &line_of(TerminalUp::Clipboard(TerminalClipboard::new(
+                "w1:p1", &past,
+            )))
+            .unwrap(),
+        );
+        inbound(
+            &line_of(TerminalUp::Output(TerminalOutput {
+                pane: "w1:p1".into(),
+                data: encode_base64(b"after"),
+                full: true,
+            }))
+            .unwrap(),
+        );
+        assert_eq!(
+            heard.copied.lock().unwrap().as_slice(),
+            [("mini".to_owned(), "w1:p1".to_owned(), b"copied".to_vec())]
+        );
+        assert_eq!(heard.output.lock().unwrap().len(), 1);
+    });
+    assert_eq!(kinds(&records, "terminal.clipboard_unreadable").len(), 1);
+}
+
+/// A core of the protocol before a device's copy reads its line as one of a
+/// kind it does not know: it is logged, and the link and the pane's output
+/// go on, as this build reads a later kind.
+#[test]
+fn a_line_of_a_kind_this_core_does_not_know_leaves_the_link_going() {
+    let ((), records) = crate::diagnostics::capture(|| {
+        let (proxy, _link, heard) = proxy();
+        let inbound = proxy.inbound();
+        inbound(br#"{"terminal":{"kind":"later_kind","pane":"w1:p1","data":"eA=="}}"#);
+        inbound(
+            &line_of(TerminalUp::Output(TerminalOutput {
+                pane: "w1:p1".into(),
+                data: encode_base64(b"after"),
+                full: true,
+            }))
+            .unwrap(),
+        );
+        assert_eq!(heard.output.lock().unwrap().len(), 1);
+    });
+    assert_eq!(kinds(&records, "terminal.up_unreadable").len(), 1);
 }

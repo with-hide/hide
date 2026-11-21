@@ -1,24 +1,23 @@
 import { expect, test, type Page } from "@playwright/test";
 import { createHash } from "node:crypto";
-import fs from "node:fs";
 import path from "node:path";
 import { startFixture, type AgentFixture } from "./engine-fixture";
-import { startHided, type Daemon } from "./hided-fixture";
+import { seedLedger, startHided, type Daemon } from "./hided-fixture";
 import { chord } from "./chords";
 import { enterWorkspace } from "./wire";
 
 // PRD session-docs-and-assistant B28, B29, B32, B35, B41: Desk's lane, its
-// rail, its pin, ⌘J between a thread and its Agent tab, and Settings › Desk's
+// rail, its pin, ⌘J between a thread and its Agent tab, and Settings › Labs › Desk's
 // switch, off on a new install. Each test starts one stack and asserts one
 // contract.
 //
 // A Desk job is a spawn of Desk's own identity in the delivery ledger. Only
 // Desk's agent makes one, and the stack runs none, so the fixture writes the
 // spawn the core would have recorded (its shape is `coordination::started`'s
-// `register` and `spawn`) for a real pane of the fixture's Herdr, while the
+// `register` and `spawn`) for a real pane of the fixture's engine, while the
 // daemon is down.
 
-type Desk = { page: Page; herdr: AgentFixture; daemon: Daemon; pane: string };
+type Desk = { page: Page; engine: AgentFixture; daemon: Daemon; pane: string };
 
 const digest = (value: string) => createHash("sha256").update(value).digest("hex");
 
@@ -38,14 +37,13 @@ function deskLedger(node: string, pane: string, repo: string): unknown {
       { names: { workspace: "pending", tab: "pending" }, id: "spawn-2", parent: "agent-1", mode: "handoff", machine: null, intent: "desk-lane-intent", name: "gallery-compare", kind: "claude", repo, branch: "main", requested_path: null, args: [], path: repo, pane, terminal: null, typed: 0, shell: null, child: "agent-3", completed: true, auto_watch_id: null, reserved_at_unix_ms: 1 },
     ],
     spawn_placement_revision: 1,
-    node_clocks: {},
   };
 }
 
-/** Settings › Desk's switch, turned to `on` and closed again; every window follows the core without a restart. */
+/** Settings › Labs › Desk's switch, turned to `on` and closed again; every window follows the core without a restart. */
 async function switchDesk(page: Page, on: boolean) {
   await page.locator("[data-open-settings]").click();
-  await page.locator('[data-settings-tab="desk"]').click();
+  await page.locator('[data-settings-tab="labs"]').click();
   const use = page.locator("[data-desk-use]");
   if ((await use.getAttribute("data-desk-use")) !== String(on)) await use.click();
   await expect(use).toHaveAttribute("data-desk-use", String(on));
@@ -55,21 +53,21 @@ async function switchDesk(page: Page, on: boolean) {
 
 /** A Workspace whose second pane is a thread Desk started, Desk switched on, and the page on Desk's room unless `open` is false. */
 async function startDesk(page: Page, name: string, open = true): Promise<Desk> {
-  const herdr = await startFixture({ agents: false });
-  const repo = path.join(herdr.root, "fixture");
-  let daemon = await startHided(herdr, name);
-  const pane = herdr.panes[1];
+  const engine = await startFixture({ agents: false });
+  const repo = path.join(engine.root, "fixture");
+  let daemon = await startHided(engine, name);
+  const pane = engine.panes[1];
   daemon = await daemon.restart((stateDir) => {
-    fs.writeFileSync(path.join(stateDir, "delivery-ledger.json"), JSON.stringify(deskLedger(daemon.node, pane, repo)));
+    seedLedger(stateDir, JSON.stringify(deskLedger(daemon.node, pane, repo)));
   });
   await page.goto("about:blank");
   await page.goto(`${daemon.origin}/?probe=1#token=${daemon.token}`);
   await enterWorkspace(page, "fixture");
-  if (!open) return { page, herdr, daemon, pane };
+  if (!open) return { page, engine, daemon, pane };
   await switchDesk(page, true);
   await page.locator("[data-desk-sidebar-row]").click();
   await expect(page.locator("[data-desk-screen]")).toBeVisible();
-  return { page, herdr, daemon, pane };
+  return { page, engine, daemon, pane };
 }
 
 const room = (page: Page) => page.locator("[data-desk-room]");
@@ -98,7 +96,7 @@ test("☰ opens the Threads list over the chat and a row opens its thread in the
     await expect(page.locator('[data-desk-view-column] [data-desk-outputs="0"]')).toBeVisible();
   } finally {
     desk.daemon.stop();
-    desk.herdr.stop();
+    desk.engine.stop();
   }
 });
 
@@ -138,7 +136,7 @@ test("📌 beside ✕ docks Desk's lane beside the chat, the core keeps it throu
     await expect(page.locator("[data-desk-chat-column] [data-desk-composer-input]")).toBeFocused();
   } finally {
     desk.daemon.stop();
-    desk.herdr.stop();
+    desk.engine.stop();
   }
 });
 
@@ -166,7 +164,7 @@ test("⌘J goes from a thread to its Agent tab and back to Desk with the thread 
     await expect(page.locator(`[data-pane-view="${desk.pane}"]`)).toHaveAttribute("data-focused", "true");
   } finally {
     desk.daemon.stop();
-    desk.herdr.stop();
+    desk.engine.stop();
   }
 });
 
@@ -194,6 +192,6 @@ test("Desk is off on a new install, its switch in Settings shows it without a re
     await expect(page.locator(`[data-pane-view="${desk.pane}"] [data-desk-pane-to-desk]`)).toHaveCount(0);
   } finally {
     desk.daemon.stop();
-    desk.herdr.stop();
+    desk.engine.stop();
   }
 });

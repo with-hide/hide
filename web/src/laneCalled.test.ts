@@ -25,7 +25,7 @@ describe("laneCalled", () => {
     expect(laneCalled(reveal(false))).toBe(false);
     expect(laneCalled({ schema_version: 2, kind: "workspace_view", payload: { tool: "project" } })).toBe(true);
     expect(laneCalled({ schema_version: 2, kind: "workspace_view", payload: { tool: null } })).toBe(false);
-    expect(laneCalled({ schema_version: 2, kind: "workspace_view", payload: { pinned: true } })).toBe(false);
+    expect(laneCalled({ schema_version: 2, kind: "workspace_view", payload: { document_width: 600 } })).toBe(false);
   });
 
   it("leaves the lane as it is for an agent or tab chosen", () => {

@@ -296,6 +296,7 @@ if name == 'playwright' and '--list' in args:
                 calls = self.tool_calls("playwright", "desktop")
                 self.assertEqual(len(calls), 3 if shard.endswith("/2") else 1)
                 self.assertTrue(all("--grep" in call and "@platform" in call for call in calls))
+                self.assertTrue(all("--grep-invert" not in call for call in calls))
                 self.assertNotIn("--list", calls[-1])
                 if shard.endswith("/2"):
                     self.assertTrue(all("--list" in call for call in calls[:2]))
@@ -312,15 +313,44 @@ if name == 'playwright' and '--list' in args:
         result = self.workflow_step("web-e2e.yml", "e2e", "End-to-end",
                                     RUNNER_TEMP=str(self.root),
                                     HIDE_E2E_SCREENSHOT_DIR=str(self.root / "screenshots"),
-                                    GREP="", GREP_INVERT="@herdr", SHARD="1/2")
+                                    GREP="", SPECS="", REPEAT="", SHARD="1/2")
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertEqual(self.tool_calls("node", "web"), [["scripts/build-phone.mjs"]])
         calls = self.tool_calls("playwright", "web")
         self.assertEqual(len(calls), 3)
         self.assertTrue(all("--list" in call for call in calls[:2]))
         self.assertNotIn("--list", calls[-1])
-        # The own engine's lane leaves out the tests that look at Herdr itself, in its lists and its run.
-        self.assertTrue(all("--grep-invert" in call and "@herdr" in call for call in calls))
+        self.assertTrue(all("--grep-invert" not in call for call in calls))
+
+    def test_web_repeat_runs_the_named_specs_n_times_with_no_retry(self):
+        self.enable_package_scripts()
+        # `ci-repeat.py` reads `src` test declarations through `rust_scan.py`,
+        # so a staged run needs both.
+        for name in ("ci-repeat.py", "rust_scan.py"):
+            shutil.copyfile(ROOT / "scripts" / name, self.root / "scripts" / name)
+        result = self.workflow_step("web-e2e.yml", "e2e", "End-to-end",
+                                    RUNNER_TEMP=str(self.root), GITHUB_STEP_SUMMARY=str(self.root / "summary.md"),
+                                    HIDE_E2E_SCREENSHOT_DIR=str(self.root / "screenshots"),
+                                    GREP="", SPECS="web/e2e/s3.spec.ts web/e2e/s7.spec.ts", REPEAT="10", SHARD="1/1")
+        self.assertEqual(result.returncode, 0, result.stderr)
+        calls = self.tool_calls("playwright", "web")
+        self.assertEqual(calls, [[
+            "test", "--retries=0", "--repeat-each=10", r"web/e2e/s3\.spec\.ts$", r"web/e2e/s7\.spec\.ts$",
+        ]])
+
+    def test_web_repeat_refuses_a_bad_repeat_and_a_second_shard(self):
+        self.enable_package_scripts()
+        # `ci-repeat.py` reads `src` test declarations through `rust_scan.py`,
+        # so a staged run needs both.
+        for name in ("ci-repeat.py", "rust_scan.py"):
+            shutil.copyfile(ROOT / "scripts" / name, self.root / "scripts" / name)
+        for repeat, shard in (("", "1/1"), ("0", "1/1"), ("ten", "1/1"), ("10", "1/2")):
+            with self.subTest(repeat=repeat, shard=shard):
+                result = self.workflow_step("web-e2e.yml", "e2e", "End-to-end",
+                                            RUNNER_TEMP=str(self.root), GITHUB_STEP_SUMMARY=str(self.root / "summary.md"),
+                                            HIDE_E2E_SCREENSHOT_DIR=str(self.root / "screenshots"),
+                                            GREP="", SPECS="web/e2e/s3.spec.ts", REPEAT=repeat, SHARD=shard)
+                self.assertNotEqual(result.returncode, 0)
 
     def test_desktop_execution_always_builds_and_propagates_prerequisite_and_test_failures(self):
         self.enable_package_scripts()
@@ -377,6 +407,34 @@ if name == 'playwright' and '--list' in args:
         self.assertFalse(any(key.startswith(("HERDR_", "HCOORD_")) for key in received["env"]))
         self.assertEqual(received["env"]["HIDE_E2E_HERDR_BIN"], "explicit-test-binary")
         self.assertEqual(self.run_entry("verify-cargo.sh", "check", "--workspace", FAIL_COMMAND="23").returncode, 23)
+
+    def test_a_hide_pane_s_handles_never_reach_a_test_but_its_inputs_do(self):
+        pane = {"HIDE_STATE_DIR": "operator-state", "HIDE_CAP_REF": "operator-credential",
+                "HIDE_PANE_ID": "h1:p2", "HIDE_INSTALL": "app", "HIDE_INSTALL_CLI": "/operator/hide",
+                "HIDE_PORT": "7777", "HIDE_SOMETHING_NEW": "a daemon setting added later"}
+        inputs = {"HIDE_TEST_HOLDER_BIN": "holder", "HIDE_E2E_WSL_DISTRO": "distro", "HIDE_BUILD_ORDER": "7",
+                  "HIDE_VT_ZIG_CACHE": "zig", "HIDE_HOLDER_CONPTY": "conpty", "HIDE_VERSION": "1.2.3",
+                  "HIDE_AGY_BINARY": "agy"}
+        for mode in (("test",), ("test-scoped", "-p", "hide-kit"), ("nextest", "-p", "hide-kit"), ("nextest-list", "-p", "hide-kit"), ("check", "--workspace")):
+            with self.subTest(mode=mode[0]):
+                self.record.unlink(missing_ok=True)
+                self.assertEqual(self.run_entry("verify-cargo.sh", *mode, **pane, **inputs).returncode, 0)
+                received = self.records()[0]["env"]
+                self.assertEqual([key for key in received if key in pane], [])
+                self.assertEqual({key: received[key] for key in inputs}, inputs)
+
+    def test_a_test_run_reads_none_of_the_account_s_git_settings(self):
+        for mode in (("test",), ("test-scoped", "-p", "hide-kit"), ("nextest", "-p", "hide-kit")):
+            with self.subTest(mode=mode[0]):
+                self.record.unlink(missing_ok=True)
+                self.assertEqual(self.run_entry("verify-cargo.sh", *mode, GIT_CONFIG_GLOBAL="~/.gitconfig").returncode, 0)
+                received = self.records()[0]["env"]
+                self.assertEqual(received["GIT_CONFIG_GLOBAL"], "/dev/null")
+                self.assertEqual(received["GIT_CONFIG_NOSYSTEM"], "1")
+        # A build or a lint runs no test, and leaves cargo's own git reads alone.
+        self.record.unlink(missing_ok=True)
+        self.assertEqual(self.run_entry("verify-cargo.sh", "check", "--workspace", GIT_CONFIG_GLOBAL="~/.gitconfig").returncode, 0)
+        self.assertEqual(self.records()[0]["env"]["GIT_CONFIG_GLOBAL"], "~/.gitconfig")
 
     def test_a_build_that_can_reach_hide_vt_prepares_its_inputs_first(self):
         self.assertEqual(self.run_entry("verify-cargo.sh", "test").returncode, 0)

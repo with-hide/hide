@@ -1,4 +1,4 @@
-// Settings > Agents on an isolated pinned Herdr and a hided that runs the install kit (PRD settings-cleanup
+// Settings > Agents on an isolated engine and a hided that runs the install kit (PRD settings-cleanup
 // B8 to B20): the seven supported agents of this Mac, the ones whose program the private HOME holds under
 // Installed and the rest folded under Not installed, a switch that writes and removes Hide's own entries,
 // the Partial popover from its chip by keyboard, and a hook the operator removed shown on its row with
@@ -26,8 +26,8 @@ const read = (file: string) => (fs.existsSync(file) ? fs.readFileSync(file, "utf
  * likely to have there.
  */
 async function start(label: string) {
-  const herdr = await startFixture();
-  const home = path.join(fs.mkdtempSync(path.join(herdr.root, "ag-")), "home");
+  const engine = await startFixture();
+  const home = path.join(fs.mkdtempSync(path.join(engine.root, "ag-")), "home");
   for (const folder of [".claude", ".codex", ".grok/hooks", ".cursor"]) fs.mkdirSync(path.join(home, folder), { recursive: true });
   fs.mkdirSync(path.join(home, ".local", "bin"), { recursive: true });
   for (const program of ["claude", "codex", "grok", "opencode", "omp", "cursor-agent"]) fs.writeFileSync(path.join(home, ".local", "bin", program), "#!/bin/sh\n", { mode: 0o755 });
@@ -36,8 +36,8 @@ async function start(label: string) {
   copyFixtureShim("claude-shim", path.join(home, ".local", "bin", "claude"));
   fs.mkdirSync(path.join(home, ".hide", "kit"), { recursive: true });
   fs.writeFileSync(path.join(home, ".hide", "kit", "installed.json"), JSON.stringify({ format: 1, installed: [] }));
-  const daemon = await startHided(herdr, label, home, {}, true);
-  return { herdr, daemon, home };
+  const daemon = await startHided(engine, label, home, {}, true);
+  return { engine, daemon, home };
 }
 
 async function openAgents(page: Page, daemon: Daemon) {
@@ -50,7 +50,7 @@ async function openAgents(page: Page, daemon: Daemon) {
 }
 
 test("lists the installed agents with a status and a switch, and folds the others under Not installed with an install link", async ({ page }) => {
-  const { herdr, daemon } = await start("agents-list");
+  const { engine, daemon } = await start("agents-list");
   try {
     const sent = countSent(page);
     const list = await openAgents(page, daemon);
@@ -92,12 +92,12 @@ test("lists the installed agents with a status and a switch, and folds the other
     await expect(list.locator("[data-agent-row]")).toHaveCount(7);
   } finally {
     daemon.stop();
-    herdr.stop();
+    engine.stop();
   }
 });
 
 test("the Partial chip opens by keyboard with a mark and a word per feature, and Escape returns to the chip", async ({ page }) => {
-  const { herdr, daemon } = await start("agents-partial");
+  const { engine, daemon } = await start("agents-partial");
   try {
     const list = await openAgents(page, daemon);
     const chip = list.locator('[data-agent-partial="grok"]');
@@ -113,8 +113,7 @@ test("the Partial chip opens by keyboard with a mark and a word per feature, and
     // A mark and a word for each feature; the table is the kit's, so a '–' is something Hide does not do.
     await expect(popover.locator("[data-agent-feature$=':no']").first()).toContainText("–");
     await expect(popover.locator("[data-agent-feature$=':yes']").first()).toContainText("✓");
-    // Every supported agent has Herdr's integration: the popover lists it and says nothing of a screen-only status.
-    await expect(popover.locator('[data-agent-feature="herdr_integration:yes"]')).toBeVisible();
+    // The popover says nothing of a screen-only status.
     await expect(popover).not.toContainText("from the screen");
     await screenshot(page, "agents-partial-popover");
     await page.keyboard.press("Escape");
@@ -122,12 +121,12 @@ test("the Partial chip opens by keyboard with a mark and a word per feature, and
     await expect(chip).toBeFocused();
   } finally {
     daemon.stop();
-    herdr.stop();
+    engine.stop();
   }
 });
 
 test("a switch installs and takes out Hide's own entries, and a hook the operator removed shows on its row until Reinstall", async ({ page }) => {
-  const { herdr, daemon, home } = await start("agents-switch");
+  const { engine, daemon, home } = await start("agents-switch");
   try {
     const list = await openAgents(page, daemon);
     const grok = path.join(home, ".grok", "hooks", "hide.json");
@@ -160,13 +159,13 @@ test("a switch installs and takes out Hide's own entries, and a hook the operato
     await expect(list.locator("[data-agent-problem]")).toHaveCount(0);
   } finally {
     daemon.stop();
-    herdr.stop();
+    engine.stop();
   }
 });
 
 test("reads without sideways scrolling in Korean and English, light and dark, on a narrow window", async ({ page }) => {
   // B65: the sheet shrinks with its window; the rows' status, the Partial chip and the Not installed list wrap, not clip.
-  const { herdr, daemon } = await start("agents-narrow");
+  const { engine, daemon } = await start("agents-narrow");
   try {
     const list = await openAgents(page, daemon);
     await expect(list.locator("[data-agent-row]")).toHaveCount(7, { timeout: 60_000 });
@@ -196,6 +195,6 @@ test("reads without sideways scrolling in Korean and English, light and dark, on
     }
   } finally {
     daemon.stop();
-    herdr.stop();
+    engine.stop();
   }
 });

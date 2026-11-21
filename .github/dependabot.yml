@@ -2,7 +2,6 @@
 # Actions wait seven days after a release before proposing it, so a version
 # that is yanked or patched within its first week never reaches a pull request
 # here; Dependabot has no cooldown for the toolchain (see its entry).
-# The bundled Herdr runtime is not a package; herdr-update.yml owns that pin.
 # Each proposal's title carries the type prefix CONTRIBUTING.md asks of every
 # commit subject and pull request title.
 version: 2

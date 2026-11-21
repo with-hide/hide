@@ -1,0 +1,23 @@
+[Unit]
+Description=Hide device relay monthly traffic meter
+After=hide-iroh-relay-limits.service hide-relay-proxy.service
+
+[Service]
+Type=oneshot
+# Root: it reads the nftables counters and starts, stops and restarts the relay.
+ExecStart=/usr/bin/python3 -I /opt/hide-relay/current/iroh-relay-meter.py tick
+StateDirectory=hide-iroh-relay-meter
+# Caddy reads the stopped marker here to answer 503.
+StateDirectoryMode=0755
+TimeoutStartSec=60
+MemoryMax=64M
+NoNewPrivileges=true
+ProtectSystem=strict
+ProtectHome=true
+PrivateTmp=true
+PrivateDevices=true
+IPAddressDeny=any
+RestrictAddressFamilies=AF_UNIX AF_NETLINK
+LogNamespace=hide-relay
+StandardOutput=journal
+StandardError=journal

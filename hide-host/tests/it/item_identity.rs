@@ -10,7 +10,7 @@ use hide_host::mutate::trash;
 use hide_host::{ErrorCode, Root};
 
 fn inode_of(root: &Root, name: &str) -> u64 {
-    list(root.dir(), Path::new(""), root.real_path())
+    list(root.dir(), Path::new(""), root.real_path(), None)
         .unwrap()
         .entries
         .into_iter()

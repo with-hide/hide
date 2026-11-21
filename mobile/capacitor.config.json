@@ -1,0 +1,15 @@
+{
+  "appId": "me.grab.hide.ios",
+  "appName": "Hide",
+  "webDir": "www",
+  "loggingBehavior": "none",
+  "server": {
+    "iosScheme": "capacitor",
+    "hostname": "localhost",
+    "allowNavigation": []
+  },
+  "ios": {
+    "webContentsDebuggingEnabled": false,
+    "handleApplicationNotifications": false
+  }
+}

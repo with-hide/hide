@@ -34,7 +34,7 @@ fn the_plugin_keeps_its_pinned_bytes() {
             file.text(crate::hook_target(helper)),
             crate::routed_script(pinned),
             "{} changed: raise its version and regenerate the fixture",
-            file.name()
+            file.name(None)
         );
     }
 }
@@ -46,17 +46,10 @@ fn node_test(dir: &Path, test: &str, env: &[(&str, &Path)]) {
     command
         .args(["--test", "--test-timeout=60000"])
         .arg(crate_dir().join("tests/opencode").join(test))
-        .env(
-            "HIDE_OPENCODE_HELPER_SCRIPT",
-            crate_dir().join("tests/opencode/helper.mjs"),
-        )
         .env("HIDE_OPENCODE_HELPER_LOG", dir.join("calls.jsonl"))
         // The guardrails policy is read from HOME, which the test writes.
         .env("HOME", dir)
-        .env("HIDE_OPENCODE_HELPER_ANSWERS", dir.join("answers.json"))
-        .env_remove("HERDR_ENV")
-        .env_remove("HERDR_PANE_ID")
-        .env_remove("HERDR_SOCKET_PATH");
+        .env("HIDE_OPENCODE_HELPER_ANSWERS", dir.join("answers.json"));
     for (name, value) in env {
         command.env(name, value);
     }
@@ -71,15 +64,14 @@ fn node_test(dir: &Path, test: &str, env: &[(&str, &Path)]) {
     );
 }
 
-/// The stand-in helper. The plugin hands its environment on, so the stand-in
-/// is named there rather than written into the program, which then starts at
-/// once.
+/// The stand-in helper (`host_helper`), which finds its log and answers from
+/// the environment the plugin hands on.
 #[cfg(unix)]
 fn stand_in(dir: &Path) -> PathBuf {
     let helper = dir.join("hide-agent-hooks");
     crate::stand_ins::program(
         &helper,
-        "#!/bin/sh\nexec node \"$HIDE_OPENCODE_HELPER_SCRIPT\" \"$@\"\n",
+        &crate::host_helper::body("HIDE_OPENCODE_HELPER_LOG", "HIDE_OPENCODE_HELPER_ANSWERS"),
     );
     helper
 }

@@ -115,10 +115,11 @@ mod unix {
             row: Arc<Row>,
         ) -> Result<hide_node_link::device::Established, EstablishError> {
             std::fs::write(self.local.join(".ssh/config"), config).unwrap();
-            let transport = hide_node::ssh::Connector::new(Some(self.packages.clone()))
-                .with_askpass_program(PathBuf::from(env!("CARGO_BIN_EXE_hide")))
-                .transport(&self.local, "system-ssh", alias, None)
-                .unwrap();
+            let transport =
+                hide_node::ssh::Connector::new(Some(self.packages.clone()), hided::cli::RELEASE)
+                    .with_askpass_program(PathBuf::from(env!("CARGO_BIN_EXE_hide")))
+                    .transport(&self.local, "system-ssh", alias)
+                    .unwrap();
             transport.establish(
                 &HostConsent {
                     contract: HOST_CONSENT_CONTRACT,
@@ -210,7 +211,7 @@ mod unix {
             other => panic!("an unattended attempt went on: {:?}", other.err()),
         }
         // The core's row refuses an unattended attempt's question at once and
-        // shows nothing (herdr-core `ssh_sign_in`); the attempt then ends ssh.
+        // shows nothing (hide-core `ssh_sign_in`); the attempt then ends ssh.
         assert_eq!(unattended.asked().len(), 1);
         assert!(!known.exists() || std::fs::read_to_string(&known).unwrap().is_empty());
 
@@ -258,7 +259,7 @@ mod unix {
             refused.err()
         );
         // The core's row refuses an unattended attempt's question at once and
-        // shows nothing (herdr-core `ssh_sign_in`); the attempt then ends ssh.
+        // shows nothing (hide-core `ssh_sign_in`); the attempt then ends ssh.
         assert_eq!(unattended.asked().len(), 1);
 
         let row = Row::answering(vec![text("wrong"), text("fixture passphrase")]);
@@ -540,7 +541,20 @@ mod unix {
         std::fs::write(local.join(".ssh/config"), "").unwrap();
         let packages = base.join("p");
         std::fs::create_dir(&packages).unwrap();
-        std::fs::write(packages.join("hided"), vec![7u8; 8 * 1024 * 1024]).unwrap();
+        // Bytes that do not pack, so the link still carries more than the
+        // stand-in device reads before it stops.
+        let mut state = 0x9e37_79b9_7f4a_7c15u64;
+        let helper: Vec<u8> = (0..8 * 1024 * 1024)
+            .map(|_| {
+                state ^= state << 13;
+                state ^= state >> 7;
+                state ^= state << 17;
+                state as u8
+            })
+            .collect();
+        std::fs::write(packages.join("hided"), helper).unwrap();
+        // Every device gets the pane holder beside the helper.
+        std::fs::write(packages.join("hide-holder"), b"holder").unwrap();
         let ssh = base.join("ssh");
         std::fs::write(
             &ssh,
@@ -584,10 +598,10 @@ for last; do :; done
             }
         };
 
-        let transport = hide_node::ssh::Connector::new(Some(packages))
+        let transport = hide_node::ssh::Connector::new(Some(packages), hided::cli::RELEASE)
             .with_askpass_program(PathBuf::from(env!("CARGO_BIN_EXE_hide")))
             .with_ssh_program(ssh.clone())
-            .transport(&local, "system-ssh", "device", None)
+            .transport(&local, "system-ssh", "device")
             .unwrap();
         let attempt = Cancel::default();
         let returned = Arc::new(std::sync::atomic::AtomicBool::new(false));
@@ -680,6 +694,35 @@ for last; do :; done
         let row = Arc::new(Row::default());
         reached_the_device(fixture.attempt(&config, "device", Wake::Allowed, row.clone()));
         assert!(row.asked().is_empty());
+    }
+
+    /// A restart is ready on its own server's "Server listening" line, not on
+    /// the line the first start left in the appended log, and a port another
+    /// server took while it was down is named, since a restart cannot choose
+    /// another (the client's config is bound to the port).
+    #[test]
+    #[ignore = "the system's sshd; the remote mailbox lane runs it"]
+    fn a_restart_waits_for_its_own_listening_line_and_names_a_lost_port() {
+        let fixture = fixture();
+        let port = fixture.sshd.port;
+        let listening = format!("Server listening on 127.0.0.1 port {port}.");
+        fixture.sshd.online(false).unwrap();
+        let other_server = std::net::TcpListener::bind(("127.0.0.1", port)).unwrap_or_else(|error| {
+            panic!("another process took port {port} between the server's stop and this test's bind: {error}")
+        });
+        let error = fixture.sshd.online(true).unwrap_err();
+        assert!(
+            format!("{error:#}").contains("another server holds it"),
+            "{error:#}"
+        );
+        drop(other_server);
+        fixture.sshd.online(true).unwrap();
+        assert_eq!(
+            fixture.sshd.log().matches(&listening).count(),
+            2,
+            "{}",
+            fixture.sshd.log()
+        );
     }
 
     /// B6: a password is answered on the row. The account and its server

@@ -40,7 +40,7 @@ pub use reinforcement::words_digest;
 pub use repeats::{RepeatRequest, RepeatScope, RepeatSource, instruction_line};
 pub use upkeep::{Aging, AgingReport, CHANGE_LIMIT, CardChange, ChangeKind};
 
-const SCHEMA_VERSION: i64 = 25;
+const SCHEMA_VERSION: i64 = 26;
 /// Version 2 names where analysis can go: the agent Hide AI runs on and any
 /// agent the operator added under its fallback list (PRD settings-cleanup
 /// D-26), which now includes vendors other than the two it was limited to.
@@ -885,6 +885,99 @@ pub struct Folded {
 
 /// Folds the Project `leftover`, stored under the id `into` that `moving`
 /// would take, with `moving`'s rows and choices winning (`convert_device_merging`).
+/// Every table that keys rows by Project, read from the schema so a table
+/// added later cannot keep an old id.
+fn project_tables(transaction: &Transaction<'_>) -> Result<Vec<String>, MemoryError> {
+    let mut statement = transaction.prepare(
+        "SELECT m.name FROM sqlite_master m WHERE m.type='table' AND m.name!='projects'
+         AND EXISTS(SELECT 1 FROM pragma_table_info(m.name) c WHERE c.name='project_id')",
+    )?;
+    Ok(statement
+        .query_map([], |row| row.get::<_, String>(0))?
+        .collect::<Result<Vec<_>, _>>()?)
+}
+
+/// Moves each Project whose id an earlier build derived from its root's own
+/// text (`hide_project::project_id_as_written`) where the root's wire
+/// spelling now derives another (`hide_project::project_id`): a Windows
+/// root such as `\\?\C:\repo`, which is `C:/repo` on the wire. Every row
+/// naming the old id names the new one, and a copy of the Project already
+/// stored under the new id, with a root of the same wire spelling, is
+/// folded in as [`MemoryStore::convert_device_merging`] folds one. A Project
+/// whose id is neither, such as a device's scoped id, is left as it is. On
+/// macOS and Linux a root's text is its wire spelling, so nothing moves.
+/// One transaction, so the file is either converted or untouched; a second
+/// run finds nothing left to move.
+fn rekey_root_spellings(connection: &Connection) -> Result<Vec<Conversion>, MemoryError> {
+    let transaction = connection.unchecked_transaction()?;
+    transaction.execute_batch("PRAGMA defer_foreign_keys=ON;")?;
+    let projects = {
+        let mut statement = transaction.prepare("SELECT id, root, device_id FROM projects")?;
+        statement
+            .query_map([], |row| {
+                Ok((
+                    row.get::<_, String>(0)?,
+                    row.get::<_, String>(1)?,
+                    row.get::<_, String>(2)?,
+                ))
+            })?
+            .collect::<Result<Vec<_>, _>>()?
+    };
+    let moving = projects
+        .into_iter()
+        .filter_map(|(old, root, device)| {
+            let new = hide_project::project_id(&device, Path::new(&root));
+            (new != old && hide_project::project_id_as_written(&device, &root) == old)
+                .then_some((old, new, root, device))
+        })
+        .collect::<Vec<_>>();
+    if moving.is_empty() {
+        return Ok(Vec::new());
+    }
+    let tables = project_tables(&transaction)?;
+    let mut moved = Vec::with_capacity(moving.len());
+    for (old, new, root, device) in moving {
+        let wire_root = hide_platform::path::to_wire_lossy(Path::new(&root));
+        let held: Option<String> = transaction
+            .query_row("SELECT root FROM projects WHERE id=?1", [&new], |row| {
+                row.get(0)
+            })
+            .optional()?;
+        let merged = match held {
+            None => {
+                for table in &tables {
+                    transaction.execute(
+                        &format!("UPDATE \"{table}\" SET project_id=?1 WHERE project_id=?2"),
+                        params![new, old],
+                    )?;
+                }
+                transaction.execute(
+                    "UPDATE projects SET id=?1, root=?2 WHERE id=?3",
+                    params![new, wire_root, old],
+                )?;
+                None
+            }
+            Some(held_root)
+                if hide_platform::path::to_wire_lossy(Path::new(&held_root)) == wire_root =>
+            {
+                Some(fold_project(&transaction, &tables, &old, &new, &device)?)
+            }
+            Some(_) => {
+                return Err(MemoryError::Integrity(format!(
+                    "root_spelling_conflict:{new}"
+                )));
+            }
+        };
+        moved.push(Conversion {
+            from: old,
+            to: new,
+            merged,
+        });
+    }
+    transaction.commit()?;
+    Ok(moved)
+}
+
 fn fold_project(
     transaction: &Transaction<'_>,
     tables: &[String],
@@ -1164,6 +1257,7 @@ impl MemoryStore {
             "PRAGMA journal_mode=WAL; PRAGMA foreign_keys=ON; PRAGMA synchronous=NORMAL; PRAGMA secure_delete=ON;",
         )?;
         migrate(&connection, path, diagnostic)?;
+        let rekeyed = rekey_root_spellings(&connection)?;
         enforce_database_permissions(path)?;
         let store = Self {
             connection,
@@ -1174,6 +1268,12 @@ impl MemoryStore {
         store.check_integrity()?;
         check_projection_integrity(&store.connection)?;
         certify_projection(&store.connection)?;
+        for moved in rekeyed {
+            diagnostic(serde_json::json!({
+                "component": "memory", "kind": "memory.project_rekeyed",
+                "from": moved.from, "to": moved.to, "merged": moved.merged.is_some(),
+            }));
+        }
         Ok(store)
     }
 
@@ -1367,17 +1467,7 @@ impl MemoryStore {
         if projects.is_empty() {
             return Ok(Vec::new());
         }
-        // Every table that keys rows by Project, read from the schema so a
-        // table added later cannot keep an old id.
-        let tables = {
-            let mut statement = transaction.prepare(
-                "SELECT m.name FROM sqlite_master m WHERE m.type='table' AND m.name!='projects'
-                 AND EXISTS(SELECT 1 FROM pragma_table_info(m.name) c WHERE c.name='project_id')",
-            )?;
-            statement
-                .query_map([], |row| row.get::<_, String>(0))?
-                .collect::<Result<Vec<_>, _>>()?
-        };
+        let tables = project_tables(&transaction)?;
         let mut moved = Vec::with_capacity(projects.len());
         for (old, root) in projects {
             let new = hide_project::project_id(to, Path::new(&root));
@@ -4471,6 +4561,14 @@ COMMIT;"#,
                 "component": "memory_store", "kind": "migration.planned_cards", "cards": marked,
             }));
         }
+        version = 25;
+    }
+    // Version 26 indexes a receipt's cards by card, so a card's deliveries
+    // (the list's per-card count, the promotion checks, a card's delete) are
+    // found without reading every receipt the store keeps (issue 2345). Only
+    // an index is added, so there is nothing a backup would restore.
+    if version == 25 {
+        migrate_version_twenty_five(connection)?;
         version = SCHEMA_VERSION;
     }
     if version != SCHEMA_VERSION {
@@ -4537,7 +4635,7 @@ fn migrate_version_twenty_four(connection: &Connection) -> Result<usize, MemoryE
                 connection.execute_batch("PRAGMA user_version=25;")?;
                 Ok(marked)
             }
-            SCHEMA_VERSION => Ok(0),
+            25..=SCHEMA_VERSION => Ok(0),
             found => Err(MemoryError::WrongSchema {
                 found,
                 expected: SCHEMA_VERSION,
@@ -4554,6 +4652,34 @@ fn migrate_version_twenty_four(connection: &Connection) -> Result<usize, MemoryE
             Err(error)
         }
     }
+}
+
+/// Indexes `injection_receipt_items` by card, unless another opener did
+/// while this one waited for the write lock. An index already there, as in a
+/// store first made at a later version, is kept.
+fn migrate_version_twenty_five(connection: &Connection) -> Result<(), MemoryError> {
+    connection.execute_batch("BEGIN IMMEDIATE")?;
+    let result = (|| -> Result<(), MemoryError> {
+        let actual: i64 = connection.pragma_query_value(None, "user_version", |row| row.get(0))?;
+        match actual {
+            25 => Ok(connection.execute_batch(
+                "CREATE INDEX IF NOT EXISTS injection_receipt_items_item ON injection_receipt_items(item_id,receipt_id); PRAGMA user_version=26;",
+            )?),
+            SCHEMA_VERSION => Ok(()),
+            found => Err(MemoryError::WrongSchema {
+                found,
+                expected: SCHEMA_VERSION,
+            }),
+        }
+    })();
+    match result {
+        Ok(()) => connection.execute_batch("COMMIT")?,
+        Err(error) => {
+            let _ = connection.execute_batch("ROLLBACK");
+            return Err(error);
+        }
+    }
+    Ok(())
 }
 
 fn add_branch_decision(connection: &Connection) -> Result<(), MemoryError> {
@@ -5292,6 +5418,7 @@ CREATE TABLE injection_receipts(id TEXT PRIMARY KEY,project_id TEXT NOT NULL REF
 CREATE INDEX injection_receipts_session ON injection_receipts(runtime,session_id,project_id);
 CREATE INDEX memory_sources_session ON memory_sources(provider,session_id);
 CREATE TABLE injection_receipt_items(receipt_id TEXT NOT NULL REFERENCES injection_receipts(id) ON DELETE CASCADE,item_id TEXT NOT NULL REFERENCES memory_items(id) ON DELETE CASCADE,revision INTEGER NOT NULL,PRIMARY KEY(receipt_id,item_id));
+CREATE INDEX injection_receipt_items_item ON injection_receipt_items(item_id,receipt_id);
 CREATE TABLE analysis_calls(day INTEGER PRIMARY KEY,calls INTEGER NOT NULL,checks INTEGER NOT NULL DEFAULT 0);
 CREATE TABLE card_promotions(item_id TEXT PRIMARY KEY REFERENCES memory_items(id) ON DELETE CASCADE,state TEXT NOT NULL CHECK(state IN('dismissed','running','pr_open','merged','closed_unmerged','failed','outdated','building','unbuilt','kept','ready')),revision INTEGER NOT NULL,attempt INTEGER NOT NULL,agent_id TEXT,branch TEXT,pr_number INTEGER,target_path TEXT,started_at_ms INTEGER NOT NULL,updated_at_ms INTEGER NOT NULL,failure TEXT,repository TEXT,building_branch TEXT);
 CREATE TABLE card_comparisons(item_id TEXT PRIMARY KEY REFERENCES memory_items(id) ON DELETE CASCADE,revision INTEGER NOT NULL,data TEXT NOT NULL);
@@ -11319,6 +11446,66 @@ PRAGMA user_version=14;"#,
     }
 
     #[test]
+    fn a_version_twenty_five_store_counts_each_cards_deliveries_from_its_own_receipts() {
+        let (temp, mut store, project) = store();
+        let path = temp.path().join("memory.sqlite3");
+        store
+            .apply_candidates(
+                &batch(&project, "b1", "h1"),
+                &[
+                    candidate("Keep receipt provenance", CandidateRelation::New),
+                    candidate("Run nextest before a merge", CandidateRelation::New),
+                ],
+            )
+            .unwrap();
+        for (runtime, session, turn, key, at) in [
+            ("codex", "session-1", "event:1", "m1@1", 1_000),
+            ("claude", "session-2", "event:2", "m1@1", 2_000),
+            ("codex", "session-1", "event:3", "m2@1", 3_000),
+        ] {
+            store
+                .record_receipt(&project, runtime, session, turn, key, at)
+                .unwrap();
+        }
+        store
+            .connection
+            .execute_batch("DROP INDEX injection_receipt_items_item; PRAGMA user_version=25;")
+            .unwrap();
+        drop(store);
+
+        let store = MemoryStore::open(&path).unwrap();
+        let mut counts: Vec<(u64, usize)> = store
+            .list_memories(&project)
+            .unwrap()
+            .into_iter()
+            .map(|item| (item.number, item.provided_session_count))
+            .collect();
+        counts.sort_unstable();
+        assert_eq!(counts, [(1, 2), (2, 1)]);
+        // The list asks once per card; reading every receipt for each one
+        // took 18 s on a Project of 700 cards and 76k receipt rows.
+        let plan: Vec<String> = store
+            .connection
+            .prepare(&format!(
+                "EXPLAIN QUERY PLAN {ITEM_SELECT} WHERE i.project_id=?1 AND i.lifecycle='active' ORDER BY i.updated_at_ms DESC,i.id"
+            ))
+            .unwrap()
+            .query_map([&project], |row| row.get::<_, String>(3))
+            .unwrap()
+            .collect::<rusqlite::Result<_>>()
+            .unwrap();
+        assert!(
+            plan.iter().any(|step| step
+                .starts_with("SEARCH rii USING COVERING INDEX injection_receipt_items_item")),
+            "{plan:#?}"
+        );
+        assert!(
+            !plan.iter().any(|step| step.starts_with("SCAN rii")),
+            "{plan:#?}"
+        );
+    }
+
+    #[test]
     fn a_version_twenty_two_store_opened_by_two_at_once_is_upgraded_once() {
         let (temp, store, _project) = store();
         let path = temp.path().join("memory.sqlite3");
@@ -11981,6 +12168,110 @@ PRAGMA user_version=14;"#,
             .unwrap()
             .collect::<Result<_, _>>()
             .unwrap()
+    }
+
+    /// A Windows Project an earlier build keyed by its root's verbatim
+    /// text (`\\?\C:\...`) is found under the id its wire spelling
+    /// derives once the store opens again, cards and receipt key with it; a
+    /// Project under any other id stays. On macOS and Linux both ids are one,
+    /// so the same assertions hold with nothing moved.
+    #[test]
+    fn a_project_keyed_by_its_root_as_written_is_found_under_its_wire_id() {
+        let (temp, mut store, other) = store();
+        let root = r"\\?\C:\Users\me\repo";
+        let written = hide_project::project_id_as_written("pc", root);
+        store
+            .ensure_project(&written, Path::new(root), "pc")
+            .unwrap();
+        store.set_enabled(&written, true, true).unwrap();
+        store
+            .apply_candidates(
+                &batch(&written, "b-written", "h-written"),
+                &[candidate("Build from C:\\hide-dev", CandidateRelation::New)],
+            )
+            .unwrap();
+        let key: Vec<u8> = store.receipt_auth_key(&written).unwrap();
+        let path = store.path().to_path_buf();
+        drop(store);
+
+        let wire = hide_project::project_id("pc", Path::new(root));
+        let store = MemoryStore::open(&path).unwrap();
+        assert_eq!(card_numbers(&store, &wire), vec![1]);
+        assert_eq!(store.receipt_auth_key(&wire).unwrap(), key);
+        assert_eq!(card_numbers(&store, &other).len(), 0);
+        assert!(store.project_state(&other).is_ok());
+        if cfg!(windows) {
+            assert_ne!(wire, written);
+            assert!(card_numbers(&store, &written).is_empty());
+            assert_eq!(
+                store.roots_of_device("pc").unwrap(),
+                vec!["C:/Users/me/repo".to_owned()]
+            );
+        } else {
+            assert_eq!(wire, written);
+        }
+        drop(store);
+        // A second open finds nothing left to move.
+        let store = MemoryStore::open(&path).unwrap();
+        assert_eq!(card_numbers(&store, &wire), vec![1]);
+        drop(temp);
+    }
+
+    /// A Windows root stored twice, under the id an earlier build derived
+    /// from its verbatim text and under the id its wire spelling derives,
+    /// becomes one Project when the store opens: the old copy's key and
+    /// numbers win, the wire copy's card is numbered after them, and a
+    /// second open changes nothing. Only Windows has two ids for one root.
+    #[cfg(windows)]
+    #[test]
+    fn a_root_stored_under_both_ids_is_folded_into_its_wire_id_once() {
+        let (temp, mut store, _other) = store();
+        let root = r"\\?\C:\Users\me\repo";
+        let written = hide_project::project_id_as_written("pc", root);
+        let wire = hide_project::project_id("pc", Path::new(root));
+        assert_ne!(wire, written);
+        for (id, root, text) in [
+            (&written, root, "Build from C:\\hide-dev"),
+            (&wire, "C:/Users/me/repo", "Run the formatter first"),
+        ] {
+            store.ensure_project(id, Path::new(root), "pc").unwrap();
+            store.set_enabled(id, true, true).unwrap();
+            store
+                .apply_candidates(
+                    &batch(id, &format!("b-{text}"), &format!("h-{text}")),
+                    &[candidate(text, CandidateRelation::New)],
+                )
+                .unwrap();
+        }
+        let key: Vec<u8> = store.receipt_auth_key(&written).unwrap();
+        let path = store.path().to_path_buf();
+        drop(store);
+
+        let rows = |store: &MemoryStore| -> Vec<(String, String)> {
+            store
+                .connection
+                .prepare("SELECT id, root FROM projects WHERE device_id='pc'")
+                .unwrap()
+                .query_map([], |row| Ok((row.get(0)?, row.get(1)?)))
+                .unwrap()
+                .collect::<Result<_, _>>()
+                .unwrap()
+        };
+        let one = vec![(wire.clone(), "C:/Users/me/repo".to_owned())];
+        let store = MemoryStore::open(&path).unwrap();
+        assert_eq!(rows(&store), one);
+        assert_eq!(card_numbers(&store, &wire), vec![1, 2]);
+        assert!(card_numbers(&store, &written).is_empty());
+        assert_eq!(store.search(&wire, "Build", 10).unwrap().len(), 1);
+        assert_eq!(store.search(&wire, "formatter", 10).unwrap().len(), 1);
+        assert_eq!(store.receipt_auth_key(&wire).unwrap(), key);
+        drop(store);
+
+        let store = MemoryStore::open(&path).unwrap();
+        assert_eq!(rows(&store), one);
+        assert_eq!(card_numbers(&store, &wire), vec![1, 2]);
+        assert_eq!(store.receipt_auth_key(&wire).unwrap(), key);
+        drop(temp);
     }
 
     #[test]

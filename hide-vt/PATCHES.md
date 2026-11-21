@@ -15,7 +15,7 @@ The Rust sources are copied into this crate; libghostty-vt itself is not, and it
 
 ## Herdr's patches to libghostty-vt
 
-Herdr's tree is the source dist with these patches already applied; Hide applies none of its own.
+Herdr's tree is the source dist with these patches already applied.
 `scripts/prepare-vt-inputs.py` checks each patch's sha256 and that it applies in reverse to the extracted tree, so a tree that is not the dist plus exactly these patches is refused.
 Herdr's `vendor/libghostty-vt.patches.md`, pinned in the same archive, gives each one's reason, files and removal condition.
 
@@ -27,6 +27,15 @@ Herdr's `vendor/libghostty-vt.patches.md`, pinned in the same archive, gives eac
 | `0006-clear-screen-preserving-cursor-line.patch` | a screen clear that keeps the cursor's line |
 | `0007-experimental-png-retention.patch` | an opt-in mode that keeps encoded PNG uploads |
 
+## Hide's patches to libghostty-vt
+
+Hide's own patches, applied on top of that tree, live in `hide-vt/patches/`, name files relative to the libghostty-vt tree, and are pinned by sha256 under `source.hide_patches` in `build-inputs.json`, so changing one moves the prepared folder's digest and the vt cache key.
+`scripts/prepare-vt-inputs.py` applies them after the check above, and refuses one whose digest differs from its pin or that does not apply.
+
+| Patch | What it changes | Why | Remove when |
+| --- | --- | --- | --- |
+| `0001-msvc-stl-version-gate.patch` | every C++ compile for an MSVC target (simdutf's and Highway's `build.zig`, and the `src/simd/*.cpp` files in `src/build/SharedDeps.zig`) defines `_ALLOW_COMPILER_AND_STL_VERSION_MISMATCH` | Each MSVC STL refuses a Clang older than the one its toolset expects (`STL1000`), and Zig's bundled Clang trails it: on 2026-11-16 the GitHub `windows-2025-vs2026` image moved to MSVC 14.52, which expects Clang 22, while Zig 0.16.0 carries Clang 21, and every Windows build of hide-vt that landed there failed (#2644). simdutf and the `src/simd` files include the STL and failed; Highway's compile reads none of it today and carries the define so the next STL header it reads does not fail the same way. Ghostty's build has no fix for it; Ghostty's main moved to Zig 0.17 (Clang 22), which the pinned libghostty-vt tree cannot build with. | Hide's libghostty-vt sets the define itself, or Hide stops compiling C++ against the runner's MSVC STL. A newer Zig alone does not remove it: the next MSVC raises the floor again. |
+
 ## Hide's changes to Herdr's crate
 
 Each source file starts with its origin, Herdr's copyright and license, and what Hide changed in it.
@@ -35,7 +44,7 @@ Each source file starts with its origin, Herdr's copyright and license, and what
 | --- | --- |
 | `Cargo.toml` | Renamed `ghostty-vt` to `hide-vt`; `tracing` without its default features; `serde_json` and `sha2` for the build script; the edition stays Herdr's 2021 so the sources stay as Herdr wrote them. |
 | `build.rs` | Reads the source and Zig from the prepared inputs folder instead of `vendor/`, checks the Zig version before building, runs Zig with `--system` so it fetches nothing, keeps Zig's caches in the worktree, and drops Herdr's `LIBGHOSTTY_VT_OPTIMIZE`, `LIBGHOSTTY_VT_SIMD`, `LIBGHOSTTY_VT_ZIG_SYSTEM_DIR` and `LIBGHOSTTY_VT_WINDOWS_LIBC` switches, which no Hide build sets. |
-| `src/lib.rs` | Reads the kitty placeholder table from the prepared source (`HIDE_VT_SOURCE_DIR`, set by the build script) instead of a path into `vendor/`; Herdr's name is gone from comments and test paths; two pixel loops use `as_chunks` and `kitty_placement_payload` carries a reasoned `too_many_arguments` allow, for this repository's Clippy (Herdr allows eleven arguments). For the pane holder, `Terminal::set_default_color` sets or clears a default foreground, background or cursor color (the theme a node sends), `Terminal::effective_background_color` reads the background in force, and `encode_paste` wraps libghostty's paste encoder; none changes what Herdr's functions do. |
+| `src/lib.rs` | Reads the kitty placeholder table from the prepared source (`HIDE_VT_SOURCE_DIR`, set by the build script) instead of a path into `vendor/`; Herdr's name is gone from comments and test paths; two pixel loops use `as_chunks` and `kitty_placement_payload` carries a reasoned `too_many_arguments` allow, for this repository's Clippy (Herdr allows eleven arguments). For the pane holder, `Terminal::set_default_color` sets or clears a default foreground, background or cursor color (the theme a node sends), `Terminal::effective_background_color` reads the background in force, `encode_paste` wraps libghostty's paste encoder, and `MouseEncoder::set_any_button_pressed` sets the encoder's held-button option, so a drag past the screen's edge is reported; none changes what Herdr's functions do. Herdr's Windows-only `RowIterator::wrap_state`, which nothing called, is `RowIterator::soft_wrapped` on every system, reading only the row's wrap bit, so the holder's capture can say which rows soft-wrap. |
 | `src/pane_graphics_files.rs` | The log target is `hide_vt::pane_graphics_files`, and the runtime folders are `hide-vt-native-sources-<uid>` and `hide-vt-pane-graphics-<uid>`. A generation folder is named `server-<pid>-<time>-<sequence>`: Herdr's `server-<pid>-<time>` repeats when two stores start in the same clock tick (a microsecond on macOS), and the second store failed with `AlreadyExists`. |
 | `src/native_source_tests.rs` | The test folder name no longer carries Herdr's name. |
 | `src/bindings.rs`, `src/native_image_sources.rs`, `src/native_source.rs`, `src/png_forward_tests.rs`, `src/test_allocations.rs` | Unchanged but for the header. |
@@ -43,5 +52,5 @@ Each source file starts with its origin, Herdr's copyright and license, and what
 
 ## Moving to a newer Herdr
 
-Change `build-inputs.json` to the new release's archive, its digest, its patch list and the packages its libghostty-vt build reads, compare Herdr's `crates/ghostty-vt` with these sources, and carry Hide's changes above across.
+Change `build-inputs.json` to the new release's archive, its digest, its patch list and the packages its libghostty-vt build reads, compare Herdr's `crates/ghostty-vt` with these sources, and carry Hide's changes above and its patches to libghostty-vt across.
 The packages a build reads are found by building once with `--system` on an empty folder: Zig names each missing package, and its `build.zig.zon` entry gives the URL.

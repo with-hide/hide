@@ -7,9 +7,9 @@ import type { MissionCriterionState } from "../snapshot";
 import { CriterionMark } from "./criterion-mark";
 import { TooltipProvider } from "./ui/tooltip";
 
-// A finish line's mark as docs/UI_BEHAVIOR.md (Mission map, the panel)
-// describes it: one glyph per state, whose hover and accessible name say the
-// same state word.
+// A finish line's mark as with-hide/hide-private docs/tasks-and-pr-list.md
+// (A mission's map, the panel) describes it: one glyph per state, whose hover
+// and accessible name say the same state word.
 afterEach(async () => {
   await clientI18n.changeLanguage("en");
   vi.unstubAllGlobals();

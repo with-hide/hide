@@ -14,7 +14,7 @@ export type { DeskAgent, DeskAgentId, DeskAgentState, DeskApprovalAnswer, DeskAp
 
 export type DeskSelection = DeskSection["selection"];
 
-/** Whether Desk is switched on in Settings › Desk (D-76, B41); before the section arrives it is not. */
+/** Whether Desk is switched on in Settings › Labs › Desk (D-76, B41); before the section arrives it is not. */
 export function deskOn(desk: DeskSection | null | undefined): boolean {
   return desk?.settings.enabled === true;
 }
@@ -444,7 +444,7 @@ export function agentPickable(agent: DeskAgent): boolean {
   return agent.state !== "no_ask_mode" && agent.state !== "off";
 }
 
-/** The agents a row of Settings › Desk › 권한 cannot hold (`always_runs`), named on that row; one that cannot be chosen is left out. */
+/** The agents a row of Settings › Labs › Desk › 권한 cannot hold (`always_runs`), named on that row; one that cannot be chosen is left out. */
 export function agentsRunningUnasked(agents: readonly DeskAgent[], row: DeskPermissionRow): string[] {
   return agents.filter((agent) => agentPickable(agent) && agent.always_runs.includes(row)).map((agent) => agent.label);
 }

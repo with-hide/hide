@@ -1,0 +1,39 @@
+name: Development issue
+description: For contributors - a flaky test, a CI failure, a follow-up from a review, or other work on hide's own code.
+labels: [development]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Using hide and something is broken? Use the Bug report form instead.
+
+        CI files flaky tests (`quarantine`), nightly failures (`nightly-failure`) and the agent canary (`agent-canary`) on its own; search [open issues](https://github.com/with-hide/hide/issues) before filing one of those by hand.
+
+        An issue does not reserve the work or permit a pull request.
+
+  - type: textarea
+    id: wrong
+    attributes:
+      label: What is wrong
+      description: What the code, a test or CI does, and what it should do instead.
+      placeholder: |
+        A test fails on Windows about one run in ten: the letter it waits for arrives after its 10 s bound.
+    validations:
+      required: true
+
+  - type: textarea
+    id: where
+    attributes:
+      label: Where
+      description: The files, tests, CI run or pull request it concerns.
+      placeholder: |
+        The test's file and name, and the run where it failed.
+    validations:
+      required: true
+
+  - type: textarea
+    id: evidence
+    attributes:
+      label: Evidence
+      description: The raw log lines, run links or measurements that show it. Paste them as they are, not a summary.
+      render: text

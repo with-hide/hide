@@ -6,6 +6,7 @@
 mod fs;
 mod host;
 mod ipc;
+mod launchers;
 mod listeners;
 mod memory;
 mod path;
@@ -18,3 +19,4 @@ mod stdio;
 mod time;
 mod user_agents;
 mod watch;
+mod widen;

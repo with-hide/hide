@@ -10,7 +10,7 @@ For responsiveness, rendering, CPU, or memory checks, also read [PERFORMANCE_TES
 
 - an installed packaged bundle, normally at `/Applications/hide.app`, built and ad-hoc signed by `pnpm --dir desktop package`
 - an unpackaged instance from `pnpm --dir desktop dev`, which runs the checkout's own `electron .` rather than a bundled app
-- a Playwright `_electron` instance from `pnpm --dir desktop e2e` (`desktop/e2e/fixture.ts`), which refuses to launch without its own private `HIDE_STATE_DIR`, `HOME`, `HERDR_SOCKET_PATH` and `HIDE_DESKTOP_USER_DATA_DIR`
+- a Playwright `_electron` instance from `pnpm --dir desktop e2e` (`desktop/e2e/fixture.ts`), which refuses to launch without its own private `HIDE_STATE_DIR`, `HOME` and `HIDE_DESKTOP_USER_DATA_DIR`
 
 Every instance keeps one Electron `requestSingleInstanceLock()` per profile directory (`desktop/src/main/index.ts`): a second launch that resolves to the *same* profile does not start a second process, it wakes the first one's window (`second-instance` -> `host.reopen`) and quits itself.
 The profile defaults to `~/Library/Application Support/hide-desktop` for every instance, packaged or not, unless `HIDE_DESKTOP_USER_DATA_DIR` names a different directory.

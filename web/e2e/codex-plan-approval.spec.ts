@@ -1,10 +1,10 @@
-// A Codex plan waiting for approval on an isolated engine and hided, either
-// engine (PRD codex-plan-approval-hold B1, B4, B12): the engine reads Codex's
+// A Codex plan waiting for approval on an isolated engine and hided (PRD
+// codex-plan-approval-hold B1, B4, B12): the engine reads Codex's
 // "Implement this plan?" menu as an ordinary stop, so the wait is read from
 // the session file. A rollout whose last plan-mode turn proposed a plan puts
 // the Codex row in Needs You with the approval mark, and the next turn's
 // record takes it out. That the row stays after it is read (B2) is the
-// core's rule, tested in `herdr-core/src/runtime/tests/labels.rs`.
+// core's rule, tested in `hide-core/src/runtime/tests/labels.rs`.
 //
 // The fixture Codex is the shim copied as `codex`. The engine reads its
 // screen as working while the title carries Codex's spinner and, once a title
@@ -14,12 +14,11 @@
 // wait is read for the state the row is in.
 
 import { expect, test } from "@playwright/test";
-import { execFileSync } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
 import { startFixture, type EngineServer } from "./engine-fixture";
 import { agentIn, openProject, sendKeys, withControl } from "./daemon-actions";
-import { paneCommandLine } from "./herdr-fixture";
+import { setAgentSession } from "./fixture-agents";
 import { fixtureExecutable } from "./platform-fixture";
 import { startHided, type Daemon } from "./hided-fixture";
 import { enterWorkspace, screenshot, showProjectRow } from "./wire";
@@ -51,7 +50,7 @@ function planWaiting(cwd: string): string {
     + event("task_complete", "turn-1", { last_agent_message: null });
 }
 
-/** The session read the daemon keeps for the pane: its Herdr state and the last turn it folded. */
+/** The session read the daemon keeps for the pane: its engine state and the last turn it folded. */
 function turnRead(daemon: Daemon, pane: string): { seq?: number; mode?: string } {
   type Stored = { turns_seq?: number; turns?: { last?: { mode?: string } } };
   try {
@@ -78,38 +77,16 @@ async function drawTitle(daemon: Daemon, pane: string, state: "working" | "ended
 /**
  * Starts the Codex stand-in in `pane`, whose shell is at its prompt, and
  * returns once its row names `SESSION`, as Codex's integration reports the
- * session at SessionStart: Herdr's report on Herdr; on the core's own engine
- * Hide's hook helper with Codex's payload, run from a process of the pane's
- * shell once the agent runs (the stand-in's own report is Claude Code's, and
- * its screen takes the pane's keys). The reporter waits for a marker file the
- * test writes when the agent is listed, so the hook never races the start.
+ * session at SessionStart: Hide's hook helper with Codex's payload, run by
+ * the stand-in itself after the engine lists it. No background shell job
+ * shares the stand-in's tty.
  */
-async function startCodex(fixture: EngineServer, daemon: Daemon, pane: string, cwd: string): Promise<void> {
-  const go = path.join(fixture.root, "codex-session-go");
-  if (fixture.engine === "own") {
-    const hooks = path.resolve("..", "target", "debug", fixtureExecutable("hide-agent-hooks"));
-    const reporter = path.join(fixture.root, "codex-session-report.cjs");
-    fs.writeFileSync(reporter, `
-const fs = require("node:fs");
-const { spawnSync } = require("node:child_process");
-const [hooks, session, cwd, go] = process.argv.slice(2);
-const wait = () => (fs.existsSync(go) ? hook() : setTimeout(wait, 100));
-const hook = () => process.exit(spawnSync(hooks, ["hook", "--runtime", "codex", "--event", "SessionStart"], { input: JSON.stringify({ session_id: session, hook_event_name: "SessionStart", source: "startup", cwd }), encoding: "utf8", timeout: 20000 }).status ?? 1);
-wait();
-`);
-    const background = paneCommandLine(fixture.shell, [process.execPath, reporter, hooks, SESSION, cwd, go]);
-    await withControl(daemon, async (control) => sendKeys(control, pane, `${fixture.shell === "cmd" ? "start /b " : ""}${background}${fixture.shell === "cmd" ? "" : " &"}\r`));
-  }
+async function startCodex(fixture: EngineServer, daemon: Daemon, pane: string): Promise<void> {
   await withControl(daemon, async (control) => {
     sendKeys(control, pane, "codex\r");
     await control.until((rest) => agentIn(rest, pane), "the Codex agent in the plan project", 30_000);
   });
-  if (fixture.engine === "herdr") {
-    const server = fixture as EngineServer & { env: NodeJS.ProcessEnv; bin: string };
-    execFileSync(server.bin, ["pane", "report-agent-session", pane, "--source", "herdr:codex", "--agent", "codex", "--agent-session-id", SESSION, "--seq", "2", "--session-start-source", "clear"], { env: server.env, timeout: 30_000 });
-  } else {
-    fs.writeFileSync(go, "");
-  }
+  await setAgentSession(fixture, daemon, pane, SESSION);
   await withControl(daemon, (control) => control.until((rest) => agentIn(rest, pane)?.session_id === SESSION, `${pane} on session ${SESSION}`, 20_000));
 }
 
@@ -128,20 +105,25 @@ test("a Codex plan waiting for approval holds its row in Needs You until the nex
     // the page draws it: a pane takes the operator's keys only while a screen shows it.
     const plan = await withControl(daemon, (control) => openProject(control, cwd, "plan"));
     const pane = plan.pane;
-    await (await showProjectRow(page, page.locator("[data-project]", { hasText: "plan" }).locator("[data-checkout]").first())).click();
+    await (await showProjectRow(page, page.locator("[data-project]", { hasText: "plan" }).locator("[data-checkout]").first())).click({ position: { x: 12, y: 8 } });
     await expect(page.locator("[data-canvas]").first()).toHaveAttribute("data-canvas", plan.tab);
     await expect.poll(() => page.evaluate((id) => window.__hideProbe?.paneText(id) ?? "", pane), { timeout: 20_000, message: "the prompt in the plan project" }).toContain("fixture %");
-    await startCodex(fixture, daemon, pane, plan.folder);
+    await startCodex(fixture, daemon, pane);
 
     const sessions = path.join(daemon.home, ".codex", "sessions", "2026", "10", "07");
     fs.mkdirSync(sessions, { recursive: true });
     const rollout = path.join(sessions, `rollout-2026-10-07T01-00-00-${SESSION}.jsonl`);
     fs.writeFileSync(rollout, planWaiting(cwd));
 
+    // A demand is drawn even under a folded checkout. Open the checkout by
+    // its disclosure state so lifting the demand cannot hide the agent row.
+    const toggle = page.locator("nav[data-sidebar] [data-project]", { hasText: "plan" }).locator("[data-checkout-toggle]");
+    if ((await toggle.getAttribute("aria-expanded")) === "false") await toggle.click();
+    await expect(toggle).toHaveAttribute("aria-expanded", "true");
     const row = page.locator(`nav[data-sidebar] [data-project] [data-pane="${pane}"]`);
     await expect(row).toBeVisible({ timeout: 20_000 });
 
-    // B1: the turn that proposed the plan has ended, as Herdr's next state
+    // B1: the turn that proposed the plan has ended, as the engine's next state
     // reads it; the row is the operator's to answer, with the approval mark.
     await drawTitle(daemon, pane, "working");
     await drawTitle(daemon, pane, "ended");
@@ -153,14 +135,10 @@ test("a Codex plan waiting for approval holds its row in Needs You until the nex
     const planSeq = turnRead(daemon, pane).seq;
     await screenshot(page, "codex-plan-approval-waiting");
 
-    // B4: approving starts the next turn; once Herdr's state moves, the row
+    // B4: approving starts the next turn; once the engine's state moves, the row
     // leaves Needs You.
-    // A project of one agent that no longer waits folds to its project row, so the operator opens it to see the agent's row.
-    const toggle = page.locator("nav[data-sidebar] [data-project]", { hasText: "plan" }).locator("[data-checkout-toggle]");
     fs.appendFileSync(rollout, event("task_started", "turn-2", { collaboration_mode_kind: "default" }) + person("Implement the plan."));
     await drawTitle(daemon, pane, "working");
-    await expect(row.or(toggle)).toBeVisible();
-    if (!(await row.isVisible())) await toggle.click();
     await expect(row.locator('[data-mark="going"]')).toBeVisible({ timeout: 20_000 });
     await drawTitle(daemon, pane, "ended");
     // A state not read yet shows no wait either, so the row's absence counts

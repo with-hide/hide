@@ -11,7 +11,8 @@ import { openProject, openWorktree, withControl } from "./daemon-actions";
 import { startEngine, type EngineServer } from "./engine-fixture";
 import { sessionIn, startAgentInProject } from "./fixture-agents";
 import { git, ledgerOf } from "./hide-ai-fixture";
-import { startHided, type Daemon } from "./hided-fixture";
+import { seedLedger, startHided, type Daemon } from "./hided-fixture";
+import { openOtherCheckouts } from "./wire";
 
 test.describe.configure({ timeout: 150_000 });
 
@@ -57,8 +58,7 @@ async function open(page: Page, daemon: Daemon): Promise<void> {
 async function seed(stack: Stack, task: { kind: string; target: string } | null): Promise<void> {
   const session = await sessionIn(stack.daemon, stack.hideAiPane);
   stack.daemon = await stack.daemon.restart((dir) => {
-    const file = path.join(dir, "delivery-ledger.json");
-    fs.writeFileSync(file, ledgerOf(stack.daemon.node, [{ pane: stack.hideAiPane, session, path: stack.hideAiPath, branch: "hide-memory-m43-fixture", task }]), { mode: 0o600 });
+    seedLedger(dir, ledgerOf(stack.daemon.node, [{ pane: stack.hideAiPane, session, path: stack.hideAiPath, branch: "hide-memory-m43-fixture", task }]));
   });
 }
 
@@ -69,12 +69,15 @@ test("an agent Hide AI started for a home leaves the project tree with no head, 
     await open(page, stack.daemon);
     const project = page.locator("[data-project]", { hasText: "scratch" });
     await expect(project.locator("[data-checkout-row]").first()).toBeVisible({ timeout: 20_000 });
+    // Every checkout but the main one waits in the project's Checkouts fold.
+    await openOtherCheckouts(project);
     // Before Hide AI's record exists, every checkout is the operator's and its agent is drawn (B5).
     await expect(project.locator("[data-checkout-row]", { hasText: "hide-memory-m43" })).toHaveCount(1);
     await expect(page.locator(`[data-pane="${stack.hideAiPane}"]`)).toHaveCount(1);
 
     await seed(stack, { kind: "memory_promote", target: "m43" });
     await open(page, stack.daemon);
+    await openOtherCheckouts(project);
     // The head is gone, and so is the agent's row: its home, the Memory tab, shows its work (B1).
     await expect(page.locator(`[data-pane="${stack.hideAiPane}"]`)).toHaveCount(0, { timeout: 30_000 });
     await expect(page.locator("[data-hide-ai-group]")).toHaveCount(0);
@@ -97,13 +100,13 @@ test("a start whose kind this build has no home for stays an operator's row nami
     // A record with no task, or one a newer build wrote, loads with the rest of the ledger (B20).
     await seed(stack, null);
     await open(page, stack.daemon);
+    await openOtherCheckouts(page.locator("[data-project]", { hasText: "scratch" }));
     const row = page.locator(`[data-pane="${stack.hideAiPane}"]`);
     await expect(row.locator("[data-agent-task]")).toHaveText("Hide AI", { timeout: 30_000 });
 
     const session = await sessionIn(stack.daemon, stack.hideAiPane);
     stack.daemon = await stack.daemon.restart((dir) => {
-      const file = path.join(dir, "delivery-ledger.json");
-      fs.writeFileSync(file, ledgerOf(stack.daemon.node, [{ pane: stack.hideAiPane, session, path: stack.hideAiPath, branch: "hide-memory-m43-fixture", task: { kind: "future_kind", target: "m43" } }]), { mode: 0o600 });
+      seedLedger(dir, ledgerOf(stack.daemon.node, [{ pane: stack.hideAiPane, session, path: stack.hideAiPath, branch: "hide-memory-m43-fixture", task: { kind: "future_kind", target: "m43" } }]));
     });
     await open(page, stack.daemon);
     await expect(row.locator("[data-agent-task]")).toHaveText("future_kind · m43", { timeout: 30_000 });

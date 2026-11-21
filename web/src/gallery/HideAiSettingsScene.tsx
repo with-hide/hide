@@ -1,7 +1,7 @@
 // Settings › Hide AI over invented wire values: Runs on on an agent of a
 // connected device, connected (`device`) or away (`device_away`), for review
 // captures (PRD wsl-device B11, B13). Which rows exist and when one cannot
-// answer is the core's and is tested in herdr-core.
+// answer is the core's and is tested in hide-core.
 import { useLayoutEffect, useMemo } from "react";
 import { createActions } from "../actions";
 import { TooltipProvider } from "../components/ui/tooltip";
@@ -64,7 +64,7 @@ export function HideAiSettingsScene({ params }: { params: URLSearchParams }) {
       connection: "live",
       rest: {
         status: { background_ai: ai },
-        navigator: { devices: [{ id: "local", kind: "local", label: null, machine_name: "Windows PC" }, { id: DEVICE, kind: "remote", label: "WSL Ubuntu", state: away ? "unavailable" : "ready" }] },
+        navigator: { siblings_shown: 5, devices: [{ id: "local", kind: "local", label: null, machine_name: "Windows PC" }, { id: DEVICE, kind: "remote", label: "WSL Ubuntu", state: away ? "unavailable" : "ready" }] },
         ui_state: { interface_language: lang, issue_settings: { ai_worktree_name: true, closes_instruction: true } },
       },
     } as never);

@@ -3,16 +3,16 @@
 // and drives the display the same way a local pane does, and fails with the
 // Workspace commands' own reason when no desktop is attached (PRD
 // hide-browser-cli B34, B40). Setup as in remote-workspace.spec.ts: the two
-// Herdr servers, daemon, helper install and desktop profile are private, and
+// SSH pane fixtures, daemon, helper install and desktop profile are private, and
 // the device sessions get the private HOME desktop/e2e/device-home.ts proves.
 import { expect } from "@playwright/test";
-import { spawn, spawnSync } from "node:child_process";
+import { spawn } from "node:child_process";
 import fs from "node:fs";
 import http from "node:http";
 import type { AddressInfo } from "node:net";
 import path from "node:path";
-import { startHerdr, type HerdrFixture } from "../../web/e2e/herdr-fixture";
-import { enterWorkspace } from "../../web/e2e/wire";
+import { startSshPaneFixture, type SshPaneFixture } from "./ssh-pane-fixture";
+import { enterWorkspace, showExplorer } from "../../web/e2e/wire";
 import { deviceBridges, deviceHome, proveDeviceHome, resetDeviceHome, writeSshConfig } from "./device-home";
 import { endChild, HIDE_CLI, hostLog, isolate, launch, test, type Isolated } from "./fixture";
 
@@ -23,26 +23,22 @@ const PAGE = '<!doctype html><meta charset="utf-8"><title>Device page</title><bu
 
 function quote(value: string): string { return `'${value.replaceAll("'", "'\\''")}'`; }
 /** Runs the `hide` the kit linked on the device, in the device's pane. */
-async function deviceCli(remote: HerdrFixture, run: Isolated, bridge: string, args: string[], label: string): Promise<{ status: number; out: string }> {
-  const out = path.join(remote.root, `${label}.out`), exit = path.join(remote.root, `${label}.exit`);
+async function deviceCli(remote: SshPaneFixture, run: Isolated, bridge: string, args: string[], label: string): Promise<{ status: number; out: string }> {
   const cli = path.join(run.env.HIDE_HOST_CLI_DIR!, "hide");
-  const command = `HIDE_STATE_DIR=${quote(path.dirname(bridge))} ${[cli, ...args].map(quote).join(" ")} > ${quote(out)}; printf '%s' "$?" > ${quote(exit)}\n`;
-  const sent = spawnSync(remote.bin, ["pane", "send-text", remote.panes[0]!, command], { env: remote.env, encoding: "utf8", timeout: 10_000 });
-  expect(sent.status, sent.stderr).toBe(0);
-  await expect.poll(() => fs.existsSync(exit), { timeout: 60_000 }).toBe(true);
-  return { status: Number(fs.readFileSync(exit, "utf8")), out: fs.readFileSync(out, "utf8") };
+  const result = await remote.command(`HIDE_STATE_DIR=${quote(path.dirname(bridge))} ${[cli, ...args].map(quote).join(" ")}`, label);
+  return { status: result.status, out: result.stdout };
 }
 const lastJson = (out: string) => JSON.parse(out.trim().split("\n").at(-1) || "{}") as Record<string, unknown>;
 const liveBridges = (bridge: string) => fs.existsSync(bridge) ? fs.readdirSync(bridge).filter((name) => fs.existsSync(path.join(bridge, name, "bootstrap.sock"))) : [];
 const appliedFor = (log: string, device: string) => fs.readFileSync(log, "utf8").split("\n").some((line) => line.startsWith("{") && line.includes('"apply.completed"') && line.includes(`"${device}"`));
 
 test("hide browser from a device pane reads and clicks its page, and fails like a Workspace command without a desktop", async () => {
-  const local = await startHerdr({ agents: false });
-  const remote = await startHerdr({ agents: false });
+  const local = await startSshPaneFixture();
+  const remote = await startSshPaneFixture();
   const run = isolate(local, "ssh-browser");
   run.env.HIDE_HOST_HELPER_ROOT = path.join(run.root, "remote-helper");
   run.env.HIDE_HOST_CLI_DIR = path.join(run.root, "remote-bin");
-  writeSshConfig(run.env.HOME!, ["isolated-workspace"]);
+  writeSshConfig(run.env.HOME!, { "isolated-workspace": "ssh-browser" });
   const deviceAccount = deviceHome();
   const bridge = deviceBridges(deviceAccount);
   proveDeviceHome(run.env, "isolated-workspace", deviceAccount);
@@ -57,11 +53,12 @@ test("hide browser from a device pane reads and clicks its page, and fails like 
   let app: Awaited<ReturnType<typeof launch>>["app"] | undefined;
   try {
     await expect.poll(() => run.hide(["status", "--json"]).stdout.includes('"running":true'), { timeout: 30_000 }).toBe(true);
+    await local.attach(run);
     ({ app } = await launch(run.env));
     const page = await app.firstWindow();
     await enterWorkspace(page, "fixture");
     const state = JSON.parse(fs.readFileSync(path.join(run.env.HIDE_STATE_DIR!, "hided.json"), "utf8")) as { port: number; token: string };
-    await page.evaluate(async ({ port, token, socket }) => {
+    await page.evaluate(async ({ port, token }) => {
       await new Promise<void>((resolve, reject) => {
         const ws = new WebSocket(`ws://127.0.0.1:${port}/ws`);
         const timer = setTimeout(() => reject(new Error("device registration timed out")), 10_000);
@@ -69,14 +66,32 @@ test("hide browser from a device pane reads and clicks its page, and fails like 
         ws.onopen = () => ws.send(JSON.stringify({ token, schema_version: 2 }));
         ws.onmessage = () => {
           ws.send(JSON.stringify({ schema_version: 2, kind: "register_device", payload: {
-            id: "ssh-browser", label: "SSH browser fixture", ssh_alias: "isolated-workspace", herdr_socket_path: socket, host_consent: true,
+            label: "SSH browser fixture", ssh_alias: "isolated-workspace", host_consent: true,
           } }));
           clearTimeout(timer); ws.close(); resolve();
         };
       });
-    }, { port: state.port, token: state.token, socket: remote.socket });
+    }, { port: state.port, token: state.token });
     await expect.poll(() => liveBridges(bridge).length, { timeout: 60_000 }).toBe(1);
     await expect.poll(() => appliedFor(daemonLog, "ssh-browser"), { timeout: 120_000 }).toBe(true);
+    await remote.attach(run, "ssh-browser");
+
+    // While the operator is on this Mac's Workspace, a device agent's page
+    // loads on no desk on screen, and the agent reads and drives it there
+    // (PRD lane-desk-pair-view B31, B32).
+    const behind = await deviceCli(remote, run, bridge, ["browser", "open", `http://localhost:${port}/behind.html`, "--wait"], "device-open-behind");
+    expect(behind.status, behind.out).toBe(0);
+    expect(lastJson(behind.out)).toMatchObject({ ok: true, page: { state: "loaded" } });
+    const behindDisplay = (lastJson(behind.out).result as { view_id: string }).view_id;
+    expect(hostLog(run.env).some((line) => line.event === "browser.loaded_off_screen")).toBe(true);
+    const behindShot = await deviceCli(remote, run, bridge, ["browser", "snapshot", behindDisplay], "device-snapshot-behind");
+    expect(behindShot.status, behindShot.out).toBe(0);
+    const behindPress = /(@\d+) button "Press"/.exec(behindShot.out)?.[1];
+    expect(behindPress, behindShot.out).toBeDefined();
+    const behindClick = await deviceCli(remote, run, bridge, ["browser", "click", behindDisplay, behindPress!], "device-click-behind");
+    expect(behindClick.status, behindClick.out).toBe(0);
+    expect(String(lastJson(behindClick.out).changed)).toContain("clicked from the device");
+    expect(await page.locator("[data-workspace-screen]").getAttribute("data-workspace-screen")).not.toContain("ssh-browser");
 
     // The operator goes to the device, so its agent's page opens in front:
     // from a pane the operator is not in it would only join the list behind.
@@ -93,9 +108,14 @@ test("hide browser from a device pane reads and clicks its page, and fails like 
       });
     }, { port: state.port, token: state.token });
     await expect.poll(() => page.locator("[data-workspace-screen]").getAttribute("data-workspace-screen"), { timeout: 20_000 }).toContain("ssh-browser");
+    // An open from the operator's pane comes in front only while the lane is up (PRD lane-desk-pair-view B2).
+    await showExplorer(page);
     const opened = await deviceCli(remote, run, bridge, ["browser", "open", `http://localhost:${port}/device.html`, "--wait"], "device-open");
     expect(opened.status, opened.out).toBe(0);
     const display = (lastJson(opened.out).result as { view_id: string }).view_id;
+    // The device's agent learns from `workspace info` that it can drive the page.
+    const info = lastJson((await deviceCli(remote, run, bridge, ["workspace", "info"], "device-info")).out);
+    expect((info.result as { capabilities: string[] }).capabilities).toEqual(expect.arrayContaining(["browser.open", "browser.snapshot", "browser.click", "browser.fill"]));
     const snapshot = await deviceCli(remote, run, bridge, ["browser", "snapshot", display], "device-snapshot");
     expect(snapshot.status, snapshot.out).toBe(0);
     expect(snapshot.out).toMatch(/^# Device page\n# http:\/\/127\.0\.0\.1:\d+\/device\.html\n\n/);

@@ -17,8 +17,8 @@ describe("the child runner", () => {
   });
 
   it("gives a child the environment it is handed, whole", async () => {
-    const result = await new ChildRunner().run(node, script('process.stdout.write(`${process.env.HERDR_BIN_PATH}|${process.env.HOME ?? ""}`)'), 5_000, handed({ HERDR_BIN_PATH: "/r/herdr" }));
-    expect(result.stdout).toBe("/r/herdr|");
+    const result = await new ChildRunner().run(node, script('process.stdout.write(`${process.env.HIDE_CLI_PATH}|${process.env.HOME ?? ""}`)'), 5_000, handed({ HIDE_CLI_PATH: "/r/hide" }));
+    expect(result.stdout).toBe("/r/hide|");
   });
 
   it("kills a child past its timeout", async () => {
@@ -72,6 +72,6 @@ describe("a detached start", () => {
   });
 
   it("reports a binary that cannot start", async () => {
-    expect(await startDetached("/nonexistent/herdr", ["server"], {})).toEqual({ spawnError: expect.stringMatching(/ENOENT/) });
+    expect(await startDetached("/nonexistent/program", ["arg"], {})).toEqual({ spawnError: expect.stringMatching(/ENOENT/) });
   });
 });

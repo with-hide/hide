@@ -1,5 +1,5 @@
 // The words for why waking a sleeping agent failed: the core sends an
-// `agent_wake.*` code as the sleep's `reason`, and the folder and Herdr's own
+// `agent_wake.*` code as the sleep's `reason`, and the folder and the engine's own
 // answer stay in the `agent_sleep.wake_failed` diagnostic (docs/LOCALIZATION.md,
 // Translation boundary). `startReason.ts` maps each code to its key.
 import type { Catalogs } from "../schema";

@@ -2,7 +2,7 @@
 //! (`docs/delivery.md`, The bell line), and how a transcript reader tells it
 //! from the operator's own words.
 //!
-//! `herdr-core/src/delivery/bell.rs` writes the line from the parts named
+//! `hide-core/src/delivery/bell.rs` writes the line from the parts named
 //! here and [`is_bell_line`] reads it back by the same parts, so the two
 //! cannot drift: `🦉 <sender> <kind word>`, then `: <summary>` when the letter
 //! has a first line, ` · <N more>` when other letters wait and

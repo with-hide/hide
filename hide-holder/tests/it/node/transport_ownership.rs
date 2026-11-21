@@ -91,18 +91,10 @@ struct Gated {
     gates: Arc<Gates>,
 }
 impl Attacher for Gated {
-    fn open(&self, pane: &str, mode: Mode, rows: u16, cols: u16) -> Result<SessionParts, String> {
-        self.actual.open(pane, mode, rows, cols)
-    }
     fn keeps_own_size(&self, pane: &str) -> bool {
         self.actual.keeps_own_size(pane)
     }
-    fn open_transport(
-        &self,
-        pane: &str,
-        mode: Mode,
-        size: Option<GridSize>,
-    ) -> Result<Transport, OpenFailure> {
+    fn open_transport(&self, pane: &str, size: Option<GridSize>) -> Result<Transport, OpenFailure> {
         let number = self.gates.sequence.fetch_add(1, Ordering::SeqCst) + 1;
         self.gates.trace.lock().unwrap().push(("open", number));
         let pauses = self.gates.next.lock().unwrap().take();
@@ -116,7 +108,7 @@ impl Attacher for Gated {
         } else {
             None
         };
-        let mut transport = self.actual.open_transport(pane, mode, size)?;
+        let mut transport = self.actual.open_transport(pane, size)?;
         let Cleanup::Other(cleanup) = std::mem::replace(&mut transport.cleanup, Cleanup::None)
         else {
             panic!("the actual holder supplies its socket shutdown");
@@ -131,13 +123,13 @@ impl Attacher for Gated {
                 .unwrap()
                 .push((if resumed { "closed" } else { "barrier_timeout" }, number));
         }));
-        transport.writer = transport.writer.map(|actual| {
-            Box::new(GatedWriter {
-                actual,
+        Ok(Transport {
+            writer: Box::new(GatedWriter {
+                actual: transport.writer,
                 gates: self.gates.clone(),
-            }) as Box<dyn SessionWriter>
-        });
-        Ok(transport)
+            }),
+            ..transport
+        })
     }
 }
 
@@ -172,6 +164,10 @@ impl SessionWriter for GatedWriter {
         self.admitted()?;
         self.actual.keys(keys)
     }
+    fn submit(&mut self, submit: &hide_holder_protocol::Submit) -> std::io::Result<()> {
+        self.admitted()?;
+        self.actual.submit(submit)
+    }
     fn resize(&mut self, size: GridSize) -> std::io::Result<()> {
         self.actual.resize(size)
     }
@@ -186,6 +182,9 @@ impl SessionWriter for GatedWriter {
         modifiers: u8,
     ) -> std::io::Result<()> {
         self.actual.scroll(lines, column, row, modifiers)
+    }
+    fn mouse(&mut self, mouse: &hide_holder_protocol::Mouse) -> std::io::Result<()> {
+        self.actual.mouse(mouse)
     }
     fn release(&mut self) -> std::io::Result<()> {
         self.actual.release()
@@ -450,29 +449,28 @@ fn a_new_visible_attach_cancels_the_deferred_release() {
     connection.service.close();
 }
 
+/// A submission whose text was written is
+/// committed, so a close that begins during its gap still gets its submit
+/// and never leaves the text without it.
 #[test]
-fn closing_during_a_letter_gap_reports_partial_delivery_and_never_submits() {
+fn a_letter_whose_text_was_written_submits_when_its_pane_begins_closing_in_the_gap() {
     let folder = Folder::new();
     let (connection, _, script) = connection(&folder);
-    thread::scope(|scope| {
-        let letter = scope.spawn(|| {
-            connection.linked.letter(
-                "p",
-                PaneInput::Bytes(b"body".to_vec()),
-                PaneInput::Bytes(b"submit".to_vec()),
-                HANG_LIMIT,
-            )
-        });
-        heard(&script, b"body");
-        connection.service.control(TerminalControl::Closing {
-            pane: "p".into(),
-            closing: true,
-        });
-        assert!(matches!(
-            letter.join().unwrap(),
-            Err(HolderError::Unreachable { .. })
-        ));
+    connection
+        .linked
+        .letter(
+            "p",
+            vec![PaneInput::Bytes(b"body".to_vec())],
+            PaneInput::Bytes(b"submit".to_vec()),
+            Duration::from_secs(1),
+        )
+        .unwrap();
+    heard(&script, b"body");
+    connection.service.control(TerminalControl::Closing {
+        pane: "p".into(),
+        closing: true,
     });
+    heard(&script, b"bodysubmit");
     connection.service.control(TerminalControl::Closing {
         pane: "p".into(),
         closing: false,
@@ -481,7 +479,7 @@ fn closing_during_a_letter_gap_reports_partial_delivery_and_never_submits() {
         .linked
         .input("p", PaneInput::Bytes(b"sentinel".to_vec()))
         .unwrap();
-    heard(&script, b"bodysentinel");
+    heard(&script, b"bodysubmitsentinel");
     connection.service.close();
 }
 

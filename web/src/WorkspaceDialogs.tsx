@@ -12,6 +12,7 @@ import { AlertDialog, AlertDialogContent, AlertDialogDescription, AlertDialogFoo
 import { AgentPicker } from "./components/agent-picker";
 import { Badge } from "./components/ui/badge";
 import { Button } from "./components/ui/button";
+import { Toast } from "./components/ui/toast";
 import { Checkbox } from "./components/ui/checkbox";
 import { Dialog, DialogBody, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "./components/ui/dialog";
 import { Input } from "./components/ui/input";
@@ -183,9 +184,9 @@ function OutsideAgents({ actions, subtree, what, targetDevice }: { actions: Acti
 /**
  * `Remove project…` on any device: the panes the core counted close first,
  * then only the registration goes. The row leaving the registrations is the
- * answer; a refusal or a close that failed is the core's error. A row Herdr
- * shows without a registration has only its panes to close, so its answer is
- * the row leaving the list with Herdr's workspace (PRD sidebar-context-menus D-14).
+ * answer; a refusal or a close that failed is the core's error. A row the
+ * engine shows without a registration has only its panes to close, so its answer is
+ * the row leaving the list with the engine's workspace (PRD sidebar-context-menus D-14).
  */
 function RemoveProjectDialog({ actions, workspace, listed, onClose }: { actions: Actions; workspace: Workspace; listed: boolean; onClose: () => void }) {
   const { t } = useInterfaceTranslation();
@@ -634,7 +635,7 @@ export function WorkspaceNotices({ actions }: { actions: Actions }) {
     if (!watchedRemoval || dialogOpen) return;
     const answer = removalFor(removal, watchedRemoval.deviceId, watchedRemoval.path, watchedRemoval.afterId, localDeviceId(useShellStore.getState().rest));
     if (!answer || (answer.phase !== "finished" && answer.phase !== "failed")) return;
-    useUiStore.getState().setNotice({ text: removalNoticeText(answer.notice, answer.phase, translate), refreshable: false });
+    useUiStore.getState().showNotice({ level: answer.phase === "failed" ? "important" : "info", text: removalNoticeText(answer.notice, answer.phase, translate), refreshable: false });
     useUiStore.getState().setWatchedRemoval(null);
   }, [watchedRemoval, removal, dialogOpen]);
 
@@ -663,26 +664,31 @@ export function WorkspaceNotices({ actions }: { actions: Actions }) {
   const dismiss = () => useUiStore.getState().setWatchedTask(null);
   const failure = agentFailure(task.agent_reason, task.agent_line);
   return (
-    <div role="status" data-task-agent={task.agent_phase} data-core-error={"code" in failure ? failure.code : undefined} className="flex flex-wrap items-center gap-md border-b border-border bg-card px-md py-xs text-caption text-subtle-foreground">
-      <span className="min-w-0 flex-1 break-words">
-        {task.agent_phase === "starting"
-          ? t("workspace.startingAgent", { kind: task.agent_kind ?? t("common.agent") })
-          : `${endedSentence("key" in failure ? t(failure.key) : failure.message)} ${task.kind === "worktree_create" ? t("workspace.worktreePaneKept") : t("workspace.paneKept")}`}
-        {task.agent_phase !== "starting" && "line" in failure && failure.line ? <QuotedLine line={failure.line} /> : null}
-      </span>
-      {task.agent_phase === "failed" ? (
-        <button type="button" className="text-foreground underline" onClick={() => actions.retryTaskAgent(task.id)} data-task-agent-retry="true">
-          {t("workspace.retryAgent")}
-        </button>
+    <Toast
+      level={task.agent_phase === "starting" ? "info" : "important"}
+      data-task-agent={task.agent_phase}
+      data-core-error={"code" in failure ? failure.code : undefined}
+      onDismiss={dismiss}
+      dismissLabel={t("workspace.dismiss")}
+      actions={task.agent_phase === "failed" || task.pane_id ? (
+        <>
+          {task.agent_phase === "failed" ? (
+            <Button variant="text" size="inline" onClick={() => actions.retryTaskAgent(task.id)} data-task-agent-retry="true">
+              {t("workspace.retryAgent")}
+            </Button>
+          ) : null}
+          {task.pane_id ? (
+            <Button variant="text" size="inline" onClick={() => actions.focusPane(task.pane_id as string)}>
+              {t("workspace.showPane")}
+            </Button>
+          ) : null}
+        </>
       ) : null}
-      {task.pane_id ? (
-        <button type="button" className="text-foreground underline" onClick={() => actions.focusPane(task.pane_id as string)}>
-          {t("workspace.showPane")}
-        </button>
-      ) : null}
-      <button type="button" className="text-muted-foreground" aria-label={t("workspace.dismiss")} onClick={dismiss}>
-        ×
-      </button>
-    </div>
+    >
+      {task.agent_phase === "starting"
+        ? t("workspace.startingAgent", { kind: task.agent_kind ?? t("common.agent") })
+        : `${endedSentence("key" in failure ? t(failure.key) : failure.message)} ${task.kind === "worktree_create" ? t("workspace.worktreePaneKept") : t("workspace.paneKept")}`}
+      {task.agent_phase !== "starting" && "line" in failure && failure.line ? <QuotedLine line={failure.line} /> : null}
+    </Toast>
   );
 }

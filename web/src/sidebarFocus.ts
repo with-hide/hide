@@ -4,13 +4,11 @@ import type { AgentRow, Workspace } from "./snapshot";
 /**
  * Every pane the sidebar draws a row for when no checkout is folded: each
  * checkout's roots and the children and grandchildren of the roots opened,
- * and the raised Needs You and Done rows. The Home has no row of its own
- * (PRD sidebar-titlebar-refresh D-06), so its agents are drawn only raised.
+ * and the raised Needs You and Done rows.
  */
 export function sidebarPanes(workspaces: readonly Workspace[], scope: AgentScope | null): Set<string> {
   const panes = new Set<string>();
   for (const workspace of workspaces) {
-    if (workspace.is_home) continue;
     for (const checkout of workspace.checkouts) for (const row of checkout.agent_scope.sidebar_tree.visible_rows) panes.add(row.pane_id);
   }
   for (const raised of scope?.raised ?? []) for (const ref of [...raised.shown, ...raised.more]) panes.add(ref.pane_id);
@@ -35,22 +33,19 @@ export function sidebarFocusPane(focused: string | null, agents: readonly AgentR
 
 /**
  * Scrolls the project list by as little as brings the focus's row into view,
- * and not at all while one of its rows is already in view, in the project
- * list or in the raised list held above it. The row is the deepest one marked
- * current: an agent row, else the focused checkout's row, else the project or
- * fold row that hides it; an agent drawn both raised and in its tree is
- * brought in at its tree row, and one drawn only raised within the raised list.
+ * and not at all while one of its rows is already in view. Needs You and Done
+ * are the list's first sections, so a raised row and a tree row are in the
+ * same scroll. The row is the deepest one marked current: an agent row, else
+ * the focused checkout's row, else the project or fold row that hides it; an
+ * agent drawn both raised and in its tree is brought in at its tree row, and
+ * one drawn only raised at its raised row.
  */
 export function revealSidebarFocus(lists: HTMLElement): void {
   const marked = [...lists.querySelectorAll<HTMLElement>('[aria-current="true"]')];
   if (marked.length === 0) return;
   const deepest = ["[data-agent-open]", "[data-checkout]"].map((kind) => marked.filter((row) => row.matches(kind))).find((rows) => rows.length > 0) ?? marked;
-  const raised = deepest.filter((row) => row.closest("[data-raised-list]") !== null);
-  const tree = deepest.filter((row) => !raised.includes(row));
-  const held = lists.querySelector<HTMLElement>("[data-raised-list]")?.getBoundingClientRect();
-  if (held && raised.some((row) => inside(row.getBoundingClientRect(), held.top, held.bottom))) return;
-  if (tree.length > 0) revealRow(lists.querySelector<HTMLElement>("[data-project-list]")!, tree, tree[0]!);
-  else raised[0]!.scrollIntoView({ block: "nearest" });
+  const tree = deepest.filter((row) => row.closest("[data-raised-group]") === null);
+  revealRow(lists.querySelector<HTMLElement>("[data-project-list]")!, deepest, tree[0] ?? deepest[0]!);
 }
 
 /**

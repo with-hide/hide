@@ -10,6 +10,7 @@ import stat
 import tempfile
 import time
 
+from agent_live_check.processes import Cancelled
 from agent_live_check.protection import ProtectionError, beneath, private_directory, write_private
 from agent_live_check.runtime import clean_env
 from agent_live_check.sandbox import verify_write_boundary
@@ -139,8 +140,10 @@ class Cache:
         deadline = min(runtime.owner.deadline, time.monotonic() + 600)
         while child.poll() is None:
             self.check()
-            if runtime.owner.cancelled.is_set() or time.monotonic() >= deadline:
-                raise ProtectionError("journey_cli_install_cancelled_or_timed_out")
+            if runtime.owner.cancelled.is_set():
+                raise Cancelled("run_cancelled")
+            if time.monotonic() >= deadline:
+                raise ProtectionError("journey_cli_install_timed_out")
             runtime.owner.cancelled.wait(0.2)
         if child.returncode:
             raise ProtectionError(f"journey_cli_install_failed: {kind}, see install log")

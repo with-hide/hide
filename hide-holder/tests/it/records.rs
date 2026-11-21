@@ -17,6 +17,7 @@ use hide_kit::panes::{
     ENDED_KEPT, HOLDER_CAP, Judgment, Panes, RECONCILE_BUDGET, START_LIMIT, StartRefusal,
     StartRequest, Started,
 };
+use hide_node::terminal::holder::RECONCILE_ROUNDS;
 
 use crate::role::GO;
 use crate::support::{
@@ -221,6 +222,10 @@ fn end_reason(record: &PaneRecord) -> EndReason {
 
 /// The processes running a version folder's holder under `home`, a test's
 /// own.
+/// The holders running under `home`: the processes running a holder's
+/// program, less those a found holder started. A holder's child runs the
+/// holder's program between its fork and its exec, so it is no second holder
+/// (with-hide/hide-private#498).
 fn holders_in(home: &Path) -> Vec<u32> {
     let mut found = Vec::new();
     for entry in std::fs::read_dir(layout::holders_root(home))
@@ -233,7 +238,14 @@ fn holders_in(home: &Path) -> Vec<u32> {
         };
         found.extend(hide_platform::process::running(&file).unwrap());
     }
+    let started_by_one = |pid: &u32| {
+        hide_platform::process::parent_of(*pid).is_ok_and(|parent| found.contains(&parent))
+    };
     found
+        .iter()
+        .copied()
+        .filter(|pid| !started_by_one(pid))
+        .collect()
 }
 
 #[test]
@@ -410,7 +422,7 @@ fn a_program_that_ends_with_no_node_there_leaves_why_in_its_record() {
     let end = ended.end.as_ref().unwrap();
     assert_eq!(end.reason, EndReason::ProgramExited, "{ended:?}");
     assert_eq!(end.exit_code, Some(3), "{ended:?}");
-    wait_until("the holder's end", || !holder.runs());
+    Running::named(holder).wait_gone();
 }
 
 /// The holder waits a bounded time for the records' lock and exits without
@@ -428,7 +440,7 @@ fn an_end_the_holder_could_not_record_is_settled_as_a_lost_holder() {
     .unwrap()
     .expect("the records' lock");
     std::fs::write(folder.go(), b"").unwrap();
-    wait_until("the holder's end", || !holder.runs());
+    Running::named(holder).wait_gone();
     drop(lock);
     assert_eq!(folder.record("p1").phase, Phase::Running);
 
@@ -438,6 +450,33 @@ fn an_end_the_holder_could_not_record_is_settled_as_a_lost_holder() {
     };
     let end = ended.end.as_ref().unwrap();
     assert_eq!(end.reason, EndReason::HolderLost, "{ended:?}");
+}
+
+/// A node that cannot reach a holder while it runs asks whether the record's
+/// holder is gone; the answer changes nothing, and a holder that still runs
+/// is never called gone.
+#[test]
+fn a_holder_that_ended_without_saying_why_is_told_from_one_that_runs() {
+    let folder = Folder::new();
+    let started = folder.start(&folder.role_request("p1", "exit_when_told"));
+    let holder = started.holder.expect("the holder wrote itself in");
+    assert!(!folder.panes.holder_gone("p1"), "a running holder");
+    let lock = record::lock(
+        &layout::pane_records_lock(&folder.state),
+        Duration::from_secs(5),
+    )
+    .unwrap()
+    .expect("the records' lock");
+    std::fs::write(folder.go(), b"").unwrap();
+    Running::named(holder).wait_gone();
+    drop(lock);
+    assert!(folder.panes.holder_gone("p1"));
+    assert_eq!(folder.record("p1").phase, Phase::Running, "nothing ended");
+    assert!(!folder.panes.holder_gone("absent"));
+
+    let found = folder.panes.reconcile(folder.owner(), RECONCILE_BUDGET);
+    assert!(matches!(found.panes.get("p1"), Some(Judgment::Ended(_))));
+    assert!(!folder.panes.holder_gone("p1"), "an ended pane");
 }
 
 #[test]
@@ -526,7 +565,7 @@ fn a_killed_holders_pane_is_settled_by_the_next_reconcile() {
     }
     #[cfg(windows)]
     hide_platform::process::terminate(holder.pid).unwrap();
-    wait_until("the holder's end", || !holder.runs());
+    Running::named(holder).wait_gone();
     #[cfg(unix)]
     assert!(
         tree.iter().all(Running::is_running),
@@ -548,7 +587,11 @@ fn a_killed_holders_pane_is_settled_by_the_next_reconcile() {
         );
     }
     let socket = layout::holder_socket(&folder.state, "p1");
-    assert!(!socket.exists());
+    assert!(
+        !socket.exists(),
+        "{:?}",
+        EVENTS.lock().unwrap_or_else(PoisonError::into_inner)
+    );
     let mut lock = socket.into_os_string();
     lock.push(".lock");
     assert!(!Path::new(&lock).exists());
@@ -702,7 +745,7 @@ fn a_reconcile_past_its_budget_leaves_the_rest_to_the_next() {
         hide_platform::process::terminate(holder.pid).unwrap();
     }
     for holder in &holders {
-        wait_until("the holder's end", || !holder.runs());
+        Running::named(*holder).wait_gone();
     }
 
     let none = folder.panes.reconcile(folder.owner(), Duration::ZERO);
@@ -715,10 +758,48 @@ fn a_reconcile_past_its_budget_leaves_the_rest_to_the_next() {
     );
 
     let started = Instant::now();
-    let found = folder.panes.reconcile(folder.owner(), RECONCILE_BUDGET);
+    let mut found = folder.panes.reconcile(folder.owner(), RECONCILE_BUDGET);
     let took = started.elapsed();
     eprintln!("reconcile of {PANES} lost panes with hangup-ignoring trees took {took:?}");
-    assert!(found.is_complete(), "{found:?}");
+    // A round takes up what its budget allows and leaves the rest to the next
+    // one, and a pane whose record could not be rewritten within the five
+    // seconds' wait for the records' lock is left unsettled for the next round
+    // too (`Panes::lock`; every reconcile takes that one lock, for the scan and
+    // for each judgment's write). The node's own recovery runs those rounds,
+    // and only `RECONCILE_ROUNDS` of them, before it reports what is left for
+    // the next start, so this holds the contract the node relies on: within
+    // that many rounds, each one lists no failure and ends a pane more than
+    // the one before, and the last leaves every pane ended. More rounds than
+    // the node runs would pass a sequence that leaves a pane behind in the
+    // product.
+    let settled = |found: &hide_kit::panes::Reconciled| {
+        found
+            .panes
+            .values()
+            .filter(|judgment| matches!(judgment, Judgment::Ended(_)))
+            .count()
+    };
+    let mut ended = 0;
+    for round in 1..=RECONCILE_ROUNDS {
+        assert!(
+            found.failed.is_none(),
+            "round {round} failed after {ended} of {PANES} panes were ended: {found:?}"
+        );
+        let more = settled(&found);
+        assert!(
+            more > ended,
+            "round {round} ended no pane more than the last ({ended} of {PANES}): {found:?}"
+        );
+        ended = more;
+        if ended == PANES {
+            break;
+        }
+        found = folder.panes.reconcile(folder.owner(), RECONCILE_BUDGET);
+    }
+    assert_eq!(
+        ended, PANES,
+        "{PANES} panes were not all ended in the node's {RECONCILE_ROUNDS} rounds: {found:?}"
+    );
     for number in 0..PANES {
         let Some(Judgment::Ended(ended)) = found.panes.get(&format!("p{number}")) else {
             panic!("{found:?}");
@@ -832,7 +913,11 @@ fn an_earlier_start_that_left_processes_holds_its_id_until_they_end() {
         Err(StartRefusal::EarlierRuns(left)) => assert!(left.contains(&program.pid), "{left:?}"),
         other => panic!("the pane's id was taken while its program ran: {other:?}"),
     }
+    let left = named.program;
     drop(named);
+    // The holder's end ends its program, on Windows by its job a moment
+    // after: the id is free once the program it names has ended.
+    left.wait_gone();
     let started = folder.start(&request);
     assert_eq!(started.phase, Phase::Running, "{started:?}");
     assert_ne!(started.program, Some(program), "{started:?}");

@@ -15,13 +15,14 @@ import fs from "node:fs";
 import http from "node:http";
 import path from "node:path";
 import { startFixture, type AgentFixture } from "./engine-fixture";
-import { openProject, openWorktree, withControl } from "./daemon-actions";
+import { focusTab, openProject, openWorktree, withControl } from "./daemon-actions";
 import { startAgentInProject } from "./fixture-agents";
-import { startHided, type Daemon } from "./hided-fixture";
+import { asFirstRun, startHided, type Daemon } from "./hided-fixture";
 import { fixtureProgram } from "./platform-fixture";
-import { chooseTheme, countSent, enterWorkspace, rest, rowGeometry, screenshot } from "./wire";
+import { chooseTheme, countSent, enterWorkspace, openOtherCheckouts, rest, rowGeometry, screenshot } from "./wire";
 import { toPage } from "../../desktop/src/main/wirePath";
 import { quietFor } from "./wait";
+import { withCheckoutHoverDump } from "./checkout-hover";
 import { initGithubRepository } from "./github-remote";
 
 test.describe.configure({ timeout: 180_000 });
@@ -43,6 +44,7 @@ function fakeGh(dir: string, url: string): string {
       title: TITLE,
       statusCheckRollup: [{ __typename: "CheckRun", status: "COMPLETED", conclusion: "SUCCESS", name: "verify" }],
       headRefName: BRANCH,
+      headRefOid: "1".repeat(40),
       baseRefName: "main",
       state: "OPEN",
       reviewDecision: "APPROVED",
@@ -61,6 +63,7 @@ const answers = { "pr list": ${JSON.stringify(pulls)}, "repo view": '{"nameWithO
 if (key === "auth status") process.exit(0);
 if (key === "api user") { console.log("example-user"); process.exit(0); }
 if (process.argv.slice(2).join(" ").includes("review-requested:@me")) { console.log("[]"); process.exit(0); }
+if (process.argv.slice(2).join(" ").includes("HideHeadRuns")) { const repository = {}; for (let i = 0; i < process.argv.slice(2).join(" ").split("object(oid:").length - 1; i++) repository["c" + i] = { checkSuites: { totalCount: 0, nodes: [] } }; console.log(JSON.stringify({ data: { repository } })); process.exit(0); }
 if (process.argv.slice(2).join(" ").includes("HidePrFacts")) { console.log('{"data":{"repository":{"pullRequests":{"nodes":[]}}}}'); process.exit(0); }
 if (key in answers) { console.log(answers[key]); process.exit(0); }
 console.error("unsupported: " + process.argv.slice(2).join(" "));
@@ -83,28 +86,35 @@ test("a checkout's pull request: the glyph opens it, the row's card describes it
   await new Promise<void>((resolve) => site.listen(0, "127.0.0.1", resolve));
   const port = (site.address() as { port: number }).port;
   const url = `http://127.0.0.1:${port}/acme/repo/pull/180`;
-  const herdr = await startFixture({ agents: false });
+  const engine = await startFixture({ agents: false });
   let daemon: Daemon | null = null;
   try {
-    const repo = path.join(herdr.root, "repo");
+    const repo = path.join(engine.root, "repo");
     fs.mkdirSync(repo);
     initGithubRepository(repo);
     fs.writeFileSync(path.join(repo, "README.md"), "# repo\n");
     git(repo, ["add", "README.md"]);
     git(repo, ["commit", "-m", "initial"]);
-    const worktree = path.join(herdr.root, "repo-pr");
+    const worktree = path.join(engine.root, "repo-pr");
     git(repo, ["worktree", "add", "-b", BRANCH, worktree]);
     git(worktree, ["commit", "--allow-empty", "-m", "card"]);
 
-    daemon = await startHided(herdr, "checkout-pr", undefined, { PATH: `${fakeGh(herdr.root, url)}${path.delimiter}${herdr.fixturePath}` });
+    daemon = await startHided(engine, "checkout-pr", undefined, { PATH: `${fakeGh(engine.root, url)}${path.delimiter}${engine.fixturePath}` });
     const sent = countSent(page);
     // The core lists a linked worktree once a client shows its repository.
     await page.goto(`${daemon.origin}/#token=${daemon.token}`);
-    await workspaceAt(herdr, daemon, repo, "메인 체크아웃 정리");
-    await workspaceAt(herdr, daemon, worktree, "PR 카드 구현", true);
+    await workspaceAt(engine, daemon, repo, "메인 체크아웃 정리");
+    await workspaceAt(engine, daemon, worktree, "PR 카드 구현", true);
+    // Setup focuses each new agent. Leave that connection, then open as a
+    // first run so the external-open assertion starts on Main deterministically.
+    await page.goto("about:blank");
+    daemon = await asFirstRun(daemon);
+    await page.goto(`${daemon.origin}/#token=${daemon.token}`);
     await expect(page.locator("[data-main-screen]")).toBeVisible({ timeout: 20_000 });
 
     const project = page.locator("[data-project]").filter({ has: page.locator("[data-project-row]", { hasText: /^repo/ }) });
+    // The worktree is not the project's main checkout, so its row waits in the project's Checkouts fold.
+    await openOtherCheckouts(project);
     const primary = project.locator("[data-checkout-row]", { hasText: /^main/ });
     const feature = project.locator("[data-checkout-row]").filter({ has: page.locator(`[data-checkout][aria-label^="${BRANCH}"]`) });
     const glyph = feature.locator('[data-checkout-pr-glyph="180"]');
@@ -142,7 +152,7 @@ test("a checkout's pull request: the glyph opens it, the row's card describes it
     await expect(feature.locator("[data-purpose]")).toHaveText("PR 카드 구현");
     await expect(feature.locator("[data-checkout-age]")).toHaveText("now");
     await rest(page);
-    const atRest = await rowGeometry(featureRow, project.locator("[data-inactive-checkouts]").or(project.locator("[data-checkout-row]").last()), parts);
+    const atRest = await rowGeometry(featureRow, project.locator("[data-checkout-row]").last(), parts);
     await feature.locator("[data-checkout]").hover();
     await expect(card).toBeVisible();
     await expect(card.locator("[data-checkout-card-badge]")).toHaveText("Approved");
@@ -154,7 +164,7 @@ test("a checkout's pull request: the glyph opens it, the row's card describes it
     await expect(card.locator('[data-checkout-card-row="agents"]')).toHaveCount(0);
     await expect(card.locator('[data-checkout-card-row="commit"]')).toHaveText("now");
     await expect(card.locator("[data-checkout-card-open]")).toHaveText("Open PR");
-    expect(await rowGeometry(featureRow, project.locator("[data-inactive-checkouts]").or(project.locator("[data-checkout-row]").last()), parts)).toEqual(atRest);
+    expect(await rowGeometry(featureRow, project.locator("[data-checkout-row]").last(), parts)).toEqual(atRest);
     await screenshot(page, "checkout-pr-card-dark");
 
     // B9: the card stays while the pointer crosses onto it, and Escape closes it.
@@ -259,13 +269,15 @@ test("a checkout's pull request: the glyph opens it, the row's card describes it
     await rest(page);
     await expect(plain).toHaveCount(0);
 
-    await chooseTheme(page, "light");
-    await feature.locator("[data-checkout]").hover();
-    await expect(card).toBeVisible();
-    await screenshot(page, "checkout-pr-card-light");
+    await withCheckoutHoverDump(feature.locator("[data-checkout]"), async () => {
+      await chooseTheme(page, "light");
+      await feature.locator("[data-checkout]").hover();
+      await expect(card).toBeVisible();
+      await screenshot(page, "checkout-pr-card-light");
+    });
   } finally {
     daemon?.stop();
-    herdr.stop();
+    engine.stop();
     site.close();
   }
 });
@@ -273,27 +285,31 @@ test("a checkout's pull request: the glyph opens it, the row's card describes it
 // @platform: The card names a checkout by the path the core reads it at, which the system spells (`C:\...` on Windows, /private/var on macOS) and the page shows in the wire spelling.
 test("a checkout's card names the checkout by its real path", { tag: "@platform" }, async ({ page }) => {
   await page.setViewportSize({ width: 1400, height: 900 });
-  const herdr = await startFixture({ agents: false });
+  const engine = await startFixture({ agents: false });
   let daemon: Daemon | null = null;
   try {
-    const repo = path.join(herdr.root, "repo");
+    const repo = path.join(engine.root, "repo");
     fs.mkdirSync(repo);
     git(repo, ["init"]);
     fs.writeFileSync(path.join(repo, "README.md"), "# repo\n");
     git(repo, ["add", "README.md"]);
     git(repo, ["commit", "-m", "initial"]);
-    const worktree = path.join(herdr.root, "repo-pr");
+    const worktree = path.join(engine.root, "repo-pr");
     git(repo, ["worktree", "add", "-b", BRANCH, worktree]);
 
-    daemon = await startHided(herdr, "checkout-path");
+    daemon = await startHided(engine, "checkout-path");
     await page.goto(`${daemon.origin}/#token=${daemon.token}`);
-    await withControl(daemon, async (control) => {
-      await openProject(control, repo, "repo");
+    const main = await withControl(daemon, async (control) => {
+      const opened = await openProject(control, repo, "repo");
       await openWorktree(control, worktree);
+      return opened;
     });
     await enterWorkspace(page, "repo");
+    // The main checkout's row is drawn only while it is in front or holds an agent, so bring it in front; the worktree's waits in the Checkouts fold.
+    await withControl(daemon, (control) => focusTab(control, main, main.tab));
 
     const project = page.locator("[data-project]").filter({ has: page.locator("[data-project-row]", { hasText: /^repo/ }) });
+    await openOtherCheckouts(project);
     const plain = page.locator('[data-checkout-card="plain"]');
     for (const [row, folder] of [
       [project.locator("[data-checkout-row]", { hasText: /^main/ }), repo],
@@ -313,6 +329,6 @@ test("a checkout's card names the checkout by its real path", { tag: "@platform"
     }
   } finally {
     daemon?.stop();
-    herdr.stop();
+    engine.stop();
   }
 });

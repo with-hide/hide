@@ -73,7 +73,7 @@ export async function enterWorkspace(page: Page, project?: string): Promise<void
   // A repository's row is `data-project-row`; a plain folder's is its one checkout's open button.
   const named = project ? { has: page.locator("[data-row-name]", { hasText: new RegExp(`^${project}$`) }) } : {};
   const row = page.locator("nav[data-sidebar] [data-project]", named).first().locator("[data-project-row], button[data-checkout]").first();
-  await (await dumpOnFailure("project row", () => pageSide(page), () => showProjectRow(page, row))).click();
+  await (await dumpOnFailure("project row", () => pageSide(page), () => showProjectRow(page, row))).click({ position: { x: 12, y: 8 } });
   await expect(workspace).toBeVisible();
 }
 
@@ -116,26 +116,35 @@ export async function showSidebarPrs(page: Page): Promise<void> {
   await expect(page.locator("[data-sidebar-prs]")).toBeVisible();
 }
 
-/** Brings the checkout's documents in front of the viewing column from the rail (B2, B11); a pressed button is left alone, since a press would fold them. */
+/**
+ * Enters the Workspace with the lane up on the Explorer, so an open from the
+ * operator's pane comes in front of its tab's desk and a page loads there; with
+ * the lane closed the open waits on the desk, counted on the rail (PRD
+ * lane-desk-pair-view B2).
+ */
+export async function enterWorkspaceWithLane(page: Page, project?: string): Promise<void> {
+  await enterWorkspace(page, project);
+  await showExplorer(page);
+}
+
+/**
+ * Brings the front Agent tab's desk up from the rail, as the operator does
+ * after an agent's open waited on it with the lane closed (PRD
+ * lane-desk-pair-view B2, D-29); a pressed button is left alone, since a
+ * press would fold the desk.
+ */
 export async function showDocuments(page: Page): Promise<void> {
   const button = page.locator('[data-lane-tool="documents"]');
+  await expect(button).toBeEnabled({ timeout: 20_000 }); // wait-ok: an open typed into a pane lands on the desk once the command has run there
   if ((await button.getAttribute("aria-pressed")) !== "true") await button.click();
   await expect(button).toHaveAttribute("aria-pressed", "true");
   await expect(page.locator("[data-workspace-screen]")).toHaveAttribute("data-lane-view", "documents");
 }
 
-/** The pin's state as the rail's pin button shows it: `off`, `on` or `narrow` (PRD lane-two-columns B15, B19). */
-export async function pinState(page: Page): Promise<string | null> {
-  return page.locator("[data-lane-pin]").getAttribute("data-lane-pin");
-}
-
-/** Pins or unpins the lane with the pin beside `✕` of its edge column, so the lane must be up (B15; PRD session-docs-and-assistant B33). */
-export async function setLanePinned(page: Page, pinned: boolean): Promise<void> {
-  const button = page.locator("[data-lane-pin]");
-  const on = (await button.getAttribute("data-lane-pin")) !== "off";
-  if (on !== pinned) await button.click();
-  // A pinned lane docks, or stays over the agents where docking has no room (B19).
-  await expect(button).toHaveAttribute("data-lane-pin", pinned ? /^(on|narrow)$/ : /^off$/);
+/** Closes the card tab in front with its tab's ✕, which brings the desk's tab looked at before it forward (PRD lane-desk-pair-view D-13). */
+export async function closeFrontCard(page: Page): Promise<void> {
+  const tab = page.locator('[role="tab"][data-tab-kind="card"][aria-selected="true"]').first();
+  await tab.locator("button").click();
 }
 
 /** Turns the sidebar to its 태스크 list (PRD sidebar-task-lens B1) and waits for the core's task scope. */
@@ -166,6 +175,20 @@ export async function taskRow(page: Page, pane: string, goal: string): Promise<L
   await openTaskFolds(page);
   await expect(row).toContainText(goal, { timeout: 45_000 });
   return row;
+}
+
+/**
+ * Hovers a task row once the core has settled it in `state`, so its row
+ * actions (the record and ⋯ buttons, shown on hover) stay under the pointer.
+ * The core moves a task between groups as an agent's turn is read or a record
+ * regains its ask, and the list draws the row anew in its new group: a hover
+ * given before the move belongs to the row that is gone, the new one is not
+ * hovered under a still pointer, and its buttons stay hidden, so a click on
+ * them waits out its whole timeout (with-hide/hide-private#130).
+ */
+export async function hoverSettledTaskRow(row: Locator, state: string): Promise<void> {
+  await expect(row).toHaveAttribute("data-task-state", state, { timeout: 45_000 }); // wait-ok: the core settles the task row in its group
+  await row.hover();
 }
 
 /**
@@ -245,16 +268,37 @@ export async function rowGeometry(row: Locator, next: Locator, parts: Locator[])
 }
 
 /**
- * A sidebar row of a project, shown: a project with no agent rows is folded
- * under No agents (PRD sidebar-titlebar-refresh B1), so the fold is opened
- * when the row is not drawn. The fold is the core's, so it stays open.
+ * A sidebar row of a project, shown. A project with no agent is an ordinary
+ * row of the one Projects list; its buttons (+, settings, more) wait for the
+ * pointer, so the project is hovered before the row is waited for.
  */
-export async function showProjectRow(page: Page, row: Locator): Promise<Locator> {
-  const fold = page.locator('[data-no-agent-projects][aria-expanded="false"]');
-  await expect(row.or(fold).first()).toBeVisible({ timeout: 20_000 });
-  if (!(await row.isVisible())) await fold.click();
-  await expect(row).toBeVisible();
+export async function showProjectRow(_page: Page, row: Locator): Promise<Locator> {
+  const project = row.locator("xpath=ancestor::*[@data-project][1]");
+  // The buttons draw over the end of the name, so the pointer stands at its start, where nothing is drawn over it.
+  if ((await project.count()) > 0) await projectOpener(project).hover({ position: { x: 12, y: 8 } });
+  await expect(row).toBeVisible({ timeout: 20_000 });
   return row;
+}
+
+/**
+ * What opens a project in the sidebar: a repository's own row, or a plain
+ * folder's one checkout button. A repository's main checkout has a row of its
+ * own only while it holds an agent, a purpose or the focus.
+ */
+export function projectOpener(project: Locator): Locator {
+  return project.locator("[data-project-row], button[data-checkout]").first();
+}
+
+/**
+ * Opens a project's "Checkouts N" fold, which holds every checkout but its
+ * main one, so those rows are drawn. The fold is the core's
+ * (`inactive_checkouts.expanded`), so it stays open.
+ */
+export async function openOtherCheckouts(project: Locator): Promise<void> {
+  const fold = project.locator("[data-other-checkouts]");
+  await expect(fold).toBeVisible({ timeout: 30_000 });
+  if ((await fold.getAttribute("aria-expanded")) === "false") await fold.click();
+  await expect(fold).toHaveAttribute("aria-expanded", "true");
 }
 
 /** Opens the one sidebar project whose agents all sleep, which folds until opened (PRD sidebar-titlebar-refresh B4). */
@@ -345,4 +389,10 @@ export async function chooseTheme(page: Page, theme: "light" | "dark"): Promise<
   await expect(page.locator('[data-settings="true"]')).toHaveCount(0);
   // Controls fade their colors into the new theme; a capture waits them out.
   await animationsFinished(page);
+}
+
+/** A checkout row of a project's "Checkouts" fold, with the fold opened. */
+export async function otherCheckoutRow(page: Page, project: Locator, branch: string): Promise<Locator> {
+  await openOtherCheckouts(project);
+  return page.locator(`[data-checkout][aria-label^="${branch}"]`).first();
 }

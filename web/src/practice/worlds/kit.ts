@@ -7,7 +7,7 @@
 import type { AgentGroup, AgentLayout } from "../../agentLayout";
 import type { AgentScope, AgentTreeScope, ProjectTasksScope } from "../../agentScope";
 import type { PaneMoveIntent } from "../../paneMove";
-import type { AgentRow, AgentState, AsyncOperation, Checkout, LayoutNode, SnapshotRest, SuggestionsSection, Workspace } from "../../snapshot";
+import type { AgentRequest, AgentRow, AgentState, AsyncOperation, Checkout, DetailItem, LayoutNode, SnapshotRest, StatusTone, SuggestionsSection, ViewDisplaySnapshot, Workspace } from "../../snapshot";
 import type { CoreEvent, WorldSnapshot } from "../world";
 
 export type PracticeTab = { id: string; name: string | null; root: LayoutNode; focused: string; zoomed: boolean };
@@ -245,6 +245,49 @@ function workingState(since: number): AgentState {
   };
 }
 
+const tone = (kind: StatusTone["kind"], read = false): StatusTone => ({ kind, read });
+
+/**
+ * A row's state as the core states it (`row_state`), for the five ways a row
+ * stands in a practice: working, asking (a question or approval), done (a
+ * root's unread result), quiet (a finished child or a read result) and look (a
+ * finished agent whose View waits to be looked at, which stands in Needs You).
+ */
+export function rowState(kind: "working" | "asking" | "done" | "quiet" | "look", root: boolean, since: number, extra: Partial<AgentState> = {}): AgentState {
+  const base = { ...workingState(since), root };
+  if (kind === "asking" || kind === "look") {
+    Object.assign(base, {
+      attention: true, needs_you: true, title_emphasized: true, asking: kind === "asking", working: false,
+      chip_tone: tone("warning"), mark_tone: tone("warning"), bucket: "turn", attention_rank: 1, link_rank: 0, search_tone: "attention", subtree: "waiting", link: kind === "asking" ? "question" : "idle",
+      verb: kind === "asking" ? "answer" : "result", session: { group: "needs_you", line: null, unfinished: false }, tree_rank: 0,
+    } satisfies Partial<AgentState>);
+  }
+  if (kind === "done") {
+    Object.assign(base, {
+      title_emphasized: root, working: false,
+      chip_tone: tone("success"), mark_tone: tone("success"), bucket: "turn", attention_rank: 2, link_rank: 2, search_tone: "done", subtree: "unread", link: "idle",
+      verb: "result", session: { group: "done", line: null, unfinished: false }, tree_rank: 2,
+    } satisfies Partial<AgentState>);
+  }
+  if (kind === "quiet") {
+    Object.assign(base, {
+      working: false,
+      chip_tone: tone("subtle"), mark_tone: tone("subtle"), bucket: "resting", attention_rank: 4, link_rank: 2, search_tone: "muted", subtree: "quiet", link: "idle",
+      verb: "idle", session: { group: "idle", line: null, unfinished: false }, tree_rank: 3,
+    } satisfies Partial<AgentState>);
+  }
+  return { ...base, ...extra };
+}
+
+/** The request a row shows: the operator's, or, with `from`, the named agent's. */
+export function rowRequest(text: string, summary: string, at: number, from: string | null, extra: Partial<AgentRequest> = {}): AgentRequest {
+  return {
+    verb: "working", verb_since_unix_ms: at, later_by: null, pull_requests: [], request_summary: summary,
+    request: { text, cut: false, images: 0, at_unix_ms: at, sender: from ? { kind: "named", name: from } : { kind: "operator" } },
+    ...extra,
+  };
+}
+
 const UNIT_MS: Record<string, number> = { s: 1_000, m: 60_000, h: 3_600_000, d: 86_400_000 };
 
 /**
@@ -357,7 +400,7 @@ function deskCheckout(model: DeskModel, place: PracticePlace, scope: AgentScope,
   const pane = (paneId: string) => {
     const row = model.panes.find((one) => one.id === paneId)!;
     return {
-      id: paneId, device_id: "local", device_pane_id: paneId, herdr_label: null, terminal_title: row.agent ? null : row.title, cwd: path, status_code: "idle" as const,
+      id: paneId, device_id: "local", device_pane_id: paneId, engine_label: null, terminal_title: row.agent ? null : row.title, cwd: path, status_code: "idle" as const,
       requires_close_confirmation: false, requires_close_status_check: false, identity_label: row.title,
     };
   };
@@ -393,7 +436,7 @@ function deskCheckout(model: DeskModel, place: PracticePlace, scope: AgentScope,
     tabs,
     active_tab_id: model.activeTab,
     // A tab holding only delegated children stays off the strip; the sidebar still reaches it.
-    strip: tabs.filter((tab) => !tab.delegated).map((tab) => ({ id: `strip:${tab.id}`, kind: "herdr", source_id: tab.id, label: tab.sidebar.manual_name ?? `Tab ${tab.sidebar.number}`, preview: false })),
+    strip: tabs.filter((tab) => !tab.delegated).map((tab) => ({ id: `strip:${tab.id}`, kind: "engine", source_id: tab.id, label: tab.sidebar.manual_name ?? `Tab ${tab.sidebar.number}`, preview: false })),
     next_tab_label: String(model.tabs.length + 1),
     agent_groups: { selected: model.selectedGroup, groups: model.groups, drafts: [] },
   };
@@ -429,7 +472,7 @@ function deskProject({ place, model }: PracticeDesk, nowMs: number): Workspace {
 /**
  * The snapshot the core would send for `desks`, listed in that order, with
  * `front` the project in front, on this machine with the left sidebar on its
- * Projects list. Pane ids are unique across the desks, as Herdr's are.
+ * Projects list. Pane ids are unique across the desks, as the engine's are.
  */
 export function deskSnapshot(desks: readonly PracticeDesk[], front: string, nowMs: number): WorldSnapshot {
   const shownDesk = desks.find((desk) => desk.place.project === front);
@@ -450,6 +493,7 @@ export function deskSnapshot(desks: readonly PracticeDesk[], front: string, nowM
   const focused = focusedPane(model);
   const rest: SnapshotRest = {
     navigator: {
+      siblings_shown: 5,
       agent_scope: scope,
       devices: [{ agent_scope: scope, id: "local", label: "This Mac", kind: "local", state: "local", message: null, ssh_alias: null, agent_count: agents.length, test: null }],
       workspaces,
@@ -474,8 +518,7 @@ export function deskSnapshot(desks: readonly PracticeDesk[], front: string, nowM
     status: { async_operations: desks.flatMap((desk) => desk.model.operations) },
     pane_layouts: desks.flatMap((desk) => desk.model.tabs.map((tab) => ({ workspace_id: desk.place.project, tab_id: tab.id, focused_pane_id: tab.focused, zoomed: tab.zoomed, root: tab.root }))),
     workspace_view: {
-      device_id: "local", path: main.path, open: false, documents: false, tool: null, pinned: false,
-      document_width: null, detail_width: null, explorer_width: null, panel_width: null, lane_called: 0, lane_calls: 0, lane_called_side: "view",
+      device_id: "local", path: main.path, open: false, tray: { tab_id: "t1", shown: false, count: 0 }, tool: null, document_width: null, explorer_width: null, panel_width: null, lane_called: 0, lane_calls: 0, lane_called_side: "view",
       layout: { root: { area: { id: "v1", active: null, displays: [] } }, active_area: "v1", display_count: 0, limits: { areas: 4, depth: 3, displays: 32 } },
       agent_layout: agentLayout,
     },
@@ -510,6 +553,34 @@ function everyScope(rest: SnapshotRest, change: (scope: AgentScope) => AgentScop
  * and no longer roots of their own, as the core draws a delegated child. The
  * kit lists every agent as a root.
  */
+type WorldView = NonNullable<WorldSnapshot["rest"]["workspace_view"]>;
+
+/** The id of the card tab a world draws `index`-th on the desk. */
+export const cardDisplayId = (index: number) => `card-${index}`;
+
+/**
+ * The desk in front holding `cards` as card tabs, the last in front, as the
+ * core draws a card opened onto the front Agent tab's desk (PRD
+ * lane-desk-pair-view D-13); with none it is the desk as `view` has it.
+ */
+export function cardDesk(view: WorldView, cards: readonly DetailItem[]): WorldView {
+  if (cards.length === 0) return view;
+  const displays: ViewDisplaySnapshot[] = cards.map((card, index) => ({ id: cardDisplayId(index), tab_id: null, path: "", label: "", kind: "card", committed: null, preview: false, state: "open", reason: null, card }));
+  return {
+    ...view,
+    tray: { ...view.tray, shown: true, count: displays.length },
+    layout: { root: { area: { id: "v1", active: displays.at(-1)!.id, displays } }, active_area: "v1", display_count: displays.length, limits: { areas: 4, depth: 3, displays: 32 } },
+  };
+}
+
+/** The index of the card tab a `view_layout` close takes off a world's desk, or null for any other event. */
+export function closedCard(event: CoreEvent): number | null {
+  const p = event.payload;
+  if (event.kind !== "view_layout" || p.action !== "close" || typeof p.display_id !== "string") return null;
+  const match = /^card-(\d+)$/.exec(p.display_id);
+  return match ? Number(match[1]) : null;
+}
+
 export function withLineage(rest: SnapshotRest, parent: string, children: readonly string[]): SnapshotRest {
   const nest = (tree: AgentTreeScope): AgentTreeScope => {
     const rows = tree.rows.filter((row) => !children.includes(row.pane_id)).flatMap((row) => (row.pane_id === parent ? [row, ...children.map((pane_id) => ({ pane_id, occurrence: 0, depth: 1 }))] : [row]));

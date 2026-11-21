@@ -3,29 +3,69 @@
 // shell sends for the operator's action (Add project, New tab, Split, Close,
 // a click on a pane or a tab, the start panel's start) and is read back from
 // the snapshot the daemon publishes, never from an engine's CLI, so a spec
-// says the same thing on Herdr and on the core's own engine.
+// says what the operator sees.
 
 import crypto from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
 import { expect } from "@playwright/test";
 import { toPage } from "../../desktop/src/main/wirePath";
-import { connectControl, type HidedControl, type Rest } from "./hided-control.mjs";
+import { connectControl, useControl, type HidedControl, type Rest } from "./hided-control.mjs";
+import { dumpOnFailure } from "./failure-dump";
 import type { Daemon } from "./hided-fixture";
-import { paneProgramLine, type PaneShell } from "./herdr-fixture";
+import { paneProgramLine, type PaneShell } from "./pane-fixture";
 
 type LayoutNode = { type: "pane"; pane_id: string } | { type: "split"; first: LayoutNode; second: LayoutNode };
 type PaneLayout = { tab_id: string; focused_pane_id: string | null; zoomed: boolean; root: LayoutNode };
 type NavigatorWorkspace = { id: string; path: string; label?: string; checkouts: { id: string; path?: string; tabs?: { id: string }[]; agent_groups?: { groups: { tabs: string[] }[] } }[] };
 
-/** Runs `use` on a connection of its own to `daemon`, closed whatever happens. */
+/**
+ * Runs `use` on a connection of its own to `daemon`, closed whatever happens,
+ * and returns once the daemon has applied every event `use` sent on it
+ * (`useControl`): the next step's connection cannot overtake them.
+ */
 export async function withControl<T>(daemon: Pick<Daemon, "origin" | "token">, use: (control: HidedControl) => Promise<T>): Promise<T> {
-  const control = await connectControl(daemon);
-  try {
-    return await use(control);
-  } finally {
-    control.close();
+  return useControl(await connectControl(daemon), use);
+}
+
+/** The core's log of `daemon`, every file of it, as text. */
+export function coreLog(daemon: Pick<Daemon, "stateDir">): string {
+  const dir = path.join(daemon.stateDir, "Logs");
+  if (!fs.existsSync(dir)) return "";
+  return fs
+    .readdirSync(dir)
+    .filter((name) => name.startsWith("core"))
+    .map((name) => fs.readFileSync(path.join(dir, name), "utf8"))
+    .join("\n");
+}
+
+/**
+ * How many records the core has logged so far whose fields include every field of `match`
+ * (`{ component: "mobile_push", kind: "push.skipped", reason: "viewing" }`). Each record is one JSON line; a line
+ * the core is still writing does not parse and is not counted yet.
+ */
+export function loggedCount(daemon: Pick<Daemon, "stateDir">, match: Record<string, unknown>): number {
+  let count = 0;
+  for (const line of coreLog(daemon).split("\n")) {
+    let record: Record<string, unknown>;
+    try {
+      record = JSON.parse(line) as Record<string, unknown>;
+    } catch {
+      continue;
+    }
+    if (record && Object.entries(match).every(([key, value]) => record[key] === value)) count += 1;
   }
+  return count;
+}
+
+/**
+ * Waits until the core has logged `count` records matching `match` in all (`loggedCount` before the action, plus one,
+ * for "the action was answered"). This is how a spec waits for a decision whose outcome is that nothing happens: the
+ * daemon logs that it decided (`push.skipped`), so the test waits for the record instead of a time in which a push
+ * would have arrived. `what` names the record in the failure.
+ */
+export async function untilLogged(daemon: Pick<Daemon, "stateDir">, match: Record<string, unknown>, count: number, what: string, timeout = 20_000): Promise<void> {
+  await expect.poll(() => loggedCount(daemon, match), { message: `the core logging ${what}`, timeout }).toBeGreaterThanOrEqual(count);
 }
 
 /** Types `text` into `pane` as the operator's keys. */
@@ -35,11 +75,10 @@ export function sendKeys(control: HidedControl, pane: string, text: string): voi
 
 /**
  * Reports a grid for `pane` as the pane view does once it is drawn, for a
- * pane no page shows yet: on Herdr the daemon attaches a pane's terminal,
+ * pane no page shows yet: the daemon attaches a pane's terminal,
  * and so delivers keys typed into it, only once a view has sized it
- * (`hide-node` terminal, `waiting_size`); the core's own engine sizes its
- * panes itself. Never for a pane the page shows: its view's own size
- * would be replaced.
+ * (`hide-node` terminal, `waiting_size`). Never for a pane the page shows:
+ * its view's own size would be replaced.
  */
 export function viewPane(control: HidedControl, pane: string, { cols = 120, rows = 40 }: { cols?: number; rows?: number } = {}): void {
   control.send("terminal_viewport", { pane_id: pane, cols, rows, new_view: true });
@@ -70,6 +109,11 @@ export function tabOfPane(rest: Rest, pane: string): string | undefined {
 /** The pane the core holds focused, as the snapshot names it. */
 export function corePaneFocus(rest: Rest): string | null {
   return ((rest.focused ?? null) as { pane_id?: string } | null)?.pane_id ?? null;
+}
+
+/** The terminal pane the core's next split acts on, as the snapshot names it. */
+export function coreTerminalPane(rest: Rest): string | null {
+  return ((rest.terminal ?? null) as { pane_id?: string } | null)?.pane_id ?? null;
 }
 
 /** The tab the core shows, as the snapshot names it. */
@@ -131,18 +175,37 @@ export type AgentRow = {
   agent_kind?: string | null;
   status_code?: string | null;
   activity?: string | null;
+  demand?: string | null;
   blocked?: boolean;
   unread?: boolean;
   session_id?: string | null;
   identity_label?: string | null;
   /** The pane of the agent's responsibility parent, when it is a delegated child. */
   lineage_parent_pane_id?: string | null;
+  /** On a lineage root: the asks its raised descendants make, lead first; `what` is the line the row's second line says. */
+  raised?: { raised_pane_id: string; what: string | null }[];
+  group?: string;
+  /** What a quiet row waits on (`children`, `background`, `checks`, `reply`), absent when nothing. */
+  wait?: string;
+  /** On a root whose finished turn is not read yet: the descendants still working, which its line ends with. */
+  children_left?: number;
 };
 
 /** The agent row the snapshot lists for `pane`, once an agent runs there. */
 export function agentIn(rest: Rest, pane: string): AgentRow | undefined {
   const agents = ((rest.navigator as { agents?: AgentRow[] } | undefined)?.agents ?? []);
   return agents.find((row) => row.pane_id === pane && row.agent_kind);
+}
+
+/**
+ * The agent row for `pane` once its start has settled. The engine keeps a
+ * start pending, and its row reads Starting, until the agent's screen rests
+ * past the start's settle (3 s); a row changes its line and its height when it
+ * settles, so a helper that starts an agent hands it on only through this.
+ */
+export function startedAgentIn(rest: Rest, pane: string): AgentRow | undefined {
+  const row = agentIn(rest, pane);
+  return row && row.status_code !== "starting" ? row : undefined;
 }
 
 /** A project the daemon opened: its checkout, the checkout's first tab and that tab's shell. */
@@ -164,6 +227,35 @@ export async function openProject(control: HidedControl, dir: string, label: str
   }, `the project ${folder} with its first tab`, 30_000);
 }
 
+type TaskOperation = { kind: string; phase: string; pane_id: string | null; agent_phase: string | null; failure: string | null; request_id: string | null };
+
+/**
+ * Starts the `claude` stand-in in the checkout at `folder` as the start
+ * panel's start does, with the start's other `fields` (a resumed session, a
+ * target beside another pane), and returns the pane the core started it in.
+ * It waits for the core's answer to this start, the receipt carrying its
+ * request id that the start panel reads too (`web/src/startAnswer.ts`), until
+ * the agent has started: the core holds one task slot and refuses another
+ * start, as `task_operation.busy`, while this one's agent is still starting,
+ * and the agent's row is published before that.
+ * A refused or failed start throws with the core's answer; `waitMs` bounds the
+ * wait for it, for a spec whose own timeout is shorter than the default.
+ */
+export async function startAgentInCheckout(control: HidedControl, folder: string, fields: Record<string, unknown>, what: string, waitMs = 30_000): Promise<string> {
+  const requestId = `e2e-${crypto.randomUUID()}`;
+  control.send("agent_start_in_checkout", { checkout_path: folder, provider: "claude", request_id: requestId, ...fields });
+  const answer = await control.until((rest) => {
+    const refused = (rest.status as { last_error?: { kind: string; request_id?: string | null } | null } | undefined)?.last_error;
+    if (refused?.request_id === requestId) return { refused: refused.kind };
+    const operation = rest.task_operation as TaskOperation | null | undefined;
+    if (operation?.request_id !== requestId || operation.kind !== "agent_start") return undefined;
+    return operation.phase === "working" || operation.agent_phase === "starting" ? undefined : { operation };
+  }, `the core's answer to the start of ${what}`, waitMs);
+  const operation = "operation" in answer ? answer.operation : undefined;
+  if (operation?.phase !== "ready" || operation.agent_phase !== "started" || !operation.pane_id) throw new Error(`the core did not start ${what}: ${JSON.stringify(answer)}`);
+  return operation.pane_id;
+}
+
 /** A new tab in `checkout`, as New tab makes it, and its shell. */
 export async function newTab(control: HidedControl, at: { workspace: string; checkout: string }, label: string): Promise<{ tab: string; pane: string }> {
   const before = await control.until((rest) => tabsOf(rest, at.workspace), `the tabs of ${at.workspace}`);
@@ -180,15 +272,49 @@ export async function newTab(control: HidedControl, at: { workspace: string; che
  * running `command` or the shell, as Split does; returns the new pane.
  */
 export async function splitPane(control: HidedControl, tab: string, cwd: string, { direction = "right", command = null }: { direction?: "right" | "down"; command?: string | null } = {}): Promise<string> {
-  const before = await control.until((rest) => tabLayout(rest, tab) ? tabPanes(rest, tab) : undefined, `the layout of ${tab}`);
+  // `create_pane` splits the core's current terminal pane and reads no tab,
+  // so the split waits until that pane is in `tab`; sent before, it was
+  // refused as `pane.no_current_pane` (with-hide/hide-private#456).
+  const before = await control.until((rest) => {
+    const panes = tabPanes(rest, tab);
+    const current = coreTerminalPane(rest);
+    return current && panes.includes(current) ? panes : undefined;
+  }, `the core's current pane in ${tab}`);
   control.send("create_pane", { tab_id: tab, cwd, command, direction, request_id: `e2e-${crypto.randomUUID()}` });
-  return control.until((rest) => tabPanes(rest, tab).find((pane) => !before.includes(pane)), `a new pane in ${tab}`, 30_000);
+  const created = await control.until((rest) => tabPanes(rest, tab).find((pane) => !before.includes(pane)), `a new pane in ${tab}`, 30_000);
+  // The new pane is drawn before the engine confirms the split, and a close sent in
+  // between meets a tab the core still holds as one pane: it starts at once, beside the
+  // split, instead of waiting behind it, and the engine never answers it
+  // (with-hide/hide-private#537, "timed out waiting for the close of w1:p3"). A fixture
+  // hands the pane on only once its tab's line is empty.
+  await control.until((rest) => tabGeometrySettled(rest, tab) || undefined, `the engine's confirmation of the split in ${tab}`, 30_000);
+  return created;
 }
 
-/** Closes `pane` as the operator's confirmed Close does, and waits until no layout holds it. */
+/**
+ * The phases of an operation on a tab's geometry line that the engine has not yet settled.
+ * This pairs with `geometry_tab_busy` and `geometry_in_flight` in `hide-core/src/runtime/operations.rs`
+ * (queued; transmitting, awaiting_topology), whose phase names are the wire's `phase`; a phase added or
+ * renamed there is added or renamed here, or `splitPane` stops waiting for it.
+ */
+const GEOMETRY_PENDING = new Set(["queued", "preparing", "transmitting", "awaiting_topology"]);
+
+/** Whether the core's geometry line of `tab` is empty: each split, close or move asked of it is confirmed, refused or given up. */
+export function tabGeometrySettled(rest: Rest, tab: string): boolean {
+  const operations = (rest.status as { async_operations?: { scope_id: string; phase: string }[] } | undefined)?.async_operations ?? [];
+  return !operations.some((operation) => operation.scope_id === tab && GEOMETRY_PENDING.has(operation.phase));
+}
+
+/**
+ * Closes `pane` as the operator's confirmed Close does, and waits until no layout holds it and
+ * its tab's geometry line is empty: the core draws the close ahead of the engine, so a split or
+ * close sent next to the same tab would run beside it instead of behind it (`splitPane`).
+ */
 export async function closePane(control: HidedControl, pane: string): Promise<void> {
+  const { tab } = await control.until((rest) => ({ tab: tabOfPane(rest, pane) }), `the tab of ${pane}`);
   control.send("close_pane", { pane_id: pane, confirmed: true });
   await control.until((rest) => tabOfPane(rest, pane) === undefined || undefined, `the close of ${pane}`, 30_000);
+  if (tab) await control.until((rest) => tabGeometrySettled(rest, tab) || undefined, `the engine's confirmation of the close of ${pane} in ${tab}`, 30_000);
 }
 
 /** Gives `pane` the keyboard as the operator's click does, and waits until the core holds it there. */
@@ -197,10 +323,36 @@ export async function focusPane(control: HidedControl, pane: string): Promise<vo
   await control.until((rest) => corePaneFocus(rest) === pane || undefined, `the focus of ${pane}`, 30_000);
 }
 
-/** Shows `tab` of `at` as a click on its tab does, and waits until the core shows it. */
+/**
+ * Shows `tab` of `at` as a click on its tab does, and waits until the core shows it.
+ *
+ * A tab focus the core accepted but never applied is silent: the wait says
+ * only which tab it wanted. A wait that gives up records both sides, the tab
+ * the snapshot shows beside the tabs and panes the core lists for the
+ * checkout and the focus it holds, because the failure then lies in what the
+ * core did with the request rather than in the page (with-hide/hide#2575).
+ */
 export async function focusTab(control: HidedControl, at: { workspace: string; checkout: string }, tab: string): Promise<void> {
   control.send("focus_tab", { workspace_id: at.workspace, checkout_id: at.checkout, tab_id: tab });
-  await control.until((rest) => shownTab(rest) === tab || undefined, `${tab} shown`, 30_000);
+  await dumpOnFailure(`the tab focus of ${tab}`, () => tabFocusSides(control, at, tab), () =>
+    control.until((rest) => shownTab(rest) === tab || undefined, `${tab} shown`, 30_000));
+}
+
+/** What the core holds about `tab`'s checkout when a tab focus never showed it. */
+function tabFocusSides(control: HidedControl, at: { workspace: string; checkout: string }, tab: string): Promise<unknown> {
+  return control.until((rest) => ({
+    wanted: tab,
+    shown: shownTab(rest),
+    checkout: at.checkout,
+    // The checkout's own tab list, and whether its workspace still lists it.
+    tabs: workspacesOf(rest)
+      .flatMap((workspace) => workspace.checkouts)
+      .find((checkout) => checkout.id === at.checkout)?.tabs?.map((listed) => listed.id) ?? null,
+    listedTabs: tabsOf(rest, at.workspace) ?? null,
+    layout: tabPanes(rest, tab),
+    focus: corePaneFocus(rest),
+    error: ((rest.status as { last_error?: unknown } | undefined)?.last_error) ?? null,
+  }), "the core's tab state", 5_000);
 }
 
 /**
@@ -320,7 +472,7 @@ function terminalReady(rest: Rest, pane: string): boolean {
 
 /**
  * Shows the tab that holds `pane`, as a click on its tab does, wherever the
- * navigator lists it: a tab nobody has shown is not attached on Herdr, so the
+ * navigator lists it: a tab nobody has shown is not attached, so the
  * keys typed into a pane of a spawned child's tab are dropped until it is.
  */
 export async function showTabOf(control: HidedControl, pane: string): Promise<void> {

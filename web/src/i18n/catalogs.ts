@@ -1,4 +1,5 @@
 import { mobileRelayEnglish, mobileRelayCatalogs } from "./resources/mobileRelay";
+import { mobileDemoEnglish, mobileDemoCatalogs } from "./resources/mobileDemo";
 import { groupTabsCatalogs, groupTabsEnglish } from "./resources/groupTabs";
 import { overviewBacklogCatalogs, overviewBacklogEnglish } from "../overviewBacklogMessages";
 import { overviewUsageCatalogs, overviewUsageEnglish } from "../overviewUsageMessages";
@@ -12,7 +13,11 @@ import { commandsCatalogs, commandsEnglish } from "./resources/commands";
 import { agentSessionsCatalogs, agentSessionsEnglish } from "./resources/agentSessions";
 import { taskLensCatalogs, taskLensEnglish } from "./resources/taskLens";
 import { missionsCatalogs, missionsEnglish } from "./resources/missions";
-import { missionToolCatalogs, missionToolEnglish } from "./resources/missionTool";
+import { mobileAutomationsCatalogs, mobileAutomationsEnglish } from "./resources/mobileAutomations";
+import { missionScreenCatalogs, missionScreenEnglish } from "./resources/missionScreen";
+import { automationWordsCatalogs, automationWordsEnglish } from "./resources/automationWords";
+import { automationScreenCatalogs, automationScreenEnglish } from "./resources/automationScreen";
+import { kindsCatalogs, kindsEnglish } from "./resources/kinds";
 import { plansCatalogs, plansEnglish } from "./resources/plans";
 import { deskCatalogs, deskEnglish } from "./resources/desk";
 import { archiveCatalogs, archiveEnglish } from "./resources/archive";
@@ -32,6 +37,7 @@ import { removalReasonsCatalogs, removalReasonsEnglish } from "./resources/remov
 import { diffReasonsCatalogs, diffReasonsEnglish } from "./resources/diffReasons";
 import { wakeReasonsCatalogs, wakeReasonsEnglish } from "./resources/wakeReasons";
 import { agentsCatalogs, agentsEnglish } from "./resources/agents";
+import { agentProfilesCatalogs, agentProfilesEnglish } from "./resources/agentProfiles";
 import { hideAiCatalogs, hideAiEnglish } from "./resources/hideAi";
 import { issueSettingsCatalogs, issueSettingsEnglish } from "./resources/issueSettings";
 import { historyCatalogs, historyEnglish } from "./resources/history";
@@ -45,12 +51,15 @@ import { shellCatalogs, shellEnglish } from "./resources/shell";
 import { issuesCatalogs, issuesEnglish } from "./resources/issues";
 import { mobileCatalogs, mobileEnglish } from "./resources/mobile";
 import { mobileSetupCatalogs, mobileSetupEnglish } from "./resources/mobileSetup";
+import { externalToolsCatalogs, externalToolsEnglish } from "./resources/externalTools";
+import { storeCatalogs, storeEnglish } from "./resources/store";
+import { pairingCatalogs, pairingEnglish } from "./resources/pairing";
 import { coreMoveCatalogs, coreMoveEnglish } from "./resources/coreMove";
 import { nativeCatalogs, nativeEnglish } from "./resources/native";
 import { overviewCatalogs, overviewEnglish } from "./resources/overview";
 import { firstRunCatalogs, firstRunEnglish } from "./resources/firstRun";
 import { practiceCatalogs, practiceEnglish } from "./resources/practice";
-import { herdrTakeoverCatalogs, herdrTakeoverEnglish } from "./resources/herdrTakeover";
+import { herdrImportCatalogs, herdrImportEnglish } from "./resources/herdrImport";
 import { memoryCatalogs, memoryEnglish } from "./resources/memory";
 import { suggestionsCatalogs, suggestionsEnglish } from "./resources/suggestions";
 import { prWorkCatalogs, prWorkEnglish } from "./resources/prWork";
@@ -66,6 +75,7 @@ import type { Catalogs } from "./schema";
 import { coreErrorsCatalogs, coreErrorsEnglish } from "./resources/coreErrors";
 import { sessionWorkCatalogs, sessionWorkEnglish } from "./resources/sessionWork";
 import { deviceOverviewCatalogs, deviceOverviewEnglish } from "./resources/deviceOverview";
+import { startPanelCatalogs, startPanelEnglish } from "./resources/startPanel";
 import { overviewRedesignCatalogs, overviewRedesignEnglish } from "./resources/overviewRedesign";
 
 export const english = {
@@ -73,6 +83,7 @@ export const english = {
   ...menusEnglish,
   ...sessionWorkEnglish,
   ...deviceOverviewEnglish,
+  ...startPanelEnglish,
   ...overviewRedesignEnglish,
   ...overviewBacklogEnglish,
   ...overviewUsageEnglish,
@@ -81,8 +92,12 @@ export const english = {
   ...agentSessionsEnglish,
   ...taskLensEnglish,
   ...missionsEnglish,
-  ...missionToolEnglish,
+  ...mobileAutomationsEnglish,
+  ...missionScreenEnglish,
+  ...automationWordsEnglish,
+  ...automationScreenEnglish,
   ...plansEnglish,
+  ...kindsEnglish,
   ...deskEnglish,
   ...archiveEnglish,
   ...shellEnglish,
@@ -99,6 +114,7 @@ export const english = {
   ...nativeEnglish,
   ...mobileEnglish,
   ...mobileRelayEnglish,
+  ...mobileDemoEnglish,
   ...settingsEnglish,
   ...usageEnglish,
   ...cleanupEnglish,
@@ -114,12 +130,16 @@ export const english = {
   ...diffReasonsEnglish,
   ...wakeReasonsEnglish,
   ...mobileSetupEnglish,
+  ...externalToolsEnglish,
+  ...storeEnglish,
+  ...pairingEnglish,
   ...coreMoveEnglish,
   ...workspaceEnglish,
   ...checkoutGitEnglish,
   ...issueSettingsEnglish,
   ...hideAiEnglish,
   ...agentsEnglish,
+  ...agentProfilesEnglish,
   ...requestsEnglish,
   ...issuesEnglish,
   ...prWorkEnglish,
@@ -131,7 +151,7 @@ export const english = {
   ...overviewEnglish,
   ...firstRunEnglish,
   ...practiceEnglish,
-  ...herdrTakeoverEnglish,
+  ...herdrImportEnglish,
   ...memoryEnglish,
   ...suggestionsEnglish,
   ...projectSettingsEnglish,
@@ -148,6 +168,7 @@ export const catalogs = {
     ...menusCatalogs.ko,
     ...sessionWorkCatalogs.ko,
     ...deviceOverviewCatalogs.ko,
+    ...startPanelCatalogs.ko,
     ...overviewRedesignCatalogs.ko,
     ...overviewBacklogCatalogs.ko,
     ...overviewUsageCatalogs.ko,
@@ -156,8 +177,12 @@ export const catalogs = {
     ...agentSessionsCatalogs.ko,
     ...taskLensCatalogs.ko,
     ...missionsCatalogs.ko,
-    ...missionToolCatalogs.ko,
+    ...mobileAutomationsCatalogs.ko,
+    ...missionScreenCatalogs.ko,
+    ...automationWordsCatalogs.ko,
+    ...automationScreenCatalogs.ko,
     ...plansCatalogs.ko,
+    ...kindsCatalogs.ko,
     ...deskCatalogs.ko,
     ...archiveCatalogs.ko,
     ...shellCatalogs.ko,
@@ -174,6 +199,7 @@ export const catalogs = {
     ...nativeCatalogs.ko,
     ...mobileCatalogs.ko,
     ...mobileRelayCatalogs.ko,
+    ...mobileDemoCatalogs.ko,
     ...settingsCatalogs.ko,
     ...usageCatalogs.ko,
     ...cleanupCatalogs.ko,
@@ -189,12 +215,16 @@ export const catalogs = {
     ...diffReasonsCatalogs.ko,
     ...wakeReasonsCatalogs.ko,
     ...mobileSetupCatalogs.ko,
+    ...externalToolsCatalogs.ko,
+    ...storeCatalogs.ko,
+    ...pairingCatalogs.ko,
     ...coreMoveCatalogs.ko,
     ...workspaceCatalogs.ko,
     ...checkoutGitCatalogs.ko,
     ...issueSettingsCatalogs.ko,
     ...hideAiCatalogs.ko,
     ...agentsCatalogs.ko,
+    ...agentProfilesCatalogs.ko,
     ...requestsCatalogs.ko,
     ...issuesCatalogs.ko,
     ...prWorkCatalogs.ko,
@@ -206,7 +236,7 @@ export const catalogs = {
     ...overviewCatalogs.ko,
     ...firstRunCatalogs.ko,
     ...practiceCatalogs.ko,
-    ...herdrTakeoverCatalogs.ko,
+    ...herdrImportCatalogs.ko,
     ...memoryCatalogs.ko,
     ...suggestionsCatalogs.ko,
     ...projectSettingsCatalogs.ko,
@@ -218,6 +248,7 @@ export const catalogs = {
     ...menusCatalogs["zh-CN"],
     ...sessionWorkCatalogs["zh-CN"],
     ...deviceOverviewCatalogs["zh-CN"],
+    ...startPanelCatalogs["zh-CN"],
     ...overviewRedesignCatalogs["zh-CN"],
     ...overviewBacklogCatalogs["zh-CN"],
     ...overviewUsageCatalogs["zh-CN"],
@@ -226,8 +257,12 @@ export const catalogs = {
     ...agentSessionsCatalogs["zh-CN"],
     ...taskLensCatalogs["zh-CN"],
     ...missionsCatalogs["zh-CN"],
-    ...missionToolCatalogs["zh-CN"],
+    ...mobileAutomationsCatalogs["zh-CN"],
+    ...missionScreenCatalogs["zh-CN"],
+    ...automationWordsCatalogs["zh-CN"],
+    ...automationScreenCatalogs["zh-CN"],
     ...plansCatalogs["zh-CN"],
+    ...kindsCatalogs["zh-CN"],
     ...deskCatalogs["zh-CN"],
     ...archiveCatalogs["zh-CN"],
     ...shellCatalogs["zh-CN"],
@@ -244,6 +279,7 @@ export const catalogs = {
     ...nativeCatalogs["zh-CN"],
     ...mobileCatalogs["zh-CN"],
     ...mobileRelayCatalogs["zh-CN"],
+    ...mobileDemoCatalogs["zh-CN"],
     ...settingsCatalogs["zh-CN"],
     ...usageCatalogs["zh-CN"],
     ...cleanupCatalogs["zh-CN"],
@@ -259,12 +295,16 @@ export const catalogs = {
     ...diffReasonsCatalogs["zh-CN"],
     ...wakeReasonsCatalogs["zh-CN"],
     ...mobileSetupCatalogs["zh-CN"],
+    ...externalToolsCatalogs["zh-CN"],
+    ...storeCatalogs["zh-CN"],
+    ...pairingCatalogs["zh-CN"],
     ...coreMoveCatalogs["zh-CN"],
     ...workspaceCatalogs["zh-CN"],
     ...checkoutGitCatalogs["zh-CN"],
     ...issueSettingsCatalogs["zh-CN"],
     ...hideAiCatalogs["zh-CN"],
     ...agentsCatalogs["zh-CN"],
+    ...agentProfilesCatalogs["zh-CN"],
     ...requestsCatalogs["zh-CN"],
     ...issuesCatalogs["zh-CN"],
     ...prWorkCatalogs["zh-CN"],
@@ -276,7 +316,7 @@ export const catalogs = {
     ...overviewCatalogs["zh-CN"],
     ...firstRunCatalogs["zh-CN"],
     ...practiceCatalogs["zh-CN"],
-    ...herdrTakeoverCatalogs["zh-CN"],
+    ...herdrImportCatalogs["zh-CN"],
     ...memoryCatalogs["zh-CN"],
     ...suggestionsCatalogs["zh-CN"],
     ...projectSettingsCatalogs["zh-CN"],
@@ -288,6 +328,7 @@ export const catalogs = {
     ...menusCatalogs.ja,
     ...sessionWorkCatalogs.ja,
     ...deviceOverviewCatalogs.ja,
+    ...startPanelCatalogs.ja,
     ...overviewRedesignCatalogs.ja,
     ...overviewBacklogCatalogs.ja,
     ...overviewUsageCatalogs.ja,
@@ -296,8 +337,12 @@ export const catalogs = {
     ...agentSessionsCatalogs.ja,
     ...taskLensCatalogs.ja,
     ...missionsCatalogs.ja,
-    ...missionToolCatalogs.ja,
+    ...mobileAutomationsCatalogs.ja,
+    ...missionScreenCatalogs.ja,
+    ...automationWordsCatalogs.ja,
+    ...automationScreenCatalogs.ja,
     ...plansCatalogs.ja,
+    ...kindsCatalogs.ja,
     ...deskCatalogs.ja,
     ...archiveCatalogs.ja,
     ...shellCatalogs.ja,
@@ -314,6 +359,7 @@ export const catalogs = {
     ...nativeCatalogs.ja,
     ...mobileCatalogs.ja,
     ...mobileRelayCatalogs.ja,
+    ...mobileDemoCatalogs.ja,
     ...settingsCatalogs.ja,
     ...usageCatalogs.ja,
     ...cleanupCatalogs.ja,
@@ -329,12 +375,16 @@ export const catalogs = {
     ...diffReasonsCatalogs.ja,
     ...wakeReasonsCatalogs.ja,
     ...mobileSetupCatalogs.ja,
+    ...externalToolsCatalogs.ja,
+    ...storeCatalogs.ja,
+    ...pairingCatalogs.ja,
     ...coreMoveCatalogs.ja,
     ...workspaceCatalogs.ja,
     ...checkoutGitCatalogs.ja,
     ...issueSettingsCatalogs.ja,
     ...hideAiCatalogs.ja,
     ...agentsCatalogs.ja,
+    ...agentProfilesCatalogs.ja,
     ...requestsCatalogs.ja,
     ...issuesCatalogs.ja,
     ...prWorkCatalogs.ja,
@@ -346,7 +396,7 @@ export const catalogs = {
     ...overviewCatalogs.ja,
     ...firstRunCatalogs.ja,
     ...practiceCatalogs.ja,
-    ...herdrTakeoverCatalogs.ja,
+    ...herdrImportCatalogs.ja,
     ...memoryCatalogs.ja,
     ...suggestionsCatalogs.ja,
     ...projectSettingsCatalogs.ja,

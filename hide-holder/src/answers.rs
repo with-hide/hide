@@ -8,9 +8,8 @@
 //! | DSR 5n, 6n; DECRQM; DECRQSS; XTVERSION; DA1, DA2, DA3 | libghostty |
 //! | OSC 10, 11, 12 and OSC 4 colors, `CSI ? 996 n` | libghostty, from the theme the node sent ([`crate::pane`]) |
 //! | XTGETTCAP | libghostty, less what this path does not carry ([`UNSUPPORTED`]) |
-//! | XTWINOPS 18t, the text area in cells | the holder ([`Scanner`]) |
-//! | XTWINOPS 14t, 16t | nobody: the cell's pixel size is not known, and libghostty answers neither without it |
-//! | mode 2048 size reports (`CSI 48 ; ... t`) | nobody: libghostty's carry pixels it does not know, so the holder drops them ([`keeps`]) |
+//! | XTWINOPS 18t, 14t, 16t, the text area in cells and in pixels and the cell in pixels | libghostty, from the grid and the holder's stand-in cell size ([`crate::pane::CELL_PIXELS`]) |
+//! | mode 2048 size reports (`CSI 48 ; ... t`) | nobody: their pixels would be the stand-in's, which only a program that reads pointer pixels needs, so the holder drops them ([`keeps`]) |
 //! | `CSI ? 997 n` appearance changes | the holder, on a theme whose appearance changed while mode 2031 is on |
 //! | kitty keyboard `CSI ? u` | nobody: libghostty's answer is dropped ([`keeps`]), since this path cannot send kitty keys, and a program that hears none keeps to legacy keys |
 //! | ENQ, OSC 52 reads, 21t title | nobody |
@@ -28,8 +27,6 @@ pub const UNSUPPORTED: [&str; 5] = ["Ms", "Setulc", "fullkbd", "kxIN", "kxOUT"];
 /// What the holder must act on at a point of the program's output.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Mark {
-    /// `CSI 18 t`: report the text area in cells.
-    SizeQuery,
     /// DECSCUSR with its shape; 0 hands the shape back to the receiver.
     CursorShape(u8),
     /// RIS: the terminal was reset.
@@ -145,7 +142,6 @@ impl Scanner {
 
 fn csi_mark(params: &[u8], last: u8) -> Option<Mark> {
     match (params, last) {
-        (b"18", b't') => Some(Mark::SizeQuery),
         (params, b'h') => {
             let modes = params.strip_prefix(b"?")?;
             modes
@@ -221,21 +217,14 @@ mod tests {
     }
 
     #[test]
-    fn a_size_question_is_found_where_it_ends_even_split() {
-        assert_eq!(marks(&[b"ab\x1b[18t"]), [(0, 7, Mark::SizeQuery)]);
-        assert_eq!(marks(&[b"\x1b[1", b"8t"]), [(1, 2, Mark::SizeQuery)]);
-        assert_eq!(marks(&[b"\x1b[14t\x1b[?18t\x1b[18;1t"]), []);
-    }
-
-    #[test]
-    fn a_question_inside_a_string_is_not_one() {
+    fn a_sequence_inside_a_string_is_not_one() {
         assert_eq!(
-            marks(&[b"\x1b]0;[18t\x07\x1b[18t"]),
-            [(0, 14, Mark::SizeQuery)]
+            marks(&[b"\x1b]0;[5 q\x07\x1b[5 q"]),
+            [(0, 14, Mark::CursorShape(5))]
         );
         assert_eq!(
-            marks(&[b"\x1bP1;2|[18t\x1b\\\x1b[18t"]),
-            [(0, 17, Mark::SizeQuery)]
+            marks(&[b"\x1bP1;2|[5 q\x1b\\\x1b[5 q"]),
+            [(0, 17, Mark::CursorShape(5))]
         );
     }
 

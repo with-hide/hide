@@ -170,7 +170,7 @@ export function DeskRoom({ chat, view = null, tool = null, pinned, expanded = fa
   // under it by the same width, so nothing it says is hidden.
   const width = both ? "w-[min(calc(var(--size-lane-panel-ideal)*2),calc(100%_-_var(--size-lane-min)))]" : "w-[min(var(--size-lane-panel-ideal),calc(100%_-_var(--size-lane-min)))]";
   const covered = both ? "pr-[min(calc(var(--size-lane-panel-ideal)*2),calc(100%_-_var(--size-lane-min)))]" : "pr-[min(var(--size-lane-panel-ideal),calc(100%_-_var(--size-lane-min)))]";
-  const placed = expanded ? "absolute inset-0 z-10 bg-background shadow-lg" : pinned ? cn("shrink-0", width) : cn("absolute inset-y-0 right-0 z-10 border-l border-border bg-background shadow-lg", width);
+  const placed = expanded ? "absolute inset-0 z-10 bg-background shadow-overlay" : pinned ? cn("shrink-0", width) : cn("absolute inset-y-0 right-0 z-10 border-l border-border bg-background shadow-overlay", width);
   const columns = up ? (
     <div className={cn("flex min-h-0 min-w-0 overflow-hidden", placed)} data-desk-lane={pinned ? "pinned" : "over"}>
       {view !== null ? <div className="flex min-h-0 min-w-0 flex-1 flex-col" data-desk-lane-column="view">{view}</div> : null}

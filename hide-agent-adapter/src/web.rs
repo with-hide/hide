@@ -7,7 +7,8 @@ pub struct WebAdapter {
     pub aliases: &'static [&'static str],
     pub label: &'static str,
     pub picker_label: &'static str,
-    pub herdr_kind: &'static str,
+    #[serde(rename = "agent_cli")]
+    pub engine_kind: &'static str,
     pub doc_url: &'static str,
     pub install_url: &'static str,
     pub logo_id: &'static str,
@@ -28,6 +29,22 @@ pub struct WebAdapter {
     /// What Settings calls the agent's hook piece: a hook entry, a plugin
     /// file or an extension file; absent for an agent Hide writes no hook for.
     pub hook_kind: Option<HookKind>,
+    /// How the agent keeps one account apart from another, which the
+    /// profile form's account field follows (PRD agent-profiles D-14, B3):
+    /// absent for an agent Hide keeps no profiles for (D-25).
+    pub account_by: Option<super::definition::By>,
+    /// How the agent's transcript shows the doorbell's line, which the shell
+    /// dims; absent for an agent that does not type the line.
+    pub bell_echo: Option<WebBellEcho>,
+}
+
+/// The echo of the doorbell's line: `prompt` is what the agent's composer
+/// begins with, which the echo repeats before the owl, and `chrome` what its
+/// own output rows begin with.
+#[derive(serde::Serialize)]
+pub struct WebBellEcho {
+    pub prompt: &'static [&'static str],
+    pub chrome: &'static [char],
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq, serde::Serialize)]
@@ -45,7 +62,7 @@ pub fn web_contract() -> impl Iterator<Item = WebAdapter> {
         aliases: row.aliases,
         label: row.label,
         picker_label: row.picker_label,
-        herdr_kind: row.herdr.name,
+        engine_kind: row.engine_kind,
         doc_url: row.doc_url,
         install_url: row.install_url,
         logo_id: row.logo_id,
@@ -67,5 +84,16 @@ pub fn web_contract() -> impl Iterator<Item = WebAdapter> {
             }
             super::HookInstall::None => None,
         },
+        account_by: row
+            .start
+            .and(super::definition::builtin_account(row.id))
+            .map(|rule| rule.by),
+        bell_echo: row.bell_echo.map(|echo| WebBellEcho {
+            prompt: row
+                .composer
+                .supported()
+                .map_or(&[], |composer| composer.marker),
+            chrome: echo.chrome,
+        }),
     })
 }

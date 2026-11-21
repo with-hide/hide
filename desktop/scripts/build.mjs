@@ -11,20 +11,24 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { build } from "esbuild";
 import { copyTree } from "./copy-tree.mjs";
+import { resolve } from "../../scripts/check-token-contrast.mjs";
+import { readTokens } from "../../scripts/gen-tokens.mjs";
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const dist = path.join(root, "dist");
 const tokens = path.resolve(root, "..", "web", "src", "tokens.css");
 
 const tokenCss = fs.readFileSync(tokens, "utf8");
+// The two colors the host draws itself are read from design/tokens.json through
+// the token resolver, never parsed out of the generated CSS, where a color may
+// be a var() of a palette step.
+const tokenValues = readTokens(path.resolve(root, ".."));
 // The window's color before the page paints: Hide Dark, the default the page
 // opens in (hide-color-theme D-13); the host cannot read the stored choice
 // before it attaches to the core.
-const background = /\.palette-hide \.dark\s*\{[^}]*?--background:\s*(#[0-9a-fA-F]{3,8})\s*;/.exec(tokenCss)?.[1];
-if (!background) throw new Error(`${tokens} has no Hide dark --background`);
+const background = resolve(tokenValues, "--background", "hide", "dark").toLowerCase();
 // The Windows taskbar overlay's dot, in the color the shell's Needs You marks wear.
-const warning = /\.dark\s*\{[^}]*?--warning:\s*(#[0-9a-fA-F]{6})\s*;/.exec(tokenCss)?.[1];
-if (!warning) throw new Error(`${tokens} has no dark --warning`);
+const warning = resolve(tokenValues, "--warning", "neutral", "dark").toLowerCase();
 const themeBlocks = /@theme(?:\s+(?:static|inline))?\s*\{/g;
 if (!themeBlocks.test(tokenCss)) throw new Error(`${tokens} has no @theme block; the status page expects Tailwind v4 tokens`);
 
@@ -45,5 +49,6 @@ copyTree(path.join(root, "static"), path.join(dist, "static"));
 // JSON is embedded in the local script: file: needs neither fetch nor a relaxed CSP.
 await build({ entryPoints: [path.join(root, "static/status.js")], outfile: path.join(dist, "static/status.js"), bundle: true, platform: "browser", format: "iife", target: "chrome144", minify: true, legalComments: "eof" });
 fs.rmSync(path.join(dist, "static/owl-motion.js"));
-fs.rmSync(path.join(dist, "static/owl-roam.json"));
+// The startup owl is the site's canonical pose, copied rather than kept twice.
+for (const file of ["owl-blink.svg", "owl-blink-still.svg"]) fs.copyFileSync(path.join(root, "../site/public/assets/owls", file), path.join(dist, "static", file));
 fs.writeFileSync(path.join(dist, "static", "tokens.css"), tokenCss.replace(themeBlocks, ":root {"));

@@ -1,4 +1,4 @@
-// Settings > Mobile on an isolated pinned Herdr and a debug hided (PRD
+// Settings > Mobile on an isolated engine and a debug hided (PRD
 // settings-cleanup B57, B58, B59): the Tailscale checks fold into one line when
 // they all pass, opening the tab makes no pairing code and Show QR makes one,
 // and the push mode is one dropdown that describes only the mode it shows. The
@@ -12,15 +12,15 @@ import { startHided, type Daemon } from "./hided-fixture";
 
 test.describe.configure({ timeout: 120_000 });
 
-test("a ready Mac is one line, the QR waits for Show QR, and the push dropdown on Notifications describes one mode", async ({ page }) => {
+test("a ready Mac is one line, the QR waits for Show QR, and the phone pause switch lives on Notifications", async ({ page }) => {
   await page.setViewportSize({ width: 1100, height: 800 });
-  const herdr = await startFixture();
+  const engine = await startFixture();
   const tailscale = new FakeTailscale();
   let daemon: Daemon | null = null;
   try {
     tailscale.install();
     tailscale.ready();
-    daemon = await startHided(herdr, "mobile-settings", undefined, { HIDE_TAILSCALE_BIN: tailscale.bin });
+    daemon = await startHided(engine, "mobile-settings", undefined, { HIDE_TAILSCALE_BIN: tailscale.bin });
     await page.goto(`${daemon.origin}/#token=${daemon.token}`);
     await expect(page.locator("[data-sidebar-overview]")).toBeVisible({ timeout: 20_000 });
     await page.keyboard.press(chord("settings"));
@@ -51,20 +51,19 @@ test("a ready Mac is one line, the QR waits for Show QR, and the push dropdown o
     await page.locator('[data-mobile-hide-code="true"]').click();
     await expect(page.locator("[data-mobile-qr]")).toHaveCount(0);
 
-    // B59: the push mode is one dropdown on Notifications, not Mobile (PRD settings-left-nav B6, B7), and only the chosen mode's description shows.
-    await expect(page.locator("[data-push-select]")).toHaveCount(0);
+    // Phone delivery pauses on the desktop; the phone owns whether it receives notifications.
+    await expect(page.locator("[data-phone-push-rest]")).toHaveCount(0);
     await page.locator('[data-settings-tab="notifications"]').click();
-    await expect(page.locator("[data-push-select]")).toHaveText("Off");
-    await expect(page.locator("[data-push-detail]")).toHaveCount(1);
-    await expect(page.locator('[data-push-detail="off"]')).toBeVisible();
-    await page.locator("[data-push-select]").click();
-    await expect(page.locator("[data-push-choice]")).toHaveCount(3);
-    await page.locator('[data-push-choice="always"]').click();
-    await expect(page.locator('[data-push-detail="always"]')).toBeVisible();
-    await expect(page.locator("[data-push-detail]")).toHaveCount(1);
+    const rest = page.locator("[data-phone-push-rest]");
+    await expect(rest).toHaveAttribute("aria-checked", "true");
+    await expect(page.getByText("No phone notifications while you use your computer. After 10 minutes away, or when the screen locks, they go to your phone.", { exact: true })).toBeVisible();
+    await expect(page.getByText("Choose whether to receive notifications in the phone app settings.", { exact: true })).toBeVisible();
+    await rest.click();
+    await expect(rest).toHaveAttribute("aria-checked", "false");
+
   } finally {
     daemon?.stop();
-    herdr.stop();
+    engine.stop();
     tailscale.remove();
   }
 });

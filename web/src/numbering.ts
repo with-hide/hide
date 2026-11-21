@@ -20,11 +20,16 @@ import { contextWorkspaces, contextAgents } from "./remote";
 import { areasOf, findArea } from "./areaLayout";
 import type { AgentLayout } from "./agentLayout";
 import { DIGITS, type Digit } from "./shortcuts";
-import { catalogWorkspaces, type AgentRow, type Checkout, type Device, type SnapshotRest } from "./snapshot";
+import { listedCatalog, type AgentRow, type Checkout, type Device, type SnapshotRest } from "./snapshot";
 import { drawnTasks, taskList, taskSections } from "./taskList";
+import { frontTool, toolProjectChoice, toolSidebarProjects, toolTaskList } from "./toolCells";
+import { boardProjects } from "./navigation";
+import type { ToolCell } from "./agentScope";
+import type { Screen } from "./ui";
 
 /** The page-local folds the two lists' drawn orders depend on (`ui.ts`). */
-export type SidebarFolds = { raisedOpen: readonly string[]; taskFoldsOpen: readonly string[] };
+/** What the drawn lists depend on beyond the snapshot: the page's open folds and the tool's cell it shows, if any. */
+export type SidebarFolds = { raisedOpen: readonly string[]; taskFoldsOpen: readonly string[]; screen?: Screen | null };
 
 /** The pane id at each number, the first nine of `panes` in their order, a pane counted once. */
 export function numberedPanes(panes: readonly string[]): Map<Digit, string> {
@@ -69,20 +74,23 @@ export function numberOf(numbered: Map<Digit, string>, id: string): Digit | null
   return null;
 }
 
-/** The Agents list's rows in draw order, the list ⌥n numbers whichever list is on screen (B2): the front device's. */
-function sidebarAgentOrder(state: { rest: SnapshotRest | null; agents: AgentRow[] }, raisedOpen: readonly string[], groupClosed: ReadonlySet<string>): { row: TreeRow; place: string | null }[] {
+/**
+ * The Agents list's rows in draw order, the list ⌥n numbers whichever list is on screen (B2): the front device's,
+ * or in a tool's cell the tool's projects, which raise nothing (operator decision 2026-11-15).
+ */
+function sidebarAgentOrder(state: { rest: SnapshotRest | null; agents: AgentRow[] }, raisedOpen: readonly string[], groupClosed: ReadonlySet<string>, tool: ToolCell | null): { row: TreeRow; place: string | null }[] {
   const { rest } = state;
   const scope = deviceScope(rest, frontDeviceId(rest));
-  const agents = contextAgents(rest, state.agents);
-  const workspaces = contextWorkspaces(rest);
+  const agents = tool ? everyPaneAgent(state.agents, rest?.status?.remote) : contextAgents(rest, state.agents);
+  const workspaces = tool ? toolSidebarProjects(boardProjects(rest, state.agents), tool).map((project) => project.workspace) : contextWorkspaces(rest);
   const listed = deviceListedAgents(rest?.status?.remote, rest?.navigator?.devices, state.agents, frontDeviceId(rest));
-  const projects = projectRows(workspaces, rest?.navigator ?? {}, listed, scope, raisedOpen);
+  const projects = tool ? projectRows(workspaces, {}, [], null) : projectRows(workspaces, rest?.navigator ?? {}, listed, scope, raisedOpen);
   const rows: { row: TreeRow; place: string | null }[] = [];
   const append = (agent: AgentRow, place: string | null = null) => rows.push({ row: { agent, device: null, depth: 0, descendants: (agent.lineage_child_pane_ids ?? []).length }, place });
   for (const row of projects) if (row.kind === "raised") for (const item of [...row.agents, ...(row.expanded ? row.more : [])]) append(item.agent);
   const collapsed = rest?.ui_state?.session_collapsed_checkout_ids ?? [];
   const checkout = (workspace: import("./snapshot").Workspace, value: Checkout) => {
-    const grouped = sidebarTabGroups(value, workspace.device_id, checkoutAgentRows(workspace, agents, "sidebar").get(value.id) ?? [], agents);
+    const grouped = sidebarTabGroups(value, workspace.device_id, checkoutAgentRows(workspace, everyPaneAgent(state.agents, rest?.status?.remote), "sidebar").get(value.id) ?? [], agents);
     const ordered = value.agent_groups && !collapsed.includes(value.id) ? sidebarNamedGroups(value, grouped).filter(({ group }) => !groupClosed.has(groupFoldKey(workspace.device_id, value.id, group.id))).flatMap(({ segments }) => segments) : grouped;
     for (const row of ordered.flatMap((group) => group.rows)) {
       // Digits number the roots; an opened root's children and grandchildren take none.
@@ -110,13 +118,13 @@ function sidebarAgentOrder(state: { rest: SnapshotRest | null; agents: AgentRow[
 }
 
 /** Sidebar order is the actual drawn order, including each open fold. */
-export function agentListOrder(state: { rest: SnapshotRest | null; agents: AgentRow[] }, raisedOpen: readonly string[] = [], groupClosed: ReadonlySet<string> = useGroupFolds.getState().closed): TreeRow[] {
-  return sidebarAgentOrder(state, raisedOpen, groupClosed).map(({ row }) => row);
+export function agentListOrder(state: { rest: SnapshotRest | null; agents: AgentRow[] }, raisedOpen: readonly string[] = [], groupClosed: ReadonlySet<string> = useGroupFolds.getState().closed, tool: ToolCell | null = null): TreeRow[] {
+  return sidebarAgentOrder(state, raisedOpen, groupClosed, tool).map(({ row }) => row);
 }
 
 /** A physical pane gets a keycap only at its first visible appearance. */
-export function sidebarAgentNumbers(state: { rest: SnapshotRest | null; agents: AgentRow[] }, raisedOpen: readonly string[], groupClosed: ReadonlySet<string> = useGroupFolds.getState().closed) {
-  const entries = sidebarAgentOrder(state, raisedOpen, groupClosed);
+export function sidebarAgentNumbers(state: { rest: SnapshotRest | null; agents: AgentRow[] }, raisedOpen: readonly string[], groupClosed: ReadonlySet<string> = useGroupFolds.getState().closed, tool: ToolCell | null = null) {
+  const entries = sidebarAgentOrder(state, raisedOpen, groupClosed, tool);
   const numbers = numberedAgents(entries.map(({ row }) => row));
   const first = new Map<string, string | null>();
   for (const { row, place } of entries) if (!first.has(row.agent.pane_id)) first.set(row.agent.pane_id, place);
@@ -136,13 +144,22 @@ export function numberedList(rest: SnapshotRest | null): "projects" | "tasks" {
 export function taskListOrder(state: { rest: SnapshotRest | null; agents: AgentRow[] }, taskFoldsOpen: readonly string[]): string[] {
   const { rest } = state;
   const view = rest?.ui_state?.task_view ?? "status";
-  const list = taskList(deviceScope(rest, frontDeviceId(rest))?.tasks, agentsByPane(everyPaneAgent(state.agents, rest?.status?.remote)), catalogWorkspaces(rest), view);
+  const list = taskList(deviceScope(rest, frontDeviceId(rest))?.tasks, frontDeviceId(rest), agentsByPane(everyPaneAgent(state.agents, rest?.status?.remote)), listedCatalog(rest), view);
   return drawnTasks(taskSections(list, view, new Set(taskFoldsOpen))).map(({ agent }) => agent.pane_id);
 }
 
-/** The pane at each ⌥n now: the 태스크 list's rows while the switch shows that list, else the 프로젝트 list's roots. */
+/**
+ * The pane at each ⌥n now: the 태스크 list's rows while the switch shows that list, else the 프로젝트 list's roots;
+ * a tool's cell in front numbers its own lists the same way (PRD hide-external-control B40; operator decision 2026-11-15).
+ */
 export function sidebarNumbers(state: { rest: SnapshotRest | null; agents: AgentRow[] }, folds: SidebarFolds): Map<Digit, string> {
-  return numberedList(state.rest) === "tasks" ? numberedPanes(taskListOrder(state, folds.taskFoldsOpen)) : numberedAgents(agentListOrder(state, folds.raisedOpen));
+  const tool = frontTool(state.rest, folds.screen ?? null);
+  if (tool && numberedList(state.rest) === "tasks") {
+    const view = state.rest?.ui_state?.task_view ?? "status";
+    const list = toolTaskList(state.rest, tool, agentsByPane(everyPaneAgent(state.agents, state.rest?.status?.remote)), (id) => id, view, toolProjectChoice(state.rest, tool));
+    return numberedPanes(drawnTasks(taskSections(list, view, new Set(folds.taskFoldsOpen))).map(({ agent }) => agent.pane_id));
+  }
+  return numberedList(state.rest) === "tasks" ? numberedPanes(taskListOrder(state, folds.taskFoldsOpen)) : numberedAgents(agentListOrder(state, folds.raisedOpen, undefined, tool));
 }
 
 /** The number ⌥n selects an agent by now, or null past the ninth row. */

@@ -8,6 +8,7 @@
 // buffer). Without the query nothing is installed and the writer path is the
 // plain `term.write(data)`.
 
+import { terminalView, type View } from "./terminalView";
 import type { Terminal } from "@xterm/xterm";
 import type { InputRequest } from "./snapshot";
 import { useShellStore } from "./store";
@@ -43,6 +44,8 @@ export type Probe = {
   paneGrid: (paneId: string) => { cols: number; rows: number } | null;
   /** The text a copy of the pane's drag selection puts on the clipboard, null without one. */
   paneSelection: (paneId: string) => string | null;
+  /** Where the pane's screen stands as its holder last said (`terminalView.ts`), null before it said. */
+  paneView: (paneId: string) => View | null;
 };
 
 declare global {
@@ -117,6 +120,10 @@ export function installProbe(
       return current ? { cols: current.cols, rows: current.rows } : null;
     },
     paneSelection: selectionOf,
+    paneView: (id) => {
+      const current = terminalOf(id);
+      return current ? terminalView(current) : null;
+    },
     screenText: () => {
       const current = term();
       return current ? screenText(current) : "";

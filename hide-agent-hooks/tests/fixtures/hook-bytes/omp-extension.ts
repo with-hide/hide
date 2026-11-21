@@ -1,8 +1,8 @@
-// hide-extension@13 sha256=62c5cbf4109d8667cd17616a8da5298c004df2cb0ce3b1c331c98bc095053cc6
+// hide-extension@16 sha256=7e9eab27df2348f012d176fd0ec1887df47e62aa7d2ec4d16f4a0e27e2706928
 // Hide's extension for Pi and omp, written by Hide's install kit (hide-agent-hooks).
 // An edit is kept and shown as edited in Settings; Reinstall puts Hide's back.
 // Outside a Herdr pane, in an agent started from another Pi's or omp's shell, or when its helper is gone, it does
-// nothing; inside one it acts for the pane's own TUI session, and its spawn guard for every session in it.
+// nothing; inside one it acts for the pane's own TUI session, and its opener guard for every session in it.
 // @ts-nocheck
 
 import { spawn } from "node:child_process";
@@ -14,9 +14,9 @@ import path from "node:path";
 const HELPER = "/kit path/it's/hide-agent-hooks";
 const ROUTE = [];
 const AGENT = "omp";
-const VERSION = 13;
+const VERSION = 16;
 
-// The prompt budget is Claude Code's prompt hook's; the tool budget is the spawn guard's. Both hosts wait for
+// The prompt budget is Claude Code's prompt hook's; the tool budget is the opener guard's. Both hosts wait for
 // a handler far longer (omp gives up at 30 s and then blocks the tool), so these are the limits.
 const PROMPT_BUDGET_MS = 1850;
 const TOOL_BUDGET_MS = 2500;
@@ -33,6 +33,7 @@ const PROMPT_TEXT_LIMIT = 32 * 1024;
 const RUNNING_LIMIT = 8;
 const SESSION_LIMIT = 512;
 const CHILD_LIMIT = 64;
+const ASKED_LIMIT = 16;
 const PENDING_LIMIT = 16;
 const PENDING_AGE_MS = 10 * 60 * 1000;
 const CUSTOM_TYPE = "hide";
@@ -126,8 +127,9 @@ function fileArgs(args) {
 const REMINDER_TAG = /<(\s*\/?\s*system-reminder)/gi;
 
 // omp's subagents run in the same process and get their own binding of this factory, sharing the module: the
-// counts live here, and the main session's binding reports them.
-const shared = { children: new Map(), publish: null, rootSession: null };
+// counts live here, and the main session's binding reports them. `asked` holds the tasks a `task` call asked for that
+// no subagent has taken yet, oldest first.
+const shared = { children: new Map(), asked: [], publish: null, rootSession: null };
 
 function helperPresent() {
   try {
@@ -138,10 +140,8 @@ function helperPresent() {
 }
 
 function managed(env) {
-  // A pane on the core's own engine names itself HIDE_PANE_ID first, a Herdr pane by its three variables
-  // (`hide_agent_hooks::pane`, the rule the helper and the CLI share).
-  const herdrPane = env.HERDR_ENV === "1" && env.HERDR_PANE_ID && env.HERDR_SOCKET_PATH;
-  if (!env.HIDE_PANE_ID && !herdrPane) return false;
+  // A pane Hide manages names itself HIDE_PANE_ID (`hide_agent_hooks::pane`, the rule the helper and the CLI share).
+  if (!env.HIDE_PANE_ID) return false;
   // omp marks every shell it starts with OMPCODE=1 and Pi with PI_SESSION_ID: an agent started there is not
   // the pane's agent, and its prompts must not take the pane's letters.
   if (env.OMPCODE === "1" || env.PI_SESSION_ID) return false;
@@ -297,27 +297,31 @@ function remember(set, key) {
 }
 
 /**
- * Sends the pane's subagent counts when they changed, or always when `force`. One report runs at a time and only
- * the newest waiting one follows it, so a burst of subagents costs two helper runs, not one per change.
+ * Sends the pane's subagent counts, with the running ones by id, oldest first, when they changed, or always when
+ * `force`. One report runs at a time and only the newest waiting one follows it, so a burst of subagents costs two
+ * helper runs, not one per change.
  */
 function publishCounts(state, force) {
-  let working = 0;
+  const running = [];
   let done = 0;
-  for (const child of shared.children.values()) {
-    if (child.busy) working += 1;
+  for (const [id, child] of shared.children) {
+    if (child.busy) running.push({ id, kind: child.kind, task: child.task, started_unix_ms: child.started });
     else if (child.ran) done += 1;
   }
-  const key = `${working}/${done}`;
+  running.sort((a, b) => (a.started_unix_ms ?? 0) - (b.started_unix_ms ?? 0));
+  const working = running.length;
+  // A subagent's task arrives with its first prompt, after its spawn counted it, so the key carries what each says.
+  const key = `${working}/${done}/${JSON.stringify(running.map((child) => [child.id, child.kind, child.task]))}`;
   if (!force && key === state.published) return state.counting ?? Promise.resolve();
   // Only a report the core took counts as published: a failed one is sent again with the next change, prompt or rest.
   state.published = key;
-  state.nextCount = { working, done, key };
+  state.nextCount = { working, done, running, key };
   state.counting ??= (async () => {
     try {
       while (state.nextCount) {
         const next = state.nextCount;
         state.nextCount = null;
-        const answer = await helper(state, "subagents", { working: next.working, done: next.done }, COUNT_BUDGET_MS);
+        const answer = await helper(state, "subagents", { working: next.working, done: next.done, running: next.running }, COUNT_BUDGET_MS);
         if (answer?.reported !== true && state.published === next.key) state.published = null;
       }
     } finally {
@@ -373,12 +377,51 @@ function child(id) {
   return entry;
 }
 
-function setChild(id, busy) {
+/**
+ * Keeps each task an omp `task` call asks for: its words, how a row names it (its `description`, else its `name` in
+ * words, `find_login_file` reads `find login file`, else its words) and the agent it asked for, the task's own or the
+ * call's. No spawn names its task, and omp gives a generated id to a task the call did not name, in no fixed order.
+ */
+function noteAsked(event) {
+  const input = event?.input;
+  if (AGENT !== "omp" || event?.toolName !== "task" || !Array.isArray(input?.tasks)) return;
+  const words = (value) => (typeof value === "string" ? value.trim() : "");
+  for (const task of input.tasks) {
+    const text = words(task?.task);
+    if (!text) continue;
+    if (shared.asked.length >= ASKED_LIMIT) shared.asked.shift();
+    const label = words(task.description) || words(task.name).replace(/[_-]+/g, " ").trim() || text;
+    shared.asked.push({ text, label, kind: words(task.agent) || words(input.agent) });
+  }
+}
+
+/**
+ * A subagent's first prompt carries its task's words (omp 18.7.0: `Complete assignment thoroughly:` and the task), so
+ * the oldest ask whose words it carries is its; the helper makes its label one short line.
+ */
+function takeAsked(id, prompt) {
+  const entry = shared.children.get(id);
+  if (!entry || entry.task || typeof prompt !== "string") return;
+  const at = shared.asked.findIndex((asked) => prompt.includes(asked.text));
+  if (at < 0) return;
+  const [asked] = shared.asked.splice(at, 1);
+  entry.task = asked.label;
+  if (asked.kind && asked.kind !== "task") entry.kind ??= asked.kind;
+  void shared.publish?.(false);
+}
+
+/**
+ * A subagent runs or rests. `kind` is the agent definition a spawn named, kept unless it is omp's general `task`
+ * agent, which says nothing a row could show.
+ */
+function setChild(id, busy, kind) {
   if (typeof id !== "string" || !id) return;
   const entry = child(id);
   if (!entry) return;
   entry.busy = busy;
   entry.ran ||= busy;
+  if (busy) entry.started ??= Date.now();
+  if (typeof kind === "string" && kind && kind !== "task") entry.kind ??= kind;
   void shared.publish?.(false);
 }
 
@@ -467,7 +510,6 @@ function handoverOpen(state) {
  * reply, before the next result.
  */
 async function onToolResult(state, event, ctx) {
-  await observeTool(state, event, ctx);
   if (!root(ctx) || typeof event?.toolCallId !== "string") return undefined;
   const session = sessionFile(ctx);
   if (!session) return undefined;
@@ -482,37 +524,6 @@ async function onToolResult(state, event, ctx) {
   const content = [...(Array.isArray(event.content) ? event.content : []), { type: "text", text }];
   // Replacing the content alone drops a tool's structured result: it is returned with it.
   return event.structuredContent === undefined ? { content } : { content, structuredContent: event.structuredContent };
-}
-
-/** `tool_result` includes the executed input in both hosts. Internal omp
- * sessions keep their own native id; a parent's file is never substituted.
- * The daemon may reject a child it cannot attest. */
-async function observeTool(state, event, ctx) {
-  const command = event?.input?.command;
-  if (!["bash", "powershell"].includes(event?.toolName) || typeof command !== "string" || !(command.includes("herdr") || command.includes("HERDR_BIN_PATH"))) return;
-  const session = nativeSession(ctx);
-  if (!session || typeof event.toolCallId !== "string" || Buffer.byteLength(command, "utf8") > 64 * 1024) { state.lost += 1; return; }
-  const content = event.content;
-  const truncated = Array.isArray(content) && (content.length > 16 || content.reduce((sum, part) => sum + (typeof part?.text === "string" ? Buffer.byteLength(part.text, "utf8") : 0), 0) > 128 * 1024);
-  // Preserve Pi's separate structured result when it actually is the Herdr
-  // envelope, without serializing arbitrary tool metadata or prompt bodies.
-  const structured = AGENT === "pi" && event.structuredContent?.id === "cli:agent:prompt" && !event.structuredContent?.error && event.structuredContent?.result?.type === "agent_prompted" ? event.structuredContent : null;
-  let result = null;
-  if (structured) {
-    const agent = structured.result.agent;
-    const reference = agent?.agent_session;
-    const identifiers = [agent?.pane_id, agent?.terminal_id, reference?.source, reference?.agent, reference?.kind, reference?.value];
-    if (identifiers.every((value) => value === undefined || value === null || (typeof value === "string" && value.length <= 4096))) {
-      result = { id: "cli:agent:prompt", result: { type: "agent_prompted", agent: { pane_id: agent?.pane_id, terminal_id: agent?.terminal_id, agent_session: reference ? { source: reference.source, agent: reference.agent, kind: reference.kind, value: reference.value } : null } } };
-    }
-  } else if (!truncated && Array.isArray(content) && content.every((part) => part?.type === "text" && typeof part.text === "string")) {
-    result = { content: content.filter((part) => part?.type === "text").map((part) => ({ type: "text", text: part.text })) };
-  }
-  await helper(state, "observation", {
-    session_id: session,
-    observation: { command, call_id: event.toolCallId, result, truncated,
-      failed: event.isError === true, asynchronous: Boolean(event.details?.background || event.details?.asyncJobId) },
-  }, 1500);
 }
 
 /** A message the host finished: Hide's hidden message is written, and the reply after it means the turn is recorded. */
@@ -578,10 +589,10 @@ async function onTool(state, event, ctx) {
   if (tool === "bash") {
     const command = event?.input?.command;
     // Every shell call comes here: one asks the helper while a guardrail is on, or, in the pane's own agent, when
-    // it can start an agent through Herdr or hand a result to the system opener.
+    // it can hand a result to the system opener.
     if (typeof command !== "string") return null;
-    const launch = !state.guardOnly && (command.includes("herdr") || command.includes("HERDR_BIN_PATH") || mayOpen(command));
-    if (!launch && !namesGlobal(command) && !guardrailsOn(state)) return null;
+    const opens = !state.guardOnly && mayOpen(command);
+    if (!opens && !namesGlobal(command) && !guardrailsOn(state)) return null;
     const cwd = typeof event.input.cwd === "string" && event.input.cwd ? event.input.cwd : ctx?.cwd;
     request = { tool, command, cwd };
   } else if (FILE_TOOLS.has(tool)) {
@@ -613,9 +624,12 @@ function onSessionStart(state, ctx) {
   state.root = true;
   shared.rootSession = sessionFile(ctx);
   state.guidance ??= startGuidance(state, ctx);
+  // The pane's session from its start, so letters and the inbox reach it before its first turn.
+  if (shared.rootSession) void helper(state, "session", { session_id: shared.rootSession }, COUNT_BUDGET_MS);
   if (AGENT === "omp") {
     // A new session in the pane starts its counts at zero, as Claude Code's SessionStart does.
     shared.children.clear();
+    shared.asked = [];
     shared.publish = (force) => publishCounts(state, force);
     void publishCounts(state, true);
   }
@@ -669,11 +683,15 @@ export default function hide(pi) {
   // omp reports a session the operator switched to with its own event.
   on("session_switch", (_event, ctx) => onSessionStart(state, ctx));
   // Past the budget the prompt goes on unchanged, and letters it would have carried stay pending in Hide.
-  on("before_agent_start", async (event, ctx) => (await withBudget(onPrompt(state, event, ctx), PROMPT_BUDGET_MS)) ?? undefined);
+  on("before_agent_start", async (event, ctx) => {
+    if (subagent(ctx)) takeAsked(ctx.agent.id, event?.prompt);
+    return (await withBudget(onPrompt(state, event, ctx), PROMPT_BUDGET_MS)) ?? undefined;
+  });
   on("message_end", (event, ctx) => onMessageEnd(state, event, ctx));
   // Past the budget the result goes on unchanged, and the letters it would have carried stay pending in Hide.
   on("tool_result", async (event, ctx) => (await withBudget(onToolResult(state, event, ctx), LETTERS_BUDGET_MS + 200)) ?? undefined);
   on("tool_call", async (event, ctx) => {
+    noteAsked(event);
     let reason = null;
     try {
       reason = await onTool(state, event, ctx);
@@ -682,7 +700,7 @@ export default function hide(pi) {
     return reason ? { block: true, reason } : undefined;
   });
   on("agent_start", (_event, ctx) => {
-    if (subagent(ctx)) setChild(ctx.agent.id, true);
+    if (subagent(ctx)) setChild(ctx.agent.id, true, ctx.agent.name);
     else if (root(ctx)) publishTurn(state, ctx, "working");
   });
   on("agent_end", (event, ctx) => {
@@ -706,7 +724,7 @@ export default function hide(pi) {
   on("before_subagent_spawn", (event, ctx) => {
     if (!root(ctx)) return undefined;
     // The spawn's key is the subagent's id: it counts as working from dispatch.
-    setChild(event?.spawnKey, true);
+    setChild(event?.spawnKey, true, event?.agent);
     return undefined;
   });
   on("session_shutdown", (_event, ctx) => {
@@ -719,7 +737,7 @@ export default function hide(pi) {
     if (shared.publish && AGENT === "omp") shared.publish = null;
     // A prompt or tool call still asking has no one to answer; a confirmation or a count finishes on its own budget.
     for (const running of state.running) {
-      if (["prompt", "tool", "start", "observation"].includes(running.hideOperation)) {
+      if (["prompt", "tool", "start"].includes(running.hideOperation)) {
         try {
           running.kill("SIGKILL");
         } catch {}

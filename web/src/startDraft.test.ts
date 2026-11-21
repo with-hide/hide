@@ -47,7 +47,6 @@ describe("the start panel's draft", () => {
   it("words a Codex the machine's kit has not read in the operator's language", () => {
     expect(startFailure("codex_capability_unknown")).toEqual({ key: "agents.codexUnread", code: "codex_capability_unknown" });
     expect(startFailure("session_checkpoint_invalid:cursor_launch_root_changed")).toEqual({ key: "coreError.startReason.cursor_launch_root_changed", code: "cursor_launch_root_changed" });
-    expect(startRefusal("home.conflict")).toEqual({ key: "coreError.home.conflict", code: "home.conflict" });
     expect(startRefusal("agent_start.unknown_provider")).toEqual({ key: "workspace.agentNotStarted", code: "agent_start.unknown_provider" });
     expect(startFailure("constructor")).toEqual({ key: "workspace.agentNotStarted", code: "constructor" });
   });

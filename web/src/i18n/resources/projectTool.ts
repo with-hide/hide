@@ -1,7 +1,7 @@
 import type { Catalog, Catalogs } from "../schema";
 
 // The lane's Project tool (PRD project-panel-results): its count line, 흘린
-// 것, disk line, 최근 7일 and costly tasks, the 보기 slot's worktree table,
+// 것, disk line, 최근 7일 and costly tasks, a card tab's worktree table,
 // 남은 것 and 작업 비용, and the sidebar's project filter.
 export const projectToolEnglish = {
   "projectTool.title": "Project",
@@ -122,6 +122,7 @@ export const projectToolEnglish = {
   "projectTool.sidebar.frontProject": "Project in front",
   "projectTool.sidebar.applies": "Applies to both the task and PR lists",
   "projectTool.sidebar.elsewhere": "Needs You in other projects: {{count}}",
+  "projectTool.sidebar.toolElsewhere": "Tool's turn in other projects: {{count}}",
   "projectTool.sidebar.prsCount": "PRs {{count}}",
   "projectTool.sidebar.prsLoading": "PRs …",
 } as const;
@@ -247,6 +248,7 @@ const ko: Messages = {
   "projectTool.sidebar.frontProject": "지금 보는 프로젝트",
   "projectTool.sidebar.applies": "태스크와 PR 목록에 같이 적용돼요",
   "projectTool.sidebar.elsewhere": "다른 프로젝트의 내 차례 {{count}}",
+  "projectTool.sidebar.toolElsewhere": "다른 프로젝트의 도구가 답할 차례 {{count}}",
   "projectTool.sidebar.prsCount": "PR {{count}}",
   "projectTool.sidebar.prsLoading": "PR …",
 };
@@ -370,6 +372,7 @@ const zh: Messages = {
   "projectTool.sidebar.frontProject": "当前项目",
   "projectTool.sidebar.applies": "同时用于任务和 PR 列表",
   "projectTool.sidebar.elsewhere": "其他项目中轮到你：{{count}}",
+  "projectTool.sidebar.toolElsewhere": "其他项目中轮到工具答复：{{count}}",
   "projectTool.sidebar.prsCount": "PR {{count}}",
   "projectTool.sidebar.prsLoading": "PR …",
 };
@@ -493,6 +496,7 @@ const ja: Messages = {
   "projectTool.sidebar.frontProject": "表示中のプロジェクト",
   "projectTool.sidebar.applies": "タスクと PR の一覧に共通で適用されます",
   "projectTool.sidebar.elsewhere": "ほかのプロジェクトの自分の番 {{count}}",
+  "projectTool.sidebar.toolElsewhere": "ほかのプロジェクトのツールが答える番 {{count}}",
   "projectTool.sidebar.prsCount": "PR {{count}}",
   "projectTool.sidebar.prsLoading": "PR …",
 };

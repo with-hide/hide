@@ -1,8 +1,8 @@
 """The title cell: Hide shows the agent's task under a title, not under the
 agent's name.
 
-A row's `identity_label` is one title order the core keeps (docs/status-model.md,
-Task identity): the operator's own title, the goal Hide's labels made, the
+A row's `identity_label` is one title order the core keeps (with-hide/hide-private
+docs/task-identity.md): the operator's own title, the goal Hide's labels made, the
 agent's own native title, and last the agent's name, which the contract
 names (`untitled`). The cell measures the native title the contract's
 `title` form declares, made the way the operator makes it: an `automatic`
@@ -64,8 +64,6 @@ def measure(journey):
     try:
         journey.daemon.wait(titled, TITLE_SECONDS, "the row to show a task title")
     except ProcessError as error:
-        if journey.runtime.owner.cancelled.is_set():
-            raise
         record["wait"] = str(error)
     row = journey.daemon.row(journey.pane)
     record["row"] = {key: (row or {}).get(key) for key in ("identity_label", "message", "detail", "request")}

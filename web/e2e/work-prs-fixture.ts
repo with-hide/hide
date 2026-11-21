@@ -111,7 +111,7 @@ if (a === "repo" && b === "view") { out({ nameWithOwner: "acme/repo" }); process
 if (a === "pr" && b === "list") {
   if (args.includes("merged")) { out([]); process.exit(0); }
   if (args.includes("review-requested:@me")) { if (failing("review_requests")) fail("GraphQL: API rate limit already exceeded for user ID 1"); out(asked); process.exit(0); }
-  const heads = read("heads.json");
+  const heads = fs.existsSync(file("list-heads.json")) ? read("list-heads.json") : read("heads.json");
   const merges = read("merges.json");
   if (args.includes("number,statusCheckRollup")) { out(checks); process.exit(0); }
   const first = read("first-heads.json");
@@ -144,6 +144,7 @@ if (a === "api" && args[1] === "--method" && args[2] === "PUT") {
   out({ message: "Updating pull request branch." });
   process.exit(0);
 }
+if (process.argv.slice(2).join(" ").includes("HideHeadRuns")) { const repository = {}; for (let i = 0; i < process.argv.slice(2).join(" ").split("object(oid:").length - 1; i++) repository["c" + i] = { checkSuites: { totalCount: 0, nodes: [] } }; console.log(JSON.stringify({ data: { repository } })); process.exit(0); }
 if (a === "api" && b === "graphql") {
   const query = args.join(" ");
   if (query.includes("HidePrFacts")) { if (failing("merge_queue")) fail("GraphQL: Field 'mergeQueueEntry' doesn't exist on type 'PullRequest'"); out({ data: { repository: { pullRequests: { nodes: [] } } } }); process.exit(0); }
@@ -186,6 +187,28 @@ export function skewCardHead(state: string, number: number, to: string): void {
   const heads = JSON.parse(fs.readFileSync(path.join(state, "heads.json"), "utf8")) as Record<string, string>;
   heads[number] = to;
   fs.writeFileSync(path.join(state, "card-heads.json"), JSON.stringify(heads));
+}
+
+/**
+ * Both reads keep answering the heads they last showed, as a read that lands
+ * after a push does: the list and the card still draw the pull request that
+ * was drawn when the operator looked. The reads are asked again while the
+ * card is open (the core reads it for the opened slot, the page reads it on
+ * mount, and a look re-reads the list), so without this one of them can land
+ * on the new head before the operator's write, and the core then refuses that
+ * write against the list before `gh` is asked (D-22). `releaseReads` lets both
+ * follow the push again.
+ */
+export function holdReads(state: string): void {
+  const heads = fs.readFileSync(path.join(state, "heads.json"));
+  fs.writeFileSync(path.join(state, "list-heads.json"), heads);
+  fs.writeFileSync(path.join(state, "card-heads.json"), heads);
+}
+
+/** Both reads follow the push again. */
+export function releaseReads(state: string): void {
+  fs.rmSync(path.join(state, "list-heads.json"), { force: true });
+  fs.rmSync(path.join(state, "card-heads.json"), { force: true });
 }
 
 export function moveHead(state: string, number: number, to: string): void {

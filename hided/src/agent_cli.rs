@@ -1,14 +1,20 @@
 //! Participant registration and child creation use the daemon's same durable
 //! store and pane capability as the mailbox.
 use crate::env::Env;
-use herdr_core::{coordination::Command, delivery::Command as Delivery};
+use hide_core::{coordination::Command, delivery::Command as Delivery};
 use std::collections::BTreeMap;
-pub const USAGE: &str = "hide agent register [--check] [--machine <device id>] --host-scope <scope> --session <session> --instance <terminal> --name <name> --pane <pane> [--parent <id>] [--project <path>]\nhide agent list\nhide agent show <id|here>\nhide agent end <id> [--actor <id>]\nhide agent sleep <id> [--actor <id>]\nhide agent archive <id> [--actor <id>]\nhide agent catalog [--machine <device id>]\nhide agent spawn [--parent <here|id>] [--machine <device id>] [--beside] --name <name> (--intent <key> | --plan-node <key>) --kind <kind> --repo <path> --branch <branch> [--path <path>] [--model <model>] [--effort <effort>] [--brief <text> | --brief-file <path>] [-- <native args>]";
-pub const SPAWN_HELP: &str = "hide agent spawn [--parent <here|id>] [--machine <device id>] [--beside] --name <name> (--intent <key> | --plan-node <key>) --kind <kind> --repo <path> --branch <branch> [--path <path>] [--model <model>] [--effort <effort>] [--brief <text> | --brief-file <path>] [-- <native args>]
+pub const USAGE: &str = "hide agent register [--check] [--machine <device id>] --host-scope <scope> --session <session> --instance <terminal> --name <name> --pane <pane> [--parent <id>] [--project <path>]\nhide agent list [--live]\nhide agent show <id|name|pane|here>\nhide agent ask-human <auth|permission> <where>\nhide agent ask-human --clear\nhide agent end <id> [--actor <id>] [--keep-pane]\nhide agent sleep <id> [--actor <id>]\nhide agent archive <id> [--actor <id>]\nhide agent catalog [--machine <device id>]\nhide agent profile list|add|edit|default|remove|reinstall … (hide agent profile --help)\nhide agent spawn [--parent <here|id>] [--machine <device id>] [--beside] --name <name> (--intent <key> | --plan-node <key>) --kind <kind> [--repo <path> [--branch <branch> [--path <path>]]] [--profile <name>] [--model <model>] [--effort <effort>] [--brief <text> | --brief-file <path>] [-- <native args>]";
+pub const SPAWN_HELP: &str = "hide agent spawn [--parent <here|id>] [--machine <device id>] [--beside] --name <name> (--intent <key> | --plan-node <key>) --kind <kind> [--repo <path> [--branch <branch> [--path <path>]]] [--profile <name>] [--model <model>] [--effort <effort>] [--brief <text> | --brief-file <path>] [-- <native args>]
 
 Choose the model and effort with --model and --effort, not after --:
   Hide starts the agent with them and starts it with them again whenever it wakes, forks or reopens the agent.
   Native arguments after -- reach this start only; a restart resumes the conversation without them.
+
+Choose the agent's profile with --profile <name>, a profile of that agent on the machine it starts on:
+  Without it the agent runs with your own profile when you are the same agent on the same machine,
+  else with the agent's default profile there. Every wake, fork and reopen runs it with the same profile.
+  A profile the machine does not list, or that was removed, is refused with profile_gone; --profile default
+  names the agent's built-in default.
 
 Give the agent its brief with --brief <text> or --brief-file <path> (at most 16 KiB):
   Hide starts the agent and submits the brief as its first prompt once the agent takes input,
@@ -22,7 +28,14 @@ Hand a step of your own plan to the agent with --parent here --plan-node <key> i
   The step's earlier steps must be done or dropped, the plan must not wait for the operator's review, and
   your plans' children that have not ended or gone to sleep number at most 3. Running the same command again
   returns the same agent while it works; after it sent block or its pane closed, the same command hands the
-  step to a new agent. An agent a plan or a mission started cannot start agents. See hide plan help.
+  step to a new agent. An agent a plan or a mission started cannot start agents. See hide task help.
+
+Choose where the agent works with --repo and --branch:
+  In a Git project the agent works in its own worktree: --repo names the repository and --branch the branch
+  it has out there (a new branch makes a new worktree, at --path when given). They are required there.
+  In a project that is a plain folder, not a Git repository, the agent works in the folder itself, on no branch:
+  leave out both to start it in your own folder, or give --repo alone to name a plain-folder project
+  (of the --machine device too). A Git project asked without them is refused with spawn_repo_required.
 
 Choose responsibility when spawning:
   With --parent here (or your own id): delegate work you will supervise.
@@ -33,7 +46,9 @@ Choose responsibility when spawning:
 Choose where the agent opens:
   Without --beside it opens in a tab of its own.
   With --beside it opens in your tab, in the right half of your pane, and stays there.
-    Only for your own checkout: --repo and --branch (and --path) must name the checkout you work in.
+    It is the operator's to watch, so it takes no --parent: one that asks for both is refused.
+    Only for your own checkout: --repo and --branch (and --path) must name the checkout you work in,
+    or, in a plain folder, both are left out.
     A spawn that would work in another worktree or branch, or on another device, is refused before
     anything is created; run it again without --beside to open it in a new tab.
 Neither changes the current screen or keyboard focus.
@@ -62,6 +77,10 @@ pub fn parse<'a>(mut args: impl Iterator<Item = &'a String>) -> Result<Parsed, S
     let mut flags = BTreeMap::new();
     let mut check = false;
     let mut beside = false;
+    let mut keep_pane = false;
+    let mut clear = false;
+    let mut live = false;
+    let mut words: Vec<String> = Vec::new();
     let mut id = None;
     let mut native = Vec::new();
     while let Some(arg) = args.next() {
@@ -73,6 +92,24 @@ pub fn parse<'a>(mut args: impl Iterator<Item = &'a String>) -> Result<Parsed, S
                     return Err("--beside is given twice".into());
                 }
                 beside = true;
+            }
+            "--keep-pane" if verb == "end" => {
+                if keep_pane {
+                    return Err("--keep-pane is given twice".into());
+                }
+                keep_pane = true;
+            }
+            "--live" if verb == "list" => {
+                if live {
+                    return Err("--live is given twice".into());
+                }
+                live = true;
+            }
+            "--clear" if verb == "ask-human" => {
+                if clear {
+                    return Err("--clear is given twice".into());
+                }
+                clear = true;
             }
             "--" if verb == "spawn" => {
                 native.extend(args.cloned());
@@ -101,6 +138,7 @@ pub fn parse<'a>(mut args: impl Iterator<Item = &'a String>) -> Result<Parsed, S
                         "--repo",
                         "--branch",
                         "--path",
+                        "--profile",
                         "--model",
                         "--effort",
                         "--brief",
@@ -130,6 +168,8 @@ pub fn parse<'a>(mut args: impl Iterator<Item = &'a String>) -> Result<Parsed, S
                 flags.insert(flag.to_owned(), value);
             }
             _ if matches!(verb, "show" | "end") && id.is_none() => id = Some(arg.clone()),
+            // The kind, then the place, which may be several words.
+            _ if verb == "ask-human" => words.push(arg.clone()),
             _ => return Err(USAGE.into()),
         }
     }
@@ -142,10 +182,10 @@ pub fn parse<'a>(mut args: impl Iterator<Item = &'a String>) -> Result<Parsed, S
         "register" => {
             let host_scope = take("--host-scope")?;
             let session = take("--session")?;
-            if !herdr_core::delivery::valid_session(&session) {
+            if !hide_core::delivery::valid_session(&session) {
                 return Err(format!(
                     "--session takes a native session id or session file path of at most {} bytes that does not start with -",
-                    herdr_core::delivery::SESSION_LIMIT
+                    hide_core::delivery::SESSION_LIMIT
                 ));
             }
             let instance = take("--instance")?;
@@ -170,7 +210,7 @@ pub fn parse<'a>(mut args: impl Iterator<Item = &'a String>) -> Result<Parsed, S
             let plan_node = take("--plan-node").ok();
             if plan_node
                 .as_deref()
-                .is_some_and(|key| key.starts_with('-') || !herdr_core::dag::valid_key(key))
+                .is_some_and(|key| key.starts_with('-') || !hide_core::dag::valid_key(key))
             {
                 return Err("--plan-node takes a step key of your plan".into());
             }
@@ -181,8 +221,16 @@ pub fn parse<'a>(mut args: impl Iterator<Item = &'a String>) -> Result<Parsed, S
                 (None, None) => return Err("--intent is required".into()),
             };
             let kind = take("--kind")?;
-            let repo = take("--repo")?;
-            let branch = take("--branch")?;
+            // A plain folder's agent works in the folder, on no branch: both
+            // left out name the caller's own (with-hide/hide#2479).
+            let repo = take("--repo").ok();
+            let branch = take("--branch").ok();
+            if branch.is_some() && repo.is_none() {
+                return Err("--branch names a branch of the repository --repo names; give --repo too".into());
+            }
+            if branch.is_none() && flags.contains_key("--path") {
+                return Err("--path names the folder of a new worktree on --branch; give --repo and --branch too".into());
+            }
             let brief = flags.remove("--brief");
             let brief_file = flags.remove("--brief-file");
             if brief.is_some() && brief_file.is_some() {
@@ -196,6 +244,7 @@ pub fn parse<'a>(mut args: impl Iterator<Item = &'a String>) -> Result<Parsed, S
                         mission: None,
                         plan_node,
                         plan: None,
+                        pick: None,
                         brief,
                         parent: flags.remove("--parent"),
                         machine: flags.remove("--machine"),
@@ -213,17 +262,34 @@ pub fn parse<'a>(mut args: impl Iterator<Item = &'a String>) -> Result<Parsed, S
                         // Only Hide's own identity gives a task; no flag names one.
                         task: None,
                         beside,
+                        profile: flags.remove("--profile"),
                     },
                 },
             });
         }
-        "list" => Command::List,
+        "list" => Command::List { live },
+        // The core judges the kind and the place, so its refusals say what
+        // to do (`human_kind_unknown`, `human_place_required`).
+        "ask-human" if clear => {
+            if !words.is_empty() {
+                return Err("hide agent ask-human --clear takes nothing else".into());
+            }
+            Command::AskHumanClear
+        }
+        "ask-human" => match <[String; 2]>::try_from(words) {
+            Ok([kind, place]) => Command::AskHuman { kind, place },
+            Err(words) if words.len() > 2 => {
+                return Err("hide agent ask-human takes the kind and one place; quote a place of several words".into());
+            }
+            Err(_) => return Err("hide agent ask-human needs the kind (auth or permission) and where the person acts, or --clear".into()),
+        },
         "show" => Command::Show {
             id: id.ok_or(USAGE)?,
         },
         "end" => Command::End {
             id: id.ok_or(USAGE)?,
             actor: flags.remove("--actor"),
+            keep_pane,
         },
         _ => return Err(USAGE.into()),
     };
@@ -284,11 +350,11 @@ fn checked_brief(brief: String) -> Result<String, String> {
     if brief.trim().is_empty() {
         return Err("The brief is blank".into());
     }
-    if brief.len() > herdr_core::delivery::BODY_LIMIT {
+    if brief.len() > hide_core::delivery::BODY_LIMIT {
         return Err(format!(
             "The brief is {} bytes; a brief holds at most {} bytes",
             brief.len(),
-            herdr_core::delivery::BODY_LIMIT
+            hide_core::delivery::BODY_LIMIT
         ));
     }
     Ok(brief)
@@ -306,6 +372,7 @@ pub fn with_brief(mut command: Delivery, brief: String) -> Delivery {
 }
 
 pub fn run(env: &Env, command: Delivery) -> Result<(), String> {
+    let command = with_wire_paths(command)?;
     let result = (|| {
         let mut credential = crate::workspace_cli::Credential::acquire(env)?;
         let hint = env.pane_id.clone();
@@ -314,7 +381,41 @@ pub fn run(env: &Env, command: Delivery) -> Result<(), String> {
     print_answer(result)
 }
 
-fn print_answer(result: Result<serde_json::Value, String>) -> Result<(), String> {
+/// A spawn's `--repo` and `--path` as this machine spells the folders they
+/// name, as `hide diff open` sends its path. Whether a mission's spawn is in
+/// the mission's project is read from Git on the machine whatever the
+/// spelling (with-hide/hide#2634), but the rest of a spawn reads the text:
+/// the project row a plain folder is found by (`Runtime::spawn_place`), the
+/// caller's own registration's project, a `--beside` spawn's match with the
+/// caller's checkout, and the reserved intent, which is the same spawn only
+/// with the same `--repo`. So `C:\repo`, `c:/repo` and `repo/.` go out as the
+/// one spelling the core lists the folder by. A path on the device
+/// `--machine` names is that device's to spell and goes as given, the
+/// caller's own device id included, since only a call to the core says
+/// which id is this machine's.
+fn with_wire_paths(mut command: Delivery) -> Result<Delivery, String> {
+    if let Delivery::Agents {
+        command:
+            Command::Spawn {
+                machine: None,
+                repo,
+                path,
+                ..
+            },
+    } = &mut command
+    {
+        for (flag, slot) in [("--repo", repo), ("--path", path)] {
+            if let Some(given) = slot.as_mut() {
+                let spelled = crate::cli::absolute_caller_path(given)
+                    .map_err(|_| format!("{flag} {given} names no folder this machine can read"))?;
+                *given = spelled;
+            }
+        }
+    }
+    Ok(command)
+}
+
+pub(crate) fn print_answer(result: Result<serde_json::Value, String>) -> Result<(), String> {
     match result {
         Ok(answer) if answer["ok"] == true => {
             println!(
@@ -375,6 +476,62 @@ mod tests {
     }
     fn line(args: &[&str]) -> Result<Delivery, String> {
         parsed(args).map(|parsed| parsed.command)
+    }
+    /// with-hide/hide#2634: a mission's worker started with the project's
+    /// folder spelled another way (`C:\repo` for `C:/repo` on Windows, a
+    /// trailing `.`, macOS's `/var` for `/private/var`) is sent in the one
+    /// spelling the core lists the project by, so its admission carries the
+    /// mission's destination; a device's paths go as typed.
+    #[test]
+    fn a_spawn_sends_its_repo_and_path_as_this_machine_spells_the_folders() {
+        use std::path::MAIN_SEPARATOR as SEP;
+        let folder = tempfile::tempdir().unwrap();
+        let repo = folder.path().join("repo");
+        std::fs::create_dir(&repo).unwrap();
+        let wire = |path: &std::path::Path| {
+            hide_platform::path::to_wire(&hide_platform::fs::identity::canonical(path).unwrap())
+                .unwrap()
+        };
+        let typed_repo = format!("{}{SEP}.", repo.display());
+        let typed_path = format!("{}{SEP}..{SEP}repo.worktrees{SEP}topic", repo.display());
+        let spawn = |machine: Option<&str>| {
+            let mut args = vec![
+                "spawn",
+                "--name",
+                "worker",
+                "--intent",
+                "one",
+                "--kind",
+                "codex",
+                "--repo",
+                &typed_repo,
+                "--branch",
+                "topic",
+                "--path",
+                &typed_path,
+            ];
+            if let Some(machine) = machine {
+                args.extend(["--machine", machine]);
+            }
+            let Delivery::Agents {
+                command: Command::Spawn { repo, path, .. },
+            } = with_wire_paths(line(&args).unwrap()).unwrap()
+            else {
+                panic!("spawn")
+            };
+            (repo, path)
+        };
+        assert_eq!(
+            spawn(None),
+            (
+                Some(wire(&repo)),
+                Some(format!("{}/repo.worktrees/topic", wire(folder.path())))
+            )
+        );
+        assert_eq!(
+            spawn(Some("device-1")),
+            (Some(typed_repo.clone()), Some(typed_path.clone()))
+        );
     }
     fn parsed(args: &[&str]) -> Result<Parsed, String> {
         let args = args.iter().map(|arg| arg.to_string()).collect::<Vec<_>>();
@@ -464,8 +621,47 @@ mod tests {
             assert!(line(&["spawn", flag, "value"]).is_err());
         }
     }
+    /// with-hide/hide#2479: a plain folder's agent works in the folder, so
+    /// `--repo` and `--branch` may be left out together, or `--branch` alone;
+    /// a branch needs its repository and a worktree folder its branch.
     #[test]
-    fn beside_is_a_switch_for_either_mode_and_its_help_names_the_folder_rule() {
+    fn a_spawn_may_leave_out_repo_and_branch_for_a_plain_folder() {
+        let place = |extra: &[&str]| {
+            let mut args = vec![
+                "spawn", "--name", "worker", "--intent", "one", "--kind", "codex",
+            ];
+            args.extend_from_slice(extra);
+            match line(&args)? {
+                Delivery::Agents {
+                    command: Command::Spawn { repo, branch, .. },
+                } => Ok::<_, String>((repo, branch)),
+                _ => panic!("spawn"),
+            }
+        };
+        assert_eq!(place(&[]), Ok((None, None)));
+        assert_eq!(
+            place(&["--repo", "/films"]),
+            Ok((Some("/films".to_owned()), None))
+        );
+        assert_eq!(
+            place(&["--repo", "/repo", "--branch", "topic"]),
+            Ok((Some("/repo".to_owned()), Some("topic".to_owned())))
+        );
+        assert!(
+            place(&["--branch", "topic"])
+                .unwrap_err()
+                .contains("give --repo too")
+        );
+        assert!(
+            place(&["--repo", "/repo", "--path", "/repo.worktrees/topic"])
+                .unwrap_err()
+                .contains("give --repo and --branch too")
+        );
+        assert!(SPAWN_HELP.contains("spawn_repo_required"));
+    }
+
+    #[test]
+    fn beside_is_a_switch_and_its_help_names_the_folder_and_parent_rules() {
         let beside_of = |extra: &[&str]| {
             let mut args = vec![
                 "spawn", "--name", "worker", "--intent", "one", "--kind", "codex", "--repo",
@@ -481,7 +677,6 @@ mod tests {
         };
         assert_eq!(beside_of(&[]), Ok(false));
         assert_eq!(beside_of(&["--beside"]), Ok(true));
-        assert_eq!(beside_of(&["--parent", "here", "--beside"]), Ok(true));
         assert_eq!(
             beside_of(&["--beside", "--beside"]),
             Err("--beside is given twice".into())
@@ -489,6 +684,7 @@ mod tests {
         assert!(USAGE.contains("[--beside]"));
         assert!(SPAWN_HELP.contains("Without --beside it opens in a tab of its own."));
         assert!(SPAWN_HELP.contains("Only for your own checkout"));
+        assert!(SPAWN_HELP.contains("it takes no --parent"));
         assert!(SPAWN_HELP.contains("run it again without --beside to open it in a new tab"));
     }
 
@@ -661,7 +857,7 @@ mod tests {
         assert!(read_brief_file(file.to_str().unwrap()).is_err());
         assert!(spawn(&["--brief", "x", "--brief-file", "briefs/api.md"]).is_err());
         assert!(spawn(&["--brief", " \n "]).is_err());
-        let long = "x".repeat(herdr_core::delivery::BODY_LIMIT + 1);
+        let long = "x".repeat(hide_core::delivery::BODY_LIMIT + 1);
         assert!(spawn(&["--brief", &long]).is_err());
         assert!(USAGE.contains("[--brief <text> | --brief-file <path>]"));
         assert!(SPAWN_HELP.contains("--brief-file <path>"));
@@ -724,6 +920,33 @@ mod tests {
         assert_eq!(register(&[]), None);
         assert_eq!(register(&["--machine", "mini"]).as_deref(), Some("mini"));
         assert!(line(&["list", "unexpected"]).is_err());
+        // `--live` keeps a plain list as it was and asks for only the
+        // agents not ended.
+        let lists = |args: &[&str]| match line(args) {
+            Ok(Delivery::Agents {
+                command: Command::List { live },
+            }) => Ok(live),
+            other => Err(format!("{other:?}")),
+        };
+        assert_eq!(lists(&["list"]), Ok(false));
+        assert_eq!(lists(&["list", "--live", "--json"]), Ok(true));
+        assert!(lists(&["list", "--live", "--live"]).is_err());
+        assert!(lists(&["show", "agent-1", "--live"]).is_err());
+        assert_eq!(
+            serde_json::to_value(Command::List { live: false }).unwrap(),
+            serde_json::json!({"action": "list"}),
+            "a plain list reads as an older daemon expects"
+        );
         assert!(line(&["end", "agent-1", "--actor", "agent-2"]).is_ok());
+        let ends = |args: &[&str]| match line(args) {
+            Ok(Delivery::Agents {
+                command: Command::End { keep_pane, .. },
+            }) => Ok(keep_pane),
+            other => Err(format!("{other:?}")),
+        };
+        assert_eq!(ends(&["end", "agent-1"]), Ok(false));
+        assert_eq!(ends(&["end", "agent-1", "--keep-pane"]), Ok(true));
+        assert_eq!(ends(&["end", "--keep-pane", "agent-1", "--json"]), Ok(true));
+        assert!(line(&["end", "agent-1", "--keep-pane", "--keep-pane"]).is_err());
     }
 }

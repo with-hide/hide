@@ -39,14 +39,14 @@ export function startProblem(text: string): "empty" | "too_long" | "control_char
 
 /**
  * The sheet's target label: the device, then the place on it. A registered
- * device's name and a place are data; Home and the core's own machine are
- * named here, the machine as its system calls it (`core_platform`).
+ * device's name and a place are data; the core's own machine is named here,
+ * as its system calls it (`core_platform`).
  */
 export function targetText(t: TFunction<"translation">, target: StartTarget, corePlatform: string | null): string {
-  return `${target.device_label ?? t(systemMachineKey(corePlatform ?? ""))} · ${target.place ?? t("mobile.start.home")}`;
+  return `${target.device_label ?? t(systemMachineKey(corePlatform ?? ""))} · ${target.place}`;
 }
 
-/** What the sheet shows selected: This Mac's Home until the operator picks, the remembered kind and model until then. */
+/** What the sheet shows selected: the first target until the operator picks (none when no device has a project), the remembered kind and model until then. */
 export function selectionOf(catalog: StartCatalog | null, choice: StartChoice): StartSelection {
   const targets = catalog?.targets ?? [];
   const target = targets.find((candidate) => candidate.id === choice.target) ?? targets[0] ?? null;
@@ -99,8 +99,6 @@ export function startFailure(reason: string | null): Notice {
       return { key: "mobile.start.unknownModel" };
     case "task_operation.busy":
       return { key: "mobile.start.busy" };
-    case "home.conflict":
-      return { key: "mobile.start.homeConflict" };
     case "revoked":
     case "mobile_off":
       return { key: "mobile.start.revoked" };

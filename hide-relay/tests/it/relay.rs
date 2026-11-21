@@ -95,8 +95,14 @@ async fn pairs_multiple_phones_and_forwards_opaque_messages_in_both_directions()
     .await;
     fixture.stop().await;
     let logs = serde_json::to_string(&*fixture.events.lock().unwrap()).unwrap();
-    for secret in ["private pairing credential", "192.0.2.", &hello.device_key] {
-        assert!(!logs.contains(secret));
+    // Nothing names the computer or a phone: no room hash, key or address.
+    for secret in [
+        "private pairing credential",
+        "192.0.2.",
+        &hello.device_key,
+        &hello.room,
+    ] {
+        assert!(!logs.contains(secret), "the event log carries {secret}");
     }
     for event in fixture.events.lock().unwrap().iter() {
         let value = serde_json::to_value(event).unwrap();
@@ -105,9 +111,18 @@ async fn pairs_multiple_phones_and_forwards_opaque_messages_in_both_directions()
                 .as_object()
                 .unwrap()
                 .keys()
-                .all(|k| ["event", "room", "size", "cap"].contains(&k.as_str()))
+                .all(|k| ["event", "size", "cap"].contains(&k.as_str()))
         );
     }
+    // Byte counts stay: each closed socket says how much it forwarded.
+    assert!(
+        fixture
+            .events
+            .lock()
+            .unwrap()
+            .iter()
+            .any(|event| event.event == "peer_closed" && event.size.is_some_and(|size| size > 0))
+    );
 }
 
 #[tokio::test]
@@ -659,8 +674,10 @@ async fn a_nonreading_phone_is_removed_without_closing_the_device_or_other_phone
             .unwrap()
             .remove(0);
         device.send(Message::Binary(frame.into())).await.unwrap();
-        // The pong acknowledges that the server read this input, and drains
-        // device lifecycle metadata while the slow phone never reads at all.
+        // The pong fences the server's read of this frame, so the loop cannot
+        // outrun this phone's input while the slow phone never reads at all.
+        // It fences nothing else: the socket writes the pong from its input
+        // branch, while `peer_left` is queued for the output branch beside it.
         device.send(Message::Ping(vec![1].into())).await.unwrap();
         loop {
             match next(&mut device).await {
@@ -686,19 +703,27 @@ async fn a_nonreading_phone_is_removed_without_closing_the_device_or_other_phone
         "bounded traffic must retire a non-reading destination"
     );
     fixture.cap("outbound_queue");
-    exchange(
+    // The departure is queued in the device's control FIFO, which a pong does
+    // not fence: the socket flushes its pong from the input branch, so more
+    // copies of this phone's departure can still be queued behind it. The
+    // survivors' frames are read beside them, and a departure for any other
+    // connection still fails.
+    let retired = [slow_id];
+    exchange_beside_departures(
         &mut good,
         &mut device,
         &mut good_noise,
         &mut good_device,
+        &retired,
         b"other phone still sends",
     )
     .await;
-    exchange(
+    exchange_beside_departures(
         &mut device,
         &mut good,
         &mut good_device,
         &mut good_noise,
+        &[],
         b"device still sends",
     )
     .await;
@@ -784,7 +809,13 @@ async fn control_size_and_unexpected_or_replayed_proof_have_specific_refusals() 
         },
     )
     .await;
-    assert_eq!(control(&mut device).await, ServerMessage::Registered);
+    assert_eq!(
+        control(&mut device).await,
+        ServerMessage::Registered {
+            push: false,
+            fcm: false
+        }
+    );
     send(
         &mut device,
         ClientMessage::Proof {

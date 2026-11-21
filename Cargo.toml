@@ -1,8 +1,7 @@
 [workspace]
 members = [
     "hide-agent-adapter",
-    "herdr-core",
-    "hide-herdr-client",
+    "hide-core",
     "hide-holder",
     "hide-holder-protocol",
     "hide-host",
@@ -13,6 +12,9 @@ members = [
     "hide-memory",
     "hide-node",
     "hide-node-link",
+    "hide-peer",
+    "hide-peer-iroh",
+    "hide-peer-protocol",
     "hide-platform",
     "hide-project",
     "hide-relay",
@@ -44,7 +46,7 @@ strip = "symbols"
 # per worktree. See `Build Output Belongs To Its Worktree` in AGENTS.md.
 incremental = false
 # No debug info, for the workspace's crates and every dependency: it was most
-# of a debug build's size (65% of a dependency's objects, half of herdr-core's
+# of a debug build's size (65% of a dependency's objects, half of hide-core's
 # even at line tables only), and on macOS line tables also keep every linked
 # object file beside the test binaries. A panic still names its file and
 # line; a backtrace names functions only. docs/BUILD.md, "Debug builds carry
@@ -56,4 +58,13 @@ debug = false
 # `hided` and `hide` are about 140 MB each. Unoptimized, the digest alone
 # took longer than the remote mailbox lane waits for a ready device.
 [profile.dev.package.sha2]
+opt-level = 3
+
+# The same install packs each file with gzip when the device unpacks it
+# (with-hide/hide-private#582). Unoptimized, packing one 276 MiB debug `hided`
+# took 10.6 s against 0.8 s optimized, past the remote mailbox lane's wait.
+[profile.dev.package.miniz_oxide]
+opt-level = 3
+
+[profile.dev.package.crc32fast]
 opt-level = 3

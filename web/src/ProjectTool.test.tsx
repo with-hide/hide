@@ -5,7 +5,8 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createActions } from "./actions";
 import type { ProjectStatus, ProjectStray } from "./agentScope";
 import { TooltipProvider } from "./components/ui/tooltip";
-import { DetailPanel } from "./DetailPanel";
+import { CardBody } from "./CardBody";
+import { frontCard, workspaceViewOf } from "./workspace";
 import { ProjectTool } from "./ProjectTool";
 import { durationWords, filterCounts, strayParts, strayView, taskIn } from "./projectStatus";
 import { nextSidebarLens, type ProjectMemory, type ProjectSuggestions, type SnapshotRest } from "./snapshot";
@@ -51,8 +52,12 @@ function snapshot(projectStatus: ProjectStatus | undefined, detail: { kind: "wor
       devices: [{ id: "local", label: "This Mac", kind: "local", state: "local" }],
       workspaces: [{ id: "p", label: "herdr-ide", path: "/p", device_id: "local", is_git: true, agent_scope: { ...emptyScope(), status: projectStatus }, checkouts: [{ id: "c", workspace_id: "p", path: "/p", label: "main", tabs: [], active_tab_id: null, strip: [], agent_scope: { ...emptyScope(), git_mark: "clean" } }, { id: "w", workspace_id: "p", path: "/w", label: "fix-emails", branch: "fix-emails", tabs: [], active_tab_id: null, strip: [], agent_scope: { ...emptyScope(), git_mark: "changed" } }] }],
     },
-    workspace_view: { device_id: "local", path: "/p", open: true, documents: false, tool: "project", pinned: true, document_width: null, detail_width: null, explorer_width: null, panel_width: null, lane_called: 0, lane_calls: 0, lane_called_side: "tool" },
-    ui_state: { left_sidebar_visible: true, sidebar_lens: "projects", detail: detail ? { items: [detail], shown: true } : { items: [], shown: false } },
+    // A card opened from the tool is a tab on the front desk (PRD lane-desk-pair-view D-13).
+    workspace_view: {
+      device_id: "local", path: "/p", open: true, tray: { tab_id: "t1", shown: detail !== null, count: detail ? 1 : 0 }, tool: "project", document_width: null, explorer_width: null, panel_width: null, lane_called: 0, lane_calls: 0, lane_called_side: "tool",
+      layout: { root: { area: { id: "v1", active: detail ? "card" : null, displays: detail ? [{ id: "card", tab_id: null, path: "", label: "", kind: "card", committed: null, preview: false, state: "open", reason: null, card: detail }] : [] } }, active_area: "v1", display_count: detail ? 1 : 0, limits: { areas: 4, depth: 3, displays: 32 } },
+    },
+    ui_state: { left_sidebar_visible: true, sidebar_lens: "projects" },
   } as unknown as SnapshotRest;
 }
 
@@ -84,8 +89,9 @@ describe("the Project tool", () => {
     const actions = createActions((event) => { events.push(event); return true; });
     await act(async () => {
       useShellStore.setState({ connection: "live", rest, memory: { project }, suggestions: { project: suggestions }, usage });
-      useUiStore.setState({ screen: { kind: "workspace" }, drawnLane: { mode: "docked", view: rest.ui_state?.detail?.shown ? "detail" : "none", tool: "project", stacked: false } });
-      root.render(<TooltipProvider><ToolRail actions={actions} /><ProjectTool actions={actions} />{rest.ui_state?.detail?.shown ? <DetailPanel actions={actions} /> : null}</TooltipProvider>);
+      const card = frontCard(workspaceViewOf(rest));
+      useUiStore.setState({ screen: { kind: "workspace" }, drawnLane: { mode: "overlay", view: card ? "documents" : "none", tool: "project", stacked: false } });
+      root.render(<TooltipProvider><ToolRail actions={actions} /><ProjectTool actions={actions} />{card ? <CardBody item={card} actions={actions} /> : null}</TooltipProvider>);
     });
     return actions;
   }
@@ -131,7 +137,7 @@ describe("the Project tool", () => {
     await render(snapshot(status(), { kind: "worktrees", workspace_id: "p" }));
     expect(container.querySelector('[data-project-count="worktrees"]')?.getAttribute("aria-pressed")).toBe("true");
     await press('[data-project-count="worktrees"]');
-    expect(sent("detail_show")).toEqual([{ shown: false }]);
+    expect(sent("workspace_view")).toEqual([{ documents: false }]);
   });
 
   it("draws no 흘린 것 part when nothing is left, and five rows with +N 더 past that (B8)", async () => {
@@ -150,7 +156,7 @@ describe("the Project tool", () => {
     expect(sent("detail_open").at(-1)).toEqual({ item: { kind: "remains", workspace_id: "p", checkout_id: "w" } });
     await render(snapshot(status({ strays: [stray({ changed_files: 0, failed_pr: 1815 })], strays_total: 1 })));
     await press('[data-stray-open="w"]');
-    expect(sent("pr_open").at(-1)).toEqual({ workspace_id: "p", pr_number: 1815, checkout_id: "w" });
+    expect(sent("pr_open").at(-1)).toEqual({ workspace_id: "p", pr_number: 1815, checkout_id: "w", at: "owner" });
   });
 
   it("hands a row off once, showing progress and no 놔두기 while it sends (B11, B12)", async () => {
@@ -292,7 +298,7 @@ describe("the Project tool", () => {
     expect(container.querySelectorAll("[data-task-row]")).toHaveLength(1);
     expect(container.querySelector('[data-task-row="b"]')?.textContent).toContain("Gave up on the flaky test");
     await press('[data-task-conversation="s-b"]');
-    expect(sent("detail_open").at(-1)).toEqual({ item: { kind: "record", session: { device_id: "local", agent: "claude", session_id: "s-b" } } });
+    expect(sent("detail_open").at(-1)).toEqual({ item: { kind: "record", session: { device_id: "local", agent: "claude", session_id: "s-b" } }, at: "owner" });
     await act(async () => useUiStore.getState().showTaskTable("mission", null));
     expect(container.querySelector('[data-task-table-empty="mission"]')).not.toBeNull();
   });

@@ -1,6 +1,6 @@
 //! The opener guard, run as an agent runs it: the compiled helper with a
-//! runtime's `PreToolUse` payload on stdin, beside the spawn guard's stand-in
-//! `hide`. What it proves is what the agent observes: a call that hands a
+//! runtime's `PreToolUse` payload on stdin, beside the stand-in `hide` of
+//! `pre_tool`. What it proves is what the agent observes: a call that hands a
 //! result to the system opener is refused with the `hide` command that shows
 //! it in Hide's View, and every other call runs without a word or a question
 //! to the daemon.
@@ -9,7 +9,7 @@
 
 use serde_json::json;
 
-use super::spawn_guard::{Machine, PANE};
+use super::pre_tool::{Machine, PANE};
 
 const GROK: &[(&str, &str)] = &[
     ("GROK_HOOK_EVENT", "pre_tool_use"),
@@ -137,7 +137,7 @@ fn what_is_not_a_result_runs_and_never_asks_the_daemon() {
 }
 
 #[test]
-fn outside_a_registered_checkout_or_a_herdr_pane_the_opener_runs() {
+fn outside_a_registered_checkout_or_a_pane_the_opener_runs() {
     let command = "open dist/index.html";
     let machine = Machine::new("unregistered");
     let run = machine.run_event(
@@ -192,25 +192,4 @@ fn a_grok_opener_is_refused_in_the_envelope_grok_reads() {
         "{reason}"
     );
     assert!(machine.guard_log().contains("\"runtime\":\"grok\""));
-}
-
-#[test]
-fn a_launch_and_an_opener_in_one_call_are_refused_for_the_launch() {
-    let machine = Machine::new("registered");
-    let run = machine.run_event(
-        "claude-code",
-        "PreToolUse",
-        &claude_shell(
-            &machine,
-            "herdr agent start a --kind claude --pane p; open out.html",
-        ),
-        Some(PANE),
-        &[],
-    );
-    let reason = machine.reason(&run);
-    assert!(
-        reason.contains("hide agent spawn --parent here"),
-        "{reason}"
-    );
-    assert_eq!(machine.calls(), ["workspace bootstrap"]);
 }

@@ -1,6 +1,6 @@
 import type { Catalog, Catalogs } from "../../schema";
 
-// Chapter 6's words (`practice/chapters/find.ts`).
+// Flow 4's words (`practice/chapters/find.ts`).
 const en = {
   "practice.find.title": "Find and look again",
   "practice.find.summary": "Session search, a session's record, the PR card, Revisit",
@@ -35,7 +35,7 @@ const en = {
   "practice.find.revisit.kick": "Revisit",
   "practice.find.revisit.title": "Starred tasks wait here",
   "practice.find.revisit.text": "★ tasks gather in Revisit. A question you read but did not answer stays dimmed in Needs You until you answer it.",
-  "practice.find.end.kick": "End of chapter 6",
+  "practice.find.end.kick": "End of chapter 4",
   "practice.find.end.title": "Search finds what the list let go",
   "practice.find.end.text": "A closed session, a PR, a project: start from search.",
 };
@@ -74,7 +74,7 @@ const ko = {
   "practice.find.revisit.kick": "다시 볼 것",
   "practice.find.revisit.title": "★한 태스크가 여기 모여요",
   "practice.find.revisit.text": "★한 태스크가 '다시 볼 것'에 모여요. 읽었지만 답하지 않은 질문은 답할 때까지 내 차례에 흐리게 남아요.",
-  "practice.find.end.kick": "6편 끝",
+  "practice.find.end.kick": "4편 끝",
   "practice.find.end.title": "목록에서 사라진 것도 검색으로 찾아요",
   "practice.find.end.text": "닫은 세션, PR, 프로젝트 모두 검색에서 시작하면 돼요.",
 } satisfies Catalog<typeof en>;
@@ -113,7 +113,7 @@ const zhCN = {
   "practice.find.revisit.kick": "稍后再看",
   "practice.find.revisit.title": "加了 ★ 的任务在这里",
   "practice.find.revisit.text": "加了 ★ 的任务集中在“稍后再看”。读过但还没回答的问题会变暗留在“轮到你”里，直到你回答。",
-  "practice.find.end.kick": "第 6 章完",
+  "practice.find.end.kick": "第 4 章完",
   "practice.find.end.title": "列表里不见的，搜索能找到",
   "practice.find.end.text": "关掉的会话、PR、项目，都可以从搜索开始。",
 } satisfies Catalog<typeof en>;
@@ -152,7 +152,7 @@ const ja = {
   "practice.find.revisit.kick": "あとで見る",
   "practice.find.revisit.title": "★ を付けたタスクがここに集まります",
   "practice.find.revisit.text": "★ を付けたタスクが「あとで見る」に集まります。読んだけれどまだ答えていない質問は、答えるまで「自分の番」に薄く残ります。",
-  "practice.find.end.kick": "第 6 章 おわり",
+  "practice.find.end.kick": "第 4 章 おわり",
   "practice.find.end.title": "リストから消えたものも検索で見つかります",
   "practice.find.end.text": "閉じたセッションも PR もプロジェクトも、検索から始められます。",
 } satisfies Catalog<typeof en>;

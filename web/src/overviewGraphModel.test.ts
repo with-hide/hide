@@ -4,7 +4,7 @@
 import { describe, expect, it } from "vitest";
 import { emptyScope } from "../test/legacyAgentScope";
 import { legacyAgentRow } from "../test/legacyAgentRow";
-import { checkoutChip, graphProjectId, overviewGraphModel, overviewGraphTeam, overviewProjectGraphCounts } from "./overviewGraphModel";
+import { ADD_PROJECT, checkoutChip, graphProjectId, overviewGraphModel, overviewGraphTeam, overviewProjectGraphCounts } from "./overviewGraphModel";
 import type { BoardProject } from "./projectBoard";
 import type { AgentRow, Checkout, OverviewGraphMetadata, OverviewGraphParty, Workspace } from "./snapshot";
 
@@ -28,38 +28,36 @@ const lineage = (model: Model) => [...model.parents].map(([child, parent]) => [p
 const team = (model: Model, paneId: string) => overviewGraphTeam(model.allAgents.find((row) => row.agent.pane_id === paneId)!, model).map(({ row, depth }) => [row.agent.pane_id, depth]);
 
 describe("current sessions in the Overview graph", () => {
-  it("joins letters and Herdr input between the same two sessions into one pair with directions", () => {
+  it("joins the letters between the same two sessions into one pair with directions", () => {
     const p = project("one", [agent("a"), agent("b")]);
-    const facts = metadata([party("a"), party("b")], [letter("mail", party("a"), party("b"))]);
-    facts.direct_inputs = [
-      { id: "direct-1", sender: party("a"), recipient: party("b"), at_unix_ms: 20 },
-      { id: "direct-2", sender: party("a"), recipient: party("b"), at_unix_ms: 30 },
-      { id: "direct-3", sender: party("b"), recipient: party("a"), at_unix_ms: 40 },
-      { id: "old-session", sender: party("a", "previous-digest"), recipient: party("b"), at_unix_ms: 50 },
-      { id: "other-server-device", sender: party("a", "digest-a", "other-server-device"), recipient: party("b"), at_unix_ms: 60 },
-    ];
+    const facts = metadata([party("a"), party("b")], [
+      letter("mail-1", party("a"), party("b"), "request", 20),
+      letter("mail-2", party("a"), party("b"), "request", 30),
+      letter("mail-3", party("b"), party("a"), "request", 40),
+      letter("old-session", party("a", "previous-digest"), party("b"), "request", 50),
+      letter("other-server-device", party("a", "digest-a", "other-server-device"), party("b"), "request", 60),
+    ]);
     const graph = overviewGraphModel([p], facts, null);
     expect(graph.communication).toHaveLength(1);
     const [pair] = graph.communication;
-    expect(pair).toMatchObject({ letters: 1, direct: 3 });
+    expect(pair).toMatchObject({ letters: 3 });
     const a = idOf(graph, "a");
     const b = idOf(graph, "b");
-    expect(pair!.directions.find((row) => row.from === a)).toEqual({ from: a, to: b, letters: 1, direct: 2 });
-    expect(pair!.directions.find((row) => row.from === b)).toEqual({ from: b, to: a, letters: 0, direct: 1 });
+    expect(pair!.directions.find((row) => row.from === a)).toEqual({ from: a, to: b, letters: 2 });
+    expect(pair!.directions.find((row) => row.from === b)).toEqual({ from: b, to: a, letters: 1 });
     expect(graph.parents.size).toBe(0);
-    expect(overviewGraphModel([p], { ...facts, direct_inputs: [] }, null).structure).toBe(graph.structure);
+    expect(overviewGraphModel([p], { ...facts, letters: [] }, null).structure).toBe(graph.structure);
     expect(overviewGraphModel([p], { ...facts, sessions: [] }, null).communication).toEqual([]);
-    expect(overviewGraphModel([p], { ...facts, available: false }, null).communication).toMatchObject([{ letters: 0, direct: 3 }]);
+    expect(overviewGraphModel([p], { ...facts, available: false }, null).communication).toEqual([]);
     // One direction only: the pair points from its sender.
     const one = overviewGraphModel([p], metadata([party("a"), party("b")], [letter("x", party("b"), party("a"))]), null).communication[0]!;
     expect([one.source, one.target]).toEqual([b, a]);
   });
 
-  it("shares one newest-record cap across letters and direct inputs", () => {
+  it("counts at most the newest records the core's limit names", () => {
     const p = project("one", [agent("a"), agent("b")]);
-    const facts = metadata([party("a"), party("b")], Array.from({ length: 2000 }, (_, index) => letter(`letter-${index}`, party("a"), party("b"), "request", index)));
-    facts.direct_inputs = [{ id: "direct", sender: party("a"), recipient: party("b"), at_unix_ms: 2000 }];
-    expect(overviewGraphModel([p], facts, null).communication).toMatchObject([{ letters: 1999, direct: 1 }]);
+    const facts = metadata([party("a"), party("b")], Array.from({ length: 2001 }, (_, index) => letter(`letter-${index}`, party("a"), party("b"), "request", index)));
+    expect(overviewGraphModel([p], facts, null).communication).toMatchObject([{ letters: 2000 }]);
   });
 
   it("keeps a pair whose session is outside the drawn budget, for the chosen session's counterparts", () => {
@@ -154,12 +152,13 @@ describe("current sessions in the Overview graph", () => {
     expect(graph.agents).toHaveLength(400);
     const many = Array.from({ length: 401 }, (_, i) => project(`project${String(i).padStart(3, "0")}`, [agent(`pane${i}`)]));
     const bounded = overviewGraphModel(many, undefined, null);
-    // Every admitted name retains one member position within 400 nodes.
-    expect(bounded.projects).toHaveLength(200);
-    expect(bounded.projects.length + bounded.visible.length).toBe(400);
+    // Every admitted name retains its start circle and one member position within 400 nodes,
+    // after the map's Add project place (issue 2514): 2 + 132 × 3 = 398, and a 133rd would need 401.
+    expect(bounded.projects).toHaveLength(132);
+    expect(ADD_PROJECT.nodes + bounded.projects.length * 2 + bounded.visible.length).toBe(398);
     expect(bounded.agents).toHaveLength(401);
     expect(bounded.limited).toBe(true);
-    expect(bounded.summaries.filter((row) => !row.admitted)).toHaveLength(201);
+    expect(bounded.summaries.filter((row) => !row.admitted)).toHaveLength(269);
     const counts = overviewProjectGraphCounts(many, undefined);
     expect(counts.size).toBe(401);
     expect(counts.get(graphProjectId(many[400]!))).toEqual({ total: 1, roots: 1, children: 0 });

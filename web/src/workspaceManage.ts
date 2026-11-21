@@ -9,10 +9,9 @@ import type { TFunction } from "i18next";
 import { statusText } from "./agentStatus";
 import type { MessageKey } from "./i18n/catalogs";
 import { shownPullRequest } from "./projects";
-import { supportsRemotePurpose } from "./remote";
 import { revealExternalEntry, type RevealHost } from "./revealExternal";
 import { issueSourceChoices } from "./settings";
-import type { AgentRow, Checkout, RemoteStatus, TaskOperation, Workspace, WorktreeRemoval } from "./snapshot";
+import type { AgentRow, Checkout, TaskOperation, Workspace, WorktreeRemoval } from "./snapshot";
 
 /** The native purpose field's limits (`PurposeInputPresentation`). */
 export const PURPOSE_RECOMMENDED = 40;
@@ -34,8 +33,8 @@ export function purposeCountLabel(text: string, t: TFunction<"translation">): st
 
 /**
  * Where a saved purpose is kept (PRD S5.5 B30). A device's purpose is its
- * Herdr's workspace metadata only; on this machine a branch also keeps it as
- * its Git description, which outlives the Herdr workspace.
+ * engine's workspace metadata only; on this machine a branch also keeps it as
+ * its Git description, which outlives the engine workspace.
  */
 export function purposeScope(deviceLabel: string | null, branch: string | null, t: TFunction<"translation">): string {
   if (deviceLabel) return t("workspace.purposeScopeRemote", { device: deviceLabel });
@@ -145,10 +144,10 @@ function editorItem(workspace: Workspace, host: MenuHost, t: TFunction<"translat
 /**
  * The project row's menu on any device, registered or not (PRD
  * sidebar-context-menus D-02, D-14): open the project, start work in it, find
- * its folder, then keep or drop it. A row Herdr shows without a registration
+ * its folder, then keep or drop it. A row the engine shows without a registration
  * offers the same Pin and Remove: Pin registers it with its device and root
  * and pins it in the same event, and Remove closes its panes, after which the
- * row leaves with Herdr's workspace because there is no registration to keep it.
+ * row leaves with the engine's workspace because there is no registration to keep it.
  */
 export function projectMenu(workspace: Workspace, host: MenuHost, t: TFunction<"translation">, storedIssueSource?: string, folder = false): MenuItem[] {
   const primary = primaryCheckout(workspace);
@@ -156,7 +155,8 @@ export function projectMenu(workspace: Workspace, host: MenuHost, t: TFunction<"
   const editor = folder ? editorItem(workspace, host, t, true) : [];
   const reveal = revealItem(workspace, host, t, editor.length === 0);
   return [
-    ...(!workspace.is_home ? [{ id: "project_settings" as const, label: t("projectSettings.title"), unavailable: null }, { id: "rename_project" as const, label: t("workspace.menu.renameProject"), unavailable: null }] : []),
+    { id: "project_settings" as const, label: t("projectSettings.title"), unavailable: null },
+    { id: "rename_project" as const, label: t("workspace.menu.renameProject"), unavailable: null },
     { id: "new_worktree", label: t("workspace.menu.newWorktree"), unavailable: workspace.is_git === false ? t("workspace.unavailable.notGit") : null },
     {
       id: "new_tab_primary",
@@ -176,11 +176,11 @@ export function projectMenu(workspace: Workspace, host: MenuHost, t: TFunction<"
 /**
  * Where this project's issues live (PRD settings-cleanup D-04): a submenu of
  * Automatic, GitHub (a Git project only) and Local with the one in force
- * checked. A project the issue boards do not draw for (a device's, the Home)
- * offers none.
+ * checked. A project the issue boards do not draw for (a device's) offers
+ * none.
  */
 function issueSourceItem(workspace: Workspace, stored: string | undefined, t: TFunction<"translation">): MenuItem[] {
-  if (workspace.is_home || workspace.tasks?.source == null) return [];
+  if (workspace.tasks?.source == null) return [];
   const { value, options } = issueSourceChoices(workspace, stored, t);
   return [
     {
@@ -203,7 +203,7 @@ export function projectRemovalFacts(workspace: Workspace, t: TFunction<"translat
   const facts: string[] = [];
   if (panes > 0) facts.push(t("workspace.facts.panesClose", { count: panes }));
   if (panes > 0 && running > 0) facts.push(t("workspace.facts.agentsStop", { count: running }));
-  // A row Herdr shows without a registration leaves once its panes do.
+  // A row the engine shows without a registration leaves once its panes do.
   facts.push(workspace.registered ? t("workspace.facts.registrationOnly") : panes > 0 ? t("workspace.facts.rowWithPanes") : t("workspace.facts.rowWithWorkspace"));
   facts.push(t("workspace.facts.filesStay"));
   return facts;
@@ -223,24 +223,11 @@ export function folderMenu(
   checkout: Checkout,
   host: MenuHost,
   t: TFunction<"translation">,
-  purposeProblem: string | null = null,
   storedIssueSource?: string,
 ): MenuItem[] {
   const project = projectMenu(workspace, host, t, storedIssueSource, true);
-  const [first, ...rest] = checkoutMenu(workspace, checkout, host, t, purposeProblem).filter((item) => FOLDER_CHECKOUT_ITEMS.has(item.id));
+  const [first, ...rest] = checkoutMenu(workspace, checkout, host, t).filter((item) => FOLDER_CHECKOUT_ITEMS.has(item.id));
   return first ? [...project, { ...first, separated: true }, ...rest.map((item) => ({ ...item, separated: false }))] : project;
-}
-
-/**
- * Why a remote checkout's purpose cannot be written: the core stores it in
- * that host's Herdr, which takes it from 0.9.1 (the native `purposeUnavailableReason`).
- */
-export function remotePurposeProblem(workspace: Workspace, remote: RemoteStatus[] | undefined, t: TFunction<"translation">): string | null {
-  const targetId = workspace.remote_target_id;
-  if (!targetId) return null;
-  const version = remote?.find((row) => row.target_id === targetId)?.herdr_version ?? null;
-  if (supportsRemotePurpose(version)) return null;
-  return version ? t("workspace.remotePurposeVersion", { minimum: "0.9.1", version }) : t("workspace.remotePurposeUnknownVersion", { minimum: "0.9.1" });
 }
 
 /**
@@ -267,7 +254,7 @@ function primaryProblem(workspace: Workspace, checkout: Checkout, node: string, 
  * Choices stored on this machine and the OS file manager are this computer's
  * only, so a device's checkout lists them disabled.
  */
-export function checkoutMenu(workspace: Workspace, checkout: Checkout, host: MenuHost, t: TFunction<"translation">, purposeProblem: string | null = null): MenuItem[] {
+export function checkoutMenu(workspace: Workspace, checkout: Checkout, host: MenuHost, t: TFunction<"translation">): MenuItem[] {
   const pr = shownPullRequest(checkout);
   const items: MenuItem[] = [
     { id: "open_checkout", label: t("common.open"), unavailable: null },
@@ -276,7 +263,7 @@ export function checkoutMenu(workspace: Workspace, checkout: Checkout, host: Men
   ];
   if (pr) items.push({ id: "open_pull_request", label: t("workspace.menu.openPr", { number: pr.number }), unavailable: null });
   items.push(
-    { id: "set_purpose", label: t("workspace.menu.setPurpose"), unavailable: purposeProblem, separated: true },
+    { id: "set_purpose", label: t("workspace.menu.setPurpose"), unavailable: null, separated: true },
     { id: "set_primary", label: t("workspace.menu.setPrimary"), unavailable: primaryProblem(workspace, checkout, host.node, t) },
     { id: "copy_branch", label: t("workspace.menu.copyBranch"), unavailable: checkout.branch ? null : t("workspace.unavailable.detached") },
     { id: "copy_path", label: t("workspace.menu.copyPath"), unavailable: null },
@@ -302,8 +289,8 @@ export type AgentMenuItem = MenuPresentation & {
  * An agent row's menu (PRD sidebar-context-menus D-04, D-06): go to its pane,
  * copy its reference (name and pane id) or its session id, close the tab it is in through the tab close
  * confirmation. `showChord` is the ⌥n that selects the same row, or "" when
- * it holds no number on this host. Herdr 0.9.1 can neither mark a pane seen
- * nor stop an agent, so neither is offered (D-05).
+ * it holds no number on this host. The engine can neither mark a pane seen
+ * nor stop an agent from this menu, so neither is offered (D-05).
  */
 export function agentMenu(agent: AgentRow, showChord: string, t: TFunction<"translation">): AgentMenuItem[] {
   return [
@@ -316,7 +303,7 @@ export function agentMenu(agent: AgentRow, showChord: string, t: TFunction<"tran
 
 /**
  * A linked worktree whose folder is gone and that Git, having answered for its
- * repository, no longer lists: only Herdr's panes in the folder keep the row,
+ * repository, no longer lists: only the engine's panes in the folder keep the row,
  * so deleting it closes them and asks nothing of Git (the core's
  * `unlisted_missing_worktree`).
  */

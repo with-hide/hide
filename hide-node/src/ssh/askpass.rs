@@ -576,8 +576,21 @@ mod tests {
         }
     }
 
+    /// The folder a test's desks open under. A desk's socket sits two folders
+    /// below it, and a Unix socket path holds about a hundred bytes, so the
+    /// folder is short whatever `TMPDIR` is: macOS's own is already 49 bytes
+    /// before a runner adds a folder. Windows names a pipe and has no limit.
+    fn short_parent() -> tempfile::TempDir {
+        let mut parent = tempfile::Builder::new();
+        parent.prefix("hs");
+        #[cfg(unix)]
+        return parent.tempdir_in("/tmp").unwrap();
+        #[cfg(not(unix))]
+        return parent.tempdir().unwrap();
+    }
+
     fn desk_with(answer: Result<String, Refusal>) -> (Desk, Arc<Row>, tempfile::TempDir) {
-        let parent = tempfile::tempdir().unwrap();
+        let parent = short_parent();
         let row = Arc::new(Row {
             answer: Mutex::new(Some(answer)),
             seen: Mutex::new(Vec::new()),
@@ -668,7 +681,7 @@ mod tests {
     /// beside it removes that one and no other.
     #[test]
     fn a_dead_process_s_desk_is_removed_by_the_next_one() {
-        let parent = tempfile::tempdir().unwrap();
+        let parent = short_parent();
         let gone = 0x7fff_fff0_u32;
         assert!(!hide_platform::process::is_alive(gone));
         let dead = parent.path().join(format!("{DESK_PREFIX}{gone}-aaaa"));
@@ -706,11 +719,14 @@ mod tests {
     /// the whole file, or none when no single known file is it (B9).
     #[test]
     fn a_shortened_key_path_is_the_one_whole_file_it_begins_or_none() {
-        let folder = std::env::temp_dir().join("k".repeat(120));
+        // A fixed absolute folder, never `TMPDIR`: the rule is about the
+        // path's length, and a long `TMPDIR` made the short path long.
+        let root = Path::new(if cfg!(windows) { r"C:\keys" } else { "/keys" });
+        let folder = root.join("k".repeat(120));
         let whole = folder.join("id_ed25519").to_str().unwrap().to_owned();
         let other = folder.join("id_rsa").to_str().unwrap().to_owned();
         let shown = &whole[..PROMPT_PATH_BYTES];
-        let short = std::env::temp_dir().join("id_ed25519");
+        let short = root.join("id_ed25519");
         let short = short.to_str().unwrap();
         assert_eq!(key_file(short, None).as_deref(), Some(short));
         assert_eq!(key_file(".ssh/id_ed25519", None), None);
@@ -720,6 +736,28 @@ mod tests {
         assert_eq!(key_file(shown, Some(&two)), None);
         assert_eq!(key_file(shown, Some(&[])), None);
         assert_eq!(key_file(shown, None), None);
+    }
+
+    /// A parent whose desk socket cannot be addressed is a failure that names
+    /// the socket path and leaves no folder: the attempt reports it, and the
+    /// desk does not move to another place.
+    #[cfg(unix)]
+    #[test]
+    fn a_parent_too_long_for_the_socket_fails_naming_the_path_and_leaves_nothing() {
+        let root = short_parent();
+        let parent = root.path().join("p".repeat(100));
+        std::fs::create_dir(&parent).unwrap();
+        let row = Arc::new(Row {
+            answer: Mutex::new(None),
+            seen: Mutex::new(Vec::new()),
+        });
+        let error = Desk::open(&parent, row, None)
+            .err()
+            .expect("too long to bind");
+        let reason = error.to_string();
+        assert!(reason.contains(parent.to_str().unwrap()), "{reason}");
+        assert!(reason.contains("askpass"), "{reason}");
+        assert_eq!(std::fs::read_dir(&parent).unwrap().count(), 0);
     }
 
     #[test]

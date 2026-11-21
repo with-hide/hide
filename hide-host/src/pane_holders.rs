@@ -83,6 +83,14 @@ impl PaneSlot {
         drop(previous);
     }
 
+    /// Takes the ownership of the slot's panes for a node that outlives its
+    /// links, waiting up to `within` for another owner to let go, or
+    /// answers the ownership already taken: the holders every link then
+    /// asks ([`crate::serve::Services::panes`]).
+    pub fn own(&self, within: Duration) -> Result<Arc<dyn PaneHolders>, HolderError> {
+        self.owned(Some(within))
+    }
+
     fn owned(&self, acquire: Option<Duration>) -> Result<Arc<dyn PaneHolders>, HolderError> {
         {
             let mut owner = self.owner.lock().unwrap_or_else(PoisonError::into_inner);
@@ -166,6 +174,7 @@ fn ask(holders: &dyn PaneHolders, call: PaneCall) -> PaneAnswer {
             .and_then(value),
         PaneCall::Cancel { intent, request } => holders.cancel(&intent, request).and_then(value),
         PaneCall::Retire { request } => holders.retire(request).and_then(value),
+        PaneCall::Renew { start, request } => holders.renew(&start, request).and_then(value),
         PaneCall::ShellLaunch => value(holders.shell_launch()),
         PaneCall::Terminate { pane } => holders.terminate(&pane).and_then(value),
         PaneCall::Read { pane, lines } => holders.read(&pane, lines).and_then(text),
@@ -177,16 +186,24 @@ fn ask(holders: &dyn PaneHolders, call: PaneCall) -> PaneAnswer {
             })
         }),
         PaneCall::Scroll { pane, to } => holders.scroll(&pane, to).and_then(value),
-        PaneCall::Processes { pane } => holders.processes(&pane).and_then(value),
+        PaneCall::Processes { pane } => holders
+            .processes(&pane, hide_node_link::link_panes::ASK_WAIT)
+            .and_then(value),
+        PaneCall::Process { pane, pid } => holders
+            .process(&pane, pid, hide_node_link::link_panes::ASK_WAIT)
+            .and_then(value),
         PaneCall::Proof { pane } => holders.proof(&pane).and_then(value),
         PaneCall::Input { pane, input } => holders.input(&pane, input).and_then(value),
+        PaneCall::SleeperInput { pane, input } => {
+            holders.sleeper_input(&pane, input).and_then(value)
+        }
         PaneCall::Letter {
             pane,
-            body,
+            text,
             submit,
             gap_ms,
         } => holders
-            .letter(&pane, body, submit, Duration::from_millis(gap_ms))
+            .letter(&pane, text, submit, Duration::from_millis(gap_ms))
             .and_then(value),
         PaneCall::Recovered { timeout_ms } => holders
             .recovered(Duration::from_millis(timeout_ms))
@@ -407,7 +424,15 @@ mod tests {
         fn scroll(&self, _: &str, _: Option<u64>) -> Result<HolderScroll, HolderError> {
             unreachable!()
         }
-        fn processes(&self, _: &str) -> Result<HolderProcesses, HolderError> {
+        fn processes(&self, _: &str, _: Duration) -> Result<HolderProcesses, HolderError> {
+            unreachable!()
+        }
+        fn process(
+            &self,
+            _: &str,
+            _: u32,
+            _: Duration,
+        ) -> Result<Option<hide_node_link::holders::HolderProcess>, HolderError> {
             unreachable!()
         }
         fn proof(&self, _: &str) -> Result<HolderProof, HolderError> {
@@ -423,7 +448,7 @@ mod tests {
         fn letter(
             &self,
             _: &str,
-            _: PaneInput,
+            _: Vec<PaneInput>,
             _: PaneInput,
             _: Duration,
         ) -> Result<(), HolderError> {

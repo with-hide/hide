@@ -8,15 +8,23 @@
 //! `definition::builtins`, which compiles the built-in files' screen rules
 //! once, on first use, behind a `LazyLock`, and keeps them for the process.
 
+pub mod account;
+pub use account::{
+    Account, AccountKey, AccountRef, LaunchTarget, NodeEnv, Os, Place, Profile, ProfileId, Refusal,
+    default_folder, resolve, resolve_rule,
+};
 pub mod composer;
 mod declarations;
 pub mod definition;
-mod home;
-pub use home::{HomeScope, HomeUnresolved, antigravity_app_data};
+pub use definition::{AccountPath, McpFormat};
 mod journey;
+pub mod scene;
+mod scene_declarations;
 pub mod usage;
 pub use declarations::ADAPTERS;
-pub use journey::{JourneyAdapter, JourneyCells, JourneyLetter, JourneyWake, journey_contract};
+pub use journey::{
+    JourneyAdapter, JourneyCells, JourneyLetter, JourneyScene, JourneyWake, journey_contract,
+};
 mod web;
 pub use web::{HookKind, WebAdapter, web_contract};
 
@@ -41,7 +49,7 @@ impl AgentId {
     }
 
     /// Whether a typed first prompt has to wait until the agent reported its
-    /// session to Herdr. omp 18.7.0 takes text while its extensions' session
+    /// session to Hide. omp 18.7.0 takes text while its extensions' session
     /// start still runs but drops the Enter that follows, so a brief typed
     /// before the report stays unsubmitted in its composer (measured
     /// 2026-10-31 on macOS: every lost brief was typed before the report,
@@ -136,8 +144,8 @@ impl HookDialect {
 pub enum GuidanceDialect {
     Cursor,
     Grok,
-    /// agy's `hide` block in `~/.gemini/config/hooks.json`, beside Herdr's
-    /// and the operator's blocks: the collaboration tier through a command
+    /// agy's `hide` block in `~/.gemini/config/hooks.json`, beside any
+    /// other tool's and the operator's blocks: the collaboration tier through a command
     /// hook, since agy's `injectSteps` put text into a prompt and its
     /// `PreToolUse` refuses a call.
     Antigravity,
@@ -219,16 +227,6 @@ impl ThreadPart {
     pub const ALL: [Self; 3] = [Self::Image, Self::FileChange, Self::CommandOutput];
 }
 
-/// Passive tool-result observation is an independent, required decision.
-/// The hook owner implements the selected dialect; unsupported agents must
-/// explain why no result can be observed rather than silently omitting it.
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub enum ObservationSupport {
-    Native(HookDialect),
-    Plugin(PluginDialect),
-    Unsupported { reason: &'static str },
-}
-
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum SessionFormat {
     Claude,
@@ -261,23 +259,41 @@ impl SessionFormat {
             Self::Claude | Self::Codex | Self::Grok | Self::Omp | Self::OpenCode
         )
     }
-    /// Whether Herdr keeps reporting the agent `working` while it waits for
+    /// Whether the agent's screen keeps reading `working` while it waits for
     /// the operator's plan approval or answer, and the session records say
     /// what it waits for as the session is now (Grok's `plan_mode.json`, a
     /// question call with no result yet): such a wait outranks the status.
     /// Codex's plan menu is read from how the last turn ended, which says
-    /// nothing once Herdr reports the next turn running, so it does not.
+    /// nothing once the screen reads the next turn running, so it does not.
     pub const fn waits_while_working(self) -> bool {
         matches!(self, Self::Grok)
     }
     /// Whether the session records prove which background tasks are still
     /// running and when a new process began. Claude Code's do; Codex writes no
     /// record when a session's command ends, and no other format keeps a
-    /// process boundary, so their waits are Herdr's alone (PRD
+    /// process boundary, so their waits are the screen's alone (PRD
     /// agent-blocked-state B18, D-26).
     pub const fn reports_wake_devices(self) -> bool {
         matches!(self, Self::Claude)
     }
+    /// Whether Hide's integration reports the agent's session as its session
+    /// file's path rather than the id its resume names: Pi 1.0.4 and omp
+    /// 18.7.0 hand the extension `sessionManager.getSessionFile()`
+    /// (`hide-agent-hooks/src/pi_extension/extension.js`), so a resume id is
+    /// not the session such an agent reports.
+    pub const fn reports_session_path(self) -> bool {
+        matches!(self, Self::Pi | Self::Omp)
+    }
+    /// Whether the integration reports the session only once the agent has
+    /// loaded it, and keys typed before then are lost: OpenCode 2.0.29's
+    /// plugin reports from its session event, and a prompt typed into a
+    /// woken OpenCode taken at once for the id it resumed never reached it,
+    /// while one typed after its report did (journeys 41879399661 and
+    /// 41850644522). A wake of such an agent is known by that report.
+    pub const fn reports_session_once_loaded(self) -> bool {
+        matches!(self, Self::OpenCode)
+    }
+
     pub const fn has_session_file(self) -> bool {
         matches!(
             self,
@@ -308,7 +324,7 @@ impl SessionFormat {
     }
 
     /// The native reader proves the session's owner and checkout before a
-    /// lifecycle effect (wake, fork, resume) uses its id, and Herdr's
+    /// lifecycle effect (wake, fork, resume) uses its id, and a
     /// reported id alone grants none of them: every native-file reader, and
     /// OpenCode's database reader.
     pub const fn requires_native_proof(self) -> bool {
@@ -316,7 +332,7 @@ impl SessionFormat {
     }
 
     /// The reported reference a native proof takes: OpenCode names a session
-    /// by its id in OpenCode's database, and Herdr's agy integration reports
+    /// by its id in OpenCode's database, and agy's hooks report
     /// the conversation id, whose transcript the reader finds by it; a file
     /// reader names the file's path.
     pub const fn proof_reference_kind(self) -> &'static str {
@@ -389,7 +405,7 @@ impl LaunchDialect {
     /// to its own files, and a brief typed at the start reaches the prompt.
     ///
     /// The operator's shell alias of the program may add the same option
-    /// again, since the pinned Herdr types the program's bare name, so each
+    /// again, since the engine types the program's bare name, so each
     /// full-access option is one its CLI accepts twice (measured 2026-11-01 in
     /// an empty HOME with the option given twice): Claude Code 2.1.316, agy
     /// 1.4.12, OpenCode 2.0.29 and omp 18.7.0 start.
@@ -519,17 +535,11 @@ impl LaunchDialect {
         })
     }
 
-    /// Verified launch dialects that accept repeated extra permission roots.
-    /// A checkout cwd is independent of this optional CLI argument.
-    pub const fn accepts_extra_directories(self) -> bool {
-        matches!(self, Self::Claude | Self::Codex | Self::Omp | Self::Cursor)
-    }
-
     pub const fn closes_pane_when_sleeping(self) -> bool {
         !matches!(self, Self::Claude | Self::Codex | Self::Antigravity)
     }
 
-    /// The key, as Herdr names it, that makes the idle agent quit on its
+    /// The key, spelled as the engine's key input takes it, that makes the idle agent quit on its
     /// own, as the operator quits it: a sleep in the agent's own pane presses
     /// it first, so the agent puts back the terminal modes it set (bracketed
     /// paste, its keyboard protocol, the alternate screen, mouse reports)
@@ -588,10 +598,10 @@ impl LaunchDialect {
         matches!(self, Self::Antigravity)
     }
 
-    /// Whether the agent, resumed with its `resume_flag`, tells Herdr which
-    /// session it runs. Cursor's `sessionStart` hook is Herdr's only source
+    /// Whether the agent, resumed with its `resume_flag`, tells Hide which
+    /// session it runs. Cursor's `sessionStart` hook is the only source
     /// for that, and Cursor CLI 2026.10.01 does not run it on `--resume`
-    /// (issue 938), so the pane that resumed it has no session in Herdr
+    /// (issue 938), so the pane that resumed it has no session in the engine
     /// until whoever started the resume says which one it resumed. agy 1.3.6
     /// reports its conversation from `PreInvocation`, which runs only once the
     /// next prompt is sent, so a resumed agy pane waits for the operator too.
@@ -669,7 +679,7 @@ impl FullAccess {
 }
 
 /// The one check of a model name, wherever a start or a restart takes one.
-/// It reaches the agent's command line as one argument: the pinned Herdr
+/// It reaches the agent's command line as one argument: the engine
 /// types each argument into the pane's shell in single quotes, so a glob or
 /// a parameter in it stays literal (`opus[1m]` and `$HOME` reached the agent
 /// unchanged through zsh, measured on Herdr 0.9.5, 2026-10-18), and the name
@@ -768,23 +778,6 @@ pub enum SkillLocation {
     Antigravity,
 }
 
-#[derive(Clone, Copy, Debug)]
-pub struct HerdrIntegration {
-    /// The agent kind Herdr reports the agent's panes as.
-    pub name: &'static str,
-    /// The `herdr integration install <target>` name, which is the kind for
-    /// every agent but agy (kind `agy`, target `antigravity-cli`).
-    pub target: &'static str,
-}
-
-impl HerdrIntegration {
-    /// The source the agent's own Herdr integration reports its sessions
-    /// under, named by the integration target (`herdr:antigravity_cli` for agy).
-    pub fn session_source(&self) -> String {
-        format!("herdr:{}", self.target.replace('-', "_"))
-    }
-}
-
 /// The agent as a Hide AI provider (`hide-ai`, registry).
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct AiProvider {
@@ -795,6 +788,22 @@ pub struct AiProvider {
     /// is proven read-only (`docs/AI_PROVIDERS.md`, D-15). An agent without
     /// that proof is still listed, and refuses every request with why.
     pub requests: Capability<()>,
+}
+
+/// What an agent's transcript draws around the line the doorbell types.
+///
+/// The agent echoes the line as a prompt row: the glyph its composer begins
+/// with (`composer.marker`), the owl, then the words, wrapped onto rows
+/// indented as far as the glyph. What the shell cannot read off the echo
+/// itself is what ends it: the rows of the agent's own output that may follow
+/// at that indent.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct BellEcho {
+    /// What a row of the agent's own output begins with, after its
+    /// indentation: Claude Code's `⏺` and `⎿`, Codex's `•` and `└`, Grok's
+    /// `◆`. A row that begins with one is never the wrapped rest of a bell
+    /// line; the agent's prompt glyphs are chrome too and are not repeated here.
+    pub chrome: &'static [char],
 }
 
 /// A submission hook may observe a prompt even when its output is discarded.
@@ -884,7 +893,7 @@ impl Systems {
 pub enum InputRung {
     /// The agent's own way in.
     AgentApi(AgentApi),
-    /// Typed into the agent's screen through Herdr's `agent.prompt`; the
+    /// Typed into the agent's screen through the engine's `agent.prompt`; the
     /// agent's own record (its prompt hook or session file) confirms it.
     Typed,
 }
@@ -934,40 +943,52 @@ pub struct AgentAdapter {
     pub key: AgentId,
     /// The agent's identity is its built-in definition file's
     /// (`agents/<id>.toml`, [`definition::Builtin`]): `id`, `label` (the
-    /// file's `name`), `aliases`, `executables` and `folder` (its `home`)
-    /// are that file's values, never written here.
+    /// file's `name`), `aliases` and `executables` are that file's values,
+    /// never written here, and so are its account's folders (`[account]`,
+    /// read through [`resolve`]).
     pub id: &'static str,
     pub label: &'static str,
     pub picker_label: &'static str,
     pub sidebar_label: Option<&'static str>,
     pub aliases: &'static [&'static str],
     pub executables: &'static [&'static str],
-    /// The agent's own folder under the account's home, as its parts.
-    pub folder: &'static [&'static str],
     /// Every supported agent declares one; only a retired agent, for which
     /// Hide installs nothing, has none.
     pub minimum: Option<MinimumVersion>,
     pub skill_location: SkillLocation,
+    /// Other skill folders the agent reads besides its own, as measured in
+    /// an isolated HOME (docs/agent-hooks.md, What the kit puts down): Grok
+    /// and omp also read `~/.claude/skills`, so a skill there reaches them
+    /// too (PRD skill-mcp-manager, the Claude cell's note).
+    pub skill_also_reads: &'static [SkillLocation],
     pub hook: HookInstall,
-    pub observation: ObservationSupport,
     pub guidance: Capability<ContextRoute>,
-    pub herdr: HerdrIntegration,
-    /// The variable that moves the agent's own folder away from
-    /// [`AgentAdapter::folder`] when the operator runs it (Codex's
-    /// `CODEX_HOME`), read only through [`AgentAdapter::home`]; `None` for an
-    /// agent whose folder Hide reads at its default place alone.
-    pub home_variable: Option<&'static str>,
+    /// The agent kind the engine reports the agent's panes as.
+    pub engine_kind: &'static str,
     /// How Hide AI runs the agent for background features, or why it does
     /// not: `hide-ai`'s registry lists exactly the agents that declare one.
     pub ai: Capability<AiProvider>,
     pub default_on: bool,
     pub prompt_hook: Option<PromptHook>,
-    pub spawn_guard: Option<HookDialect>,
+    /// The dialect in which the agent's `PreToolUse` hook refuses a call:
+    /// the guardrails, the plan record, the global-instruction guard and the
+    /// opener guard answer in it; `None` for an agent whose hook refuses
+    /// nothing.
+    pub guard: Option<HookDialect>,
     pub subagent_counts: Option<HookDialect>,
     /// Automatic model-context injection, not the Memory store or extraction.
     pub memory: Capability<ContextRoute>,
     pub bell: bool,
+    /// Every screen a letter's bell can meet, each with the door the journey
+    /// opens it through and what a survey found (`docs/VERIFICATION.md#agent-scenes`).
+    /// `bell` is still declared by hand: it follows the findings once the
+    /// surveys have closed them ([`scene::SceneDeclaration::bell_from_findings`]).
+    pub scenes: scene::SceneDeclaration,
     pub bell_names_inbox: bool,
+    /// How the agent shows the doorbell's line in its own transcript, so the
+    /// web shell can dim it (`docs/delivery.md`, The bell line); every agent
+    /// whose `bell` types the line declares one, and no other does.
+    pub bell_echo: Option<BellEcho>,
     pub turn_end_letters: Option<HookDialect>,
     /// The dialect whose hook, plugin or extension hands letters over at a
     /// tool event while the agent works (PRD letters-to-busy-agents D-02),
@@ -1000,10 +1021,53 @@ pub struct AgentAdapter {
     /// agent.
     pub updates: &'static [UpdateRoute],
     pub logo_id: &'static str,
-    pub terminal_click: bool,
 }
 
-/// Herdr spellings, canonical ids and case variants share this one boundary.
+impl AgentAdapter {
+    /// The agent's `[account]`, from its built-in definition, read without
+    /// its screen rules ([`definition::builtin_account`]).
+    pub fn account_rule(&self) -> Option<&'static definition::AccountRule> {
+        definition::builtin_account(self.id)
+    }
+
+    /// The shape of the agent's MCP file ([`AccountPath::Mcp`]), `None`
+    /// for an agent Hide writes no MCP server for.
+    pub fn mcp_format(&self) -> Option<McpFormat> {
+        self.account_rule()?.mcp_format
+    }
+
+    /// Where `path` is below the home for the default profile, as `~/…`:
+    /// how an agent's own documents name the place (`~/.codex/AGENTS.md`).
+    pub fn spelled_below_home(&self, path: AccountPath) -> Option<String> {
+        default_folder(self.account_rule()?, path).map(|parts| format!("~/{}", parts.join("/")))
+    }
+
+    /// [`resolve`] for this agent's built-in definition.
+    pub fn resolve(&self, profile: &Profile, node: &NodeEnv) -> Result<Account, Refusal> {
+        resolve_rule(self.id, self.account_rule(), profile, node)
+    }
+
+    /// The account the agent's built-in default profile runs in under `home`
+    /// for a node that honours none of the agent's variables: the places Hide
+    /// installs into, and those it reads at their default place.
+    pub fn account_in(&self, home: &std::path::Path) -> Account {
+        self.resolve(
+            &Profile::builtin_default(self.id),
+            &NodeEnv::new(Some(home.to_path_buf())),
+        )
+        .expect("a default profile under a known home names no variable to refuse")
+    }
+
+    /// [`Self::account_in`]'s place for `path`, which the agent declares.
+    pub fn place_in(&self, home: &std::path::Path, path: AccountPath) -> std::path::PathBuf {
+        self.account_in(home)
+            .path(path)
+            .unwrap_or_else(|| panic!("{} declares no {path:?} place", self.id))
+            .to_path_buf()
+    }
+}
+
+/// Kind spellings, canonical ids and case variants share this one boundary.
 pub fn adapter(value: &str) -> Option<&'static AgentAdapter> {
     let value = value.trim();
     ADAPTERS.iter().find(|row| {
@@ -1015,15 +1079,15 @@ pub fn adapter(value: &str) -> Option<&'static AgentAdapter> {
     })
 }
 
-/// Known identities use Herdr's spelling; an unknown captured kind stays
+/// Known identities use the kind's spelling; an unknown captured kind stays
 /// byte-for-byte intact, without granting it any adapter capability.
 pub fn canonical_kind(value: &str) -> &str {
-    adapter(value).map_or(value, |row| row.herdr.name)
+    adapter(value).map_or(value, |row| row.engine_kind)
 }
 
 pub fn start_kind(value: &str) -> Option<&'static str> {
     let row = adapter(value)?;
-    row.start.map(|_| row.herdr.name)
+    row.start.map(|_| row.engine_kind)
 }
 
 const fn start_count() -> usize {
@@ -1044,7 +1108,7 @@ const fn start_kinds() -> [&'static str; start_count()] {
     let mut destination = 0;
     while source < ADAPTERS.len() {
         if ADAPTERS[source].start.is_some() {
-            result[destination] = ADAPTERS[source].herdr.name;
+            result[destination] = ADAPTERS[source].engine_kind;
             destination += 1;
         }
         source += 1;
@@ -1062,8 +1126,6 @@ pub enum Feature {
     Letters,
     Bell,
     Memory,
-    SpawnGuard,
-    HerdrIntegration,
     Sleep,
     Fork,
     Start,
@@ -1071,14 +1133,12 @@ pub enum Feature {
 }
 
 impl Feature {
-    pub const ALL: [Self; 11] = [
+    pub const ALL: [Self; 9] = [
         Self::Skill,
         Self::Guidance,
         Self::Letters,
         Self::Bell,
         Self::Memory,
-        Self::SpawnGuard,
-        Self::HerdrIntegration,
         Self::Sleep,
         Self::Fork,
         Self::Start,
@@ -1099,12 +1159,11 @@ impl AgentAdapter {
 
     pub const fn supports(&self, feature: Feature) -> bool {
         match feature {
-            Feature::Skill | Feature::HerdrIntegration => true,
+            Feature::Skill => true,
             Feature::Guidance => self.guidance.is_some(),
             Feature::Letters => matches!(self.prompt_hook, Some(PromptHook { context: true, .. })),
             Feature::Bell => self.bell,
             Feature::Memory => self.memory.is_some(),
-            Feature::SpawnGuard => self.spawn_guard.is_some(),
             Feature::Sleep => self.sleep.is_some(),
             Feature::Fork => self.fork.is_some(),
             Feature::Start => self.start.is_some(),
@@ -1115,7 +1174,6 @@ impl AgentAdapter {
     }
 
     pub const fn basic(&self) -> bool {
-        !matches!(self.prompt_hook, Some(PromptHook { context: true, .. }))
-            || self.spawn_guard.is_none()
+        !matches!(self.prompt_hook, Some(PromptHook { context: true, .. })) || self.guard.is_none()
     }
 }
