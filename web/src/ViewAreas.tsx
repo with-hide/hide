@@ -23,6 +23,7 @@ import { useInterfaceTranslation } from "./i18n/client";
 import { windowDeviceId } from "./screenMachine";
 import { editorTabFor, frontCheckout, type ViewDisplaySnapshot, type ViewLayoutSnapshot } from "./snapshot";
 import { useShellStore } from "./store";
+import { caughtUp } from "./operatorFocus";
 import { useUiStore } from "./ui";
 import { commandLabel } from "./shortcutLabels";
 import { keyboardInputRevision, noteDrawnViews, useKeyboardOwner } from "./viewFocus";
@@ -85,12 +86,26 @@ function ViewTree({ layout, deviceId, path, actions }: { layout: ViewLayoutSnaps
   // keyboard, and the editor takes it as it mounts unless the operator has
   // moved it by then. One watch per tree, ended when the read settles, by
   // the next arrival, or with the tree.
+  // A card the operator opened is decided once, on the first frame that
+  // includes the open (`caughtUp`, the rule a pane's focus follows): the
+  // card in front of this desk takes the keyboard, after the pane the core
+  // focused with it, and otherwise the claim ends, so a card that landed
+  // where no desk draws it never takes the keys later. An earlier frame may
+  // already show the same card in front and must not settle it.
   const request = useUiStore((s) => s.viewFocusRequest);
   const opens = useShellStore((s) => s.rest?.status?.browser_opens);
+  const opensIncluded = useShellStore(caughtUp);
   const contentWatch = useRef<MutationObserver | null>(null);
   useEffect(() => () => contentWatch.current?.disconnect(), []);
   useEffect(() => {
-    if (!request || !body || !focusRequestArrived(request, key, layout, opens)) return;
+    if (!request || !body) return;
+    if ("card" in request) {
+      if (!opensIncluded) return;
+      if (!focusRequestArrived(request, key, layout, opens)) {
+        useUiStore.getState().setViewFocusRequest(null);
+        return;
+      }
+    } else if (!focusRequestArrived(request, key, layout, opens)) return;
     useUiStore.getState().setViewFocusRequest(null);
     const areaId = "areaId" in request ? request.areaId : layout.active_area;
     const revision = "revision" in request ? request.revision : undefined;
@@ -124,7 +139,7 @@ function ViewTree({ layout, deviceId, path, actions }: { layout: ViewLayoutSnaps
       watch.observe(area, { childList: true, subtree: true });
       contentWatch.current = watch;
     });
-  }, [request, key, layout, body, opens]);
+  }, [request, key, layout, body, opens, opensIncluded]);
 
   // One keeper per document on screen, however many displays show it.
   const documents = useMemo(

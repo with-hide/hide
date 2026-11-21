@@ -63,6 +63,14 @@ pub(super) struct DetailOpenPayload {
     pub(super) item: DetailItem,
     #[serde(default)]
     pub(super) at: DetailPlace,
+    /// The page that opened the card and the number it gave this open, as
+    /// an operator `focus_pane` carries them: the open may focus its owner's
+    /// pane, and the page hands the card the keyboard only from the snapshot
+    /// that includes it (`OperatorFocusAck`). Both or neither.
+    #[serde(default)]
+    pub(super) client_id: Option<String>,
+    #[serde(default)]
+    pub(super) sequence: Option<u64>,
 }
 
 /// Which Agent tab's tray a card opens on: where it was pressed (PRD

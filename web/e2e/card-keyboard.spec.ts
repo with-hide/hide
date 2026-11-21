@@ -132,3 +132,61 @@ test("a mission opened from its Conductor's pane chip or the sidebar's chip whil
     fixture.stop();
   }
 });
+
+/** The record button of `pane`'s 내 차례 row in the 태스크 list, pressed. */
+async function openRecordFromNeedsYou(page: Page, pane: string): Promise<void> {
+  const row = page.locator(`[data-task-lens] [data-task-group="needs_you"] [data-task-row="${pane}"]`);
+  await hoverSettledTaskRow(row, "needs_you");
+  await row.locator(`[data-task-record="${pane}"]`).click();
+}
+
+test("a record whose agent shares its tab with the pane holding the keys takes them on the desk it already stood on, and a pane head's title keeps them in its terminal", async ({ page }) => {
+  const fixture = await startFixture();
+  let daemon: Daemon | null = null;
+  try {
+    daemon = await openOn(page, fixture, "card-keyboard-same-tab");
+    const [owner, other] = fixture.panes;
+    await setAgentState(daemon, owner, "blocked");
+    await showTasks(page);
+    await deskStandsWith(page, daemon, "record", owner, () => openRecordFromNeedsYou(page, owner));
+    // The keys in the other pane of the same tab: the record is already in front of this tab's desk when the
+    // press is sent, so only the frame that includes the open may settle it, after the owner's pane takes the focus.
+    await keysIn(page, daemon, other);
+    await openRecordFromNeedsYou(page, owner);
+    await expect(page.locator(`[data-pane-view="${owner}"]`)).toHaveAttribute("data-focused", "true");
+    await closeChordClosesCard(page, "record", owner);
+    await expect(page.locator(`[data-pane-view="${other}"]`)).toBeVisible();
+
+    // A pane head's title opens the same record on that desk and the keys stay in its terminal.
+    await keysIn(page, daemon, owner);
+    await page.locator(`[data-pane-view="${owner}"] [data-pane-record]`).click();
+    await expect(page.locator('[data-card="record"]')).toBeVisible();
+    await page.evaluate(() => new Promise((done) => requestAnimationFrame(() => requestAnimationFrame(done))));
+    await expect(page.locator(`[data-terminal-host="${owner}"] textarea`)).toBeFocused();
+  } finally {
+    daemon?.stop();
+    fixture.stop();
+  }
+});
+
+test("in pair view a record opened for the agent beside its desk takes the keys from that agent's terminal", async ({ page }) => {
+  const fixture = await startFixture();
+  let daemon: Daemon | null = null;
+  try {
+    daemon = await openOn(page, fixture, "card-keyboard-pair");
+    const [owner] = fixture.panes;
+    await setAgentState(daemon, owner, "blocked");
+    await showTasks(page);
+    // The agent's record on its desk is what pair view shows beside it.
+    await deskStandsWith(page, daemon, "record", owner, () => openRecordFromNeedsYou(page, owner));
+    await page.keyboard.press(chord("pair_view"));
+    await expect(page.locator(`[data-pair-layer="${owner}"]`)).toBeVisible();
+    await page.locator(`[data-pair-pane="${owner}"] [data-terminal-host="${owner}"]`).click();
+    await expect(page.locator(`[data-pair-pane="${owner}"] .xterm-helper-textarea`)).toBeFocused();
+    await openRecordFromNeedsYou(page, owner);
+    await closeChordClosesCard(page, "record", owner);
+  } finally {
+    daemon?.stop();
+    fixture.stop();
+  }
+});
