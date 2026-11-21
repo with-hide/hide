@@ -59,6 +59,7 @@ fn registration(id: &str, pane: &str, parent: Option<&str>) -> AgentRecord {
         ended: false,
         terminal_id: None,
         forked: false,
+        successor: None,
     }
 }
 
@@ -357,10 +358,11 @@ fn letter_wakes_run_four_at_a_time_in_the_order_the_letters_came() {
 }
 
 /// B6: a wake that fails leaves the `request` and `block` letters waiting on
-/// it to the store to fail, with the wake's reason, and leaves a `report`
-/// waiting; the next `request` tries the wake again.
+/// it pending, with the wake's reason for their senders, as it leaves a
+/// `report` (PRD letters-missions-simplify B6); the next `request` tries the
+/// wake again.
 #[test]
-fn a_failed_letter_wake_fails_its_requests_and_the_next_one_tries_again() {
+fn a_failed_letter_wake_leaves_its_requests_pending_and_the_next_one_tries_again() {
     let mut runtime = sleepers(&[WORKER]);
     let report = letter(&mut runtime, WORKER, "report");
     let request = letter(&mut runtime, WORKER, "request");
@@ -375,23 +377,21 @@ fn a_failed_letter_wake_fails_its_requests_and_the_next_one_tries_again() {
         },
     );
     runtime.drive_letter_wakes();
-    let failed = runtime.delivery_wake_failures();
+    let failed = runtime.letter_wake_failures();
     assert_eq!(
         failed.get(&request).map(String::as_str),
         Some(crate::agent_sleep_engine::WAKE_FOLDER_MISSING)
     );
     assert!(!failed.contains_key(&report));
-    // The store's pass applies it.
-    let mut ledger = (*runtime.delivery_state().unwrap()).clone();
-    assert!(ledger.fail_undeliverable(&failed, unix_milliseconds()));
-    let undelivered = ledger
+    let ledger = runtime.delivery_state().unwrap();
+    let waiting = ledger
         .letters
         .iter()
         .find(|letter| letter.id == request)
         .unwrap();
-    assert_eq!(undelivered.state, State::Undelivered);
-    assert!(!undelivered.waiting_answer);
-    runtime.publish_delivery(Arc::new(ledger), true);
+    assert_eq!(waiting.state, State::Pending);
+    assert!(waiting.waiting_answer);
+    runtime.publish_delivery(ledger, true);
     runtime.drive_letter_wakes();
     assert_eq!(phase(&runtime, WORKER), Some(SleepPhase::Failed));
     letter(&mut runtime, WORKER, "request");
@@ -411,12 +411,11 @@ fn refused_wake() -> WakeOutcome {
 }
 
 /// with-hide/hide-private#660, #675: a letter wake the engine refused before
-/// typing anything does not fail its `request` at once; the same wake is
-/// asked again once its wait has passed, and the letter fails, with the
-/// wake's reason for its sender, only when the third wake in a row is
-/// refused as well.
+/// typing anything is not given up at once; the same wake is asked again
+/// once its wait has passed, and the sender is told the wake's reason only
+/// when the third wake in a row is refused as well.
 #[test]
-fn a_letter_wake_refused_before_typing_is_tried_again_and_fails_its_letter_on_the_third() {
+fn a_letter_wake_refused_before_typing_is_tried_again_and_given_up_on_the_third() {
     let mut runtime = sleepers(&[WORKER]);
     let request = letter(&mut runtime, WORKER, "request");
     runtime.drive_letter_wakes();
@@ -425,7 +424,7 @@ fn a_letter_wake_refused_before_typing_is_tried_again_and_fails_its_letter_on_th
         runtime.ingest_agent_wake(WORKER, WakeMode::Resume, refused_wake());
         runtime.drive_letter_wakes();
         assert!(
-            runtime.delivery_wake_failures().is_empty(),
+            runtime.letter_wake_failures().is_empty(),
             "wake {wake} was refused and its letter still waits"
         );
         // Nothing starts again before the wait has passed.
@@ -445,7 +444,7 @@ fn a_letter_wake_refused_before_typing_is_tried_again_and_fails_its_letter_on_th
     runtime.drive_letter_wakes();
     assert_eq!(
         runtime
-            .delivery_wake_failures()
+            .letter_wake_failures()
             .get(&request)
             .map(String::as_str),
         Some(crate::agent_sleep_engine::WAKE_NOT_RESUMED)
@@ -473,7 +472,7 @@ fn a_letter_wake_that_comes_back_on_its_next_try_keeps_its_letter() {
     runtime.snapshot.ui_state.agent_sleep.records.remove(WORKER);
     runtime.letter_wakes.touch();
     runtime.drive_letter_wakes();
-    assert!(runtime.delivery_wake_failures().is_empty());
+    assert!(runtime.letter_wake_failures().is_empty());
     let ledger = runtime.delivery_state().unwrap();
     let kept = ledger
         .letters
@@ -484,9 +483,9 @@ fn a_letter_wake_that_comes_back_on_its_next_try_keeps_its_letter() {
 }
 
 /// A wake that may have typed its start, or failed for a cause that stays,
-/// is not asked again: its letters fail at once, as before.
+/// is not asked again: its sender is told at once.
 #[test]
-fn a_letter_wake_that_may_have_typed_fails_its_letter_at_once() {
+fn a_letter_wake_that_may_have_typed_is_given_up_at_once() {
     let mut runtime = sleepers(&[WORKER]);
     let request = letter(&mut runtime, WORKER, "request");
     runtime.drive_letter_wakes();
@@ -502,21 +501,19 @@ fn a_letter_wake_that_may_have_typed_fails_its_letter_at_once() {
     runtime.drive_letter_wakes();
     assert_eq!(
         runtime
-            .delivery_wake_failures()
+            .letter_wake_failures()
             .get(&request)
             .map(String::as_str),
         Some(crate::agent_sleep_engine::WAKE_NOT_READY)
     );
 }
 
-/// D-13, D-16: an agent whose wake failed takes letters but no longer
-/// pauses their hour, since nothing will wake it; and a `request` that finds
-/// no connection to wake it on waits, rather than failing with the earlier
+/// D-16: a `request` to an agent whose wake failed that finds no
+/// connection to wake it on waits, rather than failing with the earlier
 /// wake's reason.
 #[test]
-fn a_failed_sleeper_runs_its_letters_deadline_and_waits_for_a_connection() {
+fn a_failed_sleeper_waits_for_a_connection() {
     let mut runtime = sleepers(&[WORKER]);
-    assert!(runtime.delivery_asleep().contains_key(WORKER));
     runtime
         .snapshot
         .ui_state
@@ -525,11 +522,10 @@ fn a_failed_sleeper_runs_its_letters_deadline_and_waits_for_a_connection() {
         .get_mut(WORKER)
         .unwrap()
         .phase = SleepPhase::Failed;
-    assert!(!runtime.delivery_asleep().contains_key(WORKER));
     runtime.live = None;
     let request = letter(&mut runtime, WORKER, "request");
     runtime.drive_letter_wakes();
-    assert!(!runtime.delivery_wake_failures().contains_key(&request));
+    assert!(!runtime.letter_wake_failures().contains_key(&request));
     assert_eq!(phase(&runtime, WORKER), Some(SleepPhase::Failed));
 }
 
@@ -549,18 +545,6 @@ fn a_restart_queues_the_wake_a_pending_request_still_needs() {
     runtime.publish_delivery(ledger, false);
     runtime.drive_letter_wakes();
     assert_eq!(phase(&runtime, WORKER), Some(SleepPhase::Waking));
-}
-
-/// D-13: the store's pass reads the asleep recipients with the session the
-/// letters to them address.
-#[test]
-fn the_store_reads_a_sleeper_with_its_session() {
-    let runtime = sleepers(&[WORKER]);
-    let asleep = runtime.delivery_asleep();
-    let sleeper = &asleep[WORKER];
-    assert_eq!(sleeper.session, actor(WORKER).session);
-    assert_eq!(sleeper.device_id, crate::node::TEST_NODE);
-    assert_eq!(sleeper.since, 1_000);
 }
 
 /// The machine's memory pressure at `level`, read at `now`.
@@ -721,7 +705,8 @@ fn a_letter_whose_bell_was_typed_but_not_taken_wakes_its_recipient_after_a_later
 
 /// The letters that hold their recipient awake: a pending one whose bell
 /// was not typed and that no prompt hook was handed, and none that rang, was
-/// handed over, taken in, cancelled, left undelivered or expired.
+/// handed over, taken in, cancelled, superseded, ended with no recipient or
+/// expired.
 #[test]
 fn only_a_pending_letter_yet_to_reach_the_conversation_holds_its_recipient() {
     let mut runtime = live(session("w-order:t1", Some("idle")));
@@ -741,7 +726,8 @@ fn only_a_pending_letter_yet_to_reach_the_conversation_holds_its_recipient() {
         (State::Delivered, false, false, false),
         (State::Acknowledged, false, false, false),
         (State::Cancelled, false, false, false),
-        (State::Undelivered, false, false, false),
+        (State::Superseded, false, false, false),
+        (State::NoRecipient, false, false, false),
         (State::Expired, false, false, false),
     ] {
         edit_letter(&mut runtime, &id, |letter| {
@@ -1471,6 +1457,56 @@ fn hide_agent_sleep_takes_only_the_agent_or_its_parent() {
     assert_eq!(phase(&runtime, WORKER), None);
 }
 
+/// D-20, PRD letters-missions-simplify D-24: binding an agent to a node
+/// gives the Conductor no say over it: an operator's root it binds as a
+/// worker still refuses the Conductor's sleep.
+#[test]
+fn hide_agent_sleep_refuses_a_conductor_that_only_binds_the_agent() {
+    let (mut runtime, _views) = views(live(session("w-order:t1", Some("idle"))));
+    let mut ledger = (*runtime.delivery_state().unwrap()).clone();
+    ledger.agents[1].parent = None;
+    runtime.delivery_ledger = Ok(Arc::new(ledger));
+    runtime.missions.book.missions.push(mission("working"));
+    runtime.save_missions();
+    assert_eq!(
+        sleep_command(&mut runtime, "agent-2").unwrap_err(),
+        "parent_authority_required"
+    );
+    assert_eq!(phase(&runtime, WORKER), None);
+}
+
+/// D-20, PRD letters-missions-simplify D-24, B2: the agent that took the
+/// worker's pane over answers to the worker's Conductor
+/// (`coordination::succeed` gives it the parent), so the Conductor puts it
+/// to sleep as it would the worker.
+#[test]
+fn hide_agent_sleep_takes_a_workers_successor_from_its_conductor() {
+    let (mut runtime, _views) = views(live(session("w-order:t1", Some("idle"))));
+    let mut ledger = (*runtime.delivery_state().unwrap()).clone();
+    // The worker's pane ran another conversation before this one.
+    let mut next = ledger.agents[1].clone();
+    next.id = String::new();
+    next.parent = None;
+    ledger.agents[1].actor.session = Some("earlier-session".into());
+    ledger.agents[1].session = "earlier-session".into();
+    let successions = std::collections::BTreeMap::from([(
+        "agent-2".to_owned(),
+        crate::coordination::Succession { successor: next },
+    )]);
+    let succeeded = crate::coordination::succeed(
+        &mut ledger,
+        &successions,
+        1,
+        &crate::coordination::Held::default(),
+    );
+    let successor = succeeded[0].1.clone();
+    runtime.delivery_ledger = Ok(Arc::new(ledger));
+    assert_eq!(
+        sleep_command(&mut runtime, &successor).unwrap()["state"],
+        "ending"
+    );
+}
+
 /// PRD hide-plan-delegate B6: a `request` that would wake a sleeping plan
 /// child while its main's plans already have three children awake is
 /// refused before the store keeps it; with a place free, or as a `report`
@@ -1802,10 +1838,12 @@ fn every_answer_reads_a_sleeping_agent_asleep_and_running_once_it_wakes() {
 
 /// A mission's node carries its worker's life from the same decision as
 /// `hide agent show`: running, asleep once Hide puts it to sleep with nothing
-/// else moving, and running again once it wakes.
+/// else moving, and running again once it wakes. Asleep, the node's work is
+/// a sleep, not a wait on its worker (PRD letters-missions-simplify B23).
 #[test]
 fn a_mission_node_reads_its_workers_sleep() {
     use crate::delivery::answer::Runtime as Life;
+    use crate::runtime::missions::NodeWork;
     let mut runtime = mission_runtime();
     let life = |runtime: &mut Runtime| {
         runtime.refresh_missions();
@@ -1819,6 +1857,10 @@ fn a_mission_node_reads_its_workers_sleep() {
         .records
         .insert(WORKER.into(), record(WORKER));
     assert_eq!(life(&mut runtime), Some(Life::Asleep));
+    assert_eq!(
+        runtime.snapshot.missions.items[0].nodes[0].work,
+        Some(NodeWork::Asleep)
+    );
     runtime.snapshot.ui_state.agent_sleep.records.remove(WORKER);
     assert_eq!(life(&mut runtime), Some(Life::Running));
 }
@@ -2026,11 +2068,144 @@ fn a_finished_node_keeps_its_workers_plan_after_the_pane_closes() {
     assert_eq!(shown(&mut runtime), Some((WORKER.into(), 2, 2)));
 }
 
-/// with-hide/hide-private#675: the note that a letter's wake failed for good
-/// reaches a sender that works at its next tool call, not after five minutes
-/// of its work, since the sender may wait on that letter's answer. Hide's
-/// other notes keep their own timing.
+/// A node's fix for its sleeping worker is the worker's status cell, and the
+/// cell wakes it as the `request` it was before did: once per new cell, so a
+/// worker that wakes, does not look and sleeps again is not woken for the
+/// same cell, while a newer one wakes it (PRD letters-missions-simplify B8,
+/// B12).
 #[test]
-fn a_failed_wake_s_note_reaches_a_working_sender_at_its_next_tool_call() {
-    const { assert!(crate::runtime::agent_sleep::letters::WAKE_FAILED_NOTE.now) };
+fn a_workers_new_status_cell_wakes_it_asleep_once() {
+    use crate::missions::{FixReason, PendingWake, WakeEvent};
+    let mut runtime = mission_runtime();
+    let asleep = |runtime: &mut Runtime| {
+        runtime
+            .snapshot
+            .ui_state
+            .agent_sleep
+            .records
+            .insert(WORKER.into(), record(WORKER));
+        runtime.letter_wakes.touch();
+    };
+    let fix = |runtime: &mut Runtime| {
+        let mission = &mut runtime.missions.book.missions[0];
+        mission.wake_seq += 1;
+        let wake = PendingWake {
+            seq: mission.wake_seq,
+            node: mission.nodes[0].key.clone(),
+            pr: Some(7),
+            event: WakeEvent::Fix,
+            head: Some("c3".into()),
+            to: Some("agent-2".into()),
+            reason: None,
+            why: Some(FixReason::CiFailed),
+            action: None,
+            warning: None,
+            ci: None,
+            line: None,
+            key: None,
+            since_unix_ms: None,
+            notified: false,
+            opened_seq: None,
+        };
+        crate::runtime::missions::push_wake(mission, wake).unwrap();
+        runtime.letter_wakes.touch();
+    };
+    asleep(&mut runtime);
+    runtime.drive_letter_wakes();
+    assert_eq!(
+        phase(&runtime, WORKER),
+        Some(SleepPhase::Sleeping),
+        "no cell yet"
+    );
+    fix(&mut runtime);
+    assert!(runtime.drive_letter_wakes());
+    assert_eq!(phase(&runtime, WORKER), Some(SleepPhase::Waking));
+    // It wakes, does not look, and sleeps again.
+    runtime.snapshot.ui_state.agent_sleep.records.remove(WORKER);
+    runtime.letter_wakes.touch();
+    runtime.drive_letter_wakes();
+    asleep(&mut runtime);
+    runtime.drive_letter_wakes();
+    assert_eq!(
+        phase(&runtime, WORKER),
+        Some(SleepPhase::Sleeping),
+        "the same cell does not wake it again"
+    );
+    fix(&mut runtime);
+    runtime.drive_letter_wakes();
+    assert_eq!(
+        phase(&runtime, WORKER),
+        Some(SleepPhase::Waking),
+        "a newer one does"
+    );
+}
+
+/// A wake a worker's cell started owns its result: a refusal that can pass
+/// is asked again, and the third in a row leaves the worker's node a raise
+/// its Conductor's cell says (`wake_refused`), so the failure reaches who can
+/// act on it; the same cell wakes nothing more.
+#[test]
+fn a_cell_wake_that_fails_is_tried_again_and_then_raised_to_the_conductor() {
+    use crate::missions::{AttentionReason, FixReason, PendingWake, WakeEvent};
+    let mut runtime = mission_runtime();
+    runtime
+        .snapshot
+        .ui_state
+        .agent_sleep
+        .records
+        .insert(WORKER.into(), record(WORKER));
+    {
+        let mission = &mut runtime.missions.book.missions[0];
+        mission.wake_seq += 1;
+        let wake = PendingWake {
+            seq: mission.wake_seq,
+            node: mission.nodes[0].key.clone(),
+            pr: Some(7),
+            event: WakeEvent::Fix,
+            head: Some("c3".into()),
+            to: Some("agent-2".into()),
+            reason: None,
+            why: Some(FixReason::CiFailed),
+            action: None,
+            warning: None,
+            ci: None,
+            line: None,
+            key: None,
+            since_unix_ms: None,
+            notified: false,
+            opened_seq: None,
+        };
+        crate::runtime::missions::push_wake(mission, wake).unwrap();
+    }
+    runtime.letter_wakes.touch();
+    runtime.drive_letter_wakes();
+    assert_eq!(phase(&runtime, WORKER), Some(SleepPhase::Waking));
+    for wake in 1..=2 {
+        runtime.ingest_agent_wake(WORKER, WakeMode::Resume, refused_wake());
+        runtime.drive_letter_wakes();
+        runtime.letter_wake_retries_due();
+        runtime.drive_letter_wakes();
+        assert_eq!(
+            phase(&runtime, WORKER),
+            Some(SleepPhase::Waking),
+            "wake {} starts",
+            wake + 1
+        );
+    }
+    runtime.ingest_agent_wake(WORKER, WakeMode::Resume, refused_wake());
+    runtime.drive_letter_wakes();
+    let node = &runtime.missions.book.missions[0].nodes[0];
+    assert_eq!(
+        node.attention.as_ref().map(|attention| attention.reason),
+        Some(AttentionReason::WakeRefused),
+        "the Conductor is told it could not wake the worker"
+    );
+    runtime.letter_wake_retries_due();
+    runtime.letter_wakes.touch();
+    runtime.drive_letter_wakes();
+    assert_eq!(
+        phase(&runtime, WORKER),
+        Some(SleepPhase::Failed),
+        "the same cell wakes nothing more"
+    );
 }

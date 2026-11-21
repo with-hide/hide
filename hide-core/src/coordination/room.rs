@@ -26,12 +26,19 @@
 //!   Conductor, workers and checkers, and the child of a plan step still
 //!   handed.
 //!
-//! A spawn record has finished once nothing can move it on: its child has
-//! ended, or it has no child and its parent has ended, since every step of
-//! a spawn is its parent's. It is kept while an identity wait or a plan
-//! step still handed names it, or while its child is held, so the mission
-//! or plan that holds the child still finds the spawn that made it. A
-//! finished spawn names nothing of its own:
+//! A registration taken over by the next agent in its pane (`succeed`) has
+//! not ended here while an agent of its line is live: the work it was
+//! started for runs on, and whoever counts that work reads it from the
+//! spawn that started it, through its line (`at_work`). So it is named, and
+//! its spawn has not finished.
+//!
+//! A spawn record has finished once nothing can move it on: its child's
+//! line has ended, or it has no child and its parent has ended, since every
+//! step of a spawn is its parent's. It is kept while an identity wait or a
+//! plan step still handed names it, or while the last of its child's line
+//! is held, so the mission or plan that holds the agent at its work still
+//! finds the spawn that made it; a kept spawn names its child's whole line.
+//! A finished spawn names nothing of its own:
 //! it goes with the registration it made or, childless, with its parent.
 //!
 //! Anything else that names a registration (Desk's job cards, sleep and
@@ -70,11 +77,10 @@ impl Held {
     pub(crate) fn keep_published(&mut self, ledger: &Ledger) {
         let ended = ended(ledger);
         self.published = Some(Finished {
-            agents: ledger
-                .agents
+            agents: ended
                 .iter()
-                .filter(|record| record.ended)
-                .map(|record| record.id.clone())
+                .filter(|(_, ended)| **ended)
+                .map(|(id, _)| (*id).to_owned())
                 .collect(),
             spawns: ledger
                 .spawns
@@ -86,12 +92,39 @@ impl Held {
     }
 }
 
+/// Whether each registration has ended here: it and every one after it in
+/// its line.
 fn ended(ledger: &Ledger) -> HashMap<&str, bool> {
+    let by_id = by_id(ledger);
     ledger
         .agents
         .iter()
-        .map(|agent| (agent.id.as_str(), agent.ended))
+        .map(|agent| {
+            (
+                agent.id.as_str(),
+                line(&by_id, agent).all(|record| record.ended),
+            )
+        })
         .collect()
+}
+
+fn by_id(ledger: &Ledger) -> HashMap<&str, &AgentRecord> {
+    ledger
+        .agents
+        .iter()
+        .map(|agent| (agent.id.as_str(), agent))
+        .collect()
+}
+
+/// `first`'s line (`coordination::line`), found in `by_id`.
+fn line<'a, 'm>(
+    by_id: &'m HashMap<&'a str, &'a AgentRecord>,
+    first: &'a AgentRecord,
+) -> impl Iterator<Item = &'a AgentRecord> + 'm
+where
+    'a: 'm,
+{
+    super::line(first, by_id.len(), |id| by_id.get(id).copied())
 }
 
 fn finished(spawn: &SpawnRecord, ended: &HashMap<&str, bool>) -> bool {
@@ -334,8 +367,12 @@ struct Named<'a> {
 impl<'a> Named<'a> {
     fn of(ledger: &'a Ledger, held: &'a Held) -> Self {
         let ended = ended(ledger);
+        let by_id = by_id(ledger);
         let mut agents: HashSet<&str> = held.agents.iter().map(String::as_str).collect();
         for agent in &ledger.agents {
+            if agent.ended && !ended[agent.id.as_str()] {
+                agents.insert(&agent.id);
+            }
             if held
                 .published
                 .as_ref()
@@ -360,6 +397,14 @@ impl<'a> Named<'a> {
         agents.extend(ledger.human_turns.keys().map(String::as_str));
         let mut spawns = HashSet::new();
         for spawn in &ledger.spawns {
+            let child_line = || {
+                spawn
+                    .child
+                    .as_deref()
+                    .and_then(|child| by_id.get(child))
+                    .into_iter()
+                    .flat_map(|child| line(&by_id, child))
+            };
             let kept = !finished(spawn, &ended)
                 || held
                     .published
@@ -369,11 +414,15 @@ impl<'a> Named<'a> {
                 || spawn
                     .child
                     .as_ref()
-                    .is_some_and(|child| held.agents.contains(child));
+                    .is_some_and(|child| held.agents.contains(child))
+                || child_line()
+                    .last()
+                    .is_some_and(|last| held.agents.contains(&last.id));
             if kept {
                 spawns.insert(spawn.id.as_str());
                 agents.insert(&spawn.parent);
                 agents.extend(spawn.child.as_deref());
+                agents.extend(child_line().map(|record| record.id.as_str()));
             }
         }
         let parties: HashSet<Identity<'_>> = ledger
@@ -481,6 +530,7 @@ pub(crate) mod tests {
             actor,
             ended,
             forked: false,
+            successor: None,
         }
     }
 
@@ -1096,62 +1146,6 @@ pub(crate) mod tests {
     }
 
     #[test]
-    fn a_first_watch_warning_whose_escalation_is_owed_stays_when_a_full_ledger_drops_letters() {
-        // Every spawn record is live, so only finished letters can go: a
-        // first warning to the lead about agent-2, finished first, then two
-        // ordinary letters.
-        let full = |notified: bool| {
-            let mut ledger = Ledger {
-                agents: vec![agent(1, false), agent(2, false)],
-                next_id: 100_000,
-                ..Ledger::default()
-            };
-            let warning = crate::delivery::mailbox::send(
-                &mut ledger,
-                &actor(3),
-                &actor(1),
-                "warning",
-                &"w".repeat(9_000),
-                "watch",
-                None,
-                NOW,
-            )
-            .unwrap()
-            .id;
-            let letter = ledger
-                .letters
-                .iter_mut()
-                .find(|letter| letter.id == warning)
-                .unwrap();
-            letter.watch_warning = Some(crate::delivery::watch::WarningReceipt {
-                target: actor(2),
-                activity_at_unix_ms: NOW,
-                ordinal: 1,
-                parent_notified: notified,
-            });
-            letter.state = State::Delivered;
-            letter.hook_confirmed = Some(true);
-            letter.finished_at_unix_ms = Some(NOW);
-            let first = finished_letter(&mut ledger, 5, 9_000);
-            let second = finished_letter(&mut ledger, 9, 9_000);
-            fill_with_briefs(&mut ledger, "agent-2", 100);
-            long_letter(&mut ledger);
-            (ledger, warning, first, second)
-        };
-        // The operator may still be told the lead did not answer it.
-        let (mut ledger, warning, first, second) = full(false);
-        for_size(&mut ledger, &Held::default()).unwrap();
-        let kept = |ledger: &Ledger, id: &str| ledger.letters.iter().any(|letter| letter.id == id);
-        assert!(kept(&ledger, &warning));
-        assert!(!kept(&ledger, &first) && !kept(&ledger, &second));
-        // Once the operator was told, it goes first like any other.
-        let (mut ledger, warning, first, second) = full(true);
-        for_size(&mut ledger, &Held::default()).unwrap();
-        assert!(!kept(&ledger, &warning) && !kept(&ledger, &first));
-        assert!(kept(&ledger, &second));
-    }
-
-    #[test]
     fn a_ledger_at_its_file_limit_whose_every_record_is_live_refuses_a_letter_unchanged() {
         // agent-2 runs, so its spawn records stay, and the one letter is
         // still to be read.
@@ -1233,6 +1227,92 @@ pub(crate) mod tests {
         assert!(ledger.size().unwrap() <= FILE_LIMIT);
         assert!((3000..=3002).all(|n| holds_spawn(&ledger, n)));
         assert!(!holds_spawn(&ledger, 3003));
+    }
+
+    /// A mission's worker the next agent in its pane took over (`succeed`)
+    /// keeps its registration and the spawn that started it while that agent
+    /// works, so the mission still counts the work against its cap; once
+    /// that agent ends too, they stay while the open mission holds it, and
+    /// go with it after. The size pass keeps them alike.
+    #[test]
+    fn a_taken_over_workers_spawn_stays_while_its_line_works_or_is_held() {
+        let mut ledger = full_of_agents();
+        // spawn-3000 started agent-2 for mission-1; agent-3 took its pane
+        // over and works.
+        ledger.agents[1].parent = Some("agent-1".into());
+        ledger.agents[1].successor = Some("agent-3".into());
+        ledger.agents[2].ended = false;
+        ledger.spawns = vec![SpawnRecord {
+            mission: Some("mission-1".into()),
+            ..spawn(3000, 1, Some(2))
+        }];
+        register(&mut ledger, &Held::default()).unwrap();
+        assert!(holds_agent(&ledger, 2) && holds_spawn(&ledger, 3000));
+        assert!(
+            !holds_agent(&ledger, 4),
+            "the oldest ended one nothing names went"
+        );
+        assert_eq!(
+            crate::coordination::mission_workers(&ledger, "mission-1", &[], NOW),
+            1
+        );
+
+        // agent-3 ended as well; the open mission holds it, since its roles
+        // follow the line.
+        let at = |ledger: &Ledger| ledger.agents.iter().position(|agent| agent.id == "agent-3");
+        let index = at(&ledger).unwrap();
+        ledger.agents[index].ended = true;
+        let held = Held {
+            agents: ["agent-3"].map(str::to_owned).into(),
+            ..Held::default()
+        };
+        register_agent(&mut ledger, 90_001, &held).unwrap();
+        assert!(holds_agent(&ledger, 2) && holds_agent(&ledger, 3) && holds_spawn(&ledger, 3000));
+        register_agent(&mut ledger, 90_002, &Held::default()).unwrap();
+        assert!(!holds_agent(&ledger, 2) && !holds_spawn(&ledger, 3000));
+
+        let mut ledger = Ledger {
+            agents: vec![
+                agent(1, false),
+                agent(2, true),
+                AgentRecord {
+                    parent: Some("agent-1".into()),
+                    successor: Some("agent-6".into()),
+                    ..agent(5, true)
+                },
+                agent(6, false),
+            ],
+            spawns: vec![SpawnRecord {
+                mission: Some("mission-1".into()),
+                brief: Some(String::new()),
+                ..spawn(2999, 1, Some(5))
+            }],
+            next_id: 100_000,
+            ..Ledger::default()
+        };
+        fill_with_briefs(&mut ledger, "agent-2", 100);
+        apply_with(
+            &mut ledger,
+            &actor(1),
+            &Mutation::Reserve {
+                parent: "agent-1".into(),
+                command: briefed("new-start"),
+            },
+            NOW,
+            &Held::default(),
+        )
+        .unwrap();
+        for_size(&mut ledger, &Held::default()).unwrap();
+        assert!(ledger.size().unwrap() <= FILE_LIMIT);
+        assert!(
+            !holds_spawn(&ledger, 3000),
+            "a finished spawn made the room"
+        );
+        assert!(holds_spawn(&ledger, 2999) && holds_agent(&ledger, 5));
+        assert_eq!(
+            crate::coordination::mission_workers(&ledger, "mission-1", &[], NOW),
+            1
+        );
     }
 
     #[test]

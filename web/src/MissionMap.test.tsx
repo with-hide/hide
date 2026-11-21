@@ -1,5 +1,5 @@
 // @vitest-environment jsdom
-// A mission's page in the 보기 slot (PRD software-factory-conductor B43; PRD
+// A mission's page as a card tab on a desk (PRD software-factory-conductor B43; PRD
 // mission-plan-visibility B25-B30, B39; PRD mission-map-git-criteria
 // B21-B35): what it shows in each state of the record and its events, what a
 // pick lights and opens, and the one event each press sends.
@@ -1152,7 +1152,7 @@ it("puts the question the decision asks of a node and its choices in its panel, 
 });
 
 // Operator report on M41: a raise in 내 차례 said only a reason and the plan's long sentences; its card now says what happened, why it reached the operator, and on 자세히 the worker's one line on each failed finish line.
-it("draws the raises its Conductor has not settled as one safety net card in 내 차례, a row per held node with its reason and age, and no card per node", async () => {
+it("draws the cells its Conductor has not resolved as one safety net card in 내 차례, a row per held node with its reason and age, and no card per node", async () => {
   const now = Date.now();
   const held = ["a", "b", "c", "d", "e"].map((key, index) => ({ key, title: `Node ${key}`, reason: "worker_ended" as const, pr: null, since_unix_ms: now - (25 - index) * 60_000 }));
   const nodes = held.map((one) => node(one.key, { status: "working", attention: { reason: "worker_ended", pr: null, to: "conductor", since_unix_ms: one.since_unix_ms, on_row: false, item: false, choices: ["leave", "drop"] } }));
@@ -1174,6 +1174,13 @@ it("draws the raises its Conductor has not settled as one safety net card in 내
     await act(async () => net.querySelector<HTMLButtonElement>("[data-mission-conversation]")!.click());
     expect(map.events.at(-1)).toMatchObject({ kind: "focus_pane", payload: { pane_id: "p1" } });
   } finally { await map.unmount(); }
+  // A standing cell that is no raise holds a row too, worded from its typed fact (letters-missions-simplify B15).
+  const failed = { key: "ci", title: "Node ci", reason: "ci_failed" as const, pr: 7, since_unix_ms: now - 21 * 60_000 };
+  const cells = await mount({ items: [mission({ nodes: [...nodes, node("ci", { status: "working" })], safety_net: { conductor_present: true, since_unix_ms: now - 25 * 60_000, nodes: [...held, failed] } })] });
+  try {
+    const row = cells.q('[data-mission-held-node="ci"]')!;
+    expect(row.textContent).toBe("Node ciCI failed on PR #7for 21m");
+  } finally { await cells.unmount(); }
   // With no Conductor the card says so, holds 지휘 다시 열기, and the Conductor row steps aside so the screen says it once.
   const gone = await mount({ items: [mission({ nodes, conductor: { pane_id: "p1", name: "conductor", agent_kind: "claude", session: null, present: false, takes_answers: false }, safety_net: { conductor_present: false, since_unix_ms: now - 25 * 60_000, nodes: held } })] });
   try {

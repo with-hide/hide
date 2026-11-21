@@ -36,7 +36,8 @@ import { requireInterfaceLanguage } from "../i18n/locale";
 import { MissionScreen } from "../MissionScreen";
 import { PaneWorkChip } from "../PaneMissionChip";
 import { ConductorTab } from "../settings/ConductorTab";
-import type { AgentRow, Device, Mission, MissionAnswerHold, MissionChecker, MissionCriterion, MissionEvent, MissionGate, MissionGateState, MissionLanding, MissionMapFlow, MissionNode, MissionStopCause, MissionWorker, PlanView, SnapshotRest } from "../snapshot";
+import type { AgentRow, Device, Mission, MissionAnswerHold, MissionAttentionReason, MissionChecker, MissionCriterion, MissionEvent, MissionGate, MissionGateState, MissionLanding, MissionMapFlow, MissionNode, MissionStopCause, MissionWorker, PlanView, SnapshotRest } from "../snapshot";
+import { MISSION_ATTENTION_REASONS } from "../snapshot";
 import { useShellStore } from "../store";
 import { MISSION_ENTRY, useUiStore } from "../ui";
 import { withCoreWaits } from "./missionWaits";
@@ -207,12 +208,12 @@ function rejectedReview(one: MissionNode): MissionNode {
 
 /**
  * The warned state (hide-private issue 552): the rejected search fix
- * failed the review round at its strength's limit, and the reopen fix went ninety-five
- * minutes with no push; Hide told the Conductor about each.
+ * failed the review round at its strength's limit, and the reopen fix's
+ * worker stood stopped on an API error; Hide told the Conductor about each.
  */
 function warned(one: MissionNode, now: number): MissionNode {
   if (one.key === "fix-1490") return { ...one, review_rounds: { line: "review", rounds: 3, limit: 3 }, warnings: [{ kind: "review_fails", from_unix_ms: now - 12 * MINUTE, since_unix_ms: now - 12 * MINUTE, told_unix_ms: now - 12 * MINUTE }] };
-  if (one.key === "fix-1487") return { ...one, pushed_at_unix_ms: now - 95 * MINUTE, warnings: [{ kind: "no_push", from_unix_ms: now - 95 * MINUTE, since_unix_ms: now - 5 * MINUTE, told_unix_ms: now - 5 * MINUTE }] };
+  if (one.key === "fix-1487") return { ...one, warnings: [{ kind: "stopped", from_unix_ms: now - 11 * MINUTE, since_unix_ms: now - 6 * MINUTE, told_unix_ms: now - 6 * MINUTE, cause: { kind: "error", line: "API Error: 500" } }] };
   return one;
 }
 
@@ -564,18 +565,23 @@ function absentNet(mission: Mission): Mission["safety_net"] {
   return nodes.length > 0 ? { conductor_present: false, since_unix_ms: nodes[0]!.since_unix_ms, nodes } : null;
 }
 
-/** The running mission held as a whole (`delay`), with one node held back (`hold`), or with one node stalled and its raise unsettled behind the safety net (`stall`). */
+/** The running mission held as a whole (`delay`), which every node not finished shows as its wait, with one node held back (`hold`), or with one node stalled and its raise unsettled behind the safety net (`stall`). */
 function stalledOrHeld({ mission, rest }: { mission: Mission; rest: SnapshotRest }, now: number, shown: "delay" | "stall" | "hold"): { mission: Mission; rest: SnapshotRest } {
   mission.decision = null;
   mission.question = null;
   if (shown === "delay") {
     mission.delay = "디스크 여유 4 GiB, 빌드 하나 끝나면 재개";
     mission.delay_until_unix_ms = now + 40 * MINUTE;
+    // The core lays the delay on each node it holds (`Mission::wait_of`).
+    for (const one of mission.nodes) if (one.status !== "done" && one.status !== "dropped") one.wait = { why: mission.delay, until_unix_ms: mission.delay_until_unix_ms, mission: true };
     return { mission, rest };
   }
   const node = mission.nodes.find((one) => one.status === "planned") ?? mission.nodes[mission.nodes.length - 1]!;
   if (shown === "hold") {
-    node.hold = { why: "아침에 실기기로 직접 눌러 보고 시작", until_unix_ms: now + 9 * 60 * MINUTE - MINUTE };
+    node.wait = { why: "아침에 실기기로 직접 눌러 보고 시작", until_unix_ms: now + 9 * 60 * MINUTE - MINUTE, mission: false };
+    // A node at work whose worker Hide put to sleep beside it: a sleep, not a wait (letters-missions-simplify B23).
+    const sleeping = mission.nodes.find((one) => one.status === "working" && one !== node);
+    if (sleeping) Object.assign(sleeping, { agent_runtime: "asleep", work: { state: "asleep" } });
     return { mission, rest };
   }
   // The raise is the Conductor's; standing 31 minutes unsettled, it is the mission's safety net.
@@ -586,9 +592,10 @@ function stalledOrHeld({ mission, rest }: { mission: Mission; rest: SnapshotRest
 
 /**
  * The running mission with nothing on the operator's turn and the lines its
- * Conductor skipped on its own listed beside the map (`decided`), or with one
- * cause raised on five nodes that its Conductor left unsettled 25 minutes,
- * one safety net card for all five (`net`).
+ * Conductor skipped on its own listed beside the map (`decided`), or with
+ * cells its Conductor left unresolved over 20 minutes on five nodes, raises
+ * and other standing cells (a failed CI, changes asked for) alike, one safety
+ * net card for all five (`net`, letters-missions-simplify B15).
  */
 function decidedOrNet({ mission, rest }: { mission: Mission; rest: SnapshotRest }, now: number, shown: "decided" | "net"): { mission: Mission; rest: SnapshotRest } {
   mission.decision = null;
@@ -601,10 +608,23 @@ function decidedOrNet({ mission, rest }: { mission: Mission; rest: SnapshotRest 
     return { mission, rest };
   }
   const raised = mission.nodes.filter((one) => one.status === "working" || one.status === "planned").slice(0, 5);
+  // Each cell names its node's own pull request where it is about one.
+  const cells = [
+    { reason: "wake_refused", pr: false },
+    { reason: "ci_failed", pr: true },
+    { reason: "worker_ended", pr: false },
+    { reason: "changes_requested", pr: true },
+    { reason: "warning_stopped", pr: false },
+  ] as const;
   const held = raised.map((one, index) => {
     const since = now - (25 - index) * MINUTE;
-    one.attention = { reason: "wake_refused", pr: null, to: "conductor", since_unix_ms: since, on_row: false, item: false, choices: ["leave", "drop"] };
-    return { key: one.key, title: one.title, reason: "wake_refused" as const, pr: null, since_unix_ms: since };
+    const at = cells[index % cells.length]!;
+    const cell = { reason: at.reason, pr: at.pr ? one.pr : null };
+    // A raise stands on its node; any other standing cell is the Conductor's alone.
+    if (MISSION_ATTENTION_REASONS.some((reason) => reason === cell.reason)) {
+      one.attention = { reason: cell.reason as MissionAttentionReason, pr: cell.pr, to: "conductor", since_unix_ms: since, on_row: false, item: false, choices: ["leave", "drop"] };
+    }
+    return { key: one.key, title: one.title, reason: cell.reason, pr: cell.pr, since_unix_ms: since };
   });
   mission.safety_net = { conductor_present: true, since_unix_ms: now - 25 * MINUTE, nodes: held };
   return { mission, rest };

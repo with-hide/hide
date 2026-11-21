@@ -1,4 +1,4 @@
-// What the landing's lane shots open in the lane's 보기 slot, over the hero's
+// What the landing's lane shots open as a card tab on a desk, over the hero's
 // story: the card of pull request 431, the lead's session record, and the mission
 // the lead conducts. Invented English values; nothing here is read or sent.
 import type { AgentRow, DetailItem, LinkPanel, LinkedSession, Mission, MissionNode, PrCard, PrState, PullRequest, SessionRecord, WorkFlow, WorkOutput, WorkRequest, WorkSession } from "../snapshot";
@@ -32,7 +32,7 @@ export function leadSession(agents: AgentRow[]): WorkSession {
   return { device_id: "local", agent: lead?.agent_kind ?? "claude", session_id: lead?.session_id ?? sessionId(LEAD_PANE) };
 }
 
-/** What the 보기 slot holds in a lane shot: the card, the record, or the Conductor's mission map beside its pane. */
+/** What a desk holds in a lane shot: the card, the record, or the Conductor's mission map beside its pane. */
 export function laneItem(lane: LandingLane, agents: AgentRow[]): DetailItem {
   if (lane === "pr") return { kind: "pull_request", workspace_id: PROJECT, number: 431 };
   if (lane === "record") return { kind: "record", session: leadSession(agents) };

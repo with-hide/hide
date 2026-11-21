@@ -423,13 +423,13 @@ fn a_node_lists_its_checkers_letters_to_the_conductor_by_id() {
     );
 }
 
-/// An intent names one letter: sending it again to the agent it went to,
-/// by name or by registration id, returns that letter, while sending it to
-/// another agent, or as another kind or body, is refused `intent_conflict`
-/// and makes no letter, so the sender is never told a letter went out that
-/// did not.
+/// B5, B30: sending an intent again to the agent it went to, by name or by
+/// registration id, with the same body returns that letter; another body is
+/// a new version that supersedes it while it waits, and the answer names
+/// the new letter; another agent or another kind is a letter of its own. No
+/// send is refused for the intent it reuses.
 #[test]
-fn a_reused_letter_intent_is_a_retry_only_for_the_same_recipient_kind_and_body() {
+fn a_reused_letter_intent_is_a_retry_a_new_version_or_a_letter_of_its_own() {
     let mission = Fixture::start();
     let send = |target: &str, kind: &str, body: &str| {
         mission.run(
@@ -449,25 +449,31 @@ fn a_reused_letter_intent_is_a_retry_only_for_the_same_recipient_kind_and_body()
         let again = send(target, "progress", "1/2").unwrap();
         assert_eq!(again["id"], first["id"], "{target}");
     }
-    for (target, kind, body) in [
-        ("neighbor", "progress", "1/2"),
-        ("worker", "progress", "2/2"),
-        ("worker", "request", "1/2"),
-    ] {
+    let elsewhere = send("neighbor", "progress", "1/2").unwrap();
+    // After a letter to another agent under the intent, the first send again
+    // is still the first letter, to the first agent.
+    let back = send("worker", "progress", "1/2").unwrap();
+    assert_eq!(back["id"], first["id"]);
+    assert_eq!(back["to"], mission.ids["worker"].as_str());
+    let asked = send("worker", "request", "1/2").unwrap();
+    let newer = send("worker", "progress", "2/2").unwrap();
+    for letter in [&elsewhere, &asked, &newer] {
+        assert_ne!(letter["id"], first["id"]);
+        assert_eq!(letter["state"], "pending");
+    }
+    let id = |letter: &serde_json::Value| letter["id"].as_str().unwrap().to_owned();
+    let superseded = mission.show("worker", &id(&first)).unwrap();
+    assert_eq!(superseded["body"], "1/2");
+    assert_eq!(superseded["state"], "superseded");
+    for (reader, letter) in [("neighbor", &elsewhere), ("worker", &asked)] {
         assert_eq!(
-            send(target, kind, body).unwrap_err(),
-            "intent_conflict",
-            "{target} {kind} {body}"
+            mission.show(reader, &id(letter)).unwrap()["state"],
+            "pending"
         );
     }
-    let kept = mission
-        .show("worker", first["id"].as_str().unwrap())
-        .unwrap();
-    assert_eq!(kept["body"], "1/2");
+    // The newer body again is the newer letter.
     assert_eq!(
-        mission
-            .show("neighbor", first["id"].as_str().unwrap())
-            .unwrap_err(),
-        "letter_unavailable"
+        send("worker", "progress", "2/2").unwrap()["id"],
+        newer["id"]
     );
 }

@@ -1387,6 +1387,25 @@ pub(super) struct KitAgentSetPayload {
     pub(super) enabled: bool,
 }
 
+/// The store screen asked for changes to one machine's store of skills and
+/// MCP items (PRD skill-mcp-manager), in order; the answer lands in
+/// `status.store_answers` under `request_id`.
+#[derive(Debug, Deserialize)]
+pub(super) struct KitStorePayload {
+    pub(super) device_id: String,
+    pub(super) request_id: String,
+    pub(super) changes: Vec<hide_kit::store::StoreChange>,
+}
+
+/// The store screen's [이 Mac에서 복사] for one device (PRD skill-mcp-manager
+/// B28): this Mac's store goes to that device's; the answer lands in
+/// `status.store_answers` under `request_id`.
+#[derive(Debug, Deserialize)]
+pub(super) struct KitStoreCopyPayload {
+    pub(super) device_id: String,
+    pub(super) request_id: String,
+}
+
 /// A Settings tab that shows the kit opened: this Mac's parts are read again
 /// once, so a part removed by hand shows as removed.
 #[derive(Debug, Deserialize)]
@@ -1774,9 +1793,7 @@ pub(super) enum Event {
     OverviewGraphChange(super::overview_graph::OverviewGraphChangePayload),
     TaskReveal(super::detail::TaskRevealPayload),
     DetailOpen(super::detail::DetailOpenPayload),
-    DetailBack,
-    DetailClose,
-    DetailShow(super::detail::DetailShowPayload),
+    PairView(super::pair_view::PairViewPayload),
     RemoteControl(RemoteControlPayload),
     RemoteFileList(RemoteFileListPayload),
     FileOpen(FileOpenPayload),
@@ -1836,6 +1853,9 @@ pub(super) enum Event {
     CancelRepositoryClone(CancelRepositoryClonePayload),
     KitReinstall(KitReinstallPayload),
     KitAgentSet(KitAgentSetPayload),
+    KitStore(KitStorePayload),
+    KitStoreCopy(KitStoreCopyPayload),
+    StoreAskAnswer(super::store_cli::StoreAskAnswerPayload),
     AgentPermissionSet(super::agent_permission::AgentPermissionSetPayload),
     CodexDaemonDisable(CodexDaemonDisablePayload),
     KitCheck(KitCheckPayload),
@@ -2099,9 +2119,7 @@ pub(super) fn validate_event(event: EventEnvelope) -> Result<Event, EventValidat
         ),
         "task_reveal" => decode!(super::detail::TaskRevealPayload, TaskReveal),
         "detail_open" => decode!(super::detail::DetailOpenPayload, DetailOpen),
-        "detail_back" => Ok(Event::DetailBack),
-        "detail_close" => Ok(Event::DetailClose),
-        "detail_show" => decode!(super::detail::DetailShowPayload, DetailShow),
+        "pair_view" => decode!(super::pair_view::PairViewPayload, PairView),
         "remote_control" => decode!(RemoteControlPayload, RemoteControl),
         "remote_file_list" => decode!(RemoteFileListPayload, RemoteFileList),
         "file_open" => decode!(FileOpenPayload, FileOpen),
@@ -2199,6 +2217,9 @@ pub(super) fn validate_event(event: EventEnvelope) -> Result<Event, EventValidat
         "cancel_repository_clone" => decode!(CancelRepositoryClonePayload, CancelRepositoryClone),
         "kit_reinstall" => decode!(KitReinstallPayload, KitReinstall),
         "kit_agent_set" => decode!(KitAgentSetPayload, KitAgentSet),
+        "kit_store" => decode!(KitStorePayload, KitStore),
+        "kit_store_copy" => decode!(KitStoreCopyPayload, KitStoreCopy),
+        "store_ask_answer" => decode!(super::store_cli::StoreAskAnswerPayload, StoreAskAnswer),
         "agent_permission_set" => decode!(
             super::agent_permission::AgentPermissionSetPayload,
             AgentPermissionSet
@@ -2614,6 +2635,13 @@ impl Runtime {
             Event::KitAgentSet(payload) => {
                 self.request_kit_agent_set(&payload.device_id, &payload.agent, payload.enabled)
             }
+            Event::KitStore(payload) => {
+                self.request_store_change(&payload.device_id, payload.request_id, payload.changes)
+            }
+            Event::KitStoreCopy(payload) => {
+                self.request_store_copy(&payload.device_id, payload.request_id)
+            }
+            Event::StoreAskAnswer(payload) => self.answer_store_ask(payload),
             Event::CodexDaemonDisable(payload) => {
                 self.request_codex_daemon_disable(&payload.device_id)
             }
@@ -3876,6 +3904,7 @@ impl Runtime {
                     && let Some(key) = self.front_workspace_key()
                     && !self.admit_view_open(
                         &key,
+                        &self.front_place(&key),
                         &created,
                         crate::view_layout::DisplayKind::File,
                         None,
@@ -4536,9 +4565,7 @@ impl Runtime {
             Event::OverviewGraphChange(payload) => self.change_overview_graph(payload),
             Event::TaskReveal(payload) => self.reveal_task(payload),
             Event::DetailOpen(payload) => self.open_detail_at(payload.item, payload.at),
-            Event::DetailBack => self.detail_back(),
-            Event::DetailClose => self.close_detail(),
-            Event::DetailShow(payload) => self.show_detail(payload.shown),
+            Event::PairView(payload) => self.set_pair_view(payload),
             Event::UiStateUpdate(payload) => {
                 let payload = *payload;
                 if let Some(visible) = payload.usage_window_visible {
@@ -4610,16 +4637,15 @@ impl Runtime {
                     sessions_expanded_agent_pane_ids: current.sessions_expanded_agent_pane_ids,
                     // Each has its own event (`sidebar_lens_set`,
                     // `task_view_set`, `sidebar_project_set`,
-                    // `practice_progress_set`, `practice_invite_close`, `detail_*`,
-                    // `overview_graph_change`).
+                    // `practice_progress_set`, `practice_invite_close`,
+                    // `overview_graph_change`); slot cards still moving onto
+                    // their trays are the core's.
                     sidebar_lens: current.sidebar_lens,
                     task_view: current.task_view,
                     sidebar_project: current.sidebar_project,
                     practice: current.practice,
                     practice_invite_closed: current.practice_invite_closed,
-                    detail: current.detail,
-                    detail_pane: current.detail_pane,
-                    detail_panes: current.detail_panes,
+                    moving_cards: current.moving_cards,
                     overview_graph: current.overview_graph,
                     selected_path: payload.selected_path,
                     // The keyboard's pane, checkout and device are the

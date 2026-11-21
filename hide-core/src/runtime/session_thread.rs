@@ -1805,6 +1805,7 @@ mod tests {
                 ended,
                 terminal_id: None,
                 forked: false,
+                successor: None,
             }
         };
         let ledger = Ledger {

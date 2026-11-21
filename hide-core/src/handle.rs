@@ -966,14 +966,16 @@ impl Core {
         // The engine is asked off the runtime lock, as every engine call is.
         if let (Some((engine, pane)), Some(session)) = (target, report.session.as_deref()) {
             match engine.hook_session(&pane, &report.runtime, session, lineage) {
-                Ok(false) => {}
-                // An agent resumed after its turn was cut off is owed one
-                // letter (PRD engine-bundle-4-herdr-removal D-22).
-                Ok(true) => lock_recover(&self.runtime).owe_transition_letter(
-                    caller,
-                    session,
-                    crate::links::now_ms(),
-                ),
+                // One the engine did not heal was never cut (PRD
+                // letters-missions-simplify D-19, B17).
+                Ok(healed) => {
+                    // A resume the engine said is taken and settled first,
+                    // in the same step, so this report never meets one
+                    // taken and not settled.
+                    let mut runtime = lock_recover(&self.runtime);
+                    runtime.take_heal(device, engine.as_ref(), crate::links::now_ms());
+                    runtime.hook_after_heal(device, caller, healed);
+                }
                 Err(error) => crate::diagnostic!(serde_json::json!({
                     "component": "agent_hooks", "kind": "hook_session.refused",
                     "pane": caller, "device": device, "agent": report.runtime,
@@ -1078,6 +1080,26 @@ impl Core {
             return Err(crate::agent_profiles::UNANSWERED.into());
         }
         lock_recover(&self.runtime).prepare_agent_profile_command(device, command)
+    }
+
+    /// `hide skill` / `hide mcp` for a caller in `pane_id` on `device`: a
+    /// read answered at once, or a change queued, which the daemon then
+    /// waits on off this thread (`store_command::Prepared::run`). A refusal
+    /// is a delivery refusal string (`coordination::split_refusal`).
+    pub fn prepare_store(
+        &self,
+        device: &str,
+        pane_id: &str,
+        command: crate::store_command::StoreCommand,
+    ) -> Result<crate::store_command::Prepared, String> {
+        if !check_owner_thread(self, "store.prepare") {
+            return Err(crate::store_command::UNAVAILABLE.into());
+        }
+        let mut runtime = lock_recover(&self.runtime);
+        let prepared = runtime.prepare_store_command(device, pane_id, command);
+        drop(runtime);
+        self.notifier.notify();
+        prepared
     }
 
     /// A read of the operator's agent definition folder in `home`, made off

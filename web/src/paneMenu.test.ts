@@ -114,3 +114,27 @@ describe("the pane menu's Plan item", () => {
     expect(terminalMenuItems(row, "reviewer", context({}), undefined, undefined, true, true).some((item) => item.id === "open_plan")).toBe(true);
   });
 });
+
+describe("what the pane head moved into its menus (PRD lane-desk-pair-view B19, B20, B21)", () => {
+  const row = { id: "w1:p1", children: null, lineage_path: [] } as unknown as PaneRow;
+
+  it("leads an agent pane's menu with @ and pair view, apart from the rest", () => {
+    const items = paneMenuItems(row, "reviewer", undefined, undefined, false, false, { mention: true, pair: "off" });
+    expect(items.map((item) => item.id)).toEqual(["mention", "pair_view", "copy_reference", "close_pane"]);
+    expect(items[1]).toMatchObject({ label: "Pair view", unavailable: null });
+    expect(items[2]?.separated).toBe(true);
+  });
+
+  it("names the way back on the pane in pair view, and says why a pane with nothing to show cannot pair", () => {
+    expect(paneMenuItems(row, "reviewer", undefined, undefined, false, false, { mention: true, pair: "on" })[1]).toMatchObject({ label: "Back to the usual view", unavailable: null });
+    const shell = paneMenuItems(row, "zsh", undefined, undefined, false, false, { mention: false, pair: "none" });
+    expect(shell.map((item) => item.id)).toEqual(["pair_view", "copy_reference", "close_pane"]);
+    expect(shell[0]?.unavailable).toBe("No view opened yet to show beside it");
+  });
+
+  it("draws pair view with a terminal's layout items, and @ with the pane's own", () => {
+    const items = terminalMenuItems(row, "reviewer", context({}), undefined, undefined, false, false, { mention: true, pair: "off" });
+    expect(items.map((item) => item.id)).toEqual(["paste", "select_all", "find", "split_right", "split_down", "toggle_zoom", "pair_view", "mention", "copy_reference", "close_pane"]);
+    expect(items.filter((item) => item.separated).map((item) => item.id)).toEqual(["split_right", "mention", "copy_reference", "close_pane"]);
+  });
+});

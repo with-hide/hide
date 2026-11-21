@@ -414,13 +414,6 @@ impl Runtime {
         holds: BTreeMap<String, crate::delivery::doorbell::Hold>,
         now: u64,
     ) {
-        // Read before a raise is kept over the hold now, so a recipient back
-        // in its pane renews its letters' deadline (`Ledger::renew_present`).
-        self.delivery_present = holds
-            .iter()
-            .filter(|(_, hold)| hold.recipient_present())
-            .map(|(id, _)| id.clone())
-            .collect();
         let waiting = self
             .delivery_ledger
             .as_ref()
@@ -434,7 +427,6 @@ impl Runtime {
                 )
             })
             .unwrap_or_default();
-        let holds = escalation::retain_raised_holds(&self.delivery_holds, holds);
         let inputs_moved = self.publish_input_asks(now);
         if self.delivery_holds == holds && self.letters_waiting == waiting {
             if inputs_moved && let Some(context) = &self.worker_context {

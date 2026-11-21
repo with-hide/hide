@@ -20,6 +20,8 @@ import type { TerminalContextLink } from "./terminalLinkProvider";
 import type { RevealHost } from "./revealExternal";
 import { archiveOffer, type ArchiveOffer } from "./archive";
 import { agentsByPane, allAgents } from "./paneAgents";
+import { pairLabelKey, type PairOffer } from "./pairView";
+import { commandLabel } from "./shortcutLabels";
 
 // The delegation tree where the operator works (PRD S6 D-07, B14-B16): a
 // child pane's header returns to its parent, a parent's badge lists every
@@ -125,6 +127,8 @@ type PaneMenuId =
   | "fork_agent"
   | "fork_agent_side"
   | "copy_reference"
+  | "mention"
+  | "pair_view"
   | "close_pane"
   | "copy"
   | "paste"
@@ -151,20 +155,43 @@ export type RevisitOffer = "hidden" | "star" | "done";
  * `overview`: the pane runs an agent, so `개요에서 보기` is offered (PRD pane-open-in-overview D-07).
  * `plan`: the pane's session has a plan, so `작업 단계` opens its map (PRD hide-plan B11).
  */
+/**
+ * What the pane's head moved into its menus (PRD lane-desk-pair-view B20,
+ * B21): `mention`, the `@` list of an agent pane; `pair`, ◧, `off` to enter
+ * pair view, `on` on the pane in it to leave it, `none` disabled with why on
+ * a pane with nothing to show beside it (B19).
+ */
+export type PaneHeadOffer = { mention: boolean; pair: PairOffer };
+
+function pairEntry(pair: PairOffer): MenuEntry<PaneMenuId> {
+  return {
+    id: "pair_view", icon: "pair",
+    label: translate(pair === "on" ? pairLabelKey("on") : pairLabelKey("off")),
+    unavailable: pair === "none" ? translate(pairLabelKey("none")) : null,
+    shortcut: commandLabel("pair_view") || undefined,
+  };
+}
+
 /** Why a disabled Sleep agent or Fork item is disabled, from the core's code; a code this build does not word falls back to the item's general line. */
 function refusalText(reason: AgentActionRefusal | null | undefined, fallback: "panes.menu.sleepUnavailable" | "panes.menu.forkUnavailable"): string {
   const key = `agentActionRefusal.${reason}`;
   return reason && key in agentActionReasonsEnglish ? translate(key as keyof typeof agentActionReasonsEnglish) : translate(fallback);
 }
 
-export function paneMenuItems(pane: PaneRow, title: string, archive: ArchiveOffer = { kind: "hidden" }, revisit: RevisitOffer = "hidden", overview = false, plan = false): MenuEntry<PaneMenuId>[] {
+export function paneMenuItems(pane: PaneRow, title: string, archive: ArchiveOffer = { kind: "hidden" }, revisit: RevisitOffer = "hidden", overview = false, plan = false, head?: PaneHeadOffer, terminal = false): MenuEntry<PaneMenuId>[] {
   const relationLabel = { parent: "panes.relation.parent", sibling: "panes.relation.sibling" } as const;
-  const items: MenuEntry<PaneMenuId>[] = relationEntries(pane).map((entry) => ({
+  // The head's `@` and ◧ lead the pane's own menu (B20, B21); a terminal's
+  // menu draws ◧ with its layout items instead.
+  const leading: MenuEntry<PaneMenuId>[] = [
+    ...(head?.mention ? [{ id: "mention" as const, icon: "mention" as const, label: translate("panes.mention.button"), unavailable: null }] : []),
+    ...(head && !terminal ? [pairEntry(head.pair)] : []),
+  ];
+  const items: MenuEntry<PaneMenuId>[] = [...leading, ...relationEntries(pane).map((entry, index) => ({
     id: `open:${entry.paneId}` as const,
     label: translate(relationLabel[entry.relation], { name: entry.label }),
-    icon: "terminal", group: "relations", menuLabel: translate(`menus.${entry.relation}`, { name: entry.label }),
-    unavailable: null,
-  }));
+    icon: "terminal" as const, group: "relations" as const, menuLabel: translate(`menus.${entry.relation}`, { name: entry.label }),
+    unavailable: null, separated: index === 0 && leading.length > 0,
+  }))];
   // Sleep agent (PRD agent-sleep B15): offered on a local agent pane that is
   // awake, disabled with the core's reason when this agent cannot sleep now.
   const agentActions: MenuEntry<PaneMenuId>[] = [];
@@ -223,7 +250,7 @@ export type TerminalMenuContext = {
  * A right-click in the terminal: its link first, editing the text, then the tab's
  * layout around this pane, then everything the header menu offers.
  */
-export function terminalMenuItems(pane: PaneRow, title: string, context: TerminalMenuContext, archive: ArchiveOffer = { kind: "hidden" }, revisit: RevisitOffer = "hidden", overview = false, plan = false): MenuEntry<PaneMenuId>[] {
+export function terminalMenuItems(pane: PaneRow, title: string, context: TerminalMenuContext, archive: ArchiveOffer = { kind: "hidden" }, revisit: RevisitOffer = "hidden", overview = false, plan = false, head?: PaneHeadOffer): MenuEntry<PaneMenuId>[] {
   const { chords } = context;
   const items: MenuEntry<PaneMenuId>[] = [];
   const { target, found } = context.link ?? {};
@@ -253,12 +280,14 @@ export function terminalMenuItems(pane: PaneRow, title: string, context: Termina
     {
       id: "toggle_zoom", menuLabel: translate(context.zoomed ? "menus.unzoom" : "menus.zoom"), icon: context.zoomed ? "unzoom" : "zoom",
       label: context.zoomed ? translate("panes.unzoom") : translate("panes.menu.zoom"),
-      unavailable: context.zoomed || context.paneCount > 1 ? null : translate("panes.menu.onlyPane"),
+      // Pair view leaves the tab's zoom as it is (D-16), so the item says why rather than doing nothing.
+      unavailable: head?.pair === "on" ? translate("panes.menu.pairZoom") : context.zoomed || context.paneCount > 1 ? null : translate("panes.menu.onlyPane"),
       shortcut: chords.zoom,
     },
+    ...(head ? [pairEntry(head.pair)] : []),
   );
   if (editingStart > 0) items[editingStart] = { ...items[editingStart]!, separated: true };
-  const paneItems = paneMenuItems(pane, title, archive, revisit, overview, plan).map((item, index) => (index === 0 ? { ...item, separated: true } : item));
+  const paneItems = paneMenuItems(pane, title, archive, revisit, overview, plan, head, true).map((item, index) => (index === 0 ? { ...item, separated: true } : item));
   return [...items, ...paneItems];
 }
 
@@ -266,7 +295,7 @@ export function terminalMenuItems(pane: PaneRow, title: string, context: Termina
 type MenuOpen = { x: number; y: number; terminal: TerminalMenuContext | null };
 
 
-export function usePaneMenu(pane: PaneRow, title: string, actions: Actions) {
+export function usePaneMenu(pane: PaneRow, title: string, actions: Actions, head?: PaneHeadOffer, onMention?: () => void) {
   const { t } = useInterfaceTranslation();
   const [open, setOpen] = useState<MenuOpen | null>(null);
   const move = usePaneMove();
@@ -294,6 +323,10 @@ export function usePaneMenu(pane: PaneRow, title: string, actions: Actions) {
       }
       case "close_pane":
         return actions.closePane(pane.id);
+      case "mention":
+        return onMention?.();
+      case "pair_view":
+        return actions.togglePairView(pane.id);
       case "sleep_agent":
         return actions.sleepAgent(pane.id);
       case "archive_session":
@@ -338,7 +371,7 @@ export function usePaneMenu(pane: PaneRow, title: string, actions: Actions) {
   const revisit = useRevisitOffer(pane.id, open !== null);
   const overview = useShellStore((s) => open !== null && agentsByPane(allAgents(s.agents, s.rest?.status?.remote)).has(pane.id));
   const plan = useShellStore((s) => open !== null && planOfPane(s.rest, pane.id) !== null);
-  const items = open === null ? [] : open.terminal ? terminalMenuItems(pane, title, open.terminal, archive, revisit, overview, plan) : paneMenuItems(pane, title, archive, revisit, overview, plan);
+  const items = open === null ? [] : open.terminal ? terminalMenuItems(pane, title, open.terminal, archive, revisit, overview, plan, head) : paneMenuItems(pane, title, archive, revisit, overview, plan, head);
   if (move?.mutationBlocked(pane.id)) {
     for (const item of items) if (["close_pane", "split_right", "split_down", "toggle_zoom", "sleep_agent", "archive_session", "fork_agent", "fork_agent_side"].includes(item.id)) item.unavailable = t("menus.paneMove.busy");
   }

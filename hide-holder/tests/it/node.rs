@@ -1410,7 +1410,10 @@ fn a_node_tells_its_panes_facts_read_by_the_rules_its_holder_reads() {
     let node = Node::start(folder.home.path(), &folder.state);
     let told = Arc::new(Told::default());
     node.holders().watch_facts(told.sink());
-    let script = Script::new(&folder.home, vec![b"\x1b]2;job\x07busy\r\n".to_vec()]);
+    let script = Script::new(
+        &folder.home,
+        vec![b"\x1b]2;job\x07\x1b]7501;state=idle:app=codex\x1b\\busy\r\n".to_vec()],
+    );
     node.start_pane(&request(
         folder.home.path(),
         "w1",
@@ -1420,9 +1423,18 @@ fn a_node_tells_its_panes_facts_read_by_the_rules_its_holder_reads() {
             (SCRIPT.into(), script.folder.clone().into()),
         ],
     ));
-    told.wait("w1", "the title", |facts| {
-        facts.title.as_deref() == Some("job") && facts.screen == ScreenRead::NoRules
+    let first = told.wait("w1", "the title and program status", |facts| {
+        facts.title.as_deref() == Some("job")
+            && facts.screen == ScreenRead::NoRules
+            && facts.program_status.is_some()
     });
+    assert_eq!(
+        first.program_status,
+        Some(Box::new(hide_node_link::holders::ProgramStatus {
+            app: "codex".to_owned(),
+            state: hide_node_link::holders::ProgramState::Idle,
+        }))
+    );
 
     let set = |min_engine_version: u32, manifest: &str| RuleSet {
         source: "built-in".to_owned(),

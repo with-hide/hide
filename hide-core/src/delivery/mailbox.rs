@@ -127,27 +127,44 @@ fn request_kind() -> String {
     "request".into()
 }
 
+/// The newest letter `sender` keeps under `intent`: the one a send under the
+/// same intent retries or supersedes.
 pub(crate) fn existing_intent<'a>(
     ledger: &'a Ledger,
     sender: &Actor,
     intent: &str,
     now: u64,
 ) -> Option<&'a Letter> {
-    ledger.letters.iter().find(|letter| {
+    ledger.letters.iter().rev().find(|letter| {
         letter.sender.same_identity(sender) && letter.intent == intent && letter.retained(now)
     })
 }
 
+/// Whether `body`, as its sender wrote it, is what `letter`'s sender wrote:
+/// what the core appended to the stored body is left out on both sides
+/// (`Letter::written`), and any other difference, a shorter body too, is
+/// another body (B5).
+fn same_body(letter: &Letter, body: &str) -> bool {
+    letter.written_body() == body
+}
+
+/// The part of a sent `body` its sender wrote: the first `written` bytes when
+/// the core appended something after them.
+fn sender_part(body: &str, written: Option<usize>) -> &str {
+    written
+        .and_then(|written| body.get(..written))
+        .unwrap_or(body)
+}
+
 /// The letter a send under `intent` retries, if its sender already holds one.
 ///
-/// A retry is the same letter again: the recipient (`to_recipient`, which
-/// each caller words in the terms it holds), the kind, the letter a reply
-/// answers and the body are those the stored letter has. A report's stored body also carries the list of
-/// Views its sender opened (`list_opened_views`), added after the sender
-/// wrote it, so a report is the same letter when its stored body begins with
-/// the body sent. Another letter under the same intent is `intent_conflict`,
-/// refused before anything is stored, so a letter is never answered with an
-/// earlier one that went elsewhere.
+/// A retry is the same letter again: the newest letter under the intent to
+/// the same recipient (`to_recipient`, which each caller words in the terms
+/// it holds), of the same kind and answering the same letter, says the same
+/// body, and the send answers with that letter. Any other send under the intent is
+/// a new letter: another body supersedes the one still waiting to the same
+/// agent (`send`, PRD letters-missions-simplify D-04, B5), and a send is
+/// never refused for the intent it reuses.
 #[expect(
     clippy::too_many_arguments,
     reason = "Each argument is one immutable field of the envelope the retry is compared on"
@@ -159,26 +176,22 @@ pub(crate) fn retried_send<'a>(
     kind: &str,
     body: &str,
     reply_to: Option<&str>,
-    to_recipient: impl FnOnce(&Actor) -> bool,
+    to_recipient: impl Fn(&Actor) -> bool,
     now: u64,
-) -> Result<Option<&'a Letter>, String> {
-    let Some(letter) = existing_intent(ledger, sender, intent, now) else {
-        return Ok(None);
-    };
-    let same_body = if kind == "report" {
-        letter.body.starts_with(body)
-    } else {
-        letter.body == body
-    };
-    if letter.kind == kind
-        && same_body
-        && letter.reply_to.as_deref() == reply_to
-        && to_recipient(&letter.recipient)
-    {
-        Ok(Some(letter))
-    } else {
-        Err("intent_conflict".into())
-    }
+) -> Option<&'a Letter> {
+    ledger
+        .letters
+        .iter()
+        .rev()
+        .find(|letter| {
+            letter.sender.same_identity(sender)
+                && letter.intent == intent
+                && letter.kind == kind
+                && letter.reply_to.as_deref() == reply_to
+                && letter.retained(now)
+                && to_recipient(&letter.recipient)
+        })
+        .filter(|letter| same_body(letter, body))
 }
 
 /// Where the finished letter that finished first stands: the one a full
@@ -198,14 +211,13 @@ pub(crate) fn finished_oldest_first(ledger: &Ledger) -> Vec<usize> {
 
 /// Each finished letter a full ledger may drop as `(when it finished, where
 /// it stands)`, which orders them by when they finished, ties by the
-/// earlier sent: one whose escalation may still be owed stays
-/// (`Letter::escalation_owed`).
+/// earlier sent.
 fn finished(ledger: &Ledger) -> impl Iterator<Item = (u64, usize)> + '_ {
     ledger
         .letters
         .iter()
         .enumerate()
-        .filter(|(_, letter)| !letter.open() && !letter.escalation_owed())
+        .filter(|(_, letter)| !letter.open())
         .map(|(index, letter)| {
             (
                 letter
@@ -230,6 +242,28 @@ pub(crate) fn send(
     reply_to: Option<String>,
     now: u64,
 ) -> Result<Letter, String> {
+    send_written(
+        ledger, sender, recipient, intent, body, None, kind, reply_to, now,
+    )
+}
+
+/// [`send`] of a `body` whose sender wrote only its first `written` bytes,
+/// the core having appended the rest (`Letter::written`).
+#[expect(
+    clippy::too_many_arguments,
+    reason = "The private transaction validates each immutable envelope field before persistence"
+)]
+fn send_written(
+    ledger: &mut Ledger,
+    sender: &Actor,
+    recipient: &Actor,
+    intent: &str,
+    body: &str,
+    written: Option<usize>,
+    kind: &str,
+    reply_to: Option<String>,
+    now: u64,
+) -> Result<Letter, String> {
     sender.require_native_identity()?;
     recipient.require_native_identity()?;
     if !sender.valid() || !recipient.valid() {
@@ -244,19 +278,37 @@ pub(crate) fn send(
     ) {
         return Err("invalid_kind".into());
     }
+    let written =
+        written.filter(|written| *written < body.len() && body.is_char_boundary(*written));
     if let Some(letter) = retried_send(
         ledger,
         sender,
         intent,
         kind,
-        body,
+        sender_part(body, written),
         reply_to.as_deref(),
         |stored| stored.same_identity(recipient),
         now,
-    )? {
+    ) {
         return Ok(letter.clone());
     }
-    let open = ledger.letters.iter().filter(|letter| letter.open()).count();
+    // The letter this one is a new version of, while it still waits: the
+    // sender's under the same intent to the same agent, of the same kind and
+    // answering the same letter. Another letter under the intent stays.
+    let superseded = ledger
+        .letters
+        .iter()
+        .find(|letter| {
+            letter.state == State::Pending
+                && letter.sender.same_identity(sender)
+                && letter.intent == intent
+                && letter.kind == kind
+                && letter.reply_to == reply_to
+                && letter.recipient.same_identity(recipient)
+        })
+        .map(|letter| letter.id.clone());
+    let open = ledger.letters.iter().filter(|letter| letter.open()).count()
+        - usize::from(superseded.is_some());
     // A full total makes room by dropping the oldest finished letter; it is
     // refused only when every letter is still open.
     let full = ledger.letters.len() >= LETTER_LIMIT;
@@ -287,13 +339,28 @@ pub(crate) fn send(
     if let Some(index) = oldest_finished {
         ledger.letters.remove(index);
     }
+    let id = format!("letter-{sequence}");
+    if let Some(old) = superseded
+        .as_ref()
+        .and_then(|old| ledger.letters.iter_mut().find(|letter| &letter.id == old))
+    {
+        old.supersede(now);
+        crate::diagnostic!(json!({"component":"delivery","kind":"letter.superseded",
+            "letter_id":old.id,"by":id,"intent":intent,"sender_pane":sender.pane_id}));
+    }
     let letter = Letter {
-        id: format!("letter-{sequence}"),
+        id,
         intent: intent.to_owned(),
+        // The registrations the letter is between, which stay its parties
+        // while their agents move panes or wake (`coordination::rebind`) or
+        // hand over to the next agent in the pane (`coordination::succeed`).
+        from: crate::coordination::registered_id(ledger, sender),
+        to: crate::coordination::registered_id(ledger, recipient),
         sender: crate::coordination::named(ledger, sender),
         recipient: crate::coordination::named(ledger, recipient),
         kind: kind.to_owned(),
         body: body.to_owned(),
+        written,
         state: State::Pending,
         hook_confirmed: Some(false),
         waiting_answer: matches!(kind, "request" | "block"),
@@ -319,12 +386,6 @@ pub(crate) fn send(
         input_noticed_at_unix_ms: 0,
         bell_failure: None,
         bell_ended: Some(0),
-        // A letter to a machine with a clock waits on that clock from now;
-        // the store gives one to a machine a letter waits on.
-        intake_from: ledger
-            .node_clocks
-            .get(&recipient.device_id)
-            .map(|clock| clock.reading(now)),
     };
     ledger.letters.push(letter.clone());
     Ok(letter)
@@ -345,12 +406,18 @@ pub fn apply(
         now,
         InterfaceLanguage::English,
         &[],
+        None,
     )
 }
 
-/// [`apply`], with what a handover shows worded in `language` and `also_reads`
+/// [`apply`], with what a handover shows worded in `language`, `also_reads`
 /// the senders whose letters `Show` answers beside the caller's own
-/// (`Authority::also_reads`).
+/// (`Authority::also_reads`), and `written` how much of a sent body its
+/// sender wrote (`Authority::written`).
+#[expect(
+    clippy::too_many_arguments,
+    reason = "Each argument is one thing the core worked out for the command"
+)]
 pub fn apply_in(
     ledger: &mut Ledger,
     actor: &Actor,
@@ -359,11 +426,12 @@ pub fn apply_in(
     now: u64,
     language: InterfaceLanguage,
     also_reads: &[Exchange],
+    written: Option<usize>,
 ) -> Result<Value, String> {
     actor.require_native_identity()?;
     match command {
-        // The runtime judged a repeated send's recipient from the key it
-        // named and hands no target; a target handed here is compared whole.
+        // A send names its recipient as the target: for a repeated send,
+        // the recipient of the letter the core judged it repeats.
         Command::Send {
             intent, kind, body, ..
         } => {
@@ -372,11 +440,11 @@ pub fn apply_in(
                 actor,
                 intent,
                 kind,
-                body,
+                sender_part(body, written),
                 None,
-                |stored| target.is_none_or(|target| target.same_identity(stored)),
+                |stored| target.is_some_and(|target| target.same_identity(stored)),
                 now,
-            )? {
+            ) {
                 return Ok(json!(letter));
             }
         }
@@ -394,7 +462,7 @@ pub fn apply_in(
                 Some(id),
                 |_| true,
                 now,
-            )? {
+            ) {
                 return Ok(json!(letter));
             }
         }
@@ -409,12 +477,13 @@ pub fn apply_in(
             force,
             ..
         } => {
-            let mut letter = send(
+            let mut letter = send_written(
                 ledger,
                 actor,
                 target.ok_or("target_unavailable")?,
                 intent,
                 body,
+                written,
                 kind,
                 None,
                 now,
@@ -441,16 +510,33 @@ pub fn apply_in(
             if !original.recipient.same_identity(actor) {
                 return Err("recipient_required".into());
             }
+            // The answer goes to the agent that runs in its sender's place
+            // now; a sender with no agent after it gets it as no recipient.
+            let (recipient, ended) = match original
+                .from
+                .as_deref()
+                .and_then(|from| crate::coordination::live_successor(ledger, from))
+            {
+                Some(Ok(record)) => (record.actor.clone(), None),
+                Some(Err(record)) => (record.actor.clone(), Some(record.id.clone())),
+                None => (original.sender.clone(), None),
+            };
             let mut reply = send(
                 ledger,
                 actor,
-                &original.sender,
+                &recipient,
                 intent,
                 body,
                 "reply",
                 Some(id.clone()),
                 now,
             )?;
+            if let Some(ended) = ended {
+                ledger.end_letters_to(&ended, &recipient, now);
+                if let Some(stored) = ledger.letters.iter().find(|stored| stored.id == reply.id) {
+                    reply = stored.clone();
+                }
+            }
             if *immediate
                 && let Some(stored) = ledger
                     .letters
@@ -616,7 +702,7 @@ pub fn apply_in(
             language,
             Bundling::of(command)
         )?)),
-        Command::Pull { .. } => Ok(json!(operator_prompt_intake(ledger, actor, now)?)),
+        Command::Pull { .. } => Ok(json!(operator_prompt_intake(ledger, actor)?)),
         Command::Confirm { ids } => {
             recipient_of_all(ledger, actor, ids)?;
             let mut reports = Vec::new();
@@ -720,9 +806,11 @@ fn record_intake(letter: &mut Letter, now: u64) -> Option<(Actor, Actor)> {
         return None;
     }
     letter.hook_confirmed = Some(true);
+    // A letter that ended before its record of intake arrived was taken
+    // all the same.
     if matches!(
         letter.state,
-        State::Pending | State::Undelivered | State::Expired
+        State::Pending | State::NoRecipient | State::Expired
     ) {
         letter.state = State::Delivered;
     }
@@ -822,12 +910,10 @@ fn rang(ledger: &Ledger, actor: &Actor, digest: &str) -> bool {
 
 /// Whether a bell is still coming for the letter. A letter whose three bells
 /// are spent, or whose recipient is never belled, stays pending for
-/// `hide inbox` and expires undelivered; the operator's own prompt promises
-/// it nothing.
-fn bell_pending(ledger: &Ledger, letter: &Letter, now: u64) -> bool {
+/// `hide inbox`; the operator's own prompt promises it nothing.
+fn bell_pending(letter: &Letter) -> bool {
     letter.state == State::Pending
         && !letter.handed
-        && letter.within_deadline(&ledger.node_clocks, now)
         && letter.attempts() < super::ledger::BELLS
         && super::doorbell::bell_target(&letter.recipient.kind)
 }
@@ -835,12 +921,12 @@ fn bell_pending(ledger: &Ledger, letter: &Letter, now: u64) -> bool {
 /// What the hook hands the agent when the operator's own prompt was
 /// submitted: never a letter body, only a line counting the letters a bell
 /// will still bring, so the operator's turn is not mixed with them.
-fn operator_prompt_intake(ledger: &Ledger, actor: &Actor, now: u64) -> Result<Intake, String> {
+fn operator_prompt_intake(ledger: &Ledger, actor: &Actor) -> Result<Intake, String> {
     actor.require_native_identity()?;
     let waiting = ledger
         .letters
         .iter()
-        .filter(|letter| letter.recipient.same_identity(actor) && bell_pending(ledger, letter, now))
+        .filter(|letter| letter.recipient.same_identity(actor) && bell_pending(letter))
         .count();
     let mut intake = Intake::default();
     if waiting > 0 && prompt_hook(&actor.kind) {
@@ -905,7 +991,6 @@ pub(crate) fn gap_pull(
         .filter(|letter| {
             letter.recipient.same_identity(actor)
                 && letter.awaiting_intake()
-                && letter.within_deadline(&ledger.node_clocks, now)
                 && letter.tool_handovers < TOOL_HANDOVERS
                 && (letter
                     .bell_turn
@@ -1180,9 +1265,8 @@ fn legacy_inbox(ledger: &Ledger, actor: &Actor) -> Value {
             .letters
             .iter()
             .filter(|letter| {
-                letter.recipient.same_identity(actor)
-                    && matches!(letter.state, State::Pending | State::Undelivered)
-                    || letter.sender.same_identity(actor) && letter.state == State::Undelivered
+                letter.recipient.same_identity(actor) && letter.state == State::Pending
+                    || letter.sender.same_identity(actor) && returned(letter)
             })
             .map(|letter| {
                 let mut entry = json!(letter);
@@ -1216,19 +1300,24 @@ fn bundle_token(ids: &[&str]) -> Option<String> {
     Some(format!("{newest}{BUNDLE_MARK}{short}"))
 }
 
-/// `hide inbox`: the caller's letters as one bundle, as a handover gives
-/// them, then its own letters that went undelivered; an agent with no prompt
-/// hook acknowledges the whole bundle with the one command it carries.
+/// Whether a letter came back to its sender: it ended with no agent to take
+/// it (`no_recipient`, B7), or, for a letter an older build wrote, expired
+/// undelivered.
+fn returned(letter: &Letter) -> bool {
+    matches!(letter.state, State::NoRecipient | State::Expired)
+}
+
+/// `hide inbox`: the caller's pending letters as one bundle, as a handover
+/// gives them, then its own letters that came back (`returned`); an agent
+/// with no prompt hook acknowledges the whole bundle with the one command it
+/// carries.
 fn inbox(ledger: &Ledger, actor: &Actor) -> Inbox {
     let mut received: Vec<_> = ledger
         .letters
         .iter()
-        .filter(|letter| {
-            letter.recipient.same_identity(actor)
-                && matches!(letter.state, State::Pending | State::Undelivered)
-        })
+        .filter(|letter| letter.recipient.same_identity(actor) && letter.state == State::Pending)
         .collect();
-    received.sort_by_key(|letter| (letter.state != State::Pending, letter.created_at_unix_ms));
+    received.sort_by_key(|letter| letter.created_at_unix_ms);
     let shares = bundle(&received, Bundling::PerSender);
     // The pending letters this answer lists, shown or folded, in the
     // ledger's order: the one acknowledgement takes exactly these.
@@ -1271,7 +1360,7 @@ fn inbox(ledger: &Ledger, actor: &Actor) -> Inbox {
         .filter(|letter| {
             letter.sender.same_identity(actor)
                 && !letter.recipient.same_identity(actor)
-                && letter.state == State::Undelivered
+                && returned(letter)
         })
         .cloned()
         .collect();
@@ -1516,15 +1605,20 @@ mod tests {
         assert!(intake.context.contains("hide request show letter-1"));
         assert_eq!(ledger.letters[0].body.len(), (BODY_LIMIT / 3) * 3);
     }
+    /// B4, B7: a letter waits for its agent however long that takes, and
+    /// ends with no recipient only when its agent ends with no agent after
+    /// it; its sender finds it among the letters that came back.
     #[test]
-    fn expiry_and_capacity_are_explicit_without_eviction() {
+    fn a_letter_waits_until_its_agent_ends_and_capacity_is_explicit_without_eviction() {
         let mut ledger = Ledger::default();
         let a = actor("a");
         let b = actor("b");
         let letter = send(&mut ledger, &a, &b, "i", "body", "request", None, 10).unwrap();
-        assert!(!ledger.expire(10 + super::super::DELIVERY_EXPIRY_MS - 1));
-        assert!(ledger.expire(10 + super::super::DELIVERY_EXPIRY_MS));
-        assert_eq!(ledger.letters[0].state, State::Undelivered);
+        ledger.cleanup(10 + 30 * 24 * 60 * 60 * 1_000);
+        assert_eq!(ledger.letters[0].state, State::Pending, "no hour ends it");
+        assert!(ledger.end_letters_to("agent-b", &b, 20));
+        assert_eq!(ledger.letters[0].state, State::NoRecipient);
+        assert!(!ledger.letters[0].waiting_answer);
         assert_eq!(
             send(
                 &mut ledger,
@@ -1544,7 +1638,7 @@ mod tests {
         let inbox = apply(&mut ledger, &a, None, &Command::Inbox { bundle: true }, 20).unwrap();
         assert_eq!(inbox["letters"], json!([]));
         assert_eq!(inbox["returned"][0]["id"], letter.id.as_str());
-        assert_eq!(inbox["returned"][0]["state"], "undelivered");
+        assert_eq!(inbox["returned"][0]["state"], "no_recipient");
         assert_eq!(inbox["returned"][0]["recipient"]["pane_id"], "b");
     }
 
@@ -1554,10 +1648,12 @@ mod tests {
         let a = actor("a");
         let b = actor("b");
         let first = send(&mut ledger, &a, &b, "first", "work", "request", None, 1).unwrap();
+        // The core hands a retry the recipient of the letter it repeats,
+        // which need not run any more.
         let retry = apply(
             &mut ledger,
             &a,
-            None,
+            Some(&b),
             &Command::Send {
                 target: "gone".into(),
                 intent: "first".into(),
@@ -1590,34 +1686,40 @@ mod tests {
             body: body.into(),
             now: false,
         };
-        // The same reply again is a retry; a reply to another letter, or
-        // with another body, under that intent is refused and answers nothing.
+        // The same reply again is a retry; a reply to another letter under
+        // that intent is a reply of its own, which answers that letter.
         let retry = apply(&mut ledger, &b, None, &reply_command(&first.id, "done"), 5).unwrap();
         assert_eq!(retry["id"], reply["id"]);
-        for (id, body) in [
-            (second.id.as_str(), "done"),
-            (second.id.as_str(), "different decision"),
-            (first.id.as_str(), "different decision"),
-        ] {
-            assert_eq!(
-                apply(&mut ledger, &b, None, &reply_command(id, body), 5),
-                Err("intent_conflict".into()),
-                "{id} {body}"
-            );
-        }
-        assert!(
-            ledger
+        let other = apply(&mut ledger, &b, None, &reply_command(&second.id, "done"), 5).unwrap();
+        assert_ne!(other["id"], reply["id"]);
+        let state = |id: &serde_json::Value| {
+            let letter = ledger
                 .letters
                 .iter()
-                .find(|letter| letter.id == second.id)
+                .find(|letter| letter.id == *id)
+                .unwrap();
+            (letter.state, letter.waiting_answer)
+        };
+        assert_eq!(
+            state(&reply["id"]),
+            (State::Pending, false),
+            "the first reply stays"
+        );
+        assert!(
+            !ledger
+                .letters
+                .iter()
+                .find(|l| l.id == second.id)
                 .unwrap()
                 .waiting_answer
         );
-        assert_eq!(ledger.letters.len(), 3);
+        assert_eq!(ledger.letters.len(), 4);
     }
 
+    /// B30: a reply under the intent of an earlier send of its sender is a
+    /// letter of its own, never answered with that send nor refused.
     #[test]
-    fn a_reply_reusing_the_intent_of_an_earlier_send_is_refused_and_not_answered_with_it() {
+    fn a_reply_reusing_the_intent_of_an_earlier_send_is_its_own_letter() {
         let mut ledger = Ledger::default();
         let (a, b) = (actor("a"), actor("b"));
         let asked = send(&mut ledger, &a, &b, "ask", "work", "request", None, 1).unwrap();
@@ -1629,15 +1731,13 @@ mod tests {
             body: "1/2".into(),
             now: false,
         };
-        assert_eq!(
-            apply(&mut ledger, &b, None, &reply, 3),
-            Err("intent_conflict".into())
-        );
-        // The request is still waiting and the send is the only letter under it.
+        let answered = apply(&mut ledger, &b, None, &reply, 3).unwrap();
+        assert_ne!(answered["id"], sent.id.as_str());
+        assert_eq!(answered["reply_to"], asked.id.as_str());
         let waiting = ledger.letters.iter().find(|l| l.id == asked.id).unwrap();
-        assert!(waiting.waiting_answer);
-        assert_eq!(ledger.letters.len(), 2);
-        assert_eq!(ledger.letters[1].id, sent.id);
+        assert!(!waiting.waiting_answer);
+        let progress = ledger.letters.iter().find(|l| l.id == sent.id).unwrap();
+        assert_eq!(progress.state, State::Pending, "the send stays");
     }
 
     fn send_command(intent: &str, kind: &str, body: &str) -> Command {
@@ -1651,8 +1751,10 @@ mod tests {
         }
     }
 
+    /// An intent reused for another recipient is a letter to that one,
+    /// never answered with the first letter, which stays.
     #[test]
-    fn an_intent_reused_for_another_recipient_is_refused_not_answered_with_the_first_letter() {
+    fn an_intent_reused_for_another_recipient_is_a_new_letter_not_the_first() {
         let mut ledger = Ledger::default();
         let (a, b, c) = (actor("a"), actor("b"), actor("c"));
         let first = send(&mut ledger, &a, &b, "once", "1/2", "progress", None, 1).unwrap();
@@ -1660,53 +1762,178 @@ mod tests {
         let retry = send(&mut ledger, &a, &b, "once", "1/2", "progress", None, 2).unwrap();
         assert_eq!(retry.id, first.id);
         // Another recipient is not, whether it arrives as a target or as a key.
-        let elsewhere = send(&mut ledger, &a, &c, "once", "1/2", "progress", None, 3);
-        assert_eq!(elsewhere, Err("intent_conflict".into()));
+        let elsewhere = send(&mut ledger, &a, &c, "once", "1/2", "progress", None, 3).unwrap();
+        assert_ne!(elsewhere.id, first.id);
         let command = send_command("once", "progress", "1/2");
-        let applied = apply(&mut ledger, &a, Some(&c), &command, 4);
-        assert_eq!(applied, Err("intent_conflict".into()));
-        assert_eq!(ledger.letters.len(), 1);
+        let applied = apply(&mut ledger, &a, Some(&c), &command, 4).unwrap();
+        assert_eq!(applied["id"], elsewhere.id.as_str(), "a retry to c");
+        assert_eq!(ledger.letters.len(), 2);
+        assert!(
+            ledger
+                .letters
+                .iter()
+                .all(|letter| letter.state == State::Pending)
+        );
     }
 
+    /// B5: another body under the same intent to the same agent is a new
+    /// version of the letter: it supersedes the one still waiting and the
+    /// answer names the new letter; the same body again is the first. A
+    /// letter already delivered stays as it was, and another kind is a
+    /// letter of its own.
     #[test]
-    fn an_intent_reused_with_another_kind_or_body_is_refused() {
+    fn another_body_under_the_same_intent_supersedes_the_waiting_letter() {
         let mut ledger = Ledger::default();
         let (a, b) = (actor("a"), actor("b"));
-        send(&mut ledger, &a, &b, "once", "1/2", "progress", None, 1).unwrap();
-        for (kind, body) in [("progress", "2/2"), ("request", "1/2")] {
-            let command = send_command("once", kind, body);
-            assert_eq!(
-                apply(&mut ledger, &a, None, &command, 2),
-                Err("intent_conflict".into()),
-                "{kind} {body}"
-            );
-        }
-        assert_eq!(ledger.letters.len(), 1);
-    }
-
-    #[test]
-    fn a_report_retry_matches_the_stored_report_that_gained_a_views_list() {
-        let mut ledger = Ledger::default();
-        let (a, b) = (actor("a"), actor("b"));
-        let listed = "done\n\nViews this agent opened (read one):\n- v1 page (seen)";
-        let first = send(&mut ledger, &a, &b, "report", listed, "report", None, 1).unwrap();
-        let retry = apply(
+        let first = send(&mut ledger, &a, &b, "once", "1/2", "progress", None, 1).unwrap();
+        let newer = apply(
             &mut ledger,
             &a,
-            None,
-            &send_command("report", "report", "done"),
+            Some(&b),
+            &send_command("once", "progress", "2/2"),
             2,
         )
         .unwrap();
-        assert_eq!(retry["id"], first.id.as_str());
-        let other = apply(
+        assert_ne!(newer["id"], first.id.as_str());
+        let state = |ledger: &Ledger, id: &str| {
+            let letter = ledger
+                .letters
+                .iter()
+                .find(|letter| letter.id == id)
+                .unwrap();
+            (letter.state, letter.finished_at_unix_ms)
+        };
+        assert_eq!(state(&ledger, &first.id), (State::Superseded, Some(2)));
+        let id = newer["id"].as_str().unwrap().to_owned();
+        assert_eq!(state(&ledger, &id), (State::Pending, None));
+        // The same body again to the same agent is the newer one.
+        let again = apply(
             &mut ledger,
             &a,
-            None,
-            &send_command("report", "report", "something else"),
+            Some(&b),
+            &send_command("once", "progress", "2/2"),
             3,
+        )
+        .unwrap();
+        assert_eq!(again["id"], id.as_str());
+        // A send names its recipient, a retry too (the core hands the one
+        // of the letter it repeats): with none, nothing is kept.
+        for body in ["2/2", "3/3"] {
+            assert_eq!(
+                apply(
+                    &mut ledger,
+                    &a,
+                    None,
+                    &send_command("once", "progress", body),
+                    4
+                ),
+                Err("target_unavailable".into())
+            );
+        }
+        // Delivered, it is not replaced; another kind stands beside it.
+        ledger
+            .letters
+            .iter_mut()
+            .find(|letter| letter.id == id)
+            .unwrap()
+            .state = State::Delivered;
+        let third = send(&mut ledger, &a, &b, "once", "3/3", "progress", None, 5).unwrap();
+        assert_eq!(state(&ledger, &id).0, State::Delivered);
+        let asked = send(&mut ledger, &a, &b, "once", "3/3", "request", None, 6).unwrap();
+        assert_eq!(state(&ledger, &third.id).0, State::Pending);
+        assert_eq!(state(&ledger, &asked.id).0, State::Pending);
+    }
+
+    /// B4, B5: a letter its recipient's hook took in is replaced under the
+    /// same intent before the hook's receipt comes; the late receipt is kept
+    /// on it, superseded and taken, beside the newer letter's in the same
+    /// confirm, and the ledger stays one the store keeps.
+    #[test]
+    fn a_late_receipt_of_a_superseded_letter_is_kept_with_the_others() {
+        let mut ledger = Ledger::default();
+        let (a, b) = (actor("a"), actor("b"));
+        let first = send(&mut ledger, &a, &b, "once", "1/2", "request", None, 1).unwrap();
+        let newer = apply(
+            &mut ledger,
+            &a,
+            Some(&b),
+            &send_command("once", "request", "2/2"),
+            2,
+        )
+        .unwrap()["id"]
+            .as_str()
+            .unwrap()
+            .to_owned();
+        apply(
+            &mut ledger,
+            &b,
+            None,
+            &Command::Confirm {
+                ids: vec![first.id.clone(), newer.clone()],
+            },
+            3,
+        )
+        .unwrap();
+        let ended = |id: &str| {
+            let letter = ledger
+                .letters
+                .iter()
+                .find(|letter| letter.id == id)
+                .unwrap();
+            (letter.state, letter.hook_confirmed)
+        };
+        assert_eq!(ended(&first.id), (State::Superseded, Some(true)));
+        assert_eq!(ended(&newer), (State::Delivered, Some(true)));
+        ledger.validate().unwrap();
+    }
+
+    /// B5: a report is compared on the words its sender wrote
+    /// (`Letter::written`): the same words again are the first report,
+    /// though the core appended the Views its sender opened; fewer words,
+    /// even the start of what it wrote, are another body; and words of the
+    /// sender's own that read like the Views list are its own.
+    #[test]
+    fn a_report_retry_compares_the_words_its_sender_wrote() {
+        let mut ledger = Ledger::default();
+        let (a, b) = (actor("a"), actor("b"));
+        let views = format!("{}\n- v1 page (seen)", super::super::OPENED_VIEWS_HEAD);
+        let mut sent = |body: &str, written: Option<usize>, at: u64| {
+            apply_in(
+                &mut ledger,
+                &a,
+                Some(&b),
+                &send_command("report", "report", body),
+                at,
+                InterfaceLanguage::English,
+                &[],
+                written,
+            )
+            .unwrap()["id"]
+                .as_str()
+                .unwrap()
+                .to_owned()
+        };
+        let wrote = "done: UI and API";
+        let first = sent(&format!("{wrote}{views}"), Some(wrote.len()), 1);
+        assert_eq!(sent(wrote, None, 2), first, "the same words");
+        let shorter = sent("done: UI", None, 3);
+        assert_ne!(shorter, first, "fewer words");
+        let own = sent(&format!("done{views}"), None, 4);
+        assert_ne!(own, shorter);
+        assert_ne!(sent("done", None, 5), own, "the list was the sender's");
+        let state = |id: &str| {
+            ledger
+                .letters
+                .iter()
+                .find(|letter| letter.id == id)
+                .unwrap()
+                .state
+        };
+        assert_eq!(
+            [state(&first), state(&shorter), state(&own)],
+            [State::Superseded; 3]
         );
-        assert_eq!(other, Err("intent_conflict".into()));
+        ledger.validate().unwrap();
     }
 
     fn pending_for(ledger: &mut Ledger, recipient: &Actor, count: usize) -> Vec<String> {
@@ -1751,9 +1978,7 @@ mod tests {
 
     /// The doorbell typing `line` for the letter at `index`.
     fn ring(ledger: &mut Ledger, index: usize, line: &str) {
-        ledger.letters[index]
-            .reserve_bell(&Default::default(), 50, line.into())
-            .unwrap();
+        ledger.letters[index].reserve_bell(line.into()).unwrap();
     }
 
     #[test]
@@ -1959,7 +2184,12 @@ mod tests {
             assert!(pull_for(&mut ledger, &recipient, changed).ids.is_empty());
         }
         assert!(pull_for(&mut ledger, &other, prompt).ids.is_empty());
-        for state in [State::Delivered, State::Cancelled, State::Undelivered] {
+        for state in [
+            State::Delivered,
+            State::Cancelled,
+            State::Superseded,
+            State::NoRecipient,
+        ] {
             ledger.letters[0].state = state;
             assert!(pull_for(&mut ledger, &recipient, prompt).ids.is_empty());
         }
@@ -2067,7 +2297,7 @@ mod tests {
         // The bell's pull handed it over: no bell is typed for it again.
         assert!(ledger.letters[0].handed);
         assert_eq!(
-            ledger.letters[0].reserve_bell(&Default::default(), 60, LINE.into()),
+            ledger.letters[0].reserve_bell(LINE.into()),
             Err("letter_handed".into())
         );
         // Once the letter is taken in, its line opens nothing.
@@ -2086,10 +2316,11 @@ mod tests {
 
     /// A letter the bell's pull handed over but no confirmation took in
     /// rides the next bell's batch for the same recipient, is not counted as
-    /// a bell still coming, and at its deadline ends delivered without a
-    /// receipt, never undelivered; a letter never handed ends undelivered.
+    /// a bell still coming, and when its agent ends ends delivered without a
+    /// receipt, never with no recipient; a letter never handed ends with no
+    /// recipient.
     #[test]
-    fn a_handed_letter_rides_the_next_bell_and_never_ends_undelivered() {
+    fn a_handed_letter_rides_the_next_bell_and_never_ends_with_no_recipient() {
         let mut ledger = Ledger::default();
         let recipient = actor("recipient");
         let first = pending_for(&mut ledger, &recipient, 1).remove(0);
@@ -2131,7 +2362,8 @@ mod tests {
         )
         .unwrap()
         .id;
-        assert!(ledger.expire(super::super::DELIVERY_EXPIRY_MS + 1_000));
+        assert!(ledger.end_letters_to("agent-recipient", &recipient, 1_000));
+        assert!(ledger.end_letters_to("agent-other", &actor("other-recipient"), 1_000));
         let state = |ledger: &Ledger, id: &str| {
             let letter = ledger
                 .letters
@@ -2146,7 +2378,7 @@ mod tests {
         };
         assert_eq!(state(&ledger, &first), (State::Delivered, None, false));
         assert_eq!(state(&ledger, &next), (State::Delivered, None, false));
-        assert_eq!(state(&ledger, &unrung).0, State::Undelivered);
+        assert_eq!(state(&ledger, &unrung).0, State::NoRecipient);
         // A confirmation that comes late still takes it in.
         apply(
             &mut ledger,
@@ -2155,25 +2387,10 @@ mod tests {
             &Command::Confirm {
                 ids: vec![first.clone()],
             },
-            super::super::DELIVERY_EXPIRY_MS + 2_000,
+            2_000,
         )
         .unwrap();
         assert_eq!(state(&ledger, &first), (State::Delivered, Some(true), true));
-    }
-
-    /// A handed letter whose recipient's wake failed is undelivered, as any
-    /// letter there is: the wake's failure, not a missing receipt, ends it.
-    #[test]
-    fn a_handed_letter_whose_wake_failed_is_undelivered() {
-        let mut ledger = Ledger::default();
-        let recipient = actor("recipient");
-        let id = pending_for(&mut ledger, &recipient, 1).remove(0);
-        ring(&mut ledger, 0, LINE);
-        pull_for(&mut ledger, &recipient, LINE);
-        assert!(ledger.letters[0].handed);
-        let failed = std::collections::BTreeMap::from([(id, "wake_failed".to_owned())]);
-        assert!(ledger.fail_undeliverable(&failed, 100));
-        assert_eq!(ledger.letters[0].state, State::Undelivered);
     }
 
     /// What a pane's node hands over confirms only the letters to its
@@ -2233,11 +2450,11 @@ mod tests {
         assert!(confirm_owed(&mut ledger, &parent, &owed("parent-native"), 5).is_empty());
     }
 
-    /// A report a prompt hook handed over ends its parent's watch at its
-    /// deadline, as a confirmation would; one no hook handed ends
-    /// undelivered and leaves the watch.
+    /// A report a prompt hook handed over ends its parent's watch when the
+    /// parent ends, as a confirmation would; one no hook handed ends with no
+    /// recipient and leaves the watch.
     #[test]
-    fn a_handed_report_ends_its_watch_at_the_deadline_and_an_unhanded_one_does_not() {
+    fn a_handed_report_ends_its_watch_when_its_parent_ends_and_an_unhanded_one_does_not() {
         for handed in [true, false] {
             let mut ledger = Ledger::default();
             let parent = actor("parent");
@@ -2260,14 +2477,14 @@ mod tests {
             if handed {
                 assert_eq!(pull_for(&mut ledger, &parent, line).ids, [report.as_str()]);
             }
-            assert!(ledger.expire(super::super::DELIVERY_EXPIRY_MS + 1_000));
+            assert!(ledger.end_letters_to("agent-parent", &parent, 1_000));
             let state = ledger.letters[0].state;
             assert_eq!(
                 (state, ledger.watches.is_empty()),
                 if handed {
                     (State::Delivered, true)
                 } else {
-                    (State::Undelivered, false)
+                    (State::NoRecipient, false)
                 }
             );
         }
@@ -2278,7 +2495,7 @@ mod tests {
         let mut ledger = Ledger::default();
         let recipient = actor("recipient");
         pending_for(&mut ledger, &recipient, 3);
-        // Three bells spent: the letter waits for `hide inbox` and expires.
+        // Three bells spent: the letter waits for `hide inbox`.
         ledger.letters[0].bell_attempts = Some(3);
         // Acknowledged before intake: no bell either.
         ledger.letters[1].state = State::Acknowledged;
@@ -2358,9 +2575,6 @@ mod tests {
             assert_eq!(pull(&ledger, Some(1000), 1000 + wait), ids[..1], "{kind}");
             let none = tool_pull(&ledger, &recipient, Some(1000), 1001).unwrap();
             assert!(!record_tool_handover(&mut ledger, &none, 1001), "{kind}");
-            // A letter past its deadline is not handed over.
-            ledger.letters[1].created_at_unix_ms = 0;
-            assert!(pull(&ledger, Some(1000), 61 * 60_000).is_empty(), "{kind}");
         }
         for kind in ["claude", "codex", "gemini", "cursor", "future-agent"] {
             assert!(!tool_letters(kind), "{kind}");
@@ -2510,8 +2724,9 @@ mod tests {
                 bundle_token(&[ids[0].as_str()]).unwrap()
             )
         );
-        // An expired letter can no longer be acknowledged, so none is offered.
-        assert!(ledger.expire(10 + super::super::DELIVERY_EXPIRY_MS));
+        // A letter that ended leaves the inbox, so no acknowledgement is
+        // offered for it.
+        ledger.letters[0].state = State::Superseded;
         let inbox = apply(
             &mut ledger,
             &recipient,
@@ -2520,7 +2735,7 @@ mod tests {
             5,
         )
         .unwrap();
-        assert_eq!(inbox["letters"][0]["state"], "undelivered");
+        assert_eq!(inbox["letters"], json!([]));
         assert!(inbox.get("ack_command").is_none());
         // A hooked agent's prompt hook acknowledges for it; the sender sees none.
         let hooked = actor("hooked");
@@ -2822,7 +3037,7 @@ mod tests {
     }
 
     #[test]
-    fn actual_confirmation_after_cancel_or_deadline_ends_watch_once_and_survives_restart() {
+    fn actual_confirmation_after_cancel_or_no_recipient_ends_watch_once_and_survives_restart() {
         for cancel in [false, true] {
             let mut ledger = Ledger::default();
             let child = actor("child");
@@ -2842,7 +3057,7 @@ mod tests {
             let confirm = Command::Confirm {
                 ids: pull(&ledger, &parent).unwrap().ids,
             };
-            let now = 2 + super::super::DELIVERY_EXPIRY_MS;
+            let now = 10;
             if cancel {
                 assert_eq!(
                     apply(
@@ -2858,7 +3073,7 @@ mod tests {
                     "cancelled"
                 );
             } else {
-                assert!(ledger.expire(now));
+                assert!(ledger.end_letters_to("agent-parent", &parent, now));
                 assert_eq!(
                     apply(
                         &mut ledger,
@@ -2870,7 +3085,7 @@ mod tests {
                         now
                     )
                     .unwrap()["state"],
-                    "undelivered"
+                    "no_recipient"
                 );
             }
             assert_eq!(ledger.watches.len(), 1);
@@ -2949,7 +3164,7 @@ mod tests {
         }
         super::super::store::save(&path, &ledger).unwrap();
         let mut restored = super::super::store::load(&path).unwrap();
-        let now = 2 + super::super::DELIVERY_EXPIRY_MS - 1;
+        let now = 3;
         assert_eq!(
             pull(&restored, &parent).unwrap().ids,
             std::slice::from_ref(&report.id)
@@ -3012,10 +3227,11 @@ mod tests {
     }
 
     #[test]
-    fn acknowledging_a_report_after_cancellation_or_expiry_does_not_record_intake() {
+    fn acknowledging_a_report_after_it_ended_does_not_record_intake() {
         for state in [
             State::Cancelled,
-            State::Undelivered,
+            State::NoRecipient,
+            State::Superseded,
             State::Expired,
             State::Acknowledged,
         ] {
@@ -3035,9 +3251,9 @@ mod tests {
             )
             .unwrap();
             acknowledged_without_receipt(&mut ledger, 0);
-            let deadline = 2 + super::super::DELIVERY_EXPIRY_MS;
+            let deadline = 10;
             if state == State::Acknowledged {
-                assert!(ledger.expire(deadline));
+                assert!(ledger.end_letters_to("agent-parent", &parent, deadline));
             } else {
                 ledger.letters[0].state = state;
                 ledger.letters[0].finished_at_unix_ms = Some(deadline);
@@ -3082,7 +3298,7 @@ mod tests {
     }
 
     #[test]
-    fn an_acknowledged_letter_without_a_receipt_stops_awaiting_intake_at_its_deadline() {
+    fn an_acknowledged_letter_without_a_receipt_stops_awaiting_intake_when_its_agent_ends() {
         let mut ledger = Ledger::default();
         let sender = actor("sender");
         let recipient = actor("recipient");
@@ -3102,8 +3318,7 @@ mod tests {
             acknowledged_without_receipt(&mut ledger, index);
         }
         let mut restored: Ledger = serde_json::from_slice(&ledger.bytes().unwrap()).unwrap();
-        let deadline = 1 + super::super::DELIVERY_EXPIRY_MS;
-        assert!(!restored.expire(deadline - 1));
+        let deadline = 10;
         assert_eq!(
             send(
                 &mut restored,
@@ -3121,7 +3336,7 @@ mod tests {
         // One sender's whole open backlog is one bundle: its block and its
         // newest three reports in full, the rest folded, all confirmable.
         assert_eq!(pull(&restored, &recipient).unwrap().ids.len(), OPEN_LIMIT);
-        assert!(restored.expire(deadline));
+        assert!(restored.end_letters_to("agent-recipient", &recipient, deadline));
         assert!(pull(&restored, &recipient).unwrap().ids.is_empty());
         // A block still awaiting its reply stays open; the reports do not.
         assert_eq!(restored.letters.iter().filter(|l| l.open()).count(), 1);
@@ -3150,7 +3365,6 @@ mod tests {
         .unwrap();
         let reloaded: Ledger = serde_json::from_slice(&restored.bytes().unwrap()).unwrap();
         assert_eq!(reloaded, restored);
-        assert!(!restored.clone().expire(deadline + 1));
     }
 
     #[test]
@@ -3498,7 +3712,7 @@ mod tests {
     }
 
     #[test]
-    fn the_deadline_leaves_answered_cancelled_and_undelivered_letters_alone() {
+    fn the_answer_deadline_leaves_answered_and_cancelled_letters_alone_and_keeps_an_untaken_one() {
         let (a, b) = (actor("a"), actor("b"));
         let mut ledger = Ledger::default();
         let answered = awaiting_reply(&mut ledger, &a, &b, "answered", 1);
@@ -3537,18 +3751,23 @@ mod tests {
             1,
         )
         .unwrap();
-        // The deadline itself, while the letters finished at 2 are still kept.
+        // The deadline itself, while the letters finished at 2 are still
+        // kept: only the letter not taken in stops waiting for its answer,
+        // and it still waits for its agent.
         let late = 1 + super::super::ANSWER_WAIT_MS;
-        assert!(ledger.expire(late));
-        assert!(!ledger.end_overdue_answer_waits(late));
-        for (id, state) in [
-            (&answered.id, State::Delivered),
-            (&cancelled.id, State::Cancelled),
-            (&unreceived.id, State::Undelivered),
+        assert!(ledger.end_overdue_answer_waits(late));
+        for (id, state, ended) in [
+            (&answered.id, State::Delivered, None),
+            (&cancelled.id, State::Cancelled, None),
+            (
+                &unreceived.id,
+                State::Pending,
+                Some(AnswerWaitEnd::Deadline),
+            ),
         ] {
             let letter = letter_of(&ledger, id);
             assert_eq!(letter.state, state);
-            assert!(letter.answer_wait_ended.is_none());
+            assert_eq!(letter.answer_wait_ended, ended);
         }
     }
 
@@ -3608,7 +3827,7 @@ mod tests {
     }
 
     #[test]
-    fn a_request_not_yet_taken_in_is_left_to_the_delivery_deadline_when_its_party_ends() {
+    fn a_request_not_yet_taken_in_ends_with_its_recipient_not_its_answer_wait() {
         let (a, b) = (actor("a"), actor("b"));
         let mut ledger = Ledger::default();
         let letter = send(&mut ledger, &a, &b, "ask", "body", "request", None, 1).unwrap();
@@ -3616,11 +3835,11 @@ mod tests {
         assert!(!ledger.end_answer_waits_of(&b, 5));
         let pending = letter_of(&ledger, &letter.id);
         assert!(pending.waiting_answer && pending.answer_wait_ended.is_none());
-        // Never collected, it ends as undelivered, as before this rule.
-        assert!(ledger.expire(1 + super::super::DELIVERY_EXPIRY_MS));
-        let undelivered = letter_of(&ledger, &letter.id);
-        assert_eq!(undelivered.state, State::Undelivered);
-        assert!(!undelivered.open() && undelivered.answer_wait_ended.is_none());
+        // Never collected, it ends with no recipient once its agent ends.
+        assert!(ledger.end_letters_to("agent-b", &b, 6));
+        let ended = letter_of(&ledger, &letter.id);
+        assert_eq!(ended.state, State::NoRecipient);
+        assert!(!ended.open() && ended.answer_wait_ended.is_none());
         ledger.validate().unwrap();
     }
 
@@ -3657,7 +3876,6 @@ mod tests {
         }
         let mut loaded: Ledger = serde_json::from_value(written).unwrap();
         loaded.validate().unwrap();
-        loaded.expire(now);
         assert!(loaded.end_overdue_answer_waits(now));
         assert_eq!(
             letter_of(&loaded, &old.id).answer_wait_ended,

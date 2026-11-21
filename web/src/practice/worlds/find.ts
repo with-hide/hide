@@ -1,13 +1,13 @@
 // Flow 4's world: one invented project with an agent at work, two
 // finished tasks in the sidebar's 태스크 list, and a session from yesterday
 // that only search still finds, with the pull request it made. It answers
-// ⌘K's session search, the record and the card the lane's 보기 slot shows,
+// ⌘K's session search, the record and the card a desk's card tab shows,
 // the record's Restore session, and the ★ that puts a task in 다시 볼 것.
 
 import type { AgentScope } from "../../agentScope";
 import type { AgentRow, AgentState, DetailItem, LinkPanel, PrCard, PullRequest, SessionRecord, SessionWorkSearch, TaskOperation, WorkSession } from "../../snapshot";
 import type { CoreEvent, PracticeWorld } from "../world";
-import { agent, applyDesk, deskSnapshot, oneTabDesk, shellScreen, type DeskModel, type PracticePane, type PracticePlace } from "./kit";
+import { agent, applyDesk, cardDesk, closedCard, deskSnapshot, oneTabDesk, shellScreen, type DeskModel, type PracticePane, type PracticePlace } from "./kit";
 
 const PLACE: PracticePlace = { project: "hide-practice", label: "hide-practice", branch: "main" };
 const HOUR_MS = 3_600_000;
@@ -26,12 +26,12 @@ export const PR_ROW = `[data-palette-row="pr:${PLACE.project}:${PR_NUMBER}"]`;
 const RESTORED_PANE = "login";
 
 /**
- * What the world can change: the desk, what ⌘K asked last, the 보기 slot,
+ * What the world can change: the desk, what ⌘K asked last, the card tabs,
  * which tasks wear the ★, and the start that brought yesterday's session back.
  */
 export type FindModel = { desk: DeskModel; searched: boolean; query: string | null; detail: DetailItem[]; starred: string[]; restore: { requestId: string | null } | null };
 
-/** The 보기 slot's item in front. */
+/** The card in front of the desk. */
 export const shownDetail = (model: FindModel): DetailItem | null => model.detail.at(-1) ?? null;
 
 /** How a root that finished reads, as the core states it: done and unread, or seen. */
@@ -249,11 +249,11 @@ function snapshot(model: FindModel, nowMs: number) {
     rest: {
       ...base.rest,
       navigator: { ...navigator, agents, workspaces, agent_scope: { ...navigator.agent_scope!, tasks }, devices: navigator.devices!.map(scoped) },
-      ui_state: { ...base.rest.ui_state!, sidebar_lens: "tasks" as const, detail: { items: model.detail, shown: model.detail.length > 0 } },
+      ui_state: { ...base.rest.ui_state!, sidebar_lens: "tasks" as const },
       pr_work: { link: null, feedback: null, cards: [prCard(nowMs)] },
       task_operation: model.restore ? restoreOperation(model.restore.requestId) : null,
-      // Opening the 보기 slot opens the lane, as the core does on `detail_open`.
-      workspace_view: { ...base.rest.workspace_view!, open: model.detail.length > 0 },
+      // A card opened onto the desk opens the lane, as the core does on `detail_open`.
+      workspace_view: cardDesk({ ...base.rest.workspace_view!, open: model.detail.length > 0 }, model.detail),
       // Hide AI's summaries on, so the record reads each flow's result as the operator's would.
       status: { ...base.rest.status, background_ai: { enabled: true, provider: "claude", chosen: true, agent_summary: true, providers: [], unavailable_reason: null } },
     },
@@ -278,6 +278,11 @@ function apply(model: FindModel, event: CoreEvent): FindModel | null {
     case "detail_open": {
       const item = p.item as DetailItem;
       return item.kind === "record" || item.kind === "pull_request" ? { ...model, detail: [...model.detail, item] } : null;
+    }
+    // A card tab's ✕ takes it off the desk.
+    case "view_layout": {
+      const index = closedCard(event);
+      return index === null || index >= model.detail.length ? null : { ...model, detail: model.detail.filter((_, at) => at !== index) };
     }
     case "pr_open":
       return p.pr_number === PR_NUMBER ? { ...model, detail: [...model.detail, { kind: "pull_request", workspace_id: PLACE.project, number: PR_NUMBER }] } : null;

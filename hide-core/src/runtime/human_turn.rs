@@ -69,10 +69,18 @@ impl Runtime {
                 ))
             })
             .collect();
-        if laid == self.human_turns_laid {
+        if laid == self.human_turns_declared {
             return false;
         }
-        self.human_turns_laid = laid;
+        self.human_turns_declared = laid;
+        // The store's confirms join them; the caller lays the rows again.
+        let mut merged = self.human_turns_declared.clone();
+        for (pane, turn) in &self.human_turns_laid {
+            if turn.kind == crate::coordination::human_turn::HumanKind::Install {
+                merged.entry(pane.clone()).or_insert_with(|| turn.clone());
+            }
+        }
+        self.human_turns_laid = merged;
         true
     }
 

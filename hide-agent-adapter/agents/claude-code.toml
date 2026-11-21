@@ -41,6 +41,8 @@ sessions = "{CLAUDE_CONFIG_DIR}/projects"
 login = { default = "~/.claude.json", profile = "{CLAUDE_CONFIG_DIR}/.claude.json" }
 state = "{CLAUDE_CONFIG_DIR}"
 usage = "{CLAUDE_CONFIG_DIR}/.credentials.json"
+mcp = { default = "~/.claude.json", profile = "{CLAUDE_CONFIG_DIR}/.claude.json" }
+mcp_format = "claude"
 
 [screen]
 version = "2026.10.11.1"

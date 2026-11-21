@@ -2,14 +2,14 @@
 // `state` parameter: running, review, finished, and a plan whose steps are
 // handed to other agents, at work (`delegated`) and finished
 // (`delegated-finished`, PRD hide-plan-delegate B25-B30); `pick` presses a step's card to open its panel. The checklist the pane chip
-// opens (PRD mission-plan-visibility B3-B6) sits beside the map the 보기 slot
+// opens (PRD mission-plan-visibility B3-B6) sits beside the map a desk's card tab
 // draws, both the real components. Nothing leaves this scene.
 import { useEffect, useLayoutEffect, useMemo } from "react";
 import { createActions } from "../actions";
 import { TooltipProvider } from "../components/ui/tooltip";
 import { useFollowInterfaceLanguage } from "../i18n/translator";
 import { requireInterfaceLanguage } from "../i18n/locale";
-import { DetailPanel } from "../DetailPanel";
+import { CardBody } from "../CardBody";
 import { PlanPopoverBody } from "../PanePlanChip";
 import type { PlanDelegation, PlanStep, PlanView, SnapshotRest, WorkSession } from "../snapshot";
 import { useShellStore } from "../store";
@@ -103,8 +103,8 @@ export function PlanScene({ params }: { params: URLSearchParams }) {
   const [shown] = plans as [PlanView, ...PlanView[]];
   const actions = useMemo(() => createActions(() => true), []);
   useLayoutEffect(() => {
-    // The 보기 slot holds the plan, so its head wears the kind mark and the `?` as the app's does.
-    const rest = { navigator: { devices: [{ id: "local", kind: "local", label: null }, { id: "mini", kind: "remote", label: "Mac mini" }] }, status: { remote: [{ target_id: "mini", state: "connected" }] }, plans: { items: plans }, ui_state: { detail: { items: [{ kind: "plan", session: SESSION }], shown: true } } } as unknown as SnapshotRest;
+    // The plan is a card on the desk, drawn as its tab's body.
+    const rest = { navigator: { devices: [{ id: "local", kind: "local", label: null }, { id: "mini", kind: "remote", label: "Mac mini" }] }, status: { remote: [{ target_id: "mini", state: "connected" }] }, plans: { items: plans } } as unknown as SnapshotRest;
     useShellStore.setState({ rest, agents: [], connection: "live" });
     document.documentElement.classList.toggle("dark", theme === "dark");
     document.documentElement.classList.toggle("light", theme === "light");
@@ -132,7 +132,7 @@ export function PlanScene({ params }: { params: URLSearchParams }) {
           <PlanPopoverBody paneId={shown.pane_id} plan={shown} onLarge={() => undefined} openPane={() => undefined} />
         </div>
         <div className="flex min-h-0 min-w-0 flex-1 flex-col rounded-md border border-border">
-          <DetailPanel actions={actions} />
+          <CardBody item={{ kind: "plan", session: SESSION }} actions={actions} />
         </div>
       </div>
     </TooltipProvider>

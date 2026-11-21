@@ -5,7 +5,7 @@ import { agentPane } from "./agent-pane";
 import { focusPane, withControl } from "./daemon-actions";
 import { startFixture } from "./engine-fixture";
 import { startHided, type Daemon } from "./hided-fixture";
-import { enterWorkspace, screenshot, setLanePinned, showExplorer } from "./wire";
+import { enterWorkspace, screenshot, showExplorer } from "./wire";
 
 // View openers and the operator's comments (PRD view-opener-feedback): an
 // agent's `hide file open` marks the View it opened, the operator comments on
@@ -57,7 +57,6 @@ test("an agent's View wears its mark, and the operator's line comment reaches th
     await page.goto(`${daemon.origin}/?probe=1#token=${daemon.token}`);
     await enterWorkspace(page, "fixture");
     await showExplorer(page);
-    await setLanePinned(page, true);
 
     // B1, B5: the agent's open marks the View with its logo; the mark says who and leads to its pane.
     await hide(["file", "open", "notes.md"]);
@@ -140,7 +139,6 @@ test("an area dragged on an image reaches its agent with a screenshot of that ar
     await page.goto(`${daemon.origin}/?probe=1#token=${daemon.token}`);
     await enterWorkspace(page, "fixture");
     await showExplorer(page);
-    await setLanePinned(page, true);
     await hide(["file", "open", "mock.png"]);
     await expect(page.locator("[data-document-header] [data-view-opener]")).toHaveAttribute("data-view-opener", pane);
 

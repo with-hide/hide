@@ -17,9 +17,6 @@ pub mod answer;
 
 pub use mailbox::Command;
 
-/// How long a letter waits to be taken before it ends; the hooks keep a
-/// confirmation they owe no longer (`hide_agent_hooks::owed`).
-pub const DELIVERY_EXPIRY_MS: u64 = hide_agent_hooks::delivery::DELIVERY_EXPIRY_MS;
 /// How long a `request` or `block` letter waits for its answer, from the time
 /// it was sent, before the wait ends as `deadline`.
 pub const ANSWER_WAIT_MS: u64 = 24 * 60 * 60 * 1_000;
@@ -41,6 +38,10 @@ pub const OPEN_LIMIT: usize = 1_024;
 pub const LETTER_LIMIT: usize = 5_000;
 pub const WATCH_LIMIT: usize = 32;
 pub const BODY_LIMIT: usize = 16 * 1_024;
+/// How the list of Views a report's sender opened begins, which the core
+/// appends to the report's body as it is sent (`Runtime::list_opened_views`):
+/// a retry of the report is the body its sender wrote, without the list.
+pub(crate) const OPENED_VIEWS_HEAD: &str = "\n\nViews this agent opened (read one with `hide view status <view-id>` or `hide browser snapshot <view-id>`; open it again from your own pane to show it to the operator):";
 /// The most bytes the ledger encodes to (`Ledger::size`): the limit its
 /// records are kept within by dropping the finished ones oldest first
 /// (`coordination::room::for_size`), which bounds the store's rows

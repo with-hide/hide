@@ -3,6 +3,7 @@ import { AgentMark } from "../AgentMark";
 import { agentProductName } from "../agentAdapters";
 import { useMinuteClock } from "../components/elapsed";
 import { OperatorBand } from "../components/mission-gate";
+import { NodeWaitLine, useWaitWords } from "../components/mission-hold";
 import { MissionGraphCard, MissionGraphReport } from "../components/mission-graph-card";
 import { BranchLineView, ResultLineView, WaitingMark } from "../components/mission-line";
 import { TooltipProvider } from "../components/ui/tooltip";
@@ -11,7 +12,7 @@ import { cn } from "../lib/utils";
 import { MissionGraph } from "../MissionGraph";
 import { MissionMapCanvas } from "../MissionMapCanvas";
 import { branchLine, branchLineWords, resultLine, resultLineWords } from "../missionLine";
-import { attentionReasonText, cardGate, escalationWhy, gateWaitedLong, holdReason, nodeLook, nodePace, openAttention } from "../missions";
+import { attentionReasonText, cardGate, escalationWhy, gateWaitedLong, holdReason, nodeLook, nodePace, openAttention, workerAsleep } from "../missions";
 import type { MissionMapFlow } from "../snapshot";
 import { openDetail } from "./connection";
 import { phoneLineNode, workerOf } from "./missionModel";
@@ -57,7 +58,8 @@ export function PhoneMissionMap({ mission }: { mission: PhoneMission }) {
  * A step's card on the phone (PRD mission-destination D-51-D-55, B59): the
  * desktop's frame and rows from what the phone's frame carries. Its title;
  * right under it the operator's band, the gate's strip and a merge that is
- * theirs now; its worker's mark and name; why it waits, when it does; and its
+ * theirs now; its worker's mark and name; why it waits, when it does; the
+ * wait its Conductor set, as the desktop's card says it (B21); and its
  * bottom line under a hairline, the desktop's branch line without the branch
  * name (the frame carries none) or a general step's preset icon and name, then
  * `내 차례` at its first row's end when the step waits on the operator for more than its merge. The
@@ -95,6 +97,9 @@ function PhoneNode({ mission, node }: { mission: PhoneMission; node: PhoneMissio
   const pace = nodePace(mission, node);
   const stopped = pace === "stopped" ? (node.work?.state === "no_worker" ? t("mission.work.stopped", { why: t("mission.work.stop.noWorker") }) : t("mission.work.stoppedPlain")) : null;
   const word = stopped ?? t(`mission.look.${look}`);
+  // A worker Hide put to sleep is said asleep, never a wait on it (letters-missions-simplify B23).
+  const asleep = pace === "waiting" && (node.work?.state === "asleep" || workerAsleep(node)) ? t("mission.worker.asleep") : null;
+  const waitLine = useWaitWords(node.wait);
   const detail = reason?.kind === "attention"
     ? `${reason.attention.to === "conductor" ? `${t("mission.attention.to.conductor")} · ` : ""}${attentionReasonText(reason.attention.reason, reason.attention.pr, t)}`
     : reason?.kind === "worker" ? escalationWhy(reason.escalation, t)
@@ -104,7 +109,7 @@ function PhoneNode({ mission, node }: { mission: PhoneMission; node: PhoneMissio
       <MissionGraphCard
         node={node} look={look} word={word} yours={mergeDue || turn} pace={pace}
         aria-label={[
-          node.title, word, node.worker_agent ? agentProductName(node.worker_agent) : null, detail,
+          node.title, word, node.worker_agent ? agentProductName(node.worker_agent) : null, asleep, detail, waitLine?.full ?? null,
           // The lines are drawn for the eye, so their words and states are said here (B28).
           branch ? `${t("mission.foot.where")}: ${branchLineWords(branch, t)}` : null,
           result ? resultLineWords(result, t) : null,
@@ -127,6 +132,8 @@ function PhoneNode({ mission, node }: { mission: PhoneMission; node: PhoneMissio
           </span>
         ) : null}
         {stopped ? <span className="truncate text-caption text-mission-stopped" data-node-work={node.work?.state}>{stopped}</span> : null}
+        {asleep ? <span className="truncate text-caption text-muted-foreground" data-node-work="asleep">{asleep}</span> : null}
+        {node.wait && waitLine ? <NodeWaitLine wait={node.wait} words={waitLine} /> : null}
         {detail ? <span className="truncate text-caption text-muted-foreground" title={detail} data-phone-node-reason="true">{detail}</span> : null}
         {branch || result || marks ? (
           <span className={cn("min-w-0 border-t border-border pt-xs text-caption text-muted-foreground", branch ? "block" : "flex items-center justify-end gap-x-xs")} data-node-foot="true">

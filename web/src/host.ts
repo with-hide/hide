@@ -49,15 +49,27 @@ export type BrowserPlacement = {
 export type BrowserDevicePlacement = { width: number; mobile: boolean };
 
 /**
- * Every browser display of the front Workspace. The host closes a page of
- * that Workspace the list no longer names, hides the pages of any other,
- * and creates a page only once its display is on screen.
+ * Every browser display of the front Workspace, and every one the core
+ * retains. The host closes a page the retained list no longer names, hides
+ * every page not placed on screen, and loads a web page off screen when the
+ * core asks it to (PRD lane-desk-pair-view B32).
  */
 export type BrowserSync = {
   workspace: string | null;
   displays: BrowserPlacement[];
-  /** Core-owned inventory; a hidden native page absent here is closed. */
-  retained: { workspace: string; id: string; area_id: string }[];
+  /**
+   * Core-owned inventory; a hidden native page absent here is closed. A web
+   * page carries its address and the load the core last asked of it, which
+   * the host loads hidden when no slot shows it.
+   */
+  retained: { workspace: string; id: string; area_id: string; url?: string; load?: number }[];
+  /**
+   * Present once `retained` is the core's inventory. A shell's first sync
+   * goes before its snapshot does, with an empty list; the host takes the
+   * newest load of the first inventory it is sent as asked before this
+   * shell, so a relaunch or a reload loads none of the saved pages (B32).
+   */
+  inventoried?: true;
   /** Changes on controller mount or reconnect so the host replays actual attachment facts once. */
   attachment_epoch?: string;
   /** Positive core area authority, including empty areas; absent grants no debugger access. Incarnation changes on revoke/regrant. */

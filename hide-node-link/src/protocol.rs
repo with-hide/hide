@@ -430,7 +430,13 @@ use crate::error::HostError;
 /// 99: a node makes an automation's own folder (`AutomationFolder`); a helper
 /// on 98 does not know the call, so it is refused at Hello and upgraded with
 /// its core.
-pub const PROTOCOL_VERSION: u32 = 99;
+/// 100: the kit carries the store of skills and MCP items (PRD
+/// skill-mcp-manager): a kit report carries the store's, the `store` pass
+/// and the `follow_store` check answer the store's report alone, and
+/// `store_export` reads a store for a copy to a device; a helper on 99 knows
+/// none of these calls, so it is refused at Hello and upgraded with its
+/// core.
+pub const PROTOCOL_VERSION: u32 = 100;
 
 /// How a start of an agent's CLI carries its arguments on the machine that
 /// runs it ([`Call::AgentInstalled`]), as `hide_platform::programs::Start`
@@ -1580,8 +1586,10 @@ impl Call {
 }
 
 /// What a `kit` request does. `apply` and `reinstall` answer a
-/// `hide_kit::KitReport`, `status` answers one without changing anything, and
-/// `remove` answers a [`KitRemoved`].
+/// `hide_kit::KitReport`, `status` answers one without changing anything,
+/// `store` answers a `hide_kit::store::StoreReport`, `follow_store` one or
+/// `null`, `store_export` a `hide_kit::store::StoreExport`, and `remove`
+/// answers a [`KitRemoved`].
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "kind", rename_all = "snake_case")]
 pub enum KitAction {
@@ -1602,6 +1610,24 @@ pub enum KitAction {
         #[serde(default, skip_serializing_if = "std::ops::Not::not")]
         codex_daemon_off: bool,
     },
+    /// A pass over the device's store alone (`hide_kit::apply_store`): the
+    /// operator's changes from a cell, a button or a command of the store's,
+    /// in order, or the daily check for new versions. It answers the store's
+    /// report alone, since a kit read asks the machine's Codex.
+    Store {
+        #[serde(default)]
+        changes: Vec<hide_kit::store::StoreChange>,
+    },
+    /// The follow of the store's folders, every few seconds
+    /// (`hide_kit::follow_store`): a pass when a followed folder changed,
+    /// answered with its report, else `null`.
+    FollowStore,
+    /// This machine's store as a copy to a device carries it
+    /// (`hide_kit::export_store`, PRD skill-mcp-manager B28), answered with a
+    /// `hide_kit::store::StoreExport` that holds each skill's files and each
+    /// MCP server's key values: the core keeps it in memory and hands each
+    /// item to the device as a `receive` change, and logs none of it.
+    StoreExport,
     Status,
     /// The device is being removed from Hide: Hide's parts come off, then
     /// the helper root.
@@ -1785,6 +1811,59 @@ mod tests {
         assert_eq!(
             serde_json::to_value(&unasked).unwrap(),
             serde_json::json!({"kind": "reinstall", "components": []})
+        );
+    }
+
+    /// A store request carries the operator's changes to a device as the
+    /// store reads them, in order, and the follow carries nothing.
+    #[test]
+    fn the_store_calls_carry_the_operators_changes_to_a_device() {
+        use hide_kit::store::{ItemKind, SourceSpec, StoreChange};
+        let changes = vec![
+            StoreChange::Inspect {
+                source: SourceSpec::Git {
+                    url: "https://github.com/acme/skills".into(),
+                },
+            },
+            StoreChange::Set {
+                item: "skill:style".into(),
+                column: Some("antigravity".into()),
+                on: false,
+            },
+            StoreChange::Adopt {
+                confirmed: None,
+                kind: ItemKind::Skill,
+                name: "notes".into(),
+                from: None,
+            },
+        ];
+        let call = Call::Kit {
+            action: KitAction::Store {
+                changes: changes.clone(),
+            },
+            cli_dir: "~/.local/bin".into(),
+            retirement_projects: Vec::new(),
+        };
+        let wire = serde_json::to_value(&call).unwrap();
+        assert_eq!(
+            wire["action"],
+            serde_json::json!({
+                "kind": "store",
+                "changes": [
+                    {"op": "inspect", "source": {"kind": "git", "url": "https://github.com/acme/skills"}},
+                    {"op": "set", "item": "skill:style", "column": "antigravity", "on": false},
+                    {"op": "adopt", "kind": "skill", "name": "notes"},
+                ],
+            })
+        );
+        let read: Call = serde_json::from_value(wire).unwrap();
+        assert!(matches!(
+            read,
+            Call::Kit { action: KitAction::Store { changes: read }, .. } if read == changes
+        ));
+        assert_eq!(
+            serde_json::to_value(KitAction::FollowStore).unwrap(),
+            serde_json::json!({"kind": "follow_store"})
         );
     }
 
