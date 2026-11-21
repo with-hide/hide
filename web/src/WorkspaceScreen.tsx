@@ -292,7 +292,8 @@ function LaneRow({ view, frame, documents, body, width, setBody, sizes, actions,
   // In pair view the lane is the half beside the paired pane, under the band
   // in the tab row's place (PRD lane-desk-pair-view B17, D-16, D-61); it is the same
   // element in every mode, so entering pair view mounts no desk again.
-  const placed = frame.mode === "expanded" ? "inset-0 z-20" : frame.mode === "pair" ? "bottom-0 right-0 top-(--size-tab-strip) z-20" : "inset-y-0 right-0 z-20";
+  // A tool floating over a pane focus mode draws alone stands under the band too, so the way back stays in sight (D-61).
+  const placed = frame.mode === "expanded" ? "inset-0 z-20" : frame.mode === "pair" || pair !== null ? "bottom-0 right-0 top-(--size-tab-strip) z-20" : "inset-y-0 right-0 z-20";
   // What a standing desk takes from Agent Views, kept under an expanded lane so expanding resizes no terminal.
   const reserve = frame.agents > 0 && width > frame.agents ? width - frame.agents : 0;
   // A press outside a floating tool closes it once the press ends, so what

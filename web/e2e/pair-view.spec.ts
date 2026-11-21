@@ -441,6 +441,15 @@ test("⌘. puts the focused pane beside its desk and takes it back, a shell draw
     await expect(screen(page)).toHaveAttribute("data-lane-view", "none");
     await expect(band(page)).toBeVisible();
     await screenshot(page, "pair-desk-folded");
+    // D-61: a tool floating over the pane drawn alone stands under the band, so its way back is never covered.
+    await showTool(page, "explorer");
+    const leave = band(page).locator("[data-pair-leave]");
+    await expect.poll(() => leave.evaluate((button) => {
+      const rect = button.getBoundingClientRect();
+      return button.contains(document.elementFromPoint(rect.x + rect.width / 2, rect.y + rect.height / 2));
+    })).toBe(true);
+    await page.locator('[data-lane-tool="explorer"]').click();
+    await expect(page.locator('aside[data-lane="explorer"]')).toHaveCount(0);
     await page.keyboard.press(chord("toggle_lane"));
     await expect(screen(page)).toHaveAttribute("data-lane-mode", "pair");
     await expect(deskTabs(page)).toHaveCount(1);
