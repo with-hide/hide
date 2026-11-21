@@ -369,6 +369,23 @@ pub(crate) fn project_sessions(
     identity: &hide_project::ProjectIdentity,
     timeout: std::time::Duration,
 ) -> Result<Vec<ProjectSession>, String> {
+    project_session_read(sessions_node, identity, timeout).map(|(rows, _)| rows)
+}
+
+/// [`project_sessions`], with the agents whose store the node read only to
+/// its newest sessions ([`hide_session::SESSIONS_CUT`]): no failure, and
+/// logged by the Memory pass once per crossing, which owns that episode.
+pub(crate) fn project_session_read(
+    sessions_node: &dyn NodeLink,
+    identity: &hide_project::ProjectIdentity,
+    timeout: std::time::Duration,
+) -> Result<
+    (
+        Vec<ProjectSession>,
+        std::collections::BTreeSet<&'static str>,
+    ),
+    String,
+> {
     let page = hide_node_link::readers::project_sessions(sessions_node, identity.clone(), timeout)
         .map_err(|error| error.to_string())?;
     if page.refused > 0 {
@@ -377,13 +394,18 @@ pub(crate) fn project_sessions(
             "project_id": identity.id, "sessions": page.refused,
         }));
     }
+    let mut cut = std::collections::BTreeSet::new();
     for refusal in &page.store_refusals {
+        if refusal.reason == hide_session::SESSIONS_CUT {
+            cut.insert(refusal.agent.as_str());
+            continue;
+        }
         crate::diagnostic!(serde_json::json!({
             "component": "memory", "kind": "sessions.store_unreadable",
             "project_id": identity.id, "agent": refusal.agent, "reason": refusal.reason,
         }));
     }
-    Ok(page.rows)
+    Ok((page.rows, cut))
 }
 
 /// How far `session`'s conversation reaches and when it was last written:

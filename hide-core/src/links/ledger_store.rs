@@ -2100,10 +2100,12 @@ impl LinkStore {
         self.ledger_issue_refs_in(&pass)
     }
 
-    /// [`LinkStore::ledger_issue_refs`] within a publish pass for one project.
-    /// The over-cap diagnostic is reported once per crossing: it is logged
-    /// when the project's count goes over the limit and not again until a read
-    /// finds it back under, a read fails, or the project has no repository.
+    /// [`LinkStore::ledger_issue_refs`] within a publish pass for one project:
+    /// its newest issues, at most [`crate::issues::ISSUE_LIMIT`], read from
+    /// its newest sightings, at most [`SUMMARY_SESSION_LIMIT`]. Either cut is
+    /// one over-cap diagnostic, reported once per crossing: it is logged when
+    /// the project goes over a limit and not again until a read finds it back
+    /// under, a read fails, or the project has no repository.
     pub(in crate::links) fn ledger_issue_refs_in(
         &self,
         pass: &ProjectPass,
@@ -2115,28 +2117,36 @@ impl LinkStore {
         };
         let refs = self.issue_refs_of_repo(pass, repo);
         match &refs {
-            Ok(found) if found.len() > crate::issues::ISSUE_LIMIT => {
+            Ok((found, sightings_cut))
+                if found.len() > crate::issues::ISSUE_LIMIT || *sightings_cut =>
+            {
                 if self.issue_capacity.borrow_mut().enter(key) {
                     crate::diagnostic!(
-                        serde_json::json!({"component":"links","kind":"ledger.issue_read_capacity","limit":crate::issues::ISSUE_LIMIT,"omitted":found.len()-crate::issues::ISSUE_LIMIT})
+                        serde_json::json!({"component":"links","kind":"ledger.issue_read_capacity","limit":crate::issues::ISSUE_LIMIT,"omitted":found.len().saturating_sub(crate::issues::ISSUE_LIMIT),"sighting_limit":SUMMARY_SESSION_LIMIT,"sightings_cut":sightings_cut})
                     );
                 }
             }
             _ => self.issue_capacity.borrow_mut().leave(key),
         }
-        Ok(refs?.into_iter().take(crate::issues::ISSUE_LIMIT).collect())
+        Ok(refs?
+            .0
+            .into_iter()
+            .take(crate::issues::ISSUE_LIMIT)
+            .collect())
     }
 
-    /// Every issue of the project's repository that one of its sessions
-    /// printed and that sits inside the project's paths, before the limit.
+    /// Every issue of the project's repository that one of its newest
+    /// [`SUMMARY_SESSION_LIMIT`] sightings printed and that sits inside the
+    /// project's paths, newest sighting first, before the issue limit, and
+    /// `true` when older sightings were left out.
     fn issue_refs_of_repo(
         &self,
         pass: &ProjectPass,
         repo: &str,
-    ) -> Result<BTreeSet<crate::issues::IssueReference>, String> {
+    ) -> Result<(Vec<crate::issues::IssueReference>, bool), String> {
         let paths = &pass.paths;
         let mut statement = self.connection.prepare("SELECT DISTINCT x.device,x.agent,x.id,x.repo,x.number FROM ledger_sightings x LEFT JOIN repo_names r ON r.name=x.repo WHERE x.kind='issue' AND COALESCE(r.repo,x.repo)=?2 ORDER BY x.at DESC LIMIT ?1").map_err(failed)?;
-        let rows = statement
+        let mut rows = statement
             .query_map(params![SUMMARY_SESSION_LIMIT as i64 + 1, repo], |r| {
                 Ok((
                     SessionIdentity {
@@ -2151,10 +2161,10 @@ impl LinkStore {
             .map_err(failed)?
             .collect::<Result<Vec<_>, _>>()
             .map_err(failed)?;
-        if rows.len() > SUMMARY_SESSION_LIMIT {
-            return Err("ledger_sighting_capacity".into());
-        }
-        let mut refs = BTreeSet::new();
+        let cut = rows.len() > SUMMARY_SESSION_LIMIT;
+        rows.truncate(SUMMARY_SESSION_LIMIT);
+        let mut seen = BTreeSet::new();
+        let mut refs = Vec::new();
         for (session, repo, number) in rows {
             if self
                 .session(&key(&session))?
@@ -2165,10 +2175,12 @@ impl LinkStore {
                     None,
                 )
                 .map_err(|_| "ledger_issue_reference_invalid")?;
-                refs.insert(reference);
+                if seen.insert(reference.clone()) {
+                    refs.push(reference);
+                }
             }
         }
-        Ok(refs)
+        Ok((refs, cut))
     }
 
     pub fn ledger_summaries(&self, project: &str) -> Result<Vec<SessionWorkSummary>, String> {
