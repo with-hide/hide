@@ -230,6 +230,24 @@ async fn a_guest_views_its_host_and_the_view_lets_nothing_in() {
         .await;
     assert_ne!(answer["reason"], "client_limit", "{answer}");
     drop(phone);
+    // ... and so is a `hide <path>` from this machine's terminal.
+    let mut cli = Window::open(&running, "cli").await;
+    cli.0
+        .send(Message::Text(
+            json!({"type": "project_add", "request_id": "c1",
+                "path": root.path().join("no-such-folder").display().to_string()})
+            .to_string()
+            .into(),
+        ))
+        .await
+        .unwrap();
+    let answer = cli
+        .frame("the command's answer", |frame| {
+            frame["type"] == "workspace_result"
+        })
+        .await;
+    assert_ne!(answer["reason"], "client_limit", "{answer}");
+    drop(cli);
     let mut eighth = Window::open(&running, "web").await;
     eighth
         .frame("the eighth window's snapshot", |frame| {

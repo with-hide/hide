@@ -5700,6 +5700,51 @@ pub fn allowed_origins(port: u16, vite: Option<&str>) -> HashSet<String> {
 
 #[cfg(test)]
 mod tests {
+    /// This machine's eight places are taken in one place, `LocalSeat`
+    /// (PRD device-connect-iroh D-67): a way in that compared a count of
+    /// its own with `MAX_CLIENTS`, as the phone's, a pane's command and
+    /// `hide <path>` once did with every connection, would let another
+    /// machine's views take this machine's places. A node daemon serves no
+    /// views and keeps its own count.
+    #[test]
+    fn only_a_local_seat_reads_the_client_limit() {
+        fn sources(dir: &std::path::Path, found: &mut Vec<std::path::PathBuf>) {
+            for entry in std::fs::read_dir(dir).unwrap() {
+                let path = entry.unwrap().path();
+                if path.is_dir() {
+                    sources(&path, found);
+                } else if path.extension().is_some_and(|extension| extension == "rs") {
+                    found.push(path);
+                }
+            }
+        }
+        let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("src");
+        let mut files = Vec::new();
+        sources(&root, &mut files);
+        // Spelled apart so this test's own lines are not among them.
+        let limit = ["MAX_", "CLIENTS"].concat();
+        let mut readers = Vec::new();
+        for file in files {
+            let text = std::fs::read_to_string(&file).unwrap();
+            for line in text.lines() {
+                if line.contains(&limit) && line.contains(">=") {
+                    let name = file
+                        .strip_prefix(&root)
+                        .unwrap()
+                        .to_string_lossy()
+                        .replace('\\', "/");
+                    readers.push(name);
+                }
+            }
+        }
+        readers.sort();
+        assert_eq!(
+            readers,
+            ["node_daemon/screen.rs", "server.rs"],
+            "take a LocalSeat instead"
+        );
+    }
+
     /// PRD lane-desk-pair-view B32: every page on no desk takes an agent's
     /// input, a desk page behind another tab of its area does not, and a
     /// display outside the caller's checkout, whose Views the list never
