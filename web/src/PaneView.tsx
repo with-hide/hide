@@ -1,4 +1,5 @@
 import { paneMoveStartTarget } from "./paneMove";
+import { botStarter } from "./bots";
 import { usePaneMove } from "./PaneMoveControls";
 import { keyboardCommandOwner, useKeyboardOwner } from "./viewFocus";
 import type { TFunction } from "i18next";
@@ -214,7 +215,7 @@ export const PaneView = memo(function PaneView({
   const title = paneTitle(pane);
   const recordAgent = agentsByPane(usePaneAgents()).get(paneId);
   // The logo's name, with the profile its badge marks (PRD agent-profiles B17).
-  const agentName = agentKind ? agentWithProfile(t, { agent_kind: agentKind, profile: recordAgent?.profile }) : "";
+  const agentName = agentKind ? agentWithProfile(t, { agent_kind: agentKind, profile: recordAgent?.profile, tool: recordAgent?.tool }) : "";
   const look = markSymbol === "look" ? recordAgent?.look ?? null : null;
   const move = usePaneMove();
   const moving = move?.mutationBlocked(pane.id) ?? false;
@@ -424,7 +425,7 @@ export const PaneView = memo(function PaneView({
             plain={
               <>
                 {markSymbol && !look ? <StatusMark mark={markSymbol} human={recordAgent?.human_turn !== undefined} label={markStatus ? markWords(t, { mark: markSymbol, status_code: markStatus }) : undefined} className={markTone} data-pane-status-mark={markSymbol} /> : null}
-                <Hint label={agentName}><span data-pane-move-excluded="true" className="flex shrink-0"><AgentMark kind={agentKind} profile={recordAgent?.profile} /></span></Hint>
+                <Hint label={agentName}><span data-pane-move-excluded="true" className="flex shrink-0"><AgentMark kind={agentKind} bot={botStarter(recordAgent)} profile={recordAgent?.profile} /></span></Hint>
                 <Hint label={`${title}\n${agentName}`} reveals>
                   <span data-pane-move-title="true" className="flex min-w-0 flex-1 items-center">{titleContent}<span className="sr-only">, {agentName}</span></span>
                 </Hint>
@@ -435,7 +436,7 @@ export const PaneView = memo(function PaneView({
             <span className="flex items-center gap-sm">
               {markSymbol && !look ? <StatusMark mark={markSymbol} human={recordAgent?.human_turn !== undefined} className={markTone} data-pane-status-mark={markSymbol} /> : null}
               {/* The logo names its product as the plain head's does (agent-mark-quiet B4, B6); the button's own name already says it. */}
-              <span data-pane-move-excluded="true" className="flex shrink-0" role="img" aria-label={agentName}><AgentMark kind={agentKind} profile={recordAgent?.profile} /></span>
+              <span data-pane-move-excluded="true" className="flex shrink-0" role="img" aria-label={agentName}><AgentMark kind={agentKind} bot={botStarter(recordAgent)} profile={recordAgent?.profile} /></span>
             </span>
             {titleContent}
             <span className="sr-only">, {agentName}</span>
@@ -448,8 +449,8 @@ export const PaneView = memo(function PaneView({
             </Hint>
           </>
         )}
-        {/* The external tool's name stays at every width too, cut short, since it says why no list of the operator's holds the agent. */}
-        {agentKind ? <ToolMark tool={recordAgent?.tool} /> : null}
+        {/* A bot in its own space keeps its name at every width too, cut short, since it says why no list of the operator's holds the agent; a 전체 bot's agent is the operator's and wears the bot's owl on its mark instead. */}
+        {agentKind && recordAgent?.tool?.owns ? <ToolMark tool={recordAgent.tool} /> : null}
         {/* The fork mark stays at every width: an icon alone, and a side fork is what makes a narrow pane. */}
         {agentKind ? <PaneForkMark pane={pane} actions={actions} /> : null}
         {/* The PR mark gives way below the tight breakpoint, since the session record also holds it; the work chip stays, its mark and count alone, since a Conductor's pane opens its map from it. */}
@@ -462,7 +463,7 @@ export const PaneView = memo(function PaneView({
             narrow one ◧ too, which the pane menu then holds; its hint carries ⌘. */}
         <PaneSplit paneId={paneId} name={title} agent={Boolean(agentKind)} actions={actions} />
         {agentKind ? <PaneAskMark paneId={paneId} header={header} actions={actions} /> : null}
-        {agentKind ? <PaneOpenAsksMark paneId={paneId} actions={actions} /> : null}
+        {agentKind ? <PaneOpenAsksMark paneId={paneId} header={header} actions={actions} /> : null}
         {agentKind && lettersWaiting > 0 ? <PaneLetterButton paneId={paneId} letters={lettersWaiting} onDeliver={actions.deliverLettersNow} /> : null}
         <span data-pane-move-blank="true" className="h-full flex-1" />
         </div>

@@ -1,4 +1,5 @@
 import { ChevronDownIcon, ChevronRightIcon } from "lucide-react";
+import { botStarter } from "../bots";
 import { memo, useRef, type KeyboardEvent } from "react";
 import { AgentRowMark } from "../AgentRowMark";
 import { agentClosing, treeCloseProgress } from "../close";
@@ -274,7 +275,7 @@ export const SidebarAgentRow = memo(function SidebarAgentRow({
         mark={<>
           <StatusMark mark={unreachable ? null : agent.mark} human={agent.human_turn !== undefined} automation={automationRun(agent)} className={markTone(agent)} data-agent-status-mark={unreachable ? "none" : agent.mark} data-agent-status={agent.status_code} />
           {/* A Hide AI row is never in a tree; the Hide owl stands beside the status mark (PRD agent-mark-quiet D-04). The provider's logo follows the view mode or an ⌥ hold, with the owl as its badge (PRD agent-logo-view-mode D-04, D-09). An automation run's row wears the automation's repeat mark instead (operator decision 2026-11-21). */}
-          <AgentRowMark kind={agent.agent_kind} hideAi={agent.hide_ai && !tree && !automationRun(agent) ? "sidebar" : null} profile={agent.profile} />
+          <AgentRowMark kind={agent.agent_kind} hideAi={agent.hide_ai && !tree && !automationRun(agent) ? "sidebar" : null} bot={botStarter(agent)} profile={agent.profile} />
         </>}
         head={<>
           {/* The row button's name already reads all of this out. */}
@@ -306,8 +307,8 @@ export const SidebarAgentRow = memo(function SidebarAgentRow({
           <FoldLane />
         </>}
       >
-        {/* An external tool's row leads its line with the tool's name, muted, since its first line has no room for it (operator decision 2026-11-14). */}
-        <ToolLed tool={offline ? undefined : agent.tool} className="pointer-events-none text-caption leading-(--size-sidebar-line-detail)">{detail}</ToolLed>
+        {/* A bot in its own space leads its row's line with its owl and name, muted, since its first line has no room for it (operator decision 2026-11-14); a 전체 bot's row wears its owl on the mark instead. */}
+        <ToolLed tool={offline || !agent.tool?.owns ? undefined : agent.tool} className="pointer-events-none text-caption leading-(--size-sidebar-line-detail)">{detail}</ToolLed>
         {origin ? (
           <span aria-hidden="true" data-agent-task={origin} className="pointer-events-none truncate text-caption leading-(--size-sidebar-line-detail) text-muted-foreground">
             {origin}

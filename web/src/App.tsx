@@ -21,6 +21,7 @@ import { usePracticeChannel } from "./practice/channel";
 import { installProbe, probeEnabled } from "./probe";
 import { configurePaneVisits, expectPane, expectSurface, focusSignature } from "./recent";
 import { FirstRunWizard } from "./FirstRunWizard";
+import { WhatsNewHost } from "./components/whats-new";
 import { useAgentNotifications } from "./agentNotices";
 import { useFetchLook, useGithubLook } from "./githubLook";
 import { PairingDialogs } from "./PairingDialogs";
@@ -295,6 +296,7 @@ export function App() {
     ["pairing", <PairingDialogs actions={actions} />],
     ["device_switch_dialogs", <DeviceSwitchDialogs actions={actions} />],
     ["first_run", <FirstRunWizard actions={actions} />],
+    ["whats_new", <WhatsNewHost actions={actions} />],
     ["workspace_dialogs", <WorkspaceDialogs actions={actions} />],
     ["add_project", <AddProjectDialog actions={actions} />],
     ["browser", <BrowserHost actions={actions} />],

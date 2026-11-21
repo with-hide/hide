@@ -3,7 +3,7 @@
 // leaves the page: no daemon, no engine, no agent.
 
 import type { NodeUsage } from "../generated/hided-ws";
-import type { AgentRow, ChangesSnapshot, EditorSnapshot, LinkPanel, MemorySection, SessionRecordSection, SessionWorkSearch, SnapshotRest, SuggestionsSection } from "../snapshot";
+import type { AccessSection, AgentRow, ChangesSnapshot, EditorSnapshot, LinkPanel, MemorySection, SessionRecordSection, SessionWorkSearch, SnapshotRest, SuggestionsSection } from "../snapshot";
 import type { DirectoryList, Documents, FileIndexResult } from "../store";
 
 export type CoreEvent = { kind: string; payload: Record<string, unknown> };
@@ -29,12 +29,14 @@ export const PRACTICE_OUTSIDE = "practice_outside";
  * editor tabs and their documents, ⌘K's session search, the record and link
  * record a desk's card tab shows, the Explorer's folder listings (keyed by
  * folder path) and the checkout's Git changes, and the Memory tool's Project
- * with the Hide AI tool's 제안 section it is drawn under.
+ * with the Hide AI tool's 제안 section it is drawn under, and Settings › 봇's
+ * requests and connected bots.
  */
 export type WorldFrames = {
   fileIndex?: FileIndexResult | null; editor?: EditorSnapshot | null; documents?: Documents;
   sessionWorkSearch?: SessionWorkSearch | null; sessionRecord?: SessionRecordSection | null; linkPanel?: LinkPanel | null;
   listings?: Record<string, DirectoryList>; changes?: ChangesSnapshot | null; memory?: MemorySection | null; suggestions?: SuggestionsSection | null;
+  access?: AccessSection | null;
 };
 
 export type WorldSnapshot = { rest: SnapshotRest; agents: AgentRow[]; focused: string | null; usage: NodeUsage | null; frames?: WorldFrames };

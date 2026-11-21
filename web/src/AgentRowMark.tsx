@@ -1,4 +1,5 @@
 import { AgentMark, HideMark, ProfileBadge, type BadgeGround } from "./AgentMark";
+import { BotFace } from "./components/bot-mark";
 import { useAgentLogosShown } from "./agentLogoMode";
 
 // Kept apart from AgentMark.tsx, which the phone bundle also imports: the phone
@@ -9,14 +10,16 @@ import { useAgentLogosShown } from "./agentLogoMode";
  * operator's view mode shows logos or an ⌥ hold peeks at them (PRD
  * agent-logo-view-mode D-04, D-05); hidden, the row draws nothing here, and a
  * Hide AI-started row stands on its owl alone, as before, and a profile
- * agent's row on its profile badge alone (PRD agent-profiles B17). `hideAi`
+ * agent's row on its profile badge alone (PRD agent-profiles B17), and a row a
+ * 전체-mode bot started (`bot`, its name) on that bot's owl. `hideAi`
  * is set for a Hide AI row, which is never in a project's tree (PRD
  * hide-ai-work-home); `profile` for an agent that runs with a profile other
  * than its built-in default.
  */
-export function AgentRowMark({ kind, hideAi = null, profile = null }: { kind: string | null | undefined; hideAi?: BadgeGround | null; profile?: string | null }) {
+export function AgentRowMark({ kind, hideAi = null, bot = null, profile = null }: { kind: string | null | undefined; hideAi?: BadgeGround | null; bot?: string | null; profile?: string | null }) {
   const shown = useAgentLogosShown();
-  if (shown) return <AgentMark kind={kind} hideAi={hideAi} profile={profile} />;
+  if (shown) return <AgentMark kind={kind} hideAi={hideAi} bot={bot} profile={profile} />;
   if (hideAi) return <HideMark className="size-(--size-agent-badge-compact)" />;
+  if (bot) return <BotFace name={bot} size="mark" />;
   return profile ? <ProfileBadge profile={profile} standalone /> : null;
 }

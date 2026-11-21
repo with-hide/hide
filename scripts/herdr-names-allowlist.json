@@ -10,7 +10,8 @@
     "pinned-plugin": "plugin JavaScript whose hash is pinned, so its comments cannot change",
     "prd-slug": "a PRD slug that names the decision in a comment",
     "to-rewrite": "a comment, doc sentence, prompt or string that explains current behaviour by what Herdr did; rewrite it and remove the entry",
-    "guard": "the gate itself: its check, its documentation and the workflow line that runs it"
+    "guard": "the gate itself: its check, its documentation and the workflow line that runs it",
+    "release-history": "a published version's release text that tells what that version changed about Herdr or its import"
   },
   "files": {
     ".github/actions/vt-cache/action.yml": {"max": 1, "reason": "attribution"},
@@ -401,6 +402,7 @@
     "web/src/importProjects.ts": {"max": 3, "reason": "old-value"},
     "web/src/navigation.test.ts": {"max": 6, "reason": "test"},
     "web/src/overviewGraph.css": {"max": 1, "reason": "to-rewrite"},
+    "web/src/releases.json": {"max": 28, "reason": "release-history"},
     "web/src/remote.test.ts": {"max": 2, "reason": "test"},
     "web/src/search.test.ts": {"max": 4, "reason": "test"},
     "web/src/search.ts": {"max": 1, "reason": "old-value"},

@@ -1,4 +1,5 @@
 import { agentMarkOf, monogram } from "./agentLogos";
+import { BotFace } from "./components/bot-mark";
 import hideMark from "./assets/hide-mark.png";
 import { cn } from "./lib/utils";
 
@@ -65,16 +66,22 @@ export function ProfileBadge({ profile, standalone = false }: { profile: string;
   );
 }
 
+/** A bot's owl on a provider icon's lower-right corner: a bot in 전체 mode started this agent, which is the operator's work. */
+function BotBadge({ bot }: { bot: string }) {
+  return <BotFace name={bot} size="badge" className="pointer-events-none absolute -right-(--size-hairline) -bottom-(--size-hairline)" />;
+}
+
 /**
  * The agent's mark. `hideAi` marks an agent Hide AI started: the provider's
- * icon wears the badge. `profile` names the profile it runs with when that is
- * not its built-in default, and the icon wears its badge instead; the two
- * share one corner, so a Hide AI agent keeps its owl and names its profile
- * in words only. A badge is part of the row's name through the caller's
- * accessible name, never carried here (D-09).
+ * icon wears the badge. `bot` names the 전체-mode bot that started it, and the
+ * icon wears that bot's owl. `profile` names the profile it runs with when
+ * that is not its built-in default, and the icon wears its badge instead; the
+ * badges share one corner, in that order, so a Hide AI or a bot's agent keeps
+ * its owl and names its profile in words only. A badge is part of the row's
+ * name through the caller's accessible name, never carried here (D-09).
  */
-export function AgentMark({ kind, className = "", hideAi = null, profile = null }: { kind: string | null | undefined; className?: string; hideAi?: BadgeGround | null; profile?: string | null }) {
-  const badge = hideAi ? <HideAiBadge ground={hideAi} /> : profile ? <ProfileBadge profile={profile} /> : null;
+export function AgentMark({ kind, className = "", hideAi = null, bot = null, profile = null }: { kind: string | null | undefined; className?: string; hideAi?: BadgeGround | null; bot?: string | null; profile?: string | null }) {
+  const badge = hideAi ? <HideAiBadge ground={hideAi} /> : bot ? <BotBadge bot={bot} /> : profile ? <ProfileBadge profile={profile} /> : null;
   if (!badge) return <PlainMark kind={kind} className={className} />;
   return (
     <span data-agent-mark-badged="true" className="relative inline-flex shrink-0">

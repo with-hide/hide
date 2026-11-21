@@ -7,7 +7,7 @@ import { useMemo } from "react";
 import { ChevronDownIcon, ChevronRightIcon } from "lucide-react";
 import { MissionChipFace, TONE_TEXT } from "../components/mission-tone";
 import { chipWords, missionStalled, missionToneOf } from "../missions";
-import { CLOSED_DIM, PR_LOOK, prMarkParts } from "../prMark";
+import { CLOSED_DIM, PR_LOOK, prCountsSummary, prMarkParts } from "../prMark";
 import { cn } from "../lib/utils";
 import { agentLinks, type AgentLinks } from "./missionModel";
 import { useElapsed } from "../components/elapsed";
@@ -166,7 +166,7 @@ function useRowLinks(agent: PhoneAgent): AgentLinks {
 
 /**
  * The desktop row's marks after the title, in its order (`sidebar-agent-row.tsx`): the pull requests (one as its state's mark
- * and `#number`, several as each state's mark and count) and the mission chip with `!` for the operator's turn and `k/n`. They
+ * and `#number`, several as one mark, how many are still open) and the mission chip with `!` for the operator's turn and `k/n`. They
  * never shrink, so a narrow phone cuts the title first; the row opens the detail, whose chips open the pages.
  */
 function RowMarks({ links }: { links: AgentLinks }) {
@@ -174,10 +174,11 @@ function RowMarks({ links }: { links: AgentLinks }) {
   if (!parts && links.missions.length === 0) return null;
   return (
     <span aria-hidden="true" className="flex shrink-0 items-center gap-sm font-mono text-body" data-phone-row-marks="true">
-      {parts && "counts" in parts ? parts.counts.map(({ state, count }) => {
+      {parts && "counts" in parts ? (() => {
+        const { state, left } = prCountsSummary(parts.counts);
         const { icon: Icon, tone } = PR_LOOK[state];
-        return <span key={state} className={cn("inline-flex items-center gap-xxs", tone, state === "closed" && CLOSED_DIM)} data-phone-row-pr={state}><Icon className="size-(--size-pr-icon) shrink-0" />{count}</span>;
-      }) : parts ? (() => {
+        return <span className={cn("inline-flex items-center gap-xxs", tone, state === "closed" && CLOSED_DIM)} data-phone-row-pr={state}><Icon className="size-(--size-pr-icon) shrink-0" />{left > 0 ? left : null}</span>;
+      })() : parts ? (() => {
         const { icon: Icon, tone } = PR_LOOK[parts.state];
         return <span className={cn("inline-flex items-center gap-xxs text-subtle-foreground", parts.state === "closed" && CLOSED_DIM)} data-phone-row-pr={parts.state}><Icon className={cn("size-(--size-pr-icon) shrink-0", tone)} />#{parts.number}</span>;
       })() : null}

@@ -65,6 +65,7 @@ def code_lines(path):
 # with pnpm and is reached through `verify-web.sh desktop package`.
 WRAPPERS = {
     'check-relay-protocol.sh': r'check-relay-protocol\.sh',
+    'check-releases-entry.sh': r'check-releases-entry\.sh',
     'device-helpers.mjs': rf'device-helpers\.mjs{SPLIT}build',
 }
 DIRECT_PATTERN = re.compile(DIRECT, re.M)
