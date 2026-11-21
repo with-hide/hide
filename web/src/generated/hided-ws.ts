@@ -971,7 +971,7 @@ export interface AccessApprovePayload {
   mode: AccessMode;
 }
 /**
- * Payload of access_mode, taken only from a window's connection: connected bot `id` runs its next command in `mode`. It moves none of the bot's work.
+ * Payload of access_mode, taken only from a window's connection: connected bot `id` runs its next command in `mode`, and its work moves on the same event: own to all hands it to the operator, all to own takes it back.
  */
 export interface AccessModePayload {
   id: string;

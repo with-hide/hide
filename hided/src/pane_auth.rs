@@ -1301,6 +1301,7 @@ fn answer_bootstrap(
     // credential a command of it runs on.
     if let Some(request) = &parsed
         && let Some(ask) = &request.access
+        && request.device.is_none()
         && line.len() <= 4096
     {
         let (answer, issued) =
@@ -1330,12 +1331,10 @@ fn answer_bootstrap(
             serde_json::from_value::<crate::pairing::Ask>(ask.clone()),
         ) {
             (Some((pairing, runtime)), Ok(ask)) => {
-                let caller = if crate::access::in_a_pane(peer, request, engine, core) {
-                    crate::pairing::Caller::Pane
-                } else {
-                    crate::pairing::Caller::Operator
-                };
-                runtime.block_on(pairing.ask(ask, caller))
+                match crate::access::pairing_caller(peer, request, engine, core) {
+                    Ok(caller) => runtime.block_on(pairing.ask(ask, caller)),
+                    Err(refused) => refused,
+                }
             }
             _ => crate::pairing::refused("invalid_request"),
         };

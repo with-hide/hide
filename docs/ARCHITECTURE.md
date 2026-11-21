@@ -2747,23 +2747,27 @@ The operator gives each bot one of two modes: `all`, the whole Hide, where the b
   The folder the tool's command runs in gives its Workspace commands a checkout when a registered one holds it, as a checkout caller's does; the tool names that folder in its ask (`AccessAsk::Use`), because Windows reports no other process's working folder, and its word reaches nothing a `cd` would not, since the key proves the tool. With no checkout there it has the connection's own context, and its Workspace command is refused `checkout_not_registered` with the way out: `hide file open`, `diff open` and `browser open` take `--repo <folder>`, which reads the target against the folder the command ran in and then moves the command into that folder before it asks (D-57); a pane's command opens in its own checkout and is refused the option (`repo_from_pane`).
 - One table says what each command needs of a bot's mode (`hide_core::access`: `Need`, `admit` and one function per command family the core also runs, `delivery_need`, `pane_need`, `mission_need`, `device_need`): `Work` runs in both modes and, in own mode, only on the bot's own work; `All` runs in all mode only and is refused own mode `access_not_own_work`; `Operator` (adding or removing a device) is refused every bot `access_operator_only`; and what means an agent in a pane (mission and plan commands, `--beside`, `ask-human`, `agent show here`, registration, a hook's reads) or a parent is refused `access_needs_agent` or `access_spawn_parent`, each with its next action.
   The command boundary judges a bot's command by it (`ScopedRequest::access_need`, which adds only the commands the core does not run as a bot's), and the core again when the command runs (`Runtime::access_authority`), before anything of it is read; a bot's letters, spawns and watches act as its connection's code-owned identity `hide:access:<id>` ([delivery.md: Bots](delivery.md#bots)).
-  In own mode the core then holds the command to the bot's own work (`Runtime::own_work`, from the ledger's `hide_started.tool_work`): a target it did not start, by agent id, name or pane, on this machine or a connected device, is refused `access_not_own_work`, and a list answers only its own agents (`Prepared::listing_only`, `hide ps`) and the missions they conduct.
+  In own mode the core then holds the command to the bot's own work (`Runtime::own_work`): the registrations `hide_started.tool_work` gives it, the spawns it or they admitted, and the panes those run in now, a spawn still starting counted only while its pane runs the terminal the spawn recorded.
+  An agent the command names is read once, as `hide agent show` reads a key (a registration id, then the bot's own spawn by its id or intent, then the one name or pane), held, and the command is rewritten to that exact id before it runs (`Runtime::own_target`), so what was held is what runs: a name of its own work that repeats another agent's id names that agent, and a key that names nothing is refused as one that is not its own.
+  A pane command is held by the pane it names (`Runtime::own_pane`), and `agent read` by the exact identity.
+  What it watches, hands a watch to and replies to is held the same way; a watch it kept from all mode on work not its own ends in the store's upkeep (`coordination::end_unowned_watches`), as a gone bot's do.
+  Anything else is refused `access_not_own_work`, and a list answers only its own agents (`Prepared::listing_only`, `hide ps`) and the missions they conduct.
   A tool's identity is code-owned with a `hide:` pane id, so a gate only Hide itself may pass (a task on a spawn, a mission's takeover, typed input's reports) asks `Actor::hide_itself`, never `hide_owned`.
 
 What each mode may do, by command family (`hide_core::access` and `ScopedRequest::access_need`; `hided/tests/it/access.rs` holds a case for each row):
 
 | Command family | `all`: the whole Hide | `own`: its own work |
 | --- | --- | --- |
-| `hide agent list`, `show`, `end`, `sleep`, `archive`, `hide ps` | every agent on every connected device | its own agents only; a list shows only them, another agent is `access_not_own_work` |
+| `hide agent list`, `show`, `end`, `sleep`, `archive`, `hide ps` | every agent on every connected device | its own agents and its own spawns still starting; a list shows only them, another agent is `access_not_own_work` |
 | `hide agent spawn` without `--parent` | into any registered project on any connected device; the agent is the operator's work and its row keeps the bot as starter | the same places; the agent and its descendants are the bot's own work, in the bot's cell |
 | `hide agent spawn --parent`, `--beside`, a plan node | refused `access_spawn_parent` / `access_needs_agent` | the same |
-| `hide request send`, `reply`, `hide inbox`, `hide watch` | to any agent | to its own agents only; its inbox and watches are its own in both modes |
+| `hide request send`, `reply`, `hide inbox`, `hide watch` | to any agent | to its own agents only, the observer a watch goes to among them; its inbox and watches are its own in both modes |
 | `hide pane read`, `send`, `agent read` | any pane on any connected device | the panes of its own agents only, a device's included |
 | `hide pane open`, `purpose`, mission and plan commands, `ask-human`, `agent show here` | refused `access_needs_agent` | the same |
 | `hide mission list`, `show` | every mission | the missions its own agents conduct |
 | `hide file`, `diff`, `browser open`, `hide view`, `hide links`, sessions, `hide worktree remove` | as the operator | refused `access_not_own_work`; its agents open Views from their own panes |
 | `hide device list`, `retry` | every device | refused `access_not_own_work` |
-| `hide device add`, `remove`, pairing | refused `access_operator_only` | the same |
+| `hide device add`, `remove`, `pause`, `resume`, pairing | refused `access_operator_only`; a pairing ask carries the bot's key, and the daemon judges it by its mode (`pairing::Ask::bot_need`) | the same |
 | `hide access list`, `hide automation`, `hide store`, agent profiles, `hide project open` | as the operator | refused `access_not_own_work` |
 | Approving bots and changing a bot's mode | never: a window's connection only | the same |
 

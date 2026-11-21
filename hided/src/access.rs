@@ -52,7 +52,7 @@ pub fn next_action(reason: &str) -> Option<&'static str> {
             "An agent in a Hide pane acts as itself; run hide access request from the tool, outside Hide's panes"
         }
         "access_pending" => {
-            "Wait until the operator approves the request in Settings > Bot; the next hide command then runs as the tool"
+            "Wait until the operator approves the request in Settings > Bots; the next hide command then runs as the tool"
         }
         "access_refused" => {
             "The operator refused this tool; run hide access request --name <name> to ask again"
@@ -61,10 +61,10 @@ pub fn next_action(reason: &str) -> Option<&'static str> {
             "The request was dropped; run hide access request --name <name> to ask again"
         }
         "access_limit" => {
-            "16 tools are connected; ask the operator to disconnect one in Settings > Bot, then run hide access request again"
+            "16 tools are connected; ask the operator to disconnect one in Settings > Bots, then run hide access request again"
         }
         "access_name_taken" => {
-            "A connected tool has this name; ask the operator to disconnect it in Settings > Bot, or choose another --name, then run hide access request again"
+            "A connected tool has this name; ask the operator to disconnect it in Settings > Bots, or choose another --name, then run hide access request again"
         }
         "access_revoked" => REVOKED_NEXT_ACTION,
         "access_ambiguous" => {
@@ -75,7 +75,7 @@ pub fn next_action(reason: &str) -> Option<&'static str> {
             "This tool's key file cannot be read; run hide access request --name <name>, which replaces it and asks the operator again"
         }
         "access_reapprove" => {
-            "External tools became bots, and a View only tool is approved again before it runs anything; run hide access request --name <name> to ask the operator"
+            "External tools became bots with two modes, and a tool that was View only is approved again before it runs anything; run hide access request --name <name> to ask the operator"
         }
         "access_not_own_work" => hide_core::access::NOT_OWN_WORK_NEXT_ACTION,
         "access_operator_only" => {
@@ -206,6 +206,37 @@ fn use_credential(
     let attestation = crate::pane_auth::attest_access(peer, key_sha256, folder, core)?;
     crate::pane_auth::issue_access(registry, &attestation, &request.nonce, port, holder)
         .map_err(str::to_owned)
+}
+
+/// Who asks a pairing question (`crate::pairing::Caller`): a pane's
+/// program, a bot whose key the request carries, in the mode the core holds
+/// for it now (mission-87), or else the operator at a terminal. A key from a
+/// pane, or one the core does not hold, is refused as a bot's command is.
+pub(crate) fn pairing_caller(
+    peer: i32,
+    request: &PaneRequest,
+    engine: Option<&EngineHandle>,
+    core: &CoreHandle,
+) -> Result<crate::pairing::Caller, Value> {
+    let in_pane = in_a_pane(peer, request, engine, core);
+    let key = match &request.access {
+        None if in_pane => return Ok(crate::pairing::Caller::Pane),
+        None => return Ok(crate::pairing::Caller::Operator),
+        Some(AccessAsk::Use { key, folder: None }) if valid_key(key) => key,
+        Some(_) => return Err(refused("invalid_request")),
+    };
+    if in_pane {
+        note("access.from_pane", None, "access_from_pane");
+        return Err(refused("access_from_pane"));
+    }
+    let proved = core
+        .access(Call::Prove {
+            key_sha256: key_hash(key),
+        })
+        .map_err(|reason| refused(&reason))?;
+    let mode = serde_json::from_value(proved["mode"].clone())
+        .map_err(|_| refused("access_unavailable"))?;
+    Ok(crate::pairing::Caller::Bot(mode))
 }
 
 /// Whether `peer` runs in a Hide pane of this machine: the pane its request

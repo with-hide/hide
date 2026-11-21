@@ -173,7 +173,7 @@ fn request(env: &Env, name: &str, wait: bool) -> Result<Value, Refusal> {
 fn wait_for_answer(env: &Env, name: &str, mut answer: Value) -> Result<Value, Refusal> {
     let folder = hide_kit::layout::access_keys(&env.home);
     eprintln!(
-        "Waiting up to {} minutes for the operator to approve {name} in Settings > Bot.",
+        "Waiting up to {} minutes for the operator to approve {name} in Settings > Bots.",
         ANSWER_WAIT.as_secs() / 60
     );
     let deadline = Instant::now() + ANSWER_WAIT;
@@ -417,7 +417,7 @@ fn ask(env: &Env, ask: AccessAsk) -> Result<Value, Refusal> {
 
 fn waiting(mut value: Value, name: &str) -> Value {
     value["next_action"] = json!(format!(
-        "Once the operator approves it in Settings > Bot, the next hide command runs as {name}; hide access request --name {name} waits for the answer"
+        "Once the operator approves it in Settings > Bots, the next hide command runs as {name}; hide access request --name {name} waits for the answer"
     ));
     value
 }
@@ -562,7 +562,7 @@ fn draw(verb: &Verb, value: &Value) -> String {
     match (verb, state) {
         (Verb::List, _) => draw_list(value),
         (_, "pending") => format!(
-            "Waiting for the operator to approve {name} in Settings > Bot.\n{}\n",
+            "Waiting for the operator to approve {name} in Settings > Bots.\n{}\n",
             value["next_action"].as_str().unwrap_or_default()
         ),
         (_, "connected") => format!("Connected as {name} · {}\n", mode_words(value)),

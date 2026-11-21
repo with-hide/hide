@@ -2870,11 +2870,11 @@ fn handle_client_text(
             }
             return Ok(ClientAction::BrowserComment(event));
         }
-        // Approving, refusing, changing the level of and disconnecting an
-        // external tool are the operator's, in a window's Settings (PRD
+        // Approving, refusing, changing the mode of and disconnecting a bot
+        // are the operator's, in a window's Settings (PRD
         // hide-external-control B8): no `hide` command and no pane sends them.
         Some(kind) if kind.starts_with("access_") && !renderer => {
-            return Err("External tools are approved in an operator window".to_owned());
+            return Err("Bots are approved in an operator window".to_owned());
         }
         // The daemon owns this flag from its renderer count; a window that
         // sent it would pause the readers every other window draws.

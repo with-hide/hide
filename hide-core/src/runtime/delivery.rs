@@ -1624,7 +1624,7 @@ impl Runtime {
         caller: &str,
         expected: &Context,
         hint: Option<&str>,
-        command: Command,
+        mut command: Command,
     ) -> Result<Prepared, String> {
         // The engine numbers panes per machine and an agent learns the numbers from
         // its own machine's engine, so a bare pane id names a pane on the
@@ -1656,7 +1656,7 @@ impl Runtime {
             let (actor, _) =
                 self.access_authority(device, connection, crate::access::delivery_need(&command))?;
             if let Some(own) = self.own_work(caller) {
-                listed = self.hold_delivery(device, &own, &command)?;
+                listed = self.hold_delivery(device, &own, &mut command)?;
             }
             (expected.clone(), actor)
         } else {
@@ -1695,9 +1695,11 @@ impl Runtime {
         &self,
         device: &str,
         own: &super::access::OwnWork,
-        command: &Command,
+        command: &mut Command,
     ) -> Result<Option<std::collections::HashSet<String>>, String> {
         use crate::coordination::Command as Agents;
+        // Each agent the command names is read once, held, and named again
+        // by the exact id that was held (`Runtime::own_target`).
         match command {
             Command::Agents {
                 command: Agents::List { .. },
@@ -1705,9 +1707,38 @@ impl Runtime {
             Command::Agents {
                 command: Agents::Show { id } | Agents::End { id, .. },
             }
-            | Command::Send { target: id, .. }
-            | Command::WatchStart { target: id, .. } => {
-                super::access::hold(self.is_own(own, device, id))?;
+            | Command::Send { target: id, .. } => {
+                *id = self.own_target(own, device, id)?;
+            }
+            Command::WatchStart {
+                target, observer, ..
+            } => {
+                *target = self.own_target(own, device, target)?;
+                if let Some(observer) = observer {
+                    *observer = self.own_target(own, device, observer)?;
+                }
+            }
+            // A watch it keeps is on its own work (`coordination::
+            // end_unowned_watches`); the agent it hands the watch to must be
+            // its own too.
+            Command::WatchAssign { observer, .. } => {
+                *observer = self.own_target(own, device, observer)?;
+            }
+            // A reply goes to the letter's sender, who must be its own work
+            // now, whatever the bot could reach when the letter came.
+            Command::Reply { id, .. } => {
+                let ledger = self.delivery_ledger.as_ref().map_err(Clone::clone)?;
+                let sender = ledger
+                    .letters
+                    .iter()
+                    .find(|letter| letter.id == *id)
+                    .map(|letter| &letter.sender);
+                let own_sender = sender.is_some_and(|sender| {
+                    ledger.agents.iter().any(|record| {
+                        own.agents.contains(&record.id) && record.actor.same_identity(sender)
+                    })
+                });
+                super::access::hold(own_sender)?;
             }
             _ => {}
         }
