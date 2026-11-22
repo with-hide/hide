@@ -836,6 +836,8 @@ Each cell carries its episode, the revision it began with, kept while facts upda
 A sleeping receiver reads its cells at its next turn and is not woken for one, except a mission node's worker or checker, whose new cell wakes it once, as the `request` it replaced did: a wake refused for a cause that can pass is asked again, and one that fails for good raises the node to its Conductor (`wake_refused`).
 The cells a pass judges in memory are at most 1024: at the cap a cell whose receiver ended goes first, and only a full set of live cells refuses a new one, logged as `status.posted_refused_full`; the pass that posted it keeps its fact and posts it again on its next run, so the cell lands once there is room.
 
+An agent's own wait (`hide wait`, PRD core-wait) is a news cell of its own subject, `wait:<id>`, for the agent that made it: one line saying what was met or how it failed, given once and then gone, the ended wait dropped with it; it wakes the agent asleep as a mission worker's cell does, and Hide sends no letter for it.
+
 Whom the operator is told about follows from the cells: an observer that did not look at a watch's warning cell within the hour, and its target is the operator's (`observer_unconfirmed`, [Watch activity and completion](#watch-activity-and-completion)); a mission's safety net counts every cell standing unresolved for its Conductor, a raise or a failed CI alike, one card per mission ([status-model.md](status-model.md)).
 What the operator reads, the safety-net card's row and the phone, words the cell's typed fact in the operator's language; the English line is for agents only.
 
