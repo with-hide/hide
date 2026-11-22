@@ -481,6 +481,20 @@ class DeviceRelayBundle(unittest.TestCase):
                                    "device_relay_stopped", "device_relay_meter_failed"})
         self.assertIn("Systemd_Filter _SYSTEMD_UNIT=hide-iroh-relay-meter.service", collector)
 
+    def test_clients_include_the_published_relay_and_proxy_security_fixes(self):
+        # GHSA-rqw2-29g8-jwxw fixes the ping queue in 1.4.2; GHSA-9v2v-w4v3-3qqq
+        # fixes proxy credential logging in 1.5.0. Check both endpoint and relay code.
+        packages = tomllib.loads((ROOT / "Cargo.lock").read_text())["package"]
+        for name in ("iroh", "iroh-relay"):
+            versions = [package["version"] for package in packages if package["name"] == name]
+            self.assertTrue(versions, f"missing locked {name}")
+            for version in versions:
+                self.assertGreaterEqual(tuple(map(int, version.split("."))), (1, 5, 0), name)
+
+    def test_the_deployable_relay_includes_the_published_security_fixes(self):
+        version = (BUNDLE / "iroh-relay.version").read_text().strip()
+        self.assertGreaterEqual(tuple(map(int, version.split("."))), (1, 5, 0))
+
     def test_one_iroh_relay_version_for_the_server_and_any_client_in_the_workspace(self):
         pinned = (BUNDLE / "iroh-relay.version").read_text().strip()
         self.assertRegex(pinned, r"^\d+\.\d+\.\d+$")

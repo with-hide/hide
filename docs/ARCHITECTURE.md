@@ -3463,7 +3463,7 @@ An append that fails partway is cut back to the last whole line, so the next eve
 An event whose target the core does not know yet (`Applied::Later`) stays recorded and holds the ones behind it, so order is kept; it is tried again until its caller says the wait is over.
 
 **The iroh transport.**
-`hide-peer-iroh` pins iroh 1.4.1 and noq 1.4.0 exactly, with `default-features = false` and `tls-ring`, port mapping off, the proxy read from the environment, and a relay that is either the one URL it is given or none; a release's is `DEVICE_RELAY_URL`, asked for its address discovery too, which is how a machine learns the address a peer behind another NAT can dial.
+`hide-peer-iroh` pins iroh 1.5.0 and noq 1.5.0 exactly, with `default-features = false` and `tls-ring`, port mapping off, the proxy read from the environment, and a relay that is either the one URL it is given or none; a release's is `DEVICE_RELAY_URL`, asked for its address discovery too, which is how a machine learns the address a peer behind another NAT can dial.
 A path counts as idle after 3 s with a keep-alive every 1 s, and a connection that had a relay path and has been without one for 5 s while this machine is still attached to its relay closes as `no_relay_path`, so the keeper dials it again; one that never had a relay path, or whose relay is down, is left alone, because a new connection would get none either.
 An incoming connection's handshake runs in a task of its own, 16 at once and 10 s each, and one past that is refused before it starts.
 Among the addresses a machine finds for itself, one in 100.64.0.0/10 is ranked last (`addr::rank_self_discovered`); mDNS lookup is an option the caller turns on.
