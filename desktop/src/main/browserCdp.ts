@@ -351,6 +351,21 @@ export class BrowserCdpGateway {
     }
     return null;
   }
+  /** Whether hided asked, with the control token; anyone else is answered 401 here. The one check every hided route makes. */
+  private controlled(request: IncomingMessage, response: ServerResponse): boolean {
+    if (sameToken(request.headers.authorization ?? "", `Bearer ${this.controlToken}`)) return true;
+    this.reply(response, 401, { error: "Unauthorized" });
+    return false;
+  }
+  /** Bytes for hided (an outside file's part, a page's still), or as JSON the reason there are none. */
+  private replyBytes(response: ServerResponse, answer: { bytes: Uint8Array; total?: number } | { failure: string }): void {
+    if ("failure" in answer) { this.reply(response, 200, { failure: answer.failure }); return; }
+    response.writeHead(200, {
+      "Content-Type": "application/octet-stream", "Content-Length": answer.bytes.length, "Cache-Control": "no-store", "X-Content-Type-Options": "nosniff",
+      ...(answer.total === undefined ? {} : { "X-Hide-Total": String(answer.total) }),
+    });
+    response.end(Buffer.from(answer.bytes.buffer, answer.bytes.byteOffset, answer.bytes.length));
+  }
   private reply(response: ServerResponse, status: number, value: unknown): void {
     response.writeHead(status, { "Content-Type": "application/json", "Cache-Control": "no-store", "X-Content-Type-Options": "nosniff" });
     response.end(JSON.stringify(value));
@@ -373,7 +388,7 @@ export class BrowserCdpGateway {
     try {
       const path = request.url ?? "";
       if (path === "/revoke" && request.method === "POST") {
-        if (!sameToken(request.headers.authorization ?? "", `Bearer ${this.controlToken}`)) { this.reply(response, 401, { error: "Unauthorized" }); return; }
+        if (!this.controlled(request, response)) return;
         // A node daemon whose link to its core ended: what the core authorized
         // through that link stops working, and the gateway stays available.
         this.revokeAll();
@@ -381,38 +396,33 @@ export class BrowserCdpGateway {
         return;
       }
       if (path === "/external-open" && request.method === "POST" && this.options.externalOpen) {
-        if (!sameToken(request.headers.authorization ?? "", `Bearer ${this.controlToken}`)) { this.reply(response, 401, { error: "Unauthorized" }); return; }
+        if (!this.controlled(request, response)) return;
         const body = await this.body(request);
         if (!object(body) || typeof body.path !== "string" || typeof body.page !== "boolean") { this.reply(response, 400, { error: "Invalid request" }); return; }
         this.reply(response, 200, await this.options.externalOpen(body.path, body.page));
         return;
       }
       if (path === "/external-read" && request.method === "POST" && this.options.externalRead) {
-        if (!sameToken(request.headers.authorization ?? "", `Bearer ${this.controlToken}`)) { this.reply(response, 401, { error: "Unauthorized" }); return; }
+        if (!this.controlled(request, response)) return;
         const body = await this.body(request);
         const valid = object(body) && typeof body.grant === "string" && body.grant.length <= 64
           && (body.file === null || (typeof body.file === "string" && body.file.length <= 1024))
           && Number.isSafeInteger(body.limit) && (body.limit as number) > 0 && (body.limit as number) <= MAX_EXTERNAL_READ_BYTES;
         if (!valid) { this.reply(response, 400, { error: "Invalid request" }); return; }
-        const read = await this.options.externalRead(body.grant as string, body.file as string | null, body.limit as number);
-        if ("failure" in read) { this.reply(response, 200, { failure: read.failure }); return; }
-        response.writeHead(200, { "Content-Type": "application/octet-stream", "Content-Length": read.bytes.length, "X-Hide-Total": String(read.total), "Cache-Control": "no-store", "X-Content-Type-Options": "nosniff" });
-        response.end(Buffer.from(read.bytes.buffer, read.bytes.byteOffset, read.bytes.length));
+        this.replyBytes(response, await this.options.externalRead(body.grant as string, body.file as string | null, body.limit as number));
         return;
       }
       if (path === "/display-still" && request.method === "POST" && this.options.still) {
-        if (!sameToken(request.headers.authorization ?? "", `Bearer ${this.controlToken}`)) { this.reply(response, 401, { error: "Unauthorized" }); return; }
+        if (!this.controlled(request, response)) return;
         const scope = scopeOf(await this.body(request));
         if (!scope?.display_id) { this.reply(response, 400, { error: "Invalid scope" }); return; }
         if (this.options.incarnation(scope) === null) { this.reply(response, 409, { error: "Workspace area is no longer authorized" }); return; }
         const still = await this.options.still(scope);
-        if ("failure" in still) { this.reply(response, 200, { failure: still.failure }); return; }
-        response.writeHead(200, { "Content-Type": "application/octet-stream", "Content-Length": still.jpeg.length, "Cache-Control": "no-store", "X-Content-Type-Options": "nosniff" });
-        response.end(Buffer.from(still.jpeg.buffer, still.jpeg.byteOffset, still.jpeg.length));
+        this.replyBytes(response, "failure" in still ? still : { bytes: still.jpeg });
         return;
       }
       if (path === "/connect" && request.method === "POST") {
-        if (!sameToken(request.headers.authorization ?? "", `Bearer ${this.controlToken}`)) { this.reply(response, 401, { error: "Unauthorized" }); return; }
+        if (!this.controlled(request, response)) return;
         const body = await this.body(request);
         const scope = scopeOf(body);
         if (!scope) { this.reply(response, 400, { error: "Invalid scope" }); return; }

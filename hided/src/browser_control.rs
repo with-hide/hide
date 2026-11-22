@@ -446,20 +446,9 @@ impl BrowserControl {
             "outside_file_no_window",
             "Open the Hide desktop app on this computer and retry",
         ))?;
-        let body = json!({"path": path, "page": page}).to_string();
-        let mut response = agent()
-            .post(format!("{}/external-open", host.endpoint))
-            .header("Authorization", format!("Bearer {}", host.token))
-            .header("Content-Type", "application/json")
-            .send(body.as_bytes())
-            .map_err(|_| unavailable())?;
-        let bytes = response
-            .body_mut()
-            .with_config()
-            .limit(MAX_ANSWER_BYTES)
-            .read_to_vec()
-            .map_err(|_| unavailable())?;
-        serde_json::from_slice(&bytes).map_err(|_| unavailable())
+        let body = json!({"path": path, "page": page});
+        let response = post_window(&host, "/external-open", &body).map_err(|_| unavailable())?;
+        json_answer(response)
     }
 
     /// Reads, through the window registered here, an outside file it granted
@@ -664,12 +653,7 @@ fn window_bytes(
     limit: u64,
     detached: Failure,
 ) -> Result<Result<(Vec<u8>, Option<u64>), String>, Failure> {
-    let mut response = match agent()
-        .post(format!("{}{path}", host.endpoint))
-        .header("Authorization", format!("Bearer {}", host.token))
-        .header("Content-Type", "application/json")
-        .send(body.to_string().as_bytes())
-    {
+    let mut response = match post_window(host, path, body) {
         Ok(response) => response,
         Err(ureq::Error::StatusCode(503)) => return Err(detached),
         Err(_) => return Err(unavailable()),
@@ -721,22 +705,36 @@ fn agent() -> ureq::Agent {
         .into()
 }
 
-/// The capability a registered gateway hands out for `scope`.
-fn ask_gateway(host: &Host, scope: &Value) -> Result<(String, String), Failure> {
-    let body = scope.to_string();
-    let mut response = agent()
-        .post(format!("{}/connect", host.endpoint))
+/// Every question hided asks this machine's window: a JSON body posted to
+/// `path` of its gateway with the control token, which the window checks in
+/// one place (`BrowserCdpGateway.controlled`).
+fn post_window(
+    host: &Host,
+    path: &str,
+    body: &Value,
+) -> Result<ureq::http::Response<ureq::Body>, ureq::Error> {
+    agent()
+        .post(format!("{}{path}", host.endpoint))
         .header("Authorization", format!("Bearer {}", host.token))
         .header("Content-Type", "application/json")
-        .send(body.as_bytes())
-        .map_err(|_| unavailable())?;
+        .send(body.to_string().as_bytes())
+}
+
+/// A window's JSON answer, read up to `MAX_ANSWER_BYTES`.
+fn json_answer(mut response: ureq::http::Response<ureq::Body>) -> Result<Value, Failure> {
     let bytes = response
         .body_mut()
         .with_config()
         .limit(MAX_ANSWER_BYTES)
         .read_to_vec()
         .map_err(|_| unavailable())?;
-    let answer: Value = serde_json::from_slice(&bytes).map_err(|_| unavailable())?;
+    serde_json::from_slice(&bytes).map_err(|_| unavailable())
+}
+
+/// The capability a registered gateway hands out for `scope`.
+fn ask_gateway(host: &Host, scope: &Value) -> Result<(String, String), Failure> {
+    let response = post_window(host, "/connect", scope).map_err(|_| unavailable())?;
+    let answer = json_answer(response)?;
     let answer = answer.get("result").unwrap_or(&answer);
     let http = answer["cdp_http_url"].as_str().ok_or_else(unavailable)?;
     let ws = answer["browser_ws_url"].as_str().ok_or_else(unavailable)?;
