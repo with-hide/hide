@@ -24,9 +24,10 @@
 //! `relay` (when unset) keeps no IP transport on either endpoint
 //! (`HIDE_PEER_RELAY_ONLY`), as between two machines with no direct way to
 //! each other, so a relay that stops takes the connection with it, and the
-//! guest has to see its host go while the relay is away; `direct` lets the
-//! two find their direct path beside the relay, which a relay restart must
-//! leave alone: the path stays direct and letters keep arriving. Before
+//! guest's ledger has to take no letter while the relay is away; `direct`
+//! lets the two find their direct path beside the relay, which a relay
+//! restart must leave alone: the path stays direct and letters keep
+//! arriving. Before
 //! each fault the guest's device list has to name that path.
 //!
 //! Its other inputs are `HIDE_TEST_IROH_RELAY`, the iroh-relay that
@@ -54,6 +55,10 @@ const HOST: &str = "fault-run-host";
 /// letter to reach its ledger after that. A hang guard, far above what a
 /// redial takes; the run prints what each one took.
 const RECOVERS_WITHIN: Duration = Duration::from_secs(180);
+
+/// A path's idle time (`hide_peer_iroh::PATH_IDLE`): a path that carries
+/// nothing for this long is gone.
+const PATH_IDLE: Duration = Duration::from_secs(3);
 
 /// How long a step outside the faults may take.
 const WITHIN: Duration = Duration::from_secs(90);
@@ -303,21 +308,26 @@ fn host_link(guest: &Machine) -> Option<(bool, String)> {
 }
 
 /// What the guest saw of its host while the relay was away for `long`,
-/// asked once a second: whether the connection went, and the letters that
-/// reached its ledger meanwhile.
-async fn while_relay_away(guest: &Machine, sender: &str, long: Duration) -> (bool, usize) {
-    let before = letters_in(&guest.terminal.state, sender).len();
-    let ends = Instant::now() + long;
-    let mut went = false;
+/// asked once a second: the paths its device list named, and the letters
+/// that reached its ledger once [`PATH_IDLE`] had passed, by when what was
+/// on the wire as the relay stopped has landed or is lost.
+async fn while_relay_away(guest: &Machine, sender: &str, long: Duration) -> Value {
+    let stopped = Instant::now();
+    let ends = stopped + long;
+    let mut paths = std::collections::BTreeSet::new();
+    let mut before = None;
     while Instant::now() < ends {
-        went |= host_link(guest).is_some_and(|(connected, _)| !connected);
+        if before.is_none() && stopped.elapsed() >= PATH_IDLE {
+            before = Some(letters_in(&guest.terminal.state, sender).len());
+        }
+        if let Some((connected, path)) = host_link(guest) {
+            paths.insert(if connected { path } else { "none".to_owned() });
+        }
         // The relay is away for this long: its absence is the fault.
         tokio::time::sleep(Duration::from_secs(1)).await; // wait-ok: the relay has been away for the fault's length
     }
-    (
-        went,
-        letters_in(&guest.terminal.state, sender).len() - before,
-    )
+    let arrived = letters_in(&guest.terminal.state, sender).len() - before.unwrap_or_default();
+    json!({"paths": paths, "letters_meanwhile": arrived})
 }
 
 /// Whether the guest has its host again: the connection, and its node
@@ -619,15 +629,17 @@ async fn every_letter_a_guests_pane_sends_through_the_faults_lands_in_its_ledger
         match fault {
             Fault::RelayRestart => {
                 relay.stop();
-                let (went, arrived) = while_relay_away(&guest, &sender, long).await;
+                away = while_relay_away(&guest, &sender, long).await;
                 relay.start();
-                away = json!({"link_went": went, "letters_meanwhile": arrived});
-                // Only the path the relay carried goes with it.
+                // Only the path the relay carried goes with it: over the
+                // relay nothing more arrives, beside it letters keep coming
+                // on the direct path.
+                let arrived = away["letters_meanwhile"].as_u64().unwrap();
                 if relay_only {
-                    assert!(went, "the relay-only link outlived the relay: {away}");
+                    assert_eq!(arrived, 0, "letters arrived with the relay away: {away}");
                 } else {
                     assert!(
-                        !went && arrived > 0,
+                        arrived > 0 && away["paths"] == json!(["direct"]),
                         "a relay restart disturbed the direct link: {away}"
                     );
                 }
