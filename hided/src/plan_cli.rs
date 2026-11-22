@@ -180,11 +180,10 @@ pub fn parse<'a>(args: impl Iterator<Item = &'a String>) -> Result<PlanCli, Stri
             let pr = values
                 .get("--pr")
                 .map(|number| {
-                    number
-                        .trim_start_matches('#')
-                        .parse::<u32>()
-                        .ok()
-                        .filter(|number| *number > 0)
+                    // Bare, with its host's label (`#12`, `!12`) or as its
+                    // address.
+                    hide_core::written_change_request(number)
+                        .and_then(|written| u32::try_from(written.number).ok())
                         .ok_or_else(|| format!("--pr takes a pull request number, not {number}"))
                 })
                 .transpose()?;
@@ -399,6 +398,19 @@ mod tests {
                 ..
             })
         ));
+        for written in [
+            "!1890",
+            "https://gitlab.com/acme/sub/app/-/merge_requests/1890",
+        ] {
+            assert!(
+                matches!(
+                    parse(words(&["node", "pr", "--status", "done", "--pr", written]).iter())
+                        .unwrap(),
+                    PlanCli::Command(PlanCommand::Node { pr: Some(1890), .. })
+                ),
+                "{written}"
+            );
+        }
         assert!(matches!(
             parse(words(&["node", "spec", "--status", "done", "--file", "docs/spec.md"]).iter())
                 .unwrap(),

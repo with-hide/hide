@@ -696,15 +696,19 @@ impl Runtime {
                     device_id: workspace.device_id.clone(),
                     workspace_id: workspace.id.clone(),
                     root: workspace.path.clone(),
-                    // The repository's name without its server, which the
-                    // record has keyed a project by since before hosts; an
-                    // identity whose server is not known keys nothing.
+                    // The repository's record name and id, which carry the
+                    // server of every host but github.com's, whose bare names
+                    // the record has keyed a project by since before hosts;
+                    // an identity whose server is not known keys nothing.
                     repository: project
-                        .and_then(|project| project.repository.as_ref()?.as_key())
-                        .map(|identity| identity.name.to_ascii_lowercase()),
+                        .and_then(|project| project.repository.as_ref()?.repository.as_ref())
+                        .and_then(|repository| self.code_hosts.record_name(repository)),
                     repository_id: project
-                        .and_then(|project| project.repository.as_ref()?.as_key())
-                        .and_then(|identity| identity.id.clone()),
+                        .and_then(|project| project.repository.as_ref())
+                        .and_then(|identity| {
+                            self.code_hosts
+                                .record_id(identity.repository.as_ref()?, identity.id.as_deref()?)
+                        }),
                     connection_epoch: self
                         .links_work
                         .connection_epochs

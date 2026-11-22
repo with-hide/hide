@@ -211,11 +211,11 @@ fn minutes(flag: &str, value: &str) -> Result<u32, String> {
         .ok_or_else(refused)
 }
 
+/// A pull request's number, written bare, with its host's label (`#12`,
+/// `!12`) or as its address; the node's project is the one it is read in.
 fn number(flag: &str, value: &str) -> Result<u32, String> {
-    value
-        .parse::<u32>()
-        .ok()
-        .filter(|number| *number > 0)
+    hide_core::written_change_request(value)
+        .and_then(|written| u32::try_from(written.number).ok())
         .ok_or_else(|| format!("{flag} takes a pull request number"))
 }
 
@@ -966,6 +966,24 @@ mod tests {
         assert!(parse(both.iter()).is_err());
         let zero = words(&["node", "a", "--pr", "0"]);
         assert!(parse(zero.iter()).is_err());
+        for written in [
+            "!12",
+            "#12",
+            "https://gitlab.com/acme/sub/app/-/merge_requests/12",
+        ] {
+            let merge_request = words(&["node", "a", "--pr", written, "--base-pr", "!3"]);
+            let Ok(MissionCli::Command(MissionCommand::Node { patch, .. })) =
+                parse(merge_request.iter())
+            else {
+                panic!("{written}");
+            };
+            assert_eq!(
+                (patch.pr, patch.base_pr),
+                (Some(Some(12)), Some(Some(3))),
+                "{written}"
+            );
+        }
+        assert!(parse(words(&["node", "a", "--pr", "!x"]).iter()).is_err());
         // The Conductor sets working, done or dropped; Hide keeps the rest.
         for status in ["planned", "review", "held", "failed", "waiting"] {
             let refused = words(&["node", "a", "--status", status]);

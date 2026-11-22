@@ -25,10 +25,26 @@ pub struct LinksQuery {
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
 pub enum QueryTarget {
-    Pr { number: u64 },
-    Issue { number: u64 },
-    Branch { name: String },
-    Session { id: String },
+    /// A change request by its number, and, when it was written with a
+    /// host's label or address, that host's key and the repository's record
+    /// name: then only a project of that host, and of that repository, holds
+    /// it.
+    Pr {
+        number: u64,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        host: Option<String>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        repository: Option<String>,
+    },
+    Issue {
+        number: u64,
+    },
+    Branch {
+        name: String,
+    },
+    Session {
+        id: String,
+    },
 }
 
 impl QueryTarget {
@@ -39,11 +55,29 @@ impl QueryTarget {
             !text.is_empty() && text.len() <= 256 && !text.chars().any(char::is_control)
         };
         match self {
-            Self::Pr { number } | Self::Issue { number } => *number > 0,
+            Self::Pr { number, .. } | Self::Issue { number } => *number > 0,
             Self::Branch { name } => plain(name),
             Self::Session { id } => plain(id),
         }
     }
+}
+
+/// Whether a change request written with `host`'s label or address, of
+/// `repository`, can be the project's: a project of another host, or of
+/// another repository, does not hold it.
+fn written_for(
+    row: &super::store::ProjectRow,
+    host: Option<&str>,
+    repository: Option<&str>,
+) -> bool {
+    let hosts = crate::code_host::CodeHosts::STANDARD;
+    let project_host = row
+        .name
+        .as_deref()
+        .and_then(|name| hosts.repository(name))
+        .map_or_else(|| hosts.before_hosts(), |(host, _)| host);
+    host.is_none_or(|host| hosts.host(host) == Some(project_host))
+        && repository.is_none_or(|repository| row.name.as_deref() == Some(repository))
 }
 
 /// The registered Projects as the runtime knows them when the query came.
@@ -159,7 +193,14 @@ fn find(
         present: &present,
     });
     let (prs, sessions): (Vec<Value>, Vec<LinkedSession>) = match target {
-        QueryTarget::Pr { number } => {
+        QueryTarget::Pr {
+            number,
+            host,
+            repository,
+        } => {
+            if !written_for(&row, host.as_deref(), repository.as_deref()) {
+                return Ok(None);
+            }
             let Some(links) = store.pr_panel(&project.key, *number, local)? else {
                 return Ok(None);
             };
@@ -401,7 +442,14 @@ mod tests {
         let (_state, scope) = fixture();
         let answer = run(
             &scope,
-            &query(QueryTarget::Pr { number: 7 }, false),
+            &query(
+                QueryTarget::Pr {
+                    number: 7,
+                    host: None,
+                    repository: None,
+                },
+                false,
+            ),
             &hide_node::Local::of_process(),
         )
         .unwrap();
@@ -430,7 +478,14 @@ mod tests {
         assert_eq!(
             run(
                 &scope,
-                &query(QueryTarget::Pr { number: 9 }, false),
+                &query(
+                    QueryTarget::Pr {
+                        number: 9,
+                        host: None,
+                        repository: None,
+                    },
+                    false
+                ),
                 &hide_node::Local::of_process()
             )
             .unwrap_err()
@@ -439,7 +494,14 @@ mod tests {
         );
         let answer = run(
             &scope,
-            &query(QueryTarget::Pr { number: 9 }, true),
+            &query(
+                QueryTarget::Pr {
+                    number: 9,
+                    host: None,
+                    repository: None,
+                },
+                true,
+            ),
             &hide_node::Local::of_process(),
         )
         .unwrap();
@@ -453,7 +515,11 @@ mod tests {
     fn what_the_record_never_saw_is_not_found() {
         let (_state, scope) = fixture();
         for target in [
-            QueryTarget::Pr { number: 404 },
+            QueryTarget::Pr {
+                number: 404,
+                host: None,
+                repository: None,
+            },
             QueryTarget::Issue { number: 404 },
             QueryTarget::Branch {
                 name: "nowhere".into(),
@@ -472,6 +538,48 @@ mod tests {
                 .0,
                 "not_found",
                 "{target:?}"
+            );
+        }
+    }
+
+    /// A pull request written with GitHub's label or address answers in a
+    /// GitHub project; written with gitlab.com's (`!7`), or with another
+    /// repository's address, the project holds none.
+    #[test]
+    fn a_change_request_written_for_another_host_or_repository_is_not_the_projects() {
+        let (_state, scope) = fixture();
+        let target = |host: Option<&str>, repository: Option<&str>| QueryTarget::Pr {
+            number: 7,
+            host: host.map(str::to_owned),
+            repository: repository.map(str::to_owned),
+        };
+        for held in [
+            target(Some("github"), None),
+            target(Some("github"), Some("acme/app")),
+        ] {
+            let answer = run(
+                &scope,
+                &query(held.clone(), false),
+                &hide_node::Local::of_process(),
+            )
+            .unwrap();
+            assert_eq!(answer["results"][0]["prs"][0]["number"], 7, "{held:?}");
+        }
+        for other in [
+            target(Some("gitlab"), None),
+            target(Some("gitlab"), Some("gitlab.com/acme/app")),
+            target(Some("github"), Some("acme/other")),
+        ] {
+            assert_eq!(
+                run(
+                    &scope,
+                    &query(other.clone(), true),
+                    &hide_node::Local::of_process()
+                )
+                .unwrap_err()
+                .0,
+                "not_found",
+                "{other:?}"
             );
         }
     }
@@ -519,7 +627,14 @@ mod tests {
         assert_eq!(
             run(
                 &scope,
-                &query(QueryTarget::Pr { number: 7 }, false),
+                &query(
+                    QueryTarget::Pr {
+                        number: 7,
+                        host: None,
+                        repository: None,
+                    },
+                    false
+                ),
                 &hide_node::Local::of_process()
             )
             .unwrap_err()

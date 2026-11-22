@@ -85,6 +85,55 @@ pub(crate) fn change_request(
     }
 }
 
+/// A change request as a person or an agent writes it on a command line
+/// (`hide links pr`, a `--pr` option): its number, written bare, with a
+/// registered host's label (`#12`, `!12`) or as a registered host's address.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct WrittenChangeRequest {
+    pub number: u64,
+    /// The key of the host its label or address is of; `None` for a bare
+    /// number, which any host's project may hold.
+    pub host: Option<String>,
+    /// The record name of the repository its address names
+    /// ([`CodeHosts::record_name`]); `None` without an address.
+    pub repository: Option<String>,
+}
+
+/// Read `word` as [`WrittenChangeRequest`], or `None` for anything else.
+pub fn written_change_request(word: &str) -> Option<WrittenChangeRequest> {
+    let hosts = CodeHosts::STANDARD;
+    let word = word.trim();
+    let positive = |digits: &str| {
+        (!digits.is_empty() && digits.bytes().all(|byte| byte.is_ascii_digit()))
+            .then(|| digits.parse::<u32>().ok())
+            .flatten()
+            .filter(|number| *number > 0)
+    };
+    if let Some(number) = positive(word) {
+        return Some(WrittenChangeRequest {
+            number: u64::from(number),
+            host: None,
+            repository: None,
+        });
+    }
+    let digits = word.trim_start_matches(|character: char| !character.is_ascii_digit());
+    if let Some(number) = positive(digits)
+        && let Some(host) = hosts.hosts().find(|host| host.number_label(number) == word)
+    {
+        return Some(WrittenChangeRequest {
+            number: u64::from(number),
+            host: Some(host.key().to_owned()),
+            repository: None,
+        });
+    }
+    let (host, repository, number) = hosts.change_request_at(word)?;
+    Some(WrittenChangeRequest {
+        number: u64::from(number),
+        host: Some(host.key().to_owned()),
+        repository: hosts.record_name(&repository),
+    })
+}
+
 /// What a host tells the screen and the phone about itself, beside a
 /// project's read and a change request's card: its key, the optional
 /// operations it offers, and what to do when it cannot be read. Made from
@@ -441,14 +490,53 @@ impl ReadClock {
 /// against them. Production code has one registry ([`CodeHosts::STANDARD`]);
 /// a test registers its own units the same way.
 #[derive(Clone, Copy)]
-pub(crate) struct CodeHosts(&'static [&'static dyn CodeHost]);
+pub(crate) struct CodeHosts {
+    units: &'static [&'static dyn CodeHost],
+    /// The host every reference saved or sent before hosts were named
+    /// belongs to: a link record row, a session's named change request or an
+    /// older node's payload that names no host. Said here once, by name,
+    /// and never read from the order of `units`; `hide_session::hosts` names
+    /// the same host for what a session's reader sends, and a test holds the
+    /// two equal.
+    before_hosts: &'static dyn CodeHost,
+}
 
 impl CodeHosts {
-    pub(crate) const STANDARD: Self =
-        Self(&[&crate::github::host::GITHUB, &crate::gitlab::host::GITLAB]);
+    pub(crate) const STANDARD: Self = Self {
+        units: &[&crate::github::host::GITHUB, &crate::gitlab::host::GITLAB],
+        before_hosts: &crate::github::host::GITHUB,
+    };
+
+    /// A registry of `units`, with the host of references from before
+    /// hosts were named, which is one of them: a test's own.
+    #[cfg(test)]
+    pub(crate) const fn new(
+        units: &'static [&'static dyn CodeHost],
+        before_hosts: &'static dyn CodeHost,
+    ) -> Self {
+        Self {
+            units,
+            before_hosts,
+        }
+    }
 
     pub(crate) fn hosts(self) -> impl Iterator<Item = Host> {
-        self.0.iter().map(|unit| Host(*unit))
+        self.units.iter().map(|unit| Host(*unit))
+    }
+
+    /// The host a reference that names none belongs to: one saved or sent
+    /// before hosts were named.
+    pub(crate) fn before_hosts(self) -> Host {
+        Host(self.before_hosts)
+    }
+
+    /// The host a reference's recorded key names, or, for none, the host of
+    /// references from before hosts were named.
+    pub(crate) fn recorded(self, key: Option<&str>) -> Option<Host> {
+        match key {
+            None | Some("") => Some(self.before_hosts()),
+            Some(key) => self.host(key),
+        }
     }
 
     /// The registered host of `key`.
@@ -494,6 +582,34 @@ impl CodeHosts {
     pub(crate) fn on_named_server(self, repository: &RepositoryRef) -> bool {
         self.of(repository)
             .is_some_and(|host| host.names_server(&repository.authority))
+    }
+
+    /// The name the link record and a session's references key
+    /// `repository` by, the one place it is folded: its host's stored name
+    /// in lower case, as a session's reader spells it (`hide_session::hosts`),
+    /// so github.com's is the bare `owner/name` the record has always held
+    /// and gitlab.com's carries its server (`gitlab.com/group/project`); on a
+    /// server its host does not name (GitHub Enterprise), its path, as the
+    /// record held it before hosts. `None` for a host not registered.
+    pub(crate) fn record_name(self, repository: &RepositoryRef) -> Option<String> {
+        let host = self.of(repository)?;
+        let name = if host.names_server(&repository.authority) {
+            host.stored_name(repository)
+        } else {
+            repository.path.clone()
+        };
+        Some(name.to_ascii_lowercase())
+    }
+
+    /// The record's key for the host's own id of `repository`: the id under
+    /// the server part of its record name, so two hosts' ids never meet
+    /// (`gitlab.com/<id>`), and github.com's bare id as it always was.
+    pub(crate) fn record_id(self, repository: &RepositoryRef, id: &str) -> Option<String> {
+        let name = self.record_name(repository)?;
+        let server = name
+            .strip_suffix(&repository.path.to_ascii_lowercase())
+            .unwrap_or_default();
+        Some(format!("{server}{id}"))
     }
 
     fn best(self, read: impl Fn(Host) -> Option<RepositoryRef>) -> Option<(Host, RepositoryRef)> {

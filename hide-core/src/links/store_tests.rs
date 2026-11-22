@@ -1694,6 +1694,136 @@ fn a_number_named_alone_belongs_to_the_project_whose_folder_the_call_ran_in() {
     assert_eq!(other, vec!["s-there"]);
 }
 
+/// A gitlab.com project and a GitHub project whose repositories share
+/// `acme/app` and whose change requests share number 7 never share a key:
+/// each session's call links only the change request of its own host, a
+/// number named alone only in a folder of a project of that host, and a
+/// `glab` number in a GitHub checkout links nothing.
+#[test]
+fn a_merge_request_and_a_pull_request_of_one_name_and_number_link_only_their_own_sessions() {
+    let home = tempfile::tempdir().unwrap();
+    let state = tempfile::tempdir().unwrap();
+    let mut store = open(state.path());
+    store
+        .apply_project(&project(vec![pr(7, "feat/x", T0, None)]), T0)
+        .unwrap();
+    store
+        .apply_project(
+            &ProjectFacts {
+                key: "project:gl".into(),
+                root: "/work/gl".into(),
+                repository: Some("gitlab.com/acme/app".into()),
+                repository_id: Some("gitlab.com/gid://gitlab/Project/1".into()),
+                worktrees: Vec::new(),
+                ..project(vec![PrFact {
+                    repository: "gitlab.com/acme/app".into(),
+                    url: "https://gitlab.com/acme/app/-/merge_requests/7".into(),
+                    ..pr(7, "feat/y", T0, None)
+                }])
+            },
+            T0,
+        )
+        .unwrap();
+    let calls = [
+        ("s-gh", ROOT, "gh pr view 7"),
+        ("s-gh-repo", "/work/gl", "gh pr view 7 -R acme/app"),
+        ("s-gh-in-gl", "/work/gl", "gh pr view 7"),
+        ("s-gl", "/work/gl", "glab mr view !7"),
+        ("s-gl-repo", ROOT, "glab mr note 7 -R acme/app -m x"),
+        ("s-gl-in-gh", ROOT, "glab mr view 7"),
+        (
+            "s-gl-address",
+            ROOT,
+            "open https://gitlab.com/ACME/App/-/merge_requests/7",
+        ),
+    ];
+    for (id, cwd, command) in calls {
+        let path = claude_call(home.path(), id, cwd, T0 + 10 * MIN, "봐 줘", command, None);
+        ingest(&mut store, home.path(), &path);
+    }
+    let sessions = |project: &str| -> Vec<String> {
+        let mut ids: Vec<String> = store
+            .pr_panel(project, 7, Some(here()))
+            .unwrap()
+            .unwrap()
+            .sessions
+            .into_iter()
+            .map(|line| line.id)
+            .collect();
+        ids.sort();
+        ids
+    };
+    assert_eq!(sessions(PROJECT), vec!["s-gh", "s-gh-repo"]);
+    assert_eq!(
+        sessions("project:gl"),
+        vec!["s-gl", "s-gl-address", "s-gl-repo"]
+    );
+}
+
+/// A record from before named change requests kept their host (version
+/// 17) gains the column with nothing read again; its rows are of the host
+/// from before hosts. An older node's reader, which knows no `glab`,
+/// sends nothing for a `glab` call: nothing is named and nothing fails.
+#[test]
+fn a_record_from_before_hosts_reads_its_named_numbers_as_github_and_reads_nothing_again() {
+    let home = tempfile::tempdir().unwrap();
+    let state = tempfile::tempdir().unwrap();
+    let path = state.path().join("links.sqlite3");
+    let review = claude_call(
+        home.path(),
+        "s-review",
+        ROOT,
+        T0 + 30 * MIN,
+        "7번 리뷰해 줘",
+        "gh pr view 7",
+        None,
+    );
+    {
+        let (mut store, _) = LinkStore::open(&path).unwrap();
+        store
+            .apply_project(&project(vec![pr(7, "feat/x", T0, None)]), T0)
+            .unwrap();
+        ingest(&mut store, home.path(), &review);
+        store
+            .connection
+            .execute_batch(
+                "ALTER TABLE session_named_prs DROP COLUMN host; PRAGMA user_version=17;",
+            )
+            .unwrap();
+    }
+    let (mut store, opened) = LinkStore::open(&path).unwrap();
+    assert_eq!(opened, Opened::Existing);
+    assert_ne!(
+        store
+            .stamps(DEVICE)
+            .unwrap()
+            .get(&review)
+            .map(String::as_str),
+        Some(""),
+        "nothing is read again"
+    );
+    assert_eq!(
+        roles(&panel(&store, 7)),
+        vec![("s-review", SessionRole::Worked, Some("7번 리뷰해 줘"))]
+    );
+
+    // What an older node sends for a session that ran `glab mr view 7`.
+    let answer = links::ReadAnswer {
+        agent: Agent::Claude,
+        path: "/f/older.jsonl".into(),
+        checkpoint: None,
+        has_more: false,
+        rescanned: false,
+        facts: chunk("s-older-node", ROOT, T0 + 40 * MIN),
+        error: None,
+    };
+    store.apply_answer(DEVICE, &answer, "stamp").unwrap();
+    assert_eq!(
+        roles(&panel(&store, 7)),
+        vec![("s-review", SessionRole::Worked, Some("7번 리뷰해 줘"))]
+    );
+}
+
 #[test]
 fn a_record_from_before_named_pull_requests_reads_its_files_again_and_finds_them() {
     let home = tempfile::tempdir().unwrap();
@@ -2505,6 +2635,7 @@ fn a_pass_over_the_changed_projects_publishes_what_a_full_pass_publishes() {
             repository: Some("acme/app".into()),
             number: 2,
             folder: None,
+            host: None,
         },
         at_unix_ms: T0 + 31 * MIN,
         request: None,
@@ -2519,6 +2650,7 @@ fn a_pass_over_the_changed_projects_publishes_what_a_full_pass_publishes() {
             repository: None,
             number: 5,
             folder: Some("/work/lib".into()),
+            host: None,
         },
         at_unix_ms: T0 + 22 * MIN,
         request: None,
@@ -2655,6 +2787,7 @@ fn a_pass_over_the_changed_projects_publishes_what_a_full_pass_publishes() {
             repository: Some("acme/app".into()),
             number: 1,
             folder: None,
+            host: None,
         },
         at_unix_ms: T0 + 96 * MIN,
         request: None,
@@ -2776,6 +2909,7 @@ fn a_pass_reads_again_only_the_pull_requests_a_change_reaches() {
             repository: None,
             number: 6,
             folder: Some("/work/app".into()),
+            host: None,
         },
         at_unix_ms: T0 + 42 * MIN,
         request: None,
@@ -2964,6 +3098,7 @@ fn the_candidate_pull_requests_are_the_ones_any_evidence_names() {
                 repository: Some("acme/app".into()),
                 number: 3,
                 folder: None,
+                host: None,
             },
             at_unix_ms: T0,
             request: None,
@@ -2973,6 +3108,7 @@ fn the_candidate_pull_requests_are_the_ones_any_evidence_names() {
                 repository: None,
                 number: 4,
                 folder: Some(ROOT.into()),
+                host: None,
             },
             at_unix_ms: T0,
             request: None,

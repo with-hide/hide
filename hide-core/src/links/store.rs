@@ -32,7 +32,7 @@ mod session_reads;
 pub(crate) use ledger::main_flow;
 pub use session_reads::{ListedSession, MainFlow, SessionFile, SessionPage, named_by_goal};
 
-const SCHEMA_VERSION: i64 = 17;
+const SCHEMA_VERSION: i64 = 18;
 
 const SCHEMA: &str = "
 CREATE TABLE projects(key TEXT PRIMARY KEY, device TEXT NOT NULL, root TEXT NOT NULL,
@@ -2053,7 +2053,7 @@ impl LinkStore {
         let mut statement = self
             .connection
             .prepare_cached(
-                "SELECT n.device, n.agent, n.id, n.repo_name, n.folder, n.at, n.request, s.cwd \
+                "SELECT n.device, n.agent, n.id, n.repo_name, n.folder, n.at, n.request, s.cwd, n.host \
                  FROM session_named_prs n LEFT JOIN sessions s \
                  ON s.device=n.device AND s.agent=n.agent AND s.id=n.id WHERE n.number=?1",
             )
@@ -2071,14 +2071,29 @@ impl LinkStore {
                     at: row.get::<_, i64>(5)? as u64,
                     request: row.get(6)?,
                     cwd: row.get(7)?,
+                    host: row.get(8)?,
                 })
             })
             .and_then(Iterator::collect)
             .map_err(failed)?;
         let mut places: Option<Vec<(String, DevicePath)>> = None;
         let mut named: BTreeMap<SessionKey, (u64, Option<String>)> = BTreeMap::new();
+        // A number named alone is of the folder's project only when the
+        // command that named it is of that project's host: `glab mr view 12`
+        // names no GitHub pull request. A project whose name the registry
+        // does not read is of the host from before hosts, as every project
+        // the record held then.
+        let hosts = crate::code_host::CodeHosts::STANDARD;
+        let project_host = project
+            .name
+            .as_deref()
+            .and_then(|name| hosts.repository(name))
+            .map_or_else(|| hosts.before_hosts(), |(host, _)| host);
         for row in rows {
             let admitted = if row.repo_name.is_empty() {
+                if hosts.recorded(Some(&row.host)) != Some(project_host) {
+                    continue;
+                }
                 let place = Some(row.folder)
                     .filter(|folder| !folder.is_empty())
                     .or(row.cwd);
@@ -2860,6 +2875,15 @@ UPDATE cursors SET checkpoint=NULL, stamp='';
 DELETE FROM meta WHERE key='listed_at' OR key LIKE 'listed_at:%';
 ";
 
+/// The host whose command named a change request (version 18,
+/// `hide_session::NamedPr::host`): a number named alone belongs only to a
+/// project of that host. A row from before it is empty, which reads as the
+/// host every reference from before hosts belongs to
+/// (`CodeHosts::before_hosts`), so nothing is read again; a store a test
+/// rolled back may already hold the column.
+const NAMED_HOST_COLUMN: &str =
+    "ALTER TABLE session_named_prs ADD COLUMN host TEXT NOT NULL DEFAULT '';";
+
 /// When a Hide pane first carried each session (version 11), the durable
 /// point a `hide_agent_started` statistic is sent from. Every session the
 /// store already holds counts as carried, so an upgrade sends nothing. A
@@ -2964,6 +2988,13 @@ fn migrate(connection: &Connection) -> Result<(), OpenFailure> {
             } else {
                 MADE_COLUMN
             };
+        let named_host = if version >= 18
+            || (version > 0 && has_column(connection, "session_named_prs", "host")?)
+        {
+            ""
+        } else {
+            NAMED_HOST_COLUMN
+        };
         let pane_seen = if version >= 11 {
             String::new()
         } else if version > 0 && has_column(connection, "sessions", "pane_first_at")? {
@@ -2973,7 +3004,7 @@ fn migrate(connection: &Connection) -> Result<(), OpenFailure> {
         };
         connection
             .execute_batch(&format!(
-                "BEGIN IMMEDIATE; {initial} {work_ledger} {origins} {backlog} {aliases} {metadata} {flows} {closed_flows} {plans} {named} {reviews} {made} {reread} {pane_seen} {folds} {reopens} PRAGMA user_version={SCHEMA_VERSION}; COMMIT;"
+                "BEGIN IMMEDIATE; {initial} {work_ledger} {origins} {backlog} {aliases} {metadata} {flows} {closed_flows} {plans} {named} {reviews} {made} {reread} {pane_seen} {folds} {reopens} {named_host} PRAGMA user_version={SCHEMA_VERSION}; COMMIT;"
             ))
             .map_err(|error| {
                 let _ = connection.execute_batch("ROLLBACK");
@@ -3044,8 +3075,8 @@ fn apply_named(
             break;
         }
         tx.execute(
-            "INSERT INTO session_named_prs VALUES(?1,?2,?3,?4,?5,?6,?7,?8,?9) \
-             ON CONFLICT(device,agent,id,repo_name,number,folder) DO UPDATE SET \
+            "INSERT INTO session_named_prs(device,agent,id,file,repo_name,number,folder,at,request,host) \
+             VALUES(?1,?2,?3,?4,?5,?6,?7,?8,?9,?10) ON CONFLICT(device,agent,id,repo_name,number,folder) DO UPDATE SET \
              request=CASE WHEN excluded.at < at THEN excluded.request ELSE request END, \
              at=MIN(at, excluded.at)",
             params![
@@ -3058,6 +3089,7 @@ fn apply_named(
                 folder,
                 mark.at_unix_ms as i64,
                 mark.request.as_ref().or(before),
+                mark.pr.host.as_deref().unwrap_or_default(),
             ],
         )
         .map_err(failed)?;
@@ -3495,6 +3527,8 @@ impl SessionRow {
 struct NamedRow {
     key: SessionKey,
     repo_name: String,
+    /// The key of the host whose command named it; empty from before hosts.
+    host: String,
     folder: String,
     at: u64,
     request: Option<String>,

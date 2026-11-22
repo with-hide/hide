@@ -8003,7 +8003,7 @@
                     "required": false,
                     "requires": [],
                     "value": {
-                        "type": "unsigned"
+                        "type": "change_request"
                     }
                 },
                 {
@@ -8014,7 +8014,7 @@
                     "required": false,
                     "requires": [],
                     "value": {
-                        "type": "unsigned"
+                        "type": "change_request"
                     }
                 },
                 {
@@ -9396,7 +9396,7 @@
                     "required": false,
                     "requires": [],
                     "value": {
-                        "type": "unsigned"
+                        "type": "change_request"
                     }
                 },
                 {
@@ -9469,7 +9469,7 @@
             "rest": null
         }
     ],
-    "digest": "sha256:be856f93a826e2903a2a53a4d1db1fdb08705974b8283fe91e5302c0aaf6ebf2",
+    "digest": "sha256:f507563ff68275ffcb74ef689ccacc66a482782d0e4f3ebdb934bb2ab78c8cd4",
     "envelopes": {
         "access": {
             "answer": "value",
@@ -9546,6 +9546,7 @@
     "value_types": {
         "approval": "not blank, at most 256 bytes, no control characters",
         "body": "not blank, at most 16384 bytes",
+        "change_request": "a change request's number above 0, bare, with its host's label (#12 on GitHub, !12 on gitlab.com) or as its address",
         "commit": "7 to 64 hexadecimal digits",
         "json": "a JSON document of the shape hide mission help or hide task help shows",
         "key": "non-empty, at most 256 bytes, no control characters, does not start with -",
