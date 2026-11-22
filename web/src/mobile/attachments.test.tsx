@@ -10,6 +10,7 @@ vi.hoisted(() => {
   HTMLCanvasElement.prototype.getContext = () => null;
 });
 
+// Each test loads the whole phone app afresh, which a loaded machine takes longer than the default 5 s to do.
 vi.setConfig({ testTimeout: 30_000 });
 
 class FakeSocket {
@@ -99,9 +100,12 @@ it("sends the words and the files as one input once every file is in, and draws 
     await submit();
     expect(of("input")).toEqual([expect.objectContaining({ text: "어제 잰 화면이랑 오늘 holder 로그야.", stages: [shot!.stage, logStage] })]);
 
+    // A file picked while the reply is on its way is not the reply's: it stays on the bar once the reply lands.
+    const later = uploads.reserveFile("later.log", "file")!;
+    await act(async () => uploads.addFile(later, { name: "later.log", bytes: new Uint8Array([4]), kind: "file", thumb: null }));
     const requestId = (of("input")[0] as { request_id: string }).request_id;
     await serve({ type: "input_result", request_id: requestId, ok: true, reason: null });
-    expect(container.querySelector("[data-phone-attachments]")).toBeNull();
+    expect([...container.querySelectorAll("[data-phone-attached]")].map((file) => file.textContent)).toEqual([expect.stringContaining("later.log")]);
     const folder = "/Users/me/.hide/state/attachments";
     await serve({
       type: "conversation", device_id: "local", pane_id: "w1:p1", state: "ok", mode: "reset", before: null, running: null,
@@ -110,6 +114,7 @@ it("sends the words and the files as one input once every file is in, and draws 
     const bubble = container.querySelector<HTMLElement>('[data-phone-message="you"]')!;
     expect(bubble.querySelector<HTMLImageElement>('[data-phone-sent-photo="IMG_0001.jpg"] img')!.src).toBe("data:image/jpeg;base64,AA==");
     expect(bubble.querySelector('[data-phone-sent-file="holder.log"]')!.textContent).toContain("holder.log");
+    expect(bubble.querySelector('[data-phone-sent-file="later.log"]')).toBeNull();
     expect(bubble.querySelector("p")!.textContent).toBe("어제 잰 화면이랑 오늘 holder 로그야.");
   } finally {
     await unmount();

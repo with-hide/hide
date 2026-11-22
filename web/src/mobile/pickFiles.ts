@@ -75,22 +75,16 @@ function dataUrl(blob: Blob): Promise<string> {
 }
 
 /**
- * A photo made smaller, as a JPEG without the original's metadata (a photo's place goes with it), and its thumbnail; null when the
- * phone cannot draw it, and it goes as the file it is.
+ * A photo made smaller, as a JPEG without the original's metadata (a photo's place goes with it), and its thumbnail, or none when only
+ * the thumbnail could not be drawn. Throws when the phone cannot draw or encode the photo itself: the original, with its place, is
+ * never sent in its stead.
  */
-async function smallerPhoto(file: File): Promise<PreparedFile | null> {
-  let bitmap: ImageBitmap;
-  try {
-    bitmap = await createImageBitmap(file);
-  } catch {
-    return null;
-  }
+export async function smallerPhoto(file: File): Promise<PreparedFile> {
+  const bitmap = await createImageBitmap(file);
   try {
     const photo = await encode(bitmap, PHOTO_LONG_SIDE, PHOTO_QUALITY);
-    const thumb = await dataUrl(await encode(bitmap, THUMB_LONG_SIDE, THUMB_QUALITY));
+    const thumb = await encode(bitmap, THUMB_LONG_SIDE, THUMB_QUALITY).then(dataUrl, () => null);
     return { name: photoName(file.name), bytes: new Uint8Array(await photo.arrayBuffer()), kind: "photo", thumb };
-  } catch {
-    return null;
   } finally {
     bitmap.close();
   }
@@ -101,9 +95,11 @@ export async function attachPicked(picked: readonly File[]): Promise<void> {
   const slots = picked.map((file) => ({ file, id: reserveFile(file.name, isPhoto(file) ? "photo" : "file") }));
   for (const { file, id } of slots) {
     if (!id) continue;
-    const photo = isPhoto(file) ? await smallerPhoto(file) : null;
-    if (photo) {
-      addFile(id, photo);
+    if (isPhoto(file)) {
+      // A photo the phone cannot make smaller is left out with its line, never sent as the original.
+      const photo = await smallerPhoto(file).catch(() => null);
+      if (photo) addFile(id, photo);
+      else leaveFile(id, { kind: "photo_failed", name: fileName(file.name) });
       continue;
     }
     // A file past the cap is never read whole: its size says enough.

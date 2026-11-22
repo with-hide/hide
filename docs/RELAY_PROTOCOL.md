@@ -334,19 +334,19 @@ A phone offers files only to a computer whose `hello` carries `attachments: true
 
 | Frame | Fields | Answer |
 | --- | --- | --- |
-| `attach_begin` | `stage`, a UUID the phone makes; `name`; `size`, at most 10 MiB (`FILE_BYTES`) | nothing, or `attach_ack {stage, failed}` |
+| `attach_begin` | `stage`, a UUID the phone makes; `name`; `size`, at most 10 MiB (`FILE_BYTES`) | `attach_ack {stage, begun: true}` |
 | `attach_chunk` | `stage`; `seq`, counted from 0; `data`, the base64 of at most 12,000 bytes (`CHUNK`) | `attach_ack {stage, seq}` once the bytes are on disk |
 | `attach_end` | `stage` | `attach_ack {stage, done: true}` once the stage's bytes match its `size` |
-| `attach_cancel` | `stage` | nothing; the stage and its file are dropped |
+| `attach_cancel` | `stage` | `attach_ack {stage, cancelled: true}` once the stage and its file are dropped |
 
-A refusal is `attach_ack {stage, failed}` with the store's reason (`too_large`, `too_many_files`, `batch_too_large`, `staging_full`, `size_mismatch`, `invalid_request` and the store's others); a frame that names no stage of the phone's shape is refused as a request is, with no `attach_ack`.
+Every upload frame is answered exactly once; a refusal is `attach_ack {stage, failed}` with the store's reason (`too_large`, `too_many_files`, `batch_too_large`, `staging_full`, `size_mismatch`, `invalid_request` and the store's others); a frame that names no stage of the phone's shape is refused as a request is, with no `attach_ack`.
 The stages a reply attaches go in its `input` as `stages`, at most eight and each once, beside its `text` (which may be empty); hided commits them from the store when the reply is written, and answers `attachment_lost` for a stage the store no longer holds, which the phone uploads again under a new stage before it sends again.
 
 Pacing keeps every hop inside its cap without a new limit:
 
 - A chunk frame is at most 16,128 bytes of JSON (12,000 bytes as 16,000 of base64 and 128 for the rest), under the 16 KiB phone message hided reads (`phone::MAX_FRAME`), and so one envelope.
-- The phone keeps at most four chunks (`WINDOW`) out that hided has not acknowledged, half the eight frames hided takes from one phone before it reads them (`relay::INBOUND_QUEUE`), so a ping and a request always fit beside them.
-- Four chunks are about 64 KiB in the phone's socket, far under the 1 MiB the phone's relay socket buffers before it refuses a send (`send_limit`, `web/src/mobile/relaySocket.ts`).
+- The phone keeps at most four upload frames (`WINDOW`) out that hided has not answered, of every kind and whichever file they name, half the eight frames hided takes from one phone before it reads them (`relay::INBOUND_QUEUE`), so a ping and a request always fit beside them; a cancel waits for a place like any other frame, and the next file begins only once there is one, so a cancel never opens a second window beside the frames still out.
+- Four frames are about 64 KiB in the phone's socket, far under the 1 MiB the phone's relay socket buffers before it refuses a send (`send_limit`, `web/src/mobile/relaySocket.ts`).
 - Every chunk is charged to the room's 1 GiB a day as any frame is; when it is spent the relay closes the phone with `daily_limit`, the phone marks every file not yet in as failed with one line that says the day's budget is used up, and it does not retry.
 
 One file uploads at a time, in the order it was picked.

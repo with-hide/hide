@@ -46,7 +46,7 @@ import { appHost } from "./appHost";
 import { appPushRefused, syncAppPush } from "./appPush";
 import { browserPushResult, forgetPush, syncPush } from "./push";
 import { RelaySocket, type PhoneSocket } from "./relaySocket";
-import { bindUploads, dropFiles, filesIntent, filesSent, onAttachAck, readyStages, reuploadFiles, uploadsConnected, uploadsLost } from "./uploads";
+import { bindUploads, dropFiles, filesSent, onAttachAck, replyFiles, reuploadFiles, uploadsConnected, uploadsLost } from "./uploads";
 import { DemoSocket, demoRequested } from "./demoSocket";
 import { translate } from "../i18n/translator";
 import { hostedPhone, PHONE_PROTOCOL, takePairing } from "./relayRuntime";
@@ -563,8 +563,11 @@ export function loadOlder(): void {
 }
 
 let requestCounter = 0;
-/** The last reply sent and its request id: the same words with the same files are the same reply, sent again under the same id (B27). */
-let lastReply: { intent: string; text: string; requestId: string } | null = null;
+/**
+ * The last reply sent: the same words with the same files are the same reply, sent again under the same request id (B27); the files
+ * it named, by what was picked, are the ones that leave the bar when it lands.
+ */
+let lastReply: { intent: string; files: string[]; requestId: string } | null = null;
 
 function newRequestId(): string {
   requestCounter += 1;
@@ -729,18 +732,18 @@ export function sendReply(text: string): boolean {
   const state = usePhone.getState();
   const detail = state.detail;
   if (!detail || state.pendingInput) return false;
-  const stages = readyStages();
-  if (!stages) return false;
-  const problem = replyProblem(text, state.answer, detail.key, stages.length);
+  const attached = replyFiles();
+  if (!attached) return false;
+  const problem = replyProblem(text, state.answer, detail.key, attached.stages.length);
   if (problem) {
     patch({ inputError: inputFailure(problem, state.answer) });
     return false;
   }
   // The files by what was picked, not by their stages: a file uploaded again after a lost connection is still the same reply's.
-  const intent = `${text}\u0000${filesIntent()}`;
+  const intent = `${text}\u0000${attached.ids.join(",")}`;
   const requestId = lastReply?.intent === intent ? lastReply.requestId : newRequestId();
-  lastReply = { intent, text, requestId };
-  const sent = send(replyMessage(detail.key, text, requestId, stages));
+  lastReply = { intent, files: attached.ids, requestId };
+  const sent = send(replyMessage(detail.key, text, requestId, attached.stages));
   patch(sent ? { pendingInput: { requestId, kind: "text" }, inputError: null } : { inputError: inputFailure("offline") });
   return sent;
 }
@@ -833,7 +836,7 @@ function onInputResult(ok: boolean, reason: string | null): void {
   patch({ pendingInput: null, inputError: ok ? null : inputFailure(reason, usePhone.getState().answer) });
   if (pending?.kind === "text") {
     const detail = usePhone.getState().detail;
-    if (ok && detail && lastReply) filesSent(detail.key, lastReply.text);
+    if (ok && detail && lastReply) filesSent(detail.key, lastReply.files);
     // The computer no longer holds a file the reply named: every file goes up again, and the reply is sent once they are in.
     if (!ok && reason === "attachment_lost") reuploadFiles();
     if (ok) lastReply = null;

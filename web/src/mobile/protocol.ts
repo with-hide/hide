@@ -389,7 +389,7 @@ export type ServerFrame =
   | { type: "look_end"; request_id: string; view_id: string }
   | { type: "input_result"; request_id?: string; ok: boolean; reason: string | null }
   /** An upload frame taken (hided/src/mobile/uploads.rs): a chunk on disk (`seq`), every byte in (`done`), or refused with why (`failed`). */
-  | { type: "attach_ack"; stage: string; seq?: number; done?: boolean; failed?: string }
+  | { type: "attach_ack"; stage: string; seq?: number; begun?: boolean; done?: boolean; cancelled?: boolean; failed?: string }
   | { type: "human_turn_result"; request_id?: string; ok: boolean; reason: string | null }
   /** Accepted for dispatch; progress and refusal remain on the core-owned row. A pane's wake answers with `sleepTarget` of its key as `sleep_id`. */
   | { type: "sleep_result"; request_id?: string; sleep_id: string; ok: boolean; reason: string | null }

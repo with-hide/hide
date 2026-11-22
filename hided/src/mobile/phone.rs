@@ -1238,7 +1238,7 @@ async fn handle(
         // into the store the desktop's uploads use.
         "attach_begin" | "attach_chunk" | "attach_end" | "attach_cancel" => {
             match super::uploads::handle(mobile.attachments(), connection, kind, message) {
-                Ok(answer) => answer,
+                Ok(answer) => Some(answer),
                 Err(reason) => {
                     refusal_logged("scope.refused", Some(phone_id), reason);
                     None
@@ -4265,18 +4265,17 @@ mod tests {
         };
         use base64::Engine as _;
         assert_eq!(
-            frame("attach_begin", json!({"name": name, "size": bytes.len()})),
-            None
+            frame("attach_begin", json!({"name": name, "size": bytes.len()}))["begun"],
+            json!(true)
         );
         let data = base64::engine::general_purpose::STANDARD.encode(bytes);
         assert_eq!(
-            frame("attach_chunk", json!({"seq": 0, "data": data}))
-                .and_then(|ack| ack.get("seq").cloned()),
-            Some(json!(0))
+            frame("attach_chunk", json!({"seq": 0, "data": data}))["seq"],
+            json!(0)
         );
         assert_eq!(
-            frame("attach_end", json!({})).and_then(|ack| ack.get("done").cloned()),
-            Some(json!(true))
+            frame("attach_end", json!({}))["done"],
+            json!(true)
         );
     }
 

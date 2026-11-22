@@ -8,18 +8,21 @@
 //! bytes travel as base64 in `attach_chunk` frames of at most [`CHUNK`] bytes:
 //!
 //! - `attach_begin {stage, name, size}` opens a stage of `size` bytes, at
-//!   most [`FILE_BYTES`]; `stage` is a UUID the phone makes;
+//!   most [`FILE_BYTES`], answered `attach_ack {stage, begun: true}`;
+//!   `stage` is a UUID the phone makes;
 //! - `attach_chunk {stage, seq, data}` appends the next bytes, answered
 //!   `attach_ack {stage, seq}` once they are on disk;
 //! - `attach_end {stage}` says every byte was sent: the stage closes, its
 //!   size checked against `size`, answered `attach_ack {stage, done: true}`;
-//! - `attach_cancel {stage}` drops the stage and its file, answered by
-//!   nothing.
+//! - `attach_cancel {stage}` drops the stage and its file, answered
+//!   `attach_ack {stage, cancelled: true}`.
 //!
 //! Any refusal is answered `attach_ack {stage, failed}` with the store's
-//! reason. The phone keeps at most [`WINDOW`] chunks out that hided has not
-//! acknowledged, so its frames never fill the eight that hided takes from
-//! each phone (`relay::INBOUND_QUEUE`) while it reads them in order.
+//! reason. Every upload frame is answered exactly once, so the phone counts
+//! the frames of every kind it has out on its connection, whichever stage
+//! they name, and keeps at most [`WINDOW`] unanswered: its uploads never
+//! fill the eight frames hided takes from each phone
+//! (`relay::INBOUND_QUEUE`), even across a cancel and the next file.
 
 use base64::Engine as _;
 use base64::engine::general_purpose::STANDARD;
@@ -34,9 +37,9 @@ pub const FILE_BYTES: u64 = 10 * 1024 * 1024;
 /// The bytes one `attach_chunk` carries at most: its base64 and the frame's
 /// other fields fit one phone message, in whole three-byte groups.
 pub const CHUNK: usize = 12_000;
-/// The chunks a phone keeps out that hided has not acknowledged: half the
-/// eight frames hided takes from a phone at once, so a ping and a request
-/// always fit beside them.
+/// The upload frames a phone keeps out that hided has not answered: half
+/// the eight frames hided takes from a phone at once, so a ping and a
+/// request always fit beside them.
 pub const WINDOW: usize = 4;
 /// What an `attach_chunk` frame holds beside its base64: its type, a stage
 /// id, a sequence number and the JSON around them.
@@ -67,15 +70,15 @@ fn stage_of(message: &Value) -> Option<&str> {
         .filter(|stage| attachments::valid_request_id(stage))
 }
 
-/// One upload frame of `connection`; the answer to send, if any. `None` for
-/// a frame that names no stage the phone could match an answer to: the
-/// caller records it as refused.
+/// One upload frame of `connection` and its one answer. An error for a
+/// frame that names no stage the phone could match an answer to: the caller
+/// records it as refused.
 pub fn handle(
     store: &Attachments,
     connection: u64,
     kind: &str,
     message: &Value,
-) -> Result<Option<Value>, &'static str> {
+) -> Result<Value, &'static str> {
     let stage = stage_of(message).ok_or("attach_stage")?;
     Ok(match kind {
         "attach_begin" => {
@@ -84,15 +87,15 @@ pub fn handle(
                 .and_then(Value::as_str)
                 .unwrap_or_default();
             let Some(size) = message.get("size").and_then(Value::as_u64) else {
-                return Ok(Some(failed(stage, "invalid_request")));
+                return Ok(failed(stage, "invalid_request"));
             };
             if size > FILE_BYTES {
-                return Ok(Some(failed(stage, "too_large")));
+                return Ok(failed(stage, "too_large"));
             }
-            store
-                .begin(connection, stage, name, size, false)
-                .err()
-                .map(|reason| failed(stage, reason))
+            match store.begin(connection, stage, name, size, false) {
+                Ok(_) => ack(stage, json!({"begun": true})),
+                Err(reason) => failed(stage, reason),
+            }
         }
         "attach_chunk" => {
             let (Some(seq), Some(data)) = (
@@ -100,28 +103,28 @@ pub fn handle(
                 message.get("data").and_then(Value::as_str),
             ) else {
                 store.discard(stage);
-                return Ok(Some(failed(stage, "invalid_request")));
+                return Ok(failed(stage, "invalid_request"));
             };
             let Ok(bytes) = STANDARD.decode(data) else {
                 store.discard(stage);
-                return Ok(Some(failed(stage, "invalid_request")));
+                return Ok(failed(stage, "invalid_request"));
             };
             if bytes.len() > CHUNK {
                 store.discard(stage);
-                return Ok(Some(failed(stage, "invalid_request")));
+                return Ok(failed(stage, "invalid_request"));
             }
-            Some(match store.write(stage, &bytes, false) {
+            match store.write(stage, &bytes, false) {
                 Ok(_) => ack(stage, json!({"seq": seq})),
                 Err(reason) => failed(stage, reason),
-            })
+            }
         }
-        "attach_end" => Some(match store.write(stage, &[], true) {
+        "attach_end" => match store.write(stage, &[], true) {
             Ok(_) => ack(stage, json!({"done": true})),
             Err(reason) => failed(stage, reason),
-        }),
+        },
         "attach_cancel" => {
             store.discard(stage);
-            None
+            ack(stage, json!({"cancelled": true}))
         }
         _ => return Err("attach_kind"),
     })
@@ -148,11 +151,15 @@ mod tests {
         frame
     }
 
-    fn send(store: &Attachments, connection: u64, kind: &str, fields: Value) -> Option<Value> {
+    fn send(store: &Attachments, connection: u64, kind: &str, fields: Value) -> Value {
         handle(store, connection, kind, &frame(kind, fields)).unwrap()
     }
 
-    fn chunk(store: &Attachments, seq: u64, bytes: &[u8]) -> Option<Value> {
+    fn begun() -> Value {
+        json!({"type": "attach_ack", "stage": STAGE, "begun": true})
+    }
+
+    fn chunk(store: &Attachments, seq: u64, bytes: &[u8]) -> Value {
         send(
             store,
             1,
@@ -174,19 +181,19 @@ mod tests {
                 "attach_begin",
                 json!({"name": "holder.log", "size": 5})
             ),
-            None
+            begun()
         );
         assert_eq!(
             chunk(&store, 0, b"abc"),
-            Some(json!({"type": "attach_ack", "stage": STAGE, "seq": 0}))
+            json!({"type": "attach_ack", "stage": STAGE, "seq": 0})
         );
         assert_eq!(
             chunk(&store, 1, b"de"),
-            Some(json!({"type": "attach_ack", "stage": STAGE, "seq": 1}))
+            json!({"type": "attach_ack", "stage": STAGE, "seq": 1})
         );
         assert_eq!(
             send(&store, 1, "attach_end", json!({})),
-            Some(json!({"type": "attach_ack", "stage": STAGE, "done": true}))
+            json!({"type": "attach_ack", "stage": STAGE, "done": true})
         );
         let paths = store.commit_reply(1, &[STAGE.to_owned()]).unwrap();
         assert_eq!(std::fs::read(&paths[0]).unwrap(), b"abcde");
@@ -208,7 +215,7 @@ mod tests {
                 "attach_begin",
                 json!({"name": "trace.json", "size": FILE_BYTES + 1})
             ),
-            Some(failed(STAGE, "too_large"))
+            failed(STAGE, "too_large")
         );
         assert_eq!(
             send(
@@ -217,12 +224,12 @@ mod tests {
                 "attach_begin",
                 json!({"name": "a.log", "size": 4})
             ),
-            None
+            begun()
         );
         chunk(&store, 0, b"ab");
         assert_eq!(
             send(&store, 1, "attach_end", json!({})),
-            Some(failed(STAGE, "size_mismatch"))
+            failed(STAGE, "size_mismatch")
         );
         assert_eq!(
             store.commit_reply(1, &[STAGE.to_owned()]),
@@ -242,10 +249,13 @@ mod tests {
             json!({"name": "a.log", "size": 4}),
         );
         chunk(&store, 0, b"ab");
-        assert_eq!(send(&store, 1, "attach_cancel", json!({})), None);
+        assert_eq!(
+            send(&store, 1, "attach_cancel", json!({})),
+            json!({"type": "attach_ack", "stage": STAGE, "cancelled": true})
+        );
         assert_eq!(
             chunk(&store, 1, b"cd"),
-            Some(failed(STAGE, "unknown_stage"))
+            failed(STAGE, "unknown_stage")
         );
         let left = std::fs::read_dir(dir.path().join("attachments"))
             .unwrap()
@@ -279,7 +289,7 @@ mod tests {
                 "attach_begin",
                 json!({"name": "a.log", "size": 2})
             ),
-            None
+            begun()
         );
     }
 
@@ -362,7 +372,7 @@ mod tests {
         let read: Value = serde_json::from_str(&largest).unwrap();
         assert_eq!(
             handle(&store, 1, "attach_chunk", &read).unwrap(),
-            Some(json!({"type": "attach_ack", "stage": STAGE, "seq": u32::MAX}))
+            json!({"type": "attach_ack", "stage": STAGE, "seq": u32::MAX})
         );
     }
 
@@ -393,11 +403,11 @@ mod tests {
                 "attach_chunk",
                 json!({"seq": 0, "data": "*not base64*"})
             ),
-            Some(failed(STAGE, "invalid_request"))
+            failed(STAGE, "invalid_request")
         );
         assert_eq!(
             chunk(&store, 1, b"ab"),
-            Some(failed(STAGE, "unknown_stage"))
+            failed(STAGE, "unknown_stage")
         );
     }
 }

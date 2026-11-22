@@ -427,7 +427,7 @@ function ConversationLog({ conversation, agent, ask, running, disabled }: { conv
   const shown = useMemo(
     () =>
       messages.map((message) => {
-        const attached = key && message.who === "you" ? shownFiles(key, message.text, message.at_ms) : null;
+        const attached = key && message.who === "you" ? shownFiles(key, message.text) : null;
         return attached && attached.files.length > 0 ? { message: { ...message, text: attached.words }, files: attached.files } : { message, files: undefined };
       }),
     [messages, key],

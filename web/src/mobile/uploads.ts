@@ -1,10 +1,12 @@
 // The files attached to the reply being written (Doop 08, 09): each one uploaded to the computer as soon as it is picked, one at a
 // time, in `attach_chunk` frames of one phone message each (hided/src/mobile/uploads.rs owns the frames and their numbers), and sent
-// with the reply's words as one `input` naming their stages. The phone keeps at most `WINDOW` chunks out that the computer has not
-// acknowledged, so it never fills the eight frames hided takes from it at once. A lost connection takes the computer's copies with
-// it (hided releases a connection's uploads no reply committed), so every file not yet sent is uploaded again under a new stage once
-// the phone is back; the relay's daily limit ends the upload with its own line. A sent reply's thumbnails stay on this phone only, for
-// the conversation they were sent in: the record keeps the files' paths alone.
+// with the reply's words as one `input` naming their stages. The computer answers every upload frame once, so the phone counts the
+// frames of every kind it has out on the connection, whichever file they belong to, and keeps at most `WINDOW` unanswered: it never
+// fills the eight frames hided takes from it at once, not even across a cancel and the next file. A lost connection takes the
+// computer's copies with it (hided releases a connection's uploads no reply committed), so every file not yet sent is uploaded again
+// under a new stage once the phone is back; the relay's daily limit ends the upload with its own line. A reply owns the files it
+// named when it was sent: only those leave the bar once it lands, and a file picked while it was on its way stays. A sent reply's
+// thumbnails stay on this phone only, for the conversation they were sent in, found by the stage in each file's path.
 
 import type { AgentKey, PhoneMessage } from "./protocol";
 import { patch, usePhone } from "./store";
@@ -13,7 +15,7 @@ import { patch, usePhone } from "./store";
 export const FILE_BYTES = 10 * 1024 * 1024;
 /** The bytes one `attach_chunk` carries (hided `uploads::CHUNK`). */
 export const CHUNK = 12_000;
-/** Chunks out that the computer has not acknowledged (hided `uploads::WINDOW`). */
+/** Upload frames out that the computer has not answered, of every kind and file (hided `uploads::WINDOW`). */
 export const WINDOW = 4;
 /** Files one reply attaches, and their bytes together: the attachment store's batch caps (hided `attachments::MAX_FILES`, `MAX_BATCH_BYTES`). */
 export const MAX_FILES = 8;
@@ -43,6 +45,7 @@ export type FileNotice =
   | { kind: "too_many" }
   | { kind: "too_much" }
   | { kind: "unreadable"; name: string }
+  | { kind: "photo_failed"; name: string }
   | { kind: "daily_limit" }
   | { kind: "failed" };
 
@@ -51,7 +54,7 @@ export type PreparedFile = { name: string; bytes: Uint8Array; kind: "photo" | "f
 
 /** A file of a sent reply, kept for its conversation on this phone. */
 export type SentFile = { stage: string; name: string; size: number; kind: "photo" | "file"; thumb: string | null };
-type SentReply = { tag: string; words: string; at: number; files: SentFile[] };
+type SentReply = { tag: string; files: SentFile[] };
 
 type Upload = { id: string; stage: string; bytes: Uint8Array; chunks: number; next: number; acked: number; ended: boolean };
 
@@ -60,10 +63,15 @@ const held = new Map<string, Uint8Array>();
 /** The stage each file was uploaded under on this connection. */
 const stages = new Map<string, string>();
 let active: Upload | null = null;
+/** Upload frames sent on this connection that the computer has not answered yet. */
+let unanswered = 0;
+/** Stages to drop on the computer, sent ahead of any other upload frame once the window has room. */
+const cancels: string[] = [];
 let fileCounter = 0;
 /** The sent replies whose files this phone still draws, oldest first. */
 const sentReplies: SentReply[] = [];
-const SENT_REPLIES = 32;
+/** How many sent replies keep their files on this phone; an older one's files are named from its paths alone. */
+export const SENT_REPLIES = 32;
 
 /** The connection's sender; set once by `connection.ts`. */
 export function bindUploads(send: (message: PhoneMessage) => boolean): void {
@@ -138,11 +146,15 @@ export function leaveFile(id: string, notice: FileNotice): void {
   patch({ files: files().filter((candidate) => candidate.id !== id), fileNotice: notice });
 }
 
+/** Drops a stage on the computer: its frames already out stay counted until their answers come. */
+function cancel(stage: string | undefined): void {
+  if (stage) cancels.push(stage);
+}
+
 /** The `×` of one file: only that file leaves, and the computer drops what it took of it. */
 export function removeFile(id: string): void {
-  const stage = stages.get(id);
   if (active?.id === id) active = null;
-  if (stage) sender({ type: "attach_cancel", stage });
+  cancel(stages.get(id));
   stages.delete(id);
   held.delete(id);
   patch({ files: files().filter((file) => file.id !== id) });
@@ -161,32 +173,37 @@ export function retryFile(id: string): void {
 
 /** Every file leaves the bar, and the computer drops what it took: the detail closed, or the computer no longer takes files. */
 export function dropFiles(): void {
-  for (const id of held.keys()) {
-    const stage = stages.get(id);
-    if (stage) sender({ type: "attach_cancel", stage });
-  }
+  for (const id of held.keys()) cancel(stages.get(id));
   active = null;
   held.clear();
   stages.clear();
   if (files().length > 0 || usePhone.getState().fileNotice) patch({ files: [], fileNotice: null });
+  pump();
 }
 
-/** The stages a reply names, in the bar's order, once the computer has every file; null while any still uploads or failed. */
-export function readyStages(): string[] | null {
+/** The files a reply names, in the bar's order, by what was picked and by the stage each is uploaded under, once the computer has every one; null while any still uploads or failed. */
+export function replyFiles(): { ids: string[]; stages: string[] } | null {
   const list = files();
   if (list.some((file) => file.state !== "ready")) return null;
   const named = list.map((file) => stages.get(file.id));
-  return named.every((stage): stage is string => typeof stage === "string") ? named : null;
+  return named.every((stage): stage is string => typeof stage === "string") ? { ids: list.map((file) => file.id), stages: named } : null;
 }
 
-/** The files on the bar by what was picked, whatever stage they are uploaded under: part of a reply's intent. */
-export function filesIntent(): string {
-  return files().map((file) => file.id).join(",");
+/** Sends one upload frame, counted until the computer answers it. */
+function sendUpload(message: PhoneMessage): boolean {
+  if (!sender(message)) return false;
+  unanswered += 1;
+  return true;
 }
 
-/** Sends what the window allows of the upload in front, starting the next file when the last one is in. */
+/** Sends what the window allows: the cancels first, then the upload in front, starting the next file when the last one is in. */
 function pump(): void {
   if (!usePhone.getState().connected) return;
+  while (cancels.length > 0 && unanswered < WINDOW) {
+    if (!sendUpload({ type: "attach_cancel", stage: cancels[0]! })) return;
+    cancels.shift();
+  }
+  if (cancels.length > 0 || unanswered >= WINDOW) return;
   if (!active) {
     const next = files().find((file) => file.state === "uploading");
     const bytes = next ? held.get(next.id) : undefined;
@@ -194,20 +211,20 @@ function pump(): void {
     const stage = newStage();
     stages.set(next.id, stage);
     active = { id: next.id, stage, bytes, chunks: Math.ceil(bytes.length / CHUNK), next: 0, acked: 0, ended: false };
-    if (!sender({ type: "attach_begin", stage, name: next.name, size: bytes.length })) {
+    if (!sendUpload({ type: "attach_begin", stage, name: next.name, size: bytes.length })) {
       active = null;
       return;
     }
   }
   const upload = active;
-  while (upload.next < upload.chunks && upload.next - upload.acked < WINDOW) {
+  while (upload.next < upload.chunks && unanswered < WINDOW) {
     const start = upload.next * CHUNK;
     const data = base64(upload.bytes.subarray(start, start + CHUNK));
-    if (!sender({ type: "attach_chunk", stage: upload.stage, seq: upload.next, data })) return;
+    if (!sendUpload({ type: "attach_chunk", stage: upload.stage, seq: upload.next, data })) return;
     upload.next += 1;
   }
-  if (upload.next === upload.chunks && !upload.ended) {
-    if (!sender({ type: "attach_end", stage: upload.stage })) return;
+  if (upload.next === upload.chunks && !upload.ended && unanswered < WINDOW) {
+    if (!sendUpload({ type: "attach_end", stage: upload.stage })) return;
     upload.ended = true;
   }
 }
@@ -218,10 +235,17 @@ function base64(bytes: Uint8Array): string {
   return btoa(binary);
 }
 
-/** The computer's answer to an upload frame: a chunk on disk moves the bar's band, the end makes the file ready, a refusal fails it. */
-export function onAttachAck(frame: { stage: string; seq?: number; done?: boolean; failed?: string }): void {
+/**
+ * The computer's answer to an upload frame, one for each: it frees a place in the window whichever file it names; for the upload in
+ * front a chunk on disk moves the bar's band, the end makes the file ready, a refusal fails it.
+ */
+export function onAttachAck(frame: { stage: string; seq?: number; begun?: boolean; done?: boolean; cancelled?: boolean; failed?: string }): void {
+  unanswered = Math.max(0, unanswered - 1);
   const upload = active;
-  if (!upload || frame.stage !== upload.stage) return;
+  if (!upload || frame.stage !== upload.stage) {
+    pump();
+    return;
+  }
   if (frame.failed) {
     active = null;
     update(upload.id, { state: "failed", reason: frame.failed });
@@ -238,8 +262,8 @@ export function onAttachAck(frame: { stage: string; seq?: number; done?: boolean
   if (typeof frame.seq === "number" && frame.seq + 1 > upload.acked) {
     upload.acked = frame.seq + 1;
     update(upload.id, { sent: Math.min(upload.acked * CHUNK, upload.bytes.length) });
-    pump();
   }
+  pump();
 }
 
 /** The computer said hello: the uploads of the files not yet sent start, or start again. */
@@ -254,6 +278,8 @@ export function uploadsConnected(): void {
  */
 export function uploadsLost(reason: string | null): void {
   active = null;
+  unanswered = 0;
+  cancels.length = 0;
   stages.clear();
   if (files().length === 0) return;
   if (reason === "daily_limit") {
@@ -266,6 +292,7 @@ export function uploadsLost(reason: string | null): void {
 /** The reply naming these files was refused because the computer no longer holds one of them: every file is uploaded again. */
 export function reuploadFiles(): void {
   active = null;
+  for (const stage of stages.values()) cancel(stage);
   stages.clear();
   patch({ files: files().map((file) => (file.state === "preparing" || !held.has(file.id) ? file : { ...file, state: "uploading", sent: 0, reason: null })) });
   pump();
@@ -275,21 +302,21 @@ function tagOf(key: AgentKey): string {
   return `${key.device_id}|${key.pane_id}`;
 }
 
-/** The reply with these files landed: the bar empties, and their thumbnails stay for this agent's conversation on this phone. */
-export function filesSent(key: AgentKey, words: string): void {
-  const list = files();
-  if (list.length === 0) return;
-  sentReplies.push({
-    tag: tagOf(key),
-    words: words.trim(),
-    at: Date.now(),
-    files: list.map((file) => ({ stage: stages.get(file.id) ?? "", name: file.name, size: file.size, kind: file.kind, thumb: file.thumb })),
-  });
+/**
+ * The reply that named the files `ids` landed: those files leave the bar, and their thumbnails stay for this agent's conversation on
+ * this phone, under the stages the reply named. A file picked while the reply was on its way is not the reply's, and stays.
+ */
+export function filesSent(key: AgentKey, ids: readonly string[]): void {
+  const mine = files().filter((file) => ids.includes(file.id));
+  if (mine.length === 0) return;
+  sentReplies.push({ tag: tagOf(key), files: mine.map((file) => ({ stage: stages.get(file.id) ?? "", name: file.name, size: file.size, kind: file.kind, thumb: file.thumb })) });
   while (sentReplies.length > SENT_REPLIES) sentReplies.shift();
-  active = null;
-  held.clear();
-  stages.clear();
-  patch({ files: [], fileNotice: null });
+  for (const id of ids) {
+    held.delete(id);
+    stages.delete(id);
+  }
+  const left = files().filter((file) => !ids.includes(file.id));
+  patch(left.length > 0 ? { files: left } : { files: [], fileNotice: null });
 }
 
 const STAGE_NAME = /^([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})-(.+)$/;
@@ -318,23 +345,23 @@ export function attachedOf(text: string): { files: NamedFile[]; words: string } 
 }
 
 /**
- * The files an operator's message of `key`'s conversation attached, as this phone draws them: the files it sent itself with their
- * thumbnails, found by their stage or, where the agent wrote its own record of them, by the same words sent within a few minutes;
- * any other attached file by its name alone.
+ * The files an operator's message of `key`'s conversation attached, as this phone draws them: a reply this phone sent, found by a
+ * stage in one of the message's paths (a stage names one upload, so it names one reply), with all its files and their thumbnails;
+ * any other message's files by their names alone, and a message with no path in front attaches none.
  */
-export function shownFiles(key: AgentKey, text: string, atMs: number): { files: (SentFile | NamedFile)[]; words: string } {
+export function shownFiles(key: AgentKey, text: string): { files: (SentFile | NamedFile)[]; words: string } {
   const { files: named, words } = attachedOf(text);
   const tag = tagOf(key);
-  const mine = sentReplies.filter((reply) => reply.tag === tag);
-  const byStage = named.length > 0 ? mine.find((reply) => named.some((file) => file.stage && reply.files.some((sent) => sent.stage === file.stage))) : undefined;
-  const byWords = byStage ?? mine.find((reply) => reply.words.length > 0 && reply.words === words.trim() && Math.abs(reply.at - atMs) < 5 * 60_000);
-  if (byWords) return { files: byWords.files, words };
-  return { files: named, words };
+  const stagesNamed = named.flatMap((file) => (file.stage ? [file.stage] : []));
+  const sent = stagesNamed.length > 0 ? sentReplies.find((reply) => reply.tag === tag && reply.files.some((file) => stagesNamed.includes(file.stage))) : undefined;
+  return { files: sent ? sent.files : named, words };
 }
 
 /** Forgets what this module holds; for tests. */
 export function resetUploads(): void {
   active = null;
+  unanswered = 0;
+  cancels.length = 0;
   held.clear();
   stages.clear();
   sentReplies.length = 0;

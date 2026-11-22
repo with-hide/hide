@@ -117,6 +117,8 @@ export function FileNoticeLine({ notice }: { notice: FileNotice | null }) {
       ? t("mobile.attach.tooLarge", { name: notice.name, size: size(notice.size) })
       : notice.kind === "unreadable"
         ? t("mobile.attach.unreadable", { name: notice.name })
+        : notice.kind === "photo_failed"
+          ? t("mobile.attach.photoFailed", { name: notice.name })
         : t(`mobile.attach.${notice.kind === "too_many" ? "tooMany" : notice.kind === "too_much" ? "tooMuch" : notice.kind === "daily_limit" ? "dailyLimit" : "failed"}`);
   return (
     <p className={cn("pb-xs break-keep text-body wrap-anywhere", notice.kind === "daily_limit" || notice.kind === "failed" ? "text-destructive" : "text-muted-foreground")} role="status" data-phone-attach-notice={notice.kind}>
