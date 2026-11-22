@@ -15,7 +15,10 @@
 # request run 44962109854 (4.2 of compile, 7.6 of test build, 7.2 of tests, 5.7
 # of the web suite) and 17.5 on main's warm cache (run 44964698382), the last
 # line of every run that planned it; split, the lane ends with its longest job,
-# the test build and its tests (docs/TESTING.md, "Where the Windows runners
+# the test build and its tests: 20.2 minutes after the run started on pull
+# request run 44979728847 (`rust tests` ran 19.0: 8.1 of build, about 9.8 of
+# tests), against 28.0 for the one job on main run 44977591536, still over the
+# 18 minutes it was cut for (docs/TESTING.md, "Where the Windows runners
 # went").
 #
 # `verify` sees only this call's result, and a called workflow fails when one

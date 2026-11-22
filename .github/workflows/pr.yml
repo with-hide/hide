@@ -420,8 +420,9 @@ jobs:
   # the workspace's compile, the Windows Rust tests on their own build, and the
   # web and desktop unit suites, three jobs on three runners that start
   # together. One job held them in a row, 27 minutes on a pull request and the
-  # last line of every run that planned it (docs/TESTING.md, "Where the Windows
-  # runners went"). The browser `@platform` tests are `windows-e2e` below, so a
+  # last line of every run that planned it; split, the lane ended 20.2 minutes
+  # into pull request run 44979728847, with the Rust tests' own 19 (docs/TESTING.md,
+  # "Where the Windows runners went"). The browser `@platform` tests are `windows-e2e` below, so a
   # change that needs the compile does not also wait for a browser, and the
   # reverse.
   windows-check:
