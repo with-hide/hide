@@ -335,6 +335,7 @@ fn tasks_stand_by_state_and_fold_a_merged_worktree_as_cleanup() {
     // The merged PR reaches the row through its session's link record.
     let pull = crate::request_view::AgentPullRequestSnapshot {
         number: 7,
+        reference: None,
         title: "Seven".into(),
         url: "https://github.com/acme/ide/pull/7".into(),
         badge: crate::model::PullRequestBadge::Merged,

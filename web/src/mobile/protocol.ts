@@ -11,7 +11,7 @@ import type { MessageKey } from "../i18n/catalogs";
 import type { PrGroupId, PrReason } from "../agentScope";
 import type { WorkerEscalation } from "../missions";
 import type { Automation, AutomationRecord, AutomationRun, AutomationSchedule, SubagentRow } from "../snapshot";
-import type { AgentSleep, AgentStatusCode, AskSubject, AgentWait, ViewReopen, GithubStatus, HumanTurnLead, LineMode, MissionAnswer, MissionAnswerFailure, MissionBrief, MissionDelivery, MissionNodeBrief, PrCard, PrState, PrFeedback, PrMergeMethod, PullRequest, RowMark, SleepingSession } from "../snapshot";
+import type { AgentSleep, AgentStatusCode, AskSubject, AgentWait, ChangeRequestRef, ViewReopen, GithubStatus, HumanTurnLead, LineMode, MissionAnswer, MissionAnswerFailure, MissionBrief, MissionDelivery, MissionNodeBrief, PrCard, PrState, PrFeedback, PrMergeMethod, PullRequest, RowMark, SleepingSession } from "../snapshot";
 
 export type PhoneAgent = {
   device_id: string;
@@ -51,7 +51,7 @@ export type PhoneAgent = {
   /** When the Mac's core last saw this agent change state (epoch ms); the phone counts the elapsed time from it. */
   changed_at_unix_ms: number | null;
   /** The desktop row's second line (`RowLine`), worded the same way. */
-  line: { text: string; mode: LineMode; tone: "warning" | "news" | "subtle"; pull_request?: number; subject?: AskSubject } | null;
+  line: { text: string; mode: LineMode; tone: "warning" | "news" | "subtle"; pull_request?: number; pull_reference?: ChangeRequestRef; subject?: AskSubject } | null;
   status_code: AgentStatusCode;
   demand: string;
   /** Present while the agent's process is ended and its pane holds a bare shell: nothing may be sent to it, and the detail says so (`AgentSleepSnapshot`). */

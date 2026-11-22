@@ -361,6 +361,8 @@ export type AgentTurn = {
 /** One of a row's pull requests (`AgentPullRequestSnapshot`). */
 export type AgentPullRequest = {
   number: number;
+  /** The reference its host's unit made, by which its lines name it (`MR !12`); absent while the list carried none. */
+  reference?: ChangeRequestRef;
   title: string;
   url: string;
   badge: PullRequest["badge"];
