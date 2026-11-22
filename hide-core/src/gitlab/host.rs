@@ -11,7 +11,7 @@ use crate::code_host::{
 use crate::node_access::NodeLink;
 
 /// The key a gitlab.com reference names its host by.
-const KEY: &str = "gitlab";
+pub(crate) const KEY: &str = "gitlab";
 
 pub(crate) struct Gitlab;
 

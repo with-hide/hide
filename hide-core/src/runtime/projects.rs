@@ -1916,6 +1916,17 @@ impl Runtime {
             }
             newly_settled |= self.github_settled.insert(path);
         }
+        // A gitlab.com project read on this machine is the day's use of GitLab.
+        let gitlab_read = answered.iter().any(|(path, outcome)| {
+            *outcome == GithubReadOutcome::Read
+                && github.project(path).is_some_and(|project| {
+                    project.status.host.as_ref().map(|host| host.key.as_str())
+                        == Some(crate::gitlab::host::KEY)
+                })
+        });
+        if gitlab_read {
+            self.note_feature_used(crate::product_analytics::Feature::Gitlab);
+        }
         let mut merged = github;
         keep_previous_reads(&mut merged, &self.github, &requested);
         self.read_merges_made_here(&mut merged);

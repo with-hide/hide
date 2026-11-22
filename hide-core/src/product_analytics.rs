@@ -87,15 +87,18 @@ pub enum Feature {
     /// A skill or MCP server added, changed, switched or removed, from
     /// Settings or `hide skill` / `hide mcp`.
     SkillsMcp,
+    /// A gitlab.com project's merge requests read on this machine.
+    Gitlab,
 }
 
 impl Feature {
-    const ALL: [Self; 2] = [Self::Focus, Self::SkillsMcp];
+    const ALL: [Self; 3] = [Self::Focus, Self::SkillsMcp, Self::Gitlab];
 
     fn name(self) -> &'static str {
         match self {
             Self::Focus => "focus",
             Self::SkillsMcp => "skills_mcp",
+            Self::Gitlab => "gitlab",
         }
     }
 }
@@ -156,6 +159,8 @@ pub struct ActiveDays {
     focus: Option<u64>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     skills_mcp: Option<u64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    gitlab: Option<u64>,
 }
 
 impl ActiveDays {
@@ -169,6 +174,7 @@ impl ActiveDays {
             Daily::Surface(ActiveSurface::Phone) => &mut self.phone,
             Daily::Feature(Feature::Focus) => &mut self.focus,
             Daily::Feature(Feature::SkillsMcp) => &mut self.skills_mcp,
+            Daily::Feature(Feature::Gitlab) => &mut self.gitlab,
         };
         if *recorded == Some(day) {
             return false;
@@ -228,6 +234,7 @@ pub enum PracticeChapter {
     Automation,
     Focus,
     Bots,
+    Gitlab,
 }
 
 impl PracticeChapter {
@@ -241,6 +248,7 @@ impl PracticeChapter {
             "automation" => Self::Automation,
             "focus" => Self::Focus,
             "bots" => Self::Bots,
+            "gitlab" => Self::Gitlab,
             _ => return None,
         })
     }
@@ -417,6 +425,7 @@ impl Event {
                         PracticeChapter::Automation => "automation",
                         PracticeChapter::Focus => "focus",
                         PracticeChapter::Bots => "bots",
+                        PracticeChapter::Gitlab => "gitlab",
                     },
                 ),
                 (

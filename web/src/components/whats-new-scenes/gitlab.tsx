@@ -5,7 +5,7 @@
 // and its card names GitLab, its failed pipeline and the page on gitlab.com,
 // with no button GitLab does not offer. It is drawn from the screens' own
 // parts and words (`PrMark`, `hostLook`, `work.card.github`,
-// `recordCard.ciFailed`), and the projects and their work are examples, never
+// `recordCard.ciFailed`, `work.reason.failed`), and the projects and their work are examples, never
 // the operator's.
 
 import { hostLook } from "../../codeHost";
@@ -30,6 +30,9 @@ export const GITLAB_STILL_MS = 6_500;
 /** The example projects: one read from GitHub, one from gitlab.com. */
 const GITHUB_PROJECT = "web";
 const GITLAB_PROJECT = "shop-api";
+const GITLAB_REPOSITORY = `acme/${GITLAB_PROJECT}`;
+/** The pipeline job that failed on `!12`. */
+const FAILED_JOB = "unit-test";
 
 type Item = { host: "github" | "gitlab"; number: number; state: PrState; title: "tabs" | "retry" | "cache"; project: string };
 const ITEMS: Item[] = [
@@ -47,7 +50,7 @@ export function GitlabScene({ at }: SceneProps) {
     <div className="relative flex aspect-[2/1] overflow-hidden bg-background text-foreground" data-whats-new-scene="gitlab" data-scene-beat={opened ? "card" : read ? "read" : "list"} aria-hidden>
       <style>{SCENE_CSS}</style>
       <div className="flex w-1/2 min-w-0 flex-col border-r border-border bg-sidebar">
-        <span className="border-b border-border px-md py-xs text-caption font-medium text-muted-foreground">PR {shown.length}</span>
+        <span className="border-b border-border px-md py-xs text-caption font-medium text-muted-foreground">{t("projectTool.sidebar.prsCount", { count: shown.length })}</span>
         {shown.map((item) => <Row key={`${item.host}${item.number}`} item={item} rise={item.host === "gitlab"} selected={opened && item.number === 12} />)}
       </div>
       <div className="flex min-w-0 flex-1 flex-col p-md">
@@ -84,14 +87,14 @@ function Card() {
     <div className="wns-rise flex min-w-0 flex-col gap-sm">
       <span className="flex items-center gap-xs text-micro text-muted-foreground">
         <Mark className="size-(--size-icon-sm) shrink-0" />
-        acme/{GITLAB_PROJECT}
+        {GITLAB_REPOSITORY}
       </span>
       <span className="flex min-w-0 items-center gap-xs">
         <PrMark state="failed" label={`${item} !12`} />
         <span className="truncate text-body font-medium">{t("whatsNewScene.gitlab.retry")}</span>
       </span>
       <span className="text-caption text-destructive">{t("recordCard.ciFailed", { count: 1, total: 2 })}</span>
-      <span className="font-mono text-micro text-muted-foreground">✗ unit-test</span>
+      <span className="font-mono text-micro text-muted-foreground">{t("work.reason.failed", { name: FAILED_JOB })}</span>
       <span className="self-start rounded-md border border-border px-sm py-xxs text-micro">{t("work.card.github", { host: name })}</span>
     </div>
   );
