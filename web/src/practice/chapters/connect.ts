@@ -23,7 +23,7 @@ export default chapter<ConnectModel>({
     { id: "add", quest: true, target: "[data-device-add-open]", side: "left", gesture: { click: true }, shown: "[data-add-link-input]" },
     // The link the Mac mini shared, in the field; done once the whole link is there, not when Connect turns on at its
     // first words, so a quick press never sends half a link.
-    { id: "paste", target: "[data-add-by-link]", side: "left", gesture: { type: { input: "[data-add-link-input]", text: LINK } }, shown: `[data-add-link-input][value="${LINK}"]` },
+    { id: "paste", target: "[data-add-by-link]", side: "left", gesture: { type: { input: "[data-add-link-input]", text: LINK, open: "[data-device-add-open]" } }, shown: `[data-add-link-input][value="${LINK}"]` },
     { id: "connect", quest: true, target: "[data-add-link-go]", side: "left", gesture: { click: true }, done: joined },
     // The same four words on both screens, in the same order.
     { id: "words", target: "[data-pair-words]", side: "left" },

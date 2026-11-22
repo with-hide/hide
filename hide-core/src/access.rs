@@ -13,11 +13,18 @@
 //! drops it, and the tool asks again. Approved connections are this file
 //! (`hide_kit::layout::access_store`), which moves with the core.
 //!
+//! The operator can also make a bot first, in Settings: a name and a mode
+//! that wait, as an invite, for a program to join with the one-time code
+//! the screen shows (`hide access join <code>`). The invite and its code
+//! live in memory alone, like a request: a restart drops them, and the
+//! operator makes the bot again.
+//!
 //! Every connection lives on the core's own machine (D-07): the bootstrap
 //! socket that takes a key is the core's local one, so the store names no
 //! machine.
 
 use std::collections::VecDeque;
+use std::fmt;
 
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
@@ -26,6 +33,19 @@ use sha2::{Digest, Sha256};
 pub const MAX_CONNECTIONS: usize = 16;
 /// Requests waiting for the operator at most, one per name (D-21).
 pub const MAX_PENDING: usize = 4;
+/// Bots the operator made that no program has joined yet, at most, apart
+/// from the requests; each holds one of the sixteen seats while its code is
+/// live.
+pub const MAX_INVITES: usize = 4;
+/// How long a made bot's code joins it, from its making or its new code.
+pub const INVITE_TTL_MS: u64 = 10 * 60_000;
+/// A code's length in [`CODE_ALPHABET`] characters: sixty random bits, which
+/// no program of the account guesses over the private socket in ten
+/// minutes, so a wrong code needs no count of its own.
+pub const CODE_LEN: usize = 12;
+/// Crockford's base 32: digits and capitals without I, L, O and U, so a code
+/// reads the same aloud and in any font.
+pub const CODE_ALPHABET: &[u8; 32] = b"0123456789ABCDEFGHJKMNPQRSTVWXYZ";
 /// How many ended requests and connections are remembered, so a tool's next
 /// look says why it ended; older ones read as never known.
 const MAX_ENDED: usize = 64;
@@ -75,12 +95,48 @@ pub fn valid_name(name: &str) -> bool {
             .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'.' | b'_' | b'-'))
 }
 
+/// A name a new bot may take: a [`valid_name`] that is a file name on every
+/// system, since its key file is `<name>.key` (no `CON`, `NUL`, `COM1`, nor a
+/// trailing dot). Asked only where a name is taken anew, a request or a made
+/// bot, so a connection an earlier build saved keeps its name.
+pub fn reservable_name(name: &str) -> bool {
+    valid_name(name) && !hide_platform::path::win32_rewrites(name)
+}
+
 /// A key as a tool makes it: 32 random bytes in lowercase hex.
 pub fn valid_key(key: &str) -> bool {
     key.len() == 64
         && key
             .bytes()
             .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
+}
+
+/// A code as a program wrote it, in its one form: capitals, without the
+/// dashes and spaces it is shown with; `None` when it is not a code.
+pub fn normalize_code(text: &str) -> Option<String> {
+    let code: String = text
+        .chars()
+        .filter(|character| !matches!(character, '-' | ' '))
+        .map(|character| character.to_ascii_uppercase())
+        .collect();
+    (code.len() == CODE_LEN && code.bytes().all(|byte| CODE_ALPHABET.contains(&byte)))
+        .then_some(code)
+}
+
+/// A code as the screen and the sentence show it: groups of four.
+pub fn spaced_code(code: &str) -> String {
+    code.as_bytes()
+        .chunks(4)
+        .map(|group| String::from_utf8_lossy(group).into_owned())
+        .collect::<Vec<_>>()
+        .join("-")
+}
+
+/// Whether two bot names are the same name: a home keeps `<name>.key`, and
+/// macOS and Windows read file names without case, so `Hermes` and `hermes`
+/// are one name everywhere.
+pub fn same_name(a: &str, b: &str) -> bool {
+    a.eq_ignore_ascii_case(b)
 }
 
 /// The SHA-256 of `key`, which is all this core keeps of it.
@@ -131,6 +187,47 @@ pub struct Pending {
     key_sha256: String,
 }
 
+/// A bot the operator made in Settings that waits for a program to join it
+/// with its code (`hide access join`). Memory only: never in the store and
+/// never in the snapshot, which carry its name, mode and time alone.
+#[derive(Clone, Eq, PartialEq)]
+pub struct Invite {
+    /// The connection's id once a program joins.
+    pub id: String,
+    pub name: String,
+    pub mode: Mode,
+    code: String,
+    /// When its code was drawn: made, or given a new code.
+    pub created_ms: u64,
+    /// When its code stops joining; past it the row stays, says so and
+    /// holds no seat, until the operator asks a new code or cancels it.
+    pub expires_ms: u64,
+}
+
+impl Invite {
+    pub fn live(&self, now_ms: u64) -> bool {
+        now_ms < self.expires_ms
+    }
+
+    /// The code, for the window that made the bot and nothing else.
+    pub fn code(&self) -> &str {
+        &self.code
+    }
+}
+
+/// Leaves the code out, so no diagnostic or panic message carries it.
+impl fmt::Debug for Invite {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter
+            .debug_struct("Invite")
+            .field("id", &self.id)
+            .field("name", &self.name)
+            .field("mode", &self.mode)
+            .field("expires_ms", &self.expires_ms)
+            .finish_non_exhaustive()
+    }
+}
+
 /// Why a key no longer reaches a request or a connection.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum Ended {
@@ -176,7 +273,8 @@ pub enum Standing {
 pub enum RequestRefusal {
     /// Sixteen tools are connected (B10).
     Limit,
-    /// A connected tool already has this name (D-20).
+    /// A connected tool, or a bot the operator made, already has this name
+    /// (D-20).
     NameTaken,
 }
 
@@ -230,6 +328,27 @@ pub enum Call {
     },
     /// `hide access status`: where the key stands, putting nothing up.
     Status { key_sha256: String },
+    /// `hide access join <code>`: the bot the operator made with this code
+    /// becomes the connection of this key, or a key already joined answers
+    /// where it stands.
+    Join {
+        code: String,
+        key_sha256: String,
+        program: Option<String>,
+    },
+    /// The operator makes a bot in Settings (a window's call only): hided
+    /// draws its id and code.
+    Invite {
+        id: String,
+        code: String,
+        name: String,
+        mode: Mode,
+    },
+    /// A new code for a made bot, with ten minutes again.
+    Renew { id: String, code: String },
+    /// A made bot's code again, while it is live, for the sentence the
+    /// window copies.
+    Code { id: String },
     /// `hide access leave`: the tool ends its own connection (B14).
     Leave { key_sha256: String },
     /// A tool's command: the connection its key proves, for a credential.
@@ -342,6 +461,7 @@ pub(crate) fn decode(bytes: &[u8]) -> Result<Stored, String> {
 pub struct Access {
     connections: Vec<Connection>,
     pending: Vec<Pending>,
+    invites: Vec<Invite>,
     ended: VecDeque<(String, Ended)>,
 }
 
@@ -371,6 +491,32 @@ impl Access {
 
     pub fn pending(&self) -> &[Pending] {
         &self.pending
+    }
+
+    pub fn invites(&self) -> &[Invite] {
+        &self.invites
+    }
+
+    /// The seats taken of the sixteen: the connections and the made bots
+    /// whose code is live.
+    fn seats(&self, now_ms: u64) -> usize {
+        self.connections.len()
+            + self
+                .invites
+                .iter()
+                .filter(|invite| invite.live(now_ms))
+                .count()
+    }
+
+    /// Whether a connection or a made bot holds `name`.
+    fn bot_named(&self, name: &str) -> bool {
+        self.connections
+            .iter()
+            .any(|connection| same_name(&connection.name, name))
+            || self
+                .invites
+                .iter()
+                .any(|invite| same_name(&invite.name, name))
     }
 
     pub fn connection(&self, id: &str) -> Option<&Connection> {
@@ -429,14 +575,10 @@ impl Access {
                 expired: None,
             });
         }
-        if self
-            .connections
-            .iter()
-            .any(|connection| connection.name == name)
-        {
+        if self.bot_named(name) {
             return Err(RequestRefusal::NameTaken);
         }
-        if self.connections.len() >= MAX_CONNECTIONS {
+        if self.seats(now_ms) >= MAX_CONNECTIONS {
             return Err(RequestRefusal::Limit);
         }
         let request = Pending {
@@ -447,7 +589,11 @@ impl Access {
             key_sha256: key_sha256.to_owned(),
         };
         let mut expired = None;
-        if let Some(same) = self.pending.iter().position(|pending| pending.name == name) {
+        if let Some(same) = self
+            .pending
+            .iter()
+            .position(|pending| same_name(&pending.name, name))
+        {
             // One waiting request per name (B9): the newer key takes its
             // place, and the older key's next look reads it as expired.
             let earlier = self.pending.remove(same);
@@ -480,14 +626,10 @@ impl Access {
             .iter()
             .position(|pending| pending.id == id)
             .ok_or("access_request_gone")?;
-        if self.connections.len() >= MAX_CONNECTIONS {
+        if self.seats(now_ms) >= MAX_CONNECTIONS {
             return Err("access_limit");
         }
-        if self
-            .connections
-            .iter()
-            .any(|connection| connection.name == self.pending[index].name)
-        {
+        if self.bot_named(&self.pending[index].name) {
             return Err("access_name_taken");
         }
         let pending = self.pending.remove(index);
@@ -501,6 +643,148 @@ impl Access {
             key_sha256: pending.key_sha256,
         });
         Ok(self.connections.last().expect("just pushed"))
+    }
+
+    /// The operator makes a bot named `name` in `mode`, which a program
+    /// joins with `code` for ten minutes. Its name may be no connection's,
+    /// request's or other made bot's; it takes a seat while its code is
+    /// live; and past four, the oldest made bot whose code ended goes, or,
+    /// all four live, none is made.
+    pub fn invite(
+        &mut self,
+        id: String,
+        code: String,
+        name: &str,
+        mode: Mode,
+        now_ms: u64,
+    ) -> Result<&Invite, &'static str> {
+        if !reservable_name(name)
+            || !valid_id(&id)
+            || normalize_code(&code).as_deref() != Some(&code)
+        {
+            return Err("invalid_request");
+        }
+        if self.bot_named(name)
+            || self
+                .pending
+                .iter()
+                .any(|pending| same_name(&pending.name, name))
+        {
+            return Err("access_name_taken");
+        }
+        if self.seats(now_ms) >= MAX_CONNECTIONS {
+            return Err("access_limit");
+        }
+        if self.invites.len() >= MAX_INVITES {
+            let ended = self
+                .invites
+                .iter()
+                .position(|invite| !invite.live(now_ms))
+                .ok_or("access_invite_limit")?;
+            self.invites.remove(ended);
+        }
+        self.invites.push(Invite {
+            id,
+            name: name.to_owned(),
+            mode,
+            code,
+            created_ms: now_ms,
+            expires_ms: now_ms + INVITE_TTL_MS,
+        });
+        Ok(self.invites.last().expect("just pushed"))
+    }
+
+    /// A new code for made bot `id`, live for ten minutes from now; one
+    /// whose code had ended takes a seat again, if one is free.
+    pub fn renew(&mut self, id: &str, code: String, now_ms: u64) -> Result<&Invite, &'static str> {
+        if normalize_code(&code).as_deref() != Some(&code) {
+            return Err("invalid_request");
+        }
+        let index = self
+            .invites
+            .iter()
+            .position(|invite| invite.id == id)
+            .ok_or("access_invite_gone")?;
+        if !self.invites[index].live(now_ms) && self.seats(now_ms) >= MAX_CONNECTIONS {
+            return Err("access_limit");
+        }
+        let invite = &mut self.invites[index];
+        invite.code = code;
+        invite.created_ms = now_ms;
+        invite.expires_ms = now_ms + INVITE_TTL_MS;
+        Ok(invite)
+    }
+
+    /// Made bot `id` while its code is live, for the sentence its window
+    /// copies again.
+    pub fn invite_code(&self, id: &str, now_ms: u64) -> Result<&Invite, &'static str> {
+        let invite = self
+            .invites
+            .iter()
+            .find(|invite| invite.id == id)
+            .ok_or("access_invite_gone")?;
+        if invite.live(now_ms) {
+            Ok(invite)
+        } else {
+            Err("access_invite_expired")
+        }
+    }
+
+    /// The operator takes back made bot `id`; its code joins nothing more.
+    pub fn cancel(&mut self, id: &str) -> Result<Invite, &'static str> {
+        let index = self
+            .invites
+            .iter()
+            .position(|invite| invite.id == id)
+            .ok_or("access_invite_gone")?;
+        Ok(self.invites.remove(index))
+    }
+
+    /// `hide access join <code>` with the key whose hash is `key_sha256`. A
+    /// key already known answers where it stands, so a join whose answer was
+    /// lost converges when run again (engineering 11); otherwise the made
+    /// bot whose live code this is becomes the key's connection, under the
+    /// name and mode the operator gave it, and the code is spent. Every made
+    /// bot's code is compared, so the time taken says nothing of which.
+    pub fn join(
+        &mut self,
+        code: &str,
+        key_sha256: &str,
+        program: Option<String>,
+        now_ms: u64,
+    ) -> Result<Requested, &'static str> {
+        let standing = self.standing(key_sha256);
+        if standing != Standing::Unknown {
+            return Ok(Requested {
+                standing,
+                put_up: false,
+                expired: None,
+            });
+        }
+        let mut found = None;
+        for (index, invite) in self.invites.iter().enumerate() {
+            if same_hash(&invite.code, code) & invite.live(now_ms) {
+                found = Some(index);
+            }
+        }
+        let index = found.ok_or("access_code_invalid")?;
+        // A live code holds its seat, so the list has room for it.
+        let invite = self.invites.remove(index);
+        self.connections.push(Connection {
+            id: invite.id,
+            name: invite.name,
+            mode: invite.mode,
+            program,
+            created_ms: now_ms,
+            last_used_ms: now_ms,
+            key_sha256: key_sha256.to_owned(),
+        });
+        let connection = self.connections.last().expect("just pushed").clone();
+        Ok(Requested {
+            standing: Standing::Connected(connection),
+            put_up: true,
+            expired: None,
+        })
     }
 
     /// The operator refuses the waiting request `id` (B7).
@@ -921,6 +1205,214 @@ mod tests {
             access.request("t", &key(2), None, 0, id(2)).unwrap_err(),
             RequestRefusal::NameTaken
         );
+    }
+
+    const CODE: &str = "K7Q4MZ2PX3RD";
+    const OTHER_CODE: &str = "0123456789AB";
+
+    fn connect(access: &mut Access, n: u8) {
+        access
+            .request(&format!("t{n}"), &key(n), None, 0, id(n))
+            .unwrap();
+        access.approve(&id(n), Mode::All, 0).unwrap();
+    }
+
+    #[test]
+    fn a_made_bot_joins_once_with_its_code_and_a_lost_answer_converges() {
+        let mut access = Access::default();
+        access
+            .invite(id(1), CODE.into(), "hermes", Mode::Own, 0)
+            .unwrap();
+        let joined = access.join(CODE, &key(1), None, 1).unwrap();
+        assert!(joined.put_up);
+        let Standing::Connected(connection) = &joined.standing else {
+            panic!("connected")
+        };
+        assert_eq!(
+            (
+                connection.id.as_str(),
+                connection.name.as_str(),
+                connection.mode
+            ),
+            (id(1).as_str(), "hermes", Mode::Own)
+        );
+        assert!(access.invites().is_empty());
+        // The same key run again, its first answer lost, is the same bot.
+        let again = access.join(CODE, &key(1), None, 2).unwrap();
+        assert!(!again.put_up);
+        assert_eq!(again.standing, joined.standing);
+        // The code is spent: another key gets nothing.
+        assert_eq!(
+            access.join(CODE, &key(2), None, 2).unwrap_err(),
+            "access_code_invalid"
+        );
+        assert_eq!(access.connections().len(), 1);
+    }
+
+    #[test]
+    fn an_ended_code_joins_nothing_and_a_new_code_replaces_it() {
+        let mut access = Access::default();
+        access
+            .invite(id(1), CODE.into(), "hermes", Mode::Own, 0)
+            .unwrap();
+        assert_eq!(
+            access.join(CODE, &key(1), None, INVITE_TTL_MS).unwrap_err(),
+            "access_code_invalid"
+        );
+        assert_eq!(
+            access.invite_code(&id(1), INVITE_TTL_MS).unwrap_err(),
+            "access_invite_expired"
+        );
+        access
+            .renew(&id(1), OTHER_CODE.into(), INVITE_TTL_MS)
+            .unwrap();
+        assert_eq!(
+            access
+                .join(CODE, &key(1), None, INVITE_TTL_MS + 1)
+                .unwrap_err(),
+            "access_code_invalid"
+        );
+        assert!(
+            access
+                .join(OTHER_CODE, &key(1), None, INVITE_TTL_MS + 1)
+                .unwrap()
+                .put_up
+        );
+    }
+
+    #[test]
+    fn a_made_bot_holds_a_seat_while_its_code_is_live_and_its_name_while_it_waits() {
+        let mut access = Access::default();
+        for n in 0..(MAX_CONNECTIONS - 1) as u8 {
+            connect(&mut access, n);
+        }
+        access
+            .invite(id(100), CODE.into(), "hermes", Mode::Own, 0)
+            .unwrap();
+        assert_eq!(
+            access
+                .request("late", &key(101), None, 1, id(101))
+                .unwrap_err(),
+            RequestRefusal::Limit
+        );
+        assert_eq!(
+            access
+                .invite(id(102), OTHER_CODE.into(), "late", Mode::Own, 1)
+                .unwrap_err(),
+            "access_limit"
+        );
+        // Its code ended: the seat is free, the name still its own, in any case.
+        let ended = INVITE_TTL_MS;
+        assert!(
+            access
+                .request("late", &key(101), None, ended, id(101))
+                .unwrap()
+                .put_up
+        );
+        assert_eq!(
+            access
+                .request("HERMES", &key(103), None, ended, id(103))
+                .unwrap_err(),
+            RequestRefusal::NameTaken
+        );
+        access.approve(&id(101), Mode::All, ended).unwrap();
+        // Every seat is taken now, so a new code waits for one.
+        assert_eq!(
+            access
+                .renew(&id(100), OTHER_CODE.into(), ended)
+                .unwrap_err(),
+            "access_limit"
+        );
+        assert_eq!(access.cancel(&id(100)).unwrap().name, "hermes");
+    }
+
+    #[test]
+    fn a_made_bot_takes_no_name_a_connection_a_request_or_another_made_bot_has() {
+        let mut access = Access::default();
+        connect(&mut access, 1);
+        access.request("asking", &key(2), None, 0, id(2)).unwrap();
+        access
+            .invite(id(3), CODE.into(), "made", Mode::Own, 0)
+            .unwrap();
+        for name in ["T1", "Asking", "MADE"] {
+            assert_eq!(
+                access
+                    .invite(id(4), OTHER_CODE.into(), name, Mode::Own, 0)
+                    .unwrap_err(),
+                "access_name_taken",
+                "{name}"
+            );
+        }
+    }
+
+    #[test]
+    fn past_four_made_bots_the_oldest_whose_code_ended_goes() {
+        let mut access = Access::default();
+        for n in 0..MAX_INVITES as u8 {
+            access
+                .invite(
+                    id(n),
+                    OTHER_CODE.into(),
+                    &format!("b{n}"),
+                    Mode::Own,
+                    u64::from(n),
+                )
+                .unwrap();
+        }
+        assert_eq!(
+            access
+                .invite(id(9), CODE.into(), "fifth", Mode::Own, 5)
+                .unwrap_err(),
+            "access_invite_limit"
+        );
+        // The first two have ended; the oldest of them goes.
+        access
+            .invite(id(9), CODE.into(), "fifth", Mode::Own, INVITE_TTL_MS + 1)
+            .unwrap();
+        let names: Vec<&str> = access
+            .invites()
+            .iter()
+            .map(|invite| invite.name.as_str())
+            .collect();
+        assert_eq!(names, ["b1", "b2", "b3", "fifth"]);
+    }
+
+    #[test]
+    fn a_new_name_is_a_file_name_on_every_system() {
+        for name in ["hermes", "night.ly", "a_b-c"] {
+            assert!(reservable_name(name), "{name}");
+        }
+        for name in ["con", "NUL", "com1", "lpt9.key", "hermes.", "", "-x"] {
+            assert!(!reservable_name(name), "{name}");
+        }
+        let mut access = Access::default();
+        assert_eq!(
+            access
+                .invite(id(1), CODE.into(), "aux", Mode::Own, 0)
+                .unwrap_err(),
+            "invalid_request"
+        );
+    }
+
+    #[test]
+    fn a_code_reads_in_one_form_and_never_reaches_a_debug_line() {
+        assert_eq!(normalize_code("k7q4-mz2p-x3rd").as_deref(), Some(CODE));
+        assert_eq!(normalize_code("K7Q4 MZ2P X3RD").as_deref(), Some(CODE));
+        assert_eq!(spaced_code(CODE), "K7Q4-MZ2P-X3RD");
+        for wrong in [
+            "K7Q4-MZ2P",
+            "K7Q4-MZ2P-X3RDX",
+            "I7Q4-MZ2P-X3RD",
+            "K7Q4-MZ2P-X3R!",
+        ] {
+            assert_eq!(normalize_code(wrong), None, "{wrong}");
+        }
+        let mut access = Access::default();
+        access
+            .invite(id(1), CODE.into(), "hermes", Mode::Own, 0)
+            .unwrap();
+        assert_eq!(access.invites()[0].code(), CODE);
+        assert!(!format!("{access:?}").contains(CODE));
     }
 
     #[test]

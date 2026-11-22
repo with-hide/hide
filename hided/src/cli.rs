@@ -215,6 +215,10 @@ fn wrong(reason: String, lines: &str) -> String {
     }
 }
 
+/// Where `hide access --help` sends a bot for what each mode may do; the
+/// guide holds `access_cli::USAGE` itself, so the pointer is added here.
+const ACCESS_GUIDE_POINTER: &str = "What a bot may do in each mode: hide guide, section Bots.";
+
 /// The usage `hide <topic> … --help` prints, for every command a person or
 /// an agent types.
 fn topic_usage(topic: &str) -> Option<String> {
@@ -226,7 +230,10 @@ fn topic_usage(topic: &str) -> Option<String> {
         "mcp" => usage(crate::store_cli::MCP_USAGE),
         "device" => usage(crate::device_cli::USAGE),
         "phone" => usage(crate::phone_cli::USAGE),
-        "access" => usage(crate::access_cli::USAGE),
+        "access" => usage(&format!(
+            "{}\n{ACCESS_GUIDE_POINTER}",
+            crate::access_cli::USAGE
+        )),
         "mission" => usage(crate::mission_cli::USAGE),
         "task" => usage(crate::plan_cli::USAGE),
         "automation" => usage(crate::automation_cli::USAGE),
@@ -289,7 +296,7 @@ fn help_text() -> String {
     }
     text.push_str("\nFor a tool outside Hide's panes, on the machine where Hide's core runs\n");
     text.push_str(&indent(crate::access_cli::USAGE));
-    text.push_str("  Once the operator approves it as a bot, it runs the commands above as its connection, over the whole Hide or one workspace, as the operator chose.\n");
+    text.push_str("  Once the operator approves it as a bot, it runs the commands above as its connection: in its own space, only on the agents and missions it started, or Full, as the operator. hide guide, section Bots, says what each mode may do.\n");
     text.push_str(
         "\nA command's name wins over a folder of the same name: hide status is the command, hide ./status opens the folder status.\nOn a connected device, hide <path> works in a Hide pane there or in a plain ssh shell as the account Hide connects with, and brings Hide's window to that device's folder.\n\nCommands that act on the operator's screen (workspace, file, diff, view, browser) need Hide's window open and a pane or shell inside a registered checkout.\nThey never start Hide.\nhide links needs only that pane or shell and a running Hide, and reads the project it is in unless --all-projects is given.\nhide session needs the same and reads the sessions of the project it is in and of the connected devices' checkouts of its repository, as each checkout's origin names it: list to scan one line per session, record to read one as its session record shows it, read for a few raw events around one request.\nhide memory reads, adds to and forgets from that project's Project Memory, which Hide keeps for the projects of its own device and of every linked device with a Memory reader.\nhide memory release ends a hold that an agent's stale report put on a card.\nhide memory recheck has a card checked again, out of every hook until the check ends; an agent may ask only for a card its conversation was given.\nRun in a Hide shell pane with no agent, it also lets that card's text be reported stale once more.\n",
     );
@@ -3995,6 +4002,20 @@ mod tests {
         assert!(error.starts_with(
             "unknown flag for hide agent spawn: --no-watch\nusage:\n  hide agent register"
         ));
+    }
+
+    /// `hide access --help` sends a bot to the guide's section on what each
+    /// mode may do, and that section exists under the name it gives.
+    #[test]
+    fn access_help_points_at_the_guides_bots_section() {
+        let args = ["hide", "access", "--help"].map(str::to_owned);
+        let CommandKind::Usage(text) = parse_args(&args).unwrap() else {
+            panic!("hide access --help prints its usage");
+        };
+        assert!(text.contains("hide access request --name <name>"));
+        assert!(text.ends_with(ACCESS_GUIDE_POINTER));
+        assert!(ACCESS_GUIDE_POINTER.contains("section Bots"));
+        assert!(crate::guide::text().contains("\n## Bots\n"));
     }
 
     /// Every command a person types answers `--help` with its own usage, a

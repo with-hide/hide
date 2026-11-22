@@ -150,6 +150,7 @@ One row is one thing the screen names. A word in the last column is not used for
 | Put a suggestion aside for now; it can rise once more | skip | 넘어가기 | スキップ | 跳过 | Don't do this, 안 함, しない, 不处理 for a suggestion |
 | Where Hide AI reads its signals, in ⚙ | where to read | 읽을 곳 | 読む場所 | 读取哪里 | one switch per signal |
 | A point where an agent lost time though nothing failed, and its four kinds | thing to improve: No doc, Searched again, Wrong guess, Tool or setting | 개선할 점: 문서 없음, 다시 찾음, 잘못 짐작, 도구·설정 불편 | 改善点: ドキュメントなし, 再検索, 推測ミス, ツール・設定の不便 | 可改进之处: 缺少文档, 重复查找, 猜错了, 工具或设置不便 | 문제, 실패 for a point (nothing failed) |
+| A bot's two modes: only the work it started, or the operator's work too | Own space, Full | 봇 공간, 전체 | ボット空間, すべて | 机器人空间, 全部 | 자기 공간, 自分の空間, 自己的空间 |
 | Agent family names | Claude Code, Codex, Grok, OpenCode, Pi, omp, Antigravity | as written | as written | as written | 代理 for an agent in zh |
 | Reasoning level | effort | effort | effort | effort | translated |
 

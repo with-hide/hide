@@ -265,7 +265,9 @@ export type LookFileStatus = "modified" | "added" | "deleted" | "untracked" | "r
 export type LookFile = { path: string; status: LookFileStatus; added: number | null; removed: number | null; binary: boolean };
 
 /** The answer states of `look_result`: everything that is not content. */
-export type LookResultState = "page" | "other" | "too_large" | "closed" | "failed" | "gone" | "refused" | "unavailable" | "device_unreachable";
+/** `not_found` and `outside_roots` say why a file cannot be read (gone since its View opened, outside every checkout); a bundle
+ * from before them shows either as a failed read. */
+export type LookResultState = "page" | "other" | "too_large" | "closed" | "failed" | "gone" | "refused" | "unavailable" | "device_unreachable" | "not_found" | "outside_roots";
 
 /**
  * What a text, an image or a page's screenshot sends first (hided/src/mobile/looks.rs `chunks`). A page's (`mode: "page"`,

@@ -17,6 +17,9 @@ pub struct AccessSnapshot {
     pub limit: usize,
     /// Requests waiting for the operator, oldest first.
     pub pending: Vec<AccessPendingSnapshot>,
+    /// Bots the operator made that wait for a program to join with their
+    /// code, oldest first; never the code itself.
+    pub invites: Vec<AccessInviteSnapshot>,
     /// Approved tools, in the order they were approved.
     pub connections: Vec<AccessConnectionSnapshot>,
 }
@@ -29,6 +32,19 @@ pub struct AccessPendingSnapshot {
     /// system did not say.
     pub program: Option<String>,
     pub requested_ms: u64,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
+pub struct AccessInviteSnapshot {
+    pub id: String,
+    pub name: String,
+    pub mode: Mode,
+    /// When its code was drawn: made, or given a new code. The window's
+    /// clock, which moves once a minute, never counts from earlier.
+    pub created_ms: u64,
+    /// When its code stops joining; the window counts down to it and, past
+    /// it, offers a new code.
+    pub expires_ms: u64,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize)]

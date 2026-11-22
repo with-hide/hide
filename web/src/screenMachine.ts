@@ -110,6 +110,17 @@ export function coreMachineName(devices: readonly Device[] | undefined, t: TFunc
 }
 
 /**
+ * The core's machine by its own name, for words that leave the screen, such
+ * as the sentence an outside AI reads, where `This Mac` would name the
+ * reader's machine: the name the machine gives itself, its label, or, when
+ * the core knows neither, what Settings calls it.
+ */
+export function coreMachineOwnName(devices: readonly Device[] | undefined, t: TFunction<"translation">): string {
+  const device = devices?.find((row) => row.id === coreRowId(devices));
+  return device?.machine_name ?? device?.label ?? coreMachineName(devices, t);
+}
+
+/**
  * The core's machine as this window names it, when the window runs on
  * another machine: what the core does with its own logins (gh, Hide AI's
  * agents) is fixed there (B15). Null on the core's own machine (B1).

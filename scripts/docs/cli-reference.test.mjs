@@ -97,7 +97,7 @@ test("a binary whose help lists a note's command no more fails as a gone note, a
     "Panes and workspaces",
     "The operator's screen",
     "Devices",
-    "Tools outside Hide",
+    "Bots",
     "Past sessions and links",
     "Project Memory",
   ]);
