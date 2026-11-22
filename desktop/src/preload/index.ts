@@ -180,7 +180,7 @@ contextBridge.exposeInMainWorld("hideHost", {
     },
   },
   remoteScreens: {
-    show(view: { device: string; key: string; rect: BrowserRect } | null): void {
+    show(view: { device: string; key: string; rect: BrowserRect; name?: string | null } | null): void {
       ipcRenderer.send(REMOTE_SHOW_CHANNEL, view);
     },
     go(request: { device: string; key: string; work: RemoteWork }): void {

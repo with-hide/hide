@@ -6,6 +6,7 @@
 // screen draw the same parts; the core owns where a switch stands
 // (`Device.switch`) and hided what a press is answered (`pairingResult`).
 
+import type { TFunction } from "i18next";
 import { useEffect, useRef, useState } from "react";
 import type { Actions } from "../actions";
 import { AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent, AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle } from "../components/ui/alert-dialog";
@@ -160,6 +161,16 @@ export function DeviceSwitchStrip({ actions }: { actions: Actions }) {
 }
 
 /**
+ * This computer by its own name, `MacBook`, where a sentence names the
+ * machine a program comes from: `This Mac` would read as the target (the
+ * name it goes by here) only once the core knows no name of its own.
+ */
+function ownName(devices: readonly Device[] | undefined, t: TFunction<"translation">): string {
+  const own = windowDeviceId(devices);
+  return devices?.find((device) => device.id === own)?.machine_name ?? machineName(devices, own, t);
+}
+
+/**
  * What a press is asked before it goes on. A machine that runs no Hide of
  * its own (B36, D-45): what would be put there, and `허용하고 설치` starts it.
  * A device another computer switched first (B69, D-75): this one gets a
@@ -201,7 +212,7 @@ export function DeviceSwitchDialogs({ actions }: { actions: Actions }) {
                 <li key={part}>{t(INSTALL_PART_KEY[part])}</li>
               ))}
             </ul>
-            <p className="break-keep text-body text-foreground">{t("devices.switch.install.grant", { name: machineName(devices, windowDeviceId(devices), t) })}</p>
+            <p className="break-keep text-body text-foreground">{t("devices.switch.install.grant", { name: ownName(devices, t) })}</p>
           </DialogBody>
           <DialogFooter>
             <Button variant="secondary" onClick={cancel}>{t("common.cancel")}</Button>
