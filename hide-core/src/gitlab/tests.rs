@@ -18,6 +18,7 @@ use crate::model::PrState;
 const SCENES: &str = include_str!("../../tests/fixtures/gitlab/merge-requests-scenes.json");
 const RUNNING: &str = include_str!("../../tests/fixtures/gitlab/merge-requests-running.json");
 const FORKS: &str = include_str!("../../tests/fixtures/gitlab/merge-requests-forks.json");
+const AFTER_PUSH: &str = include_str!("../../tests/fixtures/gitlab/merge-requests-after-push.json");
 const CARD: &str = include_str!("../../tests/fixtures/gitlab/card.json");
 const COMMITS: &str = include_str!("../../tests/fixtures/gitlab/commit-checks.json");
 
@@ -198,6 +199,27 @@ fn zero_approvals_required_is_no_review_until_someone_approves() {
     assert_eq!(pull(&listed, 11).review, None);
     assert_eq!(pull(&listed, 11).work.required_approvals, None);
     assert_eq!(pull(&listed, 1).review, Some(ReviewDecision::Approved));
+}
+
+#[test]
+fn a_merge_request_read_right_after_a_push_is_placed_by_its_checked_status() {
+    // gitlab.com answered this list seconds after a commit was pushed to
+    // !35 (no pipeline, nothing in its way): asking `mergeable` made it
+    // check, so the merge request is ready to merge, not still being checked.
+    let listed = listed(AFTER_PUSH);
+    let pushed = pull(&listed, 35);
+    assert_eq!(
+        (pushed.checks, pushed.state(), pushed.work.merge_state),
+        (
+            PullRequestChecks::None,
+            PrState::Mergeable,
+            MergeState::Clean
+        )
+    );
+    assert_eq!(
+        places(&listed.pull_requests).get(&35).copied(),
+        Some(("needs_you", "merge"))
+    );
 }
 
 #[test]

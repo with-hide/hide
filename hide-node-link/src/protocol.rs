@@ -447,6 +447,8 @@ use crate::error::HostError;
 /// rest on; a `glab` line a node does not allow is refused as unsupported
 /// rather than answered as a failure. A node on 101 refuses those lines as
 /// failed commands, so it is refused at Hello and upgraded with its core.
+/// The list read asks `mergeable` from 102 on, so a 101 node's allow-list
+/// would refuse that query too.
 pub const PROTOCOL_VERSION: u32 = 102;
 
 /// How a start of an agent's CLI carries its arguments on the machine that

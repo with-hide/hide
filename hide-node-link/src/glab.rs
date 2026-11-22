@@ -74,10 +74,16 @@ const CHANGE_FIELDS: &str = "iid title state draft webUrl sourceBranch targetBra
 /// list (approvals, reviewers, author, merge status) and their head pipeline
 /// with its jobs, and the most recently updated of any state. `glab mr list`
 /// and the REST list carry no pipeline, which would cost one more call per
-/// merge request. Kept under gitlab.com's query complexity of 250.
+/// merge request. Kept under gitlab.com's query complexity of 250 (188
+/// measured on 2026-11-23 at these page sizes).
+///
+/// `mergeable` is asked only because asking it makes gitlab.com check the
+/// merge request: after a push it keeps `detailedMergeStatus` `UNCHECKED`
+/// until something asks, and the answer then carries the checked status.
+/// The verdict still comes from `detailedMergeStatus` alone.
 pub fn merge_requests_query() -> String {
     format!(
-        "query=query HideGitlabMergeRequests($project:ID!){{currentUser{{username}} project(fullPath:$project){{id fullPath visibility webUrl repository{{rootRef}} open:mergeRequests(state:opened,first:{OPEN_LIMIT},sort:UPDATED_DESC){{count nodes{{{CHANGE_FIELDS} detailedMergeStatus approved approvalsRequired author{{username bot}} approvedBy(first:{REVIEWER_LIMIT}){{count nodes{{username}}}} reviewers(first:{REVIEWER_LIMIT}){{count nodes{{username mergeRequestInteraction{{reviewState}}}}}} headPipeline{{sha status jobs(first:{JOB_LIMIT}){{count nodes{{name status allowFailure webPath}}}}}}}}}} settled:mergeRequests(state:all,first:{RECENT_LIMIT},sort:UPDATED_DESC){{count nodes{{{CHANGE_FIELDS} author{{username bot}}}}}}}}}}"
+        "query=query HideGitlabMergeRequests($project:ID!){{currentUser{{username}} project(fullPath:$project){{id fullPath visibility webUrl repository{{rootRef}} open:mergeRequests(state:opened,first:{OPEN_LIMIT},sort:UPDATED_DESC){{count nodes{{{CHANGE_FIELDS} detailedMergeStatus mergeable approved approvalsRequired author{{username bot}} approvedBy(first:{REVIEWER_LIMIT}){{count nodes{{username}}}} reviewers(first:{REVIEWER_LIMIT}){{count nodes{{username mergeRequestInteraction{{reviewState}}}}}} headPipeline{{sha status jobs(first:{JOB_LIMIT}){{count nodes{{name status allowFailure webPath}}}}}}}}}} settled:mergeRequests(state:all,first:{RECENT_LIMIT},sort:UPDATED_DESC){{count nodes{{{CHANGE_FIELDS} author{{username bot}}}}}}}}}}"
     )
 }
 
