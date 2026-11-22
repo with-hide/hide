@@ -320,6 +320,27 @@ class Scenario:
                                "--body 'core-a asks dev-a'")
         return "dev-a -> core-a (progress), core-a -> dev-a (request)"
 
+    def paired_letter(self):
+        """A letter from core-a to an agent of a machine paired with the
+        core (PRD device-connect-iroh D-71): the ledger keeps it under that
+        machine's connection id, addressed to a registration there. The
+        scenario pairs no machine, so every release records the step as not
+        done until a generator starts a second Hide beside the core;
+        `hide-core`'s tests write these records over each released folder
+        until then (`docs/TESTING.md`, Upgrading a released state folder)."""
+        peers = ((self.daemon.snapshot() or {}).get("navigator") or {}).get("peers") or []
+        machine = next((peer for peer in peers if peer.get("opens") == "active" and peer.get("connected")), None)
+        if machine is None:
+            raise NotInRelease("the core opens no paired machine")
+        device = machine["device_id"]
+        listed = self.checked("core-a", f"hide agent list --machine {device}")
+        agent = next((row.get("id") for row in listed.get("items") or [] if row.get("id")), None)
+        if agent is None:
+            raise Stop(f"{device} lists no agent to write to")
+        self.checked("core-a", f"hide request send core:{device}:agent:{agent} --intent release-state-core-to-paired "
+                               "--kind request --body 'core-a asks the paired machine'")
+        return f"core-a -> core:{device}:agent:{agent} (request)"
+
     def memory(self):
         rest = self.daemon.snapshot()
         for device, path in ((True, DEVICE_REPO), (False, str(CORE_REPO))):
@@ -764,6 +785,7 @@ class Scenario:
             self.step("views opened from two device sessions and the core", self.views)
             self.step("device pane move", self.pane_move)
             self.step("letters to and from a device agent", self.letters)
+            self.step("letter to an agent of a paired machine", self.paired_letter)
             self.step("project memory cards", self.memory)
             self.step("plan step spawned from a device session", self.plan_spawn)
             self.step("mission conducted on the device with its worker there", self.mission)

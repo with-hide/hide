@@ -197,7 +197,37 @@ pub struct Letter {
     /// kept no such count; an older build drops the field at its next save.
     #[serde(default)]
     pub bell_ended: Option<u8>,
+    /// The id the sending core's ledger gives this letter, on a letter an
+    /// agent of another core sent (PRD device-connect-iroh D-72): on the
+    /// link a letter is named by its sender's machine and that id, so a
+    /// reply to this one names it. Absent on every other letter; an older
+    /// build drops the field at its next save.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub core_id: Option<String>,
 }
+
+/// A start an agent of this core asked of another machine's core with no
+/// parent (PRD device-connect-iroh D-59, D-71): the work is that machine's,
+/// and this core keeps only who asked and where. A machine this one opens
+/// writes nothing here first, so the result report of what was started
+/// there is taken from it by this record alone (`access::core_admit`).
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct CoreStart {
+    /// The registration that asked: the agent, not its pane, so the agent
+    /// that runs in its place later still takes the report.
+    pub origin: String,
+    /// The other machine's connection id, which it proved: a device id is
+    /// only what a machine says of itself, and two connections may say the
+    /// same one.
+    pub key: String,
+    pub at_unix_ms: u64,
+}
+
+/// The most starts on other cores the ledger remembers. At the cap the
+/// oldest whose asker ended goes, since no report reaches an ended agent;
+/// while every asker still lives a new start is refused before it leaves
+/// (`Ledger::note_core_start`).
+pub const CORE_STARTS: usize = 256;
 
 /// A bell that failed: the doorbell's code for it, and whether the engine
 /// had been asked to type the line, so it may be in the agent's input
@@ -518,6 +548,11 @@ pub struct Ledger {
     /// bound it. Left out of the file while there are none.
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub human_turns: BTreeMap<String, crate::coordination::human_turn::HumanTurn>,
+    /// The starts this core's agents asked of other cores ([`CoreStart`]),
+    /// oldest first and [`CORE_STARTS`] at most. Left out of the file while
+    /// there are none.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub core_starts: Vec<CoreStart>,
     /// What each agent saw of its status cells (`runtime::status_cells`), by
     /// registration id: the subject of each cell and the revision it saw, so
     /// a turn after a restart is not told again what it already read. One
@@ -540,6 +575,7 @@ impl Default for Ledger {
             identity_waits: Vec::new(),
             spawn_placement_revision: 0,
             human_turns: BTreeMap::new(),
+            core_starts: Vec::new(),
             status_seen: BTreeMap::new(),
         }
     }
@@ -632,6 +668,16 @@ impl Ledger {
             }
         }
         crate::coordination::validate_records(self)?;
+        if self.core_starts.len() > CORE_STARTS {
+            return Err("capacity".into());
+        }
+        if self
+            .core_starts
+            .iter()
+            .any(|start| !super::valid_key(&start.origin) || !super::valid_key(&start.key))
+        {
+            return Err("ledger_unavailable".into());
+        }
         let mut sequences = HashSet::new();
         for id in ids
             .into_iter()
@@ -753,6 +799,161 @@ impl Ledger {
         self.watches.retain(|watch| {
             !(sender.same_identity(&watch.target) && recipient.same_identity(&watch.parent))
         });
+    }
+
+    /// The core on connection `key` took letter `id`, which this core's
+    /// agent wrote to an agent of that core (PRD device-connect-iroh D-72):
+    /// the letter is delivered, and its recipient takes `name`, what that
+    /// agent is called there, in place of what its sender called it. Who the
+    /// recipient is does not change, so the same send asked again is the
+    /// same letter. Only a letter still waiting to be handed over on that
+    /// connection moves, so an answer that comes twice, or from another
+    /// machine, changes nothing. A refusal ends the letter another way
+    /// ([`Ledger::refuse_core`]). Returns whether it moved.
+    pub fn settle_core(&mut self, id: &str, key: &str, name: &str, now: u64) -> bool {
+        let Some(letter) = self.letters.iter_mut().find(|letter| {
+            letter.id == id && letter.state == State::Pending && letter.recipient.core_of(key)
+        }) else {
+            return false;
+        };
+        if super::valid_key(name) {
+            letter.recipient.name = name.to_owned();
+        }
+        letter.hook_confirmed = Some(true);
+        letter.state = State::Delivered;
+        if !letter.open() {
+            letter.finished_at_unix_ms = Some(now);
+        }
+        true
+    }
+
+    /// The core on connection `key` keeps nothing of letter `id`, which
+    /// this core's agent wrote to an agent of that core, and says why: the
+    /// letter ends `no_recipient`, as one whose agent ended with no agent
+    /// after it does, and keeps the other core's `reason` where a failed
+    /// bell's is kept (`Letter::bell_failure`), so its sender reads it with
+    /// the letter in `hide inbox` and `hide request show`. Only a letter
+    /// still waiting to be handed over on that connection ends. Returns
+    /// whether it ended.
+    pub fn refuse_core(&mut self, id: &str, key: &str, reason: &str, now: u64) -> bool {
+        let Some(letter) = self.letters.iter_mut().find(|letter| {
+            letter.id == id && letter.state == State::Pending && letter.recipient.core_of(key)
+        }) else {
+            return false;
+        };
+        letter.end(State::NoRecipient, now);
+        if super::valid_key(reason) {
+            letter.bell_failure = Some(BellFailure {
+                code: reason.to_owned(),
+                maybe_typed: false,
+                at_unix_ms: now,
+            });
+        }
+        crate::diagnostic!(serde_json::json!({
+            "component": "delivery", "kind": "letter.no_recipient",
+            "letter_id": letter.id, "pane_id": letter.recipient.pane_id, "reason": reason,
+        }));
+        true
+    }
+
+    /// Ends each letter awaiting intake by an identity `gone` names, as
+    /// [`Ledger::end_letters_to`] ends the letters of a registration that
+    /// ended: the agents of a machine this core is paired with no longer
+    /// (`coordination::end_gone_cores`). Returns whether any ended.
+    pub(crate) fn end_letters_of(&mut self, gone: impl Fn(&Actor) -> bool, now: u64) -> bool {
+        self.end_letters_where(|letter| gone(&letter.recipient), now)
+    }
+
+    /// Stamps letter `id`, which an agent of another core sent, with the
+    /// id its sender's core gives it (`Letter::core_id`). Returns whether
+    /// the ledger changed.
+    pub fn name_core_letter(&mut self, id: &str, core_id: &str) -> bool {
+        match self.letters.iter_mut().find(|letter| letter.id == id) {
+            Some(letter) if letter.core_id.as_deref() != Some(core_id) => {
+                letter.core_id = Some(core_id.to_owned());
+                true
+            }
+            _ => false,
+        }
+    }
+
+    /// Forgets the starts asked of connections not among `keys`, which
+    /// this core is paired with no longer. Returns whether any went.
+    pub fn forget_core_starts(&mut self, keys: &[String]) -> bool {
+        let before = self.core_starts.len();
+        self.core_starts.retain(|start| keys.contains(&start.key));
+        self.core_starts.len() != before
+    }
+
+    /// Remembers that the registration `origin` asked the core on
+    /// connection `key` for a start ([`CoreStart`]), before the ask leaves.
+    /// One record per asker and connection: asked again, the record takes
+    /// the newest place and time. At [`CORE_STARTS`] the oldest record whose
+    /// asker ended goes; while the asker of every record may still take its
+    /// report, the new start is refused `capacity` and nothing is dropped.
+    pub fn note_core_start(
+        &mut self,
+        origin: &str,
+        key: &str,
+        now: u64,
+    ) -> Result<(), &'static str> {
+        if let Some(at) = self
+            .core_starts
+            .iter()
+            .position(|start| start.key == key && start.origin == origin)
+        {
+            let mut start = self.core_starts.remove(at);
+            start.at_unix_ms = now;
+            self.core_starts.push(start);
+            return Ok(());
+        }
+        if self.core_starts.len() >= CORE_STARTS {
+            let finished = self
+                .core_starts
+                .iter()
+                .position(|start| !self.core_start_open(start))
+                .ok_or("capacity")?;
+            let dropped = self.core_starts.remove(finished);
+            crate::diagnostic!(serde_json::json!({
+                "component": "delivery", "kind": "core_start.dropped",
+                "agent_id": dropped.origin,
+            }));
+        }
+        self.core_starts.push(CoreStart {
+            origin: origin.to_owned(),
+            key: key.to_owned(),
+            at_unix_ms: now,
+        });
+        Ok(())
+    }
+
+    /// Whether the report of `start` may still reach its asker: its
+    /// registration is live. The agent that takes an asker's place takes
+    /// its starts ([`Self::hand_core_starts`]).
+    fn core_start_open(&self, start: &CoreStart) -> bool {
+        self.agents
+            .iter()
+            .any(|record| record.id == start.origin && !record.ended)
+    }
+
+    /// The starts registration `old` asked for are `successor`'s from now
+    /// on, one per connection: where both asked the same machine, the
+    /// successor's own record stands.
+    pub(crate) fn hand_core_starts(&mut self, old: &str, successor: &str) {
+        for at in (0..self.core_starts.len()).rev() {
+            if self.core_starts[at].origin != old {
+                continue;
+            }
+            let asked = self
+                .core_starts
+                .iter()
+                .any(|start| start.origin == successor && start.key == self.core_starts[at].key);
+            if asked {
+                self.core_starts.remove(at);
+            } else {
+                successor.clone_into(&mut self.core_starts[at].origin);
+            }
+        }
     }
 
     /// Ends the answer wait of every letter `actor` sent or received and the
@@ -1053,6 +1254,140 @@ mod tests {
     /// (`recover`, without its checks of the state folder).
     fn load(path: &Path) -> Result<Ledger, String> {
         super::super::store::load(path)
+    }
+
+    /// PRD device-connect-iroh D-72: at the cap only a start whose asker
+    /// ended goes, the oldest such first. While every asker may still take
+    /// its report a new start is refused and the oldest record, a long
+    /// mission's, keeps its place; a start asked again takes the newest
+    /// place and time and needs no room.
+    #[test]
+    fn the_remembered_starts_drop_only_ended_askers_and_refuse_when_none_ended() {
+        let key = "a".repeat(64);
+        let asker = |n: usize| format!("agent-{}", n + 1);
+        let holds = |ledger: &Ledger, n: usize| {
+            ledger
+                .core_starts
+                .iter()
+                .any(|start| start.origin == asker(n))
+        };
+        let mut ledger = Ledger::default();
+        for n in 0..=CORE_STARTS {
+            let actor = Actor {
+                pane_id: format!("w1:p{n}"),
+                name: format!("asker-{n}"),
+                kind: "codex".into(),
+                device_id: "local".into(),
+                session: crate::engine::tokens::session_digest(&format!("asker-{n}")),
+            };
+            ledger.agents.push(crate::coordination::AgentRecord {
+                id: asker(n),
+                name: Some(actor.name.clone()),
+                machine: "local".into(),
+                host_scope: "scope".into(),
+                native_machine: "machine".into(),
+                session: format!("asker-{n}"),
+                instance: format!("terminal-{n}"),
+                pane: actor.pane_id.clone(),
+                parent: None,
+                origin: None,
+                project: None,
+                actor,
+                ended: false,
+                terminal_id: None,
+                forked: false,
+                successor: None,
+            });
+        }
+        for n in 0..CORE_STARTS {
+            ledger.note_core_start(&asker(n), &key, n as u64).unwrap();
+        }
+        assert_eq!(
+            ledger.note_core_start(&asker(CORE_STARTS), &key, 999),
+            Err("capacity")
+        );
+        assert_eq!(ledger.core_starts.len(), CORE_STARTS);
+        assert_eq!(ledger.core_starts[0].origin, asker(0));
+
+        ledger.note_core_start(&asker(0), &key, 1_000).unwrap();
+        assert_eq!(ledger.core_starts.len(), CORE_STARTS);
+        let newest = ledger.core_starts.last().unwrap();
+        assert!(newest.origin == asker(0) && newest.at_unix_ms == 1_000);
+        // The same asker on another connection is another record.
+        assert_eq!(
+            ledger.note_core_start(&asker(0), &"b".repeat(64), 1_000),
+            Err("capacity")
+        );
+
+        // Askers 9 and 5 ended: the older record of the two goes for the
+        // new start, and no living asker's does.
+        for n in [9, 5] {
+            ledger.agents[n].ended = true;
+        }
+        ledger
+            .note_core_start(&asker(CORE_STARTS), &key, 1_001)
+            .unwrap();
+        assert_eq!(ledger.core_starts.len(), CORE_STARTS);
+        assert!(!holds(&ledger, 5) && holds(&ledger, 9));
+        assert!(holds(&ledger, 1) && holds(&ledger, CORE_STARTS));
+
+        // The agent that takes asker 7's place takes its start, and where
+        // both asked the same machine one record stands.
+        ledger.hand_core_starts(&asker(7), "agent-next");
+        assert!(!holds(&ledger, 7));
+        assert!(
+            ledger
+                .core_starts
+                .iter()
+                .any(|start| start.origin == "agent-next")
+        );
+        ledger.hand_core_starts(&asker(1), "agent-next");
+        assert_eq!(ledger.core_starts.len(), CORE_STARTS - 1);
+        assert!(!holds(&ledger, 1));
+    }
+
+    /// PRD device-connect-iroh D-72: a letter to another core's agent waits,
+    /// with no deadline, until the core on its connection answers. Taken, it
+    /// is delivered under the name the agent has there; refused, it ends
+    /// with no recipient and keeps the other core's reason. An answer from
+    /// another connection, or a second one, moves nothing.
+    #[test]
+    fn a_letter_to_another_cores_agent_ends_by_what_the_core_on_its_connection_answers() {
+        let address =
+            crate::address::CoreAddress::new("mini", crate::address::CoreItem::Agent, "agent-7");
+        let (mini, studio) = ("a".repeat(64), "b".repeat(64));
+        let there = Actor::core(address, &mini, "Mac mini", "agent-7", "local");
+        let to_core = || {
+            let mut ledger = letter();
+            ledger.letters[0].recipient = there.clone();
+            ledger
+        };
+
+        let mut ledger = to_core();
+        assert!(!ledger.settle_core("letter-1", &studio, "hide:core:Mac mini:worker", 5));
+        assert!(ledger.settle_core("letter-1", &mini, "hide:core:Mac mini:worker", 5));
+        let letter = &ledger.letters[0];
+        assert_eq!(letter.state, State::Delivered);
+        assert_eq!(letter.recipient.name, "hide:core:Mac mini:worker");
+        assert!(letter.recipient.core_of(&mini), "the same agent");
+        assert!(letter.waiting_answer && letter.finished_at_unix_ms.is_none());
+        assert!(!ledger.settle_core("letter-1", &mini, "hide:core:Mac mini:other", 6));
+        assert!(!ledger.refuse_core("letter-1", &mini, "target_unavailable", 6));
+        ledger.validate().unwrap();
+
+        let mut ledger = to_core();
+        assert!(!ledger.refuse_core("letter-1", &studio, "target_unavailable", 7));
+        assert!(ledger.refuse_core("letter-1", &mini, "target_unavailable", 7));
+        let letter = &ledger.letters[0];
+        assert_eq!(letter.state, State::NoRecipient);
+        assert!(!letter.waiting_answer);
+        assert_eq!(letter.finished_at_unix_ms, Some(7));
+        assert_eq!(
+            letter.bell_failure.as_ref().map(|why| why.code.as_str()),
+            Some("target_unavailable")
+        );
+        assert!(!ledger.settle_core("letter-1", &mini, "hide:core:Mac mini:worker", 8));
+        ledger.validate().unwrap();
     }
 
     fn letter() -> Ledger {

@@ -58,6 +58,10 @@ enum Command {
     DeliveryHuman {
         reply: Sender<Result<hide_core::delivery::worker::PreparedHuman, String>>,
     },
+    /// One short step of the core, run on the owner thread, which answers
+    /// through the channel the call holds: what another machine's core
+    /// asked of this one or answered it (`crate::peer_core`).
+    OnOwner(Box<dyn FnOnce(&hide_core::Core) + Send>),
     ReleaseEffects {
         reply: Sender<bool>,
     },
@@ -456,6 +460,69 @@ impl CoreHandle {
         result
             .recv()
             .map_err(|_| "delivery_unavailable".to_owned())?
+    }
+
+    /// Runs `ask` on the owner thread and answers with what it returned.
+    fn on_owner<T: Send + 'static>(
+        &self,
+        ask: impl FnOnce(&hide_core::Core) -> T + Send + 'static,
+    ) -> Result<T, String> {
+        let (reply, result) = mpsc::channel();
+        self.commands
+            .send(Command::OnOwner(Box::new(move |core| {
+                let _ = reply.send(ask(core));
+            })))
+            .map_err(|_| "delivery_unavailable".to_owned())?;
+        result.recv().map_err(|_| "delivery_unavailable".to_owned())
+    }
+
+    /// Gives the core its connection to the other machines' cores.
+    pub fn set_core_link(&self, link: Arc<dyn hide_core::core_calls::CoreLink>) {
+        let _ = self.on_owner(move |core| core.set_core_link(link));
+    }
+
+    /// The letters that wait to go to the core of machine `key`
+    /// (`Core::core_outbox`); none when the core cannot be asked.
+    pub fn core_outbox(&self, key: &str) -> hide_core::core_calls::Outbox {
+        let key = key.to_owned();
+        self.on_owner(move |core| core.core_outbox(&key))
+            .unwrap_or_default()
+    }
+
+    /// A letter the core of machine `key` sent (`Core::prepare_core_letter`).
+    pub fn prepare_core_letter(
+        &self,
+        key: &str,
+        letter: hide_core::core_calls::Letter,
+    ) -> Result<hide_core::core_calls::Taking, String> {
+        let key = key.to_owned();
+        self.on_owner(move |core| core.prepare_core_letter(&key, letter))?
+    }
+
+    /// What the core of machine `key` answered for this core's letter `id`
+    /// (`Core::core_letter_answered`).
+    pub fn core_letter_answered(
+        &self,
+        key: &str,
+        id: &str,
+        outcome: hide_core::core_calls::Outcome,
+    ) -> Option<hide_core::core_calls::Settle> {
+        let (key, id) = (key.to_owned(), id.to_owned());
+        self.on_owner(move |core| core.core_letter_answered(&key, &id, outcome))
+            .ok()
+            .flatten()
+    }
+
+    /// A read or a start the core of machine `key` asked for
+    /// (`Core::prepare_core_call`).
+    pub fn prepare_core_call(
+        &self,
+        key: &str,
+        from: hide_core::core_calls::Party,
+        asked: hide_core::core_calls::Asked,
+    ) -> Result<hide_core::core_calls::Call, String> {
+        let key = key.to_owned();
+        self.on_owner(move |core| core.prepare_core_call(&key, &from, asked))?
     }
 
     /// A letter a guest's node kept while this core was away, as the
@@ -1772,6 +1839,7 @@ fn owner_loop(
             Command::DeliveryHuman { reply } => {
                 let _ = reply.send(core.prepare_delivery_human());
             }
+            Command::OnOwner(ask) => ask(&core),
             Command::ReleaseEffects { reply } => {
                 let _ = reply.send(core.release_effects());
             }

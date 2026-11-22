@@ -21,6 +21,7 @@ mod codex_launch;
 mod composer_checks;
 mod composer_store;
 pub mod coordination;
+pub mod core_calls;
 pub mod dag;
 pub mod delivery;
 pub mod desk;
