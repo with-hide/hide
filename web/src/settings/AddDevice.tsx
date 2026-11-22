@@ -56,8 +56,7 @@ export function AddByLink({ actions, onStarted }: { actions: Actions; onStarted:
   };
   return (
     <section className="space-y-sm" data-add-by-link="true">
-      <h3 id={id} className="text-body font-semibold text-subtle-foreground">{t("pairing.add.linkTitle")}</h3>
-      <p className="break-keep text-body text-muted-foreground">{t("pairing.add.linkDescription")}</p>
+      <p id={id} className="break-keep text-body text-muted-foreground">{t("pairing.add.linkDescription")}</p>
       <div className="flex items-center gap-sm">
         <Input
           aria-labelledby={id}
@@ -224,7 +223,7 @@ export function AddDevice({ actions, devices, helperRoot, cliDir, onPaired }: { 
       )}
       <div className="flex justify-end">
         <Button disabled={blocked} onClick={submit} data-add-device={connects ? "connect" : "true"}>
-          {connects ? (connecting ? t("pairing.ssh.connecting") : t("pairing.add.connect")) : pending ? t("devices.adding") : t("common.add")}
+          {connects ? (connecting ? t("pairing.ssh.connecting") : t("pairing.add.connect")) : pending ? t("devices.adding") : pairs ? t("devices.next") : t("common.add")}
         </Button>
       </div>
     </div>

@@ -372,6 +372,8 @@ mod tests {
         let projection = project(&rest(), "local");
         let asking = top(&projection.groups[0], 0);
         assert_eq!(asking.place.as_deref(), Some("hide · prd/mobile-companion"));
+        // The list's row names the project alone; the detail names the branch too.
+        assert_eq!(asking.project.as_deref(), Some("hide"));
         assert_eq!(asking.mark, "turn");
         assert_eq!(asking.line.as_ref().unwrap().tone, "warning");
         assert_eq!(asking.key().engine_pane_id(), "w1:p2");
@@ -382,6 +384,7 @@ mod tests {
         assert_eq!(child.root_pane_id, "w1:p1");
         let seen = top(&projection.groups[3], 0);
         assert_eq!(seen.place.as_deref(), Some("notes"));
+        assert_eq!(seen.project.as_deref(), Some("notes"));
         assert_eq!(seen.line, None, "a quiet sentence is not drawn");
         assert!(
             serde_json::to_string(&projection)

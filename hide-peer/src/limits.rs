@@ -140,8 +140,9 @@ pub const MAX_UNAPPLIED: usize = hide_peer_protocol::event::BOX_MAX_EVENTS;
 /// event is finished: the cursor covers it and nothing reads it again. All
 /// applied lines go when nothing waits, and past the cap they go while an
 /// event still waits, so a host that keeps one event waiting cannot grow the
-/// file. The file, and the read of it when the inbox opens, stay under twice
-/// this.
+/// file. The file stays under twice this. Recovery streams older files one
+/// bounded line at a time and reclaims their applied history; a live tail
+/// over either cap is an error, with the file preserved.
 pub const MAX_UNAPPLIED_BYTES: usize = hide_peer_protocol::event::BOX_MAX_BYTES;
 
 /// How many connection events a slow listener may fall behind before it

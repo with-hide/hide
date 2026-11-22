@@ -13,7 +13,7 @@ import { TooltipProvider } from "./components/ui/tooltip";
 import { LinkTimeline } from "./LinkSessions";
 import { disarmKeyTarget } from "./keyTarget";
 import { resumeProvider } from "./linkPanel";
-import { AgentHead } from "./mobile/parts";
+import { AgentLead, AgentStatusMark } from "./mobile/parts";
 import type { PhoneAgent } from "./mobile/protocol";
 import { NO_CHOICE, START_KINDS, selectionOf } from "./mobile/start";
 import type { Checkout, LinkPanel, Workspace } from "./snapshot";
@@ -64,8 +64,8 @@ it.each([null, undefined])("has no product name for %s", (kind) => {
 // The phone's list row leads with the status mark alone; only the detail screen's head draws the logo (agent-mark-quiet B12).
 it("draws the provider logo in the phone detail head and not in a list row", () => {
   const agent = { mark: "going", tone: "working", agent_kind: "codex", title: "작업", emphasized: false } as unknown as PhoneAgent;
-  expect(renderToStaticMarkup(<AgentHead agent={agent} large={false} />)).not.toContain("data-agent-mark");
-  expect(renderToStaticMarkup(<AgentHead agent={agent} large />)).toContain('data-agent-mark="codex"');
+  expect(renderToStaticMarkup(<AgentStatusMark agent={agent} />)).not.toContain("data-agent-mark");
+  expect(renderToStaticMarkup(<AgentLead agent={agent} />)).toContain('data-agent-mark="codex"');
 });
 
 it.each(["future-agent", "cursor"])("keeps %s ineligible for resume", (kind) => {

@@ -47,6 +47,8 @@ export type PhoneAgent = {
   agent_kind: string;
   title: string;
   place: string | null;
+  /** The project alone, which the list row's second line names; absent where `place` is and from a Mac that predates it, where the row names `place`. */
+  project?: string;
   device_label: string | null;
   /** When the Mac's core last saw this agent change state (epoch ms); the phone counts the elapsed time from it. */
   changed_at_unix_ms: number | null;
@@ -136,6 +138,8 @@ export type PhoneMissionNode = MissionNodeBrief & {
   /** An outside step's pull request state as GitHub last answered; absent for a branch, until read and from a Mac before it. */
   external_state?: PrState;
   stage: number | null;
+  /** When the step last went to work, its start or back from a finish; the step list's `작업 중 · N분` counts from it. Absent before it started and from a Mac that predates it, where the line has no time. */
+  worked_at_unix_ms?: number | null;
   worker_agent: string | null;
   /** The worker's row in the phone's list; null when the list does not hold it, so there is nothing to open. */
   agent: AgentKey | null;
@@ -265,7 +269,9 @@ export type LookFileStatus = "modified" | "added" | "deleted" | "untracked" | "r
 export type LookFile = { path: string; status: LookFileStatus; added: number | null; removed: number | null; binary: boolean };
 
 /** The answer states of `look_result`: everything that is not content. */
-export type LookResultState = "page" | "other" | "too_large" | "closed" | "failed" | "gone" | "refused" | "unavailable" | "device_unreachable";
+/** `not_found` and `outside_roots` say why a file cannot be read (gone since its View opened, outside every checkout); a bundle
+ * from before them shows either as a failed read. */
+export type LookResultState = "page" | "other" | "too_large" | "closed" | "failed" | "gone" | "refused" | "unavailable" | "device_unreachable" | "not_found" | "outside_roots";
 
 /**
  * What a text, an image or a page's screenshot sends first (hided/src/mobile/looks.rs `chunks`). A page's (`mode: "page"`,

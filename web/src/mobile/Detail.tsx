@@ -11,17 +11,19 @@ import { OfflineText } from "./OfflineText";
 
 import { pullLabel } from "../codeHost";
 import { AnsiUp } from "ansi_up";
-import { ArrowLeftIcon, CircleAlertIcon, ImageIcon, MoonIcon, FlagIcon } from "lucide-react";
+import { CircleAlertIcon, ImageIcon, MoonIcon, FlagIcon } from "lucide-react";
 import { memo, useEffect, useLayoutEffect, useMemo, useRef, useState, type UIEvent } from "react";
 import { Elapsed } from "../components/elapsed";
 import { useInterfaceTranslation } from "../i18n/translator";
 import { Button } from "../components/ui/button";
-import { Input } from "../components/ui/input";
 import { Tabs, TabsList, TabsTrigger } from "../components/ui/tabs";
 import { wakeFailureReason, wakingLine } from "../sleep";
 import type { AgentSleep } from "../snapshot";
 import { renderMarkdown } from "./markdown";
-import { AgentHead, DETAIL_INSET, PhoneHumanTurn, Place } from "./parts";
+import { AgentLead, PhoneHumanTurn, PlaceParts } from "./parts";
+import { ActivityLine, Composer, PageHead, StatusStrip } from "./layout";
+import { lineParts } from "../agentRow";
+import { statusText } from "../agentStatus";
 import { closeDetail, closeLook, loadMore, loadOlder, onReplyResult, openPrPage, sendKey, sendReply, setTab, wakeAgent } from "./connection";
 import { LookViewer, LooksList, useKindWord } from "./Looks";
 import {
@@ -40,6 +42,7 @@ import {
   type AgentKey,
   type DetailTab,
   type LookKind,
+  type PhoneAgent,
 } from "./protocol";
 import { agentOf, openMission, usePhone } from "./store";
 import { agentLinks, progress } from "./missionModel";
@@ -97,54 +100,46 @@ export function Detail({ onBack }: { onBack: () => void }) {
   const offline = unreachable && !connected;
   return (
     <main className="flex h-full flex-col" data-phone-detail={detail ? `${detail.key.device_id}|${detail.key.pane_id}` : ""}>
-      <header className="phone-safe-top shrink-0 border-b border-border bg-background px-lg pb-md">
-        {/* Keep each label's width; wrap when the phone cannot fit all three items. */}
-        <div className="flex flex-wrap items-center gap-sm pt-sm">
-          <div className="flex min-w-max flex-1 basis-0">
-            <Button variant="ghost" onClick={viewing ? closeLook : onBack} className="-ml-sm flex min-h-(--size-touch-target) items-center gap-xs px-sm text-body text-foreground" data-phone-back={viewing ? "looks" : "true"}>
-              <ArrowLeftIcon aria-hidden="true" className="size-(--size-icon-lg)" />
-              {viewing ? t("mobile.tab.looks") : t("mobile.list")}
-            </Button>
-          </div>
-          {!viewing && (hasConversation || hasLooks) && detail && !sleep ? (
-            <Tabs value={tab} onValueChange={(value) => setTab(value as DetailTab)} className="shrink-0">
-              <TabsList>
-                {hasConversation ? (
-                  <TabsTrigger value="conversation" className="h-(--size-touch-target) px-sm text-body" data-phone-view="conversation">
-                    {t("mobile.tab.conversation")}
+      {viewing ? (
+        <ViewingHead row={viewing.row} opener={agent?.title ?? ""} />
+      ) : (
+        <PageHead
+          back={{ label: t("mobile.list"), onClick: onBack, tag: "true" }}
+          lead={agent ? <AgentLead agent={agent} /> : null}
+          title={agent?.title ?? ""}
+          line={agent ? <PlaceParts agent={agent} /> : null}
+        >
+          {(hasConversation || hasLooks) && detail && !sleep ? (
+            <div className="mt-sm flex min-w-0 flex-wrap items-center justify-between gap-sm">
+              <Tabs value={tab} onValueChange={(value) => setTab(value as DetailTab)} className="shrink-0">
+                <TabsList>
+                  {hasConversation ? (
+                    <TabsTrigger value="conversation" className="h-(--size-touch-target) px-md text-body" data-phone-view="conversation">
+                      {t("mobile.tab.conversation")}
+                    </TabsTrigger>
+                  ) : null}
+                  <TabsTrigger value="terminal" className="h-(--size-touch-target) px-md text-body" data-phone-view="terminal">
+                    {t("mobile.tab.terminal")}
                   </TabsTrigger>
-                ) : null}
-                <TabsTrigger value="terminal" className="h-(--size-touch-target) px-sm text-body" data-phone-view="terminal">
-                  {t("mobile.tab.terminal")}
-                </TabsTrigger>
-                {hasLooks ? (
-                  <TabsTrigger value="looks" className="h-(--size-touch-target) gap-xs px-sm text-body" data-phone-view="looks">
-                    {t("mobile.tab.looks")}
-                    {unseen > 0 ? (
-                      <span className="inline-flex h-(--size-badge-height) min-w-(--size-badge-height) items-center justify-center rounded-full bg-warning px-xs font-mono text-micro text-status-foreground" data-phone-looks-unseen={unseen}>
-                        {unseen}
-                      </span>
-                    ) : null}
-                  </TabsTrigger>
-                ) : null}
-              </TabsList>
-            </Tabs>
-          ) : null}
-          <span className="min-w-max flex-1 basis-0 text-right font-mono text-body text-muted-foreground">
-            <Elapsed since={agent?.changed_at_unix_ms} />
-          </span>
-        </div>
-        {viewing ? (
-          <ViewingHead row={viewing.row} opener={agent?.title ?? ""} />
-        ) : agent ? (
-          <div className="mt-xs flex flex-col gap-xs">
-            <AgentHead agent={agent} large />
-            {detail ? <DetailLinks agentKey={detail.key} /> : null}
-            <Place agent={agent} inset={DETAIL_INSET} />
-            <PhoneHumanTurn agent={agent} inset={DETAIL_INSET} />
-          </div>
-        ) : null}
-      </header>
+                  {hasLooks ? (
+                    <TabsTrigger value="looks" className="h-(--size-touch-target) gap-xs px-md text-body" data-phone-view="looks">
+                      {t("mobile.tab.looks")}
+                      {unseen > 0 ? (
+                        <span className="inline-flex h-(--size-badge-height) min-w-(--size-badge-height) items-center justify-center rounded-full bg-warning px-xs font-mono text-micro text-status-foreground" data-phone-looks-unseen={unseen}>
+                          {unseen}
+                        </span>
+                      ) : null}
+                    </TabsTrigger>
+                  ) : null}
+                </TabsList>
+              </Tabs>
+              <DetailLinks agentKey={detail.key} />
+            </div>
+          ) : detail ? <DetailLinks agentKey={detail.key} className="mt-sm" /> : null}
+          {agent ? <PhoneHumanTurn agent={agent} inset="mt-sm" /> : null}
+        </PageHead>
+      )}
+      {agent && !viewing && !sleep ? <AgentStrip agent={agent} /> : null}
       {offline ? (
         <div role="status" className="shrink-0 bg-secondary px-lg py-sm text-subhead text-subtle-foreground" data-phone-unreachable="true">
           <OfflineText />
@@ -165,7 +160,7 @@ export function Detail({ onBack }: { onBack: () => void }) {
       ) : !showsConversation ? (
         <Scrollback text={rows?.text ?? ""} more={rows?.more ?? false} lines={rows?.lines ?? 0} loading={!rows} alternateScreen={rows?.alternateScreen ?? false} conversation={hasConversation} />
       ) : conversation ? (
-        <ConversationLog conversation={conversation} />
+        <ConversationLog conversation={conversation} agent={agent ?? null} />
       ) : (
         <div className="min-h-0 flex-1 bg-background px-lg py-md">
           <p className="text-body text-muted-foreground">{t("mobile.loading")}</p>
@@ -181,7 +176,8 @@ export function Detail({ onBack }: { onBack: () => void }) {
  * Conductor or the step's title for a worker, a pull request's state mark and `#number`. A chip closes the detail and opens that
  * page on its tab, whose back goes to that tab's list.
  */
-function DetailLinks({ agentKey }: { agentKey: AgentKey }) {
+/** The chips of what the agent belongs to; nothing at all, not even its room, when it belongs to nothing. */
+function DetailLinks({ agentKey, className }: { agentKey: AgentKey; className?: string }) {
   const { t } = useInterfaceTranslation();
   const missions = usePhone((s) => s.missions);
   const prs = usePhone((s) => s.prs?.items ?? null);
@@ -189,20 +185,18 @@ function DetailLinks({ agentKey }: { agentKey: AgentKey }) {
   if (links.missions.length === 0 && links.prs.length === 0) return null;
   // Each chip is a small pill inside a press area of a touch target's height, so a row of them stays light.
   const chip = "h-auto min-h-(--size-touch-target) max-w-full px-none py-none font-normal hover:bg-transparent";
-  const pill = "flex min-w-0 items-center gap-xs rounded-full border border-border bg-secondary px-sm py-xxs text-body text-foreground";
+  const pill = "flex min-w-0 items-center gap-xs rounded-full bg-secondary px-md py-xs text-body text-foreground";
   return (
-    <div className={`-my-sm flex flex-wrap gap-x-sm ${DETAIL_INSET}`} data-phone-detail-links="true">
+    <div className={cn("-my-sm flex min-w-0 flex-wrap justify-end gap-x-sm", className)} data-phone-detail-links="true">
       {links.missions.map(({ mission, node, turn }) => {
         const { done, total } = progress(mission);
         return (
           <Button key={mission.id} variant="ghost" className={chip} data-phone-detail-mission={mission.id}
-            aria-label={`${t("mobile.tab.missions")} · ${mission.title}`} onClick={() => { closeDetail(); openMission(mission.id); }}>
+            aria-label={[t("mobile.tab.missions"), mission.title, node?.title, `${done}/${total}`].filter(Boolean).join(" · ")} onClick={() => { closeDetail(); openMission(mission.id); }}>
+            {/* The flag and the mission's progress, as Doop 02 draws it; the mission's and the step's names are the chip's name. */}
             <span className={pill}>
               <FlagIcon aria-hidden="true" className={cn("size-(--size-icon) shrink-0", TONE_TEXT[missionToneOf(mission.status, turn, missionStalled(mission))])} />
-              <span className="min-w-0 truncate">{mission.title}</span>
-              <span aria-hidden="true" className="shrink-0 text-muted-foreground">·</span>
-              {node ? <span className="min-w-0 truncate text-subtle-foreground">{node.title}</span>
-                : <span className="shrink-0 font-mono text-subtle-foreground">{done}/{total}</span>}
+              <span className="shrink-0 font-mono" data-phone-detail-mission-progress={`${done}/${total}`}>{done}/{total}</span>
             </span>
           </Button>
         );
@@ -223,28 +217,53 @@ function DetailLinks({ agentKey }: { agentKey: AgentKey }) {
   );
 }
 
-/** The head of a View on screen: its name, its kind, who opened it and how long ago (B13). */
+/** The head of a View on screen (Doop 11): back to 볼 것, its name, then its kind, the agent that opened it and how long ago (B13). */
 function ViewingHead({ row, opener }: { row: { name: string; kind: LookKind; at: number }; opener: string }) {
   const { t } = useInterfaceTranslation();
   const word = useKindWord()(row.kind);
   return (
-    <div className="mt-xs flex flex-col gap-xs" data-phone-viewing={row.name}>
-      <h1 className="break-all text-title font-medium text-foreground">{row.name}</h1>
-      <p className="flex min-w-0 flex-wrap items-center gap-x-sm text-body text-muted-foreground">
-        {row.kind === "image" ? <ImageIcon aria-hidden="true" className="size-(--size-icon) shrink-0" /> : null}
-        <span>{word}</span>
-        {opener ? (
-          <>
-            <span aria-hidden="true">·</span>
-            <span className="min-w-0 break-keep wrap-anywhere">{t("mobile.look.openedBy", { name: opener })}</span>
-          </>
-        ) : null}
-        <span aria-hidden="true">·</span>
-        <Elapsed since={row.at} className="font-mono" />
-      </p>
-    </div>
+    <PageHead
+      back={{ label: t("mobile.tab.looks"), onClick: closeLook, tag: "looks" }}
+      title={<span className="break-all">{row.name}</span>}
+      line={
+        <>
+          {row.kind === "image" ? <ImageIcon aria-hidden="true" className="size-(--size-icon) shrink-0" /> : null}
+          <span>{word}</span>
+          {opener ? (
+            <>
+              <span aria-hidden="true">·</span>
+              <span className="sr-only">{t("mobile.look.openedBy", { name: opener })}</span>
+              <span aria-hidden="true" className="min-w-0 break-keep wrap-anywhere" data-phone-viewing-opener="true">{opener}</span>
+            </>
+          ) : null}
+          <span aria-hidden="true">·</span>
+          <Elapsed since={row.at} className="font-mono" />
+        </>
+      }
+      data-phone-viewing={row.name}
+    />
   );
 }
+
+/** Where the agent stands, under the head (Doop 02, 09, 10): the state's word in its mark's colour, the row's line and how long ago it changed. */
+function AgentStrip({ agent }: { agent: PhoneAgent }) {
+  const { t } = useInterfaceTranslation();
+  // The word that leads the row's line (`작업 중`, `자식 2개 기다림`) is the strip's word, so it is said once.
+  const parts = agent.line ? lineParts(t, agent.wait === "children" && agent.wait_count === undefined ? { ...agent, wait_count: agent.descendants_working } : agent, agent.line) : null;
+  const line = parts ? [parts.text, parts.tail].filter(Boolean).join(" · ") || null : null;
+  // An agent asking the operator reads as their turn, not as the core's idle.
+  const word = parts?.lead ?? (agent.mark === "turn" ? t("agents.mark.turn") : statusText(t, agent.status_code));
+  return <StatusStrip word={word} tone={STRIP_TONE[agent.mark] ?? "text-muted-foreground"} line={line} since={agent.changed_at_unix_ms} />;
+}
+
+/** The strip's word takes the colour of the row's mark. */
+const STRIP_TONE: Partial<Record<PhoneAgent["mark"], string>> = {
+  going: "text-agent-working",
+  waiting: "text-agent-working",
+  turn: "text-warning",
+  look: "text-warning",
+  done: "text-success",
+};
 
 /**
  * What the detail shows in place of the terminal while the agent sleeps, in the
@@ -377,10 +396,16 @@ function Scrollback({ text, more, lines, loading, alternateScreen, conversation 
   );
 }
 
-function ConversationLog({ conversation }: { conversation: Conversation }) {
+function ConversationLog({ conversation, agent }: { conversation: Conversation; agent: PhoneAgent | null }) {
   const { t } = useInterfaceTranslation();
   const { messages, before } = conversation;
-  const { scroller, onScroll } = usePinnedScroll(messages, messages[0]?.id ?? 0, loadOlder);
+  // While the agent works, the foot of its conversation says it thinks, counted from its last word or its last change (Doop 09).
+  const lastAt = messages.at(-1)?.at_ms ?? 0;
+  const thinkingSince = agent?.status_code === "working" ? Math.max(lastAt, agent.changed_at_unix_ms ?? 0) || null : null;
+  // The thinking line is content too: one that appears with no new word still pulls a reader at the bottom down to it.
+  const thinking = thinkingSince !== null;
+  const content = useMemo(() => ({ messages, thinking }), [messages, thinking]);
+  const { scroller, onScroll } = usePinnedScroll(content, messages[0]?.id ?? 0, loadOlder);
   const capped = before !== null && messages.length >= MAX_MESSAGES;
   return (
     <div ref={scroller} className="min-h-0 flex-1 overflow-auto overscroll-contain bg-background px-lg py-md" data-phone-conversation={messages.length} onScroll={onScroll}>
@@ -396,6 +421,7 @@ function ConversationLog({ conversation }: { conversation: Conversation }) {
           <MessageItem key={message.id} message={message} timed={messages[index + 1]?.who !== message.who} />
         ))}
       </ol>
+      {thinkingSince ? <ActivityLine word={t("mobile.thinking")} since={thinkingSince} /> : null}
     </div>
   );
 }
@@ -404,7 +430,7 @@ function ConversationLog({ conversation }: { conversation: Conversation }) {
 const MessageItem = memo(function MessageItem({ message, timed }: { message: ConversationMessage; timed: boolean }) {
   const { t } = useInterfaceTranslation();
   const time = timed && message.at_ms > 0 ? (
-    <time dateTime={new Date(message.at_ms).toISOString()} className="block pt-xs text-right font-mono text-body text-muted-foreground">
+    <time dateTime={new Date(message.at_ms).toISOString()} className={cn("block pt-xs font-mono text-body text-muted-foreground", message.who === "you" && "text-right")}>
       {messageTime(message.at_ms)}
     </time>
   ) : null;
@@ -417,13 +443,9 @@ const MessageItem = memo(function MessageItem({ message, timed }: { message: Con
   }
   if (message.who === "you") {
     return (
-      <li data-phone-message="you">
-        <p className="flex gap-sm rounded-md bg-secondary px-md py-sm text-body leading-normal text-foreground">
-          <span aria-hidden="true" className="text-muted-foreground">
-            ❯
-          </span>
-          <span className="min-w-0 whitespace-pre-wrap break-keep wrap-anywhere">{message.text}</span>
-        </p>
+      <li data-phone-message="you" className="flex flex-col items-end">
+        {/* The operator's words stand right, in a rounded bubble, as Doop 02 draws them. */}
+        <p className="max-w-5/6 whitespace-pre-wrap break-keep rounded-xl bg-secondary px-lg py-sm text-body leading-normal text-foreground wrap-anywhere">{message.text}</p>
         {time}
       </li>
     );
@@ -483,30 +505,18 @@ function ReplyBar({ disabled, about, keys }: { disabled: boolean; about: string 
         ))}
       </div>
       ) : null}
-      <form
-        className={`${keys ? "mt-sm" : "mt-xs"} flex gap-sm pb-md`}
-        onSubmit={(event) => {
-          event.preventDefault();
-          sendReply(about ? replyAbout(about, text) : text);
-        }}
-      >
-        <Input
+      <div className={`${keys ? "mt-sm" : "mt-xs"} pb-md`}>
+        <Composer
           value={text}
-          onChange={(event) => setText(event.target.value)}
+          onChange={setText}
+          onSubmit={() => sendReply(about ? replyAbout(about, text) : text)}
           placeholder={about ? t("mobile.look.replyAbout", { name: about }) : t("mobile.replyPlaceholder")}
-          aria-label={t("mobile.reply")}
           disabled={disabled}
-          enterKeyHint="send"
-          autoComplete="off"
-          autoCorrect="off"
-          data-phone-reply="true"
-          aria-invalid={tooLong || undefined}
-          className="h-(--size-touch-target) min-w-0 flex-1 rounded-lg border border-border bg-input px-md text-title text-foreground outline-none placeholder:text-muted-foreground focus-visible:ring-1 focus-visible:ring-ring disabled:opacity-(--opacity-disabled)"
+          sendDisabled={blocked || text.trim().length === 0 || tooLong}
+          input={{ "aria-label": t("mobile.reply"), "aria-invalid": tooLong || undefined, "data-phone-reply": "true" }}
+          send={{ "data-phone-send": "true" }}
         />
-        <Button variant="secondary" type="submit" disabled={blocked || text.trim().length === 0 || tooLong} className="h-(--size-touch-target) rounded-md px-md text-body font-medium" data-phone-send="true">
-          {t("mobile.send")}
-        </Button>
-      </form>
+      </div>
       {shown ? (
         <p role="alert" className="-mt-sm pb-md text-body text-destructive" data-phone-input-error="true">
           {noticeText(t, shown)}

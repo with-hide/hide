@@ -330,7 +330,7 @@ const TaskGroups = memo(function TaskGroups({ list, view, showProject, byPane, a
       ))}
       {view === "project" ? <Folds group={group} resting={resting} cleanup={cleanup} archived={archived} open={openFolds} onToggle={toggleFold} rows={rows} archivedRows={archivedList} /> : null}
       {/* A connected machine's own rows of the same state follow this computer's (PRD device-connect-iroh D-50, B49). */}
-      {!tool && view === "status" && (group.state === "needs_you" || group.state === "done") ? <ul className="flex min-w-0 flex-col"><PeerWorkRows group={group.state} actions={actions} /></ul> : null}
+      {!tool && view === "status" && (group.state === "needs_you" || group.state === "done") ? <ul className="flex min-w-0 flex-col"><PeerWorkRows group={group.state} actions={actions} treeIndent /></ul> : null}
     </section>
   );
   // A state this computer has no row in is still drawn for another machine's rows, in its place among the states.
@@ -366,7 +366,7 @@ function PeerSection({ state, actions }: { state: "needs_you" | "done"; actions:
         <span className="tabular-nums">{count}</span>
       </h3>
       <ul className="flex min-w-0 flex-col">
-        <PeerWorkRows group={state} actions={actions} />
+        <PeerWorkRows group={state} actions={actions} treeIndent />
       </ul>
     </section>
   );
@@ -423,14 +423,18 @@ function goToHead(head: HTMLElement, stack: number) {
 function GroupHead({ group, stack }: { group: TaskGroup; stack: number }) {
   const { t } = useInterfaceTranslation();
   const tool = useContext(InToolCell);
+  // A connected machine's own rows of the state are drawn under it, so the head counts them too (PRD device-connect-iroh D-50).
+  const peerGroup = !tool && (group.state === "needs_you" || group.state === "done") ? group.state : null;
+  const peers = usePeerRows(peerGroup ?? "needs_you");
   if (group.state) {
     const name = groupLabel(group.state, tool, t);
+    const count = rowCount(group.bands) + (peerGroup ? peers.length : 0);
     return (
       <h3 data-section-sticky="true" className={STICKY_TASK_HEAD} style={stackTop(stack)} data-task-group-head={group.state}>
-        <RowButton data-task-focus="group" aria-label={`${name} ${rowCount(group.bands)}`} onClick={(event) => goToHead(event.currentTarget.parentElement!, stack)}
+        <RowButton data-task-focus="group" aria-label={`${name} ${count}`} onClick={(event) => goToHead(event.currentTarget.parentElement!, stack)}
           className={cn("h-full rounded-xs text-micro font-medium text-subtle-foreground outline-none focus-visible:ring-1 focus-visible:ring-ring", group.state === "needs_you" && !tool && "text-warning")}>
           <span>{name}</span>
-          <span className="tabular-nums">{rowCount(group.bands)}</span>
+          <span className="tabular-nums">{count}</span>
         </RowButton>
       </h3>
     );

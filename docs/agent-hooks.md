@@ -685,14 +685,15 @@ A project removed from Hide loses its protections, and a project turns them on a
 
 What each protection refuses, in any checkout of the project and in any agent session there, a pane or not (B22): outside a pane the hooks and scripts run the guardrails and nothing else.
 
-- Guard working folders: `git switch`, and a `git checkout` or `gh pr checkout` that changes branch, in the project's original checkout; a file tool's write into another checkout of the same repository than the one the agent works in.
-- Guard the base branch: a file tool's write, `git commit`, `merge` (a fast-forward too), `rebase`, `cherry-pick`, `revert`, `am` and `pull` (each but its `--abort`, `--quit` or `--skip` forms, and `pull --ff-only`, which takes only the remote's own commits) in a checkout that has the base branch checked out, and a `git push` whose destination is the base branch (`--all`, `--mirror`, an explicit refspec, a pattern refspec such as `refs/heads/*:refs/heads/*`, or the current branch); with its merge option, `gh pr merge` as well (`-R` and `--repo` read as the option they are).
+- Guard working folders: `git switch`, and a `git checkout`, `gh pr checkout` or `glab mr checkout` that changes branch, in the project's original checkout (`glab mr co` is no alias of it: glab 1.130.0 answers it with `glab mr`'s help); a file tool's write into another checkout of the same repository than the one the agent works in.
+- Guard the base branch: a file tool's write, `git commit`, `merge` (a fast-forward too), `rebase`, `cherry-pick`, `revert`, `am` and `pull` (each but its `--abort`, `--quit` or `--skip` forms, and `pull --ff-only`, which takes only the remote's own commits) in a checkout that has the base branch checked out, and a `git push` whose destination is the base branch (`--all`, `--mirror`, an explicit refspec, a pattern refspec such as `refs/heads/*:refs/heads/*`, or the current branch); with its merge option, Block agents from merging pull requests and merge requests, a merge on either code host as well.
+  What it refuses and what it lets run is the table in [The merge option's decisions](#the-merge-options-decisions).
 - Block risky Git commands: `git push --force` or `--mirror` without a lease and `--no-verify` on a push or commit, always; `git reset --hard`, `git checkout -- <path>`, `git checkout <tree> -- <path>` or `-f`, `git restore` of the worktree and `git switch -f`, only while the checkout has uncommitted changes to tracked files, and `git clean -f` only while it has untracked ones (`git -c core.fsmonitor=false --no-optional-locks status --porcelain`, the one Git process the guardrails start, once per checkout and call, with a 2 second budget, no `GIT_*` variable of the hook's and no fsmonitor command the repository configures, since the hook runs with the operator's rights).
 - Guard files: a file tool's read or write of a path on the project's list, and a shell call that names one as a word or a redirect target; `.env.*` leaves out `.env.example` and `.env.sample` unless the list names them too.
-  A word with a space in it that is text, the value of an option that takes text in `git`, `gh`, an interpreter, a search or a stream editor (`-m`, `--message`, `--title`, `--body`, `-c`, `-e` and their `=` forms, never another program's `touch -m` or `curl -c`), what `echo` or `printf` prints, or the pattern or script `grep`, `rg`, `sed`, `awk` or `jq` takes first, is read as a path only when it names something that is there; any other such word is a path, which `cp`, `touch` or `tee -a` may be about to make.
+  A word with a space in it that is text, the value of an option that takes text in `git`, `gh`, `glab`, an interpreter, a search or a stream editor (`-m`, `--message`, `--title`, `--body`, `--description`, `-c`, `-e` and their `=` forms, and `glab`'s description `-d`, never another program's `touch -m`, `curl -c` or `gh release create -d`), what `echo` or `printf` prints, or the pattern or script `grep`, `rg`, `sed`, `awk` or `jq` takes first, is read as a path only when it names something that is there; any other such word is a path, which `cp`, `touch` or `tee -a` may be about to make.
   Programs are known by their exact file name, so one spelled otherwise (`python3.12`, `sudo git`) has its text read as a path, which refuses a protected name rather than letting one through.
   The list holds at most 32 entries of at most 200 characters, each a gitignore pattern relative to the checkout or a `~/` path under the account's home, which the agent's own project lists wherever a `cd` in the line went; the default is `.env`, `.env.*`, `*.pem`, `*.key` and `~/.ssh/`.
-  The first 512 candidate words of one shell call are checked; past them the words go unchecked, the `git` and `gh` commands after them are still judged, and one `guard.word_limit` line per ten minutes says so.
+  The first 512 candidate words of one shell call are checked; past them the words go unchecked, the `git`, `gh` and `glab` commands after them are still judged, and one `guard.word_limit` line per ten minutes says so.
 
 A plain folder project takes only Guard files.
 `git checkout <word>` reads `<word>` as Git does: a local branch of that name first, then a path that is there, then a commit; anything after `--` is paths.
@@ -704,7 +705,7 @@ An array item is read wherever the comma stands, inside quotes too, so `echo 'a,
 A word holding a variable (`$PWD\.env`, `$env:USERPROFILE\.ssh`) is not read in either shell, since its path is known only when it runs.
 In Git Bash, the shell Claude Code runs on Windows, a backslash path is read as that shell runs it: quoted (`git -C 'C:\repo'`) it is the path, unquoted its backslashes are escapes, there and in the hook alike; a drive mount (`/c/work/...`, `/cygdrive/c/...`) is the drive's path (`hide_platform::path::shell_drive_path`).
 
-The refusal reaches the agent in English, in its runtime's deny shape, and names the protection, what the call did and what to do instead: `Not run: the "Guard files" protection is on for this project in Hide. This call reads or changes a path on the project's protected list. Ask the operator ...`.
+The refusal reaches the agent in English, in its runtime's deny shape, and names the protection, what the call did in its host's words (a pull request on GitHub, a merge request on GitLab) and what to do instead: `Not run: the "Guard files" protection is on for this project in Hide. This call reads or changes a path on the project's protected list. Ask the operator ...`.
 Each refusal appends one `guard.refused` line (rule, whether a fact was unread, runtime, pane; never the command, its paths or a file's contents) to `spawn-guard.log` in the hooks' records folder, and the operator's screen shows nothing for it.
 
 How it fails (D-27):
@@ -733,6 +734,27 @@ A session outside a pane, or an agent started in another agent's shell, says so 
 A command hook pays one policy read per call and parses the payload only when some protection is on ([PERFORMANCE_TESTING.md](PERFORMANCE_TESTING.md#the-guardrails-on-a-pre-tool-call)).
 `hide-agent-hooks/src/guardrails/tests.rs` holds each runtime's payload and each protection's table tests.
 
+### The merge option's decisions
+
+Block agents from merging pull requests and merge requests, and a mission worker's merge bar (`mission_merge`, [The pane's plan record](#the-panes-plan-record)), decide one table, read by one reader (`hide_agent_hooks::guardrails::host`), so a form one refuses the other refuses too.
+The guard is a guardrail for what an agent ordinarily writes, not a sandbox against a line built to hide its meaning: where the line cannot be decided it refuses, an operand never turns a write into a read, and a line built to hide its meaning is the limit below.
+
+| Answer | Calls |
+| --- | --- |
+| Refused | `gh pr merge`, `glab mr merge` and its alias `glab mr accept`, with options before, between or after the command words and `-R`/`--repo`; `gh` and `glab` are read as they find their command, where a flag without `=` before a command word takes the next word unless the command above declares it as taking none (above `pr`/`mr` and their verbs only `--help` and `--version` do), so `glab mr --sha <sha> merge` is a merge |
+| Refused | `gh api` on `repos/<owner>/<repo>/pulls/<n>/merge` and `glab api` on `projects/<id>/merge_requests/<iid>/merge` unless the request is provably a read: every method given (`-X`, `-XPUT`, `-X=PUT`, `--method`, `--method=put`) is `GET` or `HEAD`, or none is given and no `-f`, `-F`, `--input` or `--form` makes the CLI send a POST; a write, a method held in a variable and method flags that disagree (`-X PUT -X GET`) all refuse |
+| Refused | `glab mr create` or its alias `glab mr new` with `--auto-merge` on, by its last spelling, or held in a variable |
+| Refused | `git push` with a push option that makes GitLab merge the merge request by itself, `merge_request.auto_merge` or the deprecated `merge_request.merge_when_pipeline_succeeds`, under `merge_request.` or GitLab's alias `mr.`, given by `-o`, `--push-option`, `git -c push.pushOption=` or `git --config-env push.pushOption=<variable>`; a key or a value the line does not spell out beside a merge-capable other half refuses |
+| Refused | `git config` whose action, read at its own position (a subcommand as its first operand, or an action option before the first operand), is not a read or an unset, and whose operands are `push.pushOption` (or a key the line does not spell out) and such an option (or a value it does not spell out); `git config push.pushOption <option> get` writes, since `get` there is a value pattern |
+| Runs | `glab mr create`, `glab mr new` and `gh pr create` without auto-merge, and a push option that only opens a merge request (`merge_request.create`), as `gh pr create` runs |
+| Runs | view, list, diff and status commands; `api` with an explicit `GET` on a merge endpoint, or a write to an endpoint that is not one |
+| Runs | `git -c push.pushOption=... <a command that cannot push>`; `git config` reads and unsets by their action |
+| Runs | a description, title or field value that holds a merge word, flag or endpoint (`glab mr create -d --auto-merge`, `glab mr --title merge create`, `-f description=.../merge`) |
+| Not seen | a command run indirectly: a script file, `sh -c` or `eval` with a built string, `xargs`, `env -S`, an alias or function defined elsewhere, or a variable that holds the command or its subcommand; a GraphQL merge mutation (`gh api graphql`, `glab api graphql`); an MCP server's merge tool (with-hide/hide#2822) |
+
+A wrapper's own options do not hide the command after them (`command -- glab mr merge`, `env -u NAME`, `env -i NAME=value`, `exec -a name`, `time -p`), for every protection, while `command -v` and `command -V` only look a name up and run nothing (`hide_shell::command_words`).
+The refusal names the change request in its host's words, a pull request on GitHub and a merge request on GitLab.
+
 ## The pane's plan record
 
 The prompt hook and the pre-tool hook know a pane's plan and mission work from one small file, `plans/<pane>.json` in the hooks' records folder (`hide_agent_hooks::plan_record`), written whole and private to the account: `{"version":1,"session":<native session>,"context":<plan_context>}`, under 16 KiB (PRD hide-plan D-14, D-15, D-30).
@@ -754,7 +776,7 @@ The pre-tool hook reads only the record, after the project guardrails and before
 It refuses three things and lets everything else run, reading and searching included; no reason names another command to run in the refused one's place, because an agent follows such a reason over what the operator asked for:
 
 - a file write, `git commit` or `git push` while the plan waits for the operator's review (`plan_proposed`), with `hide task approve` as the way on and `hide task set --json '<plan>' --ask` as the way to send a revised plan without writing a file;
-- `gh pr merge` by a worker of a mission that goes up to pull requests (`mission_merge`);
+- a merge by a worker of a mission that goes up to pull requests (`mission_merge`), every call [The merge option's decisions](#the-merge-options-decisions) refuses; the reason names the pull request or the merge request by the host the call names;
 - `git push` with `--force`, `--force-with-lease`, a short flag holding `f` or a `+` refspec, and `git rebase` other than `--abort` or `--quit`, by an agent of a mission node, worker or checker, so the commit a node was checked on stays the one checked (`history_rewrite`); outside a mission a rebase or a force push is the operator's call, and only the [project guardrails](#project-guardrails) judge it.
 
 The shell words are read the way the opener guard reads them (`hide_shell::shell_line`), each command of a line on its own, so `cd repo && git commit` is seen; a write a script or `bash -c` makes is not, as the guardrails say of theirs.

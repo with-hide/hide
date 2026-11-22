@@ -23,7 +23,7 @@ A file may only go down: a new raw control fails, and a file with fewer than its
 
 | You need | Use | Notes |
 | --- | --- | --- |
-| An action | `Button` | `variant`: `default` (the one primary action), `secondary`, `outline`, `ghost` (toolbar and row actions), `destructive`, `link`, `text`, `text-link`, `row-action`; `size`: `default`, `sm`, `lg`, `icon`, `icon-sm`, `icon-xs`, `inline`. The lime fill (`default`) is for the one irreversible primary action of a screen or dialog (a submit, a confirm); an action inside a card, a list or a row is `secondary`, `text` or `row-action`, and lime otherwise marks only the focus ring and a selection. |
+| An action | `Button` | `variant`: `default` (the one primary action), `secondary`, `outline`, `ghost` (toolbar and row actions), `destructive`, `link`, `text`, `text-link`, `row-action`, `tint` (the accent's light fill with the accent as its words, for the primary action of a small surface that is not a screen or a dialog, such as a corner notice's `지금 업데이트`); `size`: `default`, `sm`, `lg`, `icon`, `icon-sm`, `icon-xs`, `inline`. The lime fill (`default`) is for the one irreversible primary action of a screen or dialog (a submit, a confirm); an action inside a card, a list or a row is `secondary`, `text` or `row-action`, and lime otherwise marks only the focus ring and a selection. |
 | An action that reads as words in a row or a sentence (더 보기, 접기, 열기) | `Button variant="text" size="inline"`; `variant="text-link"` when it underlines on hover | `inline` keeps the surrounding text's size; set one with `className` (`text-caption`, `text-micro`) only to differ from it. |
 | An icon-only control | `Button size="icon"`, `"icon-sm"` or `"icon-xs"` (a dense row) inside `Hint` | The hint's label is the control's accessible name. |
 | An icon action inside a row that lights on hover | `Button variant="row-action" size="icon-xs"` | `ghost` would light in the row's own hover color and vanish. |
@@ -75,7 +75,26 @@ These already draw a thing Hide shows in several places; use them instead of dra
 | A device | `DeviceChip`, `device-rail.tsx`; the chip's `variant="inline"` puts its icon and name in a caption line without a border or padding, and `variant="remote"` fills it in the other-device colour (`--device-remote`) for the mission map's card and panel |
 | What a close would take with it | `SubtreeList` |
 | A state that stands in a box | `StateBox` |
+| The children chip (`≡ ● 2 · • 3 ⌄`) | `TreeChipFace` (`tree-chip.tsx`), which the desktop pane header's button and the phone list's toggle both draw at their own sizes |
 | Desk: its chat, job and approval cards, composer and agent bar, `@` menu, Threads list, a thread, outputs, lane columns and rail, Settings › Labs › Desk | `components/desk/*`, drawn from props in the shape of `web/src/desk.ts`; the gallery's `scene=desk` shows every state. In Desk a session reads as `StatusMark`, agent mark and title wherever it appears; a card is unfilled with a `--border` line, `rounded-lg` and two lines, selected on `bg-accent`; nothing filled sits inside another filled box; the approval card's two answers are `Button variant="secondary"`, the composer's send a round `secondary` icon, and every other action is words (`variant="text"`, such as `답하기 ›`); Desk draws no `default` button, so lime marks focus and selection only; Desk's lane pin is `LanePinButton` (`components/lane-pin.tsx`), which only Desk draws (the Workspace's lane has no pin), in the head of the column at the lane's edge just before `✕` |
+
+## The phone
+
+The phone app (`web/src/mobile`) builds its screens from the same parts and tokens, and from the shared layout parts in `web/src/mobile/layout.tsx`; a screen composes them and never draws its own copy.
+
+| You need | Use | Notes |
+| --- | --- | --- |
+| A list screen's head (에이전트, 미션, 자동화) | `ScreenHead` | The big `text-headline` title, one line under it, and its action at the right. |
+| A page's head (an agent, a mission, an automation, a look) | `PageHead` | Back, the marks that lead the title, the title with one line under it, an action at the right, and what the page keeps under its head (tabs, cells, buttons) as children. The lead is one title line tall, so the marks stay on the first line of a wrapped title. |
+| A row of a list | `TwoLineRow` inside `RowButton`, or behind `RowOverlayButton` when the row holds a control | The lead column (a status mark), the title with what never shrinks after it, the time at the right; the second line starts under the title (`ROW_INSET`). Rows are separated by spacing, not dividers, except a page's run history. |
+| The state of what a page is about | `StatusStrip` | The state's word in its colour, one line of what it does now and how long ago it changed; drawn only from fields the Mac sends. |
+| What an agent does now, at the foot of its conversation | `ActivityLine` | `생각 중 · 4초`, its time counted on the phone. |
+| A field a reply is written in | `Composer` | One rounded line with a round `secondary` send; each screen passes its own name, limit and test marks. |
+| An agent's mark and logo, title, project | `AgentLead`, `AgentTitle`, `PlaceParts` (`web/src/mobile/parts.tsx`) | `PlaceParts` shows the project alone when the Mac sends `project`, else the place. |
+
+- Every press is at least `--size-touch-target` (44 px) tall; a row that is one press spans the screen's width.
+- The heads take the top safe area with `phone-safe-top`, and what sits at the bottom of a screen takes `phone-safe-bottom`; nothing else pads for the notch or the home bar.
+- Check a phone screen at 393 by 852 in Light and Dark, with a long Korean title and with `--interface-scale` raised, as the compare captures for a phone pull request do.
 
 ## Tokens at a glance
 

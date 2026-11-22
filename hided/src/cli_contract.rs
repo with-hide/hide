@@ -1032,10 +1032,31 @@ pub const COMMANDS: &[Spec] = &[
         answers: &["ps"],
         refusals: &["here_unavailable", "ps_answer_unreadable"],
     },
-    // An external tool's own connection (PRD hide-external-control D-25),
-    // run outside Hide's panes on the core's machine. Approving, refusing,
-    // the level and disconnecting are the operator's, in Settings ›
-    // External tools; no command does them (B8).
+    // A bot's own connection (PRD hide-external-control D-25), run outside
+    // Hide's panes on the core's machine. Making a bot, approving, refusing,
+    // the mode and disconnecting are the operator's, in Settings › Bots; no
+    // command does them (B8).
+    Spec {
+        words: &["access", "join"],
+        arguments: &[Arg {
+            name: "code",
+            value: Key,
+            required: true,
+            value_with: None,
+        }],
+        repeats: None,
+        needs_one_of: &[],
+        options: &[switch("--json")],
+        rest: None,
+        answers: &["access_standing"],
+        refusals: &[
+            "access_from_pane",
+            "access_code_invalid",
+            "access_join_pending",
+            "access_key_exists",
+            "access_key_unreadable",
+        ],
+    },
     Spec {
         words: &["access", "request"],
         arguments: &[],
@@ -1492,7 +1513,8 @@ pub const COMMANDS: &[Spec] = &[
     // for a computer with no window to open Settings > Mobile in. `pair`
     // draws the pairing QR for a person at a terminal outside Hide's panes
     // and waits until a phone scans it; it never prints the link the QR
-    // holds. A program in a pane may list and remove.
+    // holds, and says each line and refusal as one sentence in the
+    // operator's interface language. A program in a pane may list and remove.
     Spec {
         words: &["phone", "pair"],
         arguments: &[],
@@ -2663,12 +2685,12 @@ fn body() -> Value {
             "skill": {"ok": "ok", "answer": "value", "code": "error.code"},
             "mcp": {"ok": "ok", "answer": "value", "code": "error.code"},
         },
-        // An external tool runs the commands above as its connection, at
-        // the level the operator chose; any of them may answer one of
-        // these, with its next_action (PRD hide-external-control B20-B23).
+        // A bot runs the commands above as its connection, in the mode the
+        // operator chose; any of them may answer one of these, with its
+        // next_action (PRD hide-external-control B20-B23, mission-87).
         "access": {
             "choose": crate::env::HIDE_ACCESS,
-            "levels": ["view", "act"],
+            "modes": ["own", "all"],
             "refusals": crate::access::REFUSALS
                 .iter()
                 .map(|code| (

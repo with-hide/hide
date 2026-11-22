@@ -191,9 +191,6 @@
   "web/src/mobile/AgentChoice.tsx": {
     "select": 2
   },
-  "web/src/mobile/App.tsx": {
-    "button": 1
-  },
   "web/src/mobile/StartSheet.tsx": {
     "select": 1,
     "textarea": 1

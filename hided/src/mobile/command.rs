@@ -41,6 +41,10 @@ pub enum Ask {
     PairEnd {
         code_id: String,
     },
+    /// The interface language the operator chose, which `pair` words its
+    /// lines in; `null` for none, which the command resolves with its own
+    /// system language as every screen does (docs/LOCALIZATION.md).
+    Language,
 }
 
 pub fn refused(code: &str) -> Value {
@@ -86,7 +90,7 @@ impl Ask {
     /// is, and so is the code a pairing shows.
     fn bot_need(&self) -> hide_core::access::Need {
         match self {
-            Self::List => hide_core::access::Need::All,
+            Self::List | Self::Language => hide_core::access::Need::All,
             _ => hide_core::access::Need::Operator,
         }
     }
@@ -109,6 +113,10 @@ impl Mobile {
             }
         }
         match ask {
+            Ask::Language => json!({
+                "ok": true,
+                "interface_language": self.projection.borrow().interface_language,
+            }),
             Ask::List => self.cli_list(),
             Ask::Remove { phone } => self.cli_remove(&phone),
             Ask::Pair => self.cli_pair().await,
@@ -358,6 +366,9 @@ mod tests {
         let mobile = mobile(directory.path());
         let answer = mobile.answer_cli(Ask::Pair, Caller::Pane).await;
         assert_eq!(answer["reason"], "phone_pair_from_pane");
+        // The language its refusal is worded in is anyone's to read: none chosen yet.
+        let language = mobile.answer_cli(Ask::Language, Caller::Pane).await;
+        assert_eq!(language, json!({"ok": true, "interface_language": null}));
         // Nothing was turned on for it.
         assert!(!mobile.lock().settings.enabled);
     }
@@ -522,12 +533,19 @@ mod tests {
                 let _ = held.recv_timeout(Duration::from_secs(30));
             });
             holding.await.unwrap();
-            tokio::time::advance(super::super::OBSERVE_INTERVAL).await;
-            for _ in 0..100 {
+            // The loop may start its sleep after the clock moved, so the
+            // clock moves one interval at a time until it takes the notice.
+            for _ in 0..10 {
+                tokio::time::advance(super::super::OBSERVE_INTERVAL).await;
+                for _ in 0..100 {
+                    if mobile.lock().paired_notices.is_empty() {
+                        break;
+                    }
+                    tokio::task::yield_now().await;
+                }
                 if mobile.lock().paired_notices.is_empty() {
                     break;
                 }
-                tokio::task::yield_now().await;
             }
             assert!(
                 mobile.lock().paired_notices.is_empty(),
@@ -569,6 +587,7 @@ mod tests {
     fn asks_read_as_the_command_sends_them() {
         let ask = |value: Value| serde_json::from_value::<Ask>(value).ok();
         assert_eq!(ask(json!({"verb": "list"})), Some(Ask::List));
+        assert_eq!(ask(json!({"verb": "language"})), Some(Ask::Language));
         assert_eq!(
             ask(json!({"verb": "remove", "phone": "iPhone"})),
             Some(Ask::Remove {

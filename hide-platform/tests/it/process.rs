@@ -2878,6 +2878,31 @@ fn a_process_group_lists_its_members_where_the_system_has_them() {
     }
 }
 
+#[test]
+fn a_running_programs_path_and_account_are_kernel_facts_on_every_system() {
+    let pid = std::process::id();
+    let started = hide_platform::process::start_time(pid).unwrap();
+    let actual = hide_platform::process::image_path(pid).unwrap();
+    let expected = std::env::current_exe().unwrap();
+    assert_eq!(
+        hide_platform::fs::identity::canonical(&actual).unwrap(),
+        hide_platform::fs::identity::canonical(&expected).unwrap(),
+    );
+    assert!(hide_platform::process::same_account(pid).unwrap());
+    assert_eq!(hide_platform::process::start_time(pid).unwrap(), started);
+    assert!(hide_platform::process::image_path(u32::MAX - 1).is_err());
+    assert!(hide_platform::process::same_account(u32::MAX - 1).is_err());
+    #[cfg(unix)]
+    {
+        // The SSH walk may stop above the login shell at another
+        // account's daemon, even when that account's image is protected.
+        // SAFETY: getuid has no arguments and cannot fail.
+        if unsafe { libc::getuid() } != 0 {
+            assert!(!hide_platform::process::same_account(1).unwrap());
+        }
+    }
+}
+
 /// Windows names no foreground for a console: the program a shell runs now,
 /// its oldest child still running, stands in for it, and the shell itself
 /// while it runs none.

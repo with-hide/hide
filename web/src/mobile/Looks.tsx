@@ -2,7 +2,7 @@
 // into not seen and seen, and one View opened full screen as a change list, a document, an image or the words that say why
 // there is nothing to draw. The phone holds no path: a row is a View id, and hided finds the file (D-16).
 
-import { AppWindowIcon, FileDiffIcon, FileIcon, FileTextIcon, GlobeIcon, ImageIcon, LaptopIcon, Loader2Icon, RefreshCwIcon } from "lucide-react";
+import { AppWindowIcon, FileDiffIcon, FileIcon, FileLockIcon, FileTextIcon, FileXIcon, GlobeIcon, ImageIcon, LaptopIcon, Loader2Icon, RefreshCwIcon } from "lucide-react";
 import { useEffect, useMemo, useRef, useState, type PointerEvent, type ReactNode } from "react";
 import { Elapsed, useElapsed } from "../components/elapsed";
 import { Button } from "../components/ui/button";
@@ -164,6 +164,21 @@ export function LookViewer({ row, content, refreshing }: { row: LookRow; content
           </p>
         </Centered>
       );
+    case "not_found":
+    case "outside_roots": {
+      // Why the file cannot be read, and no retry: reading it again would only fail again.
+      const Icon = content.state === "not_found" ? FileXIcon : FileLockIcon;
+      const [title, reason] = content.state === "not_found" ? (["mobile.look.notFound", "mobile.look.notFoundReason"] as const) : (["mobile.look.outsideRoots", "mobile.look.outsideRootsReason"] as const);
+      return (
+        <Centered state={content.state}>
+          <Icon aria-hidden="true" className="size-(--size-icon-lg) text-muted-foreground" />
+          <p role="status" className="text-title text-foreground">
+            {t(title)}
+          </p>
+          <p className="text-body text-muted-foreground">{t(reason)}</p>
+        </Centered>
+      );
+    }
     case "failed":
       return (
         <Centered state="failed">

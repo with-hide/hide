@@ -354,7 +354,10 @@ export class DesktopHost {
       }
       const outcome = this.language.report(reported);
       if (outcome === "refused") this.log.event("language.refused", { reason: "value" });
-      else if (outcome === "changed") apply();
+      else if (outcome === "changed") {
+        apply();
+        this.remote?.languageChanged();
+      }
     });
   }
 
@@ -392,7 +395,7 @@ export class DesktopHost {
    * shell says which one shows where, and only this window's shell is heard.
    */
   private listenRemoteScreens(): void {
-    const remote = new RemoteScreens({ window: () => this.window, daemon: () => this.remoteDaemon(), registry: () => this.registry, background: __HIDE_BACKGROUND__, log: this.log });
+    const remote = new RemoteScreens({ window: () => this.window, daemon: () => this.remoteDaemon(), registry: () => this.registry, background: __HIDE_BACKGROUND__, language: () => this.language.language, log: this.log });
     this.remote = remote;
     remote.listen();
     ipcMain.on(REMOTE_SHOW_CHANNEL, (event: IpcMainEvent, reported: unknown) => {

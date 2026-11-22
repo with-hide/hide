@@ -148,22 +148,26 @@ hide device retry <device id or ssh alias> [--wait] [--json]
 - When it is the operator's turn, ask them for what `next_action` names. No command answers what ssh asks, trusts a server key or allows the helper: those are the operator's, on the device's row, and you never see what they type.
 - `remove` forgets a device, takes Hide's kit off it when its helper was allowed, and leaves its panes, agents and files running there.
 
-## Tools outside Hide
+## Bots
 
 ```
+hide access join <code> [--json]
 hide access request --name <name> [--no-wait] [--json]
 hide access status [--json]
 hide access leave [--json]
 hide access list [--json]
 ```
 
-- These are for a program outside Hide's panes, on the machine where Hide's core runs, such as a scheduler or another assistant; an agent in a Hide pane acts as itself and is refused with `access_from_pane`.
-- `request` asks the operator, who approves it in Settings › External tools as View only or Act, and waits up to ten minutes for the answer (`--no-wait` answers at once); a request whose wait ended is picked up by the next `hide` command once approved, with no second `request`. Once approved it writes the tool's key, private to its account, in `~/.hide/access` of the tool's own home, and every later `hide` command of that home runs as the tool, without `HIDE_CAP_REF` or a pane.
-- View only runs the reads: `hide ps`, `hide agent list` and `show`, `hide agent read`, `hide pane read`, `hide mission list` and `show`, `hide device list`, `hide automation list`, `show` and `preview`. Act also starts agents with `hide agent spawn` (never `--parent`), ends and sleeps them, types with `hide pane send`, and writes letters with `hide request send`, reading the answers with `hide inbox`, as Desk does, and makes, changes and runs automations with `hide automation`. No agent writes to a tool first.
-- What only an agent in a pane can mean (mission and task commands, `--beside`, `agent ask-human`, `agent show here`) is refused with `access_needs_agent`: start an agent and ask it in a letter instead.
-- A home with several tools' keys chooses one with `HIDE_ACCESS=<name>`. Each refusal names its code and what to do; the operator can disconnect a tool at any time, and `leave` disconnects it from the tool's side.
+- A bot is a program outside Hide's panes, on the machine where Hide's core runs, such as a scheduler or another assistant, that the operator lets use `hide`; an agent in a Hide pane acts as itself and is refused with `access_from_pane`.
+- `join` takes a bot the operator already made in Settings › Bots, with the one-time code the operator gives you (`K7Q4-MZ2P-X3RD`): the bot's name and mode are the ones the operator chose, and a code joins once, within ten minutes of being shown (`access_code_invalid` otherwise: ask for a new code). The key is kept before it is sent, so a join whose answer was lost finishes when you run the same command again; a home finishes one join at a time (`access_join_pending`), and a join never replaces another key of the bot's name in this home (`access_key_exists`).
+- `request` asks the operator, who approves it in Settings › Bots in one of two modes, and waits up to ten minutes for the answer (`--no-wait` answers at once); a request whose wait ended is picked up by the next `hide` command once approved, with no second `request`. Once joined or approved it writes the bot's key, private to its account, in `~/.hide/access` of its own home, and every later `hide` command of that home runs as the bot, without `HIDE_CAP_REF` or a pane; `status` says which mode it runs in.
+- Own space (`own`): the bot works only on its own work, the agents it starts with `hide agent spawn` (never `--parent`), the agents those start and the missions they conduct. It reads them, writes them letters, types into their panes, ends them and puts them to sleep, and `hide agent list`, `hide ps` and `hide mission list` show only them; anything else, the operator's agents, Views, devices, automations and `hide access list` included, is refused with `access_not_own_work`.
+- Full (`all`): the bot works as the operator on every agent, pane and mission on every connected device, opens files, diffs and pages on the operator's screen (`--repo <folder>` when it runs outside a checkout), lists devices and bots, and makes and runs automations with `hide automation`; what it starts is the operator's work, marked with the bot's name.
+- In either mode, adding, removing, pausing or resuming a device is refused with `access_operator_only`, only the operator's window approves bots or changes their mode, and what only an agent in a pane can mean (mission and task commands, `--beside`, `agent ask-human`, `agent show here`) is refused with `access_needs_agent`: start an agent and ask it in a letter instead.
+- Replies never come to a bot on their own: no agent writes to a bot first, so read the answers to your letters and your watches' warnings with `hide inbox`, take each with its `ack_command`, and check again every few seconds while you wait.
+- A home with several bots' keys chooses one with `HIDE_ACCESS=<name>`. Each refusal names its code and what to do; the operator can disconnect a bot or change its mode at any time, which reaches its next command, and `leave` disconnects it from the bot's side.
 - A key file that cannot be read refuses each command with `access_key_unreadable`; run `request` again, which replaces it and asks anew, and while the old connection of that name stands the operator disconnects it first (`access_name_taken`).
-- Any program running as the same account can read the key file and act as that tool, and a program of another account cannot reach Hide at all. Approve a tool View only unless it must act, give each tool its own name, and disconnect a tool no longer used.
+- Any program running as the same account can read the key file and act as that bot, and a program of another account cannot reach Hide at all. Ask for own space unless the operator wants you on their own work, give each bot its own name, and `leave` when it is no longer used.
 
 ## The operator's screen
 
