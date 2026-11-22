@@ -350,14 +350,8 @@ impl TapHub {
                 ToNode::Input { pane, bytes } => {
                     node.key(KeyTarget::Pane(pane), bytes, now_unix_ms());
                 }
-                // A screen of the host sizes the pane, as a core's resize
-                // does: the view alone only names the grid frames must
-                // have, and a program left at the guest's grid would have
-                // every frame refused as the wrong size (B10, D-74).
                 ToNode::Resize { pane, rows, cols } => {
-                    let size = GridSize { rows, cols };
-                    node.view(&pane, size, false);
-                    node.control(TerminalControl::Resize { pane, size });
+                    node.size_from_tap(&pane, GridSize { rows, cols });
                 }
                 ToNode::Terminate { pane } => {
                     if let Some(terminate) = self.terminate.get() {

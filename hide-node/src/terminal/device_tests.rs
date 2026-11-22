@@ -315,6 +315,51 @@ fn a_resident_nodes_pane_goes_up_only_while_its_core_has_it_attached() {
     assert_eq!(pane.next_input(), b"typed");
 }
 
+/// PRD device-connect-iroh B10, D-74: a screen on the host's tap sizes a
+/// guest's pane itself, so the program draws at the host's grid and its
+/// frames reach the host; sizing only the view left the program at the
+/// guest's grid and every frame refused as the wrong size.
+#[test]
+fn a_host_screens_size_resizes_a_guests_pane_so_its_frames_reach_the_host() {
+    let (opened_tx, opened) = channel();
+    let tap = Arc::new(TapSeen::default());
+    let node = NodeTerminals::resident(
+        Arc::clone(&tap) as Arc<dyn OutputSink>,
+        ResidentFolders {
+            state_dir: std::path::PathBuf::new(),
+            holders_home: std::path::PathBuf::new(),
+        },
+    );
+    node.start_service(Box::new(FakeAttacher {
+        opened: Mutex::new(opened_tx),
+        refuse: Mutex::new(None),
+    }))
+    .unwrap();
+    TerminalNode::control(
+        &node,
+        TerminalControl::Attach {
+            pane: "w1:p1".into(),
+            size: Some(SIZE),
+            manual: false,
+        },
+    );
+    let pane = opened.recv_timeout(WAIT).expect("the node attached");
+    pane.frame(SIZE, true, b"\x1bcat the guest's grid");
+    wait_for(|| tap.saw("w1:p1", b"at the guest's grid"));
+
+    let host = GridSize { rows: 40, cols: 120 };
+    node.size_from_tap("w1:p1", host);
+    let resize = loop {
+        let line = pane.next_line();
+        if line["type"] == "terminal.resize" {
+            break line;
+        }
+    };
+    assert_eq!((&resize["rows"], &resize["cols"]), (&json!(40), &json!(120)));
+    pane.frame(host, true, b"\x1bcat the host's grid");
+    wait_for(|| tap.saw("w1:p1", b"at the host's grid"));
+}
+
 /// D-18, B18: one pane flooding its output holds neither another pane's
 /// keys nor its frames.
 #[test]
