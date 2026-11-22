@@ -3645,10 +3645,11 @@ mod tests {
         );
     }
 
-    /// B38, B33, in a build without connections between two Hides: each
-    /// side judges the shared projection only while it is on, a side turned
-    /// on later is seeded by what was already waiting, and the other side's
-    /// switch never changes what a side announces.
+    /// B38, B33, with the computer in use and its window showing no waits,
+    /// so the phones do not rest: each side judges the shared projection only
+    /// while it is on, a side turned on later is seeded by what was already
+    /// waiting, and the other side's switch never changes what a side
+    /// announces.
     #[test]
     fn each_side_announces_only_while_on_and_a_late_side_is_seeded_not_told() {
         for (phone_on, desktop_on) in [(true, true), (true, false), (false, true), (false, false)] {
@@ -3656,6 +3657,8 @@ mod tests {
             let mut phone = push::PhoneNotices::default();
             let desktop = DesktopNotices::default();
             desktop.set(1, desktop_on);
+            // The computer is in use, so a notice may reach its window.
+            desktop.activity(1, true);
             assert_eq!(
                 pass(
                     &mut phone,
@@ -3689,6 +3692,8 @@ mod tests {
         );
         assert_eq!(pass(&mut phone, true, &desktop, &waiting), (1, false));
         desktop.set(1, true);
+        // The computer is in use, so a notice may reach its window.
+        desktop.activity(1, true);
         let mut frames = desktop.subscribe();
         assert!(
             judge_pass(
@@ -3714,6 +3719,8 @@ mod tests {
         let mut phone = push::PhoneNotices::default();
         let desktop = DesktopNotices::default();
         desktop.set(1, true);
+        // The computer is in use, so a notice may reach its window.
+        desktop.activity(1, true);
         assert_eq!(
             pass(&mut phone, false, &desktop, &projected("working", "none")),
             (0, false)
