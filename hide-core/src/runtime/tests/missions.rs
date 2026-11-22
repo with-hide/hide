@@ -19646,6 +19646,84 @@ fn a_check_with_its_reviewer_ended_asks_the_conductor_for_one() {
     );
 }
 
+/// A commit that only merges the destination opens no round (`hide mission
+/// help`, While it runs), and the guide leans on four facts for it: on the
+/// new head only the `check` line opens again while a review that passed
+/// stands; the Conductor's skip of that `check` wakes no checker; the skip
+/// holds on the heads after it; and the worker's next `check`, on a change
+/// of its own, takes the skip off and asks the same reviewer again.
+#[test]
+fn a_skipped_check_holds_through_later_heads_until_the_workers_next_check_opens_a_round() {
+    use crate::mission_criteria::CriterionState;
+    const HEAD_3: &str = "0123456789abcdef0123456789abcdef01234567";
+    let fixture = conducting();
+    let mut runtime = fixture.runtime.lock().unwrap();
+    reviewed_fix(&mut runtime);
+    command(&mut runtime, "recipient", record_of("fix", "c1", json!({}))).unwrap();
+    command(
+        &mut runtime,
+        "recipient",
+        record_of("fix", "check", json!({"commit": HEAD})),
+    )
+    .unwrap();
+    command(
+        &mut runtime,
+        "reviewer",
+        record_of("fix", "review", json!({"commit": HEAD})),
+    )
+    .unwrap();
+    read_cells(&mut runtime, "agent-3");
+
+    // The worker merges the destination and pushes: a new head, no check.
+    checkout_at(&mut runtime, HEAD_2);
+    assert_eq!(line_state(&runtime, "check"), CriterionState::Open);
+    assert_eq!(
+        line_state(&runtime, "review"),
+        CriterionState::Pass,
+        "the review that passed stands on the new head"
+    );
+    assert_eq!(
+        node_view(&runtime, "fix").waiting_on,
+        Some(crate::missions::WaitingOn::Worker),
+        "the open check reads as the worker's move, which the skip takes off"
+    );
+    command(
+        &mut runtime,
+        "sender",
+        json!({"op": "skip", "node": "fix", "line": "check", "reason": "a merge of main, proved by CI"}),
+    )
+    .unwrap();
+    assert_eq!(line_state(&runtime, "check"), CriterionState::Skipped);
+    assert_ne!(
+        node_view(&runtime, "fix").waiting_on,
+        Some(crate::missions::WaitingOn::Worker)
+    );
+    assert!(
+        read_cells(&mut runtime, "agent-3").is_empty(),
+        "a skip wakes no checker"
+    );
+
+    // A second merge moves the head again: the skip holds.
+    checkout_at(&mut runtime, HEAD_3);
+    assert_eq!(line_state(&runtime, "check"), CriterionState::Skipped);
+    assert_eq!(line_state(&runtime, "review"), CriterionState::Pass);
+    assert!(read_cells(&mut runtime, "agent-3").is_empty());
+
+    // The worker's own change: its check takes the skip off and opens a round.
+    command(
+        &mut runtime,
+        "recipient",
+        record_of("fix", "check", json!({"commit": HEAD_3})),
+    )
+    .unwrap();
+    assert_eq!(line_state(&runtime, "check"), CriterionState::Pass);
+    let asked = read_cells(&mut runtime, "agent-3");
+    assert!(
+        asked.len() == 1 && asked[0].contains("again: you last checked commit a1b2c3d"),
+        "{asked:?}"
+    );
+}
+
 /// PRD mission-speed-2 B2, B6, B7: on a node with no check command every
 /// line of the worker's passed is the signal, and recording them again is
 /// the next; the first failure says start fixing while the other runs, the
