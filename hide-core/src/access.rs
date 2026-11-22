@@ -100,7 +100,7 @@ pub fn valid_name(name: &str) -> bool {
 /// trailing dot). Asked only where a name is taken anew, a request or a made
 /// bot, so a connection an earlier build saved keeps its name.
 pub fn reservable_name(name: &str) -> bool {
-    valid_name(name) && !hide_platform::fs::identity::win32_rewrites(name)
+    valid_name(name) && !hide_platform::path::win32_rewrites(name)
 }
 
 /// A key as a tool makes it: 32 random bytes in lowercase hex.
