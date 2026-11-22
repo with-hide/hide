@@ -327,7 +327,8 @@ done
 }
 
 /// What the recipient's agent runs: it takes in every letter its inbox
-/// shows, as an agent reading its letters does, until `stop` exists. A
+/// lists, shown or folded, as an agent reading its letters does, until
+/// `stop` exists. A
 /// letter nobody takes in stays open, and a mailbox holds at most
 /// `OPEN_LIMIT` open letters, which two hours of letters pass. A pane of
 /// the machine's own core is handed no `HIDE_INSTALL_CLI`, so it names its
@@ -339,7 +340,7 @@ log={log}
 while [ ! -e {stop} ]; do
   inbox=$("$hide" inbox 2>&1)
   printf 'inbox %s\n' "$(printf '%s' "$inbox" | tr '\n' ' ' | cut -c1-300)" >> "$log"
-  for id in $(printf '%s' "$inbox" | grep -o '"id":"letter-[0-9]*"' | cut -d'"' -f4); do
+  for id in $(printf '%s' "$inbox" | grep -o 'letter-[0-9]*' | sort -u); do
     answer=$("$hide" request ack "$id" 2>&1)
     printf 'ack %s %s\n' "$id" "$(printf '%s' "$answer" | tr '\n' ' ' | cut -c1-200)" >> "$log"
   done
