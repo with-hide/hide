@@ -75,9 +75,9 @@ describe("the desk's ✕ in focus mode (UI_BEHAVIOR, Focus mode)", () => {
   it("names a pasted image as one on its tab and path line, and a file under home by its ~/ path", async () => {
     const title = () => container.querySelector("[role=tab] [data-tab-title]")?.textContent;
     const line = () => container.querySelector("[data-editor-path]")?.textContent;
-    await draw(FOCUS_WORLD.initial(), { pasted: true, path: "/Users/someone/.hide/state/TerminalClipboard/hide-a37308bf-2590-4cbb-9079-3d38116992f9.png", label: "hide-a37308bf-2590-4cbb-9079-3d38116992f9.png", home_relative: "~/.hide/state/TerminalClipboard/hide-a37308bf-2590-4cbb-9079-3d38116992f9.png" });
+    await draw(FOCUS_WORLD.initial(), { pasted: true, path: "/Users/alice/.hide/state/TerminalClipboard/hide-a37308bf-2590-4cbb-9079-3d38116992f9.png", label: "hide-a37308bf-2590-4cbb-9079-3d38116992f9.png", home_relative: "~/.hide/state/TerminalClipboard/hide-a37308bf-2590-4cbb-9079-3d38116992f9.png" });
     expect([title(), line()]).toEqual(["Pasted image", "Pasted image"]);
-    await draw(FOCUS_WORLD.initial(), { path: "/Users/someone/Downloads/report.pdf", label: "report.pdf", home_relative: "~/Downloads/report.pdf" });
+    await draw(FOCUS_WORLD.initial(), { path: "/Users/alice/Downloads/report.pdf", label: "report.pdf", home_relative: "~/Downloads/report.pdf" });
     expect([title(), line()]).toEqual(["report.pdf", "~/Downloads/report.pdf"]);
     await draw(FOCUS_WORLD.initial(), { path: "/Volumes/disk/report.pdf", label: "report.pdf" });
     expect(line()).toBe("/Volumes/disk/report.pdf");

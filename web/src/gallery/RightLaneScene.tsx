@@ -46,7 +46,7 @@ const LANES: Record<LaneState, Lane> = {
 };
 
 /** A home folder and a clipboard image the core names as pasted (`pasted`, `home_relative`). */
-const HOME = "/Users/operator";
+const HOME = "/Users/alice";
 const PASTED = "hide-a37308bf-2590-4cbb-9079-3d38116992f9.png";
 
 const REVIEW = `# 설정 화면 검토
