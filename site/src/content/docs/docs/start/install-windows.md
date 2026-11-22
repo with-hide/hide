@@ -11,6 +11,7 @@ sidebar:
 - Windows 11 with **Smart App Control** turned on cannot run hide. Smart App Control blocks every unsigned program, and hide is unsigned.
 - Optional: an agent CLI (Claude Code, Codex, Grok, OpenCode, Pi, omp or Antigravity), installed and signed in, if you want hide to start it.
 - Optional: GitHub's CLI `gh` 2.72.0 or later, signed in, if you want pull requests in hide.
+- Optional: GitLab's CLI `glab` 1.78.0 or later, signed in to gitlab.com, if a project of yours is on gitlab.com and you want its merge requests in hide.
 
 ## Install
 
@@ -43,6 +44,7 @@ hide never asks for an agent's credentials.
 Each CLI keeps its own sign-in, so install the CLI and sign in to it before you launch hide.
 In the **Choose your agents** step each agent shows a state, for example **Checking…**, **Ready**, **Not signed in**, **Not installed** or **Update needed**. **Installed** means the CLI is found but its sign-in has not been confirmed, so sign in to it yourself.
 For pull requests, sign in to `gh` the same way (`gh auth login`).
+For a project on gitlab.com, sign in to `glab` (`glab auth login --hostname gitlab.com`).
 
 A pane takes its `PATH` from the system Path and your user Path, not from the environment hide was started in.
 Put each agent CLI's folder on one of them, or hide's panes will not find it.
