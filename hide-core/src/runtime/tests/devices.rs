@@ -1244,6 +1244,64 @@ fn a_machines_own_work_is_held_until_it_tells_no_more_and_listed_while_it_is_ope
     assert_eq!(runtime.peer_told.len(), 16);
 }
 
+/// A paired machine whose link failed while it was away, a dial that gave
+/// up before its connection came back after a sleep, is dialed again as
+/// soon as its connection is back, not left failed beside a live
+/// connection (the release A fault run, D-34 (2)).
+#[test]
+fn a_paired_machine_whose_link_failed_while_away_is_dialed_when_its_connection_is_back() {
+    use hide_node_link::device::EstablishError;
+    let mut runtime = runtime();
+    let told = |runtime: &mut Runtime, connected: bool| {
+        let event = serde_json::to_vec(&serde_json::json!({
+            "schema_version": SCHEMA_VERSION,
+            "kind": "peer_machines",
+            "payload": { "machines": [{
+                "key": "ab".repeat(32), "device_id": "windows-pc", "name": "Windows PC",
+                "opens": "active", "opened_by": null, "connected": connected,
+                "path": connected.then_some("relay"), "reason": null, "update": null,
+            }] }
+        }))
+        .expect("peer machines event");
+        runtime.dispatch_json(&event)
+    };
+    told(&mut runtime, true);
+    told(&mut runtime, false);
+    let generation = runtime.device_host_generation("windows-pc");
+    runtime.ingest_host_established(
+        "windows-pc",
+        generation,
+        Err(EstablishError::Stopped(
+            "That machine is not connected".to_owned(),
+        )),
+    );
+    assert!(matches!(
+        runtime.device_hosts["windows-pc"].phase,
+        super::hosts::HostPhase::Unavailable(_)
+    ));
+
+    assert!(told(&mut runtime, true));
+    assert!(
+        runtime.device_host_generation("windows-pc") > generation,
+        "its link is dialed again"
+    );
+
+    // The same list again, or the connection flapping while the link keeps
+    // failing, dials no oftener than the schedule's cap.
+    let generation = runtime.device_host_generation("windows-pc");
+    runtime.ingest_host_established(
+        "windows-pc",
+        generation,
+        Err(EstablishError::Stopped(
+            "That machine is not connected".to_owned(),
+        )),
+    );
+    told(&mut runtime, true);
+    told(&mut runtime, false);
+    told(&mut runtime, true);
+    assert_eq!(runtime.device_host_generation("windows-pc"), generation);
+}
+
 /// PRD device-connect-iroh D-61 over the state folders released builds
 /// wrote: a machine this build pairs with is saved as a device beside the
 /// ones the release stored, and the next start is the same machine to it.

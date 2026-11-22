@@ -21,9 +21,7 @@ use std::time::{Duration, Instant};
 use hide_node::ssh::host::HelperPackages;
 use hide_node::ssh::host::guest_build::GuestBuild;
 use hide_node::ssh::host::peer::{Opened, PeerDial};
-use hide_node_link::device::{
-    Cancel, EstablishError, InstallStop, RemoteError, RemoteStage, Wake,
-};
+use hide_node_link::device::{Cancel, EstablishError, InstallStop, RemoteError, RemoteStage, Wake};
 use hide_peer::inbox::{Applied, Apply, Inbox, Recorded};
 use hide_peer::protocol::build::FileMessage;
 use hide_peer::protocol::event::Event;
@@ -201,15 +199,13 @@ impl Dialer {
             ))
             .is_some()
         });
-        let link = connected(&peers, &key, within)
-            .await
-            .map_err(|away| {
-                if distribution {
-                    away
-                } else {
-                    not_yet(device, away)
-                }
-            })?;
+        let link = connected(&peers, &key, within).await.map_err(|away| {
+            if distribution {
+                away
+            } else {
+                not_yet(device, away)
+            }
+        })?;
         if granted(&link, &key, told).await != GrantState::Active {
             return Err(EstablishError::Stopped(
                 "That machine has not opened itself to this one, or paused it".to_owned(),
