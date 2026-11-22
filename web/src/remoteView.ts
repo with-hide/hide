@@ -30,6 +30,35 @@ export type RemoteWork =
 /** Where a start goes on that computer: one checkout's folder, or a new worktree of a repository, each in the wire spelling. */
 export type RemotePlace = { checkout: string } | { repository: string; branch: string; base: string | null };
 
+/**
+ * How a start handed to another computer's screen ended, by its request id:
+ * started there, or why not. `not_shown`: that screen did not load in time,
+ * failed to load, went, or a later ask took its place, so its page never had
+ * the start. `late`: the page held no snapshot, or did not list the folder
+ * it added, within `TAKE_WITHIN_MS`. `not_added`: that computer refused to
+ * add the folder as its project. The rest are that computer's core's own
+ * answer to the start, as the start panel reads one of its own.
+ */
+export type RemoteWorkResult =
+  | { request: string; outcome: "started" }
+  | { request: string; outcome: "not_shown" | "late" | "no_answer" }
+  | { request: string; outcome: "not_added" | "refused"; kind: string }
+  | { request: string; outcome: "failed"; code: string | null }
+  | { request: string; outcome: "agent_failed"; reason: string | null; line: string | null };
+
+/**
+ * How long the desktop holds a start for its screen's page to load: a page
+ * loads in a second or two, and a start that went out much later, when the
+ * operator no longer looks at it, would surprise them.
+ */
+export const HAND_WITHIN_MS = 30_000;
+
+/**
+ * How long the page that took a start waits for its first snapshot and for
+ * a folder it added to be listed, together, from when the start reached it.
+ */
+export const TAKE_WITHIN_MS = 30_000;
+
 /** The preload's bridge, version 1. */
 export type RemoteBridge = {
   bridge: 1;
@@ -48,6 +77,8 @@ export type RemoteBridge = {
   onVisible(listener: (visible: boolean) => void): void;
   /** Delivers each work the guest's operator asked of this screen; absent from an older desktop app. */
   onWork?(listener: (work: RemoteWork) => void): void;
+  /** Tells the guest how a start it handed here ended. */
+  workResult?(result: RemoteWorkResult): void;
 };
 
 /** The close the desktop gives the socket of a tile it hid: nothing to show, nothing to reconnect. */

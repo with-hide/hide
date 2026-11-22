@@ -2,11 +2,12 @@
 // B20; security spec 8.3, bridge v1): another machine's Hide page, loaded in
 // a sandboxed view on its own `hide-remote://` origin, reaches its screen
 // socket, the guest machine's clipboard to write, the app menu's commands,
-// whether its tile shows and the work the guest's operator asked of it
-// (D-73, D-78), and nothing else of Electron, Node or this machine. The page holds no token: the main process opens the socket.
+// whether its tile shows, the work the guest's operator asked of it and how
+// a start it was handed ended (D-73, D-78), and nothing else of Electron,
+// Node or this machine. The page holds no token: the main process opens the socket.
 
 import { contextBridge, ipcRenderer, type IpcRendererEvent } from "electron";
-import { REMOTE_CLIPBOARD_CHANNEL, REMOTE_MENU_CHANNEL, REMOTE_SOCKET_CLOSE_CHANNEL, REMOTE_SOCKET_EVENT_CHANNEL, REMOTE_SOCKET_OPEN_CHANNEL, REMOTE_SOCKET_SEND_CHANNEL, REMOTE_VISIBLE_CHANNEL, REMOTE_WORK_CHANNEL } from "../channel";
+import { REMOTE_CLIPBOARD_CHANNEL, REMOTE_MENU_CHANNEL, REMOTE_SOCKET_CLOSE_CHANNEL, REMOTE_SOCKET_EVENT_CHANNEL, REMOTE_SOCKET_OPEN_CHANNEL, REMOTE_SOCKET_SEND_CHANNEL, REMOTE_VISIBLE_CHANNEL, REMOTE_WORK_CHANNEL, REMOTE_WORK_DONE_CHANNEL } from "../channel";
 
 type SocketEvent = { op: "open" } | { op: "message"; data: string | ArrayBuffer } | { op: "close"; code: number; reason: string };
 
@@ -56,5 +57,9 @@ contextBridge.exposeInMainWorld("hideRemote", {
     ipcRenderer.on(REMOTE_WORK_CHANNEL, (_event: IpcRendererEvent, work: unknown) => {
       if (typeof work === "object" && work !== null) listener(work);
     });
+  },
+  // The main process reads it as a result of a start it handed this page, or drops it.
+  workResult(result: unknown): void {
+    ipcRenderer.send(REMOTE_WORK_DONE_CHANNEL, result);
   },
 });

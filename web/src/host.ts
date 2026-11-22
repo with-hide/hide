@@ -10,7 +10,7 @@
 import type { RecordUpdate, ReleaseFeed, WhatsNewRecord } from "./releases";
 import { revealLabel, type RevealHost } from "./revealExternal";
 import { holdsFieldModifier, keySystemOf, type KeySystem } from "./shortcuts";
-import type { RemoteWork } from "./remoteView";
+import type { RemoteWork, RemoteWorkResult } from "./remoteView";
 
 export type HostKind = "browser" | "electron";
 
@@ -372,6 +372,8 @@ export type RemoteScreensBridge = {
   go?(request: { device: string; key: string; work: RemoteWork }): void;
   /** How the shown screen's page loaded; returns the unsubscribe. */
   onState(listener: (state: RemoteScreenState) => void): () => void;
+  /** How each start handed by `go` ended, by its request id; returns the unsubscribe. Absent with `go`. */
+  onWorkResult?(listener: (result: RemoteWorkResult & { device: string }) => void): () => void;
 };
 
 /** `failed` carries the reason this computer's daemon gave (`not_connected`, `paused`, `paused_there`, `no_grant`, ...). */

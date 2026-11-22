@@ -2,16 +2,19 @@ import { once } from "node:events";
 import type { AddressInfo } from "node:net";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import WebSocket, { WebSocketServer } from "ws";
-import { REMOTE_SOCKET_EVENT_CHANNEL, REMOTE_SOCKET_OPEN_CHANNEL, REMOTE_SOCKET_SEND_CHANNEL, REMOTE_WORK_CHANNEL } from "../channel";
+import { REMOTE_SOCKET_EVENT_CHANNEL, REMOTE_SOCKET_OPEN_CHANNEL, REMOTE_SOCKET_SEND_CHANNEL, REMOTE_WORK_CHANNEL, REMOTE_WORK_DONE_CHANNEL, REMOTE_WORK_RESULT_CHANNEL } from "../channel";
 import type { HostLog } from "./log";
 import { MAX_SEND_BYTES, pageAddress } from "./remotePage";
-import { GO_WITHIN_MS, RemoteScreens } from "./remoteScreens";
+import { HAND_WITHIN_MS } from "../../../web/src/remoteView";
+import { RemoteScreens } from "./remoteScreens";
 
 const ipc = vi.hoisted(() => new Map<string, (event: unknown, value?: unknown) => void>());
 /** What each `new WebContentsView()` gave the host, newest last. */
 const views = vi.hoisted(() => [] as { webContents: { send: (channel: string, value: unknown) => void; loaded: string[]; closed: boolean } }[]);
 /** Each session partition the host asked for, in order. */
 const partitions = vi.hoisted(() => [] as string[]);
+/** What the host sent the shell's own window, in order. */
+const shellSent = vi.hoisted(() => [] as { channel: string; value: unknown }[]);
 /** Ends each page load the host started, in order. */
 const loads = vi.hoisted(() => [] as (() => void)[]);
 vi.mock("electron", () => {
@@ -95,6 +98,7 @@ afterEach(async () => {
   views.length = 0;
   partitions.length = 0;
   loads.length = 0;
+  shellSent.length = 0;
 });
 
 /** A host with the fakes above, its daemon at `server`'s port. */
@@ -102,7 +106,7 @@ function screensOn(port: number, log: { event: ReturnType<typeof vi.fn> }, now?:
   const window = {
     isDestroyed: () => false,
     isFocused: () => false,
-    webContents: { getZoomFactor: () => 1, focus: () => undefined, send: () => undefined },
+    webContents: { getZoomFactor: () => 1, focus: () => undefined, send: (channel: string, value: unknown) => shellSent.push({ channel, value }) },
     contentView: { addChildView: () => undefined, removeChildView: () => undefined },
   };
   const screens = new RemoteScreens({
@@ -209,6 +213,10 @@ async function loaded(count: number): Promise<void> {
   await new Promise((resolve) => setTimeout(resolve, 0));
 }
 
+/** How the host told the shell its starts ended. */
+const answers = () => shellSent.filter((sent) => sent.channel === REMOTE_WORK_RESULT_CHANNEL).map((sent) => sent.value);
+const start = (request: string) => ({ op: "start", request, place: { checkout: "/home/me/app" }, provider: "claude", model: null, prompt: null, profile: null }) as const;
+
 // PRD device-connect-iroh D-73, D-78: the operator's ask of another
 // computer's screen reaches its page once, after the page loaded, for the
 // key it was asked under and while the operator still waits on it.
@@ -242,9 +250,48 @@ describe("an ask of a remote screen", () => {
     screens.closeAll();
     screens.show({ device: DEVICE, key: KEY, rect: RECT });
     screens.go({ device: DEVICE, key: KEY, work });
-    clock += GO_WITHIN_MS + 1;
+    clock += HAND_WITHIN_MS + 1;
     await loaded(2);
     expect(handed(views.at(-1)!)).toEqual([]);
     expect(log.event).toHaveBeenCalledWith("remote.work_dropped", { device: DEVICE, reason: "late" });
+  });
+
+  // A start that never reached its page is answered to the shell, so the
+  // window that handed it gives the operator's words back.
+  it("answers the shell for each start that never reached its page", async () => {
+    const screens = screensOn(9, { event: vi.fn() });
+    screens.show({ device: DEVICE, key: KEY, rect: RECT });
+    screens.go({ device: DEVICE, key: REPLACEMENT, work: start("r-1") });
+    await loaded(1);
+    expect(answers()).toEqual([{ device: DEVICE, request: "r-1", outcome: "not_shown" }]);
+
+    screens.closeAll();
+    screens.show({ device: DEVICE, key: KEY, rect: RECT });
+    screens.go({ device: DEVICE, key: KEY, work: start("r-2") });
+    screens.go({ device: DEVICE, key: KEY, work: start("r-3") });
+    screens.closeAll();
+    expect(answers().slice(1)).toEqual([
+      { device: DEVICE, request: "r-2", outcome: "not_shown" },
+      { device: DEVICE, request: "r-3", outcome: "not_shown" },
+    ]);
+  });
+
+  // Only the page a start was handed to says how it ended, once.
+  it("passes on a page's answer only for a start handed to that page", async () => {
+    const screens = screensOn(9, { event: vi.fn() });
+    screens.show({ device: DEVICE, key: KEY, rect: RECT });
+    screens.go({ device: DEVICE, key: KEY, work: start("r-1") });
+    await loaded(1);
+    const view = views.at(-1)!;
+    const done = ipc.get(REMOTE_WORK_DONE_CHANNEL)!;
+    // Not from the page's own top frame on its own origin: nothing passes.
+    done({ sender: view.webContents, senderFrame: { parent: null, url: "https://example.com/" } }, { request: "r-1", outcome: "started" });
+    // A start never handed to it, and no result at all: nothing passes.
+    done(fromPage(view), { request: "r-9", outcome: "started" });
+    done(fromPage(view), { request: "r-1", outcome: "made_up" });
+    expect(answers()).toEqual([]);
+    done(fromPage(view), { request: "r-1", outcome: "refused", kind: "start_refused" });
+    done(fromPage(view), { request: "r-1", outcome: "started" });
+    expect(answers()).toEqual([{ device: DEVICE, request: "r-1", outcome: "refused", kind: "start_refused" }]);
   });
 });

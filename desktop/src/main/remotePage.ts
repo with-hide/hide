@@ -4,7 +4,7 @@
 // load is fetched from, so each is tested on its own.
 
 import type { BrowserRect } from "../../../web/src/host";
-import type { RemotePlace, RemoteWork } from "../../../web/src/remoteView";
+import type { RemotePlace, RemoteWork, RemoteWorkResult } from "../../../web/src/remoteView";
 
 /** The page's own scheme: `hide-remote://<device>/`, one origin per machine. */
 export const REMOTE_SCHEME = "hide-remote";
@@ -110,6 +110,40 @@ export function parseGo(value: unknown): GoRequest | undefined {
   if (typeof key !== "string" || !KEY.test(key)) return undefined;
   const parsed = parseWork(work);
   return parsed ? { device, key, work: parsed } : undefined;
+}
+
+/** A word a result carries (a refusal kind, a failure code or reason): short, or none. */
+function word(value: unknown): string | null | undefined {
+  return maybe(value, 256);
+}
+
+/** What a screen's page says of a start it was handed, or undefined when it is not that. */
+export function parseWorkResult(value: unknown): RemoteWorkResult | undefined {
+  if (typeof value !== "object" || value === null) return undefined;
+  const result = value as Record<string, unknown>;
+  if (!named(result.request, 128)) return undefined;
+  const request = result.request;
+  switch (result.outcome) {
+    case "started":
+    case "not_shown":
+    case "late":
+    case "no_answer":
+      return { request, outcome: result.outcome };
+    case "not_added":
+    case "refused":
+      return named(result.kind, 256) ? { request, outcome: result.outcome, kind: result.kind } : undefined;
+    case "failed": {
+      const code = word(result.code);
+      return code === undefined ? undefined : { request, outcome: "failed", code };
+    }
+    case "agent_failed": {
+      const reason = word(result.reason);
+      const line = maybe(result.line, MAX_NAME);
+      return reason === undefined || line === undefined ? undefined : { request, outcome: "agent_failed", reason, line };
+    }
+    default:
+      return undefined;
+  }
 }
 
 /** The page's first address. */

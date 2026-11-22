@@ -18,6 +18,37 @@ const words = {
   "startPanel.newMenu": ["Choose what to open", "새 탭 고르기", "新しいタブの種類", "新标签页选项"],
   "startPanel.terminal": ["Terminal", "터미널", "ターミナル", "终端"],
   "startPanel.startAgent": ["Start an agent…", "에이전트 시작…", "エージェントを開始…", "启动智能体…"],
+  // A start on another computer is that computer's own work, started from its own screen (PRD device-connect-iroh D-73).
+  "startPanel.handOff.needsScreen": [
+    "Work on {{device}} starts on its own screen, which this window cannot show. Start it in the desktop app.",
+    "{{device}}의 일은 그 컴퓨터 화면에서 시작해요. 이 창에서는 그 화면을 열 수 없으니 데스크톱 앱에서 시작하세요.",
+    "{{device}} の作業はそのコンピューターの画面で開始します。このウィンドウではその画面を開けないため、デスクトップアプリで開始してください。",
+    "{{device}} 的工作在它自己的屏幕上启动。此窗口无法打开那个屏幕，请在桌面应用中启动。",
+  ],
+  "startPanel.handOff.notShown": [
+    "{{device}}'s screen did not open, so nothing started.",
+    "{{device}}의 화면이 열리지 않아 시작하지 않았어요.",
+    "{{device}} の画面が開かなかったため、開始していません。",
+    "{{device}} 的屏幕未打开，因此未启动。",
+  ],
+  "startPanel.handOff.late": [
+    "{{device}} was not ready in time, so nothing started.",
+    "{{device}}에서 준비가 제때 끝나지 않아 시작하지 않았어요.",
+    "{{device}} の準備が間に合わなかったため、開始していません。",
+    "{{device}} 未能及时就绪，因此未启动。",
+  ],
+  "startPanel.handOff.notAdded": [
+    "{{device}} could not add this folder as its project, so nothing started.",
+    "{{device}}에서 이 폴더를 프로젝트로 더하지 못해 시작하지 않았어요.",
+    "{{device}} でこのフォルダーをプロジェクトに追加できなかったため、開始していません。",
+    "{{device}} 无法将此文件夹添加为项目，因此未启动。",
+  ],
+  "startPanel.handOff.noAnswer": [
+    "No answer from {{device}}. Check its screen before starting again.",
+    "{{device}}에서 답이 없어요. 다시 시작하기 전에 그 컴퓨터 화면을 확인하세요.",
+    "{{device}} から応答がありません。もう一度開始する前に、その画面を確認してください。",
+    "{{device}} 没有响应。再次启动前请先查看它的屏幕。",
+  ],
 } as const;
 
 export const startPanelEnglish = Object.fromEntries(Object.entries(words).map(([key, value]) => [key, value[0]])) as { [K in keyof typeof words]: string };

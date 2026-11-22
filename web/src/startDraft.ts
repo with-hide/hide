@@ -27,7 +27,9 @@ export type StartPreset = { projectId: string; kind?: ProviderKind };
  * the log and the element's `data-core-error` when it sent one.
  */
 /** `line` is a pane screen's last line, quoted beside the sentence as the terminal showed it. */
-export type StartFailure = { message: string } | { key: MessageKey; code?: string; line?: string };
+/** Why a start handed to another computer did not go, each naming that computer (PRD device-connect-iroh D-73). */
+export type HandOffKey = "startPanel.handOff.needsScreen" | "startPanel.handOff.notShown" | "startPanel.handOff.late" | "startPanel.handOff.notAdded" | "startPanel.handOff.noAnswer";
+export type StartFailure = { message: string } | { key: MessageKey; code?: string; line?: string } | { key: HandOffKey; values: { device: string }; code?: string };
 
 /** The core's reason when it sent one (`startReason`), else the plain "did not start". */
 /** A failed task's `failure` code worded (`startReason`); a code this build does not word is the plain "did not start", the code kept for `data-core-error`. */
@@ -85,6 +87,12 @@ type StartPanelState = {
   sent: string;
   /** A start whose tab is open but whose agent has not answered yet, with its text. */
   spent: { taskId: number; text: string } | null;
+  /**
+   * A start handed to another computer's screen (PRD device-connect-iroh
+   * D-73), with the panel's text and target, until that computer says how it
+   * ended: kept so a start that never went gives everything back.
+   */
+  handed: { request: string; text: string; target: string; device: string } | null;
   open: (overSettings: boolean, preset?: StartPreset | null, stay?: boolean) => void;
   close: () => void;
   setText: (text: string) => void;
@@ -97,6 +105,16 @@ type StartPanelState = {
   restore: (failure: StartFailure) => void;
   /** The spent start's agent answered; its text is no longer kept. */
   settle: () => void;
+  /** The start went to `device`'s own screen: the panel closes and keeps its text and target with the request. */
+  handOff: (request: string, target: string, device: string) => void;
+  /**
+   * The handed start did not go: the panel opens again on its text and
+   * target, saying why. A newer draft keeps its own words and target, and a
+   * newer start in flight is left alone; only this start's reason is shown.
+   */
+  takeBack: (failure: StartFailure) => void;
+  /** The handed start went; its text is no longer kept. */
+  settleHanded: () => void;
 };
 
 export const useStartPanel = create<StartPanelState>((set) => ({
@@ -112,6 +130,7 @@ export const useStartPanel = create<StartPanelState>((set) => ({
   failure: null,
   sent: "",
   spent: null,
+  handed: null,
   // A reason the last start did not go stays with its text until the text changes.
   open: (overSettings, preset = null, stay = false) => set({ isOpen: true, target: null, overSettings, preset, stay }),
   close: () => set({ isOpen: false }),
@@ -122,6 +141,15 @@ export const useStartPanel = create<StartPanelState>((set) => ({
   finish: (taskId) => set((s) => ({ isOpen: false, text: "", request: null, failure: null, spent: taskId === null ? null : { taskId, text: s.sent } })),
   restore: (failure) => set((s) => (s.spent ? { text: s.text === "" ? s.spent.text : s.text, failure, spent: null } : {})),
   settle: () => set({ spent: null }),
+  handOff: (request, target, device) => set((s) => ({ isOpen: false, text: "", request: null, failure: null, handed: { request, text: s.text, target, device } })),
+  takeBack: (failure) =>
+    set((s) => {
+      if (!s.handed) return {};
+      if (s.request !== null) return { handed: null };
+      if (s.text !== "") return { isOpen: true, failure, handed: null };
+      return { isOpen: true, overSettings: false, preset: null, stay: false, text: s.handed.text, target: s.handed.target, failure, handed: null };
+    }),
+  settleHanded: () => set({ handed: null }),
 }));
 
 /** Input follows a core target through navigation; no group or tab topology lives here. */

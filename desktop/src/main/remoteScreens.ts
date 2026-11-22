@@ -13,11 +13,12 @@ import path from "node:path";
 import { clipboard, ipcMain, protocol, session, WebContentsView, type BrowserWindow, type Input, type IpcMainEvent, type IpcMainInvokeEvent, type Session } from "electron";
 import WebSocket from "ws";
 import type { RemoteScreenState } from "../../../web/src/host";
+import { HAND_WITHIN_MS, type RemoteWorkResult } from "../../../web/src/remoteView";
 import { matchHost, type Command } from "../../../web/src/shortcuts";
-import { COMMAND_CHANNEL, REMOTE_CLIPBOARD_CHANNEL, REMOTE_MENU_CHANNEL, REMOTE_SOCKET_CLOSE_CHANNEL, REMOTE_SOCKET_EVENT_CHANNEL, REMOTE_SOCKET_OPEN_CHANNEL, REMOTE_SOCKET_SEND_CHANNEL, REMOTE_STATE_CHANNEL, REMOTE_VISIBLE_CHANNEL, REMOTE_WORK_CHANNEL } from "../channel";
+import { COMMAND_CHANNEL, REMOTE_CLIPBOARD_CHANNEL, REMOTE_MENU_CHANNEL, REMOTE_SOCKET_CLOSE_CHANNEL, REMOTE_SOCKET_EVENT_CHANNEL, REMOTE_SOCKET_OPEN_CHANNEL, REMOTE_SOCKET_SEND_CHANNEL, REMOTE_STATE_CHANNEL, REMOTE_VISIBLE_CHANNEL, REMOTE_WORK_CHANNEL, REMOTE_WORK_DONE_CHANNEL, REMOTE_WORK_RESULT_CHANNEL } from "../channel";
 import { toBounds } from "./browserSync";
 import type { HostLog } from "./log";
-import { fetchPath, HIDDEN_CLOSE, MAX_SEND_BYTES, ofPage, pageAddress, pagePath, queueAllows, REMOTE_SCHEME, requestAllowed, socketAddress, type GoRequest, type ShowRequest } from "./remotePage";
+import { fetchPath, HIDDEN_CLOSE, MAX_SEND_BYTES, ofPage, pageAddress, pagePath, parseWorkResult, queueAllows, REMOTE_SCHEME, requestAllowed, socketAddress, type GoRequest, type ShowRequest } from "./remotePage";
 
 /** Registered before the app is ready, as Electron requires of a privileged scheme. */
 export function registerRemoteScheme(): void {
@@ -27,12 +28,8 @@ export function registerRemoteScheme(): void {
 /** How many machines' screens stay loaded; past it, the one hidden longest is closed and loads again when shown. */
 const KEPT = 3;
 
-/**
- * How long an ask waits for its machine's page to load: a page loads in a
- * second or two, and a start that went out much later, when the operator
- * no longer looks at it, would surprise them.
- */
-export const GO_WITHIN_MS = 30_000;
+/** The starts handed to pages whose answer is still owed to the shell; past it the oldest is forgotten, and the shell's own bound ends its wait. */
+const OWED = 16;
 
 /** This computer's daemon as the window is attached to it. */
 export type Daemon = { origin: string; token: string };
@@ -66,6 +63,8 @@ export class RemoteScreens {
   private readonly screens = new Map<string, Screen>();
   /** Per machine, the last ask whose page has not loaded yet, with when it was made. */
   private readonly waiting = new Map<string, { key: string; work: GoRequest["work"]; at: number }>();
+  /** Each start handed to a page, by its request id, with the device it went to: only that device's page may say how it ended. */
+  private readonly owed = new Map<string, string>();
   private readonly sessions = new Set<string>();
   private front: string | null = null;
   private clock = 0;
@@ -95,6 +94,15 @@ export class RemoteScreens {
     ipcMain.on(REMOTE_SOCKET_CLOSE_CHANNEL, (event: IpcMainEvent) => {
       const screen = this.screenOf(event);
       if (screen) this.closeSocket(screen, null);
+    });
+    // How a start this host handed the page ended, from that page only and for a start handed to it.
+    ipcMain.on(REMOTE_WORK_DONE_CHANNEL, (event: IpcMainEvent, reported: unknown) => {
+      const screen = this.screenOf(event);
+      const result = parseWorkResult(reported);
+      if (!screen || !result || this.owed.get(result.request) !== screen.device) return;
+      this.owed.delete(result.request);
+      this.deps.log.event("remote.work_result", { device: screen.device, outcome: result.outcome });
+      this.toShell(screen.device, result);
     });
     ipcMain.handle(REMOTE_CLIPBOARD_CHANNEL, (event: IpcMainInvokeEvent, text: unknown) => {
       const screen = this.screenOf(event);
@@ -149,7 +157,9 @@ export class RemoteScreens {
    * The operator's ask of a machine's screen (D-73, D-78), which the shell
    * makes as it shows that screen: handed to its page at once when loaded
    * under the same key, else when it loads, the latest ask only and for
-   * `GO_WITHIN_MS`. A page that fails to load drops it.
+   * `HAND_WITHIN_MS`. A start that never reaches its page (a later ask, a
+   * page that does not load in time, another key, the window gone) is
+   * answered `not_shown` to the shell, as the page answers one it took.
    */
   go(request: GoRequest): void {
     const screen = this.screens.get(request.device);
@@ -157,12 +167,20 @@ export class RemoteScreens {
       this.hand(screen, request.work);
       return;
     }
+    this.drop(request.device, "replaced");
     this.waiting.set(request.device, { key: request.key, work: request.work, at: this.deps.now?.() ?? Date.now() });
   }
 
   private hand(screen: Screen, work: GoRequest["work"]): void {
-    if (screen.view.webContents.isDestroyed()) return;
+    if (screen.view.webContents.isDestroyed()) return this.answer(screen.device, work, "not_shown");
     this.deps.log.event("remote.work_handed", { device: screen.device, op: work.op });
+    if (work.op === "start") {
+      this.owed.set(work.request, screen.device);
+      for (const request of this.owed.keys()) {
+        if (this.owed.size <= OWED) break;
+        this.owed.delete(request);
+      }
+    }
     screen.view.webContents.send(REMOTE_WORK_CHANNEL, work);
   }
 
@@ -170,13 +188,30 @@ export class RemoteScreens {
   private handWaiting(screen: Screen): void {
     const waiting = this.waiting.get(screen.device);
     if (!waiting) return;
-    this.waiting.delete(screen.device);
     const now = this.deps.now?.() ?? Date.now();
-    if (waiting.key !== screen.key || now - waiting.at > GO_WITHIN_MS) {
-      this.deps.log.event("remote.work_dropped", { device: screen.device, reason: waiting.key !== screen.key ? "key_changed" : "late" });
-      return;
-    }
+    if (waiting.key !== screen.key) return this.drop(screen.device, "key_changed");
+    if (now - waiting.at > HAND_WITHIN_MS) return this.drop(screen.device, "late");
+    this.waiting.delete(screen.device);
     this.hand(screen, waiting.work);
+  }
+
+  /** The ask waiting for `device`'s page goes unmade, and a start among them is answered so to the shell. */
+  private drop(device: string, reason: string): void {
+    const waiting = this.waiting.get(device);
+    if (!waiting) return;
+    this.waiting.delete(device);
+    this.deps.log.event("remote.work_dropped", { device, reason });
+    this.answer(device, waiting.work, "not_shown");
+  }
+
+  /** Tells the shell a start of its did not reach `device`'s page; nothing for a work to show. */
+  private answer(device: string, work: GoRequest["work"], outcome: "not_shown"): void {
+    if (work.op === "start") this.toShell(device, { request: work.request, outcome });
+  }
+
+  private toShell(device: string, result: RemoteWorkResult): void {
+    const window = this.deps.window();
+    if (window && !window.isDestroyed()) window.webContents.send(REMOTE_WORK_RESULT_CHANNEL, { device, ...result });
   }
 
   /** An app-menu command while a screen shows goes to that screen (B20); true when one took it. */
@@ -191,7 +226,8 @@ export class RemoteScreens {
   closeAll(): void {
     const window = this.deps.window();
     for (const screen of [...this.screens.values()]) this.destroy(screen, window);
-    this.waiting.clear();
+    for (const device of [...this.waiting.keys()]) this.drop(device, "closed");
+    this.owed.clear();
     this.front = null;
   }
 
@@ -290,7 +326,7 @@ export class RemoteScreens {
     screen.view.setVisible(false);
     this.closeSocket(screen, null);
     // An ask for a page that did not load goes with it: it is not made later, unseen.
-    if (this.waiting.delete(device)) this.deps.log.event("remote.work_dropped", { device, reason });
+    this.drop(device, reason);
     this.report(device, "failed", reason);
   }
 

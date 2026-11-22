@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { fetchPath, MAX_PROMPT, MAX_QUEUED_BYTES, MAX_SEND_BYTES, parseGo, parseShow, queueAllows, requestAllowed, socketAddress } from "./remotePage";
+import { fetchPath, MAX_PROMPT, MAX_QUEUED_BYTES, MAX_SEND_BYTES, parseGo, parseShow, parseWorkResult, queueAllows, requestAllowed, socketAddress } from "./remotePage";
 
 const KEY = "a".repeat(64);
 const OTHER = "b".repeat(64);
@@ -80,5 +80,26 @@ describe("an ask of another machine's screen", () => {
     expect(parseGo({ device: "host-a", key: KEY, work: { op: "close", pane: "w1:p2" } })).toBeUndefined();
     expect(parseGo({ device: "host-a", key: KEY, work: { op: "show", pane: "" } })).toBeUndefined();
     expect(parseGo(null)).toBeUndefined();
+  });
+});
+
+// How a page says a start it was handed ended: each outcome with what it
+// carries, and nothing else.
+describe("a page's answer for a start", () => {
+  it("takes each outcome with what it carries", () => {
+    expect(parseWorkResult({ request: "r-1", outcome: "started" })).toEqual({ request: "r-1", outcome: "started" });
+    expect(parseWorkResult({ request: "r-1", outcome: "late", kind: "x" })).toEqual({ request: "r-1", outcome: "late" });
+    expect(parseWorkResult({ request: "r-1", outcome: "not_added", kind: "workspace.create_refused" })).toEqual({ request: "r-1", outcome: "not_added", kind: "workspace.create_refused" });
+    expect(parseWorkResult({ request: "r-1", outcome: "failed", code: null })).toEqual({ request: "r-1", outcome: "failed", code: null });
+    expect(parseWorkResult({ request: "r-1", outcome: "agent_failed", reason: "exited", line: "boom" })).toEqual({ request: "r-1", outcome: "agent_failed", reason: "exited", line: "boom" });
+  });
+
+  it("refuses an answer with no request, an unknown outcome or a missing reason", () => {
+    expect(parseWorkResult({ outcome: "started" })).toBeUndefined();
+    expect(parseWorkResult({ request: "r-1", outcome: "done" })).toBeUndefined();
+    expect(parseWorkResult({ request: "r-1", outcome: "refused" })).toBeUndefined();
+    expect(parseWorkResult({ request: "r-1", outcome: "failed", code: 3 })).toBeUndefined();
+    expect(parseWorkResult({ request: "x".repeat(129), outcome: "started" })).toBeUndefined();
+    expect(parseWorkResult(null)).toBeUndefined();
   });
 });

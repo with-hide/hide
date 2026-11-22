@@ -15,7 +15,7 @@ import { translate } from "./i18n/client";
 import type { InterfaceLanguage } from "./i18n/locale";
 import type { ThemeChoice } from "./theme";
 import { hostBridge, type HostKind } from "./host";
-import { computerTiles } from "./computers";
+import { computerTiles, pairedComputer } from "./computers";
 import {
   closeWithSaveOutcome,
   deleteBuffer,
@@ -1871,17 +1871,20 @@ export function createActions(send: DispatchFn, clipboard?: Clipboard) {
      * A paired computer's work on that computer's own screen (PRD
      * device-connect-iroh D-73, D-78, D-81): its tile comes forward and its
      * page shows the work its core knows by that pane, or makes the start,
-     * which is then that computer's own work and the page moves to it. False
-     * where no desktop app draws that screen, or `deviceId` is no paired
-     * computer's: the caller does what it did before.
+     * which is then that computer's own work and the page moves to it.
+     * `not_paired`: `deviceId` is no paired computer, and the caller does
+     * what it did before; `no_screen`: it is one, but no screen of it can be
+     * drawn here (a browser tab, an older desktop app, a pairing this
+     * window does not open), so nothing was handed.
      */
-    openComputerWork(deviceId: string, work: RemoteWork): boolean {
+    openComputerWork(deviceId: string, work: RemoteWork): "handed" | "no_screen" | "not_paired" {
+      const computer = pairedComputer(rest(), deviceId);
+      if (!computer) return "not_paired";
       const remote = hostBridge()?.remoteScreens;
-      const tile = computerTiles(rest()).find((row) => row.screen !== null && (row.id === deviceId || row.screen.device_id === deviceId));
-      if (!tile?.screen || !remote?.go) return false;
-      ui().setRemoteScreen(tile.screen.device_id);
-      remote.go({ device: tile.screen.device_id, key: tile.screen.key, work });
-      return true;
+      if (!computer.screen || !remote?.go || !remote.onWorkResult) return "no_screen";
+      ui().setRemoteScreen(computer.screen.device_id);
+      remote.go({ device: computer.screen.device_id, key: computer.screen.key, work });
+      return "handed";
     },
 
     focusTool(connection: string) {

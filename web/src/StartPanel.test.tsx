@@ -8,6 +8,7 @@ import { TooltipProvider } from "./components/ui/tooltip";
 import type { SnapshotRest } from "./snapshot";
 import { useShellStore } from "./store";
 import { useStartPanel } from "./startDraft";
+import { HANDED_ANSWER_MS } from "./computerWork";
 import { checkoutKey } from "./startTargets";
 import { useUiStore } from "./ui";
 
@@ -535,6 +536,107 @@ it("lists a device's items by whether it is connected and whether its Hide keeps
   } finally {
     await act(async () => root.unmount());
     container.remove();
+    useShellStore.setState(shell, true);
+    useUiStore.setState(ui, true);
+    useStartPanel.setState(panel, true);
+    vi.unstubAllGlobals();
+  }
+});
+
+// PRD device-connect-iroh D-59, D-73, B64: a start on a paired computer is
+// that computer's own work, so the panel hands it to that computer's screen
+// and keeps the operator's words until that computer says it went; where no
+// screen of it can be drawn, nothing starts here in its place.
+it("hands a start on a paired computer to its screen, gives the words back when it did not go, and refuses where no screen is drawn", async () => {
+  vi.stubGlobal("IS_REACT_ACT_ENVIRONMENT", true);
+  const shell = useShellStore.getState();
+  const ui = useUiStore.getState();
+  const panel = useStartPanel.getState();
+  const key = "ab".repeat(32);
+  const mini = "mini-device";
+  const project = { id: "mini-project", label: "web-app", path: "/home/me/web-app", device_id: mini, remote_target_id: mini, registered: true, temporary: false, is_git: false, checkouts: [{ id: "mini-checkout", workspace_id: "mini-project", label: "main", path: "/home/me/web-app", exists: true, is_primary: true }] };
+  const snapshot = {
+    navigator: {
+      focused_device_id: "core-machine",
+      workspaces: [],
+      devices: [
+        { id: "core-machine", kind: "local", label: "Core machine", state: "local" },
+        { id: mini, kind: "remote", label: "Mini", state: "ready", peer_key: key, kit: { busy: false, components: [], agents: [{ id: "claude-code", availability: "available", enabled: true, chosen: true }] } },
+      ],
+      peers: [{ device_id: mini, key, name: "Mini", connected: true, opens: "active" }],
+    },
+    ui_state: { agent_start: { kind: "claude", models: {} } },
+    status: { remote: [{ target_id: mini, state: "connected", session: { workspaces: [project] } }] },
+  } as unknown as SnapshotRest;
+  const events: { kind: string }[] = [];
+  const container = document.createElement("div");
+  document.body.append(container);
+  const root = createRoot(container);
+  const go = vi.fn();
+  let answer: ((result: { device: string; request: string; outcome: string }) => void) | null = null;
+  const press = async (text: string) => {
+    await act(async () => {
+      useStartPanel.getState().open(false, { projectId: project.id, kind: "claude" });
+      useStartPanel.getState().setTarget(checkoutKey(mini, project.path));
+      useStartPanel.getState().setText(text);
+    });
+    await act(async () => (container.querySelector("[data-start-submit]") as HTMLButtonElement).click());
+  };
+  const failure = () => container.querySelector("[data-start-failure]")?.textContent ?? null;
+  const render = async () => {
+    await act(async () => {
+      useShellStore.setState({ rest: snapshot, connection: "live" });
+      useUiStore.setState({ screen: { kind: "main" }, overlay: "none", workspaceDialog: null, remoteScreen: null });
+      root.render(<TooltipProvider><StartPanelHost actions={createActions((event) => { events.push(event as { kind: string }); return true; })} /></TooltipProvider>);
+    });
+  };
+  try {
+    // A browser tab draws no other computer's screen: the start is refused with why, and its words stay.
+    await render();
+    await press("fix the build");
+    expect(events.filter((event) => event.kind === "agent_start_in_checkout" || event.kind === "create_worktree")).toEqual([]);
+    expect(failure()).toContain("starts on its own screen");
+    expect(useStartPanel.getState()).toMatchObject({ isOpen: true, text: "fix the build", handed: null });
+    await act(async () => root.render(<></>));
+
+    // The desktop app: the start goes to that computer's screen, which comes forward, and the panel keeps its words.
+    window.hideHost = { kind: "electron", platform: "darwin", remoteScreens: { show: vi.fn(), go, onState: () => () => {}, onWorkResult: (listener: typeof answer) => ((answer = listener), () => {}) } } as never;
+    await render();
+    await press("fix the build");
+    const first = go.mock.calls[0]![0] as { device: string; key: string; work: { request: string; place: unknown } };
+    expect(first).toMatchObject({ device: mini, key, work: { op: "start", place: { checkout: project.path }, prompt: "fix the build", provider: "claude" } });
+    expect(events.filter((event) => event.kind === "agent_start_in_checkout")).toEqual([]);
+    expect(useUiStore.getState().remoteScreen).toBe(mini);
+    expect(useStartPanel.getState()).toMatchObject({ isOpen: false, text: "", handed: { request: first.work.request, text: "fix the build" } });
+
+    // It did not go there: the panel opens again on its words and its target, saying why.
+    await act(async () => answer!({ device: mini, request: "another-request", outcome: "not_shown" }));
+    expect(useStartPanel.getState().isOpen).toBe(false);
+    await act(async () => answer!({ device: mini, request: first.work.request, outcome: "not_shown" }));
+    expect(useStartPanel.getState()).toMatchObject({ isOpen: true, text: "fix the build", target: checkoutKey(mini, project.path), handed: null });
+    expect(failure()).toContain("did not open");
+
+    // It went: nothing comes back.
+    await act(async () => (container.querySelector("[data-start-submit]") as HTMLButtonElement).click());
+    const second = (go.mock.calls[1]![0] as { work: { request: string } }).work.request;
+    await act(async () => answer!({ device: mini, request: second, outcome: "started" }));
+    expect(useStartPanel.getState()).toMatchObject({ isOpen: false, text: "", handed: null });
+
+    // No answer at all within the bound: the words come back; an answer that arrives later touches nothing newer.
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+    await press("third words");
+    const third = (go.mock.calls[2]![0] as { work: { request: string } }).work.request;
+    await act(async () => vi.advanceTimersByTime(HANDED_ANSWER_MS));
+    expect(useStartPanel.getState()).toMatchObject({ isOpen: true, text: "third words", handed: null });
+    expect(failure()).toContain("No answer from");
+    await act(async () => useStartPanel.getState().setText("newer words"));
+    await act(async () => answer!({ device: mini, request: third, outcome: "not_shown" }));
+    expect(useStartPanel.getState()).toMatchObject({ text: "newer words", failure: null });
+  } finally {
+    vi.useRealTimers();
+    await act(async () => root.unmount());
+    container.remove();
+    delete (window as { hideHost?: unknown }).hideHost;
     useShellStore.setState(shell, true);
     useUiStore.setState(ui, true);
     useStartPanel.setState(panel, true);

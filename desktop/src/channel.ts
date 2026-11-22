@@ -146,12 +146,15 @@ export const REMOTE_STATE_CHANNEL = "hide:remote-state";
  * hears it once it loaded (`REMOTE_WORK_CHANNEL`).
  */
 export const REMOTE_GO_CHANNEL = "hide:remote-go";
+/** How a start the shell handed to a screen ended, by its request id (main -> renderer). */
+export const REMOTE_WORK_RESULT_CHANNEL = "hide:remote-work-result";
 
 /**
  * The remote screen's own bridge, version 1, between its sandboxed page and
  * the main process and nothing else: its one screen socket (open, send,
  * close, and its events back), a clipboard write, the app menu's commands,
- * whether its tile shows, and the work this window's operator asked of it.
+ * whether its tile shows, the work this window's operator asked of it, and
+ * how a start it was handed ended.
  */
 export const REMOTE_SOCKET_OPEN_CHANNEL = "hide-remote:socket-open";
 export const REMOTE_SOCKET_SEND_CHANNEL = "hide-remote:socket-send";
@@ -161,3 +164,4 @@ export const REMOTE_CLIPBOARD_CHANNEL = "hide-remote:clipboard";
 export const REMOTE_MENU_CHANNEL = "hide-remote:menu";
 export const REMOTE_VISIBLE_CHANNEL = "hide-remote:visible";
 export const REMOTE_WORK_CHANNEL = "hide-remote:work";
+export const REMOTE_WORK_DONE_CHANNEL = "hide-remote:work-done";

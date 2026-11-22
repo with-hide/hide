@@ -117,7 +117,7 @@ export function PeerWorkRows({ group, actions }: { group: "needs_you" | "done"; 
             className="min-h-(--size-control-lg) items-start gap-sm rounded-sm px-sm py-xs text-caption text-subtle-foreground hover:text-foreground"
             // That computer's work opens on its own screen with the work chosen (D-78, D-81); without a desktop to draw it, its tile.
             onClick={() => {
-              if (!actions.openComputerWork(deviceId, { op: "show", pane: row.id })) actions.focusDevice(deviceId);
+              if (actions.openComputerWork(deviceId, { op: "show", pane: row.id }) !== "handed") actions.focusDevice(deviceId);
             }}
           >
             <span className="flex h-(--size-sidebar-line) shrink-0 items-center gap-xs">

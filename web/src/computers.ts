@@ -80,3 +80,16 @@ export function screenStateKey(state: Exclude<ScreenState, "ready">): MessageKey
       return "remoteScreen.noGrant";
   }
 }
+
+/**
+ * The paired computer `deviceId` names, by its device id or its pairing's:
+ * one that runs its own Hide, whose work started there is its own (PRD
+ * device-connect-iroh D-59). `screen` is the pairing this window could show
+ * its screen by, or null when there is none; null when `deviceId` is no
+ * paired computer.
+ */
+export function pairedComputer(rest: SnapshotRest | null | undefined, deviceId: string): { screen: Peer | null } | null {
+  const tile = computerTiles(rest).find((row) => row.screen !== null && (row.id === deviceId || row.screen.device_id === deviceId));
+  if (tile) return { screen: tile.screen };
+  return rest?.navigator?.devices?.some((device) => device.id === deviceId && device.peer_key) ? { screen: null } : null;
+}
