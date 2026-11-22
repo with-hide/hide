@@ -16,7 +16,7 @@ export default chapter<GitlabModel>({
   preview: "rows",
   steps: [
     { id: "list", quest: true, target: '[data-sidebar-lens-option="prs"]', side: "right", command: "open_sidebar_prs", gesture: { click: true }, done: showsPrs },
-    // Both hosts in one list: `!12` with GitLab's mark, `#2806` with GitHub's.
+    // Both hosts in one list: `!12` with GitLab's mark, `#41` with GitHub's.
     { id: "mark", target: MR_ROW, side: "right" },
     { id: "open", quest: true, target: MR_ROW, side: "right", gesture: { click: true }, done: showsMr },
     { id: "card", target: `${MR_CARD} [data-pr-card-header]`, side: "left" },

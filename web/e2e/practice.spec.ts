@@ -349,7 +349,7 @@ test("the GitLab chapter draws a gitlab.com merge request by its host beside a G
     await expect(layer).toHaveAttribute("data-practice-step", "card");
     const merge = practice.locator('[data-pr="12"][data-pr-project="shop-api"]');
     await expect(merge.locator("[data-pr-mark]")).toHaveText("!12");
-    await expect(practice.locator('[data-pr="2806"][data-pr-project="web"] [data-pr-mark]')).toHaveText("#2806");
+    await expect(practice.locator('[data-pr="41"][data-pr-project="web"] [data-pr-mark]')).toHaveText("#41");
     const card = practice.locator('[data-pr-card="12"][data-pr-card-project="shop-api"]');
     await expect(card.locator("[data-pr-card-number] [data-pr-mark]")).toHaveText("!12");
     await expect(card.locator("[data-pr-card-github]")).toHaveText("View on GitLab");

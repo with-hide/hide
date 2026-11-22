@@ -32,7 +32,7 @@ const GITLAB: HostDeclaration = {
 export const MR_NUMBER = 12;
 const OTHER_MR = 14;
 /** GitHub's pull request, beside them in the same list. */
-const PR_NUMBER = 2806;
+const PR_NUMBER = 41;
 /** The list row of the merge request the learner opens. */
 export const MR_ROW = `[data-pr="${MR_NUMBER}"][data-pr-project="${GITLAB_PLACE.project}"]`;
 /** Its card, once open on the desk. */

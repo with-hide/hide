@@ -145,6 +145,8 @@ SAMPLES = (
     "web/src/mobile/demoData.ts",
     "web/src/mobile/prFixture.ts",
     "web/src/i18n/resources/whatsNewScenes.ts",
+    # A practice chapter's words, which name its world's sample hosts.
+    "web/src/i18n/resources/practice/",
     # A skill's source is a git address the skills format names, not a
     # project's code host.
     "web/src/settings/skillsMcp.ts",
@@ -180,6 +182,13 @@ KNOWN_LINES = {
         '"projectSettings.repositoryInvalid": "请输入 owner/repository 或 gitlab.com/group/project，而不是 URL。",',
         '"projectSettings.repositoryHint": "owner/repository または gitlab.com/group/project",',
         '"projectSettings.repositoryInvalid": "URLではなく owner/repository または gitlab.com/group/project を入力してください。",',
+    },
+    "hide-core/src/product_analytics.rs": {
+        # The usage statistics' names of the GitLab feature and practice
+        # chapter, spelled like every other feature's and chapter's.
+        'Self::Gitlab => "gitlab",',
+        '"gitlab" => Self::Gitlab,',
+        'PracticeChapter::Gitlab => "gitlab",',
     },
     "web/src/CloneFromUrl.tsx": {
         # The clone field's placeholder: an example the person replaces.
