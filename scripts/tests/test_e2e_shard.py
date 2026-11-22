@@ -93,20 +93,38 @@ class Splitting(unittest.TestCase):
         self.assertEqual(notes, ['the heaviest of 2 shards plans 21 s, over the 20 s this lane sizes a shard for; '
                                  'add a shard (docs/TESTING.md, "Balancing the e2e shards")'])
 
-    def test_the_web_lane_uses_the_fewest_shards_within_its_recorded_work_budget(self):
-        # Policy: size from recorded test work within 60% of the 1200s cap.
-        # Read the caller's actual count: one fewer must exceed the budget,
-        # while every selected shard must fit the current recording.
+    # The Linux lane is sized by when it ends too, beside the Rust lane: the two
+    # longest Linux lines of a run, so neither alone sets the run's length.
+    # The Rust lane is held to 13 minutes of a run's start, and the plan job
+    # takes 18 s of that, which leaves this lane 762 s. Its own numbers,
+    # medians of twenty successful main runs (2026-11-20..21, 120 shard
+    # jobs): `build hided` 194 s, a shard's setup before its step 80 s, and
+    # the step's listing and report around its tests 37 s (the step's 692 s
+    # less the 655 s it planned).
+    LINUX_BUILD_SECONDS = 194
+    LINUX_SHARD_SETUP_SECONDS = 80
+    LINUX_STEP_OVERHEAD_SECONDS = 37
+    LINUX_LANE_TARGET_SECONDS = 762
+
+    def test_the_web_lane_uses_the_fewest_shards_that_end_beside_the_rust_lane(self):
         workflow = (ROOT / ".github/workflows/pr.yml").read_text()
         lane = re.split(r"\n(?=  [a-z0-9-]+:\n)",
                         workflow.split("\n  web-e2e:\n", 1)[1], maxsplit=1)[0]
-        count = int(re.search(r"shards: (\d+)", lane).group(1))
+        count = int(re.search(r"\n      shards: (\d+)", lane).group(1))
         table = json.loads((ROOT / "web/e2e/shard-durations.json").read_text(encoding="utf-8"))
+
+        def finish(seconds):
+            return (self.LINUX_BUILD_SECONDS + self.LINUX_SHARD_SETUP_SECONDS
+                    + self.LINUX_STEP_OVERHEAD_SECONDS + seconds)
+
         _, load = shard.split(sorted(table), table, count)
+        # The shard's own step cap still bounds its test work (60 % of 1200 s).
         self.assertLessEqual(max(load), 720)
         self.assertGreater(count, 1)
+        self.assertLessEqual(finish(max(load)), self.LINUX_LANE_TARGET_SECONDS)
+        # One fewer would end past the target, so the count is the fewest that does.
         _, smaller = shard.split(sorted(table), table, count - 1)
-        self.assertGreater(max(smaller), 720)
+        self.assertGreater(finish(max(smaller)), self.LINUX_LANE_TARGET_SECONDS)
 
     # The Windows lane is sized by when a shard finishes, not by its test work
     # alone: the daemon and shell builds precede the shards (`needs:`) and each

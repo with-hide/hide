@@ -138,7 +138,7 @@ use Class::{Daemon, Desktop, Local, OwnWindow, Screen, Window};
 /// the ones hided answers itself.
 pub(crate) const CLASSES: &[(&str, Class)] = &[
     ("access_approve", OwnWindow),
-    ("access_level", OwnWindow),
+    ("access_mode", OwnWindow),
     ("access_refuse", OwnWindow),
     ("access_revoke", OwnWindow),
     ("add_project_folder_set", Screen),

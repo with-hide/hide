@@ -65,10 +65,10 @@ test("a tool outside Hide's panes is approved at Act, starts an agent, writes to
     const asked = ok(tool(["access", "request", "--name", "nightly", "--no-wait", "--json"]), "request");
     expect(asked.state).toBe("pending");
     await useControl(await connectControl({ origin: live.origin, token: live.token, clientKind: "web" }), async (window) => {
-      window.send("access_approve", { id: asked.id as string, level: "act" });
+      window.send("access_approve", { id: asked.id as string, mode: { kind: "all" } });
       await expect.poll(() => tool(["access", "status", "--json"]).value?.state, { message: "the tool connected", timeout: 20_000 }).toBe("connected"); // wait-ok: the window's approval reached the core; the tool's next status reads it
     });
-    expect(ok(tool(["access", "status", "--json"]), "status")).toMatchObject({ state: "connected", level: "act" });
+    expect(ok(tool(["access", "status", "--json"]), "status")).toMatchObject({ state: "connected", mode: { kind: "all" } });
 
     // B21: an agent with no parent, its pane in the fixture's checkout, on a session the stand-in resumes.
     const repo = fs.realpathSync(path.join(fixture.root, "fixture"));

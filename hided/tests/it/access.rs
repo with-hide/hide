@@ -1,10 +1,11 @@
-//! An external tool's journey (PRD hide-external-control c1, c2): a fake
+//! A bot's journey (PRD hide-external-control c1, c2; mission-87): a fake
 //! tool, the built `hide` run with a home of its own and no pane identity,
-//! asks to connect, the operator's window approves it with the event
-//! Settings sends, and the same request run again hands the tool its key.
-//! It then runs what its level allows and is refused the rest with a code
-//! and what to do; a refusal, a disconnect, its own leave, a restart and a
-//! damaged key each answer as the tool can act on.
+//! asks to connect, the operator's window approves it in a mode with the
+//! event Settings sends, and the same request run again hands the tool its
+//! key. It then runs what its mode allows and is refused the rest with a
+//! code and what to do; a refusal, a disconnect, its own leave, a restart,
+//! a damaged key and a connection an earlier build approved View only each
+//! answer as the tool can act on.
 
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
@@ -50,7 +51,7 @@ fn daemon_env(root: &Path) -> Env {
 }
 
 /// The operator's window: a web client, the one kind of connection that may
-/// approve, refuse, change the level of and disconnect a tool.
+/// approve, refuse, change the mode of and disconnect a bot.
 pub(crate) struct Window(Socket);
 
 impl Window {
@@ -231,6 +232,11 @@ impl Tool {
         self.run_with(args, &[])
     }
 
+    /// `hide args` run in `folder`, as a tool runs it from a project.
+    fn run_in(&self, folder: &Path, args: &[&str]) -> Ran {
+        Ran::of(self.command(args).current_dir(folder).output().unwrap())
+    }
+
     fn run_with(&self, args: &[&str], env: &[(&str, &str)]) -> Ran {
         let mut command = self.command(args);
         for (key, value) in env {
@@ -323,13 +329,14 @@ impl Tool {
     }
 }
 
-/// c1: request, the window's approval, the key on the request run again; at
-/// View only the reads of B20 and nothing else; at Act the commands of B21,
-/// letters and inbox among them; and B22, B23 refused with their codes.
+/// c1: request, the window's approval, the key on the request run again;
+/// a bot of the whole Hide runs the reads and the commands of B21, letters
+/// and inbox among them; devices are the operator's to add or remove; and
+/// B22, B23 are refused with their codes.
 // The daemon runs on this test's runtime while a fake tool's `hide` blocks
 // a thread of it, so it needs threads of its own.
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-async fn a_tool_asks_is_approved_and_runs_what_its_level_allows() {
+async fn a_bot_asks_is_approved_for_the_whole_hide_and_runs_what_the_operator_does() {
     let root = tempfile::tempdir().unwrap();
     let running = hided::start_daemon(daemon_env(root.path())).await.unwrap();
     let mut window = Window::open(&running).await;
@@ -339,12 +346,12 @@ async fn a_tool_asks_is_approved_and_runs_what_its_level_allows() {
     // Asked again, the same request, not a second one (B5, B9).
     assert_eq!(tool.put_up("nightly"), id);
     window
-        .send("access_approve", json!({"id": id, "level": "view"}))
+        .send("access_approve", json!({"id": id, "mode": {"kind": "all"}}))
         .await;
     let connected = tool.request_until_answered("nightly").await;
     assert!(connected.ok, "{}", connected.out);
     assert_eq!(connected.json()["value"]["state"], "connected");
-    assert_eq!(connected.json()["value"]["level"], "view");
+    assert_eq!(connected.json()["value"]["mode"], json!({"kind": "all"}));
     let key = tool.key_file("nightly", "key");
     assert!(
         hide_platform::fs::private::is_private(&key).unwrap(),
@@ -359,12 +366,11 @@ async fn a_tool_asks_is_approved_and_runs_what_its_level_allows() {
     assert!(!tool.key_file("nightly", "request").exists());
     let human = tool.run(&["access", "request", "--name", "nightly"]);
     assert!(
-        human.out.contains("Connected as nightly · View only"),
+        human.out.contains("Connected as nightly · whole Hide"),
         "{}",
         human.out
     );
 
-    // View only (B20).
     for args in [
         &["access", "status", "--json"][..],
         &["access", "list", "--json"],
@@ -372,37 +378,19 @@ async fn a_tool_asks_is_approved_and_runs_what_its_level_allows() {
         &["agent", "list"],
         &["mission", "list"],
         &["device", "list", "--json"],
+        &["inbox"],
     ] {
         let ran = tool.run(args);
         assert!(ran.ok, "{args:?}: {}", ran.out);
     }
     let list = tool.run(&["access", "list", "--json"]).json();
     assert_eq!(list["value"]["connections"][0]["name"], "nightly");
-    assert_eq!(list["value"]["connections"][0]["level"], "view");
-    for args in [
-        &["inbox"][..],
-        &[
-            "request", "send", "someone", "--intent", "look", "--body", "please",
-        ],
-        &["agent", "sleep", "agent-1"],
-        &["pane", "send", "w1:p1", "hi"],
-    ] {
-        tool.run(args).refused("access_view_only");
-    }
-
-    // Act (B21): the operator's switch reaches the tool's next command.
-    window
-        .send("access_level", json!({"id": id, "level": "act"}))
-        .await;
-    let deadline = Instant::now() + Duration::from_secs(20);
-    while tool.run(&["access", "status", "--json"]).json()["value"]["level"] != "act" {
-        assert!(Instant::now() < deadline, "the level never moved");
-        tokio::time::sleep(Duration::from_millis(100)).await; // wait-ok: the window's level change reached the core; the tool's next status reads it
-    }
-    let inbox = tool.run(&["inbox"]);
-    assert!(inbox.ok, "{}", inbox.out);
+    assert_eq!(
+        list["value"]["connections"][0]["mode"],
+        json!({"kind": "all"})
+    );
     // A letter goes as far as the recipient: there is none, and the core
-    // says so, not the level.
+    // says so, not the mode.
     let send = tool.run(&[
         "request", "send", "someone", "--intent", "look", "--body", "please",
     ]);
@@ -412,6 +400,12 @@ async fn a_tool_asks_is_approved_and_runs_what_its_level_allows() {
         send.out
     );
     assert!(!send.out.contains("access_"), "{}", send.out);
+    // Adding or removing a device stays the operator's (operator decision
+    // 2026-11-21).
+    tool.run(&["device", "add", "mini"])
+        .refused("access_operator_only");
+    tool.run(&["device", "remove", "mini"])
+        .refused("access_operator_only");
 
     // B22, B23.
     tool.run(&[
@@ -456,7 +450,7 @@ async fn refusals_disconnects_leave_restart_and_a_damaged_key_each_say_what_to_d
     let revoked = Tool::new(root.path(), "revoked-home");
     let id = revoked.put_up("revoked");
     window
-        .send("access_approve", json!({"id": id, "level": "act"}))
+        .send("access_approve", json!({"id": id, "mode": {"kind": "all"}}))
         .await;
     assert!(revoked.request_until_answered("revoked").await.ok);
     window.send("access_revoke", json!({"id": id})).await;
@@ -475,7 +469,7 @@ async fn refusals_disconnects_leave_restart_and_a_damaged_key_each_say_what_to_d
     let leaving = Tool::new(root.path(), "leaving-home");
     let id = leaving.put_up("leaving");
     window
-        .send("access_approve", json!({"id": id, "level": "view"}))
+        .send("access_approve", json!({"id": id, "mode": {"kind": "all"}}))
         .await;
     assert!(leaving.request_until_answered("leaving").await.ok);
     let left = leaving.run(&["access", "leave", "--json"]);
@@ -500,7 +494,7 @@ async fn refusals_disconnects_leave_restart_and_a_damaged_key_each_say_what_to_d
     let kept = Tool::new(root.path(), "kept-home");
     let id = kept.put_up("kept");
     window
-        .send("access_approve", json!({"id": id, "level": "view"}))
+        .send("access_approve", json!({"id": id, "mode": {"kind": "all"}}))
         .await;
     assert!(kept.request_until_answered("kept").await.ok);
     drop(window);
@@ -549,7 +543,10 @@ async fn refusals_disconnects_leave_restart_and_a_damaged_key_each_say_what_to_d
     let renewed = again.json()["value"]["id"].as_str().unwrap().to_owned();
     assert_ne!(renewed, id, "a new key is a new connection");
     window
-        .send("access_approve", json!({"id": renewed, "level": "view"}))
+        .send(
+            "access_approve",
+            json!({"id": renewed, "mode": {"kind": "all"}}),
+        )
         .await;
     assert!(kept.request_until_answered("kept").await.ok);
     assert!(kept.run(&["ps", "--json"]).ok);
@@ -574,8 +571,13 @@ async fn a_request_waits_for_its_answer_and_a_later_command_picks_up_the_key() {
     let running = hided::start_daemon(daemon_env(root.path())).await.unwrap();
     let mut window = Window::open(&running).await;
 
-    for (name, answer, payload_level, state) in [
-        ("approved", "access_approve", Some("act"), Some("connected")),
+    for (name, answer, payload_mode, state) in [
+        (
+            "approved",
+            "access_approve",
+            Some(json!({"kind": "all"})),
+            Some("connected"),
+        ),
         ("refused", "access_refuse", None, None),
     ] {
         let tool = Tool::new(root.path(), &format!("{name}-home"));
@@ -594,8 +596,8 @@ async fn a_request_waits_for_its_answer_and_a_later_command_picks_up_the_key() {
             assert!(Instant::now() < deadline, "never put up: {}", status.out);
             tokio::time::sleep(Duration::from_millis(100)).await; // wait-ok: the waiting request's own process puts it up
         };
-        let payload = match payload_level {
-            Some(level) => json!({"id": id, "level": level}),
+        let payload = match payload_mode {
+            Some(mode) => json!({"id": id, "mode": mode}),
             None => json!({"id": id}),
         };
         window.send(answer, payload).await;
@@ -625,7 +627,7 @@ async fn a_request_waits_for_its_answer_and_a_later_command_picks_up_the_key() {
     let later = Tool::new(root.path(), "later-home");
     let id = later.put_up("later");
     window
-        .send("access_approve", json!({"id": id, "level": "view"}))
+        .send("access_approve", json!({"id": id, "mode": {"kind": "all"}}))
         .await;
     // `access status` reads where the request stands and keeps no key.
     let deadline = Instant::now() + Duration::from_secs(20);
@@ -658,7 +660,7 @@ async fn a_home_with_two_keys_needs_hide_access_to_choose() {
     for name in ["first", "second"] {
         let id = tool.put_up(name);
         window
-            .send("access_approve", json!({"id": id, "level": "view"}))
+            .send("access_approve", json!({"id": id, "mode": {"kind": "all"}}))
             .await;
         assert!(tool.request_until_answered(name).await.ok);
     }
@@ -685,7 +687,7 @@ async fn only_an_operator_window_approves_a_tool() {
     let id = tool.put_up("nightly");
     let mut screen = Window::open_as(&running, None).await;
     screen
-        .send("access_approve", json!({"id": id, "level": "act"}))
+        .send("access_approve", json!({"id": id, "mode": {"kind": "all"}}))
         .await;
     assert_eq!(screen.error().await, "refused access_approve not_here");
     let status = tool.run(&["access", "status", "--json"]);
@@ -693,7 +695,7 @@ async fn only_an_operator_window_approves_a_tool() {
 
     let mut window = Window::open(&running).await;
     window
-        .send("access_approve", json!({"id": id, "level": "act"}))
+        .send("access_approve", json!({"id": id, "mode": {"kind": "all"}}))
         .await;
     assert!(tool.request_until_answered("nightly").await.ok);
     running.stop();
@@ -714,7 +716,7 @@ async fn a_pane_programs_child_is_never_a_tool() {
     let id = tool.put_up("paned");
     let mut window = Window::open(&running).await;
     window
-        .send("access_approve", json!({"id": id, "level": "act"}))
+        .send("access_approve", json!({"id": id, "mode": {"kind": "all"}}))
         .await;
     assert!(tool.request_until_answered("paned").await.ok);
 
@@ -731,5 +733,274 @@ async fn a_pane_programs_child_is_never_a_tool() {
     tool.in_a_pane(&["access", "request", "--name", "paned", "--json"])
         .finish()
         .refused("access_from_pane");
+    running.stop();
+}
+
+/// The approved bot `name` in `mode`, its key in its own home.
+async fn approved(root: &Path, window: &mut Window, name: &str, mode: Value) -> (Tool, String) {
+    let tool = Tool::new(root, &format!("{name}-home"));
+    let id = tool.put_up(name);
+    window
+        .send("access_approve", json!({"id": id, "mode": mode}))
+        .await;
+    let connected = tool.request_until_answered(name).await;
+    assert!(connected.ok, "{}", connected.out);
+    assert_eq!(connected.json()["value"]["mode"], mode, "{}", connected.out);
+    (tool, id)
+}
+
+/// A plain-folder project Hide has open, `project` (`w-project`), with a
+/// `notes.md`, under the operator's home by its real path.
+fn a_project(env: &Env) -> PathBuf {
+    let project = hide_platform::fs::identity::canonical(&env.home)
+        .unwrap()
+        .join("projects")
+        .join("project");
+    std::fs::create_dir_all(&project).unwrap();
+    std::fs::write(project.join("notes.md"), "# notes\n").unwrap();
+    std::fs::write(
+        env.state_dir.join("core-state.json"),
+        json!({
+            "schema_version": 1,
+            "expanded_paths": [],
+            "selected_path": null,
+            "selected_pane_id": null,
+            "workspace_registrations": [{
+                "id": "w-project",
+                "label": "project",
+                "path": hide_platform::path::to_wire(&project).unwrap(),
+            }],
+        })
+        .to_string(),
+    )
+    .unwrap();
+    project
+}
+
+/// The refusal an own-mode bot gets for what is not its own work.
+fn not_own(ran: Ran, what: &str) {
+    assert!(!ran.ok, "{what} ran: {}", ran.out);
+    assert!(
+        ran.out.contains("access_not_own_work"),
+        "{what}: {}",
+        ran.out
+    );
+    assert!(
+        ran.out
+            .contains(hide_core::access::NOT_OWN_WORK_NEXT_ACTION),
+        "{what}'s next action: {}",
+        ran.out
+    );
+}
+
+/// mission-87 c2: a bot of its own work is refused, family by family, what
+/// names the operator's work (an agent, a letter's recipient, a pane, a
+/// mission) or no one bot's (the Views and files of a project, its records,
+/// devices, the bots, the automations), with one code and what to do; it
+/// lists its own work only, so with none started its lists are empty; it
+/// starts agents in a project Hide has open, past the hold; and the whole
+/// Hide, set from the window, runs those again with no new approval. Its
+/// own agents and a connected device's pane are the core's tests
+/// (`runtime::tests::access_letters`, `missions`, `remote_spawn`), which
+/// hold the started records this daemon would need an agent CLI for.
+// The daemon runs on this test's runtime while a fake tool's `hide` blocks
+// a thread of it, so it needs threads of its own.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn an_own_mode_bot_is_refused_the_operators_work_and_lists_only_its_own() {
+    let root = tempfile::tempdir().unwrap();
+    let env = daemon_env(root.path());
+    let project = a_project(&env);
+    let running = hided::start_daemon(env).await.unwrap();
+    let mut window = Window::open(&running).await;
+    let (bot, id) = approved(root.path(), &mut window, "keeper", json!({"kind": "own"})).await;
+    let human = bot.run(&["access", "status"]);
+    assert!(
+        human.out.contains("Connected as keeper · own work"),
+        "{}",
+        human.out
+    );
+    let project_wire = hide_platform::path::to_wire(&project).unwrap();
+
+    // Agents and letters: what it names is not its work.
+    let agents = bot.run(&["agent", "list", "--json"]);
+    assert!(agents.ok, "{}", agents.out);
+    assert_eq!(agents.json()["value"]["items"], json!([]), "{}", agents.out);
+    for args in [
+        &["agent", "show", "agent-1"][..],
+        &["agent", "end", "agent-1"],
+        &["agent", "sleep", "agent-1"],
+        &[
+            "request", "send", "someone", "--intent", "look", "--body", "please",
+        ],
+        &["watch", "start", "agent-1"],
+    ] {
+        not_own(bot.run(args), &format!("{args:?}"));
+    }
+    // It starts agents in a project Hide has open: past the hold to the
+    // spawn's own answer, since no such agent is installed.
+    let spawn = bot.run(&[
+        "agent",
+        "spawn",
+        "--repo",
+        &project_wire,
+        "--name",
+        "helper",
+        "--intent",
+        "help",
+        "--kind",
+        "no-such-agent",
+    ]);
+    assert!(!spawn.out.contains("access_"), "{}", spawn.out);
+    // Its own letters and watches are its own.
+    for args in [&["inbox"][..], &["watch", "list"]] {
+        let ran = bot.run(args);
+        assert!(ran.ok, "{args:?}: {}", ran.out);
+    }
+
+    // Panes.
+    not_own(bot.run(&["pane", "read", "w1:p1"]), "pane read");
+    not_own(bot.run(&["pane", "send", "w1:p1", "hi"]), "pane send");
+    not_own(bot.run(&["agent", "read", "agent-1"]), "agent read");
+
+    // Missions and `hide ps` list its own work only.
+    let missions = bot.run(&["mission", "list"]);
+    assert!(missions.ok, "{}", missions.out);
+    not_own(
+        bot.run(&["mission", "show", "--mission", "mission-1"]),
+        "mission show",
+    );
+    let ps = bot.run(&["ps", "--json"]);
+    assert!(ps.ok, "{}", ps.out);
+    assert_eq!(ps.json()["value"]["panes"], json!([]), "{}", ps.out);
+
+    // A project's Views, files and records, devices, the bots and the
+    // automations are no one bot's work; its own standing still reads.
+    not_own(bot.run_in(&project, &["view", "list"]), "view list");
+    not_own(
+        bot.run(&[
+            "file",
+            "open",
+            &format!("{project_wire}/notes.md"),
+            "--repo",
+            &project_wire,
+        ]),
+        "file open",
+    );
+    not_own(bot.run_in(&project, &["links", "branch", "main"]), "links");
+    for args in [
+        &["device", "list", "--json"][..],
+        &["access", "list", "--json"],
+        &["automation", "list"],
+    ] {
+        not_own(bot.run(args), &format!("{args:?}"));
+    }
+    assert!(bot.run(&["access", "status", "--json"]).ok);
+    bot.run(&["device", "add", "mini"])
+        .refused("access_operator_only");
+
+    // The whole Hide, set from the window, reaches the next command.
+    window
+        .send("access_mode", json!({"id": id, "mode": {"kind": "all"}}))
+        .await;
+    let deadline = Instant::now() + Duration::from_secs(20);
+    while bot.run(&["access", "status", "--json"]).json()["value"]["mode"] != json!({"kind": "all"})
+    {
+        assert!(Instant::now() < deadline, "the mode never moved");
+        tokio::time::sleep(Duration::from_millis(100)).await; // wait-ok: the window's mode change reached the core; the bot's next status reads it
+    }
+    assert!(bot.run(&["device", "list", "--json"]).ok);
+    assert!(bot.run_in(&project, &["view", "list"]).ok);
+    running.stop();
+}
+
+/// mission-87 c3 (D4): a store an earlier build wrote (schema 1) loads with
+/// the connection at Act as a bot of the whole Hide, which runs on with no
+/// new approval, and the one at View only ended: its next command and
+/// request are refused with the reason that asks it to request again, the
+/// request drops its key, and the next one puts it up for the operator.
+// The daemon runs on this test's runtime while a fake tool's `hide` blocks
+// a thread of it, so it needs threads of its own.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn an_earlier_builds_act_tool_runs_as_the_whole_hide_and_its_view_only_tool_asks_again() {
+    let root = tempfile::tempdir().unwrap();
+    let env = daemon_env(root.path());
+    let running = hided::start_daemon(env.clone()).await.unwrap();
+    let mut window = Window::open(&running).await;
+    let all = json!({"kind": "all"});
+    let (acting, _) = approved(root.path(), &mut window, "acting", all.clone()).await;
+    let (viewing, _) = approved(root.path(), &mut window, "viewing", all.clone()).await;
+    drop(window);
+    // Dropped, not only stopped: the drop saves the core's state and lets go
+    // of the state folder's lock, as a daemon's exit does.
+    drop(running);
+
+    // The file as schema 1 kept the same two: a level where a mode is now.
+    let store = hide_kit::layout::access_store(&env.state_dir);
+    let mut saved: Value = serde_json::from_slice(&std::fs::read(&store).unwrap()).unwrap();
+    assert_eq!(saved["schema_version"], 2);
+    saved["schema_version"] = json!(1);
+    for connection in saved["connections"].as_array_mut().unwrap() {
+        let object = connection.as_object_mut().unwrap();
+        object.remove("mode");
+        let level = if object["name"] == "acting" {
+            "act"
+        } else {
+            "view"
+        };
+        object.insert("level".into(), json!(level));
+    }
+    std::fs::write(&store, serde_json::to_vec(&saved).unwrap()).unwrap();
+
+    let running = hided::start_daemon(env).await.unwrap();
+    let status = acting.run(&["access", "status", "--json"]);
+    assert!(status.ok, "{}", status.out);
+    assert_eq!(status.json()["value"]["mode"], all, "{}", status.out);
+    assert!(acting.run(&["ps", "--json"]).ok);
+
+    viewing.run(&["ps", "--json"]).refused("access_reapprove");
+    // As for a refused tool (B7): the next request says so and drops the
+    // key, and the one after asks the operator anew.
+    viewing
+        .run(&[
+            "access",
+            "request",
+            "--name",
+            "viewing",
+            "--no-wait",
+            "--json",
+        ])
+        .refused("access_reapprove");
+    assert!(!viewing.key_file("viewing", "key").exists());
+    viewing.put_up("viewing");
+    running.stop();
+}
+
+/// mission-87, review F4: with connections between two Hides on, `hide
+/// device` asks the daemon's pairing first; a bot's ask carries its key
+/// there, so stopping or removing a machine is the operator's alone in
+/// either mode, whether the bot is the one key its home keeps or is named
+/// by `HIDE_ACCESS`.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_bots_pairing_ask_is_judged_by_its_mode_at_the_daemon() {
+    let root = tempfile::tempdir().unwrap();
+    let mut env = daemon_env(root.path());
+    env.device_connect = true;
+    env.peer_direct = Some("127.0.0.1:0".parse().unwrap());
+    let running = hided::start_daemon(env).await.unwrap();
+    let mut window = Window::open(&running).await;
+    for (name, mode) in [
+        ("keeper", json!({"kind": "own"})),
+        ("runner", json!({"kind": "all"})),
+    ] {
+        let (bot, _) = approved(root.path(), &mut window, name, mode).await;
+        // The CLI offers pairing only where the daemon does.
+        let on = (hided::env::HIDE_DEVICE_CONNECT, "1");
+        for verb in ["pause", "remove"] {
+            bot.run_with(&["device", verb, "mini"], &[on])
+                .refused("access_operator_only");
+            bot.run_with(&["device", verb, "mini"], &[on, ("HIDE_ACCESS", name)])
+                .refused("access_operator_only");
+        }
+    }
     running.stop();
 }

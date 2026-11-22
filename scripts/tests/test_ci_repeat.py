@@ -824,8 +824,9 @@ class IgnoredPreparation(unittest.TestCase):
 
     def test_both_lanes_prepare_ignored_tests_with_that_script_and_nothing_of_their_own(self):
         pr = self.workflow("pr.yml")
+        rust = self.workflow("rust.yml")["build"]
         repeat = self.workflow("repeat.yml")["rust"]
-        for job, lane in ((pr["rust"], "rust"), (pr["windows-check"], "windows-check"), (repeat, "rust")):
+        for job, lane in ((rust, "rust"), (pr["windows-check"], "windows-check"), (repeat, "rust")):
             with self.subTest(lane=lane):
                 sourced = self.steps_running(job, ". scripts/prepare-ignored-tests.sh")
                 self.assertTrue(sourced, f"{lane} calls no shared preparation")

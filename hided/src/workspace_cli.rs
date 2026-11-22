@@ -324,7 +324,9 @@ pub fn pairing_ask_within(env: &Env, ask: Value, within: Duration) -> Result<Val
         one_shot: false,
         hook: None,
         install: None,
-        access: None,
+        // A bot's pairing ask carries its key, so the daemon judges it by
+        // the bot's mode rather than as the operator at a terminal.
+        access: crate::access_cli::tool_key(env)?.map(|key| AccessAsk::Use { key, folder: None }),
         device: Some(ask),
     })
     .map_err(|_| "reference_unavailable".to_owned())?;
