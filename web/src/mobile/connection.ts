@@ -46,6 +46,7 @@ import { appHost } from "./appHost";
 import { appPushRefused, syncAppPush } from "./appPush";
 import { browserPushResult, forgetPush, syncPush } from "./push";
 import { RelaySocket, type PhoneSocket } from "./relaySocket";
+import { bindUploads, dropFiles, filesIntent, filesSent, onAttachAck, readyStages, reuploadFiles, uploadsConnected, uploadsLost } from "./uploads";
 import { DemoSocket, demoRequested } from "./demoSocket";
 import { translate } from "../i18n/translator";
 import { hostedPhone, PHONE_PROTOCOL, takePairing } from "./relayRuntime";
@@ -225,6 +226,7 @@ export function send(message: PhoneMessage): boolean {
   try { socket.send(JSON.stringify(message)); return true; }
   catch { if (socket) lose(socket); return false; }
 }
+bindUploads(send);
 
 function scheduleRetry(): void {
   if (stopped || retryTimer !== null) return;
@@ -258,6 +260,8 @@ function connect(): void {
     stopped = true;
     window.location.replace(`/?host=${encodeURIComponent(relayHost!.room)}`);
   }, (reason) => {
+    // The relay's day is spent: an upload stops with its own line rather than starting again on every retry.
+    if (reason === "daily_limit") uploadsLost(reason);
     if (["connection_limit", "room_limit", "rate_limit", "daily_limit", "frame_limit"].includes(reason)) patch({ relayError: "busy" });
     else if (reason === "unsupported_version") { stopped = true; patch({ screen: "version" }); }
   }) : new WebSocket(socketUrl());
@@ -293,6 +297,9 @@ function connect(): void {
       }
       if (watch) watch.ready = true;
       applyFrame(frame);
+      // A computer that takes no files (an older one, or one put back) keeps none of the bar's.
+      if (frame.attachments === true) uploadsConnected();
+      else dropFiles();
       reopenDetail();
       reopenStartSheet();
       reopenPr();
@@ -305,6 +312,10 @@ function connect(): void {
     }
     if (frame.type === "input_result") {
       onInputResult(frame.ok, frame.reason);
+      return;
+    }
+    if (frame.type === "attach_ack") {
+      onAttachAck(frame);
       return;
     }
     if (frame.type === "human_turn_result") {
@@ -367,6 +378,7 @@ function settleLoss(ws: PhoneSocket, refused: boolean): void {
   const state = usePhone.getState();
   failPendingSleep();
   failLoadingLook();
+  uploadsLost(null);
   if (state.missionAnswer) patch({ missionAnswer: null, missionAnswerError: { mission: state.missionAnswer.mission, notice: missionAnswerFailure("offline") } });
   if (state.missionReopen) patch({ missionReopen: null, missionAnswerError: { mission: state.missionReopen.mission, notice: missionReopenFailure("offline") } });
   if (state.pendingInput?.kind === "choice" && state.choice) patch({ pendingInput: null, choice: { turn: state.choice.turn, choice: state.choice.choice, state: "failed", notice: inputFailure("uncertain") } });
@@ -426,6 +438,7 @@ export function openDetail(key: AgentKey, tab: DetailTab = "conversation"): void
   }
   const view: DetailView = "conversation";
   dropTransfer();
+  if (!sameKey(state.detail?.key ?? null, key)) dropFiles();
   patch({ detail: { key, view, tab, rows: null, moreAskedAt: null, conversation: null, olderAskedAt: null, looks: null, look: null, ask: null, running: null }, inputError: null, pendingInput: null, choice: null });
   send({ type: "open", device_id: key.device_id, pane_id: key.pane_id, view });
 }
@@ -449,6 +462,7 @@ export function setTab(tab: DetailTab): void {
 
 export function closeDetail(): void {
   dropTransfer();
+  dropFiles();
   patch({ detail: null, inputError: null, pendingInput: null, choice: null });
   send({ type: "close" });
 }
@@ -550,7 +564,8 @@ export function loadOlder(): void {
 
 let requestCounter = 0;
 /** A reply that failed keeps its request id, so a resend of the same text lands once (B27). */
-let lastReply: { text: string; requestId: string } | null = null;
+/** The last reply sent and its request id: the same words with the same files are the same reply, sent again under the same id (B27). */
+let lastReply: { intent: string; text: string; requestId: string } | null = null;
 
 function newRequestId(): string {
   requestCounter += 1;
@@ -707,19 +722,26 @@ function onMissionResult(frame: Extract<ServerFrame, { type: "mission_result" }>
   patch({ missionDrafts: drafts, missionAnswerError: null });
 }
 
-/** Sends a reply with Enter after it; the caller clears its field only on success (B26, B27). */
+/**
+ * Sends a reply with Enter after it, with the files on the bar once the computer has every one of them; the caller clears its field
+ * only on success (B26, B27).
+ */
 export function sendReply(text: string): boolean {
   const state = usePhone.getState();
   const detail = state.detail;
   if (!detail || state.pendingInput) return false;
-  const problem = replyProblem(text, state.answer, detail.key);
+  const stages = readyStages();
+  if (!stages) return false;
+  const problem = replyProblem(text, state.answer, detail.key, stages.length);
   if (problem) {
     patch({ inputError: inputFailure(problem, state.answer) });
     return false;
   }
-  const requestId = lastReply?.text === text ? lastReply.requestId : newRequestId();
-  lastReply = { text, requestId };
-  const sent = send(replyMessage(detail.key, text, requestId));
+  // The files by what was picked, not by their stages: a file uploaded again after a lost connection is still the same reply's.
+  const intent = `${text}\u0000${filesIntent()}`;
+  const requestId = lastReply?.intent === intent ? lastReply.requestId : newRequestId();
+  lastReply = { intent, text, requestId };
+  const sent = send(replyMessage(detail.key, text, requestId, stages));
   patch(sent ? { pendingInput: { requestId, kind: "text" }, inputError: null } : { inputError: inputFailure("offline") });
   return sent;
 }
@@ -793,6 +815,10 @@ function onInputResult(ok: boolean, reason: string | null): void {
   }
   patch({ pendingInput: null, inputError: ok ? null : inputFailure(reason, usePhone.getState().answer) });
   if (pending?.kind === "text") {
+    const detail = usePhone.getState().detail;
+    if (ok && detail && lastReply) filesSent(detail.key, lastReply.text);
+    // The computer no longer holds a file the reply named: every file goes up again, and the reply is sent once they are in.
+    if (!ok && reason === "attachment_lost") reuploadFiles();
     if (ok) lastReply = null;
     for (const listener of replyListeners) listener(ok);
   }

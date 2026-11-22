@@ -117,7 +117,7 @@ const COMPOSER_LINES = 4;
  * lines (the keyboard's return key writes one; only the send sends) and grows to four lines, its corners then those of a box.
  * `input` and `send` carry each screen's own name, limit and test marks.
  */
-export function Composer({ value, onChange, onSubmit, placeholder, disabled, sendDisabled, lines = false, input, send }: {
+export function Composer({ value, onChange, onSubmit, placeholder, disabled, sendDisabled, lines = false, lead, input, send }: {
   value: string;
   onChange: (value: string) => void;
   onSubmit: () => void;
@@ -125,6 +125,8 @@ export function Composer({ value, onChange, onSubmit, placeholder, disabled, sen
   disabled: boolean;
   sendDisabled: boolean;
   lines?: boolean;
+  /** What stands before the field inside its frame, such as the reply bar's `+` (Doop 08). */
+  lead?: ReactNode;
   input?: Omit<ComponentProps<typeof Input>, "value" | "onChange" | "placeholder" | "disabled"> & DataProps;
   send?: DataProps;
 }) {
@@ -133,7 +135,8 @@ export function Composer({ value, onChange, onSubmit, placeholder, disabled, sen
   const field = "min-w-0 flex-1 rounded-none border-none bg-transparent px-none text-title text-foreground shadow-none outline-none placeholder:text-muted-foreground focus-visible:ring-0 disabled:opacity-100";
   return (
     // The rounded frame is the field: it takes the field's focus ring and its over-limit mark, as `Input` draws them on its own border.
-    <form className={cn("flex min-w-0 items-center gap-xs border border-border bg-input py-xxs pl-lg pr-xxs focus-within:border-ring focus-within:ring-1 focus-within:ring-ring has-[[aria-invalid=true]]:border-destructive has-[[aria-invalid=true]]:ring-destructive", tall.grown ? "items-end rounded-xl" : "rounded-full", disabled && "opacity-(--opacity-disabled)")} onSubmit={(event) => { event.preventDefault(); onSubmit(); }}>
+    <form className={cn("flex min-w-0 items-center gap-xs border border-border bg-input py-xxs pr-xxs focus-within:border-ring focus-within:ring-1 focus-within:ring-ring has-[[aria-invalid=true]]:border-destructive has-[[aria-invalid=true]]:ring-destructive", tall.grown ? "items-end rounded-xl" : "rounded-full", lead ? "pl-xxs" : "pl-lg", disabled && "opacity-(--opacity-disabled)")} onSubmit={(event) => { event.preventDefault(); onSubmit(); }}>
+      {lead}
       {lines ? (
         <Textarea
           {...(input as ComponentProps<typeof Textarea>)}
