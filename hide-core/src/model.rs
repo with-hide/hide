@@ -624,6 +624,16 @@ pub struct ViewDisplaySnapshot {
     /// takes this pane to the left and folds another agent's tabs by it.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub owner_pane: Option<String>,
+    /// A file that is an image the operator pasted into a terminal
+    /// (`attachments::is_clipboard_wire_path`): its tab and path line name
+    /// it so, never by its request's file name.
+    #[serde(skip_serializing_if = "std::ops::Not::not")]
+    pub pasted: bool,
+    /// A file's path below the home folder of the machine it is on, as
+    /// `~/<names>`, which the path line shows for a file outside the
+    /// checkout; absent outside that home and for every other kind.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub home_relative: Option<String>,
 }
 
 impl ViewDisplaySnapshot {

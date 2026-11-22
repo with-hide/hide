@@ -229,6 +229,9 @@ struct DisplayFacts<'a> {
     /// The machine's live sessions by pane, which a record or plan card
     /// names its owner from (`owner_pane`); read on the first card only.
     sessions: std::cell::OnceCell<Vec<(String, crate::links::ledger::SessionIdentity)>>,
+    /// The Workspace's machine's home as wire spellings, as named and as its
+    /// filesystem names it, which a file's `home_relative` is read below.
+    homes: Vec<String>,
 }
 
 /// Where a document being read shows once it lands: the Workspace, the tray
@@ -3474,7 +3477,24 @@ impl Runtime {
                 .map(|view| &view.feedback)
                 .filter(|feedback| !feedback.comments.is_empty()),
             sessions: std::cell::OnceCell::new(),
+            homes: self.machine_homes(&key.0),
         }
+    }
+
+    /// The home of the machine `device` names, as wire spellings: this
+    /// machine's as named and as its filesystem names it, a connected
+    /// device's as its helper reported it; none while it is not known.
+    fn machine_homes(&self, device: &str) -> Vec<String> {
+        if device != self.node.as_str() {
+            return self.device_homes.get(device).cloned().into_iter().collect();
+        }
+        let mut homes: Vec<String> = [self.home_path.as_deref(), self.home_real.as_deref()]
+            .into_iter()
+            .flatten()
+            .map(hide_platform::path::to_wire_lossy)
+            .collect();
+        homes.dedup();
+        homes
     }
 
     /// What one display can show now, and why not when it cannot.
@@ -3615,6 +3635,17 @@ impl Runtime {
             &none
         };
         let owner_pane = self.owner_pane_of(display, opener.as_ref(), sessions);
+        let file = display.kind == DisplayKind::File;
+        let home_relative = file
+            .then(|| {
+                facts.homes.iter().find_map(|home| {
+                    hide_platform::path::wire_relative(home, &display.path)
+                        .ok()
+                        .filter(|below| !below.is_root())
+                        .map(|below| format!("~/{below}"))
+                })
+            })
+            .flatten();
         ViewDisplaySnapshot {
             id: display.id.clone(),
             tab_id: tab.map(|tab| tab.id.clone()),
@@ -3647,6 +3678,8 @@ impl Runtime {
             external: display.external.clone(),
             card: display.card.clone(),
             owner_pane,
+            pasted: file && hide_node_link::attachments::is_clipboard_wire_path(&display.path),
+            home_relative,
         }
     }
 
