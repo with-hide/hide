@@ -7,6 +7,7 @@
 //! Every step is one diagnostic record with the connection id, this
 //! machine and the reason, never a key or a key file's path (B33).
 
+use std::collections::HashSet;
 use std::path::PathBuf;
 use std::sync::Arc;
 
@@ -14,7 +15,7 @@ use serde::Deserialize;
 use serde_json::{Value, json};
 
 use super::Runtime;
-use crate::access::{Access, Call, Ended, Level, Standing, Stored};
+use crate::access::{Access, Call, Ended, Mode, Standing, Stored};
 use crate::latest_file::{LatestFile, read_capped};
 use crate::model::{AccessConnectionSnapshot, AccessPendingSnapshot, AccessSnapshot};
 
@@ -56,22 +57,21 @@ pub(crate) fn restore(path: PathBuf) -> (LatestFile<Stored>, Stored) {
     (file, stored)
 }
 
-/// The operator's answer to a tool, from a window's Settings › External
-/// tools (D-31); a pane's scoped connection and the CLI cannot send one
-/// (B8).
+/// The operator's answer to a bot, from a window's Settings (D-31); a
+/// pane's scoped connection and the CLI cannot send one (B8).
 #[derive(Debug)]
 pub(crate) enum AccessEvent {
-    Approve { id: String, level: Level },
+    Approve { id: String, mode: Mode },
     Refuse { id: String },
-    Level { id: String, level: Level },
+    Mode { id: String, mode: Mode },
     Revoke { id: String },
 }
 
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
-struct WithLevel {
+struct WithMode {
     id: String,
-    level: Level,
+    mode: Mode,
 }
 
 #[derive(Deserialize)]
@@ -84,22 +84,22 @@ impl AccessEvent {
     pub(super) const KINDS: [&'static str; 4] = [
         "access_approve",
         "access_refuse",
-        "access_level",
+        "access_mode",
         "access_revoke",
     ];
 
     pub(super) fn decode(kind: &str, payload: Value) -> Option<Self> {
         Some(match kind {
             "access_approve" => {
-                let WithLevel { id, level } = serde_json::from_value(payload).ok()?;
-                Self::Approve { id, level }
+                let WithMode { id, mode } = serde_json::from_value(payload).ok()?;
+                Self::Approve { id, mode }
             }
             "access_refuse" => Self::Refuse {
                 id: serde_json::from_value::<ById>(payload).ok()?.id,
             },
-            "access_level" => {
-                let WithLevel { id, level } = serde_json::from_value(payload).ok()?;
-                Self::Level { id, level }
+            "access_mode" => {
+                let WithMode { id, mode } = serde_json::from_value(payload).ok()?;
+                Self::Mode { id, mode }
             }
             "access_revoke" => Self::Revoke {
                 id: serde_json::from_value::<ById>(payload).ok()?.id,
@@ -116,7 +116,7 @@ fn standing_answer(standing: &Standing) -> Result<Value, String> {
             "state": "connected",
             "id": connection.id,
             "name": connection.name,
-            "level": connection.level,
+            "mode": connection.mode,
         })),
         Standing::Ended(ended) => Err(ended.reason().to_owned()),
         Standing::Unknown => Ok(json!({"state": "unknown"})),
@@ -135,7 +135,6 @@ impl Runtime {
     /// ends every other tool's records, watches and answer waits by
     /// (`coordination::end_gone_tools`, D-23); `None` until the list is
     /// restored at start, so a start ends nothing before it knows the list.
-    /// A level set to View ends nothing: the connection still stands.
     pub(crate) fn delivery_tool_connections(&self) -> Option<Vec<String>> {
         self.access.store.as_ref()?;
         Some(
@@ -148,19 +147,26 @@ impl Runtime {
         )
     }
 
-    fn note_access(
-        &self,
-        kind: &str,
-        id: Option<&str>,
-        level: Option<Level>,
-        reason: Option<&str>,
-    ) {
+    /// The connections the core holds in own mode, whose watches on work
+    /// not their own the delivery store's upkeep ends
+    /// (`coordination::end_unowned_watches`, mission-87).
+    pub(crate) fn delivery_own_connections(&self) -> Vec<String> {
+        self.access
+            .state
+            .connections()
+            .iter()
+            .filter(|connection| connection.mode == Mode::Own)
+            .map(|connection| connection.id.clone())
+            .collect()
+    }
+
+    fn note_access(&self, kind: &str, id: Option<&str>, mode: Option<Mode>, reason: Option<&str>) {
         crate::diagnostic!(json!({
             "component": "access",
             "kind": kind,
             "connection_id": id,
             "machine": self.node.as_str(),
-            "level": level.map(Level::as_str),
+            "mode": mode.map(Mode::as_str),
             "reason": reason,
         }));
     }
@@ -216,7 +222,7 @@ impl Runtime {
                             self.note_access(
                                 "access.key_issued",
                                 Some(&connection.id),
-                                Some(connection.level),
+                                Some(connection.mode),
                                 None,
                             );
                         }
@@ -236,7 +242,7 @@ impl Runtime {
                 Standing::Connected(connection) => Ok(json!({
                     "id": connection.id,
                     "name": connection.name,
-                    "level": connection.level,
+                    "mode": connection.mode,
                 })),
                 standing => {
                     let reason = match standing {
@@ -257,7 +263,7 @@ impl Runtime {
                 if self.access.state.used(&id, now) {
                     self.access_changed(true);
                 }
-                Ok(json!({"id": connection.id, "name": connection.name, "level": connection.level}))
+                Ok(json!({"id": connection.id, "name": connection.name, "mode": connection.mode}))
             }
             Call::Leave { key_sha256 } => match self.access.state.standing(&key_sha256) {
                 Standing::Connected(connection) => {
@@ -289,21 +295,21 @@ impl Runtime {
     pub(super) fn access_event(&mut self, event: AccessEvent) -> bool {
         let now = super::unix_milliseconds();
         let outcome = match &event {
-            AccessEvent::Approve { id, level } => self
+            AccessEvent::Approve { id, mode } => self
                 .access
                 .state
-                .approve(id, *level, now)
-                .map(|_| ("access.approved", id, Some(*level), true)),
+                .approve(id, *mode, now)
+                .map(|_| ("access.approved", id, Some(*mode), true)),
             AccessEvent::Refuse { id } => self
                 .access
                 .state
                 .refuse(id)
                 .map(|_| ("access.refused", id, None, false)),
-            AccessEvent::Level { id, level } => self
+            AccessEvent::Mode { id, mode } => self
                 .access
                 .state
-                .set_level(id, *level)
-                .map(|changed| ("access.level", id, Some(*level), changed)),
+                .set_mode(id, *mode)
+                .map(|changed| ("access.mode", id, Some(*mode), changed)),
             AccessEvent::Revoke { id } => self
                 .access
                 .state
@@ -311,13 +317,14 @@ impl Runtime {
                 .map(|_| ("access.revoked", id, None, true)),
         };
         match outcome {
-            Ok((kind, id, level, save)) => {
-                self.note_access(kind, Some(id), level, None);
+            Ok((kind, id, mode, save)) => {
+                self.note_access(kind, Some(id), mode, None);
                 self.access_changed(save);
-                if matches!(
-                    event,
-                    AccessEvent::Level { .. } | AccessEvent::Revoke { .. }
-                ) {
+                // Who keeps the bot's work follows the event that moved it:
+                // a bot of the whole Hide works as the operator, so all mode
+                // or a disconnect hands it to the operator at once, and own
+                // mode takes it back (mission-87).
+                if matches!(event, AccessEvent::Mode { .. } | AccessEvent::Revoke { .. }) {
                     let id = id.clone();
                     self.tool_work_moved(&id);
                 }
@@ -329,7 +336,7 @@ impl Runtime {
                 let id = match &event {
                     AccessEvent::Approve { id, .. }
                     | AccessEvent::Refuse { id }
-                    | AccessEvent::Level { id, .. }
+                    | AccessEvent::Mode { id, .. }
                     | AccessEvent::Revoke { id } => id,
                 };
                 self.note_access("access.event_refused", Some(id), None, Some(reason));
@@ -338,12 +345,12 @@ impl Runtime {
         }
     }
 
-    /// The connection `id` names, while it stands: the level a command of
-    /// it runs at, and the identity it acts as.
-    pub(crate) fn access_actor(&self, id: &str) -> Option<(Level, crate::delivery::Actor)> {
+    /// The connection `id` names, while it stands: the mode a command of
+    /// it runs in, and the identity it acts as.
+    pub(crate) fn access_actor(&self, id: &str) -> Option<(Mode, crate::delivery::Actor)> {
         self.access.state.connection(id).map(|connection| {
             (
-                connection.level,
+                connection.mode,
                 crate::delivery::Actor::access(
                     &connection.id,
                     &connection.name,
@@ -358,15 +365,17 @@ impl Runtime {
         self.access.edit += 1;
     }
 
-    /// Whether the tool of `connection` keeps its work now: the connection
-    /// stands, at Act (PRD hide-external-control D-14). A View only, a
-    /// disconnected or a left connection keeps none, and a new connection
-    /// of the same name is another id, so it takes none of this (D-40).
+    /// Whether the bot of `connection` keeps its work now: the connection
+    /// stands in own mode (PRD hide-external-control D-14, mission-87). A
+    /// bot of the whole Hide works as the operator, so what it starts is the
+    /// operator's and only names it as its starter; a disconnected or a left
+    /// connection keeps none, and a new connection of the same name is
+    /// another id, so it takes none of this (D-40).
     pub(crate) fn access_keeps_work(&self, connection: &str) -> bool {
         self.access
             .state
             .connection(connection)
-            .is_some_and(|connection| connection.level == Level::Act)
+            .is_some_and(|connection| connection.mode == Mode::Own)
     }
 
     /// The external tool `work` is, as a row or a mission names it: whether
@@ -393,7 +402,16 @@ impl Runtime {
         &self,
         mission: &crate::missions::Mission,
     ) -> Option<crate::model::ToolWorkSnapshot> {
-        let conductor = &mission.conductor;
+        self.conductor_tool(&mission.conductor)
+            .map(|work| self.tool_work_snapshot(work))
+    }
+
+    /// The bot's work `conductor` is, by its registration or, for a record
+    /// that names none, by its pane and session.
+    fn conductor_tool(
+        &self,
+        conductor: &crate::missions::Conductor,
+    ) -> Option<&crate::coordination::started::ToolWork> {
         self.hide_started
             .tool_work
             .iter()
@@ -405,10 +423,9 @@ impl Runtime {
                         && work.session == conductor.actor.session
                 }
             })
-            .map(|work| self.tool_work_snapshot(work))
     }
 
-    /// Who keeps connection `id`'s work moved (a level, a disconnect, a
+    /// Who keeps connection `id`'s work moved (a mode, a disconnect, a
     /// leave): the rows and their lists are judged again on this event, so
     /// the work is in or out of the operator's lists at once (B16). Nothing
     /// is read for a tool that started nothing.
@@ -464,7 +481,7 @@ impl Runtime {
                 AccessConnectionSnapshot {
                     id: connection.id.clone(),
                     name: connection.name.clone(),
-                    level: connection.level,
+                    mode: connection.mode,
                     program: connection.program.clone(),
                     created_ms: connection.created_ms,
                     last_used_ms: connection.last_used_ms,
@@ -497,20 +514,312 @@ impl Runtime {
 }
 
 impl Runtime {
-    /// The identity a tool's command acts as: its connection's, on this
-    /// machine, while the connection's level allows `need` (B20-B23,
-    /// `crate::access::admit`).
+    /// The identity a bot's command acts as: its connection's, on this
+    /// machine, while the connection's mode allows `need` (B20-B23,
+    /// `crate::access::admit`), with the mode the command's own reads hold
+    /// it to (D3).
     pub(super) fn access_authority(
         &self,
         device: &str,
         connection: &str,
         need: crate::access::Need,
-    ) -> Result<crate::delivery::Actor, String> {
-        let (level, actor) = self
+    ) -> Result<(crate::delivery::Actor, Mode), String> {
+        let (mode, actor) = self
             .access_actor(connection)
             .filter(|_| device == self.node.as_str())
             .ok_or(Ended::Revoked.reason())?;
-        crate::access::admit(level, need)?;
-        Ok(actor)
+        crate::access::admit(mode, need)?;
+        Ok((actor, mode))
+    }
+}
+
+/// What an own-mode bot's command reaches, judged against its own work
+/// (mission-87): the agents its connection started and every agent started
+/// under them, as the started records hold them (`hide_started.tool_work`,
+/// the set that keeps them out of the operator's lists), and the missions
+/// those agents conduct. What none of them is, is not its own.
+impl Runtime {
+    /// The own work an own-mode bot's command is held to: `None` for a
+    /// caller that is no bot, or a bot of the whole Hide.
+    pub(super) fn own_work(&self, caller: &str) -> Option<OwnWork> {
+        match crate::workspace_control::Caller::parse(caller) {
+            crate::workspace_control::Caller::Access { connection, .. }
+                if self
+                    .access
+                    .state
+                    .connection(connection)
+                    .is_some_and(|connection| connection.mode == Mode::Own) =>
+            {
+                Some(self.own_work_of(connection))
+            }
+            _ => None,
+        }
+    }
+
+    /// Connection `id`'s own work now, read from the ledger the core holds:
+    /// the registrations `hide_started.tool_work` gives it, the spawns it or
+    /// they admitted, and the panes those run in now.
+    pub(super) fn own_work_of(&self, id: &str) -> OwnWork {
+        let agents: HashSet<String> = self
+            .hide_started
+            .tool_work
+            .iter()
+            .filter(|work| work.connection == id)
+            .map(|work| work.agent_id.clone())
+            .collect();
+        let mut own = OwnWork {
+            connection: id.to_owned(),
+            agents,
+            origins: HashSet::new(),
+            spawns: HashSet::new(),
+            panes: Vec::new(),
+        };
+        let Ok(ledger) = self.delivery_ledger.as_ref() else {
+            return own;
+        };
+        own.origins = ledger
+            .agents
+            .iter()
+            .filter(|record| record.actor.access_connection() == Some(id))
+            .map(|record| record.id.clone())
+            .collect();
+        for record in &ledger.agents {
+            if !record.ended && own.agents.contains(&record.id) {
+                own.panes.push(record.actor.pane_id.clone());
+            }
+        }
+        for spawn in &ledger.spawns {
+            if !own.origins.contains(&spawn.parent) && !own.agents.contains(&spawn.parent) {
+                continue;
+            }
+            own.spawns.insert(spawn.id.clone());
+            // A spawn still starting has no registration yet: its pane is
+            // the bot's while the pane runs the terminal the spawn recorded,
+            // never a pane that took the id over later.
+            if spawn.child.is_none()
+                && let (Some(pane), Some(terminal)) = (self.spawn_pane_id(spawn), &spawn.terminal)
+                && self.pane_runs(&pane, terminal)
+            {
+                own.panes.push(pane);
+            }
+        }
+        own
+    }
+
+    /// Whether the pane the core names `pane` runs terminal `terminal` now.
+    fn pane_runs(&self, pane: &str, terminal: &str) -> bool {
+        let node = self.node.as_str();
+        self.snapshot
+            .navigator
+            .workspaces
+            .iter()
+            .flat_map(|workspace| &workspace.checkouts)
+            .flat_map(|checkout| &checkout.tabs)
+            .flat_map(|tab| &tab.panes)
+            .any(|row| {
+                crate::address::same_pane(node, node, &row.id, pane)
+                    && row.terminal_id.as_deref() == Some(terminal)
+            })
+    }
+
+    /// The agent an own-mode bot's command names, read once by the one
+    /// resolver every command shares (`Runtime::resolve_target`), held to
+    /// `own`, and answered as the exact id the command then runs on: a
+    /// registration's, or a spawn's that has none yet (mission-87). A key
+    /// that names nothing is refused as one that is not its own, so a bot
+    /// cannot tell the two apart.
+    pub(super) fn own_target(
+        &self,
+        own: &OwnWork,
+        device: &str,
+        key: &str,
+    ) -> Result<String, String> {
+        let bot = self.access_actor(&own.connection).map(|(_, actor)| actor);
+        match self.resolve_target(bot.as_ref(), device, key)? {
+            Some(super::delivery::Target::Agent(record)) if own.agents.contains(&record.id) => {
+                Ok(record.id.clone())
+            }
+            Some(super::delivery::Target::Spawn(spawn)) if own.spawns.contains(&spawn.id) => {
+                Ok(spawn.id.clone())
+            }
+            _ => Err(crate::access::NOT_OWN_WORK.to_owned()),
+        }
+    }
+
+    /// Whether the pane `key` names, as a pane command reads it on `device`,
+    /// is one `own` runs in now: a live registration's of its own, or its
+    /// own spawn's that is still starting there.
+    pub(super) fn own_pane(&self, own: &OwnWork, device: &str, key: &str) -> bool {
+        let node = self.node.as_str();
+        let pane = crate::address::named_pane_id(node, device, key);
+        own.panes
+            .iter()
+            .any(|own| crate::address::same_pane(node, node, own, &pane))
+    }
+
+    /// Whether `conductor` conducts as `own`'s work.
+    pub(super) fn conducts_own(
+        &self,
+        own: &OwnWork,
+        conductor: &crate::missions::Conductor,
+    ) -> bool {
+        self.conductor_tool(conductor)
+            .is_some_and(|work| work.connection == own.connection)
+    }
+}
+
+/// An own-mode bot's work, by the exact identities its commands are held
+/// to.
+pub(super) struct OwnWork {
+    pub connection: String,
+    /// The registrations it started and those started under them, ended or
+    /// not, by id.
+    pub agents: HashSet<String>,
+    /// Its own origin registrations, which its spawns name as their parent.
+    pub origins: HashSet<String>,
+    /// The spawns it or its agents admitted, by id.
+    pub spawns: HashSet<String>,
+    /// The panes its work runs in now, by the id the core names them with.
+    pub panes: Vec<String>,
+}
+
+/// Holds what an own-mode bot names to its own work.
+pub(super) fn hold(own: bool) -> Result<(), String> {
+    if own {
+        Ok(())
+    } else {
+        Err(crate::access::NOT_OWN_WORK.to_owned())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::collections::BTreeSet;
+
+    use serde_json::{Value, json};
+
+    use super::AccessEvent;
+    use crate::access::Mode;
+    use crate::model::{AccessConnectionSnapshot, AccessPendingSnapshot, AccessSnapshot};
+
+    fn schema() -> Value {
+        serde_json::from_str(include_str!("../../../contracts/hided-ws.schema.json")).unwrap()
+    }
+
+    fn keys(value: &Value) -> BTreeSet<String> {
+        value.as_object().unwrap().keys().cloned().collect()
+    }
+
+    /// Whether `value` has every key `def` requires and none it does not
+    /// name, as `additionalProperties: false` says.
+    fn fits(def: &Value, value: &Value) -> bool {
+        let named = keys(&def["properties"]);
+        let required: BTreeSet<String> = def["required"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|key| key.as_str().unwrap().to_owned())
+            .collect();
+        let have = keys(value);
+        required.is_subset(&have) && have.is_subset(&named)
+    }
+
+    fn mode_fits(defs: &Value, mode: &Value) -> bool {
+        defs["accessMode"]["oneOf"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .filter(|shape| {
+                fits(shape, mode) && shape["properties"]["kind"]["const"] == mode["kind"]
+            })
+            .count()
+            == 1
+    }
+
+    #[test]
+    fn the_access_section_and_its_events_are_the_shapes_the_wire_contract_names() {
+        let schema = schema();
+        let defs = &schema["$defs"];
+        let section = serde_json::to_value(AccessSnapshot {
+            machine: "this-mac".into(),
+            limit: crate::access::MAX_CONNECTIONS,
+            pending: vec![AccessPendingSnapshot {
+                id: "00000000000000a1".into(),
+                name: "orca".into(),
+                program: None,
+                requested_ms: 1,
+            }],
+            connections: [Mode::All, Mode::Own]
+                .into_iter()
+                .enumerate()
+                .map(|(n, mode)| AccessConnectionSnapshot {
+                    id: format!("00000000000000b{n}"),
+                    name: format!("bot-{n}"),
+                    mode,
+                    program: Some("python3".into()),
+                    created_ms: 1,
+                    last_used_ms: 2,
+                    agent_count: 0,
+                    mission_count: 0,
+                })
+                .collect(),
+        })
+        .unwrap();
+        assert!(fits(&defs["accessSnapshot"], &section), "{section}");
+        assert!(fits(&defs["accessPending"], &section["pending"][0]));
+        for connection in section["connections"].as_array().unwrap() {
+            assert!(fits(&defs["accessConnection"], connection), "{connection}");
+            assert!(mode_fits(defs, &connection["mode"]), "{connection}");
+        }
+
+        // Each event the contract declares decodes from its payload, and a
+        // level or a workspace, earlier wires, decodes into nothing.
+        for mode in [json!({"kind": "all"}), json!({"kind": "own"})] {
+            let payload = json!({"id": "00000000000000a1", "mode": mode});
+            assert!(fits(&defs["accessApprovePayload"], &payload));
+            assert!(fits(&defs["accessModePayload"], &payload));
+            assert!(matches!(
+                AccessEvent::decode("access_approve", payload.clone()),
+                Some(AccessEvent::Approve { .. })
+            ));
+            assert!(matches!(
+                AccessEvent::decode("access_mode", payload),
+                Some(AccessEvent::Mode { .. })
+            ));
+        }
+        let by_id = json!({"id": "00000000000000a1"});
+        assert!(fits(&defs["accessIdPayload"], &by_id));
+        assert!(AccessEvent::decode("access_refuse", by_id.clone()).is_some());
+        assert!(AccessEvent::decode("access_revoke", by_id).is_some());
+        for refused in [
+            ("access_approve", json!({"id": "a", "level": "act"})),
+            ("access_level", json!({"id": "a", "level": "act"})),
+            (
+                "access_mode",
+                json!({"id": "a", "mode": {"kind": "workspace"}}),
+            ),
+        ] {
+            assert!(
+                AccessEvent::decode(refused.0, refused.1.clone()).is_none(),
+                "{refused:?}"
+            );
+        }
+        // The starter a row and a mission carry names the bot either way.
+        let starter = serde_json::to_value(crate::model::ToolWorkSnapshot {
+            connection: "00000000000000b1".into(),
+            name: "bot-1".into(),
+            owns: false,
+        })
+        .unwrap();
+        assert!(fits(&defs["botStarter"], &starter), "{starter}");
+        assert_eq!(
+            AccessEvent::KINDS,
+            [
+                "access_approve",
+                "access_refuse",
+                "access_mode",
+                "access_revoke"
+            ]
+        );
     }
 }

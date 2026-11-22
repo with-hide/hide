@@ -173,7 +173,7 @@ fn request(env: &Env, name: &str, wait: bool) -> Result<Value, Refusal> {
 fn wait_for_answer(env: &Env, name: &str, mut answer: Value) -> Result<Value, Refusal> {
     let folder = hide_kit::layout::access_keys(&env.home);
     eprintln!(
-        "Waiting up to {} minutes for the operator to approve {name} in Settings > External tools.",
+        "Waiting up to {} minutes for the operator to approve {name} in Settings > Bots.",
         ANSWER_WAIT.as_secs() / 60
     );
     let deadline = Instant::now() + ANSWER_WAIT;
@@ -395,7 +395,7 @@ pub(crate) fn state_dir(env: &Env) -> PathBuf {
 fn ended(code: &str) -> bool {
     matches!(
         code,
-        "access_refused" | "access_request_expired" | "access_revoked"
+        "access_refused" | "access_request_expired" | "access_revoked" | "access_reapprove"
     )
 }
 
@@ -417,7 +417,7 @@ fn ask(env: &Env, ask: AccessAsk) -> Result<Value, Refusal> {
 
 fn waiting(mut value: Value, name: &str) -> Value {
     value["next_action"] = json!(format!(
-        "Once the operator approves it in Settings > External tools, the next hide command runs as {name}; hide access request --name {name} waits for the answer"
+        "Once the operator approves it in Settings > Bots, the next hide command runs as {name}; hide access request --name {name} waits for the answer"
     ));
     value
 }
@@ -547,10 +547,11 @@ fn fresh_key() -> Result<String, Refusal> {
     Ok(hex::encode(bytes))
 }
 
-fn level_words(value: &Value) -> &'static str {
-    match value["level"].as_str() {
-        Some("act") => "Act",
-        _ => "View only",
+/// The mode a bot runs in, in words.
+fn mode_words(value: &Value) -> &'static str {
+    match value["mode"]["kind"].as_str() {
+        Some("own") => "own work",
+        _ => "whole Hide",
     }
 }
 
@@ -561,10 +562,10 @@ fn draw(verb: &Verb, value: &Value) -> String {
     match (verb, state) {
         (Verb::List, _) => draw_list(value),
         (_, "pending") => format!(
-            "Waiting for the operator to approve {name} in Settings > External tools.\n{}\n",
+            "Waiting for the operator to approve {name} in Settings > Bots.\n{}\n",
             value["next_action"].as_str().unwrap_or_default()
         ),
-        (_, "connected") => format!("Connected as {name} · {}\n", level_words(value)),
+        (_, "connected") => format!("Connected as {name} · {}\n", mode_words(value)),
         (_, "left") => format!(
             "Left. {name}'s key is removed, and the agents it started are the operator's now.\n"
         ),
@@ -585,7 +586,7 @@ fn draw_list(value: &Value) -> String {
         text.push_str(&format!(
             "  {}  {}  {} agents  {} missions  last used {}\n",
             connection["name"].as_str().unwrap_or_default(),
-            level_words(connection),
+            mode_words(connection),
             connection["agent_count"],
             connection["mission_count"],
             ago(connection["last_used_ms"].as_u64().unwrap_or_default()),

@@ -180,45 +180,24 @@ impl Shown {
                 runtime.agent_state_facts(&record.actor, &spawns_of(&ledger, Some(&record.id)));
             Found::Agent(Box::new(record.clone()), facts)
         };
-        let caller = super::live_self(&ledger, actor)
-            .next()
-            .map(|record| record.id.clone());
-        let spawn = || {
-            ledger
-                .spawns
-                .iter()
-                .find(|spawn| spawn.id == key)
-                .or_else(|| {
-                    let caller = caller.as_deref()?;
-                    ledger
-                        .spawns
-                        .iter()
-                        .find(|spawn| spawn.parent == caller && spawn.intent == key)
-                })
-        };
         let found = if key == super::HERE {
             registered(super::here(
                 &ledger,
                 actor,
                 crate::runtime::unix_milliseconds(),
             )?)
-        } else if let Some(record) = ledger.agents.iter().find(|record| record.id == key) {
-            registered(record)
-        } else if let Some(spawn) = spawn() {
-            match spawn
-                .child
-                .as_deref()
-                .and_then(|child| ledger.agents.iter().find(|record| record.id == child))
-            {
-                Some(record) => registered(record),
-                None => Found::Spawn(Box::new(spawn.clone()), runtime.spawn_state_facts(spawn)),
-            }
         } else {
-            // A name or a pane, as a letter's recipient is named; a bare
-            // pane id is one of the caller's own machine.
+            // A bare pane id is one of the caller's own machine.
             let pane =
                 crate::address::named_pane_id(runtime.node().as_str(), &actor.device_id, key);
-            registered(super::shown_record(&ledger, key, &pane)?.ok_or("agent_unavailable")?)
+            match super::resolve_key(&ledger, Some(actor), &pane, key)?
+                .ok_or("agent_unavailable")?
+            {
+                super::Named::Agent(record) => registered(record),
+                super::Named::Spawn(spawn) => {
+                    Found::Spawn(Box::new(spawn.clone()), runtime.spawn_state_facts(spawn))
+                }
+            }
         };
         Ok(Self {
             ledger,
