@@ -13,7 +13,7 @@ import { HAND_WITHIN_MS, TAKE_WITHIN_MS, type RemoteBridge, type RemotePlace, ty
 import type { SnapshotRest, Workspace } from "./snapshot";
 import { agentFailure, startFailure, startRefusal, type StartFailure } from "./startDraft";
 import { localDeviceId } from "./snapshot";
-import { START_ANSWER_TIMEOUT_MS, startAnswer } from "./startAnswer";
+import { agentAnswer, START_ANSWER_TIMEOUT_MS, startAnswer } from "./startAnswer";
 import type { StartTarget } from "./startTargets";
 
 /**
@@ -36,7 +36,7 @@ export function startWork(target: StartTarget, start: { request: string; provide
  * went. That computer's core's own answer reads as one of this computer's
  * would; what kept it from reaching that core names the computer.
  */
-export function handedFailure(result: RemoteWorkResult, device: string): StartFailure | null {
+export function handedFailure(result: Exclude<RemoteWorkResult, { outcome: "starting" }>, device: string): StartFailure | null {
   switch (result.outcome) {
     case "started":
       return null;
@@ -48,6 +48,10 @@ export function handedFailure(result: RemoteWorkResult, device: string): StartFa
       return { key: "startPanel.handOff.notAdded", values: { device }, code: result.kind };
     case "no_answer":
       return { key: "shell.startTimeout" };
+    case "unconfirmed":
+      return { key: "startPanel.handOff.unconfirmed", values: { device } };
+    case "busy":
+      return { key: "startPanel.handOff.busy", values: { device } };
     case "refused":
       return startRefusal(result.kind);
     case "failed":
@@ -82,32 +86,26 @@ function makeStart(actions: Pick<Actions, "startAgent" | "createWorktree">, rest
   actions.createWorktree({ requestId: work.request, deviceId: localDeviceId(rest), repositoryRoot: work.place.repository, branch: work.place.branch, baseBranch: work.place.base, agentKind: work.provider, purpose: null, ...common });
 }
 
-/** A start's own answer from this computer's core, as the result the window that handed it reads; null while there is none. */
-function startResult(rest: SnapshotRest, work: Start): RemoteWorkResult | null {
-  const answer = startAnswer(rest, work.request, "checkout" in work.place ? "agent_start" : "worktree_create");
-  const request = work.request;
-  if (answer.phase === "pending") return null;
-  if (answer.phase === "refused") return { request, outcome: "refused", kind: answer.kind };
-  if (answer.phase === "failed") return { request, outcome: "failed", code: answer.message };
-  if (answer.agentPhase === "failed") return { request, outcome: "agent_failed", reason: answer.agentReason, line: answer.agentLine };
-  return { request, outcome: "started" };
-}
+const kindOf = (work: Start) => ("checkout" in work.place ? "agent_start" : "worktree_create");
 
 export type ComputerWorkDeps = {
   actions: Pick<Actions, "openListedAgent" | "startAgent" | "createWorktree" | "createWorkspace">;
   rest: () => SnapshotRest | null;
   /** Calls back on each snapshot; returns the unsubscribe. */
   subscribe: (listener: () => void) => () => void;
+  /** Whether the page is connected to its core now; a start is made only then, and one made is read only then. */
+  connected: () => boolean;
   note: (message: string) => void;
 };
 
-type Waiting =
-  /** Before anything is made: the first snapshot, then the folder listed or added. */
-  | { work: RemoteWork; until: number; phase: "before" }
-  /** The folder is being added as a project under the request `add`. */
-  | { work: Start; until: number; phase: "adding"; add: string }
-  /** The start went to this computer's core, which answers it by its request id. */
-  | { work: Start; until: number; phase: "starting" };
+/** The ask not made yet, the latest only: it waits for the first snapshot, then for its folder to be listed or added (`add`, the add's request). */
+type Pending = { work: RemoteWork; until: number; add: string | null };
+
+/** A start made on this computer's core: `until` bounds the core's answer; `taskId` is the task once its tab exists. */
+type Sent = { work: Start; until: number; taskId: number | null };
+
+/** How many made starts are followed at once; a start past it is not made and is answered `busy`. The core refuses a start while another is unanswered or its agent is still coming up, so a second is answered at once; this only guards. */
+export const SENT_CAP = 8;
 
 /**
  * The other computer's page: what its own window's operator asked of this
@@ -116,85 +114,126 @@ type Waiting =
  * first and goes once the add is listed (D-73); both waits together end
  * `TAKE_WITHIN_MS` after the ask arrived, read before anything is made, so
  * nothing starts late even when the snapshot that would allow it arrives
- * late. A start's own answer then has `START_ANSWER_TIMEOUT_MS`. Every start
- * ends with one result to the window that handed it. One ask at a time, the
- * latest; a start it replaces is answered `late`. Returns the stop.
+ * late. Only the latest ask not made yet waits; one it replaces is answered
+ * `late`. A start once made is followed to its own end, whatever is asked
+ * after it: the core's answer within `START_ANSWER_TIMEOUT_MS`, then its
+ * agent's (`agentAnswer`, told `starting` meanwhile), each reported once to
+ * the window that handed it; once the page loses its core, every made start
+ * is `unconfirmed`, never sent again. Returns the stop.
  */
 export function takeComputerWork(bridge: Pick<RemoteBridge, "onWork" | "workResult">, deps: ComputerWorkDeps): () => void {
-  let waiting: Waiting | null = null;
+  let pending: Pending | null = null;
+  const sent = new Map<string, Sent>();
   let unsubscribe: (() => void) | null = null;
   let timer: ReturnType<typeof setTimeout> | null = null;
-  const settle = () => {
-    waiting = null;
-    unsubscribe?.();
-    unsubscribe = null;
-    if (timer !== null) clearTimeout(timer);
-    timer = null;
-  };
-  const arm = (until: number) => {
-    if (timer !== null) clearTimeout(timer);
-    timer = setTimeout(step, Math.max(0, until - Date.now()));
-  };
-  const end = (result: RemoteWorkResult | null) => {
-    const work = waiting?.work;
-    settle();
-    if (!work || work.op !== "start" || !result) return;
-    if (result.outcome !== "started") deps.note(`start from another computer ${result.outcome}: ${placeFolder(work.place)}`);
+  let on = true;
+  const report = (work: Start, result: RemoteWorkResult) => {
+    if (result.outcome !== "started" && result.outcome !== "starting") deps.note(`start from another computer ${result.outcome}: ${placeFolder(work.place)}`);
     bridge.workResult?.(result);
   };
-  const step = () => {
-    const current = waiting;
-    if (!current) return;
-    const rest = deps.rest();
-    if (current.phase === "starting") {
-      // The core's answer is a fact, read even past the bound; only nothing more is waited for then.
-      const result = rest ? startResult(rest, current.work) : null;
-      if (result) return end(result);
-      if (Date.now() >= current.until) end({ request: current.work.request, outcome: "no_answer" });
+  /** Each made start's own end, read from this snapshot; with the core lost, none can be read any more. */
+  const follow = (rest: SnapshotRest | null) => {
+    if (!deps.connected()) {
+      for (const [request, start] of sent) report(start.work, { request, outcome: "unconfirmed" });
+      sent.clear();
       return;
     }
-    // Nothing is made once the bound passed, whatever the snapshot now allows.
-    if (Date.now() >= current.until) {
-      if (current.work.op === "show") deps.note(`show from another computer: ${current.work.pane} came too late; nothing opened`);
-      return end(current.work.op === "start" ? { request: current.work.request, outcome: "late" } : null);
-    }
     if (!rest) return;
+    for (const [request, start] of sent) {
+      if (start.taskId === null) {
+        const answer = startAnswer(rest, request, kindOf(start.work));
+        if (answer.phase === "pending") {
+          if (Date.now() >= start.until) {
+            sent.delete(request);
+            report(start.work, { request, outcome: "no_answer" });
+          }
+          continue;
+        }
+        if (answer.phase !== "ready") {
+          sent.delete(request);
+          report(start.work, answer.phase === "refused" ? { request, outcome: "refused", kind: answer.kind } : { request, outcome: "failed", code: answer.message });
+          continue;
+        }
+        start.taskId = answer.taskId;
+        if (answer.agentPhase === "starting") report(start.work, { request, outcome: "starting" });
+      }
+      const agent = agentAnswer(rest.task_operation, start.taskId);
+      if (agent.phase === "starting") continue;
+      sent.delete(request);
+      report(start.work, agent.phase === "failed" ? { request, outcome: "agent_failed", reason: agent.reason, line: agent.line } : { request, outcome: "started" });
+    }
+  };
+  /** The ask not made yet: nothing is made once its bound passed, whatever the snapshot now allows. */
+  const take = (rest: SnapshotRest | null) => {
+    const current = pending;
+    if (!current) return;
     const work = current.work;
+    if (Date.now() >= current.until) {
+      pending = null;
+      if (work.op === "start") report(work, { request: work.request, outcome: "late" });
+      else deps.note(`show from another computer: ${work.pane} came too late; nothing opened`);
+      return;
+    }
+    if (!rest || !deps.connected()) return;
     if (work.op === "show") {
-      settle();
+      pending = null;
       deps.actions.openListedAgent(work.pane);
       return;
     }
     if (placeListed(rest.navigator?.workspaces ?? [], work.place)) {
+      pending = null;
+      if (sent.size >= SENT_CAP) {
+        return report(work, { request: work.request, outcome: "busy" });
+      }
       makeStart(deps.actions, rest, work);
-      const until = Date.now() + START_ANSWER_TIMEOUT_MS;
-      waiting = { work, until, phase: "starting" };
-      arm(until);
+      sent.set(work.request, { work, until: Date.now() + START_ANSWER_TIMEOUT_MS, taskId: null });
       return;
     }
-    if (current.phase === "adding") {
+    if (current.add !== null) {
       const receipt = rest.status?.project_adds?.findLast((row) => row.request_id === current.add);
-      if (receipt?.state === "refused") end({ request: work.request, outcome: "not_added", kind: receipt.kind });
+      if (receipt?.state === "refused") {
+        pending = null;
+        report(work, { request: work.request, outcome: "not_added", kind: receipt.kind });
+      }
       return;
     }
     // The folder is no project here: the start adds it (D-73), and goes once the core lists it.
-    const add = `${work.request}-add`;
-    waiting = { work, until: current.until, phase: "adding", add };
+    current.add = `${work.request}-add`;
     const folder = placeFolder(work.place);
-    deps.actions.createWorkspace(folder, folderName(folder), localDeviceId(rest), false, add);
+    deps.actions.createWorkspace(folder, folderName(folder), localDeviceId(rest), false, current.add);
   };
-  let on = true;
+  /** Listens and keeps one timer while anything is open: the nearest of the pending ask's bound and each unanswered start's. */
+  const rearm = () => {
+    if (timer !== null) clearTimeout(timer);
+    timer = null;
+    const open = pending !== null || sent.size > 0;
+    if (open && !unsubscribe) unsubscribe = deps.subscribe(step);
+    if (!open && unsubscribe) {
+      unsubscribe();
+      unsubscribe = null;
+    }
+    const bounds = [...(pending ? [pending.until] : []), ...[...sent.values()].filter((start) => start.taskId === null).map((start) => start.until)];
+    if (bounds.length > 0) timer = setTimeout(step, Math.max(0, Math.min(...bounds) - Date.now()));
+  };
+  function step() {
+    if (!on) return;
+    const rest = deps.rest();
+    follow(rest);
+    take(rest);
+    rearm();
+  }
   bridge.onWork?.((work) => {
     if (!on) return;
-    end(waiting?.work.op === "start" ? { request: waiting.work.request, outcome: "late" } : null);
-    const until = Date.now() + TAKE_WITHIN_MS;
-    waiting = { work, until, phase: "before" };
-    unsubscribe = deps.subscribe(step);
-    arm(until);
+    // The same start asked again is the one already taken.
+    if (work.op === "start" && (sent.has(work.request) || (pending?.work.op === "start" && pending.work.request === work.request))) return;
+    if (pending?.work.op === "start") report(pending.work, { request: pending.work.request, outcome: "late" });
+    pending = { work, until: Date.now() + TAKE_WITHIN_MS, add: null };
     step();
   });
   return () => {
     on = false;
-    settle();
+    pending = null;
+    sent.clear();
+    rearm();
   };
 }

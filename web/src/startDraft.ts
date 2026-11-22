@@ -28,7 +28,7 @@ export type StartPreset = { projectId: string; kind?: ProviderKind };
  */
 /** `line` is a pane screen's last line, quoted beside the sentence as the terminal showed it. */
 /** Why a start handed to another computer did not go, each naming that computer (PRD device-connect-iroh D-73). */
-export type HandOffKey = "startPanel.handOff.needsScreen" | "startPanel.handOff.notShown" | "startPanel.handOff.late" | "startPanel.handOff.notAdded" | "startPanel.handOff.noAnswer";
+export type HandOffKey = "startPanel.handOff.needsScreen" | "startPanel.handOff.notShown" | "startPanel.handOff.late" | "startPanel.handOff.notAdded" | "startPanel.handOff.noAnswer" | "startPanel.handOff.unconfirmed" | "startPanel.handOff.busy";
 export type StartFailure = { message: string } | { key: MessageKey; code?: string; line?: string } | { key: HandOffKey; values: { device: string }; code?: string };
 
 /** The core's reason when it sent one (`startReason`), else the plain "did not start". */
@@ -91,8 +91,10 @@ type StartPanelState = {
    * A start handed to another computer's screen (PRD device-connect-iroh
    * D-73), with the panel's text and target, until that computer says how it
    * ended: kept so a start that never went gives everything back.
+   * `starting`: its tab exists there and its agent is coming up, so no
+   * silence bound applies any more, as for `spent`.
    */
-  handed: { request: string; text: string; target: string; device: string } | null;
+  handed: { request: string; text: string; target: string; device: string; starting: boolean } | null;
   open: (overSettings: boolean, preset?: StartPreset | null, stay?: boolean) => void;
   close: () => void;
   setText: (text: string) => void;
@@ -113,6 +115,8 @@ type StartPanelState = {
    * newer start in flight is left alone; only this start's reason is shown.
    */
   takeBack: (failure: StartFailure) => void;
+  /** The handed start's tab exists and its agent is coming up; its end follows. */
+  handedStarting: () => void;
   /** The handed start went; its text is no longer kept. */
   settleHanded: () => void;
 };
@@ -141,7 +145,7 @@ export const useStartPanel = create<StartPanelState>((set) => ({
   finish: (taskId) => set((s) => ({ isOpen: false, text: "", request: null, failure: null, spent: taskId === null ? null : { taskId, text: s.sent } })),
   restore: (failure) => set((s) => (s.spent ? { text: s.text === "" ? s.spent.text : s.text, failure, spent: null } : {})),
   settle: () => set({ spent: null }),
-  handOff: (request, target, device) => set((s) => ({ isOpen: false, text: "", request: null, failure: null, handed: { request, text: s.text, target, device } })),
+  handOff: (request, target, device) => set((s) => ({ isOpen: false, text: "", request: null, failure: null, handed: { request, text: s.text, target, device, starting: false } })),
   takeBack: (failure) =>
     set((s) => {
       if (!s.handed) return {};
@@ -149,6 +153,7 @@ export const useStartPanel = create<StartPanelState>((set) => ({
       if (s.text !== "") return { isOpen: true, failure, handed: null };
       return { isOpen: true, overSettings: false, preset: null, stay: false, text: s.handed.text, target: s.handed.target, failure, handed: null };
     }),
+  handedStarting: () => set((s) => (s.handed ? { handed: { ...s.handed, starting: true } } : {})),
   settleHanded: () => set({ handed: null }),
 }));
 

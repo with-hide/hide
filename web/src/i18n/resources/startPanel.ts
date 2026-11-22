@@ -49,6 +49,18 @@ const words = {
     "{{device}} から応答がありません。もう一度開始する前に、その画面を確認してください。",
     "{{device}} 没有响应。再次启动前请先查看它的屏幕。",
   ],
+  "startPanel.handOff.unconfirmed": [
+    "Hide lost track of this start on {{device}}. Check its screen, then start again if it is not there.",
+    "{{device}}에서 이 시작이 어떻게 됐는지 알 수 없게 됐어요. 그 컴퓨터 화면을 확인한 뒤 다시 시작하세요.",
+    "{{device}} でこの開始がどうなったか分からなくなりました。その画面を確認してから、もう一度開始してください。",
+    "无法确认此启动在 {{device}} 上的结果。请先查看它的屏幕，再重新启动。",
+  ],
+  "startPanel.handOff.busy": [
+    "{{device}} is still answering earlier starts, so nothing started.",
+    "{{device}}에서 앞선 시작들이 아직 끝나지 않아 시작하지 않았어요.",
+    "{{device}} で前の開始がまだ終わっていないため、開始していません。",
+    "{{device}} 上之前的启动尚未结束，因此未启动。",
+  ],
 } as const;
 
 export const startPanelEnglish = Object.fromEntries(Object.entries(words).map(([key, value]) => [key, value[0]])) as { [K in keyof typeof words]: string };

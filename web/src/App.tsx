@@ -80,6 +80,7 @@ export function App() {
       actions,
       rest: () => useShellStore.getState().rest,
       subscribe: (listener) => useShellStore.subscribe(listener),
+      connected: () => useShellStore.getState().connection === "live",
       note: (message) => useShellStore.getState().noteDiagnostic(message),
     });
   }, [actions]);

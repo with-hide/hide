@@ -9,6 +9,7 @@ import type { SnapshotRest } from "./snapshot";
 import { useShellStore } from "./store";
 import { useStartPanel } from "./startDraft";
 import { HANDED_ANSWER_MS } from "./computerWork";
+import type { RemoteWorkResult } from "./remoteView";
 import { checkoutKey } from "./startTargets";
 import { useUiStore } from "./ui";
 
@@ -573,7 +574,7 @@ it("hands a start on a paired computer to its screen, gives the words back when 
   document.body.append(container);
   const root = createRoot(container);
   const go = vi.fn();
-  let answer: ((result: { device: string; request: string; outcome: string }) => void) | null = null;
+  let answer: ((result: RemoteWorkResult & { device: string }) => void) | null = null;
   const press = async (text: string) => {
     await act(async () => {
       useStartPanel.getState().open(false, { projectId: project.id, kind: "claude" });
@@ -632,6 +633,26 @@ it("hands a start on a paired computer to its screen, gives the words back when 
     await act(async () => useStartPanel.getState().setText("newer words"));
     await act(async () => answer!({ device: mini, request: third, outcome: "not_shown" }));
     expect(useStartPanel.getState()).toMatchObject({ text: "newer words", failure: null });
+
+    // Its tab exists there and its agent is coming up: no silence bound any more; the agent's failure gives the words back.
+    await act(async () => useStartPanel.getState().setText(""));
+    await press("fourth words");
+    const fourth = (go.mock.calls[3]![0] as { work: { request: string } }).work.request;
+    await act(async () => answer!({ device: mini, request: fourth, outcome: "starting" }));
+    await act(async () => vi.advanceTimersByTime(2 * HANDED_ANSWER_MS));
+    expect(useStartPanel.getState()).toMatchObject({ isOpen: false, text: "", handed: { request: fourth, starting: true } });
+    await act(async () => answer!({ device: mini, request: fourth, outcome: "agent_failed", reason: "exited", line: "boom" }));
+    expect(useStartPanel.getState()).toMatchObject({ isOpen: true, text: "fourth words", handed: null });
+    expect(failure()).toContain("boom");
+
+    // That computer's screen went while its agent was coming up: the words come back, asking to check there first.
+    await act(async () => useStartPanel.getState().setText(""));
+    await press("fifth words");
+    const fifth = (go.mock.calls[4]![0] as { work: { request: string } }).work.request;
+    await act(async () => answer!({ device: mini, request: fifth, outcome: "starting" }));
+    await act(async () => answer!({ device: mini, request: fifth, outcome: "unconfirmed" }));
+    expect(useStartPanel.getState()).toMatchObject({ isOpen: true, text: "fifth words", target: checkoutKey(mini, project.path), handed: null });
+    expect(failure()).toContain("Check its screen");
   } finally {
     vi.useRealTimers();
     await act(async () => root.unmount());

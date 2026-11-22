@@ -13,7 +13,7 @@ import { Command, CommandEmpty, CommandGroup, CommandInput, CommandItem, Command
 import { Textarea } from "./components/ui/textarea";
 import { Hint } from "./components/ui/tooltip";
 import { DeviceChip } from "./components/device-chip";
-import { START_ANSWER_TIMEOUT_MS, startAnswer, startRequestId } from "./startAnswer";
+import { agentAnswer, START_ANSWER_TIMEOUT_MS, startAnswer, startRequestId } from "./startAnswer";
 import { agentFailure, useStartPanel, startFailure, startRefusal } from "./startDraft";
 import { QuotedLine } from "./QuotedLine";
 import { projectOf, resolveTarget, startTargets, type StartProject, type StartTarget, type StartTargets } from "./startTargets";
@@ -97,9 +97,9 @@ function useSpentStart() {
   useEffect(() => {
     if (!spent) return;
     const panel = useStartPanel.getState();
-    if (!operation || operation.id !== spent.taskId) return panel.settle();
-    if (operation.agent_phase === "failed" || operation.agent_phase === "unknown") panel.restore(agentFailure(operation.agent_reason, operation.agent_line));
-    else if (operation.agent_phase !== "starting") panel.settle();
+    const answer = agentAnswer(operation, spent.taskId);
+    if (answer.phase === "failed") panel.restore(agentFailure(answer.reason, answer.line));
+    else if (answer.phase === "started") panel.settle();
   }, [spent, operation]);
 }
 
@@ -108,6 +108,8 @@ function useSpentStart() {
  * D-73): that computer says how it ended, by the request id; one that did not
  * go, or that no answer came for within `HANDED_ANSWER_MS`, opens the panel
  * again on its text and target with why (B31's rule for a start's words).
+ * Once its tab exists there and its agent is coming up, it is followed like
+ * `spent`, to its agent's own answer, with no bound of its own.
  */
 function useHandedStart() {
   const handed = useStartPanel((s) => s.handed);
@@ -116,6 +118,8 @@ function useHandedStart() {
       hostBridge()?.remoteScreens?.onWorkResult?.((result) => {
         const panel = useStartPanel.getState();
         if (!panel.handed || result.request !== panel.handed.request) return;
+        // Its tab exists there and its agent is coming up: no longer silence, and its end follows.
+        if (result.outcome === "starting") return panel.handedStarting();
         const failure = handedFailure(result, panel.handed.device);
         if (failure) panel.takeBack(failure);
         else panel.settleHanded();
@@ -123,7 +127,7 @@ function useHandedStart() {
     [],
   );
   useEffect(() => {
-    if (!handed) return undefined;
+    if (!handed || handed.starting) return undefined;
     const timer = window.setTimeout(() => useStartPanel.getState().takeBack({ key: "startPanel.handOff.noAnswer", values: { device: handed.device } }), HANDED_ANSWER_MS);
     return () => window.clearTimeout(timer);
   }, [handed]);

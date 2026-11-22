@@ -41,6 +41,12 @@ export type RemotePlace = { checkout: string } | { repository: string; branch: s
  */
 export type RemoteWorkResult =
   | { request: string; outcome: "started" }
+  /** Not an end: the tab exists and its agent is still coming up; `started` or `agent_failed` follows, or `unconfirmed`. */
+  | { request: string; outcome: "starting" }
+  /** The start was made, and what became of it can no longer be read: its page went, or lost its core. */
+  | { request: string; outcome: "unconfirmed" }
+  /** Not made: the page still follows as many starts as it may. */
+  | { request: string; outcome: "busy" }
   | { request: string; outcome: "not_shown" | "late" | "no_answer" }
   | { request: string; outcome: "not_added" | "refused"; kind: string }
   | { request: string; outcome: "failed"; code: string | null }

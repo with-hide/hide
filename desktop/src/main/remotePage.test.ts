@@ -88,6 +88,7 @@ describe("an ask of another machine's screen", () => {
 describe("a page's answer for a start", () => {
   it("takes each outcome with what it carries", () => {
     expect(parseWorkResult({ request: "r-1", outcome: "started" })).toEqual({ request: "r-1", outcome: "started" });
+    expect(parseWorkResult({ request: "r-1", outcome: "starting" })).toEqual({ request: "r-1", outcome: "starting" });
     expect(parseWorkResult({ request: "r-1", outcome: "late", kind: "x" })).toEqual({ request: "r-1", outcome: "late" });
     expect(parseWorkResult({ request: "r-1", outcome: "not_added", kind: "workspace.create_refused" })).toEqual({ request: "r-1", outcome: "not_added", kind: "workspace.create_refused" });
     expect(parseWorkResult({ request: "r-1", outcome: "failed", code: null })).toEqual({ request: "r-1", outcome: "failed", code: null });

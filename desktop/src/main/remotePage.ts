@@ -125,6 +125,9 @@ export function parseWorkResult(value: unknown): RemoteWorkResult | undefined {
   const request = result.request;
   switch (result.outcome) {
     case "started":
+    case "starting":
+    case "unconfirmed":
+    case "busy":
     case "not_shown":
     case "late":
     case "no_answer":

@@ -10,7 +10,7 @@ import { RemoteScreens } from "./remoteScreens";
 
 const ipc = vi.hoisted(() => new Map<string, (event: unknown, value?: unknown) => void>());
 /** What each `new WebContentsView()` gave the host, newest last. */
-const views = vi.hoisted(() => [] as { webContents: { send: (channel: string, value: unknown) => void; loaded: string[]; closed: boolean } }[]);
+const views = vi.hoisted(() => [] as { webContents: { send: (channel: string, value: unknown) => void; loaded: string[]; closed: boolean; handlers: Map<string, (...args: unknown[]) => void> } }[]);
 /** Each session partition the host asked for, in order. */
 const partitions = vi.hoisted(() => [] as string[]);
 /** What the host sent the shell's own window, in order. */
@@ -60,7 +60,10 @@ vi.mock("electron", () => {
           },
           isFocused: () => false,
           focus: () => undefined,
-          on: () => undefined,
+          handlers: new Map<string, (...args: unknown[]) => void>(),
+          on(event: string, handler: (...args: unknown[]) => void) {
+            this.handlers.set(event, handler);
+          },
           setWindowOpenHandler: () => undefined,
         },
       };
@@ -293,5 +296,50 @@ describe("an ask of a remote screen", () => {
     done(fromPage(view), { request: "r-1", outcome: "refused", kind: "start_refused" });
     done(fromPage(view), { request: "r-1", outcome: "started" });
     expect(answers()).toEqual([{ device: DEVICE, request: "r-1", outcome: "refused", kind: "start_refused" }]);
+  });
+
+  // An agent still coming up is not the end; a page that went takes its
+  // made starts with it, logged and unanswered, so none is started twice.
+  it("passes on an agent still starting and then its end, and forgets the starts of a page that went", async () => {
+    const log = { event: vi.fn() };
+    const screens = screensOn(9, log);
+    screens.show({ device: DEVICE, key: KEY, rect: RECT });
+    screens.go({ device: DEVICE, key: KEY, work: start("r-1") });
+    await loaded(1);
+    const view = views.at(-1)!;
+    const done = ipc.get(REMOTE_WORK_DONE_CHANNEL)!;
+    done(fromPage(view), { request: "r-1", outcome: "starting" });
+    done(fromPage(view), { request: "r-1", outcome: "agent_failed", reason: "exited", line: null });
+    expect(answers()).toEqual([
+      { device: DEVICE, request: "r-1", outcome: "starting" },
+      { device: DEVICE, request: "r-1", outcome: "agent_failed", reason: "exited", line: null },
+    ]);
+
+    // Each way the page goes answers its made starts `unconfirmed` once, and the page says nothing after.
+    screens.go({ device: DEVICE, key: KEY, work: start("r-2") });
+    view.webContents.handlers.get("did-start-navigation")!({ isMainFrame: true, isSameDocument: false });
+    screens.go({ device: DEVICE, key: KEY, work: start("r-3") });
+    view.webContents.handlers.get("render-process-gone")!();
+    screens.show({ device: DEVICE, key: KEY, rect: RECT });
+    screens.go({ device: DEVICE, key: KEY, work: start("r-4") });
+    await loaded(2);
+    screens.closeAll();
+    done(fromPage(views.at(-1)!), { request: "r-4", outcome: "started" });
+    expect(answers().slice(2)).toEqual([
+      { device: DEVICE, request: "r-2", outcome: "unconfirmed" },
+      { device: DEVICE, request: "r-3", outcome: "unconfirmed" },
+      { device: DEVICE, request: "r-4", outcome: "unconfirmed" },
+    ]);
+    expect(log.event).toHaveBeenCalledWith("remote.work_unknown", { device: DEVICE, reason: "reloaded" });
+    expect(log.event).toHaveBeenCalledWith("remote.work_unknown", { device: DEVICE, reason: "page_gone" });
+    expect(log.event).toHaveBeenCalledWith("remote.work_unknown", { device: DEVICE, reason: "closed" });
+  });
+
+  it("answers the oldest owed start unconfirmed past the cap", async () => {
+    const screens = screensOn(9, { event: vi.fn() });
+    screens.show({ device: DEVICE, key: KEY, rect: RECT });
+    await loaded(1);
+    for (let n = 0; n <= 16; n += 1) screens.go({ device: DEVICE, key: KEY, work: start(`r-${n}`) });
+    expect(answers()).toEqual([{ device: DEVICE, request: "r-0", outcome: "unconfirmed" }]);
   });
 });

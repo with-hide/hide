@@ -28,7 +28,12 @@ export function registerRemoteScheme(): void {
 /** How many machines' screens stay loaded; past it, the one hidden longest is closed and loads again when shown. */
 const KEPT = 3;
 
-/** The starts handed to pages whose answer is still owed to the shell; past it the oldest is forgotten, and the shell's own bound ends its wait. */
+/**
+ * The starts handed to pages whose end is still owed to the shell. Past it
+ * the oldest, and every one of a page that went, is answered `unconfirmed`:
+ * it may have been made, so the shell keeps its words and asks to check that
+ * computer's screen rather than starting it again.
+ */
 const OWED = 16;
 
 /** This computer's daemon as the window is attached to it. */
@@ -100,7 +105,8 @@ export class RemoteScreens {
       const screen = this.screenOf(event);
       const result = parseWorkResult(reported);
       if (!screen || !result || this.owed.get(result.request) !== screen.device) return;
-      this.owed.delete(result.request);
+      // An agent still coming up is not the end: its end follows from the same page.
+      if (result.outcome !== "starting") this.owed.delete(result.request);
       this.deps.log.event("remote.work_result", { device: screen.device, outcome: result.outcome });
       this.toShell(screen.device, result);
     });
@@ -176,9 +182,9 @@ export class RemoteScreens {
     this.deps.log.event("remote.work_handed", { device: screen.device, op: work.op });
     if (work.op === "start") {
       this.owed.set(work.request, screen.device);
-      for (const request of this.owed.keys()) {
+      for (const [request, device] of this.owed) {
         if (this.owed.size <= OWED) break;
-        this.owed.delete(request);
+        this.unconfirmed(request, device, "owed_cap");
       }
     }
     screen.view.webContents.send(REMOTE_WORK_CHANNEL, work);
@@ -209,6 +215,17 @@ export class RemoteScreens {
     if (work.op === "start") this.toShell(device, { request: work.request, outcome });
   }
 
+  /** The starts `device`'s page was following go with the page: each is answered `unconfirmed` (see `OWED`). */
+  private forget(device: string, reason: string): void {
+    for (const [request, owner] of this.owed) if (owner === device) this.unconfirmed(request, device, reason);
+  }
+
+  private unconfirmed(request: string, device: string, reason: string): void {
+    this.owed.delete(request);
+    this.deps.log.event("remote.work_unknown", { device, reason });
+    this.toShell(device, { request, outcome: "unconfirmed" });
+  }
+
   private toShell(device: string, result: RemoteWorkResult): void {
     const window = this.deps.window();
     if (window && !window.isDestroyed()) window.webContents.send(REMOTE_WORK_RESULT_CHANNEL, { device, ...result });
@@ -227,7 +244,6 @@ export class RemoteScreens {
     const window = this.deps.window();
     for (const screen of [...this.screens.values()]) this.destroy(screen, window);
     for (const device of [...this.waiting.keys()]) this.drop(device, "closed");
-    this.owed.clear();
     this.front = null;
   }
 
@@ -327,6 +343,7 @@ export class RemoteScreens {
     this.closeSocket(screen, null);
     // An ask for a page that did not load goes with it: it is not made later, unseen.
     this.drop(device, reason);
+    this.forget(device, reason);
     this.report(device, "failed", reason);
   }
 
@@ -351,6 +368,10 @@ export class RemoteScreens {
       if (screen.state !== "failed") this.failed(device, screen.key, "not_connected");
     });
     contents.on("render-process-gone", () => this.failed(device, screen.key, "page_gone"));
+    // A page loaded again knows none of the starts the one before it was following.
+    contents.on("did-start-navigation", (details) => {
+      if (details.isMainFrame && !details.isSameDocument) this.forget(device, "reloaded");
+    });
     // ⌥⌘n chooses a computer tile, which is this window's rail, not the screen's (B47).
     contents.on("before-input-event", (event, input: Input) => {
       if (input.type !== "keyDown" || input.isComposing) return;
@@ -417,6 +438,7 @@ export class RemoteScreens {
   }
 
   private destroy(screen: Screen, window: BrowserWindow | null): void {
+    this.forget(screen.device, "closed");
     this.closeSocket(screen, null);
     this.screens.delete(screen.device);
     if (window && !window.isDestroyed()) window.contentView.removeChildView(screen.view);
