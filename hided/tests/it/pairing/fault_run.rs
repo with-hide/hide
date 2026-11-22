@@ -330,6 +330,16 @@ async fn while_relay_away(guest: &Machine, sender: &str, long: Duration) -> Valu
     json!({"paths": paths, "letters_meanwhile": arrived})
 }
 
+/// Whether `by`, a path the guest's device list names, is the run's: the
+/// relay, or a direct path between the two machines' own addresses or
+/// their Tailscale addresses (D-86), whichever the two find first.
+fn on_path(by: &str, relay_only: bool) -> bool {
+    match relay_only {
+        true => by == "relay",
+        false => matches!(by, "direct" | "tailscale"),
+    }
+}
+
 /// Whether the guest has its host again: the connection, and its node
 /// there answering.
 fn guest_has_its_host(guest: &Machine) -> bool {
@@ -619,7 +629,7 @@ async fn every_letter_a_guests_pane_sends_through_the_faults_lands_in_its_ledger
         // The connection is on the path this run is about.
         wait_within(&format!("the guest's link to be {path}"), WITHIN, || {
             Ok(host_link(&guest)
-                .is_some_and(|(connected, by)| connected && by == path)
+                .is_some_and(|(connected, by)| connected && on_path(&by, relay_only))
                 .then_some(()))
         })
         .unwrap_or_else(|error| panic!("{error:#}: {:?} after {report:?}", host_link(&guest)));
@@ -638,8 +648,9 @@ async fn every_letter_a_guests_pane_sends_through_the_faults_lands_in_its_ledger
                 if relay_only {
                     assert_eq!(arrived, 0, "letters arrived with the relay away: {away}");
                 } else {
+                    let mut paths = away["paths"].as_array().unwrap().iter();
                     assert!(
-                        arrived > 0 && away["paths"] == json!(["direct"]),
+                        arrived > 0 && paths.all(|by| on_path(by.as_str().unwrap(), false)),
                         "a relay restart disturbed the direct link: {away}"
                     );
                 }
