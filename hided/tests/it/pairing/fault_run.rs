@@ -415,6 +415,7 @@ async fn every_letter_a_guests_pane_sends_through_the_faults_lands_in_its_ledger
     assert_eq!(pair(&host, &guest).await, HOST);
 
     // The letters' recipient: the guest's own agent in its own project.
+    std::fs::create_dir(at("cr")).unwrap();
     let recipient = Agent::start(
         &guest.screen(),
         at("cr"),
