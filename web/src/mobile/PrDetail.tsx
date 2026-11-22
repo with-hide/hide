@@ -268,7 +268,7 @@ function Buttons({ pr, projects, connected }: { pr: PhonePr; projects: readonly 
           <p className="text-body text-muted-foreground" data-phone-pr-merge-why={why.key}>{t(`work.card.why.${why.key}`, { count: why.count, base: why.base, host: pullHost(pr).name })}</p>
         ) : null}
         <WriteLine pr={pr} connected={connected} />
-        {notice ? <p role="alert" className="text-body text-warning" data-phone-pr-notice="true">{noticeText(t, notice)}</p> : null}
+        {notice ? <p role="alert" className="text-body text-warning" data-phone-pr-notice="true">{noticeText(t, notice, { noun: t(pullHost(pr).noun) })}</p> : null}
         {delegated ? <p role="status" className="text-body text-pr-mergeable" data-phone-pr-delegated="true">{t("mobile.prs.delegated")}</p> : null}
         <div className="flex gap-sm">
           {view.mergeShown ? (
@@ -312,7 +312,7 @@ function WriteLine({ pr, connected }: { pr: PhonePr; connected: boolean }) {
   const reason = write.reason ?? "failed";
   return (
     <p role="alert" className="flex flex-wrap items-center gap-sm text-body text-warning" data-phone-pr-write="failed" data-phone-pr-write-reason={reason}>
-      <span className="min-w-0 break-keep wrap-anywhere">{t(`work.card.fail.${reason}`, { base: pr.base_branch ?? "", host: pullHost(pr).name })}</span>
+      <span className="min-w-0 break-keep wrap-anywhere">{t(`work.card.fail.${reason}`, { base: pr.base_branch ?? "", host: pullHost(pr).name, item: pullHost(pr).item })}</span>
       <Button size="sm" variant="secondary" className="min-h-(--size-touch-target)" disabled={!connected || pr.card?.reading === true} onClick={lookAgainPr} data-phone-pr-look-again="true">
         {t("work.card.lookAgain")}
       </Button>

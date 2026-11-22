@@ -37,7 +37,7 @@ const FAILED_JOB = "unit-test";
 type Item = { host: "github" | "gitlab"; number: number; state: PrState; title: "tabs" | "retry" | "cache"; project: string };
 const ITEMS: Item[] = [
   { host: "gitlab", number: 12, state: "failed", title: "retry", project: GITLAB_PROJECT },
-  { host: "github", number: 2806, state: "mergeable", title: "tabs", project: GITHUB_PROJECT },
+  { host: "github", number: 41, state: "mergeable", title: "tabs", project: GITHUB_PROJECT },
   { host: "gitlab", number: 14, state: "pending", title: "cache", project: GITLAB_PROJECT },
 ];
 
@@ -82,7 +82,7 @@ function Row({ item, rise, selected }: { item: Item; rise: boolean; selected: bo
 /** `!12`'s card: its number as GitLab writes it, its project, its failed pipeline and the page on gitlab.com; no merge or hand-over, which GitLab does not offer here. */
 function Card() {
   const { t } = useInterfaceTranslation();
-  const { Mark, name, item } = hostLook("gitlab");
+  const { Mark, name, item, numberLabel } = hostLook("gitlab");
   return (
     <div className="wns-rise flex min-w-0 flex-col gap-sm">
       <span className="flex items-center gap-xs text-micro text-muted-foreground">
@@ -90,7 +90,7 @@ function Card() {
         {GITLAB_REPOSITORY}
       </span>
       <span className="flex min-w-0 items-center gap-xs">
-        <PrMark state="failed" label={`${item} !12`} />
+        <PrMark state="failed" label={`${item} ${numberLabel(12)}`} />
         <span className="truncate text-body font-medium">{t("whatsNewScene.gitlab.retry")}</span>
       </span>
       <span className="text-caption text-destructive">{t("recordCard.ciFailed", { count: 1, total: 2 })}</span>

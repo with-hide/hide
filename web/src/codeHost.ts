@@ -7,7 +7,8 @@ import { FolderGit2Icon, type LucideIcon } from "lucide-react";
 import { GithubIcon } from "./components/github-icon";
 import { GitlabIcon } from "./components/gitlab-icon";
 import type { MessageKey } from "./i18n/catalogs";
-import type { ChangeRequestRef, GithubStatus, HostDeclaration, HostOperation, Workspace } from "./snapshot";
+import { catalogWorkspaces, type ChangeRequestRef, type GithubStatus, type HostDeclaration, type HostOperation, type Workspace } from "./snapshot";
+import { useShellStore } from "./store";
 
 /**
  * What a host looks like on the screen. `item` is what it calls a change request (`PR`, `MR`), which no language
@@ -79,6 +80,23 @@ export function pullName(pull: Pull): string {
  */
 export function samePull(left: ChangeRequestRef | null | undefined, right: ChangeRequestRef | null | undefined): boolean {
   return !!left?.key && left.key === right?.key;
+}
+
+/**
+ * Whether Hide AI's suggestions can use `declaration`'s host: it files issues and reads the push rule of a base, as
+ * the core's `suggestions_github` asks. A suggestion step or a signal that needs them is not drawn for a host
+ * without them.
+ */
+export function servesSuggestions(declaration: HostDeclaration | null | undefined): boolean {
+  return offers(declaration, "issues") && offers(declaration, "base_policy");
+}
+
+/** The host that reads the project `workspaceId` names, from the shell's snapshot; null as [`projectHost`] is. */
+export function useProjectHost(workspaceId: string): HostDeclaration | null {
+  return useShellStore((state) => {
+    const workspace = catalogWorkspaces(state.rest).find((row) => row.id === workspaceId);
+    return workspace ? projectHost(workspace) : null;
+  });
 }
 
 /** The statuses of a project's checkouts that a host answered for. */

@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { RICH } from "./gallery/cmdkSceneData";
+import { GITLAB } from "./gallery/PrCardScene";
 import { initializeInterfaceI18n } from "./i18n/instance";
 import { githubEntries } from "./search";
 import { githubRow, hasGithubProject, lastReadWords, ownAnswer, projectRead, projectToRead, startsSearch } from "./searchGithub";
@@ -52,7 +53,7 @@ describe("a project's read as its checkouts show it (B8, B9)", () => {
   });
 
   it("reads while ⌘K's request has no answer yet", () => {
-    expect(projectRead(NEVER_READ.navigator!.workspaces![0]!, new Set(["w1"]), now, t, "en")).toEqual({ state: "reading" });
+    expect(projectRead(NEVER_READ.navigator!.workspaces![0]!, new Set(["w1"]), now, t, "en")).toEqual({ state: "reading", label: "Reading GitHub" });
     expect(projectRead(WORKSPACE, new Set(["w1"]), now, t, "en")).toBeNull();
   });
 
@@ -63,6 +64,13 @@ describe("a project's read as its checkouts show it (B8, B9)", () => {
     expect(read).toEqual({ state: "failed", tooltip: "GitHub read failed · last value: 5 min. ago · reason in logs" });
     expect(projectRead(failed.navigator!.workspaces![0]!, new Set(["w1"]), now, ko, "ko")).toEqual({ state: "failed", tooltip: "GitHub 읽기 실패 · 5분 전 값 · 이유는 로그에" });
     expect(JSON.stringify(read)).not.toContain("timed out");
+  });
+
+  it("names the host that read the project: GitLab for a gitlab.com project whose glab read failed", () => {
+    const failed = structuredClone(RICH) as SnapshotRest;
+    failed.navigator!.workspaces![0]!.checkouts[0]!.github = { failure_category: "not_logged_in", available: false, loading: false, stale: false, last_success_at_unix_ms: null, host: GITLAB };
+    expect(projectRead(failed.navigator!.workspaces![0]!, new Set(["w1"]), now, t, "en")).toEqual({ state: "failed", tooltip: "GitLab read failed · last value: 5 min. ago · reason in logs" });
+    expect(projectRead(failed.navigator!.workspaces![0]!, new Set(["w1"]), now, ko, "ko")).toEqual({ state: "failed", tooltip: "GitLab 읽기 실패 · 5분 전 값 · 이유는 로그에" });
   });
 
   it("says when its pull requests and issues were read", () => {

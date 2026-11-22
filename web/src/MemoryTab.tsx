@@ -1,5 +1,5 @@
 import { ArchiveRestoreIcon, ChevronDownIcon, ChevronRightIcon, FileIcon, LoaderCircleIcon, MoreHorizontalIcon, RefreshCwIcon, SettingsIcon, SparklesIcon, Trash2Icon, Undo2Icon, UserIcon } from "lucide-react";
-import { pullHost, pullLabel } from "./codeHost";
+import { namedHost, pullHost, pullLabel, useProjectHost } from "./codeHost";
 import { useUiStore } from "./ui";
 import { useEffect, useRef, useState, type ReactNode } from "react";
 import type { Actions } from "./actions";
@@ -576,7 +576,7 @@ function CardRow({ row, project, actions, busy }: { row: MemoryRow; project: Pro
             </>
           )}
         </span>
-        <PromotionStatus row={row} actions={actions} />
+        <PromotionStatus row={row} project={project} actions={actions} />
         {checking && !STATUS_STATES.has(row.promotion?.state) ? (
           // Quiet and alone: the operator has nothing to do (design 13).
           <span className="text-caption text-muted-foreground" data-memory-verifying={row.number}>
@@ -597,8 +597,10 @@ function CardRow({ row, project, actions, busy }: { row: MemoryRow; project: Pro
   );
 }
 
-function PromotionStatus({ row, actions }: { row: MemoryRow; actions: Actions }) {
+function PromotionStatus({ row, project, actions }: { row: MemoryRow; project: ProjectMemory; actions: Actions }) {
   const { t } = useInterfaceTranslation();
+  // The read that could not answer is the project's host's, with its own program.
+  const { name: host, program } = namedHost(useProjectHost(project.workspace_id));
   return <>
         {row.promotion?.state === "running" ? (
           <span className="flex min-w-0 items-center gap-xs text-caption text-subtle-foreground" data-memory-running={row.number}>
@@ -617,14 +619,14 @@ function PromotionStatus({ row, actions }: { row: MemoryRow; actions: Actions })
           </span>
         ) : null}
         {row.promotion?.state === "unconfirmed" ? (
-          // The agent is gone and GitHub cannot say whether its pull request
-          // came; restoring GitHub settles it, so nothing here asks to act.
+          // The agent is gone and the host cannot say whether its pull request
+          // came; restoring the host's read settles it, so nothing here asks to act.
           <span className="flex min-w-0 items-center gap-xs text-caption text-muted-foreground" data-memory-unconfirmed={row.number}>
             <span className="shrink-0 whitespace-nowrap">{t("memory.unconfirmed")}</span>
             {row.promotion.github_failure && row.promotion.github_failure !== "no_github_remote" ? (
               <>
                 <span aria-hidden="true">·</span>
-                <span className="min-w-0 truncate">{t(`memory.github.${row.promotion.github_failure}`)}</span>
+                <span className="min-w-0 truncate">{t(`memory.github.${row.promotion.github_failure}`, { host, program })}</span>
               </>
             ) : null}
           </span>

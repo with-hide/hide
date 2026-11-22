@@ -1,6 +1,6 @@
 import { ChevronDownIcon, ChevronRightIcon, EllipsisIcon, ExternalLinkIcon, PlayIcon } from "lucide-react";
 import { offers, projectActionHost, pullHost, pullLabel, pullWords } from "./codeHost";
-import { useState, type KeyboardEvent, type MouseEvent } from "react";
+import { useMemo, useState, type KeyboardEvent, type MouseEvent } from "react";
 import type { Actions } from "./actions";
 import type { PrGroupId } from "./agentScope";
 import { markTone, rowLine, lineTone } from "./agentRow";
@@ -23,6 +23,7 @@ import { approvalCount, prReview } from "./prReview";
 import { ApprovalCount, ReviewerMarks } from "./PrReviewers";
 import { IssuePicker } from "./PrLinks";
 import { beginAgentDrag } from "./agentReference";
+import type { HostDeclaration } from "./snapshot";
 import { useShellStore } from "./store";
 import { useUiStore } from "./ui";
 
@@ -51,6 +52,12 @@ export function PrList({ model, actions, onlyCheckout, showProject, onAllCheckou
 }) {
   const { t } = useInterfaceTranslation();
   const [opened, setOpened] = useState<ReadonlySet<string>>(new Set());
+  // The host each read card declared, found once for the whole list rather than by every row.
+  const cards = useShellStore((state) => state.rest?.pr_work?.cards);
+  const cardHosts = useMemo<CardHosts>(() => {
+    const hosts = new Map((cards ?? []).map((card) => [`${card.workspace_id}#${card.number}`, card.host] as const));
+    return (workspaceId, number) => hosts.get(`${workspaceId}#${number}`);
+  }, [cards]);
   const toggle = (key: string) => setOpened((before) => {
     const next = new Set(before);
     if (!next.delete(key)) next.add(key);
@@ -88,13 +95,16 @@ export function PrList({ model, actions, onlyCheckout, showProject, onAllCheckou
         </div>
       ) : null}
       {model.groups.map((view) => (
-        <Group key={view.group} view={view} opened={opened} onToggle={toggle} actions={actions} showProject={showProject} />
+        <Group key={view.group} view={view} opened={opened} onToggle={toggle} actions={actions} showProject={showProject} cardHosts={cardHosts} />
       ))}
     </div>
   );
 }
 
-function Group({ view, opened, onToggle, actions, showProject }: { view: PrGroupView; opened: ReadonlySet<string>; onToggle: (key: string) => void; actions: Actions; showProject: boolean }) {
+/** The host the read card of `workspaceId`'s pull request `number` declared, if one was read. */
+type CardHosts = (workspaceId: string, number: number) => HostDeclaration | null | undefined;
+
+function Group({ view, opened, onToggle, actions, showProject, cardHosts }: { view: PrGroupView; opened: ReadonlySet<string>; onToggle: (key: string) => void; actions: Actions; showProject: boolean; cardHosts: CardHosts }) {
   const { t } = useInterfaceTranslation();
   const count = view.entries.length + view.team.length + view.old.length;
   // Everything after Blocked starts folded (B7); a click turns it the other way.
@@ -111,9 +121,9 @@ function Group({ view, opened, onToggle, actions, showProject }: { view: PrGroup
       </button>
       {expanded ? (
         <ul className="flex min-w-0 flex-col" role="list">
-          {view.entries.map((entry) => <PrRow key={entry.key} entry={entry} actions={actions} showProject={showProject} />)}
-          <Fold view={view} kind="team" entries={view.team} opened={opened} onToggle={onToggle} actions={actions} showProject={showProject} />
-          <Fold view={view} kind="old" entries={view.old} opened={opened} onToggle={onToggle} actions={actions} showProject={showProject} />
+          {view.entries.map((entry) => <PrRow key={entry.key} entry={entry} actions={actions} showProject={showProject} cardHosts={cardHosts} />)}
+          <Fold view={view} kind="team" entries={view.team} opened={opened} onToggle={onToggle} actions={actions} showProject={showProject} cardHosts={cardHosts} />
+          <Fold view={view} kind="old" entries={view.old} opened={opened} onToggle={onToggle} actions={actions} showProject={showProject} cardHosts={cardHosts} />
         </ul>
       ) : null}
     </section>
@@ -121,7 +131,7 @@ function Group({ view, opened, onToggle, actions, showProject }: { view: PrGroup
 }
 
 /** A folded line inside a group: team review requests, or pull requests nothing moved on (B15, B16). */
-function Fold({ view, kind, entries, opened, onToggle, actions, showProject }: { view: PrGroupView; kind: "team" | "old"; entries: PrEntry[]; opened: ReadonlySet<string>; onToggle: (key: string) => void; actions: Actions; showProject: boolean }) {
+function Fold({ view, kind, entries, opened, onToggle, actions, showProject, cardHosts }: { view: PrGroupView; kind: "team" | "old"; entries: PrEntry[]; opened: ReadonlySet<string>; onToggle: (key: string) => void; actions: Actions; showProject: boolean; cardHosts: CardHosts }) {
   const { t } = useInterfaceTranslation();
   if (entries.length === 0) return null;
   const key = `${view.group}:${kind}`;
@@ -135,7 +145,7 @@ function Fold({ view, kind, entries, opened, onToggle, actions, showProject }: {
           <span className="min-w-0 truncate">{t(`work.fold.${kind}`, { count: entries.length })}</span>
         </button>
       </li>
-      {expanded ? entries.map((entry) => <PrRow key={entry.key} entry={entry} actions={actions} showProject={showProject} folded={kind} />) : null}
+      {expanded ? entries.map((entry) => <PrRow key={entry.key} entry={entry} actions={actions} showProject={showProject} folded={kind} cardHosts={cardHosts} />) : null}
     </>
   );
 }
@@ -146,7 +156,7 @@ function Fold({ view, kind, entries, opened, onToggle, actions, showProject }: {
  * one button that opens the card (⌘-click and ⌘↵: GitHub); every part above
  * it is its own destination.
  */
-function PrRow({ entry, actions, showProject, folded }: { entry: PrEntry; actions: Actions; showProject: boolean; folded?: "team" | "old" }) {
+function PrRow({ entry, actions, showProject, folded, cardHosts }: { entry: PrEntry; actions: Actions; showProject: boolean; folded?: "team" | "old"; cardHosts: CardHosts }) {
   const { t, i18n } = useInterfaceTranslation();
   const devices = useShellStore((state) => state.rest?.navigator?.devices);
   const { pr, project, row, reason } = entry;
@@ -183,7 +193,7 @@ function PrRow({ entry, actions, showProject, folded }: { entry: PrEntry; action
           {review ? <ReviewerMarks review={review} /> : null}
           <span className="relative flex shrink-0 items-center justify-end">
             <Elapsed since={pr.updated_at_unix_ms} className={cn("shrink-0 text-micro text-muted-foreground", "group-focus-within/pr-row:invisible group-hover/pr-row:invisible group-has-data-[state=open]/pr-row:invisible", entry.agents.length > 0 && "absolute right-0")} data-pr-age={pr.number} />
-            <RowActions entry={entry} actions={actions} linking={linking} onLinking={setLinking} inFlow={entry.agents.length > 0} />
+            <RowActions entry={entry} cardHosts={cardHosts} actions={actions} linking={linking} onLinking={setLinking} inFlow={entry.agents.length > 0} />
           </span>
         </div>
         <div className="pointer-events-none relative flex min-w-0 pl-[calc(var(--size-pr-icon)+var(--spacing-xs))]">
@@ -228,7 +238,7 @@ function AgentMarks({ entry, actions }: { entry: PrEntry; actions: Actions }) {
  * still here, else GitHub, each with `⋯` for Link issue, New issue, Copy
  * branch name and Assign (B19).
  */
-function RowActions({ entry, actions, linking, onLinking, inFlow }: { entry: PrEntry; actions: Actions; linking: boolean; onLinking: (open: boolean) => void; inFlow: boolean }) {
+function RowActions({ entry, cardHosts, actions, linking, onLinking, inFlow }: { entry: PrEntry; cardHosts: CardHosts; actions: Actions; linking: boolean; onLinking: (open: boolean) => void; inFlow: boolean }) {
   const { t } = useInterfaceTranslation();
   const { pr, project, row } = entry;
   // Over the time slot, or, beside agent marks, holding its own width so a
@@ -242,8 +252,7 @@ function RowActions({ entry, actions, linking, onLinking, inFlow }: { entry: PrE
   const local = project.tasks?.source?.kind === "local";
   // An action the pull request's host does not offer is not drawn (docs/UI_BEHAVIOR.md, Code hosts): its card's
   // declaration once read, else its project's.
-  const cardHost = useShellStore((state) => state.rest?.pr_work?.cards?.find((card) => card.workspace_id === project.id && card.number === pr.number)?.host);
-  const host = projectActionHost(project, cardHost);
+  const host = projectActionHost(project, cardHosts(project.id, pr.number));
   const linkable = !merged && row.issue === null && offers(host, "issues") && (!local || (worktree && !folderGone));
   const handover = offers(host, "handover");
   const delegate = () => useUiStore.getState().setWorkspaceDialog({ kind: "pr_delegate", workspaceId: project.id, prNumber: pr.number });
