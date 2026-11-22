@@ -22,6 +22,7 @@ import { DeviceSwitchStrip } from "./settings/DeviceSwitch";
 import { useShellStore } from "./store";
 import { useUiStore } from "./ui";
 import { offersUpdate, updateNow, useUpdateStatus } from "./updates";
+import { trafficLightSpace, useWindowChrome } from "./windowChrome";
 
 /** How long a page that could not load waits before it is asked again while its machine reads as reachable. */
 const RETRY_MS = 5_000;
@@ -43,6 +44,7 @@ export function RemoteStage({ actions }: { actions: Actions }) {
   // What this window calls the machine, which its page names itself by.
   const name = peer?.name ?? null;
   const rail = useShellStore((s) => railShown(s.rest));
+  const chrome = useWindowChrome();
   const bridge = hostBridge()?.remoteScreens ?? null;
   const stage = useRef<HTMLDivElement>(null);
   // The line a switch that just landed says (devices.switch.fresh) stands over the screen's top, which starts under it.
@@ -119,12 +121,14 @@ export function RemoteStage({ actions }: { actions: Actions }) {
     };
   }, [bridge, showing, device, key, name, attempt]);
 
+  const lights = trafficLightSpace(chrome);
   const why = state !== "ready" ? state : failed ? failedState(loaded?.reason) : null;
   return (
     <>
       {rail ? <DeviceRail actions={actions} /> : null}
-      <div ref={notice} className={cn("fixed top-0 right-0 z-10", rail ? "left-(--size-rail)" : "left-0")} data-remote-notice="true">
-        <DeviceSwitchStrip actions={actions} />
+      {/* The notice takes the window's top row, so it starts after macOS's traffic lights as the title row does. */}
+      <div ref={notice} className={cn("fixed top-0 right-0 z-10", lights ? "left-0" : rail ? "left-(--size-rail)" : "left-0")} data-remote-notice="true">
+        <DeviceSwitchStrip actions={actions} start={lights ? "calc(var(--size-traffic-light-inset) + var(--spacing-xs))" : undefined} />
       </div>
       <div ref={stage} className="flex min-h-0 min-w-0 flex-1 flex-col items-center justify-center gap-sm p-xl text-center" data-remote-stage={device ?? ""} data-remote-state={why ?? loaded?.state ?? "opening"}>
         {why ? (

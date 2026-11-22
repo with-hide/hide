@@ -118,7 +118,12 @@ export function DeviceNotCarriedLine({ deviceId }: { deviceId: string }) {
  * then the switch's steps or its failure. Only this computer's own window
  * draws it, since no other screen may switch a device (B52).
  */
-export function DeviceSwitchStrip({ actions }: { actions: Actions }) {
+/**
+ * `start` is where the strip's words begin when it takes the window's top
+ * row (the remote screen's notice, after macOS's traffic lights); left out,
+ * its own inset.
+ */
+export function DeviceSwitchStrip({ actions, start }: { actions: Actions; start?: string }) {
   const { t } = useInterfaceTranslation();
   const ownScreen = useShellStore((s) => ownWindow(s.pairing));
   const devices = useShellStore((s) => s.rest?.navigator?.devices);
@@ -132,7 +137,7 @@ export function DeviceSwitchStrip({ actions }: { actions: Actions }) {
   if (landed && device.peer_key != null) {
     const left = device.not_carried ?? 0;
     return (
-      <div className="flex flex-col gap-xxs border-b border-border bg-card px-md py-xs text-caption text-subtle-foreground" data-device-switched={device.id}>
+      <div className="flex flex-col gap-xxs border-b border-border bg-card px-md py-xs text-caption text-subtle-foreground" style={{ paddingInlineStart: start }} data-device-switched={device.id}>
         {left > 0 ? (
           <Status tone="warn" data-device-not-carried={String(left)}>
             {t("devices.switch.notCarried", { count: left })}
@@ -144,7 +149,7 @@ export function DeviceSwitchStrip({ actions }: { actions: Actions }) {
   }
   if (!switchOffered(device, deviceConnect)) return null;
   return (
-    <div className="flex flex-wrap items-center gap-x-sm gap-y-xs border-b border-border bg-card px-md py-xs text-caption text-subtle-foreground" data-device-switch-strip={device.id}>
+    <div className="flex flex-wrap items-center gap-x-sm gap-y-xs border-b border-border bg-card px-md py-xs text-caption text-subtle-foreground" style={{ paddingInlineStart: start }} data-device-switch-strip={device.id}>
       {device.switch ? (
         <DeviceSwitchLine device={device} actions={actions} className="text-caption" />
       ) : (
