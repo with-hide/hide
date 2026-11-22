@@ -222,6 +222,8 @@ it("lists the steps by default, says how long a worked step has worked from the 
     node("b", "working", { agent: worker, started_at_unix_ms: now - 4 * 60_000 }),
     // A Mac that predates the start time sends none: the line has no time.
     node("c", "working"),
+    // Nobody has started it: its title alone.
+    node("d", "planned", { depends_on: ["b"], agent_runtime: null }),
   ] });
   const { container, click, serve, unmount } = await connect([page]);
   try {
@@ -238,11 +240,13 @@ it("lists the steps by default, says how long a worked step has worked from the 
     expect(container.querySelector('[data-phone-step="a"] [data-phone-step-pr]')?.textContent).toBe("#80");
     expect(line("b")).toBe("Measure memory · Working · 4m");
     expect(line("c")).toBe("Working");
+    expect(container.querySelector('[data-phone-step="d"]'), "a step not started is listed").not.toBeNull();
+    expect(line("d")).toBeUndefined();
     await click("[data-phone-mission-map-toggle]");
-    expect(container.querySelectorAll("[data-mission-node]")).toHaveLength(3);
+    expect(container.querySelectorAll("[data-mission-node]")).toHaveLength(4);
     expect(container.querySelector("[data-phone-step]")).toBeNull();
     await click("[data-phone-mission-map-toggle]");
-    expect(container.querySelectorAll("[data-phone-step]")).toHaveLength(3);
+    expect(container.querySelectorAll("[data-phone-step]")).toHaveLength(4);
   } finally {
     await unmount();
   }
