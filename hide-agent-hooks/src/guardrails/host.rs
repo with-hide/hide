@@ -157,14 +157,17 @@ const API_VALUE_OPTIONS: &[&str] = &[
     "--template",
 ];
 const API_VALUE_LETTERS: &[char] = &['F', 'f', 'H', 'q', 'p', 't'];
+/// The options that add a request body, which makes the CLI's default
+/// method a POST.
+const API_FIELD_OPTIONS: &[&str] = &["--field", "--raw-field", "--input", "--form"];
 
 /// Whether `gh api` or `glab api` (the `api` word at `api_at` in `args`)
 /// calls the host's merge endpoint with `PUT`: `repos/<owner>/<repo>/pulls/<n>/merge`
 /// on GitHub, `projects/<id>/merge_requests/<iid>/merge` on GitLab, as a
 /// positional word (an option's value, such as a field's, is no endpoint),
 /// in any spelling of the method flag (`-X PUT`, `-XPUT`, `-X=PUT`, `-iX PUT`,
-/// `--method PUT`, `--method=put`). A `GET` there only asks whether it is
-/// merged. A method held in a variable is unknown, and read as `PUT`.
+/// `--method PUT`, `--method=put`), unless the request is provably a read.
+/// A `GET` there only asks whether it is merged.
 fn api_merges(host: Host, args: &[String], api_at: usize) -> bool {
     let collection = match host {
         Host::GitHub => "pulls",
@@ -172,6 +175,7 @@ fn api_merges(host: Host, args: &[String], api_at: usize) -> bool {
     };
     let mut endpoints = Vec::new();
     let mut methods = Vec::new();
+    let mut fields = false;
     let mut at = 0;
     while let Some(arg) = args.get(at) {
         let next = args.get(at + 1).map(String::as_str);
@@ -185,6 +189,7 @@ fn api_merges(host: Host, args: &[String], api_at: usize) -> bool {
             methods.extend(next);
             at += 1;
         } else if API_VALUE_OPTIONS.contains(&arg.as_str()) {
+            fields |= API_FIELD_OPTIONS.contains(&arg.as_str());
             at += 1;
         } else if let Some(letters) = arg.strip_prefix('-').filter(|rest| !rest.starts_with('-')) {
             // A short cluster: the first letter that takes a value takes the
@@ -203,9 +208,16 @@ fn api_merges(host: Host, args: &[String], api_at: usize) -> bool {
                 };
                 if letter == 'X' {
                     methods.extend(value);
+                } else {
+                    fields |= matches!(letter, 'F' | 'f');
                 }
                 break;
             }
+        } else if API_FIELD_OPTIONS.iter().any(|option| {
+            arg.strip_prefix(option)
+                .is_some_and(|rest| rest.starts_with('='))
+        }) {
+            fields = true;
         } else if !arg.starts_with('-') {
             endpoints.push(arg.as_str());
         }
@@ -216,10 +228,19 @@ fn api_merges(host: Host, args: &[String], api_at: usize) -> bool {
         let segments: Vec<&str> = path.split('/').filter(|part| !part.is_empty()).collect();
         matches!(segments.as_slice(), [.., kind, _, "merge"] if *kind == collection)
     });
-    endpoint
-        && methods
-            .iter()
-            .any(|method| method.eq_ignore_ascii_case("PUT") || unknown(method))
+    // A merge endpoint is refused unless the request is provably a read:
+    // every method given is GET or HEAD, or none is given and no field makes
+    // the CLI send a POST. A method held in a variable, a write, or method
+    // flags that disagree all refuse.
+    let read = if methods.is_empty() {
+        !fields
+    } else {
+        methods.iter().all(|method| {
+            !unknown(method)
+                && (method.eq_ignore_ascii_case("GET") || method.eq_ignore_ascii_case("HEAD"))
+        })
+    };
+    endpoint && !read
 }
 
 /// The options of `glab mr create` that take a value, the short ones by
@@ -287,8 +308,28 @@ fn arms(option: &str) -> bool {
     merging_option(option) || option.split('=').next().is_some_and(unknown)
 }
 
+/// Whether a configuration key is, or may be, `push.pushOption`: one held
+/// in an expansion is undecided, and read as that key.
 fn push_option_key(key: &str) -> bool {
-    key.eq_ignore_ascii_case("push.pushOption")
+    key.eq_ignore_ascii_case("push.pushOption") || unknown(key)
+}
+
+/// Whether a `-c` value (`<key>=<value>`) sets a push option that arms a
+/// merge: either half undecided while the other is merge-capable refuses,
+/// and a setting held whole in an expansion is undecided.
+fn arming_setting(setting: &str) -> bool {
+    match setting.split_once('=') {
+        Some((key, value)) => push_option_key(key) && arms(value),
+        None => unknown(setting),
+    }
+}
+
+/// Whether a `--config-env` value (`<key>=<variable>`) names, or may name,
+/// `push.pushOption`; its value is always the shell's.
+fn config_env_key(setting: &str) -> bool {
+    setting
+        .split_once('=')
+        .map_or(unknown(setting), |(key, _)| push_option_key(key))
 }
 
 /// Whether a `git` call (its args from Git's own options on) pushes with, or
@@ -306,21 +347,15 @@ fn git_arms_merge(args: &[String]) -> bool {
         let next = args.get(at + 1).map(String::as_str);
         match arg.as_str() {
             "-c" => {
-                configured |= next
-                    .and_then(|value| value.split_once('='))
-                    .is_some_and(|(key, value)| push_option_key(key) && arms(value));
+                configured |= next.is_some_and(arming_setting);
                 at += 2;
             }
             "--config-env" => {
-                configured |= next
-                    .and_then(|value| value.split_once('='))
-                    .is_some_and(|(key, _)| push_option_key(key));
+                configured |= next.is_some_and(config_env_key);
                 at += 2;
             }
             other if other.starts_with("--config-env=") => {
-                configured |= other["--config-env=".len()..]
-                    .split_once('=')
-                    .is_some_and(|(key, _)| push_option_key(key));
+                configured |= config_env_key(&other["--config-env=".len()..]);
                 at += 1;
             }
             "-C" | "--git-dir" | "--work-tree" | "--namespace" | "--exec-path"
@@ -340,36 +375,77 @@ fn git_arms_merge(args: &[String]) -> bool {
     }
 }
 
+/// The options of `git config` that take the next word as their value.
+const CONFIG_VALUE_OPTIONS: &[&str] = &[
+    "-f",
+    "--file",
+    "--blob",
+    "--type",
+    "--default",
+    "--comment",
+    "--value",
+    "--url",
+];
+/// The action options of `git config` that read, list, remove or edit
+/// rather than write.
+const CONFIG_READ_OPTIONS: &[&str] = &[
+    "--get",
+    "--get-all",
+    "--get-regexp",
+    "--get-urlmatch",
+    "--get-color",
+    "--get-colorbool",
+    "-l",
+    "--list",
+    "--unset",
+    "--unset-all",
+    "--remove-section",
+    "--rename-section",
+    "-e",
+    "--edit",
+];
+/// `git config`'s subcommands (Git 2.46 and later) that read, remove or edit.
+const CONFIG_READ_SUBCOMMANDS: &[&str] = &[
+    "get",
+    "list",
+    "unset",
+    "rename-section",
+    "remove-section",
+    "edit",
+];
+
 /// Whether `git config <args>` writes a push option that arms a merge into
-/// `push.pushOption`: the key, then such a value after it, in a call that
-/// neither reads, lists, unsets nor edits.
+/// `push.pushOption`. Its action is read at its own position: a read or
+/// unset subcommand as the first operand, or a read or unset action option
+/// before it; anything later is an operand or a value pattern and never
+/// turns a write into a read (`git config push.pushOption <value> get`
+/// writes). A key the line does not spell out is read as `push.pushOption`.
 fn config_stores_merging_option(args: &[String]) -> bool {
-    const NOT_WRITES: &[&str] = &[
-        "get",
-        "list",
-        "unset",
-        "remove-section",
-        "rename-section",
-        "edit",
-        "--get",
-        "--get-all",
-        "--get-regexp",
-        "--get-urlmatch",
-        "-l",
-        "--list",
-        "--unset",
-        "--unset-all",
-        "--remove-section",
-        "--rename-section",
-        "-e",
-        "--edit",
-    ];
-    if args.iter().any(|arg| NOT_WRITES.contains(&arg.as_str())) {
-        return false;
+    let mut operands = Vec::new();
+    let mut at = 0;
+    while let Some(arg) = args.get(at) {
+        at += 1;
+        if arg == "--" {
+            operands.extend(args[at..].iter().map(String::as_str));
+            break;
+        }
+        if operands.is_empty() && CONFIG_READ_OPTIONS.contains(&arg.as_str()) {
+            return false;
+        }
+        if CONFIG_VALUE_OPTIONS.contains(&arg.as_str()) {
+            at += 1;
+        } else if !arg.starts_with('-') {
+            operands.push(arg.as_str());
+        }
     }
-    args.iter()
-        .position(|arg| push_option_key(arg))
-        .is_some_and(|key| args[key + 1..].iter().any(|value| arms(value)))
+    match operands.first() {
+        Some(first) if CONFIG_READ_SUBCOMMANDS.contains(first) => return false,
+        Some(&"set") => {
+            operands.remove(0);
+        }
+        _ => {}
+    }
+    matches!(operands.as_slice(), [key, value, ..] if push_option_key(key) && arms(value))
 }
 
 /// The values of a `git push`'s `-o`/`--push-option` options.

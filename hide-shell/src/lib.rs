@@ -919,6 +919,9 @@ pub fn command_words(words: &[String], compound: bool) -> &[String] {
     while let Some(word) = words.get(at) {
         if is_assignment(word) {
             at += 1;
+        } else if wrapper == Some("command") && command_looks_up(word) {
+            // `command -v` and `-V` only say what a name would run.
+            return &words[words.len()..];
         } else if let Some(taken) = wrapper.and_then(|wrapper| wrapper_option(wrapper, word)) {
             at += taken;
         } else if is_prefix(word, compound) {
@@ -929,6 +932,13 @@ pub fn command_words(words: &[String], compound: bool) -> &[String] {
         }
     }
     &words[at.min(words.len())..]
+}
+
+/// Whether an option of `command` makes it look a name up rather than run
+/// it (`-v`, `-V`, and a cluster holding either, such as `-pv`).
+fn command_looks_up(word: &str) -> bool {
+    word.strip_prefix('-')
+        .is_some_and(|letters| !letters.starts_with('-') && letters.contains(['v', 'V']))
 }
 
 /// How many words an option of a wrapper takes, itself included; `None` for
@@ -985,6 +995,14 @@ mod tests {
             "if command -- glab mr merge 3",
         ] {
             assert_eq!(program(line).as_deref(), Some("glab"), "{line}");
+        }
+        // `command -v` only looks the name up: nothing runs.
+        for line in [
+            "command -v glab mr merge 3",
+            "command -V glab",
+            "command -pv glab",
+        ] {
+            assert_eq!(program(line), None, "{line}");
         }
         // A program's own options stay its words.
         assert_eq!(

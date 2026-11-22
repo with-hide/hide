@@ -596,6 +596,9 @@ mod tests {
             "git -c push.pushOption=merge_request.auto_merge push",
             "glab mr --sha abc merge 3",
             "git --config-env=push.pushOption=OPT push",
+            "git config push.pushOption merge_request.auto_merge get",
+            "git -c \"$key=merge_request.auto_merge\" push",
+            "glab api -XPUT --method=GET projects/1/merge_requests/3/merge",
         ];
         for syntax in [hide_shell::Syntax::Posix, hide_shell::Syntax::PowerShell] {
             for (host, commands) in [(Host::GitHub, &github[..]), (Host::GitLab, &gitlab[..])] {
@@ -617,10 +620,16 @@ mod tests {
                 "glab mr create -t x -d --auto-merge",
                 "glab mr --title merge create -t x",
                 "git -c push.pushOption=merge_request.auto_merge status",
+                "git config get push.pushOption",
+                "glab api --method GET projects/1/merge_requests/3/merge",
             ] {
                 assert_eq!(judged(command, syntax), None, "{command} ({syntax:?})");
             }
         }
+        assert_eq!(
+            refusal(&worker, &shell_action("command -v glab mr merge 3")),
+            None
+        );
         for command in ["command -- glab mr merge 3", "env -u NAME gh pr merge 12"] {
             assert!(
                 matches!(

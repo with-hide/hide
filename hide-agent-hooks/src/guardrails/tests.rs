@@ -451,6 +451,26 @@ const MERGES: &[&str] = &[
     "git --config-env=push.pushOption=OPT push origin feature",
     "git --config-env push.pushOption=OPT push",
     "git config --add push.pushOption \"$opt\"",
+    // A merge endpoint is refused unless the request is provably a read.
+    "gh api repos/o/r/pulls/12/merge -f merge_method=squash",
+    "gh api --method POST repos/o/r/pulls/12/merge",
+    "gh api -X PUT -X GET repos/o/r/pulls/12/merge",
+    "glab api -XPUT --method=GET projects/1/merge_requests/3/merge",
+    "glab api -X \"$m\" projects/1/merge_requests/3/merge",
+    "glab api projects/1/merge_requests/3/merge --raw-field=squash=true",
+    // `git config`'s action is read at its own position; an operand never
+    // turns a write into a read.
+    "git config push.pushOption merge_request.auto_merge get",
+    "git config --replace-all push.pushOption merge_request.auto_merge list",
+    "git config set push.pushOption merge_request.auto_merge",
+    "git config --global set push.pushOption mr.auto_merge",
+    "git config push.pushOption merge_request.auto_merge --unset",
+    // A key or value the line does not spell out, beside a merge-capable
+    // other half.
+    "git config \"$key\" merge_request.auto_merge",
+    "git -c \"$key=merge_request.auto_merge\" push origin feature",
+    "git -c push.pushOption=\"$value\" push origin feature",
+    "git -c \"$setting\" push origin feature",
 ];
 
 /// The same through a POSIX wrapper's own options, which PowerShell has not.
@@ -495,7 +515,22 @@ const NOT_MERGES: &[&str] = &[
     "git config --get-regexp push.pushOption merge_request.auto_merge",
     "git config --unset push.pushOption merge_request.auto_merge",
     "git push -o ci.variable=A=$B origin feature",
+    "glab api --method=get projects/1/merge_requests/3/merge",
+    "gh api -X HEAD repos/o/r/pulls/12/merge",
+    "glab mr create --title 'merge --auto-merge' -d 'projects/1/merge_requests/3/merge'",
+    "git config get push.pushOption",
+    "git config get --all push.pushOption",
+    "git config list",
+    "git config unset push.pushOption",
+    "git config --unset-all push.pushOption",
+    "git config \"$key\"",
+    "git config \"$key\" merge_request.create",
+    "git -c \"$key=merge_request.create\" push origin feature",
+    "git -c \"$key=merge_request.auto_merge\" status",
 ];
+
+/// POSIX lookups that run nothing.
+const POSIX_NOT_MERGES: &[&str] = &["command -v glab mr merge 3", "command -V gh pr merge 12"];
 
 #[test]
 fn merging_a_change_request_is_refused_on_either_host_only_with_the_option() {
@@ -529,6 +564,9 @@ fn merging_a_change_request_is_refused_on_either_host_only_with_the_option() {
         for command in NOT_MERGES {
             assert_eq!(judged(command, syntax), None, "{command} ({syntax:?})");
         }
+    }
+    for command in POSIX_NOT_MERGES {
+        assert_eq!(judged(command, Syntax::Posix), None, "{command}");
     }
     for command in WRAPPED_MERGES {
         assert_eq!(
