@@ -769,7 +769,7 @@ function settleChoice(ok: boolean, reason: string | null): void {
   }
   const state: ChoiceState = ok
     ? { choice: picked.choice, state: "sent" }
-    : { choice: picked.choice, state: "failed", notice: inputFailure(reason), inTerminal: reason === "uncertain" || reason === "screen_differs" };
+    : { choice: picked.choice, state: "failed", notice: inputFailure(reason), inTerminal: reason === "uncertain" || reason === "screen_differs" || reason === "ask_not_shown" };
   patch({ pendingInput: null, answering: null, answers: withAnswer(answers, answering, state) });
 }
 

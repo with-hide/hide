@@ -584,6 +584,8 @@ export function inputFailure(reason: string | null, lines = false): Notice {
       return { key: "mobile.input.stale" };
     case "screen_differs":
       return { key: "mobile.input.screenDiffers" };
+    case "ask_not_shown":
+      return { key: "mobile.input.askNotShown" };
     case "asleep":
       return { key: "mobile.input.asleep" };
     case "device_unreachable":

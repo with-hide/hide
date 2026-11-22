@@ -52,6 +52,10 @@ const KEY_GAP: Duration = Duration::from_millis(80);
 /// expects.
 pub const SCREEN_DIFFERS: &str = "screen_differs";
 
+/// Why a choice typed nothing: the screen shows no row of the ask, which the
+/// operator answered already, or whose allowed command runs.
+pub const ASK_NOT_SHOWN: &str = "ask_not_shown";
+
 /// Why a key write typed nothing: another key write to the pane is under way.
 pub const IN_FLIGHT: &str = "in_flight";
 
@@ -258,6 +262,7 @@ fn await_screen(
     after_key: bool,
 ) -> Result<(), Unwritten> {
     let reads = if after_key { ROW_READS } else { 1 };
+    let mut visible = String::new();
     for read in 0..reads {
         if read > 0 {
             // A production wait: the program has not drawn the last key yet.
@@ -265,17 +270,28 @@ fn await_screen(
             std::thread::sleep(KEY_GAP);
         }
         // A failed read typed nothing, whatever the engine answered.
-        let visible = engine
-            .read_visible(raw_pane, STEP_TIMEOUT)
-            .map_err(|error| match Unwritten::of(&error) {
-                Unwritten::Uncertain => Unwritten::Unavailable,
-                certain => certain,
-            })?;
+        visible =
+            engine
+                .read_visible(raw_pane, STEP_TIMEOUT)
+                .map_err(|error| match Unwritten::of(&error) {
+                    Unwritten::Uncertain => Unwritten::Unavailable,
+                    certain => certain,
+                })?;
         if screen.shows(&visible, place) {
             return Ok(());
         }
     }
-    Err(Unwritten::Unready(SCREEN_DIFFERS))
+    // Before any key, a screen with none of the ask's rows has left the ask.
+    let left = !after_key
+        && screen
+            .rows
+            .as_ref()
+            .is_some_and(|rows| !rows.any_highlighted(&visible));
+    Err(Unwritten::Unready(if left {
+        ASK_NOT_SHOWN
+    } else {
+        SCREEN_DIFFERS
+    }))
 }
 
 /// An ask on the agent's own screen that a choice answers.
@@ -440,15 +456,7 @@ impl Screen {
         let row = match (&self.rows, place) {
             (Some(rows), Some(place)) => rows.highlighted(visible, place),
             (None, Some(_)) => false,
-            (Some(rows), None) => {
-                let labelled = rows.row.contains(hide_agent_adapter::definition::ROW_LABEL);
-                let places = if labelled {
-                    rows.labels.len()
-                } else {
-                    ROW_PLACES
-                };
-                (0..places).any(|place| rows.highlighted(visible, place))
-            }
+            (Some(rows), None) => rows.any_highlighted(visible),
             (None, None) => true,
         };
         command && row
@@ -456,6 +464,17 @@ impl Screen {
 }
 
 impl Rows {
+    /// Whether `screen` shows the highlight on any row of the ask.
+    fn any_highlighted(&self, screen: &str) -> bool {
+        let labelled = self.row.contains(hide_agent_adapter::definition::ROW_LABEL);
+        let places = if labelled {
+            self.labels.len()
+        } else {
+            ROW_PLACES
+        };
+        (0..places).any(|place| self.highlighted(screen, place))
+    }
+
     /// Whether `screen`, a pane's visible text, shows the highlight on row
     /// `place` (0 for the first): the lowest line that begins with the
     /// marker, past a box's border, is that row. A screen with no
@@ -905,7 +924,7 @@ mod tests {
         let shown = rows.showing("cargo test --workspace");
         assert_eq!(
             write_with(&running, &["esc"], &shown),
-            Err(Unwritten::Unready(SCREEN_DIFFERS))
+            Err(Unwritten::Unready(ASK_NOT_SHOWN))
         );
         assert_eq!(running.methods(), ["read_pane"]);
         let here = menu(2, 0);
