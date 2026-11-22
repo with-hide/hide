@@ -9,7 +9,7 @@ What it needs from the operator, whether it is running, whether it has reported 
 - Activity: working, stopped, unknown.
 - Completion: reported, not reported.
 - Read: read, unread.
-- Ownership: operator, delegated, Hide AI's, for work a Hide-started agent does for a screen that owns it, or an external tool's, for work a tool the operator approved at Act started and keeps.
+- Ownership: operator, delegated, Hide AI's, for work a Hide-started agent does for a screen that owns it, or a bot's, for work a bot the operator approved in own mode started and keeps.
 
 `hide-core/src/agent_state/axes.rs` is the single owner of all five.
 `agent_state/turn.rs` derives the group, request verb, close and rest gates from them; `sidebar.rs` assembles the snapshot rows.
@@ -48,10 +48,11 @@ Regression owners: `a_hide_started_row_follows_its_attempts_pull_request_into_an
 
 ### Work an external tool keeps
 
-An external tool the operator approved at Act ([ARCHITECTURE.md: External tools](ARCHITECTURE.md#external-tools)) starts agents for its own purposes, and they are the tool's work, not the operator's: the agent it started, and every agent started under that one with `--parent` however deep, such as a Conductor's workers (PRD hide-external-control D-09, B26, B27).
+A bot the operator approved in own mode ([ARCHITECTURE.md: Bots](ARCHITECTURE.md#bots)) starts agents for its own purposes, and they are the bot's work, not the operator's: the agent it started, and every agent started under that one with `--parent` however deep, such as a Conductor's workers (PRD hide-external-control D-09, B26, B27).
 The coordination ledger is the only source of the fact: `coordination::started` collects, from the tool's handoff spawns and the registrations whose responsibility parent is already one of them, each registration with its connection's id and name (`HideStarted::tool_work`), ended ones included, and the runtime lays the `tool` mark `{connection, name, owns}` on each live row of them by its pane and the session the registration holds, as it lays Hide AI's.
-`owns` is read from the connection list on every projection and stored nowhere: it holds while the tool's connection stands at Act (`Runtime::access_keeps_work`).
-A disconnect, the tool's `hide access leave` or View only hands the work to the operator at once, still running; Act again on the same connection takes it back; a new connection under the same name is another id and takes none of it (D-14, D-40).
+`owns` is read from the connection list on every projection and stored nowhere: it holds while the bot's connection stands in own mode (`Runtime::access_keeps_work`).
+A bot in all mode works as the operator: what it starts is the operator's own work from the start, in the operator's scopes, lists and Needs You, and its rows still carry the `tool` mark with `owns` false, naming the bot as the starter (mission-87).
+A disconnect, the bot's `hide access leave` or all mode hands the work to the operator at once, still running; own mode again on the same connection takes it back; a new connection under the same name is another id and takes none of it (D-14, D-40).
 On that event the rows and their lists are judged again (`Runtime::tool_work_moved`), so nothing waits for the next session read.
 A root the tool keeps is the fourth ownership value, `Tool`; a delegated row the tool keeps stays `Delegated` for its group, Working or Seen, and `kept_elsewhere` keeps it off the lists too.
 `listed_for_operator` treats the tool's work as it treats Hide AI's: listed only while it is in Needs You, and no tree draws it even then.
@@ -62,7 +63,7 @@ The Overview graph draws the scope's members, so it follows the same rule: the r
 The row stays in the agent data, so ⌘K, the recent panel, the tab strip and `hide agent list` find it, and its pane head, its Needs You row and its ⌘K result write the tool's name ([UI_BEHAVIOR.md](UI_BEHAVIOR.md#work-an-external-tool-keeps)); the phone's row carries it as `tool` (`PhoneAgent::tool`, absent on the operator's rows) for the phone to lead its second line with.
 A mission whose Conductor is the tool's work is the tool's too, which A mission adds no status below says.
 
-The tool's work has a scope of its own beside the device scopes, the tool's cell (D-45, D-46, D-47, B40): the scope cache (`agent_state/tally/scope.rs`) publishes one `ToolCell` in `navigator.tools` per tool connected at Act, with or without work, in the access list's order.
+The tool's work has a scope of its own beside the device scopes, the tool's cell (D-45, D-46, D-47, B40): the scope cache (`agent_state/tally/scope.rs`) publishes one `ToolCell` in `navigator.tools` per bot connected in own mode, with or without work, in the access list's order.
 It holds the rows that tool keeps on each connected device and nothing else, each placed in its project and checkout as a device's are, so its 태스크 cards (`tasks::Forest`) and the Overview's members are built by the same code as a device's.
 For each checkout that holds a session the tool keeps it carries that checkout's tree of the tool's sessions (`ToolCheckout::sidebar_tree`, by `lineage::sidebar_tree` over the same index of every device's rows as a checkout's own tree, so a delegated child opens under its root by the operator's own folds) and the marks its row's badge counts (`ToolCheckout::marks`, `RowMark::count_row` as a checkout's `agent_summary.marks`); a checkout holding only a delegated child has none, since the child is drawn under its root, and the checkout's own tree and badge still leave the tool's rows out (operator decision 2026-11-15).
 The cell's 프로젝트 tab draws these in place of the checkout's own.
@@ -71,7 +72,7 @@ A tool's own open (`hide file open`, `diff open` or `browser open` from its conn
 The phone's row for a tool's agent carries no `look` and its pane's Views list is empty (`phone_looks` returns none while the tool keeps the row, B46).
 An answer typed into the pane clears the demand and with it the tool's turn, and the work stays the tool's (B43).
 `turn` counts the cards whose root is in the tool's turn and the tool's missions that are their own ask; it is the cell's grey number and is added to no device scope, so no Needs You, app badge, desktop notification or push follows it (B41).
-A tool at View only, disconnected or gone has no cell, and its work is back in the device scopes on the same event (B44).
+A bot in all mode, disconnected or gone has no cell, and its work is back in the device scopes on the same event (B44).
 The checkout Hide made for a tool's spawn (`StartedCheckout::tool`, kept only when the spawn record says it made the folder, `SpawnRecord::made`; a spawn into a worktree that already existed, or into the folder itself, lists nothing, so the operator's checkout is never hidden) is published in `navigator.hide_ai_checkouts` with the tool's name while the tool keeps its work, beside Hide AI's, so the sidebar tree draws it by Hide AI's rule, and leaves the list on the event that lets the work go.
 Regression owners: `each_row_reaches_the_operators_lists_by_whose_work_it_is`, `a_tools_agent_reaches_the_operator_only_for_a_person`, `a_tools_delegated_child_rises_to_the_operator_only_for_a_person`, `a_tools_cell_holds_its_work_and_counts_only_the_tools_turn`, `a_tools_agent_waiting_on_a_person_stays_in_progress_in_the_tools_cell`, `a_tools_checkout_is_listed_with_hide_ais_only_while_the_tool_acts` and `a_tools_cell_carries_the_tree_of_its_sessions_in_each_checkout_they_work_in` in `hide-core/src/runtime/tests/tool_work.rs`, and `a_tools_work_holds_what_its_agent_delegates_however_deep_and_ends_nothing` and `a_tools_spawn_lists_only_the_checkout_it_made` in `coordination/started.rs`.
 
@@ -83,7 +84,7 @@ The hold is the card's, not the agent's: it decides only what the hooks give, an
 ### A mission adds no status
 
 A Conductor and its workers are ordinary agents: a Conductor's row, its workers' rows and their delegated tabs read and group as any agent's do, and a mission adds no attention state, group, badge or notification (PRD software-factory-conductor D-14).
-A mission whose Conductor is an external tool's work (Work an external tool keeps above; `Runtime::mission_tool`, by the Conductor's registration) is the tool's while the tool keeps it (PRD hide-external-control B30, D-36; [hide-private missions.md: A mission an external tool conducts](delivery.md#missions)).
+A mission whose Conductor is a bot's work (Work an external tool keeps above; `Runtime::mission_tool`, by the Conductor's registration) is the bot's while the bot keeps it in own mode, and the operator's from the start in all mode (PRD hide-external-control B30, D-36, mission-87; [hide-private missions.md: A mission a bot conducts](delivery.md#missions)).
 Its view carries `tool`, the rows' `{connection, name, owns}` mark; with `owns` the device's mission screen and its number leave it out, its asks go to the tool's cell (`ToolCell::mission_asks`, counted in its `turn`) instead of the device's `mission_asks`, it sends no notice and the phone's mission list leaves it out, while the tool's cell lists it.
 Once the tool lets go it is the operator's like any mission and what it holds is told then, and the mark stays, as where the work came from (D-14, D-15).
 The mission's own states (`planning`, `running`, `merge_wait`, `done`, `cancelled`) and each node's live only in the mission record and are drawn only on the map and the row's mission chip ([hide-private tasks-and-pr-list.md: A mission's map](UI_BEHAVIOR.md#tasks-card-tabs-and-the-pr-list)).

@@ -7,7 +7,7 @@
       "highlights": [
         {
           "drawing": "automation",
-          "chapter": null,
+          "chapter": "automation",
           "text": {
             "en": {
               "title": "Hand your everyday tasks to automations",
@@ -29,45 +29,46 @@
         },
         {
           "drawing": "pair",
-          "chapter": null,
+          "chapter": "focus",
           "text": {
             "en": {
-              "title": "Pair view, for when you want to focus on one agent",
-              "line": "Press Pair view on a pane to see its terminal beside what the agent is making, a website or a slide deck, and watch it change as the agent works."
+              "title": "Focus mode, for watching an agent beside what it makes",
+              "line": "When an agent builds a website or a slide deck, turn on focus mode (◧) to see its terminal beside the result, and watch it change as the agent works."
             },
             "ko": {
-              "title": "한 에이전트의 일에 집중하고 싶을 때는 짝 보기",
-              "line": "패널의 짝 보기 버튼을 누르면 터미널과 그 에이전트가 만드는 웹사이트나 발표 자료가 나란히 보여요. 고치는 대로 옆에서 바로 바뀌어요."
+              "title": "에이전트와 결과물을 나란히 볼 때는 집중 모드",
+              "line": "에이전트가 웹사이트나 발표 자료를 만들 때 집중 모드(◧)를 켜면 터미널과 결과물이 나란히 보여요. 고치는 대로 옆에서 바로 바뀌어요."
             },
             "zh-CN": {
-              "title": "想专注于一个智能体时，用并排查看",
-              "line": "按窗格上的“并排查看”，它的终端和智能体正在做的网站或幻灯片会并排显示，修改的同时就能在旁边看到变化。"
+              "title": "想把智能体和它的成果并排看时，用专注模式",
+              "line": "智能体在做网站或幻灯片时，打开专注模式（◧），终端和成果会并排显示，修改的同时就能在旁边看到变化。"
             },
             "ja": {
-              "title": "一つのエージェントに集中したいときはペア表示",
-              "line": "ペインの「ペア表示」を押すと、ターミナルとそのエージェントが作っているウェブサイトやスライドが並んで表示され、直したそばから変わるのが見えます。"
+              "title": "エージェントと成果物を並べて見たいときは集中モード",
+              "line": "エージェントがウェブサイトやスライドを作るとき、集中モード（◧）をオンにするとターミナルと成果物が並んで表示され、直したそばから変わるのが見えます。"
             }
           }
         },
         {
           "drawing": "skills",
           "chapter": null,
+          "settings": "skills",
           "text": {
             "en": {
               "title": "Your skills and MCP servers, the same on every agent",
-              "line": "Add one once in Settings › Skills & MCP and Claude, Codex and every other agent can use it; turn it off or update it in the same place."
+              "line": "Add a skill or an MCP server once and Claude, Codex and every other agent use it. Manage them in Settings › Skills & MCP, or ask an agent to add one."
             },
             "ko": {
               "title": "스킬과 MCP를 모든 에이전트에서 똑같이",
-              "line": "설정 › 스킬·MCP에서 한 번만 넣으면 Claude, Codex 등 모든 에이전트가 같이 써요. 끄고 켜기와 업데이트도 한 곳에서 해요."
+              "line": "스킬이나 MCP를 한 번 넣으면 모든 에이전트가 같이 써요. 설정 › 스킬·MCP에서 관리하거나, 에이전트에게 넣어 달라고 해도 돼요."
             },
             "zh-CN": {
               "title": "技能和 MCP，在每个智能体上都一样",
-              "line": "在 设置 › 技能与 MCP 中添加一次，Claude、Codex 等所有智能体都能使用；关闭或更新也在同一个地方。"
+              "line": "技能或 MCP 只需添加一次，Claude、Codex 等所有智能体都能使用。可以在 设置 › 技能与 MCP 中管理，也可以让智能体帮你添加。"
             },
             "ja": {
               "title": "スキルと MCP をすべてのエージェントで同じように",
-              "line": "設定 › スキル・MCP で一度入れれば、Claude や Codex などすべてのエージェントが使えます。オンオフや更新も一か所でできます。"
+              "line": "スキルや MCP を一度入れれば、Claude や Codex などすべてのエージェントが使えます。設定 › スキル・MCP で管理するか、エージェントに入れてと頼むこともできます。"
             }
           }
         }

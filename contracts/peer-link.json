@@ -183,7 +183,7 @@
   "file": {
     "build": {
       "id_chars": 16,
-      "max_bytes": 268435456,
+      "max_bytes": 536870912,
       "max_files": 64,
       "max_path_bytes": 255
     },

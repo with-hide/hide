@@ -632,9 +632,13 @@ export function createActions(send: DispatchFn, clipboard?: Clipboard) {
     }
   };
 
-  /** The documents' own ✕ (B12): the viewing column closes, every view kept on the documents button; the tool column stays. Pair view draws none, since only its own ways out end it (D-46). */
+  /**
+   * The documents' own ✕ (B12): the viewing column closes, every view kept on the documents button; the tool column stays.
+   * In focus mode it is ⌘E's fold of the desk beside the pane, the same event, not a lane close (D-57, D-63, D-46).
+   */
   const closeDocuments = () => {
-    if (pairBesideDesk(workspaceViewOf(rest()))) return diagnostic("close documents: pair view keeps its desk");
+    const view = workspaceViewOf(rest());
+    if (pairBesideDesk(view)) return showPairDesk(false);
     setWorkspaceView({ documents: false });
   };
 
@@ -1492,19 +1496,20 @@ export function createActions(send: DispatchFn, clipboard?: Clipboard) {
       dispatch({ schema_version: 2, kind: `pairing_${verb}`, payload });
     },
     /**
-     * Settings › External tools (PRD hide-external-control B3, B4, B12,
-     * B13): the operator's answer to a tool's request and the level or
+     * Settings › 봇 (PRD hide-external-control B3, B4, B12, B13;
+     * mission-87): the operator's answer to a bot's request, with the mode it
+     * is approved in (its own space or all of Hide), and the mode or
      * disconnect of a connected one, each one core event; the `access`
      * section shows the outcome.
      */
-    approveAccess(id: string, level: import("./snapshot").AccessLevel) {
-      dispatch({ schema_version: 2, kind: "access_approve", payload: { id, level } });
+    approveAccess(id: string, mode: import("./bots").BotModeKind) {
+      dispatch({ schema_version: 2, kind: "access_approve", payload: { id, mode: { kind: mode } } });
     },
     refuseAccess(id: string) {
       dispatch({ schema_version: 2, kind: "access_refuse", payload: { id } });
     },
-    setAccessLevel(id: string, level: import("./snapshot").AccessLevel) {
-      dispatch({ schema_version: 2, kind: "access_level", payload: { id, level } });
+    setAccessMode(id: string, mode: import("./bots").BotModeKind) {
+      dispatch({ schema_version: 2, kind: "access_mode", payload: { id, mode: { kind: mode } } });
     },
     revokeAccess(id: string) {
       dispatch({ schema_version: 2, kind: "access_revoke", payload: { id } });

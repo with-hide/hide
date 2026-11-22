@@ -8539,7 +8539,7 @@ fn a_raise_with_no_row_to_lay_it_on_is_told_to_the_operator_once() {
 /// the operator, who is told then, and the mission still names the tool.
 #[test]
 fn a_mission_a_tool_keeps_asks_the_tools_cell_until_the_tool_lets_go() {
-    use crate::access::{Call, Level, key_hash};
+    use crate::access::{Call, Mode, key_hash};
     use crate::delivery::worker::HumanNoticeKind;
     use crate::missions::AttentionReason;
     use crate::runtime::access::AccessEvent;
@@ -8555,7 +8555,7 @@ fn a_mission_a_tool_keeps_asks_the_tools_cell_until_the_tool_lets_go() {
     let connection = asked.unwrap()["id"].as_str().unwrap().to_owned();
     assert!(runtime.access_event(AccessEvent::Approve {
         id: connection.clone(),
-        level: Level::Act,
+        mode: Mode::Own,
     }));
     let conductor = runtime
         .missions
@@ -20410,4 +20410,75 @@ fn a_report_owed_over_a_released_state_folder_is_still_owed_at_the_next_start() 
         runtime.install_mission_store(MissionStore::new(state.path()), Restored::Read(next));
         assert_eq!(runtime.missions.reports_owed, [id], "{tag}");
     }
+}
+
+/// mission-87 c2: an own-mode bot lists and shows the missions its own
+/// agents conduct; one with no work lists none and is refused the mission
+/// it names.
+#[test]
+fn an_own_mode_bot_lists_and_shows_the_missions_its_agents_conduct_only() {
+    use crate::access::{Call, Mode, key_hash};
+    use crate::runtime::access::AccessEvent;
+    let fixture = conducting();
+    let mut runtime = fixture.runtime.lock().unwrap();
+    running(&mut runtime);
+    let mut bot = |name: &str, digit: &str| {
+        let (asked, _) = runtime.access_call(Call::Request {
+            name: name.into(),
+            key_sha256: key_hash(&digit.repeat(64)),
+            program: None,
+            id: format!("00000000000000{digit}{digit}"),
+        });
+        let id = asked.unwrap()["id"].as_str().unwrap().to_owned();
+        assert!(runtime.access_event(AccessEvent::Approve {
+            id: id.clone(),
+            mode: Mode::Own,
+        }));
+        id
+    };
+    let conducting = bot("conducting", "a");
+    let idle = bot("idle", "b");
+    let conductor = runtime
+        .missions
+        .book
+        .get("mission-1")
+        .unwrap()
+        .conductor
+        .clone();
+    runtime.hide_started.tool_work = vec![crate::coordination::started::ToolWork {
+        connection: conducting.clone(),
+        name: "conducting".into(),
+        agent_id: conductor.agent_id.clone().unwrap_or_default(),
+        pane_id: conductor.actor.pane_id.clone(),
+        session: conductor.actor.session.clone(),
+        ended: false,
+    }];
+    let mut ask = |connection: &str, command: Value| {
+        runtime.mission_command(
+            crate::node::TEST_NODE,
+            &crate::workspace_control::access_caller_id(connection, None),
+            &crate::access::access_context(crate::node::TEST_NODE, connection),
+            serde_json::from_value(command).unwrap(),
+        )
+    };
+    let ids = |answer: Value| {
+        answer["items"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|item| item["id"].as_str().unwrap().to_owned())
+            .collect::<Vec<_>>()
+    };
+    let list = json!({"op": "list"});
+    let show = json!({"op": "show", "mission": "mission-1"});
+    assert_eq!(
+        ids(ask(&conducting, list.clone()).unwrap().0),
+        ["mission-1"]
+    );
+    assert!(ask(&conducting, show.clone()).is_ok());
+    assert!(ids(ask(&idle, list).unwrap().0).is_empty());
+    assert_eq!(
+        ask(&idle, show).err().as_deref(),
+        Some(crate::access::NOT_OWN_WORK)
+    );
 }

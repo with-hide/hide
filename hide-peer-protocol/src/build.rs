@@ -18,8 +18,8 @@ pub const ID_CHARS: usize = 16;
 /// The most files a build has.
 pub const MAX_FILES: usize = 64;
 /// The most bytes a build's files have together: the size limit of a
-/// release's device kit.
-pub const MAX_BYTES: u64 = 256 * 1024 * 1024;
+/// release's device kit (`hide-node/src/ssh/kit/manifest.rs`, `MAX_KIT`).
+pub const MAX_BYTES: u64 = 512 * 1024 * 1024;
 /// The most bytes of a file's path.
 pub const MAX_PATH: usize = 255;
 

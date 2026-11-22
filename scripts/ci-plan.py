@@ -30,6 +30,7 @@ docs/TESTING.md, "Which lanes a pull request runs", owns the rules and the
 reasons for them.
 """
 import argparse
+import bisect
 from fnmatch import fnmatchcase
 import importlib.util
 import json
@@ -428,6 +429,516 @@ def pull_request_macos(result, entries, root=ROOT):
     if why:
         return with_macos(result, True, why)
     return with_macos(result, False, ["no macOS path changed; main's push run and the nightly run the macOS jobs"])
+
+
+# Whether a pull request takes a Windows runner at all (operator decision
+# 2026-11-21, the macOS rule of 2026-11-01 applied to Windows). Over 28 hours
+# of pull request runs `windows check` and the Windows e2e shards were the
+# longest jobs and held the most runner slots, and 39 of 285 failed pull
+# request runs in two weeks failed in Windows jobs only; a pull request
+# therefore runs its Windows jobs only when it changes a Windows path, and
+# main's push run and the nightly run all of them. A Windows break another
+# change causes shows up on main and is fixed before the next release
+# (CONTRIBUTING.md, When main's push run fails).
+#
+# The lanes that run on Windows alone in a pull request (`agy-contract` runs
+# only its Windows leg there; `rust` runs the same agy tests on Linux), and
+# the lanes with a Windows leg beside their Linux one, which run without it
+# (`pr.yml` reads the plan's `windows`). `package` is neither: every package
+# input is a Windows path (`windows_path`), since the Windows installer and
+# the Windows device kit are what it builds, so it never runs without them.
+WINDOWS_ONLY_LANES = ("windows-check", "windows-e2e", "windows-desktop", "windows-wsl", "agy-contract")
+WINDOWS_LEG_LANES = ("relay-protocol", "os-contract", "vt", "holder-restart", "omp-contract", "agent-journey", "agent-clis")
+# Each entry is code or CI whose Windows form only a Windows job of a pull
+# request proves. A glob's `*` includes descendants. When it is unclear
+# whether a path needs Windows, it does: a Windows path left out is a break
+# no pull request shows.
+WINDOWS_PATHS = (
+    # The workflows that define the Windows jobs a pull request runs, and
+    # `pr.yml`, which calls them and picks their legs.
+    ".github/workflows/pr.yml", ".github/workflows/web-e2e.yml", ".github/workflows/desktop-e2e.yml",
+    ".github/workflows/wsl-device.yml", ".github/workflows/os-contract.yml", ".github/workflows/vt.yml",
+    ".github/workflows/holder-restart.yml", ".github/workflows/omp-contract.yml", ".github/workflows/agy-contract.yml",
+    ".github/workflows/agent-journey.yml", ".github/workflows/agent-clis.yml", ".github/workflows/relay-protocol.yml",
+    ".github/workflows/package.yml",
+    # Steps every Windows job runs: the caches, the fixture shims and their PATH.
+    ".github/actions/*",
+    # This plan, which decides which Windows jobs run.
+    "scripts/ci-plan.py",
+    # How a shell reads a command line, PowerShell's syntax among them, which
+    # `windows check` runs in Windows PowerShell for the hooks.
+    "hide-shell/*",
+    # A crate's dependencies, features and build script: a dependency that
+    # does not build on Windows, or a Windows-only one, shows only there.
+    "*/Cargo.toml", "*/build.rs",
+    # The web code whose Windows form differs from Linux's, of the files the
+    # desktop host imports or drives (SHARED_WEB above): the host bridge (the
+    # firewall ask, the taskbar badge), the chords, their labels and the
+    # keyboard (AltGr, a Windows IME, Ctrl+C with a selection), and terminal
+    # links (a drive path, the right-click order). The rest of SHARED_WEB is
+    # the same code on every system, which the Linux suites run.
+    "web/src/host.ts", "web/src/revealExternal.ts", "web/src/shortcuts.ts", "web/src/shortcutLabels.ts",
+    "web/src/keyboard.ts", "web/src/keys.ts", "web/src/terminalLinks.ts", "web/src/terminalLinkProvider.ts",
+    # The pins a Windows leg installs or runs from: the agent CLIs (agy's
+    # Windows download among them), the journey's agents and the flags only
+    # their Windows help shows, the device kits (the Windows kit's target),
+    # and the terminal parser's build inputs.
+    "contracts/agent-clis.json", "contracts/agent-journey.json", "contracts/device-kits.json", "hide-vt/build-inputs.json",
+    # The files the WSL device lane proves besides its crates (WSL_CRATE_FILES above).
+    *WSL_CRATE_FILES,
+)
+# A path named for Windows or a piece only Windows has: the ConPTY runtime
+# and its pin, PowerShell, WSL, a `win` folder (portable-pty's Windows side),
+# the Windows installer's resources and the Windows fixtures and tests; and a
+# PowerShell, batch or NSIS script, which runs on Windows alone (a Windows
+# device's bootstrap, the installer's script).
+WINDOWS_NAME = re.compile(r"(?i)(?:^|[/_.-])(?:windows|win|win32|powershell|conpty|wsl)(?:[/_.-]|$)")
+WINDOWS_SCRIPTS = (".ps1", ".psm1", ".cmd", ".bat", ".nsh")
+# A changed file that holds Windows-only code: a Rust `cfg` or target that
+# names Windows (over several lines, or nested in `any`, `all` or `not`),
+# `std::os::windows`, a `win32` branch in desktop, web or script code, a
+# Python `os.name` or `platform.system()` branch, a C `_WIN32` branch, or a
+# shell's `MINGW*|MSYS*|CYGWIN*` case. A test tagged `@platform` is no
+# Windows path by its tag: the Linux suite runs it, and its Windows leg runs
+# on main, as its macOS leg does.
+WINDOWS_CODE = re.compile(
+    r'cfg(?:_attr)?!?\s*\([^;{}\]]*?\bwindows\b|target_(?:os|family)\s*=\s*"windows"|std::os::windows'
+    r'|\bwin32\b|os\.name\s*[!=]=\s*["\']nt["\']|platform\.system\(\)'
+    r'|\b_WIN(?:32|64)\b|\b_MSC_VER\b|\b__MINGW(?:32|64)__\b|\b__CYGWIN__\b|\b(?:MINGW|MSYS|CYGWIN)\*'
+)
+# The files whose code `WINDOWS_CODE` reads; a deleted one cannot be read.
+CODE_SUFFIXES = (".rs", ".ts", ".tsx", ".mts", ".cts", ".js", ".mjs", ".cjs", ".py", ".sh", ".c", ".h")
+
+
+# The layer where each system's form is written once, and the Windows-only
+# pieces beside it: a file there that holds Windows code runs its Windows
+# jobs whatever line changed. Elsewhere a Rust file's change is read against
+# its Windows items (`windows_change`).
+WINDOWS_LAYER = ("hide-platform/*", "hide-shell/*", "hide-holder/*", "vendor/portable-pty/*", *WSL_CRATE_FILES)
+# The Rust tokens the item reader follows; an identifier is kept for `else`,
+# `macro_rules` and a macro's name.
+RUST_TOKEN = re.compile(r"[A-Za-z_][A-Za-z0-9_]*|[{}()\[\];,#!.?]")
+RAW_STRING = re.compile(r'b?r(#*)"')
+
+
+class Unreadable(Exception):
+    """The reader cannot place an item's extent with certainty."""
+
+
+def rust_tokens(text):
+    """The text's tokens with their offsets, and the spans comments cover.
+
+    Strings, characters and comments are skipped; a string, comment or
+    raw string left open raises Unreadable.
+    """
+    tokens, comments, i, size = [], [], 0, len(text)
+    while i < size:
+        char = text[i]
+        if text.startswith("//", i):
+            end = text.find("\n", i)
+            end = size if end < 0 else end
+            comments.append((i, end))
+            i = end
+        elif text.startswith("/*", i):
+            depth, j = 1, i + 2
+            while depth:
+                if j >= size:
+                    raise Unreadable("a block comment is left open")
+                if text.startswith("/*", j):
+                    depth, j = depth + 1, j + 2
+                elif text.startswith("*/", j):
+                    depth, j = depth - 1, j + 2
+                else:
+                    j += 1
+            comments.append((i, j))
+            i = j
+        elif (raw := RAW_STRING.match(text, i)) and (i == 0 or not (text[i - 1].isalnum() or text[i - 1] == "_")):
+            close = '"' + raw.group(1)
+            end = text.find(close, raw.end())
+            if end < 0:
+                raise Unreadable("a raw string is left open")
+            i = end + len(close)
+        elif char == '"' or (char == "b" and text.startswith('b"', i) and (i == 0 or not text[i - 1].isalnum())):
+            j = i + (2 if char == "b" else 1)
+            while j < size and text[j] != '"':
+                j += 2 if text[j] == "\\" else 1
+            if j >= size:
+                raise Unreadable("a string is left open")
+            i = j + 1
+        elif char == "'":
+            # A character ('x', '\n', '\u{1F600}') or a lifetime or label ('a).
+            if text.startswith("\\", i + 1):
+                end = text.find("'", i + 3)
+                if end < 0:
+                    raise Unreadable("a character is left open")
+                i = end + 1
+            elif i + 2 < size and text[i + 2] == "'":
+                i += 3
+            else:
+                i += 1
+        else:
+            token = RUST_TOKEN.match(text, i)
+            if token:
+                tokens.append((token.group(0), i))
+                i = token.end()
+            else:
+                i += 1
+    return tokens, comments
+
+
+def windows_items(text):
+    """The line ranges (first, last, from 1) of the items that carry Windows
+    code: from a marker, or the attribute it sits in, to the end of the item,
+    statement or block it is on. Raises Unreadable when it cannot tell."""
+    tokens, comments = rust_tokens(text)
+    lines = [0] + [index + 1 for index, char in enumerate(text) if char == "\n"]
+
+    def line(offset):
+        return bisect.bisect_right(lines, offset)
+    # Each opening bracket: its token index, its closer's index and whether a
+    # macro's body opens there (`name!(`, `macro_rules! name {`).
+    opener, stack = {}, []
+    for index, (token, _) in enumerate(tokens):
+        if token in "([{":
+            before = [value for value, _ in tokens[max(0, index - 3):index]]
+            macro = ((before[-1:] == ["!"] and len(before) >= 2 and before[-2] != "cfg" and RUST_TOKEN.fullmatch(before[-2])
+                      and before[-2][0].isalpha()) or before[-3:-1] == ["macro_rules", "!"])
+            stack.append((index, token, macro))
+        elif token in ")]}":
+            if not stack or {")": "(", "]": "[", "}": "{"}[token] != stack[-1][1]:
+                raise Unreadable("the brackets do not balance")
+            start, _, macro = stack.pop()
+            opener[start] = (index, macro)
+    if stack:
+        raise Unreadable("the brackets do not balance")
+    offsets = [offset for _, offset in tokens]
+    items = []
+    for marker in WINDOWS_CODE.finditer(text):
+        if any(start <= marker.start() < end for start, end in comments):
+            continue
+        at = bisect.bisect_left(offsets, marker.start())
+        enclosing = [start for start, (end, _) in opener.items() if start < at <= end]
+        if any(opener[start][1] for start in enclosing):
+            raise Unreadable("Windows code inside a macro's body")
+        attribute = next((start for start in sorted(enclosing, reverse=True)
+                          if tokens[start][0] == "[" and start and tokens[start - 1][0] in ("#", "!")), None)
+        if attribute is not None and tokens[attribute - 1][0] == "!":
+            # An inner attribute (`#![cfg(windows)]`) holds the whole module.
+            return [(1, len(lines))]
+        if attribute is not None:
+            first = attribute - 1
+            scan = opener[attribute][0] + 1
+        else:
+            first = scan = at
+        items.append((line(tokens[first][1]), line(item_end(tokens, opener, scan))))
+    return items
+
+
+def item_end(tokens, opener, scan):
+    """The offset where the item that starts at token `scan` ends: a `;` at
+    its own depth, the close of a block it opened that no `else`, `.` or `?`
+    continues, or the close of the block that holds it."""
+    index = scan
+    while index < len(tokens):
+        token, offset = tokens[index]
+        if token in ";":
+            return offset
+        if token in "([{":
+            close = opener[index][0]
+            if token == "{" and not (close + 1 < len(tokens) and tokens[close + 1][0] in ("else", ".", "?")):
+                return tokens[close][1]
+            index = close + 1
+            continue
+        if token in ")]}":
+            # The block that holds the item closes.
+            return offset
+        index += 1
+    raise Unreadable("an item runs to the end of the file")
+
+
+class Change:
+    """A pull request's change read from git: each Rust file's text on both
+    sides and the line ranges its hunks replace."""
+
+    def __init__(self, base, head, root=ROOT):
+        self.base, self.head, self.root = base, head, root
+        self.hunks, self.texts, self.modules = {}, {}, {}
+        raw = subprocess.check_output(
+            ["git", "diff", "-U0", "--no-renames", "--no-color", "--no-ext-diff", base, head, "--", "*.rs"],
+            cwd=root, stderr=subprocess.PIPE,
+        ).decode("utf-8", errors="replace")
+        name = None
+        for row in raw.splitlines():
+            if row.startswith("--- "):
+                # A deleted file keeps its old name; an added one takes the new.
+                name = None if row == "--- /dev/null" else row[len("--- a/"):]
+            elif row.startswith("+++ "):
+                name = name if row == "+++ /dev/null" else row[len("+++ b/"):]
+            elif row.startswith("@@ ") and name:
+                old_start, old_count, new_start, new_count = re.match(
+                    r"@@ -(\d+)(?:,(\d+))? \+(\d+)(?:,(\d+))? @@", row).groups()
+                self.hunks.setdefault(name, []).append(
+                    (int(old_start), int(old_count or 1), int(new_start), int(new_count or 1), [], []))
+            elif name and self.hunks.get(name) and row[:1] in ("-", "+"):
+                self.hunks[name][-1][4 if row[0] == "-" else 5].append(row[1:])
+
+    def text(self, side, name):
+        """The file's text at the base (`old`) or the head (`new`); empty only
+        when the commit's tree lists no such path. Any other failure to read
+        it (the commit, the tree or the blob) raises Unreadable, which is no
+        answer about the file."""
+        key = (side, name)
+        if key not in self.texts:
+            revision = self.base if side == "old" else self.head
+            done = subprocess.run(["git", "show", f"{revision}:{name}"], cwd=self.root, capture_output=True)
+            if done.returncode == 0:
+                self.texts[key] = done.stdout.decode("utf-8", errors="replace")
+            else:
+                # The tree says whether the path is there without reading its blob.
+                listed = subprocess.run(["git", "ls-tree", revision, "--", name], cwd=self.root, capture_output=True)
+                if listed.returncode != 0 or listed.stdout.strip():
+                    raise Unreadable(f"git cannot read {name} at {revision}")
+                self.texts[key] = ""
+        return self.texts[key]
+
+
+def source(name, side, root, change):
+    """A Rust file's text on one side of the change, or on disk without one; empty when absent."""
+    if change is not None:
+        return change.text(side, name)
+    try:
+        return (root / name).read_text(encoding="utf-8", errors="replace")
+    except FileNotFoundError:
+        return ""
+    except OSError as error:
+        raise Unreadable(f"{name}: {error.strerror}") from error
+
+
+def module_of(path, root):
+    """The module a Rust file is and the folder its module sits in, or None
+    for a crate's root (`lib.rs`, `main.rs`, `build.rs`, a binary, a test, an
+    example or a bench target)."""
+    parent = path.parent
+    if (path.name in ("lib.rs", "main.rs", "build.rs")
+            or (parent.name == "bin" and parent.parent.name == "src")
+            or (parent.name in ("tests", "examples", "benches") and (root / parent.parent / "Cargo.toml").is_file())):
+        return None
+    return (parent.name, parent.parent) if path.name == "mod.rs" else (path.stem, parent)
+
+
+def declarations(name, side, root, change):
+    """Each (file, line) in the file's crate that may declare its module: a
+    `mod` of its name in a module above its folder, or a `path` attribute
+    naming the file."""
+    path = PurePosixPath(name)
+    module, folder = module_of(path, root)
+    crate = next((str(above) for above in path.parents if (root / above / "Cargo.toml").is_file()), "")
+    pattern = (rf"mod[[:space:]]+(r#)?{module}[[:space:]]*;"
+               rf'|path[[:space:]]*=[[:space:]]*"([^"]*/)?{re.escape(path.name)}"')
+    revision = [] if change is None else [change.base if side == "old" else change.head]
+    done = subprocess.run(["git", "grep", "-n", "-I", "-E", pattern, *revision, "--", f"{crate}/*.rs" if crate else "*.rs"],
+                          cwd=root, capture_output=True)
+    if done.returncode not in (0, 1):
+        raise Unreadable("git cannot search the crate for its module")
+    found = []
+    for row in done.stdout.decode("utf-8", errors="replace").splitlines():
+        if revision:
+            row = row[len(revision[0]) + 1:]
+        other, line, text = row.split(":", 2)
+        place = PurePosixPath(other)
+        above = place.parent if place.name in ("mod.rs", "lib.rs", "main.rs") else place.parent / place.stem
+        if other != name and ("path" in text or folder == above or above in folder.parents):
+            found.append((other, int(line)))
+    return found
+
+
+def windows_module(name, side, root, change, seen=None):
+    """Why a Rust file compiles for Windows alone, because its module is
+    declared under a Windows `cfg` or inside an outer module that is, or None.
+    Raises Unreadable when no file declares it or a declaration cannot be
+    placed."""
+    if module_of(PurePosixPath(name), root) is None:
+        return None
+    if change is not None and (side, name) in change.modules:
+        return change.modules[side, name]
+    seen = seen or {name}
+    found = declarations(name, side, root, change)
+    if not found:
+        raise Unreadable("no file declares its module")
+    for parent in sorted({other for other, _ in found}):
+        text = source(parent, side, root, change)
+        lines = [line for other, line in found if other == parent]
+        if WINDOWS_CODE.search(text):
+            items = windows_items(text)
+            if any(first <= line <= last for line in lines for first, last in items):
+                return f"a Windows module: {name}, declared for Windows in {parent}"
+        if parent not in seen:
+            seen.add(parent)
+            reason = windows_module(parent, side, root, change, seen)
+            if reason:
+                return reason
+    if change is not None:
+        change.modules[side, name] = None
+    return None
+
+
+def windows_change(name, change):
+    """Why a change to a shared Rust file touches its Windows code, or None.
+
+    A changed line that holds a Windows marker does, and so does a hunk inside
+    an item a marker is on; a file whose items cannot be read with certainty
+    counts as touched, never as untouched.
+    """
+    hunks = change.hunks.get(name, [])
+    for _, _, _, _, removed, added in hunks:
+        for row in removed + added:
+            if WINDOWS_CODE.search(row):
+                return f"Windows code changed: {name}"
+    try:
+        old_text, new_text = change.text("old", name), change.text("new", name)
+    except Unreadable as error:
+        return f"Windows code it cannot place the change against ({error}): {name}"
+    if not (WINDOWS_CODE.search(old_text) or WINDOWS_CODE.search(new_text)):
+        return None
+    try:
+        old_items = windows_items(old_text)
+        new_items = windows_items(new_text)
+    except Unreadable as error:
+        return f"Windows code it cannot place the change against ({error}): {name}"
+    for old_start, old_count, new_start, new_count, _, _ in hunks:
+        # The lines a hunk removes, on the old side, and the lines it adds, on the new.
+        old_span = (old_start, old_start + old_count - 1) if old_count else None
+        new_span = (new_start, new_start + new_count - 1) if new_count else None
+        for span, items in ((old_span, old_items), (new_span, new_items)):
+            if span and any(first <= span[1] and span[0] <= last for first, last in items):
+                return f"a change inside a Windows item: {name}:{span[0]}"
+    return None
+
+
+def windows_path(status, name, crates, root=ROOT, change=None):
+    """Why a changed path makes a pull request run its Windows jobs, or None.
+
+    With the pull request's `change`, a Rust file outside WINDOWS_LAYER counts
+    only when the change touches its Windows code (`windows_change`); without
+    it, the whole file is read.
+    """
+    if status not in ("A", "M", "D"):
+        return f"{status} change, unreadable: {name}"
+    if any(fnmatchcase(name, pattern) for pattern in WINDOWS_PATHS):
+        return f"Windows path: {name}"
+    path = PurePosixPath(name)
+    lanes, reason, _ = classify(path, status, crates, root)
+    if lanes is None:
+        if any(fnmatchcase(name, pattern) for pattern in ALL_LANE_PATHS):
+            # A CI definition that defines no Windows job a pull request runs.
+            return None
+        if fnmatchcase(name, "desktop/resources/*") and not WINDOWS_NAME.search(name):
+            # A package resource no other rule names (a Linux install script, a
+            # notice): `package` builds and installs it on Windows.
+            return f"package input, which the Windows installer and kit carry: {name}"
+        # A path no rule narrows plans every lane, and it cannot be shown to leave Windows alone.
+        return f"every lane: {reason}"
+    package = any(fnmatchcase(name, pattern) for pattern in PACKAGE_PATHS)
+    if (not lanes and not reader_entries(name) and not package) or path.suffix in (".md", ".mdx"):
+        # Documentation, the design library and paths only `policy` reads; a
+        # user docs page about Windows is built and checked on Linux.
+        return None
+    if WINDOWS_NAME.search(name) or path.suffix.lower() in WINDOWS_SCRIPTS:
+        return f"Windows path: {name}"
+    if path.suffix == ".rs":
+        try:
+            inherited = windows_module(name, "old" if status == "D" else "new", root, change)
+        except Unreadable as error:
+            return f"a module it cannot show to be built off Windows too ({error}): {name}"
+        if inherited:
+            return inherited
+    shared_rust = (change is not None and path.suffix == ".rs"
+                   and not any(fnmatchcase(name, pattern) for pattern in WINDOWS_LAYER))
+    if shared_rust:
+        reason = windows_change(name, change)
+        if reason:
+            return reason
+    elif path.suffix in CODE_SUFFIXES:
+        if status == "D":
+            return f"deleted code, which cannot be read for its Windows code: {name}"
+        try:
+            code = (root / name).read_text(encoding="utf-8", errors="replace")
+        except OSError as error:
+            return f"unreadable, so it cannot be shown to hold no Windows code: {name} ({error.strerror})"
+        if WINDOWS_CODE.search(code):
+            return f"Windows code: {name}"
+    if package:
+        return f"package input, which the Windows installer and kit carry: {name}"
+    return None
+
+
+WINDOWS_LANES = WINDOWS_ONLY_LANES + WINDOWS_LEG_LANES
+# What a Rust change's Windows form is proved by: `windows check`, which
+# compiles the workspace for Windows and runs its Windows tests, and the
+# Windows legs of the crate's own lanes (the OS contract, vt and the holder,
+# agy, WSL, the relay). The Windows e2e suites drive the app, not the crate's
+# Windows code, and the journey's Windows forms run its Python scripts; both
+# stay with main's push run and the nightly for a crate, as the macOS desktop
+# suite does for every crate change.
+RUST_WINDOWS_OFF = ("windows-e2e", "windows-desktop", "agent-journey")
+
+
+def windows_lanes(status, name, crates, root=ROOT, change=None):
+    """The Windows jobs (a Windows-only lane, or a lane's Windows leg) that
+    prove a changed path, and why; nothing when no Windows job does."""
+    why = windows_path(status, name, crates, root, change)
+    if why is None or why.startswith("package input"):
+        # A package input without Windows code is proved by `package`, which
+        # builds the Windows installer and kit on every run of its lane.
+        return set(), why
+    own = set(select([(status, name)], crates, root)["lanes"]) & set(WINDOWS_LANES)
+    path = PurePosixPath(name)
+    lanes, _, _ = classify(path, status, crates, root) if status in ("A", "M", "D") else (None, None, None)
+    rust = (name == "Cargo.lock" or (lanes is not None and (
+        path.parts[0] in crates or path.parts[:2] == ("vendor", "portable-pty"))))
+    if rust:
+        return own - set(RUST_WINDOWS_OFF), why
+    return own, why
+
+
+def with_windows(result, lanes, why):
+    """Record the Windows jobs that run; drop the Windows-only lanes outside them.
+
+    `package` builds the Windows installer and kit whenever it is planned, so
+    a plan with it takes Windows runners too.
+    """
+    result["windows"] = {"runs": bool(lanes) or "package" in result["lanes"],
+                         "lanes": [lane for lane in WINDOWS_LANES if lane in lanes], "why": why}
+    result["lanes"] = [lane for lane in result["lanes"] if lane not in WINDOWS_ONLY_LANES or lane in lanes]
+    for lane in set(WINDOWS_ONLY_LANES) - set(lanes):
+        result["reasons"].pop(lane, None)
+    return result
+
+
+def pull_request_windows(result, entries, crates, root=ROOT, change=None):
+    """A pull request's plan with the Windows jobs that prove the Windows paths it changes."""
+    lanes, why = set(), []
+    for status, name in entries:
+        proved, reason = windows_lanes(status, name, crates, root, change)
+        if proved:
+            lanes |= proved
+            why.append(f"{reason} ({', '.join(lane for lane in WINDOWS_LANES if lane in proved)})")
+        elif reason:
+            why.append(f"{reason} (package)")
+    if why:
+        return with_windows(result, lanes, why)
+    return with_windows(result, set(), ["no Windows path changed; main's push run and the nightly run the Windows jobs"])
+
+
+def pull_request_systems(result, entries, crates, root=ROOT, change=None):
+    """A pull request's plan with its macOS and Windows jobs decided; `change`
+    reads a shared Rust file's change against its Windows code."""
+    return pull_request_windows(pull_request_macos(result, entries, root), entries, crates, root, change)
+
+
+def every_system(result, why):
+    """A plan that runs every macOS and Windows job its lanes have."""
+    return with_windows(with_macos(result, True, why), set(WINDOWS_LANES), why)
 
 
 # Paths named here and in READERS are the only ones narrower than "every
@@ -973,7 +1484,9 @@ def last_green_run(repo, number, head_repo, head_ref, run_id, gh=call_gh):
     with tempfile.TemporaryDirectory() as directory:
         gh("run", "download", str(run["id"]), "--repo", repo, "--name", RECORD_ARTIFACT, "--dir", directory)
         record = json.loads((Path(directory) / RECORD_FILE).read_text(encoding="utf-8"))
-    return verified_commits(record, number, run)
+    # The head this run checked (its `policy` among the checks), beside the
+    # commits its lanes checked, which an earlier run may have checked.
+    return {**verified_commits(record, number, run), "pr_head": run["head_sha"], "run_id": run["id"]}
 
 
 def fetch_history(root, *commits):
@@ -1025,9 +1538,11 @@ def still_stands(verified, base, head, entries, crates, root=ROOT):
     return why, delta
 
 
-def plan(event, base, head, root=ROOT, crates=None, draft=False, last_green=None, nightly_agent_checks=False):
+def plan(event, base, head, root=ROOT, crates=None, draft=False, last_green=None, nightly_agent_checks=False,
+         body_edit=False):
     """The lanes for base..head. `last_green` answers the commits of the pull
-    request's latest green run, or raises; None skips the reuse check."""
+    request's latest green run, or raises; None skips the reuse check.
+    `body_edit` is a run started by an edit of the pull request's body."""
     if nightly_agent_checks:
         if event not in ("schedule", "workflow_dispatch"):
             raise ValueError("only nightly's scheduled or dispatched call can own the agent checks")
@@ -1044,13 +1559,13 @@ def plan(event, base, head, root=ROOT, crates=None, draft=False, last_green=None
         why = "merge group: the checks two changes that each passed can fail together"
         result = {"full": False, "lanes": list(MERGE_GROUP_LANES), "rust_packages": [],
                   "reasons": {lane: [why] for lane in MERGE_GROUP_LANES}}
-        return with_macos(result, False, ["merge group: no macOS job"])
+        return with_windows(with_macos(result, False, ["merge group: no macOS job"]), set(), ["merge group: no Windows job"])
     if draft:
         # A draft is not a merge candidate: no lane runs, `aggregate` fails
         # `verify` for it, and marking the pull request ready for review
         # starts the run that plans lanes.
         return {"full": False, "lanes": [], "rust_packages": [], "reasons": {}, "draft": True,
-                "macos": {"runs": False, "why": ["draft"]}}
+                "macos": {"runs": False, "why": ["draft"]}, "windows": {"runs": False, "lanes": [], "why": ["draft"]}}
     if crates is None:
         try:
             crates = cargo_crates(root)
@@ -1058,11 +1573,11 @@ def plan(event, base, head, root=ROOT, crates=None, draft=False, last_green=None
             # Without the crate graph no Rust change can be narrowed; the full
             # Rust lane runs the whole workspace and needs no package list.
             reason = f"crate graph unavailable: {error}"
-            return with_macos(select([], {}, root, reason), True, [reason])
+            return every_system(select([], {}, root, reason), [reason])
     if event != "pull_request":
         result = select([], crates, root, f"{event}: every lane runs on main")
         result["deny"] = event != "push"
-        return with_macos(result, True, [f"{event}: every macOS job runs"])
+        return every_system(result, [f"{event}: every macOS and Windows job runs"])
     try:
         # A pull request's checkout is the merge commit GitHub made; anything
         # else would compare against a parent that is not the base.
@@ -1072,38 +1587,49 @@ def plan(event, base, head, root=ROOT, crates=None, draft=False, last_green=None
         if len(parents) != 3:
             raise ValueError(f"{head} is not a merge commit")
         entries = changed_entries(base, head, root)
+        change = Change(base, head, root)
     except (subprocess.CalledProcessError, UnicodeDecodeError, ValueError) as error:
-        # Paths that cannot be listed cannot be shown to leave macOS alone.
+        # Paths that cannot be listed cannot be shown to leave macOS or Windows alone.
         reason = f"comparison unavailable: {error_detail(error)}"
-        return with_macos(select([], crates, root, reason), True, [reason])
+        return every_system(select([], crates, root, reason), [reason])
     result = select(entries, crates, root)
     result["commits"] = {"base": parents[1], "head": parents[2]}
-    # `policy` alone is what a reuse plans; nothing to save.
-    if last_green is None or result["lanes"] == ["policy"]:
-        return pull_request_macos(result, entries, root)
+    # `policy` alone is what a reuse plans; nothing to save. A body edit still
+    # asks which head the last green run checked, for `body_only` below.
+    if last_green is None or (result["lanes"] == ["policy"] and not body_edit):
+        return pull_request_systems(result, entries, crates, root, change)
     try:
-        verified = last_green()
-        why, delta = still_stands(verified, base, head, entries, crates, root)
+        green = last_green()
+        verified = {key: green[key] for key in ("run", "base", "head")}
+        if result["lanes"] != ["policy"]:
+            why, delta = still_stands(verified, base, head, entries, crates, root)
     except (NotReused, subprocess.CalledProcessError, OSError, ValueError) as error:
         # Every failure keeps the plan the change itself needs.
         result["reuse"] = {"run": None, "why": error_detail(error)}
-        return pull_request_macos(result, entries, root)
-    # Never call select with an empty delta: an empty comparison deliberately
-    # plans every lane. Preserve the original green anchor even after these
-    # checks succeed, so a later run compares with the app code actually tested.
-    rerun = select(delta, crates, root) if delta else {"lanes": ["policy"], "rust_packages": [], "reasons": {"policy": []}, "repeat": NO_REPEAT}
-    rerun["reasons"]["policy"].append(f"reuses run {verified['run']}: {why}")
-    return pull_request_macos({
-        "full": False,
-        "lanes": rerun["lanes"],
-        "rust_packages": rerun["rust_packages"],
-        "reasons": rerun["reasons"],
-        "repeat": rerun["repeat"],
-        "deny": rerun.get("deny", False),
-        "commits": result["commits"],
-        "reuse": {"run": verified["run"], "why": why},
-        "verified": verified,
-    }, entries, root)
+        return pull_request_systems(result, entries, crates, root, change)
+    if result["lanes"] != ["policy"]:
+        # Never call select with an empty delta: an empty comparison deliberately
+        # plans every lane. Preserve the original green anchor even after these
+        # checks succeed, so a later run compares with the app code actually tested.
+        rerun = select(delta, crates, root) if delta else {"lanes": ["policy"], "rust_packages": [], "reasons": {"policy": []}, "repeat": NO_REPEAT}
+        rerun["reasons"]["policy"].append(f"reuses run {verified['run']}: {why}")
+        result = {
+            "full": False,
+            "lanes": rerun["lanes"],
+            "rust_packages": rerun["rust_packages"],
+            "reasons": rerun["reasons"],
+            "repeat": rerun["repeat"],
+            "deny": rerun.get("deny", False),
+            "commits": result["commits"],
+            "reuse": {"run": verified["run"], "why": why},
+            "verified": verified,
+        }
+    if body_edit and green.get("pr_head") == parents[2]:
+        # The green run's `policy` ran the script suite and the structural
+        # checks on this head, and a body edit changes no file they read; only
+        # the checks that read the body run again.
+        result["body_only"] = f"body edit of head {parents[2][:9]}, which run {green['run_id']} checked"
+    return pull_request_systems(result, entries, crates, root, change)
 
 
 def plan_record(result, number, run_id):
@@ -1174,10 +1700,14 @@ def summary(result, runs_url=None):
     if result["rust_packages"]:
         lines.append("")
         lines.append("Rust packages: " + ", ".join(result["rust_packages"]))
-    macos = result["macos"]
-    why = "; ".join(macos["why"][:3]) + (f" (+{len(macos['why']) - 3} more)" if len(macos["why"]) > 3 else "")
-    lines.append("")
-    lines.append(f"macOS jobs: {'run' if macos['runs'] else 'skipped'}: {why}.")
+    for key, label in (("macos", "macOS"), ("windows", "Windows")):
+        system = result[key]
+        why = "; ".join(system["why"][:3]) + (f" (+{len(system['why']) - 3} more)" if len(system["why"]) > 3 else "")
+        lines.append("")
+        lines.append(f"{label} jobs: {'run' if system['runs'] else 'skipped'}: {why}.")
+    if result.get("body_only"):
+        lines.append("")
+        lines.append(f"`policy` runs only the checks that read the body: {result['body_only']}.")
     reuse = result.get("reuse")
     if reuse:
         lines.append("")
@@ -1197,6 +1727,8 @@ def main():
     plan_parser.add_argument("--base", default="HEAD^1")
     plan_parser.add_argument("--head", default="HEAD")
     plan_parser.add_argument("--draft", choices=("true", "false"), default="false", help="the pull request is a draft")
+    plan_parser.add_argument("--body-edit", choices=("true", "false"), default="false",
+                             help="the run was started by an edit of the pull request's body")
     plan_parser.add_argument("--nightly-agent-checks", choices=("true", "false"), default="false",
                              help="nightly owns agy and the journey in its direct jobs")
     plan_parser.add_argument("--record", type=Path, help="write the plan record a pull request's next run reads here")
@@ -1220,7 +1752,7 @@ def main():
             def last_green():
                 return last_green_run(repo, pull["number"], head_repo, pull["head"]["ref"], run_id)
         result = plan(args.event, args.base, args.head, draft=draft, last_green=last_green,
-                      nightly_agent_checks=args.nightly_agent_checks == "true")
+                      nightly_agent_checks=args.nightly_agent_checks == "true", body_edit=args.body_edit == "true")
         print(json.dumps(result, indent=2))
         if args.record and pull is not None and not draft:
             args.record.write_text(json.dumps(plan_record(result, pull["number"], run_id), indent=2) + "\n", encoding="utf-8")
@@ -1230,6 +1762,10 @@ def main():
                 output.write(f"full={str(result['full']).lower()}\n")
                 output.write(f"draft={str(result.get('draft', False)).lower()}\n")
                 output.write(f"macos={str(result['macos']['runs']).lower()}\n")
+                # The lanes whose Windows leg runs; a Windows-only lane runs when the plan names it.
+                legs = [lane for lane in result["windows"]["lanes"] if lane in WINDOWS_LEG_LANES]
+                output.write(f"windows-legs={json.dumps(legs, separators=(',', ':'))}\n")
+                output.write(f"body-only={str(bool(result.get('body_only'))).lower()}\n")
                 output.write(f"deny={str(result.get('deny', False)).lower()}\n")
                 output.write(f"rust-packages={json.dumps(result['rust_packages'])}\n")
                 repeat = result.get("repeat", NO_REPEAT)

@@ -545,13 +545,13 @@ The rule grammar, its limits and the evaluator have their own cases in `hide-scr
 ## Which lanes a pull request runs
 
 `pr.yml`'s `plan` job reads the paths a pull request changes against the base it merges into and plans the lanes they need; `scripts/ci-plan.py` is the one place the rules live, and `scripts/tests/test_ci_plan.py` checks them against real paths.
-`MACOS_LANE_INPUTS` holds each macOS lane's covered paths together, including the existing crate-only desktop exception; Linux and Windows selection stays with the general classifier.
+`MACOS_LANE_INPUTS` holds each macOS lane's covered paths together, including the existing crate-only desktop exception; Linux and Windows selection stays with the general classifier, and on a pull request the Windows jobs it picks run only for the Windows paths they prove ([Where the Windows runners went](#where-the-windows-runners-went)).
 `remote-mailbox` (the remote mailbox lane, its own Linux job) is planned for a change to any crate it builds and tests (`MAILBOX_CRATES` in the script: `hide-core`, `hided`, `hide-agent-hooks`, `hide-host`, and so every crate they depend on, the device link's `hide-node` and `hide-node-link` among them); web code and web specs do not reach it.
 `remote-mailbox-arm` runs the same lane on a Linux ARM64 runner (`ubuntu-24.04-arm`), where the device is an ARM64 Linux machine (with-hide/hide-private#501): it is planned for the device link's own crates (`ARM_DEVICE_CRATES`: `hide-node`, `hide-node-link`), `hided/tests/it/device_own_engine.rs` and `contracts/device-kits.json`, which `hide-node` compiles in; main's push run and the nightly run it with every lane, and it builds cold, since no job saves a dependency cache for that processor.
 `windows-wsl` (the [WSL device lane](#wsl-device-lane)) is planned for a change to a crate the WSL link and a Windows core's ssh cross (`WSL_CRATES`: `hide-platform`, `hide-node`, `hide-node-link`, `hide-host`), to the node command or to its tests, and not for a crate that only consumes them: the core's decisions about a WSL device are unit tests in `hide-core/src/runtime/tests/wsl_devices.rs`.
 Every lane is a job whose `if:` asks the plan, and `verify` passes only when every planned lane succeeded and every other lane was skipped.
 A planned lane that was skipped, failed or cancelled fails `verify`, so a wrong `if:` shows up as a red check rather than a lane quietly left out.
-The table names the lanes a path reaches; on a pull request the macOS jobs among them run only when it changes a macOS path, which [Where the macOS runners went](#where-the-macos-runners-went) owns.
+The table names the lanes a path reaches; on a pull request the macOS jobs among them run only when it changes a macOS path, which [Where the macOS runners went](#where-the-macos-runners-went) owns, and the Windows jobs among them only for a path that job proves, which [Where the Windows runners went](#where-the-windows-runners-went) owns.
 
 | Change | Lanes |
 | --- | --- |
@@ -598,6 +598,8 @@ A new PR push (`synchronize`) cancels the older run in the same concurrency grou
 
 Every plan includes `policy`, whatever else it names, except a draft pull request's: it plans no lane, and `verify` fails with "draft: lanes not run, mark ready for review".
 A body edit (`edited`) starts a run too, for the checks that read the body (`check-pr-screenshots.py`); it waits for a run in progress rather than cancelling it, and with the last green run standing it plans `policy` alone.
+When that green run checked this same head, `policy` runs only the checks that read the body: the script suite and the structural checks passed on this head in that run, and a body edit changes no file they read (`plan`'s `body-only`).
+With no green run, a green run of another head or a lookup that fails, a body edit runs the whole `policy` as before; `BodyEdit` in `scripts/tests/test_ci_plan.py` checks both and the steps `pr.yml` skips.
 Marking the pull request ready (`ready_for_review`) starts the run that plans and runs the lanes, and that run's `verify` replaces the failed one.
 `verify` fails on a draft instead of being skipped because a skipped required check counts as passed, and `verify` is not started until its lanes finish: a skipped `verify` from the draft run would otherwise be the only check on the commit for the minutes after it is marked ready.
 Keep `ready_for_review` in `pr.yml`'s `types`, and keep `verify` running on a draft; `scripts/tests/test_ci_plan.py` reads the workflow for both.
@@ -681,12 +683,45 @@ The accepted risk is a pull request that breaks only macOS merging green, with m
 It happened before, when a web shell or crate change left `desktop e2e` out until issue #1288: #1106 (the session record, `session-work-ledger.spec.ts`) and #1147 (the file tree a lane close keeps, `right-lane.spec.ts`) kept main red 92 and 103 minutes on 2026-10-15, and of 400 failed runs from 2026-10-05 to 2026-10-27, 33 failed only in the macOS desktop suite.
 So a main push run that fails only in macOS jobs does not stop merges; it is fixed before the next release, whose tagged commit's main `verify` must pass, macOS included ([CONTRIBUTING.md](../CONTRIBUTING.md#when-mains-push-run-fails)).
 A pull request that wants its desktop specs run on macOS before it merges can run `gh workflow run nightly.yml --ref <branch> -f lane=macos`.
-The desktop `@platform` tests run on Windows in a pull request (`windows-desktop`, about six minutes) and on Linux only in the nightly.
+The desktop `@platform` tests run on Windows in a pull request only when it changes a Windows path `windows desktop` proves ([Where the Windows runners went](#where-the-windows-runners-went)), and on Linux only in the nightly.
 
 The remote mailbox lane runs `hided/tests/it/device_own_engine.rs`, a device of the core's own engine (PRD engine-bundle-3-core-owns B35): it stages the built `hide-holder` (the lane restores the vt lane's Zig inputs for it) beside the shipped `hided`, starts a pane by the node link's pane requests, proves a caller in another pane by that pane's holder record, ends the link and its node, and checks the next link's node finds the pane with the same process and that no file of Herdr's reached the account.
 Its asker program waits for the test before it asks the node's pane socket, and the test releases it once the node's proof of the pane says it runs: the holder writes a pane's record as running after its program started, and a program that asks in between is refused as a pane the node does not know yet, once, with no retry (with-hide/hide-private#503).
 Each test's loopback `sshd` (`hided/tests/it/support/sshd.rs`) chooses its port by binding port 0 and letting it go, so another test's server can take the port before this one binds; the server is ready only when its own log says `Server listening on 127.0.0.1 port N.`, never when a connection to the port succeeds, because that reaches whichever server holds it, and a server that lost the bind (`Address already in use`) is started again on another port (with-hide/hide-private#210); a restart on the same port reads only the log lines its own server wrote, since the log is appended to, and names a port another server took while it was down.
 Locally: `bash scripts/verify-cargo.sh cli`, then `HIDE_TEST_HOLDER_BIN=$PWD/target/debug/hide-holder bash scripts/verify-cargo.sh nextest -p hided --test it -E 'test(/^(remote_delivery|node_contract|system_ssh|device_own_engine|stress_gate_canary)::/) & !test(protocol24)' --run-ignored only`.
+
+### Where the Windows runners went
+
+A pull request runs a Windows job only when it changes a path that job proves, and main's push run and the nightly run every Windows job (operator decision 2026-11-21, the macOS rule above applied to Windows).
+Measured over 28 hours (191 pull request `verify` runs), a run that ran lanes took a median 27.1 minutes, and `windows check` (about 24 minutes) and the Windows e2e shards were its longest jobs and held the most runner slots; over two weeks, 39 of 285 failed pull request runs failed in Windows jobs only.
+`scripts/ci-plan.py` decides it per lane, as `MACOS_LANE_INPUTS` does for macOS: `windows_lanes` names, for each changed path, the Windows jobs that prove it, and the plan keeps those and drops the rest.
+The Windows-only lanes (`WINDOWS_ONLY_LANES`: `windows-check`, `windows-e2e`, `windows-desktop`, `windows-wsl`, and `agy-contract`, whose pull request call runs Windows alone) are planned or left out; the Windows legs of `relay-protocol`, `os-contract`, `vt`, `holder-restart`, `omp-contract`, `agent-journey` and `agent-clis` (`WINDOWS_LEG_LANES`) follow `plan`'s `windows-legs` output.
+
+| Windows path | The Windows jobs that prove it |
+| --- | --- |
+| A CI definition that defines a Windows job (`pr.yml` and the workflows it calls with a Windows runner, `.github/actions/`, `scripts/ci-plan.py`), a path no rule narrows, a change that is not an add, modify or delete | Every Windows job its plan has |
+| Rust code that holds Windows code (a `cfg` or target naming Windows, over several lines or nested in `any`, `all` or `not`, `std::os::windows`, `win32`), a Rust file whose module is declared under a Windows `cfg` or inside a module that is, a crate's `Cargo.toml` or `build.rs`, `Cargo.lock`, a deleted Rust file in the Windows layer | `windows check` and the Windows legs of the crate's own lanes (the OS contract, vt and the holder, agy, WSL, the relay); not the Windows e2e suites, which drive the app, nor the journey's Windows forms, which run its Python scripts |
+| A path outside a crate named for Windows (`windows`, `win`, `win32`, `powershell`, `conpty`, `wsl` in its name) or a PowerShell, batch or NSIS script | The Windows jobs of the lanes the path reaches; inside a crate, the Rust row's |
+| The web files whose Windows form differs (the host bridge, `revealExternal.ts`, the chords and their labels, the keyboard and keys, terminal links) | `windows e2e` and `windows desktop` |
+| Desktop, web or script code with a `win32` branch, a Python `os.name` or `platform.system()` branch, a C `_WIN32` branch or a shell's `MINGW*\|MSYS*\|CYGWIN*` case | The Windows jobs of the lanes the path reaches: `windows desktop` and, for `desktop/src/main`, `windows check`, whose Vitest step runs the host's unit suite; `windows e2e` for a web e2e helper; the journey's Windows forms for its scripts |
+| The pins a Windows leg installs or runs from: `contracts/agent-clis.json`, `contracts/agent-journey.json`, `contracts/device-kits.json`, `hide-vt/build-inputs.json` | The Windows jobs of the lanes that read them (agy's contract and the Windows legs of the agent CLIs, the journey and the holder restart for the agent pins) |
+| A package input with no Windows code | `package`, which builds and installs the Windows installer and makes the Windows device kit on every run of its lane |
+
+A Rust file outside the Windows layer (`WINDOWS_LAYER`: `hide-platform`, `hide-shell`, `hide-holder`, `vendor/portable-pty` and the WSL lane's files) is read change by change, not whole: it plans `windows check` only when a changed line holds a Windows marker or a changed hunk lies inside an item that carries one.
+`windows_items` finds each item from its marker, or the attribute the marker sits in, to the end of the item, statement or block it is on, by matching brackets with strings, characters and comments skipped; an `if cfg!(windows)` keeps its `else` with it.
+A file it cannot read with certainty (brackets that do not balance, a string or comment left open, a marker inside a macro's body, an inner `#![cfg(windows)]`, a side git cannot read) counts as touched, never as untouched.
+Before any of that, `windows_module` finds where the file's module is declared in its crate (`git grep` at the pull request's head, or its base for a delete: a `mod` of its name above its folder, or a `path` attribute naming it) and follows the declarations up to the crate root; a declaration inside a Windows item makes the whole file Windows, and a file no module declares counts as Windows.
+So a change outside the Windows block of a shared file meets Windows on main, not on the pull request.
+A file in the Windows layer, where each system's form is written, runs Windows whatever line changed, as does any file the plan cannot read as a diff.
+A test tagged `@platform` is no Windows path by its tag: the Linux suite runs it, and its Windows leg runs on main and in the nightly, as its macOS leg does.
+
+On the 70 pull requests merged before 2026-11-21 (#2503 to #2794), read with each one's own diff, 39 plan neither `windows check` nor `windows e2e`.
+The others change CI, the Windows layer, a line of Windows code or a hunk inside a Windows item, a web file with a Windows form, or a path no rule narrows yet (`Cargo.lock`, a lockfile, `.config/nextest.toml`).
+
+The accepted risk is the macOS one: a pull request that breaks only Windows merges green, and main's push run, or the next nightly, is the first to show it.
+A main push run that fails only in Windows jobs does not stop merges; it is fixed before the next release, whose tagged commit's main `verify` must pass, Windows included ([CONTRIBUTING.md](../CONTRIBUTING.md#when-mains-push-run-fails)).
+The plan has no way for a pull request to ask for lanes by name, since every lane follows from its paths; a pull request that its author knows is risky on Windows runs the Windows web and desktop `@platform` suites and agy before it merges with `gh workflow run nightly.yml --ref <branch> -f lane=windows`, and one Windows test file with `gh workflow run repeat.yml --ref <branch> -f runner=windows`.
+`WindowsOnPullRequests` and `RustChange` in `scripts/tests/test_ci_plan.py` check the rule with the paths of real merged pull requests, the item reader with items cut from the files whose Windows code most often met a pull request, and the legs `pr.yml` passes.
 
 ### WSL device lane
 
@@ -865,16 +900,17 @@ The transition retains these explicit exceptions:
 | --- | --- | --- |
 | Desktop SSH specs on the own engine | Fixture prepared; existing private-SSH prerequisites still skip without that environment | Connect an isolated SSH CI lane |
 
-A run that plans every lane a pull request can plan starts at most 62 jobs.
+A run that plans every lane a pull request can plan starts at most 69 jobs.
 The package lane's six preparation and compile jobs (helper identity, two Linux device helpers, device bundles and the separate Windows and macOS compiles) are counted, and every suite runs once, on the core's own engine, since Herdr's lanes went with Herdr (PRD engine-bundle-4-herdr-removal D-2).
 `scripts/tests/test_ci_plan.py` counts them from the workflows:
 
 | Jobs | Count | Why |
 | --- | --- | --- |
-| `plan`, `policy`, `rust`, `checks`, `windows check`, `verify` | 6 | `checks` merges `web checks` and `desktop checks`: both install the same dependencies, run for a minute or two and start a runner each |
+| `plan`, `policy`, `checks`, `windows check`, `verify` | 5 | `checks` merges `web checks` and `desktop checks`: both install the same dependencies, run for a minute or two and start a runner each |
+| `rust workspace` | 5 | one build of the planned crates' tests, three shards that run them from its archive, and the lint beside the build ([The Rust lane's shards](#the-rust-lanes-shards)): one job held all of it for 14 to 18 minutes, the longest Linux line of a run |
 | `windows e2e` | 5 | the `@platform` suite in three shards dealt by the Windows table, with the daemon and web shell builds in their own parallel jobs as on Linux: one job held all 88 tests and took 22.4 minutes at the median of 65 successful jobs, the longest of a run, while three shards plan 4.2 minutes of tests each; the reusable workflow starts no `plan` job, since a matrix picks its list by index |
 | `windows desktop` | 1 | the desktop `@platform` tests on Windows, the one job that starts the Electron app there in a pull request; it keeps the window it drew as the run's artifact |
-| `web e2e` (Linux) | 8 | parallel daemon and web shell builds and six shards dealt by recorded durations: six were cut to four in 2026-10-05 after queues at the 20-job limit, returned to six as the suite grew, and six now meet the 720-second budget using the refreshed twenty-run median ([Balancing the e2e shards](#balancing-the-e2e-shards)) |
+| `web e2e` (Linux) | 11 | parallel daemon and web shell builds and nine shards dealt by recorded durations: six were cut to four in 2026-10-05 after queues at the 20-job limit, returned to six as the suite grew, and went to nine in 2026-11 so the lane ends beside the Rust lane, 13 minutes into a run ([Balancing the e2e shards](#balancing-the-e2e-shards)) |
 | `os contract` (Linux, Windows), `os contract (macOS)` | 3 | one job per system, the macOS leg planned only for its two crates and a macOS path |
 | `agy contract` (Windows) | 1 | agy's hook block, trust, conversations and Hide AI backend, and the real agy reading Hide's block, where the hook commands and install folder differ; `rust` runs the same tests on Linux and the nightly runs all three systems |
 | `omp SDK contract` (Linux, macOS, Windows) | 3 | both supported exact npm SDK versions on Bun 1.3.14, with synthetic stored login and localhost inference; the native SQLite, Bun runtime and package resolution need each system |
@@ -888,10 +924,34 @@ The package lane's six preparation and compile jobs (helper identity, two Linux 
 | `vt`, holder restart, relay interoperability | 9 | each lane runs once on Linux, macOS and Windows |
 | `package` (Windows, Linux, macOS) | 9 | helper identity, two Linux device helpers, device bundles, Windows and macOS compiles, and three packages; without macOS, its compile and package are omitted, leaving seven jobs |
 
-The common runs are smaller: a `hide-core` or `hided` change starts 31 jobs, a web shell change 19, a desktop-only change 5 (6 for `desktop/src/main`, which adds `windows check`), a `hide-platform` change 35, a `hide-kit` or `hide-agent-hooks` change 39, all with none on macOS, and a documentation change 3, as does a push that reuses the pull request's last green run.
+The common runs are smaller, counted with `runner_jobs` over the pull request plan of one changed file, each lane's macOS leg left out as such a plan leaves it, with `plan` and `verify`: `hide-core/src/lib.rs` starts 31 jobs, `hided/src/lib.rs` 36 (it holds tests, so it plans the repeat lane), `web/src/Overview.tsx` 21, a desktop-only change 5 (6 for `desktop/src/main`, which adds `windows check`), `hide-platform/src/lib.rs` 35, `hide-kit/src/lib.rs` or `hide-agent-hooks/src/lib.rs` 39 (the package lane's seven jobs among them), all with none on macOS, and a documentation change 3, as does a push that reuses the pull request's last green run.
+A change to a test file adds the repeat lane's jobs to these.
 A macOS path adds its macOS jobs: a change to a macOS file of `desktop/src/main` starts 10 jobs with four on macOS, and one to `hide-platform`'s macOS code 37 with two.
 The median wall time and the share of runs whose Linux shards waited more than 10 minutes come from a measurement of the pull request runs after a change merges, taken the way issue #561 took its baseline; they are not in this guide because a pull request cannot prove them.
 The `plan` job's summary lists each lane with the paths that chose it.
+
+### The Rust lane's shards
+
+The `rust` lane is `.github/workflows/rust.yml`, which `pr.yml` calls, so `verify` and the plan still see one `rust` lane.
+It has three kinds of job, and the tests are built once.
+
+- `build tests` compiles the planned crates' tests (the whole workspace in a full plan) and packs them with `scripts/verify-cargo.sh nextest-archive <file>`, `cargo nextest archive`, kept as the run's `rust-tests` artifact for a day.
+  It is Linux's saver of the `workspace` set ([BUILD.md](BUILD.md#cis-rust-caches)).
+- `tests 1/3` to `tests 3/3` each download the archive and run their slice with `scripts/verify-cargo.sh nextest --profile ci --archive-file <file> --partition slice:N/3`.
+  No shard builds: the script runs `cargo-nextest` itself for an archive, so `cargo`, rustup's proxy, never installs the toolchain on a shard.
+  `slice` deals the tests round-robin across every binary, so each shard holds a third of each binary, and the three shards' counts add up to the tests one runner ran before the split (9298 on main run [44905662162](https://github.com/with-hide/hide/actions/runs/44905662162)).
+- `lint` checks the shared feature set, the licenses and advisories when the plan's `deny` says so, formatting and Clippy beside the build, not before the tests; it saves the `lint` set, Clippy's check of the dependencies, which no test build makes.
+
+The archive is extracted into the checkout, where `target/` was when it was built, and the script refuses `--extract-to` and the remap options.
+A test reads paths the compiler wrote into it (`CARGO_BIN_EXE_*` for a binary it starts, `CARGO_MANIFEST_DIR`, a build script's `OUT_DIR`), and every Linux runner checks the repository out at the same path, so those paths hold on a shard; the archive carries the binaries and the build script output the tests link.
+A trial before the split ran every test of `hide-agent-hooks` and `hide-shell` (489, among them the ones that start the `hide-agent-hooks` binary by `CARGO_BIN_EXE_`) from an archive extracted into a checkout whose own `target/` had been removed, with no `cargo` on `PATH`, and the three slices together ran each test once.
+
+The ignored tests the lane runs, the real-shell tests and the oldest gh (below), run in `build tests` after the archive is uploaded.
+They need the built pane holder, which `scripts/prepare-ignored-tests.sh` builds with cargo, and the login shells: a shard has no compiler, and `lint` compiles no test, so either would build again what the build job already has, while the build job runs them in about 20 seconds.
+Each job that runs tests files the flaky ones it saw from its own JUnit report (`scripts/ci-flaky-report.py --suite rust`).
+
+Three shards come from main's single runner: a warm build of 4m26s and 779 seconds of tests (run [44905662162](https://github.com/with-hide/hide/actions/runs/44905662162)), so a shard runs about 260 seconds of tests after a minute of setup and the archive's download, and the lane ends about 13 minutes into a run, beside the web lane ([Balancing the e2e shards](#balancing-the-e2e-shards)).
+Locally, `bash scripts/verify-cargo.sh nextest-archive target/rust-tests.tar.zst -p <crate>` and then `bash scripts/verify-cargo.sh nextest --archive-file target/rust-tests.tar.zst --partition slice:1/3` run one shard as CI does.
 
 ### Balancing the e2e shards
 
@@ -918,14 +978,13 @@ A lane sizes its shards to plan at most 60 % of that cap, and `split --budget <s
 Both lanes pass 720 seconds.
 A macOS shard costs one of the five macOS runners the organization runs at once and about 4.5 minutes of its own setup (checkout, the caches, the cargo build of the CLI binaries and the web build), so the macOS lanes add the fewest shards that keep that margin.
 
-The current web table is the median per listed test from the Linux web e2e jobs of twenty successful main `verify` runs, collected on 2026-10-28.
-The runs range from [40285086262](https://github.com/with-hide/hide/actions/runs/40285086262) (2026-10-26) through [40612941430](https://github.com/with-hide/hide/actions/runs/40612941430) (2026-10-28), including the audit baseline [40569996553](https://github.com/with-hide/hide/actions/runs/40569996553).
-All 385 currently listed tests have a passing observation: 379 have twenty runs, one has nineteen, three have nine and two have six because they were added later.
-The existing `durations` command takes the median of passing lines, including a passing retry, and rounds to 0.1 second; no test in this refresh uses the unknown-test fallback.
-The table totals 3851.3 seconds; the unchanged splitter plans at most 962.9 seconds with four shards, 770.3 with five and 641.9 with six.
-Six is the smallest count within the unchanged 720-second test-work budget; the e2e step still caps a stalled run at 1200 seconds.
+The current web table is the median per listed test from the Linux web e2e jobs of twenty successful main `verify` runs, collected on 2026-11-21: 120 shard jobs, from [44682548621](https://github.com/with-hide/hide/actions/runs/44682548621) (2026-11-20) through [44905662162](https://github.com/with-hide/hide/actions/runs/44905662162) (2026-11-21).
+It lists 478 tests that total 3929.6 seconds; the table it replaced (2026-10-28) knew 354 of them, and the 124 it lacked each weighed its median.
+The existing `durations` command takes the median of passing lines, including a passing retry, and rounds to 0.1 second.
 These weights include fixture setup and teardown charged to a test, but exclude report overhead, runner setup and queues; medians are neither a wall-time forecast nor p95 or causal speedup evidence.
-This refresh replaces the approved single-run recording from 2026-10-25, whose five-shard plan had drifted below actual test time, without changing assertions, retries, timeouts or test selection.
+The Linux lane is sized by when it ends, as the Windows lane is: the daemon build (194 seconds), a shard's setup (80) and its step's listing and report around the tests (37, the step's 692 less the 655 it planned) come first and last whatever the count, medians of the same twenty runs.
+Its target is to end within the Rust lane's 13 minutes of a run's start, less the plan job's 18 seconds, 762 seconds, so neither of a run's two longest Linux lines sets its length alone ([The Rust lane's shards](#the-rust-lanes-shards)).
+Nine shards plan 437 seconds each and end near 748; eight plan 491 and end near 802, so nine is the fewest that meets it, and `scripts/tests/test_e2e_shard.py` holds the count to that measurement.
 The Linux web lane deals by this table, and the Windows pull request lane by its own, `web/e2e/shard-durations-windows.json`: the median per listed test from the logs of 22 successful `web e2e windows` jobs, all on 2026-11-14.
 All 88 listed tests have a passing observation, seven at least.
 That table totals 763.8 seconds, and the Windows lane is sized by when it finishes rather than by its test work: the daemon build precedes the shards and each shard adds its own setup, about 288 and 114 seconds at the median of 115 jobs, so two shards plan 383 seconds each and finish near 785, over the 720 the lane targets, while three plan 255 and finish near 657.

@@ -2,9 +2,9 @@
 //!
 //! A program outside every Hide pane on the core's own machine (a chat
 //! gateway, a cron job, a script) asks once with `hide access request
-//! --name <name>`; the operator approves it from Settings › External tools
-//! as View only or Act, and from then on the tool runs the ordinary `hide`
-//! commands as that connection.
+//! --name <name>`; the operator approves it as a bot from Settings, in one
+//! of two modes, the whole Hide or its own work, and from then on the bot
+//! runs the ordinary `hide` commands as that connection.
 //!
 //! The tool makes its key itself and keeps it in an owner-only file under
 //! its own home; this core keeps only the key's SHA-256 (as phone pairing
@@ -36,22 +36,29 @@ pub const NAME_LIMIT: usize = 64;
 pub const USE_INTERVAL_MS: u64 = 60_000;
 /// The store's size at most: sixteen short records.
 pub(crate) const READ_CAP: u64 = 256 * 1024;
-const SCHEMA_VERSION: u32 = 1;
+/// Schema 2 replaced a connection's level (View only or Act) with its mode;
+/// schema 1 is read once more on load ([`decode`]).
+const SCHEMA_VERSION: u32 = 2;
 
-/// What an approved tool may do (D-06, D-34): see what Hide shows, or that
-/// and everything the operator does through `hide`.
+/// What an approved bot reaches (mission-87): every bot runs what the
+/// operator does through `hide`; a mode says over whose work.
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case")]
-pub enum Level {
-    View,
-    Act,
+#[serde(tag = "kind", rename_all = "snake_case")]
+pub enum Mode {
+    /// The whole Hide: the operator's work and every bot's, on every
+    /// connected device, and the settings-wide state.
+    All,
+    /// Its own work only: the agents it started, the agents started under
+    /// them, and the missions they conduct (`Runtime::own_work`); it starts
+    /// agents in any project on any connected device, and those are its own.
+    Own,
 }
 
-impl Level {
+impl Mode {
     pub fn as_str(self) -> &'static str {
         match self {
-            Self::View => "view",
-            Self::Act => "act",
+            Self::All => "all",
+            Self::Own => "own",
         }
     }
 }
@@ -105,7 +112,7 @@ fn same_hash(a: &str, b: &str) -> bool {
 pub struct Connection {
     pub id: String,
     pub name: String,
-    pub level: Level,
+    pub mode: Mode,
     /// The program that asked, as the kernel named the requesting process's
     /// parent; shown, never trusted.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -133,6 +140,10 @@ pub enum Ended {
     Expired,
     /// The operator disconnected the tool (B13).
     Revoked,
+    /// A View only connection of an earlier build: a bot runs everything a
+    /// connection at Act ran, so it waits for the operator to approve it
+    /// again rather than gain that unasked (mission-87 D4).
+    Reapprove,
 }
 
 impl Ended {
@@ -141,6 +152,7 @@ impl Ended {
             Self::Refused => "access_refused",
             Self::Expired => "access_request_expired",
             Self::Revoked => "access_revoked",
+            Self::Reapprove => "access_reapprove",
         }
     }
 }
@@ -222,7 +234,7 @@ pub enum Call {
     Leave { key_sha256: String },
     /// A tool's command: the connection its key proves, for a credential.
     Prove { key_sha256: String },
-    /// A command run on that credential: the connection's level now (B12,
+    /// A command run on that credential: the connection's mode now (B12,
     /// B13), which also moves its last use (B34).
     Check { id: String },
     /// `hide access list`: the section as the screen reads it (B17).
@@ -236,20 +248,87 @@ pub struct Stored {
     pub schema_version: u32,
     #[serde(default)]
     pub connections: Vec<Connection>,
+    /// Never written: the key hashes of schema 1's View only connections,
+    /// which [`Access::restored`] ends as [`Ended::Reapprove`] (D4). The file
+    /// keeps them until its next save, so a restart before that tells the
+    /// tool the same.
+    #[serde(skip)]
+    pub reapprove: Vec<String>,
+}
+
+/// A schema 1 connection: a level where schema 2 has a mode.
+#[derive(Deserialize)]
+struct ConnectionV1 {
+    id: String,
+    name: String,
+    level: LevelV1,
+    #[serde(default)]
+    program: Option<String>,
+    created_ms: u64,
+    last_used_ms: u64,
+    key_sha256: String,
+}
+
+#[derive(Clone, Copy, Deserialize, Eq, PartialEq)]
+#[serde(rename_all = "snake_case")]
+enum LevelV1 {
+    View,
+    Act,
+}
+
+#[derive(Deserialize)]
+struct StoredV1 {
+    #[serde(default)]
+    connections: Vec<ConnectionV1>,
 }
 
 pub(crate) fn encode(stored: &Stored) -> Result<Vec<u8>, String> {
     serde_json::to_vec_pretty(stored).map_err(|error| error.to_string())
 }
 
+/// Reads the file. Schema 1 moves on load (D4): a connection at Act becomes
+/// the whole Hide, which is what Act reached; one at View only is left out
+/// and its key waits for the operator's approval again, so no tool reaches
+/// more than the operator approved.
 pub(crate) fn decode(bytes: &[u8]) -> Result<Stored, String> {
-    let mut stored: Stored = serde_json::from_slice(bytes).map_err(|error| error.to_string())?;
-    if stored.schema_version > SCHEMA_VERSION {
-        return Err(format!(
-            "schema {} is newer than this build reads",
-            stored.schema_version
-        ));
+    #[derive(Deserialize)]
+    struct Version {
+        #[serde(default)]
+        schema_version: u32,
     }
+    let version: Version = serde_json::from_slice(bytes).map_err(|error| error.to_string())?;
+    let mut stored = match version.schema_version {
+        0 | 1 => {
+            let old: StoredV1 = serde_json::from_slice(bytes).map_err(|error| error.to_string())?;
+            let (act, view): (Vec<_>, Vec<_>) = old
+                .connections
+                .into_iter()
+                .partition(|connection| connection.level == LevelV1::Act);
+            Stored {
+                schema_version: SCHEMA_VERSION,
+                connections: act
+                    .into_iter()
+                    .map(|connection| Connection {
+                        id: connection.id,
+                        name: connection.name,
+                        mode: Mode::All,
+                        program: connection.program,
+                        created_ms: connection.created_ms,
+                        last_used_ms: connection.last_used_ms,
+                        key_sha256: connection.key_sha256,
+                    })
+                    .collect(),
+                reapprove: view
+                    .into_iter()
+                    .map(|connection| connection.key_sha256)
+                    .filter(|hash| hash.len() == 64)
+                    .take(MAX_CONNECTIONS)
+                    .collect(),
+            }
+        }
+        SCHEMA_VERSION => serde_json::from_slice(bytes).map_err(|error| error.to_string())?,
+        newer => return Err(format!("schema {newer} is newer than this build reads")),
+    };
     stored
         .connections
         .retain(|connection| valid_name(&connection.name) && connection.key_sha256.len() == 64);
@@ -268,16 +347,21 @@ pub struct Access {
 
 impl Access {
     pub fn restored(stored: Stored) -> Self {
-        Self {
+        let mut access = Self {
             connections: stored.connections,
             ..Self::default()
+        };
+        for key_sha256 in stored.reapprove {
+            access.end(key_sha256, Ended::Reapprove);
         }
+        access
     }
 
     pub fn stored(&self) -> Stored {
         Stored {
             schema_version: SCHEMA_VERSION,
             connections: self.connections.clone(),
+            reapprove: Vec::new(),
         }
     }
 
@@ -384,11 +468,11 @@ impl Access {
         })
     }
 
-    /// The operator approves the waiting request `id` at `level` (B4).
+    /// The operator approves the waiting request `id` in `mode` (B4).
     pub fn approve(
         &mut self,
         id: &str,
-        level: Level,
+        mode: Mode,
         now_ms: u64,
     ) -> Result<&Connection, &'static str> {
         let index = self
@@ -410,7 +494,7 @@ impl Access {
         self.connections.push(Connection {
             id: pending.id,
             name: pending.name,
-            level,
+            mode,
             program: pending.program,
             created_ms: now_ms,
             last_used_ms: now_ms,
@@ -431,16 +515,16 @@ impl Access {
         Ok(pending)
     }
 
-    /// The operator sets connection `id` to `level`; the tool's next
-    /// command runs at it (B12). Whether it changed.
-    pub fn set_level(&mut self, id: &str, level: Level) -> Result<bool, &'static str> {
+    /// The operator sets connection `id`'s mode; the bot's next command
+    /// runs in it (B12). Whether it changed.
+    pub fn set_mode(&mut self, id: &str, mode: Mode) -> Result<bool, &'static str> {
         let connection = self
             .connections
             .iter_mut()
             .find(|connection| connection.id == id)
             .ok_or("access_connection_gone")?;
-        let changed = connection.level != level;
-        connection.level = level;
+        let changed = connection.mode != mode;
+        connection.mode = mode;
         Ok(changed)
     }
 
@@ -484,62 +568,78 @@ impl Access {
     }
 }
 
-/// What a tool's level must allow for a command (B20-B23). The one table:
-/// hided judges a tool's command by it at the command boundary, and the
-/// core again when the command runs (`runtime::access`).
+/// What a bot's mode must allow for a command (B20-B23, mission-87 D3). The
+/// one table: hided judges a bot's command by it at the command boundary,
+/// and the core again when the command runs (`runtime::access`).
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum Need {
-    /// Reads what Hide shows: View only runs it.
-    View,
-    /// Changes something, as the operator would: Act runs it.
-    Act,
-    /// Means an agent in a Hide pane: no tool runs it; the tool starts an
+    /// Reaches agents, panes or missions, or only the bot's own letters and
+    /// watches: every bot runs it, and the core holds an own-mode bot's to
+    /// its own work where the command names or lists what it reaches
+    /// (`runtime::access`, `Runtime::own_work`).
+    Work,
+    /// Reaches what is no one bot's work: the operator's screen (Views,
+    /// files, the project's records), devices and the settings-wide state.
+    /// The whole Hide only.
+    All,
+    /// The operator's alone, whatever the mode: adding or removing a device
+    /// (operator decision 2026-11-21), as approving a bot is.
+    Operator,
+    /// Means an agent in a Hide pane: no bot runs it; the bot starts an
     /// agent and asks it instead (B22).
     Agent,
-    /// A spawn under a parent: a tool is never one (B23).
+    /// A spawn under a parent: a bot is never one (B23).
     Parent,
 }
 
-/// A View only tool asked for what only Act may (B20).
-pub const VIEW_ONLY: &str = "access_view_only";
+/// An own-mode bot reached past its own work.
+pub const NOT_OWN_WORK: &str = "access_not_own_work";
+/// What only the operator does, such as adding or removing a device.
+pub const OPERATOR_ONLY: &str = "access_operator_only";
+/// What a bot refused [`NOT_OWN_WORK`] is told, by the core's refusals and
+/// hided's alike.
+pub const NOT_OWN_WORK_NEXT_ACTION: &str = "This bot acts on its own work only: the agents it started, the agents under them and the missions they conduct; start an agent with hide agent spawn and ask it, or ask the operator to give the bot the whole Hide in Settings";
 /// A command only an agent in a Hide pane can mean (B22).
 pub const NEEDS_AGENT: &str = "access_needs_agent";
-/// A tool's spawn named a parent (B23).
+/// A bot's spawn named a parent (B23).
 pub const SPAWN_PARENT: &str = "access_spawn_parent";
 
-/// Whether a tool at `level` runs a command that needs `need`, or the
-/// reason it is refused.
-pub fn admit(level: Level, need: Need) -> Result<(), &'static str> {
-    match (level, need) {
-        (_, Need::View) | (Level::Act, Need::Act) => Ok(()),
-        (Level::View, _) => Err(VIEW_ONLY),
-        (Level::Act, Need::Agent) => Err(NEEDS_AGENT),
-        (Level::Act, Need::Parent) => Err(SPAWN_PARENT),
+/// Whether a bot in `mode` runs a command that needs `need`, or the reason
+/// it is refused. What a `Need::Work` command of an own-mode bot names is
+/// judged where it is read, against its own work.
+pub fn admit(mode: Mode, need: Need) -> Result<(), &'static str> {
+    match (mode, need) {
+        (_, Need::Work) | (Mode::All, Need::All) => Ok(()),
+        (Mode::Own, Need::All) => Err(NOT_OWN_WORK),
+        (_, Need::Operator) => Err(OPERATOR_ONLY),
+        (_, Need::Agent) => Err(NEEDS_AGENT),
+        (_, Need::Parent) => Err(SPAWN_PARENT),
     }
 }
 
-/// What a delivery command needs: listing and showing agents are reads,
-/// a spawn and an end are Act, a spawn under a parent never runs, and what
-/// names the caller's own pane (`here`, `--beside`, a plan node,
-/// registering, asking a person, a hook's reads) needs an agent. A spawn
-/// with a task needs Act here; the task itself is Hide's own, which the
+/// What a delivery command needs: listing, showing, spawning and ending
+/// agents and the bot's letters and watches reach work, a spawn
+/// under a parent never runs, and what names the caller's own pane
+/// (`here`, `--beside`, a plan node, registering, asking a person, a hook's
+/// reads) needs an agent. A spawn with a task is Hide's own, which the
 /// spawn's rule refuses any other caller (`coordination`).
 pub fn delivery_need(command: &crate::delivery::Command) -> Need {
     use crate::coordination::Command as Agents;
     use crate::delivery::Command as Delivery;
     match command {
         Delivery::Agents { command } => match command {
-            Agents::List { .. } => Need::View,
-            Agents::Show { id } if id != crate::coordination::HERE => Need::View,
+            Agents::Show { id } if id == crate::coordination::HERE => Need::Agent,
             Agents::Spawn {
                 parent: Some(_), ..
             } => Need::Parent,
             Agents::Spawn {
                 beside, plan_node, ..
             } if *beside || plan_node.is_some() => Need::Agent,
-            Agents::Spawn { .. } | Agents::End { .. } => Need::Act,
-            Agents::Show { .. }
-            | Agents::RegisterSelf { .. }
+            Agents::List { .. }
+            | Agents::Show { .. }
+            | Agents::Spawn { .. }
+            | Agents::End { .. } => Need::Work,
+            Agents::RegisterSelf { .. }
             | Agents::Register { .. }
             | Agents::AskHuman { .. }
             | Agents::AskHumanClear => Need::Agent,
@@ -556,50 +656,53 @@ pub fn delivery_need(command: &crate::delivery::Command) -> Need {
         | Delivery::WatchStart { .. }
         | Delivery::WatchStop { .. }
         | Delivery::WatchAssign { .. }
-        | Delivery::WatchList => Need::Act,
+        | Delivery::WatchList => Need::Work,
     }
 }
 
-/// What a pane command needs: reading a pane is a read, typing into one is
-/// Act, and opening a pane beside the caller or naming its purpose needs
-/// the caller's own pane.
+/// What a pane command needs: reading a pane and typing into one reach the
+/// work it runs, and opening a pane beside the caller or naming its
+/// purpose needs the caller's own pane.
 pub fn pane_need(command: &crate::pane_command::PaneCommand) -> Need {
     use crate::pane_command::PaneCommand;
     match command {
         PaneCommand::Read { .. }
         | PaneCommand::ReadScreen { .. }
-        | PaneCommand::AgentRead { .. } => Need::View,
-        PaneCommand::Send { .. } => Need::Act,
+        | PaneCommand::AgentRead { .. }
+        | PaneCommand::Send { .. } => Need::Work,
         PaneCommand::Open { .. } | PaneCommand::Purpose { .. } => Need::Agent,
     }
 }
 
-/// What a mission command needs: reading missions is a read; a tool leads
-/// none, a Conductor it starts does (D-12).
+/// What a mission command needs: reading missions reaches their work; a bot leads none, a Conductor it starts does (D-12).
 pub fn mission_need(command: &crate::missions::MissionCommand) -> Need {
     use crate::missions::MissionCommand;
     match command {
-        MissionCommand::List | MissionCommand::Show { .. } => Need::View,
+        MissionCommand::List | MissionCommand::Show { .. } => Need::Work,
         _ => Need::Agent,
     }
 }
 
-/// What a device command needs: the list is a read, anything else Act.
+/// What a device command needs: devices are no bot's work, and adding or
+/// removing one is the operator's alone.
 pub fn device_need(command: &crate::device_command::DeviceCommand) -> Need {
+    use crate::device_command::DeviceCommand;
     match command {
-        crate::device_command::DeviceCommand::List => Need::View,
-        _ => Need::Act,
+        DeviceCommand::List | DeviceCommand::Retry { .. } => Need::All,
+        DeviceCommand::Add { .. } | DeviceCommand::Remove { .. } => Need::Operator,
     }
 }
 
 /// How another machine's core stands toward this one (PRD
 /// device-connect-iroh D-72), read from the pairing facts hided tells the
-/// core (`crate::peer_machines`). Its agents' commands enter here as an
-/// external tool's do, at Act, and the same table judges them.
+/// core (`crate::peer_machines`). Its agents' commands enter here as a
+/// bot's of the whole Hide do ([`Mode::All`]), and the same table judges
+/// them: a machine is opened whole or not at all, so none stands in own
+/// mode.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum CoreStanding {
     /// It holds an active grant to open this machine: what it asks runs as
-    /// a tool at Act would run it.
+    /// a bot of the whole Hide would run it.
     Opens,
     /// Only this machine opens it. It asked for nothing here, so it writes
     /// nothing first: it answers a letter it got and sends the result
@@ -659,8 +762,8 @@ pub enum CoreAsk {
 }
 
 /// Whether a core standing as `standing` runs `command` here, or the reason
-/// it is refused. A core that opens this machine is a tool at Act
-/// ([`admit`], [`delivery_need`]); one that only answers runs a reply and
+/// it is refused. A core that opens this machine is a bot of the whole
+/// Hide ([`admit`], [`delivery_need`]); one that only answers runs a reply and
 /// the result report of a start this core asked it for, and is refused the
 /// rest as a machine that may not write first.
 pub fn core_admit(
@@ -668,7 +771,7 @@ pub fn core_admit(
     command: &crate::delivery::Command,
     ask: CoreAsk,
 ) -> Result<(), &'static str> {
-    admit(Level::Act, delivery_need(command))?;
+    admit(Mode::All, delivery_need(command))?;
     match (standing, ask) {
         (CoreStanding::Opens, _)
         | (CoreStanding::Answers, CoreAsk::Reply | CoreAsk::ResultReport) => Ok(()),
@@ -679,9 +782,9 @@ pub fn core_admit(
 /// Whether a core standing as `standing` runs the read or the start
 /// `asked` here. Only a core that opens this machine asks one, and only
 /// these: listing and showing agents, reading a pane, and a start, each as
-/// the tool table judges it at Act, so a start under a parent, beside a
-/// pane or for a plan step is refused as a tool's is. Typing into a pane
-/// and everything else a tool at Act may do is not another machine's.
+/// the bot table judges it for the whole Hide, so a start under a parent,
+/// beside a pane or for a plan step is refused as a bot's is. Typing into a
+/// pane and everything else such a bot may do is not another machine's.
 pub fn core_call_admit(
     standing: CoreStanding,
     asked: &crate::core_calls::Asked,
@@ -689,6 +792,7 @@ pub fn core_call_admit(
     use crate::coordination::Command as Agents;
     use crate::core_calls::Asked;
     use crate::delivery::Command as Delivery;
+    use crate::pane_command::PaneCommand;
     if standing != CoreStanding::Opens {
         return Err(MACHINE_NOT_PERMITTED);
     }
@@ -701,9 +805,13 @@ pub fn core_call_admit(
                 }
             ) =>
         {
-            admit(Level::Act, delivery_need(command))
+            admit(Mode::All, delivery_need(command))
         }
-        Asked::Pane(command) if pane_need(command) == Need::View => Ok(()),
+        Asked::Pane(
+            command @ (PaneCommand::Read { .. }
+            | PaneCommand::ReadScreen { .. }
+            | PaneCommand::AgentRead { .. }),
+        ) => admit(Mode::All, pane_need(command)),
         _ => Err(MACHINE_NOT_PERMITTED),
     }
 }
@@ -733,12 +841,12 @@ mod tests {
             panic!("pending")
         };
         assert_eq!(pending, id(1));
-        access.approve(&pending, Level::View, 3).unwrap();
+        access.approve(&pending, Mode::All, 3).unwrap();
         let connected = access.request("hermes", &key(1), None, 4, id(1)).unwrap();
         assert!(matches!(
             connected.standing,
             Standing::Connected(Connection {
-                level: Level::View,
+                mode: Mode::All,
                 ..
             })
         ));
@@ -780,7 +888,7 @@ mod tests {
             else {
                 panic!("pending")
             };
-            access.approve(&id, Level::Act, 0).unwrap();
+            access.approve(&id, Mode::All, 0).unwrap();
         }
         assert_eq!(
             access
@@ -798,7 +906,7 @@ mod tests {
         access.refuse(&id(1)).unwrap();
         assert_eq!(access.standing(&key(1)), Standing::Ended(Ended::Refused));
         assert!(access.request("t", &key(2), None, 0, id(2)).unwrap().put_up);
-        access.approve(&id(2), Level::Act, 0).unwrap();
+        access.approve(&id(2), Mode::All, 0).unwrap();
         access.revoke(&id(2)).unwrap();
         assert_eq!(access.standing(&key(2)), Standing::Ended(Ended::Revoked));
         assert!(access.connections().is_empty());
@@ -808,7 +916,7 @@ mod tests {
     fn a_connected_name_is_not_requested_twice() {
         let mut access = Access::default();
         access.request("t", &key(1), None, 0, id(1)).unwrap();
-        access.approve(&id(1), Level::View, 0).unwrap();
+        access.approve(&id(1), Mode::All, 0).unwrap();
         assert_eq!(
             access.request("t", &key(2), None, 0, id(2)).unwrap_err(),
             RequestRefusal::NameTaken
@@ -819,7 +927,7 @@ mod tests {
     fn last_use_moves_once_a_minute() {
         let mut access = Access::default();
         access.request("t", &key(1), None, 0, id(1)).unwrap();
-        access.approve(&id(1), Level::View, 0).unwrap();
+        access.approve(&id(1), Mode::All, 0).unwrap();
         assert!(!access.used(&id(1), USE_INTERVAL_MS - 1));
         assert!(access.used(&id(1), USE_INTERVAL_MS));
         assert!(!access.used(&id(1), USE_INTERVAL_MS + 1));
@@ -838,22 +946,61 @@ mod tests {
                 id(7),
             )
             .unwrap();
-        access.approve(&id(7), Level::Act, 0).unwrap();
+        access.approve(&id(7), Mode::All, 0).unwrap();
         let bytes = encode(&access.stored()).unwrap();
         assert!(!String::from_utf8_lossy(&bytes).contains(&raw));
         assert_eq!(decode(&bytes).unwrap(), access.stored());
     }
 
     #[test]
-    fn view_only_runs_reads_and_act_runs_all_but_what_needs_an_agent_or_a_parent() {
-        assert_eq!(admit(Level::View, Need::View), Ok(()));
-        assert_eq!(admit(Level::View, Need::Act), Err(VIEW_ONLY));
-        assert_eq!(admit(Level::View, Need::Agent), Err(VIEW_ONLY));
-        assert_eq!(admit(Level::View, Need::Parent), Err(VIEW_ONLY));
-        assert_eq!(admit(Level::Act, Need::View), Ok(()));
-        assert_eq!(admit(Level::Act, Need::Act), Ok(()));
-        assert_eq!(admit(Level::Act, Need::Agent), Err(NEEDS_AGENT));
-        assert_eq!(admit(Level::Act, Need::Parent), Err(SPAWN_PARENT));
+    fn every_bot_runs_a_command_on_work_and_only_the_whole_hide_runs_the_rest() {
+        assert_eq!(admit(Mode::All, Need::Work), Ok(()));
+        assert_eq!(admit(Mode::All, Need::All), Ok(()));
+        assert_eq!(admit(Mode::Own, Need::Work), Ok(()));
+        assert_eq!(admit(Mode::Own, Need::All), Err(NOT_OWN_WORK));
+        for mode in [Mode::All, Mode::Own] {
+            assert_eq!(admit(mode, Need::Operator), Err(OPERATOR_ONLY));
+            assert_eq!(admit(mode, Need::Agent), Err(NEEDS_AGENT));
+            assert_eq!(admit(mode, Need::Parent), Err(SPAWN_PARENT));
+        }
+    }
+
+    #[test]
+    fn a_schema_one_store_moves_act_to_the_whole_hide_and_ends_view_only_for_approval_again() {
+        let (act, view) = (key(1), key(2));
+        let bytes = serde_json::to_vec(&serde_json::json!({
+            "schema_version": 1,
+            "connections": [
+                {"id": id(1), "name": "acts", "level": "act", "created_ms": 1,
+                 "last_used_ms": 2, "key_sha256": act},
+                {"id": id(2), "name": "looks", "level": "view", "program": "cron",
+                 "created_ms": 1, "last_used_ms": 2, "key_sha256": view},
+            ],
+        }))
+        .unwrap();
+        let access = Access::restored(decode(&bytes).unwrap());
+        let Standing::Connected(moved) = access.standing(&act) else {
+            panic!("the Act connection stands")
+        };
+        assert_eq!((moved.name.as_str(), &moved.mode), ("acts", &Mode::All));
+        assert_eq!(access.standing(&view), Standing::Ended(Ended::Reapprove));
+        assert_eq!(access.connections().len(), 1);
+        // Saved, it is schema 2 and names neither level nor the ended key.
+        let saved = encode(&access.stored()).unwrap();
+        let text = String::from_utf8_lossy(&saved);
+        assert!(text.contains("\"schema_version\": 2"), "{text}");
+        assert!(!text.contains("level") && !text.contains(&view), "{text}");
+        assert_eq!(decode(&saved).unwrap(), access.stored());
+    }
+
+    #[test]
+    fn a_mode_reads_and_writes_as_its_kind() {
+        for (mode, kind) in [(Mode::All, "all"), (Mode::Own, "own")] {
+            let wire = serde_json::json!({"kind": kind});
+            assert_eq!(serde_json::to_value(mode).unwrap(), wire);
+            assert_eq!(serde_json::from_value::<Mode>(wire).unwrap(), mode);
+        }
+        assert!(serde_json::from_value::<Mode>(serde_json::json!({"kind": "workspace"})).is_err());
     }
 
     #[test]
@@ -920,7 +1067,7 @@ mod tests {
             },
         };
         let pull = Delivery::Inbox { bundle: false };
-        // A core that opens this machine: the tool table at Act.
+        // A core that opens this machine: the bot table for the whole Hide.
         assert_eq!(
             core_admit(CoreStanding::Opens, &send, CoreAsk::First),
             Ok(())

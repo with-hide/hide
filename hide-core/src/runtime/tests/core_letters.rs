@@ -777,6 +777,36 @@ fn a_letter_between_machines_names_registrations_and_no_pane() {
     assert_eq!(letters(&pair.mac).len(), 1, "kept once");
 }
 
+/// A bot writes to no agent of another machine. One held to its own work
+/// is refused as for any agent it did not start, on the reading of the key
+/// every command shares; one of the whole Hide as every identity that is
+/// no agent is. Neither keeps a letter.
+#[test]
+fn a_bot_writes_to_no_agent_of_another_machine_in_either_mode() {
+    use crate::access::Mode;
+    let pair = Pair::start();
+    let there = agent_there(MINI, &pair.mini.ids["worker"]);
+    let own = pair
+        .mac
+        .connect_as("own", &"a".repeat(64), "00000000000000a1", Mode::Own);
+    let whole = pair
+        .mac
+        .connect_as("whole", &"b".repeat(64), "00000000000000b2", Mode::All);
+    assert_eq!(
+        pair.mac
+            .tool(&own, send(&there, "ask", "request"))
+            .unwrap_err(),
+        crate::access::NOT_OWN_WORK
+    );
+    assert_eq!(
+        pair.mac
+            .tool(&whole, send(&there, "ask", "request"))
+            .unwrap_err(),
+        "machine_not_permitted"
+    );
+    assert!(letters(&pair.mac).is_empty());
+}
+
 /// B66: an agent of the machine that opens reads the other machine's
 /// agents through that machine's core; the machine that is only opened
 /// reads nothing, typing into a pane is no machine's, and a machine that is

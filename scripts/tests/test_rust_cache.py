@@ -21,11 +21,14 @@ MANIFEST = "hashFiles('Cargo.toml')"
 # Each set's savers, one per system: (workflow, job id) and the exact `save`.
 SAVERS = {
     'workspace': {
-        ('pr.yml', 'rust'): ON_MAIN,
+        ('rust.yml', 'build'): ON_MAIN,
         ('pr.yml', 'windows-check'): ON_MAIN,
         ('desktop-e2e.yml', 'e2e'):
             "${{ github.ref == 'refs/heads/main' && matrix.shard == 1 && runner.os == 'macOS' }}",
     },
+    # Clippy's check of the dependencies, which no test build makes; the Rust
+    # lane's lint job runs beside its build rather than in it.
+    'lint': {('rust.yml', 'lint'): ON_MAIN},
     'platform': {('os-contract.yml', 'contract'): ON_MAIN},
     # The Windows app's binaries compile in their own job, beside the device
     # helpers, so it saves Windows's release set and the package matrix only

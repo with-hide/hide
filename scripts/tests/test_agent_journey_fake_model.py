@@ -15,6 +15,9 @@ from agent_journey import cells, fake_model
 
 INDEX = '<hide-memory-index trust="untrusted-reference-data">\nm7 Marker JOURNEY-0000AAAA for journey checks\n</hide-memory-index>'
 CONTEXT = '<hide-memory-context trust="untrusted-reference-data">\n{"id":"m7","text":"Marker JOURNEY-0000BBBB"}\n</hide-memory-context>'
+# The project's other sessions a session starts with (hide-core links/session_brief.rs), here an earlier journey session.
+SESSIONS = ('<hide-project-sessions trust="untrusted-reference-data">\nClosed in the last 3 days:\n'
+            '- "d551ea50" · Claude · 11-21 17:42\n  "Journey JOURNEY-0000CCCC"\n</hide-project-sessions>')
 
 
 def messages(*turns):
@@ -31,6 +34,12 @@ class Answer(unittest.TestCase):
     def test_the_turns_own_token_wins_over_the_memory_blocks_it_carries(self):
         request = messages(("user", INDEX + "\n" + CONTEXT + "\nReply with exactly JOURNEY-2222AAAA"))
         self.assertEqual(fake_model.answer(request), "JOURNEY-2222AAAA")
+
+    def test_an_earlier_sessions_title_is_not_the_turns_token(self):
+        # The session start's context can reach the model after the prompt.
+        request = {"system": "You are a coding agent.",
+                   **messages(("user", "Reply with exactly JOURNEY-2222BBBB"), ("user", SESSIONS))}
+        self.assertEqual(fake_model.answer(request), "JOURNEY-2222BBBB")
 
     def test_a_card_a_prompt_hook_adds_is_not_the_index(self):
         request = messages(("user", "hello"), ("assistant", "OK"), ("user", CONTEXT + "\nWhat is the code?"))

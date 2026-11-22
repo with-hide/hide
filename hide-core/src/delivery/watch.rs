@@ -212,7 +212,12 @@ pub fn assign(
     if approved_observer && expected_generation.is_none() {
         return Err("expected_generation_required".into());
     }
-    let registered = crate::coordination::resolve_actor(ledger, id).cloned();
+    // A target key is read as every command reads one
+    // (`coordination::resolve_key`): an exact registration id wins.
+    let registered = match crate::coordination::resolve_key(ledger, Some(parent), id, id) {
+        Ok(Some(crate::coordination::Named::Agent(record))) => Some(record.actor.clone()),
+        _ => None,
+    };
     let mut matches = ledger.watches.iter().enumerate().filter(|(_, watch)| {
         (watch.parent.same_identity(parent) || approved_observer)
             && (watch.id == id

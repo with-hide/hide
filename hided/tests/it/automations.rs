@@ -163,18 +163,18 @@ async fn an_automation_that_is_on_keeps_an_idle_daemon_until_none_is_on() {
     }
 }
 
-/// `hide automation …` run as an approved tool, which the operator gave
-/// Act: the `hide` binary itself against this daemon, with no pane.
+/// `hide automation …` run as an approved bot in `mode`: the `hide` binary
+/// itself against this daemon, with no pane.
 async fn acting_tool(
     root: &Path,
     window: &mut crate::access::Window,
     name: &str,
-    level: &str,
+    mode: Value,
 ) -> crate::access::Tool {
     let tool = crate::access::Tool::new(root, &format!("{name}-home"));
     let id = tool.put_up(name);
     window
-        .send("access_approve", json!({"id": id, "level": level}))
+        .send("access_approve", json!({"id": id, "mode": mode}))
         .await;
     let connected = tool.request_until_answered(name).await;
     assert!(connected.ok, "{}", connected.out);
@@ -230,7 +230,13 @@ async fn the_cli_makes_changes_and_removes_an_automation_the_screen_shows() {
     .unwrap();
     let running = hided::start_daemon(env).await.unwrap();
     let mut settings = crate::access::Window::open(&running).await;
-    let tool = acting_tool(dir.path(), &mut settings, "scheduler", "act").await;
+    let tool = acting_tool(
+        dir.path(),
+        &mut settings,
+        "scheduler",
+        json!({"kind": "all"}),
+    )
+    .await;
     let mut screen = window(&running).await;
 
     let made = tool.run(&[
@@ -414,15 +420,17 @@ async fn the_cli_makes_changes_and_removes_an_automation_the_screen_shows() {
         "18:30"
     ));
 
-    // At View only, the reads run and a change is refused.
-    let viewer = acting_tool(dir.path(), &mut settings, "watcher", "view").await;
-    assert!(viewer.run(&["automation", "list"]).ok);
-    let change = viewer.run(&["automation", "pause", &id]);
-    assert!(
-        !change.ok && change.out.contains("access_view_only"),
-        "{}",
-        change.out
-    );
+    // The automations are no one bot's work: a bot of its own work neither
+    // reads nor changes them (mission-87).
+    let held = acting_tool(dir.path(), &mut settings, "watcher", json!({"kind": "own"})).await;
+    for args in [&["automation", "list"][..], &["automation", "pause", &id]] {
+        let ran = held.run(args);
+        assert!(
+            !ran.ok && ran.out.contains("access_not_own_work"),
+            "{args:?}: {}",
+            ran.out
+        );
+    }
 
     let removed = tool.run(&["automation", "remove", "Issue sweep"]);
     assert!(removed.ok, "{}", removed.out);

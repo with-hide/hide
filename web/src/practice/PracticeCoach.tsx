@@ -12,11 +12,11 @@ import { commandLabel } from "../shortcutLabels";
 import { hostChord, hostRegistry, isCycleCommand, releaseModifier, type CommandId } from "../shortcuts";
 import { useShellStore } from "../store";
 import { pasteText, terminalFor } from "../terminals";
-import { useUiStore } from "../ui";
+import { useUiStore, type Overlay } from "../ui";
 import type { PracticeChapter, PracticeDrag, PracticeMenu, PracticePick, PracticeStep, PracticeTyping } from "./chapter";
 import { FIRST_CHAPTER } from "./channel";
 import { COACH_CSS } from "./coachStyle";
-import type { PracticeWorld } from "./world";
+import type { CoreEvent, PracticeWorld } from "./world";
 import { composingKey } from "../keys";
 
 type Rect = { x: number; y: number; w: number; h: number };
@@ -300,7 +300,9 @@ const KEYS_MARK = "\u0001";
 const SHELL_LAYERS = '[data-palette], [data-slot="cycle-overlay"]';
 /** The shell's right-click menus while one is open: the bubble moves beside one it would cover. */
 const OPEN_MENUS = '[role="menu"]';
-const shellLayerOpen = (state: ReturnType<typeof useUiStore.getState>) => state.overlay !== "none" || state.cycle !== null;
+/** Whether a palette the shell opened is up; Settings is a page the guide walks through, so it keeps its bubble, button and keys there. */
+const paletteOpen = (overlay: Overlay) => overlay !== "none" && overlay !== "settings";
+const shellLayerOpen = (state: ReturnType<typeof useUiStore.getState>) => paletteOpen(state.overlay) || state.cycle !== null;
 
 /** The palette field a step types into, or null for a step that types nowhere or into a terminal. */
 function fieldOfStep(step: PracticeStep): string | null {
@@ -330,6 +332,8 @@ type Props = {
   /** Steps before this one are played again by the coach itself, the way ⏎ plays them. */
   resume: number;
   onStep: (step: number, finished: boolean) => void;
+  /** Tells the world a step that names an event (`enter`) has come up. */
+  onEnter: (event: CoreEvent) => void;
   onNext: () => void;
   onRestart: () => void;
   /** Starts the chapter over and plays it again up to `step`, where the learner stands at its start. */
@@ -345,7 +349,7 @@ const REPLAY_MS = 120;
 /** Whether a step waits for something to happen, rather than being a look the learner presses on from. */
 const acts = (step: PracticeStep) => !!(step.done || step.shown);
 
-export function PracticeCoach({ chapter, model, next, resume, onStep, onNext, onRestart, onRewind, onHub, onLeave }: Props) {
+export function PracticeCoach({ chapter, model, next, resume, onStep, onEnter, onNext, onRestart, onRewind, onHub, onLeave }: Props) {
   const { t } = useInterfaceTranslation();
   const say = (key: string, values?: Record<string, unknown>) => t(key as MessageKey, values as never) as string;
   const [index, setIndex] = useState(0);
@@ -372,6 +376,11 @@ export function PracticeCoach({ chapter, model, next, resume, onStep, onNext, on
   useEffect(() => {
     if (index >= resume) onStep(index, last);
   }, [index, last, onStep, resume]);
+
+  // A world that moves on by itself starts from the step the learner is on, replayed steps included.
+  useEffect(() => {
+    if (step.enter) onEnter(step.enter);
+  }, [onEnter, step]);
 
   // The model as it is now, for a press that reads it after this render.
   const current = useRef(model);
@@ -551,7 +560,7 @@ export function PracticeCoach({ chapter, model, next, resume, onStep, onNext, on
       // A step that types into the palette's field keeps ⏎ while the field is empty, to type its words;
       // past them ⏎ is the palette's, which opens the row it highlights.
       const types = field !== null && !fieldFilled(field);
-      const open = useUiStore.getState().overlay !== "none";
+      const open = paletteOpen(useUiStore.getState().overlay);
       // While the coach is still typing into the field, it holds only part of the words: ⏎ there would open the wrong row, so it waits.
       const typing = playing.current && playing.current !== step ? fieldOfStep(playing.current) : null;
       if (open && event.key === "Enter" && typing && !wordsIn(typing, playing.current!)) {

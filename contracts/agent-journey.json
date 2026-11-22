@@ -1683,7 +1683,7 @@
     },
     "letter": "bell",
     "busy_letter": [
-      "bell_hook"
+      "bell"
     ],
     "scenes": [
       {

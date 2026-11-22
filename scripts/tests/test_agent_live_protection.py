@@ -1032,6 +1032,7 @@ else:raise RuntimeError("group_survived_reap")
                                    env=dict(os.environ))
         self.assertEqual(code, 0)
 
+    @unittest.skipUnless(sys.platform.startswith("linux"), "only the Linux guardian is a subreaper; macOS has no os.waitid")
     def test_linux_reaping_adopted_children_leaves_the_root_to_its_own_wait(self):
         exited = SimpleNamespace(si_pid=222)
         root = SimpleNamespace(si_pid=111)

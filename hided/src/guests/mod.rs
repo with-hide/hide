@@ -2069,7 +2069,7 @@ mod tests {
     }
 
     /// PRD B34: a relay carries about 2 MiB a second, so the largest build
-    /// (`build::MAX_BYTES`) takes two minutes to arrive, longer than any
+    /// (`build::MAX_BYTES`) takes four minutes to arrive, longer than any
     /// one wait of the link. Its bytes are read to the end, because each
     /// read has its own wait, and a stream that then brings nothing is
     /// given up after one such wait.
