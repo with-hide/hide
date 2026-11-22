@@ -15,7 +15,7 @@ cert_mode = "Manual"
 manual_cert_path = "/run/credentials/hide-iroh-relay.service/tls.crt"
 manual_key_path = "/run/credentials/hide-iroh-relay.service/tls.key"
 
-# What each client may send through the relay. iroh-relay 1.4.1 reads but does
+# What each client may send through the relay. iroh-relay 1.5.0 reads but does
 # not enforce accept_conn_limit/accept_conn_burst, so the new-connection rate
 # and the open-connection cap live in iroh-relay.nft instead.
 [limits.client.rx]
