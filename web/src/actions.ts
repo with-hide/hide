@@ -1517,6 +1517,10 @@ export function createActions(send: DispatchFn, clipboard?: Clipboard) {
     revokeAccess(id: string) {
       dispatch({ schema_version: 2, kind: "access_revoke", payload: { id } });
     },
+    /** Takes back a bot the operator made that no program joined yet; its code joins nothing more. */
+    cancelAccessInvite(id: string) {
+      dispatch({ schema_version: 2, kind: "access_invite_cancel", payload: { id } });
+    },
     setPushMode(mode: "app_closed" | "always") {
       dispatch({ schema_version: 2, kind: "mobile_push_mode", payload: { mode } });
     },

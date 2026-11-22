@@ -509,8 +509,11 @@ export function PracticeCoach({ chapter, model, next, resume, onStep, onEnter, o
     // a second press would close it (the pane head's agent list before the next child has started).
     if (step.shown && step.target && document.querySelector(step.target)?.getAttribute("aria-expanded") === "true") return;
     performed.current = step;
-    // A field the step types into is opened first by the step's command: ⌘K, then the words.
-    if (step.gesture && "type" in step.gesture && "input" in step.gesture.type && !document.querySelector(step.gesture.type.input) && step.command) return pressCommand(step.command, pace);
+    // A field the step types into is opened first by the step's command (⌘K, then the words) or by pressing what opens its dialog.
+    if (step.gesture && "type" in step.gesture && "input" in step.gesture.type && !document.querySelector(step.gesture.type.input)) {
+      if (step.command) return pressCommand(step.command, pace);
+      if (step.gesture.type.open) return play(pressTarget(step.gesture.type.open, pace, setHand));
+    }
     if (step.gesture && "type" in step.gesture) {
       const typing = step.gesture.type;
       // The learner's own words in a prompt are sent as they are, for the world to judge; the example goes only into an

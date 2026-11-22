@@ -97,6 +97,9 @@ pub struct PaneRequest {
 pub enum AccessAsk {
     /// `hide access request --name <name>`.
     Request { name: String, key: String },
+    /// `hide access join <code>`: the bot the operator made with this
+    /// one-time code becomes this key's connection.
+    Join { code: String, key: String },
     /// `hide access status`.
     Status { key: String },
     /// `hide access leave`.
