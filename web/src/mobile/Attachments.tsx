@@ -76,7 +76,7 @@ function ComposerItem({ file, onRemove, onRetry }: { file: ComposerFile; onRemov
         </span>
         <span className="min-w-0 text-left">
           <span className="block truncate text-body text-foreground">{file.name}</span>
-          <span className="block font-mono text-caption text-muted-foreground">{failed ? t("mobile.attach.retry") : file.size > 0 ? size(file.size) : " "}</span>
+          <span className={cn("block text-caption text-muted-foreground", !failed && "font-mono")}>{failed ? t("mobile.attach.retry") : file.size > 0 ? size(file.size) : " "}</span>
         </span>
       </span>
     );
