@@ -17,6 +17,7 @@ use std::path::{Path, PathBuf};
 use serde::{Deserialize, Serialize};
 
 use crate::guardrails::Action;
+use crate::guardrails::host::{Host, HostCall, host_call};
 use hide_shell::{command_words, shell_line};
 
 /// The record's version; one of another version is not read.
@@ -284,8 +285,10 @@ pub enum Refused {
     /// A file write, `git commit` or `git push` while the plan waits for
     /// the operator's review.
     ProposedPlan,
-    /// `gh pr merge` by a worker of a mission that goes up to pull requests.
-    MissionMerge,
+    /// A merge (`gh pr merge`, `glab mr merge`, a merge through the host's
+    /// API or a push option that arms one) by a worker of a mission that
+    /// goes up to pull requests, on the host the call names.
+    MissionMerge(Host),
     /// `git push --force*` or `git rebase` by an agent of a mission node,
     /// whose checked commit has to stay the one checked. Outside a mission
     /// the project's guardrails alone judge these.
@@ -296,7 +299,7 @@ impl Refused {
     pub fn code(self) -> &'static str {
         match self {
             Self::ProposedPlan => "plan_proposed",
-            Self::MissionMerge => "mission_merge",
+            Self::MissionMerge(_) => "mission_merge",
             Self::HistoryRewrite => "history_rewrite",
         }
     }
@@ -307,8 +310,11 @@ impl Refused {
             Self::ProposedPlan => {
                 "Not run: the task's steps are waiting for the operator's review (run hide task approve once they answer). Reading and looking around still run; write, commit and push wait for the operator's answer. Revised steps go up with hide task set --json '<plan>' --ask."
             }
-            Self::MissionMerge => {
+            Self::MissionMerge(Host::GitHub) => {
                 "Not run: this mission goes up to pull requests, so its workers do not merge. Report the pull request to the Conductor; the operator merges."
+            }
+            Self::MissionMerge(Host::GitLab) => {
+                "Not run: this mission goes up to merge requests, so its workers do not merge. Report the merge request to the Conductor; the operator merges."
             }
             Self::HistoryRewrite => {
                 "Not run: an agent of a mission does not force push or rebase, so the commit its node was checked on stays the one checked. Do not replace it with another command; tell the Conductor what you needed and wait for its answer."
@@ -378,7 +384,11 @@ fn shell(
         let Some((first, args)) = words.split_first() else {
             continue;
         };
-        match syntax.program(first).as_str() {
+        let program = syntax.program(first);
+        if merge_barred && let Some(HostCall::Merge { host, .. }) = host_call(&program, args) {
+            return Some(Refused::MissionMerge(host));
+        }
+        match program.as_str() {
             "git" => {
                 let Some((subcommand, rest)) = git_subcommand(args) else {
                     continue;
@@ -403,12 +413,6 @@ fn shell(
                     "commit" | "push" if proposed => return Some(Refused::ProposedPlan),
                     _ => {}
                 }
-            }
-            "gh" if merge_barred
-                && args.first().map(String::as_str) == Some("pr")
-                && args.get(1).map(String::as_str) == Some("merge") =>
-            {
-                return Some(Refused::MissionMerge);
             }
             _ => {}
         }
@@ -536,7 +540,8 @@ mod tests {
     fn no_refusal_offers_another_command_in_its_place() {
         for refused in [
             Refused::ProposedPlan,
-            Refused::MissionMerge,
+            Refused::MissionMerge(Host::GitHub),
+            Refused::MissionMerge(Host::GitLab),
             Refused::HistoryRewrite,
         ] {
             let reason = refused.reason();
@@ -549,13 +554,91 @@ mod tests {
         let worker = |scope: &str| mission_agent(scope, "worker");
         assert_eq!(
             refusal(&worker("pr"), &shell_action("gh pr merge 12 --squash")),
-            Some(Refused::MissionMerge)
+            Some(Refused::MissionMerge(Host::GitHub))
         );
         assert_eq!(
             refusal(&worker("merge"), &shell_action("gh pr merge 12")),
             None
         );
         assert_eq!(refusal(&worker("pr"), &shell_action("gh pr view 12")), None);
+    }
+
+    /// The merge bar reads a call as the project guardrails do
+    /// (`guardrails::host`): the `-R` and `--repo` forms, `glab`, a merge
+    /// through the host's API and a push option that arms one, in both
+    /// shell syntaxes and from every runtime's shell tool.
+    #[test]
+    fn a_pr_scope_worker_is_refused_every_form_of_a_merge_on_either_host() {
+        let worker = mission_agent("pr", "worker");
+        let judged = |command: &str, syntax| {
+            refusal(
+                &worker,
+                &Action::Shell {
+                    command: command.to_owned(),
+                    syntax,
+                },
+            )
+        };
+        let github = [
+            "gh -R owner/repo pr merge 12",
+            "gh --repo owner/repo pr merge 12",
+            "gh --repo=owner/repo pr merge 12 --auto",
+            "gh pr -R owner/repo merge",
+            "gh api -X PUT repos/owner/repo/pulls/12/merge",
+            "gh api --method=PUT repos/owner/repo/pulls/12/merge",
+        ];
+        let gitlab = [
+            "glab mr merge 3",
+            "glab mr accept 3",
+            "glab mr merge -R group/sub/app 3",
+            "glab mr --repo group/app merge 3",
+            "glab api -X PUT projects/89295207/merge_requests/3/merge",
+            "glab mr create --fill --auto-merge",
+            "git push -o merge_request.auto_merge origin m91/guards",
+            "git push --push-option=mr.merge_when_pipeline_succeeds",
+            "git -c push.pushOption=merge_request.auto_merge push",
+        ];
+        for syntax in [hide_shell::Syntax::Posix, hide_shell::Syntax::PowerShell] {
+            for (host, commands) in [(Host::GitHub, &github[..]), (Host::GitLab, &gitlab[..])] {
+                for command in commands {
+                    assert_eq!(
+                        judged(command, syntax),
+                        Some(Refused::MissionMerge(host)),
+                        "{command} ({syntax:?})"
+                    );
+                }
+            }
+            for command in [
+                "gh pr create --fill",
+                "gh api repos/owner/repo/pulls/12/merge",
+                "glab mr create --fill",
+                "glab mr view 3",
+                "glab mr checkout 3",
+                "git push -o merge_request.create origin m91/guards",
+            ] {
+                assert_eq!(judged(command, syntax), None, "{command} ({syntax:?})");
+            }
+        }
+        for command in ["gh -R owner/repo pr merge 12", "glab mr merge 3"] {
+            for (runtime, action) in
+                crate::guardrails::payload::every_runtimes_shell_call(command)
+            {
+                assert!(
+                    matches!(refusal(&worker, &action), Some(Refused::MissionMerge(_))),
+                    "{command} ({runtime})"
+                );
+            }
+        }
+        // A mission that goes through the merge lets its worker merge.
+        assert_eq!(
+            refusal(&mission_agent("merge", "worker"), &shell_action("glab mr merge 3")),
+            None
+        );
+        assert!(
+            Refused::MissionMerge(Host::GitLab)
+                .reason()
+                .contains("Report the merge request to the Conductor")
+        );
     }
 
     /// with-hide/hide-private#576: Claude Code's PowerShell tool call is

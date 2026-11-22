@@ -297,3 +297,66 @@ fn string_after(bytes: &[u8], key: &str) -> Option<String> {
         .next()?
         .ok()
 }
+
+/// The shell call `command` as each runtime's shell tool sends it, read the
+/// way its hook or script reads it: one entry per runtime and shell tool.
+#[cfg(test)]
+pub(crate) fn every_runtimes_shell_call(command: &str) -> Vec<(&'static str, Action)> {
+    use serde_json::json;
+    let hook = |payload: Value, dialect| {
+        read_hook(payload.to_string().as_bytes(), false, dialect)
+            .expect("a shell call is read")
+            .action
+    };
+    let script = |dialect, tool| {
+        action(dialect, tool, &json!({ "command": command })).expect("a shell call is read")
+    };
+    vec![
+        (
+            "Claude Code Bash",
+            hook(
+                json!({"cwd": "/r", "tool_name": "Bash", "tool_input": {"command": command}}),
+                HookDialect::ClaudeCode,
+            ),
+        ),
+        (
+            "Claude Code PowerShell",
+            hook(
+                json!({"cwd": "/r", "tool_name": "PowerShell", "tool_input": {"command": command}}),
+                HookDialect::ClaudeCode,
+            ),
+        ),
+        (
+            "Codex",
+            hook(
+                json!({"cwd": "/r", "tool_name": "Bash", "tool_input": {"command": command}}),
+                HookDialect::Codex,
+            ),
+        ),
+        (
+            "Cursor",
+            hook(
+                json!({"hook_event_name": "preToolUse", "tool_name": "Shell", "tool_input": {"command": command, "cwd": ""}, "workspace_roots": ["/r"]}),
+                HookDialect::Cursor,
+            ),
+        ),
+        (
+            "Grok",
+            hook(
+                json!({"cwd": "/r", "toolName": "Bash", "toolInput": {"command": command}}),
+                HookDialect::Grok,
+            ),
+        ),
+        (
+            "agy",
+            hook(
+                json!({"toolCall": {"name": "run_command", "args": {"CommandLine": command, "Cwd": "/r"}}, "workspacePaths": ["/r"]}),
+                HookDialect::Antigravity,
+            ),
+        ),
+        ("OpenCode 1", script(HookDialect::OpenCode, "bash")),
+        ("OpenCode 2", script(HookDialect::OpenCode, "shell")),
+        ("Pi", script(HookDialect::Pi, "bash")),
+        ("omp", script(HookDialect::Omp, "bash")),
+    ]
+}

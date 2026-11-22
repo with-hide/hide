@@ -406,6 +406,224 @@ fn merging_a_pull_request_is_refused_only_with_the_option() {
     assert_eq!(fixture.shell(&fixture.worktree, "gh pr merge 12"), None);
 }
 
+/// The calls that merge a change request on either host, each read in both
+/// shell syntaxes Hide reads.
+const MERGES: &[&str] = &[
+    // GitHub.
+    "gh pr merge 12",
+    "gh -R o/r pr merge 12",
+    "gh api -X PUT repos/o/r/pulls/12/merge",
+    "gh api --method PUT /repos/o/r/pulls/12/merge -f merge_method=squash",
+    "gh api --method=put 'repos/{owner}/{repo}/pulls/12/merge'",
+    "gh api -XPUT https://api.github.com/repos/o/r/pulls/12/merge",
+    "gh api repos/o/r/pulls/12/merge -X=PUT",
+    "gh api -iX PUT repos/o/r/pulls/12/merge",
+    // GitLab.
+    "glab mr merge 3",
+    "glab mr merge",
+    "glab mr accept 3",
+    "glab mr merge -R group/sub/app 3 --auto-merge=false",
+    "glab mr -R group/app merge 3",
+    "glab mr merge --repo=group/app 3 -d -s",
+    "glab api -X PUT projects/89295207/merge_requests/3/merge",
+    "glab api --method PUT projects/:id/merge_requests/3/merge -F auto_merge=true",
+    "glab api -XPUT 'projects/group%2Fapp/merge_requests/3/merge?squash=true'",
+    "glab mr create --fill --auto-merge",
+    "glab mr create -t x --auto-merge=true",
+    "git push -o merge_request.auto_merge origin feature",
+    "git push -o merge_request.create -o merge_request.merge_when_pipeline_succeeds origin feature",
+    "git push --push-option=mr.auto_merge origin feature",
+    "git push --push-option merge_request.auto_merge=true",
+    "git push -uomerge_request.auto_merge origin feature",
+    "git -c push.pushOption=merge_request.auto_merge push origin feature",
+    "git config push.pushOption merge_request.auto_merge",
+    "git config --add push.pushoption mr.merge_when_pipeline_succeeds",
+];
+
+/// Calls about change requests that merge nothing.
+const NOT_MERGES: &[&str] = &[
+    "gh pr view 12",
+    "gh pr create --title x --body y",
+    "gh api repos/o/r/pulls/12/merge",
+    "gh api -X GET repos/o/r/pulls/12/merge",
+    "gh api -X PUT repos/o/r/pulls/12",
+    "gh api graphql -f query='{ viewer { login } }'",
+    "glab mr view 3",
+    "glab mr create -t x -d y",
+    "glab mr create -t x --auto-merge=false",
+    "glab mr update 3 --ready",
+    "glab api projects/89295207/merge_requests/3/merge",
+    "glab api projects/89295207/merge_requests/3",
+    "git push -o merge_request.create -o merge_request.target=main origin feature",
+    "git push --push-option=ci.skip origin feature",
+    "git config push.pushOption merge_request.create",
+    "git commit -m 'merge_request.auto_merge'",
+];
+
+#[test]
+fn merging_a_change_request_is_refused_on_either_host_only_with_the_option() {
+    let fixture = Fixture::new();
+    let worktree = &fixture.worktree;
+    let judged = |command: &str, syntax: Syntax| {
+        refused(fixture.decide_in(worktree, shell(command, syntax), Some(false)))
+    };
+    // The base protection alone lets a merge run, as it lets `gh pr merge`.
+    fixture.policy(rules(|rules| rules.base_branch = true), Some("main"));
+    for syntax in [Syntax::Posix, Syntax::PowerShell] {
+        for command in MERGES {
+            assert_eq!(judged(command, syntax), None, "{command} ({syntax:?})");
+        }
+    }
+    fixture.policy(
+        rules(|rules| {
+            rules.base_branch = true;
+            rules.agent_merge = true;
+        }),
+        Some("main"),
+    );
+    for syntax in [Syntax::Posix, Syntax::PowerShell] {
+        for command in MERGES {
+            assert_eq!(
+                judged(command, syntax),
+                Some(Rule::AgentMerge),
+                "{command} ({syntax:?})"
+            );
+        }
+        for command in NOT_MERGES {
+            assert_eq!(judged(command, syntax), None, "{command} ({syntax:?})");
+        }
+    }
+    // PowerShell finds the program without case or `.exe`, and an assigned
+    // command is judged as itself.
+    for command in [
+        "GLAB.EXE mr merge 3",
+        "$r = glab mr accept 3",
+        r"Set-Location ..\repo-feature; Git push -o merge_request.auto_merge origin feature",
+    ] {
+        assert_eq!(
+            judged(command, Syntax::PowerShell),
+            Some(Rule::AgentMerge),
+            "{command}"
+        );
+    }
+    // Every runtime's shell tool brings the call to the same judgment.
+    for command in [
+        "glab mr merge 3",
+        "glab api -X PUT projects/1/merge_requests/3/merge",
+        "gh api -X PUT repos/o/r/pulls/12/merge",
+        "git push -o merge_request.auto_merge origin feature",
+    ] {
+        for (runtime, action) in payload::every_runtimes_shell_call(command) {
+            assert_eq!(
+                refused(fixture.decide_in(worktree, action, Some(false))),
+                Some(Rule::AgentMerge),
+                "{command} ({runtime})"
+            );
+        }
+    }
+    // The refusal names the change request in its host's words.
+    let reason = |command: &str| match fixture.decide_in(worktree, posix(command), Some(false)) {
+        Outcome::Refuse(refusal) => refusal.reason(),
+        other => panic!("{command}: {other:?}"),
+    };
+    for (command, said) in [
+        ("gh pr merge 12", "This call merges a pull request."),
+        (
+            "gh api -X PUT repos/o/r/pulls/12/merge",
+            "This call merges a pull request through GitHub's API.",
+        ),
+        ("glab mr merge 3", "This call merges a merge request."),
+        (
+            "glab api -X PUT projects/1/merge_requests/3/merge",
+            "This call merges a merge request through GitLab's API.",
+        ),
+        (
+            "glab mr create --auto-merge",
+            "This call opens a merge request set to merge by itself (--auto-merge).",
+        ),
+        (
+            "git push -o merge_request.auto_merge",
+            "This call pushes with a GitLab push option that sets a merge request to merge by itself.",
+        ),
+    ] {
+        let reason = reason(command);
+        assert!(reason.contains(said), "{reason}");
+        assert!(
+            reason.contains("Block agents from merging pull requests and merge requests"),
+            "{reason}"
+        );
+    }
+    // Outside every project, nothing is judged.
+    let outside = fixture.home.clone();
+    assert_eq!(
+        refused(fixture.decide_in(&outside, posix("glab mr merge 3"), Some(false))),
+        None
+    );
+}
+
+#[test]
+fn checking_out_a_merge_request_keeps_the_original_checkouts_branch() {
+    let fixture = Fixture::new();
+    fixture.policy(rules(|rules| rules.worktree_folder = true), Some("main"));
+    let (repo, worktree) = (&fixture.repo, &fixture.worktree);
+    for syntax in [Syntax::Posix, Syntax::PowerShell] {
+        let judged = |cwd: &Path, command: &str| {
+            refused(fixture.decide_in(cwd, shell(command, syntax), Some(false)))
+        };
+        for command in [
+            "glab mr checkout 3",
+            "glab mr checkout 3 --branch todo-fix",
+            "glab mr -R group/app checkout 3",
+            "gh pr checkout 12",
+        ] {
+            assert_eq!(
+                judged(repo, command),
+                Some(Rule::WorktreeFolder),
+                "{command} ({syntax:?})"
+            );
+            assert_eq!(judged(worktree, command), None, "{command} ({syntax:?})");
+        }
+        // `glab mr co` is no alias of checkout in glab: it prints `glab mr`'s
+        // help.
+        assert_eq!(judged(repo, "glab mr co 3"), None, "{syntax:?}");
+    }
+    for (runtime, action) in payload::every_runtimes_shell_call("glab mr checkout 3") {
+        assert_eq!(
+            refused(fixture.decide_in(repo, action, Some(false))),
+            Some(Rule::WorktreeFolder),
+            "{runtime}"
+        );
+    }
+}
+
+#[test]
+fn a_glab_description_is_text_and_not_a_path() {
+    let fixture = Fixture::new();
+    fixture.policy(rules(|rules| rules.files = true), Some("main"));
+    let repo = &fixture.repo;
+    for syntax in [Syntax::Posix, Syntax::PowerShell] {
+        let judged =
+            |command: &str| refused(fixture.decide_in(repo, shell(command, syntax), Some(false)));
+        for command in [
+            "glab mr create -t x -d 'rotate server.pem'",
+            "glab mr create -t x -yd 'rotate server.pem'",
+            "glab mr update 3 -d 'renew api.key and .env'",
+            "glab mr create -t x --description 'rotate server.pem'",
+            "glab mr create -t x --description='rotate server.pem'",
+        ] {
+            assert_eq!(judged(command), None, "{command} ({syntax:?})");
+        }
+        // A bare name is a path wherever it stands, and another program's
+        // `-d` takes no text.
+        for command in [
+            "glab mr create -t x -d server.pem",
+            "gh release create v1 -d 'my server.pem'",
+        ] {
+            assert_eq!(judged(command), Some(Rule::Files), "{command} ({syntax:?})");
+        }
+    }
+}
+
 #[test]
 fn risky_git_commands_are_refused_and_their_safe_forms_run() {
     let fixture = Fixture::new();
