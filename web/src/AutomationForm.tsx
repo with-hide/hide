@@ -109,7 +109,7 @@ export function AutomationForm({ section, automation, example = null, actions }:
       useUiStore.getState().setAutomations({ form: null });
       return;
     }
-    const answer = await callAutomations(addCall(draft, git, runNow));
+    const answer = await callAutomations(addCall(draft, git, runNow, example));
     if (!open.current) return;
     setSending(false);
     if (!answer.ok) return setRefusal({ field: refusalField(answer.code), code: answer.code });

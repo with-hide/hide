@@ -1,6 +1,6 @@
 // The What's new scenes by the name a release's highlight gives as its
 // `drawing`. A main feature's pull request adds its scene here
-// (CONTRIBUTING.md, A main feature brings its practice and its scene).
+// (CONTRIBUTING.md, A main feature brings its practice, its scene and its measure).
 
 import { AUTOMATION_LOOP_MS, AutomationScene } from "./automation";
 import { BOTS_LOOP_MS, BOTS_STILL_MS, BotsScene } from "./bots";

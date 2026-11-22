@@ -243,6 +243,11 @@ enum Command {
         device_id: String,
         reply: Sender<Option<EngineHandle>>,
     },
+    /// Who answers a call proved only by its folder (D-55).
+    FolderCall {
+        folder: String,
+        reply: Sender<hide_core::guest_panes::FolderCall>,
+    },
     /// The Views a pane's agent has open, for a phone's 볼 것 tab.
     AgentLooks {
         pane_id: String,
@@ -1295,6 +1300,25 @@ impl CoreHandle {
         rx.recv().map_err(|_| "core_unavailable".to_owned())?
     }
 
+    /// Who answers a call proved only by the folder it was made in; see
+    /// `Core::folder_call`. A core that does not answer leaves the call
+    /// where it was: with this machine.
+    pub fn folder_call(&self, folder: &str) -> hide_core::guest_panes::FolderCall {
+        let (reply, rx) = mpsc::channel();
+        if self
+            .commands
+            .send(Command::FolderCall {
+                folder: folder.to_owned(),
+                reply,
+            })
+            .is_err()
+        {
+            return hide_core::guest_panes::FolderCall::Host;
+        }
+        rx.recv()
+            .unwrap_or(hide_core::guest_panes::FolderCall::Host)
+    }
+
     /// The engine the core holds for a connected SSH device; see
     /// `Core::device_engine`.
     pub fn device_engine(&self, device_id: &str) -> Result<Option<EngineHandle>, String> {
@@ -2028,6 +2052,9 @@ fn owner_loop(
             }
             Command::DeviceEngine { device_id, reply } => {
                 let _ = reply.send(core.device_engine(&device_id));
+            }
+            Command::FolderCall { folder, reply } => {
+                let _ = reply.send(core.folder_call(&folder));
             }
             Command::AgentLooks { pane_id, reply } => {
                 let _ = reply.send(core.agent_looks(&pane_id));

@@ -78,7 +78,12 @@ export type PendingViewsClose = {
  * the external tool `tool` names, whose cell is then in front
  * (`frontTool`, PRD hide-external-control D-54, B40).
  */
-export type Screen = { kind: "main"; deviceId?: string; tool?: string } | { kind: "workspace" } | { kind: "desk" } | { kind: "missions"; tool?: string } | { kind: "automations" };
+/**
+ * `guest` is a pane of another machine's work on this computer (PRD
+ * device-connect-iroh B10): the window's own page, since that pane is no
+ * tab of this core's. It is read, typed into, sized and closed here.
+ */
+export type Screen = { kind: "main"; deviceId?: string; tool?: string } | { kind: "workspace" } | { kind: "desk" } | { kind: "missions"; tool?: string } | { kind: "automations" } | { kind: "guest"; paneId: string };
 
 /**
  * The mission screen's page state (PRD mission-screen D-10): the device it
@@ -400,6 +405,9 @@ type UiStore = {
   /** The working session whose Archive session waits for Stop work and archive (PRD session-archive B6). */
   pendingArchive: { paneId: string } | null;
   pendingViewsClose: PendingViewsClose | null;
+  /** The pane of another machine's work this window is asked to close, until the operator confirms or cancels (PRD device-connect-iroh B10). */
+  guestClose: string | null;
+  setGuestClose: (paneId: string | null) => void;
   /** The archived session whose delete waits for its confirmation (B28). */
   pendingArchiveDelete: { id: string } | null;
   cycle: Cycle | null;
@@ -578,6 +586,7 @@ export const useUiStore = create<UiStore>((set, get) => ({
   pendingClose: null,
   pendingArchive: null,
   pendingViewsClose: null,
+  guestClose: null,
   pendingArchiveDelete: null,
   cycle: null,
   notices: [],
@@ -669,6 +678,7 @@ export const useUiStore = create<UiStore>((set, get) => ({
   setPendingClose: (pendingClose) => set({ pendingClose }),
   setPendingArchive: (pendingArchive) => set({ pendingArchive }),
   setPendingViewsClose: (pendingViewsClose) => set({ pendingViewsClose }),
+  setGuestClose: (guestClose) => set({ guestClose }),
   setPendingArchiveDelete: (pendingArchiveDelete) => set({ pendingArchiveDelete }),
   setCycle: (cycle) => set({ cycle }),
   showNotice: (notice) => set((state) => ({ notices: withNotice(state.notices, notice) })),

@@ -726,6 +726,11 @@ The others change CI, the Windows layer, a line of Windows code or a hunk inside
 The accepted risk is the macOS one: a pull request that breaks only Windows merges green, and main's push run, or the next nightly, is the first to show it.
 A main push run that fails only in Windows jobs does not stop merges; it is fixed before the next release, whose tagged commit's main `verify` must pass, Windows included ([CONTRIBUTING.md](../CONTRIBUTING.md#when-mains-push-run-fails)).
 The plan has no way for a pull request to ask for lanes by name, since every lane follows from its paths; a pull request that its author knows is risky on Windows runs the Windows web and desktop `@platform` suites and agy before it merges with `gh workflow run nightly.yml --ref <branch> -f lane=windows`, and one Windows test file with `gh workflow run repeat.yml --ref <branch> -f runner=windows`.
+`windows check` itself is three jobs of `windows-check.yml` that start together on three runners, so a pull request that changes a Windows path waits for its longest job, not for their sum.
+One job held them in a row: 26.7 minutes on pull request run 44962109854 (4.2 of the workspace's compile, 7.6 of the test build, 7.2 of the Rust tests, 5.7 of the web unit suite and the rest setup) and 17.5 on main's warm cache (run 44964698382), while the Linux lines of a run end about 14 minutes in.
+Split, pull request run 44979728847 ended the lane 20.2 minutes after the run started, against 28.0 for the one job on main run 44977591536 of the same base, with the same 43 nextest calls, 1231 Rust tests and both unit suites' counts: `compile` ran 5.6 minutes, `web unit` 8.2 and `rust tests` 19.0 (8.1 of test build, about 9.8 of tests), so the lane now ends with the Rust tests' own build and run, over the 18 minutes it was cut for.
+`compile` checks every target of the workspace, `rust tests` builds the test binaries and runs every Windows Rust step on them in the order and under the conditions the one job had, and `web unit` runs the web and desktop unit suites; no check runs in two of them (`WindowsCheckLane` in `scripts/tests/test_ci_plan.py`).
+The lane is still one `windows-check` lane to the plan and to `verify`, which waits on the call: a called workflow fails when one of its jobs fails or is cancelled, and no job of this one has a condition that could skip it.
 `WindowsOnPullRequests` and `RustChange` in `scripts/tests/test_ci_plan.py` check the rule with the paths of real merged pull requests, the item reader with items cut from the files whose Windows code most often met a pull request, and the legs `pr.yml` passes.
 
 ### WSL device lane
@@ -907,13 +912,14 @@ The transition retains these explicit exceptions:
 | --- | --- | --- |
 | Desktop SSH specs on the own engine | Fixture prepared; existing private-SSH prerequisites still skip without that environment | Connect an isolated SSH CI lane |
 
-A run that plans every lane a pull request can plan starts at most 69 jobs.
+A run that plans every lane a pull request can plan starts at most 71 jobs.
 The package lane's six preparation and compile jobs (helper identity, two Linux device helpers, device bundles and the separate Windows and macOS compiles) are counted, and every suite runs once, on the core's own engine, since Herdr's lanes went with Herdr (PRD engine-bundle-4-herdr-removal D-2).
 `scripts/tests/test_ci_plan.py` counts them from the workflows:
 
 | Jobs | Count | Why |
 | --- | --- | --- |
-| `plan`, `policy`, `checks`, `windows check`, `verify` | 5 | `checks` merges `web checks` and `desktop checks`: both install the same dependencies, run for a minute or two and start a runner each |
+| `plan`, `policy`, `checks`, `verify` | 4 | `checks` merges `web checks` and `desktop checks`: both install the same dependencies, run for a minute or two and start a runner each |
+| `windows check` | 3 | the workspace's compile, the Windows Rust tests on their own build, and the web and desktop unit suites, three runners that start together ([Where the Windows runners went](#where-the-windows-runners-went)): one job held them in a row for 27 minutes on a pull request, the last line of every run that planned it |
 | `rust workspace` | 5 | one build of the planned crates' tests, three shards that run them from its archive, and the lint beside the build ([The Rust lane's shards](#the-rust-lanes-shards)): one job held all of it for 14 to 18 minutes, the longest Linux line of a run |
 | `windows e2e` | 5 | the `@platform` suite in three shards dealt by the Windows table, with the daemon and web shell builds in their own parallel jobs as on Linux: one job held all 88 tests and took 22.4 minutes at the median of 65 successful jobs, the longest of a run, while three shards plan 4.2 minutes of tests each; the reusable workflow starts no `plan` job, since a matrix picks its list by index |
 | `windows desktop` | 1 | the desktop `@platform` tests on Windows, the one job that starts the Electron app there in a pull request; it keeps the window it drew as the run's artifact |
@@ -931,9 +937,9 @@ The package lane's six preparation and compile jobs (helper identity, two Linux 
 | `vt`, holder restart, relay interoperability | 9 | each lane runs once on Linux, macOS and Windows |
 | `package` (Windows, Linux, macOS) | 9 | helper identity, two Linux device helpers, device bundles, Windows and macOS compiles, and three packages; without macOS, its compile and package are omitted, leaving seven jobs |
 
-The common runs are smaller, counted with `runner_jobs` over the pull request plan of one changed file, each lane's macOS leg left out as such a plan leaves it, with `plan` and `verify`: `hide-core/src/lib.rs` starts 31 jobs, `hided/src/lib.rs` 36 (it holds tests, so it plans the repeat lane), `web/src/Overview.tsx` 21, a desktop-only change 5 (6 for `desktop/src/main`, which adds `windows check`), `hide-platform/src/lib.rs` 35, `hide-kit/src/lib.rs` or `hide-agent-hooks/src/lib.rs` 39 (the package lane's seven jobs among them), all with none on macOS, and a documentation change 3, as does a push that reuses the pull request's last green run.
+The common runs are smaller, counted with `runner_jobs` over the pull request plan of one changed file, each lane's macOS leg left out as such a plan leaves it, with `plan` and `verify`: `hide-core/src/lib.rs` starts 22 jobs, `hided/src/lib.rs` 27 (it holds tests, so it plans the repeat lane), `web/src/Overview.tsx` 21, a desktop-only change 5 (8 for a `desktop/src/main` file with Windows code, such as `index.ts`, which adds `windows check`'s three), `hide-platform/src/lib.rs` 30, `hide-kit/src/lib.rs` 34 and `hide-agent-hooks/src/lib.rs` 29 (the package lane's seven jobs among them), all with none on macOS, and a documentation change 3, as does a push that reuses the pull request's last green run.
 A change to a test file adds the repeat lane's jobs to these.
-A macOS path adds its macOS jobs: a change to a macOS file of `desktop/src/main` starts 10 jobs with four on macOS, and one to `hide-platform`'s macOS code 37 with two.
+A macOS path adds its macOS jobs: a change to `desktop/src/main/menu.ts` starts 6 jobs with two on macOS, one to `desktop/src/main/updater.ts`, a package input with Windows code, 19 with four, and one to `hide-platform`'s macOS code (`user_agents/launchd.rs`) 25 with two.
 The median wall time and the share of runs whose Linux shards waited more than 10 minutes come from a measurement of the pull request runs after a change merges, taken the way issue #561 took its baseline; they are not in this guide because a pull request cannot prove them.
 The `plan` job's summary lists each lane with the paths that chose it.
 

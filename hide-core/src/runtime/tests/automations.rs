@@ -1394,6 +1394,72 @@ fn a_run_stopped_before_its_row_is_read_opens_its_conversation_again() {
     );
 }
 
+/// The usage statistics count an automation made, with the example its
+/// form started from (none for an empty form or the CLI), and each run's
+/// end once, with what started it; a stop asked again counts nothing.
+#[test]
+fn an_automation_made_and_its_run_ended_are_each_counted_once() {
+    use crate::product_analytics::{AutomationOutcome, AutomationStart, AutomationTrigger, Event};
+    let state = tempfile::tempdir().unwrap();
+    let mut harness = Harness::new(&state);
+    let statistics = Arc::new(RecordedStatistics::default());
+    harness
+        .runtime
+        .lock()
+        .unwrap()
+        .install_product_analytics(statistics.clone());
+    let automations = || {
+        statistics
+            .take()
+            .into_iter()
+            .filter(|event| {
+                matches!(
+                    event,
+                    Event::AutomationCreated { .. } | Event::AutomationRunEnded { .. }
+                )
+            })
+            .collect::<Vec<_>>()
+    };
+    harness
+        .call(json!({
+            "call": "add", "name": "Briefing", "task": "Sum up the new issues",
+            "schedule": {"kind": "daily", "time": later()}, "agent": {"kind": "claude"},
+            "example": "briefing",
+        }))
+        .unwrap();
+    assert_eq!(
+        automations(),
+        [Event::AutomationCreated {
+            start: AutomationStart::Briefing
+        }]
+    );
+    let id = harness.run_now();
+    assert_eq!(
+        automations(),
+        [Event::AutomationCreated {
+            start: AutomationStart::Own
+        }]
+    );
+    harness.tick(1);
+    assert_eq!(harness.run(&id).0, "running");
+    harness
+        .call(json!({"call": "run_stop", "id": id, "run": 1}))
+        .unwrap();
+    harness.tick(1);
+    assert!(
+        harness
+            .call(json!({"call": "run_stop", "id": id, "run": 1}))
+            .is_err()
+    );
+    assert_eq!(
+        automations(),
+        [Event::AutomationRunEnded {
+            outcome: AutomationOutcome::Stopped,
+            trigger: AutomationTrigger::Manual,
+        }]
+    );
+}
+
 /// The next run started right after the last one's terminal closed finds
 /// the folder's workspace closing its last pane: that start started
 /// nothing, so it waits and is asked again under its intent, never a

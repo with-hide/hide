@@ -634,6 +634,20 @@ impl NodeTerminals {
         }
     }
 
+    /// The folder a pane of this node was started in, as its holder's
+    /// record keeps it, in the spelling paths cross machines in; `None`
+    /// before the node started its holders and for a pane with no such
+    /// record.
+    pub fn start_folder(&self, pane: &str) -> Option<String> {
+        let holders = lock(&self.local).clone()?;
+        holders
+            .record(pane)
+            .ok()
+            .flatten()?
+            .reservation
+            .map(|reservation| reservation.cwd)
+    }
+
     /// The service of a node whose core runs on another machine (PRD
     /// core-host-node-remote-core D-06): its panes run in its pane holders,
     /// and their output reaches its own `screen` always, and its link only

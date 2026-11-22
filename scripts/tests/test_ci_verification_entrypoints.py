@@ -166,15 +166,17 @@ if name == 'playwright' and '--list' in args:
 
     def test_windows_runs_both_unit_suites_without_repeating_static_checks(self):
         self.enable_package_scripts()
-        steps = yaml.safe_load((ROOT / ".github/workflows/pr.yml").read_text())["jobs"]["windows-check"]["steps"]
+        # The Windows lane's `web` job (`windows-check.yml`); its other jobs run no web step.
+        lane = yaml.safe_load((ROOT / ".github/workflows/windows-check.yml").read_text())["jobs"]
+        steps = [step for job in lane.values() for step in job["steps"]]
         for package, name in (("web", "Web shell unit suite"), ("desktop", "Desktop app unit suite")):
             with self.subTest(package=package):
                 self.record.unlink(missing_ok=True)
-                result = self.workflow_step("pr.yml", "windows-check", name)
+                result = self.workflow_step("windows-check.yml", "web", name)
                 self.assertEqual(result.returncode, 0, result.stderr)
                 self.assertEqual(self.tool_calls("vitest", package), [["run"]])
                 self.record.unlink()
-                result = self.workflow_step("pr.yml", "windows-check", name, FAIL_PROGRAM="vitest")
+                result = self.workflow_step("windows-check.yml", "web", name, FAIL_PROGRAM="vitest")
                 self.assertEqual(result.returncode, 23, result.stderr)
         # Check every step, so putting a duplicate back under another name fails.
         commands = "\n".join(step.get("run", "") for step in steps)

@@ -66,6 +66,23 @@ impl Runtime {
         &mut self,
         surface: crate::product_analytics::ActiveSurface,
     ) {
+        use crate::product_analytics::{Daily, Event};
+        self.note_daily(Daily::Surface(surface), Event::Active { surface });
+    }
+
+    /// The operator used a main feature: its first use of a UTC day sends
+    /// `hide_feature_used` and saves the day, as `note_operator_active` does
+    /// for a surface.
+    pub(crate) fn note_feature_used(&mut self, feature: crate::product_analytics::Feature) {
+        use crate::product_analytics::{Daily, Event};
+        self.note_daily(Daily::Feature(feature), Event::FeatureUsed { feature });
+    }
+
+    fn note_daily(
+        &mut self,
+        what: crate::product_analytics::Daily,
+        event: crate::product_analytics::Event,
+    ) {
         let Some(sink) = &self.product_analytics else {
             return;
         };
@@ -74,11 +91,11 @@ impl Runtime {
                 .snapshot
                 .ui_state
                 .product_active_days
-                .first_of_day(surface, super::unix_milliseconds())
+                .first_of_day(what, super::unix_milliseconds())
         {
             return;
         }
-        sink.capture(crate::product_analytics::Event::Active { surface });
+        sink.capture(event);
         self.persist_ui_state();
     }
 

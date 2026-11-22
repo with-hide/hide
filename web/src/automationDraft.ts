@@ -113,7 +113,8 @@ function worktreeOf(draft: FormDraft, git: boolean): boolean {
   return draft.folder !== null && git && draft.worktree;
 }
 
-export function addCall(draft: FormDraft, git: boolean, runNow: boolean): Extract<AutomationCall, { call: "add" }> {
+/** `example`: the example the form started from, which only the usage statistics count. */
+export function addCall(draft: FormDraft, git: boolean, runNow: boolean, example: AutomationExample | null = null): Extract<AutomationCall, { call: "add" }> {
   return {
     call: "add",
     name: draft.name.trim(),
@@ -123,6 +124,7 @@ export function addCall(draft: FormDraft, git: boolean, runNow: boolean): Extrac
     ...(draft.folder !== null ? { folder: draft.folder } : {}),
     worktree: worktreeOf(draft, git),
     run_now: runNow,
+    ...(example ? { example } : {}),
   };
 }
 

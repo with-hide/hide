@@ -1957,7 +1957,7 @@ fn a_parents_request_stays_the_childs_work_when_the_parents_screen_title_changes
 }
 
 /// A core on `state`, whose own node's agent files live in an empty `home`,
-/// with panes `p-a`, `p-b` and `p-c` carrying the given sessions.
+/// with panes `p-a` to `p-d` carrying the given sessions.
 fn statistics_runtime(
     state: &Path,
     home: &Path,
@@ -1990,7 +1990,7 @@ fn statistics_runtime(
     runtime.snapshot.navigator.workspaces = vec![record_workspace(
         crate::node::TEST_NODE,
         "w",
-        &["p-a", "p-b", "p-c", "p-shell"],
+        &["p-a", "p-b", "p-c", "p-d", "p-shell"],
     )];
     runtime.snapshot.navigator.agents = sessions
         .iter()
@@ -2009,7 +2009,7 @@ fn statistics_runtime(
 /// session a pane carries again, in another place or after the core
 /// restarts on the same state, is not counted again; a new one is, and a
 /// shell pane sends nothing. Each names who started it: the operator, a
-/// spawn, or a mission.
+/// spawn, a mission or an automation.
 #[test]
 fn a_session_a_pane_carries_is_counted_once_across_a_restart() {
     use crate::product_analytics::{AgentSource, Event};
@@ -2085,16 +2085,49 @@ fn a_session_a_pane_carries_is_counted_once_across_a_restart() {
             ("p-a", "claude", "session-a"),
             ("p-b", "codex", "session-b"),
             ("p-c", "claude", "session-c"),
+            ("p-d", "claude", "session-d"),
         ],
         &statistics,
     )));
-    // The third pane is a mission's checker.
+    // The third pane is a mission's checker, and the fourth an automation's
+    // run.
     {
         let mut runtime = shared.lock().unwrap();
         runtime.delivery_ledger = Ok(Arc::new(crate::delivery::ledger::Ledger {
-            agents: vec![on_pane("agent-3", "p-c", Some("agent-1"))],
+            agents: vec![
+                on_pane("agent-3", "p-c", Some("agent-1")),
+                on_pane("agent-4", "p-d", None),
+            ],
             ..Default::default()
         }));
+        let mut automation = crate::automations::Automation {
+            id: "auto-1".into(),
+            name: "Briefing".into(),
+            task: "Sum up the new issues".into(),
+            schedule: serde_json::from_value(serde_json::json!({"kind": "daily", "time": "09:00"}))
+                .unwrap(),
+            agent: crate::automations::AgentChoice {
+                kind: "claude".into(),
+                ..Default::default()
+            },
+            folder: crate::automations::Folder {
+                path: "/repo".into(),
+                default: false,
+                worktree: false,
+            },
+            machine: crate::node::TEST_NODE.into(),
+            paused: None,
+            created_at_unix_ms: 1,
+            next_due_unix_ms: None,
+            records: Vec::new(),
+            next_run_number: 0,
+        };
+        let run = automation.new_run(crate::automations::Trigger::Scheduled, Some(1), 1);
+        automation.run_mut(run).unwrap().agent_id = Some("agent-4".into());
+        let (store, mut stored, _) =
+            crate::runtime::automations::restore(state.path().join("automations.json"));
+        stored.automations.push(automation);
+        runtime.install_automations_store(store, stored, jiff::tz::TimeZone::UTC);
         runtime.missions.book.missions.push(
             serde_json::from_value(serde_json::json!({
                 "id": "mission-1", "title": "Fix the bug", "project": "/repo",
@@ -2116,15 +2149,15 @@ fn a_session_a_pane_carries_is_counted_once_across_a_restart() {
     }
     let worker = super::super::links::spawn_worker(&shared, ChangeNotifier::noop())
         .expect("the link worker starts again");
-    wait(&shared, "the third session's start", |_| {
-        !statistics.0.lock().unwrap().is_empty()
+    wait(&shared, "the third and fourth sessions' starts", |_| {
+        statistics.0.lock().unwrap().len() >= 2
     });
     // The worker is joined first, so a recount in the same pass is seen.
     drop(worker);
-    assert_eq!(
-        statistics.take(),
-        [AgentStarted(Agent::Claude, AgentSource::Mission)]
-    );
+    let started = statistics.take();
+    assert_eq!(started.len(), 2, "{started:?}");
+    assert!(started.contains(&AgentStarted(Agent::Claude, AgentSource::Mission)));
+    assert!(started.contains(&AgentStarted(Agent::Claude, AgentSource::Automation)));
 }
 
 fn pre_check_operation(

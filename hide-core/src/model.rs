@@ -1004,6 +1004,12 @@ pub struct NavigatorSnapshot {
     /// They are not this core's panes: its engine runs none of them.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub guest_panes: Vec<crate::guest_panes::GuestPanes>,
+    /// What each connected machine this one opens told of its own work that
+    /// waits on a person or is done, as hided last handed it on (PRD
+    /// device-connect-iroh D-50). Another core's rows: listed with the
+    /// machine's mark and never judged for a notification here.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub peer_work: Vec<crate::peer_work::PeerWork>,
     pub workspaces: Vec<WorkspaceSnapshot>,
     /// Project rows the core grouped at the bottom of each device's Projects
     /// list. `workspaces` remains the one authoritative row collection so
@@ -6453,6 +6459,15 @@ impl LinkOrigin {
     pub fn reports_own_facts(&self) -> bool {
         matches!(self, Self::Inbound | Self::Wsl { .. })
     }
+
+    /// Whether the machine keeps its own Settings (PRD device-connect-iroh,
+    /// Settings per machine): a paired machine runs a Hide of its own, so
+    /// its agents, models and Hide AI are chosen there and this core's
+    /// Settings hold none of them. A device with no Hide of its own is set
+    /// from the core that runs it.
+    pub fn keeps_own_settings(&self) -> bool {
+        matches!(self, Self::Peer { .. })
+    }
 }
 
 /// A registration as the store and the shell spell it: the alias of a
@@ -8565,6 +8580,7 @@ impl Snapshot {
                 device_not_added: None,
                 peers: Vec::new(),
                 guest_panes: Vec::new(),
+                peer_work: Vec::new(),
                 workspaces: Vec::new(),
                 inactive_projects: Vec::new(),
                 agents: Vec::new(),

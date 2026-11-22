@@ -124,6 +124,22 @@ pub const WRITE_WITHIN: Duration = Duration::from_secs(30);
 /// "applied": what a host's box can hold (B13).
 pub const MAX_UNAPPLIED: usize = hide_peer_protocol::event::BOX_MAX_EVENTS;
 
+/// The most bytes of lines the inbox's file keeps of events between
+/// "recorded" and "applied", what a host's box can hold (B13), and the most
+/// it keeps of applied events ahead of them. It counts the bytes of recorded
+/// lines, which is what a host's sending adds.
+///
+/// An unapplied event is in use: the host was told it is recorded and
+/// dropped it from its box. At the cap the next event is not recorded and
+/// not acknowledged ([`crate::inbox::Recorded::Full`]), so the host keeps it
+/// and sends it again; nothing finished could make room for it. An applied
+/// event is finished: the cursor covers it and nothing reads it again. All
+/// applied lines go when nothing waits, and past the cap they go while an
+/// event still waits, so a host that keeps one event waiting cannot grow the
+/// file. The file, and the read of it when the inbox opens, stay under twice
+/// this.
+pub const MAX_UNAPPLIED_BYTES: usize = hide_peer_protocol::event::BOX_MAX_BYTES;
+
 /// How many connection events a slow listener may fall behind before it
 /// skips to the newest.
 pub const MAX_EVENTS: usize = 64;
@@ -152,4 +168,7 @@ const _: () = {
     assert!(OFFER_FOR.as_secs() < PENDING_FOR.as_secs());
     assert!(ANSWER_WITHIN.as_secs() < OFFER_FOR.as_secs());
     assert!(SETTLE_RETRY_FIRST.as_secs() < SETTLE_RETRY_MOST.as_secs());
+    // An event arrives in one message, so one always fits an empty inbox:
+    // the byte cap never refuses an event for good.
+    assert!(MAX_UNAPPLIED_BYTES >= 2 * hide_peer_protocol::frame::MAX_MESSAGE);
 };

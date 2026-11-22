@@ -229,17 +229,6 @@ impl hide_node::terminal::OutputSink for NoScreens {
     fn clipboard(&self, _pane: &str, _text: &[u8]) {}
 }
 
-/// Where one guest's node keeps its state and runs its builds from.
-struct Place {
-    /// The node's `--guest` folder.
-    node: PathBuf,
-    /// The folder its builds are placed in.
-    install: PathBuf,
-    /// Whether they are the device helper's folders, which this guest took
-    /// over ([`Guests::take_helper`]), and not folders of the guest's own.
-    helper: bool,
-}
-
 /// What became of a guest's ask for the device helper's folder on this
 /// machine (PRD device-connect-iroh D-49, D-75).
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -259,9 +248,7 @@ impl Guests {
     /// The paired machine that took the device helper's folder over, with
     /// the helper root, as the record in that folder says.
     fn helper_taken(&self) -> Option<(PeerKey, PathBuf)> {
-        let taken = layout::HelperGuest::read(&layout::device_node_state(&self.home))?;
-        let key = PeerKey::from_hex(&taken.key).ok()?;
-        taken.root.is_absolute().then_some((key, taken.root))
+        layout::HelperGuest::taken(&layout::device_node_state(&self.home))
     }
 
     /// The paired machine that took the device helper's folder over.
@@ -367,24 +354,11 @@ impl Guests {
     }
 
     /// The folders of `guest`'s node: the device helper's when the guest
-    /// took them over, and its own below its guest folder otherwise. The
-    /// one place that chooses, so the node, its builds and their removal
-    /// agree.
-    fn place(&self, guest: &PeerKey) -> Place {
-        if let Some((holder, root)) = self.helper_taken()
-            && holder == *guest
-        {
-            return Place {
-                node: layout::device_node_state(&self.home),
-                install: root,
-                helper: true,
-            };
-        }
-        Place {
-            node: layout::guest_node_side(&self.state_dir, guest),
-            install: layout::guest_install_root(&self.state_dir, guest),
-            helper: false,
-        }
+    /// took them over ([`Guests::take_helper`]), and its own below its
+    /// guest folder otherwise, as `layout::GuestPlace` chooses for the node,
+    /// its builds, their removal and a call handed to the guest's `hide`.
+    fn place(&self, guest: &PeerKey) -> layout::GuestPlace {
+        layout::GuestPlace::of(&self.state_dir, &self.home, guest)
     }
 
     /// Called on the daemon's runtime, whose tasks follow each guest's
@@ -409,6 +383,24 @@ impl Guests {
         })
     }
 
+    /// Ends a guest's pane for this machine's operator, by its address
+    /// here (B10): the guest's node closes it and tells its own core,
+    /// whether or not the guest is connected. Refused for an address that
+    /// is no listed pane of a guest on this machine.
+    pub fn close_pane(&self, id: &str) -> Result<(), &'static str> {
+        let (device, pane) = hide_node_link::address::guest_pane(id).ok_or("pane_unavailable")?;
+        let tap = lock(&self.hosted)
+            .values()
+            .find(|hosted| hosted.tap.device() == device)
+            .map(|hosted| Arc::clone(&hosted.tap))
+            .ok_or("pane_unavailable")?;
+        if !tap.panes().iter().any(|listed| listed.pane == pane) {
+            return Err("pane_unavailable");
+        }
+        tap.terminate(pane);
+        Ok(())
+    }
+
     /// Every guest's panes on this machine, as each guest's node last
     /// said; a guest with none is not in the list.
     pub fn panes(&self) -> Vec<hide_core::guest_panes::GuestPanes> {
@@ -427,6 +419,7 @@ impl Guests {
                             id: guest_pane_id(device, &pane.pane),
                             pane: pane.pane,
                             since_unix_ms: pane.since_unix_ms,
+                            folder: pane.folder,
                         })
                         .collect(),
                 }
@@ -1098,7 +1091,7 @@ impl Guests {
             *guest,
             place.node,
             self.home.clone(),
-            place.helper.then(|| self.state_dir.clone()),
+            place.helper.then_some(place.state),
         );
         let tap = self.tap_of(guest, device, &node);
         hosted.insert(
@@ -1929,6 +1922,19 @@ mod tests {
         assert!(place.helper);
         assert_eq!(place.node, node);
         assert_eq!(place.install, home.path().join(".hide/host-helper"));
+        // Its node runs with this daemon's state folder, as the helper's
+        // panes name it, and a call handed to its `hide` (D-55) is sent to
+        // the same folders by its installation's name.
+        assert_eq!(place.state, state.path());
+        let named = |guest: &PeerKey| {
+            layout::GuestPlace::of_install(
+                state.path(),
+                home.path(),
+                &hide_peer::protocol::launch::install_name(&guest.short()),
+            )
+            .unwrap()
+        };
+        assert_eq!(named(&key(1)), place);
 
         assert_eq!(
             guests.helper_for(&key(2), root, paired),
@@ -1943,6 +1949,8 @@ mod tests {
         let own = guests.place(&key(2));
         assert!(!own.helper);
         assert!(own.node.starts_with(state.path()), "{:?}", own.node);
+        assert_eq!(own.state, own.node);
+        assert_eq!(named(&key(2)), own);
 
         // The holder holds no grant here and runs nothing: its pairing
         // never finished, and the next machine takes the folder.
@@ -2312,6 +2320,7 @@ mod tests {
                     rows: 24,
                     cols: 80,
                     since_unix_ms: 5,
+                    folder: Some("/work/shop-api".to_owned()),
                 }],
             })
             .unwrap(),
@@ -2532,6 +2541,7 @@ mod tests {
                     id: "guest:macbook:pane:w1:p1".to_owned(),
                     pane: "w1:p1".to_owned(),
                     since_unix_ms: 5,
+                    folder: Some("/work/shop-api".to_owned()),
                 }],
             }],
             "the panes show before the node is back"

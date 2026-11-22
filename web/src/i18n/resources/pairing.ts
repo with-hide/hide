@@ -2,7 +2,8 @@ import type { Catalog, Catalogs } from "../schema";
 
 // Pairing this computer with another Hide (PRD device-connect-iroh B1-B6,
 // B21, B24-B27, B50, B51; D-76): Settings › Devices' share row, the paired
-// machines' rows, the pasted link's words and the allow window. A machine's
+// machines' rows, the pasted link's words and the allow window, and another
+// machine's work on this computer (`pairing.work.*`, B10, B68). A machine's
 // name is caller data and is followed by a fixed word or a colon, never by a
 // particle that depends on its last sound.
 export const pairingEnglish = {
@@ -116,6 +117,22 @@ export const pairingEnglish = {
   "pairing.remove.outgoingDescription": "This computer no longer opens it. Work this computer left there keeps running on that computer.",
   "pairing.remove.go": "Remove",
   "pairing.rail.hint": "{{name}} · {{state}}",
+  "pairing.work.group": "From {{name}}",
+  "pairing.work.groupAria": "Work {{name}} runs on this computer",
+  "pairing.work.rowAria": "{{label}} · from {{name}}",
+  "pairing.work.tabs": "Tabs of work from {{name}}",
+  "pairing.work.onThatMachine": "Do this on {{name}}",
+  "pairing.work.menu": "{{label}} actions",
+  "pairing.work.split": "Split",
+  "pairing.work.newTab": "New tab",
+  "pairing.work.rename": "Rename",
+  "pairing.work.startAgent": "Start an agent",
+  "pairing.work.close": "Close…",
+  "pairing.work.closeTitle": "Close this terminal?",
+  "pairing.work.closeBody": "It ends what {{name}} runs in it on this computer. {{name}} is told that it ended.",
+  "pairing.work.closeGo": "Close",
+  "pairing.work.gone": "This terminal ended",
+  "pairing.work.peerRowAria": "{{title}} · on {{name}}",
   "settings.titleOf": "{{machine}} Settings",
 } as const;
 
@@ -230,6 +247,22 @@ const ko = {
   "pairing.remove.outgoingDescription": "이 컴퓨터가 더는 그 기기를 열지 않아요. 이 컴퓨터가 거기에 맡긴 일은 그 기기에서 계속 돌아요.",
   "pairing.remove.go": "빼기",
   "pairing.rail.hint": "{{name}} · {{state}}",
+  "pairing.work.group": "{{name}}에서 시킨 일",
+  "pairing.work.groupAria": "{{name}}에서 시켜 이 컴퓨터에서 도는 일",
+  "pairing.work.rowAria": "{{label}} · {{name}}에서 시킨 일",
+  "pairing.work.tabs": "{{name}}에서 시킨 일의 탭",
+  "pairing.work.onThatMachine": "{{name}}에서 할 수 있어요",
+  "pairing.work.menu": "{{label}} 메뉴",
+  "pairing.work.split": "나누기",
+  "pairing.work.newTab": "새 탭",
+  "pairing.work.rename": "이름 바꾸기",
+  "pairing.work.startAgent": "에이전트 시작",
+  "pairing.work.close": "닫기…",
+  "pairing.work.closeTitle": "이 터미널을 닫을까요?",
+  "pairing.work.closeBody": "{{name}}에서 시켜 이 컴퓨터에서 돌던 일이 끝나요. {{name}}에는 끝났다고 알려요.",
+  "pairing.work.closeGo": "닫기",
+  "pairing.work.gone": "이 터미널은 끝났어요",
+  "pairing.work.peerRowAria": "{{title}} · {{name}}",
   "settings.titleOf": "{{machine}} 설정",
 } satisfies Catalog<typeof pairingEnglish>;
 
@@ -344,6 +377,22 @@ const zhCN = {
   "pairing.remove.outgoingDescription": "此电脑将不再打开它。此电脑留在那里的工作会在那台设备上继续运行。",
   "pairing.remove.go": "移除",
   "pairing.rail.hint": "{{name}} · {{state}}",
+  "pairing.work.group": "来自 {{name}}",
+  "pairing.work.groupAria": "{{name}} 在此电脑上运行的工作",
+  "pairing.work.rowAria": "{{label}} · 来自 {{name}}",
+  "pairing.work.tabs": "来自 {{name}} 的工作的标签页",
+  "pairing.work.onThatMachine": "可在 {{name}} 上操作",
+  "pairing.work.menu": "{{label}} 操作",
+  "pairing.work.split": "拆分",
+  "pairing.work.newTab": "新标签页",
+  "pairing.work.rename": "重命名",
+  "pairing.work.startAgent": "启动智能体",
+  "pairing.work.close": "关闭…",
+  "pairing.work.closeTitle": "要关闭这个终端吗？",
+  "pairing.work.closeBody": "{{name}} 在此电脑上运行的工作会结束，并会告知 {{name}} 已结束。",
+  "pairing.work.closeGo": "关闭",
+  "pairing.work.gone": "这个终端已结束",
+  "pairing.work.peerRowAria": "{{title}} · {{name}}",
   "settings.titleOf": "{{machine}} 设置",
 } satisfies Catalog<typeof pairingEnglish>;
 
@@ -458,6 +507,22 @@ const ja = {
   "pairing.remove.outgoingDescription": "このコンピュータからは開かなくなります。そこに任せた作業はそのデバイスで動き続けます。",
   "pairing.remove.go": "外す",
   "pairing.rail.hint": "{{name}} · {{state}}",
+  "pairing.work.group": "{{name}} からの作業",
+  "pairing.work.groupAria": "{{name}} がこのコンピュータで動かしている作業",
+  "pairing.work.rowAria": "{{label}} · {{name}} からの作業",
+  "pairing.work.tabs": "{{name}} からの作業のタブ",
+  "pairing.work.onThatMachine": "{{name}} でできます",
+  "pairing.work.menu": "{{label}} の操作",
+  "pairing.work.split": "分割",
+  "pairing.work.newTab": "新しいタブ",
+  "pairing.work.rename": "名前を変更",
+  "pairing.work.startAgent": "エージェントを開始",
+  "pairing.work.close": "閉じる…",
+  "pairing.work.closeTitle": "このターミナルを閉じますか？",
+  "pairing.work.closeBody": "{{name}} がこのコンピュータで動かしていた作業が終わります。{{name}} には終わったと伝えます。",
+  "pairing.work.closeGo": "閉じる",
+  "pairing.work.gone": "このターミナルは終了しました",
+  "pairing.work.peerRowAria": "{{title}} · {{name}}",
   "settings.titleOf": "{{machine}} の設定",
 } satisfies Catalog<typeof pairingEnglish>;
 

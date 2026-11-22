@@ -22,7 +22,9 @@ MANIFEST = "hashFiles('Cargo.toml')"
 SAVERS = {
     'workspace': {
         ('rust.yml', 'build'): ON_MAIN,
-        ('pr.yml', 'windows-check'): ON_MAIN,
+        # The Windows test build, the most any Windows job builds and the
+        # lane's longest job; `compile` beside it only restores.
+        ('windows-check.yml', 'tests'): ON_MAIN,
         ('desktop-e2e.yml', 'e2e'):
             "${{ github.ref == 'refs/heads/main' && matrix.shard == 1 && runner.os == 'macOS' }}",
     },

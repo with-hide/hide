@@ -167,13 +167,15 @@ Three things made the copies: a key named after the job, so the rust lane, the w
 
 | Set | What it holds | Saved by, on main only | Read by |
 | --- | --- | --- | --- |
-| `workspace` | The debug build of the dependencies, one feature set for every member (`workspace-hack`) | `rust workspace / build tests` on Linux, `windows check` on Windows, `desktop e2e` shard 1 on macOS | Every other lane that builds Rust, and a release tag's tests |
+| `workspace` | The debug build of the dependencies, one feature set for every member (`workspace-hack`) | `rust workspace / build tests` on Linux, `windows check / rust tests` on Windows, `desktop e2e` shard 1 on macOS | Every other lane that builds Rust, and a release tag's tests |
 | `lint` | Clippy's check of the dependencies, which a test build does not make | `rust workspace / lint` on Linux | `merge check rust` |
 | `platform` | `hide-platform` built alone, outside that feature set | `os contract` on each system | Nothing else |
 | `release` | The release profile's dependencies | `package.yml`'s Windows and Linux package jobs and its macOS compile | The packages of a pull request and a release tag, and the nightly measurement |
 
 Each set is saved by one job per system, the one that builds the most of it, because a key that exists is never saved again: two savers would race and the loser's extra build would be lost every run.
 The Rust lane builds its tests in one job and lints in another beside it ([TESTING.md](TESTING.md#the-rust-lanes-shards)), and Cargo checks a dependency for Clippy apart from building it for a test, so neither job's build holds the other's: each saves its own set, and `merge check rust`, which runs the same lint, reads the `lint` set.
+The Windows lane builds its test binaries in one job and checks every target of the workspace in another beside it ([TESTING.md](TESTING.md#where-the-windows-runners-went)); the test build is the larger, every test step waits on it and the lane ends with it, so `windows check / rust tests` saves Windows's `workspace` set and `windows check / compile` reads it.
+A check makes metadata, not the compiled dependencies a test build makes, so what `compile` takes from the entry is the build scripts and proc macros the two share, and it checks the dependencies' metadata itself; the unit suites' job builds only the relay WebAssembly, as Linux `checks` does, and reads no set.
 A reader builds what the saver did not, which on macOS is the extra dependencies of the nightly lanes that test more than the daemon.
 rust-cache's environment hash stays in the key; it hashes every installed toolchain, so the action first removes every toolchain but the one `rust-toolchain.toml` names, and the hash then depends on the pin and not on the runner.
 rust-cache ends each key with its own 8-digit hash of `Cargo.lock`, every member's `Cargo.toml` and `rust-toolchain.toml`, and when that hash changes it restores the newest entry of the same set and system and builds only the dependencies that changed; it leaves out the root `Cargo.toml`, whose `[profile]` sections change every dependency's build, so the action puts that file's hash in the key before the system, and a change there misses once.

@@ -823,10 +823,10 @@ class IgnoredPreparation(unittest.TestCase):
         self.assertIn("fetch-conpty.py", script)
 
     def test_both_lanes_prepare_ignored_tests_with_that_script_and_nothing_of_their_own(self):
-        pr = self.workflow("pr.yml")
+        windows = self.workflow("windows-check.yml")["tests"]
         rust = self.workflow("rust.yml")["build"]
         repeat = self.workflow("repeat.yml")["rust"]
-        for job, lane in ((rust, "rust"), (pr["windows-check"], "windows-check"), (repeat, "rust")):
+        for job, lane in ((rust, "rust"), (windows, "windows-check"), (repeat, "rust")):
             with self.subTest(lane=lane):
                 sourced = self.steps_running(job, ". scripts/prepare-ignored-tests.sh")
                 self.assertTrue(sourced, f"{lane} calls no shared preparation")

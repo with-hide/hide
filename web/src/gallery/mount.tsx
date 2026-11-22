@@ -28,6 +28,7 @@ import { UsageScene } from "./UsageScene";
 import { ProjectSettingsScene } from "./ProjectSettingsScene";
 import { AddDeviceScene } from "./AddDeviceScene";
 import { PairingScene } from "./PairingScene";
+import { GuestWorkScene } from "./GuestWorkScene";
 import { AddProjectScene } from "./AddProjectScene";
 import { HideAiSettingsScene } from "./HideAiSettingsScene";
 import { AgentsSettingsScene } from "./AgentsSettingsScene";
@@ -90,6 +91,11 @@ export function mountGallery(root: Root) {
     if (scene === "pairing") {
       document.title = "hide · Pairing scene";
       root.render(<StrictMode><PairingScene params={params} /></StrictMode>);
+      return;
+    }
+    if (scene === "guest-work") {
+      document.title = "hide · Another machine's work scene";
+      root.render(<StrictMode><GuestWorkScene params={params} /></StrictMode>);
       return;
     }
     if (scene === "add-project") {

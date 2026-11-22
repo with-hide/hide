@@ -1,5 +1,5 @@
 //! One Hide's work on another, with both cores real (PRD device-connect-iroh
-//! c1; B9, B10, B12, B14 to B16, B60): two daemons of a shipped copy of this
+//! c1; B9, B10, B12, B14 to B16, B54, B60, D-55, D-74): two daemons of a shipped copy of this
 //! build, each a machine of its own, pair by a link, and the guest opens a
 //! folder of its host. The work runs in the guest's node, the shipped
 //! `hided` the host starts from the guest's install root, and this test
@@ -461,6 +461,50 @@ async fn a_guests_work_runs_on_its_host_from_the_guests_build_and_outlives_each_
     types(&guest, &on_guest, &asks_its_core("f3")).await;
     let answered = left(&at("f3"));
     assert!(answered.contains("\"ok\":true"), "{answered}");
+    // B10: the host's screen says which folder the pane was started in, as
+    // the guest's node told it, so the pane stands under the project there.
+    let folder = project.to_string_lossy().into_owned();
+    let in_folder = |path: &Value| {
+        path.as_str()
+            .is_some_and(|path| path.ends_with(folder.trim_start_matches("/private")))
+    };
+    let mut shown = Value::Null;
+    wait_within("the pane's folder on the host's screen", WITHIN, || {
+        shown = host.screen().snapshot()?["navigator"]["guest_panes"].clone();
+        Ok(in_folder(&shown[0]["panes"][0]["folder"]).then_some(()))
+    })
+    .unwrap_or_else(|error| panic!("{error:#}: {shown}"));
+    // D-50: the guest may open the host, so the host's core tells it its
+    // own Needs You and Done on the stream the two cores talk on, and the
+    // guest's screen holds them under the host. Nothing waits on the host,
+    // so the counts are zero; the host, which may not open the guest, is
+    // told nothing of the guest's.
+    let mut told = Value::Null;
+    wait_within("the host's own work on the guest's screen", WITHIN, || {
+        told = guest.screen().snapshot()?["navigator"]["peer_work"].clone();
+        Ok((told[0]["key"].is_string() && told[0]["needs_you"] == 0).then_some(()))
+    })
+    .unwrap_or_else(|error| panic!("{error:#}: {told}"));
+    let of_guest = host.screen().snapshot().unwrap()["navigator"]["peer_work"].clone();
+    assert!(of_guest.as_array().is_none_or(Vec::is_empty), "{of_guest}");
+    // B54, D-55: `hide` at a terminal of the host outside every pane, in the
+    // folder only the guest's pane lives in, is the guest's own `hide`. The
+    // guest's core answers it with the pane of that folder, which the
+    // host's core has no project for.
+    let handed = Ran::of(
+        host.command(&["ps", "--json"])
+            .current_dir(&project)
+            .output()
+            .unwrap(),
+    );
+    assert!(handed.ok, "{}", handed.text());
+    let panes = handed.json()["value"]["panes"].clone();
+    assert!(
+        panes
+            .as_array()
+            .is_some_and(|panes| panes.iter().any(|pane| in_folder(&pane["checkout_path"]))),
+        "{panes}"
+    );
     // B14: the guest's Hide ends, and its work goes on: the host lists and
     // types into the pane as before. B12: a command in the pane that needs
     // the guest's core is told at once that it is away.
@@ -522,6 +566,42 @@ async fn a_guests_work_runs_on_its_host_from_the_guests_build_and_outlives_each_
     assert_eq!(host.screen().port, daemon);
     types(&host, &pane, &itself("f8")).await;
     assert_eq!(left(&at("f8")), shell);
+
+    // B10, D-74: the host's operator ends one pane of the guest's work from
+    // a window, and the rest of that work stays.
+    wait_within("the guest's link to its node started anew", WITHIN, || {
+        Ok(guest
+            .screen()
+            .snapshot()?
+            .pointer("/navigator/devices")
+            .and_then(Value::as_array)
+            .into_iter()
+            .flatten()
+            .any(|row| row["id"] == host_id.as_str() && row["host"]["state"] == "ready")
+            .then_some(()))
+    })
+    .unwrap();
+    let second = at("hh").join("second");
+    checkout(&second);
+    guest
+        .screen()
+        .event(
+            "create_workspace",
+            json!({"device_id": host_id, "path": second, "label": "Second",
+                "initialize_git": false}),
+        )
+        .unwrap();
+    let added = host.lists("the guest's second pane on its host", |listed| {
+        guest_panes(listed).into_iter().find(|id| *id != pane)
+    });
+    let screen = host.screen();
+    let mut closing = Window::open_at(screen.port, &screen.token, "web").await;
+    closing
+        .send("guest_pane_close", json!({"pane_id": added}))
+        .await;
+    host.lists("the closed pane gone and the other kept", |listed| {
+        (guest_panes(listed) == [pane.clone()]).then_some(())
+    });
 
     // B60, B26: the host's operator takes the guest off and ends its work.
     // The pane closes with no word from the guest, the node ends, and

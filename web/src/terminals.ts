@@ -49,6 +49,7 @@ import { useShellStore, type TerminalChunk } from "./store";
 import { outsideFilesShown } from "./externalFiles";
 import { catalogWorkspaces, type SnapshotRest } from "./snapshot";
 import type { DispatchFn } from "./ws";
+import { isGuestPaneId } from "./guestWork";
 import type { ClipboardContent } from "./clipboard";
 
 /** What a terminal asks of the shell's actions: where a clicked link goes, and the clipboard its copy and paste use. */
@@ -517,6 +518,9 @@ function sendGrid(paneId: string, instance: Instance, newView: boolean, onlyChan
     kind: "terminal_viewport",
     payload: { pane_id: paneId, cols: term.cols, rows: term.rows, new_view: newView },
   });
+  // Another machine's pane is sized by its own node from the view above
+  // (hided's tap); the core, which holds no such pane, is sent no resize.
+  if (isGuestPaneId(paneId)) return;
   instance.dispatch({
     schema_version: 2,
     kind: "terminal_resize",
@@ -1307,7 +1311,9 @@ export function attachTerminal(
     shown.term.textarea?.addEventListener("focus", () => {
       holdKept(shown);
       noteTerminalFocus(shown.paneId);
-      if (followingSnapshot) return;
+      // Another machine's pane is no pane of this core's: the keyboard is
+      // this window's own there, and the core is told of no focus.
+      if (followingSnapshot || isGuestPaneId(shown.paneId)) return;
       // A snapshot can lag a newer intent. Core owns focus idempotence and
       // coalescing, so every operator focus must reach it.
       // A remote pane's focus is its host's, so it goes there by the pane's

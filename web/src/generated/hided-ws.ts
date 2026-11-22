@@ -137,7 +137,8 @@ export type SnapshotSections =
   | AccessApprovePayload
   | AccessModePayload
   | AccessIdPayload
-  | BotStarter;
+  | BotStarter
+  | GuestPaneClosePayload;
 /**
  * The core's shared explicit interface language. Null follows each client's primary system language, with English for unsupported languages. Invalid stored values publish en with a diagnostic and remain stored until an explicit edit.
  */
@@ -784,11 +785,15 @@ export interface TerminalFrame {
   terminal_sequence: number;
 }
 /**
- * Payload of an agent_notice frame (PRD first-run-onboarding D-09): the daemon judged the agents' latest change the way the phone's push does. Each notice is a root agent that newly needs the operator or has finished; clear lists the tags of notifications to withdraw because the operator has seen that agent. Whether a notification shows, and its words, is the window's and the host's to decide.
+ * Payload of an agent_notice frame (PRD first-run-onboarding D-09): the daemon judged the agents' latest change the way the phone's push does. Each notice is a root agent that newly needs the operator or has finished; clear lists the tags of notifications to withdraw because the operator has seen that agent. Whether a notification shows, and its words, is the window's and the host's to decide. A notice goes to one place (PRD device-connect-iroh D-60): the frame carries this machine's own only while someone uses this computer, and one a machine this computer may open handed over because no one is at that machine, which carries `peer` and a tag of the form `peer:<connection id>|<that machine's tag>`; opening it selects that machine's tile.
  */
 export interface AgentNotice {
   notices: {
     tag: string;
+    /**
+     * Present on a notice another machine handed over: that machine's connection id, `navigator.peers[].key`. `device_id` and `pane_id` are then that machine's own names for the work.
+     */
+    peer?: string;
     device_id: string;
     pane_id: string;
     title: string;
@@ -995,4 +1000,10 @@ export interface BotStarter {
    */
   name: string;
   owns: boolean;
+}
+/**
+ * Payload of the `guest_pane_close` client event, accepted only from an operator window and never sent to the core: the window ends a pane another machine's work runs in on this computer, named by its address here (`guest:<device>:pane:<pane>`). The daemon ends it through that machine's node on this computer whether or not the machine is connected, and refuses a pane it does not list (`pane_unavailable`). PRD device-connect-iroh B10, D-74.
+ */
+export interface GuestPaneClosePayload {
+  pane_id: string;
 }
