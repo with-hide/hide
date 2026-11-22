@@ -3,6 +3,7 @@
 // tree, the order and what is folded (`hide-core` `phone/tree.rs`); this
 // draws it and keeps only which parents and folds this phone opened.
 
+import { pullLabel } from "../codeHost";
 import { useMemo } from "react";
 import { ChevronDownIcon, ChevronRightIcon } from "lucide-react";
 import { MissionChipFace, TONE_TEXT } from "../components/mission-tone";
@@ -203,7 +204,7 @@ function AgentRow({ agent }: { agent: PhoneAgent }) {
   const links = useRowLinks(agent);
   const marks = [
     agent.starred ? t("taskLens.revisit.starred") : null,
-    ...links.prs.map((pr) => `#${pr.number}`),
+    ...links.prs.map((pr) => pullLabel(pr)),
     ...links.missions.map(({ mission }) => `${t("mobile.tab.missions")} ${mission.title}`),
   ];
   const label = [words, agent.title, ...marks, agentProductName(agent.agent_kind), agent.tool, agent.place, agent.device_label, elapsed].filter(Boolean).join(", ");

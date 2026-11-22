@@ -144,7 +144,7 @@ export function detailOf(rest: SnapshotRest | null, entry: SearchEntry, now: num
         facts: present([
           [t("common.project"), entry.workspace?.label],
           [t("search.fact.assigned"), owners.map((checkout) => checkout.branch ?? checkout.label).join(", ")],
-          [t("search.fact.closingPrs"), closing.map((checkout) => `#${checkout.pull_request?.number}`).join(", ")],
+          [t("search.fact.closingPrs"), closing.flatMap((checkout) => (checkout.pull_request ? [pullLabel(checkout.pull_request)] : [])).join(", ")],
           sessionsFact(links, entry, t),
           [t("search.fact.read"), entry.workspace ? lastReadWords(entry.workspace, now, t, language) : null],
         ]),

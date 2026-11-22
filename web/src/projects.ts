@@ -234,7 +234,7 @@ export type CheckoutCardRow =
 export type CheckoutCard = {
   /** A pull request's badge line, or the danger header of a folder that is gone; null on a plain checkout. */
   header:
-    | { kind: "pull_request"; badge: ReturnType<typeof badgeWord>; state: PrState; number: number; url: string; title: string }
+    | { kind: "pull_request"; badge: ReturnType<typeof badgeWord>; state: PrState; number: number; label: string; url: string; title: string }
     | { kind: "missing"; label: string }
     | null;
   /** Each row only where its source has a value; a row with nothing to say takes no place. */
@@ -286,7 +286,7 @@ export function pullRequestCard(pr: PullRequest, t: TFunction<"translation">): C
 }
 
 function pullRequestHeader(pr: PullRequest, t: TFunction<"translation">): NonNullable<CheckoutCard["header"]> {
-  return { kind: "pull_request", badge: badgeWord(pr, t), state: pr.state, number: pr.number, url: pr.url, title: pr.title };
+  return { kind: "pull_request", badge: badgeWord(pr, t), state: pr.state, number: pr.number, label: pullLabel(pr), url: pr.url, title: pr.title };
 }
 
 /** A pull request's Review and Checks rows, each once GitHub has answered it. */

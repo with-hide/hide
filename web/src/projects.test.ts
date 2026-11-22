@@ -227,6 +227,7 @@ describe("checkoutCard", () => {
       badge: { label: "Approved", draft: false },
       state: "mergeable",
       number: 180,
+      label: "#180",
       url: "https://example.invalid/pull/180",
       title: "Sidebar readability",
     });

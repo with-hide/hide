@@ -88,9 +88,8 @@ export function CheckoutUpstream({ header, onCatchUp }: { header: Header | null 
   </Detail>;
 }
 
-/** The CI look a commit's last answer takes, and whether that answer is current; one that is not stays, dimmed, with its age (D-09, B22). */
-function useCiLook(ci: CheckoutCi | null, header: Header | null, view: WorkspaceView) {
-  const host = useShellStore((state) => checkoutHost(catalogWorkspaces(state.rest), view.device_id, view.path).name);
+/** The CI look a commit's last answer takes, and whether that answer is current; one that is not stays, dimmed, with its age (D-09, B22). `host` names the checkout's code host. */
+function useCiLook(ci: CheckoutCi | null, header: Header | null, host: string) {
   const live = useShellStore((state) => state.connection === "live");
   const observed = ci?.observed ?? null;
   const expired = useRemaining(observed?.read_at_unix_ms == null ? null : observed.read_at_unix_ms + 90_000) === "past";
@@ -98,7 +97,7 @@ function useCiLook(ci: CheckoutCi | null, header: Header | null, view: Workspace
   const value = ci?.state ?? "unknown";
   const look: keyof typeof ciIcons = !current && value === "loading" ? "stale" : value;
   const line = useObservedLine(current || !observed ? null : { ...observed, freshness: observed.freshness === "fresh" ? "stale" : observed.freshness }, "github", host);
-  return { look, current, line, host };
+  return { look, current, line };
 }
 
 const ciIcons = { loading: LoaderCircleIcon, passing: CheckIcon, failed: XIcon, pending: LoaderCircleIcon, none: CircleMinusIcon, unknown: CircleHelpIcon, unavailable: TriangleAlertIcon, stale: ClockIcon };
@@ -110,10 +109,10 @@ function openCommit(sha: string, url: string, view: WorkspaceView, actions: Acti
   if (current?.device_id === view.device_id && current.path === view.path && useShellStore.getState().connection === "live" && current.git?.commit_links?.some((link) => link.sha === sha && link.url === url)) actions.openBrowser(url, { device_id: view.device_id, path: view.path });
 }
 
-function CommitHistoryRow({ commit, ci, header, view, actions, incoming = false }: { commit: CheckoutCommitRecord; ci: CheckoutCi | null; header: Header; view: WorkspaceView; actions: Actions; incoming?: boolean }) {
+function CommitHistoryRow({ commit, ci, header, view, host, actions, incoming = false }: { commit: CheckoutCommitRecord; ci: CheckoutCi | null; header: Header; view: WorkspaceView; host: string; actions: Actions; incoming?: boolean }) {
   const { t, i18n } = useInterfaceTranslation();
   const elapsed = useElapsed(commit.commit_unix_seconds == null ? null : commit.commit_unix_seconds * 1000);
-  const { look: state, current, line, host } = useCiLook(ci, header, view);
+  const { look: state, current, line } = useCiLook(ci, header, host);
   const Icon = ciIcons[state];
   const label = [t(`checkoutGit.ci.${state}`), line].filter(Boolean).join(" · ");
   const canOpen = Boolean(ci?.url && current);
@@ -135,7 +134,7 @@ function CommitHistoryRow({ commit, ci, header, view, actions, incoming = false 
   </li>;
 }
 
-function CommitHistory({ header, view, actions }: { header: Header; view: WorkspaceView; actions: Actions }) {
+function CommitHistory({ header, view, host, actions }: { header: Header; view: WorkspaceView; host: string; actions: Actions }) {
   const { t } = useInterfaceTranslation();
   const live = useShellStore((state) => state.connection === "live");
   const remote = useRemoteCheck(header);
@@ -145,7 +144,7 @@ function CommitHistory({ header, view, actions }: { header: Header; view: Worksp
   // (D-04); while the fetch fails they are the last ones received (B11).
   const incoming = facts?.upstream_state === "tracked" ? (facts.incoming_commits ?? []).slice(0, 5) : [];
   const more = Math.max(0, (facts?.behind ?? 0) - incoming.length);
-  return <section data-commit-history="true"><p className="mb-xs text-caption font-medium">{t("checkoutGit.history")}</p>{!live || header.state !== "fresh" ? <p role="status" className="text-micro text-muted-foreground">{t("checkoutGit.stale")}</p> : null}{incoming.length && remote.failure ? <p role="status" className="text-micro text-muted-foreground" data-commit-incoming-age="true">{remote.failure}</p> : null}<ol className="m-0 list-none divide-y divide-border p-0">{incoming.map((commit) => <CommitHistoryRow key={`incoming:${commit.sha}`} incoming commit={commit} header={header} view={view} actions={actions} ci={null} />)}{more && incoming.length ? <li className="py-xs text-micro text-muted-foreground opacity-60" data-commit-incoming-more={more}>{t("checkoutGit.incomingMore", { count: more })}</li> : null}{commits.map((commit) => <CommitHistoryRow key={commit.sha} commit={commit} header={header} view={view} actions={actions} ci={header.recent_ci?.find((row) => row.sha === commit.sha) ?? (header.ci?.sha === commit.sha ? header.ci : null)} />)}</ol></section>;
+  return <section data-commit-history="true"><p className="mb-xs text-caption font-medium">{t("checkoutGit.history")}</p>{!live || header.state !== "fresh" ? <p role="status" className="text-micro text-muted-foreground">{t("checkoutGit.stale")}</p> : null}{incoming.length && remote.failure ? <p role="status" className="text-micro text-muted-foreground" data-commit-incoming-age="true">{remote.failure}</p> : null}<ol className="m-0 list-none divide-y divide-border p-0">{incoming.map((commit) => <CommitHistoryRow key={`incoming:${commit.sha}`} incoming commit={commit} header={header} view={view} host={host} actions={actions} ci={null} />)}{more && incoming.length ? <li className="py-xs text-micro text-muted-foreground opacity-60" data-commit-incoming-more={more}>{t("checkoutGit.incomingMore", { count: more })}</li> : null}{commits.map((commit) => <CommitHistoryRow key={commit.sha} commit={commit} header={header} view={view} host={host} actions={actions} ci={header.recent_ci?.find((row) => row.sha === commit.sha) ?? (header.ci?.sha === commit.sha ? header.ci : null)} />)}</ol></section>;
 }
 
 export function CheckoutCommit({ header, view, actions, title, time }: { header: Header | null | undefined; view: WorkspaceView; actions: Actions; title: boolean; time: boolean }) {
@@ -154,10 +153,12 @@ export function CheckoutCommit({ header, view, actions, title, time }: { header:
   const elapsed = useElapsed(facts?.commit_unix_seconds == null ? null : facts.commit_unix_seconds * 1000);
   const head = facts?.head_sha ?? null;
   const ci = header?.ci?.sha === head ? header?.ci ?? null : null;
-  const { look: state, current, line } = useCiLook(ci, header ?? null, view);
+  // The checkout's code host, read once for the header and every commit row under it.
+  const host = useShellStore((state) => checkoutHost(catalogWorkspaces(state.rest), view.device_id, view.path).name);
+  const { look: state, current, line } = useCiLook(ci, header ?? null, host);
   if (!facts?.head_sha || !header || !head) return null;
   const CiIcon = ciIcons[state];
-  const history = <CommitHistory header={header} view={view} actions={actions} />;
+  const history = <CommitHistory header={header} view={view} host={host} actions={actions} />;
   return <>
     <Detail key={head} label={t("checkoutGit.commit", { subject: facts.subject })} className="min-w-(--size-control-sm) shrink" data-checkout-commit={head} mark={<><GitCommitHorizontalIcon className={iconClass} />{title ? <span className="min-w-0 truncate" data-checkout-subject="true">{facts.subject}</span> : null}{time && elapsed ? <span className="shrink-0 text-muted-foreground" data-checkout-age="true">{t("checkoutGit.ago", { time: elapsed })}</span> : null}</>}>{history}</Detail>
     {ci?.state !== "none" ? <Detail key={`${head}:ci`} label={[t(`checkoutGit.ci.${state}`), line].filter(Boolean).join(" · ")} className={`${ciColors[state]} ${current ? "" : "opacity-50"}`} data-checkout-ci={state} data-checkout-ci-current={current ? "true" : "false"} mark={<><CiIcon className={iconClass} /><span>CI</span></>}>{history}</Detail> : null}
