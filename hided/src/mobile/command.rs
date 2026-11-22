@@ -4,8 +4,10 @@
 //!
 //! Asked over the bootstrap socket (`pane_auth`), one ask per connection. A
 //! program in a Hide pane may list and remove; only a terminal outside the
-//! panes pairs, since a pairing lets a phone in (D-53). The answer to `pair`
-//! carries the link the QR encodes, which `phone_cli` draws and never prints.
+//! panes pairs, since a pairing lets a phone in (D-53). A bot lists the
+//! phones in the whole Hide's mode and pairs or removes none, as it does no
+//! machine (`crate::pairing`, mission-87). The answer to `pair` carries the
+//! link the QR encodes, which `phone_cli` draws and never prints.
 
 use std::sync::Arc;
 use std::time::Duration;
@@ -14,6 +16,7 @@ use serde::Deserialize;
 use serde_json::{Value, json};
 
 use super::{Mobile, phones};
+use crate::pairing::Caller;
 
 /// How long `pair` waits for Mobile to reach the relay (or Tailscale) before
 /// it can show a code: a relay socket opens in well under this, and a
@@ -38,13 +41,6 @@ pub enum Ask {
     PairEnd {
         code_id: String,
     },
-}
-
-/// Who asks: a terminal outside Hide's panes, or a program in one.
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub enum Caller {
-    Operator,
-    Pane,
 }
 
 pub fn refused(code: &str) -> Value {
@@ -78,17 +74,43 @@ pub fn next_action(code: &str) -> &'static str {
         "mobile_failed" => {
             "Mobile could not be set up on this computer: hide status and Settings > Mobile say why"
         }
-        _ => "Run hide phone pair again",
+        // A bot's refusal, another screen's, or one no phone code names.
+        code => crate::pairing::next_action(code),
+    }
+}
+
+impl Ask {
+    /// What a bot's mode has to grant for this ask (mission-87): reading the
+    /// phones is the whole Hide's, as `hide device list` is; pairing and
+    /// removing one is the operator's alone, as adding or removing a machine
+    /// is, and so is the code a pairing shows.
+    fn bot_need(&self) -> hide_core::access::Need {
+        match self {
+            Self::List => hide_core::access::Need::All,
+            _ => hide_core::access::Need::Operator,
+        }
     }
 }
 
 impl Mobile {
     /// Answers one `hide phone` ask.
     pub async fn answer_cli(self: &Arc<Self>, ask: Ask, caller: Caller) -> Value {
+        match caller {
+            Caller::Operator => {}
+            Caller::Pane if ask != Ask::Pair => {}
+            Caller::Pane => return refused("phone_pair_from_pane"),
+            // The bootstrap socket names no other screen; one that did would
+            // be refused here, as `crate::pairing` refuses it.
+            Caller::OtherScreen => return refused("device_from_other_screen"),
+            Caller::Bot(mode) => {
+                if let Err(code) = hide_core::access::admit(mode, ask.bot_need()) {
+                    return refused(code);
+                }
+            }
+        }
         match ask {
             Ask::List => self.cli_list(),
             Ask::Remove { phone } => self.cli_remove(&phone),
-            Ask::Pair if caller == Caller::Pane => refused("phone_pair_from_pane"),
             Ask::Pair => self.cli_pair().await,
             Ask::PairStatus { code_id } => self.cli_pair_status(&code_id),
             Ask::PairEnd { code_id: wanted } => {
@@ -338,6 +360,48 @@ mod tests {
         assert_eq!(answer["reason"], "phone_pair_from_pane");
         // Nothing was turned on for it.
         assert!(!mobile.lock().settings.enabled);
+    }
+
+    /// mission-87: a bot reads the phones in the whole Hide's mode, and
+    /// pairs or removes none in either mode, with the bot's own refusal.
+    #[tokio::test]
+    async fn a_bot_lists_phones_and_pairs_or_removes_none() {
+        use hide_core::access::{Mode, NOT_OWN_WORK, OPERATOR_ONLY};
+        let directory = tempfile::tempdir().unwrap();
+        let mobile = mobile(directory.path());
+        let (code, _) = exposed_code(&mobile);
+        mobile.pair(&code, "iPhone").unwrap();
+        let (_, id) = exposed_code(&mobile);
+
+        let listed = mobile.answer_cli(Ask::List, Caller::Bot(Mode::All)).await;
+        assert_eq!(listed["ok"], true);
+        assert_eq!(listed["phones"][0]["name"], "iPhone");
+        let own = mobile.answer_cli(Ask::List, Caller::Bot(Mode::Own)).await;
+        assert_eq!(own["reason"], NOT_OWN_WORK);
+        assert_eq!(
+            own["next_action"],
+            hide_core::access::NOT_OWN_WORK_NEXT_ACTION
+        );
+        for mode in [Mode::All, Mode::Own] {
+            for ask in [
+                Ask::Pair,
+                Ask::Remove {
+                    phone: "iPhone".to_owned(),
+                },
+                Ask::PairStatus {
+                    code_id: id.clone(),
+                },
+                Ask::PairEnd {
+                    code_id: id.clone(),
+                },
+            ] {
+                let answer = mobile.answer_cli(ask, Caller::Bot(mode)).await;
+                assert_eq!(answer["reason"], OPERATOR_ONLY, "{mode:?}");
+            }
+        }
+        // The phone is still paired and the shown code still stands.
+        assert_eq!(mobile.cli_list()["phones"].as_array().unwrap().len(), 1);
+        assert_eq!(mobile.cli_pair_status(&id)["state"], "waiting");
     }
 
     /// The new-phone notices owed to the phones already paired stay as many

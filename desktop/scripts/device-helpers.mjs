@@ -33,7 +33,8 @@ const NODE_ARCH = { x86_64: "x64", aarch64: "arm64" };
 export const DEVICE_PLATFORMS = Object.fromEntries(Object.entries(contract.kits)
   .filter(([, kit]) => kit.producer === "device-helpers")
   .map(([platform, kit]) => [platform, { target: kit.target, os: NODE_OS[kit.os], arch: NODE_ARCH[kit.arch] }]));
-const MAX_KIT = 256 * 1024 * 1024;
+/** The most one kit may hold, its archive and its files each (hide-node/src/ssh/kit/manifest.rs, MAX_KIT). */
+export const MAX_KIT = 512 * 1024 * 1024;
 
 /** A kit's archive name in release `version`. */
 export function deviceAsset(platform, version) {
@@ -162,7 +163,7 @@ export function makeDeviceKit(platform, folder, version, output) {
 /**
  * The manifest entry of one kit's archive, computed from its bytes after the
  * core's checks (hide-node/src/ssh/kit/archive.rs): the release's name for
- * the platform, at most 256 MiB packed and unpacked, exactly the kit's files
+ * the platform, at most 512 MiB packed and unpacked, exactly the kit's files
  * as regular entries and every program with its platform's header.
  */
 export function readDeviceKit(platform, archive, version) {
@@ -171,7 +172,7 @@ export function readDeviceKit(platform, archive, version) {
   const asset = deviceAsset(platform, version);
   if (path.basename(archive) !== asset) throw new Error(`${archive} is not the ${platform} kit of ${version} (${asset})`);
   const stat = fs.lstatSync(archive);
-  if (!stat.isFile() || stat.size === 0 || stat.size > MAX_KIT) throw new Error(`${asset} is not an archive of at most 256 MiB`);
+  if (!stat.isFile() || stat.size === 0 || stat.size > MAX_KIT) throw new Error(`${asset} is not an archive of at most 512 MiB`);
   const bytes = fs.readFileSync(archive);
   const entries = readUstar(gunzipSync(bytes, { maxOutputLength: MAX_KIT + 64 * 1024 }));
   const expected = deviceKitFiles(platform);
@@ -187,7 +188,7 @@ export function readDeviceKit(platform, archive, version) {
     total += content.length;
     files[name] = { sha256: digest(content), size: content.length };
   }
-  if (total > MAX_KIT) throw new Error(`${platform} device kit exceeds 256 MiB`);
+  if (total > MAX_KIT) throw new Error(`${platform} device kit exceeds 512 MiB`);
   return { asset, sha256: digest(bytes), size: bytes.length, files };
 }
 

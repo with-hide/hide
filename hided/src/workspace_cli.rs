@@ -345,7 +345,9 @@ fn operator_ask(
         one_shot: false,
         hook: None,
         install: None,
-        access: None,
+        // A bot's ask carries its key, so the daemon judges it by the bot's
+        // mode rather than as the operator at a terminal.
+        access: crate::access_cli::tool_key(env)?.map(|key| AccessAsk::Use { key, folder: None }),
         device,
         phone,
     })

@@ -167,11 +167,13 @@ Three things made the copies: a key named after the job, so the rust lane, the w
 
 | Set | What it holds | Saved by, on main only | Read by |
 | --- | --- | --- | --- |
-| `workspace` | The debug build of the dependencies, one feature set for every member (`workspace-hack`) | `rust workspace` on Linux, `windows check` on Windows, `desktop e2e` shard 1 on macOS | Every other lane that builds Rust, and a release tag's tests |
+| `workspace` | The debug build of the dependencies, one feature set for every member (`workspace-hack`) | `rust workspace / build tests` on Linux, `windows check` on Windows, `desktop e2e` shard 1 on macOS | Every other lane that builds Rust, and a release tag's tests |
+| `lint` | Clippy's check of the dependencies, which a test build does not make | `rust workspace / lint` on Linux | `merge check rust` |
 | `platform` | `hide-platform` built alone, outside that feature set | `os contract` on each system | Nothing else |
 | `release` | The release profile's dependencies | `package.yml`'s Windows and Linux package jobs and its macOS compile | The packages of a pull request and a release tag, and the nightly measurement |
 
 Each set is saved by one job per system, the one that builds the most of it, because a key that exists is never saved again: two savers would race and the loser's extra build would be lost every run.
+The Rust lane builds its tests in one job and lints in another beside it ([TESTING.md](TESTING.md#the-rust-lanes-shards)), and Cargo checks a dependency for Clippy apart from building it for a test, so neither job's build holds the other's: each saves its own set, and `merge check rust`, which runs the same lint, reads the `lint` set.
 A reader builds what the saver did not, which on macOS is the extra dependencies of the nightly lanes that test more than the daemon.
 rust-cache's environment hash stays in the key; it hashes every installed toolchain, so the action first removes every toolchain but the one `rust-toolchain.toml` names, and the hash then depends on the pin and not on the runner.
 rust-cache ends each key with its own 8-digit hash of `Cargo.lock`, every member's `Cargo.toml` and `rust-toolchain.toml`, and when that hash changes it restores the newest entry of the same set and system and builds only the dependencies that changed; it leaves out the root `Cargo.toml`, whose `[profile]` sections change every dependency's build, so the action puts that file's hash in the key before the system, and a change there misses once.
@@ -393,7 +395,7 @@ The job keeps the three archives, and no manifest, as the `hide-device-bundles` 
 No package waits for it or carries its output: each package needs only its own compile, and a failed helper or Windows compile skips the candidate's receipt.
 A local package (no `HIDE_VERSION`) needs neither helpers nor kits: its `-main.` version has no published release, so a core of that build downloads no kit anyway.
 `desktop/scripts/device-helpers.mjs build <platform> <version> <source-sha> <build-order>` is the Linux producer command on its matching runner after dependency installation and `rustup target add <triple>`.
-Making a kit refuses missing members, a different source/version/order, digest mismatches, links, files above 256 MiB and incorrect executable headers.
+Making a kit refuses missing members, a different source/version/order, digest mismatches, links, files above 512 MiB and incorrect executable headers.
 Downloaded artifacts need not retain executable mode bits.
 
 `makeDeviceKit(platform, folder, version, output)` makes one archive from a folder holding exactly the kit's files under their kit names and answers its manifest entry, read back from the archive by `readDeviceKit(platform, archive, version)`, the core's checks in JavaScript.
@@ -402,7 +404,7 @@ Each archive is one gzip-compressed USTAR archive holding exactly the kit's file
 A device is sent every file, the pane holder apart from the helper's version folder (PRD engine-bundle-3-core-owns D-22, `HelperPackages::payload_for`); no archive carries Herdr (PRD engine-bundle-4-herdr-removal D-2).
 No links, folder entries, extended attributes or PAX records belong in an archive.
 The archive's name is `hide-device-<platform>-<app-version>.tar.gz`, without a leading `v` in the version.
-The uncompressed total and the compressed archive are each capped at 256 MiB.
+The uncompressed total and the compressed archive are each capped at 512 MiB; a 1.2.11 kit is about 300 MB unpacked, two programs of 132 to 145 MB each, so the earlier 256 MiB cap stopped its release.
 
 `device-bundles.json` has `format: 4`, `version`, full `commit`, decimal string `order`, and `platforms` keyed by every platform of the contract.
 Format 3 named only the two Linux kits, for the manifest each app carried; format 2 carried Herdr beside the holder and format 1 had no holder; a core reads only its own release's manifest, so no build reads two.
@@ -428,7 +430,7 @@ From a folder a device gets exactly the runtime files its kit names, the files a
 A build that is not a published release (a `-main.` or `0.0.0-` version, one without a commit, or one no package numbered, such as a plain `cargo build --release`, whose build order is 0) downloads nothing, and its refusal names the developer folder: `node desktop/scripts/device-helpers.mjs stage <device-bundles.json> <archive> <folder>` checks a release or CI kit against its manifest and unpacks it there under those names.
 
 The connection worker fetches `https://github.com/with-hide/hide/releases/download/v<app-version>/device-bundles.json`, then the kit's archive, over HTTPS with at most five redirects;
-a request fails once nothing arrives or leaves for 30 seconds, so a slow download that keeps arriving runs on, and half an hour bounds it in all (`hide-node/src/ssh/kit/cache.rs`, `RELEASE`); the manifest is capped at 64 KiB and a kit at 256 MiB.
+a request fails once nothing arrives or leaves for 30 seconds, so a slow download that keeps arriving runs on, and half an hour bounds it in all (`hide-node/src/ssh/kit/cache.rs`, `RELEASE`); the manifest is capped at 64 KiB and a kit at 512 MiB.
 Before any archive it refuses a manifest whose version, commit or build order differs from the ones compiled into the build (`hided::cli::RELEASE`), whose format is not the contract's, or which does not name exactly the contract's platforms and each kit's files.
 It checks archive size and hash, then exact entry names, regular-file types, sizes, file hashes and the programs' executable headers before atomically publishing a cache slot.
 
@@ -436,7 +438,7 @@ The cache path belongs to `hide_kit::layout::device_bundle_cache`: `~/.hide/cach
 It holds the lock file, the release's manifest, `recent` (the slots from most to least recently used), one staging folder for the download in progress and one slot per platform a device of this account needed; any other entry is refused, never removed.
 A five-second process lock serializes cache access, and a kit's bytes are read before the lock is released, so another build cannot evict a kit while it is read.
 Everything in it, the staging kit and its archive included, stays within 1024 MiB: a download that would pass it first removes the least recently used slots.
-A fixed slot per platform would have held four 256 MiB kits beside a 256 MiB staging kit and its archive, 1.5 GiB, so the four platforms share the old two-platform limit instead.
+A fixed slot per platform would have held four 512 MiB kits beside a 512 MiB staging kit and its archive, 3 GiB, so the four platforms share one limit instead; a kit of today's size (about 300 MB with a 120 MB archive) leaves room for one more slot beside its download.
 A reconnect verifies and reuses its cached bytes offline; a slot of another build or with changed bytes is replaced, and a failed download leaves no usable partial kit.
 Every exit explicitly cleans staging before releasing the cache lock; if cleanup fails, the device reason retains both failures and a structured diagnostic names the platform and release, while Drop makes a backup attempt.
 Files in the cache are inert private data; upload gives the verified programs executable permission on the device.

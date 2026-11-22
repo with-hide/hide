@@ -6,7 +6,8 @@ Responses, Anthropic Messages, Gemini generateContent), streamed or whole, and
 answers every request with the last journey token of the turn it answers,
 everything the request sends after the model's own last turn: the prompt's
 token, or the token of a letter a hook handed over with it. A token inside
-Hide's Project Memory blocks never counts there, so a turn that carries none
+Hide's Project Memory blocks or its list of the project's other sessions never
+counts there, so a turn that carries none
 is answered with the token of the Project Memory index the session started
 with, and a request with neither is answered `OK`; any token from the whole
 conversation would let an earlier turn's token pass a later turn's cell.
@@ -39,9 +40,11 @@ import time
 import uuid
 
 TOKEN = re.compile(r"JOURNEY-[0-9A-F]{8}")
-# Hide's Project Memory blocks (hide-agent-hooks guidance): the index a
-# session starts with and the cards a prompt hook adds to a turn.
-MEMORY_BLOCK = re.compile(r"<hide-memory-(index|context)\b.*?</hide-memory-\1>", re.S)
+# Hide's reference blocks (hide-agent-hooks guidance): the Project Memory
+# index a session starts with, the cards a prompt hook adds to a turn, and the
+# project's other sessions a session starts with, whose titles name the tokens
+# earlier journey sessions answered.
+REFERENCE_BLOCK = re.compile(r"<(hide-memory-index|hide-memory-context|hide-project-sessions)\b.*?</\1>", re.S)
 MEMORY_INDEX = re.compile(r"<hide-memory-index\b.*?</hide-memory-index>", re.S)
 MODEL = "journey-model"
 # A turn whose prompt carries this mark is answered only after HOLD_SECONDS,
@@ -95,7 +98,7 @@ def latest(request):
 def answer(request):
     """The token the model answers `request` with, or `OK`."""
     turn = "\n".join(strings(latest(request)))
-    found = TOKEN.findall(MEMORY_BLOCK.sub("", turn))
+    found = TOKEN.findall(REFERENCE_BLOCK.sub("", turn))
     if found:
         return found[-1]
     indexed = [token for text in strings(request) for block in MEMORY_INDEX.findall(text)

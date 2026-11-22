@@ -96,16 +96,16 @@ pub struct Capability {
     claimed: bool,
     path: PathBuf,
     remote: Option<RemoteCapability>,
-    /// An external tool's level, as the core answered it for this command
+    /// A bot's mode, as the core answered it for this command
     /// ([`Registry::validate`]); `None` for every other caller.
-    access_level: Option<hide_core::access::Level>,
+    access_mode: Option<hide_core::access::Mode>,
 }
 
 impl Capability {
-    /// The level an external tool's command runs at, which the command
-    /// boundary judges it by (`server::ScopedRequest::access_need`).
-    pub(crate) fn access_level(&self) -> Option<hide_core::access::Level> {
-        self.access_level
+    /// The mode a bot's command runs in, which the command boundary judges
+    /// it by (`server::ScopedRequest::access_need`).
+    pub(crate) fn access_mode(&self) -> Option<hide_core::access::Mode> {
+        self.access_mode
     }
 
     /// The shell a pane-bound credential was proved against; none for any
@@ -407,7 +407,7 @@ impl Registry {
                 claimed: false,
                 path: path.clone(),
                 remote: None,
-                access_level: None,
+                access_mode: None,
             },
         );
         Ok((path, true, token))
@@ -460,7 +460,7 @@ impl Registry {
                     link: grant.link,
                     source_pane_id: grant.source_pane_id,
                 }),
-                access_level: None,
+                access_mode: None,
             },
         );
         Ok((token, true))
@@ -618,16 +618,20 @@ impl Registry {
         if matches!(cap.binding, Binding::Desk { .. }) {
             return Ok(cap);
         }
-        // An external tool's connection is asked again for each command, so
-        // a disconnect or a level the operator changed holds from the next
-        // one (PRD hide-external-control B12, B13).
+        // A bot's connection is asked again for each command, so a
+        // disconnect or a mode the operator changed holds from the next one
+        // (PRD hide-external-control B12, B13).
         if let Binding::Access { connection } = &cap.binding {
             return match core.access(hide_core::access::Call::Check {
                 id: connection.clone(),
             }) {
                 Ok(answer) => {
-                    cap.access_level = serde_json::from_value(answer["level"].clone()).ok();
-                    cap.access_level.map(|_| cap).ok_or("access_unavailable")
+                    cap.access_mode = serde_json::from_value(answer["mode"].clone()).ok();
+                    if cap.access_mode.is_some() {
+                        Ok(cap)
+                    } else {
+                        Err("access_unavailable")
+                    }
                 }
                 Err(reason) => {
                     self.revoke(token);
@@ -1313,6 +1317,8 @@ fn answer_bootstrap(
     // credential a command of it runs on.
     if let Some(request) = &parsed
         && let Some(ask) = &request.access
+        && request.device.is_none()
+        && request.phone.is_none()
         && line.len() <= 4096
     {
         let (answer, issued) =
@@ -1342,14 +1348,12 @@ fn answer_bootstrap(
             serde_json::from_value::<crate::pairing::Ask>(ask.clone()),
         ) {
             (Some(operators), Ok(ask)) => {
-                let caller = if crate::access::in_a_pane(peer, request, engine, core) {
-                    crate::pairing::Caller::Pane
-                } else {
-                    crate::pairing::Caller::Operator
-                };
-                operators
-                    .runtime
-                    .block_on(operators.pairing.ask(ask, caller))
+                match crate::access::pairing_caller(peer, request, engine, core) {
+                    Ok(caller) => operators
+                        .runtime
+                        .block_on(operators.pairing.ask(ask, caller)),
+                    Err(refused) => refused,
+                }
             }
             _ => crate::pairing::refused("invalid_request"),
         };
@@ -1357,9 +1361,10 @@ fn answer_bootstrap(
         return;
     }
     // What `hide phone` asks (PRD device-connect-iroh D-70): answered in
-    // this one exchange, and a pairing refused to a caller the kernel places
-    // in a pane, as `hide device` is above. A build that does not offer
-    // connections between two Hides answers none of it.
+    // this one exchange, the caller judged as `hide device`'s is above (a
+    // pane is refused a pairing, a bot what its mode does not grant). A
+    // build that does not offer connections between two Hides answers none
+    // of it.
     if let Some(request) = &parsed
         && let Some(ask) = &request.phone
         && line.len() <= 4096
@@ -1373,14 +1378,12 @@ fn answer_bootstrap(
                 command::refused(crate::pairing::DEVICE_CONNECT_OFF)
             }
             (Some(operators), Ok(ask)) => {
-                let caller = if crate::access::in_a_pane(peer, request, engine, core) {
-                    command::Caller::Pane
-                } else {
-                    command::Caller::Operator
-                };
-                operators
-                    .runtime
-                    .block_on(operators.mobile.answer_cli(ask, caller))
+                match crate::access::pairing_caller(peer, request, engine, core) {
+                    Ok(caller) => operators
+                        .runtime
+                        .block_on(operators.mobile.answer_cli(ask, caller)),
+                    Err(refused) => refused,
+                }
             }
             _ => command::refused("invalid_request"),
         };
@@ -2112,7 +2115,7 @@ mod tests {
                 claimed: false,
                 path: PathBuf::new(),
                 remote: None,
-                access_level: None,
+                access_mode: None,
             }
             .pane_terminal()
             .map(str::to_owned)
