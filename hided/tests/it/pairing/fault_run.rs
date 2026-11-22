@@ -328,8 +328,7 @@ done
 
 /// What the recipient's agent runs: it takes in every letter its inbox
 /// lists, shown or folded, as an agent reading its letters does, until
-/// `stop` exists. A
-/// letter nobody takes in stays open, and a mailbox holds at most
+/// `stop` exists. A letter nobody takes in stays open, and a mailbox holds at most
 /// `OPEN_LIMIT` open letters, which two hours of letters pass. A pane of
 /// the machine's own core is handed no `HIDE_INSTALL_CLI`, so it names its
 /// `hide`.
@@ -337,16 +336,11 @@ fn recipient_script(folder: &Path, hide: &Path) -> String {
     format!(
         r#"hide={hide}
 log={log}
-for sig in HUP INT QUIT TERM PIPE TTIN TTOU; do
-  trap "printf 'signal %s %s\\n' $sig \"\$(date +%s)\" >> \"$log.signals\"; exit 1" $sig
-done
 while [ ! -e {stop} ]; do
-  printf 'inbox %s\n' "$(date +%s)" > "$log.now"
   inbox=$("$hide" inbox 2>&1)
   printf 'inbox %s\n' "$(printf '%s' "$inbox" | tr '\n' ' ' | cut -c1-300)" >> "$log"
   ids=$(printf '%s' "$inbox" | grep -o 'letter-[0-9]*' | sort -u)
   for id in $ids; do
-    printf 'ack %s %s\n' "$id" "$(date +%s)" > "$log.now"
     answer=$("$hide" request ack "$id" 2>&1)
     printf 'ack %s %s\n' "$id" "$(printf '%s' "$answer" | tr '\n' ' ' | cut -c1-200)" >> "$log"
   done
@@ -476,6 +470,13 @@ async fn every_letter_a_guests_pane_sends_through_the_faults_lands_in_its_ledger
     place_build(&at("p"), &host.terminal.state, &key);
     assert_eq!(pair(&host, &guest).await, HOST);
 
+    // Sleep off: the stand-ins' conversations are dated long ago, so the
+    // idle rule would end them within a minute, with the keys that end an
+    // agent; the run's subject is the connection, not sleep.
+    guest
+        .screen()
+        .event("agent_sleep_set", json!({"after_hours": null}))
+        .unwrap();
     // The letters' recipient: the guest's own agent in its own project.
     std::fs::create_dir(at("cr")).unwrap();
     let recipient = Agent::start(
@@ -547,13 +548,7 @@ async fn every_letter_a_guests_pane_sends_through_the_faults_lands_in_its_ledger
     })
     .unwrap_or_else(|error| {
         panic!(
-            "{error:#}: its order taken {}, its panes {:?}, its log:\n{}",
-            !guest_env
-                .home
-                .join(".fixture-run")
-                .join(recipient_pane.replace(':', "-"))
-                .exists(),
-            crate::support::remote_delivery::ready_panes(&guest_env.home),
+            "{error:#}: its reads:\n{}",
             std::fs::read_to_string(run.join("read.log")).unwrap_or_default()
         )
     });
@@ -655,49 +650,6 @@ async fn every_letter_a_guests_pane_sends_through_the_faults_lands_in_its_ledger
         json!({"faults": report.len(), "letters": last, "held": held.len(),
             "kept_while_away": queued, "tries_again": retried,
             "not_taken_in": open_letters(&guest.terminal.state, &sender)})
-    );
-    let read = std::fs::read_to_string(run.join("read.log")).unwrap_or_default();
-    let hides = Command::new("ps")
-        .args(["-Ao", "pid=,etime=,command="])
-        .output()
-        .unwrap();
-    eprintln!(
-        "fault_run: the recipient at {} is in {}, its hide calls still running:\n{}\nits last reads:\n{}",
-        std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .unwrap()
-            .as_secs(),
-        format!(
-            "{} {}",
-            std::fs::read_to_string(run.join("read.log.now")).unwrap_or_default(),
-            std::fs::read_to_string(run.join("read.log.signals")).unwrap_or_default()
-        ),
-        String::from_utf8_lossy(&hides.stdout)
-            .lines()
-            .filter(
-                |line| line.contains(&*at("p").join("hide").to_string_lossy())
-                    && (line.contains(" inbox") || line.contains(" ack "))
-            )
-            .collect::<Vec<_>>()
-            .join("\n"),
-        read.lines().rev().take(6).collect::<Vec<_>>().join("\n")
-    );
-    let core_log =
-        std::fs::read_to_string(guest.terminal.state.join("Logs/core.jsonl")).unwrap_or_default();
-    eprintln!(
-        "fault_run: the guest core's sleep and input records:\n{}",
-        core_log
-            .lines()
-            .filter(|line| {
-                (line.contains("agent_sleep")
-                    || line.contains("doorbell")
-                    || line.contains("h1:p2"))
-                    && !line.contains("doorbell.held")
-            })
-            .rev()
-            .take(25)
-            .collect::<Vec<_>>()
-            .join("\n")
     );
     assert_eq!(held, wanted, "each letter the shell sent, once");
     drop(recipient);
