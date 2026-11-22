@@ -5,6 +5,14 @@ import type { Catalog, Catalogs } from "../schema";
 // shares with the screen it shows (the automation screen's title, an example
 // automation) come from that screen's own catalog.
 export const whatsNewScenesEnglish = {
+  "whatsNewScene.connect.here": "Fix the checkout 500",
+  "whatsNewScene.connect.mini": "Mac mini",
+  "whatsNewScene.connect.windows": "Windows PC",
+  "whatsNewScene.connect.linux": "Linux server",
+  "whatsNewScene.connect.miniTask": "Release notes",
+  "whatsNewScene.connect.windowsTask": "Fix the installer",
+  "whatsNewScene.connect.linuxTask": "Nightly build",
+  "whatsNewScene.connect.question": "New signing key?",
   "whatsNewScene.gitlab.waiting": "Reading the projects",
   "whatsNewScene.gitlab.read": "Open a merge request",
   "whatsNewScene.gitlab.retry": "Limit payment retries",
@@ -74,6 +82,14 @@ export const whatsNewScenesEnglish = {
 };
 
 const ko: Catalog<typeof whatsNewScenesEnglish> = {
+  "whatsNewScene.connect.here": "결제 500 오류 고치기",
+  "whatsNewScene.connect.mini": "Mac mini",
+  "whatsNewScene.connect.windows": "Windows PC",
+  "whatsNewScene.connect.linux": "Linux 서버",
+  "whatsNewScene.connect.miniTask": "릴리스 노트 쓰기",
+  "whatsNewScene.connect.windowsTask": "설치 프로그램 고치기",
+  "whatsNewScene.connect.linuxTask": "야간 빌드 고치기",
+  "whatsNewScene.connect.question": "서명 키를 바꿀까요?",
   "whatsNewScene.gitlab.waiting": "프로젝트를 읽는 중",
   "whatsNewScene.gitlab.read": "MR을 열어 보세요",
   "whatsNewScene.gitlab.retry": "결제 재시도 횟수 제한",
@@ -143,6 +159,14 @@ const ko: Catalog<typeof whatsNewScenesEnglish> = {
 };
 
 const zh: Catalog<typeof whatsNewScenesEnglish> = {
+  "whatsNewScene.connect.here": "修复结账 500",
+  "whatsNewScene.connect.mini": "Mac mini",
+  "whatsNewScene.connect.windows": "Windows PC",
+  "whatsNewScene.connect.linux": "Linux 服务器",
+  "whatsNewScene.connect.miniTask": "撰写发布说明",
+  "whatsNewScene.connect.windowsTask": "修复安装程序",
+  "whatsNewScene.connect.linuxTask": "修复夜间构建",
+  "whatsNewScene.connect.question": "要换签名密钥吗？",
   "whatsNewScene.gitlab.waiting": "正在读取项目",
   "whatsNewScene.gitlab.read": "打开一个合并请求",
   "whatsNewScene.gitlab.retry": "限制支付重试次数",
@@ -212,6 +236,14 @@ const zh: Catalog<typeof whatsNewScenesEnglish> = {
 };
 
 const ja: Catalog<typeof whatsNewScenesEnglish> = {
+  "whatsNewScene.connect.here": "決済の 500 を直す",
+  "whatsNewScene.connect.mini": "Mac mini",
+  "whatsNewScene.connect.windows": "Windows PC",
+  "whatsNewScene.connect.linux": "Linux サーバー",
+  "whatsNewScene.connect.miniTask": "リリースノートを書く",
+  "whatsNewScene.connect.windowsTask": "インストーラーを直す",
+  "whatsNewScene.connect.linuxTask": "ナイトリービルドを直す",
+  "whatsNewScene.connect.question": "署名キーを替えますか？",
   "whatsNewScene.gitlab.waiting": "プロジェクトを読み込み中",
   "whatsNewScene.gitlab.read": "MR を開いてみましょう",
   "whatsNewScene.gitlab.retry": "決済の再試行回数を制限",

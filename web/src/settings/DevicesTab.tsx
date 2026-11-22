@@ -19,7 +19,7 @@ import { AddByLink, AddDevice } from "./AddDevice";
 import { DeviceDetails } from "./DeviceDetails";
 import { DeviceRow, type DeviceRowHandlers } from "./DeviceRow";
 import { PairedRows } from "./PairingRows";
-import { deviceConnectOffered, listedDevices, ownWindow } from "../pairing";
+import { listedDevices, ownWindow } from "../pairing";
 import { KitTerms } from "./MachineKit";
 import { coreErrorText } from "../coreError";
 import { useErrorSince } from "../errorSince";
@@ -59,14 +59,11 @@ export function DevicesTab({ actions }: { actions: Actions }) {
   const localCliDir = localHost?.cli_dir ?? null;
   // A paired machine's row is its pairing's; its device has none of its own.
   const listed = listedDevices(rows);
-  // A build that does not offer connections between two Hides shows no
-  // pairing, and any screen adds an SSH device as before pairing.
-  const pairs = useShellStore((s) => deviceConnectOffered(s.daemon));
   // What the last Add over SSH did not add, and why (B41).
   const notAdded = useShellStore((s) => s.rest?.navigator?.device_not_added ?? null);
   // Adding a machine is this computer's own window's to do (B52).
   const ownScreen = useShellStore((s) => ownWindow(s.pairing));
-  const canAdd = ownScreen || !pairs;
+  const canAdd = ownScreen;
   const registrations = useShellStore((s) => s.rest?.ui_state?.workspace_registrations);
   const editorTabs = useShellStore((s) => s.editor?.tabs);
   const recoveryDrafts = useShellStore((s) => s.recoveryDrafts);
@@ -106,8 +103,6 @@ export function DevicesTab({ actions }: { actions: Actions }) {
       focused={focused === device.id}
       place={{
         name: machineName(devices, device.id, t),
-        // Every computer runs a core of its own once two Hides connect, so no row is marked as the core's (PRD device-connect-iroh D-80).
-        core: !pairs && isCoreMachine(devices, device.id),
         own: device.id === own,
         windowIsNode,
         coreName,
@@ -137,7 +132,7 @@ export function DevicesTab({ actions }: { actions: Actions }) {
         {localRows.map(row)}
         {deviceError ? <Row label={<Note tone="error" data-device-error="true" data-core-error={deviceError.kind}>{coreErrorText(deviceError, t)}</Note>} /> : null}
       </Group>
-      {pairs ? <PairedRows actions={actions} /> : null}
+      <PairedRows actions={actions} />
       <Group title={sshTitle} data-device-section="ssh">
         {sshRows.map(row)}
         {notAdded ? (
@@ -159,13 +154,11 @@ export function DevicesTab({ actions }: { actions: Actions }) {
             </DialogHeader>
             <DialogBody className="space-y-md">
               {/* Which kind of machine is added: one that runs its own Hide, by its link, or one reached over SSH or WSL (PRD device-connect-iroh B2, B7). */}
-              {pairs ? (
-                <ToggleGroup type="single" value={addKind} onValueChange={(next) => { if (next) setAddKind(next as AddKind); }} aria-label={t("devices.addTitle")} className="w-full" data-add-kind={addKind}>
-                  <ToggleGroupItem value="hide" size="sm" className="flex-1" data-add-kind-choice="hide">{t("pairing.add.kindHide")}</ToggleGroupItem>
-                  <ToggleGroupItem value="ssh" size="sm" className="flex-1" data-add-kind-choice="ssh">{t("pairing.add.kindSsh")}</ToggleGroupItem>
-                </ToggleGroup>
-              ) : null}
-              {pairs && addKind === "hide" ? (
+              <ToggleGroup type="single" value={addKind} onValueChange={(next) => { if (next) setAddKind(next as AddKind); }} aria-label={t("devices.addTitle")} className="w-full" data-add-kind={addKind}>
+                <ToggleGroupItem value="hide" size="sm" className="flex-1" data-add-kind-choice="hide">{t("pairing.add.kindHide")}</ToggleGroupItem>
+                <ToggleGroupItem value="ssh" size="sm" className="flex-1" data-add-kind-choice="ssh">{t("pairing.add.kindSsh")}</ToggleGroupItem>
+              </ToggleGroup>
+              {addKind === "hide" ? (
                 <AddByLink actions={actions} onStarted={() => setAdding(null)} />
               ) : (
                 <AddDevice actions={actions} devices={rows} helperRoot={localRoot} cliDir={localCliDir} onPaired={() => setAdding(null)} />

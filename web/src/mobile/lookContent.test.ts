@@ -83,8 +83,10 @@ describe("a read put back from its chunks", () => {
 
 describe("the states that are not content", () => {
   it("maps what hided answers to what the viewer draws", () => {
-    expect(resultContent("page", "https://a.example/")).toEqual({ state: "page", url: "https://a.example/" });
-    for (const state of ["other", "too_large", "closed", "device_unreachable", "not_found", "outside_roots"] as const) expect(resultContent(state, undefined)).toEqual({ state });
+    expect(resultContent("page", "https://a.example/")).toEqual({ state: "page", url: "https://a.example/", reason: null });
+    expect(resultContent("page", "https://a.example/", "window_elsewhere")).toEqual({ state: "page", url: "https://a.example/", reason: "window_elsewhere" });
+    expect(resultContent("page", "https://a.example/", "a_later_reason")).toEqual({ state: "page", url: "https://a.example/", reason: null });
+    for (const state of ["other", "too_large", "closed", "device_unreachable", "not_found", "outside_roots", "grant_expired", "file_replaced", "no_window"] as const) expect(resultContent(state, undefined)).toEqual({ state });
     // A state a newer computer sends that this bundle does not know is a read that failed, as an older bundle shows the two above.
     expect(resultContent("a_later_reason" as LookResultState, undefined)).toEqual({ state: "failed" });
     // A refusal, an agent that left and an unreadable checkout read as a read that failed, with 다시.

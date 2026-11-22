@@ -368,6 +368,20 @@ test("hide browser: a busy, hidden, file or missing display and a stale ref are 
   expect(hidden.next_action).toContain("ask the operator to show it");
   expect((await json(["screenshot", display, path.join(fixture.root, "hidden.png")])).reason).toBe("display_hidden");
   expect(await snapshot(display)).toContain('button "Apply"');
+  // A phone's still of it is the host's own capture of the page as it is
+  // (`BrowserViews.still`, a plain `capturePage()`): behind another tab it
+  // still draws a picture, where the debugger's screenshot above is refused.
+  const still = await app!.evaluate(async ({ BrowserWindow }, address) => {
+    for (const view of BrowserWindow.getAllWindows()[0]!.contentView.children) {
+      const contents = (view as { webContents?: Electron.WebContents }).webContents;
+      if (!contents || contents.isDestroyed() || contents.getURL() !== address) continue;
+      const image = await contents.capturePage();
+      return { visible: (view as Electron.View).getVisible(), empty: image.isEmpty(), width: image.getSize().width };
+    }
+    return null;
+  }, `${origin}/agent`);
+  expect(still).toMatchObject({ visible: false, empty: false });
+  expect(still!.width).toBeGreaterThan(0);
   const file = path.join(fixture.root, "fixture", "agent-file.html");
   fs.writeFileSync(file, "<title>Local file</title><h1>Local file</h1>");
   const fileDisplay = await openDisplay(pathToFileURL(file).href);

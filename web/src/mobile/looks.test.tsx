@@ -265,6 +265,56 @@ it("names what the phone cannot show: a page's address, a binary, an image past 
   }
 });
 
+it("says why a file outside the project cannot be read, with nothing to retry, and seen only once its reason is all there is (Doop 10, 12)", async () => {
+  const { container, serve, last, press, socket, unmount } = await openLooks();
+  try {
+    const seen = () => socket.sent.filter((message) => message.type === "look_seen").map((message) => message.view_id);
+    const reasons = [
+      ["grant_expired", "Hide can't open this file anymore", "Open it again on the Mac to see it here"],
+      ["file_replaced", "This file was replaced", "It became a link or a folder after the agent opened it"],
+      ["no_window", "The Hide app isn't open on the Mac", "Files outside the project show while the Mac app is open"],
+    ] as const;
+    for (const [state, title, reason] of reasons) {
+      await press('[data-phone-look="v1"]');
+      await serve({ type: "look_result", request_id: last("look_open").request_id as string, view_id: "v1", state });
+      const body = container.querySelector(`[data-phone-look-state="${state}"]`)!;
+      expect(body.querySelector('[role="status"]')!.textContent).toBe(title);
+      expect(body.textContent).toContain(reason);
+      expect(container.querySelector("[data-phone-look-retry]")).toBeNull();
+      await press('[data-phone-back="looks"]');
+    }
+    // With no desktop app the file may be read later, so it is not seen yet; the other two are.
+    expect(seen()).toEqual(["v1", "v1"]);
+  } finally {
+    await unmount();
+  }
+});
+
+it("says why a page's screen cannot be taken when the operator can act on it: no desktop app, another computer, a page the app has not drawn", async () => {
+  const { container, serve, last, press, socket, unmount } = await openLooks();
+  try {
+    const seen = () => socket.sent.filter((message) => message.type === "look_seen").map((message) => message.view_id);
+    for (const [reason, words] of [
+      ["no_window", "The Hide app isn't open on the Mac"],
+      ["window_elsewhere", "It's on another computer's screen"],
+      ["not_drawn", "Show this page on the Mac once to see it here"],
+      // A reason a later computer sends that this bundle does not know is the plain sentence.
+      ["a_later_reason", "The screen can't be fetched right now"],
+    ] as const) {
+      // The first answer is to opening the page, each later one to a refresh.
+      await press(container.querySelector("[data-phone-look-refresh]") ? "[data-phone-look-refresh]" : '[data-phone-look="v4"]');
+      await serve({ type: "look_result", request_id: last("look_open").request_id as string, view_id: "v4", state: "page", url: "http://localhost:5173/", reason: reason as "no_window" });
+      const body = container.querySelector('[data-phone-look-state="page"]')!;
+      expect(body.querySelector("[data-phone-look-address]")!.textContent).toBe("http://localhost:5173/");
+      expect(body.querySelector('[role="status"]')!.textContent).toBe(words);
+      // A page with a reason has nothing drawn yet that the Mac could not give later, so it stays unseen; the plain sentence is seen, as before.
+      expect(seen()).toEqual(reason === "a_later_reason" ? ["v4"] : []);
+    }
+  } finally {
+    await unmount();
+  }
+});
+
 // A JPEG's first bytes, which is all the phone reads to know what an image is.
 const JPEG = Buffer.from([0xff, 0xd8, 0xff, 0xe0, 1, 2, 3, 4]).toString("base64");
 

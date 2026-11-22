@@ -45,7 +45,8 @@ fn daemon_env(root: &Path) -> Env {
         tailscale_bin: Some(root.join("no-tailscale")),
         relay_url: "ws://127.0.0.1:9/ws".to_owned(),
         peer_direct: None,
-        device_connect: false,
+        peer_relay: None,
+        peer_relay_only: false,
         search_path: None,
     }
 }
@@ -1095,7 +1096,6 @@ async fn an_earlier_builds_act_tool_runs_as_the_whole_hide_and_its_view_only_too
 async fn a_bots_pairing_ask_is_judged_by_its_mode_at_the_daemon() {
     let root = tempfile::tempdir().unwrap();
     let mut env = daemon_env(root.path());
-    env.device_connect = true;
     env.peer_direct = Some("127.0.0.1:0".parse().unwrap());
     let running = hided::start_daemon(env).await.unwrap();
     let mut window = Window::open(&running).await;
@@ -1104,17 +1104,15 @@ async fn a_bots_pairing_ask_is_judged_by_its_mode_at_the_daemon() {
         ("runner", json!({"kind": "all"}), true),
     ] {
         let (bot, _) = approved(root.path(), &mut window, name, mode).await;
-        // The CLI offers pairing only where the daemon does.
-        let on = (hided::env::HIDE_DEVICE_CONNECT, "1");
         for verb in ["pause", "remove"] {
-            bot.run_with(&["device", verb, "mini"], &[on])
+            bot.run(&["device", verb, "mini"])
                 .refused("access_operator_only");
-            bot.run_with(&["device", verb, "mini"], &[on, ("HIDE_ACCESS", name)])
+            bot.run_with(&["device", verb, "mini"], &[("HIDE_ACCESS", name)])
                 .refused("access_operator_only");
         }
-        bot.run_with(&["phone", "remove", "Pixel"], &[on])
+        bot.run(&["phone", "remove", "Pixel"])
             .refused("access_operator_only");
-        let listed = bot.run_with(&["phone", "list", "--json"], &[on]);
+        let listed = bot.run(&["phone", "list", "--json"]);
         if whole {
             assert!(listed.ok, "{name}");
         } else {

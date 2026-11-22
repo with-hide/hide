@@ -78,7 +78,7 @@ const RAIL: { name: string; turn: number }[] = [
 function Rail({ selected }: { selected: string | null }) {
   return (
     <nav aria-label="rail" data-gallery-rail="true" className="flex w-(--size-rail) shrink-0 flex-col items-center gap-md self-stretch border-r border-border bg-sidebar py-md">
-      <RailTileView tile={{ id: "gallery-mac", label: "This Mac", icon: "local", core: false }} selected={selected === null} counts={{ needs_you: 2, done: 0 }} connected onSelect={() => undefined} />
+      <RailTileView tile={{ id: "gallery-mac", label: "This Mac", icon: "local" }} selected={selected === null} counts={{ needs_you: 2, done: 0 }} connected onSelect={() => undefined} />
       <span aria-hidden="true" className="h-(--size-hairline) w-(--size-icon) bg-border" />
       {RAIL.map((bot) => (
         <BotTileView key={bot.name} name={bot.name} turn={bot.turn} connection={bot.name} selected={bot.name === selected} onSelect={() => undefined} />

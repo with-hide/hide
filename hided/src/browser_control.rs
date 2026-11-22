@@ -98,6 +98,13 @@ enum Window {
     Elsewhere(RemoteHost),
 }
 
+/// What the window read of an outside file: its first bytes and the
+/// file's whole size.
+pub struct OutsideBytes {
+    pub bytes: Vec<u8>,
+    pub total: u64,
+}
+
 /// Where a `hide browser` page command's relay runs.
 pub enum Relay {
     /// From the core to its own window's gateway, at this capability URL.
@@ -439,20 +446,69 @@ impl BrowserControl {
             "outside_file_no_window",
             "Open the Hide desktop app on this computer and retry",
         ))?;
-        let body = json!({"path": path, "page": page}).to_string();
-        let mut response = agent()
-            .post(format!("{}/external-open", host.endpoint))
-            .header("Authorization", format!("Bearer {}", host.token))
-            .header("Content-Type", "application/json")
-            .send(body.as_bytes())
-            .map_err(|_| unavailable())?;
-        let bytes = response
-            .body_mut()
-            .with_config()
-            .limit(MAX_ANSWER_BYTES)
-            .read_to_vec()
-            .map_err(|_| unavailable())?;
-        serde_json::from_slice(&bytes).map_err(|_| unavailable())
+        let body = json!({"path": path, "page": page});
+        let response = post_window(&host, "/external-open", &body).map_err(|_| unavailable())?;
+        json_answer(response)
+    }
+
+    /// Reads, through the window registered here, an outside file it granted
+    /// (`desktop/src/main/externalFiles.ts`, `ExternalFiles.readPart`): the
+    /// granted file itself, or with `file` one inside its folder that its
+    /// page names, read now and up to `limit` bytes. The core holds only
+    /// `grant`, so the path never leaves the desktop host. `Ok(Err(reason))`
+    /// is the host's reason it could not; a missing window is
+    /// `outside_file_no_window`.
+    pub fn external_read(
+        &self,
+        grant: &str,
+        file: Option<&str>,
+        limit: u64,
+    ) -> Result<Result<OutsideBytes, String>, Failure> {
+        const NO_WINDOW: Failure = (
+            "outside_file_no_window",
+            "Open the Hide desktop app on this computer and retry",
+        );
+        let _slot = self.acquire()?;
+        let host = self.own_host()?.ok_or(NO_WINDOW)?;
+        let body = json!({"grant": grant, "file": file, "limit": limit});
+        let answer = window_bytes(&host, "/external-read", &body, limit, NO_WINDOW)?;
+        Ok(answer.and_then(|(bytes, total)| {
+            let total = total.ok_or_else(|| "no_total".to_owned())?;
+            Ok(OutsideBytes { bytes, total })
+        }))
+    }
+
+    /// A phone's picture of `display_id` of `source`'s checkout, taken by the
+    /// window that draws it (`BrowserViews.still` in the desktop host): what
+    /// the page draws, in front or behind another tab, as a JPEG of at most
+    /// `limit` bytes, or the host's reason it has none. Only this machine's
+    /// own window answers; a page in a node's window is `window_elsewhere`.
+    pub fn display_still(
+        &self,
+        source: &QueryResult,
+        display_id: &str,
+        limit: u64,
+    ) -> Result<Result<Vec<u8>, String>, Failure> {
+        const ELSEWHERE_STILL: Failure = (
+            "window_elsewhere",
+            "The page is in a window on another computer",
+        );
+        let _slot = self.acquire()?;
+        let (_, _, scope) = scope_of(source, Some(display_id))?;
+        let host = match self.window(None)? {
+            Window::Core(host) => host,
+            Window::Own(_) | Window::Elsewhere(_) => return Err(ELSEWHERE_STILL),
+        };
+        Ok(
+            window_bytes(&host, "/display-still", &scope, limit, unavailable())?
+                .map(|(bytes, _)| bytes),
+        )
+    }
+
+    /// Whether any desktop window is registered, here or on a linked node.
+    pub fn has_window(&self) -> bool {
+        matches!(self.own_host(), Ok(Some(_)) | Err(_))
+            || matches!(self.only_node_window(), Ok(Some(_)) | Err(_))
     }
 
     /// Asks every window registered here to drop each capability it handed
@@ -588,6 +644,50 @@ fn scope_of(
     Ok((area_id, display_id, scope))
 }
 
+/// A window's bytes and the `X-Hide-Total` it sent, or its reason for none.
+type WindowBytes = Result<(Vec<u8>, Option<u64>), String>;
+
+/// Asks this machine's window at `path` for bytes, with the control token:
+/// its answer is the bytes (and `X-Hide-Total` when it sends one) or, as
+/// JSON, the reason it has none (`Ok(Err)`). A window open with no shell
+/// attached is `detached`.
+fn window_bytes(
+    host: &Host,
+    path: &str,
+    body: &Value,
+    limit: u64,
+    detached: Failure,
+) -> Result<WindowBytes, Failure> {
+    let mut response = match post_window(host, path, body) {
+        Ok(response) => response,
+        Err(ureq::Error::StatusCode(503)) => return Err(detached),
+        Err(_) => return Err(unavailable()),
+    };
+    let bytes_answer = response
+        .headers()
+        .get("content-type")
+        .is_some_and(|kind| kind.as_bytes() == b"application/octet-stream");
+    let total = response
+        .headers()
+        .get("x-hide-total")
+        .and_then(|total| total.to_str().ok()?.parse::<u64>().ok());
+    let answer = response
+        .body_mut()
+        .with_config()
+        .limit(limit.max(MAX_ANSWER_BYTES))
+        .read_to_vec()
+        .map_err(|_| unavailable())?;
+    if bytes_answer {
+        if answer.len() as u64 > limit {
+            return Err(unavailable());
+        }
+        return Ok(Ok((answer, total)));
+    }
+    let refused: Value = serde_json::from_slice(&answer).map_err(|_| unavailable())?;
+    let reason = refused["failure"].as_str().ok_or_else(unavailable)?;
+    Ok(Err(reason.chars().take(32).collect()))
+}
+
 /// A revoke is asked again rather than waited on.
 const REVOKE_ATTEMPTS: u32 = 3;
 const REVOKE_RETRY: Duration = Duration::from_millis(500);
@@ -610,22 +710,36 @@ fn agent() -> ureq::Agent {
         .into()
 }
 
-/// The capability a registered gateway hands out for `scope`.
-fn ask_gateway(host: &Host, scope: &Value) -> Result<(String, String), Failure> {
-    let body = scope.to_string();
-    let mut response = agent()
-        .post(format!("{}/connect", host.endpoint))
+/// Every question hided asks this machine's window: a JSON body posted to
+/// `path` of its gateway with the control token, which the window checks in
+/// one place (`BrowserCdpGateway.controlled`).
+fn post_window(
+    host: &Host,
+    path: &str,
+    body: &Value,
+) -> Result<ureq::http::Response<ureq::Body>, ureq::Error> {
+    agent()
+        .post(format!("{}{path}", host.endpoint))
         .header("Authorization", format!("Bearer {}", host.token))
         .header("Content-Type", "application/json")
-        .send(body.as_bytes())
-        .map_err(|_| unavailable())?;
+        .send(body.to_string().as_bytes())
+}
+
+/// A window's JSON answer, read up to `MAX_ANSWER_BYTES`.
+fn json_answer(mut response: ureq::http::Response<ureq::Body>) -> Result<Value, Failure> {
     let bytes = response
         .body_mut()
         .with_config()
         .limit(MAX_ANSWER_BYTES)
         .read_to_vec()
         .map_err(|_| unavailable())?;
-    let answer: Value = serde_json::from_slice(&bytes).map_err(|_| unavailable())?;
+    serde_json::from_slice(&bytes).map_err(|_| unavailable())
+}
+
+/// The capability a registered gateway hands out for `scope`.
+fn ask_gateway(host: &Host, scope: &Value) -> Result<(String, String), Failure> {
+    let response = post_window(host, "/connect", scope).map_err(|_| unavailable())?;
+    let answer = json_answer(response)?;
     let answer = answer.get("result").unwrap_or(&answer);
     let http = answer["cdp_http_url"].as_str().ok_or_else(unavailable)?;
     let ws = answer["browser_ws_url"].as_str().ok_or_else(unavailable)?;
@@ -1026,6 +1140,136 @@ mod tests {
             }
         });
         (endpoint, bodies)
+    }
+
+    /// Each path a scripted window was asked at, with its body.
+    type Asked = Arc<Mutex<Vec<(String, Value)>>>;
+
+    /// A window that answers `/display-still` for `browser-a` with a JPEG's
+    /// bytes and for any other display with the host's reason, keeping each
+    /// path and body it was asked with.
+    fn scripted_still_window() -> (String, Asked) {
+        use std::io::{Read, Write};
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let endpoint = format!("http://{}", listener.local_addr().unwrap());
+        let asked = Arc::new(Mutex::new(Vec::new()));
+        let seen = Arc::clone(&asked);
+        std::thread::spawn(move || {
+            for stream in listener.incoming() {
+                let Ok(mut stream) = stream else { return };
+                let mut raw = Vec::new();
+                let mut chunk = [0_u8; 1024];
+                let (path, body) = loop {
+                    let read = stream.read(&mut chunk).unwrap_or(0);
+                    raw.extend_from_slice(&chunk[..read]);
+                    let text = String::from_utf8_lossy(&raw).into_owned();
+                    if let Some((head, body)) = text.split_once("\r\n\r\n") {
+                        let length = head
+                            .lines()
+                            .find_map(|line| {
+                                line.to_ascii_lowercase()
+                                    .strip_prefix("content-length:")
+                                    .map(|n| n.trim().parse::<usize>().unwrap_or(0))
+                            })
+                            .unwrap_or(0);
+                        if body.len() >= length || read == 0 {
+                            let path = head.split(' ').nth(1).unwrap_or_default().to_owned();
+                            break (path, body.to_owned());
+                        }
+                    }
+                };
+                let body: Value = serde_json::from_str(&body).unwrap();
+                let (kind, bytes) = if body["display_id"] == "browser-a" {
+                    ("application/octet-stream", b"\xff\xd8\xffjpeg".to_vec())
+                } else {
+                    ("application/json", br#"{"failure":"not_drawn"}"#.to_vec())
+                };
+                seen.lock().unwrap().push((path, body));
+                let _ = write!(
+                    stream,
+                    "HTTP/1.1 200 OK\r\nContent-Type: {kind}\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
+                    bytes.len()
+                );
+                let _ = stream.write_all(&bytes);
+            }
+        });
+        (endpoint, asked)
+    }
+
+    /// A phone's still is asked of this machine's own window for the
+    /// display's checkout and area, and is its bytes or the host's reason.
+    #[test]
+    fn a_phone_still_is_the_own_windows_capture_of_the_display_or_why_not() {
+        let registry = BrowserControl::default();
+        let mut source = source();
+        let mut other = source.views.as_ref().unwrap()[0].clone();
+        other.view_id = "browser-b".into();
+        other.selected = false;
+        source.views.as_mut().unwrap().push(other);
+        // No window registered anywhere: nothing to ask.
+        assert!(registry.display_still(&source, "browser-a", 1024).is_err());
+
+        let (endpoint, asked) = scripted_still_window();
+        registry
+            .register(Registration {
+                owner_pid: std::process::id() as i32,
+                endpoint,
+                token: "t".repeat(40),
+            })
+            .unwrap();
+        assert_eq!(
+            registry.display_still(&source, "browser-a", 1024).unwrap(),
+            Ok(b"\xff\xd8\xffjpeg".to_vec())
+        );
+        // A page behind another tab is asked for the same way, and the host's
+        // reason it has none comes back as it was given.
+        assert_eq!(
+            registry.display_still(&source, "browser-b", 1024).unwrap(),
+            Err("not_drawn".to_owned())
+        );
+        // More bytes than the caller's cap is no picture.
+        assert!(registry.display_still(&source, "browser-a", 4).is_err());
+        let asked = asked.lock().unwrap().clone();
+        assert_eq!(asked[0].0, "/display-still");
+        assert_eq!(asked[0].1["display_id"], "browser-a");
+        assert_eq!(asked[0].1["area_id"], "area-a");
+        // A display the checkout does not list is never asked about.
+        assert!(registry.display_still(&source, "browser-z", 1024).is_err());
+        assert_eq!(asked.len(), 3);
+    }
+
+    /// A page whose only window is a linked node's is `window_elsewhere`,
+    /// answered without asking anything; once this machine has its own
+    /// window, that window is asked instead.
+    #[test]
+    fn a_phone_still_of_a_page_in_a_nodes_window_is_window_elsewhere() {
+        let registry = BrowserControl::default();
+        registry
+            .announce("mini", RemoteHost::detached("mini"), vec![4242])
+            .unwrap();
+        assert_eq!(
+            registry
+                .display_still(&source(), "browser-a", 1024)
+                .unwrap_err()
+                .0,
+            "window_elsewhere"
+        );
+
+        let (endpoint, asked) = scripted_still_window();
+        registry
+            .register(Registration {
+                owner_pid: std::process::id() as i32,
+                endpoint,
+                token: "t".repeat(40),
+            })
+            .unwrap();
+        assert_eq!(
+            registry
+                .display_still(&source(), "browser-a", 1024)
+                .unwrap(),
+            Ok(b"\xff\xd8\xffjpeg".to_vec())
+        );
+        assert_eq!(asked.lock().unwrap().len(), 1);
     }
 
     #[test]
