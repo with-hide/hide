@@ -7,7 +7,7 @@ import type { ConnectableHost, Watch } from "./Gathered";
 import { HOSTS_KEY } from "./hosts";
 import type { Presence } from "./presence";
 import type { AgentGroup, PhoneAgent } from "./protocol";
-import { patch, usePhone } from "./store";
+import { applyFrame, patch, usePhone } from "./store";
 
 vi.hoisted(() => { HTMLCanvasElement.prototype.getContext = () => null; });
 
@@ -217,4 +217,38 @@ it("says which computer's list left agents out", async () => {
   expect(said.map((item) => item.getAttribute("data-phone-gathered-omitted"))).toEqual([MAC.room, MINI.room]);
   expect(said[1]!.textContent).toContain("맥미니");
   expect(said[1]!.textContent).toContain("3");
+});
+
+// PRD device-connect-iroh B56, D-57: a phone that kept only the Mac hears once that the 맥미니 the Mac opens, which now runs work of its
+// own, can be added too; [추가] starts adding a computer and the hint never comes back, and a phone that already keeps the 맥미니
+// (by the machine id its hello gave, or by name before that) is told nothing.
+it("hints once at a machine the open computer opens that this phone does not keep", async () => {
+  pair(MAC);
+  const { watch } = watcher();
+  await render(watch);
+  const hint = () => container.querySelector<HTMLElement>("[data-phone-add-hint]");
+  expect(hint()).toBeNull();
+  await act(async () => applyFrame({ type: "meta", push_mode: "off", other_phones: 0, machines: [{ machine: "mini-node", name: "맥미니" }] }));
+  expect(hint()?.getAttribute("data-phone-add-hint")).toBe("mini-node");
+  expect(hint()?.textContent).toContain("You can add 맥미니 to this phone too");
+  await act(async () => hint()!.querySelector<HTMLElement>("[data-phone-add-hint-add]")!.click());
+  expect(assign).toHaveBeenCalledWith("/?add=1");
+  expect(hint()).toBeNull();
+  await act(async () => root.unmount());
+  root = createRoot(container);
+  await render(watch);
+  await act(async () => applyFrame({ type: "meta", push_mode: "off", other_phones: 0, machines: [{ machine: "mini-node", name: "맥미니" }] }));
+  expect(hint()).toBeNull();
+});
+
+it("hints at no machine this phone already keeps", async () => {
+  pair(MAC, MINI);
+  const saved = JSON.parse(localStorage.getItem(HOSTS_KEY)!) as object[];
+  localStorage.setItem(HOSTS_KEY, JSON.stringify([saved[0], { ...saved[1], name: "mini (renamed)", machine: "mini-node" }]));
+  const { watch } = watcher();
+  await render(watch);
+  await act(async () => applyFrame({ type: "meta", push_mode: "off", other_phones: 0, machines: [{ machine: "mini-node", name: "맥미니" }] }));
+  expect(container.querySelector("[data-phone-add-hint]")).toBeNull();
+  await act(async () => applyFrame({ type: "meta", push_mode: "off", other_phones: 0, machines: [{ machine: "pc-node", name: "Windows PC" }] }));
+  expect(container.querySelector("[data-phone-add-hint]")?.getAttribute("data-phone-add-hint")).toBe("pc-node");
 });

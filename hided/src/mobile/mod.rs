@@ -293,6 +293,9 @@ struct Inner {
     /// `phones::MAX_PHONES` phones, so no more are owed, and at that cap the
     /// oldest is dropped.
     paired_notices: VecDeque<PhoneRecord>,
+    /// The other machines this computer opens that run work of their own,
+    /// as the follower last read them (`other_machines`).
+    machines: Vec<OtherMachine>,
 }
 
 /// A change of hide's own settings, or the start, that no pass has read yet.
@@ -364,6 +367,59 @@ struct LivePhone {
 pub struct PhoneMeta {
     pub push_mode: PushMode,
     pub live_phones: usize,
+    /// The other machines this computer opens that run work of their own
+    /// ([`other_machines`]).
+    pub machines: Vec<OtherMachine>,
+}
+
+/// Another machine this computer opens over a connection between two Hides
+/// and that tells it work of its own (`navigator.peer_work`): its work is
+/// that machine's, which a phone sees only once it adds that machine, so a
+/// phone that has not hears of it once (PRD device-connect-iroh B56, D-57).
+#[derive(Clone, Debug, Eq, PartialEq, serde::Serialize)]
+pub struct OtherMachine {
+    /// Its product device id, which its own phone hello names it by
+    /// (`machine`).
+    pub machine: String,
+    pub name: String,
+}
+
+/// The most other machines a phone is told of: as many as the gathered view
+/// shows computers.
+pub const MAX_OTHER_MACHINES: usize = 16;
+
+/// [`OtherMachine`]s from the core's rest: each machine `navigator.peer_work`
+/// lists, named as `navigator.peers` names it, by name, at most
+/// [`MAX_OTHER_MACHINES`]. One with no name there is left out.
+pub fn other_machines(rest: &Value) -> Vec<OtherMachine> {
+    let navigator = &rest["navigator"];
+    let peers = navigator["peers"]
+        .as_array()
+        .map(Vec::as_slice)
+        .unwrap_or_default();
+    let mut machines: Vec<OtherMachine> = navigator["peer_work"]
+        .as_array()
+        .map(Vec::as_slice)
+        .unwrap_or_default()
+        .iter()
+        .filter_map(|work| {
+            let key = work["key"].as_str()?;
+            let peer = peers
+                .iter()
+                .find(|peer| peer["key"].as_str() == Some(key))?;
+            Some(OtherMachine {
+                machine: work["device_id"].as_str()?.to_owned(),
+                name: peer["name"]
+                    .as_str()
+                    .filter(|name| !name.is_empty())?
+                    .to_owned(),
+            })
+        })
+        .collect();
+    machines.sort_by(|a, b| a.name.cmp(&b.name).then_with(|| a.machine.cmp(&b.machine)));
+    machines.dedup_by(|a, b| a.machine == b.machine);
+    machines.truncate(MAX_OTHER_MACHINES);
+    machines
 }
 
 pub struct Config {
@@ -521,6 +577,7 @@ impl Mobile {
                 reconcile_owed: PassOwed(true),
                 paired_code: None,
                 paired_notices: VecDeque::new(),
+                machines: Vec::new(),
             }),
             config,
             reconcile_lock: tokio::sync::Mutex::new(()),
@@ -535,7 +592,7 @@ impl Mobile {
             starts,
             meta: watch::channel(PhoneMeta {
                 push_mode,
-                live_phones: 0,
+                ..PhoneMeta::default()
             })
             .0,
             live: Mutex::new(HashMap::new()),
@@ -810,6 +867,7 @@ impl Mobile {
             let next = PhoneMeta {
                 push_mode,
                 live_phones,
+                machines: inner.machines.clone(),
             };
             if *meta == next {
                 false
@@ -2830,6 +2888,16 @@ impl Mobile {
                     return;
                 }
                 Ok(true) => {
+                    let machines = other_machines(&rest);
+                    let moved = {
+                        let mut inner = self.lock();
+                        let moved = inner.machines != machines;
+                        inner.machines = machines;
+                        moved
+                    };
+                    if moved {
+                        self.publish();
+                    }
                     let catalog = start::Catalog::of(&rest, self.node().as_str());
                     self.catalog.send_if_modified(|current| {
                         if **current == catalog {

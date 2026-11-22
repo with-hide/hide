@@ -2,6 +2,7 @@
 // doop final board's F1 list and F2 device sheet, drawn from production parts.
 // Names, places and counts are fixtures, never operator data.
 
+import { ADD_HINTS_KEY } from "../mobile/addHint";
 import { HOSTS_KEY } from "../mobile/hosts";
 import type { LookContent } from "../mobile/lookContent";
 import type { AgentGroup, AgentKey, GroupRow, LookFile, LookRow, PhoneAgent, PhoneDevice, PhoneSleepingSession } from "../mobile/protocol";
@@ -114,10 +115,15 @@ export const GATHERED_COMPUTERS = [
 ] as const;
 
 /** The one paired Mac the hosted phone's picker lists, written before the sheet reads it; `gathered` adds the other computers. */
+/** The machine the Mac opens that runs work of its own and that the phone keeps no pairing with (`phone-add-hint`, PRD device-connect-iroh B56). */
+export const ADD_HINT_MACHINES = [{ machine: "gallery-mini", name: "맥미니" }];
+
 export function seedPairedMac(gathered = false): void {
   const hosts = [{ room: PHONE_ROOM, name: PHONE_MAC }, ...(gathered ? GATHERED_COMPUTERS : [])];
   try {
     localStorage.setItem(HOSTS_KEY, JSON.stringify(hosts.map((host) => ({ ...host, noiseKey: "b".repeat(43), credential: "gallery", protocol: 2, lastSeen: null }))));
+    // Each visit draws the add hint again (`phone-add-hint`), however the last one ended it.
+    localStorage.removeItem(ADD_HINTS_KEY);
   } catch {
     // The picker then says storage is unavailable, which is the state it draws.
   }

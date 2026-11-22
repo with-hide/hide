@@ -5,7 +5,7 @@
 
 import { create } from "zustand";
 import type { PressedAnswer } from "../missionAnswer";
-import type { AgentGroup, AgentKey, AutomationAction, Conversation, DetailTab, DetailView, LookRow, Notice, Notifications, PairPayload, PhoneAgent, PhoneDevice, PhoneAutomation, PhoneMission, PhonePr, PhonePrFeedback, PhonePrProject, Refusal, RowsState, ServerFrame, StartCatalog } from "./protocol";
+import type { AgentGroup, AgentKey, AutomationAction, Conversation, DetailTab, DetailView, LookRow, Notice, Notifications, OtherMachine, PairPayload, PhoneAgent, PhoneDevice, PhoneAutomation, PhoneMission, PhonePr, PhonePrFeedback, PhonePrProject, Refusal, RowsState, ServerFrame, StartCatalog } from "./protocol";
 import { keyTag, listedAgents, mergeConversation, missionsOnWire, sameKey } from "./protocol";
 import { resultContent, type LookContent } from "./lookContent";
 import { holds, prOf, type MergeConfirm } from "./prModel";
@@ -153,6 +153,8 @@ type PhoneState = {
    * its saved answer stands (`PairedHost.deviceConnect`). Only then does the agents tab offer the gathered view.
    */
   deviceConnect: boolean | null;
+  /** The other machines the open computer opens that run work of their own, as its last meta frame named them (B56). */
+  otherMachines: readonly OtherMachine[];
   missionOpen: string | null;
   /** Null until the first missions frame; kept across a lost connection, dimmed under the unreachable line (B45). */
   missions: PhoneMission[] | null;
@@ -238,6 +240,7 @@ const initial: PhoneState = {
   tab: "agents",
   listScope: typeof location === "undefined" ? "all" : listScopeOf(new URLSearchParams(location.search)),
   deviceConnect: null,
+  otherMachines: [],
   missionOpen: null,
   missions: null,
   missionsFailed: false,
@@ -308,7 +311,7 @@ export function applyFrame(frame: ServerFrame): void {
       });
       return;
     case "meta":
-      patch({ otherPhones: frame.other_phones });
+      patch({ otherPhones: frame.other_phones, otherMachines: frame.machines ?? [] });
       return;
     case "agents":
       patch({

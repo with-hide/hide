@@ -148,16 +148,19 @@ it("opens the computer the address names, or the only one kept unless it refused
   expect(open(`?host=${other.room}`, [host])).toBeNull();
 });
 
-// PRD device-connect-iroh B62: a computer's last answer to whether it offers connections between two Hides stays with its record in
-// both stores, so a page opened on it while it is off still offers the gathered view; a record that says something else is refused.
-it("keeps each computer's last connections answer in the browser and in the app", async () => {
+// PRD device-connect-iroh B62, B56: a computer's last answer to whether it offers connections between two Hides, and the machine id
+// its hello named, stay with its record in both stores, so a page opened on it while it is off still offers the gathered view and
+// the phone knows which machine it already has; a record that says something else is refused.
+it("keeps each computer's last connections answer and machine id in the browser and in the app", async () => {
   const browser = storage();
-  await browserStore(browser).save({ ...host, deviceConnect: true });
-  expect(readHosts(browser)[0]!.deviceConnect).toBe(true);
+  await browserStore(browser).save({ ...host, deviceConnect: true, machine: "macbook-node" });
+  expect(readHosts(browser)[0]).toMatchObject({ deviceConnect: true, machine: "macbook-node" });
   const app = storage();
-  await appStore(app).save({ ...host, deviceConnect: true });
-  expect((await appStore(app).list())[0]!.deviceConnect).toBe(true);
-  const odd = storage();
-  odd.setItem(HOSTS_KEY, JSON.stringify([{ ...host, deviceConnect: "yes" }]));
-  expect(() => readHosts(odd)).toThrow("host_storage_invalid");
+  await appStore(app).save({ ...host, deviceConnect: true, machine: "macbook-node" });
+  expect((await appStore(app).list())[0]).toMatchObject({ deviceConnect: true, machine: "macbook-node" });
+  for (const odd of [{ deviceConnect: "yes" }, { machine: "" }, { machine: 7 }, { machine: "a\nb" }]) {
+    const stored = storage();
+    stored.setItem(HOSTS_KEY, JSON.stringify([{ ...host, ...odd }]));
+    expect(() => readHosts(stored)).toThrow("host_storage_invalid");
+  }
 });

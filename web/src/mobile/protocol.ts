@@ -98,6 +98,8 @@ export type GroupRow = ({ kind: "agent" } & PhoneAgent) | ({ kind: "sleeping" } 
 export type AgentGroup = { group: GroupId; count: number; rows: GroupRow[]; more?: GroupRow[]; more_asleep?: number };
 
 /** The paired Mac (`local`) and each device it reaches, with the counts of their top rows. */
+/** Another machine the computer opens that runs work of its own, by its product device id and its name there (B56). */
+export type OtherMachine = { machine: string; name: string };
 export type PhoneDevice = { device_id: string; label: string | null; local?: true; connected: boolean; needs_you: number; working: number };
 
 /** Every agent the list holds, a parent before its children, shown or folded. */
@@ -326,9 +328,11 @@ export type StartCatalog = {
 export type ServerFrame =
   | { type: "paired"; credential: string; phone_id: string; name: string }
   /** `device_connect`: the computer offers connections between two Hides, and with them the gathered view (`gather.ts`); absent from every computer before it and from a build with them off. */
-  | { type: "hello"; mac_name: string | null; phone_id: string; name: string | null; vapid_public_key: string; notifications: Notifications; device_connect?: boolean }
+  /** `machine`: the computer's product device id, which another computer's `machines` names it by; sent with `device_connect`. */
+  | { type: "hello"; mac_name: string | null; phone_id: string; name: string | null; vapid_public_key: string; notifications: Notifications; device_connect?: boolean; machine?: string }
   // Older computers still send off; new phone settings do not use this global mode.
-  | { type: "meta"; push_mode: "off" | "app_closed" | "always"; other_phones: number }
+  /** `machines`: the other machines this computer opens that run work of their own (PRD device-connect-iroh B56); absent when none. */
+  | { type: "meta"; push_mode: "off" | "app_closed" | "always"; other_phones: number; machines?: OtherMachine[] }
   /**
    * `interface_language` is the core's explicit choice as stored (en, ko, zh-CN, ja), or null while the phone follows its own language.
    * `color_theme` is the operator's palette (`hide`, `neutral`); the phone keeps its own light or dark.

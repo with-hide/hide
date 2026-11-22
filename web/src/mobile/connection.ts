@@ -48,7 +48,7 @@ import { RelaySocket, type PhoneSocket } from "./relaySocket";
 import { DemoSocket, demoRequested } from "./demoSocket";
 import { translate } from "../i18n/translator";
 import { hostedPhone, PHONE_PROTOCOL, takePairing } from "./relayRuntime";
-import { HOST_LIST_LINK, hostStore, type PairedHost } from "./hosts";
+import { HOST_LIST_LINK, hostStore, validMachine, type PairedHost } from "./hosts";
 import type { PairingQr } from "../../../hide-relay-protocol/web";
 
 let relayHost: PairedHost | null = null;
@@ -286,7 +286,7 @@ function connect(): void {
     if (frame.type === "hello") {
       attempt = 0;
       if (relayHost) {
-        relayHost = { ...relayHost, name: frame.mac_name || relayHost.name, lastSeen: Date.now(), deviceConnect: frame.device_connect === true };
+        relayHost = { ...relayHost, name: frame.mac_name || relayHost.name, lastSeen: Date.now(), deviceConnect: frame.device_connect === true, machine: validMachine(frame.machine) ? frame.machine : undefined };
         patch({ relayError: usePhone.getState().relayError === "loadError" ? "loadError" : null });
         storeCredential(credential);
       }

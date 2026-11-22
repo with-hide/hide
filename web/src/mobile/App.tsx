@@ -34,7 +34,8 @@ import { hostedPhone, PHONE_PROTOCOL } from "./relayRuntime";
 import { HostPicker } from "./HostPicker";
 import { Landing, DeviceIdentity } from "./Landing";
 import { VersionScreen } from "./HostList";
-import { HOST_LIST_LINK } from "./hosts";
+import { HOST_LIST_LINK, type PairedHost } from "./hosts";
+import { hintedMachine, markHinted, readHinted } from "./addHint";
 import { DemoBar } from "./Demo";
 import { ComputerChoice, GatheredList, openRoom, useConnectableHosts, type Watch } from "./Gathered";
 
@@ -189,6 +190,7 @@ export function ListScreen({ hosted = hostedPhone(), picker, gathered }: { hoste
       ) : null}
       {relayError === "storage" || relayError === "loadError" ? <p role="alert" className="px-lg text-warning">{t(`mobile.relay.${relayError}`)}</p> : null}
       {installHint && !standalone() ? <InstallHint /> : null}
+      {hosted && hosts ? <AddMachineHint hosts={hosts} /> : null}
       {computers && activeRoom && scope === "all" ? <GatheredList hosts={computers} activeRoom={activeRoom} dim={dim} watch={gathered?.watch} /> : <div className={dim ? "opacity-(--opacity-dimmed)" : undefined} aria-busy={dim}>
         {groups && groups.length === 0 ? (
           <p className="px-lg py-xxl text-center text-title text-muted-foreground" data-phone-empty="true">
@@ -237,6 +239,37 @@ function GroupHead({ id, count }: { id: GroupId; count: number }) {
 }
 
 /** Shown once after pairing, in a browser tab: keep hide on the Home Screen (B11). */
+/**
+ * One line, once: "<machine>도 폰에 추가할 수 있어요" for a machine the open computer opens that runs work of its own and that this
+ * phone keeps under no saved computer (PRD device-connect-iroh B56). [추가] starts adding a computer; either it or the close ends
+ * that machine's hint for good.
+ */
+function AddMachineHint({ hosts }: { hosts: readonly PairedHost[] }) {
+  const { t } = useInterfaceTranslation();
+  const others = usePhone((s) => s.otherMachines);
+  const [hinted, setHinted] = useState<readonly string[] | null>(() => {
+    try { return readHinted(localStorage); } catch { return null; }
+  });
+  useEffect(() => { if (hinted === null) patch({ relayError: "storage" }); }, [hinted]);
+  const machine = hinted ? hintedMachine(others, hosts, hinted) : null;
+  if (!machine) return null;
+  const done = () => {
+    try { markHinted(localStorage, machine.machine); setHinted(readHinted(localStorage)); return true; }
+    catch { patch({ relayError: "storage" }); return false; }
+  };
+  return (
+    <div className="mx-xl mt-md flex items-center gap-sm text-body leading-relaxed text-subtle-foreground" data-phone-add-hint={machine.machine}>
+      <span className="min-w-0 flex-1 break-keep wrap-anywhere">{t("mobile.addHint", { name: machine.name })}</span>
+      <Button variant="text" className="min-h-(--size-touch-target) shrink-0 px-none text-body" data-phone-add-hint-add="true" onClick={() => { if (done()) window.location.assign("/?add=1"); }}>
+        {t("mobile.addHintAdd")}
+      </Button>
+      <Button variant="ghost" size="icon" aria-label={t("common.close")} className="size-(--size-touch-target) text-muted-foreground" data-phone-add-hint-close="true" onClick={() => { done(); }}>
+        <XIcon aria-hidden="true" className="size-(--size-icon)" />
+      </Button>
+    </div>
+  );
+}
+
 function InstallHint() {
   const { t } = useInterfaceTranslation();
   return (
