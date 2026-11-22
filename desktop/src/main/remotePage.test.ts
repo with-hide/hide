@@ -45,7 +45,11 @@ describe("another machine's screen", () => {
 
   it("takes from the shell a machine id, its key and a place, or none", () => {
     expect(parseShow(null)).toBeNull();
-    expect(parseShow({ device: "host-a", key: KEY, rect: { x: 56, y: 0, width: 800, height: 600 } })).toEqual({ device: "host-a", key: KEY, rect: { x: 56, y: 0, width: 800, height: 600 } });
+    expect(parseShow({ device: "host-a", key: KEY, rect: { x: 56, y: 0, width: 800, height: 600 } })).toEqual({ device: "host-a", key: KEY, rect: { x: 56, y: 0, width: 800, height: 600 }, name: null });
+    // The name the window calls the machine by goes with it when it is one short line.
+    const named = (name: unknown) => parseShow({ device: "host-a", key: KEY, rect: { x: 0, y: 0, width: 1, height: 1 }, name })?.name;
+    expect(named("build-box")).toBe("build-box");
+    expect([named("a\nb"), named("  "), named("x".repeat(129)), named(7)]).toEqual([null, null, null, null]);
     // S1: a request names the key; one without it, or with a key Hide never spells, is no request.
     expect(parseShow({ device: "host-a", rect: { x: 0, y: 0, width: 1, height: 1 } })).toBeUndefined();
     expect(parseShow({ device: "host-a", key: OTHER.toUpperCase(), rect: { x: 0, y: 0, width: 1, height: 1 } })).toBeUndefined();

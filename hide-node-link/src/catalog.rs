@@ -34,6 +34,15 @@ pub struct PathFacts {
     /// a node older than this field: its remotes are unknown.
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub remotes: BTreeMap<String, Vec<String>>,
+    /// Each remote's address, with the user and password a `scheme://`
+    /// address can carry removed so a token never leaves the node, by the
+    /// repository's main root; a remote that is a path on the node is left
+    /// out. The core asks each code host's unit which repository an address
+    /// names. Listed for the same repositories as `remotes` (an empty list:
+    /// no remote names a server); a node older than this field lists none,
+    /// and the core reads its `remotes` instead.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub remote_addresses: BTreeMap<String, Vec<String>>,
 }
 
 /// One path as its node reads it.

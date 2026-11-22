@@ -1521,6 +1521,9 @@ impl Pairing {
         far: &Arc<SwitchReach>,
     ) -> Result<Value, &'static str> {
         let device = source.device_id.as_str();
+        // The machine keeps the name its device had here, not the one it
+        // calls itself: the operator switched the device they know.
+        let label = hide_peer::link::clean_name(&source.label);
         self.switch_step(device, "checking", json!({})).await;
         // The request a switch runs under is its channel's own, so one
         // that stopped midway is asked again as the same request.
@@ -1556,13 +1559,20 @@ impl Pairing {
             let (this, service, peers) = (Arc::clone(self), service.clone(), peers.clone());
             let (device, requested, landed) =
                 (device.to_owned(), requested.clone(), Arc::clone(&landed));
+            let label = label.clone();
             let far = Arc::clone(far);
             move |switched: &pairing_ssh::Switched| {
                 // The target answered a pairing: it holds a grant now.
                 far.started();
-                let done = runtime.block_on(
-                    this.admit_switch(&service, &peers, &device, &through, &requested, switched),
-                );
+                let done = runtime.block_on(this.admit_switch(
+                    &service,
+                    &peers,
+                    &device,
+                    label.as_deref(),
+                    &through,
+                    &requested,
+                    switched,
+                ));
                 let active = done.is_ok();
                 *lock(&landed) = Some(done);
                 active
@@ -1623,13 +1633,16 @@ impl Pairing {
     /// What follows the target's answer to a switch: the core is told the
     /// machine the device becomes, the pairing is saved, and the connection
     /// confirms the grant. The core takes the device over the moment it is
-    /// active. `through` is the login the machine was reached through, and
+    /// active. `label` is the device's name here, which the pairing keeps;
+    /// `through` is the login the machine was reached through, and
     /// `requested` the key its request is kept under.
+    #[allow(clippy::too_many_arguments)]
     async fn admit_switch(
         self: &Arc<Self>,
         service: &Service,
         peers: &HostPeers,
         device: &str,
+        label: Option<&str>,
         through: &Login,
         requested: &str,
         switched: &pairing_ssh::Switched,
@@ -1668,7 +1681,10 @@ impl Pairing {
             connecting["needs"] = needs.payload();
         }
         self.switch_step(device, "connecting", connecting).await;
-        if let Some(paired) = paired.clone() {
+        if let Some(mut paired) = paired.clone() {
+            if let Some(label) = label {
+                label.clone_into(&mut paired.accepted.name);
+            }
             match service.adopt(paired.accepted, paired.first) {
                 // Adopted before, by a switch that stopped after it.
                 Ok(()) | Err(AcceptError::Already) => {}

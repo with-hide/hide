@@ -8,9 +8,13 @@
 import { useLayoutEffect, useMemo, useState } from "react";
 import { createActions } from "../actions";
 import { TooltipProvider } from "../components/ui/tooltip";
+import { InterfaceLanguageBoundary } from "../i18n/client";
 import { Sidebar } from "../sidebar";
 import { TitleRow } from "../TitleRow";
 import { SettingsGate } from "../SettingsSheet";
+import { NOTHING_UNDER_WAY } from "../pairing";
+import type { AgentScope } from "../agentScope";
+import type { AgentRow, SnapshotRest } from "../snapshot";
 import { useShellStore } from "../store";
 import { OVERVIEW_ENTRY, useUiStore } from "../ui";
 import { withMissionAsk } from "./MissionScene";
@@ -36,6 +40,10 @@ export type SceneParams = {
   lens?: "projects" | "tasks" | "tasks-project";
   /** `shown` seeds the core's `ui_state.agent_logo_mode`, so the rows draw their logos. */
   logos?: "hidden" | "shown";
+  /** `on`: a paired Mac-mini tells two Needs You rows of its own, under its head after this computer's (operator review 2026-11-22). */
+  peers?: "off" | "on";
+  /** The interface language, seeded as the core's `ui_state.interface_language`. */
+  lang?: "en" | "ko";
 };
 
 export function sceneParams(params: URLSearchParams): SceneParams {
@@ -56,10 +64,14 @@ export function sceneParams(params: URLSearchParams): SceneParams {
   if (lens !== "projects" && lens !== "tasks" && lens !== "tasks-project") throw new Error(`Unknown scene lens ${lens}`);
   const logos = params.get("logos") ?? "hidden";
   if (logos !== "hidden" && logos !== "shown") throw new Error(`Unknown scene logos ${logos}`);
-  return { lens, logos, theme: params.get("theme") === "light" ? "light" : "dark", width: width === null ? null : Number(width), scale, content, devices, front, rail, state: params.get("state") ?? "rest" };
+  const peers = params.get("peers") ?? "off";
+  if (peers !== "off" && peers !== "on") throw new Error(`Unknown scene peers ${peers}`);
+  const lang = params.get("lang") ?? "en";
+  if (lang !== "en" && lang !== "ko") throw new Error(`Unknown scene lang ${lang}`);
+  return { lens, logos, peers, lang, theme: params.get("theme") === "light" ? "light" : "dark", width: width === null ? null : Number(width), scale, content, devices, front, rail, state: params.get("state") ?? "rest" };
 }
 
-export function SidebarScene({ theme, width, scale, content, devices, front, rail, state, lens = "projects", logos = "hidden", axis = false }: SceneParams) {
+export function SidebarScene({ theme, width, scale, content, devices, front, rail, state, lens = "projects", logos = "hidden", peers = "off", lang = "en", axis = false }: SceneParams) {
   const [folds, setFolds] = useState<SceneFolds>({ ...REFERENCE_FOLDS, frontDevice: front === "mini" ? "mini" : front === "offline" ? OFFLINE_DEVICE : "local" });
   const actions = useMemo(
     () =>
@@ -74,16 +86,18 @@ export function SidebarScene({ theme, width, scale, content, devices, front, rai
   );
 
   // Seed the app's stores before the first paint, and again on every fold.
-  const scene = useMemo(() => axis ? sidebarStatusAxisScene(content, folds, Date.now()) : sidebarScene(content, folds, Date.now(), devices), [content, folds, devices, axis]);
+  const scene = useMemo(() => axis ? withOwnTurn(sidebarStatusAxisScene(content, folds, Date.now()), peers === "on") : sidebarScene(content, folds, Date.now(), devices), [content, folds, devices, axis, peers]);
   useLayoutEffect(() => {
     const sized = width === null ? scene.rest : { ...scene.rest, ui_state: { ...scene.rest.ui_state, sidebar_width: width } };
-    const shown = { ...sized, ui_state: { ...sized.ui_state, device_rail_visible: rail === "shown", sidebar_lens: lens === "projects" ? "projects" as const : "tasks" as const, task_view: lens === "tasks-project" ? "project" as const : "status" as const, agent_logo_mode: logos } };
+    const shown = { ...sized, ui_state: { ...sized.ui_state, device_rail_visible: rail === "shown", sidebar_lens: lens === "projects" ? "projects" as const : "tasks" as const, task_view: lens === "tasks-project" ? "project" as const : "status" as const, agent_logo_mode: logos, interface_language: lang } };
     // `mission-ask`: a mission waits on the operator with no session row to carry it, so Needs You lists the mission itself.
     // `mission-close-refused`: the same, for a mission whose nodes are all done and whose close was refused.
     // `mission-gate`: the same, for a reached review gate (PRD mission-human-gate D-23).
     const rest = state === "mission-ask" || state === "mission-close-refused" || state === "mission-gate" ? withMissionAsk(shown, "local", Date.now(), state === "mission-ask" ? "no-conductor" : state === "mission-gate" ? "gate-nocond" : "close-refused") : shown;
-    useShellStore.setState({ rest, agents: scene.agents, connection: "live", ...(axis ? { focusedPaneId: "a1" } : {}) });
-  }, [scene, width, rail, axis, state, lens, logos]);
+    const told = peers === "on" ? withPeerWork(rest, Date.now()) : rest;
+    // This computer's own window, the only one that lists another computer's rows.
+    useShellStore.setState({ rest: told, agents: scene.agents, connection: "live", pairing: peers === "on" ? NOTHING_UNDER_WAY : null, ...(axis ? { focusedPaneId: "a1" } : {}) });
+  }, [scene, width, rail, axis, state, lens, logos, peers, lang]);
 
   useLayoutEffect(() => {
     useUiStore.setState({ screen: axis ? { kind: "workspace" } : { kind: "main" }, overview: { ...OVERVIEW_ENTRY, projectId: "hide" }, overviewOpen: false });
@@ -99,6 +113,7 @@ export function SidebarScene({ theme, width, scale, content, devices, front, rai
 
   return (
     <TooltipProvider>
+      <InterfaceLanguageBoundary />
       <div className="flex h-full flex-col bg-background text-foreground" data-gallery-scene="projects-sidebar" data-scene-content={content} data-scene-devices={devices} data-scene-front={front} data-scene-rail={rail}>
         {/* The device name sits in the window's top row over the sidebar (PRD sidebar-titlebar-refresh B17). */}
         <TitleRow actions={actions} />
@@ -109,4 +124,32 @@ export function SidebarScene({ theme, width, scale, content, devices, front, rai
       <SettingsGate actions={actions} />
     </TooltipProvider>
   );
+}
+
+/** A paired Mac-mini and the two rows of its own Needs You it tells. */
+function withPeerWork(rest: SnapshotRest, now: number): SnapshotRest {
+  const key = "m".repeat(64);
+  const rows = [
+    { id: "w1:p1", group: "needs_you", title: "Claude", agent_kind: "claude", place: "docs · main", mark: "turn", status_code: "approval", changed_at_unix_ms: now - 3 * 60_000 },
+    { id: "w2:p1", group: "needs_you", title: "Claude", agent_kind: "claude", place: "shop-api · main", mark: "turn", status_code: "approval", changed_at_unix_ms: now - 3 * 60_000 },
+  ];
+  const navigator = rest.navigator!;
+  return {
+    ...rest,
+    navigator: {
+      ...navigator,
+      peers: [{ key, device_id: "mac-mini", name: "Mac-mini", opens: "active", opened_by: "active", connected: true, path: "direct" }],
+      peer_work: [{ device_id: "mac-mini", key, needs_you: rows.length, done: 0, rows }],
+    },
+  } as SnapshotRest;
+}
+
+/** With `peers=on`, one of this computer's own tasks waits on the operator too, so its row and the paired machine's stand in one Needs You. */
+function withOwnTurn(scene: { rest: SnapshotRest; agents: AgentRow[] }, on: boolean): { rest: SnapshotRest; agents: AgentRow[] } {
+  if (!on) return scene;
+  const agents = scene.agents.map((row) => row.pane_id === "q1" ? { ...row, group: "needs_you" as const, mark: "turn" as const, status_code: "approval" as const, demand: "approval" as const, detail: null } : row);
+  const scope: AgentScope = { ...scene.rest.navigator!.agent_scope!, tasks: { cards: [{ root: "q1", state: "needs_you", members: ["q1"], checkouts: ["hide:main"], recency: "" }], needs_you: 1, recency: "" } };
+  const navigator = scene.rest.navigator!;
+  const rest = { ...scene.rest, navigator: { ...navigator, agents, agent_scope: scope, devices: navigator.devices!.map((device) => ({ ...device, agent_scope: scope })), workspaces: navigator.workspaces!.map((row) => ({ ...row, agent_scope: scope, checkouts: row.checkouts.map((c) => ({ ...c, agent_scope: scope })) })) } } as SnapshotRest;
+  return { rest, agents };
 }

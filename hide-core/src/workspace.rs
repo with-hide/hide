@@ -313,6 +313,9 @@ pub struct PathIndex {
     notes: BTreeMap<String, Result<BTreeMap<String, BranchNote>, String>>,
     /// Each repository's remotes, by main root (`PathFacts::remotes`).
     remotes: BTreeMap<String, Vec<String>>,
+    /// Each repository's remote addresses, by main root
+    /// (`PathFacts::remote_addresses`); none from an older node.
+    remote_addresses: BTreeMap<String, Vec<String>>,
     /// The asked paths whose Project the node could not read, with why.
     unread: BTreeMap<String, String>,
 }
@@ -352,6 +355,7 @@ impl PathIndex {
         paths: BTreeMap::new(),
         notes: BTreeMap::new(),
         remotes: BTreeMap::new(),
+        remote_addresses: BTreeMap::new(),
         unread: BTreeMap::new(),
     };
 
@@ -408,6 +412,7 @@ impl PathIndex {
             paths,
             notes: facts.repositories,
             remotes: facts.remotes,
+            remote_addresses: facts.remote_addresses,
             unread,
         }
     }
@@ -442,6 +447,7 @@ impl PathIndex {
             facts.paths.extend(answer.paths);
             facts.repositories.extend(answer.repositories);
             facts.remotes.extend(answer.remotes);
+            facts.remote_addresses.extend(answer.remote_addresses);
         }
         Ok(Self::new(facts))
     }
@@ -464,12 +470,21 @@ impl PathIndex {
             .unwrap_or_else(|| comparison_by_names(Path::new(path)))
     }
 
-    /// The repositories the remotes of the repository `path` is in name,
-    /// as its node read them; `None` when the node did not say.
-    pub fn remotes(&self, path: &str) -> Option<&[String]> {
-        self.remotes
-            .get(&self.place(path)?.main_root)
-            .map(Vec::as_slice)
+    /// The remotes of the repository `path` is in, as its node read them:
+    /// their addresses, from a node that sends them, else the GitHub-shaped
+    /// names an older node sends; unknown when the node did not say.
+    pub(crate) fn remotes(&self, path: &str) -> crate::code_host::CheckoutRemotes<'_> {
+        use crate::code_host::CheckoutRemotes;
+        let Some(place) = self.place(path) else {
+            return CheckoutRemotes::Unknown;
+        };
+        if let Some(addresses) = self.remote_addresses.get(&place.main_root) {
+            CheckoutRemotes::Addresses(addresses)
+        } else if let Some(names) = self.remotes.get(&place.main_root) {
+            CheckoutRemotes::Named(names)
+        } else {
+            CheckoutRemotes::Unknown
+        }
     }
 
     /// The repository `path` is in, as its node read it.

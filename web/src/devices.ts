@@ -104,10 +104,7 @@ export function tileCounts(rest: SnapshotRest | null, _localAgents: AgentRow[], 
   // device-connect-iroh D-50); this computer's work that runs there opens in
   // this computer's tile (D-55) and is counted on it.
   const peerKey = devices.find((device) => device.id === deviceId)?.peer_key;
-  if (peerKey != null) {
-    const told = rest?.navigator?.peer_work?.find((peer) => peer.key === peerKey);
-    return { needs_you: told?.needs_you ?? 0, done: told?.done ?? 0 };
-  }
+  if (peerKey != null) return peerCounts(rest, peerKey);
   const counts = own(deviceId);
   if (deviceId !== localDeviceId(rest)) return counts;
   for (const device of devices) {
@@ -119,6 +116,12 @@ export function tileCounts(rest: SnapshotRest | null, _localAgents: AgentRow[], 
   return counts;
 }
 
+/** What the paired machine on connection `key` told of its own Needs You and Done (D-50); nothing while it told none. */
+export function peerCounts(rest: SnapshotRest | null | undefined, key: string): TileCounts {
+  const told = rest?.navigator?.peer_work?.find((peer) => peer.key === key);
+  return { needs_you: told?.needs_you ?? 0, done: told?.done ?? 0 };
+}
+
 /** The number the Needs You pill draws: the count, or `9+` from ten. */
 export function badgeText(count: number): string {
   return count >= 10 ? "9+" : String(count);
@@ -127,11 +130,14 @@ export function badgeText(count: number): string {
 /**
  * The letters a remote device's tile draws in place of a name: the first
  * letter of each of the first two words (`Mac mini` → `Mm`, `build-box` →
- * `Bb`), or the first letter alone for a one-word name (`mini` → `M`), the
- * first one capitalized. The name itself is the tile's hint.
+ * `Bb`), a one-word name's words being where a small letter meets a capital
+ * (`MacBook` → `MB`), or the first letter alone for a one-word name with
+ * none (`mini` → `M`), the first one capitalized. The name itself is the
+ * tile's hint.
  */
 export function tileMonogram(label: string): string {
-  const [first = "", second = ""] = label.normalize("NFC").split(/[\s._-]+/).filter(Boolean);
+  const words = label.normalize("NFC").split(/[\s._-]+/).filter(Boolean);
+  const [first = "", second = ""] = words.length === 1 ? words[0]!.split(/(?<=\p{Ll})(?=\p{Lu})/u) : words;
   const initial = (word: string) => Array.from(word)[0] ?? "";
   return initial(first).toLocaleUpperCase() + initial(second);
 }

@@ -15,7 +15,7 @@ use std::path::PathBuf;
 use serde::{Deserialize, Serialize};
 
 use crate::latest_file::{LatestFile, read_capped};
-use crate::model::{GithubProjectSnapshot, GithubSnapshot};
+use crate::model::{GithubProjectSnapshot, GithubSnapshot, RepositoryIdentity};
 
 const SCHEMA_VERSION: u32 = 2;
 
@@ -77,10 +77,41 @@ fn encode(github: &GithubSnapshot) -> Result<Vec<u8>, String> {
     serde_json::to_vec(&stored).map_err(|error| format!("could not be encoded: {error}"))
 }
 
+/// What a file from before the identity was saved said about a repository's
+/// visibility: under its issues (`issues.public`).
+#[derive(Deserialize)]
+struct LegacyStored {
+    #[serde(default)]
+    projects: Vec<LegacyProject>,
+}
+
+#[derive(Deserialize)]
+struct LegacyProject {
+    root_path: String,
+    #[serde(default)]
+    issues: LegacyIssues,
+}
+
+#[derive(Default, Deserialize)]
+struct LegacyIssues {
+    #[serde(default)]
+    public: Option<bool>,
+}
+
 /// What a restored project says about itself: read once, not current.
 fn decode(bytes: &[u8]) -> Result<GithubSnapshot, String> {
     let stored: Stored =
         serde_json::from_slice(bytes).map_err(|error| format!("could not be decoded: {error}"))?;
+    let legacy_public: std::collections::HashMap<String, Option<bool>> =
+        serde_json::from_slice::<LegacyStored>(bytes)
+            .map(|legacy| {
+                legacy
+                    .projects
+                    .into_iter()
+                    .map(|project| (project.root_path, project.issues.public))
+                    .collect()
+            })
+            .unwrap_or_default();
     if stored.schema_version != SCHEMA_VERSION {
         return Err(format!(
             "has schema version {}, expected {SCHEMA_VERSION}",
@@ -114,7 +145,62 @@ fn decode(bytes: &[u8]) -> Result<GithubSnapshot, String> {
             ));
         }
         project.pull_requests_read = true;
-        project.issues_read = true;
+        // The issues part comes back with the outcome it was saved with; a
+        // file from before it was kept reads `Read` (the field's default).
+        // A saved reference names its repository and number as its host's
+        // unit made them; the unit makes the rest again (its label, pages and
+        // key), so a file saved before it made one it makes now reads like a
+        // fresh answer, and a host no unit is registered for keeps what it
+        // saved. A file from before references were saved is GitHub's: each
+        // of its pull requests is named by GitHub's unit from its own
+        // address, server and port kept, as a fresh read names it.
+        // One saved before keys were made whose host has no unit names
+        // nothing it can be compared by, and is dropped.
+        for pull_request in &mut project.pull_requests {
+            let named = match &pull_request.reference {
+                Some(saved) => crate::code_host::CodeHosts::STANDARD
+                    .of(&saved.repository)
+                    .map(|host| (host, saved.repository.clone(), saved.number)),
+                None => crate::code_host::CodeHosts::STANDARD.change_request_at(&pull_request.url),
+            };
+            if let Some((host, repository, number)) = named {
+                pull_request.reference = Some(crate::code_host::change_request(
+                    host.unit(),
+                    repository,
+                    number,
+                ));
+            } else if pull_request
+                .reference
+                .as_ref()
+                .is_some_and(|saved| saved.key.is_empty())
+            {
+                pull_request.reference = None;
+            }
+        }
+        // A file from before the identity was saved: its pull requests'
+        // addresses name the repository with its server. The issues' bare
+        // `OWNER/NAME` does not (an Enterprise server's reads as github.com),
+        // so a file without pull requests waits for the next read.
+        if project.repository.is_none() {
+            project.repository = project
+                .pull_requests
+                .iter()
+                .find_map(|pull_request| pull_request.reference.as_ref())
+                .and_then(|reference| {
+                    let host = crate::code_host::CodeHosts::STANDARD.of(&reference.repository)?;
+                    Some(RepositoryIdentity {
+                        public: legacy_public.get(&project.root_path).copied().flatten(),
+                        ..RepositoryIdentity::named(host.unit(), reference.repository.clone())
+                    })
+                });
+        }
+        // The repository's page is its unit's to make, again on restore.
+        if let Some(identity) = &mut project.repository {
+            identity.url = identity.repository.as_ref().and_then(|repository| {
+                let host = crate::code_host::CodeHosts::STANDARD.of(repository)?;
+                Some(host.unit().repository_url(repository))
+            });
+        }
         project.status.stale = true;
         project.status.loading = false;
         projects.push(project);
@@ -195,6 +281,7 @@ mod tests {
                 ..Default::default()
             },
             pull_requests: vec![PullRequestSnapshot {
+                reference: None,
                 closing_issues: Vec::new(),
                 title: "Fix".to_owned(),
                 checks: PullRequestChecks::Failed,
@@ -214,7 +301,7 @@ mod tests {
                 work: Default::default(),
             }],
             pull_requests_read: true,
-            issues_read: true,
+            issues_read: crate::model::PartRead::Read,
             ..Default::default()
         }
     }
@@ -228,6 +315,189 @@ mod tests {
         GithubStore::new(path).restore()
     }
 
+    /// A file as main saved it: no identity, no outcome of the issues part
+    /// and no reference on its pull requests, the visibility under its
+    /// issues beside their bare `OWNER/NAME`.
+    fn saved_before_hosts(url: Option<&str>) -> GithubSnapshot {
+        let mut project = answer("/repo", Some(100));
+        match url {
+            Some(url) => project.pull_requests[0].url = url.to_owned(),
+            None => project.pull_requests.clear(),
+        }
+        let mut stored: serde_json::Value = serde_json::from_slice(
+            &encode(&GithubSnapshot {
+                projects: vec![project],
+            })
+            .unwrap(),
+        )
+        .unwrap();
+        let fields = stored["projects"][0].as_object_mut().unwrap();
+        fields.remove("repository");
+        fields.remove("issues_read");
+        fields.insert(
+            "issues".to_owned(),
+            serde_json::json!({"repository": "acme/app", "issues": [], "overflow": false, "public": true}),
+        );
+        for pull_request in fields["pull_requests"].as_array_mut().unwrap() {
+            pull_request.as_object_mut().unwrap().remove("reference");
+        }
+        decode(&serde_json::to_vec(&stored).unwrap()).expect("a file main saved restores")
+    }
+
+    /// Each pull request of a file main saved is named again from its own
+    /// address, server and port kept; the repository's identity comes from
+    /// that address, never from the issues' bare `OWNER/NAME`, which would
+    /// read an Enterprise server's repository as github.com's.
+    #[test]
+    fn a_file_saved_before_hosts_is_named_from_its_pull_requests_addresses() {
+        for (url, authority, files) in [
+            (
+                "https://github.com/acme/app/pull/12",
+                "github.com",
+                "https://github.com/acme/app/pull/12/files",
+            ),
+            (
+                "https://ghe.example.com/acme/app/pull/12",
+                "ghe.example.com",
+                "https://ghe.example.com/acme/app/pull/12/files",
+            ),
+            (
+                "https://ghe.example.com:8443/acme/app/pull/12",
+                "ghe.example.com:8443",
+                "https://ghe.example.com:8443/acme/app/pull/12/files",
+            ),
+        ] {
+            let restored = saved_before_hosts(Some(url));
+            let project = &restored.projects[0];
+            let reference = project.pull_requests[0]
+                .reference
+                .as_ref()
+                .expect("named again");
+            assert_eq!(
+                (
+                    reference.repository.authority.as_str(),
+                    reference.files_url.as_str()
+                ),
+                (authority, files)
+            );
+            let identity = project.repository.as_ref().expect("named by the address");
+            assert_eq!(identity.repository.as_ref(), Some(&reference.repository));
+            assert_eq!(identity.public, Some(true), "the visibility main saved");
+            assert_eq!(project.issues_read, crate::model::PartRead::Read);
+        }
+        assert_eq!(
+            saved_before_hosts(None).projects[0].repository,
+            None,
+            "without a pull request the server is unknown until the next read"
+        );
+    }
+
+    /// Each of the four outcomes of the issues part comes back as it was
+    /// saved; only a file from before the part was kept reads `Read`.
+    #[test]
+    fn the_issues_and_identity_outcomes_come_back_as_saved() {
+        use crate::model::PartRead;
+        for outcome in [
+            PartRead::Read,
+            PartRead::Failed,
+            PartRead::NotRead,
+            PartRead::Unsupported,
+        ] {
+            let mut sent = answer("/repo", Some(100));
+            sent.issues_read = outcome;
+            sent.identity_read = outcome;
+            let restored = saved_then_restored(GithubSnapshot {
+                projects: vec![sent],
+            })
+            .expect("the file is restored");
+            assert_eq!(restored.projects[0].issues_read, outcome);
+            assert_eq!(restored.projects[0].identity_read, outcome);
+        }
+        let mut stored: serde_json::Value = serde_json::from_slice(
+            &encode(&GithubSnapshot {
+                projects: vec![answer("/repo", Some(100))],
+            })
+            .unwrap(),
+        )
+        .unwrap();
+        let project = stored["projects"][0].as_object_mut().unwrap();
+        assert!(project.remove("issues_read").is_some());
+        assert!(project.remove("identity_read").is_some());
+        let restored = decode(&serde_json::to_vec(&stored).unwrap()).unwrap();
+        assert_eq!(restored.projects[0].issues_read, PartRead::Read);
+        assert_eq!(restored.projects[0].identity_read, PartRead::Read);
+    }
+
+    /// A reference another host's unit made comes back as saved, even where
+    /// its address would read as a GitHub Enterprise one: the file never
+    /// moves a pull request to another host.
+    #[test]
+    fn a_saved_reference_of_another_host_comes_back_as_its_unit_made_it() {
+        let repository = crate::code_host::RepositoryRef {
+            host: "plain".to_owned(),
+            authority: "code.example".to_owned(),
+            path: "acme/app".to_owned(),
+        };
+        let mut sent = answer("/repo", Some(100));
+        let pull_request = &mut sent.pull_requests[0];
+        pull_request.url = format!("https://code.example/acme/app/pull/{}", pull_request.number);
+        let made = crate::code_host::change_request(
+            &crate::code_host::tests::PLAIN,
+            repository,
+            pull_request.number,
+        );
+        pull_request.reference = Some(made.clone());
+        let restored = saved_then_restored(GithubSnapshot {
+            projects: vec![sent],
+        })
+        .expect("the file is restored");
+        assert_eq!(restored.projects[0].pull_requests[0].reference, Some(made));
+    }
+
+    #[test]
+    fn a_reference_saved_in_an_older_shape_is_named_again_rather_than_refusing_the_file() {
+        let mut sent = answer("/repo", Some(100));
+        let number = sent.pull_requests[0].number;
+        sent.repository = crate::code_host::CodeHosts::STANDARD
+            .repository("acme/app")
+            .map(|(host, repository)| RepositoryIdentity::named(host.unit(), repository));
+        let mut stored: serde_json::Value = serde_json::from_slice(
+            &encode(&GithubSnapshot {
+                projects: vec![sent],
+            })
+            .unwrap(),
+        )
+        .unwrap();
+        stored["projects"][0]["pull_requests"][0]["reference"] = serde_json::json!({
+            "repository": {"host": "github", "authority": "github.com", "path": "acme/app"},
+            "number": number,
+        });
+        let folder = tempfile::tempdir().unwrap();
+        let path = folder.path().join("github-snapshot.json");
+        std::fs::write(&path, serde_json::to_vec(&stored).unwrap()).unwrap();
+        let restored = GithubStore::new(path.clone())
+            .restore()
+            .expect("the file is restored");
+        let pull_request = &restored.projects[0].pull_requests[0];
+        let reference = pull_request.reference.as_ref().expect("named again");
+        assert_eq!(
+            reference.key,
+            format!("github.com/acme/app#{}", pull_request.number)
+        );
+
+        // One whose host no unit is registered for names nothing it can be
+        // compared by, and is dropped rather than kept with an empty key.
+        stored["projects"][0]["pull_requests"][0]["reference"] = serde_json::json!({
+            "repository": {"host": "plain", "authority": "code.example", "path": "acme/app"},
+            "number": number,
+        });
+        std::fs::write(&path, serde_json::to_vec(&stored).unwrap()).unwrap();
+        let restored = GithubStore::new(path)
+            .restore()
+            .expect("the file is restored");
+        assert_eq!(restored.projects[0].pull_requests[0].reference, None);
+    }
+
     #[test]
     fn a_saved_answer_comes_back_stale_with_every_pull_request_field() {
         let sent = GithubSnapshot {
@@ -238,7 +508,8 @@ mod tests {
         assert!(project.status.stale && !project.status.loading);
         assert_eq!(project.status.last_success_at_unix_ms, Some(100));
         assert_eq!(project.pull_requests, sent.projects[0].pull_requests);
-        assert!(project.pull_requests_read && project.issues_read);
+        assert!(project.pull_requests_read);
+        assert_eq!(project.issues_read, crate::model::PartRead::Read);
     }
 
     #[test]

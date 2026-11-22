@@ -632,6 +632,7 @@ fn ended(started_at_unix_ms: u64, failure: &str) -> SuggestionAttemptSnapshot {
         started_at_unix_ms,
         pr_number: None,
         url: None,
+        reference: None,
         agent_id: None,
         agent_pane: None,
         failure: Some(failure.to_owned()),
@@ -692,6 +693,7 @@ fn batch_row(
             .pr_number
             .and_then(|number| u32::try_from(number).ok()),
         url: promotion.pr_url.clone(),
+        reference: promotion.pr_reference.clone(),
         agent_id: cards
             .iter()
             .find_map(|card| card.promotion.agent.as_ref()?.agent_id.clone()),
@@ -766,6 +768,7 @@ mod tests {
                 }),
                 pr_number: Some(900 + number),
                 pr_url: Some(format!("https://github.com/acme/app/pull/{}", 900 + number)),
+                pr_reference: None,
                 target_path: None,
                 github_failure: None,
                 branch: None,

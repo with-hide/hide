@@ -46,21 +46,31 @@ pub fn clipboard_file_name(request_id: &str) -> String {
 /// Whether `path` names a clipboard image: a request's file directly inside
 /// a clipboard folder, the only file a clipboard removal may delete.
 pub fn is_clipboard_path(path: &std::path::Path) -> bool {
-    let named = |component: Option<&std::ffi::OsStr>, wanted: &dyn Fn(&str) -> bool| {
-        component
-            .and_then(std::ffi::OsStr::to_str)
-            .is_some_and(wanted)
-    };
+    fn name(component: Option<&std::ffi::OsStr>) -> Option<&str> {
+        component.and_then(std::ffi::OsStr::to_str)
+    }
     path.is_absolute()
-        && named(path.file_name(), &|name| {
-            name.strip_prefix("hide-")
-                .and_then(|rest| rest.strip_suffix(".png"))
-                .is_some_and(valid_request_id)
-        })
-        && named(
-            path.parent().and_then(std::path::Path::file_name),
-            &|folder| folder == CLIPBOARD_FOLDER,
+        && clipboard_names(
+            name(path.parent().and_then(std::path::Path::file_name)),
+            name(path.file_name()),
         )
+}
+
+/// Whether a wire spelling (`hide_platform::path`) names a clipboard image,
+/// by the same names as `is_clipboard_path`, so any machine may ask it of
+/// any machine's path.
+pub fn is_clipboard_wire_path(path: &str) -> bool {
+    use hide_platform::path::{is_wire_absolute, wire_name, wire_parent};
+    is_wire_absolute(path)
+        && clipboard_names(wire_parent(path).map(wire_name), Some(wire_name(path)))
+}
+
+fn clipboard_names(folder: Option<&str>, name: Option<&str>) -> bool {
+    folder == Some(CLIPBOARD_FOLDER)
+        && name
+            .and_then(|name| name.strip_prefix("hide-"))
+            .and_then(|rest| rest.strip_suffix(".png"))
+            .is_some_and(valid_request_id)
 }
 
 pub fn check_cancelled(cancelled: &std::sync::atomic::AtomicBool) -> Result<(), String> {

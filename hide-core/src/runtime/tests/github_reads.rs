@@ -22,6 +22,7 @@ fn git_project(id: &str, path: &str, branch: &str) -> WorkspaceSnapshot {
 
 fn pull_request(number: u32, branch: &str, badge: PullRequestBadge) -> PullRequestSnapshot {
     PullRequestSnapshot {
+        reference: None,
         closing_issues: Vec::new(),
         title: format!("Pull request {number}"),
         checks: PullRequestChecks::Passing,
@@ -52,8 +53,28 @@ fn read_ok(root: &str, pull_requests: Vec<PullRequestSnapshot>, at: u64) -> Gith
         },
         pull_requests,
         pull_requests_read: true,
-        issues_read: true,
+        issues_read: crate::model::PartRead::Read,
         ..Default::default()
+    }
+}
+
+/// A read of `root` that named its repository `name` on GitHub.
+fn read_named(
+    root: &str,
+    name: &str,
+    pull_requests: Vec<PullRequestSnapshot>,
+    at: u64,
+) -> GithubProjectSnapshot {
+    GithubProjectSnapshot {
+        repository: Some(
+            crate::code_host::CodeHosts::STANDARD
+                .repository(name)
+                .map(|(host, repository)| {
+                    crate::model::RepositoryIdentity::named(host.unit(), repository)
+                })
+                .unwrap(),
+        ),
+        ..read_ok(root, pull_requests, at)
     }
 }
 
@@ -306,7 +327,7 @@ fn a_read_whose_issues_failed_backs_off_and_still_reads_a_printed_pull_request()
     runtime.reread_stale_github(now);
     let issues_failed = || {
         let mut read = read_ok("/tmp/a", vec![pull_request_in("owner/a", 1)], 10);
-        read.issues_read = false;
+        read.issues_read = crate::model::PartRead::Failed;
         read.status.stale = true;
         read.status.unavailable_reason = Some("gh api graphql: no answer".into());
         GithubSnapshot {
@@ -328,6 +349,180 @@ fn a_read_whose_issues_failed_backs_off_and_still_reads_a_printed_pull_request()
     let before = generation_of(&runtime, "/tmp/a");
     runtime.read_sighted_pull_requests(&[sighted("w9:p1", "owner/a", 2)], (now, NOW_MS));
     assert_eq!(generation_of(&runtime, "/tmp/a"), before + 1);
+}
+
+/// A pass whose issues failed or were not read shows the issues read
+/// before, as of their read, and keeps the part's own outcome: the clock
+/// and the store see a failed part, not a read one.
+#[test]
+fn kept_issues_keep_the_passes_own_outcome() {
+    for outcome in [
+        crate::model::PartRead::Failed,
+        crate::model::PartRead::NotRead,
+    ] {
+        let mut runtime = runtime();
+        runtime.snapshot.navigator.workspaces = vec![git_project("a", "/tmp/a", "main")];
+        runtime.reread_stale_github(Instant::now());
+        let mut first = read_ok("/tmp/a", Vec::new(), 10);
+        first.issues = crate::issues::ProjectIssuesSnapshot {
+            repository: Some("owner/a".into()),
+            issues: crate::issues::parse_issues(
+                r#"[{"number":7,"title":"Fix","url":"https://github.com/owner/a/issues/7","state":"OPEN","labels":[]}]"#,
+            )
+            .unwrap(),
+            ..Default::default()
+        };
+        runtime.ingest_github_answer(
+            GithubSnapshot {
+                projects: vec![first],
+            },
+            true,
+        );
+        let mut second = read_ok("/tmp/a", Vec::new(), 20);
+        second.issues_read = outcome;
+        second.status.stale = true;
+        second.status.unavailable_reason = Some("gh api graphql: no answer".into());
+        runtime.ingest_github_answer(
+            GithubSnapshot {
+                projects: vec![second],
+            },
+            true,
+        );
+        let project = runtime.github.project("/tmp/a").unwrap();
+        assert_eq!(
+            project.issues.issues.len(),
+            1,
+            "the issues read before are shown"
+        );
+        assert_eq!(project.issues_read, outcome);
+        assert_eq!(
+            project.read_outcome(),
+            crate::model::GithubReadOutcome::IssuesFailed
+        );
+    }
+}
+
+/// A pull request at `address`, with the reference GitHub's unit makes of it.
+fn referenced(address: &str) -> PullRequestSnapshot {
+    let (host, repository, number) = crate::code_host::CodeHosts::STANDARD
+        .change_request_at(address)
+        .unwrap();
+    PullRequestSnapshot {
+        reference: Some(crate::code_host::change_request(
+            host.unit(),
+            repository,
+            number,
+        )),
+        url: address.to_owned(),
+        ..pull_request(number, &format!("branch-{number}"), PullRequestBadge::Open)
+    }
+}
+
+/// A checkout read in place whose identity this pass could not read keeps
+/// the one read before only when a pull request this pass listed is of that
+/// exact repository: the same remotes can name another one (`gh repo
+/// set-default`, or an origin moved beside an upstream left as it was), and
+/// a repository at the same path on another server is another repository.
+/// A pass that read nothing keeps it with the list and issues it keeps; a
+/// project answered "no remote" names no repository and keeps none.
+#[test]
+fn an_unread_identity_is_kept_only_where_this_pass_names_its_repository() {
+    use crate::model::PartRead;
+    let identity = || {
+        let mut read = read_named("/tmp/a", "owner/a", Vec::new(), 10);
+        let identity = read.repository.as_mut().unwrap();
+        identity.id = Some("R1".into());
+        identity.default_branch = Some("trunk".into());
+        read.identity_read = PartRead::Read;
+        read
+    };
+    let unread = |pull_requests| GithubProjectSnapshot {
+        identity_read: PartRead::Failed,
+        ..read_ok("/tmp/a", pull_requests, 20)
+    };
+    for (case, pass, kept) in [
+        (
+            "a pull request of the same repository",
+            unread(vec![referenced("https://github.com/Owner/A/pull/3")]),
+            true,
+        ),
+        (
+            "the same path on another server",
+            unread(vec![referenced("https://ghe.example:8443/owner/a/pull/3")]),
+            false,
+        ),
+        ("no pull request names it", unread(Vec::new()), false),
+        ("a pass that read nothing", read_failed("/tmp/a"), true),
+        (
+            "a checkout found to have no remote",
+            crate::code_host::read::no_remote("/tmp/a".to_owned()),
+            false,
+        ),
+    ] {
+        let mut runtime = runtime();
+        runtime.snapshot.navigator.workspaces = vec![git_project("a", "/tmp/a", "main")];
+        runtime.reread_stale_github(Instant::now());
+        runtime.ingest_github_answer(
+            GithubSnapshot {
+                projects: vec![identity()],
+            },
+            true,
+        );
+        runtime.ingest_github_answer(
+            GithubSnapshot {
+                projects: vec![pass],
+            },
+            true,
+        );
+        let project = runtime.github.project("/tmp/a").unwrap();
+        assert_eq!(
+            project
+                .repository
+                .as_ref()
+                .map(|identity| (identity.id.as_deref(), identity.default_branch.as_deref())),
+            kept.then_some((Some("R1"), Some("trunk"))),
+            "{case}"
+        );
+        assert_ne!(project.identity_read, PartRead::Read, "{case}");
+    }
+}
+
+/// An identity read that fails while the lists are read leaves the lists
+/// standing and backs the clock off, as failed issues do; with nothing read
+/// before, no identity is made up.
+#[test]
+fn a_failed_identity_alone_keeps_the_lists_and_backs_the_clock_off() {
+    let mut runtime = runtime();
+    runtime.snapshot.navigator.workspaces = vec![git_project("a", "/tmp/a", "main")];
+    let start = Instant::now();
+    runtime.reread_stale_github(start);
+    let pass = GithubProjectSnapshot {
+        identity_read: crate::model::PartRead::Failed,
+        ..read_ok(
+            "/tmp/a",
+            vec![referenced("https://github.com/owner/a/pull/3")],
+            10,
+        )
+    };
+    runtime.ingest_github_answer(
+        GithubSnapshot {
+            projects: vec![pass],
+        },
+        true,
+    );
+    let project = runtime.github.project("/tmp/a").unwrap();
+    assert_eq!(project.repository, None);
+    assert_eq!(project.pull_requests.len(), 1);
+    assert_eq!(project.issues_read, crate::model::PartRead::Read);
+    assert_eq!(
+        project.read_outcome(),
+        crate::model::GithubReadOutcome::IssuesFailed
+    );
+    let now = start + Duration::from_secs(1);
+    assert_eq!(
+        seconds_until_asked_again(&mut runtime, "/tmp/a", now),
+        Some(30)
+    );
 }
 
 #[test]
@@ -1227,11 +1422,17 @@ fn a_repository_without_a_remote_asks_gh_nothing_until_a_remote_is_added() {
                 r#"{"data":{"repository":{"pullRequests":{"nodes":[]}}}}"#,
             ),
             ("pr list", "[]"),
-            ("repo view", r#"{"nameWithOwner":"acme/app","id":"R_1"}"#),
+            (
+                "repo view",
+                r#"{"nameWithOwner":"acme/app","id":"R_1","url":"https://github.com/acme/app","visibility":"PUBLIC"}"#,
+            ),
             ("issue list", "[]"),
         ],
     });
-    let reader = std::cell::RefCell::new(crate::github::GithubReader::new(node.clone()));
+    let reader = std::cell::RefCell::new(crate::code_host::read::CodeHostReader::new(
+        node.clone(),
+        crate::code_host::CodeHosts::STANDARD,
+    ));
     let mut runtime = runtime();
     runtime.snapshot.navigator.workspaces = vec![git_project("app", &root, "main")];
     let read_catalog = |runtime: &mut Runtime| {
@@ -1296,6 +1497,56 @@ fn a_repository_without_a_remote_asks_gh_nothing_until_a_remote_is_added() {
         project.status.unavailable_reason
     );
     assert_eq!(project.issues.repository.as_deref(), Some("acme/app"));
+    assert_eq!(project.repository_id(), Some("R_1"));
+}
+
+/// A checkout's remote reaches the core as the address its node read, with
+/// the sign-in a scheme address carried taken out, and the registered units
+/// choose its host from it: the base-only host reads its nested path by its
+/// name, and with GitHub alone the same address is left to `gh` in the
+/// checkout, as before hosts.
+#[test]
+fn a_checkouts_host_is_chosen_from_its_remote_address_with_no_sign_in_reaching_the_core() {
+    let dir = tempfile::tempdir().unwrap();
+    let root = dir.path().canonicalize().unwrap().join("app");
+    std::fs::create_dir(&root).unwrap();
+    let root = root.to_string_lossy().into_owned();
+    super::device_worktrees::git(&root, &["init", "-q", "-b", "main"]);
+    super::device_worktrees::git(
+        &root,
+        &[
+            "remote",
+            "add",
+            "origin",
+            "https://oauth2:secret-token@code.example/group/sub/project.git",
+        ],
+    );
+    let node = Machine {
+        gh: Mutex::new(Vec::new()),
+        answers: &[],
+    };
+    let place = |hosts: crate::code_host::CodeHosts| {
+        let mut runtime = runtime();
+        runtime.code_hosts = hosts;
+        runtime.snapshot.navigator.workspaces = vec![git_project("app", &root, "main")];
+        runtime.catalog_paths =
+            Arc::new(crate::workspace::PathIndex::ask(&node, [root.clone()].into()).unwrap());
+        assert_eq!(
+            runtime.catalog_paths.remotes(&root).listed(),
+            Some(&["https://code.example/group/sub/project.git".to_owned()][..])
+        );
+        runtime.github_request().projects[0].place.clone()
+    };
+    let plain = place(crate::code_host::tests::BOTH).expect("a host reads it");
+    assert_eq!(plain.host().key(), "plain");
+    assert_eq!(
+        plain.stored_name().as_deref(),
+        Some("code.example/group/sub/project")
+    );
+    let github = place(crate::code_host::CodeHosts::STANDARD).expect("gh is asked");
+    assert_eq!(github.host().key(), "github");
+    assert_eq!(github.repository(), None, "read in place by gh");
+    assert!(node.gh.lock().unwrap().is_empty());
 }
 
 /// Remotes the catalog does not know (an included config, an older node) can
@@ -1454,7 +1705,7 @@ fn a_look_leaves_an_issues_only_failure_to_its_retry() {
     let start = Instant::now();
     runtime.reread_stale_github(start);
     let mut read = read_ok("/tmp/a", Vec::new(), 10);
-    read.issues_read = false;
+    read.issues_read = crate::model::PartRead::Failed;
     runtime.ingest_github_answer(
         GithubSnapshot {
             projects: vec![read],
@@ -1553,9 +1804,15 @@ fn open_pull_request(number: u32, checks: PullRequestChecks) -> PullRequestSnaps
     pull_request
 }
 
+fn github_host() -> crate::code_host::Host {
+    crate::code_host::CodeHosts::STANDARD
+        .host("github")
+        .unwrap()
+}
+
 fn polled_paths(runtime: &mut Runtime) -> Vec<String> {
     runtime
-        .github_poll_request()
+        .github_poll_request(github_host())
         .projects
         .into_iter()
         .map(|project| project.path)
@@ -1576,15 +1833,17 @@ fn the_poll_watches_only_projects_whose_last_read_worked_and_holds_an_open_pull_
     first_read(
         &mut runtime,
         vec![
-            read_ok(
+            read_named(
                 "/tmp/a",
+                "acme/app",
                 vec![open_pull_request(1, PullRequestChecks::Pending)],
                 10,
             ),
             read_failed("/tmp/b"),
-            read_ok("/tmp/c", vec![merged], 10),
-            read_ok(
+            read_named("/tmp/c", "acme/app", vec![merged], 10),
+            read_named(
                 "/tmp/d",
+                "acme/app",
                 vec![open_pull_request(2, PullRequestChecks::Passing)],
                 10,
             ),
@@ -1593,7 +1852,7 @@ fn the_poll_watches_only_projects_whose_last_read_worked_and_holds_an_open_pull_
     );
     runtime.snapshot.navigator.focused_checkout_id = Some("d-checkout".to_owned());
 
-    let request = runtime.github_poll_request();
+    let request = runtime.github_poll_request(github_host());
     let watched: Vec<_> = request
         .projects
         .iter()
@@ -1604,7 +1863,7 @@ fn the_poll_watches_only_projects_whose_last_read_worked_and_holds_an_open_pull_
         ["/tmp/d", "/tmp/a"],
         "the project in front first; a failed read and a project with nothing open are left out"
     );
-    assert_eq!(request.projects[1].repository, "acme/app");
+    assert_eq!(request.projects[1].repository.path, "acme/app");
     assert_eq!(
         request.projects[1].heads,
         vec![format!("{:040x}", 1)],
@@ -1628,14 +1887,15 @@ fn the_poll_watches_a_failed_head_while_a_run_on_it_still_goes() {
     running.work.checks_running = true;
     first_read(
         &mut runtime,
-        vec![read_ok(
+        vec![read_named(
             "/tmp/a",
+            "acme/app",
             vec![running, open_pull_request(2, PullRequestChecks::Failed)],
             10,
         )],
         Instant::now(),
     );
-    let request = runtime.github_poll_request();
+    let request = runtime.github_poll_request(github_host());
     assert_eq!(
         request.projects[0].heads,
         vec![format!("{:040x}", 1)],
@@ -1653,8 +1913,9 @@ fn the_poll_reads_at_most_eight_projects_the_one_in_front_first() {
         &mut runtime,
         (0..12)
             .map(|index| {
-                read_ok(
+                read_named(
                     &format!("/tmp/p{index:02}"),
+                    "acme/app",
                     vec![open_pull_request(1, PullRequestChecks::Passing)],
                     10,
                 )
@@ -1775,14 +2036,14 @@ fn the_project_in_front_is_polled_with_no_pull_request_open_and_others_are_not()
     other.issues.repository = Some("acme/other".to_owned());
     first_read(&mut runtime, vec![front, other], Instant::now());
     runtime.snapshot.navigator.focused_checkout_id = Some("a-checkout".to_owned());
-    let request = runtime.github_poll_request();
+    let request = runtime.github_poll_request(github_host());
     assert_eq!(
         request
             .projects
             .iter()
-            .map(|project| (project.path.as_str(), project.repository.as_str()))
+            .map(|project| (project.path.as_str(), project.repository.path.as_str()))
             .collect::<Vec<_>>(),
-        [("/tmp/a", "acme/app")],
+        [("/tmp/a", "Acme/App")],
         "a pull request opened elsewhere on the project in front is seen within the minute (B24)"
     );
 }
@@ -1827,4 +2088,35 @@ fn a_missions_early_ask_to_read_again_is_kept_until_the_thirty_seconds_pass() {
     runtime.drain_mission_reads(answered + Duration::from_secs(30));
     assert_eq!(generation_of(&runtime, "/tmp/a"), 1);
     assert!(runtime.missions.reads_due.is_empty());
+}
+
+/// The creation times the label workers judge a session's printed address
+/// against are keyed by a github.com address's `owner/name` in lower case and
+/// its number; an Enterprise server's pull request, which a printed address
+/// never names, and one GitHub gave no creation time are not among them.
+#[test]
+fn the_creation_times_a_label_worker_reads_are_keyed_by_a_github_address_in_lower_case() {
+    let mut runtime = runtime();
+    runtime.snapshot.navigator.workspaces = vec![git_project("a", "/tmp/a", "main")];
+    let enterprise = PullRequestSnapshot {
+        url: "https://ghe.example/acme/app/pull/8".to_owned(),
+        ..pull_request(8, "main", PullRequestBadge::Open)
+    };
+    let undated = PullRequestSnapshot {
+        created_at_unix_ms: None,
+        ..pull_request_in("acme/app", 9)
+    };
+    first_read(
+        &mut runtime,
+        vec![read_ok(
+            "/tmp/a",
+            vec![pull_request_in("Acme/App", 7), enterprise, undated],
+            10,
+        )],
+        Instant::now(),
+    );
+    assert_eq!(
+        *runtime.pull_request_times(),
+        crate::labels::facts::PullRequestTimes::from([(("acme/app".to_owned(), 7), 2)])
+    );
 }

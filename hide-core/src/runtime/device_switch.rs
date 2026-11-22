@@ -49,6 +49,9 @@ pub struct DeviceSwitchSource {
     /// The device's id, which the one who asked may have named by its
     /// alias.
     pub device_id: String,
+    /// The name the operator knows the device by, which the machine it
+    /// becomes keeps (PRD device-connect-iroh, [바꾸기]: the same name).
+    pub label: String,
     pub via: SwitchVia,
     /// The helper root the operator allowed on the device, as the consent
     /// spells it.
@@ -187,6 +190,7 @@ impl Runtime {
         };
         Ok(DeviceSwitchSource {
             device_id: device_id.to_owned(),
+            label: registration.label.clone(),
             via,
             helper_root: registration
                 .host_consent

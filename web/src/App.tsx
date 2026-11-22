@@ -295,7 +295,7 @@ export function App() {
     ["draft_recovery", <DraftRecoveryLine actions={actions} />],
     ["workspace_notices", <WorkspaceNotices actions={actions} />],
     ["notice", <NoticeToasts actions={actions} />],
-    ["peer_update", <PeerUpdateNotice />],
+    ["peer_update", <PeerUpdateNotice actions={actions} />],
   ];
   const overlays: [string, ReactNode][] = [
     ["overview", <OverviewModal actions={actions} />],
@@ -335,7 +335,8 @@ export function App() {
             <TitleRow actions={actions} />
           </RenderBoundary>
           {leftOut(["connection", <ConnectionBadge actions={actions} />])}
-          {leftOut(["device_switch", <DeviceSwitchStrip actions={actions} />])}
+          {/* Over a paired machine's screen the stage draws it, where that screen leaves room for it. */}
+          {remoteScreen === null ? leftOut(["device_switch", <DeviceSwitchStrip actions={actions} />]) : null}
           <div className="flex min-h-0 flex-1">
             {/* A paired machine's own screen takes the sidebar's and the center's place, beside the rail (PRD device-connect-iroh B17). */}
             {remoteScreen !== null ? (

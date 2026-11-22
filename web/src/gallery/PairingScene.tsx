@@ -120,6 +120,8 @@ export function PairingScene({ params }: { params: URLSearchParams }) {
   // `view=update`: the desktop app, whose updates the notice offers; the
   // stand-in reports no update found yet and does nothing on a press.
   const updating = view === "update";
+  // `side=there`: the computer that waits for the other to update, whose notice asks it to.
+  const updatePeers = params.get("side") === "there" ? UPDATE_PEERS.filter((row) => row.update !== "here_asked") : UPDATE_PEERS;
   useLayoutEffect(() => {
     if (!firewall && !updating) return;
     const before = window.hideHost;
@@ -159,7 +161,7 @@ export function PairingScene({ params }: { params: URLSearchParams }) {
             ? { verb: "switch", ok: true, switch: "install_needed", system: "linux", device_id: "build-box", request_id: "gallery" }
             : null,
       rest: {
-        navigator: { devices: switching ? [LOCAL, ...HELPERS] : landed ? [LOCAL, ...LANDED] : [LOCAL], device_not_added: view === "switch" ? NOT_ADDED : null, peers: view === "devices" || view === "other" ? PEERS : landed ? LANDED_PEERS : updating ? UPDATE_PEERS : [], guest_panes: view === "devices" ? GUEST_PANES : [], focused_device_id: switching || landed ? front : "local", workspaces: switching ? HELPER_PROJECTS : [] },
+        navigator: { devices: switching ? [LOCAL, ...HELPERS] : landed ? [LOCAL, ...LANDED] : [LOCAL], device_not_added: view === "switch" ? NOT_ADDED : null, peers: view === "devices" || view === "other" ? PEERS : landed ? LANDED_PEERS : updating ? updatePeers : [], guest_panes: view === "devices" ? GUEST_PANES : [], focused_device_id: switching || landed ? front : "local", workspaces: switching ? HELPER_PROJECTS : [] },
         status: { remote: (switching ? HELPERS : landed ? LANDED : []).map((device) => ({ target_id: device.id, state: "connected", message: null })) },
         ui_state: { interface_language: lang as "en" | "ko" | "ja" | "zh-CN" },
       },
@@ -167,7 +169,7 @@ export function PairingScene({ params }: { params: URLSearchParams }) {
     useUiStore.setState({ switchedDevices: landed ? ["build-box"] : [] });
     document.documentElement.classList.toggle("dark", theme === "dark");
     document.documentElement.classList.toggle("light", theme === "light");
-  }, [theme, lang, view, switching, landed, updating, front]);
+  }, [theme, lang, view, switching, landed, updating, updatePeers, front]);
   return (
     <>
       <InterfaceLanguageBoundary />
@@ -177,7 +179,7 @@ export function PairingScene({ params }: { params: URLSearchParams }) {
           {view === "devices" || view === "other" || switching || landed || updating ? <div className="max-w-[calc(var(--size-settings-sheet-w)-var(--size-settings-nav-w))] px-xl py-lg"><DevicesTab actions={actions} /></div> : null}
           <PairingDialogs actions={actions} />
           <DeviceSwitchDialogs actions={actions} />
-          {updating ? <ToastStack><PeerUpdateNotice /></ToastStack> : null}
+          {updating ? <ToastStack><PeerUpdateNotice actions={actions} /></ToastStack> : null}
         </div>
       </TooltipProvider>
     </>

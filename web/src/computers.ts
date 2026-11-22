@@ -53,8 +53,9 @@ export type ScreenState = "ready" | "not_connected" | "confirming" | "paused" | 
 
 export function screenState(peer: Peer): ScreenState {
   if (peer.opens == null || peer.opens === "unpaired" || peer.opens === "removing") return "no_grant";
-  if (peer.update === "here") return "update_here";
-  if (peer.update === "there") return "update_there";
+  // An ask to update changes who is asked, not which side must update (B22).
+  if (peer.update === "here" || peer.update === "here_asked") return "update_here";
+  if (peer.update === "there" || peer.update === "there_asked") return "update_there";
   if (peer.opens === "paused") return "paused";
   if (peer.opens === "paused_there") return "paused_there";
   if (peer.opens === "confirming") return "confirming";

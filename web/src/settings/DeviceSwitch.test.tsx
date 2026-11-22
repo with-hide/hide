@@ -38,9 +38,12 @@ async function mount(device: Device, over: { front?: string; pairing?: PairingVi
     status: { remote: [] },
     ui_state: {},
   });
+  // `place` is where the window draws the strip: the main screen, or the
+  // remote screen once a machine's own Hide shows (App, RemoteStage).
+  const draw = (place: string) => root.render(<TooltipProvider><DeviceSwitchStrip key={place} actions={actions} /><DeviceSwitchDialogs actions={actions} /></TooltipProvider>);
   await act(async () => {
     useShellStore.setState({ connection: "live", pairing: over.pairing === undefined ? NOTHING_UNDER_WAY : over.pairing, pairingResult: null, rest: rest(device) } as never);
-    root.render(<TooltipProvider><DeviceSwitchStrip actions={actions} /><DeviceSwitchDialogs actions={actions} /></TooltipProvider>);
+    draw("main");
   });
   const q = (selector: string) => document.body.querySelector(selector) as HTMLElement | null;
   const show = async (next: Device) => { await act(async () => { useShellStore.setState({ rest: rest(next) } as never); }); };
@@ -49,7 +52,8 @@ async function mount(device: Device, over: { front?: string; pairing?: PairingVi
     const request = switches(events).at(-1)?.payload.request_id;
     await act(async () => { useShellStore.setState({ pairingResult: { verb: "switch", request_id: request, ...result } } as never); });
   };
-  return { events, q, show, answer, unmount: async () => { await act(async () => root.unmount()); useShellStore.setState(saved, true); } };
+  const moveStrip = async (place: string) => { await act(async () => draw(place)); };
+  return { events, q, show, answer, moveStrip, unmount: async () => { await act(async () => root.unmount()); useShellStore.setState(saved, true); } };
 }
 
 const switches = (events: Parameters<DispatchFn>[0][]) => events.filter((event) => event.kind === "pairing_switch");
@@ -203,6 +207,31 @@ it("takes a device added for its switch off again when the install question is l
     expect(events.filter((event) => event.kind === "remove_device").map((event) => event.payload.device_id)).toEqual(removed);
     await unmount();
   }
+});
+
+it("keeps a landed switch's line while the strip moves from the main screen to the machine's own screen (D-48)", async () => {
+  const machine = helper({ ssh_alias: null, peer_key: "ab".repeat(32), switch: null });
+  const { q, show, moveStrip, unmount } = await mount(helper({ switch: { state: "connecting" } }));
+  await show(machine);
+  // The switch landing brings the machine's own screen, which draws the strip anew.
+  await moveStrip("remote");
+  expect(q('[data-device-switched="mini"]')?.textContent).toBe("Memory and standing instructions start fresh on this machine");
+  await unmount();
+});
+
+it("says a landed switch's line only over that machine's screen, and ends it when another computer's screen opens (D-48)", async () => {
+  const machine = helper({ ssh_alias: null, peer_key: "ab".repeat(32), switch: null });
+  const { q, show, moveStrip, unmount } = await mount(helper({ switch: { state: "connecting" } }));
+  await show(machine);
+  await act(async () => { useUiStore.setState({ remoteScreen: "mini" }); });
+  await moveStrip("remote");
+  expect(q('[data-device-switched="mini"]')).not.toBeNull();
+  // Another paired computer's screen opens from its tile; the core's focus stays on the machine.
+  await act(async () => { useUiStore.setState({ remoteScreen: "other" }); });
+  expect(q("[data-device-switched]")).toBeNull();
+  expect(useUiStore.getState().switchedDevices).toEqual([]);
+  await act(async () => { useUiStore.setState({ remoteScreen: null }); });
+  await unmount();
 });
 
 it("says once how many terminals a landed switch could not take over (B36)", async () => {

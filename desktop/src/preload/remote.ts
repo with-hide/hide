@@ -7,7 +7,7 @@
 // Node or this machine. The page holds no token: the main process opens the socket.
 
 import { contextBridge, ipcRenderer, type IpcRendererEvent } from "electron";
-import { REMOTE_CLIPBOARD_CHANNEL, REMOTE_MENU_CHANNEL, REMOTE_SOCKET_CLOSE_CHANNEL, REMOTE_SOCKET_EVENT_CHANNEL, REMOTE_SOCKET_OPEN_CHANNEL, REMOTE_SOCKET_SEND_CHANNEL, REMOTE_VISIBLE_CHANNEL, REMOTE_WORK_CHANNEL, REMOTE_WORK_DONE_CHANNEL } from "../channel";
+import { REMOTE_CLIPBOARD_CHANNEL, REMOTE_MENU_CHANNEL, REMOTE_SOCKET_CLOSE_CHANNEL, REMOTE_SOCKET_EVENT_CHANNEL, REMOTE_SOCKET_OPEN_CHANNEL, REMOTE_SOCKET_SEND_CHANNEL, REMOTE_VIEWER_CHANNEL, REMOTE_VISIBLE_CHANNEL, REMOTE_WORK_CHANNEL, REMOTE_WORK_DONE_CHANNEL } from "../channel";
 
 type SocketEvent = { op: "open" } | { op: "message"; data: string | ArrayBuffer } | { op: "close"; code: number; reason: string };
 
@@ -49,6 +49,15 @@ contextBridge.exposeInMainWorld("hideRemote", {
     ipcRenderer.removeAllListeners(REMOTE_VISIBLE_CHANNEL);
     ipcRenderer.on(REMOTE_VISIBLE_CHANNEL, (_event: IpcRendererEvent, visible: unknown) => {
       if (typeof visible === "boolean") listener(visible);
+    });
+  },
+  // The main process resolved the language and checked the name the shell gave.
+  onViewer(listener: (viewer: { language: string; name: string | null }) => void): void {
+    ipcRenderer.removeAllListeners(REMOTE_VIEWER_CHANNEL);
+    ipcRenderer.on(REMOTE_VIEWER_CHANNEL, (_event: IpcRendererEvent, viewer: unknown) => {
+      if (typeof viewer !== "object" || viewer === null) return;
+      const { language, name } = viewer as Record<string, unknown>;
+      if (typeof language === "string" && (name === null || typeof name === "string")) listener({ language, name });
     });
   },
   // The main process checked the ask's shape before it handed it here.

@@ -3755,6 +3755,7 @@ fn a_usage_limited_turn_clears_its_line_and_recovers_when_the_provider_wait_ends
             &mut rows,
             |_| None,
             &crate::model::GithubSnapshot::default(),
+            crate::code_host::CodeHosts::STANDARD,
             &Default::default(),
             &mut Default::default(),
             1_000,

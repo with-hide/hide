@@ -234,13 +234,16 @@ fn a_change_that_moves_no_policy_saves_without_a_delivery() {
 fn a_new_base_branch_reaches_the_policy_before_it_is_saved() {
     let mut runtime = held(fixture());
     let record = crate::project_settings::ProjectSettings::new(crate::node::TEST_NODE, ROOT)
-        .patched(crate::project_settings::Patch {
-            guardrails: Some(Rules {
-                base_branch: true,
-                ..Rules::default()
-            }),
-            ..Default::default()
-        })
+        .patched(
+            crate::project_settings::Patch {
+                guardrails: Some(Rules {
+                    base_branch: true,
+                    ..Rules::default()
+                }),
+                ..Default::default()
+            },
+            crate::code_host::CodeHosts::STANDARD,
+        )
         .unwrap();
     runtime
         .snapshot

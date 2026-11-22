@@ -360,9 +360,10 @@ export type RemoteScreensBridge = {
    * pixels, or none. Its socket to that machine lives only while it shows
    * (B63); a screen whose page could not load loads again when shown. `key`
    * is the key the machine is paired under now: a page loaded under another
-   * key is closed and the machine's page loaded anew.
+   * key is closed and the machine's page loaded anew. `name` is what this
+   * window calls the machine, which its page names itself by.
    */
-  show(view: { device: string; key: string; rect: BrowserRect } | null): void;
+  show(view: { device: string; key: string; rect: BrowserRect; name?: string | null } | null): void;
   /**
    * The operator's ask of that machine's screen (PRD device-connect-iroh
    * D-73, D-78): its work to show, or a start to make there. Made as the

@@ -342,6 +342,7 @@ fn a_failed_check_and_a_merge_after_changes_are_handed_on_once() {
     runtime.suggestions_work.client = Some(client);
     let pr = |number: u32| {
         let mut pr = PullRequestSnapshot {
+            reference: None,
             closing_issues: Vec::new(),
             title: format!("Pull request {number}"),
             checks: crate::model::PullRequestChecks::Failed,
@@ -482,6 +483,7 @@ fn a_followed_attempt_follows_its_branchs_pull_request() {
     runtime.github.projects = vec![GithubProjectSnapshot {
         root_path: "/repo".into(),
         pull_requests: vec![PullRequestSnapshot {
+            reference: None,
             closing_issues: Vec::new(),
             title: "Fix the check".into(),
             checks: PullRequestChecks::Passing,
