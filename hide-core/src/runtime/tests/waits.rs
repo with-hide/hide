@@ -723,9 +723,10 @@ fn a_code_host_wait_past_its_deadline_fails_only_after_one_more_read() {
     assert_eq!(outcome(&runtime, 2), Some(WaitOutcome::Expired));
 }
 
-/// N1 of the review (D-05): a read by number says only that the pull
-/// request is open, never how its checks ended, so a CI wait's failure
-/// stands through it with its raise.
+/// N1 of the review and with-hide/hide#2254 (D-05): a read that cannot say
+/// how a CI wait's checks ended (they could not be read, or the host reads
+/// none by number) is unread: a failure stands through it with its raise,
+/// and the wait carries the unread mark instead of reading as open.
 #[test]
 fn a_ci_failure_stands_through_a_read_that_does_not_see_the_checks() {
     let fixture = conducting();
@@ -738,10 +739,14 @@ fn a_ci_failure_stands_through_a_read_that_does_not_see_the_checks() {
         }),
     );
     assert_eq!(node_view(&runtime, "wait").wait_outcome, Some("ci_failed"));
-    read_back(&mut runtime, Found::OpenUnchecked);
+    read_back(
+        &mut runtime,
+        Found::Unread("The change request's checks could not be read".into()),
+    );
     let view = node_view(&runtime, "wait");
     assert_eq!(view.wait_outcome, Some("ci_failed"));
     assert_eq!(reason(&runtime, "wait"), Some(AttentionReason::CiFailed));
+    assert!(runtime.missions.outside.unread("mission-1", "wait"));
 }
 
 /// M2 of the review: a store whose waits all went is still kept, so the

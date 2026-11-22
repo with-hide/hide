@@ -295,10 +295,9 @@ pub(crate) fn judge_listed(target: &WaitTarget, pull: &PullRequestSnapshot) -> O
     }
 }
 
-/// What a change request's standing by number says of a target that names
-/// it and that the project's list does not hold: an open one is still
-/// waited on (for a CI target the list holds every open change request the
-/// read took, and the next read judges it there).
+/// What a change request's standing by number says of a pull request
+/// target the project's list does not hold: an open one is still waited on.
+/// A CI target is read with its checks instead (`ByNumber::as_listed`).
 pub(crate) fn judge_standing(standing: crate::code_host::Standing) -> Option<WaitOutcome> {
     match standing {
         crate::code_host::Standing::Open => None,

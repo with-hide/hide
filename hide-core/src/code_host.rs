@@ -788,6 +788,21 @@ pub(crate) trait ByNumber: Sync {
     fn standing(&self, node: &dyn NodeLink, place: &Place, number: u32)
     -> Result<Standing, String>;
 
+    /// Change request `number` as the project's list holds one, its checks
+    /// judged as the list judges them: a CI wait on one the list no longer
+    /// holds is judged from it (PRD core-wait D-05). A host that cannot read
+    /// one so says why, and the wait reads as unread, never as open.
+    fn as_listed(
+        &self,
+        _node: &dyn NodeLink,
+        _place: &Place,
+        number: u32,
+    ) -> Result<crate::model::PullRequestSnapshot, String> {
+        Err(format!(
+            "The project's code host reads no checks of change request {number} by its number"
+        ))
+    }
+
     fn head(
         &self,
         node: &dyn NodeLink,

@@ -362,6 +362,15 @@ impl ByNumber for Github {
         super::pr_standing(node, &where_of(place), number)
     }
 
+    fn as_listed(
+        &self,
+        node: &dyn NodeLink,
+        place: &Place,
+        number: u32,
+    ) -> Result<crate::model::PullRequestSnapshot, String> {
+        super::pr_as_listed(node, &where_of(place), number)
+    }
+
     fn head(
         &self,
         node: &dyn NodeLink,

@@ -256,10 +256,6 @@ pub(crate) enum Found {
         replaced: bool,
     },
     InMain(Option<String>),
-    /// A change request read by its number is open, and that read says
-    /// nothing of its checks: a CI wait stays as it stands, a failure it
-    /// holds included, until the list judges the checks again.
-    OpenUnchecked,
     /// A change request, or its CI, ended so (met or failed).
     Ended(WaitOutcome),
     Unread(String),
@@ -377,11 +373,7 @@ fn branch_line(found: &Found) -> Option<&'static str> {
         ),
         Found::Ahead(_) => Some("Waiting: the branch has commits main does not have yet."),
         Found::InMain(_) => Some("In main: the branch's own work reached main."),
-        Found::Open
-        | Found::OpenUnchecked
-        | Found::Ended(_)
-        | Found::Unread(_)
-        | Found::BaseUnread(_) => None,
+        Found::Open | Found::Ended(_) | Found::Unread(_) | Found::BaseUnread(_) => None,
     }
 }
 
@@ -444,7 +436,23 @@ fn listed_found(target: &WaitTarget, listed: Option<&GithubProjectSnapshot>) -> 
         .pull_requests
         .iter()
         .find(|pull| pull.number == number)?;
-    Some(crate::waits::judge_listed(target, pull).map_or(Found::Open, Found::Ended))
+    Some(found_of(target, pull))
+}
+
+/// How a change request's entry, listed or read by its number as the list
+/// would hold it, answers `target`: a CI target whose checks could not be
+/// read is unread, so a failure it holds stands and the mark says so, never
+/// open.
+fn found_of(target: &WaitTarget, pull: &crate::model::PullRequestSnapshot) -> Found {
+    match crate::waits::judge_listed(target, pull) {
+        Some(outcome) => Found::Ended(outcome),
+        None if matches!(target, WaitTarget::Ci(_))
+            && pull.ci_end() == crate::model::CiEnd::Unread =>
+        {
+            Found::Unread("The change request's checks could not be read".to_owned())
+        }
+        None => Found::Open,
+    }
 }
 
 /// The asks followed in `device`'s open missions and agent waits in
@@ -540,7 +548,7 @@ fn outcome_of(found: &Found) -> Option<Option<WaitOutcome>> {
         Found::Open | Found::Ahead(_) | Found::NoOwnWork { .. } => Some(None),
         Found::InMain(_) => Some(Some(WaitOutcome::Merged)),
         Found::Ended(outcome) => Some(Some(outcome.clone())),
-        Found::OpenUnchecked | Found::Unread(_) | Found::BaseUnread(_) => None,
+        Found::Unread(_) | Found::BaseUnread(_) => None,
     }
 }
 
@@ -1300,16 +1308,16 @@ fn read_one(
         let by_number = place.host().by_number().ok_or_else(|| {
             "The project's code host reads no change request by its number".to_owned()
         })?;
-        // An open change request's CI is judged on the project's list, which
-        // the next read brings; this read leaves it as it stands.
-        let open = if matches!(watch.target(), Some(WaitTarget::Ci(_))) {
-            Found::OpenUnchecked
-        } else {
-            Found::Open
-        };
-        return by_number
-            .standing(node, place, number)
-            .map(|standing| crate::waits::judge_standing(standing).map_or(open, Found::Ended));
+        // A CI target the list does not hold (older than its newest) is read
+        // with its checks, as the list would hold it.
+        if let Some(target @ WaitTarget::Ci(_)) = watch.target() {
+            return by_number
+                .as_listed(node, place, number)
+                .map(|pull| found_of(target, &pull));
+        }
+        return by_number.standing(node, place, number).map(|standing| {
+            crate::waits::judge_standing(standing).map_or(Found::Open, Found::Ended)
+        });
     }
     let head = head.ok_or("The node names no branch")??;
     let against = against.ok_or("The project's default branch is not known yet")?;
