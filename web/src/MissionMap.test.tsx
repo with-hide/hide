@@ -490,10 +490,10 @@ it("draws each card as its mark and title, Hide's mark when Hide changed it, its
     node("api", { status: "done", pr: 1650, pr_state: "merged", landing: { state: "landed", proof: { by: "merged" } }, hide: { action: "done", at_unix_ms: 1 }, criteria: [line("c1", "own", { state: "pass" })], criteria_met: 1, criteria_skipped: 0 }),
     node("branch", { status: "done", delivery: "direct", branch: "feat/a-very-long-branch-name-for-the-screen-node", landing: { state: "left", action: "join" } }),
     node("on-branch", { status: "working", branch: "feat/engine-own-layout", worker: { agent: "claude", model: "opus", effort: "xhigh", effort_auto: false } }),
-    node("outside", { title: "바깥: isolated 앱 실행기 정리", kind: "external", delivery: null, external: { pr: 1232 }, outside: { base: "main", state: "pending" } }),
-    node("closed-out", { kind: "external", delivery: null, external: { pr: 1605 }, outside: { base: "release/1.2", state: "closed" }, status: "working", attention: { reason: "pr_closed", pr: 1605, to: "conductor", since_unix_ms: 1, on_row: false, item: false, choices: ["leave", "drop"] } }),
-    node("merged-out", { kind: "external", delivery: null, external: { pr: 1702 }, outside: { base: "main", state: "merged" }, status: "done", landing: { state: "landed", proof: { by: "outside" } } }),
-    node("branch-out", { kind: "external", delivery: null, external: { branch: "feat/outside-work" }, outside: { base: "develop" }, status: "working" }),
+    node("outside", { title: "바깥: isolated 앱 실행기 정리", kind: "wait", delivery: null, external: { pr: 1232 }, outside: { base: "main", state: "pending" } }),
+    node("closed-out", { kind: "wait", delivery: null, external: { pr: 1605 }, outside: { base: "release/1.2", state: "closed" }, status: "working", attention: { reason: "pr_closed", pr: 1605, to: "conductor", since_unix_ms: 1, on_row: false, item: false, choices: ["leave", "drop"] } }),
+    node("merged-out", { kind: "wait", delivery: null, external: { pr: 1702 }, outside: { base: "main", state: "merged" }, status: "done", landing: { state: "landed", proof: { by: "outside" } } }),
+    node("branch-out", { kind: "wait", delivery: null, external: { branch: "feat/outside-work" }, outside: { base: "develop" }, status: "working" }),
     node("next", { depends_on: ["core", "outside"] }),
     node("sleeping", { status: "working", agent_id: "agent-2", agent_runtime: "asleep" }),
     // Finished: one whose launch the core kept (its pane long gone), one with no launch kept and only the plan left.
@@ -1228,7 +1228,7 @@ it("lists only what the operator can do in 내 차례: the decision whose node c
   const raised = { pane_id: "p2", escalation: { cause: "child_blocked", letter_id: null, since_unix_ms: 1, human_notice: true }, request: { verb: "blocked", verb_since_unix_ms: 1, line: "Login expired", end: "blocked", request: null, later_by: null, pull_requests: [] } } as unknown as AgentRow;
   const nodes = [
     node("api", { status: "working", pane_id: "p2" }),
-    node("outside", { kind: "external", delivery: null, external: { pr: 1232 }, status: "working", attention: { reason: "pr_closed", pr: 1232, to: "operator", since_unix_ms: 1, on_row: false, item: true, choices: ["leave", "drop"] } }),
+    node("outside", { kind: "wait", delivery: null, external: { pr: 1232 }, status: "working", attention: { reason: "pr_closed", pr: 1232, to: "operator", since_unix_ms: 1, on_row: false, item: true, choices: ["leave", "drop"] } }),
     // What waits on the Conductor stays on its card.
     node("waits", { status: "working", attention: { reason: "worker_ended", pr: null, to: "conductor", since_unix_ms: 1, on_row: false, item: false, choices: ["leave", "drop"] } }),
   ];

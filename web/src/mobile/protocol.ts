@@ -11,7 +11,7 @@ import type { MessageKey } from "../i18n/catalogs";
 import type { PrGroupId, PrReason } from "../agentScope";
 import type { WorkerEscalation } from "../missions";
 import type { Automation, AutomationRecord, AutomationRun, AutomationSchedule, SubagentRow } from "../snapshot";
-import type { AgentSleep, AgentStatusCode, AskSubject, AgentWait, ViewReopen, GithubStatus, HumanTurnLead, LineMode, MissionAnswer, MissionAnswerFailure, MissionBrief, MissionDelivery, MissionNodeBrief, PrCard, PrState, PrFeedback, PrMergeMethod, PullRequest, RowMark, SleepingSession } from "../snapshot";
+import type { AgentSleep, AgentStatusCode, AskSubject, AgentWait, ViewReopen, GithubStatus, HumanTurnLead, LineMode, MissionAnswer, MissionAnswerFailure, MissionBrief, MissionDelivery, MissionNodeBrief, MissionWaitOutcome, MissionWaitTarget, PrCard, PrState, PrFeedback, PrMergeMethod, PullRequest, RowMark, SleepingSession } from "../snapshot";
 
 export type PhoneAgent = {
   device_id: string;
@@ -135,6 +135,12 @@ export type PhoneMissionNode = MissionNodeBrief & {
   external_base?: string;
   /** An outside step's pull request state as GitHub last answered; absent for a branch, until read and from a Mac before it. */
   external_state?: PrState;
+  /** What a waiting step waits on, when it is due, the progress of a mission it waits on, the code host's label of its pull request and how it failed (PRD core-wait B22); absent from a Mac before waits. */
+  wait_target?: MissionWaitTarget;
+  wait_until_unix_ms?: number;
+  wait_progress?: { done: number; total: number };
+  wait_label?: string;
+  wait_outcome?: MissionWaitOutcome;
   stage: number | null;
   worker_agent: string | null;
   /** The worker's row in the phone's list; null when the list does not hold it, so there is nothing to open. */
@@ -146,14 +152,19 @@ export type PhoneMissionNode = MissionNodeBrief & {
  * A step as the frame carries it (PRD node-presets D-11): a general step of the `research` or `verify` preset keeps that preset's
  * name as its kind, so a bundle from before general steps names it as before, and a Hide from before them sends only those names.
  */
-export type PhoneMissionNodeOnWire = Omit<PhoneMissionNode, "kind"> & { kind: PhoneMissionNode["kind"] | "research" | "verify" };
+export type PhoneMissionNodeOnWire = Omit<PhoneMissionNode, "kind"> & { kind: PhoneMissionNode["kind"] | "research" | "verify" | "external" };
 export type PhoneMissionOnWire = Omit<PhoneMission, "nodes"> & { nodes: PhoneMissionNodeOnWire[] };
 
-/** The frame's missions with every step read as this bundle names it: an old kind name is a general step of that preset. */
+/**
+ * The frame's missions with every step read as this bundle names it: an old kind name is a general step of that preset, and a
+ * waiting step, which the frame still names `external` for a bundle from before waits (PRD core-wait D-18), is `wait`.
+ */
 export function missionsOnWire(items: readonly PhoneMissionOnWire[]): PhoneMission[] {
   return items.map((mission) => ({
     ...mission,
-    nodes: mission.nodes.map((node) => (node.kind === "research" || node.kind === "verify" ? { ...node, kind: "general", preset: node.kind } : { ...node, kind: node.kind })),
+    nodes: mission.nodes.map((node) =>
+      node.kind === "research" || node.kind === "verify" ? { ...node, kind: "general", preset: node.kind } : { ...node, kind: node.kind === "external" ? "wait" : node.kind },
+    ),
   }));
 }
 

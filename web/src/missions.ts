@@ -497,7 +497,7 @@ export function nodeLook<N extends Pick<MissionNode, "status" | "kind" | "blocke
   if (node.status === "dropped") return "dropped";
   if (node.status === "done") return "done";
   if (mission.status === "cancelled") return "cancelled";
-  if (node.kind === "external") return "external";
+  if (node.kind === "wait") return "external";
   if (node.blocked || node.status === "planned") return "waiting";
   // A worker Hide put to sleep leaves its node in progress (PRD mission-node-simple D-01, B1): its sleep is the panel's and the mark's hover words.
   return "working";
@@ -695,9 +695,10 @@ export function neighbours(edges: readonly { from: string; to: string }[], key: 
 export function cardLine(mission: Mission, node: MissionNode, planLine: string | null, t: TFunction<"translation">): { text: string; attention: boolean } | null {
   const look = nodeLook(mission, node);
   if (look === "cancelled" || look === "dropped") return null;
-  // An outside node says where its pull request or branch is in every state, finished too (B19).
-  if (node.kind === "external") {
+  // A waiting node says where what it waits on is in every state, finished too (B19); one that failed says how (PRD core-wait D-17).
+  if (node.kind === "wait") {
     if (node.attention?.reason === "pr_closed") return { text: t("mission.outside.closed"), attention: true };
+    if (node.wait_outcome && look !== "done") return { text: t(`mission.wait.failed.${node.wait_outcome}`), attention: true };
     if (look === "done") return { text: t("mission.look.landed"), attention: false };
     return { text: t(node.unread ? "mission.outside.unread" : "mission.outside.waiting"), attention: false };
   }
@@ -1234,7 +1235,7 @@ export function attentionPr(node: MissionNode, attention: MissionAttention, pull
 
 /** Whether the operator can set a done or dropped node to work again (B16): not in a cancelled mission, which does not reopen. */
 export function nodeResumable(mission: Mission, node: MissionNode): boolean {
-  return mission.status !== "cancelled" && (node.status === "done" || node.status === "dropped") && node.kind !== "external";
+  return mission.status !== "cancelled" && (node.status === "done" || node.status === "dropped") && node.kind !== "wait";
 }
 
 /**
@@ -1311,7 +1312,7 @@ export function conductorState(mission: Mission, row: AgentRow | null): Conducto
 
 /** The mission's own pull requests with the node that holds each, in order, a node's several in the order it got them (B18, B20): an outside node's pull request is not the mission's. */
 export function missionPulls(mission: Mission): { node: MissionNode; pr: MissionNodePr }[] {
-  return orderedNodes(mission).flatMap((node) => (node.kind !== "external" && node.status !== "dropped" ? node.prs.map((pr) => ({ node, pr })) : []));
+  return orderedNodes(mission).flatMap((node) => (node.kind !== "wait" && node.status !== "dropped" ? node.prs.map((pr) => ({ node, pr })) : []));
 }
 
 /**
@@ -1336,7 +1337,7 @@ export function missionResultCounts(mission: Mission): MissionResultCounts {
   const total = lines.reduce((sum, node) => sum + node.criteria.length, 0);
   const skipped = lines.reduce((sum, node) => sum + node.criteria_skipped, 0);
   const passed = lines.reduce((sum, node) => sum + node.criteria_met, 0) - skipped;
-  const workers = kept.filter((node) => node.kind !== "external" && node.agent_id != null).length;
+  const workers = kept.filter((node) => node.kind !== "wait" && node.agent_id != null).length;
   const checkers = kept.reduce((sum, node) => sum + missionCheckers(node).filter((checker) => checker.agent_id != null).length, 0);
   const changes = kept.filter((node) => node.kind === "change");
   return {

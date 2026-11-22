@@ -54,7 +54,7 @@ export function workerOf(node: PhoneMissionNode): WorkerEscalation | null {
 export function phoneLineNode(node: PhoneMissionNode, nodes: readonly Pick<PhoneMissionNode, "pr" | "pr_state">[] = []): LineNode {
   const external = node.external_pr != null ? { pr: node.external_pr }
     : node.external_branch != null ? { branch: node.external_branch }
-      : node.kind === "external" && node.pr != null ? { pr: node.pr } : null;
+      : node.kind === "wait" && node.pr != null ? { pr: node.pr } : null;
   const outside = node.external_base != null || node.external_state != null ? { base: node.external_base, state: node.external_state } : null;
   const base = node.base_pr == null ? null : nodes.find((one) => one.pr === node.base_pr);
   return { ...node, external, outside, pr_base: node.pr_base ?? null, pr_more: node.pr_more ?? 0, base_state: base?.pr_state ?? null };

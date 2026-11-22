@@ -114,7 +114,7 @@ function Head({ mission, node, events, end, onClose, actions }: { mission: Missi
   const branch = node.branch ?? (node.external && "branch" in node.external ? node.external.branch : null);
   // A general node's preset by its icon and name, a waiting node by its hourglass, as its card draws them (PRD node-presets D-08, D-13); a change, the usual kind, says nothing.
   const kind = node.kind === "change" ? null : nodeKindWord(node);
-  const KindIcon = node.kind === "external" ? HourglassIcon : presetIcon(node.preset);
+  const KindIcon = node.kind === "wait" ? HourglassIcon : presetIcon(node.preset);
   const parts: ReactNode[] = [
     ...(kind ? [<span key="kind" className="flex shrink-0 items-center gap-xxs font-semibold text-subtle-foreground" data-panel-kind={node.kind} data-panel-preset={node.kind === "general" ? (node.preset ?? "general") : undefined}><KindIcon aria-hidden="true" className="size-(--size-icon-sm) shrink-0" />{t(kind)}</span>] : []),
     ...(worker ? [<span key="run" className="flex min-w-0 items-center gap-xxs">{worker.agent ? <AgentMark kind={worker.agent} profile={worker.run.profile} /> : null}<RunText run={worker.run} /></span>] : []),
@@ -166,7 +166,7 @@ function WorkerWays({ mission, node, actions }: { mission: Mission; node: Missio
   // Derived outside the selector: it builds a new session each call, which a selector must not return.
   const rest = useShellStore((s) => s.rest);
   const session = useMemo(() => (row ? sessionOfAgent(row) : null), [row, rest]);
-  if (node.kind === "external") return null;
+  if (node.kind === "wait") return null;
   const card = node.pr != null ? `${t("mission.prCard")} · #${node.pr}` : null;
   return (
     <>
@@ -411,7 +411,7 @@ function Made({ mission, node, events, actions }: { mission: Mission; node: Miss
   }
   const outside = node.external && "pr" in node.external ? [{ number: node.external.pr, state: node.pr_state, url: node.pr_url }] : [];
   // The current pull request is the head's button; the earlier ones and the base it stacks on stay here. An outside node has no head button.
-  const prs = node.prs.length > 0 ? node.prs.filter((pr) => node.kind === "external" || pr.number !== node.pr) : outside;
+  const prs = node.prs.length > 0 ? node.prs.filter((pr) => node.kind === "wait" || pr.number !== node.pr) : outside;
   if (prs.length > 0 || node.base_pr != null) {
     rows.push([
       t("mission.field.pr"),
@@ -630,7 +630,7 @@ function Links({ mission, node, onSelect }: { mission: Mission; node: MissionNod
 
 /** `다시 진행` on a done or dropped node (B16); the pull request, terminal and record are the head's. */
 function Ways({ mission, node, actions }: { mission: Mission; node: MissionNode; actions: Actions }) {
-  if (node.kind === "external" || !nodeResumable(mission, node)) return null;
+  if (node.kind === "wait" || !nodeResumable(mission, node)) return null;
   return (
     <div className="flex flex-wrap gap-xs" data-panel-part="ways">
       <ResumeNode mission={mission} node={node} actions={actions} />

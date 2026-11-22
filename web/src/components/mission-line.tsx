@@ -16,10 +16,10 @@
 // accessible name says these words; the line itself is for the eye.
 
 import type { ReactNode } from "react";
-import { ChevronRightIcon, FileTextIcon, GitBranchIcon, GitPullRequestDraftIcon, GitPullRequestIcon, HourglassIcon, RocketIcon, SearchIcon, ShieldCheckIcon, UserRoundIcon, type LucideIcon } from "lucide-react";
+import { ChevronRightIcon, FileTextIcon, GitBranchIcon, GitPullRequestDraftIcon, GitPullRequestIcon, HourglassIcon, RocketIcon, SearchIcon, ShieldCheckIcon, UserRoundIcon, WaypointsIcon, type LucideIcon } from "lucide-react";
 import { useInterfaceTranslation } from "../i18n/translator";
 import { cn } from "../lib/utils";
-import { linePrLabel, lineToLabel, lineToWords, resultLineWords, type BranchLine, type LineMark, type ResultLine, type ResultTone } from "../missionLine";
+import { linePrLabel, lineToLabel, lineToWords, resultLineWords, waitLineWords, type BranchLine, type LineMark, type ResultLine, type ResultTone, type WaitLine } from "../missionLine";
 import { PR_LOOK } from "../prMark";
 import type { MissionNodePreset, PrState } from "../snapshot";
 
@@ -172,13 +172,48 @@ export function ResultLineView({ line, whole = false, className }: { line: Resul
   );
 }
 
-/** A waiting node's place for a worker on the desktop's card and the phone's (PRD node-presets D-13, B12): an hourglass and `기다림`, since Hide, not an agent, watches its pull request or branch. */
-export function WaitingMark() {
+/**
+ * A waiting node's place for a worker on the desktop's card and the phone's (PRD node-presets D-13, B12): an hourglass and `기다림`,
+ * since Hide, not an agent, watches what it waits on; then `· 5시간 남음` under a day before its deadline and `· 기한 지남` past it
+ * (PRD core-wait D-15, B8), the latter in the failed tone.
+ */
+export function WaitingMark({ left = null }: { left?: { expired: true } | { hours: number } | null }) {
   const { t } = useInterfaceTranslation();
   return (
     <span className="flex shrink-0 items-center gap-xxs" data-node-waiting="true">
       <HourglassIcon aria-hidden="true" className="size-(--size-icon-sm) shrink-0" />
       {t("mission.kind.external")}
+      {left ? (
+        <span className={cn("whitespace-nowrap", "expired" in left && "text-mission-failed")} data-node-wait-left={"expired" in left ? "expired" : left.hours}>
+          · {"expired" in left ? t("mission.wait.failed.expired") : t("mission.wait.left", { hours: String(left.hours) })}
+        </span>
+      ) : null}
+    </span>
+  );
+}
+
+/**
+ * A waiting node's line for its CI, another mission or a node of one (PRD core-wait D-15-D-17): the pull request's mark and its
+ * number as its code host writes it then `CI 끝나면`; the mission mark and its id then its progress `끝 2/7` or the node's key;
+ * and how it failed, in the failed tone. `end` is the foot's right-end marks, as for the branch line.
+ */
+export function WaitLineView({ line, end, className }: { line: WaitLine; end?: ReactNode; className?: string }) {
+  const { t } = useInterfaceTranslation();
+  const icon = line.kind === "ci" ? (() => {
+    const { icon: Icon, tone } = markLook(line.mark);
+    return <Icon className={cn("size-(--size-icon-sm) shrink-0", tone)} data-line-icon={line.mark} />;
+  })() : <WaypointsIcon className="size-(--size-icon-sm) shrink-0 text-muted-foreground" data-line-icon="mission" />;
+  const lead = line.kind === "ci" ? `↗${line.pr}` : line.mission;
+  const after = line.kind === "ci" ? t("mission.wait.ci") : line.kind === "mission" ? (line.progress ? t("mission.wait.progress", { done: String(line.progress.done), total: String(line.progress.total) }) : null) : line.node;
+  return (
+    <span className={cn("flex min-w-0 items-center gap-x-xs text-caption text-muted-foreground", className)} title={waitLineWords(line, t)} data-node-line="wait" data-wait-kind={line.kind} data-wait-failed={line.failed ?? undefined}>
+      <span aria-hidden="true" className="flex min-w-0 flex-1 items-center gap-xxs">
+        {icon}
+        <span className={cn("shrink-0 tabular-nums", line.kind === "ci" ? "text-foreground" : "text-subtle-foreground")}>{lead}</span>
+        {after ? <span className={cn("min-w-0 truncate", line.kind === "node" && "text-subtle-foreground")}>· {after}</span> : null}
+        {line.failed ? <span className="shrink-0 whitespace-nowrap text-mission-failed" data-wait-failed-word="true">· {t(`mission.wait.failed.${line.failed}`)}</span> : null}
+      </span>
+      {end}
     </span>
   );
 }

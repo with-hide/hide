@@ -14,7 +14,7 @@
 import type { TFunction } from "i18next";
 import type { MessageKey } from "./i18n/catalogs";
 import { PR_LOOK } from "./prMark";
-import type { MissionDelivery, MissionExternal, MissionMergeStep, MissionNode, MissionNodeBrief, MissionNodePreset, MissionOutside, MissionVerdict, PrState } from "./snapshot";
+import type { MissionDelivery, MissionExternal, MissionMergeStep, MissionNode, MissionNodeBrief, MissionNodePreset, MissionOutside, MissionVerdict, MissionWaitOutcome, MissionWaitTarget, PrState } from "./snapshot";
 
 /** What the bottom line reads of a node: the shared rules' fields, its pull requests' base and count, an outside node's facts and, on the desktop, its branch (the phone's frame carries none, D-52). */
 export type LineNode = Pick<MissionNodeBrief, "kind" | "preset" | "status" | "pr" | "pr_state" | "landing" | "merge"> & {
@@ -35,12 +35,18 @@ export type LineNode = Pick<MissionNodeBrief, "kind" | "preset" | "status" | "pr
   line?: string | null;
   verdict?: MissionVerdict | null;
   checks?: { passed: number; total: number } | null;
+  /** A waiting node's target, its deadline, the progress of a mission it waits on, the code host's label of its pull request and how it failed (PRD core-wait D-15-D-17); absent from a core before waits. */
+  wait_target?: MissionWaitTarget | null;
+  wait_until_unix_ms?: number | null;
+  wait_progress?: { done: number; total: number } | null;
+  wait_label?: string | null;
+  wait_outcome?: MissionWaitOutcome | null;
 };
 
 const KIND_WORD: Record<MissionNode["kind"], MessageKey> = {
   change: "mission.kind.change",
   general: "mission.kind.general",
-  external: "mission.kind.external",
+  wait: "mission.kind.external",
 };
 
 /** A general node's name by its preset (PRD node-presets D-02); the core's preset table names the same words, which `missionKindWords.test.ts` checks. */
@@ -63,12 +69,12 @@ export function nodeKindWord(node: Pick<MissionNode, "kind" | "preset">): Messag
 export function lineNode(node: MissionNode, nodes: readonly Pick<MissionNode, "prs">[] = []): LineNode {
   const current = node.prs.at(-1);
   const base = node.base_pr == null ? null : nodes.flatMap((one) => one.prs).find((pr) => pr.number === node.base_pr);
-  return { ...node, pr_base: current?.base ?? null, pr_more: Math.max(node.prs.length - 1, 0), base_state: base?.state ?? null };
+  return { ...node, pr_base: current?.base ?? null, pr_more: Math.max(node.prs.length - 1, 0), base_state: base?.state ?? null, wait_label: node.wait_reference?.label ?? null };
 }
 
 /** Whether a node's result goes into a branch, so it ends in a branch line (D-51): a change or an outside node. */
 export function changesCode(node: Pick<MissionNodeBrief, "kind">): boolean {
-  return node.kind === "change" || node.kind === "external";
+  return node.kind === "change" || node.kind === "wait";
 }
 
 /**
@@ -104,8 +110,8 @@ export type BranchLine = {
  * null when it could not be read.
  */
 export function branchLine(node: LineNode, destination: string | null): BranchLine | null {
-  if (!changesCode(node)) return null;
-  return node.kind === "external" ? outsideLine(node, destination) : ownLine(node, destination);
+  if (!changesCode(node) || waitLine(node)) return null;
+  return node.kind === "wait" ? outsideLine(node, destination) : ownLine(node, destination);
 }
 
 function ownLine(node: LineNode, destination: string | null): BranchLine {
@@ -131,6 +137,50 @@ function outsideLine(node: LineNode, destination: string | null): BranchLine {
     return { mark: done ? "merged" : (node.outside?.state ?? "pull"), pr: { number: external.pr, outside: true, more: 0 }, branch: null, plan: null, direct: false, to, person: null };
   }
   return { mark: done ? "merged" : "branch", pr: null, branch: external ? { name: external.branch, outside: true } : null, plan: null, direct: false, to, person: null };
+}
+
+/**
+ * A waiting node's line for a target that is not a pull request's merge or a
+ * branch (PRD core-wait D-15-D-17): `↗#12 · CI 끝나면`, `mission-91 · 끝 2/7`
+ * or `mission-91 · gitlab-write`, then how it failed; null for any other node,
+ * whose branch line speaks. The pull request is named as its code host writes
+ * it (`#12`, `!12`).
+ */
+export type WaitLine = { failed: Exclude<MissionWaitOutcome, "expired"> | null } & (
+  | { kind: "ci"; pr: string; mark: LineMark }
+  | { kind: "mission"; mission: string; progress: { done: number; total: number } | null }
+  | { kind: "node"; mission: string; node: string }
+);
+
+export function waitLine(node: LineNode): WaitLine | null {
+  const target = node.kind === "wait" ? node.wait_target : null;
+  if (!target) return null;
+  const failed = node.wait_outcome && node.wait_outcome !== "expired" ? node.wait_outcome : null;
+  if ("ci" in target) {
+    const mark: LineMark = node.status === "done" ? "merged" : (node.outside?.state ?? "pull");
+    return { kind: "ci", pr: node.wait_label ?? `#${target.ci}`, mark, failed };
+  }
+  if ("mission" in target) return { kind: "mission", mission: target.mission, progress: node.wait_progress ?? null, failed };
+  if ("node" in target) return { kind: "node", mission: target.node.mission, node: target.node.node, failed };
+  return null;
+}
+
+/** The wait line in words, for the card's name and its hover. */
+export function waitLineWords(line: WaitLine, t: TFunction<"translation">): string {
+  const head = line.kind === "ci" ? [`↗${line.pr}`, t("mission.wait.ci")] : line.kind === "mission" ? [line.mission, line.progress ? t("mission.wait.progress", { done: String(line.progress.done), total: String(line.progress.total) }) : null] : [line.mission, line.node];
+  return [...head, line.failed ? t(`mission.wait.failed.${line.failed}`) : null].filter(Boolean).join(" · ");
+}
+
+/** The day a waiting node's deadline shows from (D-15): under it the head says the hours left. */
+const WAIT_LEFT_FROM_MS = 24 * 60 * 60 * 1000;
+
+/** What a waiting node's head says after `기다림` (D-15, B8): `기한 지남` once its deadline passed, the hours left under a day, else nothing. */
+export function waitLeft(node: Pick<LineNode, "kind" | "status" | "wait_until_unix_ms" | "wait_outcome">, now: number): { expired: true } | { hours: number } | null {
+  if (node.kind !== "wait" || node.status === "done" || node.status === "dropped") return null;
+  if (node.wait_outcome === "expired") return { expired: true };
+  const until = node.wait_until_unix_ms;
+  if (until == null || until <= now || until - now >= WAIT_LEFT_FROM_MS) return null;
+  return { hours: Math.max(1, Math.ceil((until - now) / (60 * 60 * 1000))) };
 }
 
 /** A branch the result lands in, bold when it is not the destination; bold needs a destination to differ from, so with none read it is drawn plainly. */

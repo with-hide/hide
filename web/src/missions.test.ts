@@ -59,7 +59,7 @@ describe("the wire values", () => {
     for (const by of contract.mission_landing_proof as string[]) {
       const proof = proofs[by];
       expect(proof).toBeDefined();
-      const n = node("n", { status: "done", kind: by === "outside" ? "external" : "change", commit: "recorded1", landing: { state: "landed", proof: proof! } });
+      const n = node("n", { status: "done", kind: by === "outside" ? "wait" : "change", commit: "recorded1", landing: { state: "landed", proof: proof! } });
       expect([nodeLanded(n), landingLeft(n), mainCommit(n)]).toEqual([true, null, by === "in_main" ? "abc1234def" : "recorded1"]);
     }
   });
@@ -220,7 +220,7 @@ describe("a node's state colour (PRD mission-node-simple D-01, D-02, B5)", () =>
   });
 
   it("draws the mission page's head cells as its cards: finished work one green whether or not it reached main, an outside node waiting (PRD mission-map-git-criteria B26)", () => {
-    const m = mission("m", { nodes: [node("spec", { status: "done", kind: "general", preset: "research", delivery: null }), node("api", { status: "done", pr: 3, pr_state: "merged" }), node("ui", { status: "done", pr: 4, pr_state: "mergeable", depends_on: ["api"] }), node("out", { kind: "external", delivery: null, external: { pr: 9 } }), node("old", { status: "dropped" })] });
+    const m = mission("m", { nodes: [node("spec", { status: "done", kind: "general", preset: "research", delivery: null }), node("api", { status: "done", pr: 3, pr_state: "merged" }), node("ui", { status: "done", pr: 4, pr_state: "mergeable", depends_on: ["api"] }), node("out", { kind: "wait", delivery: null, external: { pr: 9 } }), node("old", { status: "dropped" })] });
     expect(missionHeadCells(m)).toEqual(["done", "done", "external", "done"]);
     // A node someone has to look at is the decision colour's cell whatever its shape (PRD mission-node-simple B5).
     expect(missionHeadCells(mission("m", { nodes: [node("a", { status: "done", attention: raised("conductor", "close_refused") }), node("b", { status: "working" })] }))).toEqual(["attention", "working"]);
@@ -318,7 +318,7 @@ describe("a card's look (PRD mission-node-simple D-01, B1)", () => {
     expect(nodeLook(m, node("n", { status: "done", delivery: "direct", commit: "c216793eb4a1" }))).toBe("done");
     expect(nodeLook(m, node("n", { status: "done", kind: "general", preset: "research", delivery: null }))).toBe("done");
     expect(nodeLook(m, node("n", { status: "done", pr: 3, pr_state: "mergeable" }))).toBe("done");
-    const outside = (status: MissionNode["status"]) => node("x", { kind: "external", delivery: null, external: { pr: 1232 }, status });
+    const outside = (status: MissionNode["status"]) => node("x", { kind: "wait", delivery: null, external: { pr: 1232 }, status });
     expect([nodeLook(m, outside("planned")), nodeLook(m, outside("done")), nodeLook(m, { ...outside("working"), attention: raised("conductor", "pr_closed", 1232) })]).toEqual(["external", "done", "external"]);
     expect(nodeLook(mission("m", { status: "cancelled" }), node("n", { status: "working" }))).toBe("cancelled");
   });
@@ -376,7 +376,7 @@ describe("a node's finish lines (PRD mission-map-git-criteria B6, B12, B23, B28,
     const n = node("n", { criteria: lines, criteria_met: 2, criteria_skipped: 1 });
     expect(criteriaTally(mission("m"), n)).toEqual({ passed: 1, total: 4, skipped: 1 });
     expect(criteriaTally(mission("m", { exempt: true }), n)).toBeNull();
-    expect(criteriaTally(mission("m"), node("x", { kind: "external", delivery: null, external: { branch: "tools/runner" } }))).toBeNull();
+    expect(criteriaTally(mission("m"), node("x", { kind: "wait", delivery: null, external: { branch: "tools/runner" } }))).toBeNull();
   });
 
   it("words each line as one list: the node's own words, the check command, the CI, and a review or verification by its checkers' names", () => {
@@ -451,7 +451,7 @@ describe("a card's line (PRD mission-map-git-criteria B20, B28)", () => {
     // mission-82: one waiting on a finish line names it after its node, and once free to start it says where it stacks.
     expect(cardLine(m, { ...m.nodes[1]!, depends_on: ["core:c1"], waiting_on: { kind: "nodes", keys: ["core:c1"] } }, null, t)?.text).toBe("waiting for #1703 c1");
     expect(cardLine(m, { ...m.nodes[1]!, depends_on: ["core:c1"], waiting_on: { kind: "start" }, stack: { on: "core", branch: "m82/core", pr: 1703 } }, null, t)?.text).toBe("can start · stacked on core");
-    const outside = node("x", { kind: "external", delivery: null, external: { pr: 1232 }, status: "planned" });
+    const outside = node("x", { kind: "wait", delivery: null, external: { pr: 1232 }, status: "planned" });
     expect(cardLine(m, outside, null, t)?.text).toBe("waiting for main");
     expect(cardLine(m, { ...outside, unread: true }, null, t)?.text).toBe("Could not check");
     expect(cardLine(m, { ...outside, status: "working", attention: raised("conductor", "pr_closed", 1232) }, null, t)).toEqual({ text: "Closed without merge", attention: true });
@@ -467,7 +467,7 @@ describe("the operator's turn (PRD mission-map-git-criteria B18, B20, B25; PRD m
     const nodes = [
       node("api", { status: "working", pane_id: "p2" }),
       node("ui", { status: "working", pane_id: "p3" }),
-      node("outside", { kind: "external", delivery: null, external: { pr: 1232 }, status: "working", attention: raised("operator", "pr_closed", 1232) }),
+      node("outside", { kind: "wait", delivery: null, external: { pr: 1232 }, status: "working", attention: raised("operator", "pr_closed", 1232) }),
       node("conductor", { status: "working", attention: raised("conductor") }),
     ];
     const rows: Record<string, Partial<AgentRow>> = {
@@ -527,7 +527,7 @@ describe("the operator's turn (PRD mission-map-git-criteria B18, B20, B25; PRD m
   it("gives at most one turn item for one cause on five nodes, whatever the raise's reason, with or without a Conductor (hide-private docs/missions.md, the principle of 2026-11-11)", () => {
     const gone = { pane_id: "p1", name: "c", agent_kind: "claude", session: null, present: false, takes_answers: false };
     // The reasons only the operator settles stay theirs per node: a gate reached with no Conductor, and a Conductor's failure from before.
-    const operatorFirst: Record<MissionAttentionReason, boolean> = { merged_unproven: false, worker_ended: false, pr_closed: false, unplanned_pr: false, conductor_failed: true, wake_refused: false, close_refused: false, human_gate: true, not_started: false, warning_stood: false, wait_stood: false };
+    const operatorFirst: Record<MissionAttentionReason, boolean> = { merged_unproven: false, worker_ended: false, pr_closed: false, unplanned_pr: false, conductor_failed: true, wake_refused: false, close_refused: false, human_gate: true, not_started: false, warning_stood: false, wait_stood: false, ci_failed: false, mission_cancelled: false, node_dropped: false, wait_expired: false };
     const wrong: string[] = [];
     for (const reason of MISSION_ATTENTION_REASONS) {
       const keys = ["a", "b", "c", "d", "e"];
@@ -565,7 +565,7 @@ describe("a finished mission's results and the map's summary (PRD mission-tool B
         node("c", { status: "done", agent_id: "w3", delivery: "direct", branch: "c", landing: { state: "landed", proof: { by: "in_main", commit: "abc1234" } } }),
         node("check", { kind: "general", preset: "verify", delivery: null, status: "done", agent_id: "w4" }),
         // An outside pull request and a dropped node are not the mission's results.
-        node("out", { kind: "external", delivery: null, external: { pr: 9 }, pr: 9, pr_state: "merged", status: "done", landing: { state: "landed", proof: { by: "outside" } } }),
+        node("out", { kind: "wait", delivery: null, external: { pr: 9 }, pr: 9, pr_state: "merged", status: "done", landing: { state: "landed", proof: { by: "outside" } } }),
         node("gone", { status: "dropped", agent_id: "w5", pr: 3, pr_state: "closed" }),
       ],
     });
@@ -688,7 +688,7 @@ describe("a node that waits on someone, and what Hide did (PRD mission-node-simp
     expect(attentionPr(at, ended, null)).toEqual({ number: 7, state: "pending" });
     // A raise about another pull request names it, with no state the node's would lend it.
     expect(attentionPr(at, raised("operator", "unplanned_pr", 12), null)).toEqual({ number: 12, state: null });
-    expect(attentionPr(node("o", { kind: "external", external: { pr: 1232 } }), ended, null)?.number).toBe(1232);
+    expect(attentionPr(node("o", { kind: "wait", external: { pr: 1232 } }), ended, null)?.number).toBe(1232);
   });
 
   it("says what Hide did last and why", () => {
@@ -909,7 +909,7 @@ describe("how a node in progress moves (operator decision 2026-11-13)", () => {
     expect(pace({ work: { state: "no_worker", since_unix_ms: 1 } })).toBe("stopped");
     expect(nodePace(m, node("a", { status: "planned" }))).toBeNull();
     expect(nodePace(m, node("a", { status: "done" }))).toBeNull();
-    expect(nodePace(m, node("a", { status: "working", kind: "external" }))).toBeNull();
+    expect(nodePace(m, node("a", { status: "working", kind: "wait" }))).toBeNull();
     expect(nodePace(mission("m", { status: "cancelled" }), node("a", { status: "working", work: { state: "no_worker" } }))).toBeNull();
   });
 

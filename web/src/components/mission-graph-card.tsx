@@ -60,7 +60,7 @@ export function MissionGraphCard({ node, look, word, yours, selected = false, di
       data-node-blocked={node.blocked ?? undefined} data-node-dimmed={dimmed || undefined}
       className={cn(
         "relative flex h-auto w-(--size-mission-node) min-w-0 min-h-(--size-touch-target) flex-col items-stretch gap-xs rounded-md border bg-card px-sm py-xs text-left font-normal text-foreground hover:text-foreground whitespace-normal outline-none transition-opacity hover:bg-accent focus-visible:ring-1 focus-visible:ring-ring",
-        yours ? ATTENTION_CARD : look === "working" && pace ? PACE_CARD[pace] : LOOK_CARD[look], node.kind === "external" && "border-dotted",
+        yours ? ATTENTION_CARD : look === "working" && pace ? PACE_CARD[pace] : LOOK_CARD[look], node.kind === "wait" && "border-dotted",
         tab && "rounded-tr-none", selected && "outline-2 outline-offset-2 outline-primary", dimmed && "opacity-(--opacity-dimmed)",
       )}
       {...props}

@@ -3,7 +3,7 @@
 // line of one that does not, as the desktop and the phone both read them.
 import { expect, it } from "vitest";
 import { initializeInterfaceI18n } from "./i18n/instance";
-import { branchLine, branchLineWords, lineNode, resultLine, resultLineWords, type LineNode } from "./missionLine";
+import { branchLine, branchLineWords, lineNode, resultLine, resultLineWords, waitLeft, waitLine, waitLineWords, type LineNode } from "./missionLine";
 import type { MissionNode } from "./snapshot";
 
 function node(extra: Partial<LineNode> = {}): LineNode {
@@ -52,7 +52,7 @@ it("puts the operator's merge before the destination as where it stands, and not
 });
 
 it("draws an outside node as `↗#n` lit by GitHub's answer or `↗ <branch>`, to the base it goes to, merged once it is done (D-52, B55)", () => {
-  const outside = { kind: "external" as const, delivery: null, branch: null };
+  const outside = { kind: "wait" as const, delivery: null, branch: null };
   expect(branchLine(node({ ...outside, external: { pr: 1232 }, outside: { base: "main", state: "pending" } }), "main")).toEqual({ mark: "pending", pr: { number: 1232, outside: true, more: 0 }, branch: null, plan: null, direct: false, to: { kind: "branch", name: "main", elsewhere: false }, person: null });
   expect(branchLine(node({ ...outside, status: "done", external: { pr: 1232 }, outside: { base: "release/1.2" } }), "main")).toMatchObject({ mark: "merged", to: { kind: "branch", name: "release/1.2", elsewhere: true } });
   expect(branchLine(node({ ...outside, external: { branch: "vendor/sdk" }, outside: { base: "develop" } }), "main")).toMatchObject({ mark: "branch", branch: { name: "vendor/sdk", outside: true }, to: { kind: "branch", name: "develop", elsewhere: true } });
@@ -61,7 +61,7 @@ it("draws an outside node as `↗#n` lit by GitHub's answer or `↗ <branch>`, t
 it("names no branch or destination it was not sent: no branch, no `→` without a destination, no bold without one to differ from (B59, B60)", () => {
   // A mission from before destinations, an outside node from before its base, and the phone's frame, which carries no branch.
   expect(branchLine(node({ branch: null, pr: 31, pr_state: "pending" }), null)).toMatchObject({ pr: { number: 31 }, branch: null, to: null });
-  expect(branchLine(node({ kind: "external", delivery: null, external: { pr: 9 } }), "main")?.to).toBeNull();
+  expect(branchLine(node({ kind: "wait", delivery: null, external: { pr: 9 } }), "main")?.to).toBeNull();
   expect(branchLine(node({ pr: 31, pr_state: "pending", pr_base: "release/1.2" }), null)?.to).toEqual({ kind: "branch", name: "release/1.2", elsewhere: false });
   const phone: LineNode = { ...node({ pr: 31, pr_state: "pending" }) };
   delete phone.branch;
@@ -74,7 +74,7 @@ it("says the line in words, its pull request's state and the operator's merge in
   expect(branchLineWords(branchLine(node({ pr: 3106, pr_state: "pending", base_pr: 3105 }), "main")!, words)).toBe("#3106 feat/refund-db → PR 3105 · CI 실행 중이거나 리뷰 대기");
   expect(branchLineWords(branchLine(node({ status: "planned", delivery: "direct", branch: null }), "main")!, words)).toBe("PR 없이 → main");
   expect(branchLineWords(branchLine(node({ delivery: "direct" }), "main")!, words)).toBe("feat/refund-db → main · PR 없이");
-  expect(branchLineWords(branchLine(node({ kind: "external", delivery: null, branch: null, external: { branch: "vendor/sdk" } }), null)!, words)).toBe("↗ vendor/sdk");
+  expect(branchLineWords(branchLine(node({ kind: "wait", delivery: null, branch: null, external: { branch: "vendor/sdk" } }), null)!, words)).toBe("↗ vendor/sdk");
 });
 
 it("gives every general node its preset's line: the name until done, then the result line or a verdict of any preset, the icon by where it stands (PRD node-presets D-08, B1, B2, B5)", () => {
@@ -99,4 +99,33 @@ it("gives every general node its preset's line: the name until done, then the re
     resultLineWords(resultLine({ ...verify, status: "done", verdict: "pass", checks: { passed: 7, total: 7 } })!, words),
     ...[research, verify, deploy, none].map((one) => resultLineWords(resultLine({ ...one, status: "planned" })!, words)),
   ]).toEqual(["통과 7/7", "리서치", "검증", "배포·출시", "일반"]);
+});
+
+// PRD core-wait D-15-D-17, B5-B8: a waiting node on CI, another mission or a node of one says what it waits on in the branch
+// line's place, how it failed, and under a day before its deadline the hours left.
+it("says what a waiting node waits on, the progress of a mission and how the wait failed", () => {
+  const waiting = (extra: Partial<LineNode>) => node({ kind: "wait", delivery: null, branch: null, ...extra });
+  const ci = waitLine(waiting({ wait_target: { ci: 1232 }, wait_label: "!1232" }));
+  expect(ci).toEqual({ kind: "ci", pr: "!1232", mark: "pull", failed: null });
+  expect(branchLine(waiting({ wait_target: { ci: 1232 } }), "main")).toBeNull();
+  expect(waitLineWords(ci!, t())).toBe("↗!1232 · CI 끝나면");
+  expect(waitLineWords(waitLine(waiting({ wait_target: { mission: "mission-91" }, wait_progress: { done: 2, total: 7 } }))!, t())).toBe("mission-91 · 끝 2/7");
+  expect(waitLineWords(waitLine(waiting({ wait_target: { node: { mission: "mission-91", node: "gitlab-write" } }, wait_outcome: "node_dropped" }))!, t())).toBe("mission-91 · gitlab-write · 노드 빠짐");
+  // A pull request's merge and a branch keep their branch line; a node of another kind has no wait line.
+  expect(waitLine(waiting({ wait_target: { pr: 1232 }, external: { pr: 1232 } }))).toBeNull();
+  expect(waitLine(node({ wait_target: { ci: 1 } }))).toBeNull();
+  // An expired wait says so in the head, not on the line.
+  expect(waitLine(waiting({ wait_target: { ci: 1232 }, wait_outcome: "expired" }))?.failed).toBeNull();
+});
+
+it("shows a waiting node's time left only under a day, and past its deadline says so", () => {
+  const hour = 3_600_000;
+  const now = 1_000 * hour;
+  const waiting = (until: number, extra: Partial<LineNode> = {}) => node({ kind: "wait", wait_until_unix_ms: until, ...extra });
+  expect(waitLeft(waiting(now + 25 * hour), now)).toBeNull();
+  expect(waitLeft(waiting(now + 5 * hour - 60_000), now)).toEqual({ hours: 5 });
+  expect(waitLeft(waiting(now + 60_000), now)).toEqual({ hours: 1 });
+  expect(waitLeft(waiting(now - hour, { wait_outcome: "expired" }), now)).toEqual({ expired: true });
+  expect(waitLeft(waiting(now + hour, { status: "done" }), now)).toBeNull();
+  expect(waitLeft(node({ wait_until_unix_ms: now + hour }), now)).toBeNull();
 });

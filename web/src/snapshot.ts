@@ -380,7 +380,12 @@ export type AgentSleep = {
   progress?: string | null;
   /** Why Hide put it to sleep, when its hover says so; absent otherwise. */
   cause?: SleepCause | null;
+  /** The open wait it sleeps on, the line under its row (PRD core-wait D-15, B18); absent for one asleep with no wait. */
+  wait?: SleepWait | null;
 };
+
+/** What a sleeping agent waits on (`WaitLine`): its target, its deadline and, for a pull request or its CI, how its code host writes it. */
+export type SleepWait = { target: MissionWaitTarget; until_unix_ms: number; reference?: MissionWaitReference | null };
 
 /** Why Hide put an agent to sleep (`contracts/snapshot-wire-enums.json`: `sleep_cause`): its machine was short of memory. */
 export type SleepCause = "memory_pressure";
@@ -1437,8 +1442,8 @@ export type MissionStatus = "planning" | "running" | "merge_wait" | "done" | "ca
 export type MissionScope = "pr" | "merge";
 /** How strongly the Conductor has a mission's nodes checked (`mission_strength`); guidance for the Conductor, never a gate. */
 export type MissionStrength = "fast" | "normal" | "thorough";
-/** A node's kind (`mission_node_kind`), each done by its own rule (D-15): a code node (`change`), a general node whose `preset` says its work (PRD node-presets D-01), or `external`, which watches a pull request or branch outside the mission (PRD mission-map-git-criteria D-20). */
-export type MissionNodeKind = "change" | "general" | "external";
+/** A node's kind (`mission_node_kind`), each done by its own rule (D-15): a code node (`change`), a general node whose `preset` says its work (PRD node-presets D-01), or `wait`, which waits on a pull request, its CI, a branch, another mission or its node (PRD core-wait D-02, D-18). */
+export type MissionNodeKind = "change" | "general" | "wait";
 /** A general node's preset (`mission_node_preset`, PRD node-presets D-02); a general node may have none. */
 export type MissionNodePreset = "research" | "verify" | "deploy";
 /** How a change node's work lands (`mission_delivery`). */
@@ -1451,10 +1456,10 @@ export type MissionNodeStatus = "planned" | "working" | "done" | "dropped";
 export type MissionBlocked = "upstream_dropped";
 
 /** Why a node waits on someone to look (`mission_attention_reason`, PRD mission-node-simple D-04). */
-export const MISSION_ATTENTION_REASONS = ["merged_unproven", "worker_ended", "pr_closed", "unplanned_pr", "conductor_failed", "wake_refused", "close_refused", "human_gate", "not_started", "warning_stood", "wait_stood"] as const;
+export const MISSION_ATTENTION_REASONS = ["merged_unproven", "worker_ended", "pr_closed", "unplanned_pr", "conductor_failed", "wake_refused", "close_refused", "human_gate", "not_started", "warning_stood", "wait_stood", "ci_failed", "mission_cancelled", "node_dropped", "wait_expired"] as const;
 export type MissionAttentionReason = typeof MISSION_ATTENTION_REASONS[number];
 /** A standing cell that is not a raise, as the safety net's row names it (`mission_health::CellReason`, PRD letters-missions-simplify D-23). */
-export const MISSION_HELD_CELL_REASONS = ["ci_failed", "ci_cancelled", "changes_requested", "outside_failed", "warning_review_fails", "warning_stopped"] as const;
+export const MISSION_HELD_CELL_REASONS = ["ci_failed", "ci_cancelled", "changes_requested", "warning_review_fails", "warning_stopped"] as const;
 export type MissionHeldCellReason = typeof MISSION_HELD_CELL_REASONS[number];
 /** Who a raised node waits on (`mission_attention_to`, D-05). */
 export type MissionAttentionTo = "conductor" | "operator";
@@ -1560,8 +1565,15 @@ export type MissionGate = {
   said: string | null;
 };
 
-/** What an external node watches (`External`). */
+/** A waiting node's pull request or branch (`external`), the shape the branch line reads. */
 export type MissionExternal = { pr: number } | { branch: string };
+
+/** What a waiting node waits on (`WaitTarget`, PRD core-wait D-02). */
+export type MissionWaitTarget = { pr: number } | { ci: number } | { branch: string } | { mission: string } | { node: { mission: string; node: string } };
+/** How a waiting node's wait failed (`wait_outcome`, D-17); met and open carry none. */
+export type MissionWaitOutcome = "closed_unmerged" | "ci_failed" | "mission_cancelled" | "node_dropped" | "expired";
+/** The change request a pull request or CI target names, as its code host writes it (`#12`, `!12`) and its page. */
+export type MissionWaitReference = { label: string; url: string };
 
 /** Where an outside node's work goes (`OutsideView`, PRD mission-destination D-14): its pull request's base and state as GitHub last answered, or the default branch its branch is judged against; each absent until read. */
 export type MissionOutside = { base?: string; state?: PrState };
@@ -1706,6 +1718,14 @@ export type MissionNode = {
   criteria_met: number;
   criteria_skipped: number;
   external: MissionExternal | null;
+  /** What a waiting node waits on, when it is due and how it failed (PRD core-wait D-15-D-17); absent on every other node and from a core before waits. */
+  wait_target?: MissionWaitTarget;
+  wait_until_unix_ms?: number;
+  /** The progress of the mission it waits on, `끝 2/7` (D-16). */
+  wait_progress?: { done: number; total: number };
+  /** How the code host writes the change request a pull request or CI target names. */
+  wait_reference?: MissionWaitReference;
+  wait_outcome?: MissionWaitOutcome;
   /** Where an outside node's work goes, for its branch line; absent for any other node and from a core before it. */
   outside?: MissionOutside;
   /** An outside node Hide could not read: it stays waiting, the reason is in the diagnostic log (`확인 못 함`, B20). */
@@ -3813,6 +3833,8 @@ export type SleepingSession = {
   checking: boolean;
   /** Why Hide put it to sleep, when its hover says so; absent otherwise. */
   cause?: SleepCause | null;
+  /** The open wait it sleeps on (PRD core-wait B18); absent for one asleep with no wait. */
+  wait?: SleepWait | null;
 };
 
 /** One archived root and the descendants archived with it (`ArchivedSessionSnapshot`, PRD session-archive). */

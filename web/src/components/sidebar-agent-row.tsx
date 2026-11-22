@@ -5,6 +5,7 @@ import { AgentRowMark } from "../AgentRowMark";
 import { agentClosing, treeCloseProgress } from "../close";
 import { useInterfaceTranslation } from "../i18n/client";
 import { useShellStore } from "../store";
+import { sleepWaitWords } from "../sleepWait";
 import { branchChip, forkLabel, lineParts, lineTone, markTone, markWords, rowAccessibleName, rowDimmed, rowSentence, sidebarLine, projectTreeLine } from "../agentRow";
 import { agentWithProfile, recordWords } from "../agentRow";
 import { AgentRecordTitle } from "./agent-record-title";
@@ -21,7 +22,7 @@ import { AgentPrHover, PrHoverCard } from "./pr-mark";
 import { pullsStaleness, rowPulls } from "../prMark";
 import type { SessionPull } from "../snapshot";
 import { AgentTreePopover } from "./agent-tree-popover";
-import { Elapsed } from "./elapsed";
+import { Elapsed, useMinuteClock } from "./elapsed";
 import { MissionChip } from "./mission-chip";
 import { EntryContextMenu, type MenuEntry } from "./entry-menu";
 import { DeviceChip } from "./device-chip";
@@ -201,6 +202,9 @@ export const SidebarAgentRow = memo(function SidebarAgentRow({
     </span>
   );
   const staleness = ask ? undefined : pullsStaleness(pulls);
+  // An agent asleep on its own wait says what it waits on under its title, the hours left under a day (PRD core-wait B18); awake, the line goes.
+  const minute = useMinuteClock();
+  const waiting = agent.status_code === "sleeping" && agent.sleep?.wait ? sleepWaitWords(agent.sleep.wait, minute, t) : null;
   // The row's line under its title.
   const detail = offline ? (
     <span aria-hidden="true" data-agent-line="disconnected" className="pointer-events-none truncate text-caption leading-(--size-sidebar-line-detail) text-subtle-foreground">
@@ -216,6 +220,10 @@ export const SidebarAgentRow = memo(function SidebarAgentRow({
     </span>
   ) : line ? (
     <RowLineText aria-hidden="true" data-agent-line={line.mode} parts={lineParts(t, agent, line)} className={cn("pointer-events-none text-caption leading-(--size-sidebar-line-detail)", lineTone(line, agent))} />
+  ) : waiting ? (
+    <span aria-hidden="true" data-agent-line="wait" className="pointer-events-none truncate text-caption leading-(--size-sidebar-line-detail) text-muted-foreground">
+      {waiting}
+    </span>
   ) : null;
   const onKeyDown = (event: KeyboardEvent<HTMLButtonElement>) => {
     if (!tree || tree.open === null || event.metaKey || event.ctrlKey || event.altKey) return;
@@ -256,7 +264,7 @@ export const SidebarAgentRow = memo(function SidebarAgentRow({
           ref={main}
           type="button"
           disabled={unreachable}
-          aria-label={[paired ? t("panes.pair.mark") : null, offline ? [agent.identity_label, remote?.label, agentWithProfile(t, agent), offline].filter(Boolean).join(", ") : rowAccessibleName(t, agent, device ?? remote?.label ?? null), forkLabel(t, agent), starred(agent) ? t("taskLens.revisit.starred") : null, closing ? t("agents.closingName") : null, place].filter(Boolean).join(", ")}
+          aria-label={[paired ? t("panes.pair.mark") : null, offline ? [agent.identity_label, remote?.label, agentWithProfile(t, agent), offline].filter(Boolean).join(", ") : rowAccessibleName(t, agent, device ?? remote?.label ?? null), forkLabel(t, agent), starred(agent) ? t("taskLens.revisit.starred") : null, closing ? t("agents.closingName") : null, place, waiting].filter(Boolean).join(", ")}
           aria-current={selected ? "true" : undefined}
           aria-expanded={tree && tree.open !== null && !tree.popover ? tree.open : undefined}
           data-agent-open={agent.pane_id}
