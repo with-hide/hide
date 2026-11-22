@@ -442,7 +442,6 @@ const MERGES: &[&str] = &[
     // A flag before the command word, which cobra reads as taking the next
     // word, does not hide the command.
     "glab mr --sha abc merge 3",
-    "glab mr --yes merge 3",
     "gh pr --match-head-commit abc merge 12",
     "glab -X PUT api projects/1/merge_requests/3/merge",
     "glab mr --auto-merge=true create --fill",
@@ -484,6 +483,8 @@ const NOT_MERGES: &[&str] = &[
     "git config push.pushOption merge_request.create",
     "git commit -m 'merge_request.auto_merge'",
     // An option's value is no option, field or endpoint.
+    "glab mr --title merge create -t x",
+    "glab mr --yes merge 3",
     "glab mr create -t x -d --auto-merge",
     "glab mr create -t x -yd --auto-merge",
     "glab mr create --auto-merge --auto-merge=false",
@@ -630,6 +631,12 @@ fn checking_out_a_merge_request_keeps_the_original_checkouts_branch() {
         // `glab mr co` is no alias of checkout in glab: it prints `glab mr`'s
         // help.
         assert_eq!(judged(repo, "glab mr co 3"), None, "{syntax:?}");
+        // A flag's value before the command word is no command word.
+        assert_eq!(
+            judged(repo, "glab mr --title checkout create -t x"),
+            None,
+            "{syntax:?}"
+        );
     }
     assert_eq!(
         refused(fixture.decide_in(repo, posix("command -- glab mr checkout 3"), Some(false))),

@@ -615,6 +615,7 @@ mod tests {
                 "glab mr checkout 3",
                 "git push -o merge_request.create origin m91/guards",
                 "glab mr create -t x -d --auto-merge",
+                "glab mr --title merge create -t x",
                 "git -c push.pushOption=merge_request.auto_merge status",
             ] {
                 assert_eq!(judged(command, syntax), None, "{command} ({syntax:?})");

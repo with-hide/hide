@@ -81,20 +81,17 @@ pub(crate) fn host_call(program: &str, args: &[String]) -> Option<HostCall> {
 }
 
 fn cli(host: Host, args: &[String]) -> Option<HostCall> {
-    // `gh` and `glab` find their command as cobra does: a flag before it
-    // without `=` (`--sha x`, `-y x`) takes the next word unless cobra knows
-    // it as one that takes none. Both readings are judged, so a merge either
-    // one finds is refused, never one that cobra finds and this does not.
-    [true, false]
-        .into_iter()
-        .find_map(|takes| judge(host, args, &cli_words(args, takes)))
+    judge(host, args, &cli_words(args))
 }
 
 /// The first two command words of a `gh` or `glab` call and their places in
-/// `args`. With `takes`, a flag without `=` that is `--name` or `-x` takes
-/// the next word (cobra's reading of a flag its parent command does not
-/// declare); without, only `-R`/`--repo` do.
-fn cli_words(args: &[String], takes: bool) -> Vec<(usize, &str)> {
+/// `args`, found as cobra finds them: a flag before a command word that has
+/// no `=` and is `--name` or `-x` takes the next word, unless the command
+/// above declares it as taking none. Above `pr`/`mr` and their verbs, gh and
+/// glab declare only `-h`/`--help` and `-v`/`--version` (glab 1.130.0, gh
+/// 2.x), so `glab mr --title merge create` is a create and
+/// `glab mr --sha <sha> merge` a merge.
+fn cli_words(args: &[String]) -> Vec<(usize, &str)> {
     let mut words = Vec::new();
     let mut at = 0;
     while let Some(arg) = args.get(at) {
@@ -102,11 +99,9 @@ fn cli_words(args: &[String], takes: bool) -> Vec<(usize, &str)> {
             break;
         }
         if arg.starts_with('-') && arg != "-" {
-            let valued = matches!(arg.as_str(), "-R" | "--repo")
-                || (takes
-                    && !arg.contains('=')
-                    && (arg.starts_with("--") || arg.len() == 2)
-                    && !matches!(arg.as_str(), "-h" | "--help"));
+            let valued = !arg.contains('=')
+                && (arg.starts_with("--") || arg.len() == 2)
+                && !matches!(arg.as_str(), "-h" | "--help" | "-v" | "--version");
             at += if valued { 2 } else { 1 };
             continue;
         }
