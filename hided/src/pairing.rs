@@ -759,6 +759,13 @@ impl Pairing {
             {
                 let mut told = self.told.lock().await;
                 if told.as_ref() != Some(&machines) {
+                    if told
+                        .as_deref()
+                        .is_some_and(|before| pairing_finished(before, &machines))
+                    {
+                        self.core
+                            .note_feature_used(hide_core::product_analytics::Feature::HidesPaired);
+                    }
                     self.paired_changed(&machines).await;
                     *told = Some(machines);
                 }
@@ -2010,6 +2017,30 @@ fn rows(
 /// id, its name, or the start of its connection id. A device id is what a
 /// machine says of itself, so two machines can say the same one; then only
 /// the connection id, which each proved, names one of them.
+/// Whether a pairing finished between `before` and `after`, the machines
+/// told before and now: a machine opens this one, or is opened by it, where
+/// before it was not listed or held neither direction yet (a confirm under
+/// way, a pairing the other machine had dropped). A resume, a reconnect and
+/// the daemon's start (nothing told before) finish none, so the usage
+/// statistics count a pairing once, on each machine.
+fn pairing_finished(before: &[PeerMachine], after: &[PeerMachine]) -> bool {
+    let holds = |machine: &PeerMachine| {
+        machine.opened_by.is_some()
+            || matches!(
+                machine.opens,
+                Some(PeerOpens::Active | PeerOpens::Paused | PeerOpens::PausedThere)
+            )
+    };
+    after
+        .iter()
+        .filter(|machine| holds(machine))
+        .any(|machine| {
+            !before
+                .iter()
+                .any(|earlier| earlier.key == machine.key && holds(earlier))
+        })
+}
+
 fn name_one(mut paired: Vec<Paired>, text: &str) -> Result<Paired, &'static str> {
     let text = text.trim();
     let matching = |paired: &[Paired], named: &dyn Fn(&PeerMachine) -> bool| -> Vec<usize> {
@@ -2081,6 +2112,31 @@ mod tests {
             reason: None,
             update: None,
         }
+    }
+
+    /// The usage statistics count a pairing when it finishes, on the side
+    /// that allowed it and on the side that joined, and never for a confirm
+    /// still under way, a resume or a reconnect.
+    #[test]
+    fn a_pairing_finishes_once_and_a_resume_or_reconnect_finishes_none() {
+        let confirming = PeerMachine {
+            opens: Some(PeerOpens::Confirming),
+            ..machine(false, false)
+        };
+        assert!(pairing_finished(&[], &[machine(false, true)]));
+        assert!(!pairing_finished(&[], &[confirming.clone()]));
+        assert!(pairing_finished(&[confirming], &[machine(true, false)]));
+        let paused = PeerMachine {
+            opens: Some(PeerOpens::Paused),
+            ..machine(false, false)
+        };
+        assert!(!pairing_finished(&[paused], &[machine(true, false)]));
+        let connected = PeerMachine {
+            connected: true,
+            ..machine(true, false)
+        };
+        assert!(!pairing_finished(&[machine(true, false)], &[connected]));
+        assert!(!pairing_finished(&[machine(true, true)], &[]));
     }
 
     fn paired(key: u8, device: &str, name: &str) -> Paired {
