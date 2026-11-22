@@ -669,6 +669,19 @@ pub struct Draft {
     /// Make it and start a manual run (B8).
     #[serde(default)]
     pub run_now: bool,
+    /// The example the form started from, counted in the usage statistics
+    /// only; none for an empty form or `hide automation add`.
+    #[serde(default)]
+    pub example: Option<Example>,
+}
+
+/// The automation screen's examples (B4).
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum Example {
+    Report,
+    Briefing,
+    Ci,
 }
 
 /// What an edit changes (B26); a field it leaves out stays.

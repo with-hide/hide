@@ -175,15 +175,17 @@ Follow the skill's verification prerequisites, and use its `screenshots` command
 Write the issue it finishes on the `Closes #N` line and nothing else there; a big issue split across several pull requests gets one sub-issue per piece, and each pull request closes its own.
 `Related:` names only the PRD path and the pull requests this one follows or depends on, because Hide and GitHub relate a pull request to an issue only through a closing keyword.
 
-### A main feature brings its practice and its scene
+### A main feature brings its practice, its scene and its measure
 
 A feature a release will name among its main features, a new screen or a new way of working rather than a fix or a tweak, is shown once to everyone who updates, in the What's new window ([docs/UI_BEHAVIOR.md](docs/UI_BEHAVIOR.md#whats-new-and-update-history)).
 What makes them want to try it is seeing the feature itself work and trying it right there, so its pull request brings both:
 
 - Its scene, `web/src/components/whats-new-scenes/<name>.tsx`, listed in that folder's `index.ts` and in `RELEASE_DRAWINGS` (`web/src/releases.ts`): the feature's real screen at its real size, from its own parts and words, playing one short loop of example work from the first press to the result, with a still moment for the gallery and reduced motion.
-- Its practice chapter, `web/src/practice/chapters/<id>.ts`, which the window's `Try it` (`체험하기`) opens, with `since` set to the version it ships in.
+- Its practice chapter, `web/src/practice/chapters/<id>.ts`, which the window's `Try it` (`체험하기`) opens, with `since` set to the version it ships in, and its id named in `PracticeChapter::of` (`hide-core/src/product_analytics.rs`), so the chapter's start and end are counted.
+- Its measure: how its use is counted in the usage statistics, named as the highlight's `measure` in `web/src/releases.json`. It is an event of its own in `hide-core/src/product_analytics.rs` (such as `hide_automation_created`), or a `Feature` the core notes on its first use of a day (`hide_feature_used:<feature>`, `Runtime::note_feature_used`), sent from the core where the operator's action lands, never from the shell. The event's properties stay a closed list spelled in that module, with no content, name or path; the same pull request adds its row to the usage-statistics table of `site/public/privacy.html` in each language, and the release that ships it names the change in its notes.
 
-Both are app code, so they must be merged before the release candidate is cut; the release itself only writes the version's words in `web/src/releases.json` and names the scene and the chapter there.
+All three are app code, so they must be merged before the release candidate is cut; the release itself only writes the version's words in `web/src/releases.json` and names the scene, the chapter and the measure there.
+Two tests in `hide-core/src/product_analytics.rs` refuse the omission: a chapter whose id `PracticeChapter::of` does not name, and a highlight from 1.2.11 on with no `measure` or one this build does not send.
 A feature merged without them ships with a practice card's move for its drawing and no `Try it`, and the release's draft says so.
 Check the scene in the gallery (`/gallery?scene=whats-new&version=<version>&state=dialog`) with the entry that names it, and put its capture in the pull request.
 

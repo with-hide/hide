@@ -1868,6 +1868,29 @@ fn paired(tab: &str, pane: &str) -> Pair {
     (tab.to_owned(), pane.to_owned())
 }
 
+/// Turning focus mode on counts one use of it a UTC day: moving it to
+/// another pane, and turning it off and on again that day, count nothing.
+#[test]
+fn turning_focus_mode_on_counts_a_use_once_a_day() {
+    use crate::product_analytics::{Event, Feature};
+    let (mut runtime, _checkout, directory) = setup("pair-count");
+    control_file(&mut runtime, "w-order:t1:p", &directory, "a.md", "a");
+    control_file(&mut runtime, "w-order:t2:p", &directory, "c.md", "c");
+    let statistics = Arc::new(RecordedStatistics::default());
+    runtime.install_product_analytics(statistics.clone());
+    pair_event(&mut runtime, Some("w-order:t1:p"));
+    assert_eq!(runtime.snapshot.status.last_error, None);
+    pair_event(&mut runtime, Some("w-order:t2:p"));
+    pair_event(&mut runtime, None);
+    pair_event(&mut runtime, Some("w-order:t1:p"));
+    assert_eq!(
+        statistics.take(),
+        [Event::FeatureUsed {
+            feature: Feature::Focus
+        }]
+    );
+}
+
 /// D-45, B18: entering puts the pane's agent's View in front of its tab's
 /// desk; a tab switch keeps the mode, drawing the new tab's pane beside its
 /// own desk, and so does a restart. D-51: leaving gives back the lane the
