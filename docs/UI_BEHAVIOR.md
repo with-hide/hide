@@ -2832,7 +2832,7 @@ A practice screen cannot run an outside AI, so its world stages the join: a few 
 Settings closed, the rail shows `nightly` in its own space and no tile for `hermes`, and a few seconds after the join (a `wait` step) the 전체 bot's agent asks, its row wearing `hermes`'s owl on its logo and its hint ending `hermes(봇)이 띄움`; refusing, disconnecting and a mode change are not answered, so the chapter keeps both bots.
 Settings opens over every practice screen as over Hide (`SettingsGate` in `PracticePlayer.tsx`), each world answering only the events its chapter needs, and the guide keeps ⏎, → and ← while it is up, since it is a page the guide walks through rather than a palette that takes the keyboard.
 
-Flow 9 (GitLab, `chapters/gitlab.ts`, since 1.3.0) shows a gitlab.com project read beside a GitHub one.
+Flow 10 (GitLab, `chapters/gitlab.ts`, since 1.3.0) shows a gitlab.com project read beside a GitHub one.
 Its world lists `shop-api`, read by gitlab.com, and `web`, read by GitHub, each checkout carrying the host that read it and each pull request the reference its host made, so the screens draw them as they draw a real read (Code hosts).
 The learner opens the PR list (`open_sidebar_prs` or the list switch's PR), reads `!12` with GitLab's mark beside `#41` with GitHub's, and opens `!12`; the world answers `pr_open` as the core does, and the card names GitLab, its failed pipeline and `GitLab에서 보기`, with no merge or 맡기기 because gitlab.com does not declare them.
 Settings (`settings`) then opens on 원격 저장소, whose GitLab row stands below GitHub's because a gitlab.com project exists; every address in the world is an example.

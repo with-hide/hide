@@ -1,4 +1,4 @@
-// Flow 9: a project on gitlab.com. Its merge requests sit in the PR list
+// Flow 10: a project on gitlab.com. Its merge requests sit in the PR list
 // beside GitHub's pull requests, written `!12` with GitLab's mark; the learner
 // opens one, reads its card, which names GitLab and draws only what GitLab
 // offers, and finds GitLab's row in Settings › Remote repositories.
@@ -8,7 +8,7 @@ import { GITLAB_WORLD, MR_CARD, MR_ROW, showsMr, showsPrs, type GitlabModel } fr
 
 export default chapter<GitlabModel>({
   id: "gitlab",
-  number: 9,
+  number: 10,
   version: 1,
   since: "1.3.0",
   world: GITLAB_WORLD,
