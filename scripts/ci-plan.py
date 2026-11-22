@@ -458,7 +458,7 @@ WINDOWS_PATHS = (
     ".github/workflows/wsl-device.yml", ".github/workflows/os-contract.yml", ".github/workflows/vt.yml",
     ".github/workflows/holder-restart.yml", ".github/workflows/omp-contract.yml", ".github/workflows/agy-contract.yml",
     ".github/workflows/agent-journey.yml", ".github/workflows/agent-clis.yml", ".github/workflows/relay-protocol.yml",
-    ".github/workflows/package.yml",
+    ".github/workflows/package.yml", ".github/workflows/windows-check.yml",
     # Steps every Windows job runs: the caches, the fixture shims and their PATH.
     ".github/actions/*",
     # This plan, which decides which Windows jobs run.
