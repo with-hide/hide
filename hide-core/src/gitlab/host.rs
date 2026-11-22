@@ -67,6 +67,10 @@ impl CodeHost for Gitlab {
         KEY
     }
 
+    fn name(&self) -> &'static str {
+        "GitLab"
+    }
+
     fn names_server(&self, authority: &str) -> bool {
         authority == HOST
     }

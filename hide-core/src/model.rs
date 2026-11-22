@@ -7386,6 +7386,17 @@ impl RepositoryIdentity {
     }
 }
 
+/// Which bounded lists of a read held only their newest part.
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub struct ListCut {
+    /// The open change requests passed their cap: one the list does not
+    /// hold may be open.
+    pub open: bool,
+    /// The recent window of every state passed its cap: older merged and
+    /// closed ones are not listed, by design of the window.
+    pub settled: bool,
+}
+
 /// One repository's pull requests as its host reported them.
 #[derive(Clone, Debug, Default, Eq, PartialEq, Deserialize, Serialize)]
 pub struct GithubProjectSnapshot {
@@ -7414,20 +7425,22 @@ pub struct GithubProjectSnapshot {
     pub status: GithubStatusSnapshot,
     /// The read named no remote because the node did not say enough to
     /// tell (`code_host::Placement::RemotesNotKnown`): kept apart from no
-    /// remote here and in the store, and read as no remote everywhere else,
-    /// since nothing truer can be shown.
-    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    /// remote in the core and read as no remote everywhere else, since
+    /// nothing truer can be shown. Never saved: the reader makes it again
+    /// each pass from the node's facts, as it makes no remote.
+    #[serde(skip)]
     pub remotes_not_known: bool,
     /// The read was not made this pass, and is no failure
     /// ([`ReadHeld`]): the runtime keeps the previous answer and starts no
     /// failure clock. Internal reader provenance.
     #[serde(skip)]
     pub held: Option<ReadHeld>,
-    /// The open list passed its host's cap and holds its newest part only.
-    /// Internal reader provenance, for the core's own use; no screen draws
-    /// it yet.
+    /// Which of the read's bounded lists passed their cap and hold their
+    /// newest part only. Internal reader provenance, kept with the list it
+    /// describes (a list carried over a failed read keeps its mark); no
+    /// screen draws it yet.
     #[serde(skip)]
-    pub pull_requests_cut: bool,
+    pub pull_requests_cut: ListCut,
     /// The account `gh` is signed in as, which "mine" is judged against;
     /// absent before the first successful read.
     #[serde(default)]

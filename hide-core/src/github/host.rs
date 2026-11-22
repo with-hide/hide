@@ -69,6 +69,10 @@ impl CodeHost for Github {
         KEY
     }
 
+    fn name(&self) -> &'static str {
+        "GitHub"
+    }
+
     fn names_server(&self, authority: &str) -> bool {
         authority == SERVER
     }

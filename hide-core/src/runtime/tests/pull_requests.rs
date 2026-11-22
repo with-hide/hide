@@ -72,7 +72,7 @@ fn pr_runtime(pull_requests: Vec<PullRequestSnapshot>) -> Runtime {
         .projects
         .push(crate::model::GithubProjectSnapshot {
             held: None,
-            pull_requests_cut: false,
+            pull_requests_cut: crate::model::ListCut::default(),
             remotes_not_known: false,
             viewer: None,
             root_path: "/repo".into(),

@@ -585,6 +585,8 @@ export type GithubStatus = {
 /** A code host as the core declares it (`code_host::HostDeclaration`): its key, the optional operations it offers (an action not named here is refused by the core), and how it is reached. */
 export type HostDeclaration = {
   key: string;
+  /** The host as the screen names it (`GitHub`, `GitLab`). */
+  name: string;
   operations: HostOperation[];
   access: { program: string; minimum_version: string; sign_in: string };
 };

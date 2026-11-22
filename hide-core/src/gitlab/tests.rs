@@ -743,6 +743,19 @@ type Answer = Result<crate::node_access::LinkAnswer, hide_node_link::LinkError>;
 /// other `glab` line with its function.
 struct Answering(fn() -> Answer);
 
+/// [`Answering`] on an older protocol.
+struct Older(fn() -> Answer);
+
+impl crate::node_access::NodeLink for Older {
+    fn call(&self, call: hide_node_link::protocol::Call, timeout: std::time::Duration) -> Answer {
+        crate::node_access::NodeLink::call(&Answering(self.0), call, timeout)
+    }
+
+    fn predates_current_protocol(&self) -> bool {
+        true
+    }
+}
+
 impl crate::node_access::NodeLink for Answering {
     fn call(&self, call: hide_node_link::protocol::Call, _timeout: std::time::Duration) -> Answer {
         let hide_node_link::protocol::Call::Glab { args } = call else {
@@ -760,7 +773,7 @@ impl crate::node_access::NodeLink for Answering {
     }
 }
 
-fn read_with(node: &Answering) -> GithubProjectSnapshot {
+fn read_with(node: &dyn crate::node_access::NodeLink) -> GithubProjectSnapshot {
     let repository = host::GITLAB.repository("gitlab.com/acme/app").unwrap();
     let place = Place::Repository {
         host: crate::code_host::CodeHosts::STANDARD
@@ -802,6 +815,24 @@ fn a_node_that_does_not_know_glab_holds_the_read_and_a_broken_link_fails_it() {
         crate::model::GithubReadOutcome::Held
     );
     assert_eq!(unsupported.status.failure_category, None);
+
+    // An older node cannot read the call at all and says the request is
+    // invalid; from a current node that answer is a failure.
+    fn invalid() -> Answer {
+        Err(hide_node_link::LinkError::Refused(
+            hide_node_link::HostError::new(
+                hide_node_link::ErrorCode::InvalidRequest,
+                "unknown variant `glab`",
+            ),
+        ))
+    }
+    assert_eq!(read_with(&Older(invalid)).held, Some(ReadHeld::Unsupported));
+    let current = read_with(&Answering(invalid));
+    assert_eq!(current.held, None);
+    assert_eq!(
+        current.read_outcome(),
+        crate::model::GithubReadOutcome::Failed
+    );
 
     let broken = read_with(&Answering(|| {
         Err(hide_node_link::LinkError::NotConnected("gone".into()))
@@ -852,17 +883,36 @@ fn a_spent_background_budget_holds_the_list_read_without_asking() {
 }
 
 /// An open list past its cap keeps the newest part and says it was cut to
-/// the core.
+/// the core; the recent window of every state says so too.
 #[test]
-fn an_open_list_past_its_cap_says_it_was_cut() {
+fn an_open_list_and_the_recent_window_past_their_caps_say_they_were_cut() {
     let mut value: serde_json::Value = serde_json::from_str(SCENES).unwrap();
+    let listed_open = value["data"]["project"]["open"]["nodes"]
+        .as_array()
+        .unwrap()
+        .len();
     value["data"]["project"]["open"]["count"] = 150.into();
+    value["data"]["project"]["settled"]["count"] = 400.into();
     let cut = parse_list(&value.to_string(), &KnownChecks::default()).unwrap();
-    assert!(cut.open_cut);
-    assert!(cut.into_snapshot("/fixture/app").pull_requests_cut);
-    let whole = listed(SCENES);
-    assert!(!whole.open_cut);
-    assert!(!whole.into_snapshot("/fixture/app").pull_requests_cut);
+    // The newest part is what is listed: every open merge request the page
+    // held, none invented.
+    assert_eq!(
+        cut.pull_requests
+            .iter()
+            .filter(|pull| !pull.badge.is_settled())
+            .count(),
+        listed_open
+    );
+    let snapshot = cut.into_snapshot("/fixture/app");
+    assert_eq!(
+        snapshot.pull_requests_cut,
+        crate::model::ListCut {
+            open: true,
+            settled: true
+        }
+    );
+    let whole = listed(SCENES).into_snapshot("/fixture/app");
+    assert_eq!(whole.pull_requests_cut, crate::model::ListCut::default());
 }
 
 /// An older node sends its origin as the config holds it: what the core
@@ -890,4 +940,36 @@ fn an_older_nodes_raw_origin_enters_the_core_without_its_credentials() {
             "{raw}"
         );
     }
+}
+
+/// Reviewers and approvers past their page are counted as more, never
+/// dropped, and a review ask that rests on the cut part is unknown: the
+/// account may be among the reviewers the page did not hold.
+#[test]
+fn reviewers_and_approvers_past_their_page_are_counted_and_leave_the_ask_unknown() {
+    let mut value: serde_json::Value = serde_json::from_str(FORKS).unwrap();
+    value["data"]["currentUser"]["username"] = "someone-else".into();
+    let request = value["data"]["project"]["open"]["nodes"]
+        .as_array_mut()
+        .unwrap()
+        .iter_mut()
+        .find(|request| request["iid"] == "4429")
+        .unwrap();
+    // The page held 2 of 7 reviewers and 1 of 3 approvers.
+    request["reviewers"]["count"] = 7.into();
+    request["approvedBy"]["count"] = 3.into();
+    let listed = parse_list(&value.to_string(), &KnownChecks::default()).unwrap();
+    let cut = pull(&listed, 4429);
+    assert_eq!(cut.work.reviewers.as_ref().unwrap().len(), 2);
+    assert_eq!(cut.work.reviewers_more, 5 + 2);
+    assert_eq!(cut.work.asked_of_me, ReviewAsk::Unknown);
+    // Whole, the same request asks nothing of that account.
+    let whole: serde_json::Value = {
+        let mut value: serde_json::Value = serde_json::from_str(FORKS).unwrap();
+        value["data"]["currentUser"]["username"] = "someone-else".into();
+        value
+    };
+    let whole = parse_list(&whole.to_string(), &KnownChecks::default()).unwrap();
+    assert_eq!(pull(&whole, 4429).work.reviewers_more, 0);
+    assert_eq!(pull(&whole, 4429).work.asked_of_me, ReviewAsk::None);
 }

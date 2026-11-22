@@ -9,7 +9,8 @@
 
 import type { PrReasonKind } from "../agentScope";
 import { confirmHolds, defaultMethod, mergeWhy, primaryAction, type Confirmed, type MergeWhy } from "../prCardModel";
-import { readingOfStatuses, type PrReading } from "../prWork";
+import { hostLines, readingOfStatuses, type PrReading } from "../prWork";
+import type { TFunction } from "i18next";
 import type { PrMergeMethod } from "../snapshot";
 import type { PhonePr, PhonePrProject } from "./protocol";
 
@@ -86,6 +87,20 @@ export function openCount(groups: readonly PrGroupView[]): number {
 /** How GitHub reads stand over the projects listed (B38): the desktop list's own reading rule. */
 export function prsReading(projects: readonly PhonePrProject[], now: number): PrReading {
   return readingOfStatuses(projects.flatMap((project) => project.github), now);
+}
+
+/**
+ * The tab's status line over the list, beside a reading that is not refused
+ * whole: each refused host's refusal, and each failed host "read again",
+ * named by its host; a read in part says nothing here, as before hosts.
+ */
+export function prsStatusLines(reading: PrReading, t: TFunction<"translation">): string[] {
+  if (reading.state === "blocked") return [];
+  return (reading.hosts ?? []).flatMap((host) => {
+    if (host.reading.state === "blocked") return hostLines([host], t);
+    if (host.reading.state === "stale") return [t("mobile.prs.readFailed", { host: host.name })];
+    return [];
+  });
 }
 
 /** The pull request's page, from the current list; null once it left the list. */
