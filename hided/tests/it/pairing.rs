@@ -24,6 +24,7 @@ use tokio_tungstenite::tungstenite::http::header::ORIGIN;
 type Socket =
     tokio_tungstenite::WebSocketStream<tokio_tungstenite::MaybeTlsStream<tokio::net::TcpStream>>;
 
+mod bootstrap_origin;
 #[cfg(unix)]
 mod core_letters;
 #[cfg(unix)]

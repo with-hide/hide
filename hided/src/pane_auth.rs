@@ -1464,10 +1464,17 @@ fn answer_bootstrap(
             // written it carries a connection to this core, and its
             // admission from then on is the peer transport's (D-27).
             (Some(operators), Ok(crate::pairing::Ask::Carry)) => {
-                let caller = if crate::access::in_a_pane(peer, request, engine, core) {
-                    crate::pairing::Caller::Pane
-                } else {
-                    crate::pairing::Caller::Operator
+                let caller = match crate::access::in_a_pane(peer, request, engine, core) {
+                    Ok(true) => crate::pairing::Caller::Pane,
+                    Ok(false) => crate::pairing::Caller::Operator,
+                    Err(reason) => {
+                        let answer = json!({
+                            "ok": false, "reason": reason,
+                            "next_action": refusal_next_action(reason),
+                        });
+                        let _ = writeln!(stream, "{answer}");
+                        return;
+                    }
                 };
                 match operators
                     .runtime
