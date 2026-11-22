@@ -363,7 +363,7 @@ impl Pace {
             .wait_for(|ledger| ledger.may_send(request_id) != Some(false))
             .await
             .map(|ledger| ledger.may_send(request_id).is_some());
-        if room != Ok(true) {
+        if !matches!(room, Ok(true)) {
             return false;
         }
         let _sending = self.sending.lock().await;
