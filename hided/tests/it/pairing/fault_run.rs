@@ -329,10 +329,12 @@ done
 /// What the recipient's agent runs: it takes in every letter its inbox
 /// shows, as an agent reading its letters does, until `stop` exists. A
 /// letter nobody takes in stays open, and a mailbox holds at most
-/// `OPEN_LIMIT` open letters, which two hours of letters pass.
-fn recipient_script(folder: &Path) -> String {
+/// `OPEN_LIMIT` open letters, which two hours of letters pass. A pane of
+/// the machine's own core is handed no `HIDE_INSTALL_CLI`, so it names its
+/// `hide`.
+fn recipient_script(folder: &Path, hide: &Path) -> String {
     format!(
-        r#"hide="$HIDE_INSTALL_CLI"
+        r#"hide={hide}
 log={log}
 while [ ! -e {stop} ]; do
   inbox=$("$hide" inbox 2>&1)
@@ -347,6 +349,7 @@ done
 "#,
         stop = quote(folder.join("stop")),
         log = quote(folder.join("read.log")),
+        hide = quote(hide),
     )
 }
 
@@ -509,7 +512,7 @@ async fn every_letter_a_guests_pane_sends_through_the_faults_lands_in_its_ledger
     let run = at("run");
     std::fs::create_dir(&run).unwrap();
     let reads = run.join("read.sh");
-    std::fs::write(&reads, recipient_script(&run)).unwrap();
+    std::fs::write(&reads, recipient_script(&run, &at("p").join("hide"))).unwrap();
     let recipient_pane = recipient.own_pane(&recipient.pane).unwrap().to_owned();
     hand_over(&guest_env.home, &recipient_pane, &reads);
     let script = run.join("send.sh");
