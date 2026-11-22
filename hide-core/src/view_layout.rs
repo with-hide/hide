@@ -183,7 +183,7 @@ pub enum ExternalKind {
 
 /// An outside file as the core knows it: the desktop host's grant and what
 /// the tab shows. The path stays in the desktop host.
-#[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 pub struct ExternalFile {
     pub grant: String,
     pub name: String,

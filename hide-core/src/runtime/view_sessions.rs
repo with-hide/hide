@@ -492,6 +492,7 @@ impl Runtime {
                 output: (display.kind == crate::view_layout::DisplayKind::File)
                     .then(|| output_kind(hide_platform::path::wire_name(&display.path)))
                     .flatten(),
+                external: display.external.clone(),
                 unseen: display.unseen.is_some(),
                 at_unix_ms: at(display),
             })

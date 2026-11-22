@@ -269,9 +269,16 @@ export type LookFileStatus = "modified" | "added" | "deleted" | "untracked" | "r
 export type LookFile = { path: string; status: LookFileStatus; added: number | null; removed: number | null; binary: boolean };
 
 /** The answer states of `look_result`: everything that is not content. */
-/** `not_found` and `outside_roots` say why a file cannot be read (gone since its View opened, outside every checkout); a bundle
- * from before them shows either as a failed read. */
-export type LookResultState = "page" | "other" | "too_large" | "closed" | "failed" | "gone" | "refused" | "unavailable" | "device_unreachable" | "not_found" | "outside_roots";
+/** `not_found` and `outside_roots` say why a file cannot be read (gone since its View opened, outside every checkout), and
+ * `grant_expired`, `file_replaced` and `no_window` why a file outside every checkout cannot (the desktop app no longer holds its
+ * opening, it became a link or a folder, no desktop app is open to read it); a bundle from before them shows each as a failed read. */
+export type LookResultState =
+  | "page" | "other" | "too_large" | "closed" | "failed" | "gone" | "refused" | "unavailable" | "device_unreachable"
+  | "not_found" | "outside_roots" | "grant_expired" | "file_replaced" | "no_window";
+
+/** Why a page's screen cannot be taken, when the operator can act on it (no desktop app, the window on another computer, a page
+ * the app has not drawn); absent for any other reason, and a bundle from before it ignores it and says the screen cannot be taken now. */
+export type LookPageReason = "no_window" | "window_elsewhere" | "not_drawn";
 
 /**
  * What a text, an image or a page's screenshot sends first (hided/src/mobile/looks.rs `chunks`). A page's (`mode: "page"`,
@@ -333,7 +340,7 @@ export type StartCatalog = {
 
 export type ServerFrame =
   | { type: "paired"; credential: string; phone_id: string; name: string }
-  /** `device_connect`: the computer offers connections between two Hides, and with them the gathered view (`gather.ts`); absent from every computer before it and from a build with them off. */
+  /** `device_connect`: the computer offers connections between two Hides, and with them the gathered view (`gather.ts`); absent from every computer before 1.3.0. */
   /** `machine`: the computer's product device id, which another computer's `machines` names it by; sent with `device_connect`. */
   /**
    * `answer`: the computer takes a reply of several lines up to one phone message (`replyFits`), sends the open detail's `ask` and the
@@ -381,7 +388,7 @@ export type ServerFrame =
   | { type: "ask"; device_id: string; pane_id: string; ask: PhoneAsk | null }
   /** The agent's open Views, newest first; sent again only when they change. `omitted` counts the ones past hided's cap. */
   | { type: "looks"; device_id: string; pane_id: string; views: LookRow[]; omitted: number }
-  | { type: "look_result"; request_id: string; view_id: string; state: LookResultState; url?: string }
+  | { type: "look_result"; request_id: string; view_id: string; state: LookResultState; url?: string; reason?: LookPageReason }
   | { type: "look_changes"; request_id: string; view_id: string; files: LookFile[]; count: number; added: number; removed: number }
   | LookHead
   | { type: "look_chunk"; request_id: string; seq: number; data: string }

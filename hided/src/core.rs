@@ -50,6 +50,8 @@ enum Command {
     /// The operator acted from a surface outside the core (a phone); the
     /// core counts the first action of each UTC day.
     OperatorActive(hide_core::product_analytics::ActiveSurface),
+    /// A main feature used outside the core (a finished pairing with
+    /// another Hide); the core counts the first use of each UTC day.
     FeatureUsed(hide_core::product_analytics::Feature),
     DeliveryHuman {
         reply: Sender<Result<hide_core::delivery::worker::PreparedHuman, String>>,
@@ -401,8 +403,8 @@ impl CoreHandle {
         let _ = self.commands.send(Command::OperatorActive(surface));
     }
 
-    /// Tells the core the operator used `feature` from outside it (a phone's
-    /// answer); the core sends `hide_feature_used` for its first use of a UTC day.
+    /// Tells the core a main feature was used outside it; the core sends
+    /// `hide_feature_used` for the first such use of a UTC day.
     pub fn note_feature_used(&self, feature: hide_core::product_analytics::Feature) {
         let _ = self.commands.send(Command::FeatureUsed(feature));
     }

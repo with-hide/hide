@@ -10,14 +10,14 @@ import { WebSocketServer, WebSocket } from "ws";
 import { fixtureExecutable } from "./platform-fixture.ts";
 import { ownUntilWorkerExit } from "./worker-owned.ts";
 import { PHONE_PROTOCOL } from "../src/mobile/phoneVersion";
-import type { LookHead, LookResultState, LookRow, PhoneAgent, ServerFrame } from "../src/mobile/protocol";
+import type { LookHead, LookPageReason, LookResultState, LookRow, PhoneAgent, ServerFrame } from "../src/mobile/protocol";
 
 /** The fixture's own chunk and its chunks ahead of the last ack: what the phone is shown to handle is many chunks, confirmed one
  * by one, whatever size and pace hided picks (`hided/src/mobile/looks.rs` holds and tests its own). */
 export const LOOK_CHUNK = 30_000;
 const LOOK_WINDOW = 3;
-/** A View the fixture's agent opened: bytes sent in chunks, or a `look_result` state alone. */
-export type FixtureLook = { id: string; kind: LookRow["kind"]; name: string } & ({ mode: LookHead["mode"]; bytes: Buffer } | { result: LookResultState });
+/** A View the fixture's agent opened: bytes sent in chunks, or a `look_result` state alone (a page's with its address and why). */
+export type FixtureLook = { id: string; kind: LookRow["kind"]; name: string } & ({ mode: LookHead["mode"]; bytes: Buffer } | { result: LookResultState; url?: string; reason?: LookPageReason });
 
 const repo = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../..");
 type Reply = { qr?: string; frames: string[]; text: string | null };
@@ -159,7 +159,7 @@ export async function startPhoneRelay(port = 0) {
     } else if (data.type === "look_open" && state.look) {
       const look = state.look;
       const request_id = String(data.request_id);
-      if ("result" in look) { await send(id, { type: "look_result", request_id, view_id: look.id, state: look.result }); return; }
+      if ("result" in look) { await send(id, { type: "look_result", request_id, view_id: look.id, state: look.result, ...(look.url ? { url: look.url } : {}), ...(look.reason ? { reason: look.reason } : {}) }); return; }
       const parts: string[] = [];
       for (let at = 0; at < look.bytes.length; at += LOOK_CHUNK) parts.push(look.bytes.subarray(at, at + LOOK_CHUNK).toString("base64"));
       await send(id, { type: "look_head", request_id, view_id: look.id, mode: look.mode, size: look.bytes.length, total: look.bytes.length, truncated: false, chunks: parts.length });

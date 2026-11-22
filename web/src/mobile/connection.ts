@@ -514,19 +514,26 @@ function failLoadingLook(): void {
 }
 
 /**
- * What the phone drew about a View, however much of it: a loading, closed, failed or unreachable screen is not that (B24, D-15).
- * A file gone or outside every checkout is, like one too large: its reason is all there is to see of it, here or on the desktop.
+ * What the phone drew about a View, however much of it: a loading, closed, failed or unreachable screen, or an outside file with no desktop app open to read it, is not that (B24, D-15).
+ * A file gone, outside every checkout, or an outside file the desktop app can no longer read is, like one too large: its reason is all there is to see of it, here or on the desktop.
+ * A page with no picture is seen only when nothing would draw it later: one with a reason (no desktop app, another computer's window, not drawn yet)
+ * is still to be seen, as an outside file with no desktop app is, and the operator acts on the Mac first.
  * Every state answers, so a new one cannot be left out by accident.
  */
 const SEEN: Record<LookContent["state"], boolean> = {
-  loading: false, text: true, image: true, changes: true, shot: true, html: true, page: true, other: true, too_large: true, not_found: true, outside_roots: true, closed: false, device_unreachable: false, failed: false,
+  loading: false, text: true, image: true, changes: true, shot: true, html: true, page: true, other: true, too_large: true, not_found: true, outside_roots: true,
+  grant_expired: true, file_replaced: true, no_window: false, closed: false, device_unreachable: false, failed: false,
 };
+
+function seen(content: LookContent): boolean {
+  return content.state === "page" ? content.reason === null : SEEN[content.state];
+}
 
 /** The View on screen was opened and the phone drew its answer: it is seen, once, here and on the desktop (B24, D-15). */
 function markLookSeen(): void {
   const detail = usePhone.getState().detail;
   const look = detail?.look;
-  if (!detail || !look || look.shown || !SEEN[look.content.state]) return;
+  if (!detail || !look || look.shown || !seen(look.content)) return;
   const sent = send({ type: "look_seen", device_id: detail.key.device_id, pane_id: detail.key.pane_id, view_id: look.row.id });
   if (sent) patch({ detail: { ...detail, look: { ...look, shown: true } } });
 }

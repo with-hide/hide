@@ -10,13 +10,10 @@
 //! start, and the pairing after every change to the machines this one is
 //! paired with ([`Follower`]); a paired core also never ends for idle
 //! ([`paired`], `server::watch_idle`). Paired means a finished pairing,
-//! never one still waiting (`peer_host::pairing_confirmed`), and never in a
-//! build that does not offer connections between two Hides
-//! (`env::Env::device_connect` off), which keeps no item for them and takes
-//! out one a development build left.
+//! never one still waiting (`peer_host::pairing_confirmed`).
 //!
 //! A core moved here before 1.2.0 is kept the same way while the machine it
-//! was moved off still dials it as a node (D-46), in every build: that
+//! was moved off still dials it as a node (D-46): that
 //! machine can only split from it by reaching it, so its login item is not
 //! taken out before the two are paired.
 
@@ -29,11 +26,11 @@ use serde::Serialize;
 use serde_json::json;
 
 /// Whether the folder's core is kept on, the one answer the item follows:
-/// it has finished a pairing (`peer_host::pairing_confirmed`, never while
-/// `device_connect` is off), or it is a core moved here before 1.2.0 that a
-/// node still dials (`hide_core::dialing_nodes`), which every build keeps.
-pub fn paired(state_dir: &Path, device_connect: bool) -> Result<bool, String> {
-    if crate::peer_host::pairing_confirmed(state_dir, device_connect)
+/// it has finished a pairing (`peer_host::pairing_confirmed`), or it is a
+/// core moved here before 1.2.0 that a node still dials
+/// (`hide_core::dialing_nodes`).
+pub fn paired(state_dir: &Path) -> Result<bool, String> {
+    if crate::peer_host::pairing_confirmed(state_dir)
         .map_err(|error| format!("the peer records: {error}"))?
     {
         return Ok(true);
@@ -78,9 +75,6 @@ pub struct Warning {
 pub struct Asker<'a> {
     pub program: &'a Path,
     pub under_item: bool,
-    /// Whether its build offers connections between two Hides
-    /// (`env::Env::device_connect`).
-    pub device_connect: bool,
 }
 
 /// Puts the login item in when the folder is paired and it is not there,
@@ -92,7 +86,7 @@ pub fn reconcile(
     asker: &Asker<'_>,
     install: impl FnOnce(&Path) -> Result<PathBuf, String>,
 ) -> Result<Outcome, String> {
-    let paired = paired(state_dir, asker.device_connect)?;
+    let paired = paired(state_dir)?;
     if let Err(error) = agents.supported() {
         return Ok(if paired {
             Outcome::Unsupported {
@@ -135,7 +129,7 @@ pub fn reconcile(
             let program = install(&hide_kit::layout::core_root(home))?;
             // The asking core goes on; the item's core waits on the
             // folder's lock until it exits.
-            crate::login_item::adopt(agents, home, state_dir, &program, asker.device_connect)?;
+            crate::login_item::adopt(agents, home, state_dir, &program)?;
             let warning = match agents.linger(home, &AtomicBool::new(false)) {
                 Ok(Linger::On) => None,
                 Ok(Linger::NeedsAdministrator { command }) => Some(Warning {
@@ -178,17 +172,14 @@ pub struct Follower {
     state_dir: PathBuf,
     /// Whether the login item started this core ([`Asker::under_item`]).
     under_item: bool,
-    /// [`Asker::device_connect`].
-    device_connect: bool,
 }
 
 impl Follower {
-    pub fn new(home: PathBuf, state_dir: PathBuf, under_item: bool, device_connect: bool) -> Self {
+    pub fn new(home: PathBuf, state_dir: PathBuf, under_item: bool) -> Self {
         Self {
             home,
             state_dir,
             under_item,
-            device_connect,
         }
     }
 
@@ -200,7 +191,6 @@ impl Follower {
             home,
             state_dir,
             under_item,
-            device_connect,
         } = self.clone();
         let spawned = std::thread::Builder::new()
             .name("always-on".to_owned())
@@ -214,7 +204,6 @@ impl Follower {
                         let asker = Asker {
                             program: &program,
                             under_item,
-                            device_connect,
                         };
                         reconcile(&agents_for(&home), &home, &state_dir, &asker, |root| {
                             install_this_build(asker.program, root)

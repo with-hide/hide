@@ -162,6 +162,46 @@ describe("ExternalFiles", () => {
     expect(log).toHaveBeenLastCalledWith("external.read_failed", { grant: id, kind: "text", reason: "not_physical" });
   });
 
+  it("reads a phone's part of the granted file or a file of its folder now, with the file's size, and nothing past the folder or through a link", async () => {
+    const files = new ExternalFiles(vi.fn());
+    const page = file("phone/mock.html", "<img src=art/logo.png>");
+    file("phone/art/logo.png", "png bytes");
+    file("phone-secret.txt", "secret");
+    const { id } = files.grant(page, "html")!;
+    expect(await files.readPart(id, null, 4)).toEqual({ bytes: new Uint8Array(Buffer.from("<img")), total: 22 });
+    // Read again on each ask: what is on the disk now.
+    fs.writeFileSync(page, "<p>new</p>");
+    expect(await files.readPart(id, null, 1024)).toEqual({ bytes: new Uint8Array(Buffer.from("<p>new</p>")), total: 10 });
+    expect(await files.readPart(id, "art/logo.png", 1024)).toEqual({ bytes: new Uint8Array(Buffer.from("png bytes")), total: 9 });
+    for (const escape of ["../phone-secret.txt", "art/../../phone-secret.txt", "", "/etc/hosts", "art\\logo.png"]) {
+      expect(await files.readPart(id, escape, 1024), escape).toEqual({ failure: "outside_folder" });
+    }
+    expect(await files.readPart(id, "art/missing.png", 1024)).toEqual({ failure: "ENOENT" });
+    expect(await files.readPart("0".repeat(32), null, 1024)).toEqual({ failure: "grant_gone" });
+  });
+
+  it.skipIf(process.platform === "win32")("reads a phone's folder file by the desktop page's rule: a link inside the folder is followed, one out of it is refused", async () => {
+    const files = new ExternalFiles(vi.fn());
+    const page = file("linked/mock.html", "<p>hi</p>");
+    file("linked/build/assets/app.css", "p{}");
+    fs.symlinkSync(path.join(root, "linked/build/assets"), path.join(root, "linked/assets"));
+    fs.symlinkSync(file("linked-secret.txt", "secret"), path.join(root, "linked/leak.txt"));
+    const { id } = files.grant(page, "html")!;
+    expect(await files.readPart(id, "assets/app.css", 1024)).toEqual({ bytes: new Uint8Array(Buffer.from("p{}")), total: 3 });
+    expect(files.inside(id, path.join(root, "linked/assets/app.css"))).toBe(true);
+    expect(await files.readPart(id, "leak.txt", 1024)).toEqual({ failure: "outside_folder" });
+    expect(files.inside(id, path.join(root, "linked/leak.txt"))).toBe(false);
+  });
+
+  it("reads no folder file for a grant that is not a page: an image or text grant reaches its own file alone", async () => {
+    const files = new ExternalFiles(vi.fn());
+    const note = file("notes/todo.md", "# todo");
+    file("notes/secret.md", "secret");
+    const { id } = files.grant(note, "text")!;
+    expect(await files.readPart(id, null, 1024)).toEqual({ bytes: new Uint8Array(Buffer.from("# todo")), total: 6 });
+    expect(await files.readPart(id, "secret.md", 1024)).toEqual({ failure: "outside_folder" });
+  });
+
   it("lets an HTML page's files come from its folder alone, links resolved, while the grant lasts (D-03)", () => {
     const files = new ExternalFiles(vi.fn());
     const page = file("site/index.html", "<p>hi</p>");
