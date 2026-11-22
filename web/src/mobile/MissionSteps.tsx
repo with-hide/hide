@@ -12,7 +12,7 @@ import { StatusMark } from "../components/status-mark";
 import { RowButton } from "../components/ui/row-button";
 import { useInterfaceTranslation } from "../i18n/translator";
 import { cn } from "../lib/utils";
-import { branchLine, linePrLabel, lineToWords, resultLine, resultLineWords, waitLine, waitLineWords } from "../missionLine";
+import { branchLine, linePrLabel, lineToWords, resultLine, resultLineWords, waitFailureWords, waitLine, waitLineWords } from "../missionLine";
 import { PR_LOOK } from "../prMark";
 import type { PrState } from "../snapshot";
 import { statusText } from "../agentStatus";
@@ -70,7 +70,8 @@ function StepRow({ mission, node }: { mission: PhoneMission; node: PhoneMissionN
     : look === "waiting" && !asleep ? null
       : look === "working" ? [agent?.title, word, elapsed].filter(Boolean).join(" · ")
         : target ? waitLineWords(target, t)
-        : branch ? [branch.plan ? t(branch.plan === "pr" ? "mission.foot.planPr" : "mission.foot.planDirect") : branch.mark in PR_LOOK ? t(PR_LOOK[branch.mark as PrState].word) : word, branch.to ? `→ ${lineToWords(branch.to, t)}` : null].filter(Boolean).join(" ")
+        // A waiting step whose wait failed says how in its state word's place (PRD core-wait D-17, B4).
+        : branch ? [branch.plan ? t(branch.plan === "pr" ? "mission.foot.planPr" : "mission.foot.planDirect") : branch.failed ? waitFailureWords(branch.failed, t) : branch.mark in PR_LOOK ? t(PR_LOOK[branch.mark as PrState].word) : word, branch.to ? `→ ${lineToWords(branch.to, t)}` : null].filter(Boolean).join(" ")
           : result ? resultLineWords(result, t) : word;
   const pr = branch?.pr ? { label: linePrLabel(branch.pr), look: branch.mark in PR_LOOK ? PR_LOOK[branch.mark as PrState] : null } : null;
   const Icon = pr?.look?.icon;

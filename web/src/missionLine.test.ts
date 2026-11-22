@@ -116,7 +116,7 @@ it("says what a waiting node waits on, the progress of a mission and how the wai
   expect(waitLine(waiting({ wait_target: { pr: 1232 }, external: { pr: 1232 } }))).toBeNull();
   const closed = branchLine(waiting({ wait_target: { pr: 2528 }, external: { pr: 2528 }, outside: { base: "main", state: "closed" }, wait_outcome: "closed_unmerged" }), "main");
   expect(closed).toMatchObject({ mark: "closed", pr: { number: 2528, outside: true }, to: { kind: "branch", name: "main" }, failed: "closed_unmerged" });
-  expect(branchLineWords(closed!, t())).toBe(`↗#${2528} → main · 닫힘 · 머지 없이 닫힘`);
+  expect(branchLineWords(closed!, t())).toBe(`↗#${2528} → main · 머지 없이 닫힘`);
   expect(branchLine(waiting({ wait_target: { branch: "vendor/sdk" }, external: { branch: "vendor/sdk" }, outside: { base: "main" }, wait_outcome: "closed_unmerged" }), "main")?.failed).toBe("closed_unmerged");
   expect(branchLine(waiting({ wait_target: { pr: 2528 }, external: { pr: 2528 }, wait_outcome: "expired" }), "main")?.failed).toBeNull();
   expect(branchLine(node({ pr: 7 }), "main")?.failed).toBeNull();

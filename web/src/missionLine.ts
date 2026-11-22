@@ -253,7 +253,8 @@ export function linePrLabel(pr: NonNullable<BranchLine["pr"]>): string {
 export function branchLineWords(line: BranchLine, t: TFunction<"translation">): string {
   const head = line.plan ? [t(line.plan === "pr" ? "mission.foot.planPr" : "mission.foot.planDirect")] : [line.pr ? linePrLabel(line.pr) : null, line.branch ? `${line.branch.outside ? "↗ " : ""}${line.branch.name}` : null];
   const path = [...head, line.to ? `→ ${lineToWords(line.to, t)}` : null].filter(Boolean).join(" ");
-  const state = line.mark in PR_LOOK ? t(PR_LOOK[line.mark as PrState].word) : null;
+  // A failed wait's reason says how its pull request stands, so the state word gives way to it.
+  const state = line.failed == null && line.mark in PR_LOOK ? t(PR_LOOK[line.mark as PrState].word) : null;
   const person = line.person ? [t("mission.merge.mine"), line.person === "due" ? t("mission.merge.turn") : line.person === "merged" ? t("mission.merge.merged") : null] : [];
   return [path, line.direct ? t("mission.foot.planDirect") : null, state, ...person, line.failed ? waitFailureWords(line.failed, t) : null].filter(Boolean).join(" · ");
 }

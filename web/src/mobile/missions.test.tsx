@@ -252,6 +252,24 @@ it("lists the steps by default, says how long a worked step has worked from the 
   }
 });
 
+// PRD core-wait D-17, B4 (with-hide/hide#2848 verifier finding 3): a waiting step whose pull request closed without a merge
+// says so in its state word's place, as the map's card ends its line in it.
+it("says how a waiting step's wait failed on a pull request that closed without a merge", async () => {
+  const page = mission("m-wait", { nodes: [
+    node("vendor", "working", { kind: "wait", delivery: null, agent_runtime: null, worker_agent: null, pr: 2528, external_pr: 2528, external_base: "main", external_state: "closed", wait_target: { pr: 2528 }, wait_outcome: "closed_unmerged", attention: { reason: "pr_closed", pr: 2528, to: "conductor", since_unix_ms: Date.now(), on_row: false, item: false } }),
+  ] });
+  const { container, click, unmount } = await connect([page]);
+  try {
+    await click('[data-phone-tab="missions"]');
+    await click('[data-phone-mission="m-wait"]');
+    const step = container.querySelector('[data-phone-step="vendor"]');
+    expect(step?.querySelector("[data-phone-step-line]")?.textContent).toBe("closed without merge → main");
+    expect(step?.getAttribute("aria-label")).toContain("closed without merge");
+  } finally {
+    await unmount();
+  }
+});
+
 it("counts a step's time only while its worker works: a stopped or sleeping step says so with no time, and one owed to the operator stands in the hold band", async () => {
   const now = Date.now();
   const forty = now - 40 * 60_000;
