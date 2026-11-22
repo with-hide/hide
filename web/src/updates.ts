@@ -3,7 +3,7 @@
 // its dot, the ↑ button and its card beside Help, and Settings > About. A browser tab and the phone have no bridge,
 // so they read null and show none of it (B24).
 
-import { useSyncExternalStore } from "react";
+import { useEffect, useSyncExternalStore } from "react";
 import { hostBridge, type UpdateStatus } from "./host";
 import { formatRelativeTime } from "./i18n/format";
 import type { InterfaceLanguage } from "./i18n/locale";
@@ -66,6 +66,32 @@ export function checkedAgo(language: InterfaceLanguage, checkedAt: number, now: 
 /** Installs the ready update and reopens the app; the core and its agents keep running. */
 export function restartIntoUpdate(): void {
   hostBridge()?.updates.restart();
+}
+
+/** Updates this app now, as the operator pressed: restarts into the ready version, or looks for one. */
+export function updateNow(status: UpdateStatus | null): void {
+  if (readyVersion(status) !== null) restartIntoUpdate();
+  else checkForUpdates();
+}
+
+/**
+ * Another computer, which opens this one, asked it to update (PRD
+ * device-connect-iroh B22): while `asked`, the app looks for the official
+ * release at once and restarts into it once it is ready, with no press. A
+ * restart that asks for the system password (Linux, D-18) is left to the
+ * operator, whose notice stays. A browser tab and the phone have no
+ * updates and do nothing.
+ */
+export function useAskedUpdate(asked: boolean): void {
+  const status = useUpdateStatus();
+  const known = status !== null;
+  const ready = readyVersion(status) !== null;
+  const unattended = status?.installOnQuit === true;
+  useEffect(() => {
+    if (!asked || !known) return;
+    if (!ready) checkForUpdates();
+    else if (unattended) restartIntoUpdate();
+  }, [asked, known, ready, unattended]);
 }
 
 /** Closes the ready card for `version`; Help's dot and line and About keep the update. */

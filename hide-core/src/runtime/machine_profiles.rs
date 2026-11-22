@@ -401,7 +401,7 @@ impl Runtime {
                 registration
             }
             // The press is the install consent, as Add device's is (B2).
-            (None, Some(distro)) => match self.register_wsl_device(distro, true) {
+            (None, Some(distro)) => match self.register_wsl_device(distro, true, false) {
                 Ok(registration) => registration,
                 Err(refusal) => {
                     self.set_error(refusal.code, refusal.message, false);

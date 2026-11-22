@@ -105,6 +105,124 @@ impl WslAccess {
             .collect())
     }
 
+    /// `wsl.exe -d <distro> --cd ~ -e <command…>`, as the distribution's
+    /// default user.
+    fn command<S: AsRef<std::ffi::OsStr>>(&self, distro: &str, command: &[S]) -> Command {
+        let mut wsl = Command::new(&self.program);
+        // What runs starts in the Linux home, not in the Windows folder
+        // this process runs in, which WSL would mount.
+        wsl.args(["-d", distro, "--cd", "~", "-e"])
+            .args(command)
+            // wsl.exe's own messages in UTF-8, as the link reads them.
+            .env("WSL_UTF8", "1");
+        wsl
+    }
+
+    /// Whether `distro` runs now; asking starts nothing.
+    pub fn runs(&self, distro: &str) -> Result<bool, String> {
+        let _admitted = admitted("its state was not read")?;
+        hide_platform::wsl::running_from(&self.program, RUNNING_TIMEOUT)
+            .map(|running| running.contains(distro))
+            .map_err(|error| error.to_string())
+    }
+
+    /// Runs `argv` in `distro` to its end, as the distribution's default
+    /// user from its home, and answers its exit code and at most `cap`
+    /// bytes of what it printed. It starts a distribution that is off, so
+    /// a caller that may not wake one asks [`Self::runs`] first (D-11).
+    pub fn run(
+        &self,
+        distro: &str,
+        argv: &[String],
+        cap: usize,
+        within: Duration,
+    ) -> Result<bootstrap::Ran, String> {
+        valid(distro)?;
+        let _admitted = admitted("the command was not run")?;
+        let mut command = self.command(distro, argv);
+        command
+            .stdin(Stdio::null())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped());
+        let mut child = hide_platform::process::OwnedChild::spawn(&mut command)
+            .map_err(|error| format!("wsl.exe could not start: {error}"))?;
+        let output = child
+            .capture_until(Instant::now() + within, cap)
+            .map_err(|error| format!("wsl.exe did not answer: {error}"))?;
+        Ok(bootstrap::Ran {
+            // A run a signal ended has no code; it is no answer either.
+            status: output.status.code().unwrap_or(-1),
+            stdout: output.stdout,
+            stderr: output.stderr,
+        })
+    }
+
+    /// Starts `argv` in `distro` with its input, output and error output
+    /// piped, for a caller that talks to it for as long as it runs and
+    /// ends it: a connection's carrier. It starts a distribution that is
+    /// off, as [`Self::run`] does.
+    pub fn start(
+        &self,
+        distro: &str,
+        argv: &[String],
+    ) -> Result<hide_platform::process::OwnedChild, String> {
+        valid(distro)?;
+        // Held for the start alone: the child is the caller's from here.
+        let _admitted = admitted("the connection was not started")?;
+        let mut command = self.command(distro, argv);
+        command
+            .stdin(Stdio::piped())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped());
+        hide_platform::process::OwnedChild::spawn(&mut command)
+            .map_err(|error| format!("wsl.exe could not start: {error}"))
+    }
+
+    /// Puts this build's programs in their version folder under `root` in
+    /// `distro`, sending only what it lacks, and answers where the build's
+    /// `hided` is there: what `Upstream::install_build` does over SSH, for
+    /// the Hide this PC started in the distribution (PRD
+    /// device-connect-iroh B23). It starts a distribution that is off, as
+    /// [`Self::run`] does, and ends its `wsl.exe` before it answers.
+    pub fn install_build(
+        &self,
+        distro: &str,
+        packages: &HelperPackages,
+        root: &str,
+    ) -> Result<String, String> {
+        valid(distro)?;
+        let _admitted = admitted("the build was not sent")?;
+        let mut command = self.command(distro, &bootstrap::WRAPPER);
+        command
+            .stdin(Stdio::piped())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped());
+        let child = hide_platform::process::OwnedChild::spawn(&mut command)
+            .map_err(|error| format!("wsl.exe could not start: {error}"))?;
+        let cancel = hide_node_link::device::Cancel::default();
+        let link = ChildLink::start(&format!("wsl:{distro}"), child, Some(&cancel))
+            .map_err(|error| format!("The distribution's link could not start: {error}"))?;
+        let mut pipe = UnaskedStart::new(link, cancel);
+        let installed = (|pipe: &mut UnaskedStart| {
+            let facts = match bootstrap::probe(&mut *pipe, Instant::now() + PROBE_TIMEOUT) {
+                Ok(facts) => facts,
+                Err(bootstrap::ProbeError::Unsupported(reason)) => return Err(reason),
+                Err(bootstrap::ProbeError::Stopped(stop)) => {
+                    return Err(WslDevice::stopped(pipe, stop));
+                }
+            };
+            let payload = packages
+                .payload_for(&facts.os, &facts.arch)
+                .map_err(|error| error.to_string())?;
+            // Sent as they are, as a device's install is.
+            bootstrap::install_build(&mut *pipe, root, &facts.home, payload, false)
+                .map_err(|error| error.to_string())
+        })(&mut pipe);
+        // The start script waits for a helper to start: nothing follows.
+        pipe.link.kill();
+        installed
+    }
+
     fn distribution(&self, name: &str) -> Result<Distribution, EstablishError> {
         let found = (self.distributions)().map_err(|error| {
             EstablishError::Helper(format!(
@@ -120,6 +238,20 @@ impl WslAccess {
                 ))
             })
     }
+}
+
+fn valid(distro: &str) -> Result<(), String> {
+    match hide_platform::wsl::valid_distribution_name(distro) {
+        true => Ok(()),
+        false => Err(format!("{distro:?} is not a WSL distribution name")),
+    }
+}
+
+/// One of the [`MAX_CALLS`] places, or why `what` did not happen.
+fn admitted(what: &str) -> Result<crate::ssh::gate::Slot, String> {
+    CALLS
+        .admit(Instant::now() + CALL_ADMISSION, None)
+        .ok_or_else(|| format!("WSL is busy with {MAX_CALLS} other calls from Hide; {what}"))
 }
 
 /// One WSL distribution reached through `wsl.exe`.
@@ -159,31 +291,13 @@ impl WslDevice {
         format!("wsl:{}", self.distro)
     }
 
-    /// `wsl.exe -d <distro> --cd ~ -e <command…>`, as the distribution's
-    /// default user.
     fn command(&self, command: &[&str]) -> Command {
-        let mut wsl = Command::new(&self.access.program);
-        // The helper and its scripts start in the Linux home, not in the
-        // Windows folder this process runs in, which WSL would mount.
-        wsl.args(["-d", &self.distro, "--cd", "~", "-e"])
-            .args(command)
-            // wsl.exe's own messages in UTF-8, as the link reads them.
-            .env("WSL_UTF8", "1");
-        wsl
+        self.access.command(&self.distro, command)
     }
 
     /// Whether the distribution runs now; asking starts nothing.
     fn running(&self) -> Result<bool, String> {
-        let _admitted = CALLS
-            .admit(Instant::now() + CALL_ADMISSION, None)
-            .ok_or_else(|| {
-                format!(
-                    "WSL is busy with {MAX_CALLS} other calls from Hide; its state was not read"
-                )
-            })?;
-        hide_platform::wsl::running_from(&self.access.program, RUNNING_TIMEOUT)
-            .map(|running| running.contains(&self.distro))
-            .map_err(|error| error.to_string())
+        self.access.runs(&self.distro)
     }
 
     /// Why the start script stopped before the helper started, with the

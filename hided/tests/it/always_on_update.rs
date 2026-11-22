@@ -134,13 +134,41 @@ impl Machine {
 
     /// `hide connect` of the newer app: whether it succeeded, and its line.
     fn connect(&self) -> (bool, Value) {
-        let mut child = self
-            .command(&self.app_cli, NEW)
-            .arg("connect")
+        let mut connect = self.command(&self.app_cli, NEW);
+        connect.arg("connect");
+        self.answer(connect)
+    }
+
+    /// The raise a paired machine runs with the build it put here (B23):
+    /// `program core-update` with no build named, as a build of `order`.
+    fn raise(&self, program: &Path, order: u32) -> Value {
+        self.raise_from(program, order, true)
+    }
+
+    /// [`Machine::raise`], by a build that offers connections between two
+    /// Hides (`HIDE_DEVICE_CONNECT=1`) or one that does not.
+    fn raise_from(&self, program: &Path, order: u32, offers: bool) -> Value {
+        let mut raise = self.command(program, order);
+        if offers {
+            raise.env(hided::env::HIDE_DEVICE_CONNECT, "1");
+        }
+        raise
+            .arg("core-update")
+            .arg("--state-dir")
+            .arg(&self.state)
+            .args(["--intent", "update-1"]);
+        let (ok, line) = self.answer(raise);
+        assert!(ok, "a raise answers with its outcome: {line}");
+        line
+    }
+
+    /// Runs `command` to its end: whether it succeeded, and its line.
+    fn answer(&self, mut command: Command) -> (bool, Value) {
+        let mut child = command
             .stdout(Stdio::piped())
             .stderr(Stdio::inherit())
             .spawn()
-            .expect("hide connect starts");
+            .expect("the command starts");
         // Read to the end on a thread of its own: a daemon that inherited
         // the output would hold it open for its whole life on Windows.
         let mut stdout = child.stdout.take().unwrap();
@@ -152,11 +180,11 @@ impl Machine {
         });
         let bytes = heard
             .recv_timeout(Duration::from_secs(240))
-            .expect("hide connect answers within the update's bound");
+            .expect("the command answers within the update's bound");
         let ok = child.wait().unwrap().success();
         let line = serde_json::from_slice(&bytes).unwrap_or_else(|error| {
             panic!(
-                "hide connect printed no JSON line ({error}): {}",
+                "the command printed no JSON line ({error}): {}",
                 String::from_utf8_lossy(&bytes)
             )
         });
@@ -337,6 +365,89 @@ fn a_newer_app_updates_the_core_its_login_item_runs_and_keeps_the_previous_build
         hide_kit::layout::keep_alive(&machine.state).is_file(),
         "the item's marker stays"
     );
+}
+
+/// B23: a machine that started this account's Hide over SSH or `wsl.exe`
+/// puts its newer build here and runs it as a raise. The core its starter
+/// runs is replaced by that build, placed in the install root; the same
+/// build asked again finds nothing to do, and an older build leaves the
+/// newer core as it is.
+#[test]
+fn a_paired_machine_s_newer_build_raises_the_core_and_an_older_one_leaves_it() {
+    let mut machine = Machine::new();
+    machine.log_in();
+    let old_pid = machine.old_core.as_ref().unwrap().id();
+
+    // A build that does not offer connections between two Hides takes no
+    // raise, and the core runs on.
+    let off = machine.raise_from(&machine.app_daemon, NEW, false);
+    assert_eq!(off["kind"], "refused", "{off}");
+    assert_eq!(off["reason"], "device_connect_unavailable", "{off}");
+    assert!(
+        hide_platform::process::is_alive(old_pid),
+        "the core was not touched"
+    );
+
+    let raised = machine.raise(&machine.app_daemon, NEW);
+
+    assert_eq!(raised["kind"], "updated", "{raised}");
+    let new_build = build_of(&machine.app_daemon);
+    let updated = machine.health_until(|health| health["build"] == new_build.as_str());
+    let program = program_of(&updated);
+    assert!(
+        program.starts_with(&machine.core_root) && !same_file(&program, &machine.old_daemon),
+        "the core runs the new build from the install root: {}",
+        program.display()
+    );
+    assert_eq!(raised["pid"], updated["pid"], "{raised}");
+    assert!(
+        !hide_platform::process::is_alive(old_pid),
+        "the old build's core ended"
+    );
+    assert_eq!(machine.builds().len(), 2, "{:?}", machine.builds());
+
+    let again = machine.raise(&machine.app_daemon, NEW);
+    assert_eq!(again["kind"], "current", "{again}");
+    let lower = machine.raise(&machine.old_daemon, OLD);
+    assert_eq!(lower["kind"], "kept", "{lower}");
+    let after = machine.health_until(|health| health["build"] == new_build.as_str());
+    assert_eq!(after["pid"], updated["pid"], "neither restarted the core");
+}
+
+/// B23: once the app has been opened on a machine whose Hide another
+/// machine started, the app updates that core, so a paired machine's build
+/// newer than the app's raises nothing: a core raised past the app would
+/// refuse the app's own connection. The app's word is its own `hide
+/// connect`'s, whoever holds the account's `hide` command, here the device
+/// helper that started the Hide.
+#[test]
+fn a_core_its_app_opened_is_left_to_the_app_by_a_paired_machine_s_newer_build() {
+    let mut machine = Machine::new();
+    machine.log_in();
+    #[cfg(unix)]
+    {
+        let helper = hide_kit::layout::helper_root(&machine.home)
+            .join("current")
+            .join("hide");
+        std::fs::create_dir_all(helper.parent().unwrap()).unwrap();
+        stand_in(&helper);
+        let bin = machine.home.join(".local").join("bin");
+        std::fs::create_dir_all(&bin).unwrap();
+        std::os::unix::fs::symlink(&helper, bin.join("hide")).unwrap();
+    }
+
+    let (ok, line) = machine.connect();
+
+    assert!(ok, "the app opens and updates the core: {line}");
+    let app_build = build_of(&machine.app_daemon);
+    let opened = machine.health_until(|health| health["build"] == app_build.as_str());
+    // Another build of a later order than the app's, as a paired machine
+    // on a newer main would put here.
+    let raised = machine.raise(&machine.old_daemon, NEW + 1);
+    assert_eq!(raised["kind"], "left_to_app", "{raised}");
+    let after = machine.health_until(|health| health["build"] == app_build.as_str());
+    assert_eq!(after["pid"], opened["pid"], "the core was not restarted");
+    assert_eq!(machine.builds().len(), 2, "{:?}", machine.builds());
 }
 
 #[test]

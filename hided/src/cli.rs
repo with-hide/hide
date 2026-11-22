@@ -2131,6 +2131,12 @@ fn connect(env: &Env) -> Result<Healthy, ConnectError> {
     Ok(healthy)
 }
 
+/// Whether this state folder's daemon runs now, started here when it did
+/// not: [`connect`] for a caller that prints nothing of it.
+pub(crate) fn core_started(env: &Env) -> bool {
+    connect(env).is_ok()
+}
+
 /// A daemon and the `/health` it answered when it was found or started: its
 /// role and node are read from that answer, never asked for again.
 type Healthy = (DaemonState, serde_json::Value);
@@ -2249,6 +2255,20 @@ fn find_or_start(env: &Env) -> Result<Healthy, ConnectError> {
         .ok()
         .as_deref()
         .and_then(hide_kit::bundled_kit_dir);
+    // The app says it opens this folder's core, before anything below can
+    // end the connect: from now on the app updates that core, and a paired
+    // machine's raise leaves it alone (B23). The connect goes on without
+    // the note, which the next one writes.
+    if let Some(package) = &package
+        && let Err(message) = hide_kit::app::note(&env.state_dir, package)
+    {
+        eprintln!(
+            "{}",
+            serde_json::json!({
+                "component": "hide", "kind": "app.not_noted", "message": message,
+            })
+        );
+    }
     if let Some((state, health)) = healthy_daemon(env) {
         let running = health.get("build").and_then(serde_json::Value::as_str);
         if running == Some(build.as_str()) {
@@ -3415,7 +3435,7 @@ fn healthy_daemon(env: &Env) -> Option<(DaemonState, serde_json::Value)> {
     healthy_daemon_in(&env.state_dir)
 }
 
-fn healthy_daemon_in(state_dir: &Path) -> Option<(DaemonState, serde_json::Value)> {
+pub(crate) fn healthy_daemon_in(state_dir: &Path) -> Option<(DaemonState, serde_json::Value)> {
     probe_daemon(state_dir, HEALTH_REQUEST).ok()
 }
 

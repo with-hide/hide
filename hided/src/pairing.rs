@@ -32,10 +32,9 @@ use hide_core::peer_machines::{
 use hide_peer::pairing::{AcceptError, JoinError, Me, Pairings, RequestError, View};
 use hide_peer::protocol::hello::{Behind, GrantState};
 use hide_peer::protocol::{Candidate, PathKind, PeerKey, StreamKind};
-use hide_peer::store::{Grant, GrantStatus, Host, KnownState, StoreError, Via};
+use hide_peer::store::{Grant, GrantStatus, Host, KnownState, Login, StoreError, Via};
 use hide_peer::words::WordList;
 use hide_peer::{PeerEvent, PeerTransport, RelayState};
-use hide_peer_iroh::IrohTransport;
 use serde::Deserialize;
 use serde_json::{Value, json};
 use tokio::sync::{OnceCell, Semaphore, watch};
@@ -45,9 +44,11 @@ use crate::core::CoreHandle;
 use crate::ending::Ending;
 use crate::guests::HelperFolder;
 use crate::pairing_ssh;
+use crate::pairing_wsl;
 use crate::peer_host::{HostPeers, Incoming, Link, PeerHost};
+use crate::started_cores::{Failure, Raised};
 
-type Service = Pairings<IrohTransport>;
+type Service = Pairings<crate::peer_host::Transport>;
 
 /// How long a share a terminal holds lives after the terminal last asked
 /// for its status: a closed terminal ends its offer (security spec 3.4).
@@ -62,6 +63,25 @@ const RELAY_ANSWER_FOR: Duration = Duration::from_secs(30);
 
 /// The most addresses kept for one host.
 const MAX_ADDRESSES: usize = 8;
+
+/// Puts the address an operator gave first among a host's, and drops the
+/// last ones past [`MAX_ADDRESSES`]. A distribution's name is not an
+/// address someone gave: it is the only way this PC reaches that Hide, so
+/// it is never the one dropped.
+fn put_first(candidates: &mut Vec<Candidate>, first: Candidate) {
+    candidates.retain(|candidate| *candidate != first);
+    candidates.insert(0, first);
+    let distribution = |candidate: &Candidate| matches!(candidate, Candidate::Wsl(_));
+    let mut room =
+        MAX_ADDRESSES.saturating_sub(candidates.iter().filter(|c| distribution(c)).count());
+    candidates.retain(|candidate| {
+        distribution(candidate) || {
+            let kept = room > 0;
+            room = room.saturating_sub(1);
+            kept
+        }
+    });
+}
 
 /// Which direction of a pair an ask is about.
 #[derive(Clone, Copy, Debug, Deserialize, PartialEq, Eq)]
@@ -134,6 +154,11 @@ pub enum Ask {
     Retry {
         device: String,
     },
+    /// Asks a machine this one opens, whose Hide is too old to connect,
+    /// to update itself (B22).
+    Update {
+        device: String,
+    },
     /// Names an address to reach a host at first.
     Address {
         device: String,
@@ -150,6 +175,23 @@ pub enum Ask {
     PairSsh {
         alias: String,
     },
+    /// [`Ask::LookSsh`] for a WSL distribution of this PC, asked through
+    /// `wsl.exe` (D-27); it may start a distribution that is off, which the
+    /// operator's choice of it in Add device allows (B43).
+    LookWsl {
+        distro: String,
+    },
+    /// [`Ask::PairSsh`] for a WSL distribution of this PC (security spec
+    /// 17): its own Hide saves a pending grant, this PC confirms it over
+    /// the connection `wsl.exe` carries, and nothing is installed there.
+    PairWsl {
+        distro: String,
+    },
+    /// The stream this ask came on becomes the carrier of a connection to
+    /// this machine's core: what `hide device carry` asks, run by the PC
+    /// of the distribution this core runs in (D-27, D-62). Answered by
+    /// [`Pairing::carrier`], never as a value.
+    Carry,
     /// Switches the helper device this machine dials as `alias` to the
     /// connection of the Hide on its machine (D-49, B36): that Hide is
     /// paired over the device's SSH login and, once the connection is
@@ -195,9 +237,13 @@ impl Ask {
             | Self::Answer { .. }
             | Self::Resume { .. }
             | Self::Request { .. }
+            | Self::Update { .. }
             | Self::Address { .. }
             | Self::LookSsh { .. }
             | Self::PairSsh { .. }
+            | Self::LookWsl { .. }
+            | Self::PairWsl { .. }
+            | Self::Carry
             | Self::Switch { .. }
             | Self::AcceptSsh { .. } => true,
             Self::Status { .. }
@@ -309,6 +355,10 @@ pub fn next_action(code: &str) -> &'static str {
             "ssh did not sign in without asking: check ssh <alias> in a terminal, or add the machine by a link it shares"
         }
         "ssh_busy" => "Other SSH checks are still running; try again in a moment",
+        "wsl_not_reached" => {
+            "WSL did not run Hide in that distribution: open the distribution once in a terminal, then try again"
+        }
+        "wsl_unavailable" => "This computer has no WSL to reach a distribution through",
         "ssh_mac_from_mac_only" => {
             "A Mac takes a Hide only from a Mac: install Hide on that Mac and add it by a link it shares"
         }
@@ -323,9 +373,12 @@ pub fn next_action(code: &str) -> &'static str {
             "Hide could not be started on that machine; the device is used as before. Try the switch again, or open Hide there"
         }
         "switch_unsupported" => {
-            "Only a device this Hide dials over SSH and has connected to once can be switched"
+            "Only a device this Hide dials over SSH and has connected to once, or a WSL distribution of this PC, can be switched"
         }
         "device_own" => "That is this machine itself",
+        "update_not_asked" => {
+            "Only a machine this one opens, with that direction on, can be asked to update: update Hide on that machine itself"
+        }
         code => crate::access::next_action(code)
             .unwrap_or("Retry; the reason is in Hide's diagnostic log"),
     }
@@ -351,9 +404,9 @@ struct Paired {
 /// How far a switch got with its target, for a device that was added for
 /// that switch (B41): such a device is taken off again only when the target
 /// was asked and nothing was started there. A switch that never reached
-/// its SSH login (too many run, [`SSH_DIALS`]) said nothing about the
-/// target, and one that started a Hide there or had a grant saved there
-/// left something the device still reaches.
+/// its login, SSH or `wsl.exe` (too many run, [`SSH_DIALS`]), said nothing
+/// about the target, and one that started a Hide there or had a grant
+/// saved there left something the device still reaches.
 #[derive(Default)]
 struct SwitchReach(std::sync::atomic::AtomicU8);
 
@@ -361,7 +414,7 @@ impl SwitchReach {
     const ASKED: u8 = 1;
     const STARTED: u8 = 2;
 
-    /// The SSH login to the target runs.
+    /// The login to the target runs.
     fn asked(&self) {
         self.0
             .fetch_max(Self::ASKED, std::sync::atomic::Ordering::AcqRel);
@@ -400,8 +453,14 @@ pub struct Pairing {
     frame: watch::Sender<Arc<Value>>,
     /// Counts the asks that want the paired machines read again.
     look: watch::Sender<u64>,
-    /// Which machines cannot connect until one side updates.
+    /// Which machines cannot connect until one side updates, and whether
+    /// that side was asked to (B22), until the two connect.
     updates: Mutex<HashMap<PeerKey, PeerUpdate>>,
+    /// Where bringing the Hides this machine switched to its build stands.
+    raises: Mutex<Raises>,
+    /// Held by the one raise that runs: each copies a build to a machine
+    /// and restarts its core (B23).
+    raising: tokio::sync::Mutex<()>,
     relay: Mutex<Relay>,
     /// The machines the core was last told, and the turn to tell it.
     told: tokio::sync::Mutex<Option<Vec<PeerMachine>>>,
@@ -445,10 +504,97 @@ pub(crate) const SWITCH_CONNECTS_WITHIN: Duration = Duration::from_secs(90);
 /// The most requests remembered; the oldest is dropped first.
 const SSH_REQUESTS: usize = 16;
 
+/// The name a distribution's pairing request is kept under beside the SSH
+/// aliases': no alias holds a space.
+fn wsl_request_key(distro: &str) -> String {
+    format!("wsl {distro}")
+}
+
 struct SshRequest {
     alias: String,
     id: String,
     made: Instant,
+}
+
+/// What a machine's row says after another refused first exchange, given
+/// what it said: which side is behind, and that the side was asked to
+/// update when it was asked before and is still the one behind.
+fn still_needed(said: Option<PeerUpdate>, behind: Behind) -> PeerUpdate {
+    match behind {
+        Behind::Theirs if said == Some(PeerUpdate::ThereAsked) => PeerUpdate::ThereAsked,
+        Behind::Theirs => PeerUpdate::There,
+        Behind::Ours | Behind::Either if said == Some(PeerUpdate::HereAsked) => {
+            PeerUpdate::HereAsked
+        }
+        Behind::Ours | Behind::Either => PeerUpdate::Here,
+    }
+}
+
+/// The Hides this machine switched on other machines, each brought to this
+/// machine's build once per build it is seen to run (B23,
+/// `crate::started_cores`).
+#[derive(Default)]
+struct Raises {
+    /// A raise that waits or runs, or how the last one failed: what the
+    /// machine's row shows in place of who has to update.
+    shown: HashMap<PeerKey, PeerUpdate>,
+    /// The build each machine named when its raise was last begun.
+    tried: HashMap<PeerKey, String>,
+    /// The raise that waits or runs for each machine, by the number it was
+    /// begun under: only that raise's end is written.
+    running: HashMap<PeerKey, u64>,
+    begun: u64,
+}
+
+impl Raises {
+    /// Begins a raise of `key`'s machine, which names the build `theirs`,
+    /// and answers its number; none when one runs for it already, or when
+    /// that build was tried and nobody `asked` again.
+    fn begin(&mut self, key: PeerKey, theirs: &str, asked: bool) -> Option<u64> {
+        if self.running.contains_key(&key)
+            || (!asked && self.tried.get(&key).map(String::as_str) == Some(theirs))
+        {
+            return None;
+        }
+        self.begun += 1;
+        self.running.insert(key, self.begun);
+        self.tried.insert(key, theirs.to_owned());
+        self.shown.insert(key, PeerUpdate::Updating);
+        Some(self.begun)
+    }
+
+    /// Writes how raise `attempt` of `key`'s machine ended. A raise that is
+    /// no longer that machine's, because the machine was taken off while it
+    /// ran, writes nothing and answers false.
+    fn finish(&mut self, key: PeerKey, attempt: u64, raised: Result<Raised, Failure>) -> bool {
+        if self.running.get(&key) != Some(&attempt) {
+            return false;
+        }
+        self.running.remove(&key);
+        match raised {
+            Ok(_) => self.shown.remove(&key),
+            Err(failure) => self.shown.insert(key, raise_failure(failure)),
+        };
+        true
+    }
+
+    /// Keeps only what belongs to a machine among `paired`: what a raise
+    /// left of a machine goes with the machine.
+    fn keep(&mut self, paired: &std::collections::HashSet<PeerKey>) {
+        self.shown.retain(|key, _| paired.contains(key));
+        self.tried.retain(|key, _| paired.contains(key));
+        self.running.retain(|key, _| paired.contains(key));
+    }
+}
+
+/// A failed raise as its row names it.
+fn raise_failure(failure: Failure) -> PeerUpdate {
+    match failure {
+        Failure::NotReached => PeerUpdate::UpdateNotReached,
+        Failure::RolledBack => PeerUpdate::UpdateRolledBack,
+        Failure::Busy => PeerUpdate::UpdateBusy,
+        Failure::Failed => PeerUpdate::UpdateFailed,
+    }
 }
 
 impl Pairing {
@@ -471,6 +617,8 @@ impl Pairing {
             frame: watch::channel(Arc::new(json!(View::default()))).0,
             look: watch::channel(0).0,
             updates: Mutex::new(HashMap::new()),
+            raises: Mutex::default(),
+            raising: tokio::sync::Mutex::default(),
             relay: Mutex::new(Relay::default()),
             told: tokio::sync::Mutex::new(None),
             guests: OnceLock::new(),
@@ -620,21 +768,128 @@ impl Pairing {
                 changed = saved.changed() => if changed.is_err() { return },
                 changed = look.changed() => if changed.is_err() { return },
                 event = events.recv() => match event {
-                    Ok(PeerEvent::UpdateNeeded { key, behind, .. }) => {
-                        let update = match behind {
-                            Behind::Ours | Behind::Either => PeerUpdate::Here,
-                            Behind::Theirs => PeerUpdate::There,
+                    Ok(PeerEvent::UpdateNeeded { key, behind, build, .. }) => {
+                        let asked = {
+                            let mut updates = lock(&self.updates);
+                            let update = still_needed(updates.get(&key).copied(), behind);
+                            updates.insert(key, update);
+                            update == PeerUpdate::ThereAsked
                         };
-                        lock(&self.updates).insert(key, update);
+                        // An ask is said once per exchange: until the two
+                        // connect, each dial of the machine says it again,
+                        // so a Hide restarted there still hears it. A
+                        // machine this one no longer opens is asked nothing.
+                        if asked && peers.ask_update(&key).is_err() {
+                            lock(&self.updates).insert(key, PeerUpdate::There);
+                        }
+                        // A Hide this machine switched is brought to its
+                        // build instead of waiting for someone there.
+                        if behind != Behind::Ours {
+                            self.raise_started(&peers, key, &build, false);
+                        }
+                    }
+                    // The app here is told through the machine's row: its
+                    // own window updates and restarts (B22).
+                    // Only where this machine is the one behind: an ask on
+                    // a connection that lives has nothing to update for.
+                    Ok(PeerEvent::UpdateRequested { key }) => {
+                        let mut updates = lock(&self.updates);
+                        if updates.get(&key) == Some(&PeerUpdate::Here) {
+                            updates.insert(key, PeerUpdate::HereAsked);
+                        }
                     }
                     Ok(PeerEvent::Connected { key, .. }) => {
                         lock(&self.updates).remove(&key);
+                        if let Some(link) = peers.link(&key) {
+                            let build = link.their_hello().build.clone();
+                            self.raise_started(&peers, key, &build, false);
+                        }
                     }
                     Ok(_) | Err(tokio::sync::broadcast::error::RecvError::Lagged(_)) => {}
                     Err(tokio::sync::broadcast::error::RecvError::Closed) => return,
                 },
             }
         }
+    }
+
+    /// Brings the Hide this machine reaches through a login on `key`'s
+    /// machine to this build, when that Hide names an older one (`theirs`):
+    /// once per build it names, and again when the operator asks (`asked`).
+    /// A machine this one never switched through a login, and one that runs
+    /// this build or a newer release, are left alone, and so is one that
+    /// answers that its app updates it or that nothing would start its core
+    /// again: its row shows nothing of the raise. One raise runs at a time.
+    fn raise_started(self: &Arc<Self>, peers: &HostPeers, key: PeerKey, theirs: &str, asked: bool) {
+        // A build that does not offer connections between two Hides raises
+        // no other machine's core (`env::Env::device_connect`).
+        if !self.host.device_connect() {
+            return;
+        }
+        let Some(login) = peers.host(&key).and_then(|host| host.started) else {
+            return;
+        };
+        let ours = crate::build_order::Release::of_this_build().version;
+        let attempt = {
+            let mut raises = lock(&self.raises);
+            if !crate::build_order::may_be_older(&ours, theirs) {
+                // It caught up, by this machine's raise or another's.
+                if raises.shown.remove(&key).is_some() {
+                    self.look.send_modify(|count| *count += 1);
+                }
+                return;
+            }
+            let Some(attempt) = raises.begin(key, theirs, asked) else {
+                return;
+            };
+            attempt
+        };
+        self.look.send_modify(|count| *count += 1);
+        let (pairing, peers) = (Arc::clone(self), peers.clone());
+        tokio::spawn(async move {
+            let raised = pairing.raise(login).await;
+            let written = lock(&pairing.raises).finish(key, attempt, raised);
+            if raised == Ok(Raised::Updated) {
+                // The core there restarted: its connection is made again
+                // now, not at the next redial.
+                peers.network_changed();
+            }
+            if written {
+                pairing.look.send_modify(|count| *count += 1);
+            }
+        });
+    }
+
+    /// One raise through `login`, after the ones begun before it.
+    async fn raise(&self, login: Login) -> Result<Raised, Failure> {
+        let _one = tokio::select! {
+            () = self.shutdown.ended() => return Err(Failure::Failed),
+            one = self.raising.lock() => one,
+        };
+        let dial = Arc::clone(&self.ssh_dials)
+            .acquire_owned()
+            .await
+            .map_err(|_| Failure::Failed)?;
+        let (reach, wsl) = (self.ssh.clone(), self.host.wsl().cloned());
+        tokio::task::spawn_blocking(move || {
+            let _dial = dial;
+            // This build's programs for every system it carries, beside
+            // this one.
+            let packages = hide_node::ssh::host::HelperPackages::new(
+                std::env::current_exe()
+                    .ok()
+                    .and_then(|exe| exe.parent().map(std::path::Path::to_path_buf)),
+                crate::cli::RELEASE,
+            );
+            match &login {
+                Login::Ssh(alias) => pairing_ssh::raise(&reach, alias, &packages),
+                Login::Wsl(distro) => match &wsl {
+                    Some(carriers) => pairing_wsl::raise(carriers.access(), distro, &packages),
+                    None => Err(Failure::NotReached),
+                },
+            }
+        })
+        .await
+        .unwrap_or(Err(Failure::Failed))
     }
 
     /// Runs once when the pairing starts and then whenever the machines this
@@ -645,6 +900,14 @@ impl Pairing {
     /// (D-41).
     async fn paired_changed(&self, machines: &[PeerMachine]) {
         self.always_on.peers_changed();
+        // What a raise left of a machine goes with the machine.
+        {
+            let paired: std::collections::HashSet<PeerKey> = machines
+                .iter()
+                .filter_map(|machine| PeerKey::from_hex(&machine.key).ok())
+                .collect();
+            lock(&self.raises).keep(&paired);
+        }
         // A guest's work here follows its grant: one that holds none any
         // more was taken off this machine (`Guests::granted`).
         if let Some(guests) = self.guests.get() {
@@ -717,7 +980,10 @@ impl Pairing {
     fn paired(self: &Arc<Self>, peers: &HostPeers) -> Vec<Paired> {
         let hosts = peers.hosts();
         let guests = peers.grants(|grants, now| grants.list(now).cloned().collect::<Vec<_>>());
-        let updates = lock(&self.updates).clone();
+        let mut updates = lock(&self.updates).clone();
+        // A raise under way or failed is what its row says: this machine
+        // is who updates that Hide.
+        updates.extend(lock(&self.raises).shown.clone());
         let (mut paired, away) = rows(&hosts, &guests, |key| peers.link(key), &updates);
         // Why a host this machine dials is not connected: the relay's own
         // answer when it has one (B34), else nothing more than "not
@@ -812,6 +1078,16 @@ impl Pairing {
                 .await?;
             return Ok(json!({ "alias": alias, "looked": looked }));
         }
+        if let Ask::LookWsl { distro } = &ask {
+            let (carriers, reach) = (self.wsl()?, self.ssh.clone());
+            let target = distro.clone();
+            let looked = self
+                .wsl_call(distro, move || {
+                    pairing_wsl::look(carriers.access(), &reach, &target)
+                })
+                .await?;
+            return Ok(json!({ "distro": distro, "looked": looked }));
+        }
         // Sharing this machine, joining another and either side of an SSH
         // pairing open the endpoint (D-83). Nothing else does: with no
         // endpoint there is no machine to act on and no ask to answer.
@@ -819,6 +1095,7 @@ impl Pairing {
             Ask::Share { .. }
             | Ask::Join { .. }
             | Ask::PairSsh { .. }
+            | Ask::PairWsl { .. }
             | Ask::Switch { .. }
             | Ask::AcceptSsh { .. } => self.service().await?,
             Ask::EndShare | Ask::DismissJoin => match self.service.get() {
@@ -850,7 +1127,41 @@ impl Pairing {
             }
         };
         match ask {
-            Ask::Status { .. } | Ask::LookSsh { .. } => unreachable!("answered above"),
+            Ask::Status { .. } | Ask::LookSsh { .. } | Ask::LookWsl { .. } => {
+                unreachable!("answered above")
+            }
+            // A carrier is a stream, which only the bootstrap socket hands
+            // over (`Pairing::carrier`); asked as a value it is no request.
+            Ask::Carry => Err("invalid_request"),
+            Ask::PairWsl { distro } => {
+                let carriers = self.wsl()?;
+                let requested = wsl_request_key(&distro);
+                let request = self.ssh_request(&requested)?;
+                let (reach, me, key) = (self.ssh.clone(), self.me.clone(), peers.key());
+                let target = distro.clone();
+                let asked = Arc::clone(&carriers);
+                let paired = self
+                    .wsl_call(&distro, move || {
+                        pairing_wsl::accept(asked.access(), &reach, &target, &request, &me, &key)
+                    })
+                    .await??;
+                let answer = json!({
+                    "device_id": paired.accepted.device,
+                    "name": paired.accepted.name,
+                });
+                // The operator pressed: the dial that confirms the pairing
+                // may start the distribution again if it went off meanwhile.
+                carriers.may_wake(&distro);
+                service
+                    .adopt(paired.accepted, paired.first)
+                    .map_err(|error| match error {
+                        AcceptError::Invalid => "device_own",
+                        AcceptError::Already => "device_already_connected",
+                        AcceptError::Store(error) => store(error),
+                    })?;
+                lock(&self.ssh_requests).retain(|kept| kept.alias != requested);
+                Ok(answer)
+            }
             Ask::PairSsh { alias } => {
                 let request = self.ssh_request(&alias)?;
                 let (reach, me, key) = (self.ssh.clone(), self.me.clone(), peers.key());
@@ -1030,6 +1341,36 @@ impl Pairing {
                 let paired = self.named(&peers, &device)?;
                 lock(&self.relay).answer = None;
                 peers.network_changed();
+                // A raise that failed is the operator's to ask again.
+                let failed = {
+                    let raises = lock(&self.raises);
+                    raises
+                        .shown
+                        .get(&paired.key)
+                        .filter(|shown| **shown != PeerUpdate::Updating)
+                        .and_then(|_| raises.tried.get(&paired.key).cloned())
+                };
+                if let Some(theirs) = failed {
+                    self.raise_started(&peers, paired.key, &theirs, true);
+                }
+                self.look.send_modify(|count| *count += 1);
+                Ok(json!({ "device_id": paired.machine.device_id }))
+            }
+            Ask::Update { device } => {
+                let paired = self.named(&peers, &device)?;
+                // Asked only of a machine whose Hide is the older one and
+                // that this machine opens: the ask rides the first
+                // exchange of the dial made now, the one thing the two
+                // builds share.
+                let older = matches!(
+                    lock(&self.updates).get(&paired.key),
+                    Some(PeerUpdate::There | PeerUpdate::ThereAsked)
+                );
+                if !older || peers.ask_update(&paired.key).is_err() {
+                    return Err("update_not_asked");
+                }
+                lock(&self.updates).insert(paired.key, PeerUpdate::ThereAsked);
+                peers.network_changed();
                 self.look.send_modify(|count| *count += 1);
                 Ok(json!({ "device_id": paired.machine.device_id }))
             }
@@ -1038,10 +1379,7 @@ impl Pairing {
                 let address: SocketAddr = address.trim().parse().map_err(|_| "address_invalid")?;
                 let saved = peers.known(|known| {
                     let mut host = known.of(&paired.key).cloned().ok_or(StoreError::Unknown)?;
-                    let first = Candidate::Ip(address);
-                    host.candidates.retain(|candidate| *candidate != first);
-                    host.candidates.insert(0, first);
-                    host.candidates.truncate(MAX_ADDRESSES);
+                    put_first(&mut host.candidates, Candidate::Ip(address));
                     known.put(host)
                 });
                 saved.map_err(store)?;
@@ -1115,61 +1453,94 @@ impl Pairing {
         far: &Arc<SwitchReach>,
     ) -> Result<Value, &'static str> {
         let device = source.device_id.as_str();
-        let alias = source.ssh_alias.as_str();
         self.switch_step(device, "checking", json!({})).await;
-        let request = self.ssh_request(alias)?;
+        // The request a switch runs under is its channel's own, so one
+        // that stopped midway is asked again as the same request.
+        let requested = match &source.via {
+            hide_core::SwitchVia::Ssh { alias, .. } => alias.clone(),
+            hide_core::SwitchVia::Wsl { distro } => wsl_request_key(distro),
+        };
+        let request = self.ssh_request(&requested)?;
         let (reach, me, key) = (self.ssh.clone(), self.me.clone(), peers.key());
-        let target = alias.to_owned();
-        let (helper_root, press) = (source.helper_root.clone(), source.sign_in.clone());
+        let helper_root = source.helper_root.clone();
         let projects = source.projects.clone();
-        // The install's step is told from the thread that runs ssh.
+        // The install's step is told from the thread that runs the login.
         let (steps, runtime) = (Arc::clone(self), tokio::runtime::Handle::current());
-        let installed = device.to_owned();
         let installing = {
             let (runtime, far) = (runtime.clone(), Arc::clone(far));
+            let installed = device.to_owned();
             move || {
                 far.started();
                 runtime.block_on(steps.switch_step(&installed, "installing", json!({})));
             }
         };
+        // The login the machine is reached through, which its record keeps
+        // for bringing its Hide to this machine's build (B23).
+        let through = match &source.via {
+            hide_core::SwitchVia::Ssh { alias, .. } => Login::Ssh(alias.clone()),
+            hide_core::SwitchVia::Wsl { distro } => Login::Wsl(distro.clone()),
+        };
         // What follows the target's answer runs on the thread that holds
-        // the SSH login, before its session ends: the machine's own Hide is
-        // handed the device's projects only once it admitted this machine.
+        // the login, before it ends: the machine's own Hide is handed the
+        // device's projects only once it admitted this machine.
         let landed: Arc<Mutex<Option<Result<Value, &'static str>>>> = Arc::default();
         let admitted = {
             let (this, service, peers) = (Arc::clone(self), service.clone(), peers.clone());
-            let (device, alias, landed) =
-                (device.to_owned(), alias.to_owned(), Arc::clone(&landed));
+            let (device, requested, landed) =
+                (device.to_owned(), requested.clone(), Arc::clone(&landed));
             let far = Arc::clone(far);
             move |switched: &pairing_ssh::Switched| {
                 // The target answered a pairing: it holds a grant now.
                 far.started();
-                let done = runtime
-                    .block_on(this.admit_switch(&service, &peers, &device, &alias, switched));
+                let done = runtime.block_on(
+                    this.admit_switch(&service, &peers, &device, &through, &requested, switched),
+                );
                 let active = done.is_ok();
                 *lock(&landed) = Some(done);
                 active
             }
         };
-        let asked = Arc::clone(far);
-        let switched = self
-            .ssh_dial(alias, move || {
-                asked.asked();
-                pairing_ssh::switch(&pairing_ssh::Switch {
+        // What one switch asks, whichever channel carries it, from the
+        // thread its login runs on.
+        let asked = {
+            let far = Arc::clone(far);
+            move |run: &dyn Fn(
+                &pairing_ssh::Switch<'_>,
+            ) -> Result<pairing_ssh::Switched, &'static str>| {
+                far.asked();
+                run(&pairing_ssh::Switch {
                     reach: &reach,
-                    alias: &target,
                     request: &request,
                     me: &me,
                     key: &key,
                     helper_root: (!own_folder).then_some(helper_root.as_str()),
                     projects: &projects,
                     admitted: &admitted,
-                    press,
                     install,
                     installing: &installing,
                 })
-            })
-            .await??;
+            }
+        };
+        let switched = match &source.via {
+            hide_core::SwitchVia::Ssh { alias, sign_in } => {
+                let (target, press) = (alias.clone(), sign_in.clone());
+                self.ssh_dial(alias, move || {
+                    asked(&|switch| pairing_ssh::switch(&target, press.clone(), switch))
+                })
+                .await??
+            }
+            hide_core::SwitchVia::Wsl { distro } => {
+                let carriers = self.wsl()?;
+                // The operator's press: the distribution may be started
+                // for the switch and for the dial that follows it (B43).
+                carriers.may_wake(distro);
+                let target = distro.clone();
+                self.wsl_call(distro, move || {
+                    asked(&|switch| pairing_wsl::switch(carriers.access(), &target, switch))
+                })
+                .await??
+            }
+        };
         match switched {
             pairing_ssh::Switched::HeldBy(by) => Ok(json!({ "switch": "held", "by": by })),
             pairing_ssh::Switched::InstallNeeded { system } => {
@@ -1184,13 +1555,15 @@ impl Pairing {
     /// What follows the target's answer to a switch: the core is told the
     /// machine the device becomes, the pairing is saved, and the connection
     /// confirms the grant. The core takes the device over the moment it is
-    /// active.
+    /// active. `through` is the login the machine was reached through, and
+    /// `requested` the key its request is kept under.
     async fn admit_switch(
         self: &Arc<Self>,
         service: &Service,
         peers: &HostPeers,
         device: &str,
-        alias: &str,
+        through: &Login,
+        requested: &str,
         switched: &pairing_ssh::Switched,
     ) -> Result<Value, &'static str> {
         let pairing_ssh::Switched::Paired {
@@ -1202,13 +1575,21 @@ impl Pairing {
             return Err("switch_not_connected");
         };
         // The machine the device is: the one that just answered, or the
-        // one this machine is paired with already under the device's id.
+        // one this machine is paired with already, under the device's id
+        // or, for a distribution, by the name this PC reaches it by (its
+        // own Hide names itself by an id of its own).
+        let known_as = |paired: &Paired| match through {
+            Login::Ssh(_) => paired.machine.device_id == device,
+            Login::Wsl(distro) => peers
+                .host(&paired.key)
+                .is_some_and(|host| host.candidates.contains(&Candidate::Wsl(distro.clone()))),
+        };
         let host = match paired {
             Some(paired) => paired.accepted.key,
             None => self
                 .paired(peers)
                 .into_iter()
-                .find(|paired| paired.machine.device_id == device && paired.machine.opens.is_some())
+                .find(|paired| known_as(paired) && paired.machine.opens.is_some())
                 .map(|paired| paired.key)
                 .ok_or("device_unknown")?,
         };
@@ -1227,7 +1608,28 @@ impl Pairing {
                 Err(AcceptError::Store(StoreError::Full)) => return Err("device_limit"),
                 Err(AcceptError::Store(_)) => return Err("device_not_saved"),
             }
-            lock(&self.ssh_requests).retain(|kept| kept.alias != alias);
+            lock(&self.ssh_requests).retain(|kept| kept.alias != requested);
+        }
+        // A Hide reached through a login is this machine's to keep at its
+        // build through that login (B23), whichever switch started it: the
+        // record is the machine's, not this run's, and an account that has
+        // the app answers a raise that its app updates it. The pairing
+        // stands without the record, so a store that refuses it is only
+        // logged.
+        let saved = peers.known(|known| {
+            let mut record = known.of(&host).cloned().ok_or(StoreError::Unknown)?;
+            if record.started.as_ref() == Some(through) {
+                return Ok(());
+            }
+            record.started = Some(through.clone());
+            known.put(record)
+        });
+        if let Err(error) = saved {
+            hide_core::diagnostic!(json!({
+                "component": "pairing",
+                "kind": "pairing.started_not_saved",
+                "reason": format!("{error:?}"),
+            }));
         }
         let over = Instant::now() + SWITCH_CONNECTS_WITHIN;
         loop {
@@ -1310,6 +1712,29 @@ impl Pairing {
         if !pairing_ssh::valid_alias(alias) {
             return Err("invalid_request");
         }
+        self.login_step(step, "ssh_not_reached").await
+    }
+
+    /// Runs one `wsl.exe` step for `distro` off the runtime, counted with
+    /// the `ssh` steps; the step's `wsl.exe` ends with it.
+    async fn wsl_call<T: Send + 'static>(
+        &self,
+        distro: &str,
+        step: impl FnOnce() -> T + Send + 'static,
+    ) -> Result<T, &'static str> {
+        if !hide_platform::wsl::valid_distribution_name(distro) {
+            return Err("invalid_request");
+        }
+        self.login_step(step, "wsl_not_reached").await
+    }
+
+    /// One step that runs a login's program, off the runtime; an ask past
+    /// [`SSH_DIALS`] of them is refused, not queued.
+    async fn login_step<T: Send + 'static>(
+        &self,
+        step: impl FnOnce() -> T + Send + 'static,
+        lost: &'static str,
+    ) -> Result<T, &'static str> {
         let dial = Arc::clone(&self.ssh_dials)
             .try_acquire_owned()
             .map_err(|_| "ssh_busy")?;
@@ -1318,7 +1743,27 @@ impl Pairing {
             step()
         })
         .await
-        .map_err(|_| "ssh_not_reached")
+        .map_err(|_| lost)
+    }
+
+    /// What reaches this PC's WSL distributions; refused on a machine that
+    /// reaches none.
+    fn wsl(&self) -> Result<Arc<pairing_wsl::Carriers>, &'static str> {
+        self.host.wsl().cloned().ok_or("wsl_unavailable")
+    }
+
+    /// The endpoint a carrier that arrived on the bootstrap socket is
+    /// handed to (`Ask::Carry`): opened for it, as for either side of a
+    /// pairing, and only for the operator's own account outside a pane.
+    pub async fn carrier(self: &Arc<Self>, caller: Caller) -> Result<HostPeers, &'static str> {
+        if !self.host.device_connect() {
+            return Err(DEVICE_CONNECT_OFF);
+        }
+        if caller != Caller::Operator {
+            return Err("device_from_pane");
+        }
+        self.service().await?;
+        self.host.peers().ok_or("peer_unavailable")
     }
 
     /// The request `alias`'s pairing runs under: the one it ran under in
@@ -1626,6 +2071,7 @@ mod tests {
             grant: "grant".into(),
             state,
             candidates: Vec::new(),
+            started: None,
         };
         // A host that dropped the pairing is listed and is nothing to dial.
         let (dropped, away) = rows(
@@ -1746,6 +2192,24 @@ mod tests {
     }
 
     #[test]
+    fn an_update_that_was_asked_for_stays_asked_while_the_same_side_is_behind() {
+        use PeerUpdate::{Here, HereAsked, There, ThereAsked};
+        for (said, behind, says) in [
+            (None, Behind::Theirs, There),
+            (None, Behind::Ours, Here),
+            (None, Behind::Either, Here),
+            (Some(ThereAsked), Behind::Theirs, ThereAsked),
+            (Some(HereAsked), Behind::Ours, HereAsked),
+            (Some(HereAsked), Behind::Either, HereAsked),
+            // The other side became the older one: nothing was asked of it.
+            (Some(ThereAsked), Behind::Ours, Here),
+            (Some(HereAsked), Behind::Theirs, There),
+        ] {
+            assert_eq!(still_needed(said, behind), says, "{said:?} {behind:?}");
+        }
+    }
+
+    #[test]
     fn what_only_the_operator_may_ask_is_refused_to_every_other_caller() {
         let operators = [
             json!({"verb": "share"}),
@@ -1755,6 +2219,8 @@ mod tests {
             json!({"verb": "answer", "ask": 1, "allow": true}),
             json!({"verb": "resume", "device": "pc"}),
             json!({"verb": "request", "device": "pc"}),
+            // Another machine's app restarts on it (B22).
+            json!({"verb": "update", "device": "pc"}),
             json!({"verb": "address", "device": "pc", "address": "10.0.0.2:7842"}),
             json!({"verb": "accept_ssh", "request": "r", "key": "k", "device": "d", "name": "n"}),
         ];
@@ -1802,6 +2268,7 @@ mod tests {
             "pairing_unanswered",
             "pairing_unreachable",
             "pairing_update_needed",
+            "update_not_asked",
         ] {
             assert!(!next_action(code).starts_with("Retry;"), "{code}");
         }
@@ -1822,6 +2289,58 @@ mod tests {
         for code in switch.refusals {
             assert!(!next_action(code).starts_with("Retry;"), "{code}");
         }
+    }
+
+    /// One raise runs for a machine at a time, a build already tried is
+    /// tried again only when asked, and a raise whose machine was taken off
+    /// while it ran leaves nothing of that machine behind when it ends.
+    #[test]
+    fn a_raise_that_ends_after_its_machine_was_taken_off_writes_nothing() {
+        let (kept, gone) = (PeerKey::from_bytes([1; 32]), PeerKey::from_bytes([2; 32]));
+        let mut raises = Raises::default();
+        let first = raises.begin(kept, "1.2.9", false).unwrap();
+        assert_eq!(raises.begin(kept, "1.2.9", true), None, "one already runs");
+        assert!(raises.finish(kept, first, Err(Failure::Busy)));
+        assert_eq!(raises.shown.get(&kept), Some(&PeerUpdate::UpdateBusy));
+        assert_eq!(raises.begin(kept, "1.2.9", false), None, "tried, not asked");
+        let again = raises.begin(kept, "1.2.9", true).unwrap();
+        assert!(raises.finish(kept, again, Ok(Raised::Updated)));
+        assert_eq!(raises.shown.get(&kept), None);
+
+        let late = raises.begin(gone, "1.2.9", false).unwrap();
+        raises.keep(&std::collections::HashSet::from([kept]));
+        assert!(!raises.finish(gone, late, Err(Failure::Failed)));
+        // Paired again while the first raise still ran: only the new
+        // raise's end is the machine's.
+        let new = raises.begin(gone, "1.2.9", false).unwrap();
+        assert!(!raises.finish(gone, late, Err(Failure::Failed)));
+        assert_eq!(raises.shown.get(&gone), Some(&PeerUpdate::Updating));
+        assert!(raises.finish(gone, new, Ok(Raised::Current)));
+        raises.keep(&std::collections::HashSet::from([kept]));
+        assert!(raises.shown.is_empty() && raises.running.is_empty());
+        assert_eq!(raises.tried.len(), 1);
+    }
+
+    /// An address an operator gives goes first and the last ones past the
+    /// cap go, but never a distribution's name: it is the only way this PC
+    /// reaches that Hide, and `hide device address` used often would have
+    /// cut it off.
+    #[test]
+    fn a_given_address_never_pushes_a_distribution_s_name_out() {
+        let address = |last: u8| Candidate::Ip(SocketAddr::from(([10, 0, 0, last], 7000)));
+        let distribution = Candidate::Wsl("Ubuntu".to_owned());
+        let mut candidates = vec![distribution.clone()];
+        for last in 1..=MAX_ADDRESSES as u8 + 2 {
+            put_first(&mut candidates, address(last));
+        }
+        assert_eq!(candidates.len(), MAX_ADDRESSES);
+        assert_eq!(candidates[0], address(MAX_ADDRESSES as u8 + 2));
+        assert_eq!(candidates.last(), Some(&distribution));
+        // The same address again moves to the front and adds nothing.
+        put_first(&mut candidates, address(5));
+        assert_eq!(candidates.len(), MAX_ADDRESSES);
+        assert_eq!(candidates[0], address(5));
+        assert!(candidates.contains(&distribution));
     }
 
     /// B41: a device added for its switch is taken off again only when the
