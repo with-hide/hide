@@ -649,6 +649,11 @@ async fn every_letter_a_guests_pane_sends_through_the_faults_lands_in_its_ledger
             "kept_while_away": queued, "tries_again": retried,
             "not_taken_in": open_letters(&guest.terminal.state, &sender)})
     );
+    let read = std::fs::read_to_string(run.join("read.log")).unwrap_or_default();
+    eprintln!(
+        "fault_run: the recipient's last reads:\n{}",
+        read.lines().rev().take(12).collect::<Vec<_>>().join("\n")
+    );
     assert_eq!(held, wanted, "each letter the shell sent, once");
     drop(recipient);
 }
