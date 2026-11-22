@@ -10,7 +10,10 @@ import { cn } from "../../lib/utils";
 // an icon action inside a row that lights on hover itself, so it lights one
 // step further (secondary over the row's accent) and stays lit while its menu
 // is open. `practice` is the practice window's own start, in its amber, so the
-// practice reads as one place apart from Hide's lime.
+// practice reads as one place apart from Hide's lime. `tint` is a primary
+// action in a small surface that is not a screen or a dialog, such as a
+// corner notice: the accent's light fill and the accent as its words, so it
+// stands out without the full lime a screen's one primary action has.
 const buttonVariants = cva(
   "inline-flex shrink-0 items-center justify-center gap-xs whitespace-nowrap rounded-sm font-medium outline-none transition-colors focus-visible:ring-1 focus-visible:ring-ring focus-visible:ring-offset-1 focus-visible:ring-offset-background disabled:pointer-events-none disabled:opacity-(--opacity-disabled) aria-invalid:ring-1 aria-invalid:ring-destructive [&_svg]:pointer-events-none [&_svg]:shrink-0 [&_svg:not([class*='size-'])]:size-(--size-icon)",
   {
@@ -26,6 +29,7 @@ const buttonVariants = cva(
         "text-link": "font-normal text-subtle-foreground underline-offset-4 hover:text-foreground hover:underline",
         "row-action": "font-normal text-muted-foreground hover:bg-secondary hover:text-foreground data-[state=open]:bg-secondary",
         practice: "font-semibold bg-practice-accent text-practice-ink hover:bg-practice-accent-strong",
+        tint: "bg-selected text-primary hover:bg-primary/20",
       },
       size: {
         default: "h-(--size-control) px-md text-body",

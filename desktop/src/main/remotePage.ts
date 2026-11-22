@@ -39,13 +39,17 @@ const KEY = /^[0-9a-f]{64}$/;
  * a page one host loaded never reaches a host that later took the same
  * device id (security pre-review S1).
  */
-export type ShowRequest = { device: string; key: string; rect: BrowserRect } | null;
+/** `name`: what this window calls the machine, which its page names itself by; null when the shell gave none. */
+export type ShowRequest = { device: string; key: string; rect: BrowserRect; name: string | null } | null;
+
+/** The longest machine name a show carries, as a pairing keeps one. */
+const MAX_NAME_CHARS = 128;
 
 /** The shell's request, or undefined when it is not one. */
 export function parseShow(value: unknown): ShowRequest | undefined {
   if (value === null) return null;
   if (typeof value !== "object") return undefined;
-  const { device, key, rect } = value as Record<string, unknown>;
+  const { device, key, rect, name } = value as Record<string, unknown>;
   if (typeof device !== "string" || !DEVICE.test(device)) return undefined;
   if (typeof key !== "string" || !KEY.test(key)) return undefined;
   if (typeof rect !== "object" || rect === null) return undefined;
@@ -53,7 +57,9 @@ export function parseShow(value: unknown): ShowRequest | undefined {
   const numbers = [x, y, width, height];
   if (!numbers.every((value) => typeof value === "number" && Number.isFinite(value))) return undefined;
   if ((width as number) < 0 || (height as number) < 0) return undefined;
-  return { device, key, rect: { x: x as number, y: y as number, width: width as number, height: height as number } };
+  // A name that is no short line is left out; the page then names itself as its own machine does.
+  const named = typeof name === "string" && name.trim() !== "" && Array.from(name).length <= MAX_NAME_CHARS && !/\p{Cc}/u.test(name) ? name : null;
+  return { device, key, rect: { x: x as number, y: y as number, width: width as number, height: height as number }, name: named };
 }
 
 /** The longest path, pane, model or profile name an ask carries. */

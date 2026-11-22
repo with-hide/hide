@@ -68,6 +68,16 @@ export function restartIntoUpdate(): void {
   hostBridge()?.updates.restart();
 }
 
+/**
+ * Whether a press of Update now does something: a development build, or an
+ * app that is not where it can replace itself, takes no update, and one
+ * already looking or downloading has nothing more to start.
+ */
+export function offersUpdate(status: UpdateStatus | null): boolean {
+  const phase = status?.phase.kind;
+  return status !== null && phase !== "off" && phase !== "checking" && phase !== "downloading";
+}
+
 /** Updates this app now, as the operator pressed: restarts into the ready version, or looks for one. */
 export function updateNow(status: UpdateStatus | null): void {
   if (readyVersion(status) !== null) restartIntoUpdate();

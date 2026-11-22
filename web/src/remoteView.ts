@@ -81,6 +81,8 @@ export type RemoteBridge = {
   onMenuCommand(listener: (id: string) => void): void;
   /** Says when the tile shows or hides. */
   onVisible(listener: (visible: boolean) => void): void;
+  /** Delivers what the window that shows this screen calls its machine, and that window's language; absent from an older desktop app. */
+  onViewer?(listener: (viewer: Viewer) => void): void;
   /** Delivers each work the guest's operator asked of this screen; absent from an older desktop app. */
   onWork?(listener: (work: RemoteWork) => void): void;
   /** Tells the guest how a start it handed here ended. */
@@ -182,4 +184,39 @@ export function remoteCommands(): { onCommand(listener: (id: string) => void): (
       };
     },
   };
+}
+
+/** The window that shows this screen: what it calls this machine, and its language. */
+export type Viewer = { language: string; name: string | null };
+
+let viewer: Viewer | null = null;
+const viewerListeners = new Set<() => void>();
+let viewerHeard = false;
+
+/** Starts hearing the showing window once, in a remote view only. */
+function hearViewer(): void {
+  if (viewerHeard) return;
+  viewerHeard = true;
+  remoteBridge()?.onViewer?.((next) => {
+    if (next.language === viewer?.language && next.name === viewer?.name) return;
+    viewer = next;
+    for (const listener of viewerListeners) listener();
+  });
+}
+
+/**
+ * The window that shows this screen, or null outside a remote view and
+ * before the desktop said it. A machine whose operator chose no language is
+ * read in that window's language, not its operating system's, and its own
+ * page names it as that window does rather than This Mac
+ * (docs/LOCALIZATION.md; UI_BEHAVIOR.md, Device rail).
+ */
+export function subscribeViewer(listener: () => void): () => void {
+  hearViewer();
+  viewerListeners.add(listener);
+  return () => viewerListeners.delete(listener);
+}
+
+export function readViewer(): Viewer | null {
+  return viewer;
 }

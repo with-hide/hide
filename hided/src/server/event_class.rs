@@ -140,6 +140,8 @@ use Class::{Daemon, Desktop, Local, OwnWindow, Screen, Window};
 /// the ones hided answers itself.
 pub(crate) const CLASSES: &[(&str, Class)] = &[
     ("access_approve", OwnWindow),
+    ("access_call", OwnWindow),
+    ("access_invite_cancel", OwnWindow),
     ("access_mode", OwnWindow),
     ("access_refuse", OwnWindow),
     ("access_revoke", OwnWindow),
@@ -575,6 +577,8 @@ mod tests {
             "pairing_remove",
             "pairing_request",
             "access_approve",
+            "access_call",
+            "access_invite_cancel",
             "mobile_show_code",
             "mobile_enable",
             "register_device",

@@ -88,13 +88,36 @@ describe("a parent's children on the list", () => {
     }
   });
 
-  it("wear a pill for each state they are in, named for a screen reader", async () => {
-    const parent = agent("p", { children: kids(3), descendants: { asking: 1, working: 1, done: 1 } });
+  it("wear the desktop pane header's chip at the head of the second line, its name spelling out every state", async () => {
+    const first = agent("c0", { mark: "going" });
+    const parent = agent("p", { children: [first, ...kids(2, 1)], descendants: { asking: 1, working: 1, done: 1 }, subagents: 3, line: { text: "Reviewing", mode: "news", tone: "subtle" } });
     const { container, unmount } = await mount([working([parent])]);
     try {
-      const pills = [...container.querySelectorAll('[data-phone-children-toggle="local|p"] [role="img"]')].map((pill) => pill.getAttribute("aria-label"));
-      expect(pills).toEqual(["1 asking you", "1 working", "1 finished"]);
-      expect(container.querySelector('[data-phone-children-toggle="local|p"]')!.textContent).toContain("3 children");
+      const chip = container.querySelector('[data-phone-children-toggle="local|p"]')!;
+      // `≡ ● 3 · • 3 ⌄`: the first child's mark, the children, the subagents (operator decision 2026-11-22, D).
+      expect(chip.querySelector("[data-phone-tree-mark]")?.getAttribute("data-phone-tree-mark")).toBe("going");
+      expect(chip.querySelector("[data-tree-chip-count]")?.textContent).toBe("3");
+      expect(chip.querySelector("[data-tree-chip-subagents]")?.textContent).toBe("3");
+      expect(chip.getAttribute("aria-label")).toBe("Child agents 3 · 1 asking you · 1 working · 1 finished · 3 subagents working");
+      // It leads the row's second line, before the line's words.
+      const line = container.querySelector('[data-phone-row="local|p"] [data-phone-line]')!.parentElement!;
+      expect(line.firstElementChild).toBe(chip);
+    } finally {
+      await unmount();
+    }
+  });
+});
+
+describe("a chip with nothing hung under its row", () => {
+  it("counts the descendants it still has, and draws no chevron when it opens nothing", async () => {
+    // A second-level row whose children the list folded flat: no children here, only how many and in which state.
+    const parent = agent("p", { descendants: { asking: 1, working: 2, done: 0 } });
+    const { container, unmount } = await mount([working([parent])]);
+    try {
+      const chip = container.querySelector('[data-phone-tree-chip="local|p"]')!;
+      expect(chip.querySelector("[data-tree-chip-count]")?.textContent).toBe("3");
+      expect(chip.getAttribute("aria-label")).toBe("1 asking you · 2 working");
+      expect(chip.querySelectorAll("svg")).toHaveLength(1);
     } finally {
       await unmount();
     }
@@ -110,8 +133,8 @@ describe("an agent's subagents on the list", () => {
     const { container, unmount } = await mount([working([parent])]);
     try {
       const toggle = container.querySelector('[data-phone-children-toggle="local|p"]')!;
-      expect(toggle.textContent).toContain("1 child");
-      expect(toggle.textContent).toContain("Subagents 7");
+      expect(toggle.getAttribute("aria-label")).toBe("Child agents 1 · 7 subagents working");
+      expect(toggle.querySelector("[data-tree-chip-subagents]")?.textContent).toBe("7");
       expect(container.querySelector("[data-phone-subagent]")).toBeNull();
       await click(container, '[data-phone-children-toggle="local|p"]');
       const list = container.querySelector('[data-phone-children="local|p"]')!;
@@ -129,7 +152,7 @@ describe("an agent's subagents on the list", () => {
     const parent = agent("p", { subagents: 2 });
     const { container, unmount } = await mount([working([parent])]);
     try {
-      expect(container.querySelector('[data-phone-children-toggle="local|p"]')!.textContent).not.toContain("child");
+      expect(container.querySelector('[data-phone-children-toggle="local|p"]')!.getAttribute("aria-label")).not.toContain("Child");
       await click(container, '[data-phone-children-toggle="local|p"]');
       expect(container.querySelector('[data-phone-children="local|p"] [data-phone-subagent-more]')!.textContent).toBe("2 subagents working");
     } finally {

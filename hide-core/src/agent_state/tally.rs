@@ -481,6 +481,11 @@ pub mod phone {
         pub title: String,
         /// `project · branch`, or the project alone for a plain folder.
         pub place: Option<String>,
+        /// The project alone, which the phone list's row names on its
+        /// second line while the detail names `place`; absent where `place`
+        /// is, and from a core before it, where the row names `place`.
+        #[serde(skip_serializing_if = "Option::is_none")]
+        pub project: Option<String>,
         /// The SSH device's name; `None` on this Mac.
         pub device_label: Option<String>,
         /// When the core last saw the agent change state; the phone counts the
@@ -930,9 +935,16 @@ pub mod phone {
         })
     }
 
-    /// Each pane's `project · branch`, from one device's workspaces, the way
-    /// the desktop's `agentPlaces` walks them.
-    fn places(workspaces: Option<&Value>) -> HashMap<String, String> {
+    /// Where a pane works: its `project · branch` and the project alone.
+    #[derive(Clone)]
+    struct Place {
+        place: String,
+        project: String,
+    }
+
+    /// Each pane's place, from one device's workspaces, the way the
+    /// desktop's `agentPlaces` walks them.
+    fn places(workspaces: Option<&Value>) -> HashMap<String, Place> {
         let mut places = HashMap::new();
         for workspace in workspaces.and_then(Value::as_array).into_iter().flatten() {
             let label = str_of(workspace, "label");
@@ -953,6 +965,10 @@ pub mod phone {
                         .filter(|branch| !branch.is_empty())
                         .unwrap_or_else(|| str_of(checkout, "label"));
                     format!("{label} · {branch}")
+                };
+                let place = Place {
+                    place,
+                    project: label.to_owned(),
                 };
                 for tab in checkout
                     .get("tabs")
@@ -1010,7 +1026,7 @@ pub mod phone {
         whose: crate::whose_work::Whose,
         device_id: &str,
         device_label: Option<&str>,
-        places: &HashMap<String, String>,
+        places: &HashMap<String, Place>,
         out: &mut Vec<PhoneAgent>,
     ) {
         // The list is this core's phone list and the rows it judges a
@@ -1155,7 +1171,8 @@ pub mod phone {
                         }),
                 agent_kind: str_of(agent, "agent_kind").to_owned(),
                 title: title.to_owned(),
-                place: places.get(pane_id).cloned(),
+                place: places.get(pane_id).map(|place| place.place.clone()),
+                project: places.get(pane_id).map(|place| place.project.clone()),
                 device_label: device_label.map(str::to_owned),
                 changed_at_unix_ms: agent.get("changed_at_unix_ms").and_then(Value::as_u64),
                 line: line(agent),

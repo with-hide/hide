@@ -125,7 +125,12 @@ it("asks for a View by its id alone, draws a Markdown document from its chunks, 
     expect(body.textContent).toContain("설치하기");
     expect(body.textContent).toContain("본문이에요.");
     expect(socket.sent.filter((message) => message.type === "look_seen")).toEqual([{ type: "look_seen", device_id: "local", pane_id: "w1:p1", view_id: "v1" }]);
-    expect(container.querySelector("[data-phone-viewing]")!.textContent).toContain("NOTES.md");
+    // Doop 11: the View's name, then its kind, the agent that opened it and how long ago; a screen reader hears who opened it.
+    const head = container.querySelector("[data-phone-viewing]")!;
+    expect(head.querySelector("h1")!.textContent).toBe("NOTES.md");
+    expect(head.querySelector("[data-phone-viewing-opener]")!.textContent).toBe("리뷰 반영");
+    expect(head.querySelector(".sr-only")!.textContent).toBe("Opened by 리뷰 반영");
+    expect(head.textContent).toMatch(/Document·.*리뷰 반영·1m$/);
 
     // A reply sent while looking carries the name of what is on screen in front (B30), and the quick keys are not offered.
     expect(container.querySelector("[data-phone-key]")).toBeNull();

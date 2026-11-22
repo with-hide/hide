@@ -4,7 +4,7 @@
 // it has run and, away from the Mac, its device. What waits on the operator,
 // the groups and the line are `missionList.ts`'s rules; this draws them.
 
-import { CheckIcon, ChevronRightIcon, Loader2Icon, XIcon } from "lucide-react";
+import { ChevronRightIcon, Loader2Icon } from "lucide-react";
 import { PILL_TONE, ProgressCells, STATE_PILL_TONE } from "../components/mission-tone";
 import { useElapsed } from "../components/elapsed";
 import { GateAheadCount } from "../components/mission-gate";
@@ -13,7 +13,7 @@ import { Button } from "../components/ui/button";
 import { useInterfaceTranslation } from "../i18n/translator";
 import { formatDateTime } from "../i18n/format";
 import { requireInterfaceLanguage } from "../i18n/locale";
-import { CLOSED_SHOWN, groupMissions, missionPillKey, rowLine, rowLineText, type MissionEntry, type MissionGroup } from "../missionList";
+import { CLOSED_SHOWN, STATE_PILL, groupMissions, missionPillKey, rowLine, rowLineText, type MissionEntry, type MissionGroup } from "../missionList";
 import { gatesAhead, missionCells } from "../missions";
 import { cn } from "../lib/utils";
 import { OfflineText } from "./OfflineText";
@@ -21,6 +21,7 @@ import { DeviceTag } from "./parts";
 import { openCount, progress, useMissionEntries } from "./missionModel";
 import type { PhoneMission } from "./protocol";
 import { TabBar } from "./TabBar";
+import { ScreenHead, TwoLineRow } from "./layout";
 import { openMission, setMissionFold, usePhone } from "./store";
 
 export function MissionsScreen() {
@@ -34,10 +35,10 @@ export function MissionsScreen() {
   const dim = unreachable && !connected;
   return (
     <main className="flex min-h-full flex-col" data-phone-missions="true">
-      <header className="phone-safe-top px-xl pb-sm">
-        <h1 className="pt-lg text-headline font-semibold text-foreground">{t("mobile.missions.title")}</h1>
-        {entries && entries.length > 0 ? <p className="mt-xs text-subhead text-muted-foreground" data-phone-missions-open={openCount(entries)}>{t("mobile.missions.running", { count: openCount(entries) })}</p> : null}
-      </header>
+      <ScreenHead
+        title={t("mobile.missions.title")}
+        line={entries && entries.length > 0 ? <span data-phone-missions-open={openCount(entries)}>{t("mobile.missions.running", { count: openCount(entries) })}</span> : null}
+      />
       {dim ? (
         <div role="status" className="flex items-center gap-sm px-xl py-sm text-body text-subtle-foreground" data-phone-unreachable="true">
           <Loader2Icon aria-hidden="true" className="size-(--size-icon-lg) shrink-0 animate-spin" />
@@ -83,7 +84,7 @@ function Group({ group, entries }: { group: MissionGroup; entries: MissionEntry<
           </Button>
         ) : null}
       </h2>
-      <ul className="divide-y divide-border border-b border-border">
+      <ul>
         {shown.map((entry) => (
           <li key={entry.mission.id}>{closed ? <ClosedRow mission={entry.mission} /> : <OpenRow entry={entry} />}</li>
         ))}
@@ -111,53 +112,83 @@ function OpenRow({ entry }: { entry: MissionEntry<PhoneMission> }) {
       aria-label={t("missionScreen.open", { title: mission.title })}
       data-phone-mission={mission.id}
       data-phone-mission-state={group}
-      className={cn("min-h-(--size-touch-target) flex-col items-stretch gap-xs rounded-none px-none py-md hover:bg-transparent active:bg-accent", mission.stale && "opacity-(--opacity-dimmed)")}
+      className={cn("min-h-(--size-touch-target) rounded-none px-none py-md hover:bg-transparent active:bg-accent", mission.stale && "opacity-(--opacity-dimmed)")}
       onClick={() => openMission(mission.id)}
     >
-      <span className="flex w-full min-w-0 items-center gap-sm">
-        <span
-          className={cn("flex shrink-0 items-center rounded-full px-sm text-caption font-semibold", first ? PILL_TONE.hold : STATE_PILL_TONE[mission.status])}
-          data-phone-mission-pill={first?.kind ?? mission.status}
-        >
-          {pill}
-        </span>
-        <span className="min-w-0 flex-1 break-keep text-title font-medium text-foreground wrap-anywhere">{mission.title}</span>
-        <ChevronRightIcon aria-hidden="true" className="size-(--size-icon) shrink-0 text-muted-foreground" />
-      </span>
-      {text ? <span className="line-clamp-2 break-keep text-body text-subtle-foreground wrap-anywhere" data-phone-mission-line={line?.kind}>{text}</span> : null}
-      <span className="flex min-w-0 flex-wrap items-center gap-sm text-body text-muted-foreground">
-        {mission.nodes.length > 0 ? (
+      <TwoLineRow
+        head={
           <>
-            <ProgressCells tones={missionCells(mission)} size="chip" />
-            <span className="shrink-0 font-mono" data-phone-mission-counts={`${done}/${total}`}>{done}/{total}</span>
-            <GateAheadCount count={gatesAhead(mission).length} />
+            <span
+              className={cn("flex shrink-0 items-center rounded-sm px-sm text-caption font-semibold", first ? PILL_TONE.hold : STATE_PILL_TONE[mission.status])}
+              data-phone-mission-pill={first?.kind ?? mission.status}
+            >
+              {pill}
+            </span>
+            <span className="min-w-0 flex-1 truncate text-title font-medium text-foreground">{mission.title}</span>
           </>
-        ) : null}
-        {elapsed ? <span className="shrink-0 font-mono">· {elapsed}</span> : null}
-        {mission.device_label ? <DeviceTag label={mission.device_label} /> : null}
-      </span>
+        }
+        end={elapsed}
+        line={
+          <span className="flex min-w-0 flex-1 flex-col gap-xs">
+            {/* A question wraps in full; the other lines keep to two. */}
+            {text ? <span className={cn("break-keep text-subtle-foreground wrap-anywhere", line?.kind !== "decision" && "line-clamp-2")} data-phone-mission-line={line?.kind}>{text}</span> : null}
+            {mission.nodes.length > 0 || mission.device_label ? (
+              <span className="flex min-w-0 flex-wrap items-center gap-sm text-muted-foreground">
+                {mission.nodes.length > 0 ? (
+                  <>
+                    <ProgressCells tones={missionCells(mission)} size="chip" />
+                    <span className="shrink-0 font-mono" data-phone-mission-counts={`${done}/${total}`}>{done}/{total}</span>
+                    <GateAheadCount count={gatesAhead(mission).length} />
+                  </>
+                ) : null}
+                {mission.device_label ? <DeviceTag label={mission.device_label} /> : null}
+              </span>
+            ) : null}
+          </span>
+        }
+      />
     </RowButton>
   );
 }
 
-/** A finished or cancelled mission (B31): ✓ or a grey ✕, its title and the day it closed. */
+/** A finished or cancelled mission (B31, Doop 13): its state's pill, its title and the day it closed, then its cells. */
 function ClosedRow({ mission }: { mission: PhoneMission }) {
   const { t, i18n } = useInterfaceTranslation();
   const language = requireInterfaceLanguage(i18n.language);
   const closed = mission.closed_at_unix_ms;
-  const done = mission.status === "done";
+  const { done, total } = progress(mission);
   return (
     <RowButton
       aria-label={t("missionScreen.open", { title: mission.title })}
       data-phone-mission={mission.id}
       data-phone-mission-state="closed"
-      className="min-h-(--size-touch-target) gap-sm rounded-none px-none py-md text-body hover:bg-transparent active:bg-accent"
+      className="min-h-(--size-touch-target) rounded-none px-none py-md hover:bg-transparent active:bg-accent"
       onClick={() => openMission(mission.id)}
     >
-      {done ? <CheckIcon aria-label={t("mission.pill.done")} className="size-(--size-icon) shrink-0 text-mission-done" /> : <XIcon aria-label={t("mission.pill.cancelled")} className="size-(--size-icon) shrink-0 text-muted-foreground" />}
-      <span className="min-w-0 flex-1 break-keep text-subtle-foreground wrap-anywhere">{mission.title}</span>
-      {mission.device_label ? <DeviceTag label={mission.device_label} /> : null}
-      {closed != null ? <span className="shrink-0 font-mono text-muted-foreground">{formatDateTime(language, closed, { month: "numeric", day: "numeric" })}</span> : null}
+      <TwoLineRow
+        head={
+          <>
+            <span className={cn("flex shrink-0 items-center rounded-sm px-sm text-caption font-semibold", STATE_PILL_TONE[mission.status])} data-phone-mission-pill={mission.status}>
+              {t(STATE_PILL[mission.status])}
+            </span>
+            <span className="min-w-0 flex-1 truncate text-title font-medium text-subtle-foreground">{mission.title}</span>
+          </>
+        }
+        end={closed != null ? formatDateTime(language, closed, { month: "numeric", day: "numeric" }) : null}
+        line={
+          mission.nodes.length > 0 || mission.device_label ? (
+            <span className="flex min-w-0 flex-wrap items-center gap-sm text-muted-foreground">
+              {mission.nodes.length > 0 ? (
+                <>
+                  <ProgressCells tones={missionCells(mission)} size="chip" />
+                  <span className="shrink-0 font-mono">{done}/{total}</span>
+                </>
+              ) : null}
+              {mission.device_label ? <DeviceTag label={mission.device_label} /> : null}
+            </span>
+          ) : null
+        }
+      />
     </RowButton>
   );
 }

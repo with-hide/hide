@@ -56,7 +56,9 @@ describe("the sample host's screens", () => {
   });
 
   it("mark a row as the desktop's row does: its pull request, the mission it conducts, and the operator's star", () => {
-    const rowOf = (pane: string) => document.querySelector(`[data-phone-agent="local|${pane}"]`)!;
+    // The row's press is a layer behind its content (the children chip is a press of its own): its name is on the press, its marks in the row.
+    const rowOf = (pane: string) => document.querySelector(`[data-phone-row="local|${pane}"]`)!;
+    const pressOf = (pane: string) => document.querySelector(`[data-phone-agent="local|${pane}"]`)!;
     // A Conductor's row wears its mission's chip with `!` while the mission waits on the operator; a step's worker gets none.
     const chip = rowOf("a1").querySelector('[data-phone-row-mission="mission-release"]');
     expect(chip?.textContent).toBe("!2/6");
@@ -66,7 +68,7 @@ describe("the sample host's screens", () => {
     const starred = rowOf("a7");
     expect(starred.closest('[data-phone-group="revisit"]')).not.toBeNull();
     expect(starred.querySelector('[data-phone-mark="star"]')).not.toBeNull();
-    expect(starred.getAttribute("aria-label")).toContain("Starred to revisit");
+    expect(pressOf("a7").getAttribute("aria-label")).toContain("Starred to revisit");
     expect(rowOf("a5").querySelector("[data-revisit-star]")).toBeNull();
   });
 
@@ -82,8 +84,10 @@ describe("the sample host's screens", () => {
     await act(async () => openDetail({ device_id: "local", pane_id: "a3" }));
     await settle(50);
     const mission = document.querySelector<HTMLElement>('[data-phone-detail-mission="mission-release"]')!;
-    expect(mission.textContent).toContain("Prepare release 1.2.0");
-    expect(mission.textContent).toContain("Rehearse the migration");
+    // The chip draws the flag and the mission's progress (Doop 02); its name says the mission and the step.
+    expect(mission.textContent).toBe("2/6");
+    expect(mission.getAttribute("aria-label")).toContain("Prepare release 1.2.0");
+    expect(mission.getAttribute("aria-label")).toContain("Rehearse the migration");
     expect(document.querySelector("[data-phone-detail-pr]")?.textContent).toContain("2091");
     await act(async () => mission.click());
     expect(usePhone.getState().detail).toBeNull();
@@ -108,6 +112,9 @@ describe("the sample host's screens", () => {
     expect(text()).toContain("Prepare release 1.2.0");
     await act(async () => openMission("mission-release"));
     expect(text()).toContain("The signing certificate expired");
+    // The steps are a list first; the graph is behind the head's map button (Doop 14).
+    expect(document.querySelectorAll("[data-phone-mission-steps] [data-phone-step]")).toHaveLength(6);
+    await act(async () => document.querySelector<HTMLButtonElement>("[data-phone-mission-map-toggle]")!.click());
     const graph = document.querySelector("[data-phone-mission-steps]")!;
     expect(graph.querySelectorAll("[data-mission-node]")).toHaveLength(6);
     expect(graph.querySelector("[data-dependency-graph]")).not.toBeNull();

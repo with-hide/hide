@@ -6,6 +6,7 @@
 // screen draw the same parts; the core owns where a switch stands
 // (`Device.switch`) and hided what a press is answered (`pairingResult`).
 
+import type { TFunction } from "i18next";
 import { useEffect, useRef, useState } from "react";
 import type { Actions } from "../actions";
 import { AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent, AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle } from "../components/ui/alert-dialog";
@@ -117,24 +118,26 @@ export function DeviceNotCarriedLine({ deviceId }: { deviceId: string }) {
  * then the switch's steps or its failure. Only this computer's own window
  * draws it, since no other screen may switch a device (B52).
  */
-export function DeviceSwitchStrip({ actions }: { actions: Actions }) {
+/**
+ * `start` is where the strip's words begin when it takes the window's top
+ * row (the remote screen's notice, after macOS's traffic lights); left out,
+ * its own inset.
+ */
+export function DeviceSwitchStrip({ actions, start }: { actions: Actions; start?: string }) {
   const { t } = useInterfaceTranslation();
   const ownScreen = useShellStore((s) => ownWindow(s.pairing));
   const devices = useShellStore((s) => s.rest?.navigator?.devices);
-  const front = useShellStore((s) => frontDeviceId(s.rest));
+  const front = useShownDevice();
   const deviceConnect = useShellStore((s) => deviceConnectOffered(s.daemon));
   const device = devices?.find((row) => row.id === front);
+  // Said once: the line goes when the operator leaves the machine's screen
+  // (`useSwitchedSeen`), whichever screen draws this strip meanwhile.
   const landed = useUiStore((s) => front != null && s.switchedDevices.includes(front));
-  // Said once: the line goes with the first look at the machine's screen.
-  useEffect(() => {
-    if (!landed || front == null) return;
-    return () => useUiStore.getState().clearSwitched(front);
-  }, [landed, front]);
   if (!ownScreen || !device) return null;
   if (landed && device.peer_key != null) {
     const left = device.not_carried ?? 0;
     return (
-      <div className="flex flex-col gap-xxs border-b border-border bg-card px-md py-xs text-caption text-subtle-foreground" data-device-switched={device.id}>
+      <div className="flex flex-col gap-xxs border-b border-border bg-card px-md py-xs text-caption text-subtle-foreground" style={{ paddingInlineStart: start }} data-device-switched={device.id}>
         {left > 0 ? (
           <Status tone="warn" data-device-not-carried={String(left)}>
             {t("devices.switch.notCarried", { count: left })}
@@ -146,7 +149,7 @@ export function DeviceSwitchStrip({ actions }: { actions: Actions }) {
   }
   if (!switchOffered(device, deviceConnect)) return null;
   return (
-    <div className="flex flex-wrap items-center gap-x-sm gap-y-xs border-b border-border bg-card px-md py-xs text-caption text-subtle-foreground" data-device-switch-strip={device.id}>
+    <div className="flex flex-wrap items-center gap-x-sm gap-y-xs border-b border-border bg-card px-md py-xs text-caption text-subtle-foreground" style={{ paddingInlineStart: start }} data-device-switch-strip={device.id}>
       {device.switch ? (
         <DeviceSwitchLine device={device} actions={actions} className="text-caption" />
       ) : (
@@ -160,6 +163,16 @@ export function DeviceSwitchStrip({ actions }: { actions: Actions }) {
 }
 
 /**
+ * This computer by its own name, `MacBook`, where a sentence names the
+ * machine a program comes from: `This Mac` would read as the target (the
+ * name it goes by here) only once the core knows no name of its own.
+ */
+function ownName(devices: readonly Device[] | undefined, t: TFunction<"translation">): string {
+  const own = windowDeviceId(devices);
+  return devices?.find((device) => device.id === own)?.machine_name ?? machineName(devices, own, t);
+}
+
+/**
  * What a press is asked before it goes on. A machine that runs no Hide of
  * its own (B36, D-45): what would be put there, and `허용하고 설치` starts it.
  * A device another computer switched first (B69, D-75): this one gets a
@@ -170,6 +183,7 @@ export function DeviceSwitchDialogs({ actions }: { actions: Actions }) {
   const { t } = useInterfaceTranslation();
   useSwitchAfterAdd(actions);
   useSwitchLanded();
+  useSwitchedSeen();
   const answer = useShellStore((s) => (s.pairingResult?.verb === "switch" && s.pairingResult.ok && (s.pairingResult.switch === "held" || s.pairingResult.switch === "install_needed") ? s.pairingResult : null));
   const devices = useShellStore((s) => s.rest?.navigator?.devices);
   const count = useShellStore((s) => (answer?.device_id ? deviceTerminalCount(s.rest, answer.device_id) : 0));
@@ -201,7 +215,7 @@ export function DeviceSwitchDialogs({ actions }: { actions: Actions }) {
                 <li key={part}>{t(INSTALL_PART_KEY[part])}</li>
               ))}
             </ul>
-            <p className="break-keep text-body text-foreground">{t("devices.switch.install.grant", { name: machineName(devices, windowDeviceId(devices), t) })}</p>
+            <p className="break-keep text-body text-foreground">{t("devices.switch.install.grant", { name: ownName(devices, t) })}</p>
           </DialogBody>
           <DialogFooter>
             <Button variant="secondary" onClick={cancel}>{t("common.cancel")}</Button>
@@ -260,6 +274,34 @@ function useSwitchLanded() {
       else if (switching.current.delete(device.id) && device.peer_key != null) useUiStore.getState().markSwitched(device.id);
     }
   }, [devices]);
+}
+
+/**
+ * The machine whose screen the window shows: a paired machine's own screen
+ * opened from its tile, else the device in front. A paired machine's screen
+ * moves no focus in the core, so the device in front alone would name the
+ * machine the operator left.
+ */
+function useShownDevice(): string {
+  const remote = useUiStore((s) => s.remoteScreen);
+  const front = useShellStore((s) => frontDeviceId(s.rest));
+  return remote ?? front;
+}
+
+/**
+ * A landed switch's line is said once (D-48): it goes when the operator
+ * leaves that machine's screen for another. Kept here, where the window
+ * always draws, since the strip that says it moves from the main screen to
+ * the remote screen as the switch lands, and unmounting there is no leaving.
+ */
+function useSwitchedSeen() {
+  const front = useShownDevice();
+  const shown = useRef(front);
+  useEffect(() => {
+    const left = shown.current;
+    shown.current = front;
+    if (left != null && left !== front) useUiStore.getState().clearSwitched(left);
+  }, [front]);
 }
 
 /**
