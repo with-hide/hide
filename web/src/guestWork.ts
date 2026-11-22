@@ -10,6 +10,7 @@
 // it, and everything else is done on the machine that asked for the work.
 
 import { tileMonogram } from "./devices";
+import type { MessageKey } from "./i18n/catalogs";
 import type { GuestPanes, PeerWork, PeerWorkRow, SnapshotRest, Workspace } from "./snapshot";
 
 /** One pane of another machine's work on this computer, as a row and a tab draw it. */
@@ -128,4 +129,17 @@ export function peerRows(rest: SnapshotRest | null | undefined, group: "needs_yo
     const machine = peerName(rest, peer.device_id);
     return (peer.rows ?? []).filter((row) => row.group === group).map((row) => ({ row, deviceId: peer.device_id, machine }));
   });
+}
+
+/**
+ * Why another machine's row waits, in this window's words, when that
+ * machine's core sent no sentence of its own: the same words this
+ * computer's own Needs You row says for the ask (`agentSessions.ask.*`).
+ * A Done row, or a code this build does not know, has none.
+ */
+export function peerReasonKey(row: Pick<PeerWorkRow, "group" | "status_code">): MessageKey | null {
+  if (row.group !== "needs_you") return null;
+  if (row.status_code === "approval") return "agentSessions.ask.approval";
+  if (row.status_code === "question") return "agentSessions.ask.answer";
+  return null;
 }

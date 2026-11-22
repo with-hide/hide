@@ -102,6 +102,8 @@ describe("the device rail's facts (quick device-rail-badges)", () => {
 
   it("draws a device's monogram from the first letters of its first two words", () => {
     expect(["Mac mini", "Mac Studio", "mini", "build-box", "연구실 빌드 서버", "  spaced  out "].map(tileMonogram)).toEqual(["Mm", "MS", "M", "Bb", "연빌", "So"]);
+    // A one-word name splits where a small letter meets a capital, as the mockup draws MacBook.
+    expect(["MacBook", "MacBookPro", "iMac", "Ubuntu"].map(tileMonogram)).toEqual(["MB", "MB", "IM", "U"]);
     // A name macOS hands over decomposed still yields whole syllables.
     expect(tileMonogram("연구실 빌드".normalize("NFD"))).toBe("연빌");
   });

@@ -3,9 +3,11 @@ import type { Actions } from "./actions";
 import { DeviceChip } from "./components/device-chip";
 import { StatusMark } from "./components/status-mark";
 import { RowButton } from "./components/ui/row-button";
-import { AgentMark } from "./AgentMark";
+import { AgentRowMark } from "./AgentRowMark";
+import { Elapsed } from "./components/elapsed";
+import { SessionRowBody } from "./components/session-row";
 import { GuestMark, useGuestPanes } from "./GuestPaneScreen";
-import { guestGroups, peerRows, type GuestPane, type PeerRow } from "./guestWork";
+import { guestGroups, peerReasonKey, peerRows, type GuestPane, type PeerRow } from "./guestWork";
 import { useInterfaceTranslation } from "./i18n/client";
 import { cn } from "./lib/utils";
 import type { RowMark } from "./snapshot";
@@ -97,9 +99,12 @@ export function usePeerRows(group: "needs_you" | "done"): PeerRow[] {
 
 /**
  * Another machine's own Needs You or Done rows (D-50, B49), after this
- * computer's: each wears that machine's filled chip, since the work is that
- * machine's and opens in its tile. This computer rings nothing for them; the
- * machine that owns the work picks where its notice goes.
+ * computer's, drawn as this computer's own rows are: the status mark and the
+ * agent's logo as the logo view mode says, the title with that machine's
+ * filled chip and the time since it changed, then where it runs and why it
+ * waits. The chip is filled because the work is that machine's and opens in
+ * its tile. This computer rings nothing for them; the machine that owns the
+ * work picks where its notice goes.
  */
 export function PeerWorkRows({ group, actions }: { group: "needs_you" | "done"; actions: Actions }) {
   const { t } = useInterfaceTranslation();
@@ -107,33 +112,45 @@ export function PeerWorkRows({ group, actions }: { group: "needs_you" | "done"; 
   if (rows.length === 0) return null;
   return (
     <>
-      {rows.map(({ row, deviceId, machine }) => (
-        <li key={`${deviceId}:${row.id}`}>
-          <RowButton
-            aria-label={t("pairing.work.peerRowAria", { title: row.title, name: machine })}
-            data-peer-row={`${deviceId}:${row.id}`}
-            data-peer-group={group}
-            data-task-focus="row"
-            className="min-h-(--size-control-lg) items-start gap-sm rounded-sm px-sm py-xs text-caption text-subtle-foreground hover:text-foreground"
-            // That computer's work opens on its own screen with the work chosen (D-78, D-81); without a desktop to draw it, its tile.
-            onClick={() => {
-              if (actions.openComputerWork(deviceId, { op: "show", pane: row.id }) !== "handed") actions.focusDevice(deviceId);
-            }}
-          >
-            <span className="flex h-(--size-sidebar-line) shrink-0 items-center gap-xs">
-              <StatusMark mark={markOf(row.mark)} read={row.read === true} />
-              <AgentMark kind={row.agent_kind} />
-            </span>
-            <span className="flex min-w-0 flex-1 flex-col">
-              <span className="flex min-w-0 items-center gap-xs">
-                <span className="min-w-0 truncate text-foreground">{row.title}</span>
-                <DeviceChip label={machine} variant="remote" className="max-w-2/5" />
-              </span>
-              {row.detail || row.place ? <span className="min-w-0 truncate text-muted-foreground">{row.detail ?? row.place}</span> : null}
-            </span>
-          </RowButton>
-        </li>
-      ))}
+      {rows.map(({ row, deviceId, machine }) => {
+        const reasonKey = peerReasonKey(row);
+        const reason = row.detail ?? (reasonKey ? t(reasonKey) : null);
+        return (
+          <li key={`${deviceId}:${row.id}`}>
+            <RowButton
+              aria-label={[t("pairing.work.peerRowAria", { title: row.title, name: machine }), row.place, reason].filter(Boolean).join(", ")}
+              data-peer-row={`${deviceId}:${row.id}`}
+              data-peer-group={group}
+              data-task-focus="row"
+              className="min-h-(--size-control-lg) items-start rounded-sm px-sm py-xs text-caption text-subtle-foreground hover:text-foreground"
+              // That computer's work opens on its own screen with the work chosen (D-78, D-81); without a desktop to draw it, its tile.
+              onClick={() => {
+                if (actions.openComputerWork(deviceId, { op: "show", pane: row.id }) !== "handed") actions.focusDevice(deviceId);
+              }}
+            >
+              <SessionRowBody
+                mark={<>
+                  <StatusMark mark={markOf(row.mark)} read={row.read === true} />
+                  <AgentRowMark kind={row.agent_kind} />
+                </>}
+                head={<>
+                  <span className="min-w-0 truncate text-foreground">{row.title}</span>
+                  <DeviceChip label={machine} variant="remote" className="max-w-2/5" />
+                  <span className="min-w-0 flex-1" />
+                  <Elapsed since={row.changed_at_unix_ms} aria-hidden="true" className="shrink-0 font-mono text-caption text-muted-foreground" data-peer-elapsed="true" />
+                </>}
+              >
+                {row.place || reason ? (
+                  <span aria-hidden="true" className="flex min-w-0 gap-xs text-caption leading-(--size-sidebar-line-detail)">
+                    {row.place ? <span className="min-w-0 shrink truncate text-muted-foreground">{row.place}</span> : null}
+                    {reason ? <span className={cn("min-w-0 truncate", group === "needs_you" ? "text-warning" : "text-muted-foreground")} data-peer-reason="true">{reason}</span> : null}
+                  </span>
+                ) : null}
+              </SessionRowBody>
+            </RowButton>
+          </li>
+        );
+      })}
     </>
   );
 }
