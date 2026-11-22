@@ -696,13 +696,14 @@ impl Runtime {
                     device_id: workspace.device_id.clone(),
                     workspace_id: workspace.id.clone(),
                     root: workspace.path.clone(),
-                    // The repository's path on its server, which the
-                    // record has keyed a project by since before hosts.
+                    // The repository's name without its server, which the
+                    // record has keyed a project by since before hosts; an
+                    // identity whose server is not known keys nothing.
                     repository: project
-                        .and_then(|project| project.repository.as_ref())
-                        .map(|identity| identity.repository.path.to_ascii_lowercase()),
+                        .and_then(|project| project.repository.as_ref()?.as_key())
+                        .map(|identity| identity.name.to_ascii_lowercase()),
                     repository_id: project
-                        .and_then(|project| project.repository.as_ref())
+                        .and_then(|project| project.repository.as_ref()?.as_key())
                         .and_then(|identity| identity.id.clone()),
                     connection_epoch: self
                         .links_work

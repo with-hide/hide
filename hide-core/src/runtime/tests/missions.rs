@@ -9624,13 +9624,15 @@ fn repository_read(root: &str, id: Option<&str>) -> GithubSnapshot {
         ..Default::default()
     };
     project.repository = Some(crate::model::RepositoryIdentity {
-        repository: crate::code_host::CodeHosts::STANDARD
-            .repository("acme/project")
-            .unwrap()
-            .1,
         id: id.map(str::to_owned),
         public: None,
         default_branch: None,
+        ..crate::model::RepositoryIdentity::of(
+            crate::code_host::CodeHosts::STANDARD
+                .repository("acme/project")
+                .unwrap()
+                .1,
+        )
     });
     GithubSnapshot {
         projects: vec![project],
@@ -9772,6 +9774,27 @@ fn a_worker_on_another_machine_starts_only_for_a_pull_request_change_of_the_same
         admit(&runtime, Some(DEVICE), "mission-1:review-fix").unwrap(),
         mission,
         "a checker names its node only when it is bound"
+    );
+    // The same id on a machine whose server is not known could be another
+    // server's repository's: it proves no match, though its facts stand.
+    let known = |runtime: &mut Runtime, known: bool| {
+        let project = &mut runtime.device_github.get_mut(DEVICE).unwrap().projects[0];
+        project.repository.as_mut().unwrap().repository = known.then(|| {
+            crate::code_host::CodeHosts::STANDARD
+                .repository("acme/project")
+                .unwrap()
+                .1
+        });
+    };
+    known(&mut runtime, false);
+    assert_eq!(
+        refused(&runtime, "mission-1:fix"),
+        "mission_machine_no_repository"
+    );
+    known(&mut runtime, true);
+    assert_eq!(
+        admit(&runtime, Some(DEVICE), "mission-1:fix").unwrap(),
+        mission
     );
     // A mission whose own repository GitHub has not named proves no match.
     runtime.github = repository_read(PROJECT, None);

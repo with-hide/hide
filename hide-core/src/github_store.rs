@@ -173,10 +173,8 @@ fn decode(bytes: &[u8]) -> Result<GithubSnapshot, String> {
                 .iter()
                 .find_map(|pull_request| pull_request.reference.as_ref())
                 .map(|reference| RepositoryIdentity {
-                    repository: reference.repository.clone(),
-                    id: None,
                     public: legacy_public.get(&project.root_path).copied().flatten(),
-                    default_branch: None,
+                    ..RepositoryIdentity::of(reference.repository.clone())
                 });
         }
         project.status.stale = true;
@@ -359,7 +357,7 @@ mod tests {
                 (authority, files)
             );
             let identity = project.repository.as_ref().expect("named by the address");
-            assert_eq!(identity.repository, reference.repository);
+            assert_eq!(identity.repository.as_ref(), Some(&reference.repository));
             assert_eq!(identity.public, Some(true), "the visibility main saved");
             assert_eq!(project.issues_read, crate::model::PartRead::Read);
         }

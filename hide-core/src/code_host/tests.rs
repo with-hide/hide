@@ -152,10 +152,10 @@ impl HostReads for PlainReads {
                     issues_read: PartRead::Unsupported,
                     identity_read: PartRead::Read,
                     repository: Some(RepositoryIdentity {
-                        repository: repository.clone(),
                         id: None,
                         public: None,
                         default_branch: Some("main".to_owned()),
+                        ..crate::model::RepositoryIdentity::of(repository.clone())
                     }),
                     ..GithubProjectSnapshot::default()
                 };
@@ -435,10 +435,15 @@ fn a_checkout_is_placed_by_its_remotes_and_none_is_no_remote_with_no_host_asked(
     let by_name = |hosts: CodeHosts, remotes: &[&str]| {
         hosts.place_of_checkout(root, CheckoutRemotes::Named(&list(remotes)))
     };
-    let in_checkout = |hosts: CodeHosts, key: &str| {
+    // Read in the checkout, with the remotes the registry gives that host.
+    let in_checkout = |hosts: CodeHosts, key: &str, remotes: &[&str]| {
         Some(Place::Checkout {
             host: host(hosts, key),
             root: root.to_path_buf(),
+            remotes: remotes
+                .iter()
+                .map(|name| hosts.repository(name).unwrap().1)
+                .collect(),
         })
     };
     let github = "https://github.com/acme/app.git";
@@ -446,7 +451,10 @@ fn a_checkout_is_placed_by_its_remotes_and_none_is_no_remote_with_no_host_asked(
     let nested = "https://code.example/group/sub/project.git";
 
     assert_eq!(by_address(BOTH, &[]), None, "no remote: no host is asked");
-    assert_eq!(by_address(BOTH, &[github]), in_checkout(BOTH, "github"));
+    assert_eq!(
+        by_address(BOTH, &[github]),
+        in_checkout(BOTH, "github", &["acme/app"])
+    );
     assert_eq!(
         by_address(BOTH, &[nested, "git@code.example:group/sub/project.git"]),
         BOTH.place_of("code.example/group/sub/project"),
@@ -454,27 +462,27 @@ fn a_checkout_is_placed_by_its_remotes_and_none_is_no_remote_with_no_host_asked(
     );
     assert_eq!(
         by_address(BOTH, &[nested, github]),
-        in_checkout(BOTH, "github"),
+        in_checkout(BOTH, "github", &["acme/app"]),
         "remotes of two hosts go to the one that picks in the checkout"
     );
     assert_eq!(
         by_address(BOTH, &[github, enterprise]),
-        in_checkout(BOTH, "github"),
+        in_checkout(BOTH, "github", &["acme/app", "ghe.example.com/acme/app"]),
         "github.com and an Enterprise server are one host, which picks in the checkout"
     );
     assert_eq!(
         by_address(BOTH, &["http://github.com/acme/app.git"]),
-        in_checkout(BOTH, "github"),
+        in_checkout(BOTH, "github", &[]),
         "an address no unit reads is unknown, read in the checkout as main left it to gh"
     );
     assert_eq!(
         by_address(CodeHosts::STANDARD, &[nested]),
-        in_checkout(CodeHosts::STANDARD, "github"),
+        in_checkout(CodeHosts::STANDARD, "github", &[]),
         "with GitHub alone a nested path is no repository GitHub reads: unknown, as on main"
     );
     assert_eq!(
         hosts_place(BOTH, root, CheckoutRemotes::Unknown),
-        in_checkout(BOTH, "github"),
+        in_checkout(BOTH, "github", &[]),
         "remotes the node did not list are read in the checkout"
     );
     assert_eq!(
@@ -488,10 +496,13 @@ fn a_checkout_is_placed_by_its_remotes_and_none_is_no_remote_with_no_host_asked(
         None,
         "a name no unit reads names nothing"
     );
-    assert_eq!(by_name(BOTH, &["acme/app"]), in_checkout(BOTH, "github"));
+    assert_eq!(
+        by_name(BOTH, &["acme/app"]),
+        in_checkout(BOTH, "github", &["acme/app"])
+    );
     assert_eq!(
         by_name(BOTH, &["acme/app", "ghe.example.com/acme/app"]),
-        in_checkout(BOTH, "github")
+        in_checkout(BOTH, "github", &["acme/app", "ghe.example.com/acme/app"])
     );
 }
 

@@ -887,13 +887,15 @@ fn acknowledged_remote_repository_edits_invalidate_native_intake_before_returnin
     };
     github.issues.repository = Some("acme/original".into());
     github.repository = Some(crate::model::RepositoryIdentity {
-        repository: crate::code_host::CodeHosts::STANDARD
-            .repository("acme/original")
-            .unwrap()
-            .1,
         id: None,
         public: None,
         default_branch: None,
+        ..crate::model::RepositoryIdentity::of(
+            crate::code_host::CodeHosts::STANDARD
+                .repository("acme/original")
+                .unwrap()
+                .1,
+        )
     });
     runtime.device_github.insert(
         "mini".into(),
@@ -1052,13 +1054,15 @@ fn a_project_name_past_its_length_or_with_a_control_character_is_refused() {
 fn an_unread_identity_is_kept_only_where_the_connected_repository_is_its_own() {
     use crate::model::{GithubProjectSnapshot, GithubStatusSnapshot, PartRead};
     let identity = |name: &str| crate::model::RepositoryIdentity {
-        repository: crate::code_host::CodeHosts::STANDARD
-            .repository(name)
-            .unwrap()
-            .1,
         id: Some("R1".into()),
         public: Some(true),
         default_branch: Some("trunk".into()),
+        ..crate::model::RepositoryIdentity::of(
+            crate::code_host::CodeHosts::STANDARD
+                .repository(name)
+                .unwrap()
+                .1,
+        )
     };
     let read = || GithubProjectSnapshot {
         root_path: "/fixture/project".into(),
@@ -1148,12 +1152,7 @@ fn a_saved_answer_is_reused_under_a_setting_its_identity_names() {
                 let (_, repository) = crate::code_host::CodeHosts::STANDARD
                     .repository(name)
                     .unwrap();
-                crate::model::RepositoryIdentity {
-                    repository,
-                    id: None,
-                    public: None,
-                    default_branch: None,
-                }
+                crate::model::RepositoryIdentity::of(repository)
             }),
             status: crate::model::GithubStatusSnapshot {
                 last_success_at_unix_ms: Some(1),

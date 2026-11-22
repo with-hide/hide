@@ -143,7 +143,14 @@ pub(crate) enum Place {
     },
     /// A checkout on the core's machine, whose remote its host resolves
     /// itself ([`CodeHost::resolves_checkout`]), as `gh` does in a folder.
-    Checkout { host: Host, root: PathBuf },
+    /// `remotes` are the repositories its remotes name that the registry
+    /// gives this host, as data for the host's unit; empty when its node did
+    /// not list them.
+    Checkout {
+        host: Host,
+        root: PathBuf,
+        remotes: Vec<RepositoryRef>,
+    },
 }
 
 impl Place {
@@ -470,24 +477,29 @@ impl CodeHosts {
         root: &Path,
         remotes: CheckoutRemotes<'_>,
     ) -> Option<Place> {
-        let in_checkout = |host: Host| Place::Checkout {
+        let in_checkout = |host: Host, named: &[(Host, RepositoryRef)]| Place::Checkout {
             host,
             root: root.to_path_buf(),
+            remotes: named
+                .iter()
+                .filter(|(named, _)| *named == host)
+                .map(|(_, repository)| repository.clone())
+                .collect(),
         };
-        let resolving = || {
+        let resolving = |named: &[(Host, RepositoryRef)]| {
             self.hosts()
                 .find(|host| host.resolves_checkout())
-                .map(in_checkout)
+                .map(|host| in_checkout(host, named))
         };
         let named: Vec<(Host, RepositoryRef)> = match remotes {
-            CheckoutRemotes::Unknown => return resolving(),
+            CheckoutRemotes::Unknown => return resolving(&[]),
             CheckoutRemotes::Addresses(addresses) => {
-                let mut named = Vec::with_capacity(addresses.len());
-                for address in addresses {
-                    match self.remote(address) {
-                        Some(read) => named.push(read),
-                        None => return resolving(),
-                    }
+                let named: Vec<_> = addresses
+                    .iter()
+                    .filter_map(|address| self.remote(address))
+                    .collect();
+                if named.len() < addresses.len() {
+                    return resolving(&named);
                 }
                 named
             }
@@ -498,11 +510,11 @@ impl CodeHosts {
         };
         let (first, rest) = named.split_first()?;
         if rest.iter().any(|(host, _)| *host != first.0) {
-            return resolving();
+            return resolving(&named);
         }
         let (host, repository) = first.clone();
         Some(if host.resolves_checkout() {
-            in_checkout(host)
+            in_checkout(host, &named)
         } else {
             Place::Repository { host, repository }
         })

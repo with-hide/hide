@@ -192,12 +192,17 @@ pub(super) fn read(
                     project.place.clone(),
                     hide_platform::path::to_wire_lossy(&project.root),
                 )),
-                Some(Place::Checkout { host, root }) => main_worktree(node, root).map(|main| {
+                Some(Place::Checkout {
+                    host,
+                    root,
+                    remotes,
+                }) => main_worktree(node, root).map(|main| {
                     let root_path = hide_platform::path::to_wire_lossy(&main);
                     (
                         Some(Place::Checkout {
                             host: *host,
                             root: main,
+                            remotes: remotes.clone(),
                         }),
                         root_path,
                     )

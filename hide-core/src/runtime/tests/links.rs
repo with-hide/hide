@@ -241,13 +241,15 @@ fn native_lineage_reaches_the_ledger_on_remote_and_cross_device_sessions() {
     };
     remote.issues.repository = Some("acme/remote".into());
     remote.repository = Some(crate::model::RepositoryIdentity {
-        repository: crate::code_host::CodeHosts::STANDARD
-            .repository("acme/remote")
-            .unwrap()
-            .1,
         id: None,
         public: None,
         default_branch: None,
+        ..crate::model::RepositoryIdentity::of(
+            crate::code_host::CodeHosts::STANDARD
+                .repository("acme/remote")
+                .unwrap()
+                .1,
+        )
     });
     runtime.device_github.insert(
         "remote".into(),
@@ -591,16 +593,36 @@ fn links_runtime(pull_requests: Vec<PullRequestSnapshot>, read: bool) -> Runtime
             // The identity is read on its own: the record keys on it, not
             // on the issues answer.
             repository: Some(crate::model::RepositoryIdentity {
-                repository: crate::code_host::CodeHosts::STANDARD
-                    .repository("Acme/Project")
-                    .unwrap()
-                    .1,
                 id: Some("R_kgDO".into()),
                 public: None,
                 default_branch: None,
+                ..crate::model::RepositoryIdentity::of(
+                    crate::code_host::CodeHosts::STANDARD
+                        .repository("Acme/Project")
+                        .unwrap()
+                        .1,
+                )
             }),
         });
     runtime
+}
+
+/// A repository whose server is not known keeps its facts in the read, and
+/// the record keys nothing on its bare name or id, which another server's
+/// repository could share.
+#[test]
+fn an_identity_whose_server_is_not_known_keys_no_record() {
+    let mut runtime = links_runtime(vec![pull_request(7, "4-task", &[3])], true);
+    let identity = runtime.github.projects[0].repository.as_mut().unwrap();
+    identity.repository = None;
+    let kept = identity.clone();
+
+    let projects = runtime.link_projects();
+    assert_eq!(projects[0].repository, None);
+    assert_eq!(projects[0].repository_id, None);
+    assert_eq!(kept.name, "Acme/Project");
+    assert_eq!(kept.id.as_deref(), Some("R_kgDO"));
+    assert_eq!(runtime.github.projects[0].repository.as_ref(), Some(&kept));
 }
 
 #[test]

@@ -587,9 +587,8 @@ pub fn answered_output(arguments: &[&str], mut stdout: String) -> String {
 /// body, a pull request's body, and the Work tab's two, a merge and a branch
 /// update, each conditioned on the head commit the operator was shown.
 /// What a project's GitHub read asks of its repository: its name, the id a
-/// rename keeps, its address (which names its server), whether it is public
-/// (`공개`, PRD overview-device-tasks D-35) and its default branch.
-pub const REPOSITORY_FIELDS: &str = "nameWithOwner,id,url,visibility,defaultBranchRef";
+/// rename keeps, and whether it is public (`공개`, PRD overview-device-tasks D-35).
+pub const REPOSITORY_FIELDS: &str = "nameWithOwner,id,visibility,defaultBranchRef";
 
 /// Whether the node may run `gh` with `arguments`. Every shape named here has
 /// a line in `hide-host/tests/it/gh_floor.rs`, which runs it against the

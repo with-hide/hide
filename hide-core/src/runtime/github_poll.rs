@@ -94,17 +94,24 @@ impl Runtime {
         if open.is_empty() && !in_front {
             return None;
         }
-        let repository = project
-            .repository
-            .as_ref()
-            .map(|identity| identity.repository.clone())
-            .or_else(|| {
+        let repository = match &project.repository {
+            // While the identity's server is not known, a listed pull request
+            // names its repository with the server `gh` gave it.
+            Some(identity) => identity.repository.clone().or_else(|| {
+                open.iter()
+                    .find_map(|pull_request| pull_request.reference.as_ref())
+                    .map(|reference| reference.repository.clone())
+            }),
+            // An answer saved before the identity was kept names it in its
+            // issues.
+            None => {
                 let (named, repository) = self
                     .code_hosts
                     .repository(project.issues.repository.as_deref()?)?;
                 (named == host).then_some(repository)
-            })
-            .filter(|repository| self.code_hosts.of(repository) == Some(host))?;
+            }
+        }
+        .filter(|repository| self.code_hosts.of(repository) == Some(host))?;
         let heads: BTreeSet<String> = open
             .iter()
             .filter(|pull_request| pull_request.checks_unfinished())

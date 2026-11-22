@@ -7298,7 +7298,15 @@ pub enum PartRead {
 /// fails: the link record and a mission's admission key on it.
 #[derive(Clone, Debug, Eq, Hash, PartialEq, Deserialize, Serialize)]
 pub struct RepositoryIdentity {
-    pub repository: crate::code_host::RepositoryRef,
+    /// The repository with the server it is on, or `None` while its server is
+    /// not known (a checkout its host read in place, whose remotes and
+    /// addresses did not settle the server): then nothing that needs the
+    /// server is made from it, no address and no key another server's
+    /// repository could share.
+    pub repository: Option<crate::code_host::RepositoryRef>,
+    /// The host's own name of the repository without its server (`OWNER/NAME`
+    /// on GitHub), which holds while the server is not known.
+    pub name: String,
     /// The host's own id of the repository, which a rename keeps: the link
     /// record follows it (PRD link-graph D-35).
     #[serde(default)]
@@ -7311,6 +7319,26 @@ pub struct RepositoryIdentity {
     /// worktree reader prefers over `origin/HEAD` (PRD git-freshness D-07).
     #[serde(default)]
     pub default_branch: Option<String>,
+}
+
+impl RepositoryIdentity {
+    /// The identity as a key that matches repositories, which needs the
+    /// server: `None` while the server is not known, so a bare name or id
+    /// never joins another server's repository.
+    pub(crate) fn as_key(&self) -> Option<&Self> {
+        self.repository.as_ref().map(|_| self)
+    }
+
+    /// A repository whose server is known, with nothing else read about it.
+    pub(crate) fn of(repository: crate::code_host::RepositoryRef) -> Self {
+        Self {
+            name: repository.path.clone(),
+            repository: Some(repository),
+            id: None,
+            public: None,
+            default_branch: None,
+        }
+    }
 }
 
 /// One repository's pull requests as its host reported them.
@@ -7388,9 +7416,10 @@ impl GithubProjectSnapshot {
         !self.status.stale && self.pull_requests_read
     }
 
-    /// The host's own id of the repository the read named.
+    /// The host's own id of the repository the read named, as a key: `None`
+    /// while its server is not known ([`RepositoryIdentity::as_key`]).
     pub(crate) fn repository_id(&self) -> Option<&str> {
-        self.repository.as_ref()?.id.as_deref()
+        self.repository.as_ref()?.as_key()?.id.as_deref()
     }
 
     /// The branch the repository's host names as its default.

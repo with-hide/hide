@@ -432,6 +432,7 @@ mod tests {
                     .host("github")
                     .unwrap(),
                 root: root.to_path_buf(),
+                remotes: Vec::new(),
             }),
         );
 

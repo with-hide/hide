@@ -67,13 +67,15 @@ fn read_named(
 ) -> GithubProjectSnapshot {
     GithubProjectSnapshot {
         repository: Some(crate::model::RepositoryIdentity {
-            repository: crate::code_host::CodeHosts::STANDARD
-                .repository(name)
-                .unwrap()
-                .1,
             id: None,
             public: None,
             default_branch: None,
+            ..crate::model::RepositoryIdentity::of(
+                crate::code_host::CodeHosts::STANDARD
+                    .repository(name)
+                    .unwrap()
+                    .1,
+            )
         }),
         ..read_ok(root, pull_requests, at)
     }

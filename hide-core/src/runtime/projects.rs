@@ -1840,9 +1840,11 @@ impl Runtime {
                 .is_none_or(|connection| match connection {
                     crate::project_settings::RepositoryConnection::Repository { repository } => {
                         let saved = match &project.repository {
-                            Some(identity) => hosts
-                                .of(&identity.repository)
-                                .map(|host| host.stored_name(&identity.repository)),
+                            Some(identity) => identity.repository.as_ref().and_then(|repository| {
+                                hosts
+                                    .of(repository)
+                                    .map(|host| host.stored_name(repository))
+                            }),
                             None => project.issues.repository.clone(),
                         };
                         saved.is_some_and(|saved| saved.eq_ignore_ascii_case(repository))
@@ -5810,10 +5812,13 @@ fn keep_previous_reads(
 ) {
     for project in &mut answer.projects {
         if project.repository.is_none()
-            && let Some(identity) = previous
+            && let Some(kept) = previous
                 .project(&project.root_path)
                 .and_then(|previous| previous.repository.as_ref())
         {
+            // An identity whose server was not known names no exact
+            // repository, so no evidence can match it.
+            let named_repository = kept.repository.as_ref();
             let place = request
                 .projects
                 .iter()
@@ -5821,22 +5826,27 @@ fn keep_previous_reads(
                 .and_then(|asked| asked.place.as_ref());
             let named = place
                 .and_then(crate::code_host::Place::repository)
-                .is_some_and(|repository| same_repository(repository, &identity.repository));
+                .zip(named_repository)
+                .is_some_and(|(repository, kept)| same_repository(repository, kept));
             let referenced = project.pull_requests_read
-                && project.pull_requests.iter().any(|pull| {
-                    pull.reference.as_ref().is_some_and(|reference| {
-                        same_repository(&reference.repository, &identity.repository)
+                && named_repository.is_some_and(|kept| {
+                    project.pull_requests.iter().any(|pull| {
+                        pull.reference
+                            .as_ref()
+                            .is_some_and(|reference| same_repository(&reference.repository, kept))
                     })
                 });
             let contradicted = place.is_some_and(|place| match place.repository() {
-                Some(repository) => !same_repository(repository, &identity.repository),
-                None => place.host().key() != identity.repository.host,
+                Some(repository) => {
+                    !named_repository.is_some_and(|kept| same_repository(repository, kept))
+                }
+                None => named_repository.is_some_and(|kept| place.host().key() != kept.host),
             });
             // A project found to have no remote a host reads is answered,
             // not failed: it names no repository, so nothing is kept for it.
             let failed = project.read_outcome() == GithubReadOutcome::Failed;
             if named || referenced || (failed && !contradicted) {
-                project.repository = Some(identity.clone());
+                project.repository = Some(kept.clone());
             }
         }
         if (project.status.stale || project.status.unavailable_reason.is_some())

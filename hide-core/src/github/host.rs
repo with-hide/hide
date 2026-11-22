@@ -24,7 +24,7 @@ const KEY: &str = "github";
 /// The server GitHub's own repositories are on, which a stored name leaves
 /// out (`OWNER/NAME`); any other server is a GitHub Enterprise Server's and
 /// is named in front (`HOST/OWNER/NAME`).
-const SERVER: &str = "github.com";
+pub(super) const SERVER: &str = "github.com";
 
 pub(crate) struct Github;
 
