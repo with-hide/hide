@@ -33,17 +33,16 @@ pub fn spawn(core: &Arc<CoreHandle>, event: Value, frames: tokio::sync::mpsc::Se
     let core = Arc::clone(core);
     tokio::spawn(async move {
         let request_id = request_id(&event);
-        let frame = tokio::task::spawn_blocking(move || {
-            answer(&event, fresh, |call| core.access(call))
-        })
-        .await
-        .unwrap_or_else(|error| {
-            hide_core::diagnostic!(json!({
-                "component": "access", "kind": "access.window_call_failed",
-                "request_id": request_id, "reason": error.to_string(),
-            }));
-            result(&request_id, Err("access_unavailable".to_owned()))
-        });
+        let frame =
+            tokio::task::spawn_blocking(move || answer(&event, fresh, |call| core.access(call)))
+                .await
+                .unwrap_or_else(|error| {
+                    hide_core::diagnostic!(json!({
+                        "component": "access", "kind": "access.window_call_failed",
+                        "request_id": request_id, "reason": error.to_string(),
+                    }));
+                    result(&request_id, Err("access_unavailable".to_owned()))
+                });
         let _ = frames.send(frame.to_string()).await;
     });
 }
@@ -82,9 +81,12 @@ fn answer(
     };
     let core_call = match asked {
         WindowCall::Code { id } => Some(Call::Code { id }),
-        WindowCall::Invite { name, mode } => {
-            fresh().map(|(id, code)| Call::Invite { id, code, name, mode })
-        }
+        WindowCall::Invite { name, mode } => fresh().map(|(id, code)| Call::Invite {
+            id,
+            code,
+            name,
+            mode,
+        }),
         WindowCall::Renew { id } => fresh().map(|(_, code)| Call::Renew { id, code }),
     };
     let answer = core_call
@@ -116,7 +118,9 @@ mod tests {
     #[test]
     fn a_make_reaches_the_core_with_the_id_and_code_hided_drew() {
         let frame = answer(
-            &event(json!({"request_id": "r1", "call": {"call": "invite", "name": "hermes", "mode": {"kind": "own"}}})),
+            &event(
+                json!({"request_id": "r1", "call": {"call": "invite", "name": "hermes", "mode": {"kind": "own"}}}),
+            ),
             fixed,
             |call| {
                 assert_eq!(

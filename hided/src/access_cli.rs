@@ -70,7 +70,7 @@ pub fn parse<'a>(mut args: impl Iterator<Item = &'a String>) -> Result<AccessCli
     while let Some(arg) = args.next() {
         match arg.as_str() {
             "--json" if !json => json = true,
-            text if verb == Some("join") && code.is_none() && !text.starts_with("--") => {
+            text if verb == Some("join") && code.is_none() && !text.starts_with('-') => {
                 code = Some(text.to_owned());
             }
             "--no-wait" if verb == Some("request") && wait => wait = false,
@@ -913,10 +913,17 @@ mod tests {
         let first = pending_join(&folder, "K7Q4MZ2PX3RD").ok().unwrap();
         assert!(hide_platform::fs::private::is_private(&folder.join(JOIN_FILE)).unwrap());
         // Run again, the same code sends the same key.
-        assert_eq!(pending_join(&folder, "K7Q4MZ2PX3RD").ok(), Some(first.clone()));
+        assert_eq!(
+            pending_join(&folder, "K7Q4MZ2PX3RD").ok(),
+            Some(first.clone())
+        );
         let other = pending_join(&folder, "0123456789AB").err().unwrap();
         assert_eq!(other.code, "access_join_pending");
-        assert!(other.message.contains("hide access join K7Q4-MZ2P-X3RD"), "{}", other.message);
+        assert!(
+            other.message.contains("hide access join K7Q4-MZ2P-X3RD"),
+            "{}",
+            other.message
+        );
         // An unfinished join is no key a command runs with.
         assert_eq!(names(&folder, false).ok().unwrap(), Vec::<String>::new());
         remove_join(&folder, &"0".repeat(64));
@@ -932,15 +939,22 @@ mod tests {
         let key = "a".repeat(64);
         assert!(keep_joined_key(&folder, "hermes", &key).is_ok());
         assert_eq!(kept(&folder, "hermes").ok().flatten().unwrap().key, key);
-        assert!(keep_joined_key(&folder, "hermes", &key).is_ok(), "the same join done before");
+        assert!(
+            keep_joined_key(&folder, "hermes", &key).is_ok(),
+            "the same join done before"
+        );
         assert_eq!(
-            keep_joined_key(&folder, "hermes", &"b".repeat(64)).err().map(|refusal| refusal.code),
+            keep_joined_key(&folder, "hermes", &"b".repeat(64))
+                .err()
+                .map(|refusal| refusal.code),
             Some("access_key_exists".to_owned())
         );
         assert_eq!(kept(&folder, "hermes").ok().flatten().unwrap().key, key);
         assert!(write_key(&folder, "asking", &"c".repeat(64), Kept::Requested).is_ok());
         assert_eq!(
-            keep_joined_key(&folder, "asking", &"d".repeat(64)).err().map(|refusal| refusal.code),
+            keep_joined_key(&folder, "asking", &"d".repeat(64))
+                .err()
+                .map(|refusal| refusal.code),
             Some("access_key_exists".to_owned())
         );
     }

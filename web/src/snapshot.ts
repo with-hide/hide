@@ -3454,7 +3454,7 @@ export type DeskMentions = {
  * machine, each with its mode, the whole Hide or its own work. The shapes
  * are the contract's (`accessSnapshot` in `contracts/hided-ws.schema.json`).
  */
-export type { AccessConnection, AccessMode, AccessPending, AccessSnapshot as AccessSection } from "./generated/hided-ws";
+export type { AccessConnection, AccessInvite, AccessMode, AccessPending, AccessSnapshot as AccessSection } from "./generated/hided-ws";
 
 /** A day of the week as a schedule names it (`contracts/snapshot-wire-enums.json` `automation_weekday`). */
 export type AutomationWeekday = "sun" | "mon" | "tue" | "wed" | "thu" | "fri" | "sat";

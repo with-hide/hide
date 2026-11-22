@@ -512,7 +512,10 @@ impl Access {
         self.connections
             .iter()
             .any(|connection| same_name(&connection.name, name))
-            || self.invites.iter().any(|invite| same_name(&invite.name, name))
+            || self
+                .invites
+                .iter()
+                .any(|invite| same_name(&invite.name, name))
     }
 
     pub fn connection(&self, id: &str) -> Option<&Connection> {
@@ -1224,7 +1227,11 @@ mod tests {
             panic!("connected")
         };
         assert_eq!(
-            (connection.id.as_str(), connection.name.as_str(), connection.mode),
+            (
+                connection.id.as_str(),
+                connection.name.as_str(),
+                connection.mode
+            ),
             (id(1).as_str(), "hermes", Mode::Own)
         );
         assert!(access.invites().is_empty());
@@ -1281,7 +1288,9 @@ mod tests {
             .invite(id(100), CODE.into(), "hermes", Mode::Own, 0)
             .unwrap();
         assert_eq!(
-            access.request("late", &key(101), None, 1, id(101)).unwrap_err(),
+            access
+                .request("late", &key(101), None, 1, id(101))
+                .unwrap_err(),
             RequestRefusal::Limit
         );
         assert_eq!(
@@ -1292,15 +1301,24 @@ mod tests {
         );
         // Its code ended: the seat is free, the name still its own, in any case.
         let ended = INVITE_TTL_MS;
-        assert!(access.request("late", &key(101), None, ended, id(101)).unwrap().put_up);
+        assert!(
+            access
+                .request("late", &key(101), None, ended, id(101))
+                .unwrap()
+                .put_up
+        );
         assert_eq!(
-            access.request("HERMES", &key(103), None, ended, id(103)).unwrap_err(),
+            access
+                .request("HERMES", &key(103), None, ended, id(103))
+                .unwrap_err(),
             RequestRefusal::NameTaken
         );
         access.approve(&id(101), Mode::All, ended).unwrap();
         // Every seat is taken now, so a new code waits for one.
         assert_eq!(
-            access.renew(&id(100), OTHER_CODE.into(), ended).unwrap_err(),
+            access
+                .renew(&id(100), OTHER_CODE.into(), ended)
+                .unwrap_err(),
             "access_limit"
         );
         assert_eq!(access.cancel(&id(100)).unwrap().name, "hermes");
@@ -1330,7 +1348,13 @@ mod tests {
         let mut access = Access::default();
         for n in 0..MAX_INVITES as u8 {
             access
-                .invite(id(n), OTHER_CODE.into(), &format!("b{n}"), Mode::Own, u64::from(n))
+                .invite(
+                    id(n),
+                    OTHER_CODE.into(),
+                    &format!("b{n}"),
+                    Mode::Own,
+                    u64::from(n),
+                )
                 .unwrap();
         }
         assert_eq!(
@@ -1343,7 +1367,11 @@ mod tests {
         access
             .invite(id(9), CODE.into(), "fifth", Mode::Own, INVITE_TTL_MS + 1)
             .unwrap();
-        let names: Vec<&str> = access.invites().iter().map(|invite| invite.name.as_str()).collect();
+        let names: Vec<&str> = access
+            .invites()
+            .iter()
+            .map(|invite| invite.name.as_str())
+            .collect();
         assert_eq!(names, ["b1", "b2", "b3", "fifth"]);
     }
 
@@ -1369,7 +1397,12 @@ mod tests {
         assert_eq!(normalize_code("k7q4-mz2p-x3rd").as_deref(), Some(CODE));
         assert_eq!(normalize_code("K7Q4 MZ2P X3RD").as_deref(), Some(CODE));
         assert_eq!(spaced_code(CODE), "K7Q4-MZ2P-X3RD");
-        for wrong in ["K7Q4-MZ2P", "K7Q4-MZ2P-X3RDX", "I7Q4-MZ2P-X3RD", "K7Q4-MZ2P-X3R!"] {
+        for wrong in [
+            "K7Q4-MZ2P",
+            "K7Q4-MZ2P-X3RDX",
+            "I7Q4-MZ2P-X3RD",
+            "K7Q4-MZ2P-X3R!",
+        ] {
             assert_eq!(normalize_code(wrong), None, "{wrong}");
         }
         let mut access = Access::default();

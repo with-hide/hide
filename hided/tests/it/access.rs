@@ -373,7 +373,10 @@ async fn a_bot_the_operator_made_is_joined_once_with_the_code_its_window_alone_w
         .call(json!({"call": "invite", "name": "hermes", "mode": {"kind": "own"}}))
         .await;
     assert_eq!(made["payload"]["ok"], true, "{made}");
-    let code = made["payload"]["value"]["code"].as_str().unwrap().to_owned();
+    let code = made["payload"]["value"]["code"]
+        .as_str()
+        .unwrap()
+        .to_owned();
     assert_eq!(code.len(), 14, "{code}");
     // The name is the bot's while it waits, in any case.
     let taken = window
@@ -403,7 +406,11 @@ async fn a_bot_the_operator_made_is_joined_once_with_the_code_its_window_alone_w
     assert!(joined.ok, "{}", joined.out);
     let value = &joined.json()["value"];
     assert_eq!(
-        (value["state"].as_str(), value["name"].as_str(), &value["mode"]),
+        (
+            value["state"].as_str(),
+            value["name"].as_str(),
+            &value["mode"]
+        ),
         (Some("connected"), Some("hermes"), &json!({"kind": "own"})),
         "{}",
         joined.out

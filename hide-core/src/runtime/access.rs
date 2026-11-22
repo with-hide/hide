@@ -63,12 +63,24 @@ pub(crate) fn restore(path: PathBuf) -> (LatestFile<Stored>, Stored) {
 /// pane's scoped connection and the CLI cannot send one (B8).
 #[derive(Debug)]
 pub(crate) enum AccessEvent {
-    Approve { id: String, mode: Mode },
-    Refuse { id: String },
-    Mode { id: String, mode: Mode },
-    Revoke { id: String },
+    Approve {
+        id: String,
+        mode: Mode,
+    },
+    Refuse {
+        id: String,
+    },
+    Mode {
+        id: String,
+        mode: Mode,
+    },
+    Revoke {
+        id: String,
+    },
     /// A bot the operator made and takes back before a program joined it.
-    Cancel { id: String },
+    Cancel {
+        id: String,
+    },
 }
 
 #[derive(Deserialize)]
