@@ -188,6 +188,16 @@ impl Runtime {
                 changed |= self.register_peer_device(machine);
                 continue;
             };
+            // The machine a core was moved off before 1.2.0 dialed this core
+            // as its node; it runs a core of its own now and paired with
+            // this one over the SSH login the move used (D-46), so its
+            // registration goes on as that machine's device.
+            if self.snapshot.ui_state.device_registrations[index].id == machine.device_id
+                && self.snapshot.ui_state.device_registrations[index].origin == LinkOrigin::Inbound
+            {
+                changed |= self.switch_device_link(&machine.device_id, &machine.key);
+                continue;
+            }
             let registration = &mut self.snapshot.ui_state.device_registrations[index];
             // A device switched from a helper keeps the id it had, which
             // need not be the one its machine names itself by.

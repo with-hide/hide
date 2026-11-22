@@ -67,9 +67,9 @@ STORES = {
         13,
         "the core's UI state file, including durable directory/write receipts "
         "with the durable writer's own access type, the state folder's identity "
-        "that keeps its directory receipt once per folder, and explicit "
-        "write-error variants before sleeping-session effects, and a moved copy "
-        "of it read to name what this build cannot read",
+        "that keeps its directory receipt once per folder, explicit "
+        "write-error variants before sleeping-session effects, and the read of "
+        "the nodes that dial a core moved before 1.2.0, asked with no core running",
     ),
     "hide-core/src/workspace_views.rs": (6, "the core's saved View layouts"),
     "hide-core/src/delivery/ledger.rs": (
@@ -94,7 +94,7 @@ STORES = {
     "hide-core/src/local_issues.rs": (5, "the core's local issue store"),
     "hide-core/src/mission_events.rs": (
         4,
-        "the core's per-mission event logs, which a core move copies; its folder "
+        "the core's per-mission event logs; its folder "
         "is made, each log written, and an ended mission's log deleted or swept; "
         "the same writer then asks mission_store to write the mission files "
         "after the logs they go with",
@@ -103,8 +103,8 @@ STORES = {
         9,
         "the core's mission bodies and index, split from missions.json: reads "
         "the index, sweeps orphan bodies, creates the mission folder and "
-        "atomically replaces its private files; all move with the core, "
-        "and explicit shelf reads run outside the runtime lock; startup streams "
+        "atomically replaces its private files; "
+        "explicit shelf reads run outside the runtime lock; startup streams "
         "and reconciles and trims index rows through the same writer before sweeping, "
         "and committed shelf eviction also deletes its owned history",
     ),
@@ -150,30 +150,12 @@ STORES = {
         "and looks for the delivery ledger's store and its old file, which "
         "it imports first and never writes",
     ),
-    "hide-core/src/node_migration/copy.rs": (
-        62,
-        "copies, places and sets aside the core's own stores for a move of "
-        "the core (PRD core-host-node-move), run by the hided whose state "
-        "folder holds them while no core runs on it; the retired "
-        "session-search store moves read-only, kept for its retention "
-        "settings (PRD overview-device-tasks D-20), a global instruction "
-        "kept through a link moves as the text the core reads through it, "
-        "and the old delivery ledger file is checked only without its store",
-    ),
     "hide-core/src/node_migration/devices.rs": (
         10,
         "renames a dialed device an earlier build registered under its SSH "
         "alias to its machine id in the core's own stores and its engine "
         "folder, once, where they were written, before the core starts on "
         "them, resuming from its journal beside them",
-    ),
-    "hide-core/src/node_migration/reown.rs": (
-        4,
-        "converts a moved copy of the core's own link and Project "
-        "Memory stores to the receiving node's ids, before a core starts on "
-        "it, and carries "
-        "the retired session-search store's retention to them (PRD "
-        "overview-device-tasks D-20)",
     ),
     "hide-core/src/memory_hook.rs": (
         1,
@@ -182,8 +164,8 @@ STORES = {
     ),
     "hide-core/src/global_instruction.rs": (
         16,
-        "the Hide global instruction beside the core's state file, which a "
-        "core move carries (`MOVES_WITH_CORE`): read as a regular file, a link "
+        "the Hide global instruction beside the core's state file: "
+        "read as a regular file, a link "
         "followed only to an existing text file, and written with the checked "
         "save so an edit the operator made meanwhile is kept",
     ),

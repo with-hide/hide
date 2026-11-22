@@ -408,8 +408,6 @@ type UiStore = {
   addDeviceRequested: boolean;
   /** The `hide skill` / `hide mcp` confirm 확인하기 opened, which Settings › 스킬·MCP shows until it is answered or gone. */
   storeAskRequested: string | null;
-  /** Settings was opened from the window's strip to give up a move's wait: the Devices tab opens the move dialog at its confirm once and clears this. */
-  moveGiveUpRequested: boolean;
   pendingClose: PendingClose | null;
   /** The working session whose Archive session waits for Stop work and archive (PRD session-archive B6). */
   pendingArchive: { paneId: string } | null;
@@ -501,9 +499,6 @@ type UiStore = {
   switchedDevices: string[];
   markSwitched: (deviceId: string) => void;
   clearSwitched: (deviceId: string) => void;
-  /** Opens Settings › Devices with the move dialog at its give-up confirm, from the window's strip. */
-  openMoveGiveUp: () => void;
-  clearMoveGiveUpRequest: () => void;
   setPendingClose: (pending: PendingClose | null) => void;
   setPendingArchive: (pending: { paneId: string } | null) => void;
   setPendingViewsClose: (pending: PendingViewsClose | null) => void;
@@ -597,7 +592,6 @@ export const useUiStore = create<UiStore>((set, get) => ({
   addDeviceRequested: false,
   storeAskRequested: null,
   switchedDevices: [],
-  moveGiveUpRequested: false,
   pendingClose: null,
   pendingArchive: null,
   pendingViewsClose: null,
@@ -690,8 +684,6 @@ export const useUiStore = create<UiStore>((set, get) => ({
   clearStoreAsk: () => set({ storeAskRequested: null }),
   markSwitched: (deviceId) => set((state) => (state.switchedDevices.includes(deviceId) ? state : { switchedDevices: [...state.switchedDevices, deviceId] })),
   clearSwitched: (deviceId) => set((state) => (state.switchedDevices.includes(deviceId) ? { switchedDevices: state.switchedDevices.filter((id) => id !== deviceId) } : state)),
-  openMoveGiveUp: () => set({ overlay: "settings", settingsTab: "devices", moveGiveUpRequested: true }),
-  clearMoveGiveUpRequest: () => set({ moveGiveUpRequested: false }),
   setPendingClose: (pendingClose) => set({ pendingClose }),
   setPendingArchive: (pendingArchive) => set({ pendingArchive }),
   setPendingViewsClose: (pendingViewsClose) => set({ pendingViewsClose }),

@@ -156,6 +156,10 @@ pub enum Verb {
         /// The root of the device helper the caller dialed on this account,
         /// whose folder and terminals it asks for with the grant (D-49).
         helper: Option<String>,
+        /// The grant the caller gives this machine, which then becomes its
+        /// guest: taken only from the machine this core was moved off
+        /// before 1.2.0 (D-46).
+        grant: Option<String>,
     },
     /// What a machine that switched its device here runs once this machine
     /// admitted it (security spec 15); not a command a person types. The
@@ -191,6 +195,7 @@ pub fn parse<'a>(mut args: impl Iterator<Item = &'a String>) -> Result<DeviceCli
     let mut install = false;
     let mut helper = None;
     let mut projects = Vec::new();
+    let mut grant = None;
     let mut direction = None;
     let (mut name, mut request, mut key, mut device) = (None, None, None, None);
     let mut words = Vec::new();
@@ -217,6 +222,7 @@ pub fn parse<'a>(mut args: impl Iterator<Item = &'a String>) -> Result<DeviceCli
                 continue;
             }
             "--helper" if accept && helper.is_none() => &mut helper,
+            "--grant" if accept && grant.is_none() => &mut grant,
             "--project" if hands && projects.len() < hide_core::SWITCHED_PROJECTS => {
                 match args.next() {
                     Some(value) if !value.starts_with('-') => projects.push(value.clone()),
@@ -314,6 +320,7 @@ pub fn parse<'a>(mut args: impl Iterator<Item = &'a String>) -> Result<DeviceCli
                 name,
                 wsl,
                 helper,
+                grant,
             },
             _ => return Err(USAGE.to_owned()),
         },
@@ -545,23 +552,31 @@ fn answer(env: &Env, cli: &DeviceCli) -> Result<Printed, Refused> {
                 // starts one here (D-45, B7); left out when this system
                 // does not say.
                 let desktop = (!core)
-                    .then(crate::core_install::checks::Programs::for_this_machine)
-                    .and_then(Result::ok)
-                    .and_then(|programs| {
+                    .then(|| {
                         crate::core_install::checks::desktop_session(
                             &env.home,
-                            &programs,
                             &std::sync::atomic::AtomicBool::new(false),
                         )
-                    });
+                    })
+                    .flatten();
                 if let Some(desktop) = desktop {
                     look["desktop"] = json!(desktop);
                 }
                 look
             };
             match pairing(env, json!({"verb":"status"})) {
-                Ok(_) => {
-                    println!("{}", json!({"ok":true,"value":{"look":look(true)}}));
+                Ok(status) => {
+                    let mut look = look(true);
+                    // What the running core says of itself, which a node
+                    // reads before it asks to be split from it
+                    // (`pairing_ssh::core_on`); a core before 1.2.0 says
+                    // nothing of it.
+                    if let Some(core) = status["core"].as_object() {
+                        for said in ["node", "build", "release"] {
+                            look[said] = core.get(said).cloned().unwrap_or(Value::Null);
+                        }
+                    }
+                    println!("{}", json!({"ok":true,"value":{"look":look}}));
                     Ok(Printed::Done)
                 }
                 // No daemon answered: a Hide of this account's own that is
@@ -581,12 +596,14 @@ fn answer(env: &Env, cli: &DeviceCli) -> Result<Printed, Refused> {
             name,
             wsl,
             helper,
+            grant,
         } => {
             let value = pairing(
                 env,
                 json!({
                     "verb":"accept_ssh","request":request,"key":key,
                     "device":device,"name":name,"wsl":wsl,"helper":helper,
+                    "grant":grant,
                 }),
             )?;
             // Read by the machine that ran it, never by a person.

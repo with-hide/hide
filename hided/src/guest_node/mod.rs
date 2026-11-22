@@ -156,6 +156,12 @@ struct Helper {
     /// Whether this program runs from a build folder of the helper root,
     /// where the host placed it: only then is it the helper's installation.
     placed: bool,
+    /// The helper root the host's record names.
+    root: Option<PathBuf>,
+    /// The installation the folder's panes name when it is not the helper
+    /// root's: the host's own Hide ran its node here before it was split
+    /// from the core this node belongs to (PRD device-connect-iroh D-46).
+    panes: Option<hide_kit::layout::PanesInstall>,
 }
 
 impl Helper {
@@ -166,13 +172,19 @@ impl Helper {
         }
         // The host's record of the machine that took the folder names the
         // root its helper ran from.
-        let root = hide_kit::layout::HelperGuest::read(dir).map(|taken| taken.root);
+        let taken = hide_kit::layout::HelperGuest::read(dir);
+        let root = taken.as_ref().map(|taken| taken.root.clone());
         let placed = program
             .parent()
             .is_some_and(|build| hide_peer::protocol::build::is_id(&build_name(build)))
             && root.is_some()
             && program.parent().and_then(Path::parent) == root.as_deref();
-        Some(Self { home, placed })
+        Some(Self {
+            home,
+            placed,
+            root,
+            panes: taken.and_then(|taken| taken.panes),
+        })
     }
 }
 
@@ -231,6 +243,22 @@ pub fn run(dir: &str) -> ! {
         unsafe {
             std::env::set_var("HIDE_STATE_DIR", &dir);
         }
+    }
+    // The panes a split left in this folder name the host's own
+    // installation, and so does everything this node answers and starts:
+    // their `hide` and hooks ask for that name (D-46).
+    if let Some(panes) = helper.as_ref().and_then(|helper| helper.panes.as_ref()) {
+        let install =
+            panes
+                .id
+                .clone()
+                .zip(panes.cli.clone())
+                .map(|(id, cli)| hide_host::kit::PaneInstall {
+                    id,
+                    cli,
+                    path_first: None,
+                });
+        hide_host::kit::answer_as(install);
     }
     hide_node::diagnostics::install(diagnostic);
     let bind = |name: &str| -> LocalListener {
@@ -379,6 +407,17 @@ pub fn run(dir: &str) -> ! {
         &install_root,
         program.parent().and_then(Path::file_name),
     ) {
+        // The host's own Hide keeps its installation on this account; this
+        // node keeps the entries of the build it runs, as a guest's does.
+        (Some(helper), _, Some(version)) if helper.placed && helper.panes.is_some() => {
+            match &helper.root {
+                Some(root) => KitPlace::Guest {
+                    root: root.clone(),
+                    version: version.to_string_lossy().into_owned(),
+                },
+                None => KitPlace::Standalone,
+            }
+        }
         (Some(helper), _, _) if helper.placed => KitPlace::Installed,
         (None, Some(root), Some(version)) => KitPlace::Guest {
             root: root.clone(),

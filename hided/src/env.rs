@@ -51,19 +51,13 @@ pub const HIDE_PEER_DIRECT: &str = "HIDE_PEER_DIRECT";
 /// Whether this build offers connections between two Hides
 /// ([`Env::device_connect`]); off in every build until that feature ships.
 pub const HIDE_DEVICE_CONNECT: &str = "HIDE_DEVICE_CONNECT";
-/// Test-only: how a core move starts the core on the machine taking it.
+/// Test-only: how a core is started on a machine for another one's sake.
 pub const HIDE_CORE_STARTER: &str = "HIDE_CORE_STARTER";
-/// Test-only: `hang` makes the core role's stop never return, so a journey
-/// proves the stop's bound.
-pub const HIDE_FIXTURE_CORE_STOP: &str = "HIDE_FIXTURE_CORE_STOP";
 /// Test-only: a file in a fixture HOME naming a build whose daemon exits at
 /// its start, so a journey proves a core update's way back to the previous
 /// build; a file, since the fixture's SSH sessions keep the environment
 /// they started with.
 pub const FIXTURE_FAIL_BUILD_FILE: &str = ".hide-e2e-fail-build";
-/// Test-only: a folder of stand-in `launchctl` and `pmset` that a move's
-/// checks run instead of the system's.
-pub const HIDE_PREFLIGHT_PROGRAMS: &str = "HIDE_PREFLIGHT_PROGRAMS";
 /// Test-only: the version this build presents in a link's hello, so a
 /// journey shows one build as newer or older than another.
 pub const HIDE_BUILD_VERSION_OVERRIDE: &str = "HIDE_BUILD_VERSION_OVERRIDE";
@@ -241,19 +235,7 @@ pub const REGISTRY: &[EnvKey] = &[
         key: HIDE_CORE_STARTER,
         required: false,
         format: "`fixture`; read only when HOME is a fixture HOME (in the temporary folder, carrying .hide-e2e-device-home, and not the account's own)",
-        absent_behavior: "A core move starts the core on the machine taking it through the account's login item (launchd); a fixture HOME with `fixture` starts it as a detached process instead, and a fixture HOME without it is refused, so no test reaches launchd",
-    },
-    EnvKey {
-        key: HIDE_FIXTURE_CORE_STOP,
-        required: false,
-        format: "`hang`; read only when HOME is a fixture HOME (in the temporary folder, carrying .hide-e2e-device-home, and not the account's own)",
-        absent_behavior: "The core role stops when asked; a fixture HOME with `hang` makes that stop never return, so the process ends itself past its bound",
-    },
-    EnvKey {
-        key: HIDE_PREFLIGHT_PROGRAMS,
-        required: false,
-        format: "absolute path of a folder holding stand-in `gh`, `launchctl` and `pmset`; read only when HOME is a fixture HOME (in the temporary folder, carrying .hide-e2e-device-home, and not the account's own)",
-        absent_behavior: "A core move's checks on the machine taking the core run the account's `gh`, /bin/launchctl and /usr/bin/pmset; a fixture HOME names stand-ins, so a test passes or fails each check without the machine's own GitHub login, session and power settings, and a fixture HOME without it is refused rather than reaching the account's launchd",
+        absent_behavior: "A core started for another machine's sake (an update over SSH, an install over SSH) starts through the account's login item (launchd); a fixture HOME with `fixture` starts it as a detached process instead, and a fixture HOME without it is refused, so no test reaches launchd",
     },
     EnvKey {
         key: HIDE_DEV_DEVICE_HOME,
@@ -743,13 +725,6 @@ pub fn fixture_fails_build(build: &str) -> bool {
             && std::fs::read_to_string(home.join(FIXTURE_FAIL_BUILD_FILE))
                 .is_ok_and(|named| named.trim() == build)
     })
-}
-
-/// Whether a fixture asked the core role's stop never to return
-/// ([`HIDE_FIXTURE_CORE_STOP`]).
-pub fn fixture_core_stop_hangs() -> bool {
-    std::env::var_os(HIDE_FIXTURE_CORE_STOP).as_deref() == Some(std::ffi::OsStr::new("hang"))
-        && hide_platform::host::home_dir().is_ok_and(|home| fixture_home(&home))
 }
 
 /// The home every SSH device's node runs with ([`HIDE_DEV_DEVICE_HOME`]),

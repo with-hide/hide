@@ -1,7 +1,7 @@
-// The core move's screens on the gallery's synthetic scenes (PRD
-// core-host-node-move B2 to B5, B10, B16, W1 to W3): `core-move` is the
-// shipped Settings › Devices tab with its ⋯ menus and the move dialog over it,
-// `core-move-window` the shell's real strip and Sidebar with the device rail.
+// A core that works with another machine, on the gallery's synthetic scenes
+// (PRD core-host-node-move B10, B16, W2, W3): `core-link` is the shipped
+// Settings › Devices tab with its ⋯ menu, `core-link-window` the shell's real
+// strip and Sidebar with the device rail.
 // Each state is set up from the address, so the design review captures it as
 // the operator would see it; the scene marks itself ready once a menu it
 // opens is open. One scene fills one document, because the stores it seeds are
@@ -11,34 +11,33 @@ import { useEffect, useLayoutEffect, useMemo, useState } from "react";
 import { createActions } from "../actions";
 import { ConnectionBadge } from "../badge";
 import { TooltipProvider } from "../components/ui/tooltip";
-import { CoreMoveDialog, requestOfView } from "../settings/CoreMoveDialog";
 import { clientI18n } from "../i18n/translator";
 import { DevicesTab } from "../settings/DevicesTab";
 import { Sidebar } from "../sidebar";
 import { NOTHING_UNDER_WAY } from "../pairing";
 import { useShellStore } from "../store";
 import { OVERVIEW_ENTRY, useUiStore } from "../ui";
-import { CORE_MOVE_STATES, CORE_WINDOW_STATES, coreMoveRest, DIALOG_VIEWS, GIVE_UP_STATES, MENU_STATES, NODE_DEVICE, sideOf, WINDOW_STATES, type CoreMoveState } from "./coreMoveSceneData";
+import { CORE_LINK_STATES, CORE_WINDOW_STATES, coreLinkRest, MENU_STATES, NODE_DEVICE, sideOf, WINDOW_STATES, type CoreLinkState } from "./coreLinkSceneData";
 import type { SceneContent } from "./sceneData";
 
-export type CoreMoveSceneKind = "core-move" | "core-move-window";
-export type CoreMoveSceneParams = { scene: CoreMoveSceneKind; theme: "light" | "dark"; state: CoreMoveState; content: SceneContent; language: "ko" | "en" };
+export type CoreLinkSceneKind = "core-link" | "core-link-window";
+export type CoreLinkSceneParams = { scene: CoreLinkSceneKind; theme: "light" | "dark"; state: CoreLinkState; content: SceneContent; language: "ko" | "en" };
 
-export function coreMoveSceneParams(scene: CoreMoveSceneKind, params: URLSearchParams): CoreMoveSceneParams {
-  const known: readonly string[] = scene === "core-move" ? CORE_MOVE_STATES : CORE_WINDOW_STATES;
+export function coreLinkSceneParams(scene: CoreLinkSceneKind, params: URLSearchParams): CoreLinkSceneParams {
+  const known: readonly string[] = scene === "core-link" ? CORE_LINK_STATES : CORE_WINDOW_STATES;
   // At rest each scene shows its first state.
   const state = params.get("state") ?? known[0]!;
   if (!known.includes(state)) throw new Error(`Unknown ${scene} scene state ${state}`);
   const content = params.get("content") ?? "reference";
   if (content !== "reference" && content !== "long") throw new Error(`Unknown scene content ${content}`);
   // Korean, as the approved bundle draws it, unless the address asks for English.
-  return { scene, theme: params.get("theme") === "light" ? "light" : "dark", state: state as CoreMoveState, content, language: params.get("lang") === "en" ? "en" : "ko" };
+  return { scene, theme: params.get("theme") === "light" ? "light" : "dark", state: state as CoreLinkState, content, language: params.get("lang") === "en" ? "en" : "ko" };
 }
 
-export function CoreMoveScene({ scene, theme, state, content, language }: CoreMoveSceneParams) {
+export function CoreLinkScene({ scene, theme, state, content, language }: CoreLinkSceneParams) {
   const side = sideOf(state);
   const fixture = useMemo(() => {
-    const next = coreMoveRest(side, content, Date.now());
+    const next = coreLinkRest(side, content, Date.now());
     if (state === "device-kit-failed" || state === "device-unsupported") {
       const device = next.rest.navigator!.devices!.find((device) => device.id === NODE_DEVICE)!;
       device.state = "unavailable";
@@ -60,7 +59,7 @@ export function CoreMoveScene({ scene, theme, state, content, language }: CoreMo
     // A node's window names its machine in the address, as `hide connect` does.
     window.history.replaceState(null, "", side === "node" ? `${window.location.pathname}${window.location.search}#node=${NODE_DEVICE}` : `${window.location.pathname}${window.location.search}`);
     const shown = WINDOW_STATES[state];
-    useShellStore.setState({ rest: fixture.rest, agents: fixture.agents, pairing: NOTHING_UNDER_WAY, connection: shown?.connection ?? "live", coreMove: shown?.move ?? DIALOG_VIEWS[state] ?? null, coreMoveRefusal: null, coreLink: shown?.link ?? null });
+    useShellStore.setState({ rest: fixture.rest, agents: fixture.agents, pairing: NOTHING_UNDER_WAY, connection: shown?.connection ?? "live", coreLink: shown?.link ?? null, coreSplit: state === "node-split-failed" ? "split_not_connected" : null });
     useUiStore.setState({ screen: { kind: "main" }, overview: { ...OVERVIEW_ENTRY, projectId: "herdr-ide" } });
     document.documentElement.classList.toggle("dark", theme === "dark");
     document.documentElement.classList.toggle("light", theme === "light");
@@ -95,15 +94,12 @@ export function CoreMoveScene({ scene, theme, state, content, language }: CoreMo
     return () => cancelAnimationFrame(frame);
   }, [state]);
 
-  const shownView = DIALOG_VIEWS[state];
-  const dialog = shownView ? <CoreMoveDialog request={requestOfView(shownView)} asked={null} giveUp={GIVE_UP_STATES.has(state)} actions={actions} onClose={() => {}} onRequest={() => {}} /> : null;
   return (
     <TooltipProvider>
-      <div className="flex h-screen w-screen flex-col overflow-hidden bg-background text-foreground" data-gallery-scene={scene} data-core-move-scene-ready={ready ? state : undefined}>
-        {scene === "core-move" ? (
+      <div className="flex h-screen w-screen flex-col overflow-hidden bg-background text-foreground" data-gallery-scene={scene} data-core-link-scene-ready={ready ? state : undefined}>
+        {scene === "core-link" ? (
           <div className="min-h-0 flex-1 overflow-hidden px-xl py-lg">
             <DevicesTab actions={actions} />
-            {dialog}
           </div>
         ) : (
           <>

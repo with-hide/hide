@@ -420,7 +420,7 @@ fn an_install_sends_only_what_the_device_does_not_hold_whole() {
     let install_once = || {
         let mut pipe = device.connect();
         let facts = device.probe(&mut pipe);
-        let payload = packages.payload(&facts.os, &facts.arch).unwrap();
+        let payload = packages.local(&facts.os, &facts.arch).unwrap();
         install(
             &mut pipe,
             "~/.hide/helper",
@@ -482,7 +482,7 @@ fn a_packed_install_crosses_the_link_smaller_and_lands_whole() {
     let mut pipe = device.connect();
     let facts = probe(&mut pipe, soon()).unwrap();
     assert!(facts.unpacks, "every Windows device unpacks gzip");
-    let payload = packages.payload(&facts.os, &facts.arch).unwrap();
+    let payload = packages.local(&facts.os, &facts.arch).unwrap();
     let installed = install(&mut pipe, "~/.hide/helper", &facts.home, &payload, true).unwrap();
     assert_eq!((installed.upload.sent, installed.upload.reused), (3, 0));
     let landed = hide_platform::path::from_wire(&installed.helper_path).unwrap();
@@ -602,7 +602,7 @@ fn an_install_under_a_folder_others_can_change_or_a_link_is_refused() {
     ] {
         let mut pipe = device.connect();
         let facts = device.probe(&mut pipe);
-        let payload = packages.payload(&facts.os, &facts.arch).unwrap();
+        let payload = packages.local(&facts.os, &facts.arch).unwrap();
         let Err(EstablishError::Install { reason, .. }) =
             install(&mut pipe, root, &facts.home, &payload, facts.unpacks)
         else {
@@ -626,7 +626,7 @@ fn a_link_or_an_open_folder_below_the_install_folder_is_refused() {
     let install_once = || {
         let mut pipe = device.connect();
         let facts = device.probe(&mut pipe);
-        let payload = packages.payload(&facts.os, &facts.arch).unwrap();
+        let payload = packages.local(&facts.os, &facts.arch).unwrap();
         install(
             &mut pipe,
             "~/.hide/helper",
@@ -992,63 +992,6 @@ fn a_command_that_ends_leaves_nothing_it_started_running() {
         gone_soon(pid),
         "the program the command started outlived it"
     );
-    assert_eq!(
-        run(&mut pipe, &words(&["cmd.exe", "/c", "exit 0"]), 16, soon())
-            .unwrap()
-            .status,
-        0
-    );
-}
-
-/// A copied file lands whole and private, a damaged one leaves the file
-/// already there alone, and the same file reads back with the digest the
-/// machine states for it.
-#[test]
-fn a_file_goes_whole_into_a_private_folder_and_comes_back_whole() {
-    let device = Device::new();
-    let mut pipe = device.connect();
-    device.probe(&mut pipe);
-    let bytes: Vec<u8> = (0..200_000_u32).map(|index| (index % 251) as u8).collect();
-    let remote = device.home().join(r"moved\deep\file");
-    let spelled = Device::wire(&remote);
-    put_file(
-        &mut pipe,
-        &spelled,
-        &digest(&bytes),
-        bytes.len() as u64,
-        &mut bytes.as_slice(),
-        &|_| {},
-    )
-    .unwrap();
-    assert_eq!(std::fs::read(&remote).unwrap(), bytes);
-    assert!(hide_platform::fs::private::is_private(&device.home().join("moved")).unwrap());
-    assert!(hide_platform::fs::private::is_private(&remote).unwrap());
-
-    assert!(matches!(
-        put_file(
-            &mut pipe,
-            &spelled,
-            &"0".repeat(64),
-            5,
-            &mut &b"other"[..],
-            &|_| {}
-        ),
-        Err(StepError::Refused(_))
-    ));
-    assert_eq!(std::fs::read(&remote).unwrap(), bytes);
-    assert_eq!(
-        std::fs::read_dir(remote.parent().unwrap()).unwrap().count(),
-        1
-    );
-
-    let mut back = Vec::new();
-    let (size, stated) = get_file(&mut pipe, &spelled, &mut back, &|_| {}).unwrap();
-    assert_eq!((size, stated), (bytes.len() as u64, digest(&bytes)));
-    assert_eq!(back, bytes);
-    assert!(matches!(
-        get_file(&mut pipe, "C:/no/such/file", &mut Vec::new(), &|_| {}),
-        Err(StepError::Refused(_))
-    ));
     assert_eq!(
         run(&mut pipe, &words(&["cmd.exe", "/c", "exit 0"]), 16, soon())
             .unwrap()

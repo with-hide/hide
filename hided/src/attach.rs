@@ -102,17 +102,6 @@ pub enum Line {
     Accepted(Accepted),
     /// From the core: the link is refused, and why.
     Refused(Refusal),
-    /// From `hided core-move release` on the core's own machine: stop the
-    /// core for a move back to `target` (PRD core-host-node-move B6).
-    Release(ReleaseRequest),
-    /// From the core: the stop is recorded and the core stops now.
-    Released,
-}
-
-#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
-pub struct ReleaseRequest {
-    pub intent: String,
-    pub target: String,
 }
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
@@ -138,10 +127,6 @@ pub struct NodeHello {
     /// The node build's version and order (`build_order`).
     #[serde(default)]
     pub release: crate::build_order::Release,
-    /// The core move whose commit this link is, while the node's placement
-    /// names one (PRD core-host-node-move amendment 1).
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub move_intent: Option<String>,
 }
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
@@ -346,14 +331,7 @@ pub struct AttachService {
     pub terminals: Arc<dyn DeviceSink>,
     pub grants: Arc<RelayGrants>,
     pub attaching: Attaching,
-    /// Closed while a move's copy waits for its commit.
-    pub move_gate: Arc<crate::core_move::gate::MoveGate>,
-    /// The process's move, which a release asks to stop the core.
-    pub moves: Arc<crate::core_move::control::MoveControl>,
 }
-
-/// How long the core may take to check and record a release.
-const RELEASE_ANSWER_WITHIN: Duration = Duration::from_secs(20);
 
 /// The nodes whose link is between the core's admission and its taking the
 /// link as the node's. A second attach of one meanwhile is refused as
@@ -461,11 +439,7 @@ fn attach_stopped(message: &str) {
 
 impl AttachService {
     fn build(&self) -> Result<String, String> {
-        static OWN: std::sync::OnceLock<Result<String, String>> = std::sync::OnceLock::new();
-        match &self.build {
-            Some(build) => Ok(build.clone()),
-            None => OWN.get_or_init(crate::build_id::of_current_exe).clone(),
-        }
+        crate::build_id::of_daemon(self.build.as_deref())
     }
 }
 
@@ -497,27 +471,6 @@ fn take_link(stream: LocalStream, service: &AttachService) {
     }
     let node = match read_line(&mut reader) {
         Ok(Line::Node(node)) => node,
-        // Only this account reaches the socket, so a release comes from the
-        // core's own machine (`hided core-move release`).
-        Ok(Line::Release(request)) => {
-            let answer =
-                service
-                    .moves
-                    .release(&request.intent, &request.target, RELEASE_ANSWER_WITHIN);
-            hide_core::diagnostic!(json!({
-                "component": "core_move",
-                "kind": "release.asked",
-                "intent": request.intent,
-                "target": request.target,
-                "refused": answer.as_ref().err(),
-            }));
-            let line = match answer {
-                Ok(()) => Line::Released,
-                Err(reason) => Line::Refused(Refusal { reason }),
-            };
-            let _ = write_line(&mut writer, &line);
-            return;
-        }
         Ok(_) => {
             attach_failed("", "the node sent another line than its own");
             return;
@@ -572,17 +525,6 @@ fn take_link(stream: LocalStream, service: &AttachService) {
         refuse(&mut writer, "grants_full");
         return;
     };
-    // The commit of a pending move, recorded before the node hears it: a
-    // node that never reads the answer finds the move committed when it
-    // asks.
-    if let Err(reason) = service
-        .move_gate
-        .admit(&node.node, node.move_intent.as_deref())
-    {
-        service.grants.revoke(&relay_token);
-        refuse(&mut writer, reason);
-        return;
-    }
     let accepted = Line::Accepted(Accepted {
         port: service.port,
         relay_token: relay_token.clone(),
@@ -736,33 +678,6 @@ pub fn run(args: &[OsString]) -> Result<(), String> {
             let mut stdout = std::io::stdout().lock();
             write_line(&mut stdout, &Line::Attach(outcome))
         }
-    }
-}
-
-/// Asks the core running on `state_dir` to stop for the move back
-/// `intent` to `target`; answers once the core recorded the stop, or its
-/// refusal.
-pub fn release(state_dir: &Path, intent: &str, target: &str) -> Result<(), String> {
-    let stream = find_core(state_dir)
-        .map_err(|outcome| format!("no core to release: {}", outcome.code()))?;
-    let _ = stream.set_read_timeout(Some(RELEASE_ANSWER_WITHIN + HANDSHAKE_TIMEOUT));
-    let mut writer = stream.duplicate();
-    let mut reader = BufReader::new(stream);
-    match read_line(&mut reader).map_err(|error| error.to_string())? {
-        Line::Core(_) => {}
-        _ => return Err("the core sent another line than its own".to_owned()),
-    }
-    write_line(
-        &mut writer,
-        &Line::Release(ReleaseRequest {
-            intent: intent.to_owned(),
-            target: target.to_owned(),
-        }),
-    )?;
-    match read_line(&mut reader).map_err(|error| error.to_string())? {
-        Line::Released => Ok(()),
-        Line::Refused(refusal) => Err(refusal.reason),
-        _ => Err("the core answered another line than the release's".to_owned()),
     }
 }
 

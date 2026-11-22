@@ -647,44 +647,6 @@ function Step-Run([string]$count, [string]$cap) {
     $stdout.Flush()
 }
 
-function Step-Fput([string]$wire, [string]$digest, [string]$size) {
-    if (-not (Absolute $wire)) { [void](Copy-Bytes ([long]$size) $null); Say fail "$wire is not absolute"; return }
-    $target = Native $wire
-    $temp = "$target.part"
-    $state.Pending = $temp
-    if ((Store $temp ([long]$size)) -and (Sum $temp) -eq $digest -and (Replace-Into $temp $target)) {
-        $state.Pending = $null
-        Say ok
-    } else {
-        Remove-Quietly $temp
-        $state.Pending = $null
-        Say fail "$wire did not arrive whole"
-    }
-}
-
-function Step-Fget([string]$wire) {
-    $file = $null
-    if (Absolute $wire) {
-        try { $file = [IO.File]::Open((Native $wire), [IO.FileMode]::Open, [IO.FileAccess]::Read, [IO.FileShare]::Read) } catch { $file = $null }
-    }
-    if ($null -eq $file) { Say fail "$wire is not a file Hide can read"; return }
-    try {
-        $size = $file.Length
-        $digest = Sum-Stream $file
-        [void]$file.Seek(0, [IO.SeekOrigin]::Begin)
-        Say file $size $digest
-        $chunk = New-Object byte[] 65536
-        $left = $size
-        while ($left -gt 0) {
-            $n = $file.Read($chunk, 0, [int][Math]::Min([long]$chunk.Length, $left))
-            if ($n -le 0) { throw 'the file got shorter while it was read' }
-            $stdout.Write($chunk, 0, $n)
-            $left -= $n
-        }
-        $stdout.Flush()
-    } finally { $file.Dispose() }
-}
-
 function Probe {
     $machine = $env:HIDE_MACHINE_ID
     if (-not $machine) {
@@ -713,8 +675,6 @@ try {
             'zput' { Step-Put $fields[1] $fields[2] $fields[4] $true }
             'start' { Step-Start $fields[1] $fields[2] }
             'run' { Step-Run $fields[1] $fields[2] }
-            'fput' { Step-Fput $fields[1] $fields[2] $fields[3] }
-            'fget' { Step-Fget $fields[1] }
             'attach' { Step-Attach $fields[1] $fields[2] }
             default { Say fail "unknown step $($fields[0])"; exit 64 }
         }

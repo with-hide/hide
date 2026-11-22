@@ -1757,18 +1757,6 @@ export function createActions(send: DispatchFn, clipboard?: Clipboard) {
     },
 
     /**
-     * Asks the process's supervisor about the core move (PRD
-     * core-host-node-move B3 to B5): run the checks toward a device or back
-     * to this machine, start the move once they passed, or give up its wait
-     * on its other machine where the frame offers it. The answer is the
-     * `core_move` frame, or a refusal naming why.
-     */
-    coreMove(request: { action: "check" | "start"; device: string } | { action: "check_back" | "back" | "abandon" }) {
-      useShellStore.setState({ coreMoveRefusal: null });
-      dispatch({ schema_version: 2, kind: "core_move", payload: request });
-    },
-
-    /**
      * A node's window ends or restores its link to the core on another machine (B16), or retries a link that stopped
      * on what only the operator can fix; the node's own daemon answers.
      */
@@ -1779,16 +1767,6 @@ export function createActions(send: DispatchFn, clipboard?: Clipboard) {
     /** Answers what ssh asks the core link's dial on this window's strip (PRD system-ssh-device-link B33). */
     answerCoreLinkSignIn(question: number, reply: SignInReply) {
       dispatch({ schema_version: 2, kind: "core_link", payload: { action: "sign_in", question, ...reply } });
-    },
-
-    /** Answers what ssh asks the move's checks in the move dialog (PRD system-ssh-device-link B33). */
-    answerCoreMoveSignIn(question: number, reply: SignInReply) {
-      dispatch({ schema_version: 2, kind: "core_move", payload: { action: "sign_in", question, ...reply } });
-    },
-
-    /** Ends the sign-in of the checks this window asked for, whatever it shows, before its first question too (B8). */
-    cancelCoreMoveSignIn() {
-      dispatch({ schema_version: 2, kind: "core_move", payload: { action: "sign_in", reply: "cancel" } });
     },
 
     /**

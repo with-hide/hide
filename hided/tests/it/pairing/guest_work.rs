@@ -68,7 +68,7 @@ pub(super) struct Machine {
 }
 
 impl Machine {
-    fn command(&self, args: &[&str]) -> Command {
+    pub(super) fn command(&self, args: &[&str]) -> Command {
         let mut command = self.terminal.command_of(&self.hide, args);
         command
             .env("HIDE_PEER_DIRECT", &self.direct)
@@ -118,7 +118,7 @@ impl Machine {
     }
 
     /// The pane of this machine's own project, as `hide ps` lists it.
-    fn own_pane(&self) -> String {
+    pub(super) fn own_pane(&self) -> String {
         let project = self.project.to_string_lossy().into_owned();
         let mut last = Value::Null;
         wait_within("the pane of the machine's own project", WITHIN, || {
@@ -136,7 +136,7 @@ impl Machine {
     }
 
     /// What `hide device list` says at this machine's terminal.
-    fn listed(&self) -> Value {
+    pub(super) fn listed(&self) -> Value {
         self.ran(&["device", "list", "--json"]).json()["value"].clone()
     }
 
@@ -268,7 +268,7 @@ fn guest_panes(listed: &Value) -> Vec<String> {
 }
 
 /// Waits for the file a command typed into a pane leaves, and reads it.
-fn left(file: &Path) -> String {
+pub(super) fn left(file: &Path) -> String {
     wait_within(&format!("{} from the pane", file.display()), WITHIN, || {
         Ok(std::fs::read_to_string(file)
             .ok()
@@ -282,7 +282,7 @@ const GRID: (u16, u16) = (31, 97);
 
 /// Types `line` and Enter into `pane` as a screen of `machine`'s Hide does:
 /// it shows the pane at its grid, has it drawn whole, and sends the keys.
-async fn types(machine: &Machine, pane: &str, line: &str) {
+pub(super) async fn types(machine: &Machine, pane: &str, line: &str) {
     let screen = machine.screen();
     let mut window = Window::open_at(screen.port, &screen.token, "web").await;
     // A pane on another machine is drawn while that machine is the one in
@@ -316,7 +316,7 @@ async fn types(machine: &Machine, pane: &str, line: &str) {
 }
 
 /// The process whose command line names `words`, each of them.
-fn process_naming(words: &[&str]) -> Option<u32> {
+pub(super) fn process_naming(words: &[&str]) -> Option<u32> {
     let listing = Command::new("ps")
         .args(["-Ao", "pid=,command="])
         .output()

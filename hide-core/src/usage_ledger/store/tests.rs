@@ -471,7 +471,7 @@ fn batch_failure_rolls_back_totals_and_checkpoint_and_capacity_reports_a_limit()
 }
 
 #[test]
-fn native_node_identity_and_original_local_day_survive_zone_changes_and_core_move() {
+fn native_node_identity_and_original_local_day_survive_zone_changes() {
     let dir = tempfile::tempdir().unwrap();
     let state = dir.path().join("state");
     std::fs::create_dir(&state).unwrap();
@@ -505,14 +505,6 @@ fn native_node_identity_and_original_local_day_survive_zone_changes_and_core_mov
         )
         .unwrap();
     assert_eq!(store.daily().unwrap()[0].day, "2026-10-02");
-    let ai = dir.path().join("ai.json");
-    std::fs::write(&ai, r#"{"provider":"claude"}"#).unwrap();
-    let destination = dir.path().join("copy");
-    // Live WAL write must reach the moved copy through VACUUM INTO.
-    let manifest = crate::node_migration::copy::stage(&state, &destination, &ai).unwrap();
-    assert!(manifest.files.contains_key(hide_kit::layout::USAGE_STORE));
-    let copy = open(&hide_kit::layout::usage_store(&destination)).unwrap();
-    assert_eq!(copy.daily().unwrap(), store.daily().unwrap());
 }
 
 #[test]

@@ -13,6 +13,7 @@ import type { Device, RemoteStatus } from "../snapshot";
 import { useShellStore } from "../store";
 import { switchOffered } from "../deviceSwitch";
 import { deviceConnectOffered, ownWindow } from "../pairing";
+import { splitFailureLine } from "../coreLink";
 import { DeviceSwitchButton, DeviceSwitchLine } from "./DeviceSwitch";
 import { DeviceSignIn } from "./SignInPrompt";
 import { FixCommand } from "./FixCommand";
@@ -26,10 +27,6 @@ export type DeviceRowHandlers = {
   onAllow: (device: Device) => void;
   onRevoke: (device: Device) => void;
   onRemove: (device: Device) => void;
-  /** Opens the move of the core to this device (PRD core-host-node-move B2). */
-  onMove: (device: Device) => void;
-  /** From a node's window: opens the move of the core back to this machine. */
-  onMoveBack: () => void;
   /** From a node's window: asks to end its link to the core (B16). */
   onDisconnect: () => void;
 };
@@ -40,7 +37,7 @@ export type DeviceRowHandlers = {
  * window's own machine, whether that machine is a node, whether the core
  * reads it now, and the core machine's name for the node's menu.
  */
-export type DeviceRowPlace = { name: string; core: boolean; own: boolean; windowIsNode: boolean; connected: boolean; coreName: string };
+export type DeviceRowPlace = { name: string; core: boolean; own: boolean; windowIsNode: boolean; coreName: string };
 
 /**
  * One device (PRD settings-cleanup B54, B55): its name, alias, platform
@@ -69,10 +66,10 @@ export function DeviceRow({ device, status, focused, place, actions, handlers }:
           <span className="flex min-w-0 flex-wrap items-center gap-xs">
             <span className="break-words font-semibold" data-device-name={device.id}>{place.name}</span>
             {place.core ? (
-              <Hint label={t("coreMove.runs")}>
+              <Hint label={t("coreLink.runs")}>
                 <Badge variant="outline" data-device-core={device.id}>
                   <CrownIcon aria-hidden="true" />
-                  {t("coreMove.badge")}
+                  {t("coreLink.badge")}
                 </Badge>
               </Hint>
             ) : null}
@@ -84,7 +81,7 @@ export function DeviceRow({ device, status, focused, place, actions, handlers }:
           ) : null}
         </span>
       }
-      detail={<DeviceAttention device={device} actions={actions} switchable={switchable} onAct={handlers.onAct} onAllow={handlers.onAllow} />}
+      detail={<DeviceAttention device={device} place={place} actions={actions} switchable={switchable} onAct={handlers.onAct} onAllow={handlers.onAllow} />}
     >
       <Status tone={line.tone} data-device-state={`${device.id}:${device.state}`}>
         {line.text}
@@ -123,17 +120,14 @@ export function DeviceRow({ device, status, focused, place, actions, handlers }:
 }
 
 /**
- * The row's ⋯ (PRD core-host-node-move B2, B16): a device this core dials
- * offers to take the core, dimmed with why while it is not connected; the
- * window's own machine, on a node, offers the core back and the end of its
- * link. The core moves only from the core's own window (issue 951).
+ * The row's ⋯ (PRD core-host-node-move B16): the window's own machine, on a
+ * node, offers the end of its link to the core.
  */
 function DeviceMenu({ device, focused, place, actions, handlers }: { device: Device; focused: boolean; place: DeviceRowPlace; actions: Actions; handlers: DeviceRowHandlers }) {
   const { t } = useInterfaceTranslation();
   const dialed = device.kind === "remote" && device.dials_in !== true;
   const remote = device.kind === "remote" && !place.own;
   const granted = device.host?.consent === "granted" && device.host.state !== "identity_changed";
-  const movable = dialed && !place.windowIsNode;
   const nodeOwn = place.own && place.windowIsNode;
   return (
     <DropdownMenu>
@@ -162,22 +156,10 @@ function DeviceMenu({ device, focused, place, actions, handlers }: { device: Dev
             </DropdownMenuItem>
           )
         ) : null}
-        {movable ? <DropdownMenuSeparator /> : null}
-        {movable ? (
-          <DropdownMenuItem disabled={!place.connected} onSelect={() => handlers.onMove(device)} className="flex-col items-start gap-0" data-device-move={device.id}>
-            <span>{t("coreMove.moveHere")}</span>
-            {place.connected ? null : <span className="text-caption text-muted-foreground">{t("devices.rail.notConnected")}</span>}
-          </DropdownMenuItem>
-        ) : null}
         {nodeOwn ? <DropdownMenuSeparator /> : null}
         {nodeOwn ? (
-          <DropdownMenuItem onSelect={() => handlers.onMoveBack()} data-device-move-back={device.id}>
-            {t("coreMove.moveBackMenu")}
-          </DropdownMenuItem>
-        ) : null}
-        {nodeOwn ? (
           <DropdownMenuItem onSelect={() => handlers.onDisconnect()} data-device-core-disconnect={device.id}>
-            {t("coreMove.disconnectMenu", { machine: place.coreName })}
+            {t("coreLink.disconnectMenu", { machine: place.coreName })}
           </DropdownMenuItem>
         ) : null}
         {remote ? <DropdownMenuSeparator /> : null}
@@ -192,8 +174,10 @@ function DeviceMenu({ device, focused, place, actions, handlers }: { device: Dev
 }
 
 /** The lines under a device that something needs the operator for; a healthy device has none. */
-function DeviceAttention({ device, actions, switchable, onAct, onAllow }: { device: Device; actions: Actions; switchable: boolean; onAct: () => void; onAllow: (device: Device) => void }) {
+function DeviceAttention({ device, place, actions, switchable, onAct, onAllow }: { device: Device; place: DeviceRowPlace; actions: Actions; switchable: boolean; onAct: () => void; onAllow: (device: Device) => void }) {
   const { t, i18n } = useInterfaceTranslation();
+  // A node whose machine was not made a Hide of its own says why on its own row, with the Retry (PRD device-connect-iroh B45).
+  const splitFailed = useShellStore((s) => (place.own && place.windowIsNode ? s.coreSplit : null));
   // SSH trust, sign-in and helper consent belong to a device this core dials, not to a node that dials in.
   const remote = device.kind === "remote" && device.dials_in !== true;
   const signIn = remote ? (device.sign_in ?? null) : null;
@@ -211,6 +195,22 @@ function DeviceAttention({ device, actions, switchable, onAct, onAllow }: { devi
   const kit = device.kit;
   const kitShown = kit !== undefined && (Boolean(kit.unavailable) || Boolean(kit.refused) || kit.busy || kitProblems(kit).length > 0);
   const rows = [
+    splitFailed ? (
+      <div key="split" className="flex flex-wrap items-center gap-x-sm gap-y-xs" data-device-split={splitFailed}>
+        <Status tone="warn">{splitFailureLine(splitFailed, place.coreName, t)}</Status>
+        <Button
+          variant="secondary"
+          size="sm"
+          onClick={() => {
+            onAct();
+            actions.coreLink("retry");
+          }}
+          data-device-split-retry={device.id}
+        >
+          {t("common.retry")}
+        </Button>
+      </div>
+    ) : null,
     switchable && device.switch ? <DeviceSwitchLine key="switch" device={device} actions={actions} /> : null,
     deviceLinkShown(device) ? <DeviceLink key="link" device={device} actions={actions} /> : null,
     ownWords ? (

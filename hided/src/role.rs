@@ -1,7 +1,7 @@
 //! What `hided` was started to be, read from its arguments once, before
 //! anything else runs: a closed list of roles, each with its own words.
-//! The daemon is the role of no arguments at all (what `hide connect`, a
-//! moved core's login item and the test fixtures start), so an argument this
+//! The daemon is the role of no arguments at all (what `hide connect` and
+//! the test fixtures start), so an argument this
 //! list does not name is refused before any state folder is opened, rather
 //! than read as one more way to start a core (with-hide/hide-private#670).
 
@@ -23,8 +23,6 @@ pub enum Role<'a> {
     Node(&'a [OsString]),
     /// The pipe a node on another machine runs here over SSH.
     Attach(&'a [OsString]),
-    /// A step of a core move.
-    CoreMove(&'a [OsString]),
     /// The update of the core here to this build.
     CoreUpdate(&'a [OsString]),
     /// The Unix opener supervisor; it reads the whole argument list.
@@ -41,7 +39,6 @@ pub const USAGE: &str = "usage: hided [--version | --help]
                           the daemon, as the core's login item starts it
   hided node serve [--guest <folder>]|--version
   hided attach [--state-dir <absolute dir>]
-  hided core-move <step> ...
   hided core-update ...
   hided shell-exec --shell <absolute executable path> --login";
 
@@ -64,7 +61,6 @@ pub fn parse(args: &[OsString]) -> Result<Role<'_>, String> {
         Some("shell-exec") => Ok(Role::ShellExec(rest)),
         Some("node") => Ok(Role::Node(rest)),
         Some("attach") => Ok(Role::Attach(rest)),
-        Some("core-move") => Ok(Role::CoreMove(rest)),
         Some("core-update") => Ok(Role::CoreUpdate(rest)),
         Some("--open-helper") => Ok(Role::OpenHelper(args)),
         Some("core-login") => core_login(rest),

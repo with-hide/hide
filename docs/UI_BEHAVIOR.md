@@ -349,7 +349,7 @@ Only authoritative topology removes missing live tabs; an unresolved catalog or 
 Reopen closed tab uses the former group, area and position when they survive, otherwise the ungrouped fallback.
 An older build may discard Agent layout state; returning starts with all current tabs in one area and keeps the View layout.
 A Workspace of an SSH device the core dials has the same named-group and draft controls but keeps its existing single-area restriction within each group.
-A machine that dials in to the core, which is what the machine the core moved off becomes, keeps its Agent areas as this machine does: its tree, splits and active area are the same before a move, after it and after the move back, its engine shows the tab of the area in use, and the panes of every area's tab are live.
+A machine that dials in to the core, which only a core moved before 1.2.0 left, keeps its Agent areas as this machine does: its engine shows the tab of the area in use, and the panes of every area's tab are live.
 
 Closing a primary checkout's last tab or last pane closes it like any other tab, even while a linked worktree remains, and its linked worktrees stay open.
 
@@ -436,7 +436,7 @@ Matching checkout and path documents use one shared buffer, and the same address
 Dirty-document close guards count every reference.
 A page an agent opens loads even where no desk on screen shows it, on no desk or on the desk of a tab or Workspace not in front, and coming onto a desk it is the same page, scroll and typing kept (B32); `--wait` proves only a real load.
 
-Every desk and the Views on no desk are saved with the Workspace and survive restart and core moves (B27).
+Every desk and the Views on no desk are saved with the Workspace and survive restart (B27).
 A first start after the update moves an older file once (D-18, B34, B35): the checkout's open documents go to the desk of the Agent tab last seen, each pane's 보기 slot cards to the desk of that pane's tab in the order they stacked, a pinned lane opens over the agents, and documents, comments and unsaved drafts stay; the file is then saved only in the new form.
 Local and connected-device callers follow the same rules; the phone keeps its existing flow.
 Web owner: the shell draws the snapshot projection of the desk on screen and asks the unsaved question in `web/src/Overlays.tsx` (`ConfirmViewsClose`) from the projection's `session_drafts`.
@@ -1580,7 +1580,7 @@ Backlog lists both Local issues and eligible GitHub issues for a project, with s
 The saved Issue source choice (Auto, GitHub or Local) remains the default for older entry points; it does not hide either source in Overview.
 Local issues remain in `local-issues.json`, numbered per project; GitHub issues are read and written through the owning machine's `gh`.
 An open Issue source menu follows the core's stored choice as it arrives, including an acknowledgement received after the menu reopened; selecting an item does not create a second, optimistic choice in the shell.
-A project's source defaults to GitHub when its repository reads as a GitHub repository and to Local otherwise (a folder, a repository with no GitHub remote, or `gh` not installed); a project of a device the core dials has no source, while a project of a node that dials the core keeps its source, its issues and its Start as it had them before the core moved (PRD core-host-node-move D-29).
+A project's source defaults to GitHub when its repository reads as a GitHub repository and to Local otherwise (a folder, a repository with no GitHub remote, or `gh` not installed); a project of a device the core dials has no source, while a project of a node that dials the core keeps its source, its issues and its Start (PRD core-host-node-move D-29).
 The core hands the web a source-neutral task (the id the source shows, URL, title, open or closed, labels, when it was made and last changed), so no view reads a GitHub shape, and a new source is one more adapter in `hide-core/src/tasks.rs`.
 A GitHub project can therefore keep Local issues beside its GitHub issues.
 
@@ -2481,7 +2481,7 @@ Which machine is a device is the window's to say (`awayDevice` in `web/src/scree
 
 A machine whose core runs on another machine (ARCHITECTURE.md, A core on another machine) is a device on that core's rail like any other, named by its host name.
 Its `다시 연결` is answered that the machine reconnects by itself, and removing it ends its connection until it attaches again; neither adds a state or a line of its own.
-The window's own machine is always the first tile and the one named This Mac (`이 Mac`), the laptop glyph (`web/src/screenMachine.ts`, `windowFirst`); on a window of a machine whose core runs elsewhere, the core's machine follows it, named by the name the operator registered it under before the core moved to it, which the core keeps (`machine_label`, ARCHITECTURE.md, Moving the core), and by the name its machine gives itself when it has none.
+The window's own machine is always the first tile and the one named This Mac (`이 Mac`), the laptop glyph (`web/src/screenMachine.ts`, `windowFirst`); on a window of a machine whose core runs elsewhere, the core's machine follows it, named by the name the operator registered it under before the core moved to it, which the core keeps (`machine_label`, ARCHITECTURE.md, A core on another machine), and by the name its machine gives itself when it has none.
 No tile wears a crown: every computer runs a core of its own, so where the core is marks nothing on the rail (PRD device-connect-iroh D-80); the tile of the machine that runs the core keeps `core 실행 중` in its hint.
 A Hide this machine is paired with and opens has a tile too, after the devices: lettered from its name like a device, with no mark, and dimmed with the `×` while the two are not connected or the opening is paused (`openedMachines` in `web/src/pairing.ts`, B3).
 A machine that is already a device of this core has only its device tile, so no machine shows twice, and a machine that only opens this one has no tile.
@@ -2493,15 +2493,16 @@ Choosing its tile scopes the sidebar, 태스크, PR, Overview, the tile counts a
 
 A window on a machine whose core runs elsewhere shows its core's state and takes its strip, in the place and size of the connection badge, when the core cannot draw it (W1 to W3, B16):
 
-- while a move holds the window, `core를 Mac mini 기기로 옮기는 중 · 3/5 프로젝트와 기록 복사 · 다시 연결될 때까지 입력을 받지 않아요`, the move's step of five, with `…`, and the window sends nothing but the move's own give-up (a rollback says `옮기지 못해 이 Mac의 core로 되돌리는 중`); while the move waits on a machine that took its link and stopped answering, the strip ends with `그만 기다리기` (`여기로 가져오기` for a move back), which only opens the move dialog at its confirm;
 - while this machine updates its core to this app's build, `Mac mini의 core를 이 앱의 빌드로 바꾸는 중 · 에이전트는 계속 실행돼요`, with `…`;
-- while the core cannot be reached, `! Mac mini의 core에 연결할 수 없어요 · 다시 연결하는 중`;
+- while the core cannot be reached, `! Mac mini의 core에 연결할 수 없어요 · 이전 대기 중`: the node dials again by itself, and once the core answers on this build the two machines are split into two Hides (PRD device-connect-iroh B45); a build that does not offer connections between two Hides splits nothing and ends the line `다시 연결하는 중` (the `core_link` frame's `splits`);
 - while the dial a window's `로그인` or retry started waits on the operator, that window alone shows `… Mac mini core에 로그인하는 중` with what ssh asks under it exactly as a device's row shows it (PRD system-ssh-device-link B33): ssh's own sentence and a masked field with `로그인` and `취소`, a server's fingerprint with `이 서버 믿고 연결` and `취소`, neither chosen, a page to confirm with `열기`, or `보안 키를 터치하세요`; another window shows the link connecting and cannot answer; the answer is cleared as it is sent; Cancel, five minutes on a question, a page or a key touch, or closing that window ends the attempt, before the first question or between two as well; one press asks at most one sign-in; a connect no window made (`hide connect`, a launch) and the dials Hide makes by itself never ask, and stop at the sign-in for the window's `로그인`;
 - while the link stopped on what only the operator can fix, which nothing dials again until they act, the device row's three actions: a sign-in (`! Mac mini core에 연결하려면 로그인이 필요해요`, or `! Mac mini core가 로그인을 거절했어요`) with `로그인`, which dials again and may ask; a changed server key (`! Mac mini core의 서버 키가 바뀌었어요 · 터미널에서 확인해 주세요`) with `ssh mini` and Copy and no `다시 시도`, as on the device row, since a retry would meet the same key; a Hide an update replaced on disk (`! Hide가 실행된 뒤에 업데이트됐어요 · Hide를 종료하고 다시 열면 Mac mini core에 연결돼요`) with no action, since only Hide opened again can dial; and any other such failure (`! ssh로 Mac mini core에 연결하지 못했어요 · 터미널에서 ssh mini 명령으로 이유를 확인해 주세요`) with `다시 시도`;
 - after the operator ended the link here, `! Mac mini core와 연결을 끊었어요` with `다시 연결` at its end, which links it again and is, with `다시 시도` (`로그인`) and an answer to what ssh asks, the only thing the window sends while it waits;
 - otherwise the shell's own connecting state.
 
-The window takes no input while its strip shows, and sends none of what was typed meanwhile once the core is back; the strip goes when the core's snapshot arrives, and a move that ends on another machine rewrites the window's address to it without a reload (`addressAfterMove`).
+The window takes no input while its strip shows, and sends none of what was typed meanwhile once the core is back; the strip goes when the core's snapshot arrives.
+Once the two machines are split, this machine's daemon runs its own core: the window's connection drops, its address loses the node's name (`addressForRole` in `web/src/ws.ts`) and it reconnects to that core as any window of a core's machine.
+A split that did not happen leaves the window as it was, the node of its core, and Settings › Devices says why on the window's own row (below).
 
 ## Another machine's work on this computer
 
@@ -3248,26 +3249,11 @@ The page has no per-device agents line, no coordination retirement row and no Co
 The rows put the window's own machine first, named This Mac, and name the core's machine on a window of another machine by the name it was registered under before the core moved to it, else the name it gives itself (PRD core-host-node-move B2, `web/src/screenMachine.ts`).
 The row of the machine that runs the core always wears a `core` badge with the hint `core 실행 중`, a one-Mac setup included, unlike the rail's crown (Q11 of the plan; B1 keeps the one-Mac rail unchanged).
 Test and Retry are offered for a device this core dials, never for a machine that dials in, which has no SSH alias here.
-A connected device this core dials offers `core를 이 기기로 옮기기…` in its ⋯ menu, dimmed with `연결 안 됨` while it is not connected; a window of a machine whose core runs elsewhere offers it on no row.
-That window's own row offers instead `core를 이 Mac으로 되돌리기…` and `Mac mini core와 연결 끊기…`, and its menu has no Remove…, since a machine does not remove itself.
+No row offers to move the core, and no command does: every computer runs a core of its own (PRD device-connect-iroh D-35, B44).
+On a window of a machine whose core runs elsewhere, which only a core moved before 1.2.0 left, that window's own row offers `Mac mini core와 연결 끊기…`, and its menu has no Remove…, since a machine does not remove itself.
 `연결 끊기…` asks once, saying that the core refuses this Mac's pane input, file reads and browser actions at once and that reconnecting allows them again, and the window's strip then offers `다시 연결` (B16).
-
-A move is one dialog over Settings whose body turns with the move, and every form names the reason first, `Mac mini 기기는 늘 켜져 있어서 이 Mac을 덮어도 에이전트와 폰 연결이 계속돼요.` (B3 to B5):
-
-- checking: `점검하는 중…` while both machines are checked and nothing is changed; when signing in to the other machine needs the operator, what ssh asks shows under it as on a device's row (PRD system-ssh-device-link B33), in the window that asked for the checks only, and only it answers; closing the dialog while the request it sent runs, before the core's first answer too, or closing that window, ends the checks' sign-in whether it shows a question, a page, a key touch or nothing yet, and five minutes on any of them does too, which ends the check;
-- checks failed: `고칠 것 2개 · 통과 9개` (the passed count only when every check ran) and one line per failing check, naming the machine and either the one command that fixes it, with Copy (`gh auth login`, `sudo pmset -c sleep 0`), or what to do in words; `다시 점검` checks again;
-  a connection that stopped on ssh says what the device row says (`로그인 필요`, `로그인이 거절됐어요`, `서버 키가 바뀌었어요` with `ssh mini` and Copy, `연결하지 못했어요`), and for a sign-in `다시 점검` reads `로그인`, since the checks it starts may ask, while a changed server key and a Hide an update replaced (`Hide를 종료하고 다시 열면 연결돼요`) offer no `다시 점검`;
-  a line names the machine the failure is on, so a Hide AI with no agent chosen names the machine whose core moves, since that setting moves with the core, `이 Mac의 Hide AI` with `설정 › Hide AI에서 켜고 에이전트를 고르세요`, while an agent of it not signed in names the machine taking the core (`checkMachine` in `web/src/coreMove.ts`);
-  earlier core records on the machine taking the core fail `Mac mini의 이전 core 기록` with `Mac mini에서 정리하세요`, and a folder the copy cannot reach there (a file on the way to its state folder, a link that leads nowhere, a folder another account owns) fails `Mac mini의 상태 폴더` with the cause as its line and `Mac mini에서 폴더를 고치세요`; a link on the way is no failure, since the machine answers the folder by its resolved path;
-- confirm: what happens (`몇 초 동안 창에 입력할 수 없어요. 폰에서는 QR을 한 번 다시 스캔해야 해요.`), that it can be undone, and `Mac mini 기기로 옮기기`;
-- moving: the five steps with ✓, `…` and `-`, and, while the other machine cannot be reached, `Mac mini에 연결할 수 없어요 · 연결되면 옮기기를 이어 가요`; where that machine may already have taken the core, so only it can say whether the move committed, the footer offers `그만 기다리기`, and for a move back whose core machine does not answer its retirement, `여기로 가져오기`;
-- give up (amendment 4): the confirm of that action in the same dialog, `되돌릴 수 없어요.` first, then that this Mac's core starts again as it was and that a core coming back on Mac mini is stopped and set aside, not merged, and one plain line, in the body color like the others, that a Mac mini only cut off, not gone, keeps its core running until this Mac reaches it; `취소` goes back to the steps and `그만 기다리기` is the destructive action, never the default; the move back's `core를 여기로 가져올까요?` says instead that this Mac's core starts from the copy it received and that Mac mini's core stays stopped until it is retired, with no risk line;
-- stopped waiting: `이 Mac의 core가 원래대로 실행 중이에요.` and that Mac mini's core stops once this Mac reaches it;
-- failed: the step that failed with ×, `이 Mac의 core는 그대로예요.` with ✓, and Retry;
-- done: `폰에서 Mac mini의 QR을 한 번 다시 스캔하세요.` and `되돌리기`, which opens the same dialog for the move back.
-
-The dialog only asks; the supervisor's `core_move` frame says where the move is, so a window that closed it and opens Settings again finds the same form, and a request another move holds is answered `다른 이동이 진행 중이에요`.
-In Korean a fixed noun follows the machine's name (`Mac mini 기기로`), so no particle depends on how the name ends.
+When that machine could not be made a Hide of its own on this connection, its own row says so in one line with `다시 시도`: `새 연결로 이전하지 못했어요 · ` and the cause, `SSH로 Mac mini에 연결하지 못했어요`, `Mac mini의 Hide가 거절했어요`, `Mac mini에 새 연결로 닿지 못했어요` or `이 컴퓨터에 저장하지 못했어요` (PRD device-connect-iroh B45; `splitFailureLine` in `web/src/coreLink.ts`).
+The window goes on as the node of its core meanwhile; `다시 시도` ends the link and tries once more, and the line goes with it.
 
 Settings > Agents shows the seven agents Hide supports, Claude Code, Codex, Grok, OpenCode, Pi, omp and Antigravity, in that order, for one machine at a time (PRD settings-cleanup B8 to B20, B67).
 With a device registered, a switch at the top chooses This Mac or a device and the list below is that machine's; with none there is no switch.

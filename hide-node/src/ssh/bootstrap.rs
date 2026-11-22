@@ -20,9 +20,8 @@
 //! The connection to a core on another machine runs the same script (PRD
 //! system-ssh-device-link B33, `super::super::session`), with steps of its
 //! own between the probe and the end: a command whose output comes back
-//! counted ([`run`]), a file sent to or read from an absolute path
-//! ([`put_file`], [`get_file`]), and the attach role's start in place of the
-//! script ([`attach`]).
+//! counted ([`run`]), and the attach role's start in place of the script
+//! ([`attach`]).
 //!
 //! The steps go in lock step on purpose. A file's bytes are read with
 //! `head -c <size>`, and macOS's `head` reads through a buffer that would
@@ -238,9 +237,6 @@ o=$(mktemp "${TMPDIR:-/tmp}/hide-run.XXXXXX") && e=$(mktemp "${TMPDIR:-/tmp}/hid
 s=$(cat -- "$x"); s=${s:-255}; ol=$(($(wc -c <"$o"))); el=$(($(wc -c <"$e")));
 if [ "$ol" -gt "$b" ] || [ "$el" -gt "$b" ]; then say big "$s" "$ol" "$el"; else say ran "$s" "$ol" "$el"; cat -- "$o" "$e"; fi;
 rm -f -- "$o" "$e" "$x"; o= e= x=;;
-fput) case $a in /*) ;; *) head -c "$c" >/dev/null; say fail "$a is not absolute"; continue;; esac; t=$a.part;
-if head -c "$c" | (umask 077; store "$t") && [ "$(sum "$t")" = "$b" ] && mv -f -- "$t" "$a"; then t=; say ok; else rm -f -- "$t"; t=; say fail "$a did not arrive whole"; fi;;
-fget) if [ -f "$a" ] && [ -r "$a" ]; then n=$(($(wc -c <"$a"))); say file "$n" "$(sum "$a")"; head -c "$n" <"$a"; else say fail "$a is not a file Hide can read"; fi;;
 attach) [ -x "$a" ] || { say fail "$a is missing"; exit 65; };
 cd -- "${HOME:-/}" 2>/dev/null || :;
 say attach; case $b in -) exec "$a" attach;; *) exec "$a" attach --state-dir "$b";; esac;;
@@ -654,10 +650,11 @@ pub(crate) fn start(
     }
 }
 
-/// Puts this build in its version folder under `root` on a machine that
-/// already runs a build of Hide's (a core update, PRD core-host-node-move
-/// B10), sending only the files it lacks or holds damaged, packed as
-/// [`install`] packs them. Answers where the build's `hided` is.
+/// Puts this build, whole, in its version folder under `root` on a machine
+/// that already runs a build of Hide's (a core update, PRD
+/// core-host-node-move B10), sending only the files it lacks or holds
+/// damaged, packed as [`install`] packs them. Answers where the build's
+/// `hided` is.
 pub(crate) fn install_build(
     pipe: &mut dyn Pipe,
     root: &str,
@@ -687,8 +684,6 @@ pub enum StepError {
     Lost(String),
     /// The machine answered that the step failed, and why.
     Refused(String),
-    /// A file on this machine could not be read or written.
-    Local(String),
 }
 
 impl fmt::Display for StepError {
@@ -696,7 +691,6 @@ impl fmt::Display for StepError {
         match self {
             Self::Lost(reason) => write!(formatter, "the connection was lost: {reason}"),
             Self::Refused(reason) => formatter.write_str(reason),
-            Self::Local(reason) => write!(formatter, "local: {reason}"),
         }
     }
 }
@@ -711,9 +705,6 @@ pub struct Ran {
 
 /// The most of a counted answer taken from the pipe at once.
 const COUNTED_CHUNK: usize = 64 * 1024;
-/// How long one chunk of a file may wait to be taken or to arrive: a copy
-/// takes as long as its size needs, and one that stops moving ends.
-pub(crate) const STALL_TIMEOUT: Duration = Duration::from_secs(30);
 
 fn lost(stop: Stop) -> StepError {
     StepError::Lost(match stop {
@@ -813,98 +804,6 @@ pub(crate) fn run(
         [kind, ..] if kind == "big" => Err(StepError::Refused(format!(
             "the command wrote more than {cap} bytes"
         ))),
-        other => Err(StepError::Refused(refusal(other))),
-    }
-}
-
-/// Sends `size` bytes that `read` gives to the absolute path `remote` on the
-/// machine, whose SHA-256 is `digest`. The bytes go to `<remote>.part`
-/// beside their final name, in a folder made private where it is missing,
-/// are checked against the digest and renamed into place, so the final name
-/// only ever holds a whole copy. `sent` hears each chunk's size as it goes.
-pub(crate) fn put_file(
-    pipe: &mut dyn Pipe,
-    remote: &str,
-    digest: &str,
-    size: u64,
-    read: &mut dyn std::io::Read,
-    sent: &(dyn Fn(u64) + Sync),
-) -> Result<(), StepError> {
-    if !remote_path(remote) {
-        return Err(StepError::Refused(format!(
-            "{remote} is not a plain absolute path"
-        )));
-    }
-    pipe.send(
-        format!("fput\t{remote}\t{digest}\t{size}\n").as_bytes(),
-        Instant::now() + STALL_TIMEOUT,
-    )
-    .map_err(StepError::Lost)?;
-    let mut buffer = vec![0_u8; COUNTED_CHUNK];
-    let mut left = size;
-    while left > 0 {
-        let wanted = usize::try_from(left)
-            .unwrap_or(usize::MAX)
-            .min(buffer.len());
-        let filled = match read.read(&mut buffer[..wanted]) {
-            Ok(0) => {
-                return Err(StepError::Local(format!(
-                    "the file for {remote} ended {left} bytes short of its size"
-                )));
-            }
-            Ok(filled) => filled,
-            Err(error) if error.kind() == std::io::ErrorKind::Interrupted => continue,
-            Err(error) => return Err(StepError::Local(error.to_string())),
-        };
-        pipe.send(&buffer[..filled], Instant::now() + STALL_TIMEOUT)
-            .map_err(StepError::Lost)?;
-        sent(filled as u64);
-        left -= filled as u64;
-    }
-    let answered = pipe.line(Instant::now() + STALL_TIMEOUT).map_err(lost)?;
-    match answer(&answered).as_deref() {
-        Some([kind]) if kind == "ok" => Ok(()),
-        Some(other) => Err(StepError::Refused(refusal(other))),
-        None => Err(StepError::Lost(format!(
-            "the machine answered {:?}",
-            String::from_utf8_lossy(&answered)
-        ))),
-    }
-}
-
-/// Reads the file at the absolute path `remote` on the machine, handing its
-/// bytes to `write` as they arrive; `received` hears each chunk's size.
-/// Answers its size and the SHA-256 the machine stated for it, for the
-/// caller to check what it wrote against.
-pub(crate) fn get_file(
-    pipe: &mut dyn Pipe,
-    remote: &str,
-    write: &mut dyn std::io::Write,
-    received: &(dyn Fn(u64) + Sync),
-) -> Result<(u64, String), StepError> {
-    if !remote_path(remote) {
-        return Err(StepError::Refused(format!(
-            "{remote} is not a plain absolute path"
-        )));
-    }
-    match ask(
-        pipe,
-        &format!("fget\t{remote}\n"),
-        Instant::now() + STALL_TIMEOUT,
-    )?
-    .as_slice()
-    {
-        [kind, size, digest] if kind == "file" => {
-            let size: u64 = number(size)?;
-            counted(pipe, size, STALL_TIMEOUT, &mut |chunk| {
-                write
-                    .write_all(chunk)
-                    .map_err(|error| StepError::Local(error.to_string()))?;
-                received(chunk.len() as u64);
-                Ok(())
-            })?;
-            Ok((size, digest.clone()))
-        }
         other => Err(StepError::Refused(refusal(other))),
     }
 }

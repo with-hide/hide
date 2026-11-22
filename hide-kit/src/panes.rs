@@ -109,6 +109,26 @@ const LEFTOVER_LIMIT: Duration = Duration::from_secs(5);
 /// Where diagnostics go: one JSON record each.
 pub type Sink = fn(serde_json::Value);
 
+/// The holders that still run among the panes `state_dir` records, by pid,
+/// read without the records lock: a caller that only asks whose pane a
+/// process runs in neither owns the folder nor waits on the node that does.
+/// A record that does not read, or one of an ended pane, names none.
+pub fn live_holders(state_dir: &Path) -> Vec<u32> {
+    let Ok(entries) = std::fs::read_dir(layout::pane_records(state_dir)) else {
+        return Vec::new();
+    };
+    entries
+        .flatten()
+        .filter(|entry| entry.file_name().to_string_lossy().ends_with(".json"))
+        .take(MAX_RECORD_FILES)
+        .filter_map(|entry| record::read(&entry.path()).ok().flatten())
+        .filter(|record| record.phase != Phase::Ended)
+        .filter_map(|record| record.holder)
+        .filter(Identity::runs)
+        .map(|holder| holder.pid)
+        .collect()
+}
+
 /// The id a pane's holder record, socket and log carry for the pane a core
 /// names `pane`. The core's own engine names its panes `<workspace>:p<n>`
 /// (PRD engine-bundle-3-core-owns D-4), and no Windows file name holds a
@@ -2061,6 +2081,32 @@ mod tests {
         let (reader, writer) = std::io::pipe().unwrap();
         assert!(matches!(first_line(reader, limit), Report::Silent));
         drop(writer);
+    }
+
+    /// Only a holder that still runs for a pane that has not ended is
+    /// named: an ended pane's holder, and one whose process is gone, hold
+    /// no caller.
+    #[test]
+    fn only_a_running_holder_of_a_pane_that_has_not_ended_is_live() {
+        let home = crate::short_tempdir();
+        let state = home.path().join("s");
+        assert!(live_holders(&state).is_empty(), "no folder holds no pane");
+        let panes = Panes::open(home.path(), &state, quiet).unwrap();
+        let stand_in = StandIn::start();
+        let holder = stand_in.identity();
+        let write = |pane: &str, holder: Identity, phase: Phase| {
+            let mut record = reserved(&panes, Some(holder), phase);
+            record.pane = pane.to_owned();
+            record::write(&layout::pane_record(&state, pane), &record).unwrap();
+        };
+        write("p1", holder, Phase::Running);
+        write("p2", holder, Phase::Ended);
+        let gone = Identity {
+            pid: holder.pid,
+            started: holder.started + 1,
+        };
+        write("p3", gone, Phase::Running);
+        assert_eq!(live_holders(&state), vec![holder.pid]);
     }
 
     #[test]

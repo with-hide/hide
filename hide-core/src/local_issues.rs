@@ -5,8 +5,8 @@
 //! `local-issues.json` beside `core-state.json`, keyed by the project's path:
 //! the core's own machine's projects under `projects`, and a node's that
 //! dials the core under `devices` by that node's id, which is the slot a core
-//! move writes the machine giving up the core into (`node_migration::reown`),
-//! so its issues are the same ones after the move. The runtime reads it once when it is created, before any
+//! move before 1.2.0 wrote the machine giving up the core into, so its
+//! issues were the same ones after the move. The runtime reads it once when it is created, before any
 //! lock exists, holds the store in memory, applies a change there at once,
 //! and hands the whole store to a save thread, so no file I/O happens under
 //! the runtime mutex (the UI state's own save pattern, `write_ui_state`).
@@ -62,10 +62,9 @@ pub struct LocalIssueStore {
     #[serde(default)]
     pub projects: BTreeMap<String, LocalIssueProject>,
     /// Another machine's projects, by the id this folder names that machine
-    /// by and then by project path: a core move keeps the machine giving up
-    /// the core here (`node_migration::reown`), and the move back makes them
-    /// `projects` again. A node that dials the core reads and changes its
-    /// own entry through it; every save keeps every entry.
+    /// by and then by project path: a core move before 1.2.0 kept the
+    /// machine giving up the core here. A node that dials the core reads
+    /// and changes its own entry through it; every save keeps every entry.
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub devices: BTreeMap<String, BTreeMap<String, LocalIssueProject>>,
 }

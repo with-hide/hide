@@ -324,11 +324,11 @@ impl PassOwed {
 }
 
 impl Inner {
-    fn relay_desired(&self, open: bool) -> bool {
+    fn relay_desired(&self, network: bool) -> bool {
         self.settings.enabled
             && self.settings.method() == Method::Relay
             && self.settings.serve.is_none()
-            && open
+            && network
     }
 }
 
@@ -436,10 +436,10 @@ pub struct Config {
     pub input_gate: Arc<hide_core::input_gate::PaneInputGate>,
     /// Which connections show a start surface; a phone's open start sheet is one.
     pub start_demand: Arc<crate::demand::ObservationDemand>,
-    /// Whether the core may act outside this machine: a core on a move's
-    /// copy serves no phone and pushes nothing until the move's link
-    /// commits it (PRD core-host-node-move amendment 3).
-    pub open: watch::Receiver<bool>,
+    /// Whether this host reaches outside the machine (the relay, its
+    /// observers, the `tailscale serve` entry): every daemon's does, and a
+    /// test that drives the phone boundary alone starts none of it.
+    pub network: bool,
     /// The desktop windows' notifications, judged on the projection this
     /// follower reads (`desktop_notices.rs`).
     pub desktop: Arc<crate::desktop_notices::DesktopNotices>,
@@ -618,13 +618,8 @@ impl Mobile {
         mobile.publish();
         let startup = Arc::clone(&mobile);
         let opened = async move {
-            let mut open = startup.config.open.clone();
-            let mut stopping = startup.stopping.subscribe();
-            tokio::select! {
-                opened = open.wait_for(|open| *open) => if opened.is_err() {
-                    return;
-                },
-                _ = stopping.wait_for(|stopping| *stopping) => return,
+            if !startup.config.network || *startup.stopping.borrow() {
+                return;
             }
             tokio::join!(
                 Arc::clone(&startup).observe_loop(),
@@ -707,12 +702,12 @@ impl Mobile {
     }
 
     fn relay_desired(&self) -> bool {
-        self.lock().relay_desired(*self.config.open.borrow())
+        self.lock().relay_desired(self.config.network)
     }
 
     fn relay_state(&self, state: relay::State) {
         let mut inner = self.lock();
-        if !inner.relay_desired(*self.config.open.borrow()) || inner.relay_state == state {
+        if !inner.relay_desired(self.config.network) || inner.relay_state == state {
             return;
         }
         inner.exposure = if state == relay::State::Connected {
@@ -1012,9 +1007,8 @@ impl Mobile {
 
     async fn pass(&self, forced: bool) {
         let _running = self.reconcile_lock.lock().await;
-        // Once the daemon is stopping, shutdown owns the serve entry; a
-        // pending core touches none.
-        if *self.stopping.borrow() || !*self.config.open.borrow() {
+        // Once the daemon is stopping, shutdown owns the serve entry.
+        if *self.stopping.borrow() || !self.config.network {
             return;
         }
         let (enabled, method, record) = {
@@ -1386,9 +1380,7 @@ impl Mobile {
         // After any reconcile in flight: an add it finishes is recorded, so
         // the record read here is the entry actually there.
         let _running = self.reconcile_lock.lock().await;
-        // A core that never left pending added no entry; the one recorded
-        // is the previous core's.
-        if !*self.config.open.borrow() {
+        if !self.config.network {
             return;
         }
         let record = self.lock().settings.serve.clone();
@@ -3280,29 +3272,24 @@ pub(super) fn test_mobile_with(
     desktop: Arc<crate::desktop_notices::DesktopNotices>,
 ) -> Arc<Mobile> {
     // These tests drive the phone boundary directly, never a network supervisor.
-    test_mobile_from(
-        directory,
-        gate,
-        tokio::sync::watch::channel(false).1,
-        desktop,
-    )
+    test_mobile_from(directory, gate, false, desktop)
 }
 
-/// `test_mobile` over a core whose opening the test decides (`open`).
+/// [`test_mobile`] on a host that reaches outside the machine, as every
+/// daemon's does, so its resident loops run.
 #[cfg(test)]
-pub(super) fn test_mobile_opened(
+pub(super) fn test_mobile_on_network(
     directory: &std::path::Path,
     gate: &Arc<hide_core::input_gate::PaneInputGate>,
-    open: tokio::sync::watch::Receiver<bool>,
 ) -> Arc<Mobile> {
-    test_mobile_from(directory, gate, open, Arc::default())
+    test_mobile_from(directory, gate, true, Arc::default())
 }
 
 #[cfg(test)]
 pub(super) fn test_mobile_from(
     directory: &std::path::Path,
     gate: &Arc<hide_core::input_gate::PaneInputGate>,
-    open: tokio::sync::watch::Receiver<bool>,
+    network: bool,
     desktop: Arc<crate::desktop_notices::DesktopNotices>,
 ) -> Arc<Mobile> {
     let core = Arc::new(crate::core::CoreHandle::bare(directory));
@@ -3320,7 +3307,7 @@ pub(super) fn test_mobile_from(
         core: Arc::clone(&core),
         input_gate: Arc::clone(gate),
         start_demand: Arc::default(),
-        open,
+        network,
         desktop,
         boundary: Arc::clone(&boundary),
         roots: Arc::new(crate::RootFollower::new(

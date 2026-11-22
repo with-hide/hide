@@ -66,6 +66,11 @@ pub struct Reach {
     /// The folder the target's account links `hide` in
     /// (`HIDE_HOST_CLI_DIR`); none is `~/.local/bin`.
     pub command_folder: Option<String>,
+    /// The words that start the target's `hide`, for a caller that knows
+    /// where it is: the node of a core moved before 1.2.0 runs the `hide`
+    /// beside that core's program (`moved_core`). None reads the command
+    /// folder.
+    pub hide: Option<Vec<String>>,
 }
 
 /// What a target said about pairing over SSH, before anything is asked of
@@ -156,7 +161,7 @@ pub enum NotInstalled {
 }
 
 /// The SSH session `upstream` signs in, as a [`Login`].
-struct Ssh<'a>(&'a Upstream);
+pub(crate) struct Ssh<'a>(pub(crate) &'a Upstream);
 
 impl Login for Ssh<'_> {
     fn channel(&self) -> Channel {
@@ -221,6 +226,9 @@ pub fn raise(
 /// system; a Windows session starts in the profile folder, which a path
 /// under the home is relative to.
 fn program(reach: &Reach, system: &str) -> Vec<String> {
+    if let Some(hide) = &reach.hide {
+        return hide.clone();
+    }
     let folder = reach.command_folder.as_deref().unwrap_or(COMMAND_FOLDER);
     let under_home = folder.strip_prefix("~/");
     if system == "windows" {
@@ -355,6 +363,32 @@ fn look_of(said: Said) -> Looked {
     }
 }
 
+/// The core a target runs, as it says of itself in its look: its node, and
+/// its build and release as its node link's hello would name them.
+#[derive(Clone, Debug, serde::Deserialize, Eq, PartialEq)]
+pub struct CoreThere {
+    pub node: String,
+    pub build: String,
+    #[serde(default)]
+    pub release: crate::build_order::Release,
+}
+
+/// Reads the core the target runs, on `upstream`'s session, and changes
+/// nothing there. `None` from a target that says nothing of it: a Hide
+/// before 1.2.0, one that is not running, or none.
+pub fn core_on(upstream: &Upstream, reach: &Reach) -> Result<Option<CoreThere>, String> {
+    Ok(core_of(run(&Ssh(upstream), reach, &["look-ssh"])?))
+}
+
+fn core_of(said: Said) -> Option<CoreThere> {
+    match said {
+        Said::Answer(answer) if answer["ok"] == true => {
+            serde_json::from_value(answer["value"]["look"].clone()).ok()
+        }
+        Said::Answer(_) | Said::NoProgram | Said::Unread => None,
+    }
+}
+
 /// Asks the machine `alias` names whether it can pair over SSH. Blocks for
 /// as long as ssh takes to sign in and the target to answer.
 pub fn look(reach: &Reach, alias: &str) -> Looked {
@@ -412,24 +446,33 @@ pub(crate) fn pair_on(
         me,
         key,
         helper: None,
+        grant: None,
     };
     let answer = accept_on(login, reach, &asked)?;
     paired(login, &answer["accepted"]).ok_or("ssh_update_there")
 }
 
 /// What one `accept-ssh` asks of a target.
-struct Accept<'a> {
-    request: &'a str,
-    me: &'a Me,
-    key: &'a PeerKey,
+pub(crate) struct Accept<'a> {
+    pub(crate) request: &'a str,
+    pub(crate) me: &'a Me,
+    pub(crate) key: &'a PeerKey,
     /// The root this machine's device helper is installed under there,
     /// when it also asks for that helper's folder (D-49).
-    helper: Option<&'a str>,
+    pub(crate) helper: Option<&'a str>,
+    /// The grant this machine gives the target, which then becomes this
+    /// machine's guest too: only the core this machine dialed as a node
+    /// takes one (D-46).
+    pub(crate) grant: Option<&'a str>,
 }
 
 /// Runs the target's `accept-ssh` on `login` and answers the value it
 /// printed.
-fn accept_on(login: &dyn Login, reach: &Reach, asked: &Accept<'_>) -> Result<Value, &'static str> {
+pub(crate) fn accept_on(
+    login: &dyn Login,
+    reach: &Reach,
+    asked: &Accept<'_>,
+) -> Result<Value, &'static str> {
     let me = asked.me;
     let key = asked.key.to_hex();
     let mut words = vec![
@@ -445,6 +488,9 @@ fn accept_on(login: &dyn Login, reach: &Reach, asked: &Accept<'_>) -> Result<Val
     ];
     if let Some(root) = asked.helper {
         words.extend(["--helper", root]);
+    }
+    if let Some(grant) = asked.grant {
+        words.extend(["--grant", grant]);
     }
     // The target records which channel its grant was asked over.
     if login.channel() == Channel::Wsl {
@@ -462,6 +508,7 @@ fn accept_on(login: &dyn Login, reach: &Reach, asked: &Accept<'_>) -> Result<Val
             Some("device_limit") => "device_limit",
             Some("hide_unavailable" | "request_timeout") => "ssh_hide_not_running",
             Some("invalid_request") => "invalid_request",
+            Some("device_unknown") => "device_unknown",
             _ => "ssh_update_there",
         });
     }
@@ -685,6 +732,7 @@ pub(crate) fn switch_on(login: &dyn Login, switch: &Switch<'_>) -> Result<Switch
             me: switch.me,
             key: switch.key,
             helper: switch.helper_root,
+            grant: None,
         },
     );
     let answer = match accepted {
@@ -862,6 +910,53 @@ mod tests {
         );
     }
 
+    /// A running core's look names it, node and build, which is what a node
+    /// reads before it asks to be split from it; a look that names none (a
+    /// Hide before 1.2.0, one that is not running, none at all) reads as no
+    /// core to split from.
+    #[test]
+    fn a_look_names_the_running_core_and_only_a_running_one() {
+        let release = crate::build_order::Release {
+            version: "1.2.11".to_owned(),
+            order: 1043,
+            commit: None,
+        };
+        let named = json!({"ok":true,"value":{"look":{
+            "system":"macos","core":true,"node":"studio","build":"b1","release":release,
+        }}});
+        assert_eq!(
+            core_of(said(0, &line(named))),
+            Some(CoreThere {
+                node: "studio".to_owned(),
+                build: "b1".to_owned(),
+                release,
+            })
+        );
+        for unnamed in [
+            said(
+                0,
+                &line(json!({"ok":true,"value":{"look":{"system":"macos","core":true}}})),
+            ),
+            said(
+                0,
+                &line(json!({"ok":true,"value":{"look":{
+                    "system":"macos","core":true,"node":"studio","build":null,"release":null,
+                }}})),
+            ),
+            said(
+                1,
+                &line(json!({
+                    "ok":false,"error":{"code":"hide_unavailable"},
+                    "look":{"system":"macos","core":true},
+                })),
+            ),
+            said(2, b"usage: hide device list\n"),
+            said(127, b""),
+        ] {
+            assert_eq!(core_of(unnamed), None);
+        }
+    }
+
     /// A Mac takes a Hide over SSH only from a Mac, and only while someone
     /// is logged in to its desktop (PRD device-connect-iroh D-45, B7); a
     /// target that does not say who is logged in, as an older helper's
@@ -940,6 +1035,7 @@ mod tests {
         let default = Reach {
             home: PathBuf::from("/Users/example"),
             command_folder: None,
+            hide: None,
         };
         assert_eq!(
             program(&default, "macos"),
@@ -949,6 +1045,7 @@ mod tests {
         let named = Reach {
             home: PathBuf::from("/Users/example"),
             command_folder: Some("/opt/hide/bin".to_owned()),
+            hide: None,
         };
         assert_eq!(program(&named, "linux"), ["/opt/hide/bin/hide"]);
     }

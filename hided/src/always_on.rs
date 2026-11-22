@@ -14,6 +14,11 @@
 //! build that does not offer connections between two Hides
 //! (`env::Env::device_connect` off), which keeps no item for them and takes
 //! out one a development build left.
+//!
+//! A core moved here before 1.2.0 is kept the same way while the machine it
+//! was moved off still dials it as a node (D-46), in every build: that
+//! machine can only split from it by reaching it, so its login item is not
+//! taken out before the two are paired.
 
 use std::path::{Path, PathBuf};
 use std::sync::Mutex;
@@ -23,12 +28,18 @@ use hide_platform::user_agents::{Linger, UserAgents};
 use serde::Serialize;
 use serde_json::json;
 
-/// Whether the folder has finished a pairing, the one answer the item
-/// follows (`peer_host::pairing_confirmed`); never while `device_connect`
-/// is off.
+/// Whether the folder's core is kept on, the one answer the item follows:
+/// it has finished a pairing (`peer_host::pairing_confirmed`, never while
+/// `device_connect` is off), or it is a core moved here before 1.2.0 that a
+/// node still dials (`hide_core::dialing_nodes`), which every build keeps.
 pub fn paired(state_dir: &Path, device_connect: bool) -> Result<bool, String> {
-    crate::peer_host::pairing_confirmed(state_dir, device_connect)
-        .map_err(|error| format!("the peer records: {error}"))
+    if crate::peer_host::pairing_confirmed(state_dir, device_connect)
+        .map_err(|error| format!("the peer records: {error}"))?
+    {
+        return Ok(true);
+    }
+    hide_core::dialing_nodes(&state_dir.join(hide_core::node_migration::CORE_STATE))
+        .map(|nodes| !nodes.is_empty())
 }
 
 /// What [`reconcile`] found or did.
@@ -47,8 +58,6 @@ pub enum Outcome {
     Removed,
     /// Not paired, and no item.
     Nothing,
-    /// A move placed this core here, and its own item is the move's.
-    Moved,
     /// Paired, and no login item is kept: this system has none, or HOME is
     /// not the account's own home ([`agents_for`]). `reason` says which.
     Unsupported { reason: String },
@@ -83,9 +92,6 @@ pub fn reconcile(
     asker: &Asker<'_>,
     install: impl FnOnce(&Path) -> Result<PathBuf, String>,
 ) -> Result<Outcome, String> {
-    if crate::core_move::handover::read(state_dir)?.is_some() {
-        return Ok(Outcome::Moved);
-    }
     let paired = paired(state_dir, asker.device_connect)?;
     if let Err(error) = agents.supported() {
         return Ok(if paired {
@@ -129,7 +135,7 @@ pub fn reconcile(
             let program = install(&hide_kit::layout::core_root(home))?;
             // The asking core goes on; the item's core waits on the
             // folder's lock until it exits.
-            crate::login_item::adopt(agents, home, state_dir, &program)?;
+            crate::login_item::adopt(agents, home, state_dir, &program, asker.device_connect)?;
             let warning = match agents.linger(home, &AtomicBool::new(false)) {
                 Ok(Linger::On) => None,
                 Ok(Linger::NeedsAdministrator { command }) => Some(Warning {

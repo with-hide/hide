@@ -7016,13 +7016,23 @@
                     "value": {
                         "type": "text"
                     }
+                },
+                {
+                    "name": "--grant",
+                    "required": false,
+                    "requires": [],
+                    "value": {
+                        "type": "key"
+                    }
                 }
             ],
             "refusals": [
                 "device_from_pane",
                 "invalid_request",
                 "device_already_connected",
-                "device_limit"
+                "device_limit",
+                "device_unknown",
+                "hide_unavailable"
             ],
             "repeats_at_most": null,
             "rest": null
@@ -9459,7 +9469,7 @@
             "rest": null
         }
     ],
-    "digest": "sha256:322369ab7ccb29e58e05a63df30037b87328c64527fc26e82a60c9dc212cec55",
+    "digest": "sha256:be856f93a826e2903a2a53a4d1db1fdb08705974b8283fe91e5302c0aaf6ebf2",
     "envelopes": {
         "access": {
             "answer": "value",

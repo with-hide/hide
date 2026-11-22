@@ -322,7 +322,7 @@ Grok's `--tools ""` giving a tool-free run, where the validated object sits in G
 
 Which agent answers, and which of its models, is a setting.
 It lives in `~/Library/Application Support/hide/ai.json`, a sibling of Hide's own `state.json`, and `hide-ai/src/settings.rs` owns the path, the schema and the rule that turns a choice into a `RouterConfig`.
-The file belongs to the machine that runs the core: a core move carries it in its copy and places it where the machine taking the core keeps it, keeping that machine's own file when it chooses the same and refusing one that chooses otherwise, and once the move commits the file the core left is set aside in `moved-out/<intent>` with the rest of its state (`hide-core/src/node_migration/copy.rs`; `ARCHITECTURE.md`, Moving the core).
+The file belongs to the machine that runs the core.
 
 Hide writes it: the Settings Hide AI tab (`web/src/settings/HideAiTab.tsx`, rules in `web/src/hideAi.ts`) dispatches one `ai_settings` event per intent, the core applies it to the snapshot at once and queues the write, and the session-sync coordinator performs the write off the runtime mutex.
 The core reads the file once, when this Mac's session-sync coordinator starts, and from then on holds the choice in the runtime, so a file edited by hand while `hided` runs is read at the next start.
@@ -348,7 +348,6 @@ The file names a provider, a model per provider, whether Hide AI is on, an order
 A paired machine runs its own Hide and keeps its own Settings, so it is never such a device: its agents are not read or offered for this core's Hide AI, an event that names it is refused (`ai_settings.device_keeps_its_own`), and an entry that names a device which has since been paired is taken off, with the file written again (PRD device-connect-iroh, Settings per machine).
 One item runs on one machine, so Runs on and a fallback entry never name the same item twice; `set_runs_on` keeps the place of an item that moves from the fallback list to Runs on, and `place` sets or clears it.
 `routes_like` compares the places too, so moving an item to another machine rebuilds a held router.
-An item placed on a device is left out of the move's Hide AI check (`hide_ai_asks`), since it answers on the device's logins wherever the core runs.
 
 ### Agent items
 
@@ -377,7 +376,6 @@ Codex keeps Hide's private `CODEX_HOME` and links the `auth.json` of the item's 
 A profile item is asked only while its machine lists the profile (`ItemProfiles`, what each machine's profile list says, kept by the runtime): one its machine no longer lists, or a machine that lists no profiles, as an older node that would read no profile field and run the agent's default account, is answered `profile_missing` without asking the machine, and a delete that lands between the list and the call is refused by the node with `NotFound`, which the core reads the same way: the item cannot answer, the router passes over it, and the refusal says so (B6, B21).
 Any other refusal keeps the machine's own sentence, as a node at its cap of backends (`Unsupported`): the profile is there and the node is full.
 Such an item stays in the file and in the snapshot with `profile_missing`, dimmed on the screen as a missing profile, until the operator removes it; Hide never takes it out of the file.
-A core move asks the machine taking the core for a profile item as its agent with its model, once per pair, and refuses nothing for the profile itself: profiles stay with the machine they were made on, and one the new machine does not list is passed over there.
 Each connected device's items are its own profiles, read with its own logins; a device whose Hide keeps no profiles offers its agents' default items alone (B6).
 
 `enabled` is the Settings › Hide AI switch and is on when the field is absent.

@@ -328,15 +328,12 @@ struct PullRequestFact {
 impl Runtime {
     /// What a promotion's start needs: Hide's own coordination identity, the
     /// Project's folder on `node` and the agent the operator last started
-    /// (D-25). A core whose move has not committed starts no agent.
+    /// (D-25).
     pub(super) fn promotion_start(
         &mut self,
         node: &crate::node::NodeId,
         repo: &str,
     ) -> Result<PromotionStart, String> {
-        if self.effects_held() {
-            return Err("effects_held".into());
-        }
         let (client, authority, actor) = self.hide_delivery(HIDE_MEMORY_ROLE)?;
         let choice = &self.snapshot.ui_state.agent_start;
         let kind = choice
@@ -490,9 +487,6 @@ impl Runtime {
     /// a time; a request during it runs one more after. A core whose move has
     /// not committed checks nothing, since a check may start an agent again.
     pub(super) fn track_memory_promotions(&mut self) {
-        if self.effects_held() {
-            return;
-        }
         let nodes = self.promotion_nodes();
         let tracking = &mut self.project_memory.promotions;
         if tracking.followed == Some(false) {
@@ -2302,8 +2296,7 @@ pub(super) fn spawn_hide_agent(
 }
 
 /// What every start of a Project's promotions begins its intent with: the
-/// digest of the Project's id, which tells whose card a task's number names
-/// (`node_migration::reown`).
+/// digest of the Project's id, which tells whose card a task's number names.
 pub(crate) fn intent_prefix(project_id: &str) -> String {
     format!("memory-promote-{}-", &stable_digest(project_id)[..12])
 }
