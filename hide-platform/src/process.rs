@@ -4714,31 +4714,6 @@ mod sys {
         Ok(uids.contains(&unsafe { libc::getuid() }))
     }
 
-    #[cfg(all(test, target_os = "linux"))]
-    mod account_tests {
-        use super::account_uids;
-
-        #[test]
-        fn a_setuid_intermediate_keeps_its_original_account() {
-            let ours = 1000;
-            for status in [
-                "Uid:\t1000\t0\t0\t0\n",
-                "Uid:\t0\t0\t1000\t0\n",
-                "Uid:\t0\t1000\t0\t0\n",
-                "Uid:\t0\t0\t0\t1000\n",
-            ] {
-                assert!(account_uids(status).unwrap().contains(&ours));
-            }
-            assert!(
-                !account_uids("Uid:\t0\t0\t0\t0\n").unwrap().contains(&ours),
-                "the SSH daemon with none of our UIDs is an account boundary"
-            );
-            for broken in ["", "Uid: 1000", "Uid: 1000 1000 bad 1000"] {
-                assert!(account_uids(broken).is_err());
-            }
-        }
-    }
-
     #[cfg(target_os = "linux")]
     pub(super) fn argv_of(pid: u32) -> io::Result<Vec<String>> {
         let bytes = std::fs::read(format!("/proc/{pid}/cmdline")).map_err(|error| {
@@ -5022,6 +4997,27 @@ mod sys {
 
         use super::super::Ending;
         use super::*;
+
+        #[cfg(target_os = "linux")]
+        #[test]
+        fn a_setuid_intermediate_keeps_its_original_account() {
+            let ours = 1000;
+            for status in [
+                "Uid:\t1000\t0\t0\t0\n",
+                "Uid:\t0\t0\t1000\t0\n",
+                "Uid:\t0\t1000\t0\t0\n",
+                "Uid:\t0\t0\t0\t1000\n",
+            ] {
+                assert!(account_uids(status).unwrap().contains(&ours));
+            }
+            assert!(
+                !account_uids("Uid:\t0\t0\t0\t0\n").unwrap().contains(&ours),
+                "the SSH daemon with none of our UIDs is an account boundary"
+            );
+            for broken in ["", "Uid: 1000", "Uid: 1000 1000 bad 1000"] {
+                assert!(account_uids(broken).is_err());
+            }
+        }
 
         const SHORT: Duration = Duration::from_millis(200);
 

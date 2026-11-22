@@ -13,12 +13,38 @@ pub(super) const UNAVAILABLE: &str = "caller_origin_unavailable";
 /// no process or record is dropped. This runs only at bootstrap, off-lock.
 const MAX_ANCESTORS: usize = 32;
 
+fn directory(path: &Path) -> Result<(), &'static str> {
+    if std::fs::metadata(path).map_err(|_| UNAVAILABLE)?.is_dir() {
+        Ok(())
+    } else {
+        Err(UNAVAILABLE)
+    }
+}
+
 fn root(path: &Path) -> Result<Option<PathBuf>, &'static str> {
     match canonical(path) {
-        Ok(path) => Ok(Some(path)),
+        Ok(path) => {
+            directory(&path)?;
+            Ok(Some(path))
+        }
         // No installation can run from a root that has never existed. A
         // running image whose root was removed fails its own canonical read.
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(None),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+            // Windows also reports PATH_NOT_FOUND when a prefix is a file.
+            // Prove the nearest existing prefix is a directory; a broken
+            // link, non-directory or unreadable prefix is not an empty root.
+            for ancestor in path.ancestors() {
+                match std::fs::symlink_metadata(ancestor) {
+                    Ok(_) => {
+                        directory(ancestor)?;
+                        return Ok(None);
+                    }
+                    Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+                    Err(_) => return Err(UNAVAILABLE),
+                }
+            }
+            Err(UNAVAILABLE)
+        }
         Err(_) => Err(UNAVAILABLE),
     }
 }
@@ -104,6 +130,14 @@ mod tests {
             in_holder(std::process::id() as i32, &home, root.path()),
             Err(UNAVAILABLE)
         );
+        assert_eq!(super::root(&home), Err(UNAVAILABLE));
+        assert_eq!(super::root(&root.path().join("never-installed")), Ok(None));
+        #[cfg(unix)]
+        {
+            let broken = root.path().join("broken-link");
+            std::os::unix::fs::symlink(root.path().join("gone"), &broken).unwrap();
+            assert_eq!(super::root(&broken.join("holders")), Err(UNAVAILABLE));
+        }
     }
 
     #[cfg(unix)]

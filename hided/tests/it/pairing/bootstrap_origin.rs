@@ -11,13 +11,18 @@ use std::time::{Duration, Instant};
 use hide_platform::process::run_to_end;
 use serde_json::{Value, json};
 
-const PROBE: &str = "pairing::bootstrap_origin::socket_probe";
-const HOLDER: &str = "pairing::bootstrap_origin::holder_process";
+const TEST: &str =
+    "pairing::bootstrap_origin::a_guest_holder_child_cannot_become_the_host_operator_without_hints";
+// Only this test's private children receive a role. Production reads none
+// of it; the ordinary suite always executes the complete socket journey.
+const ROLE: &str = "HIDE_TEST_BOOTSTRAP_ORIGIN_ROLE";
+const PROBE: &str = "probe";
+const HOLDER: &str = "holder";
 
-fn command(program: &Path, test: &str, folder: &Path) -> Command {
+fn command(program: &Path, role: &str, folder: &Path) -> Command {
     let mut command = Command::new(program);
     command
-        .args(["--exact", test, "--ignored", "--nocapture"])
+        .args(["--exact", TEST, "--nocapture"])
         .current_dir(folder)
         .stdin(Stdio::null())
         .stdout(Stdio::piped())
@@ -27,6 +32,7 @@ fn command(program: &Path, test: &str, folder: &Path) -> Command {
             command.env_remove(key);
         }
     }
+    command.env(ROLE, role);
     command
 }
 
@@ -50,9 +56,7 @@ fn configuration() -> Value {
     serde_json::from_slice(&std::fs::read("probe.json").unwrap()).unwrap()
 }
 
-/// Only invoked in a private exact-test subprocess, never by the suite.
-#[test]
-#[ignore = "private subprocess for the bootstrap origin tests"]
+/// Only invoked by this test's private subprocess dispatch.
 fn socket_probe() {
     let config = configuration();
     let mut answers = Vec::new();
@@ -72,9 +76,7 @@ fn socket_probe() {
 }
 
 /// Its executable lives where the guest's holder runs; the socket peer is
-/// its child running the original test executable, with no HIDE_* hints.
-#[test]
-#[ignore = "private subprocess for the bootstrap origin tests"]
+/// its child running the original test executable, with no production hints.
 fn holder_process() {
     let config = configuration();
     #[cfg(unix)]
@@ -114,6 +116,13 @@ fn requests() -> Value {
 // waits for the deliberately synchronous local socket subprocesses.
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn a_guest_holder_child_cannot_become_the_host_operator_without_hints() {
+    match std::env::var(ROLE) {
+        Ok(role) if role == PROBE => return socket_probe(),
+        Ok(role) if role == HOLDER => return holder_process(),
+        Ok(role) => panic!("unknown bootstrap test role: {role}"),
+        Err(std::env::VarError::NotPresent) => {}
+        Err(error) => panic!("unreadable bootstrap test role: {error}"),
+    }
     let root = crate::fixtures::fixture_root("bootstrap-origin-");
     let env = super::host_env(root.path());
     let state = env.state_dir.clone();
