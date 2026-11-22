@@ -4273,10 +4273,7 @@ mod tests {
             frame("attach_chunk", json!({"seq": 0, "data": data}))["seq"],
             json!(0)
         );
-        assert_eq!(
-            frame("attach_end", json!({}))["done"],
-            json!(true)
-        );
+        assert_eq!(frame("attach_end", json!({}))["done"], json!(true));
     }
 
     /// A reply that attaches files types each one's path, quoted in the

@@ -253,10 +253,7 @@ mod tests {
             send(&store, 1, "attach_cancel", json!({})),
             json!({"type": "attach_ack", "stage": STAGE, "cancelled": true})
         );
-        assert_eq!(
-            chunk(&store, 1, b"cd"),
-            failed(STAGE, "unknown_stage")
-        );
+        assert_eq!(chunk(&store, 1, b"cd"), failed(STAGE, "unknown_stage"));
         let left = std::fs::read_dir(dir.path().join("attachments"))
             .unwrap()
             .count();
@@ -405,9 +402,6 @@ mod tests {
             ),
             failed(STAGE, "invalid_request")
         );
-        assert_eq!(
-            chunk(&store, 1, b"ab"),
-            failed(STAGE, "unknown_stage")
-        );
+        assert_eq!(chunk(&store, 1, b"ab"), failed(STAGE, "unknown_stage"));
     }
 }
