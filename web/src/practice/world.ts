@@ -5,6 +5,7 @@
 import type { AutomationCall, CallAnswer } from "../automationCall";
 import type { NodeUsage } from "../generated/hided-ws";
 import type { AccessSection, AgentRow, AutomationsSection, ChangesSnapshot, EditorSnapshot, LinkPanel, MemorySection, SessionRecordSection, SessionWorkSearch, SnapshotRest, SuggestionsSection } from "../snapshot";
+import type { PairingResult, PairingView } from "../pairing";
 import type { DirectoryList, Documents, FileIndexResult } from "../store";
 
 export type CoreEvent = { kind: string; payload: Record<string, unknown> };
@@ -30,14 +31,16 @@ export const PRACTICE_OUTSIDE = "practice_outside";
  * editor tabs and their documents, ⌘K's session search, the record and link
  * record a desk's card tab shows, the Explorer's folder listings (keyed by
  * folder path) and the checkout's Git changes, and the Memory tool's Project
- * with the Hide AI tool's 제안 section it is drawn under, and Settings › 봇's
- * requests and connected bots.
+ * with the Hide AI tool's 제안 section it is drawn under, Settings › 봇's
+ * requests and connected bots, and hided's `pairing` frame with its answer to
+ * the last `pairing_*` press (a world without one has nothing under way).
  */
 export type WorldFrames = {
   fileIndex?: FileIndexResult | null; editor?: EditorSnapshot | null; documents?: Documents;
   sessionWorkSearch?: SessionWorkSearch | null; sessionRecord?: SessionRecordSection | null; linkPanel?: LinkPanel | null;
   listings?: Record<string, DirectoryList>; changes?: ChangesSnapshot | null; memory?: MemorySection | null; suggestions?: SuggestionsSection | null;
   access?: AccessSection | null;
+  pairing?: PairingView; pairingResult?: PairingResult | null;
 };
 
 /** `automations` is the core's section of the automation screen; a world without one sends none, and the shell then holds none. */
