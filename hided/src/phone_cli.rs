@@ -122,11 +122,11 @@ pub fn run(env: &Env, cli: &PhoneCli) -> Result<(), String> {
 
 /// The answer and its lines for a person.
 fn answer(env: &Env, cli: &PhoneCli) -> Result<(Value, String), Refused> {
-    if !env.device_connect {
-        return Err(Refused::code(crate::pairing::DEVICE_CONNECT_OFF));
-    }
     match &cli.verb {
-        Verb::Pair => pair(env),
+        // `pair` answers a person, so it words every refusal in their
+        // language, a build without the feature's included.
+        Verb::Pair => pair(env, &Words(language(env))),
+        _ if !env.device_connect => Err(Refused::code(crate::pairing::DEVICE_CONNECT_OFF)),
         Verb::List => {
             let value = ask(env, json!({"verb": "list"}))?;
             let lines = list_lines(&value, crate::mobile::now_ms());
@@ -166,8 +166,7 @@ fn ask(env: &Env, ask: Value) -> Result<Value, Refused> {
 /// Shows the pairing QR and waits for the phone that scans it, at most as
 /// long as the code lives.
 #[allow(clippy::disallowed_methods)] // polls a code the daemon spends or ends on its own, bounded by the code's life
-fn pair(env: &Env) -> Result<(Value, String), Refused> {
-    let words = Words(language(env));
+fn pair(env: &Env, words: &Words) -> Result<(Value, String), Refused> {
     let refused = |code: &str| Refused {
         code: code.to_owned(),
         message: words
@@ -181,6 +180,9 @@ fn pair(env: &Env) -> Result<(Value, String), Refused> {
             .map_or(refusal.message, str::to_owned),
         code: refusal.code,
     };
+    if !env.device_connect {
+        return Err(refused(crate::pairing::DEVICE_CONNECT_OFF));
+    }
     // The daemon refuses a pane again by what the kernel says of the caller.
     if env.pane_id.is_some() || env.access.is_some() {
         return Err(refused("phone_pair_from_pane"));
@@ -607,6 +609,48 @@ mod tests {
                 );
             }
         }
+    }
+
+    /// A build without the feature refuses `pair` in the operator's
+    /// language too, as every other refusal of `pair` is.
+    #[test]
+    fn pair_refuses_a_build_without_the_feature_in_the_operators_language() {
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().to_path_buf();
+        let env = Env {
+            home: path.clone(),
+            state_dir: path.clone(),
+            legacy_state_dir: None,
+            account_state_folder: false,
+            keep_alive: true,
+            vite_origin: None,
+            bind: "127.0.0.1:0".parse().unwrap(),
+            idle_secs: 600,
+            build: None,
+            starter_program: None,
+            open_command: None,
+            host_helper_root: None,
+            host_cli_dir: None,
+            pane_id: None,
+            install: None,
+            access: None,
+            tailscale_bin: None,
+            relay_url: "ws://127.0.0.1:9/ws".to_owned(),
+            peer_direct: None,
+            device_connect: false,
+            search_path: None,
+        };
+        let refusal = pair(&env, &Words(InterfaceLanguage::Korean)).err().unwrap();
+        assert_eq!(refusal.code, crate::pairing::DEVICE_CONNECT_OFF);
+        assert_eq!(
+            refusal.message,
+            "이 버전의 Hide는 아직 hide phone을 지원하지 않아요. 설정 › 모바일에서 폰을 연결하세요."
+        );
+        let english = pair(&env, &Words(InterfaceLanguage::English)).err().unwrap();
+        assert_eq!(
+            english.message,
+            next_action(crate::pairing::DEVICE_CONNECT_OFF)
+        );
     }
 
     #[test]
