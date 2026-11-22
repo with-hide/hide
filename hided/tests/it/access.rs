@@ -973,7 +973,9 @@ async fn an_earlier_builds_act_tool_runs_as_the_whole_hide_and_its_view_only_too
 /// device` asks the daemon's pairing first; a bot's ask carries its key
 /// there, so stopping or removing a machine is the operator's alone in
 /// either mode, whether the bot is the one key its home keeps or is named
-/// by `HIDE_ACCESS`.
+/// by `HIDE_ACCESS`. `hide phone` asks the same socket with the same key
+/// (PRD device-connect-iroh D-70): the phones are the whole Hide's to
+/// list, and removing one is the operator's alone.
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn a_bots_pairing_ask_is_judged_by_its_mode_at_the_daemon() {
     let root = tempfile::tempdir().unwrap();
@@ -982,9 +984,9 @@ async fn a_bots_pairing_ask_is_judged_by_its_mode_at_the_daemon() {
     env.peer_direct = Some("127.0.0.1:0".parse().unwrap());
     let running = hided::start_daemon(env).await.unwrap();
     let mut window = Window::open(&running).await;
-    for (name, mode) in [
-        ("keeper", json!({"kind": "own"})),
-        ("runner", json!({"kind": "all"})),
+    for (name, mode, whole) in [
+        ("keeper", json!({"kind": "own"}), false),
+        ("runner", json!({"kind": "all"}), true),
     ] {
         let (bot, _) = approved(root.path(), &mut window, name, mode).await;
         // The CLI offers pairing only where the daemon does.
@@ -994,6 +996,14 @@ async fn a_bots_pairing_ask_is_judged_by_its_mode_at_the_daemon() {
                 .refused("access_operator_only");
             bot.run_with(&["device", verb, "mini"], &[on, ("HIDE_ACCESS", name)])
                 .refused("access_operator_only");
+        }
+        bot.run_with(&["phone", "remove", "Pixel"], &[on])
+            .refused("access_operator_only");
+        let listed = bot.run_with(&["phone", "list", "--json"], &[on]);
+        if whole {
+            assert!(listed.ok, "{name}");
+        } else {
+            listed.refused("access_not_own_work");
         }
     }
     running.stop();

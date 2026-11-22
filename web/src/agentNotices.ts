@@ -8,7 +8,8 @@
 // operator has seen takes its notification back. A notice a machine this
 // computer may open handed over, because someone is here and no one is
 // there (PRD device-connect-iroh D-60), is worded the same way and a click
-// selects that machine's tile. The app icon counts root agents in each
+// selects that machine's tile, as does the notice that a phone was paired
+// with such a machine (D-70). The app icon counts root agents in each
 // notification group whose switch is on.
 
 import { useEffect } from "react";
@@ -64,7 +65,8 @@ function notificationBadgeCount(rest: SnapshotRest | null): number {
 }
 
 /**
- * Shows each group through the desktop host while its own switch is on,
+ * Shows each group through the desktop host while its own switch is on, and
+ * a new phone of a machine this computer may open whichever switch is on;
  * opens what a click names, and keeps the enabled groups' app icon count.
  */
 export function useAgentNotifications(actions: Actions) {
@@ -89,10 +91,18 @@ export function useAgentNotifications(actions: Actions) {
     actions.wantAgentNotices(true, needsYouEnabled);
     return () => actions.wantAgentNotices(false);
   }, [actions, wanted, needsYouEnabled]);
+  // hided sends every desktop window its frames; the window listens while it is live, whichever switch is on, since a new phone
+  // shows with both off (D-70) and each group's notice is held to its own switch below.
   useEffect(() => {
-    if (!bridge || !wanted) return;
-    const listener: Listener = ({ notices, clear }) => {
+    if (!bridge || !live) return;
+    const listener: Listener = ({ notices, clear, phones }) => {
       if (clear.length > 0) bridge.withdrawNotifications(clear.map((tag) => `${AGENT_NOTICE_PREFIX}${tag}`));
+      // A phone paired with a machine this computer may open shows whichever switch is on (D-70): it is how the operator sees a pairing they did not make.
+      for (const paired of phones ?? []) {
+        const machine = useShellStore.getState().rest?.navigator?.peers?.find((peer) => peer.key === paired.peer)?.name;
+        const body = machine ? `${machine} · ${paired.phone}` : paired.phone;
+        bridge.notify(`${AGENT_NOTICE_PREFIX}${paired.tag}`, t("mobile.notice.phonePaired"), cut(body, BODY_LIMIT), { unlessFocused: false });
+      }
       for (const notice of notices) {
         if (!(notice.state === "needs_you" ? needsYouEnabled : doneEnabled)) continue;
         // The row's own word leads, as on its line (status-marks B23); the section name only when the core sent none.
@@ -109,7 +119,7 @@ export function useAgentNotifications(actions: Actions) {
     return () => {
       listeners.delete(listener);
     };
-  }, [bridge, wanted, needsYouEnabled, doneEnabled, t]);
+  }, [bridge, live, needsYouEnabled, doneEnabled, t]);
   useEffect(() => {
     if (!bridge) return undefined;
     return bridge.onNotificationOpen((id) => {

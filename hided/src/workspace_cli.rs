@@ -213,6 +213,7 @@ fn bootstrap_pane(env: &Env, one_shot: bool) -> Result<PathBuf, String> {
         install: env.install.clone(),
         access: None,
         device: None,
+        phone: None,
     };
     let request = serde_json::to_value(&request).map_err(|_| "reference_unavailable".to_owned())?;
     let install = env.install.as_deref();
@@ -314,6 +315,26 @@ pub fn pairing_ask(env: &Env, ask: Value) -> Result<Value, String> {
 /// [`pairing_ask`] for an ask whose answer is the end of work the daemon
 /// does first, which `within` bounds.
 pub fn pairing_ask_within(env: &Env, ask: Value, within: Duration) -> Result<Value, String> {
+    operator_ask(env, Some(ask), None, within)
+}
+
+/// How long `hide phone` waits for one answer: past `pair` turning Mobile on
+/// and waiting for the relay (`mobile::command`).
+const PHONE_TIMEOUT: Duration = Duration::from_secs(45);
+
+/// One ask about the phones paired with this computer
+/// (`crate::mobile::command`), answered as [`pairing_ask`] is.
+pub fn phone_ask(env: &Env, ask: Value) -> Result<Value, String> {
+    operator_ask(env, None, Some(ask), PHONE_TIMEOUT)
+}
+
+/// One `hide device` or `hide phone` ask of this machine's own daemon.
+fn operator_ask(
+    env: &Env,
+    device: Option<Value>,
+    phone: Option<Value>,
+    within: Duration,
+) -> Result<Value, String> {
     let mut nonce = [0u8; 16];
     getrandom::getrandom(&mut nonce).map_err(|_| "reference_unavailable".to_owned())?;
     let request = serde_json::to_value(PaneRequest {
@@ -324,10 +345,11 @@ pub fn pairing_ask_within(env: &Env, ask: Value, within: Duration) -> Result<Val
         one_shot: false,
         hook: None,
         install: None,
-        // A bot's pairing ask carries its key, so the daemon judges it by
-        // the bot's mode rather than as the operator at a terminal.
+        // A bot's ask carries its key, so the daemon judges it by the bot's
+        // mode rather than as the operator at a terminal.
         access: crate::access_cli::tool_key(env)?.map(|key| AccessAsk::Use { key, folder: None }),
-        device: Some(ask),
+        device,
+        phone,
     })
     .map_err(|_| "reference_unavailable".to_owned())?;
     let mut stream = connect_bootstrap(&env.state_dir)?;
@@ -377,6 +399,7 @@ pub fn carrier(env: &Env) -> Result<LocalStream, NoCarrier> {
         install: None,
         access: None,
         device: Some(serde_json::json!({ "verb": "carry" })),
+        phone: None,
     })
     .map_err(|_| no_daemon("reference_unavailable"))?;
     let mut stream = connect_bootstrap(&env.state_dir).map_err(NoCarrier::NoDaemon)?;
@@ -423,6 +446,7 @@ fn access_request(ask: AccessAsk, one_shot: bool) -> Result<Value, String> {
         install: None,
         access: Some(ask),
         device: None,
+        phone: None,
     })
     .map_err(|_| "reference_unavailable".to_owned())
 }

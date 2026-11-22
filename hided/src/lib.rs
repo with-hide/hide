@@ -53,6 +53,7 @@ pub mod pairing_ssh;
 pub mod pairing_wsl;
 pub mod pane_cli;
 pub mod pane_install;
+pub mod phone_cli;
 pub mod plan_cli;
 pub mod profile_cli;
 mod project_open;
@@ -603,6 +604,7 @@ pub async fn start_core_role(env: Env, seat: seat::SeatParts) -> Result<RunningD
         boundary: Arc::clone(&boundary),
         roots: Arc::clone(&roots),
         browser_control: Arc::clone(&browser_control),
+        device_connect: env.device_connect,
     });
     seat.starting("core.peers");
     // How another account's `hide` is reached, over SSH or `wsl.exe`.
@@ -812,6 +814,7 @@ pub async fn start_core_role(env: Env, seat: seat::SeatParts) -> Result<RunningD
             port,
             desktop_renderers: Arc::clone(&app.desktop_renderers),
             pairing,
+            mobile: Arc::clone(&mobile),
             health: Arc::clone(&listeners.pane_bootstrap),
         },
         shutdown.clone(),

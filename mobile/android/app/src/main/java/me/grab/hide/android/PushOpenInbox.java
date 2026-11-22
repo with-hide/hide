@@ -29,9 +29,12 @@ public final class PushOpenInbox {
         return SHARED;
     }
 
-    /** Keeps the target when it names an agent of a computer by the shapes the message service writes, and tells the page one waits; false for any other. */
+    /**
+     * Keeps the target when it names an agent of a computer, or the computer itself with no agent (both empty), by the
+     * shapes the message service writes, and tells the page one waits; false for any other.
+     */
     public boolean offer(String room, String deviceId, String paneId) {
-        if (!SealedFiles.isRoom(room) || !fits(deviceId, 256) || !fits(paneId, 512)) return false;
+        if (!SealedFiles.isRoom(room) || !fits(deviceId, 256) || !fits(paneId, 512) || deviceId.isEmpty() != paneId.isEmpty()) return false;
         Runnable notify;
         synchronized (this) {
             target = new Target(room, deviceId, paneId);
@@ -54,6 +57,6 @@ public final class PushOpenInbox {
     }
 
     private static boolean fits(String value, int max) {
-        return value != null && !value.isEmpty() && value.length() <= max;
+        return value != null && value.length() <= max;
     }
 }

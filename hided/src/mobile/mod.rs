@@ -12,6 +12,7 @@
 //! What the renderer sees is one `mobile` frame, republished on every
 //! change; what it asks is one of the `mobile_*` events.
 
+pub mod command;
 pub mod conversation;
 pub mod html_look;
 pub mod looks;
@@ -282,6 +283,19 @@ struct Inner {
     missed_check: bool,
     /// Whether a pass is owed for a change no pass has read yet.
     reconcile_owed: PassOwed,
+    /// The last code a phone paired with, by its `command::code_id`, and
+    /// that phone's name: what `hide phone pair` waits for.
+    paired_code: Option<(String, String)>,
+    /// New phones whose "새 폰이 연결됐어요" the phones already paired and the
+    /// connected computers that may open this one are still owed (PRD
+    /// device-connect-iroh D-70), oldest first. `observe_loop` sends
+    /// them, one batch at a time; a computer keeps no more than
+    /// `phones::MAX_PHONES` phones, so no more are owed, and at that cap the
+    /// oldest is dropped.
+    paired_notices: VecDeque<PhoneRecord>,
+    /// The other machines this computer opens that run work of their own,
+    /// as the follower last read them (`other_machines`).
+    machines: Vec<OtherMachine>,
 }
 
 /// A change of hide's own settings, or the start, that no pass has read yet.
@@ -353,6 +367,59 @@ struct LivePhone {
 pub struct PhoneMeta {
     pub push_mode: PushMode,
     pub live_phones: usize,
+    /// The other machines this computer opens that run work of their own
+    /// ([`other_machines`]).
+    pub machines: Vec<OtherMachine>,
+}
+
+/// Another machine this computer opens over a connection between two Hides
+/// and that tells it work of its own (`navigator.peer_work`): its work is
+/// that machine's, which a phone sees only once it adds that machine, so a
+/// phone that has not hears of it once (PRD device-connect-iroh B56, D-57).
+#[derive(Clone, Debug, Eq, PartialEq, serde::Serialize)]
+pub struct OtherMachine {
+    /// Its product device id, which its own phone hello names it by
+    /// (`machine`).
+    pub machine: String,
+    pub name: String,
+}
+
+/// The most other machines a phone is told of: as many as the gathered view
+/// shows computers.
+pub const MAX_OTHER_MACHINES: usize = 16;
+
+/// [`OtherMachine`]s from the core's rest: each machine `navigator.peer_work`
+/// lists, named as `navigator.peers` names it, by name, at most
+/// [`MAX_OTHER_MACHINES`]. One with no name there is left out.
+pub fn other_machines(rest: &Value) -> Vec<OtherMachine> {
+    let navigator = &rest["navigator"];
+    let peers = navigator["peers"]
+        .as_array()
+        .map(Vec::as_slice)
+        .unwrap_or_default();
+    let mut machines: Vec<OtherMachine> = navigator["peer_work"]
+        .as_array()
+        .map(Vec::as_slice)
+        .unwrap_or_default()
+        .iter()
+        .filter_map(|work| {
+            let key = work["key"].as_str()?;
+            let peer = peers
+                .iter()
+                .find(|peer| peer["key"].as_str() == Some(key))?;
+            Some(OtherMachine {
+                machine: work["device_id"].as_str()?.to_owned(),
+                name: peer["name"]
+                    .as_str()
+                    .filter(|name| !name.is_empty())?
+                    .to_owned(),
+            })
+        })
+        .collect();
+    machines.sort_by(|a, b| a.name.cmp(&b.name).then_with(|| a.machine.cmp(&b.machine)));
+    machines.dedup_by(|a, b| a.machine == b.machine);
+    machines.truncate(MAX_OTHER_MACHINES);
+    machines
 }
 
 pub struct Config {
@@ -383,6 +450,10 @@ pub struct Config {
     /// The desktop windows' gateways, which a page View's screenshot goes
     /// through (`page_shot.rs`).
     pub browser_control: Arc<crate::browser_control::BrowserControl>,
+    /// Whether this build offers connections between two Hides
+    /// (`env::Env::device_connect`): what the phone gains with them (the
+    /// gathered view, `hide phone`) stays away until it does.
+    pub device_connect: bool,
 }
 
 pub struct Mobile {
@@ -418,6 +489,11 @@ pub struct Mobile {
     stopping: watch::Sender<bool>,
     relay_change: watch::Sender<u64>,
     relay_task: Mutex<Option<tokio::task::JoinHandle<()>>>,
+    /// The task that runs Mobile's resident loops: the seven-day sweep, and
+    /// once the core opens, `observe_loop`, `follow` and the first reconcile.
+    /// `shutdown` joins it, and with it the notice batch and delivery pass
+    /// the observe loop has in flight.
+    resident_task: Mutex<Option<tokio::task::JoinHandle<()>>>,
 }
 
 fn record_transport_failure(failure: &CommandFailure, step: &str) {
@@ -499,6 +575,9 @@ impl Mobile {
                 inputs: HashMap::new(),
                 missed_check: false,
                 reconcile_owed: PassOwed(true),
+                paired_code: None,
+                paired_notices: VecDeque::new(),
+                machines: Vec::new(),
             }),
             config,
             reconcile_lock: tokio::sync::Mutex::new(()),
@@ -513,7 +592,7 @@ impl Mobile {
             starts,
             meta: watch::channel(PhoneMeta {
                 push_mode,
-                live_phones: 0,
+                ..PhoneMeta::default()
             })
             .0,
             live: Mutex::new(HashMap::new()),
@@ -523,6 +602,7 @@ impl Mobile {
             stopping: watch::channel(false).0,
             relay_change: watch::channel(0).0,
             relay_task: Mutex::new(None),
+            resident_task: Mutex::new(None),
         });
         // A notice for an app phone carries the relay room, which comes from these keys. The
         // supervisor's first pass makes them too, but a notice can be delivered before that pass
@@ -537,7 +617,7 @@ impl Mobile {
         mobile.sweep();
         mobile.publish();
         let startup = Arc::clone(&mobile);
-        tokio::spawn(async move {
+        let opened = async move {
             let mut open = startup.config.open.clone();
             let mut stopping = startup.stopping.subscribe();
             tokio::select! {
@@ -546,11 +626,22 @@ impl Mobile {
                 },
                 _ = stopping.wait_for(|stopping| *stopping) => return,
             }
-            tokio::spawn(Arc::clone(&startup).observe_loop());
-            tokio::spawn(Arc::clone(&startup).follow());
-            startup.reconcile_if_owed().await;
+            tokio::join!(
+                Arc::clone(&startup).observe_loop(),
+                Arc::clone(&startup).follow(),
+                startup.reconcile_if_owed(),
+            );
+        };
+        let resident = tokio::spawn({
+            let sweeping = Arc::clone(&mobile);
+            async move {
+                tokio::join!(sweeping.sweep_loop(), opened);
+            }
         });
-        tokio::spawn(Arc::clone(&mobile).sweep_loop());
+        *mobile
+            .resident_task
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner) = Some(resident);
         mobile
     }
 
@@ -640,6 +731,11 @@ impl Mobile {
     fn relay_changed(&self) {
         self.relay_change
             .send_modify(|generation| *generation = generation.wrapping_add(1));
+    }
+
+    /// Whether this build offers connections between two Hides (`Config::device_connect`).
+    pub fn device_connect(&self) -> bool {
+        self.config.device_connect
     }
 
     /// The mac's name on the phone: its tailnet name, else the system's.
@@ -771,6 +867,7 @@ impl Mobile {
             let next = PhoneMeta {
                 push_mode,
                 live_phones,
+                machines: inner.machines.clone(),
             };
             if *meta == next {
                 false
@@ -1269,6 +1366,14 @@ impl Mobile {
     pub async fn shutdown(&self) {
         self.stopping.send_replace(true);
         self.close_phones("mobile_off");
+        let resident = self
+            .resident_task
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .take();
+        if let Some(task) = resident {
+            let _ = task.await;
+        }
         let relay_task = self
             .relay_task
             .lock()
@@ -1315,10 +1420,30 @@ impl Mobile {
         let mut since_background = Duration::ZERO;
         let mut since_delivery = BACKGROUND_INTERVAL;
         let mut pending_delivery: Option<tokio::task::JoinHandle<()>> = None;
+        let mut pending_paired: Option<tokio::task::JoinHandle<()>> = None;
         loop {
+            // `wait_for` reads the flag as it is now, so a stop that came
+            // before this loop first ran ends it too, and `shutdown` never
+            // waits on a loop that missed it.
             tokio::select! {
                 _ = tokio::time::sleep(OBSERVE_INTERVAL) => {}
-                _ = stopping.changed() => break,
+                _ = stopping.wait_for(|stopping| *stopping) => break,
+            }
+            if pending_paired
+                .as_ref()
+                .is_some_and(tokio::task::JoinHandle::is_finished)
+            {
+                pending_paired = None;
+            }
+            if pending_paired.is_none() {
+                let owed: Vec<PhoneRecord> = self.lock().paired_notices.drain(..).collect();
+                if !owed.is_empty() {
+                    let mobile = Arc::clone(&self);
+                    // One batch at a time, joined below before this owner ends.
+                    pending_paired = Some(tokio::task::spawn_blocking(move || {
+                        mobile.tell_paired(&owed);
+                    }));
+                }
             }
             if pending_delivery
                 .as_ref()
@@ -1357,7 +1482,7 @@ impl Mobile {
                 self.reconcile().await;
             }
         }
-        if let Some(pending) = pending_delivery {
+        for pending in [pending_delivery, pending_paired].into_iter().flatten() {
             // The stop flag prevents another channel call, and this owner
             // joins the one already started before releasing its resources.
             let _ = pending.await;
@@ -1431,28 +1556,38 @@ impl Mobile {
         Ok(payload)
     }
 
+    /// Every phone a notice can reach, but `except`.
+    fn routes(inner: &Inner, except: Option<&str>) -> Vec<(String, Route)> {
+        inner
+            .phones
+            .current()
+            .filter(|phone| Some(phone.id.as_str()) != except)
+            .filter_map(|phone| Route::of(phone).map(|route| (phone.id.clone(), route)))
+            .take(phones::MAX_PHONES)
+            .collect()
+    }
+
+    /// The contact a Web Push request names (RFC 8292's `sub`).
+    fn push_subject(inner: &Inner) -> String {
+        inner
+            .settings
+            .serve
+            .as_ref()
+            .map(|serve| format!("https://{}", serve.dns_name))
+            .unwrap_or_else(|| "mailto:hide@localhost".into())
+    }
+
     fn push_delivery(&self, notice: &HumanNotice) -> Result<(), &'static str> {
         let (targets, subject) = {
             let inner = self.lock();
-            let targets = inner
-                .phones
-                .current()
-                .filter_map(|phone| Route::of(phone).map(|route| (phone.id.clone(), route)))
-                .take(4)
-                .collect::<Vec<_>>();
+            let targets = Self::routes(&inner, None);
             push::notice_route(
                 inner.settings.push_mode,
                 inner.settings.enabled,
                 self.config.desktop.rests_phone(),
                 targets.len(),
             )?;
-            let subject = inner
-                .settings
-                .serve
-                .as_ref()
-                .map(|serve| format!("https://{}", serve.dns_name))
-                .unwrap_or_else(|| "mailto:hide@localhost".into());
-            (targets, subject)
+            (targets, Self::push_subject(&inner))
         };
         let payload = self.push_payload(
             &push::Notice {
@@ -1480,6 +1615,87 @@ impl Mobile {
             },
             &BTreeSet::new(),
         )?;
+        self.send_notice(targets, &subject, &payload)
+    }
+
+    /// Tells each owed new phone (D-70): to the connected computers that may
+    /// open this one, then to the phones already paired. Blocking: it sends
+    /// the phones' pushes.
+    fn tell_paired(&self, owed: &[PhoneRecord]) {
+        for phone in owed {
+            self.config.desktop.phone_paired(&phone.name);
+            self.push_phone_paired(phone);
+        }
+    }
+
+    /// A new phone paired: each phone already paired hears it once, whether
+    /// or not the computer is in use, so a pairing the operator did not make
+    /// is seen (PRD device-connect-iroh D-70). The notice names this computer
+    /// and the new phone, and opens this computer's list.
+    fn push_phone_paired(&self, phone: &PhoneRecord) {
+        if *self.stopping.borrow() {
+            return;
+        }
+        let title = self.mac_name().unwrap_or_else(|| "Hide".to_owned());
+        let (targets, subject) = {
+            let inner = self.lock();
+            if !inner.settings.enabled {
+                return;
+            }
+            (
+                Self::routes(&inner, Some(&phone.id)),
+                Self::push_subject(&inner),
+            )
+        };
+        if targets.is_empty() {
+            return;
+        }
+        let notice = push::Notice {
+            key: AgentKey {
+                device_id: String::new(),
+                pane_id: String::new(),
+            },
+            title,
+            status_code: None,
+            detail: Some(phone.name.clone()),
+            subject: None,
+            state: push::NoticeState::PhonePaired,
+            place: String::new(),
+        };
+        let sent = self
+            .push_payload(&notice, &BTreeSet::new())
+            .and_then(|payload| self.send_notice(targets, &subject, &payload));
+        if let Err(reason) = sent {
+            hide_core::diagnostic!(json!({
+                "component": "mobile_pairing", "kind": "phone.paired_notice_failed",
+                "phone_id": phone.id, "reason": reason,
+            }));
+        }
+    }
+
+    /// Owes the phones already paired the notice of `phone` (D-70), for
+    /// `observe_loop` to send; at the cap the oldest owed one is dropped and
+    /// the log says which.
+    fn owe_paired_notice(&self, phone: PhoneRecord) {
+        let mut inner = self.lock();
+        if inner.paired_notices.len() >= phones::MAX_PHONES
+            && let Some(dropped) = inner.paired_notices.pop_front()
+        {
+            hide_core::diagnostic!(json!({
+                "component": "mobile_pairing", "kind": "phone.paired_notice_dropped", "phone_id": dropped.id,
+            }));
+        }
+        inner.paired_notices.push_back(phone);
+    }
+
+    /// Sends one notice to `targets`: `Ok` when a phone got it, else why
+    /// none did (`send_failed`, `subscription_gone` or `stopping`).
+    fn send_notice(
+        &self,
+        targets: Vec<(String, Route)>,
+        subject: &str,
+        payload: &Value,
+    ) -> Result<(), &'static str> {
         let (mut delivered, mut failed) = (false, false);
         for (phone_id, route) in targets {
             if *self.stopping.borrow() {
@@ -1488,7 +1704,7 @@ impl Mobile {
             let subscription = match route {
                 Route::Web(subscription) => subscription,
                 Route::App => {
-                    match self.push_to_app(&phone_id, &payload) {
+                    match self.push_to_app(&phone_id, payload) {
                         Ok(()) => delivered = true,
                         Err("token_gone") => {}
                         Err(_) => failed = true,
@@ -1500,7 +1716,7 @@ impl Mobile {
                 failed = true;
                 continue;
             };
-            match self.send_web(&phone_id, vapid, &subject, &subscription, &payload) {
+            match self.send_web(&phone_id, vapid, subject, &subscription, payload) {
                 push::SendOutcome::Delivered => delivered = true,
                 push::SendOutcome::Gone(_) => {
                     self.lock()
@@ -1523,7 +1739,7 @@ impl Mobile {
         loop {
             tokio::select! {
                 _ = tokio::time::sleep(SWEEP_INTERVAL) => {}
-                _ = stopping.changed() => return,
+                _ = stopping.wait_for(|stopping| *stopping) => return,
             }
             self.sweep();
         }
@@ -1767,7 +1983,11 @@ impl Mobile {
 
     /// Pairs a phone with the live code (the phone's `pair` handshake). A
     /// code exists only while Mobile is exposed.
-    pub fn pair(&self, code: &str, user_agent: &str) -> Result<(PhoneRecord, String), PairRefusal> {
+    pub fn pair(
+        self: &Arc<Self>,
+        code: &str,
+        user_agent: &str,
+    ) -> Result<(PhoneRecord, String), PairRefusal> {
         let (result, route) = {
             use hide_core::product_analytics::PhoneRoute;
             let mut inner = self.lock();
@@ -1776,10 +1996,14 @@ impl Mobile {
                 Exposure::Relay => Some(PhoneRoute::Relay),
                 _ => None,
             };
+            let spent = inner.phones.code().map(|(code, _)| command::code_id(code));
             let result = match route {
                 Some(_) if inner.settings.enabled => inner.phones.pair(code, user_agent, now_ms()),
                 _ => Err(PairRefusal::CodeExpired),
             };
+            if let (Ok((phone, _)), Some(spent)) = (&result, spent) {
+                inner.paired_code = Some((spent, phone.name.clone()));
+            }
             // The code is spent; the next phone needs `mobile_show_code`.
             (result, route)
         };
@@ -1792,6 +2016,9 @@ impl Mobile {
                     self.config.core.capture_product_event(
                         hide_core::product_analytics::Event::PhonePaired { route },
                     );
+                }
+                if self.config.device_connect {
+                    self.owe_paired_notice(phone.clone());
                 }
             }
             Err(refusal) => hide_core::diagnostic!(json!({
@@ -2661,6 +2888,16 @@ impl Mobile {
                     return;
                 }
                 Ok(true) => {
+                    let machines = other_machines(&rest);
+                    let moved = {
+                        let mut inner = self.lock();
+                        let moved = inner.machines != machines;
+                        inner.machines = machines;
+                        moved
+                    };
+                    if moved {
+                        self.publish();
+                    }
                     let catalog = start::Catalog::of(&rest, self.node().as_str());
                     self.catalog.send_if_modified(|current| {
                         if **current == catalog {
@@ -3042,6 +3279,32 @@ pub(super) fn test_mobile_with(
     gate: &Arc<hide_core::input_gate::PaneInputGate>,
     desktop: Arc<crate::desktop_notices::DesktopNotices>,
 ) -> Arc<Mobile> {
+    // These tests drive the phone boundary directly, never a network supervisor.
+    test_mobile_from(
+        directory,
+        gate,
+        tokio::sync::watch::channel(false).1,
+        desktop,
+    )
+}
+
+/// `test_mobile` over a core whose opening the test decides (`open`).
+#[cfg(test)]
+pub(super) fn test_mobile_opened(
+    directory: &std::path::Path,
+    gate: &Arc<hide_core::input_gate::PaneInputGate>,
+    open: tokio::sync::watch::Receiver<bool>,
+) -> Arc<Mobile> {
+    test_mobile_from(directory, gate, open, Arc::default())
+}
+
+#[cfg(test)]
+pub(super) fn test_mobile_from(
+    directory: &std::path::Path,
+    gate: &Arc<hide_core::input_gate::PaneInputGate>,
+    open: tokio::sync::watch::Receiver<bool>,
+    desktop: Arc<crate::desktop_notices::DesktopNotices>,
+) -> Arc<Mobile> {
     let core = Arc::new(crate::core::CoreHandle::bare(directory));
     let boundary = Arc::new(crate::boundary::Boundary::new(directory).unwrap());
     Mobile::start(Config {
@@ -3057,8 +3320,7 @@ pub(super) fn test_mobile_with(
         core: Arc::clone(&core),
         input_gate: Arc::clone(gate),
         start_demand: Arc::default(),
-        // These tests drive the phone boundary directly, never a network supervisor.
-        open: tokio::sync::watch::channel(false).1,
+        open,
         desktop,
         boundary: Arc::clone(&boundary),
         roots: Arc::new(crate::RootFollower::new(
@@ -3068,6 +3330,7 @@ pub(super) fn test_mobile_with(
             Arc::new(crate::index::IndexService::new()),
         )),
         browser_control: Arc::default(),
+        device_connect: false,
     })
 }
 

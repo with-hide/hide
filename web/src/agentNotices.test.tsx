@@ -147,13 +147,24 @@ it("asks for agent notices while the switch is on, words each one, withdraws a s
   await act(async () => receiveAgentNotice({ notices: [], clear: ["peer:ab12|node|w1:p1"] }));
   expect(withdrawn.at(-1)).toEqual(["agent:peer:ab12|node|w1:p1"]);
 
+  // A phone paired with a machine this computer may open shows even over a focused window, named by that machine, and a click selects its tile (PRD device-connect-iroh D-70).
+  await act(async () => receiveAgentNotice({ notices: [], clear: [], phones: [{ tag: "peer:ab12|phone|Pixel", peer: "ab12", phone: "Pixel" }] }));
+  expect(shown.at(-1)).toEqual(["agent:peer:ab12|phone|Pixel", "New phone connected", "Mac mini · Pixel", { unlessFocused: false }]);
+  const beforePhone = events.length;
+  await act(async () => open?.("agent:peer:ab12|phone|Pixel"));
+  expect(events.slice(beforePhone)).toEqual([{ schema_version: 2, kind: "focus_device", payload: { device_id: "device-mini" } }]);
+
   // The switch off: the window stops asking, and a late frame shows nothing.
   await act(async () => {
     useShellStore.setState({ rest: { ui_state: { desktop_notifications: false }, navigator: { devices: [] } } } as never);
   });
   expect(events.filter((event) => event.kind === "desktop_notices").at(-1)?.payload).toEqual({ wanted: false, needs_you: false });
   await act(async () => receiveAgentNotice({ notices: [{ tag: "node|w1:p2", device_id: "node", pane_id: "w1:p2", title: "x", state: "done", place: "" }], clear: [] }));
-  expect(shown).toHaveLength(14);
+  expect(shown).toHaveLength(15);
+  // A new phone still shows with both switches off: it is how the operator sees a pairing they did not make (D-70, B61).
+  await act(async () => receiveAgentNotice({ notices: [], clear: [], phones: [{ tag: "peer:ab12|phone|Pixel 2", peer: "ab12", phone: "Pixel 2" }] }));
+  expect(shown.at(-1)).toEqual(["agent:peer:ab12|phone|Pixel 2", "New phone connected", "Pixel 2", { unlessFocused: false }]);
+  expect(shown).toHaveLength(16);
   await act(async () => root.unmount());
   useShellStore.setState(saved, true);
 });

@@ -84,6 +84,17 @@ public class NoticeTest {
     }
 
     @Test
+    public void readsANoticeAboutTheComputerItselfWhichNamesNoAgent() throws Exception {
+        Notice paired = read(NoticeSealer.notice(ROOM).put("title", "build-box").put("state", "phone_paired").put("status_code", JSONObject.NULL)
+            .put("detail", "Pixel 9").put("place", "").put("tag", "|").put("device_id", "").put("pane_id", ""));
+        assertNotNull(paired);
+        assertEquals("새 폰이 연결됐어요 · Pixel 9", paired.body(NoticeWords.forLanguages(List.of("ko"))));
+        assertEquals(List.of("", ""), List.of(paired.deviceId, paired.paneId));
+        assertNull("an agent's notice names both its device and its pane", read(NoticeSealer.notice(ROOM).put("device_id", "")));
+        assertNull(read(NoticeSealer.notice(ROOM).put("pane_id", "")));
+    }
+
+    @Test
     public void theDemoSampleIsWordedAsARealQuestionIs() {
         Notice sample = Notice.sample("Address review comments", "question", "needs_you", "Apply all 3 review comments?", "demo · fix/review");
         assertEquals("Address review comments", sample.title);
@@ -105,5 +116,8 @@ public class NoticeTest {
         PushOpenInbox.Target target = inbox.take();
         assertEquals(List.of(ROOM, "mini", "w1:p1"), List.of(target.room, target.deviceId, target.paneId));
         assertNull("given out once", inbox.take());
+        assertEquals("a notice about the computer itself opens its list", true, inbox.offer(ROOM, "", ""));
+        PushOpenInbox.Target computer = inbox.take();
+        assertEquals(List.of(ROOM, "", ""), List.of(computer.room, computer.deviceId, computer.paneId));
     }
 }

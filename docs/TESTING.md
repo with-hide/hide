@@ -1228,7 +1228,7 @@ They cover multiple phones and both directions, all five required caps, bounded 
 A monotonic test clock moves rate and daily windows to their exact boundaries without sleeps; limits may be lowered through the service's embedding API, never raised above production.
 The service's caller owns its listener, task and shutdown signal; test guards abort that task on failure, and its task set owns every accepted socket.
 
-The relay's opt-in `production_capacity_keeps_128_rooms_live_and_refuses_only_socket_513` load case fills all 512 production slots with 128 devices and 384 real Noise sessions, exchanges 72 MiB across three bursts and checks that every socket receives restart.
-Run `bash scripts/verify-cargo.sh test-scoped -p hide-relay --test it production_capacity -- --ignored` on a host with at least 1,100 available file descriptors for the client and server ends.
+The relay's opt-in `production_capacity_keeps_384_rooms_live_and_refuses_only_socket_1537` load case fills all 1,536 production slots with 384 devices and 1,152 real Noise sessions, exchanges 72 MiB in one burst and checks that every socket receives restart.
+Run `bash scripts/verify-cargo.sh test-scoped -p hide-relay --test it production_capacity -- --ignored` on a host with at least 3,200 available file descriptors for the client and server ends.
 It is excluded from ordinary CI because the test host's descriptor budget includes both ends; the regular caller tests exercise each cap with lowered service limits on all three systems.
 Record the host, elapsed time and outcome outside the repository; this finite loopback workload is not an internet throughput or latency guarantee.
