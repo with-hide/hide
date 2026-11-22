@@ -114,7 +114,7 @@ const NO_PEER_ROWS: PeerRow[] = [];
  * runs and why it waits. This computer rings nothing for them; the machine
  * that owns the work picks where its notice goes.
  */
-export function PeerWorkRows({ group, actions }: { group: "needs_you" | "done"; actions: Actions }) {
+export function PeerWorkRows({ group, actions, treeIndent = false }: { group: "needs_you" | "done"; actions: Actions; /** Leave the tree chevron's room, so the rows line up under a list whose rows have one. */ treeIndent?: boolean }) {
   const rows = usePeerRows(group);
   const machines = useMemo(() => peerMachines(rows), [rows]);
   if (rows.length === 0) return null;
@@ -128,7 +128,7 @@ export function PeerWorkRows({ group, actions }: { group: "needs_you" | "done"; 
             <span className="tabular-nums">{machine.rows.length}</span>
           </div>
           <ul aria-label={machine.name} className="flex min-w-0 flex-col">
-            <PeerMachineRows group={group} rows={machine.rows} actions={actions} />
+            <PeerMachineRows group={group} rows={machine.rows} actions={actions} treeIndent={treeIndent} />
           </ul>
         </li>
       ))}
@@ -136,7 +136,7 @@ export function PeerWorkRows({ group, actions }: { group: "needs_you" | "done"; 
   );
 }
 
-function PeerMachineRows({ group, rows, actions }: { group: "needs_you" | "done"; rows: PeerRow[]; actions: Actions }) {
+function PeerMachineRows({ group, rows, actions, treeIndent }: { group: "needs_you" | "done"; rows: PeerRow[]; actions: Actions; treeIndent: boolean }) {
   const { t } = useInterfaceTranslation();
   return (
     <>
@@ -150,12 +150,13 @@ function PeerMachineRows({ group, rows, actions }: { group: "needs_you" | "done"
               data-peer-row={`${deviceId}:${row.id}`}
               data-peer-group={group}
               data-task-focus="row"
-              className="min-h-(--size-control-lg) items-start rounded-sm px-sm py-xs text-caption text-subtle-foreground hover:text-foreground"
+              className={cn("min-h-(--size-control-lg) items-start rounded-sm py-xs text-caption text-subtle-foreground hover:text-foreground", treeIndent ? "pr-xs pl-none" : "px-sm")}
               // That computer's work opens on its own screen with the work chosen (D-78, D-81); without a desktop to draw it, its tile.
               onClick={() => {
                 if (actions.openComputerWork(deviceId, { op: "show", pane: row.id }) !== "handed") actions.focusDevice(deviceId);
               }}
             >
+              {treeIndent ? <span aria-hidden="true" className="w-(--size-lineage-chevron) shrink-0" /> : null}
               <SessionRowBody
                 mark={<>
                   <StatusMark mark={markOf(row.mark)} read={row.read === true} />

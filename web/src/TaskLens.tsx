@@ -330,7 +330,7 @@ const TaskGroups = memo(function TaskGroups({ list, view, showProject, byPane, a
       ))}
       {view === "project" ? <Folds group={group} resting={resting} cleanup={cleanup} archived={archived} open={openFolds} onToggle={toggleFold} rows={rows} archivedRows={archivedList} /> : null}
       {/* A connected machine's own rows of the same state follow this computer's (PRD device-connect-iroh D-50, B49). */}
-      {!tool && view === "status" && (group.state === "needs_you" || group.state === "done") ? <ul className="flex min-w-0 flex-col"><PeerWorkRows group={group.state} actions={actions} /></ul> : null}
+      {!tool && view === "status" && (group.state === "needs_you" || group.state === "done") ? <ul className="flex min-w-0 flex-col"><PeerWorkRows group={group.state} actions={actions} treeIndent /></ul> : null}
     </section>
   );
   // A state this computer has no row in is still drawn for another machine's rows, in its place among the states.
@@ -366,7 +366,7 @@ function PeerSection({ state, actions }: { state: "needs_you" | "done"; actions:
         <span className="tabular-nums">{count}</span>
       </h3>
       <ul className="flex min-w-0 flex-col">
-        <PeerWorkRows group={state} actions={actions} />
+        <PeerWorkRows group={state} actions={actions} treeIndent />
       </ul>
     </section>
   );
