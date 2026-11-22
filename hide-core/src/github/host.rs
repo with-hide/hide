@@ -465,25 +465,66 @@ impl Watch for Github {
     }
 }
 
+/// What the poll reads of a watch request: the repositories on github.com,
+/// by `owner/name`, which its `gh api` calls address. An Enterprise server's
+/// repository is left to the regular read, as it always was: the poll never
+/// names a server, so it would ask github.com about another server's
+/// repository.
+fn poll_request(request: WatchRequest) -> crate::github_poll::PollRequest {
+    crate::github_poll::PollRequest {
+        projects: request
+            .projects
+            .into_iter()
+            .filter(|watched| watched.repository.authority == SERVER)
+            .map(|watched| crate::github_poll::PollProject {
+                repository: watched.repository.path.to_ascii_lowercase(),
+                path: watched.path,
+                in_front: watched.in_front,
+                heads: watched.heads,
+            })
+            .collect(),
+    }
+}
+
 impl WatchReader for crate::github_poll::GithubPollReader {
     fn read_if_due(&mut self, request: WatchRequest) -> Option<WatchAnswer> {
-        let request = crate::github_poll::PollRequest {
-            projects: request
-                .projects
-                .into_iter()
-                .map(|watched| crate::github_poll::PollProject {
-                    // The poll asks `gh api` by `owner/name`, as it did
-                    // before hosts.
-                    repository: watched.repository.path.to_ascii_lowercase(),
-                    path: watched.path,
-                    in_front: watched.in_front,
-                    heads: watched.heads,
-                })
-                .collect(),
+        crate::github_poll::GithubPollReader::read_if_due(self, poll_request(request)).map(
+            |answer| WatchAnswer {
+                changed: answer.changed,
+                held: answer.held,
+            },
+        )
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// The poll's `gh api` calls address github.com, so only github.com's
+    /// repositories reach it, background or in front; an Enterprise
+    /// server's, with or without a port, is left to the regular read.
+    #[test]
+    fn only_github_coms_repositories_reach_the_poll() {
+        let watched = |path: &str, stored: &str, in_front: bool| crate::code_host::Watched {
+            path: path.to_owned(),
+            repository: GITHUB.repository(stored).unwrap(),
+            in_front,
+            heads: Vec::new(),
         };
-        crate::github_poll::GithubPollReader::read_if_due(self, request).map(|answer| WatchAnswer {
-            changed: answer.changed,
-            held: answer.held,
-        })
+        let request = poll_request(WatchRequest {
+            projects: vec![
+                watched("/public", "Acme/App", false),
+                watched("/enterprise", "ghe.example.com/acme/app", false),
+                watched("/port", "ghe.example.com:8443/acme/app", false),
+                watched("/front", "ghe.example.com/acme/app", true),
+            ],
+        });
+        let polled: Vec<(&str, &str)> = request
+            .projects
+            .iter()
+            .map(|project| (project.path.as_str(), project.repository.as_str()))
+            .collect();
+        assert_eq!(polled, [("/public", "acme/app")]);
     }
 }

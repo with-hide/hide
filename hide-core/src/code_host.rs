@@ -393,29 +393,38 @@ impl CodeHosts {
             .expect("at least one host is registered")
     }
 
-    /// `items` in their order, each host's past its
-    /// [`CodeHost::project_limit`] left out; an item no host reads (`None`)
-    /// counts against the largest registered limit.
+    /// `items` in their order, at most the largest registered
+    /// [`CodeHost::project_limit`] of them in all, and of those each host's
+    /// past its own limit left out; an item no host reads (`None`) takes a
+    /// place in the total and in no host's. With one host this is its limit
+    /// over every item, as before hosts.
     pub(crate) fn within_limits<T>(
         self,
         items: impl IntoIterator<Item = T>,
         host_of: impl Fn(&T) -> Option<Host>,
     ) -> Vec<T> {
-        let unplaced = self
+        let total = self
             .hosts()
             .map(|host| host.project_limit())
             .max()
             .unwrap_or(0);
-        let mut counts: std::collections::HashMap<Option<Host>, usize> =
-            std::collections::HashMap::new();
+        let mut kept = 0;
+        let mut counts: std::collections::HashMap<Host, usize> = std::collections::HashMap::new();
         items
             .into_iter()
             .filter(|item| {
-                let host = host_of(item);
-                let limit = host.map_or(unplaced, |host| host.project_limit());
-                let count = counts.entry(host).or_default();
-                *count += 1;
-                *count <= limit
+                if kept == total {
+                    return false;
+                }
+                if let Some(host) = host_of(item) {
+                    let count = counts.entry(host).or_default();
+                    if *count == host.project_limit() {
+                        return false;
+                    }
+                    *count += 1;
+                }
+                kept += 1;
+                true
             })
             .collect()
     }
@@ -441,24 +450,22 @@ impl CodeHosts {
             .map(|(host, repository)| Place::Repository { host, repository })
     }
 
-    /// Where a checkout of the core's machine is read, from the repositories
-    /// its remotes name as its node read them (`None` when the node did not
-    /// say):
+    /// Where a checkout of the core's machine is read, from its remotes as
+    /// its node read them:
     ///
-    /// - remotes that name no repository a registered host reads: `None`,
-    ///   answered "no remote" with no host asked;
+    /// - no remote that names a server (an empty list): `None`, answered "no
+    ///   remote" with no host asked;
     /// - remotes of one host alone: that host, in the checkout when it finds
-    ///   the remote itself, else by the first remote's name;
-    /// - remotes the node did not name, or remotes of several hosts: the
-    ///   first registered host that finds a checkout's remote itself, which
-    ///   picks one in the checkout (GitHub's `gh` does, which keeps a
-    ///   project with a GitHub mirror beside another host's `origin` on
-    ///   GitHub); `None` when no host does.
-    pub(crate) fn place_of_checkout(
-        self,
-        root: &Path,
-        remotes: Option<&[String]>,
-    ) -> Option<Place> {
+    ///   the remote itself, else by the first remote's repository;
+    /// - remotes the node did not list, an address no registered unit reads,
+    ///   or remotes of several hosts: the first registered host that finds a
+    ///   checkout's remote itself, which picks one in the checkout (GitHub's
+    ///   `gh` does, which keeps a project with a GitHub mirror beside another
+    ///   host's `origin` on GitHub); `None` when no host does.
+    ///
+    /// An older node's GitHub-shaped names are read as stored names, as they
+    /// were; a name no unit reads names nothing.
+    pub(crate) fn place_of_checkout(self, root: &Path, remotes: CheckoutRemotes<'_>) -> Option<Place> {
         let in_checkout = |host: Host| Place::Checkout {
             host,
             root: root.to_path_buf(),
@@ -468,13 +475,23 @@ impl CodeHosts {
                 .find(|host| host.resolves_checkout())
                 .map(in_checkout)
         };
-        let Some(remotes) = remotes else {
-            return resolving();
+        let named: Vec<(Host, RepositoryRef)> = match remotes {
+            CheckoutRemotes::Unknown => return resolving(),
+            CheckoutRemotes::Addresses(addresses) => {
+                let mut named = Vec::with_capacity(addresses.len());
+                for address in addresses {
+                    match self.remote(address) {
+                        Some(read) => named.push(read),
+                        None => return resolving(),
+                    }
+                }
+                named
+            }
+            CheckoutRemotes::Named(names) => names
+                .iter()
+                .filter_map(|name| self.repository(name))
+                .collect(),
         };
-        let named: Vec<(Host, RepositoryRef)> = remotes
-            .iter()
-            .filter_map(|remote| self.repository(remote))
-            .collect();
         let (first, rest) = named.split_first()?;
         if rest.iter().any(|(host, _)| *host != first.0) {
             return resolving();
@@ -485,6 +502,29 @@ impl CodeHosts {
         } else {
             Place::Repository { host, repository }
         })
+    }
+}
+
+/// A checkout's remotes as its node read them.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum CheckoutRemotes<'a> {
+    /// The node did not say (its config could not be read or includes
+    /// another file, or the node has not answered).
+    Unknown,
+    /// Each remote's address, without a credential, a local path left out.
+    Addresses(&'a [String]),
+    /// The GitHub-shaped names a node older than the addresses sends.
+    Named(&'a [String]),
+}
+
+impl<'a> CheckoutRemotes<'a> {
+    /// The list as the node sent it, to notice a change; `None` while
+    /// unknown.
+    pub(crate) fn listed(self) -> Option<&'a [String]> {
+        match self {
+            Self::Unknown => None,
+            Self::Addresses(list) | Self::Named(list) => Some(list),
+        }
     }
 }
 

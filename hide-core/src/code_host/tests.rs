@@ -37,15 +37,15 @@ impl CodeHost for Plain {
     }
 
     fn repository(&self, stored: &str) -> Option<RepositoryRef> {
+        // A group, any subgroups, and a name: not GitHub's two parts.
         let path = stored.strip_prefix(PLAIN_SERVER)?.strip_prefix('/')?;
-        let (owner, name) = path.split_once('/')?;
         let plain = |part: &str| {
             !part.is_empty()
                 && part
                     .bytes()
                     .all(|byte| byte.is_ascii_alphanumeric() || byte == b'-')
         };
-        (plain(owner) && plain(name)).then(|| RepositoryRef {
+        (path.split('/').count() >= 2 && path.split('/').all(plain)).then(|| RepositoryRef {
             host: self.key().to_owned(),
             authority: PLAIN_SERVER.to_owned(),
             path: path.to_owned(),
@@ -150,6 +150,7 @@ impl HostReads for PlainReads {
                     },
                     pull_requests_read: true,
                     issues_read: PartRead::Unsupported,
+                    identity_read: PartRead::Read,
                     repository: Some(RepositoryIdentity {
                         repository: repository.clone(),
                         id: None,
@@ -418,15 +419,21 @@ fn a_stored_name_belongs_to_the_host_that_names_its_server_else_the_first_that_r
     );
 }
 
-/// The node names each remote's repository as a stored name and never its
-/// URL (`PathFacts::remotes`); a remote it could not name is left out.
+/// A node sends each remote's address without its credential
+/// (`PathFacts::remote_addresses`) and each unit reads its own; an older
+/// node sends GitHub-shaped names (`PathFacts::remotes`), read as stored
+/// names as before.
 #[test]
 fn a_checkout_is_placed_by_its_remotes_and_none_is_no_remote_with_no_host_asked() {
     let root = Path::new("/work/app");
-    let place = |hosts: CodeHosts, remotes: Option<&[&str]>| {
-        let remotes: Option<Vec<String>> =
-            remotes.map(|remotes| remotes.iter().map(|remote| (*remote).to_owned()).collect());
-        hosts.place_of_checkout(root, remotes.as_deref())
+    let list = |remotes: &[&str]| -> Vec<String> {
+        remotes.iter().map(|remote| (*remote).to_owned()).collect()
+    };
+    let by_address = |hosts: CodeHosts, remotes: &[&str]| {
+        hosts.place_of_checkout(root, CheckoutRemotes::Addresses(&list(remotes)))
+    };
+    let by_name = |hosts: CodeHosts, remotes: &[&str]| {
+        hosts.place_of_checkout(root, CheckoutRemotes::Named(&list(remotes)))
     };
     let in_checkout = |hosts: CodeHosts, key: &str| {
         Some(Place::Checkout {
@@ -434,37 +441,55 @@ fn a_checkout_is_placed_by_its_remotes_and_none_is_no_remote_with_no_host_asked(
             root: root.to_path_buf(),
         })
     };
-    let github = "acme/app";
-    let plain = "code.example/acme/app";
+    let github = "https://github.com/acme/app.git";
+    let enterprise = "git@ghe.example.com:acme/app.git";
+    let nested = "https://code.example/group/sub/project.git";
 
-    assert_eq!(place(BOTH, Some(&[])), None, "no remote: no host is asked");
+    assert_eq!(by_address(BOTH, &[]), None, "no remote: no host is asked");
+    assert_eq!(by_address(BOTH, &[github]), in_checkout(BOTH, "github"));
     assert_eq!(
-        place(BOTH, Some(&["not a repository"])),
-        None,
-        "a remote no host reads is no remote"
-    );
-    assert_eq!(place(BOTH, Some(&[github])), in_checkout(BOTH, "github"));
-    assert_eq!(
-        place(BOTH, Some(&[plain])),
-        BOTH.place_of("code.example/acme/app"),
-        "a host that does not find a checkout's remote reads it by name"
+        by_address(BOTH, &[nested, "git@code.example:group/sub/project.git"]),
+        BOTH.place_of("code.example/group/sub/project"),
+        "a host that does not find a checkout's remote reads it by name, any shape its unit reads"
     );
     assert_eq!(
-        place(BOTH, Some(&[plain, github])),
+        by_address(BOTH, &[nested, github]),
         in_checkout(BOTH, "github"),
         "remotes of two hosts go to the one that picks in the checkout"
     );
     assert_eq!(
-        place(BOTH, Some(&[github, "ghe.example.com/acme/app"])),
+        by_address(BOTH, &[github, enterprise]),
         in_checkout(BOTH, "github"),
         "github.com and an Enterprise server are one host, which picks in the checkout"
     );
     assert_eq!(
-        place(BOTH, None),
+        by_address(BOTH, &["http://github.com/acme/app.git"]),
         in_checkout(BOTH, "github"),
-        "remotes the node did not name are read in the checkout"
+        "an address no unit reads is unknown, read in the checkout as main left it to gh"
     );
-    assert_eq!(place(PLAIN_ONLY, None), None);
+    assert_eq!(
+        by_address(CodeHosts::STANDARD, &[nested]),
+        in_checkout(CodeHosts::STANDARD, "github"),
+        "with GitHub alone a nested path is no repository GitHub reads: unknown, as on main"
+    );
+    assert_eq!(
+        hosts_place(BOTH, root, CheckoutRemotes::Unknown),
+        in_checkout(BOTH, "github"),
+        "remotes the node did not list are read in the checkout"
+    );
+    assert_eq!(hosts_place(PLAIN_ONLY, root, CheckoutRemotes::Unknown), None);
+
+    assert_eq!(by_name(BOTH, &[]), None);
+    assert_eq!(by_name(BOTH, &["not a repository"]), None, "a name no unit reads names nothing");
+    assert_eq!(by_name(BOTH, &["acme/app"]), in_checkout(BOTH, "github"));
+    assert_eq!(
+        by_name(BOTH, &["acme/app", "ghe.example.com/acme/app"]),
+        in_checkout(BOTH, "github")
+    );
+}
+
+fn hosts_place(hosts: CodeHosts, root: &Path, remotes: CheckoutRemotes<'_>) -> Option<Place> {
+    hosts.place_of_checkout(root, remotes)
 }
 
 #[test]
@@ -513,8 +538,28 @@ fn an_operation_a_host_does_not_declare_is_not_there_to_call() {
     assert!(BOTH.search_query_limit().is_some());
 }
 
-/// Each host keeps its own cap and clock: a host's projects past its cap
-/// are left out without taking another host's place.
+/// One total over every project in rank order, the largest registered
+/// limit: with GitHub alone that is its 64 over every local Git project, a
+/// project no host reads (no remote) taking a place like any other, as
+/// before hosts.
+#[test]
+fn one_total_admits_projects_in_rank_order_with_github_alone() {
+    let github = host(CodeHosts::STANDARD, "github");
+    let projects: Vec<(usize, Option<Host>)> = (0..70)
+        .map(|rank| (rank, (rank % 3 != 0).then_some(github)))
+        .collect();
+    let kept: Vec<usize> = CodeHosts::STANDARD
+        .within_limits(projects, |(_, host)| *host)
+        .into_iter()
+        .map(|(rank, _)| rank)
+        .collect();
+    assert_eq!(kept, (0..64).collect::<Vec<_>>());
+    assert_eq!(70 - kept.len(), 6, "the shortfall the read reports");
+}
+
+/// Each host keeps its own cap inside the total, and its own clock: a
+/// host's projects past its cap are left out without taking another host's
+/// place.
 #[test]
 fn each_host_caps_and_clocks_its_own_projects() {
     let github = host(BOTH, "github");
@@ -535,6 +580,9 @@ fn each_host_caps_and_clocks_its_own_projects() {
     assert_eq!(kept, ["p1", "g1", "p2", "none", "g2"]);
     let many = (0..70).map(|_| Some(github));
     assert_eq!(BOTH.within_limits(many, |host| *host).len(), 64);
+    // The total is the largest limit, whichever hosts take it.
+    let unplaced = (0..70).map(|_| None::<Host>);
+    assert_eq!(BOTH.within_limits(unplaced, |host| *host).len(), 64);
 
     let clock = github.read_clock();
     assert_eq!(
@@ -597,14 +645,37 @@ fn the_four_read_outcomes_of_a_part_are_told_apart() {
         GithubProjectSnapshot::default().issues_read,
         PartRead::NotRead
     );
-    let saved_before: GithubProjectSnapshot =
-        serde_json::from_value(serde_json::json!({"root_path": "/repo"})).unwrap();
+    // The identity is every host's: only a read of it that failed is owed.
+    let identity = |identity_read: PartRead| {
+        GithubProjectSnapshot {
+            pull_requests_read: true,
+            issues_read: PartRead::Read,
+            identity_read,
+            ..GithubProjectSnapshot::default()
+        }
+        .read_outcome()
+    };
+    assert_eq!(identity(PartRead::Failed), GithubReadOutcome::IssuesFailed);
+    assert_eq!(identity(PartRead::Read), GithubReadOutcome::Read);
+    assert_eq!(identity(PartRead::NotRead), GithubReadOutcome::Read);
+    // A project as main saved it: every field it had, without the three this
+    // contract added.
+    let mut old = serde_json::to_value(GithubProjectSnapshot {
+        root_path: "/repo".to_owned(),
+        ..GithubProjectSnapshot::default()
+    })
+    .unwrap();
+    let fields = old.as_object_mut().unwrap();
+    assert!(fields.remove("issues_read").is_some() && fields.remove("repository").is_some());
+    assert!(fields.remove("identity_read").is_some());
+    let saved_before: GithubProjectSnapshot = serde_json::from_value(old).unwrap();
     assert_eq!(
         saved_before.issues_read,
         PartRead::Read,
         "an answer saved before the part was kept had its issues read"
     );
     assert_eq!(saved_before.repository, None);
+    assert_eq!(saved_before.identity_read, PartRead::Read);
 }
 
 /// The common reader hands the test host its projects and keeps its
@@ -666,4 +737,136 @@ fn the_common_reader_reads_a_host_with_the_base_contract_alone() {
     assert_eq!(down.issues_read, PartRead::NotRead);
 
     assert_eq!(read("/none").read_outcome(), GithubReadOutcome::NoRemote);
+}
+
+/// GitHub's `gh` as GitHub's unit asks it through the node, by the
+/// repository each call names: `acme/app` lists one open pull request,
+/// `acme/quiet` refuses its issues, `acme/down` refuses its list.
+struct GithubCli;
+
+const APP_PULLS: &str = r#"[{"number":7,"title":"Add thing","headRefName":"thing","headRefOid":"0123456789abcdef0123456789abcdef01234567","baseRefName":"main","state":"OPEN","reviewDecision":"","isDraft":false,"url":"https://github.com/acme/app/pull/7","mergedAt":null,"updatedAt":"2026-10-14T01:00:00Z","createdAt":"2026-10-13T01:00:00Z","closedAt":null,"closingIssuesReferences":[],"isCrossRepository":false}]"#;
+
+impl NodeLink for GithubCli {
+    fn call(
+        &self,
+        call: Call,
+        _timeout: Duration,
+    ) -> Result<hide_node_link::LinkAnswer, hide_node_link::LinkError> {
+        use hide_node_link::gh::GhAnswer;
+        let Call::Gh {
+            args, repository, ..
+        } = call
+        else {
+            panic!("only gh is asked, yet the node was: {call:?}");
+        };
+        let words: Vec<&str> = args.iter().map(String::as_str).collect();
+        let repository = repository.unwrap_or_default();
+        let output = |stdout: &str| GhAnswer::Output {
+            stdout: stdout.to_owned(),
+        };
+        let refused = || GhAnswer::Failed {
+            category: crate::model::GithubFailureCategory::NetworkOrRateLimit,
+            reason: "HTTP 502: Bad Gateway".to_owned(),
+        };
+        let answer = match (words.as_slice(), repository.as_str()) {
+            (["--version"], _) => output("gh version 2.76.2 (2025-07-30)\n"),
+            (["auth", "status", ..], _) => {
+                output("github.com\n  - Token scopes: 'gist', 'project', 'read:org', 'repo'\n")
+            }
+            (["pr", "list", ..], "acme/down") => refused(),
+            (["pr", "list", "--state", "all", ..], "acme/app") => output(APP_PULLS),
+            (["pr", "list", ..], _) => output("[]"),
+            (["issue", ..], "acme/quiet") => refused(),
+            (["issue", ..], _) => output("[]"),
+            (["repo", "view", ..], name) => GhAnswer::Output {
+                stdout: format!(
+                    r#"{{"nameWithOwner":"{name}","id":"R_{name}","url":"https://github.com/{name}","visibility":"PUBLIC","defaultBranchRef":{{"name":"main"}}}}"#
+                ),
+            },
+            (["api", "user", ..], _) => output("example-user"),
+            _ => output(r#"{"data":{}}"#),
+        };
+        Ok(serde_json::to_value(answer).unwrap().into())
+    }
+}
+
+/// GitHub's unit and the base-only host go through the one reader pass and
+/// the one saved answer alike: each part is read, failed, not read or
+/// unsupported as its host answered, an unsupported part is never an empty
+/// success, and what was saved comes back with the outcome it was saved
+/// with.
+#[test]
+fn both_hosts_answer_the_same_four_outcomes_through_one_reader_and_store() {
+    let project = |root: &str, place: Option<Place>| GithubProjectRequest {
+        links: Vec::new(),
+        root: PathBuf::from(root),
+        place,
+        generation: 1,
+    };
+    let request = GithubRequest {
+        projects: vec![
+            project("/github-app", BOTH.place_of("acme/app")),
+            project("/github-quiet", BOTH.place_of("acme/quiet")),
+            project("/github-down", BOTH.place_of("acme/down")),
+            project("/plain-app", BOTH.place_of("code.example/acme/app")),
+            project("/plain-down", BOTH.place_of("code.example/acme/down")),
+            project("/none", None),
+        ],
+    };
+    let answer = super::read::read(&mut Reads::new(BOTH), &GithubCli, &request);
+    let outcome = |answer: &crate::model::GithubSnapshot, root: &str| {
+        answer.project(root).map(|project| {
+            (
+                project.read_outcome(),
+                project.issues_read,
+                project.identity_read,
+            )
+        })
+    };
+    use GithubReadOutcome::{Failed, IssuesFailed, NoRemote, Read};
+    let read = [
+        ("/github-app", (Read, PartRead::Read, PartRead::Read)),
+        ("/github-quiet", (IssuesFailed, PartRead::Failed, PartRead::Read)),
+        ("/github-down", (Failed, PartRead::Read, PartRead::Read)),
+        ("/plain-app", (Read, PartRead::Unsupported, PartRead::Read)),
+        ("/plain-down", (Failed, PartRead::NotRead, PartRead::NotRead)),
+    ];
+    for (root, expected) in read {
+        assert_eq!(outcome(&answer, root), Some(expected), "{root}");
+    }
+    assert_eq!(
+        answer.project("/none").map(|project| project.read_outcome()),
+        Some(NoRemote)
+    );
+    let github = answer.project("/github-app").unwrap();
+    let reference = github.pull_requests[0].reference.as_ref().unwrap();
+    assert_eq!(
+        (reference.label.as_str(), reference.repository.authority.as_str()),
+        ("#7", "github.com")
+    );
+    assert_eq!(github.repository_id(), Some("R_acme/app"));
+
+    // Only a project read once is saved; it comes back as it was saved.
+    let folder = tempfile::tempdir().unwrap();
+    let path = folder.path().join("github-snapshot.json");
+    let store = crate::github_store::GithubStore::new(path.clone());
+    store.save(answer.clone());
+    drop(store);
+    let restored = crate::github_store::GithubStore::new(path)
+        .restore()
+        .expect("the file is restored");
+    for (root, expected) in read {
+        let saved = answer
+            .project(root)
+            .is_some_and(|project| project.status.last_success_at_unix_ms.is_some());
+        assert_eq!(
+            outcome(&restored, root),
+            saved.then_some(expected),
+            "{root}"
+        );
+    }
+    assert_eq!(
+        restored.project("/github-app").unwrap().pull_requests[0].reference,
+        github.pull_requests[0].reference
+    );
 }

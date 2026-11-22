@@ -240,7 +240,7 @@ fn a_new_base_branch_reaches_the_policy_before_it_is_saved() {
                 ..Rules::default()
             }),
             ..Default::default()
-        })
+        }, crate::code_host::CodeHosts::STANDARD)
         .unwrap();
     runtime
         .snapshot

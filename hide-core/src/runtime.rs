@@ -1183,6 +1183,10 @@ pub(crate) struct DeviceGithubRead {
     generation: u64,
     asked_at: std::time::Instant,
     links: Vec<crate::issues::IssueReference>,
+    /// The last answer's own outcome, taken before a failed part was filled
+    /// in from the answer before it (`keep_previous_reads`), as this
+    /// machine's clock takes it (`github_answered`).
+    answered: Option<crate::model::GithubReadOutcome>,
 }
 
 /// Whether `actor` is one of Hide's own roles that writes notices rather

@@ -1110,6 +1110,13 @@ fn read_project(
     ))
 }
 
+/// The stored name of the repository an `origin` address names, as the unit
+/// of its code host reads it.
+pub(crate) fn origin_repository(hosts: crate::code_host::CodeHosts, origin: &str) -> Option<String> {
+    let (host, repository) = hosts.remote(origin)?;
+    Some(host.stored_name(&repository))
+}
+
 /// A repository's host facts as the snapshot's project entry, each row
 /// carrying the deletion gate its facts decide. The gate's pane and agent
 /// counts are filled when the catalog places the row.
@@ -1121,7 +1128,8 @@ pub fn project_snapshot(
         repository: facts
             .origin_url
             .as_deref()
-            .and_then(hide_node_link::gh::repository_of_remote),
+            .and_then(|origin| origin_repository(crate::code_host::CodeHosts::STANDARD, origin)),
+        origin_url: facts.origin_url.clone(),
         shared_git_path: facts.shared_git_path,
         root_path: facts.root_path,
         default_branch: facts.default_branch,

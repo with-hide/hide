@@ -370,12 +370,16 @@ fn read_project(
     let issues =
         issues.unwrap_or_else(|_| Err(GhFailure::network("gh issue reader failed".to_owned())));
     // `OWNER/NAME` as GitHub names it, without its server, which the
-    // repository's own API paths take.
-    let repository = identity
-        .as_ref()
-        .map(|identity| identity.repository.path.clone())
-        .map_err(Clone::clone);
-    let identity = identity.ok();
+    // repository's own API paths take; the issues name it too when the
+    // identity could not be read.
+    let repository = match &identity {
+        Ok(identity) => Ok(identity.repository.path.clone()),
+        Err(failure) => issues
+            .as_ref()
+            .ok()
+            .and_then(|(issues, _)| issues.repository.clone())
+            .ok_or_else(|| failure.clone()),
+    };
     let mut pull_requests = match listed {
         Ok(value) => value,
         Err(reason) if reason.category == GithubFailureCategory::NoGithubRemote => {
@@ -391,12 +395,14 @@ fn read_project(
                 Ok((issues, warning)) => (issues, PartRead::Read, warning),
                 Err(_) => (Default::default(), PartRead::Failed, None),
             };
+            let (repository, identity_read) = identity_outcome(&root_path, identity);
             return (
                 GithubProjectSnapshot {
                     root_path,
                     issues,
                     issues_read,
-                    repository: identity,
+                    repository,
+                    identity_read,
                     status: failed(reason),
                     ..GithubProjectSnapshot::default()
                 },
@@ -413,6 +419,7 @@ fn read_project(
         recheck_settled(&run, repository, &mut pull_requests, now_unix_ms());
     }
     let unread_queries = add_extra_facts(&run, repository, viewer, &mut pull_requests);
+    let (identity, identity_read) = identity_outcome(&root_path, identity);
     match issues {
         Ok((issues, warning)) => (
             GithubProjectSnapshot {
@@ -420,6 +427,7 @@ fn read_project(
                 viewer: viewer.map(str::to_owned),
                 issues,
                 repository: identity,
+                identity_read,
                 pull_requests,
                 pull_requests_read: true,
                 issues_read: PartRead::Read,
@@ -440,6 +448,7 @@ fn read_project(
                 root_path,
                 viewer: viewer.map(str::to_owned),
                 repository: identity,
+                identity_read,
                 pull_requests,
                 pull_requests_read: true,
                 issues_read: PartRead::Failed,
@@ -451,6 +460,27 @@ fn read_project(
             },
             None,
         ),
+    }
+}
+
+/// The identity a pass read and how its read ended. A failed one is logged:
+/// the operator cannot act on it, and the clock asks again
+/// ([`GithubProjectSnapshot::read_outcome`]).
+fn identity_outcome(
+    root_path: &str,
+    identity: Result<RepositoryIdentity, GhFailure>,
+) -> (Option<RepositoryIdentity>, PartRead) {
+    match identity {
+        Ok(identity) => (Some(identity), PartRead::Read),
+        Err(failure) => {
+            crate::diagnostic!(serde_json::json!({
+                "component": "github",
+                "kind": "repository.identity_unread",
+                "root": root_path,
+                "reason": failure.reason,
+            }));
+            (None, PartRead::Failed)
+        }
     }
 }
 
@@ -3443,6 +3473,9 @@ mod tests {
     struct Repository {
         version: &'static str,
         list_fails: bool,
+        /// `gh repo view` of the repository's identity fails; the issues'
+        /// own name is still answered.
+        identity_fails: bool,
         asked: Mutex<Vec<Vec<String>>>,
         /// What `gh auth status` prints; when its scopes leave out
         /// `read:project`, an issue list with Projects fields is refused.
@@ -3457,6 +3490,7 @@ mod tests {
             Self {
                 version,
                 list_fails,
+                identity_fails: false,
                 asked: Mutex::default(),
                 auth_status: Mutex::new(SCOPED),
             }
@@ -3529,6 +3563,14 @@ mod tests {
                 }
                 ["issue", ..] | ["pr", "list", "--state", "open", ..] => output("[]"),
                 ["api", "user", ..] => output("example-user"),
+                ["repo", "view", "--json", fields]
+                    if self.identity_fails && *fields == hide_node_link::gh::REPOSITORY_FIELDS =>
+                {
+                    GhAnswer::Failed {
+                        category: GithubFailureCategory::NetworkOrRateLimit,
+                        reason: "HTTP 502: Bad Gateway".to_owned(),
+                    }
+                }
                 ["repo", ..] => output(
                     r#"{"nameWithOwner":"acme/project","id":"R1","url":"https://github.com/acme/project","visibility":"PUBLIC","defaultBranchRef":{"name":"main"}}"#,
                 ),
@@ -3581,6 +3623,29 @@ mod tests {
             assert_eq!(project.status.failure_category, None, "{version:?}");
             assert!(project.pull_requests_read, "{version:?}");
         }
+    }
+
+    /// The identity read failing alone is named failed, so the clock asks
+    /// again, while the lists it was read beside stand as read.
+    #[test]
+    fn a_failed_identity_read_alone_is_named_failed_and_the_lists_stand() {
+        let repository = Repository {
+            identity_fails: true,
+            ..Repository::new("gh version 2.76.2 (2025-07-30)\n", false)
+        };
+        let project = repository.read();
+        assert!(project.pull_requests_read);
+        assert_eq!(project.status.failure_category, None);
+        assert_eq!(project.issues_read, PartRead::Read);
+        assert_eq!(project.identity_read, PartRead::Failed);
+        assert_eq!(project.repository, None);
+        assert_eq!(
+            project.read_outcome(),
+            crate::model::GithubReadOutcome::IssuesFailed
+        );
+        let read = Repository::new("gh version 2.76.2 (2025-07-30)\n", false).read();
+        assert_eq!(read.identity_read, PartRead::Read);
+        assert_eq!(read.read_outcome(), crate::model::GithubReadOutcome::Read);
     }
 
     #[test]

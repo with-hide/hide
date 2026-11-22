@@ -7329,6 +7329,12 @@ pub struct GithubProjectSnapshot {
     /// named it.
     #[serde(default)]
     pub repository: Option<RepositoryIdentity>,
+    /// Whether this pass read the repository's identity. A failed one keeps
+    /// the identity read before only where this pass names that same
+    /// repository (`keep_previous_reads`), and backs the clock off as failed
+    /// issues do; saved with the answer.
+    #[serde(default = "PartRead::saved_before_it_was_kept")]
+    pub identity_read: PartRead,
     pub issues: crate::issues::ProjectIssuesSnapshot,
     /// The repository's main worktree, which is what identifies a project.
     pub root_path: String,
@@ -7346,8 +7352,8 @@ pub struct GithubProjectSnapshot {
 pub enum GithubReadOutcome {
     /// The pull requests and the issues were read.
     Read,
-    /// The pull requests were read and the issues were not, though its host
-    /// offers them. The re-read
+    /// The pull requests were read and the issues, though its host offers
+    /// them, or the repository's identity were not. The re-read
     /// clock backs off as from a failure, so issues that fail every time
     /// (a fork with its issues turned off) are not asked for every minute,
     /// while the pull requests the answer holds are current.
@@ -7397,7 +7403,9 @@ impl GithubProjectSnapshot {
             GithubReadOutcome::NoRemote
         } else if !self.pull_requests_read {
             GithubReadOutcome::Failed
-        } else if matches!(self.issues_read, PartRead::NotRead | PartRead::Failed) {
+        } else if matches!(self.issues_read, PartRead::NotRead | PartRead::Failed)
+            || self.identity_read == PartRead::Failed
+        {
             GithubReadOutcome::IssuesFailed
         } else {
             GithubReadOutcome::Read
@@ -7803,10 +7811,15 @@ pub struct ProjectWorktreesSnapshot {
     /// Why this repository has no worktree list. An empty list with no reason
     /// means the repository genuinely has none.
     pub unavailable_reason: Option<String>,
-    /// The GitHub repository its `origin` names (`[HOST/]OWNER/NAME`), by
-    /// which a device's pull requests are read with this machine's login.
+    /// The repository its `origin` names, by its code host's stored name
+    /// (`[HOST/]OWNER/NAME` on GitHub), by which a device's pull requests are
+    /// read with this machine's login.
     #[serde(skip)]
     pub repository: Option<String>,
+    /// The address of its `origin`, which names `repository` through the
+    /// registered code hosts.
+    #[serde(skip)]
+    pub origin_url: Option<String>,
 }
 
 #[derive(Clone, Debug, Default, Eq, PartialEq, Serialize)]

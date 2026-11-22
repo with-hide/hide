@@ -1464,7 +1464,7 @@ impl Runtime {
                 // older node) can gain a GitHub one unseen, so `gh`'s word
                 // that there is none is asked again on the full wait.
                 let clock = if outcome == GithubReadOutcome::NoRemote
-                    && self.catalog_paths.remotes(&path).is_some()
+                    && self.catalog_paths.remotes(&path).listed().is_some()
                 {
                     GithubClock::NoRemote
                 } else {
@@ -1731,7 +1731,7 @@ impl Runtime {
     /// value seen is remembered, not a move, and a catalog that does not say
     /// (its path read failed, or an older node) moves nothing.
     fn github_remotes_moved(&mut self, path: &str) -> bool {
-        let Some(remotes) = self.catalog_paths.remotes(path) else {
+        let Some(remotes) = self.catalog_paths.remotes(path).listed() else {
             return false;
         };
         match self.github_remotes.get(path) {
@@ -1825,7 +1825,11 @@ impl Runtime {
     ) {
         if let Some(mut restored) = restored {
             // A saved provider cache may predate the private connection choice.
-            // Reuse it only when its repository agrees with that choice.
+            // Reuse it only when its repository agrees with that choice: the
+            // identity read on its own, by its unit's stored name, whatever
+            // became of the issues; a file from before the identity was kept
+            // by the repository its issues named.
+            let hosts = self.code_hosts;
             restored.projects.retain(|project| {
                 crate::project_settings::get(
                     &self.snapshot.ui_state.project_settings,
@@ -1835,7 +1839,13 @@ impl Runtime {
                 .and_then(|record| record.repository.as_ref())
                 .is_none_or(|connection| match connection {
                     crate::project_settings::RepositoryConnection::Repository { repository } => {
-                        project.issues.repository.as_ref() == Some(repository)
+                        let saved = match &project.repository {
+                            Some(identity) => hosts
+                                .of(&identity.repository)
+                                .map(|host| host.stored_name(&identity.repository)),
+                            None => project.issues.repository.clone(),
+                        };
+                        saved.is_some_and(|saved| saved.eq_ignore_ascii_case(repository))
                     }
                     crate::project_settings::RepositoryConnection::Auto => false,
                 })
@@ -1871,7 +1881,7 @@ impl Runtime {
         // it has been read once, including one that returned nothing.
         let mut newly_settled = false;
         let mut answered = Vec::new();
-        for project in requested.projects {
+        for project in &requested.projects {
             let path = project.root.to_string_lossy().into_owned();
             // The read's own provenance, taken before a failed one is filled
             // in from the previous answer below.
@@ -1895,7 +1905,7 @@ impl Runtime {
             newly_settled |= self.github_settled.insert(path);
         }
         let mut merged = github;
-        keep_previous_reads(&mut merged, &self.github);
+        keep_previous_reads(&mut merged, &self.github, &requested);
         self.read_merges_made_here(&mut merged);
         // A mission's pull request that merged, was asked for changes or got
         // a new commit wakes its Conductor (PRD software-factory-conductor
@@ -3649,7 +3659,6 @@ impl Runtime {
         self.device_github_reads.retain(|key, _| listed(key));
         self.device_github_read_generation
             .retain(|key, _| listed(key));
-        let answered = self.device_github.get(device_id);
         // The links the node's rows were derived with; a wake reads them and
         // derives nothing.
         let mut links = self
@@ -3690,9 +3699,11 @@ impl Runtime {
                 // A read whose pull requests failed is asked again sooner, as
                 // this machine's first retry is; failed issues alone keep the
                 // full wait, since this clock does not climb.
-                let failed = answered
-                    .and_then(|github| github.project(&root))
-                    .is_some_and(|read| read.read_outcome() == GithubReadOutcome::Failed);
+                let failed = self
+                    .device_github_reads
+                    .get(&(device_id.to_owned(), root.clone()))
+                    .and_then(|read| read.answered)
+                    == Some(GithubReadOutcome::Failed);
                 let place = self.code_hosts.place_of(&repository);
                 let clock = place.as_ref().map_or_else(
                     || self.code_hosts.unplaced_clock(),
@@ -3711,6 +3722,7 @@ impl Runtime {
                         generation: 0,
                         asked_at: now,
                         links: links.clone(),
+                        answered: None,
                     });
                 if now.duration_since(read.asked_at) >= wait || read.links != links {
                     read.generation = read.generation.wrapping_add(1);
@@ -3739,6 +3751,7 @@ impl Runtime {
                 generation: 0,
                 asked_at: now,
                 links: Vec::new(),
+                answered: None,
             });
         read.generation = read.generation.wrapping_add(1);
         read.asked_at = now;
@@ -3922,9 +3935,19 @@ impl Runtime {
                 project.generation,
             );
         }
+        // Each project's own outcome, before a failed part is filled in from
+        // the previous answer below: the device's clock retries by it.
+        for project in &github.projects {
+            if let Some(read) = self
+                .device_github_reads
+                .get_mut(&(device_id.to_owned(), project.root_path.clone()))
+            {
+                read.answered = Some(project.read_outcome());
+            }
+        }
         let mut merged = github;
         if let Some(previous) = self.device_github.get(device_id) {
-            keep_previous_reads(&mut merged, previous);
+            keep_previous_reads(&mut merged, previous, request);
         }
         self.note_mission_pulls(device_id, &merged);
         if self.device_github.get(device_id) == Some(&merged) {
@@ -5773,11 +5796,47 @@ pub(super) fn resume_session_arguments(kind: &str, session_id: &str) -> Option<V
 /// beside them and only the status changes; dependencies and sub-issues that
 /// could not be read keep the ones read before. This machine's answers and a
 /// node's go through it alike.
+///
+/// The repository's identity a pass did not read is the one read before only
+/// where nothing says the pass reads another repository: a pass that read
+/// its list keeps it when a pull request reference it read, or the
+/// repository its place names, is that repository; a failed pass keeps it
+/// with the list and issues it keeps unless its place names another
+/// repository or host.
 fn keep_previous_reads(
     answer: &mut crate::model::GithubSnapshot,
     previous: &crate::model::GithubSnapshot,
+    request: &crate::code_host::read::GithubRequest,
 ) {
     for project in &mut answer.projects {
+        if project.repository.is_none()
+            && let Some(identity) = previous
+                .project(&project.root_path)
+                .and_then(|previous| previous.repository.as_ref())
+        {
+            let place = request
+                .projects
+                .iter()
+                .find(|asked| asked.root.to_string_lossy() == project.root_path)
+                .and_then(|asked| asked.place.as_ref());
+            let named = place
+                .and_then(crate::code_host::Place::repository)
+                .is_some_and(|repository| same_repository(repository, &identity.repository));
+            let referenced = project.pull_requests_read
+                && project.pull_requests.iter().any(|pull| {
+                    pull.reference.as_ref().is_some_and(|reference| {
+                        same_repository(&reference.repository, &identity.repository)
+                    })
+                });
+            let contradicted = place.is_some_and(|place| match place.repository() {
+                Some(repository) => !same_repository(repository, &identity.repository),
+                None => place.host().key() != identity.repository.host,
+            });
+            let failed = !project.pull_requests_read;
+            if named || referenced || (failed && !contradicted) {
+                project.repository = Some(identity.clone());
+            }
+        }
         if (project.status.stale || project.status.unavailable_reason.is_some())
             && let Some(previous) = previous.project(&project.root_path)
         {
@@ -5796,17 +5855,13 @@ fn keep_previous_reads(
                 // the questions that left them unknown stay named beside it.
                 project.status.unread_queries = previous.status.unread_queries.clone();
             }
+            // The previous issues are shown, as of their read; the part's own
+            // outcome stays this pass's, which the clocks and the store keep.
             if issues_missing
                 && (previous.issues_read == crate::model::PartRead::Read
                     || previous.status.last_success_at_unix_ms.is_some())
             {
                 project.issues = previous.issues.clone();
-                project.issues_read = crate::model::PartRead::Read;
-            }
-            // The repository's identity a failed pass could not read is the
-            // one read before: the link record keys on it.
-            if project.repository.is_none() {
-                project.repository = previous.repository.clone();
             }
             if incomplete {
                 project.status.stale = true;
@@ -5831,6 +5886,18 @@ fn keep_previous_reads(
             }
         }
     }
+}
+
+/// Whether two references name one repository: the same host, and the same
+/// server and path apart from ASCII case, which a server and GitHub's names
+/// ignore.
+fn same_repository(
+    one: &crate::code_host::RepositoryRef,
+    other: &crate::code_host::RepositoryRef,
+) -> bool {
+    one.host == other.host
+        && one.authority.eq_ignore_ascii_case(&other.authority)
+        && one.path.eq_ignore_ascii_case(&other.path)
 }
 
 /// The Overview card of `checkout`, whichever machine it is on.

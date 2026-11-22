@@ -1049,6 +1049,58 @@ fn a_node_s_github_project_lists_its_repository_s_issues_and_links_its_checkouts
         .find(|checkout| checkout.path == repo.linked)
         .unwrap();
     assert_eq!(linked.task_key.as_deref(), Some("github:acme/app#12"));
+    // The failed read is asked again on the first retry, though its answer
+    // was kept: the clock takes the answer's own outcome.
+    let retried = runtime.device_github_request(
+        NODE,
+        std::time::Instant::now() + std::time::Duration::from_secs(31),
+    );
+    assert_eq!(retried.projects[0].generation, first.wrapping_add(1));
+}
+
+/// A node read whose issues alone failed keeps the full wait: its pull
+/// requests were read.
+#[test]
+fn a_node_read_whose_issues_alone_failed_keeps_the_full_wait() {
+    let repo = repo(Some("https://github.com/acme/app.git"), "main");
+    let shared = node_runtime(
+        &repo,
+        FakeDevice::new(),
+        Recording::of(None),
+        Default::default(),
+    );
+    let mut runtime = shared.lock().unwrap();
+    let start = std::time::Instant::now();
+    let first = runtime.device_github_request(NODE, start).projects[0].generation;
+    let answer = |issues_read| crate::model::GithubSnapshot {
+        projects: vec![crate::model::GithubProjectSnapshot {
+            root_path: repo.root.clone(),
+            pull_requests_read: true,
+            issues_read,
+            status: crate::model::GithubStatusSnapshot {
+                available: true,
+                last_success_at_unix_ms: Some(5),
+                ..Default::default()
+            },
+            ..Default::default()
+        }],
+    };
+    runtime.ingest_device_github(NODE, &Default::default(), answer(crate::model::PartRead::Read));
+    runtime.ingest_device_github(NODE, &Default::default(), answer(crate::model::PartRead::Failed));
+    let later = start + std::time::Duration::from_secs(31);
+    assert_eq!(
+        runtime.device_github_request(NODE, later).projects[0].generation,
+        first
+    );
+    assert_eq!(
+        runtime
+            .device_github
+            .get(NODE)
+            .and_then(|github| github.project(&repo.root))
+            .map(|project| project.issues_read),
+        Some(crate::model::PartRead::Failed),
+        "the kept answer keeps the part's own outcome"
+    );
 }
 
 /// Choosing a node project's issue source in Settings moves its board to
@@ -1120,6 +1172,47 @@ fn a_node_project_says_when_this_machine_s_gh_is_signed_out() {
             source.reading
         ),
         ("github", Some("gh auth login"), false)
+    );
+}
+
+/// A node's origin is named by this core's registered hosts: with GitHub
+/// alone a nested path names no repository, as before hosts, and the
+/// base-only host reads the same address by its name.
+#[test]
+fn a_node_s_origin_is_named_by_the_registered_hosts() {
+    let repo = repo(Some("https://code.example/group/sub/project.git"), "feature");
+    let shared = node_runtime(
+        &repo,
+        FakeDevice::new(),
+        Recording::of(None),
+        Default::default(),
+    );
+    let mut runtime = shared.lock().unwrap();
+    let named = |runtime: &mut Runtime| {
+        runtime
+            .device_github_request(NODE, std::time::Instant::now())
+            .projects
+            .iter()
+            .filter_map(|project| project.place.as_ref())
+            .map(|place| (place.host().key(), place.stored_name()))
+            .collect::<Vec<_>>()
+    };
+    assert_eq!(named(&mut runtime), Vec::new());
+    runtime.code_hosts = crate::code_host::tests::BOTH;
+    let project = runtime.device_worktrees[NODE].projects[&repo.root].clone();
+    runtime.device_worktrees.get_mut(NODE).unwrap().in_flight = Some(99);
+    runtime.ingest_device_worktrees(
+        NODE,
+        99,
+        crate::runtime::device_catalog::WorktreesAnswer {
+            answers: vec![(repo.root.clone(), Some(project))],
+            notes: Vec::new(),
+            failure: None,
+        },
+    );
+    assert_eq!(
+        named(&mut runtime),
+        vec![("plain", Some("code.example/group/sub/project".to_owned()))]
     );
 }
 

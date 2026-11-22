@@ -1611,3 +1611,49 @@ fn read_origin(
     }
     Ok(slot)
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// A node that must not be asked anything.
+    struct NoCall;
+
+    impl NodeLink for NoCall {
+        fn call(
+            &self,
+            call: Call,
+            _timeout: std::time::Duration,
+        ) -> Result<crate::node_access::LinkAnswer, crate::node_access::LinkError> {
+            panic!("a host without issues was asked: {call:?}");
+        }
+    }
+
+    /// An issue is made only where the project's host keeps issues; another
+    /// host's project is refused before anything is sent.
+    #[test]
+    fn an_issue_for_a_host_without_issues_is_refused_with_nothing_sent() {
+        let place = crate::code_host::tests::BOTH
+            .place_of("code.example/acme/app")
+            .unwrap();
+        let key = AttemptKey::Intent(BacklogIntent {
+            intent: "i-1".into(),
+            device: "local".into(),
+            project: "/repo".into(),
+            workspace_id: "w".into(),
+        });
+        let made = create_once(
+            &LinkClient::full_mailbox_for_test(),
+            &key,
+            &NoCall,
+            &place,
+            "Title",
+            &CancelToken::new(),
+        );
+        assert!(
+            matches!(made, Err(BacklogFailure::NoGithubRemote)),
+            "{:?}",
+            made.err()
+        );
+    }
+}

@@ -797,10 +797,16 @@ impl Runtime {
         answer: WorktreesAnswer,
     ) -> bool {
         let WorktreesAnswer {
-            answers,
+            mut answers,
             notes,
             failure,
         } = answer;
+        // A device's origin is named by this core's registered hosts.
+        for project in answers.iter_mut().filter_map(|(_, project)| project.as_mut()) {
+            project.repository = project.origin_url.as_deref().and_then(|origin| {
+                crate::worktrees::origin_repository(self.code_hosts, origin)
+            });
+        }
         let Some(entry) = self.device_worktrees.get_mut(target) else {
             return false;
         };

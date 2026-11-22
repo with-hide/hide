@@ -114,6 +114,37 @@ fn github_remotes(urls: &[String]) -> Option<Vec<String>> {
     Some(remotes)
 }
 
+/// Each remote URL that names a server, without the user and password a
+/// `scheme://` address can carry, sorted: a code host's unit reads the
+/// repository from it, and a token stays on this machine. An scp-like
+/// `user@host:path` keeps its user, which names an account, never a secret.
+fn remote_addresses(urls: &[String]) -> Vec<String> {
+    let mut addresses: Vec<String> = urls
+        .iter()
+        .filter(|url| !names_local_path(url))
+        .map(|url| without_credentials(url.trim()))
+        .collect();
+    addresses.sort();
+    addresses.dedup();
+    addresses
+}
+
+fn without_credentials(url: &str) -> String {
+    let Some((scheme, rest)) = url.split_once("://") else {
+        return url.to_owned();
+    };
+    let (authority, path) = rest.split_once('/').map_or((rest, None), |(authority, path)| {
+        (authority, Some(path))
+    });
+    let host = authority
+        .rsplit_once('@')
+        .map_or(authority, |(_, host)| host);
+    match path {
+        Some(path) => format!("{scheme}://{host}/{path}"),
+        None => format!("{scheme}://{host}"),
+    }
+}
+
 /// Whether Git reads a remote URL as a local path: `file://`, or no
 /// `scheme://` and no `host:` before the first `/` (Git's
 /// `url_is_local_not_ssh`), a drive letter (`C:\`) being a path too.
@@ -161,6 +192,10 @@ fn read(native: &Path, facts: &mut PathFacts, bytes: &mut usize) -> PathFact {
             if let Some(remotes) = remote_urls.as_deref().and_then(github_remotes) {
                 *bytes = bytes.saturating_add(remotes.iter().map(String::len).sum::<usize>());
                 facts.remotes.insert(main_root.clone(), remotes);
+            }
+            if let Some(addresses) = remote_urls.as_deref().map(remote_addresses) {
+                *bytes = bytes.saturating_add(addresses.iter().map(String::len).sum::<usize>());
+                facts.remote_addresses.insert(main_root.clone(), addresses);
             }
         }
         RepositoryPlace {
@@ -308,6 +343,30 @@ mod tests {
         assert!(
             remotes("[include]\n\tpath = more\n").is_empty(),
             "an include may name a remote: unknown"
+        );
+        let addresses = |config: &str| {
+            std::fs::write(git.join("config"), config).unwrap();
+            path_facts(&asked).unwrap().remote_addresses
+        };
+        assert_eq!(
+            addresses(concat!(
+                "[remote \"origin\"]\n\turl = https://oauth2:secret@code.example/group/sub/project.git\n",
+                "[remote \"ssh\"]\n\turl = git@code.example:group/sub/project.git\n",
+                "[remote \"mirror\"]\n\turl = /srv/git/app.git\n",
+            )),
+            [(
+                path::to_wire_lossy(&root),
+                vec![
+                    "git@code.example:group/sub/project.git".to_owned(),
+                    "https://code.example/group/sub/project.git".to_owned(),
+                ]
+            )]
+            .into(),
+            "every server's address, any shape, without its token or a local path"
+        );
+        assert!(
+            addresses("[include]\n\tpath = more\n").is_empty(),
+            "listed for the same repositories as the names"
         );
         for url in [
             "http://github.com/acme/app.git",

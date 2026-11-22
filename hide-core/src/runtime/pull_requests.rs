@@ -1291,3 +1291,35 @@ fn write_closing_line(
         .ok_or_else(|| "The project's host does not edit a body".to_owned())?
         .write_closing_line(node, place, number, issue)
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// A node that must not be asked anything.
+    struct NoCall;
+
+    impl crate::node_access::NodeLink for NoCall {
+        fn call(
+            &self,
+            call: hide_node_link::protocol::Call,
+            _timeout: std::time::Duration,
+        ) -> Result<crate::node_access::LinkAnswer, crate::node_access::LinkError> {
+            panic!("a host without the operation was asked: {call:?}");
+        }
+    }
+
+    /// A card write its host does not offer is refused before anything is
+    /// sent.
+    #[test]
+    fn a_card_write_its_host_does_not_offer_is_refused_with_nothing_sent() {
+        let place = crate::code_host::tests::BOTH
+            .place_of("code.example/acme/app")
+            .unwrap();
+        for write in [CardWrite::Merge { method: None }, CardWrite::UpdateBranch] {
+            let refused = run_card_write(&NoCall, &place, 3, &write, "abc").unwrap_err();
+            assert_eq!(refused.reason, "failed", "{write:?}");
+        }
+        assert!(write_closing_line(&NoCall, &place, 3, 7).is_err());
+    }
+}
