@@ -18,7 +18,7 @@ use std::collections::VecDeque;
 use std::sync::Mutex;
 
 use super::*;
-use crate::code_host::{ByNumber, CodeHost, CodeHosts, HeadMerge, MergeProof};
+use crate::code_host::{ByNumber, CodeHost, CodeHosts, HeadMerge, MergeProof, MergedHeads};
 use crate::gitlab::host;
 use hide_node_link::glab::GlabAnswer;
 use hide_node_link::{ErrorCode, HostError, LinkError};
@@ -280,6 +280,96 @@ fn a_lost_read_after_a_write_is_unreachable_and_asking_again_succeeds_with_one_w
     assert_eq!(node.merges_sent(), 1);
 }
 
+/// Once the merge line may have left, a read after it that cannot say what
+/// happened, for any reason, leaves the outcome not known (`unreachable`,
+/// read again at once), never `failed`; and asking again never writes over
+/// a merge whose outcome is not known to be "did not happen": still locked,
+/// it writes nothing; merged at the head, it succeeds. One write in all.
+#[test]
+fn an_answer_after_the_write_that_settles_nothing_is_not_known_and_asking_again_writes_nothing() {
+    let head = head_of(MERGED_SQUASH);
+    let locked = edited(MERGED_SQUASH, |item| item["state"] = "locked".into());
+    let too_large: Answer = Ok(serde_json::to_value(GlabAnswer::Output {
+        stdout: "[".to_owned(),
+        cut: true,
+    })
+    .unwrap()
+    .into());
+    let signed_out: Answer = Ok(serde_json::to_value(GlabAnswer::Failed {
+        category: GithubFailureCategory::NotLoggedIn,
+        reason: "401 Unauthorized".to_owned(),
+    })
+    .unwrap()
+    .into());
+    let scenes: Vec<(&str, Vec<Answer>)> = vec![
+        ("unreadable", vec![output("<html>a proxy page</html>")]),
+        ("too large", vec![too_large]),
+        ("sign-in lost", vec![signed_out]),
+        ("no such merge request", vec![output("[]")]),
+        ("still locked", vec![output(&locked), output(&locked)]),
+    ];
+    for (scene, after) in scenes {
+        let mut reads = vec![output(&open_squash_scene())];
+        reads.extend(after);
+        // Asked again while gitlab.com still merges it: nothing is written.
+        reads.push(output(&locked));
+        // Asked again once it landed: a success with nothing written.
+        reads.push(output(MERGED_SQUASH));
+        let node = Scripted::new(reads, vec![output("✓ Merged!\n")]);
+        let first = merge_with(&node, Some(PrMergeMethod::Merge), &head).unwrap_err();
+        assert_eq!(
+            (first.reason, first.read_again),
+            ("unreachable", true),
+            "{scene}"
+        );
+        let running = merge_with(&node, Some(PrMergeMethod::Merge), &head).unwrap_err();
+        assert_eq!(running.reason, "unreachable", "{scene}");
+        assert_eq!(
+            merge_with(&node, Some(PrMergeMethod::Merge), &head),
+            Ok(()),
+            "{scene}"
+        );
+        assert_eq!(node.merges_sent(), 1, "{scene}");
+    }
+}
+
+/// The unit says when the card and the list are read again: after a write
+/// whose answer may mean the merge request moved (a moved head, auto-merge
+/// set, an outcome not known), and not after a refusal that changed nothing
+/// or a read that failed before anything was written.
+#[test]
+fn the_unit_asks_to_read_again_only_where_the_merge_request_may_have_moved() {
+    let head = head_of(MERGED_SQUASH);
+    let failure = |reads: Vec<Answer>, writes: Vec<Answer>| {
+        let node = Scripted::new(reads, writes);
+        let failure = merge_with(&node, Some(PrMergeMethod::Merge), &head).unwrap_err();
+        (failure.reason, failure.read_again)
+    };
+    let moved = edited(&open_squash_scene(), |item| {
+        item["sha"] = "b".repeat(40).into()
+    });
+    assert_eq!(failure(vec![output(&moved)], vec![]), ("head_moved", true));
+    let auto = edited(&open_squash_scene(), |item| {
+        item["merge_when_pipeline_succeeds"] = true.into();
+    });
+    assert_eq!(
+        failure(
+            vec![output(&open_squash_scene()), output(&auto)],
+            vec![output("")]
+        ),
+        ("auto_merge", true)
+    );
+    let closed = edited(&open_squash_scene(), |item| item["state"] = "closed".into());
+    assert_eq!(
+        failure(vec![output(&closed)], vec![]),
+        ("not_mergeable", false)
+    );
+    assert_eq!(
+        failure(vec![glab_failed("connection reset")], vec![]),
+        ("unreachable", false)
+    );
+}
+
 /// An old phone bundle sends GitHub's shapes: a queue join (no method) or a
 /// squash or rebase. gitlab.com offers none of them, so the core refuses
 /// with nothing sent; the merge request's own merge is the one it takes.
@@ -467,10 +557,13 @@ fn a_branchs_merged_merge_requests_prove_its_heads_and_their_targets() {
         .unwrap();
     assert_eq!(
         heads,
-        vec![MergedHead {
-            head_oid: head_of(MERGED_SQUASH),
-            base_ref: "main".to_owned(),
-        }]
+        MergedHeads {
+            heads: vec![MergedHead {
+                head_oid: head_of(MERGED_SQUASH),
+                base_ref: "main".to_owned(),
+            }],
+            cut: false,
+        }
     );
     assert!(host::GITLAB.merged_heads(&node, &place(), "-x").is_err());
 }

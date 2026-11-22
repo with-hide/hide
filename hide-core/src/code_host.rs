@@ -816,12 +816,16 @@ pub(crate) struct CardRead {
     pub times_unread: Vec<&'static str>,
 }
 
-/// Why a write from a card did not happen: a code the card words, and the
-/// host's own text for the diagnostic log.
+/// Why a write from a card did not happen: a code the card words, the
+/// host's own text for the diagnostic log, and whether the change request
+/// is to be read again now, which the unit decides (its state may have
+/// moved, or the write may have landed unseen) and the core follows by one
+/// rule that names no host and no reason.
 #[derive(Debug, Eq, PartialEq)]
 pub(crate) struct WriteFailure {
     pub reason: &'static str,
     pub detail: String,
+    pub read_again: bool,
 }
 
 pub(crate) trait HeadMerge: Sync {
@@ -862,6 +866,15 @@ pub(crate) trait EditBody: Sync {
     ) -> Result<bool, String>;
 }
 
+/// A branch's merged change requests as its host answered them: their
+/// exact heads, and whether the host's page may have cut an older one, so
+/// that a head not found in a cut answer is not known, never not merged.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(crate) struct MergedHeads {
+    pub heads: Vec<MergedHead>,
+    pub cut: bool,
+}
+
 /// The exact head and base of a merged change request.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(crate) struct MergedHead {
@@ -889,13 +902,14 @@ pub(crate) trait MergeProof: Sync {
         head: &str,
     ) -> Result<bool, String>;
 
-    /// The exact heads and bases of the merged change requests of `branch`.
+    /// The exact heads and bases of the merged change requests of `branch`,
+    /// and whether the answer was cut.
     fn merged_heads(
         &self,
         node: &dyn NodeLink,
         place: &Place,
         branch: &str,
-    ) -> Result<Vec<MergedHead>, String>;
+    ) -> Result<MergedHeads, String>;
 }
 
 pub(crate) trait BasePolicy: Sync {

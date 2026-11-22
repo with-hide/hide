@@ -12,7 +12,7 @@ use super::Where;
 use crate::code_host::{
     BasePolicy, ByNumber, CardRead, ChangeHead, ChangeHeadFailure, ChangeRequestPage, CodeHost,
     CommitChecks, CreateFailure, EditBody, FailedLog, Feedback, Handover, HeadMerge, HostAccess,
-    HostFailure, HostReads, Issues, JobLog, MergeProof, MergedHead, Place, ReadClock,
+    HostFailure, HostReads, Issues, JobLog, MergeProof, MergedHeads, Place, ReadClock,
     RepositoryRef, Search, SearchTarget, Standing, UpdateBranch, Watch, WatchAnswer, WatchReader,
     WatchRequest, WriteFailure,
 };
@@ -321,8 +321,11 @@ impl MergeProof for Github {
         node: &dyn NodeLink,
         place: &Place,
         branch: &str,
-    ) -> Result<Vec<MergedHead>, String> {
+    ) -> Result<MergedHeads, String> {
+        // GitHub's list is judged whole, as it was before the answer could
+        // say it was cut.
         super::merged_pull_request_proofs(node, &where_of(place), branch)
+            .map(|heads| MergedHeads { heads, cut: false })
     }
 }
 

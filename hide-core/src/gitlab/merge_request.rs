@@ -18,8 +18,8 @@ use serde::Deserialize;
 use super::budget::{self, Share};
 use super::{Refusal, glab, glab_taken, repository_of};
 use crate::code_host::{
-    ChangeHead, ChangeHeadFailure, HeadMerge, MergeProof, MergedHead, Place, RepositoryRef,
-    Standing, WriteFailure,
+    ChangeHead, ChangeHeadFailure, HeadMerge, MergeProof, MergedHead, MergedHeads, Place,
+    RepositoryRef, Standing, WriteFailure,
 };
 use crate::model::GithubFailureCategory;
 use crate::node_access::NodeLink;
@@ -104,6 +104,10 @@ fn repository(place: &Place) -> Result<&RepositoryRef, String> {
     repository_of(place).ok_or_else(|| "the checkout names no gitlab.com project".to_owned())
 }
 
+/// The answer once the merge line may have left and nothing says whether it
+/// landed: the host's outcome is unknown, never a failure.
+const UNKNOWN: &str = "unreachable";
+
 /// What the read before a merge allows.
 #[derive(Debug, Eq, PartialEq)]
 enum Before {
@@ -125,17 +129,21 @@ fn before(item: Option<&Item>, head: &str) -> Before {
         State::Merged => Before::Refused("head_moved"),
         _ if !item.at(head) => Before::Refused("head_moved"),
         State::Closed => Before::Refused("not_mergeable"),
-        // Its merge is running; the read after a write would say the same.
-        State::Locked => Before::Refused("failed"),
+        // A merge is running and has not landed yet: its outcome is not
+        // known, and nothing is written over it.
+        State::Locked => Before::Refused(UNKNOWN),
         State::Opened => Before::Write,
     }
 }
 
 /// What the merge request's state after the merge line says happened; the
-/// line's own answer goes to the log only.
+/// line's own answer goes to the log only. A state that cannot say whether
+/// the merge landed (no such merge request in the answer, or gitlab.com
+/// still merging it) is `unreachable`: the outcome is unknown, and asking
+/// again reads it before writing anything.
 fn after(item: Option<&Item>, head: &str) -> Result<(), &'static str> {
     let Some(item) = item else {
-        return Err("failed");
+        return Err(UNKNOWN);
     };
     if !item.at(head) {
         return Err("head_moved");
@@ -143,7 +151,7 @@ fn after(item: Option<&Item>, head: &str) -> Result<(), &'static str> {
     match item.state {
         State::Merged => Ok(()),
         State::Closed => Err("not_mergeable"),
-        State::Locked => Err("failed"),
+        State::Locked => Err(UNKNOWN),
         State::Opened if item.merge_when_pipeline_succeeds => Err("auto_merge"),
         State::Opened => Err(open_reason(item)),
     }
@@ -173,7 +181,15 @@ fn merge(
     head: &str,
     account: &std::sync::Mutex<budget::Budget>,
 ) -> Result<(), WriteFailure> {
-    let refused = |reason: &'static str, detail: String| WriteFailure { reason, detail };
+    // Whether the merge request is to be read again now is this unit's
+    // call: when its state may have moved (a moved head, a merge running or
+    // landed unseen, auto-merge set), the card and the list are read again.
+    let answer = |reason: &'static str, detail: String, read_again: bool| WriteFailure {
+        reason,
+        detail,
+        read_again,
+    };
+    let refused = |reason: &'static str, detail: String| answer(reason, detail, false);
     // gitlab.com has no merge queue to join, and its squash and rebase are
     // the merge request's and the project's settings, not a choice at the
     // button: one asked of it (an old phone's queue join, a GitHub method)
@@ -207,9 +223,10 @@ fn merge(
     match before(first.as_ref(), head) {
         Before::Done => return Ok(()),
         Before::Refused(reason) => {
-            return Err(refused(
+            return Err(answer(
                 reason,
                 format!("before writing, gitlab.com read it as {first:?}"),
+                matches!(reason, "head_moved" | UNKNOWN),
             ));
         }
         Before::Write => {}
@@ -218,9 +235,12 @@ fn merge(
     if let Err(Refusal::Unsupported(reason)) = &wrote {
         return Err(refused("unsupported", reason.clone()));
     }
+    // The line may have left: a read that cannot answer, for whatever reason,
+    // leaves the merge's outcome unknown, not failed.
+    let unknown = |refusal: Refusal| answer(UNKNOWN, refusal.reason(), true);
     let mut last = None;
     for _ in 0..2 {
-        let item = read(node, repository, number, None).map_err(unread)?;
+        let item = read(node, repository, number, None).map_err(unknown)?;
         let locked = item
             .as_ref()
             .is_some_and(|item| item.state == State::Locked);
@@ -231,7 +251,7 @@ fn merge(
     }
     let item = last.flatten();
     after(item.as_ref(), head).map_err(|reason| {
-        refused(
+        answer(
             reason,
             format!(
                 "the merge line answered {}; gitlab.com then read it as {item:?}",
@@ -240,6 +260,7 @@ fn merge(
                     Err(refusal) => refusal.reason(),
                 }
             ),
+            matches!(reason, "head_moved" | "auto_merge" | UNKNOWN),
         )
     })
 }
@@ -298,14 +319,14 @@ impl MergeProof for super::host::Gitlab {
     }
 
     /// The merged merge requests of `branch`, newest first: at most
-    /// [`MERGED_LIMIT`], and a full page says it may have been cut, since an
-    /// older merge past it is then not proved, never disproved.
+    /// [`MERGED_LIMIT`], and a full page says it may have been cut, so an
+    /// older merge past it is not known, never disproved.
     fn merged_heads(
         &self,
         node: &dyn NodeLink,
         place: &Place,
         branch: &str,
-    ) -> Result<Vec<MergedHead>, String> {
+    ) -> Result<MergedHeads, String> {
         let repository = repository(place)?;
         let arguments = merged_arguments(&repository.path, branch)
             .ok_or_else(|| format!("the branch {branch:?} cannot be named to gitlab.com"))?;
@@ -316,20 +337,24 @@ impl MergeProof for super::host::Gitlab {
             )
         })?;
         let items = parse_items(&output)?;
-        if items.len() >= MERGED_LIMIT {
+        // A full page may have cut an older merge of this branch: the
+        // answer says so, and what it holds still proves.
+        let cut = items.len() >= MERGED_LIMIT;
+        if cut {
             crate::diagnostic!(serde_json::json!({
                 "component": "gitlab", "kind": "merge_proof.cut",
                 "limit": MERGED_LIMIT,
             }));
         }
-        Ok(items
+        let heads = items
             .into_iter()
             .filter(|item| item.state == State::Merged)
             .map(|item| MergedHead {
                 head_oid: item.sha,
                 base_ref: item.target_branch,
             })
-            .collect())
+            .collect();
+        Ok(MergedHeads { heads, cut })
     }
 }
 

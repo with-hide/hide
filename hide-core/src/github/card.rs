@@ -299,6 +299,7 @@ pub(crate) fn run_write(
     let refused = |detail: &str| WriteFailure {
         reason: "failed",
         detail: detail.to_owned(),
+        read_again: false,
     };
     let arguments = match write {
         Write::Merge {
@@ -325,6 +326,11 @@ pub(crate) fn run_write(
                     reason
                 },
                 detail: failure.reason,
+                // A moved head means the card shows an old pull request,
+                // and a branch update that conflicted has made the row a
+                // conflict: the core reads it again, as it always has.
+                read_again: reason == "head_moved"
+                    || (matches!(write, Write::UpdateBranch { .. }) && reason == "conflict"),
             }),
         },
     }

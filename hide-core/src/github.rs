@@ -4108,7 +4108,30 @@ mod tests {
             Err(crate::code_host::WriteFailure {
                 reason: "not_mergeable",
                 detail: blocked.to_owned(),
+                read_again: false,
             })
+        );
+
+        // GitHub's unit asks the core to read again exactly where it always
+        // did: a moved head on any write, and a conflict a branch update
+        // made; never after an unknown answer or another refusal.
+        let read_again = |result: Result<(), crate::code_host::WriteFailure>| {
+            let failure = result.unwrap_err();
+            (failure.reason, failure.read_again)
+        };
+        assert_eq!(
+            read_again(merge(&refused(
+                "Head branch was modified. Review and try the merge again."
+            ))),
+            ("head_moved", true)
+        );
+        assert_eq!(
+            read_again(merge(&refused("Pull request has merge conflicts"))),
+            ("conflict", false)
+        );
+        assert_eq!(
+            read_again(merge(&refused("dial tcp: connection refused"))),
+            ("unreachable", false)
         );
 
         let named = |words: &[&str]| {
@@ -4143,6 +4166,14 @@ mod tests {
             named,
         );
         assert_eq!(update(&late).unwrap_err().reason, "failed");
+        let conflicted = Answering::refusing(
+            (
+                GithubFailureCategory::NetworkOrRateLimit,
+                "merge conflict between base and head",
+            ),
+            named,
+        );
+        assert_eq!(read_again(update(&conflicted)), ("conflict", true));
         // A repository `gh` cannot name takes no write.
         let unnamed = refused("HTTP 404: Not Found");
         assert_eq!(update(&unnamed).unwrap_err().reason, "failed");

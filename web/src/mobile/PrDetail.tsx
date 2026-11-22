@@ -309,7 +309,7 @@ function WriteLine({ pr, connected }: { pr: PhonePr; connected: boolean }) {
   const reason = write.reason ?? "failed";
   return (
     <p role="alert" className="flex flex-wrap items-center gap-sm text-body text-warning" data-phone-pr-write="failed" data-phone-pr-write-reason={reason}>
-      <span className="min-w-0 break-keep wrap-anywhere">{t(`work.card.fail.${reason}`, { base: pr.base_branch ?? "" })}</span>
+      <span className="min-w-0 break-keep wrap-anywhere">{t(`work.card.fail.${reason}`, { base: pr.base_branch ?? "", host: pr.card?.host?.name ?? "GitHub" })}</span>
       <Button size="sm" variant="secondary" className="min-h-(--size-touch-target)" disabled={!connected || pr.card?.reading === true} onClick={lookAgainPr} data-phone-pr-look-again="true">
         {t("work.card.lookAgain")}
       </Button>

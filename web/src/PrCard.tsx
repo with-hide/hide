@@ -365,7 +365,7 @@ function WriteLine({ write, base, card, actions, projectId, number }: { write: P
   const reason = write.reason ?? "failed";
   return (
     <p role="alert" className="flex flex-wrap items-center gap-sm text-caption text-warning" data-pr-card-write="failed" data-pr-card-write-reason={reason}>
-      <span>{t(`work.card.fail.${reason}`, { base })}</span>
+      <span>{t(`work.card.fail.${reason}`, { base, host: card?.host?.name ?? "GitHub" })}</span>
       <Button size="sm" variant="secondary" disabled={card?.reading === true} onClick={() => actions.lookAgainPrCard(projectId, number)} data-pr-card-look-again="true">{t("work.card.lookAgain")}</Button>
     </p>
   );
