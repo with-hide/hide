@@ -878,6 +878,13 @@ It is ignored only because it needs that release; the rust lane's `Every gh comm
 A new shape in `hide_node_link::gh::allowed` gets a line there, and a field or flag only a newer `gh` knows fails it until the minimum, the script's version and digest move together.
 Run it locally with `HIDE_TEST_GH_BIN=$(bash scripts/fetch-gh.sh <folder>) bash scripts/verify-cargo.sh nextest -p hide-host --lib -E 'test(=gh::tests::every_command_line_parses_on_the_oldest_gh_hide_supports)' --run-ignored only`.
 
+### The oldest glab Hide supports
+
+`hide-host/src/glab.rs`'s `every_command_line_parses_on_the_oldest_glab_hide_supports` does for `glab` what the gh test above does: every line the node may run `glab` with, built by the same builders, runs against `hide_node_link::glab::MINIMUM_VERSION`, which `scripts/fetch-glab.sh` downloads against its pinned digests, and stops at a proxy that refuses every connection.
+It is ignored only because it needs that release; the rust lane's `Every glab command line on the oldest glab Hide supports` step runs it whenever `hide-host` is planned.
+A new shape in `hide_node_link::glab::allowed` gets a line there, and a flag only a newer `glab` knows fails it until the minimum, the script's version and digests move together.
+Run it locally with `HIDE_TEST_GLAB_BIN=$(bash scripts/fetch-glab.sh <folder>) bash scripts/verify-cargo.sh nextest -p hide-host --lib -E 'test(=glab::tests::every_command_line_parses_on_the_oldest_glab_hide_supports)' --run-ignored only`.
+
 ### The user docs
 
 `site/` is one Astro project: `site/public/` is the landing page, served at `/` byte for byte as it is on disk, and Starlight serves the user docs at `/docs` from `site/src/content/docs/docs/{start,guides,features,reference}/`.
