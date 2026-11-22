@@ -17,10 +17,11 @@
 //! one document with the files it names folded in (`html_look.rs`), which the
 //! phone draws itself.
 //!
-//! Content leaves as JSON text, so bytes travel as base64 chunks small
-//! enough for one relay message (`CHUNK`), at most `WINDOW` of them ahead of
-//! what the phone confirmed (`look_ack`): the relay closes a peer whose
-//! queue fills, so a transfer is paced by the phone and never by a timer.
+//! Content leaves as JSON text, so bytes travel as base64 chunks of one relay
+//! frame each (`CHUNK`), at most `WINDOW` of them ahead of what the phone
+//! confirmed (`look_ack`): the relay drops a phone whose eight-frame queue
+//! fills (`TRANSFER_FRAMES`), so a transfer is paced by the phone and never
+//! by a timer.
 
 use std::sync::Arc;
 
@@ -28,6 +29,7 @@ use axum::extract::ws::Message;
 use base64::Engine as _;
 use base64::engine::general_purpose::STANDARD;
 use hide_core::{ChangedFileStatus, DisplayKind, LookChange, LookView, LookViews};
+use hide_relay_protocol::{frame::MAX_QUEUED_FRAMES, noise::CHUNK_DATA};
 use serde_json::{Value, json};
 use tokio::sync::{mpsc, watch};
 
@@ -42,11 +44,24 @@ use crate::server;
 pub const TEXT_CAP: u64 = 1024 * 1024;
 /// The largest image a phone is sent (D-10).
 pub const IMAGE_CAP: u64 = 10 * 1024 * 1024;
-/// Raw bytes in one chunk: 96 KiB is 128 KiB of base64, half of the relay's
-/// 256 KiB message.
-const CHUNK: usize = 96 * 1024;
+/// A `look_chunk` frame's text beside its base64: its type, a request id of
+/// at most 64 characters (`request`), a sequence number and the JSON around
+/// them.
+const CHUNK_FRAME_EXTRA: usize = 160;
+/// Raw bytes in one chunk: the most whose frame is one relay frame, in whole
+/// three-byte groups, so the phone joins the chunks' base64 as one text.
+const CHUNK: usize = (CHUNK_DATA - CHUNK_FRAME_EXTRA) / 4 * 3;
 /// Chunks sent ahead of the phone's last `look_ack`.
 const WINDOW: u64 = 4;
+/// The relay frames one transfer can have queued for a phone that reads
+/// nothing: its head, `WINDOW` chunks and its end. The relay refuses a phone
+/// whose queue fills and drops it from the room, so the transfer keeps two of
+/// the socket's frames free for what the phone is sent beside it (a list, a
+/// reply).
+const TRANSFER_FRAMES: usize = 1 + WINDOW as usize + 1;
+const _: () = assert!(CHUNK % 3 == 0);
+const _: () = assert!(CHUNK.div_ceil(3) * 4 + CHUNK_FRAME_EXTRA <= CHUNK_DATA);
+const _: () = assert!(TRANSFER_FRAMES + 2 <= MAX_QUEUED_FRAMES);
 /// Changed files a list names; the totals still count every file.
 const CHANGE_FILES: usize = 200;
 /// Characters of a name, an address or a folder one frame carries, so the
@@ -482,23 +497,12 @@ async fn read(
                 }
             }
             Message::Text(text) => {
-                let reason = serde_json::from_str::<Value>(&text)
-                    .ok()
-                    .and_then(|frame| {
-                        frame
-                            .pointer("/payload/reason")
-                            .and_then(Value::as_str)
-                            .map(str::to_owned)
-                    })
-                    .unwrap_or_default();
+                let reason = refusal_reason(&text);
                 hide_core::diagnostic!(json!({
                     "component": "mobile_phone", "kind": "look.read_refused",
                     "view_id": view.display_id, "reason": reason,
                 }));
-                break Err(match reason.as_str() {
-                    "too_large" => "too_large",
-                    _ => "failed",
-                });
+                break Err(refusal_state(&reason));
             }
             _ => break Err("failed"),
         }
@@ -591,6 +595,33 @@ fn link_state(link: Result<(), String>, view_id: &str) -> Option<&'static str> {
         "view_id": view_id, "reason": reason,
     }));
     Some("device_unreachable")
+}
+
+/// Why the readers' text frame (`path_refused`, `file_bytes_error`) refused
+/// a read.
+fn refusal_reason(text: &str) -> String {
+    serde_json::from_str::<Value>(text)
+        .ok()
+        .and_then(|frame| {
+            frame
+                .pointer("/payload/reason")
+                .and_then(Value::as_str)
+                .map(str::to_owned)
+        })
+        .unwrap_or_default()
+}
+
+/// The `look_result` state for why the readers refused a file: one that is
+/// gone since the View opened is `not_found`, one outside every checkout this
+/// Mac reads is `outside_roots`, and the phone shows either as its reason with
+/// nothing to retry; any other refusal is a read that failed.
+fn refusal_state(reason: &str) -> &'static str {
+    match reason {
+        "too_large" => "too_large",
+        "not_found" => "not_found",
+        "outside_checkout" | "outside_home" => "outside_roots",
+        _ => "failed",
+    }
 }
 
 /// Whether the bytes of a text document are text: UTF-8, allowing the cut at
@@ -891,6 +922,87 @@ mod tests {
             (Some("look_end"), Some("d-1"))
         );
         task.await.unwrap();
+    }
+
+    /// A phone that reads nothing confirms nothing: everything the transfer
+    /// sends before it waits sits in the relay's queue for that phone, and
+    /// the relay drops a phone whose queue fills. Each frame is counted as the
+    /// relay counts it, by sealing it in a real session.
+    #[tokio::test]
+    async fn a_phone_that_reads_nothing_never_fills_its_relay_queue() {
+        use hide_relay_protocol::noise::{NoiseKeypair, Session};
+        let key = NoiseKeypair::generate().unwrap();
+        let mut phone = Session::initiator(&key.public_key(), 7).unwrap();
+        let mut device = Session::responder(&key, 7).unwrap();
+        device
+            .read_handshake(&phone.write_handshake().unwrap())
+            .unwrap();
+        phone
+            .read_handshake(&device.write_handshake().unwrap())
+            .unwrap();
+
+        let looked = view("photo.png", DisplayKind::File);
+        let (frames, mut sent) = mpsc::channel(64);
+        let (_acked, window) = watch::channel(0_u64);
+        // The largest image, under the longest request id a phone may send.
+        let request_id = "r".repeat(64);
+        let task = tokio::spawn(async move {
+            let read = Read {
+                bytes: vec![0x89; IMAGE_CAP as usize],
+                total: IMAGE_CAP,
+                page: None,
+            };
+            chunks(&request_id, &looked, Shown::Image, read, &frames, window).await;
+        });
+        let mut queued = 0;
+        while let Ok(Some(frame)) =
+            tokio::time::timeout(std::time::Duration::from_millis(200), sent.recv()).await
+        {
+            let relay_frames = device.send_message(frame.to_string().as_bytes()).unwrap();
+            if frame["type"] == "look_chunk" {
+                assert_eq!(relay_frames.len(), 1, "a chunk is one relay frame");
+            }
+            queued += relay_frames.len();
+        }
+        assert!(!task.is_finished(), "the transfer waits for the phone");
+        assert!(
+            queued + 2 <= MAX_QUEUED_FRAMES,
+            "{queued} frames queued for a phone that reads nothing"
+        );
+        task.abort();
+    }
+
+    /// A file deleted since its View opened, and one outside every checkout,
+    /// are answered with their reason, which the phone shows with nothing to
+    /// retry; the readers' answer is what `read` turns into the state.
+    #[tokio::test]
+    async fn a_file_gone_or_outside_every_checkout_is_answered_with_its_reason() {
+        let home = tempfile::tempdir().unwrap();
+        let checkout = home.path().join("checkout");
+        std::fs::create_dir(&checkout).unwrap();
+        std::fs::write(checkout.join("notes.md"), "# notes").unwrap();
+        std::fs::write(home.path().join("secret.md"), "no").unwrap();
+        let boundary = crate::boundary::Boundary::new(home.path()).unwrap();
+        boundary.set_roots(vec![crate::boundary::Root {
+            workspace_id: "w1".to_owned(),
+            checkout_id: "c1".to_owned(),
+            path: checkout.clone(),
+        }]);
+        let wire = |path: std::path::PathBuf| hide_platform::path::to_wire_lossy(&path);
+        for (path, state) in [
+            (wire(checkout.join("gone.md")), "not_found"),
+            (wire(home.path().join("secret.md")), "outside_roots"),
+        ] {
+            let event = json!({"payload": {"request_id": "r-1", "path": path, "offset": 0, "length": TEXT_CAP}});
+            let (mut sink, mut answers) = mpsc::channel::<Message>(2);
+            server::send_opened_file_bytes(&mut sink, &event, boundary.open_file(&path))
+                .await
+                .unwrap();
+            let Some(Message::Text(text)) = answers.recv().await else {
+                panic!("{path}: no refusal");
+            };
+            assert_eq!(refusal_state(&refusal_reason(&text)), state, "{path}: {text}");
+        }
     }
 
     #[tokio::test]

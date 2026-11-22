@@ -28,6 +28,9 @@ export type LookContent =
   /** The View is not open any more (B27). */
   | { state: "closed" }
   | { state: "device_unreachable" }
+  /** The file is gone since its View opened, or outside every checkout: its reason alone, since reading it again cannot help. */
+  | { state: "not_found" }
+  | { state: "outside_roots" }
   | { state: "failed" };
 
 /** The state a `look_result` stands for; a refusal or an agent that left is a failed read to the reader of the screen. */
@@ -39,6 +42,8 @@ export function resultContent(state: LookResultState, url: string | undefined): 
     case "too_large":
     case "closed":
     case "device_unreachable":
+    case "not_found":
+    case "outside_roots":
       return { state };
     default:
       return { state: "failed" };
@@ -126,7 +131,7 @@ export function finishAssembly(assembly: Assembly): LookContent | null {
   if (assembly.mode === "image" || assembly.mode === "page") {
     const mime = IMAGE_SIGNATURES.find((candidate) => candidate.matches(bytesOf(assembly.parts.slice(0, 1))))?.mime;
     if (!mime) return null;
-    // 96 KiB chunks hold whole base64 groups, so the parts join into one valid text.
+    // Each chunk holds whole base64 groups, so the parts join into one valid text.
     const url = `data:${mime};base64,${assembly.parts.join("")}`;
     return assembly.page ? { state: "shot", url, size: assembly.size, ...assembly.page } : { state: "image", url, size: assembly.size };
   }

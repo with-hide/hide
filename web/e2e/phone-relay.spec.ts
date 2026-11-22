@@ -4,7 +4,7 @@ import { expect, test as base, type Page } from "@playwright/test";
 import { WebSocket } from "ws";
 import qrcode from "qrcode-generator";
 import { screenshot } from "./wire";
-import { startPhoneRelay } from "./phone-relay-fixture";
+import { LOOK_CHUNK, LOOK_WINDOW, startPhoneRelay } from "./phone-relay-fixture";
 import { installBrowserPush } from "./phone-push-platform";
 import { PHONE_PROTOCOL } from "../src/mobile/phoneVersion";
 const test = base.extend<{ relay: Awaited<ReturnType<typeof startPhoneRelay>> }>({
@@ -384,6 +384,53 @@ try { parent.document.title; document.getElementById("parent").textContent = "pa
   expect(page.frames().map((child) => new URL(child.url(), relay.origin).pathname)).toContain(`/p/${PHONE_PROTOCOL}/look-frame.html`);
   expect(relay.received.filter((frame) => frame.type === "look_seen")).toMatchObject([{ view_id: "v-html" }]);
 });
+
+/** An uncompressed 24-bit BMP of `width` x `height` noise, so its size is its pixels and it spans many chunks. */
+function noiseBmp(width: number, height: number): Buffer {
+  const row = Math.ceil((width * 3) / 4) * 4;
+  const bmp = Buffer.alloc(54 + row * height);
+  bmp.write("BM", 0, "latin1");
+  bmp.writeUInt32LE(bmp.length, 2);
+  bmp.writeUInt32LE(54, 10);
+  bmp.writeUInt32LE(40, 14);
+  bmp.writeInt32LE(width, 18);
+  bmp.writeInt32LE(height, 22);
+  bmp.writeUInt16LE(1, 26);
+  bmp.writeUInt16LE(24, 28);
+  bmp.writeUInt32LE(row * height, 34);
+  let seed = 7;
+  for (let at = 54; at < bmp.length; at++) bmp[at] = seed = (seed * 1103515245 + 12345) & 0xff;
+  return bmp;
+}
+
+test("a large image arrives in many chunks, each confirmed, with no more than the window out at once", async ({ page, relay }) => {
+  const bytes = noiseBmp(320, 300);
+  const chunks = Math.ceil(bytes.length / LOOK_CHUNK);
+  expect(chunks).toBeGreaterThan(LOOK_WINDOW);
+  relay.state.look = { id: "v-image", kind: "image", name: "screen.bmp", mode: "image", bytes };
+  await pair(page, relay);
+  await page.locator('[data-phone-agent="test-device|pane-one"]').click();
+  await page.locator('[data-phone-view="looks"]').click();
+  await page.locator('[data-phone-look="v-image"]').click();
+  const image = page.locator('[data-phone-look-state="image"] img');
+  await expect(image).toBeVisible();
+  await expect.poll(() => image.evaluate((element: HTMLImageElement) => [element.naturalWidth, element.naturalHeight])).toEqual([320, 300]);
+  // The phone confirmed every chunk in order, and the device never ran past its window waiting for it.
+  expect(relay.received.filter((frame) => frame.type === "look_ack").map((frame) => frame.seq)).toEqual([...Array(chunks).keys()]);
+  expect(relay.wire.lookAhead).toBeLessThanOrEqual(LOOK_WINDOW);
+});
+
+for (const [state, title] of [["not_found", "This file isn't here now"], ["outside_roots", "This file can't be shown on the phone"]] as const) {
+  test(`a file the computer answers ${state} shows its reason and nothing to retry`, async ({ page, relay }) => {
+    relay.state.look = { id: "v-doc", kind: "doc", name: "release-notes-draft.md", result: state };
+    await pair(page, relay);
+    await page.locator('[data-phone-agent="test-device|pane-one"]').click();
+    await page.locator('[data-phone-view="looks"]').click();
+    await page.locator('[data-phone-look="v-doc"]').click();
+    await expect(page.locator(`[data-phone-look-state="${state}"]`)).toContainText(title);
+    await expect(page.locator("[data-phone-look-retry]")).toHaveCount(0);
+  });
+}
 
 // Reload, worker scopes and encrypted reconnect cross boundaries a component test cannot observe.
 test("the phone keeps receiving Off across reload and reconnect, and On registers again", async ({ page, relay }) => {

@@ -10,7 +10,13 @@ import { WebSocketServer, WebSocket } from "ws";
 import { fixtureExecutable } from "./platform-fixture.ts";
 import { ownUntilWorkerExit } from "./worker-owned.ts";
 import { PHONE_PROTOCOL } from "../src/mobile/phoneVersion";
-import type { PhoneAgent, ServerFrame } from "../src/mobile/protocol";
+import type { LookHead, LookResultState, LookRow, PhoneAgent, ServerFrame } from "../src/mobile/protocol";
+
+/** hided's chunk (`looks.rs`, `CHUNK`: the raw bytes whose frame is one relay frame) and its window of chunks ahead of the last ack. */
+export const LOOK_CHUNK = 49_008;
+export const LOOK_WINDOW = 4;
+/** A View the fixture's agent opened: bytes sent in chunks, or a `look_result` state alone. */
+export type FixtureLook = { id: string; kind: LookRow["kind"]; name: string } & ({ mode: LookHead["mode"]; bytes: Buffer } | { result: LookResultState });
 
 const repo = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../..");
 type Reply = { qr?: string; frames: string[]; text: string | null };
@@ -85,8 +91,24 @@ export async function startPhoneRelay(port = 0) {
   const errors: string[] = [];
   const active = new Map<number, WebSocket>();
   let nextConnection = 1;
-  const state = { protocol: PHONE_PROTOCOL, offline: false, refusal: "", sleeping: false, push: false, notifications: "unasked" as "unasked" | "on" | "off", dropInputReply: false, refuseMission: "", html: null as string | null, rows: "terminal output from device", refuseAppRegistration: false };
-  const wire = { binaryFrames: 0 };
+  const state = { protocol: PHONE_PROTOCOL, offline: false, refusal: "", sleeping: false, push: false, notifications: "unasked" as "unasked" | "on" | "off", dropInputReply: false, refuseMission: "", html: null as string | null, rows: "terminal output from device", refuseAppRegistration: false, look: null as FixtureLook | null };
+  // `lookAhead` is the most chunks that were ever out beyond the phone's last `look_ack`.
+  const wire = { binaryFrames: 0, lookAhead: 0 };
+  // The transfer in flight, paced as hided paces it (`hided/src/mobile/looks.rs`, `chunks`): driven by the phone's acks.
+  let transfer: { id: number; requestId: string; viewId: string; parts: string[]; sent: number; acked: number; ended: boolean } | null = null;
+  const pump = async () => {
+    const t = transfer;
+    if (!t) return;
+    while (t.sent < t.parts.length && t.sent < t.acked + LOOK_WINDOW) {
+      await send(t.id, { type: "look_chunk", request_id: t.requestId, seq: t.sent, data: t.parts[t.sent] });
+      t.sent++;
+      wire.lookAhead = Math.max(wire.lookAhead, t.sent - t.acked);
+    }
+    if (t.sent === t.parts.length && !t.ended) {
+      t.ended = true;
+      await send(t.id, { type: "look_end", request_id: t.requestId, view_id: t.viewId });
+    }
+  };
   const groups = (): ServerFrame => ({ type: "agents", interface_language: null, color_theme: null, devices: [{ device_id: "local", label: null, local: true, connected: true, needs_you: 1, working: 2 }], groups: [
     { group: "needs_you", count: 1, rows: [{ kind: "agent", ...agent, ...(state.sleeping ? { sleep: { state: "sleeping", since_unix_ms: 1 } } : {}) } as PhoneAgent & { kind: "agent" }] },
     { group: "working", count: 2, rows: [] },
@@ -134,6 +156,19 @@ export async function startPhoneRelay(port = 0) {
       await send(id, { type: "rows", device_id: agent.device_id, pane_id: agent.pane_id, state: "ok", text: state.rows, lines: 1, more: false });
       // An HTML file the agent opened, sent as hided sends it: one document with its files folded in.
       if (state.html !== null) await send(id, { type: "looks", device_id: agent.device_id, pane_id: agent.pane_id, views: [{ id: "v-html", kind: "html", name: "mockup.html", unseen: true, at: Date.now() }], omitted: 0 });
+      else if (state.look) await send(id, { type: "looks", device_id: agent.device_id, pane_id: agent.pane_id, views: [{ id: state.look.id, kind: state.look.kind, name: state.look.name, unseen: true, at: Date.now() }], omitted: 0 });
+    } else if (data.type === "look_open" && state.look) {
+      const look = state.look;
+      const request_id = String(data.request_id);
+      if ("result" in look) { await send(id, { type: "look_result", request_id, view_id: look.id, state: look.result }); return; }
+      const parts: string[] = [];
+      for (let at = 0; at < look.bytes.length; at += LOOK_CHUNK) parts.push(look.bytes.subarray(at, at + LOOK_CHUNK).toString("base64"));
+      await send(id, { type: "look_head", request_id, view_id: look.id, mode: look.mode, size: look.bytes.length, total: look.bytes.length, truncated: false, chunks: parts.length });
+      transfer = { id, requestId: request_id, viewId: look.id, parts, sent: 0, acked: 0, ended: false };
+      await pump();
+    } else if (data.type === "look_ack") {
+      if (transfer && transfer.requestId === data.request_id) transfer.acked = Math.max(transfer.acked, Number(data.seq) + 1);
+      await pump();
     } else if (data.type === "look_open" && state.html !== null) {
       const bytes = Buffer.from(state.html);
       const request_id = String(data.request_id);
