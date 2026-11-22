@@ -1347,6 +1347,31 @@ fn answer_bootstrap(
             &operators,
             serde_json::from_value::<crate::pairing::Ask>(ask.clone()),
         ) {
+            // The stream itself is what is asked for: once the answer is
+            // written it carries a connection to this core, and its
+            // admission from then on is the peer transport's (D-27).
+            (Some(operators), Ok(crate::pairing::Ask::Carry)) => {
+                let caller = if crate::access::in_a_pane(peer, request, engine, core) {
+                    crate::pairing::Caller::Pane
+                } else {
+                    crate::pairing::Caller::Operator
+                };
+                match operators
+                    .runtime
+                    .block_on(operators.pairing.carrier(caller))
+                {
+                    Ok(peers) => {
+                        let handed = writeln!(stream, "{}", json!({ "ok": true })).is_ok()
+                            && stream.set_read_timeout(None).is_ok()
+                            && stream.set_write_timeout(None).is_ok();
+                        if handed {
+                            peers.transport().pipe().arrived(stream.into());
+                        }
+                        return;
+                    }
+                    Err(code) => crate::pairing::refused(code),
+                }
+            }
             (Some(operators), Ok(ask)) => {
                 match crate::access::pairing_caller(peer, request, engine, core) {
                     Ok(caller) => operators

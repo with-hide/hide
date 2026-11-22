@@ -27,8 +27,8 @@ test("Settings lists its pages in two groups with About apart", async ({ page })
     await expect(sheet.locator('[data-settings-nav-group="app"]')).toHaveText(/^App/);
     await expect(sheet.locator('[data-settings-nav-group="app"] [data-settings-tab]')).toHaveText(["General", "Notifications", "Usage", "Devices", "Shortcuts"]);
     await expect(sheet.locator('[data-settings-nav-group="machine"]')).toHaveText(/^This (Mac|PC|computer)/);
-    await expect(sheet.locator('[data-settings-nav-group="machine"] [data-settings-tab]')).toHaveText(["Agents", "Skills & MCP", "Hide AI", "Mission", "Mobile", "External tools", "GitHub", "Labs"]);
-    await expect(sheet.locator("[data-settings-tab]")).toHaveText(["General", "Notifications", "Usage", "Devices", "Shortcuts", "Agents", "Skills & MCP", "Hide AI", "Mission", "Mobile", "External tools", "GitHub", "Labs", "About", "Privacy"]);
+    await expect(sheet.locator('[data-settings-nav-group="machine"] [data-settings-tab]')).toHaveText(["Agents", "Skills & MCP", "Hide AI", "Mission", "Mobile", "Bots", "GitHub", "Labs"]);
+    await expect(sheet.locator("[data-settings-tab]")).toHaveText(["General", "Notifications", "Usage", "Devices", "Shortcuts", "Agents", "Skills & MCP", "Hide AI", "Mission", "Mobile", "Bots", "GitHub", "Labs", "About", "Privacy"]);
     const tabs = sheet.locator("[data-settings-tab]");
     const githubBox = (await sheet.locator('[data-settings-tab="github"]').boundingBox())!;
     const aboutBox = (await sheet.locator('[data-settings-tab="about"]').boundingBox())!;

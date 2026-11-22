@@ -24,15 +24,27 @@
 //! [`MAX_STREAMS`] stays taken until every thread of it ended. Its bytes from
 //! the other end wait for its socket in a queue of [`MAX_PENDING`] frames;
 //! one whose socket does not take them is aborted rather than hold up every
-//! other stream: its queue is dropped and its socket shut both ways, which
-//! wakes a write stuck on a peer that stopped reading. A stream the other
+//! other stream: its queue is dropped and its socket aborted
+//! (`hide_platform::sockets::abort`), which wakes a write stuck on a peer
+//! that stopped reading on every system. A stream the other
 //! end closed writes what is already queued, each write within
 //! [`WRITE_WITHIN`], then shuts its socket. The connection's end aborts
 //! every stream.
+//!
+//! The same connection carries a peer connection's streams instead, for a
+//! carrier between two Hides that is one byte stream, as `wsl.exe`'s pipe
+//! between a distribution and its PC is (PRD device-connect-iroh D-27,
+//! D-79): [`streams`] is that form, and [`crate::pipe`] the transport over
+//! it. It shares the frames, the one writer and its outbox, and the
+//! connection's end; it has no link and opens no socket.
 
-use std::collections::{HashMap, VecDeque};
+mod streams;
+
+pub use streams::{PROOF_PRIORITY, Pipe, PipeRecv, PipeSend};
+
+use std::collections::{BTreeMap, HashMap, VecDeque};
 use std::io::{self, BufReader, Read, Write};
-use std::net::{Ipv4Addr, Shutdown, SocketAddr, TcpListener, TcpStream};
+use std::net::{Ipv4Addr, SocketAddr, TcpListener, TcpStream};
 use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
 use std::sync::{Arc, Condvar, Mutex, mpsc};
 use std::thread::JoinHandle;
@@ -67,6 +79,14 @@ const OPEN: u8 = 1;
 const CLOSE: u8 = 2;
 const PING: u8 = 3;
 const PONG: u8 = 4;
+// A peer connection's frames ([`streams`]).
+const HELLO: u8 = 5;
+const PEER_OPEN: u8 = 6;
+const PEER_DATA: u8 = 7;
+const PEER_FIN: u8 = 8;
+const PEER_STOP: u8 = 9;
+const PEER_CREDIT: u8 = 10;
+const BYE: u8 = 11;
 
 /// The link's stream.
 const LINK: u32 = 0;
@@ -101,6 +121,47 @@ enum Side {
     Node,
     /// The core's, which connects each stream and answers pings.
     Core,
+    /// One machine's end of a peer connection ([`streams`]); `dialed` is
+    /// the end that made the carrier.
+    Peer { dialed: bool },
+}
+
+/// The one byte stream a connection runs over: its two directions, and what
+/// ends both under whichever thread is blocked in one.
+pub struct Carrier {
+    read: Box<dyn Read + Send>,
+    write: Box<dyn Write + Send>,
+    end: Box<dyn Fn() + Send + Sync>,
+}
+
+impl Carrier {
+    /// `end` must make a read blocked on `read` return and a write blocked
+    /// on `write` fail, from any thread, however often it is called.
+    pub fn new(
+        read: impl Read + Send + 'static,
+        write: impl Write + Send + 'static,
+        end: impl Fn() + Send + Sync + 'static,
+    ) -> Self {
+        Self {
+            read: Box::new(read),
+            write: Box::new(write),
+            end: Box::new(end),
+        }
+    }
+}
+
+impl Carrier {
+    /// Ends a carrier no connection was started on.
+    pub fn end(self) {
+        (self.end)();
+    }
+}
+
+impl From<LocalStream> for Carrier {
+    fn from(stream: LocalStream) -> Self {
+        let end = stream.shutdown_handle();
+        Self::new(stream.duplicate(), stream, move || end.shutdown())
+    }
 }
 
 /// What waits for the connection's input, written by one thread.
@@ -114,7 +175,33 @@ struct Outbox {
 struct Out {
     control: VecDeque<Vec<u8>>,
     data: VecDeque<Vec<u8>>,
+    /// A peer connection's stream frames by their stream's priority; the
+    /// largest is written first.
+    classes: BTreeMap<i32, Class>,
+    /// Nothing more is written: the connection ended, or its writing did.
     ended: bool,
+    /// The connection ended, not its writing alone.
+    over: bool,
+}
+
+/// The frames of one priority that wait, and the room its writers take a
+/// place in before they add one.
+struct Class {
+    waiting: VecDeque<(Vec<u8>, bool)>,
+    room: Arc<tokio::sync::Semaphore>,
+}
+
+impl Class {
+    fn new(ended: bool) -> Self {
+        let room = Arc::new(tokio::sync::Semaphore::new(streams::CLASS_ROOM));
+        if ended {
+            room.close();
+        }
+        Self {
+            waiting: VecDeque::new(),
+            room,
+        }
+    }
 }
 
 impl Outbox {
@@ -170,15 +257,60 @@ impl Outbox {
         Ok(())
     }
 
-    /// The next frame to write, answers first; none once the connection
-    /// ended.
+    /// The room writers of `priority`'s frames wait in: a place taken there
+    /// is given back when the frame it was taken for is written.
+    fn room(&self, priority: i32) -> Arc<tokio::sync::Semaphore> {
+        let mut out = lock(&self.state);
+        let ended = out.ended;
+        Arc::clone(
+            &out.classes
+                .entry(priority)
+                .or_insert_with(|| Class::new(ended))
+                .room,
+        )
+    }
+
+    /// Adds a peer stream's frame behind the others of its priority,
+    /// without waiting; `placed` says its writer took a place in the
+    /// priority's room for it. Refused once the connection ended.
+    fn class(&self, priority: i32, frame: Vec<u8>, placed: bool) -> io::Result<()> {
+        let mut out = lock(&self.state);
+        if out.ended {
+            return Err(ended_error());
+        }
+        let ended = out.ended;
+        out.classes
+            .entry(priority)
+            .or_insert_with(|| Class::new(ended))
+            .waiting
+            .push_back((frame, placed));
+        self.changed.notify_all();
+        Ok(())
+    }
+
+    /// The next frame to write, answers first, then a peer stream's of the
+    /// largest priority that has one; none once the connection ended.
     fn next(&self) -> Option<Vec<u8>> {
         let mut out = lock(&self.state);
         loop {
             if out.ended {
                 return None;
             }
-            if let Some(frame) = out.control.pop_front().or_else(|| out.data.pop_front()) {
+            let classed = |out: &mut Out| {
+                out.classes.values_mut().rev().find_map(|class| {
+                    let (frame, placed) = class.waiting.pop_front()?;
+                    if placed {
+                        class.room.add_permits(1);
+                    }
+                    Some(frame)
+                })
+            };
+            if let Some(frame) = out
+                .control
+                .pop_front()
+                .or_else(|| classed(&mut out))
+                .or_else(|| out.data.pop_front())
+            {
                 self.changed.notify_all();
                 return Some(frame);
             }
@@ -189,13 +321,39 @@ impl Outbox {
         }
     }
 
-    /// Drops what waits and wakes every waiter.
+    /// Drops what waits and wakes every waiter: the connection ended.
     fn end(&self) {
         let mut out = lock(&self.state);
+        Self::refuse(&mut out);
+        out.over = true;
+        self.changed.notify_all();
+    }
+
+    /// Drops what waits and takes nothing more: the carrier takes no more
+    /// writes, and the connection itself has not ended yet.
+    fn stop(&self) {
+        Self::refuse(&mut lock(&self.state));
+        self.changed.notify_all();
+    }
+
+    fn refuse(out: &mut Out) {
         out.ended = true;
         out.control.clear();
         out.data.clear();
-        self.changed.notify_all();
+        for class in out.classes.values_mut() {
+            class.waiting.clear();
+            // Wakes every writer that waits for a place.
+            class.room.close();
+        }
+    }
+
+    /// Waits until the connection ended, for at most `within`.
+    fn over_within(&self, within: Duration) {
+        let out = lock(&self.state);
+        drop(
+            self.changed
+                .wait_timeout_while(out, within, |out| !out.over),
+        );
     }
 }
 
@@ -223,8 +381,12 @@ struct Stream {
 struct Shared {
     side: Side,
     outbox: Outbox,
-    carrier: hide_platform::ipc::ShutdownHandle,
-    link: hide_platform::ipc::ShutdownHandle,
+    /// Ends the carrier ([`Carrier::new`]).
+    carrier: Box<dyn Fn() + Send + Sync>,
+    /// The link's end this connection holds; a peer connection has none.
+    link: Option<hide_platform::ipc::ShutdownHandle>,
+    /// A peer connection's streams.
+    peer: streams::State,
     streams: Mutex<HashMap<u32, Stream>>,
     pings: Mutex<HashMap<u32, mpsc::SyncSender<()>>>,
     next: AtomicU32,
@@ -243,14 +405,17 @@ fn release(streams: &mut HashMap<u32, Stream>, id: u32) {
 }
 
 /// Closes `stream`: its queue is dropped, and when `abort` its reader is
-/// cancelled and its socket shut both ways at once.
+/// cancelled and its socket ended both ways at once, under whichever of its
+/// threads is blocked on it.
 fn shut(stream: &mut Stream, abort: bool) {
     stream.closed = true;
     stream.queue.take();
     if abort {
         stream.cancel.store(true, Ordering::SeqCst);
         if let Some(socket) = &stream.socket {
-            let _ = socket.shutdown(Shutdown::Both);
+            // Not `shutdown` alone: on Windows that leaves a read or a write
+            // another thread is blocked in asleep (#2655).
+            hide_platform::sockets::abort(socket);
         }
     }
 }
@@ -271,7 +436,12 @@ impl Shared {
     /// Sends an answer ahead of data; a connection whose answers are full
     /// ends.
     fn tell(&self, kind: u8, stream: u32) {
-        if let Err(error) = self.outbox.control(frame(kind, stream, &[]))
+        self.tell_with(kind, stream, &[]);
+    }
+
+    /// [`Shared::tell`], with the answer's few bytes.
+    fn tell_with(&self, kind: u8, stream: u32, payload: &[u8]) {
+        if let Err(error) = self.outbox.control(frame(kind, stream, payload))
             && error.kind() == io::ErrorKind::WouldBlock
         {
             self.end("answers_full");
@@ -280,12 +450,19 @@ impl Shared {
 
     /// Ends the connection and aborts every stream on it.
     fn end(&self, reason: &str) {
+        // A peer connection that ends without a word closed as lost, said
+        // before it reads as ended: no end is read without its code, and a
+        // code either end closed with stands.
+        self.peer.close_with(streams::lost());
         if self.ended.swap(true, Ordering::SeqCst) {
             return;
         }
         self.outbox.end();
-        self.carrier.shutdown();
-        self.link.shutdown();
+        (self.carrier)();
+        if let Some(link) = &self.link {
+            link.shutdown();
+        }
+        self.peer.end();
         {
             let mut streams = lock(&self.streams);
             let ids: Vec<u32> = streams.keys().copied().collect();
@@ -370,7 +547,7 @@ impl Shared {
                     (reading, Arc::clone(&stream.cancel))
                 }
                 (stream, _) => {
-                    let _ = socket.shutdown(Shutdown::Both);
+                    hide_platform::sockets::abort(&socket);
                     if let Some(stream) = stream {
                         shut(stream, true);
                     }
@@ -434,7 +611,8 @@ impl Shared {
             }
         }
         drop(queued);
-        let _ = socket.shutdown(Shutdown::Both);
+        // Ends the stream's reader too, which shares the socket.
+        hide_platform::sockets::abort(&socket);
         if failed {
             self.abort(id);
         } else {
@@ -482,21 +660,40 @@ fn start(
     carrier: LocalStream,
     pending: Vec<u8>,
 ) -> io::Result<(Arc<Shared>, LocalStream)> {
-    start_with(side, carrier, pending, &spawn_thread)
+    let (ours, link) = LocalStream::pair()?;
+    let shared = start_with(
+        side,
+        carrier.into(),
+        Some(ours),
+        pending,
+        streams::State::default(),
+        &spawn_thread,
+    )?;
+    Ok((shared, link))
 }
 
+/// Starts a connection's threads on `carrier`; `link` is the end this
+/// connection reads the link's bytes from and writes them to, which a peer
+/// connection does not have.
 fn start_with(
     side: Side,
-    carrier: LocalStream,
+    carrier: Carrier,
+    link: Option<LocalStream>,
     pending: Vec<u8>,
+    peer: streams::State,
     spawn: Spawn<'_>,
-) -> io::Result<(Arc<Shared>, LocalStream)> {
-    let (ours, link) = LocalStream::pair()?;
+) -> io::Result<Arc<Shared>> {
+    let Carrier {
+        read: carrier_read,
+        write: mut out,
+        end: carrier_end,
+    } = carrier;
     let shared = Arc::new(Shared {
         side,
         outbox: Outbox::default(),
-        carrier: carrier.shutdown_handle(),
-        link: ours.shutdown_handle(),
+        carrier: carrier_end,
+        link: link.as_ref().map(LocalStream::shutdown_handle),
+        peer,
         streams: Mutex::new(HashMap::new()),
         pings: Mutex::new(HashMap::new()),
         next: AtomicU32::new(1),
@@ -510,21 +707,40 @@ fn start_with(
     // The connection's input, from the outbox.
     {
         let shared = Arc::clone(&shared);
-        let mut out = carrier.duplicate();
         starting.started.push(spawn(
             "link-mux-out",
             Box::new(move || {
+                let mut reason = "connection_failed";
                 while let Some(frame) = shared.outbox.next() {
                     if out.write_all(&frame).and_then(|()| out.flush()).is_err() {
+                        if matches!(shared.side, Side::Peer { .. }) {
+                            // The other end may have closed: its last frame
+                            // says why, and can sit unread when a write into
+                            // the carrier it ended fails. Why a peer
+                            // connection ended is its reader's to say, so
+                            // this thread gives up writing and leaves the
+                            // end to it, for as long as a close waits for
+                            // its word; a carrier that fails only one way
+                            // is ended after that.
+                            shared.outbox.stop();
+                            drop(out);
+                            shared.outbox.over_within(streams::BYE_WITHIN);
+                        }
+                        break;
+                    }
+                    // A peer connection's last word: the other end reads
+                    // why, then the carrier ends.
+                    if frame[0] == BYE {
+                        reason = "closed";
                         break;
                     }
                 }
-                shared.end("connection_failed");
+                shared.end(reason);
             }),
         )?);
     }
     // The link's bytes, as frames.
-    {
+    if let Some(ours) = &link {
         let shared = Arc::clone(&shared);
         let mut from_link = ours.duplicate();
         starting.started.push(spawn(
@@ -549,24 +765,24 @@ fn start_with(
     // The connection's frames, to the link and each stream.
     {
         let shared = Arc::clone(&shared);
-        let reader = io::Cursor::new(pending).chain(carrier);
+        let reader = io::Cursor::new(pending).chain(carrier_read);
         starting.started.push(spawn(
             "link-mux-frames",
             Box::new(move || {
-                let reason = demux(&shared, BufReader::new(reader), ours);
+                let reason = demux(&shared, BufReader::new(reader), link);
                 shared.end(&reason);
             }),
         )?);
     }
     // Started: the threads end with the connection, not with the start.
     starting.done = true;
-    Ok((shared, link))
+    Ok(shared)
 }
 
 /// Reads frames until the connection ends; answers why it did. It never
 /// waits on the connection's input, so two ends whose inputs are both full
 /// still read each other's frames.
-fn demux(shared: &Arc<Shared>, mut reader: impl Read, mut to_link: LocalStream) -> String {
+fn demux(shared: &Arc<Shared>, mut reader: impl Read, mut to_link: Option<LocalStream>) -> String {
     let mut header = [0_u8; 9];
     loop {
         if let Err(error) = reader.read_exact(&mut header) {
@@ -586,8 +802,17 @@ fn demux(shared: &Arc<Shared>, mut reader: impl Read, mut to_link: LocalStream) 
         if reader.read_exact(&mut payload).is_err() {
             return "connection_closed".to_owned();
         }
+        if matches!(shared.side, Side::Peer { .. }) {
+            match streams::frame_in(shared, kind, stream, payload) {
+                Ok(()) => continue,
+                Err(reason) => return reason,
+            }
+        }
         match (kind, shared.side) {
             (DATA, _) if stream == LINK => {
+                let Some(to_link) = to_link.as_mut() else {
+                    return "a link frame on a connection with no link".to_owned();
+                };
                 if to_link.write_all(&payload).is_err() {
                     return "link_closed".to_owned();
                 }
@@ -909,6 +1134,7 @@ impl Drop for Forward {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::net::Shutdown;
     use std::time::Instant;
 
     /// A node and a core joined by a local pair, as the attach role joins
@@ -994,7 +1220,7 @@ mod tests {
     /// runs on a thread of its own rather than under a read timeout: macOS
     /// refuses `SO_RCVTIMEO` once the stream ended at the server, which is
     /// the very end this waits for. When the end does not come, the socket
-    /// is shut here, which ends the read, and the thread is joined before
+    /// is aborted here, which ends the read, and the thread is joined before
     /// the test fails.
     fn drained(socket: TcpStream) {
         let held = socket.try_clone().unwrap();
@@ -1012,9 +1238,9 @@ mod tests {
         });
         let heard = end.recv_timeout(Duration::from_secs(15)).is_ok();
         if !heard {
-            let _ = held.shutdown(Shutdown::Both);
+            hide_platform::sockets::abort(&held);
             end.recv_timeout(Duration::from_secs(15))
-                .expect("the read outlived its own socket's shutdown");
+                .expect("the read outlived its own socket's abort");
         }
         reading.join().unwrap();
         assert!(heard, "the stream never ended at the server");
@@ -1266,7 +1492,16 @@ mod tests {
                     }),
                 )
             };
-            assert!(start_with(Side::Core, carrier, Vec::new(), &spawn).is_err());
+            let (ours, _link) = LocalStream::pair().unwrap();
+            let started = start_with(
+                Side::Core,
+                carrier.into(),
+                Some(ours),
+                Vec::new(),
+                streams::State::default(),
+                &spawn,
+            );
+            assert!(started.is_err());
             assert_eq!(finished.load(Ordering::SeqCst), fail_at - 1);
             peer.set_read_timeout(Some(Duration::from_secs(15)))
                 .unwrap();

@@ -12,6 +12,11 @@
 $ErrorActionPreference = 'Stop'
 $ProgressPreference = 'SilentlyContinue'
 
+# The ssh session's own variables end with this script, before its first
+# step: what a step starts (the helper, a command, the attach role) is on the
+# device, not in an ssh session, and so is every pane and core it starts.
+foreach ($name in @(@SSH_SESSION_VARIABLES@)) { [Environment]::SetEnvironmentVariable($name, $null) }
+
 Add-Type -TypeDefinition @'
 using System;
 using System.Runtime.InteropServices;
@@ -576,9 +581,6 @@ function Step-Start([string]$relative, [string]$homeWire) {
             }
         } catch { Say fail "the home $homeWire could not be made"; exit 65 }
     }
-    # The ssh session's own variables stay with this script: a program in a
-    # pane the helper starts is on the device, not in an ssh session.
-    foreach ($name in @(@SSH_SESSION_VARIABLES@)) { [Environment]::SetEnvironmentVariable($name, $null) }
     Hand-Over $helper @('node', 'serve') 'start'
 }
 

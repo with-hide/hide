@@ -19,7 +19,7 @@
 //!   would leave the pair with a dead connection.
 
 use std::any::Any;
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::fmt;
 use std::io;
 use std::path::Path;
@@ -40,7 +40,7 @@ use tokio::sync::{Semaphore, broadcast, mpsc, watch};
 
 use crate::gate::{CLOSED, Gate, Guarded};
 use crate::limits;
-use crate::store::{Change, Grant, Grants, Host, Known, KnownState, StoreError, Via};
+use crate::store::{Change, Grant, GrantStatus, Grants, Host, Known, KnownState, StoreError, Via};
 use crate::transport::{PeerConn, PeerTransport, TransportError};
 use crate::wire;
 
@@ -514,6 +514,10 @@ struct Inner<T: PeerTransport> {
     incoming: mpsc::Sender<Incoming<T::Conn>>,
     /// Counts wakes and network changes; a redial wait watches it.
     woke: watch::Sender<u64>,
+    /// The hosts whose next first exchange asks them to update
+    /// ([`Peers::ask_update`]): never more than the hosts this machine
+    /// is an active guest of.
+    update_asks: Mutex<HashSet<PeerKey>>,
     shutdown: watch::Sender<bool>,
 }
 
@@ -582,6 +586,7 @@ impl<T: PeerTransport> Peers<T> {
             events: broadcast::channel(limits::MAX_EVENTS).0,
             incoming,
             woke: watch::channel(0).0,
+            update_asks: Mutex::default(),
             shutdown: watch::channel(false).0,
         });
         tokio::spawn(Arc::clone(&inner).accept_connections());
@@ -684,6 +689,30 @@ impl<T: PeerTransport> Peers<T> {
             }
         }
         self.inner.relation_changed();
+        Ok(())
+    }
+
+    /// Asks the host `key` to update itself although the two builds share
+    /// no number: the next first exchange with it says so once
+    /// ([`Hello::update`]), and the host hears it only while this machine
+    /// holds an active grant there (D-40). A connection that lives asks
+    /// with [`Link::request_update`] instead. Refused for a machine this
+    /// one is no active guest of.
+    pub fn ask_update(&self, key: &PeerKey) -> Result<(), OpenError> {
+        let known = lock(&self.inner.known);
+        let active = |key: &PeerKey| {
+            known
+                .of(key)
+                .is_some_and(|host| host.state == KnownState::Active)
+        };
+        if !active(key) {
+            return Err(OpenError::NoGrant(GrantState::None));
+        }
+        // An ask of a host that was removed before it was said goes with
+        // it, so the set never holds more than the hosts this machine opens.
+        let mut asks = lock(&self.inner.update_asks);
+        asks.retain(|asked| active(asked));
+        asks.insert(*key);
         Ok(())
     }
 
@@ -1011,6 +1040,7 @@ impl<T: PeerTransport> Inner<T> {
     async fn first_exchange(
         &self,
         conn: &T::Conn,
+        asks_update: bool,
     ) -> Result<
         (
             Hello,
@@ -1019,10 +1049,12 @@ impl<T: PeerTransport> Inner<T> {
         ),
         DialError,
     > {
-        let ours = self
-            .hello
-            .encode()
-            .map_err(|error| DialError::Protocol(error.to_string()))?;
+        let ours = Hello {
+            update: asks_update,
+            ..self.hello.clone()
+        }
+        .encode()
+        .map_err(|error| DialError::Protocol(error.to_string()))?;
         let refused = |why: &str| DialError::Protocol(why.to_owned());
         let (send, mut recv) = if conn.dialed() {
             let (mut send, mut recv) = conn.open(StreamKind::Hello.priority()).await?;
@@ -1062,10 +1094,20 @@ impl<T: PeerTransport> Inner<T> {
     /// The first exchange and admission of a connection either side dialed.
     async fn establish(self: &Arc<Self>, conn: T::Conn) -> Result<Link<T::Conn>, DialError> {
         let key = conn.peer();
-        let exchanged =
-            tokio::time::timeout(limits::HELLO_WITHIN, self.first_exchange(&conn)).await;
+        let asks_update = lock(&self.update_asks).contains(&key);
+        let exchanged = tokio::time::timeout(
+            limits::HELLO_WITHIN,
+            self.first_exchange(&conn, asks_update),
+        )
+        .await;
         let (theirs, send, recv) = match exchanged {
-            Ok(Ok(exchanged)) => exchanged,
+            Ok(Ok(exchanged)) => {
+                // Said once: the host read this exchange.
+                if asks_update {
+                    lock(&self.update_asks).remove(&key);
+                }
+                exchanged
+            }
             Ok(Err(error)) => {
                 conn.close(CloseCode::Protocol);
                 return Err(error);
@@ -1096,6 +1138,24 @@ impl<T: PeerTransport> Inner<T> {
                         "peer": key.short(),
                         "behind": format!("{behind:?}"),
                     }));
+                }
+                // The other side asks this machine to update, in the one
+                // exchange the two builds share. Only a guest that holds an
+                // active grant here is heard, as on a connection that lives.
+                if theirs.update && behind != Behind::Theirs {
+                    let granted = lock(&self.grants)
+                        .current(&key)
+                        .is_some_and(|grant| grant.state == GrantStatus::Active);
+                    if granted {
+                        self.emit(PeerEvent::UpdateRequested { key });
+                    } else {
+                        crate::diagnostic!(json!({
+                            "component": "peer",
+                            "event": "update.refused",
+                            "peer": key.short(),
+                            "reason": "the peer holds no active grant here",
+                        }));
+                    }
                 }
                 conn.close(CloseCode::UpdateNeeded);
                 return Err(DialError::UpdateNeeded(behind));

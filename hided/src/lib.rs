@@ -50,12 +50,20 @@ mod outside_open;
 pub mod page_forward;
 pub mod pairing;
 pub mod pairing_ssh;
+pub mod pairing_wsl;
 pub mod pane_cli;
 pub mod pane_install;
 pub mod phone_cli;
 pub mod plan_cli;
 pub mod profile_cli;
 mod project_open;
+pub mod started_cores;
+// The stand-in `wsl.exe` and `hide` of `pairing_wsl`'s tests, ready before
+// the deadlines those tests run them under.
+#[cfg(all(test, unix))]
+#[allow(dead_code)] // these tests place stand-ins and ready nothing else
+#[path = "../../hide-platform/tests/it/stand_ins.rs"]
+mod stand_ins;
 pub mod store_cli;
 
 pub mod guest_node;
@@ -598,6 +606,11 @@ pub async fn start_core_role(env: Env, seat: seat::SeatParts) -> Result<RunningD
         device_connect: env.device_connect,
     });
     seat.starting("core.peers");
+    // How another account's `hide` is reached, over SSH or `wsl.exe`.
+    let reach = pairing_ssh::Reach {
+        home: env.home.clone(),
+        command_folder: env.host_cli_dir.clone(),
+    };
     let peers = peer_host::PeerHost::new(
         peer_host::Settings {
             state_dir: env.state_dir.clone(),
@@ -605,6 +618,11 @@ pub async fn start_core_role(env: Env, seat: seat::SeatParts) -> Result<RunningD
             device: peer_device.clone(),
             release: build_order::Release::of_this_build().is_official(),
             direct: env.peer_direct,
+            // This PC's WSL distributions run Hides it connects to through
+            // `wsl.exe` (D-27); there is no WSL to reach on any other
+            // system.
+            wsl: hide_node::ssh::host::wsl::WslAccess::of_this_pc()
+                .map(|access| pairing_wsl::Carriers::new(access, reach.clone())),
             device_connect: env.device_connect,
         },
         shutdown.clone(),
@@ -656,10 +674,7 @@ pub async fn start_core_role(env: Env, seat: seat::SeatParts) -> Result<RunningD
                 .unwrap_or_else(|| peer_device.clone()),
             device: peer_device,
         },
-        pairing_ssh::Reach {
-            home: env.home.clone(),
-            command_folder: env.host_cli_dir.clone(),
-        },
+        reach,
         shutdown.clone(),
     );
     pairing.follow_guests(Arc::clone(&guests));
@@ -713,6 +728,9 @@ pub async fn start_core_role(env: Env, seat: seat::SeatParts) -> Result<RunningD
         starter_program: env
             .starter_program
             .as_deref()
+            .map(|program| Arc::from(program.to_string_lossy().as_ref())),
+        program: std::env::current_exe()
+            .ok()
             .map(|program| Arc::from(program.to_string_lossy().as_ref())),
         renderer_transitions: Arc::new(Mutex::new(())),
         shutdown: shutdown.clone(),

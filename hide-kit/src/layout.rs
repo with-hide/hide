@@ -489,6 +489,14 @@ pub fn keep_alive(state_dir: &Path) -> PathBuf {
     state_dir.join("keep-alive")
 }
 
+/// The note that a desktop app opened the core on `state_dir`, with the
+/// package it ran from: from then on the app updates that core, and a
+/// paired machine's raise leaves it alone (`crate::app`, PRD
+/// device-connect-iroh B23).
+pub fn app_note(state_dir: &Path) -> PathBuf {
+    state_dir.join("app.json")
+}
+
 /// The install root of the builds a paired machine's login item runs its
 /// core from, one version folder each (`<root>/<version>/hided`), so an app
 /// update never replaces the program under a running core
