@@ -144,12 +144,15 @@ pub(crate) enum Place {
     /// A checkout on the core's machine, whose remote its host resolves
     /// itself ([`CodeHost::resolves_checkout`]), as `gh` does in a folder.
     /// `remotes` are the repositories its remotes name that the registry
-    /// gives this host, as data for the host's unit; empty when its node did
-    /// not list them.
+    /// gives this host, as data for the host's unit; `remotes_complete` says
+    /// whether every remote of the checkout is known, read by this host or by
+    /// another registered unit (whose remotes are left out). It is false when
+    /// the node did not list them, or listed one no registered unit reads.
     Checkout {
         host: Host,
         root: PathBuf,
         remotes: Vec<RepositoryRef>,
+        remotes_complete: bool,
     },
 }
 
@@ -477,44 +480,50 @@ impl CodeHosts {
         root: &Path,
         remotes: CheckoutRemotes<'_>,
     ) -> Option<Place> {
-        let in_checkout = |host: Host, named: &[(Host, RepositoryRef)]| Place::Checkout {
-            host,
-            root: root.to_path_buf(),
-            remotes: named
-                .iter()
-                .filter(|(named, _)| *named == host)
-                .map(|(_, repository)| repository.clone())
-                .collect(),
-        };
-        let resolving = |named: &[(Host, RepositoryRef)]| {
+        let in_checkout =
+            |host: Host, named: &[(Host, RepositoryRef)], complete: bool| Place::Checkout {
+                host,
+                root: root.to_path_buf(),
+                remotes: named
+                    .iter()
+                    .filter(|(named, _)| *named == host)
+                    .map(|(_, repository)| repository.clone())
+                    .collect(),
+                remotes_complete: complete,
+            };
+        let resolving = |named: &[(Host, RepositoryRef)], complete: bool| {
             self.hosts()
                 .find(|host| host.resolves_checkout())
-                .map(|host| in_checkout(host, named))
+                .map(|host| in_checkout(host, named, complete))
         };
-        let named: Vec<(Host, RepositoryRef)> = match remotes {
-            CheckoutRemotes::Unknown => return resolving(&[]),
-            CheckoutRemotes::Addresses(addresses) => {
-                let named: Vec<_> = addresses
+        let (named, listed): (Vec<(Host, RepositoryRef)>, usize) = match remotes {
+            CheckoutRemotes::Unknown => return resolving(&[], false),
+            CheckoutRemotes::Addresses(addresses) => (
+                addresses
                     .iter()
                     .filter_map(|address| self.remote(address))
-                    .collect();
-                if named.len() < addresses.len() {
-                    return resolving(&named);
-                }
-                named
-            }
-            CheckoutRemotes::Named(names) => names
-                .iter()
-                .filter_map(|name| self.repository(name))
-                .collect(),
+                    .collect(),
+                addresses.len(),
+            ),
+            CheckoutRemotes::Named(names) => (
+                names
+                    .iter()
+                    .filter_map(|name| self.repository(name))
+                    .collect(),
+                names.len(),
+            ),
         };
+        let complete = named.len() == listed;
+        if !complete && matches!(remotes, CheckoutRemotes::Addresses(_)) {
+            return resolving(&named, false);
+        }
         let (first, rest) = named.split_first()?;
         if rest.iter().any(|(host, _)| *host != first.0) {
-            return resolving(&named);
+            return resolving(&named, complete);
         }
         let (host, repository) = first.clone();
         Some(if host.resolves_checkout() {
-            in_checkout(host, &named)
+            in_checkout(host, &named, complete)
         } else {
             Place::Repository { host, repository }
         })

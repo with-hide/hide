@@ -433,6 +433,7 @@ mod tests {
                     .unwrap(),
                 root: root.to_path_buf(),
                 remotes: Vec::new(),
+                remotes_complete: false,
             }),
         );
 

@@ -196,6 +196,7 @@ pub(super) fn read(
                     host,
                     root,
                     remotes,
+                    remotes_complete,
                 }) => main_worktree(node, root).map(|main| {
                     let root_path = hide_platform::path::to_wire_lossy(&main);
                     (
@@ -203,6 +204,7 @@ pub(super) fn read(
                             host: *host,
                             root: main,
                             remotes: remotes.clone(),
+                            remotes_complete: *remotes_complete,
                         }),
                         root_path,
                     )

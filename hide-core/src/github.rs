@@ -1429,9 +1429,16 @@ fn identity_on(
 ) -> RepositoryIdentity {
     let server = match place {
         Place::Repository { repository, .. } => Some(repository.authority.clone()),
-        Place::Checkout { remotes, .. } => {
-            server_of_checkout(remotes, &viewed.name, signed_in, addresses)
-        }
+        Place::Checkout {
+            remotes,
+            remotes_complete,
+            ..
+        } => server_of_checkout(
+            (remotes, *remotes_complete),
+            &viewed.name,
+            signed_in,
+            addresses,
+        ),
     };
     RepositoryIdentity {
         repository: server.and_then(|server| host::repository_on(&server, &viewed.name)),
@@ -1453,12 +1460,15 @@ fn identity_on(
 /// 4. the remotes whose path is the repository's name name one server, and
 ///    it is claimed.
 ///
+/// Steps 3 and 4 answer only from a complete remote list: a remote no unit
+/// read is an unconfirmed host, and could carry the repository's name.
+///
 /// A remote's host is claimed when it is `github.com`, or a server `auth
 /// status` names; any other (an SSH alias, a server `gh` is not signed in to,
 /// or every one but `github.com` when `auth status` names none) is
 /// unconfirmed. `remotes` hold only the remotes the registry gave GitHub.
 fn server_of_checkout(
-    remotes: &[RepositoryRef],
+    (remotes, complete): (&[RepositoryRef], bool),
     name: &str,
     signed_in: &[String],
     addresses: &[&str],
@@ -1492,6 +1502,9 @@ fn server_of_checkout(
     }
     if let [server] = one(signed_in.to_vec()).as_slice() {
         return Some(server.clone());
+    }
+    if !complete {
+        return None;
     }
     let claimed = |remote: &&RepositoryRef| {
         let host = host_name(&remote.authority);
@@ -3849,8 +3862,11 @@ mod tests {
             } else {
                 CheckoutRemotes::Addresses(&listed)
             };
-            let Some(Place::Checkout { remotes, .. }) =
-                CodeHosts::STANDARD.place_of_checkout(Path::new("/repo"), read)
+            let Some(Place::Checkout {
+                remotes,
+                remotes_complete,
+                ..
+            }) = CodeHosts::STANDARD.place_of_checkout(Path::new("/repo"), read)
             else {
                 panic!("{listed:?} is read in the checkout");
             };
@@ -3858,7 +3874,7 @@ mod tests {
                 .iter()
                 .map(|server| (*server).to_owned())
                 .collect();
-            server_of_checkout(&remotes, name, &signed_in, addresses)
+            server_of_checkout((&remotes, remotes_complete), name, &signed_in, addresses)
         };
         let at = |server: &str| Some(server.to_owned());
         let pull = "https://ghe.example/acme/app/pull/7";
@@ -3928,6 +3944,16 @@ mod tests {
                 at("github.com"),
             ),
             (
+                &[
+                    "https://github.com/old/name.git",
+                    "http://ghe.example/acme/app.git",
+                ],
+                &[],
+                "acme/app",
+                &[],
+                None,
+            ),
+            (
                 &[GITHUB, ENTERPRISE],
                 &["github.com", "ghe.example"],
                 "acme/app",
@@ -3972,6 +3998,27 @@ mod tests {
                 "{remotes:?} signed in to {signed_in:?} with {addresses:?}"
             );
         }
+        // A remote no unit reads is an unconfirmed host that could carry the
+        // repository's name: the remotes alone settle nothing beside it.
+        let unread = "http://ghe.example/acme/app.git";
+        assert_eq!(
+            server(
+                &["https://github.com/old/name.git", unread],
+                &[],
+                "acme/app",
+                &[]
+            ),
+            None
+        );
+        assert_eq!(server(&[GITHUB, unread], &[], "acme/app", &[]), None);
+        assert_eq!(
+            server(&[GITHUB, unread], &[], "acme/app", &[pull]),
+            at("ghe.example")
+        );
+        assert_eq!(
+            server(&[GITHUB, unread], &["github.com"], "acme/app", &[]),
+            at("github.com")
+        );
         // An address of another repository whose name starts the same, and
         // two addresses that differ only in the port, are taken as written.
         assert_eq!(
@@ -4026,6 +4073,34 @@ mod tests {
             None,
             "the id alone could be another server's repository's: no key is made"
         );
+
+        // A renamed repository's remote alone settles the server; beside a
+        // remote no unit reads it does not.
+        let renamed = ["https://github.com/old/name.git".to_owned()];
+        let mixed = [
+            renamed[0].clone(),
+            "http://ghe.example/acme/project.git".to_owned(),
+        ];
+        for (remotes, server) in [(&renamed[..], Some("github.com")), (&mixed[..], None)] {
+            let place = CodeHosts::STANDARD
+                .place_of_checkout(Path::new("/repo"), CheckoutRemotes::Addresses(remotes))
+                .unwrap();
+            let project = fake.read_at(&place, &RefusedProjects::default());
+            let identity = project.repository.unwrap();
+            assert_eq!(
+                identity
+                    .repository
+                    .as_ref()
+                    .map(|repository| repository.authority.as_str()),
+                server,
+                "{remotes:?}"
+            );
+            assert_eq!(
+                (identity.name.as_str(), identity.id.as_deref()),
+                ("acme/project", Some("R1"))
+            );
+            assert_eq!(project.identity_read, PartRead::Read);
+        }
 
         let named = fake.read_at(
             &CodeHosts::STANDARD.place_of("acme/project").unwrap(),

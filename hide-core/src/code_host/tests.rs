@@ -435,8 +435,9 @@ fn a_checkout_is_placed_by_its_remotes_and_none_is_no_remote_with_no_host_asked(
     let by_name = |hosts: CodeHosts, remotes: &[&str]| {
         hosts.place_of_checkout(root, CheckoutRemotes::Named(&list(remotes)))
     };
-    // Read in the checkout, with the remotes the registry gives that host.
-    let in_checkout = |hosts: CodeHosts, key: &str, remotes: &[&str]| {
+    // Read in the checkout, with the remotes the registry gives that host
+    // and whether every remote was read by a registered unit.
+    let in_checkout = |hosts: CodeHosts, key: &str, remotes: &[&str], complete: bool| {
         Some(Place::Checkout {
             host: host(hosts, key),
             root: root.to_path_buf(),
@@ -444,6 +445,7 @@ fn a_checkout_is_placed_by_its_remotes_and_none_is_no_remote_with_no_host_asked(
                 .iter()
                 .map(|name| hosts.repository(name).unwrap().1)
                 .collect(),
+            remotes_complete: complete,
         })
     };
     let github = "https://github.com/acme/app.git";
@@ -453,7 +455,7 @@ fn a_checkout_is_placed_by_its_remotes_and_none_is_no_remote_with_no_host_asked(
     assert_eq!(by_address(BOTH, &[]), None, "no remote: no host is asked");
     assert_eq!(
         by_address(BOTH, &[github]),
-        in_checkout(BOTH, "github", &["acme/app"])
+        in_checkout(BOTH, "github", &["acme/app"], true)
     );
     assert_eq!(
         by_address(BOTH, &[nested, "git@code.example:group/sub/project.git"]),
@@ -462,27 +464,32 @@ fn a_checkout_is_placed_by_its_remotes_and_none_is_no_remote_with_no_host_asked(
     );
     assert_eq!(
         by_address(BOTH, &[nested, github]),
-        in_checkout(BOTH, "github", &["acme/app"]),
+        in_checkout(BOTH, "github", &["acme/app"], true),
         "remotes of two hosts go to the one that picks in the checkout"
     );
     assert_eq!(
         by_address(BOTH, &[github, enterprise]),
-        in_checkout(BOTH, "github", &["acme/app", "ghe.example.com/acme/app"]),
+        in_checkout(
+            BOTH,
+            "github",
+            &["acme/app", "ghe.example.com/acme/app"],
+            true
+        ),
         "github.com and an Enterprise server are one host, which picks in the checkout"
     );
     assert_eq!(
         by_address(BOTH, &["http://github.com/acme/app.git"]),
-        in_checkout(BOTH, "github", &[]),
+        in_checkout(BOTH, "github", &[], false),
         "an address no unit reads is unknown, read in the checkout as main left it to gh"
     );
     assert_eq!(
         by_address(CodeHosts::STANDARD, &[nested]),
-        in_checkout(CodeHosts::STANDARD, "github", &[]),
+        in_checkout(CodeHosts::STANDARD, "github", &[], false),
         "with GitHub alone a nested path is no repository GitHub reads: unknown, as on main"
     );
     assert_eq!(
         hosts_place(BOTH, root, CheckoutRemotes::Unknown),
-        in_checkout(BOTH, "github", &[]),
+        in_checkout(BOTH, "github", &[], false),
         "remotes the node did not list are read in the checkout"
     );
     assert_eq!(
@@ -498,11 +505,26 @@ fn a_checkout_is_placed_by_its_remotes_and_none_is_no_remote_with_no_host_asked(
     );
     assert_eq!(
         by_name(BOTH, &["acme/app"]),
-        in_checkout(BOTH, "github", &["acme/app"])
+        in_checkout(BOTH, "github", &["acme/app"], true)
     );
     assert_eq!(
         by_name(BOTH, &["acme/app", "ghe.example.com/acme/app"]),
-        in_checkout(BOTH, "github", &["acme/app", "ghe.example.com/acme/app"])
+        in_checkout(
+            BOTH,
+            "github",
+            &["acme/app", "ghe.example.com/acme/app"],
+            true
+        )
+    );
+    assert_eq!(
+        by_address(BOTH, &[github, "http://ghe.example.com/acme/app.git"]),
+        in_checkout(BOTH, "github", &["acme/app"], false),
+        "a remote no unit reads beside one GitHub reads: the list is not complete"
+    );
+    assert_eq!(
+        by_name(BOTH, &["acme/app", "not a repository"]),
+        in_checkout(BOTH, "github", &["acme/app"], false),
+        "an older node's name no unit reads beside one GitHub reads"
     );
 }
 
