@@ -222,10 +222,7 @@ fn a_moved_core_keeps_its_item_while_its_node_still_dials_it() {
     assert!(machine.installed() && machine.kept());
 
     registers(serde_json::json!([]));
-    assert_eq!(
-        machine.reconcile(true, &installs),
-        Outcome::Removed
-    );
+    assert_eq!(machine.reconcile(true, &installs), Outcome::Removed);
     assert!(!machine.installed() && !machine.kept());
 }
 
