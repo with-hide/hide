@@ -2,7 +2,7 @@
 // into not seen and seen, and one View opened full screen as a change list, a document, an image or the words that say why
 // there is nothing to draw. The phone holds no path: a row is a View id, and hided finds the file (D-16).
 
-import { AppWindowIcon, FileDiffIcon, FileIcon, FileTextIcon, GlobeIcon, ImageIcon, LaptopIcon, Loader2Icon, RefreshCwIcon } from "lucide-react";
+import { AppWindowIcon, FileDiffIcon, FileIcon, FileKeyIcon, FileLockIcon, FileTextIcon, FileWarningIcon, FileXIcon, GlobeIcon, ImageIcon, LaptopIcon, Loader2Icon, MonitorOffIcon, RefreshCwIcon } from "lucide-react";
 import { useEffect, useMemo, useRef, useState, type PointerEvent, type ReactNode } from "react";
 import { Elapsed, useElapsed } from "../components/elapsed";
 import { Button } from "../components/ui/button";
@@ -17,6 +17,16 @@ import { deviceNameOf, splitLooks, type LookFile, type LookKind, type LookRow } 
 import { usePhone, type Looks } from "./store";
 
 const KIND_ICON: Record<LookKind, typeof FileIcon> = { changes: FileDiffIcon, doc: FileTextIcon, image: ImageIcon, page: GlobeIcon, html: AppWindowIcon, other: FileIcon };
+/** Why a file cannot be read, under its icon: a checkout file gone or outside every project folder, and an outside file the desktop app no longer holds an opening for, that became a link or a folder, or that no open desktop app can read. */
+const FILE_REASON = {
+  not_found: { Icon: FileXIcon, title: "mobile.look.notFound", reason: "mobile.look.notFoundReason" },
+  outside_roots: { Icon: FileLockIcon, title: "mobile.look.outsideRoots", reason: "mobile.look.outsideRootsReason" },
+  grant_expired: { Icon: FileKeyIcon, title: "mobile.look.grantExpired", reason: "mobile.look.grantExpiredReason" },
+  file_replaced: { Icon: FileWarningIcon, title: "mobile.look.fileReplaced", reason: "mobile.look.fileReplacedReason" },
+  no_window: { Icon: MonitorOffIcon, title: "mobile.look.noWindow", reason: "mobile.look.noWindowReason" },
+} as const;
+/** The sentence for a page whose screen cannot be taken, when hided says why. */
+const PAGE_REASON = { no_window: "mobile.look.pageNoWindow", window_elsewhere: "mobile.look.pageElsewhere", not_drawn: "mobile.look.pageNotDrawn" } as const;
 
 /** The kind's word, as the list and the viewer's head say it (B12). */
 export function useKindWord() {
@@ -121,14 +131,15 @@ export function LookViewer({ row, content, refreshing }: { row: LookRow; content
     case "html":
       return <HtmlBody name={row.name} content={content} />;
     case "page":
-      // The address and the one sentence, with the refresh still there (B21): why it cannot be taken is the desktop's log.
+      // The address and the one sentence, with the refresh still there (B21): why, when the operator can act on it (no desktop
+      // app open, the window on another computer, a page the app has not drawn); any other reason is the desktop's log.
       return (
         <div className="flex min-h-0 flex-1 flex-col bg-background px-lg py-md" data-phone-look-state="page">
           <PageAddress address={content.url || row.url || row.name} refreshing={refreshing} />
           <div className="flex min-h-0 flex-1 flex-col items-center justify-center gap-sm text-center">
             <GlobeIcon aria-hidden="true" className="size-(--size-icon-lg) text-muted-foreground" />
             <p role="status" className="text-title text-foreground">
-              {t("mobile.look.pageUnavailable")}
+              {t(content.reason ? PAGE_REASON[content.reason] : "mobile.look.pageUnavailable")}
             </p>
           </div>
         </div>
@@ -164,6 +175,23 @@ export function LookViewer({ row, content, refreshing }: { row: LookRow; content
           </p>
         </Centered>
       );
+    case "not_found":
+    case "outside_roots":
+    case "grant_expired":
+    case "file_replaced":
+    case "no_window": {
+      // Why the file cannot be read, and no retry: reading it again would only fail again.
+      const { Icon, title, reason } = FILE_REASON[content.state];
+      return (
+        <Centered state={content.state}>
+          <Icon aria-hidden="true" className="size-(--size-icon-lg) text-muted-foreground" />
+          <p role="status" className="text-title text-foreground">
+            {t(title)}
+          </p>
+          <p className="text-body text-muted-foreground">{t(reason)}</p>
+        </Centered>
+      );
+    }
     case "failed":
       return (
         <Centered state="failed">

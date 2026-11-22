@@ -261,7 +261,7 @@ fn bootstrap_tool(state_dir: &Path, key: String) -> Result<PathBuf, String> {
         .ok()
         .and_then(|folder| hide_platform::path::to_wire(&folder).ok());
     let request = access_request(AccessAsk::Use { key, folder }, true)?;
-    let mut stream = connect_bootstrap(state_dir)?;
+    let mut stream = connect_bootstrap(state_dir, TIMEOUT)?;
     writeln!(stream, "{request}").map_err(|_| "hide_unavailable".to_owned())?;
     read_bootstrap_answer(&mut stream, None)
 }
@@ -275,7 +275,7 @@ pub fn access_bootstrap(
 ) -> Result<Value, (String, Option<String>)> {
     let unavailable = |code: String| (code, None);
     let request = access_request(ask, false).map_err(unavailable)?;
-    let mut stream = connect_bootstrap(state_dir).map_err(unavailable)?;
+    let mut stream = connect_bootstrap(state_dir, TIMEOUT).map_err(unavailable)?;
     writeln!(stream, "{request}").map_err(|_| unavailable("hide_unavailable".to_owned()))?;
     let mut line = String::new();
     BufReader::new(&mut stream)
@@ -352,10 +352,7 @@ fn operator_ask(
         phone,
     })
     .map_err(|_| "reference_unavailable".to_owned())?;
-    let mut stream = connect_bootstrap(&env.state_dir)?;
-    stream
-        .set_read_timeout(Some(within))
-        .map_err(|_| "hide_unavailable".to_owned())?;
+    let mut stream = connect_bootstrap(&env.state_dir, within)?;
     writeln!(stream, "{request}").map_err(|_| "hide_unavailable".to_owned())?;
     let mut line = String::new();
     BufReader::new(&mut stream)
@@ -402,10 +399,8 @@ pub fn carrier(env: &Env) -> Result<LocalStream, NoCarrier> {
         phone: None,
     })
     .map_err(|_| no_daemon("reference_unavailable"))?;
-    let mut stream = connect_bootstrap(&env.state_dir).map_err(NoCarrier::NoDaemon)?;
-    stream
-        .set_read_timeout(Some(PAIRING_TIMEOUT))
-        .map_err(|_| no_daemon("hide_unavailable"))?;
+    let mut stream =
+        connect_bootstrap(&env.state_dir, PAIRING_TIMEOUT).map_err(NoCarrier::NoDaemon)?;
     writeln!(stream, "{request}").map_err(|_| no_daemon("hide_unavailable"))?;
     let mut line = Vec::new();
     let mut byte = [0u8; 1];
@@ -426,9 +421,8 @@ pub fn carrier(env: &Env) -> Result<LocalStream, NoCarrier> {
                 .to_owned(),
         ));
     }
-    stream
-        .set_read_timeout(None)
-        .map_err(|_| no_daemon("hide_unavailable"))?;
+    // From here the stream is the connection's, as long as it lives.
+    stream.clear_deadline();
     Ok(stream)
 }
 
@@ -451,10 +445,28 @@ fn access_request(ask: AccessAsk, one_shot: bool) -> Result<Value, String> {
     .map_err(|_| "reference_unavailable".to_owned())
 }
 
-fn connect_bootstrap(state_dir: &Path) -> Result<LocalStream, String> {
+/// Opens the bootstrap socket of the daemon in `state_dir` for one exchange
+/// that may take `exchange`, as [`open_exchange`] does, with the connect
+/// itself bounded by [`TIMEOUT`].
+fn connect_bootstrap(state_dir: &Path, exchange: Duration) -> Result<LocalStream, String> {
     let socket = crate::pane_auth::bootstrap_socket_path(state_dir)?;
-    LocalStream::connect_until(&socket, Instant::now() + TIMEOUT)
-        .map_err(|_| "hide_unavailable".to_owned())
+    open_exchange(&socket, TIMEOUT, exchange).map_err(|_| "hide_unavailable".to_owned())
+}
+
+/// Connects to `socket` within `connect`, then bounds every read and write
+/// of the exchange that follows by `exchange` from the connect on. A stream
+/// opened by `connect_until` keeps the connect's deadline for each later
+/// read and write (`hide_platform::ipc`), so an exchange longer than its
+/// connect sets its own: a switch's answer after ten seconds was otherwise
+/// read as `request_timeout` while the switch went on (#2846).
+fn open_exchange(
+    socket: &Path,
+    connect: Duration,
+    exchange: Duration,
+) -> std::io::Result<LocalStream> {
+    let stream = LocalStream::connect_until(socket, Instant::now() + connect.min(exchange))?;
+    stream.set_deadline(Instant::now() + exchange);
+    Ok(stream)
 }
 
 fn bootstrap_local(env: &Env, request: &Value, install: Option<&str>) -> Result<PathBuf, String> {
@@ -1786,6 +1798,30 @@ mod tests {
         assert_eq!(answer["ok"], true, "{answer}");
         assert_eq!(answer["request_id"], request["hook"]["request_id"]);
         assert_eq!(request["hook"]["command"]["prompt"], prompt.as_str());
+        served.join().unwrap();
+    }
+
+    /// An exchange longer than its connect reads its answer once the
+    /// connect's bound has passed (#2846): `hide device switch` waits for
+    /// minutes, and its answer after the ten-second connect bound was read
+    /// as `request_timeout` while the switch went on.
+    #[test]
+    fn an_exchange_longer_than_its_connect_reads_its_answer_after_the_connect_bound() {
+        let state = short_dir();
+        let (_hears, served) = hook_listener(state.path(), |_, stream| {
+            writeln!(stream, "{}", json!({"ok": true})).unwrap();
+        });
+        let socket = crate::pane_auth::bootstrap_socket_path(state.path()).unwrap();
+        let connect = Duration::from_millis(100);
+        let opened = Instant::now();
+        let mut stream = open_exchange(&socket, connect, Duration::from_secs(10)).unwrap();
+        // The connect's bound passes before the ask is even written.
+        while opened.elapsed() <= connect {
+            std::hint::spin_loop();
+        }
+        writeln!(stream, "{}", json!({"device": {"verb": "status"}})).unwrap();
+        let answer = read_answer(&mut stream).unwrap();
+        assert_eq!(answer["ok"], true, "{answer}");
         served.join().unwrap();
     }
 

@@ -135,7 +135,7 @@ it("shows no automations tab against a Hide that sends none, and the one empty l
   }
 });
 
-it("lists each automation's schedule and next run in the computer's zone, its unseen dot, and only run, pause or resume", async () => {
+it("lists each automation's schedule and next run in the computer's zone, its unseen dot, and only [다시 켜기] on one a person fixes (Doop 15)", async () => {
   const { container, click, unmount } = await connect([
     automation("on", { unseen: 2 }),
     automation("going", { running: true }),
@@ -146,18 +146,22 @@ it("lists each automation's schedule and next run in the computer's zone, its un
     await click('[data-phone-tab="automations"]');
     const row = (id: string) => container.querySelector(`[data-phone-automation="${id}"]`)!;
     const presses = (id: string) => [...row(id).querySelectorAll("[data-phone-automation-press]")].map((button) => [button.getAttribute("data-phone-automation-press"), (button as HTMLButtonElement).disabled]);
-    expect(row("on").querySelector("[data-phone-automation-next]")!.textContent).toBe("Weekdays 09:00 · Today 09:00");
+    const next = (id: string) => row(id).querySelector("[data-phone-automation-next]")!;
+    expect(next("on").textContent).toBe("Weekdays 09:00 · Today 09:00");
     expect(row("on").querySelector("[data-phone-automation-unseen]")).not.toBeNull();
-    expect(presses("on")).toEqual([["run", false], ["pause", false]]);
-    // A run going turns the next-run cell and takes [지금 실행] away (B19).
-    expect(row("going").querySelector("[data-phone-automation-next]")!.getAttribute("data-phone-automation-next")).toBe("running");
-    expect(presses("going")).toEqual([["run", true], ["pause", false]]);
-    expect(presses("off")).toEqual([["resume", false]]);
-    // [다시 켜기] says itself in words, so it is not read as [지금 실행]'s ▶ (B25).
-    expect(row("off").querySelector('[data-phone-automation-press="resume"]')!.textContent).toBe("Turn on again");
-    expect(row("signed-out").querySelector("[data-phone-automation-paused]")!.textContent).toBe("⏸ Signed out");
+    // A run going says so in the line, in the working colour (B19).
+    expect(next("going").getAttribute("data-phone-automation-next")).toBe("running");
+    expect(next("going").getAttribute("data-phone-automation-tone")).toBe("working");
+    // The operator's own pause is a dimmed row; what a person fixes is the line in the warning colour with [다시 켜기] (B25).
+    expect(next("off").getAttribute("data-phone-automation-paused")).toBe("operator");
+    expect(next("signed-out").textContent).toBe("Weekdays 09:00 · Signed out · fix it, then");
+    expect(next("signed-out").getAttribute("data-phone-automation-tone")).toBe("warning");
+    // Running now and pausing are on the page; the list carries only the one press a person fixing it needs.
+    expect([presses("on"), presses("going"), presses("off")]).toEqual([[], [], []]);
+    expect(presses("signed-out")).toEqual([["resume", false]]);
+    expect(row("signed-out").querySelector('[data-phone-automation-press="resume"]')!.textContent).toBe("Turn on again");
     // Nothing on the tab makes, edits or removes one (D-20).
-    expect(container.querySelectorAll("[data-phone-automation-press]").length).toBe(6);
+    expect(container.querySelectorAll("[data-phone-automation-press]").length).toBe(1);
   } finally {
     await unmount();
   }
@@ -199,15 +203,14 @@ it("sends a press once under one request id, waits for hided's answer, and says 
   const { container, serve, click, sent, unmount } = await connect([automation("a")]);
   try {
     await click('[data-phone-tab="automations"]');
-    await click('[data-phone-automation="a"] [data-phone-automation-press="run"]');
+    await click('[data-phone-automation="a"] [data-slot="row-overlay-button"]');
+    await click('[data-phone-automation-page] [data-phone-automation-press="run"]');
     const [first] = sent();
     expect(first).toMatchObject({ type: "automation", action: "run", id: "a" });
     // While hided has not answered, no second press goes out.
-    expect((container.querySelector('[data-phone-automation="a"] [data-phone-automation-press="pause"]') as HTMLButtonElement).disabled).toBe(true);
+    expect((container.querySelector('[data-phone-automation-page] [data-phone-automation-press="pause"]') as HTMLButtonElement).disabled).toBe(true);
     await serve({ type: "automation_result", request_id: first!.request_id as string, action: "run", id: "a", ok: false, reason: "running" });
-    // The refusal is one line under the row, and stays under the page's buttons when it opens.
-    expect(container.querySelector('[data-phone-automation="a"] [data-phone-automation-notice]')!.textContent).toBe("A run is already going.");
-    await click('[data-phone-automation="a"] [data-slot="row-overlay-button"]');
+    // The refusal is one line under the page's buttons.
     expect(container.querySelector("[data-phone-automation-notice]")!.textContent).toBe("A run is already going.");
     // A refused press sent nothing the core kept, so the next one is a new press.
     await click('[data-phone-automation-page] [data-phone-automation-press="run"]');
@@ -225,13 +228,14 @@ it("keeps the last list dimmed under the unreachable line with its buttons off, 
   const { container, click, lose, unmount } = await connect([automation("a")]);
   try {
     await click('[data-phone-tab="automations"]');
-    await click('[data-phone-automation="a"] [data-phone-automation-press="pause"]');
+    await click('[data-phone-automation="a"] [data-slot="row-overlay-button"]');
+    await click('[data-phone-automation-page] [data-phone-automation-press="pause"]');
     await lose();
     expect(container.querySelector("[data-phone-unreachable]")).not.toBeNull();
-    expect(container.querySelector('[data-phone-automations="true"] [aria-busy="true"] [data-phone-automation="a"]')).not.toBeNull();
     expect([...container.querySelectorAll<HTMLButtonElement>("[data-phone-automation-press]")].every((button) => button.disabled)).toBe(true);
-    await click('[data-phone-automation="a"] [data-slot="row-overlay-button"]');
     expect(container.querySelector("[data-phone-automation-notice]")!.textContent).toBe("The computer can't be reached right now. Try again once connected.");
+    await click('[data-phone-back="automations"]');
+    expect(container.querySelector('[data-phone-automations="true"] [aria-busy="true"] [data-phone-automation="a"]')).not.toBeNull();
   } finally {
     await unmount();
   }
@@ -243,7 +247,8 @@ it("sends a press whose answer the lost connection took again under its id, and 
   const { click, sent, lose, reconnect, serve, unmount } = await connect(before);
   try {
     await click('[data-phone-tab="automations"]');
-    const run = '[data-phone-automation="a"] [data-phone-automation-press="run"]';
+    await click('[data-phone-automation="a"] [data-slot="row-overlay-button"]');
+    const run = '[data-phone-automation-page] [data-phone-automation-press="run"]';
     await click(run);
     await lose();
     // The computer had not taken it: the list comes back as it was, and the press again is the same press.
@@ -268,12 +273,13 @@ it("sends a new pause after one whose answer was lost took effect and was undone
   const { click, sent, lose, reconnect, list, unmount } = await connect(on);
   try {
     await click('[data-phone-tab="automations"]');
-    await click('[data-phone-automation="a"] [data-phone-automation-press="pause"]');
+    await click('[data-phone-automation="a"] [data-slot="row-overlay-button"]');
+    await click('[data-phone-automation-page] [data-phone-automation-press="pause"]');
     await lose();
     // The pause landed, then the desktop turned it on again: the list is back where the press saw it.
     await reconnect([automation("a", { paused: { reason: "operator", at_unix_ms: NOW }, next_run_at_unix_ms: null })]);
     await list(on);
-    await click('[data-phone-automation="a"] [data-phone-automation-press="pause"]');
+    await click('[data-phone-automation-page] [data-phone-automation-press="pause"]');
     const [first, second] = sent();
     expect(second!.request_id).not.toBe(first!.request_id);
   } finally {
@@ -287,7 +293,8 @@ it("draws an automation that stopped for a person as one line of 내 차례 with
   try {
     await list([automation("on"), signedOut], ["signed-out"]);
     const line = container.querySelector('[data-phone-group="needs_you"] [data-phone-automation-ask="signed-out"]')!;
-    expect(line.textContent).toBe("Sort issues · Signed out · fix it, thenTurn on again");
+    // `<name>` over `자동화 <why> · 고치고` and [다시 켜기] (Doop 01).
+    expect(line.textContent).toBe("Sort issuesAutomations Signed out · fix it, thenTurn on again");
     expect(container.querySelector('[data-phone-group="needs_you"] [data-phone-group-count]')!.textContent).toBe("1");
     expect(container.querySelector('[data-phone-tab="agents"]')!.getAttribute("data-phone-tab-count")).toBe("1");
     await click('[data-phone-automation-ask="signed-out"] [data-phone-automation-press="resume"]');

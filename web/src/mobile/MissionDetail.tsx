@@ -1,14 +1,13 @@
 // The phone keeps its header and answer controls around the shared desktop mission graph.
 
-import { ArrowLeftIcon, CheckIcon, ChevronRightIcon, CircleAlertIcon, FilePlusIcon, Loader2Icon, ThumbsUpIcon } from "lucide-react";
+import { CheckIcon, ChevronRightIcon, CircleAlertIcon, FilePlusIcon, ListIcon, Loader2Icon, NetworkIcon, ThumbsUpIcon } from "lucide-react";
 import { useState } from "react";
-import { Elapsed, useElapsed } from "../components/elapsed";
+import { useElapsed } from "../components/elapsed";
 import { GatePlanList } from "../components/mission-gate";
 import { MissionDestinationTag } from "../components/mission-options";
 import { ProgressCells } from "../components/mission-tone";
 import { StatusMark } from "../components/status-mark";
 import { Button } from "../components/ui/button";
-import { Input } from "../components/ui/input";
 import { RadioGroup, RadioGroupItem } from "../components/ui/radio-group";
 import { RowButton } from "../components/ui/row-button";
 import { useInterfaceTranslation } from "../i18n/translator";
@@ -19,6 +18,8 @@ import { landsInDestination } from "../missionOptions";
 import { DECISION_VIEWS_SHOWN, attentionReasonText, gatesAhead, missionCells, missionOpen, skipWords } from "../missions";
 import { answerMission, askMissionMaterial, openDetail, reopenMissionView, settleMissionAnswer } from "./connection";
 import { PhoneMissionMap } from "./PhoneMissionMap";
+import { MissionSteps } from "./MissionSteps";
+import { Composer, PageHead } from "./layout";
 import { OfflineText } from "./OfflineText";
 import { progress } from "./missionModel";
 import type { MissionHeldNode, MissionSafetyNet, MissionSkip } from "../snapshot";
@@ -43,37 +44,39 @@ function Page({ mission, dim, connected }: { mission: PhoneMission; dim: boolean
   const asking = open && mission.decision !== null;
   // A finished mission whose steps stayed on the Mac has no progress to count.
   const stepsOmitted = mission.nodes_omitted ?? 0;
+  const [map, setMap] = useState(false);
   return (
     <main className="flex h-full flex-col" data-phone-mission-page={mission.id}>
-      <header className="phone-safe-top shrink-0 border-b border-border bg-background px-lg pb-md">
-        <div className="flex items-center justify-between gap-md pt-md">
-          <Button variant="text" size="inline" className="min-h-(--size-touch-target) gap-xs text-body" data-phone-back="missions" onClick={closeMission}>
-            <ArrowLeftIcon aria-hidden="true" className="size-(--size-icon)" />
-            {t("mobile.tab.missions")}
-          </Button>
-          {!mission.stale ? <Elapsed since={mission.started_at_unix_ms ?? mission.created_at_unix_ms} className="font-mono text-body text-muted-foreground" /> : null}
-        </div>
-        <h1 className="break-keep text-headline font-semibold text-foreground wrap-anywhere" data-phone-mission-title="true">{mission.title}</h1>
-        <div className="mt-xs flex min-w-0 items-center justify-between gap-md">
-          <p className="flex min-w-0 items-center gap-xs text-subhead text-subtle-foreground" data-phone-mission-conductor={mission.conductor.present ? "present" : "none"}>
-            {open && mission.conductor.present ? <Loader2Icon aria-hidden="true" className="size-(--size-icon) shrink-0 text-mission-working" /> : null}
-            <span className="min-w-0 break-keep wrap-anywhere">{stepsOmitted > 0 ? stateWord : `${stateWord} · ${t("mobile.mission.progress", { done, total })}`}</span>
-          </p>
-          {conductor ? (
-            <Button variant="text" size="inline" className="min-h-(--size-touch-target) shrink-0 gap-0 text-subhead" data-phone-mission-chat="true" onClick={() => openDetail(conductor)}>
-              {t("mobile.mission.chat")}
-              <ChevronRightIcon aria-hidden="true" className="size-(--size-icon)" />
+      <PageHead
+        back={{ label: t("mobile.tab.missions"), onClick: closeMission, tag: "missions" }}
+        title={<span data-phone-mission-title="true">{mission.title}</span>}
+        line={
+          // One line (Doop 14): the branch gives way first and is cut with `…`, then the Conductor's words; the count never shrinks.
+          <span className="flex min-w-0 flex-1 items-center gap-x-xs overflow-hidden whitespace-nowrap">
+            <span className="flex min-w-0 shrink items-center gap-xs" data-phone-mission-conductor={mission.conductor.present ? "present" : "none"}>
+              {open && mission.conductor.present ? <Loader2Icon aria-hidden="true" className="size-(--size-icon) shrink-0 text-mission-working" /> : null}
+              {conductor ? (
+                <Button variant="text" size="inline" className="-my-sm min-h-(--size-touch-target) gap-0 text-body" data-phone-mission-chat="true" onClick={() => openDetail(conductor)}>
+                  {stateWord} {t("mobile.mission.chat")}
+                  <ChevronRightIcon aria-hidden="true" className="size-(--size-icon)" />
+                </Button>
+              ) : <span className="min-w-0 truncate">{stateWord}</span>}
+            </span>
+            {stepsOmitted > 0 ? null : <span className="shrink-0">· {t("mobile.mission.progress", { done, total })}</span>}
+            {/* Where the results go as the desktop's head names it, in the line's own text (Doop 14), only while a step lands there and the Mac sent the branch (PRD mission-destination D-18, D-38, B17). */}
+            {mission.destination && landsInDestination(mission.nodes) ? <MissionDestinationTag branch={mission.destination} touch className="shrink-[10] border-none px-none text-body" /> : null}
+          </span>
+        }
+        action={
+          mission.nodes.length > 0 ? (
+            <Button variant="ghost" size="icon" aria-pressed={map} aria-label={t(map ? "mobile.mission.showSteps" : "mobile.mission.showMap")} className="-mr-sm size-(--size-touch-target)" data-phone-mission-map-toggle={map ? "map" : "steps"} onClick={() => setMap(!map)}>
+              {map ? <ListIcon aria-hidden="true" className="size-(--size-icon-lg)" /> : <NetworkIcon aria-hidden="true" className="size-(--size-icon-lg)" />}
             </Button>
-          ) : null}
-        </div>
-        {/* The cells, then where the results go as the desktop's head names it, only while a step lands there and the Mac sent the branch (PRD mission-destination D-18, D-38, B17). */}
-        {mission.nodes.length > 0 ? (
-          <div className="mt-sm flex min-w-0 items-center gap-sm">
-            <ProgressCells tones={missionCells(mission)} size="head" />
-            {mission.destination && landsInDestination(mission.nodes) ? <MissionDestinationTag branch={mission.destination} touch /> : null}
-          </div>
-        ) : null}
-      </header>
+          ) : null
+        }
+      >
+        {mission.nodes.length > 0 ? <div className="mt-sm"><ProgressCells tones={missionCells(mission)} size="head" /></div> : null}
+      </PageHead>
       {dim ? (
         <div role="status" className="flex items-center gap-sm px-lg py-sm text-body text-subtle-foreground" data-phone-unreachable="true">
           <Loader2Icon aria-hidden="true" className="size-(--size-icon-lg) shrink-0 animate-spin" />
@@ -85,7 +88,8 @@ function Page({ mission, dim, connected }: { mission: PhoneMission; dim: boolean
         {open && mission.safety_net ? <SafetyNet mission={mission} net={mission.safety_net} conductor={conductor} /> : null}
         {/* Where the operator will look, over a plan that waits for approval, as the desktop's map lists it (PRD mission-human-gate B1, B13). */}
         <GatePlanList nodes={mission.status === "planning" ? gatesAhead(mission) : []} className="pt-lg" />
-        <PhoneMissionMap key={mission.id} mission={mission} />
+        {/* The steps are the page's list; the desktop graph waits behind the head's map button (Doop 14). */}
+        {map ? <PhoneMissionMap key={mission.id} mission={mission} /> : <MissionSteps mission={mission} />}
         <Decided mission={mission} />
       </div>
       {asking ? <WrittenAnswer mission={mission} connected={connected} /> : null}
@@ -329,30 +333,18 @@ function WrittenAnswer({ mission, connected }: { mission: PhoneMission; connecte
   const left = ANSWER_LIMIT - draft.length;
   return (
     <footer className="phone-safe-bottom shrink-0 border-t border-border bg-background px-lg pt-sm">
-      <form
-        className="flex gap-sm pb-md"
-        onSubmit={(event) => {
-          event.preventDefault();
-          if (text && !blocked) answerMission(mission, { text }, text);
-        }}
-      >
-        <Input
+      <div className="pb-md">
+        <Composer
           value={draft}
-          maxLength={ANSWER_LIMIT}
-          onChange={(event) => setMissionDraft(mission.id, event.target.value)}
+          onChange={(value) => setMissionDraft(mission.id, value)}
+          onSubmit={() => { if (text && !blocked) answerMission(mission, { text }, text); }}
           placeholder={t("mobile.mission.replyPlaceholder")}
-          aria-label={t("mission.banner.input")}
           disabled={view.closed || !connected}
-          enterKeyHint="send"
-          autoComplete="off"
-          autoCorrect="off"
-          data-phone-answer-input="true"
-          className="h-(--size-touch-target) min-w-0 flex-1 rounded-lg border border-border bg-input px-md text-title text-foreground outline-none placeholder:text-muted-foreground focus-visible:ring-1 focus-visible:ring-ring disabled:opacity-(--opacity-disabled)"
+          sendDisabled={blocked || text.length === 0}
+          input={{ maxLength: ANSWER_LIMIT, "aria-label": t("mission.banner.input"), "data-phone-answer-input": "true" }}
+          send={{ "data-phone-answer-send": "true" }}
         />
-        <Button variant="secondary" type="submit" disabled={blocked || text.length === 0} className="h-(--size-touch-target) rounded-md px-md text-body font-medium" data-phone-answer-send="true">
-          {t("mobile.send")}
-        </Button>
-      </form>
+      </div>
       {left <= 100 ? <p className="-mt-sm pb-md text-body text-muted-foreground" data-phone-answer-left={left}>{t("mission.banner.left", { count: left })}</p> : null}
     </footer>
   );

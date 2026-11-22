@@ -8,7 +8,7 @@ import { AUTOMATION_EXAMPLE_KEYS, AUTOMATION_EXAMPLES, shownOwnFolder, type Auto
 import { AutomationForm, EXAMPLE_WORDS } from "./AutomationForm";
 import { settledPlace } from "./automationPlace";
 import { viewRun } from "./automationRunView";
-import { lastResult, pauseReasonText, recentSpendText, recordText, scheduleText, skippedFolded, spendText, whenText, type RecordTone } from "./automationWords";
+import { lastResult, pauseReasonText, recentSpendText, lineTime, recordText, scheduleText, spendText, whenText, type RecordTone } from "./automationWords";
 import { AgentLogo } from "./components/agent-logo";
 import { LookChip } from "./components/linked-view";
 import { formatElapsed, useMinuteClock } from "./components/elapsed";
@@ -520,8 +520,7 @@ function Runs({ automation, actions, words }: { automation: Automation; actions:
 
 function recordWhen(record: AutomationRecord): number | null {
   if (record.kind === "run") return record.due_unix_ms ?? record.started_at_unix_ms;
-  if (record.kind === "skipped") return skippedFolded(record) ? null : record.at_unix_ms;
-  return null;
+  return lineTime(record);
 }
 
 function RunRow({ automation, record, actions, words }: { automation: Automation; record: AutomationRecord; actions: Actions; words: Words }) {

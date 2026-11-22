@@ -1,5 +1,5 @@
 import { useRef, useState } from "react";
-import { ChevronDownIcon, LaptopIcon, XIcon } from "lucide-react";
+import { ChevronDownIcon, XIcon } from "lucide-react";
 import { Button } from "../components/ui/button";
 import { Sheet, SheetClose, SheetContent, SheetHeader, SheetTitle, SheetTrigger } from "../components/ui/sheet";
 import { useInterfaceTranslation } from "../i18n/translator";
@@ -15,8 +15,9 @@ export function HostPicker({ name, activeRoom, defaultOpen = false }: { name: st
   const [open, setOpen] = useState(defaultOpen);
   const trigger = useRef<HTMLButtonElement>(null);
   return <Sheet open={open} onOpenChange={setOpen}>
-    <SheetTrigger asChild><Button ref={trigger} variant="ghost" className="mt-xs h-auto min-h-(--size-touch-target) max-w-full justify-start gap-sm px-none py-sm text-subhead">
-      <LaptopIcon aria-hidden="true" className="size-(--size-icon) shrink-0" /><span className="min-w-0 whitespace-normal break-keep text-left wrap-anywhere">{name}</span>{active.demo ? <SamplePill /> : null}<ChevronDownIcon aria-hidden="true" className="size-(--size-icon) shrink-0" />
+    {/* The screen's title: the computer's name and a chevron (Doop 01). */}
+    <SheetTrigger asChild><Button ref={trigger} variant="ghost" className="-ml-xs h-auto min-h-(--size-touch-target) max-w-full justify-start gap-sm px-xs py-none text-headline font-semibold" data-phone-host-picker="true">
+      <span className="min-w-0 whitespace-normal break-keep text-left wrap-anywhere">{name}</span>{active.demo ? <SamplePill /> : null}<ChevronDownIcon aria-hidden="true" className="size-(--size-icon-lg) shrink-0 text-muted-foreground" />
     </Button></SheetTrigger>
     <SheetContent side="bottom" returnFocusTo={() => trigger.current} aria-describedby={undefined} className="phone-safe-bottom max-h-dvh overflow-y-auto rounded-t-xl px-lg">
       <SheetHeader className="flex-row items-center justify-between px-sm py-sm">

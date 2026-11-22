@@ -4,7 +4,7 @@ import { expect, test as base, type Page } from "@playwright/test";
 import { WebSocket } from "ws";
 import qrcode from "qrcode-generator";
 import { screenshot } from "./wire";
-import { startPhoneRelay } from "./phone-relay-fixture";
+import { LOOK_CHUNK, startPhoneRelay } from "./phone-relay-fixture";
 import { installBrowserPush } from "./phone-push-platform";
 import { PHONE_PROTOCOL } from "../src/mobile/phoneVersion";
 const test = base.extend<{ relay: Awaited<ReturnType<typeof startPhoneRelay>> }>({
@@ -42,6 +42,43 @@ const test = base.extend<{ relay: Awaited<ReturnType<typeof startPhoneRelay>> }>
 });
 test.use({ viewport: { width: 390, height: 844 }, locale: "en-US" });
 
+test.describe("narrow heads", () => {
+  test.use({ viewport: { width: 320, height: 700 }, hasTouch: true, isMobile: true });
+
+  // UI_BEHAVIOR.md, The phone app: the detail's tabs and chips wrap rather than overlap on a narrow phone (I-17), and a View's
+  // head keeps its name, kind, opener and time inside the screen however long the name (I-65).
+  test("a detail's tabs and chips and a View's head stay inside a 320-wide screen without overlapping", async ({ page, relay }) => {
+    await page.goto(`${relay.origin}/p/${PHONE_PROTOCOL}/?demo=1`);
+    await page.locator('[data-phone-agent="local|a1"]').tap();
+    const tabs = page.locator('[role="tablist"]').first();
+    const chips = page.locator("[data-phone-detail-links]");
+    await expect(tabs).toBeVisible();
+    await expect(chips).toBeVisible();
+    const [a, b] = [await tabs.boundingBox(), await chips.boundingBox()];
+    const apart = a!.x + a!.width <= b!.x || b!.x + b!.width <= a!.x || a!.y + a!.height <= b!.y || b!.y + b!.height <= a!.y;
+    expect(apart, "the chips never sit on the tabs").toBe(true);
+    const spill = () => page.evaluate(() => document.documentElement.scrollWidth - document.documentElement.clientWidth);
+    expect(await spill()).toBeLessThanOrEqual(0);
+    // The operator's words stand right, in a bubble narrower than the screen (Doop 02).
+    const mine = (await page.locator('[data-phone-message="you"] p').first().boundingBox())!;
+    expect(mine.x + mine.width).toBeGreaterThan(320 - 24);
+    expect(mine.x).toBeGreaterThan(24);
+
+    await page.locator('[data-phone-back="true"]').tap();
+    await page.locator('[data-phone-agent="local|a2"]').tap();
+    await page.locator('[data-phone-view="looks"]').tap();
+    await page.locator("[data-phone-look]").first().tap();
+    const head = page.locator("[data-phone-viewing]");
+    await expect(head).toBeVisible();
+    await expect(head.locator("[data-phone-viewing-opener]")).toBeVisible();
+    for (const part of await head.locator("h1, [data-phone-viewing-opener]").all()) {
+      const box = (await part.boundingBox())!;
+      expect(box.x + box.width).toBeLessThanOrEqual(320);
+    }
+    expect(await spill()).toBeLessThanOrEqual(0);
+  });
+});
+
 test.describe("mission graph touch", () => {
   test.use({ viewport: { width: 393, height: 852 }, hasTouch: true, isMobile: true });
 
@@ -51,6 +88,12 @@ test.describe("mission graph touch", () => {
     await page.goto(`${relay.origin}/p/${PHONE_PROTOCOL}/?demo=1`);
     await page.locator('[data-phone-tab="missions"]').tap();
     await page.locator('[data-phone-mission="mission-release"]').tap();
+    // The page opens on its step list (Doop 14), its head's second line one line: the Conductor, the count and the branch.
+    const conductor = (await page.locator("[data-phone-mission-conductor]").boundingBox())!;
+    const branch = (await page.locator("[data-mission-destination]").boundingBox())!;
+    expect(Math.abs(branch.y + branch.height / 2 - (conductor.y + conductor.height / 2))).toBeLessThan(4);
+    // The graph is behind the head's map button.
+    await page.locator("[data-phone-mission-map-toggle]").tap();
     const canvas = page.locator("[data-mission-canvas]");
     const card = page.locator('[data-mission-node="rehearse"]');
     await expect(canvas.locator('[data-dependency-layout="layered"]')).toBeVisible();
@@ -384,6 +427,72 @@ try { parent.document.title; document.getElementById("parent").textContent = "pa
   expect(page.frames().map((child) => new URL(child.url(), relay.origin).pathname)).toContain(`/p/${PHONE_PROTOCOL}/look-frame.html`);
   expect(relay.received.filter((frame) => frame.type === "look_seen")).toMatchObject([{ view_id: "v-html" }]);
 });
+
+/** An uncompressed 24-bit BMP of `width` x `height` noise, so its size is its pixels and it spans many chunks. */
+function noiseBmp(width: number, height: number): Buffer {
+  const row = Math.ceil((width * 3) / 4) * 4;
+  const bmp = Buffer.alloc(54 + row * height);
+  bmp.write("BM", 0, "latin1");
+  bmp.writeUInt32LE(bmp.length, 2);
+  bmp.writeUInt32LE(54, 10);
+  bmp.writeUInt32LE(40, 14);
+  bmp.writeInt32LE(width, 18);
+  bmp.writeInt32LE(height, 22);
+  bmp.writeUInt16LE(1, 26);
+  bmp.writeUInt16LE(24, 28);
+  bmp.writeUInt32LE(row * height, 34);
+  let seed = 7;
+  for (let at = 54; at < bmp.length; at++) bmp[at] = seed = (seed * 1103515245 + 12345) & 0xff;
+  return bmp;
+}
+
+test("a large image arrives in many chunks, each confirmed in order, and draws whole", async ({ page, relay }) => {
+  const bytes = noiseBmp(320, 300);
+  const chunks = Math.ceil(bytes.length / LOOK_CHUNK);
+  expect(chunks).toBeGreaterThan(3);
+  relay.state.look = { id: "v-image", kind: "image", name: "screen.bmp", mode: "image", bytes };
+  await pair(page, relay);
+  await page.locator('[data-phone-agent="test-device|pane-one"]').click();
+  await page.locator('[data-phone-view="looks"]').click();
+  await page.locator('[data-phone-look="v-image"]').click();
+  const image = page.locator('[data-phone-look-state="image"] img');
+  await expect(image).toBeVisible();
+  await expect.poll(() => image.evaluate((element: HTMLImageElement) => [element.naturalWidth, element.naturalHeight])).toEqual([320, 300]);
+  // The phone confirmed every chunk, in order, which is what lets a computer send the next.
+  expect(relay.received.filter((frame) => frame.type === "look_ack").map((frame) => frame.seq)).toEqual([...Array(chunks).keys()]);
+});
+
+for (const [state, title] of [
+  ["not_found", "This file isn't here now"],
+  ["outside_roots", "This file can't be shown on the phone"],
+  ["grant_expired", "Hide can't open this file anymore"],
+  ["file_replaced", "This file was replaced"],
+] as const) {
+  test(`a file the computer answers ${state} shows its reason and nothing to retry`, async ({ page, relay }) => {
+    relay.state.look = { id: "v-doc", kind: "doc", name: "release-notes-draft.md", result: state };
+    await pair(page, relay);
+    await page.locator('[data-phone-agent="test-device|pane-one"]').click();
+    await page.locator('[data-phone-view="looks"]').click();
+    await page.locator('[data-phone-look="v-doc"]').click();
+    await expect(page.locator(`[data-phone-look-state="${state}"]`)).toContainText(title);
+    await expect(page.locator("[data-phone-look-retry]")).toHaveCount(0);
+  });
+}
+
+for (const [reason, words] of [["window_elsewhere", "It's on another computer's screen"], ["not_drawn", "Show this page on the Mac once to see it here"]] as const) {
+  test(`a page the computer cannot take a picture of, ${reason}, shows its address and why`, async ({ page, relay }) => {
+    relay.state.look = { id: "v-page", kind: "page", name: "landing", result: "page", url: "http://localhost:5173/", reason };
+    await pair(page, relay);
+    await page.locator('[data-phone-agent="test-device|pane-one"]').click();
+    await page.locator('[data-phone-view="looks"]').click();
+    await page.locator('[data-phone-look="v-page"]').click();
+    const body = page.locator('[data-phone-look-state="page"]');
+    await expect(body.locator("[data-phone-look-address]")).toHaveText("http://localhost:5173/");
+    await expect(body.getByRole("status")).toHaveText(words);
+    await expect(page.locator("[data-phone-look-refresh]")).toBeEnabled();
+    await page.screenshot({ path: test.info().outputPath(`page-${reason}.png`) });
+  });
+}
 
 // Reload, worker scopes and encrypted reconnect cross boundaries a component test cannot observe.
 test("the phone keeps receiving Off across reload and reconnect, and On registers again", async ({ page, relay }) => {

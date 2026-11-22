@@ -12,10 +12,10 @@ import { cn } from "../lib/utils";
 import { MissionGraph } from "../MissionGraph";
 import { MissionMapCanvas } from "../MissionMapCanvas";
 import { branchLine, branchLineWords, resultLine, resultLineWords } from "../missionLine";
-import { attentionReasonText, cardGate, escalationWhy, gateWaitedLong, holdReason, nodeLook, nodePace, openAttention, workerAsleep } from "../missions";
+import { gateWaitedLong, holdReason } from "../missions";
 import type { MissionMapFlow } from "../snapshot";
 import { openDetail } from "./connection";
-import { phoneLineNode, workerOf } from "./missionModel";
+import { phoneLineNode, stepState, workerOf } from "./missionModel";
 import type { PhoneMission, PhoneMissionNode } from "./protocol";
 import { agentOf, usePhone } from "./store";
 
@@ -69,21 +69,14 @@ export function PhoneMissionMap({ mission }: { mission: PhoneMission }) {
  */
 function PhoneNode({ mission, node }: { mission: PhoneMission; node: PhoneMissionNode }) {
   const { t } = useInterfaceTranslation();
-  const look = nodeLook(mission, node);
-  const reason = holdReason(mission, node, workerOf);
-  const attention = openAttention(mission, node);
-  // A start gate once passed is the desktop panel's alone, as on the desktop's card (PRD node-presets D-09).
-  const gate = cardGate(node.gate);
+  // Where it stands, by the one rule the step list reads too (`stepState`); a start gate once passed is the desktop panel's alone (PRD node-presets D-09).
+  const { look, pace, gate, attention, turn, mergeDue, stopped, asleep, why: detail, word } = stepState(mission, node, t);
   const long = gateWaitedLong(gate, useMinuteClock());
   const agent = usePhone((s) => node.agent && agentOf(s.groups, node.agent) ? node.agent : null);
-  // A merge the core says is the operator's now is the band's (D-53); one ahead or done is the person on the branch line.
-  const mergeDue = node.merge?.state === "due";
   const line = useMemo(() => phoneLineNode(node, mission.nodes), [node, mission.nodes]);
   // An outside step a Mac before destinations sent with nothing it watches has no line: a lone mark would say nothing (B60).
   const branch = useMemo(() => line.kind === "external" && !line.external ? null : branchLine(line, mission.destination ?? null), [line, mission.destination]);
   const result = branch ? null : resultLine(line);
-  // `내 차례` at the line's end says the step waits on the operator for something the band and line do not: a gate reached, a raised reason, a decision or the worker's turn.
-  const turn = gate?.state === "open" || attention?.to === "operator" || reason?.kind === "decision" || reason?.kind === "worker";
   // `내 차례` stands at the right end of the line's first row as the desktop's marks do (D-56); a long wait's words give way first, the tag's own word never.
   const marks = turn ? (
     <span className="flex min-w-0 items-center justify-end gap-x-xs overflow-hidden" data-node-foot-end="true">
@@ -93,17 +86,7 @@ function PhoneNode({ mission, node }: { mission: PhoneMission; node: PhoneMissio
       </span>
     </span>
   ) : null;
-  // How the step moves now, drawn as the desktop's card draws it; a stopped one says so in its colour, without the cause or the time, which stay on the Mac (operator decision 2026-11-13).
-  const pace = nodePace(mission, node);
-  const stopped = pace === "stopped" ? (node.work?.state === "no_worker" ? t("mission.work.stopped", { why: t("mission.work.stop.noWorker") }) : t("mission.work.stoppedPlain")) : null;
-  const word = stopped ?? t(`mission.look.${look}`);
-  // A worker Hide put to sleep is said asleep, never a wait on it (letters-missions-simplify B23).
-  const asleep = pace === "waiting" && (node.work?.state === "asleep" || workerAsleep(node)) ? t("mission.worker.asleep") : null;
   const waitLine = useWaitWords(node.wait);
-  const detail = reason?.kind === "attention"
-    ? `${reason.attention.to === "conductor" ? `${t("mission.attention.to.conductor")} · ` : ""}${attentionReasonText(reason.attention.reason, reason.attention.pr, t)}`
-    : reason?.kind === "worker" ? escalationWhy(reason.escalation, t)
-      : reason?.kind === "decision" ? t("mobile.mission.waitsDecision") : null;
   return (
     <div data-dependency-node={node.key} className="flex">
       <MissionGraphCard

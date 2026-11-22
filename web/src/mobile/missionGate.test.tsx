@@ -115,6 +115,7 @@ it("counts the gates still ahead on the list row in grey, lists them over a plan
     await click('[data-phone-back="missions"]');
 
     await click('[data-phone-mission="m-run"]');
+    await click("[data-phone-mission-map-toggle]");
     expect(container.querySelector("[data-mission-gates]")).toBeNull();
     expect(container.querySelector('[data-mission-node="b"] [data-node-gate]')?.getAttribute("data-node-gate")).toBe("open");
     expect(container.querySelector('[data-mission-node="b"] [data-node-gate-long]')?.textContent).toBe(" · Waiting long");
@@ -136,6 +137,7 @@ it("keeps the later planned review visible after a two-step plan starts, without
   try {
     await click('[data-phone-tab="missions"]');
     await click('[data-phone-mission="m-start"]');
+    await click("[data-phone-mission-map-toggle]");
     expect(container.querySelector("[data-mission-gate-row]")?.textContent).toContain("the finished screen");
     await serve({ type: "missions", failed: false, items: [{ ...planned, status: "running", started_at_unix_ms: 2_000, nodes: [
       { ...planned.nodes[0]!, status: "working" },

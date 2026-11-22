@@ -48,6 +48,19 @@ type Options = {
    * hided alone asks, with the control token, and gets the grant or a reason.
    */
   externalOpen?: (path: string, page: boolean) => Promise<Json>;
+  /**
+   * Reads an outside file this window granted, now, for a phone looking at
+   * the agent's View (`ExternalFiles.readPart`): the grant's file or, with
+   * `file`, one in its folder, up to `limit` bytes. hided alone asks, with the
+   * control token; the answer is the bytes and the file's size, or a reason.
+   */
+  externalRead?: (grant: string, file: string | null, limit: number) => Promise<{ bytes: Uint8Array; total: number } | { failure: string }>;
+  /**
+   * A phone's picture of a display's page (`BrowserViews.still`): what the
+   * page draws, in front or not, as a JPEG, or why there is none. hided alone
+   * asks, with the control token, for a display of an area the core authorized.
+   */
+  still?: (scope: CdpScope) => Promise<{ jpeg: Uint8Array } | { failure: string }>;
   log: (event: string, fields: Record<string, string | number | boolean>) => void;
   chromeVersion: string;
   /** Wall clock is a platform boundary; protocol/server timers stay native. */
@@ -106,6 +119,8 @@ const MAX_HTTP_REQUESTS = 16;
 const MAX_PENDING = 32;
 const MAX_SESSIONS = 64;
 const MAX_BODY_BYTES = 16 * 1024;
+/** The most of an outside file one `/external-read` answers: a phone's image cap (`hided/src/mobile/looks.rs` `IMAGE_CAP`). */
+const MAX_EXTERNAL_READ_BYTES = 10 * 1024 * 1024;
 const MAX_MESSAGE_BYTES = 4 * 1024 * 1024;
 const MAX_BUFFER_BYTES = 8 * 1024 * 1024;
 const MAX_REQUESTS_PER_MINUTE = 600;
@@ -336,6 +351,21 @@ export class BrowserCdpGateway {
     }
     return null;
   }
+  /** Whether hided asked, with the control token; anyone else is answered 401 here. The one check every hided route makes. */
+  private controlled(request: IncomingMessage, response: ServerResponse): boolean {
+    if (sameToken(request.headers.authorization ?? "", `Bearer ${this.controlToken}`)) return true;
+    this.reply(response, 401, { error: "Unauthorized" });
+    return false;
+  }
+  /** Bytes for hided (an outside file's part, a page's still), or as JSON the reason there are none. */
+  private replyBytes(response: ServerResponse, answer: { bytes: Uint8Array; total?: number } | { failure: string }): void {
+    if ("failure" in answer) { this.reply(response, 200, { failure: answer.failure }); return; }
+    response.writeHead(200, {
+      "Content-Type": "application/octet-stream", "Content-Length": answer.bytes.length, "Cache-Control": "no-store", "X-Content-Type-Options": "nosniff",
+      ...(answer.total === undefined ? {} : { "X-Hide-Total": String(answer.total) }),
+    });
+    response.end(Buffer.from(answer.bytes.buffer, answer.bytes.byteOffset, answer.bytes.length));
+  }
   private reply(response: ServerResponse, status: number, value: unknown): void {
     response.writeHead(status, { "Content-Type": "application/json", "Cache-Control": "no-store", "X-Content-Type-Options": "nosniff" });
     response.end(JSON.stringify(value));
@@ -358,7 +388,7 @@ export class BrowserCdpGateway {
     try {
       const path = request.url ?? "";
       if (path === "/revoke" && request.method === "POST") {
-        if (!sameToken(request.headers.authorization ?? "", `Bearer ${this.controlToken}`)) { this.reply(response, 401, { error: "Unauthorized" }); return; }
+        if (!this.controlled(request, response)) return;
         // A node daemon whose link to its core ended: what the core authorized
         // through that link stops working, and the gateway stays available.
         this.revokeAll();
@@ -366,14 +396,33 @@ export class BrowserCdpGateway {
         return;
       }
       if (path === "/external-open" && request.method === "POST" && this.options.externalOpen) {
-        if (!sameToken(request.headers.authorization ?? "", `Bearer ${this.controlToken}`)) { this.reply(response, 401, { error: "Unauthorized" }); return; }
+        if (!this.controlled(request, response)) return;
         const body = await this.body(request);
         if (!object(body) || typeof body.path !== "string" || typeof body.page !== "boolean") { this.reply(response, 400, { error: "Invalid request" }); return; }
         this.reply(response, 200, await this.options.externalOpen(body.path, body.page));
         return;
       }
+      if (path === "/external-read" && request.method === "POST" && this.options.externalRead) {
+        if (!this.controlled(request, response)) return;
+        const body = await this.body(request);
+        const valid = object(body) && typeof body.grant === "string" && body.grant.length <= 64
+          && (body.file === null || (typeof body.file === "string" && body.file.length <= 1024))
+          && Number.isSafeInteger(body.limit) && (body.limit as number) > 0 && (body.limit as number) <= MAX_EXTERNAL_READ_BYTES;
+        if (!valid) { this.reply(response, 400, { error: "Invalid request" }); return; }
+        this.replyBytes(response, await this.options.externalRead(body.grant as string, body.file as string | null, body.limit as number));
+        return;
+      }
+      if (path === "/display-still" && request.method === "POST" && this.options.still) {
+        if (!this.controlled(request, response)) return;
+        const scope = scopeOf(await this.body(request));
+        if (!scope?.display_id) { this.reply(response, 400, { error: "Invalid scope" }); return; }
+        if (this.options.incarnation(scope) === null) { this.reply(response, 409, { error: "Workspace area is no longer authorized" }); return; }
+        const still = await this.options.still(scope);
+        this.replyBytes(response, "failure" in still ? still : { bytes: still.jpeg });
+        return;
+      }
       if (path === "/connect" && request.method === "POST") {
-        if (!sameToken(request.headers.authorization ?? "", `Bearer ${this.controlToken}`)) { this.reply(response, 401, { error: "Unauthorized" }); return; }
+        if (!this.controlled(request, response)) return;
         const body = await this.body(request);
         const scope = scopeOf(body);
         if (!scope) { this.reply(response, 400, { error: "Invalid scope" }); return; }

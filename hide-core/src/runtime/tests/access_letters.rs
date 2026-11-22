@@ -1271,3 +1271,59 @@ fn a_bot_moved_to_its_own_work_keeps_no_watch_or_reply_on_the_operators() {
     });
     assert!(reply(&bot).is_ok());
 }
+
+/// The usage statistics count a bot once as it connects, with how it came
+/// in and its mode: approved after it asked, or joined with the code of a
+/// bot the operator made; a join run again after a lost answer counts
+/// nothing more (CONTRIBUTING.md, A main feature brings its measure).
+#[test]
+fn a_connected_bot_is_counted_once_with_how_it_came_in_and_its_mode() {
+    use crate::product_analytics::{BotWay, Event};
+    let fixture = Fixture::start();
+    let statistics = Arc::new(RecordedStatistics::default());
+    fixture
+        .runtime
+        .lock()
+        .unwrap()
+        .install_product_analytics(statistics.clone());
+    let bots = || {
+        statistics
+            .take()
+            .into_iter()
+            .filter(|event| matches!(event, Event::BotConnected { .. }))
+            .collect::<Vec<_>>()
+    };
+    fixture.connect(Mode::All);
+    assert_eq!(
+        bots(),
+        [Event::BotConnected {
+            way: BotWay::Asked,
+            mode: Mode::All
+        }]
+    );
+    let mut guard = fixture.runtime.lock().unwrap();
+    guard
+        .access_call(Call::Invite {
+            id: "00000000000000b2".into(),
+            code: "K7Q4MZ2PX3RD".into(),
+            name: "hermes".into(),
+            mode: Mode::Own,
+        })
+        .0
+        .unwrap();
+    let join = || Call::Join {
+        code: "K7Q4MZ2PX3RD".into(),
+        key_sha256: key_hash("6e2c0ffee6e2c0ffee6e2c0ffee6e2c0ffee6e2c0ffee6e2c0ffee6e2c0ffee6"),
+        program: None,
+    };
+    guard.access_call(join()).0.unwrap();
+    guard.access_call(join()).0.unwrap();
+    drop(guard);
+    assert_eq!(
+        bots(),
+        [Event::BotConnected {
+            way: BotWay::Made,
+            mode: Mode::Own
+        }]
+    );
+}

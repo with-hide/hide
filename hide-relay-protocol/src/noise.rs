@@ -11,7 +11,10 @@ pub const PROLOGUE: &[u8] = b"hide-mobile-relay/v1\0";
 pub const MAX_MESSAGE: usize = 256 * 1024;
 pub const REASSEMBLY_TIMEOUT_MS: u64 = 10_000;
 const CHUNK_HEADER: usize = 8;
-const CHUNK_DATA: usize = MAX_PLAINTEXT - CHUNK_HEADER;
+/// The bytes of an application message one transport frame carries: a
+/// message of `n` bytes leaves as `n.div_ceil(CHUNK_DATA)` frames, one for an
+/// empty message.
+pub const CHUNK_DATA: usize = MAX_PLAINTEXT - CHUNK_HEADER;
 
 struct Incoming {
     total: usize,

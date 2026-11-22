@@ -2,7 +2,7 @@
 // sends under a flow-controlled window put back into text or an image, and the states that are not content.
 // Pure, so every rule is tested without a socket (hided/src/mobile/looks.rs is the sending side).
 
-import type { LookFile, LookHead, LookResultState } from "./protocol";
+import type { LookFile, LookHead, LookPageReason, LookResultState } from "./protocol";
 
 /** The caps hided enforces (D-10); a head that claims more is refused, so the phone never holds more than a cap. */
 export const LOOK_TEXT_CAP = 1024 * 1024;
@@ -20,25 +20,40 @@ export type LookContent =
   | { state: "shot"; url: string; size: number; address: string; takenAt: number; takenBy: string }
   /** An HTML file of a checkout as one document, the files it names folded in, drawn in the sandboxed frame. */
   | { state: "html"; document: string; size: number }
-  /** A page whose screen cannot be taken now: its address alone, and refresh still works (B21). */
-  | { state: "page"; url: string }
+  /** A page whose screen cannot be taken now: its address and why when the operator can act on it, and refresh still works (B21). */
+  | { state: "page"; url: string; reason: LookPageReason | null }
   /** Nothing the phone can show: a PDF, a video, another binary (B19). */
   | { state: "other" }
   | { state: "too_large" }
   /** The View is not open any more (B27). */
   | { state: "closed" }
   | { state: "device_unreachable" }
+  /** The file is gone since its View opened, or outside every checkout: its reason alone, since reading it again cannot help. */
+  | { state: "not_found" }
+  | { state: "outside_roots" }
+  /** A file outside every checkout that the desktop app no longer holds an opening for, became a link or a folder, or has no app to read it. */
+  | { state: "grant_expired" }
+  | { state: "file_replaced" }
+  | { state: "no_window" }
   | { state: "failed" };
 
+const PAGE_REASONS: readonly LookPageReason[] = ["no_window", "window_elsewhere", "not_drawn"];
+
 /** The state a `look_result` stands for; a refusal or an agent that left is a failed read to the reader of the screen. */
-export function resultContent(state: LookResultState, url: string | undefined): LookContent {
+export function resultContent(state: LookResultState, url: string | undefined, reason?: string): LookContent {
   switch (state) {
     case "page":
-      return { state: "page", url: url ?? "" };
+      // A reason a later computer sends that this bundle does not know is the plain "cannot be taken now".
+      return { state: "page", url: url ?? "", reason: PAGE_REASONS.find((known) => known === reason) ?? null };
     case "other":
     case "too_large":
     case "closed":
     case "device_unreachable":
+    case "not_found":
+    case "outside_roots":
+    case "grant_expired":
+    case "file_replaced":
+    case "no_window":
       return { state };
     default:
       return { state: "failed" };
@@ -126,7 +141,7 @@ export function finishAssembly(assembly: Assembly): LookContent | null {
   if (assembly.mode === "image" || assembly.mode === "page") {
     const mime = IMAGE_SIGNATURES.find((candidate) => candidate.matches(bytesOf(assembly.parts.slice(0, 1))))?.mime;
     if (!mime) return null;
-    // 96 KiB chunks hold whole base64 groups, so the parts join into one valid text.
+    // Each chunk holds whole base64 groups, so the parts join into one valid text.
     const url = `data:${mime};base64,${assembly.parts.join("")}`;
     return assembly.page ? { state: "shot", url, size: assembly.size, ...assembly.page } : { state: "image", url, size: assembly.size };
   }
