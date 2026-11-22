@@ -28,7 +28,7 @@ use serde_json::{Value, json};
 use tokio_tungstenite::tungstenite::Message;
 
 use super::guest_work::{Machine, PROGRAMS, WITHIN, free_port, left, place_build, types};
-use super::{Terminal, Window, moved_off_dials_in};
+use super::{Ran, Terminal, Window, moved_off_dials_in};
 use crate::support::remote_delivery::{
     Agent, Environment, end_holders, place_stand_in, quote, successful, wait_within,
 };
@@ -681,6 +681,31 @@ async fn a_core_moved_before_1_2_0_becomes_two_hides_and_its_work_goes_on() {
     });
     types(&original, &listed_here, &itself("f3")).await;
     assert_eq!(left(&at("f3")), shell);
+    // `hide` at a terminal of the original machine outside every pane, in
+    // the folder only the moved core's panes live in, is the moved core's
+    // own `hide` there, and that core answers it with the panes of the
+    // folder (D-55): on the folder the split handed over as on one a paired
+    // machine's node made for itself.
+    let handed = Ran::of(
+        original
+            .command(&["ps", "--json"])
+            .current_dir(&project)
+            .output()
+            .unwrap(),
+    );
+    assert!(handed.ok, "{}", handed.text());
+    let folder = project.to_string_lossy().into_owned();
+    let panes = handed.json()["value"]["panes"].clone();
+    assert!(
+        panes
+            .as_array()
+            .is_some_and(|panes| panes.iter().any(|pane| {
+                pane["checkout_path"]
+                    .as_str()
+                    .is_some_and(|path| path.ends_with(folder.trim_start_matches("/private")))
+            })),
+        "{panes}"
+    );
 
     // The worker is the moved core's agent as before: the same stand-in in
     // the same pane, whose own `hide` still reaches that core, which knows
