@@ -6,7 +6,9 @@ import { Button } from "./components/ui/button";
 import { Popover, PopoverContent, PopoverTrigger } from "./components/ui/popover";
 import { Hint } from "./components/ui/tooltip";
 import { useInterfaceTranslation } from "./i18n/client";
+import { checkoutHost } from "./codeHost";
 import { useObservedLine } from "./observed";
+import { catalogWorkspaces } from "./snapshot";
 import { useShellStore } from "./store";
 import type { CheckoutCi, CheckoutCommitRecord, CheckoutGitHeader as Header, WorkspaceView } from "./workspace";
 
@@ -87,21 +89,22 @@ export function CheckoutUpstream({ header, onCatchUp }: { header: Header | null 
 }
 
 /** The CI look a commit's last answer takes, and whether that answer is current; one that is not stays, dimmed, with its age (D-09, B22). */
-function useCiLook(ci: CheckoutCi | null, header: Header | null) {
+function useCiLook(ci: CheckoutCi | null, header: Header | null, view: WorkspaceView) {
+  const host = useShellStore((state) => checkoutHost(catalogWorkspaces(state.rest), view.device_id, view.path).name);
   const live = useShellStore((state) => state.connection === "live");
   const observed = ci?.observed ?? null;
   const expired = useRemaining(observed?.read_at_unix_ms == null ? null : observed.read_at_unix_ms + 90_000) === "past";
   const current = live && header?.state === "fresh" && !expired && (observed === null || observed.freshness === "fresh");
   const value = ci?.state ?? "unknown";
   const look: keyof typeof ciIcons = !current && value === "loading" ? "stale" : value;
-  const line = useObservedLine(current || !observed ? null : { ...observed, freshness: observed.freshness === "fresh" ? "stale" : observed.freshness }, "github");
-  return { look, current, line };
+  const line = useObservedLine(current || !observed ? null : { ...observed, freshness: observed.freshness === "fresh" ? "stale" : observed.freshness }, "github", host);
+  return { look, current, line, host };
 }
 
 const ciIcons = { loading: LoaderCircleIcon, passing: CheckIcon, failed: XIcon, pending: LoaderCircleIcon, none: CircleMinusIcon, unknown: CircleHelpIcon, unavailable: TriangleAlertIcon, stale: ClockIcon };
 const ciColors = { loading: "text-muted-foreground", passing: "text-success", failed: "text-destructive", pending: "text-warning", none: "text-muted-foreground", unknown: "text-muted-foreground", unavailable: "text-muted-foreground", stale: "text-muted-foreground" };
 
-/** Opens a commit's GitHub page from the header in front, never one a newer frame no longer offers. */
+/** Opens a commit's page on its host from the header in front, never one a newer frame no longer offers. */
 function openCommit(sha: string, url: string, view: WorkspaceView, actions: Actions) {
   const current = useShellStore.getState().rest?.workspace_view;
   if (current?.device_id === view.device_id && current.path === view.path && useShellStore.getState().connection === "live" && current.git?.commit_links?.some((link) => link.sha === sha && link.url === url)) actions.openBrowser(url, { device_id: view.device_id, path: view.path });
@@ -110,7 +113,7 @@ function openCommit(sha: string, url: string, view: WorkspaceView, actions: Acti
 function CommitHistoryRow({ commit, ci, header, view, actions, incoming = false }: { commit: CheckoutCommitRecord; ci: CheckoutCi | null; header: Header; view: WorkspaceView; actions: Actions; incoming?: boolean }) {
   const { t, i18n } = useInterfaceTranslation();
   const elapsed = useElapsed(commit.commit_unix_seconds == null ? null : commit.commit_unix_seconds * 1000);
-  const { look: state, current, line } = useCiLook(ci, header);
+  const { look: state, current, line, host } = useCiLook(ci, header, view);
   const Icon = ciIcons[state];
   const label = [t(`checkoutGit.ci.${state}`), line].filter(Boolean).join(" · ");
   const canOpen = Boolean(ci?.url && current);
@@ -118,7 +121,7 @@ function CommitHistoryRow({ commit, ci, header, view, actions, incoming = false 
   const unpushed = Boolean(header.commit_pages && !incoming && header.facts?.unpushed_commits?.includes(commit.sha));
   const subject = <p className="line-clamp-2 break-words text-caption font-medium">{commit.subject}</p>;
   return <li className={`min-w-0 py-xs ${incoming ? "opacity-60" : ""}`} data-commit-history-item={commit.sha} data-commit-incoming={incoming ? "true" : undefined}>
-    {link ? <button type="button" className="block w-full min-w-0 cursor-pointer rounded-sm text-left hover:underline focus-visible:outline focus-visible:outline-ring" aria-label={`${commit.subject} · ${t("checkoutGit.openCommit")}`} data-commit-link={commit.sha} onClick={() => openCommit(commit.sha, link, view, actions)}>{subject}</button> : subject}
+    {link ? <button type="button" className="block w-full min-w-0 cursor-pointer rounded-sm text-left hover:underline focus-visible:outline focus-visible:outline-ring" aria-label={`${commit.subject} · ${t("checkoutGit.openCommit", { host })}`} data-commit-link={commit.sha} onClick={() => openCommit(commit.sha, link, view, actions)}>{subject}</button> : subject}
     <div className="mt-xxs flex min-w-0 items-center gap-sm text-micro text-muted-foreground">
       <span className="shrink-0 font-mono">{commit.sha.slice(0, 7)}</span>
       <time className="min-w-0 truncate" dateTime={commit.commit_unix_seconds == null ? undefined : new Date(commit.commit_unix_seconds * 1000).toISOString()} title={commit.commit_unix_seconds == null ? undefined : new Date(commit.commit_unix_seconds * 1000).toLocaleString(i18n.language)}>{elapsed ? t("checkoutGit.ago", { time: elapsed }) : t("checkoutGit.notKnown")}</time>
@@ -151,7 +154,7 @@ export function CheckoutCommit({ header, view, actions, title, time }: { header:
   const elapsed = useElapsed(facts?.commit_unix_seconds == null ? null : facts.commit_unix_seconds * 1000);
   const head = facts?.head_sha ?? null;
   const ci = header?.ci?.sha === head ? header?.ci ?? null : null;
-  const { look: state, current, line } = useCiLook(ci, header ?? null);
+  const { look: state, current, line } = useCiLook(ci, header ?? null, view);
   if (!facts?.head_sha || !header || !head) return null;
   const CiIcon = ciIcons[state];
   const history = <CommitHistory header={header} view={view} actions={actions} />;

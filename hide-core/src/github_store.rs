@@ -425,7 +425,13 @@ mod tests {
     #[test]
     fn the_repository_on_the_screen_is_made_again_on_restore_and_not_saved() {
         for (host, authority, path, name, url) in [
-            ("github", "github.com", "acme/app", "acme/app", "https://github.com/acme/app"),
+            (
+                "github",
+                "github.com",
+                "acme/app",
+                "acme/app",
+                "https://github.com/acme/app",
+            ),
             (
                 "github",
                 "ghe.example.com:8443",

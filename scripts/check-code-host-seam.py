@@ -153,14 +153,9 @@ SAMPLES = (
 # A file that still reads or makes a host's address outside its unit, with
 # the mission node that removes it, or why it stays.
 KNOWN_FILES = {
-    "web/src/pullRequestIdentity.ts": "gitlab-screens compares the carried reference",
-    "web/src/actions.ts": "gitlab-screens opens the repository page the core carries",
-    "web/src/PrCard.tsx": "gitlab-screens opens the reference's checks and files pages",
-    "web/src/prCardModel.ts": "gitlab-screens opens the reference's files page",
     # Issues stay GitHub's in this plan (a GitHub issue key and its page).
     "web/src/PrLinks.tsx": "issue keys stay GitHub's",
     "hide-core/src/issues.rs": "issue references stay GitHub's",
-    "web/src/SuggestionsTab.tsx": "gitlab-screens reads the suggestion's carried reference",
 }
 
 # A line a rule matches that is not a host's address in use, with why.
@@ -173,6 +168,18 @@ KNOWN_LINES = {
     "hided/src/server.rs": {
         # An example of a page a person acts on, in an AI prompt's prose.
         '"Name where the person acts: the page\'s address (github.com/login), the app (1Password) or the setting (System Settings > Privacy & Security > Camera)"',
+    },
+    "web/src/i18n/resources/projectSettings.ts": {
+        # The repository field's hint and refusal: the forms a person types
+        # (`owner/repository`, `gitlab.com/group/project`), in each language.
+        '"projectSettings.repositoryHint": "owner/repository or gitlab.com/group/project",',
+        '"projectSettings.repositoryInvalid": "Enter owner/repository or gitlab.com/group/project, without a URL.",',
+        '"projectSettings.repositoryHint": "owner/repository 또는 gitlab.com/group/project",',
+        '"projectSettings.repositoryInvalid": "URL 대신 owner/repository 또는 gitlab.com/group/project를 입력하세요.",',
+        '"projectSettings.repositoryHint": "owner/repository 或 gitlab.com/group/project",',
+        '"projectSettings.repositoryInvalid": "请输入 owner/repository 或 gitlab.com/group/project，而不是 URL。",',
+        '"projectSettings.repositoryHint": "owner/repository または gitlab.com/group/project",',
+        '"projectSettings.repositoryInvalid": "URLではなく owner/repository または gitlab.com/group/project を入力してください。",',
     },
     "web/src/CloneFromUrl.tsx": {
         # The clone field's placeholder: an example the person replaces.

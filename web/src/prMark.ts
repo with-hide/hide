@@ -1,6 +1,6 @@
 import { GitMergeIcon, GitPullRequestClosedIcon, GitPullRequestDraftIcon, GitPullRequestIcon, type LucideIcon } from "lucide-react";
 import type { TFunction } from "i18next";
-import { pullLabel } from "./codeHost";
+import { hostLook, pullHost, pullLabel } from "./codeHost";
 import type { MessageKey } from "./i18n/catalogs";
 import { formatDateTime } from "./i18n/format";
 import type { InterfaceLanguage } from "./i18n/locale";
@@ -69,19 +69,19 @@ export function settled(state: PrState): boolean {
   return state === "merged" || state === "closed";
 }
 
-/** When GitHub could not be read again, the last read time a PR mark dims for. */
-export type PrStaleness = { stale: boolean; lastRead: number | null };
+/** When the host could not be read again, the last read time a PR mark dims for. */
+export type PrStaleness = { stale: boolean; lastRead: number | null; host: string };
 
 /** A project's GitHub read as a mark's staleness: undefined before any answer. */
 export function staleness(github: GithubStatus | null | undefined): PrStaleness | undefined {
-  return github ? { stale: github.stale === true, lastRead: github.last_success_at_unix_ms ?? null } : undefined;
+  return github ? { stale: github.stale === true, lastRead: github.last_success_at_unix_ms ?? null, host: hostLook(github.host?.key).name } : undefined;
 }
 
 /** The tooltip line of a stale mark, or null while GitHub reads. */
 export function staleLabel(value: PrStaleness | undefined, t: TFunction<"translation">, language: InterfaceLanguage): string | null {
   if (!value?.stale) return null;
   const time = value.lastRead == null ? "-" : formatDateTime(language, value.lastRead, { dateStyle: "short", timeStyle: "short" });
-  return t("agentSessions.pr.stale", { time });
+  return t("agentSessions.pr.stale", { time, host: value.host });
 }
 
 /**
@@ -95,12 +95,12 @@ export function rowPulls(agent: AgentRow, scope: "family" | "own" = "family"): S
   return scope === "own" ? pulls.filter((pull) => pull.own) : pulls;
 }
 
-/** A list's GitHub read: stale while any of its pull requests is, with the oldest of those last reads; undefined for no pull request. */
+/** A list's host read: stale while any of its pull requests is, with the oldest of those last reads; undefined for no pull request. */
 export function pullsStaleness(pulls: readonly SessionPull[]): PrStaleness | undefined {
   if (pulls.length === 0) return undefined;
   const stale = pulls.filter((pull) => pull.stale);
-  if (stale.length === 0) return { stale: false, lastRead: null };
-  return { stale: true, lastRead: stale.some((pull) => pull.last_read_at_unix_ms === null) ? null : Math.min(...stale.map((pull) => pull.last_read_at_unix_ms!)) };
+  if (stale.length === 0) return { stale: false, lastRead: null, host: pullHost(pulls[0]!).name };
+  return { stale: true, host: pullHost(stale[0]!).name, lastRead: stale.some((pull) => pull.last_read_at_unix_ms === null) ? null : Math.min(...stale.map((pull) => pull.last_read_at_unix_ms!)) };
 }
 
 /** A closed pull request is drawn dimmed in a session's list: it stays, but asks nothing (with-hide/hide-private docs/task-identity.md, One list per session). */

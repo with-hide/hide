@@ -9,6 +9,7 @@ import { OfflineText } from "./OfflineText";
 // pane without one shows its terminal alone. The quick keys and one-line
 // reply are on every detail, whatever its group.
 
+import { pullLabel } from "../codeHost";
 import { AnsiUp } from "ansi_up";
 import { ArrowLeftIcon, CircleAlertIcon, ImageIcon, MoonIcon, FlagIcon } from "lucide-react";
 import { memo, useEffect, useLayoutEffect, useMemo, useRef, useState, type UIEvent } from "react";
@@ -210,10 +211,10 @@ function DetailLinks({ agentKey }: { agentKey: AgentKey }) {
         const { icon: Icon, tone } = PR_LOOK[pr.state];
         return (
           <Button key={pr.key} variant="ghost" className={chip} data-phone-detail-pr={pr.key}
-            aria-label={`#${pr.number} ${pr.title}`} onClick={() => { closeDetail(); openPrPage(pr.key); }}>
+            aria-label={`${pullLabel(pr)} ${pr.title}`} onClick={() => { closeDetail(); openPrPage(pr.key); }}>
             <span className={pill}>
               <Icon aria-hidden="true" className={cn("size-(--size-pr-icon) shrink-0", tone)} />
-              <span className="font-mono">#{pr.number}</span>
+              <span className="font-mono">{pullLabel(pr)}</span>
             </span>
           </Button>
         );

@@ -8,7 +8,7 @@ import type { PressedAnswer } from "../missionAnswer";
 import type { AgentGroup, AgentKey, AutomationAction, Conversation, DetailTab, DetailView, LookRow, Notice, Notifications, OtherMachine, PairPayload, PhoneAgent, PhoneDevice, PhoneAutomation, PhoneMission, PhonePr, PhonePrFeedback, PhonePrProject, Refusal, RowsState, ServerFrame, StartCatalog } from "./protocol";
 import { keyTag, listedAgents, mergeConversation, missionsOnWire, sameKey } from "./protocol";
 import { resultContent, type LookContent } from "./lookContent";
-import { holds, prOf, type MergeConfirm } from "./prModel";
+import { holds, prHostOf, prOf, type MergeConfirm } from "./prModel";
 import { NO_CHOICE, type StartChoice } from "./start";
 import { listScopeOf } from "./gather";
 
@@ -29,6 +29,11 @@ export type Screen =
 export type PhoneTab = "agents" | "missions" | "automations" | "prs" | "settings";
 
 /** The open pull requests as the last `prs` frame carried them; kept across a lost connection, dimmed under the unreachable line (B45). */
+/** Whether a confirmation still names what the page shows, on the host the pull request's project reads. */
+function holdsOn(confirm: MergeConfirm, pr: PhonePr | null, projects: readonly PhonePrProject[]): boolean {
+  return pr !== null && holds(confirm, pr, prHostOf(pr, projects));
+}
+
 export type PrsState = { projects: PhonePrProject[]; items: PhonePr[]; feedback: PhonePrFeedback | null; omitted: number };
 
 /**
@@ -357,7 +362,7 @@ export function applyFrame(frame: ServerFrame): void {
         prs: { projects: frame.projects, items, feedback: frame.feedback, omitted: frame.omitted ?? 0 },
         // A pull request that left the list takes its page, its confirmation and its sheet with it.
         prOpen: state.prOpen && listed.has(state.prOpen) ? state.prOpen : null,
-        prConfirm: state.prConfirm && holds(state.prConfirm, prOf(items, state.prConfirm.key)) ? state.prConfirm : null,
+        prConfirm: state.prConfirm && holdsOn(state.prConfirm, prOf(items, state.prConfirm.key), frame.projects) ? state.prConfirm : null,
         prDelegate: state.prDelegate && listed.has(state.prDelegate.key) ? state.prDelegate : null,
         prNotice: state.prNotice && listed.has(state.prNotice.key) ? state.prNotice : null,
         prDelegated: state.prDelegated && listed.has(state.prDelegated) ? state.prDelegated : null,

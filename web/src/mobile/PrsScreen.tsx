@@ -7,6 +7,7 @@
 // line. What the groups, the line and the reading are is `prModel.ts` and the
 // desktop's own rules; this draws them.
 
+import { pullLabel, pullWords } from "../codeHost";
 import { ChevronRightIcon, Loader2Icon } from "lucide-react";
 import { RowButton } from "../components/ui/row-button";
 import { useInterfaceTranslation } from "../i18n/translator";
@@ -105,7 +106,7 @@ function Row({ entry, showProject }: { entry: PrEntry; showProject: boolean }) {
   const review = prReview(pr);
   return (
     <RowButton
-      aria-label={t("work.row.open", { number: String(pr.number), title: pr.title })}
+      aria-label={t("work.row.open", { ...pullWords(pr), title: pr.title })}
       data-phone-pr={pr.key}
       data-phone-pr-reason={pr.reason.kind}
       className="min-h-(--size-touch-target) flex-col items-stretch gap-xs rounded-none px-none py-md hover:bg-transparent active:bg-accent"
@@ -113,7 +114,7 @@ function Row({ entry, showProject }: { entry: PrEntry; showProject: boolean }) {
     >
       <span className="flex w-full min-w-0 items-center gap-sm">
         <Icon aria-hidden="true" className={cn("size-(--size-pr-icon) shrink-0", tone)} />
-        <span className="shrink-0 font-mono text-body text-subtle-foreground">#{pr.number}</span>
+        <span className="shrink-0 font-mono text-body text-subtle-foreground">{pullLabel(pr)}</span>
         <span className="min-w-0 flex-1 truncate text-title font-medium text-foreground">{pr.title}</span>
         <ChevronRightIcon aria-hidden="true" className="size-(--size-icon) shrink-0 text-muted-foreground" />
       </span>

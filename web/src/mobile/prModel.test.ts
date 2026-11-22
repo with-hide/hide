@@ -3,7 +3,7 @@
 import { expect, it } from "vitest";
 import type { PrReasonKind } from "../agentScope";
 import { HEAD, card, pr, project, standing } from "./prFixture";
-import { confirmOf, groupPrs, holds, prActions, prGroupOf, type PrGroup } from "./prModel";
+import { confirmOf, groupPrs, holds, prActions, prGroupOf, prHostOf, type PrGroup } from "./prModel";
 
 const EVERY_KIND: Record<PrReasonKind, PrGroup> = {
   merge: "ready",
@@ -56,39 +56,51 @@ it("refuses a listed pull request whose project the frame does not carry", () =>
 });
 
 it("opens a confirmation only where the desktop card would offer Merge: the operator's own pull request, nothing blocking, the card read", () => {
-  expect(confirmOf(pr(1))).toEqual({ key: "p1#1", action: "merge", head: HEAD, method: "squash", queue: false });
+  expect(confirmOf(pr(1), null)).toEqual({ key: "p1#1", action: "merge", head: HEAD, method: "squash", queue: false });
   // Someone else's pull request has no Merge on the desktop card.
-  expect(confirmOf(pr(2, { work: { ...pr(2).work!, mine: false } }))).toBeNull();
+  expect(confirmOf(pr(2, { work: { ...pr(2).work!, mine: false } }), null)).toBeNull();
   // A card not read yet has no head to name.
-  expect(confirmOf(pr(3, { card: null }))).toBeNull();
-  expect(prActions(pr(3, { card: null })).why?.key).toBe("unread");
+  expect(confirmOf(pr(3, { card: null }), null)).toBeNull();
+  expect(prActions(pr(3, { card: null }), null).why?.key).toBe("unread");
   // A draft, a failing check and a missing permission block Merge with the desktop's reason.
-  expect(prActions(pr(4, { is_draft: true })).why?.key).toBe("draft");
-  expect(prActions(pr(5, { work: { ...pr(5).work!, merge_state: "blocked", pending_checks: 2 } })).why).toMatchObject({ key: "ci", count: 2 });
-  expect(prActions(pr(6, { card: card({ merge: { methods: ["squash"], queue: false, can_merge: false } }) })).why?.key).toBe("permission");
+  expect(prActions(pr(4, { is_draft: true }), null).why?.key).toBe("draft");
+  expect(prActions(pr(5, { work: { ...pr(5).work!, merge_state: "blocked", pending_checks: 2 } }), null).why).toMatchObject({ key: "ci", count: 2 });
+  expect(prActions(pr(6, { card: card({ merge: { methods: ["squash"], queue: false, can_merge: false } }) }), null).why?.key).toBe("permission");
   // An agent working on it blocks Merge.
-  expect(prActions(pr(7, { group: "working", reason: { kind: "working" } })).why?.key).toBe("agent");
+  expect(prActions(pr(7, { group: "working", reason: { kind: "working" } }), null).why?.key).toBe("agent");
   // A merge in flight or already queued is not asked twice.
-  expect(confirmOf(pr(8, { card: card({ write: { action: "merge", head: HEAD, method: "squash", phase: "working", reason: null } }) }))).toBeNull();
-  expect(confirmOf(pr(9, { work: { ...pr(9).work!, queue: { state: "at", position: 1 } } }))).toBeNull();
+  expect(confirmOf(pr(8, { card: card({ write: { action: "merge", head: HEAD, method: "squash", phase: "working", reason: null } }) }), null)).toBeNull();
+  expect(confirmOf(pr(9, { work: { ...pr(9).work!, queue: { state: "at", position: 1 } } }), null)).toBeNull();
   // A refusal GitHub would only repeat keeps Merge off until the card is read again; a transient one does not.
   const refused = (reason: "head_moved" | "unreachable") => pr(10, { card: card({ write: { action: "merge", head: HEAD, method: "squash", phase: "failed", reason } }) });
-  expect(confirmOf(refused("head_moved"))).toBeNull();
-  expect(confirmOf(refused("unreachable"))).not.toBeNull();
+  expect(confirmOf(refused("head_moved"), null)).toBeNull();
+  expect(confirmOf(refused("unreachable"), null)).not.toBeNull();
 });
 
 it("uses the merge queue's words and no method when the repository has a queue", () => {
   const queued = pr(1, { card: card({ merge: { methods: ["squash"], queue: true, can_merge: true } }) });
-  expect(confirmOf(queued)).toEqual({ key: "p1#1", action: "merge", head: HEAD, method: "squash", queue: true });
+  expect(confirmOf(queued, null)).toEqual({ key: "p1#1", action: "merge", head: HEAD, method: "squash", queue: true });
 });
 
 it("closes a confirmation when the page no longer shows the head, the queue or the method it named, or no longer allows Merge", () => {
-  const confirm = confirmOf(pr(1))!;
-  expect(holds(confirm, pr(1))).toBe(true);
-  expect(holds(confirm, pr(1, { card: card({ head: "b".repeat(40) }) }))).toBe(false);
-  expect(holds(confirm, pr(1, { card: card({ merge: { methods: ["merge"], queue: false, can_merge: true } }) }))).toBe(false);
-  expect(holds(confirm, pr(1, { card: card({ merge: { methods: ["squash"], queue: true, can_merge: true } }) }))).toBe(false);
-  expect(holds(confirm, pr(1, { is_draft: true }))).toBe(false);
-  expect(holds(confirm, pr(2))).toBe(false);
-  expect(holds(confirm, null)).toBe(false);
+  const confirm = confirmOf(pr(1), null)!;
+  expect(holds(confirm, pr(1), null)).toBe(true);
+  expect(holds(confirm, pr(1, { card: card({ head: "b".repeat(40) }) }), null)).toBe(false);
+  expect(holds(confirm, pr(1, { card: card({ merge: { methods: ["merge"], queue: false, can_merge: true } }) }), null)).toBe(false);
+  expect(holds(confirm, pr(1, { card: card({ merge: { methods: ["squash"], queue: true, can_merge: true } }) }), null)).toBe(false);
+  expect(holds(confirm, pr(1, { is_draft: true }), null)).toBe(false);
+  expect(holds(confirm, pr(2), null)).toBe(false);
+  expect(holds(confirm, null, null)).toBe(false);
+});
+
+it("offers Merge and the hand-over only where the pull request's host does, from its project's read before its card arrives", () => {
+  const gitlab = { key: "gitlab", name: "GitLab", operations: ["commit_checks" as const], access: { program: "glab", minimum_version: "1.78.0", sign_in: "glab auth login --hostname gitlab.com" } };
+  const onGitlab = project({ github: [{ ...project().github[0]!, host: gitlab }] });
+  const listed = pr(1, { card: null });
+  expect(prHostOf(listed, [onGitlab])).toEqual(gitlab);
+  expect(prActions(listed, prHostOf(listed, [onGitlab]))).toMatchObject({ mergeShown: false, handover: false });
+  expect(confirmOf(pr(1), gitlab)).toBeNull();
+  // A project whose core names no host is GitHub's, which offers both.
+  expect(prHostOf(pr(1, { card: null }), [project()])).toBeNull();
+  expect(prActions(pr(1), null)).toMatchObject({ mergeShown: true, handover: true });
 });

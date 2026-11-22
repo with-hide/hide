@@ -29,7 +29,7 @@ function githubReference(authority: string, url: string): ChangeRequestRef {
   return { repository: { host: "github", authority, path: "acme/app" }, number: NUMBER, key: `${authority}/acme/app#${NUMBER}`, label: `#${NUMBER}`, url, checks_url: `${url}/checks`, files_url: `${url}/files` };
 }
 
-const GITHUB: HostDeclaration = { key: "github", operations: ["merge", "update_branch", "edit_body", "merge_proof", "base_policy", "commit_checks", "failed_log", "by_number", "handover", "issues", "search", "watch"], access: { program: "gh", minimum_version: "2.40.0", sign_in: "gh auth login" } };
+const GITHUB: HostDeclaration = { key: "github", name: "GitHub", operations: ["merge", "update_branch", "edit_body", "merge_proof", "base_policy", "commit_checks", "failed_log", "by_number", "handover", "issues", "search", "watch"], access: { program: "gh", minimum_version: "2.40.0", sign_in: "gh auth login" } };
 
 /** One open pull request of a docs project, whose card the core read, with `reason` deciding the card's first button. */
 async function mountCard(url: string, reference: ChangeRequestRef, reason: "review" | "merge" = "merge") {

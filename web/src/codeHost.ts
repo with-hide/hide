@@ -96,3 +96,9 @@ export function projectPullWords(workspace: Workspace | null | undefined, number
   const label = look.numberLabel(number);
   return { pull: `${look.item} ${label}`, label, host: look.name };
 }
+
+/** The host of the project that holds the checkout at `path` on `deviceId`; GitHub's look while no project holds it, as a core without hosts. */
+export function checkoutHost(workspaces: readonly Workspace[], deviceId: string, path: string): HostLook {
+  const workspace = workspaces.find((candidate) => candidate.device_id === deviceId && candidate.checkouts.some((checkout) => checkout.path === path));
+  return hostLook(workspace ? projectHost(workspace)?.key : null);
+}

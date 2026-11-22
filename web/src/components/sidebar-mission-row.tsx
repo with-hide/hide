@@ -23,6 +23,7 @@ import { FoldLane } from "./sidebar-agent-row";
 import { SessionRowBody } from "./session-row";
 import { StatusMark } from "./status-mark";
 import { ToolLabel } from "./tool-mark";
+import { pullName } from "../codeHost";
 
 /**
  * The missions `deviceId`'s scope names as its own Needs You items, the ones
@@ -85,7 +86,7 @@ export function MissionAskLine({ ask, className }: { ask: MissionAsk; className?
   // A ready pull request the plan left to the operator: the node and its merge (PRD mission-destination D-11).
   if (ask.kind === "merge") {
     const pr = mergePull(ask.node);
-    return <AskLine ask={{ verb: "answer", what: `${ask.node.title} · ${t("mission.merge.due", { pr: String(pr.number ?? "") })}${pr.more > 0 ? ` +${pr.more}` : ""}`, more: ask.more }} className={className} />;
+    return <AskLine ask={{ verb: "answer", what: `${ask.node.title} · ${t("mission.merge.due", { pull: pr.number === null ? "" : pullName({ number: pr.number, reference: pr.reference }) })}${pr.more > 0 ? ` +${pr.more}` : ""}`, more: ask.more }} className={className} />;
   }
   const look = ask.attention.reason === "human_gate" ? ask.node.gate?.look : undefined;
   const node = look ? `${ask.node.title} · ${look}` : ask.node.title;

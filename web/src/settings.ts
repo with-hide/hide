@@ -2,7 +2,7 @@
 // the core or the daemon reported, and what the copied diagnostics carry.
 // Nothing here reads the store, so every rule is tested without a browser.
 
-import { hostLook } from "./codeHost";
+import { hostLook, offers, projectHost } from "./codeHost";
 import { engineStateText } from "./coreError";
 import type { TFunction } from "i18next";
 import type { DaemonInfo } from "./store";
@@ -148,7 +148,8 @@ export function issueSourceChoices(
   const repository = source?.kind === "github" ? source.name : (workspace.home_issues?.repository ?? null);
   const options: { id: IssueSourceChoice; label: string }[] = [
     { id: "auto", label: resolved ? t("issueSettings.autoResolved", { source: resolved }) : t("issueSettings.auto") },
-    ...(workspace.is_git ? [{ id: "github" as const, label: repository ? t("issueSettings.githubRepository", { repository }) : "GitHub" }] : []),
+    // GitHub's issues are offered only where the project's host reads them.
+    ...(workspace.is_git && offers(projectHost(workspace), "issues") ? [{ id: "github" as const, label: repository ? t("issueSettings.githubRepository", { repository }) : "GitHub" }] : []),
     { id: "local", label: t("issueSettings.local") },
   ];
   return { value: options.find((option) => option.id === stored)?.id ?? "auto", options };

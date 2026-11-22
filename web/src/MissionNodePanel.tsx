@@ -53,6 +53,7 @@ import { presetIcon } from "./components/mission-line";
 import { lineNode, nodeKindWord, resultLine } from "./missionLine";
 import type { Mission, MissionChecker, MissionCriterion, MissionEvent, MissionNode, PlanView } from "./snapshot";
 import { useShellStore } from "./store";
+import { pullLabel } from "./codeHost";
 
 // The node the operator picked on a mission's map (PRD mission-map-git-criteria
 // D-01, D-10, B31-B33), read top down: a head that stays while the panel
@@ -167,13 +168,13 @@ function WorkerWays({ mission, node, actions }: { mission: Mission; node: Missio
   const rest = useShellStore((s) => s.rest);
   const session = useMemo(() => (row ? sessionOfAgent(row) : null), [row, rest]);
   if (node.kind === "external") return null;
-  const card = node.pr != null ? `${t("mission.prCard")} · #${node.pr}` : null;
+  const card = node.pr != null ? `${t("mission.prCard")} · ${pullLabel({ number: node.pr, reference: node.pr_reference })}` : null;
   return (
     <>
       {node.pr != null && card ? (
         <Hint label={card}>
-          <Button size="sm" variant="secondary" className="shrink-0 px-xs" aria-label={card} disabled={!node.pr_url} onClick={() => node.pr_url && actions.openSessionPullRequest({ workspace_id: mission.workspace_id, url: node.pr_url, number: node.pr! }, "here")} data-node-pr-card={node.pr}>
-            <MissionPrMark number={node.pr} state={node.pr_state} stale={mission.github_stale} />
+          <Button size="sm" variant="secondary" className="shrink-0 px-xs" aria-label={card} disabled={!node.pr_url} onClick={() => node.pr_url && actions.openSessionPullRequest({ workspace_id: mission.workspace_id, url: node.pr_url, number: node.pr!, reference: node.pr_reference }, "here")} data-node-pr-card={node.pr}>
+            <MissionPrMark number={node.pr} reference={node.pr_reference} state={node.pr_state} stale={mission.github_stale} />
           </Button>
         </Hint>
       ) : null}
@@ -417,7 +418,7 @@ function Made({ mission, node, events, actions }: { mission: Mission; node: Miss
       t("mission.field.pr"),
       <span key="pr" className="flex min-w-0 flex-wrap items-center gap-xs" data-panel-prs={prs.map((pr) => pr.number).join(" ")}>
         {prs.map((pr) => <MissionPrMark key={pr.number} number={pr.number} state={pr.state} stale={mission.github_stale} />)}
-        {node.base_pr != null ? <span className="text-caption text-muted-foreground" data-panel-base={node.base_pr}>{t("mission.panel.base", { number: String(node.base_pr) })}</span> : null}
+        {node.base_pr != null ? <span className="text-caption text-muted-foreground" data-panel-base={node.base_pr}>{t("mission.panel.base", { label: pullLabel({ number: node.base_pr, reference: node.prs.find((pr) => pr.number === node.base_pr)?.reference ?? mission.nodes.find((other) => other.pr === node.base_pr)?.pr_reference }) })}</span> : null}
       </span>,
     ]);
   }
@@ -611,7 +612,7 @@ function Links({ mission, node, onSelect }: { mission: Mission; node: MissionNod
         return (
           <button key={other.key} type="button" onClick={() => onSelect(other.key)} title={other.title} aria-label={`${t(which === "before" ? "mission.panel.waitsOn" : "mission.panel.waitedBy")} · ${other.title}`} className="flex min-w-0 max-w-full items-center gap-xxs rounded-xs border border-border px-xs text-muted-foreground outline-none hover:bg-accent hover:text-foreground focus-visible:ring-1 focus-visible:ring-ring" data-panel-link={other.key}>
             <span className="min-w-0 truncate">{other.title}</span>
-            {pr != null ? <MissionPrMark number={pr} state={other.pr_state} stale={mission.github_stale} /> : null}
+            {pr != null ? <MissionPrMark number={pr} reference={pr === other.pr ? other.pr_reference : null} state={other.pr_state} stale={mission.github_stale} /> : null}
           </button>
         );
       })}

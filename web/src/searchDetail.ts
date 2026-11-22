@@ -13,6 +13,7 @@ import { searchDevices } from "./search";
 import { reviewWord } from "./prMark";
 import type { LinkSummaries, SnapshotRest } from "./snapshot";
 import { sameIssue } from "./linkPanel";
+import { pullLabel } from "./codeHost";
 
 export type Detail = {
   /** `Pull request`, `Agent · Claude`: the kind the title is of. */
@@ -82,7 +83,7 @@ export function detailOf(rest: SnapshotRest | null, entry: SearchEntry, now: num
         title: entry.title,
         pills: entry.status ? [entry.status] : [],
         tags: device ? [device] : [],
-        facts: present([[t("search.fact.checkout"), entry.place], [t("search.fact.pr"), (entry.agent?.request?.pull_requests ?? []).map((pr) => `#${pr.number}`).join(", ")], [t("search.fact.lastWords"), lastWords(entry)]]),
+        facts: present([[t("search.fact.checkout"), entry.place], [t("search.fact.pr"), (entry.agent?.request?.pull_requests ?? []).map((pr) => pullLabel(pr)).join(", ")], [t("search.fact.lastWords"), lastWords(entry)]]),
         action: t("search.goToAgent"),
       };
     }
@@ -99,7 +100,7 @@ export function detailOf(rest: SnapshotRest | null, entry: SearchEntry, now: num
         tags: [checkout?.branch, device].filter((text): text is string => Boolean(text)),
         facts: present([
           [t("search.fact.changes"), [ahead > 0 ? t("search.commitsAfterBase", { count: ahead }) : null, files > 0 ? t("search.changedFiles", { count: files }) : null].filter(Boolean).join(" · ")],
-          [t("search.fact.pr"), checkout?.pull_request ? `#${checkout.pull_request.number}` : null],
+          [t("search.fact.pr"), checkout?.pull_request ? pullLabel(checkout.pull_request) : null],
           [t("issue.label"), checkout?.task_key ? (entry.workspace?.tasks?.tasks.find((task) => task.key === checkout.task_key)?.id ?? null) : null],
         ]),
         action: t("search.openCheckout"),
@@ -117,7 +118,7 @@ export function detailOf(rest: SnapshotRest | null, entry: SearchEntry, now: num
         kind: t("search.kind.pullRequest"),
         title: pr?.title ?? entry.title,
         pills: entry.status ? [entry.status] : [],
-        tags: [`#${entry.number}`],
+        tags: [pr ? pullLabel(pr) : `#${entry.number}`],
         facts: present([
           [t("search.fact.review"), review ? t(review.key) : null],
           [t("workspace.branch"), pr?.head_branch],

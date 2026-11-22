@@ -12,10 +12,10 @@ export type Freshness = (typeof FRESHNESS)[number];
 export type Observation = { freshness: Freshness; read_at_unix_ms: number | null };
 
 /** The tooltip line of a value that is not current, in the PR list's words (`GitHub 읽기 실패 · N분 전 값`), or null. */
-export function useObservedLine(observation: Observation | null | undefined, source: "git" | "github"): string | null {
+export function useObservedLine(observation: Observation | null | undefined, source: "git" | "github", host = ""): string | null {
   const { t } = useInterfaceTranslation();
   const elapsed = useElapsed(observation?.read_at_unix_ms);
   if (!observation || observation.freshness === "fresh") return null;
   if (observation.freshness === "stale") return elapsed ? t("checkoutGit.observed.stale", { time: elapsed }) : null;
-  return elapsed ? t(`checkoutGit.observed.${source}Failed`, { time: elapsed }) : t(`checkoutGit.observed.${source}FailedNever`);
+  return elapsed ? t(`checkoutGit.observed.${source}Failed`, { time: elapsed, host }) : t(`checkoutGit.observed.${source}FailedNever`, { host });
 }

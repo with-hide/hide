@@ -16,6 +16,7 @@ import { humanTurnText } from "./humanTurn";
 import { resumeProvider } from "./linkPanel";
 import { lineNode, nodeKindWord, resultLine } from "./missionLine";
 import type { AgentRow, AgentStartChoice, BackgroundAi, ChangeRequestRef, Device, HumanKind, Mission, MissionAttention, MissionBrief, MissionSafetyNet, MissionSkip, MissionNodeBrief, MissionAttentionReason, MissionHeldCellReason, MissionChecker, MissionCriterion, MissionHeldLetters, MissionNodeWait, MissionTurn, MissionNodeWork, MissionStopCause, MissionWaitingOn, MissionWorker, MissionEvent, MissionEventsSnapshot, MissionGate, MissionHideAction, MissionLandingAction, MissionNode, MissionNodePr, MissionNodeWarning, MissionVerdict, PrState, PullRequest, RowMark, SnapshotRest } from "./snapshot";
+import { pullName } from "./codeHost";
 
 export function missionOf(rest: SnapshotRest | null | undefined, id: string): Mission | null {
   return rest?.missions?.items.find((mission) => mission.id === id) ?? null;
@@ -1042,9 +1043,9 @@ export function nodeQuestion(mission: Mission, node: MissionNode): string | null
   return mission.decision;
 }
 
-/** A pull request in words: `PR #n`, or `PR` when the record names none. */
+/** A pull request in words: `PR #n`, or `PR` when the record names none. The record carries a number only, so it is written as a core without hosts writes it. */
 function prWords(pr: number | null, t: TFunction<"translation">): string {
-  return pr != null ? t("mission.attention.pr", { number: String(pr) }) : t("mission.attention.prNone");
+  return pr != null ? t("mission.attention.pr", { pull: pullName({ number: pr }) }) : t("mission.attention.prNone");
 }
 
 /** Why a node waits on someone to look, in one line (PRD mission-node-simple B2): its hover, its panel and its 내 차례 item say the same. */

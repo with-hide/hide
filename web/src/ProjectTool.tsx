@@ -1,5 +1,5 @@
 import { ArrowUpIcon, ChevronRightIcon, CircleXIcon, FileDiffIcon, LoaderCircleIcon, SettingsIcon, TriangleAlertIcon, XIcon } from "lucide-react";
-import { pullLabel } from "./codeHost";
+import { projectPullWords, pullLabel } from "./codeHost";
 import { useEffect, useMemo, useState, type ReactNode } from "react";
 import type { Actions } from "./actions";
 import type { ProjectStatus, ProjectStray } from "./agentScope";
@@ -257,7 +257,7 @@ function StrayRow({ project, stray, actions, onDismiss }: { project: Workspace; 
   const first = parts[0]!;
   const Icon = STRAY_ICON[first.kind];
   const name = stray.name ?? stray.branch ?? stray.checkout_id;
-  const words = parts.map((part) => part.kind === "ci" ? t("projectTool.strays.ci", { number: String(part.number) }) : t(`projectTool.strays.${part.kind}`, { count: part.count })).join(" · ");
+  const words = parts.map((part) => part.kind === "ci" ? t("projectTool.strays.ci", { label: projectPullWords(project, part.number).label }) : t(`projectTool.strays.${part.kind}`, { count: part.count })).join(" · ");
   const age = stray.since_unix_ms ? ageWords(language, Date.now() - stray.since_unix_ms, t) : null;
   const press = () => {
     if (stray.pane_id) actions.openAgent(stray.pane_id);

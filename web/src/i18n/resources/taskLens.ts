@@ -50,7 +50,7 @@ export const taskLensEnglish = {
   "detail.costPath": "{{project}} · last 7 days",
   "detail.record": "Record · {{title}}",
   "detail.recordUntitled": "Record",
-  "prs.noRemote": "No GitHub remote",
+  "prs.noRemote": "No remote repository",
 } as const;
 
 type Messages = Catalog<typeof taskLensEnglish>;
@@ -103,7 +103,7 @@ const ko: Messages = {
   "detail.costPath": "{{project}} · 지난 7일",
   "detail.record": "기록 · {{title}}",
   "detail.recordUntitled": "기록",
-  "prs.noRemote": "GitHub 원격 없음",
+  "prs.noRemote": "원격 저장소 없음",
 };
 
 const zh: Messages = {
@@ -154,7 +154,7 @@ const zh: Messages = {
   "detail.costPath": "{{project}} · 最近 7 天",
   "detail.record": "记录 · {{title}}",
   "detail.recordUntitled": "记录",
-  "prs.noRemote": "没有 GitHub 远程仓库",
+  "prs.noRemote": "没有远程仓库",
 };
 
 const ja: Messages = {
@@ -205,7 +205,7 @@ const ja: Messages = {
   "detail.costPath": "{{project}} · 過去 7 日間",
   "detail.record": "記録 · {{title}}",
   "detail.recordUntitled": "記録",
-  "prs.noRemote": "GitHub リモートなし",
+  "prs.noRemote": "リモートリポジトリなし",
 };
 
 export const taskLensCatalogs = { en: taskLensEnglish, ko, "zh-CN": zh, ja } satisfies Catalogs<typeof taskLensEnglish>;

@@ -285,6 +285,7 @@ describe("issues and pull requests (PRD cmdk-navigation B11-B13, D-14)", () => {
 
   it("reads #273 and 273 as numbers and nothing else", () => {
     expect(numberQuery("#273")).toBe(273);
+    expect(numberQuery("!273")).toBe(273);
     expect(numberQuery(" 273 ")).toBe(273);
     expect(numberQuery("#273a")).toBeNull();
     expect(numberQuery("sandbox")).toBeNull();
