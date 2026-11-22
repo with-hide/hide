@@ -1,17 +1,25 @@
 #!/usr/bin/env python3
-"""A code host's CLI, its addresses and its key stay inside its registration
-unit (docs/ARCHITECTURE.md, Code hosts).
+"""Starting a code host's program, its addresses and its key stay inside its
+registration unit (docs/ARCHITECTURE.md, Code hosts).
 
 Common code asks the registry (`CodeHosts`) and the unit (`CodeHost`) and
 receives a `Place`, a `HostFailure` and a `ChangeRequestRef`; the screen opens
 the addresses the core carries. This check reads the sources and fails when,
 outside the files named below as a host's implementation or a parser it owns:
 
-- Rust names a host's CLI call (`Call::Gh`) or its failure and place types
-  (`GhFailure`, `github::Where`);
+- Rust starts a host's program by one of its three doors: constructing its
+  node call (`Call::Gh`), naming the program (`"gh"`), or using the node
+  link's module for it (`hide_node_link::gh`) beyond the items that start
+  nothing (`HOST_MODULE_ITEMS`). A list of argument words that reaches none of
+  the doors is dead data and is not read: no operation of a unit takes
+  argument words from common code.
+- Rust names a host's failure or place type (`GhFailure`, `github::Where`);
 - Rust or TypeScript spells a host's address (`github.com`, a change request's
   `/pull/` path or its `/checks` and `/files` pages, a `/commit/` page);
-- Rust branches on a host's key (`"github"` compared, matched or looked up).
+- Rust spells a host's key (`"github"`) in any form: compared, matched,
+  `matches!`, looked up or passed on. The files in `KEY_FILES` name GitHub's
+  issues or its store, and the files in `COMPONENT_FILES` name a diagnostic's
+  component, each with why and, while it is temporary, the node that ends it.
 
 Test code is not read: a Rust file's `#[cfg(test)]` module and everything
 after it, `tests/` folders, `*_tests.rs` files and TypeScript `*.test.*`
@@ -24,7 +32,7 @@ import sys
 ROOT = pathlib.Path(__file__).resolve().parent.parent
 
 # A host's implementation and the parsers it owns: the only places that may
-# spell its CLI, its addresses and its key.
+# start its program, spell its addresses and its key.
 IMPLEMENTATION = (
     "hide-core/src/github.rs",
     "hide-core/src/github/",
@@ -38,23 +46,63 @@ IMPLEMENTATION = (
 RUST_ROOTS = ("hide-core/src", "hided/src")
 WEB_ROOTS = ("web/src",)
 
+# The node link's module for GitHub's program holds its argument builders,
+# allowlist and field lists; these two of its items start nothing: the read
+# failure's category and a check that a word is a full commit name.
+HOST_MODULE_ITEMS = ("GithubFailureCategory", "is_commit")
+
+# Files that spell a host's key for GitHub's issues, which stay GitHub's in
+# this plan, or for GitHub's own store, with why.
+KEY_FILES = {
+    "hide-core/src/tasks.rs": "an issue's source kind",
+    "hide-core/src/project_settings.rs": "the issue source choice's saved name",
+    "hide-core/src/runtime/backlog.rs": "a backlog item's issue destination",
+    "hide-core/src/github_store.rs": "the GitHub snapshot store's file label",
+}
+
+# Files whose diagnostics name their component "github". Common code does so
+# only while GitHub is the one host, until the node that makes it take the
+# component from the host it reads; GitHub's own files keep it for good.
+COMPONENT_FILES = {
+    "hide-core/src/code_host/read.rs": "gitlab-read takes the component from the host it reads",
+    "hide-core/src/runtime/events.rs": "gitlab-read takes the component from the host it reads",
+    "hide-core/src/runtime/projects.rs": "gitlab-read takes the component from the host it reads",
+    "hide-core/src/github_store.rs": "GitHub's own snapshot store",
+    "hide-core/src/runtime/github_poll.rs": "GitHub's own advisory poll",
+}
+
+# Each rule: what it finds, its pattern, and the files outside the units that
+# may still match it.
 RUST_RULES = (
-    ("a host's CLI call", re.compile(r"\bCall::Gh\b")),
-    ("a host's failure or place type", re.compile(r"\bGhFailure\b|\bgithub::Where\b")),
+    ("a host's program started", re.compile(r'\bCall::Gh\b|\bCall::\{[^}]*\bGh\b|"gh"'), {}),
+    (
+        "the node link's module for a host's program",
+        # The module by its path, in a one-line `use` group, or as a line of
+        # a group rustfmt wrapped.
+        re.compile(
+            r"\bhide_node_link::gh\b(?!::(?:" + "|".join(HOST_MODULE_ITEMS) + r")\b)"
+            r"|\bhide_node_link::\{[^}]*\bgh\b"
+            r"|^\s*gh(?:\s*[,}]|\s+as\b|::(?!(?:" + "|".join(HOST_MODULE_ITEMS) + r")\b))"
+        ),
+        {},
+    ),
+    ("a host's failure or place type", re.compile(r"\bGhFailure\b|\bgithub::Where\b"), {}),
     (
         "a host's address",
         re.compile(r"github\.com|/(pull|issues|commit)/(\{|\"|\d)|/checks\"|/files\""),
+        {},
     ),
-    (
-        "a branch on a host's key",
-        re.compile(r"==\s*\"github\"|\"github\"\s*(=>|==)|\.host\(\"github\"\)"),
-    ),
+    # A diagnostic's component is its own rule below; rustfmt leaves a
+    # `json!` body as written, so the field may have no space.
+    ("a host's key", re.compile(r'(?<!"component": )(?<!"component":)"github"'), KEY_FILES),
+    ("a host's key as a log's component", re.compile(r'"component":\s*"github"'), COMPONENT_FILES),
 )
 
 WEB_RULES = (
     (
         "a host's address",
         re.compile(r"github\\?\.com|\\?/(pull|issues)\\?/|[`\"]/checks[`\"]|/checks`|[`\"]/files[`\"]|/files`"),
+        {},
     ),
 )
 
@@ -160,8 +208,8 @@ def scan(roots, suffixes, lines_of, rules):
             for number, line in lines_of(text):
                 if HIDE_OWN.search(line) or line.strip() in KNOWN_LINES.get(relative, ()):
                     continue
-                for what, pattern in rules:
-                    if pattern.search(line):
+                for what, pattern, allowed in rules:
+                    if relative not in allowed and pattern.search(line):
                         found.append(f"{relative}:{number}: {what}: {line.strip()}")
     return found
 
@@ -170,7 +218,7 @@ def main():
     found = scan(RUST_ROOTS, {".rs"}, rust_lines, RUST_RULES)
     found += scan(WEB_ROOTS, {".ts", ".tsx"}, web_lines, WEB_RULES)
     if found:
-        print("A code host's CLI, address or key outside its unit:", file=sys.stderr)
+        print("A code host's program, address or key outside its unit:", file=sys.stderr)
         for line in found:
             print(f"  {line}", file=sys.stderr)
         print(
@@ -179,7 +227,7 @@ def main():
             file=sys.stderr,
         )
         return 1
-    print("code host seam: no host CLI, address or key outside its unit")
+    print("code host seam: no host program, address or key outside its unit")
     return 0
 
 

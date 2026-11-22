@@ -215,7 +215,8 @@ An identity read that fails is its own outcome (`GithubProjectSnapshot::identity
 Matching remotes alone are no such evidence, since `gh repo set-default` and a moved origin beside an unchanged upstream change the repository the same remotes read.
 Each part of a read (today the issues) is one of four outcomes (`PartRead`): unsupported by the host, not read, failed, or read (and maybe empty); only a part the host offers and did not read holds the project's re-read clock back.
 `code_host/tests.rs` registers a host with the base contract alone in the test binary and holds it and GitHub's unit to the same contract tests: the choice of host, the four outcomes, an undeclared operation's refusal, addresses and number labels.
-`scripts/check-code-host-seam.py`, a `verify` gate, refuses a host's CLI call, failure or place type, a host's address and a branch on a host's key in Rust or TypeScript outside the files it names as a host's implementation (test code is not read); the web files that still read GitHub addresses themselves are named there as known exceptions until the screen opens the references the core carries.
+`scripts/check-code-host-seam.py`, a `verify` gate, refuses starting a host's program, a host's failure or place type, a host's address and a host's key in any form in Rust or TypeScript outside the files it names as a host's implementation (test code is not read).
+A host's program is started by one of three doors, each refused outside the unit: constructing its node call, naming the program, or using the node link's module for it beyond the items that start nothing; a list of argument words that reaches no door is not refused, because no operation of a unit takes argument words from common code; the web files that still read GitHub addresses themselves are named there as known exceptions until the screen opens the references the core carries.
 
 ## Stored primary checkout
 
