@@ -4832,6 +4832,7 @@ impl Runtime {
                     agent_start: current.agent_start,
                     agent_sleep: current.agent_sleep,
                     session_archive: current.session_archive,
+                    waits: current.waits,
                     // The core records it on the front change; a shared save
                     // carries it through, or any save would empty the list.
                     recent_checkouts: current.recent_checkouts,

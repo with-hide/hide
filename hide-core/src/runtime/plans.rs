@@ -896,7 +896,7 @@ impl Runtime {
                     .iter()
                     .filter(|node| {
                         !node.status.finished()
-                            && node.kind != crate::missions::NodeKind::External
+                            && node.kind != crate::missions::NodeKind::Wait
                             && reported(node)
                             && !self.node_unmet(mission, node).is_empty()
                     })

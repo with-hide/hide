@@ -302,6 +302,9 @@ impl Runtime {
         for addressed in self.mission_cells(ledger) {
             put(addressed);
         }
+        for addressed in self.wait_cells(ledger) {
+            put(addressed);
+        }
         if let Some(ledger) = ledger {
             for addressed in watch_cells(ledger) {
                 put(addressed);
@@ -566,6 +569,14 @@ impl Runtime {
         if changed {
             self.save_missions();
         }
+        let waits: Vec<&str> = news
+            .iter()
+            .map(|cell| cell.subject.as_str())
+            .filter(|subject| subject.starts_with("wait:"))
+            .collect();
+        if !waits.is_empty() {
+            self.drop_seen_wait_notices(recipient, &waits);
+        }
     }
 
     /// The receivers to ring once now: each with a cell whose subject it has
@@ -634,10 +645,11 @@ impl Runtime {
     }
 
     /// The workers a mission woke Hide for with a cell they have not seen
-    /// (`mission_health::hide_wake`, a node's fix while its worker sleeps):
-    /// each worker's identity and the newest such cell's revision. A cell
-    /// rings a resting receiver; one for a sleeping worker wakes it instead
-    /// (`agent_sleep::letters`), once per revision.
+    /// (`mission_health::hide_wake`, a node's fix while its worker sleeps),
+    /// and the agents with an ended wait's notice they have not seen (PRD
+    /// core-wait B17): each one's identity and the newest such cell's
+    /// revision. A cell rings a resting receiver; one for a sleeping agent
+    /// wakes it instead (`agent_sleep::letters`), once per revision.
     pub(crate) fn worker_cells_unseen(&mut self) -> Vec<(String, Actor, u64)> {
         let ledger = self.delivery_ledger.clone().ok();
         let Some(seen) = self.status_seen().cloned() else {
@@ -664,6 +676,10 @@ impl Runtime {
                 let entry = newest.entry(agent.to_owned()).or_insert((actor, 0));
                 entry.1 = entry.1.max(wake.seq);
             }
+        }
+        for (agent, actor, revision) in self.wait_notices_unseen(&seen) {
+            let entry = newest.entry(agent).or_insert((actor, 0));
+            entry.1 = entry.1.max(revision);
         }
         newest
             .into_iter()
@@ -702,6 +718,7 @@ impl Runtime {
                 .missions
                 .iter()
                 .all(|mission| mission.wakes.is_empty())
+            && self.snapshot.ui_state.waits.waits.iter().all(|wait| wait.open())
             && self.delivery_ledger.as_ref().map_or(true, |ledger| {
                 ledger.watches.iter().all(|watch| watch.warning_count == 0)
             })

@@ -29,6 +29,9 @@ pub(in crate::runtime) enum Origin {
     Plan { plan: String, step: String },
     /// Its report to its parent, the letter by id.
     Report { letter: String },
+    /// Its open wait, by id (PRD core-wait D-09): spent when its end lands,
+    /// dropped when the wait ends or is cancelled first.
+    Wait { wait: String },
 }
 
 impl Origin {
@@ -38,6 +41,7 @@ impl Origin {
             Self::Node { .. } => "mission",
             Self::Plan { .. } => "plan",
             Self::Report { .. } => "report",
+            Self::Wait { .. } => "wait",
         }
     }
 
@@ -46,6 +50,7 @@ impl Origin {
             Self::Node { mission, node } => json!({"mission": mission, "node": node}),
             Self::Plan { plan, step } => json!({"plan": plan, "step": step}),
             Self::Report { letter } => json!({"letter": letter}),
+            Self::Wait { wait } => json!({"wait": wait}),
         }
     }
 }
@@ -163,7 +168,7 @@ impl Runtime {
         let missions = &mut self.missions;
         missions.sleep_marks.retain(|mark| match &mark.origin {
             Origin::Node { mission, node } => now.contains(&(mission.clone(), node.clone())),
-            Origin::Plan { .. } | Origin::Report { .. } => true,
+            Origin::Plan { .. } | Origin::Report { .. } | Origin::Wait { .. } => true,
         });
         for mission in &missions.book.missions {
             for node in &mission.nodes {

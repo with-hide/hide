@@ -5743,8 +5743,8 @@ fn a_nodes_steps_show_from_the_plan_and_its_brief_is_kept_when_the_worker_binds(
 
 fn outside_plan() -> Value {
     json!({"op": "plan", "plan": {"nodes": [
-        {"key": "parser", "title": "The parser PR", "kind": "external", "external": {"pr": 1232}},
-        {"key": "lib", "title": "The library branch", "kind": "external", "external": {"branch": "feat/lib"}},
+        {"key": "parser", "title": "The parser PR", "kind": "wait", "wait": {"pr": 1232}},
+        {"key": "lib", "title": "The library branch", "kind": "wait", "wait": {"branch": "feat/lib"}},
         {"key": "fix", "title": "Fix it", "kind": "change", "delivery": "pr",
          "criteria": ["it works"], "depends_on": ["parser", "lib"]},
     ]}})
@@ -5776,8 +5776,9 @@ fn in_main(view: &crate::runtime::missions::NodeView) -> Option<String> {
 /// finish either, and their arrival in main wakes it.
 #[test]
 fn an_outside_node_is_done_once_its_pull_request_or_branch_is_in_main() {
-    use crate::missions::{External, WakeEvent};
-    use crate::runtime::mission_outside::{Ask, Found, Watch};
+    use crate::missions::WakeEvent;
+    use crate::waits::WaitTarget;
+    use crate::runtime::mission_outside::{Ask, Found, Owner, Watch};
     let fixture = conducting();
     let mut runtime = fixture.runtime.lock().unwrap();
     command(
@@ -5801,7 +5802,7 @@ fn an_outside_node_is_done_once_its_pull_request_or_branch_is_in_main() {
         json!({"op": "node", "node": "parser", "patch": {"status": "done"}}),
     )
     .unwrap_err();
-    assert!(refused.contains("mission_external_invalid"), "{refused}");
+    assert!(refused.contains("mission_wait_invalid"), "{refused}");
 
     runtime.note_mission_pulls(
         node,
@@ -5831,10 +5832,9 @@ fn an_outside_node_is_done_once_its_pull_request_or_branch_is_in_main() {
         .unwrap()
         .outside_round;
     let lib = || Ask {
-        mission: "mission-1".into(),
-        node: "lib".into(),
+        owner: Owner::node("mission-1", "lib"),
         watch: Watch::Outside {
-            external: External::Branch("feat/lib".into()),
+            target: WaitTarget::Branch("feat/lib".into()),
             ahead: None,
             reopens: 0,
             round,
@@ -6385,12 +6385,11 @@ fn a_branch_mission_waits_for_its_branch_to_reach_main_then_closes() {
 
 /// The branch read Hide asks for `node` of the waiting mission now.
 fn landing_ask(runtime: &Runtime, node: &str) -> crate::runtime::mission_outside::Ask {
-    use crate::runtime::mission_outside::{Ask, Watch};
+    use crate::runtime::mission_outside::{Ask, Owner, Watch};
     let mission = runtime.missions.book.get("mission-1").unwrap();
     let row = mission.node(node).unwrap();
     Ask {
-        mission: "mission-1".into(),
-        node: node.into(),
+        owner: Owner::node("mission-1", node),
         watch: Watch::Landing {
             branch: row.branch.clone(),
             base: mission.destination.clone(),
@@ -6705,7 +6704,7 @@ fn a_git_mission_in_a_repository_with_no_remote_follows_its_branches_into_main()
         &mut runtime,
         "sender",
         json!({"op": "plan", "plan": {"nodes": [
-            {"key": "lib", "title": "The library branch", "kind": "external", "external": {"branch": "feat/lib"}},
+            {"key": "lib", "title": "The library branch", "kind": "wait", "wait": {"branch": "feat/lib"}},
             {"key": "fix", "title": "Fix it", "kind": "change", "delivery": "direct",
              "criteria": ["it works"], "depends_on": ["lib"]},
         ]}}),
@@ -6849,7 +6848,7 @@ fn an_outside_branch_is_in_main_only_once_its_own_work_reached_main() {
         json!({"op": "create", "title": "Fix the bug"}),
     )
     .unwrap();
-    let outside = |key: &str, branch: &str| json!({"key": key, "title": key, "kind": "external", "external": {"branch": branch}});
+    let outside = |key: &str, branch: &str| json!({"key": key, "title": key, "kind": "wait", "wait": {"branch": branch}});
     command(
         &mut runtime,
         "sender",
@@ -6928,8 +6927,8 @@ fn an_outside_branch_is_in_main_only_once_its_own_work_reached_main() {
 /// nothing seen, and so does a reopened mission's.
 #[test]
 fn an_outside_branch_answer_from_an_earlier_round_proves_nothing() {
-    use crate::missions::External;
-    use crate::runtime::mission_outside::{Ask, Found, Watch};
+    use crate::runtime::mission_outside::{Ask, Found, Owner, Watch};
+    use crate::waits::WaitTarget;
     let fixture = conducting();
     let mut runtime = fixture.runtime.lock().unwrap();
     command(
@@ -6940,17 +6939,16 @@ fn an_outside_branch_answer_from_an_earlier_round_proves_nothing() {
     .unwrap();
     let plan = |branch: &str| {
         json!({"op": "plan", "plan": {"nodes": [
-            {"key": "lib", "title": "lib", "kind": "external", "external": {"branch": branch}},
+            {"key": "lib", "title": "lib", "kind": "wait", "wait": {"branch": branch}},
         ]}})
     };
     command(&mut runtime, "sender", plan("feat/a")).unwrap();
     command(&mut runtime, "sender", json!({"op": "start"})).unwrap();
     let place = (crate::node::TEST_NODE.to_owned(), PROJECT.to_owned());
     let ask = |runtime: &Runtime| Ask {
-        mission: "mission-1".into(),
-        node: "lib".into(),
+        owner: Owner::node("mission-1", "lib"),
         watch: Watch::Outside {
-            external: External::Branch("feat/a".into()),
+            target: WaitTarget::Branch("feat/a".into()),
             ahead: None,
             reopens: runtime.missions.outside.reopens_of("mission-1"),
             round: runtime.missions.book.missions[0].nodes[0].outside_round,
@@ -6971,7 +6969,7 @@ fn an_outside_branch_answer_from_an_earlier_round_proves_nothing() {
         &mut runtime,
         "sender",
         json!({"op": "plan", "plan": {"nodes": [
-            {"key": "other", "title": "other", "kind": "external", "external": {"branch": "feat/a"}},
+            {"key": "other", "title": "other", "kind": "wait", "wait": {"branch": "feat/a"}},
         ]}}),
     )
     .unwrap();
@@ -7097,7 +7095,7 @@ fn a_branch_cut_from_a_main_that_moved_during_the_read_has_no_work_of_its_own() 
         &mut runtime,
         "sender",
         json!({"op": "plan", "plan": {"nodes": [
-            {"key": "topic", "title": "topic", "kind": "external", "external": {"branch": "topic"}},
+            {"key": "topic", "title": "topic", "kind": "wait", "wait": {"branch": "topic"}},
         ]}}),
     )
     .unwrap();
@@ -7315,12 +7313,12 @@ fn a_plan_of_more_outside_branches_than_one_read_takes_is_read_whole_when_admitt
         let mut nodes: Vec<Value> = (0..32)
             .map(|index| {
                 json!({"key": format!("e{index}"), "title": format!("outside {index}"),
-                       "kind": "external", "external": {"branch": format!("absent-{index}")}})
+                       "kind": "wait", "wait": {"branch": format!("absent-{index}")}})
             })
             .collect();
         nodes.push(
-            json!({"key": "last", "title": "In main", "kind": "external",
-                          "external": {"branch": "landed"}}),
+            json!({"key": "last", "title": "In main", "kind": "wait",
+                          "wait": {"branch": "landed"}}),
         );
         command(
             &mut runtime,
@@ -7424,7 +7422,7 @@ fn a_node_followed_while_a_read_is_out_is_read_once_that_read_answers() {
 
     let fixture = conducting();
     let (changed, changes) = mpsc::channel();
-    let outside = |key: &str, branch: &str| json!({"key": key, "title": key, "kind": "external", "external": {"branch": branch}});
+    let outside = |key: &str, branch: &str| json!({"key": key, "title": key, "kind": "wait", "wait": {"branch": branch}});
     {
         let mut runtime = fixture.runtime.lock().unwrap();
         runtime.install_worker_context(
@@ -15171,7 +15169,7 @@ fn a_held_node_is_not_spawned_and_outside_work_is_never_held() {
         {"key": "fix", "title": "Fix it", "kind": "change", "delivery": "pr",
          "criteria": ["the parser keeps v1 files"],
          "checks": [{"as": "review", "by": [{"agent": "codex", "model": "gpt-6-astra"}]}]},
-        {"key": "docs", "title": "Docs", "kind": "external", "external": {"branch": "feat/docs"}},
+        {"key": "docs", "title": "Docs", "kind": "wait", "wait": {"branch": "feat/docs"}},
     ]}}))
     .unwrap();
     let docs = runtime.missions.book.get("mission-1").unwrap().nodes[1].clone();
@@ -15182,7 +15180,7 @@ fn a_held_node_is_not_spawned_and_outside_work_is_never_held() {
         json!({"op": "node", "node": "docs", "patch": hold}),
     )
     .unwrap_err();
-    assert!(refused.contains("mission_external_invalid"), "{refused}");
+    assert!(refused.contains("mission_wait_invalid"), "{refused}");
 }
 
 /// Mission-55 c1 and the shelving contract: creating mission 129 succeeds,
@@ -15936,6 +15934,11 @@ fn expected_for(reason: crate::missions::AttentionReason) -> Expected {
         AttentionReason::NotStarted => conductors_raise(),
         AttentionReason::WarningStood => conductors_raise(),
         AttentionReason::WaitStood => conductors_raise(),
+        // A wait that failed or passed its deadline (PRD core-wait D-07).
+        AttentionReason::CiFailed => conductors_raise(),
+        AttentionReason::MissionCancelled => conductors_raise(),
+        AttentionReason::NodeDropped => conductors_raise(),
+        AttentionReason::WaitExpired => conductors_raise(),
         // A planned gate is the operator's own card (PRD mission-human-gate).
         AttentionReason::HumanGate => operators_raise(),
         // Only on a record from before schema 3.
@@ -17495,7 +17498,7 @@ fn a_mission_with_another_destination_lands_its_changes_there_and_outside_branch
         &mut runtime,
         "sender",
         json!({"op": "plan", "plan": {"destination": "feat/x", "nodes": [
-            {"key": "lib", "title": "The library branch", "kind": "external", "external": {"branch": "feat/lib"}},
+            {"key": "lib", "title": "The library branch", "kind": "wait", "wait": {"branch": "feat/lib"}},
             {"key": "a", "title": "A", "kind": "change", "delivery": "direct", "criteria": ["a works"]},
             {"key": "b", "title": "B", "kind": "change", "delivery": "direct", "criteria": ["b works"]},
         ]}}),

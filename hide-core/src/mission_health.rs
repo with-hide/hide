@@ -55,7 +55,7 @@ pub(crate) fn worker_gone(
 ) -> bool {
     mission.status.open()
         && status == NodeStatus::Working
-        && kind != NodeKind::External
+        && kind != NodeKind::Wait
         && matches!(worker, None | Some(WorkerLife::Ended))
 }
 
@@ -416,7 +416,7 @@ fn pr_less_done(mission: &Mission, node: &MissionNode, fact: &NodeFacts) -> bool
         && match node.kind {
             NodeKind::General => true,
             NodeKind::Change => node.delivery == Some(Delivery::Direct),
-            NodeKind::External => false,
+            NodeKind::Wait => false,
         }
 }
 
@@ -488,10 +488,11 @@ fn still_holds(
                 .prs
                 .iter()
                 .copied()
-                .chain(match &node.external {
-                    Some(crate::missions::External::Pr(number)) => Some(*number),
-                    _ => None,
-                })
+                .chain(
+                    node.wait_target
+                        .as_ref()
+                        .and_then(crate::waits::WaitTarget::change_request),
+                )
                 .all(|number| {
                     find(pulls, number).is_none_or(|pull| pull.badge == PullRequestBadge::Closed)
                 }),
@@ -537,6 +538,18 @@ fn still_holds(
             false
         }
         AttentionReason::NotStarted => could_start(mission, node, &facts.lines),
+        // A waiting node's failed wait stands until a read finds the target
+        // open again or the plan names another target or deadline
+        // (PRD core-wait D-08), which clears the outcome it holds.
+        AttentionReason::CiFailed
+        | AttentionReason::MissionCancelled
+        | AttentionReason::NodeDropped
+        | AttentionReason::WaitExpired => {
+            node.wait_outcome
+                .as_ref()
+                .and_then(crate::waits::WaitOutcome::attention)
+                == Some(attention.reason)
+        }
         AttentionReason::WarningStood => {
             node.status == NodeStatus::Working
                 && node.warnings.iter().any(|warning| warning.kind.stalls())
@@ -581,7 +594,12 @@ fn held_by_any(mission: &Mission, number: u32) -> bool {
         || mission
             .nodes
             .iter()
-            .any(|node| node.external == Some(crate::missions::External::Pr(number)))
+            .any(|node| {
+                node.wait_target
+                    .as_ref()
+                    .and_then(crate::waits::WaitTarget::change_request)
+                    == Some(number)
+            })
 }
 
 fn find(pulls: &GithubProjectSnapshot, number: u32) -> Option<&PullRequestSnapshot> {
@@ -705,7 +723,7 @@ fn node_works(mission: &Mission, node: &MissionNode) -> bool {
         mission.status,
         MissionStatus::Running | MissionStatus::MergeWait
     ) && node.status == NodeStatus::Working
-        && node.kind != NodeKind::External
+        && node.kind != NodeKind::Wait
 }
 
 /// Whether `node` may carry a warning now, the one rule every warning reads
@@ -966,7 +984,6 @@ pub enum CellReason {
     CiFailed,
     CiCancelled,
     ChangesRequested,
-    OutsideFailed,
     WarningReviewFails,
     WarningStopped,
 }
@@ -1005,7 +1022,6 @@ pub(crate) fn held_of(
             _ => CellReason::CiFailed,
         },
         WakeEvent::ChangesRequested => CellReason::ChangesRequested,
-        WakeEvent::OutsideFailed => CellReason::OutsideFailed,
         WakeEvent::Warning => match wake.warning {
             Some(WarningKind::ReviewFails) => CellReason::WarningReviewFails,
             _ => CellReason::WarningStopped,
@@ -1119,7 +1135,7 @@ pub(crate) fn safety_net_due(
 /// depends on done, or the finish line of it it names met.
 pub(crate) fn could_start(mission: &Mission, node: &MissionNode, lines: &[LinesNow]) -> bool {
     !node.started()
-        && node.kind != NodeKind::External
+        && node.kind != NodeKind::Wait
         && node
             .depends_on
             .iter()

@@ -223,12 +223,12 @@ pub struct PhoneNode {
     /// `+N` after its number (D-37); left out at zero.
     #[serde(skip_serializing_if = "is_zero")]
     pub pr_more: usize,
-    /// The pull request an outside step watches (`External::Pr`), its
+    /// The pull request a waiting step watches (`WaitTarget::Pr`), its
     /// `↗#n`; absent for one that watches a branch, for every other step
     /// and from a core before it.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub external_pr: Option<u32>,
-    /// The branch an outside step watches (`External::Branch`), its
+    /// The branch a waiting step watches (`WaitTarget::Branch`), its
     /// `↗ <branch>`; absent otherwise and from a core before it.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub external_branch: Option<String>,
@@ -273,6 +273,27 @@ pub struct PhoneNode {
     /// 언제까지`; absent while nothing holds it and from a core before it.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub wait: Option<PhoneWait>,
+    /// What a waiting step waits on (`NodeView::wait_target`, PRD core-wait
+    /// D-15, B22): every target, the pull request and branch too; absent on
+    /// any other step and from a core before it. An older bundle ignores it
+    /// and draws the step from `external_pr`/`external_branch`, a step of
+    /// another target as a wait with no line.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub wait_target: Option<crate::waits::WaitTarget>,
+    /// When its wait passes its deadline (`NodeView::wait_until_unix_ms`).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub wait_until_unix_ms: Option<u64>,
+    /// The progress of the mission it waits on, `끝 2/7` (D-16).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub wait_progress: Option<crate::waits::WaitProgress>,
+    /// How the code host writes the change request a pull request or CI
+    /// target names (`#12`, `!12`), which the step draws in place of a
+    /// number; absent for another target and while not known.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub wait_label: Option<String>,
+    /// How its wait failed (`wait_outcome` in snapshot-wire-enums.json, D-17).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub wait_outcome: Option<String>,
 }
 
 /// A step's wait as the map reads it (`NodeWait`), copied field by field.
@@ -476,6 +497,29 @@ struct NodeIn {
     merge: Option<PhoneMerge>,
     #[serde(default)]
     wait: Option<PhoneWait>,
+    #[serde(default)]
+    wait_target: Option<crate::waits::WaitTarget>,
+    #[serde(default)]
+    wait_until_unix_ms: Option<u64>,
+    #[serde(default)]
+    wait_progress: Option<WaitProgressIn>,
+    #[serde(default)]
+    wait_reference: Option<ReferenceIn>,
+    #[serde(default)]
+    wait_outcome: Option<String>,
+}
+
+/// A change request reference: only its label is read.
+#[derive(Deserialize)]
+struct ReferenceIn {
+    #[serde(default)]
+    label: String,
+}
+
+#[derive(Deserialize)]
+struct WaitProgressIn {
+    done: u32,
+    total: u32,
 }
 
 /// A step's kind as the phone frame carries it (PRD node-presets D-11): a
@@ -483,10 +527,13 @@ struct NodeIn {
 /// the kind a bundle from before general steps names and draws it by; a newer
 /// bundle reads it back as the general step it is (`missionsOnWire`). A
 /// general step of another preset or none is `general`, which an older
-/// bundle draws as a step it has no word for.
+/// bundle draws as a step it has no word for. A waiting step keeps its name
+/// from before, `external`, which every bundle draws as a wait (PRD
+/// core-wait B22).
 fn phone_kind(kind: String, preset: Option<&str>) -> String {
     match (kind.as_str(), preset) {
         ("general", Some(old @ ("research" | "verify"))) => old.to_owned(),
+        ("wait", _) => "external".to_owned(),
         _ => kind,
     }
 }
@@ -726,6 +773,19 @@ fn phone_mission(
                     why: cut(&wait.why),
                     ..wait
                 }),
+                wait_target: source.wait_target,
+                wait_until_unix_ms: source.wait_until_unix_ms,
+                wait_progress: source
+                    .wait_progress
+                    .map(|progress| crate::waits::WaitProgress {
+                        done: progress.done,
+                        total: progress.total,
+                    }),
+                wait_label: source
+                    .wait_reference
+                    .map(|reference| reference.label)
+                    .filter(|label| !label.is_empty()),
+                wait_outcome: source.wait_outcome,
             }
         })
         .collect();

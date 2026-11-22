@@ -30,7 +30,7 @@ use serde::{Deserialize, Deserializer, Serialize};
 use crate::delivery::Actor;
 use crate::mission_criteria::{CheckInput, Criterion};
 
-pub(crate) const SCHEMA_VERSION: u32 = 4;
+pub(crate) const SCHEMA_VERSION: u32 = 5;
 /// The schema before node criteria, read and converted (D-19).
 pub(crate) const SCHEMA_BEFORE_CRITERIA: u32 = 1;
 /// The schema before a node's three states and its pull request list (PRD
@@ -40,6 +40,12 @@ pub(crate) const SCHEMA_BEFORE_SIMPLE: u32 = 2;
 /// book of it has no `human` line and reads unchanged, but a build that knows
 /// only it cannot read a gate, so it reads no schema 4 book.
 const SCHEMA_BEFORE_GATES: u32 = 3;
+/// The schema before Hide's one wait (PRD core-wait D-18): a waiting node is
+/// `external`, watching a pull request or a branch with no deadline. It is
+/// read as a `wait` node (`convert_outside_nodes`), and a build that knows
+/// only it cannot read a wait node's other targets, so it reads no schema 5
+/// book.
+const SCHEMA_BEFORE_WAIT: u32 = 4;
 /// Answered decisions a mission keeps for a skip of a protected line; past
 /// this the oldest goes and is logged.
 pub const DECIDED_LIMIT: usize = 32;
@@ -133,9 +139,11 @@ pub enum MissionScope {
 
 /// The kinds of node, each finished by its own rule (D-15; PRD node-presets
 /// D-01): a code node (`change`) leaves a branch; a general node leaves a
-/// line, and its `preset` says what kind of work it is; an external node is
-/// a pull request or a branch outside the mission that Hide watches until it
-/// reaches main (PRD mission-map-git-criteria D-20).
+/// line, and its `preset` says what kind of work it is; a waiting node
+/// waits on something outside its own work that Hide judges (PRD core-wait
+/// D-02, D-18): a pull request, its CI, a branch, another mission or that
+/// mission's node (`waits::WaitTarget`). A plan and a book from before name
+/// it `external` and are read as `wait`.
 ///
 /// A book or a plan written before general nodes names `research` or
 /// `verify` here: a book is read as a general node with that preset
@@ -145,7 +153,7 @@ pub enum MissionScope {
 pub enum NodeKind {
     Change,
     General,
-    External,
+    Wait,
 }
 
 /// What a general node's work is (PRD node-presets D-02), the defaults it
@@ -241,7 +249,9 @@ pub fn preset_row(preset: Option<Preset>) -> &'static PresetRow {
 pub enum PlanKind {
     Change,
     General,
-    External,
+    /// `external` is its name from before (PRD core-wait D-18).
+    #[serde(alias = "external")]
+    Wait,
     Research,
     Verify,
 }
@@ -251,7 +261,7 @@ impl PlanKind {
         match self {
             Self::Change => NodeKind::Change,
             Self::General | Self::Research | Self::Verify => NodeKind::General,
-            Self::External => NodeKind::External,
+            Self::Wait => NodeKind::Wait,
         }
     }
 
@@ -260,7 +270,7 @@ impl PlanKind {
         match self {
             Self::Research => Some(Preset::Research),
             Self::Verify => Some(Preset::Verify),
-            Self::Change | Self::General | Self::External => None,
+            Self::Change | Self::General | Self::Wait => None,
         }
     }
 }
@@ -270,17 +280,9 @@ impl From<NodeKind> for PlanKind {
         match kind {
             NodeKind::Change => Self::Change,
             NodeKind::General => Self::General,
-            NodeKind::External => Self::External,
+            NodeKind::Wait => Self::Wait,
         }
     }
-}
-
-/// What an external node watches (D-20, B19).
-#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
-#[serde(rename_all = "snake_case", deny_unknown_fields)]
-pub enum External {
-    Pr(u32),
-    Branch(String),
 }
 
 /// How a change node reaches main (D-16).
@@ -413,6 +415,14 @@ pub enum AttentionReason {
     /// The node's pull request waited on CI, a review or the merge for longer
     /// than any of those takes (`mission_health::stall_acts`).
     WaitStood,
+    /// A waiting node's CI ended failed (PRD core-wait D-06).
+    CiFailed,
+    /// The mission a waiting node waits on was cancelled (D-03).
+    MissionCancelled,
+    /// The node a waiting node waits on was dropped from its plan (D-04).
+    NodeDropped,
+    /// A waiting node passed its deadline (D-07).
+    WaitExpired,
 }
 
 impl AttentionReason {
@@ -447,7 +457,11 @@ impl AttentionReason {
             | Self::WakeRefused
             | Self::NotStarted
             | Self::WarningStood
-            | Self::WaitStood => &[Drop],
+            | Self::WaitStood
+            | Self::CiFailed
+            | Self::MissionCancelled
+            | Self::NodeDropped
+            | Self::WaitExpired => &[Drop],
             Self::UnplannedPr => &[Attach],
             Self::ConductorFailed => &[Resume, Drop],
             // Answered on the gate's decision card, never past it here.
@@ -484,6 +498,10 @@ impl AttentionReason {
             Self::NotStarted => "not_started",
             Self::WarningStood => "warning_stood",
             Self::WaitStood => "wait_stood",
+            Self::CiFailed => "ci_failed",
+            Self::MissionCancelled => "mission_cancelled",
+            Self::NodeDropped => "node_dropped",
+            Self::WaitExpired => "wait_expired",
         }
     }
 }
@@ -862,8 +880,7 @@ impl PendingWake {
             && match self.event {
                 WakeEvent::Attention
                 | WakeEvent::Warning
-                | WakeEvent::ChangesRequested
-                | WakeEvent::OutsideFailed => true,
+                | WakeEvent::ChangesRequested => true,
                 WakeEvent::Ci => self
                     .ci
                     .as_ref()
@@ -899,11 +916,10 @@ pub enum WakeEvent {
     NewHead,
     /// An open pull request's CI ended on its head; `ci` says how.
     Ci,
-    /// An outside node's pull request merged or its branch reached main, so
-    /// the nodes waiting on it can start (B19).
+    /// A waiting node's wait was met (PRD core-wait D-08), so the nodes
+    /// waiting on it can start; its failure is a raise (`AttentionReason`).
+    /// Named for the outside node it was before.
     OutsideDone,
-    /// An outside pull request closed without a merge (B20).
-    OutsideFailed,
     /// The Conductor's own conversation came back in another pane and
     /// conducts the mission again (PRD mission-tool D-11, B14): a resumed
     /// conversation gets no prompt of its own, so this letter tells it to
@@ -991,7 +1007,6 @@ impl WakeEvent {
             Self::NewHead => "new_head",
             Self::Ci => "ci",
             Self::OutsideDone => "outside_done",
-            Self::OutsideFailed => "outside_failed",
             Self::Resumed => "resumed",
             Self::EndAsked => "end_asked",
             Self::Attention => "attention",
@@ -1318,8 +1333,20 @@ pub struct MissionNode {
     /// node is on the map. At most the ledger's letter size.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub brief: Option<String>,
+    /// What a waiting node waits on (PRD core-wait D-02); none on any other.
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub external: Option<External>,
+    pub wait_target: Option<crate::waits::WaitTarget>,
+    /// When a waiting node's wait passes its deadline (D-07): from its plan's
+    /// `for`, seven days when it names none, and for a node from before
+    /// deadlines, seven days from the first read of this build (D-19).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub wait_until_unix_ms: Option<u64>,
+    /// How a waiting node's wait failed, which keeps it from done and stands
+    /// with its raise until a later read finds the target open again or the
+    /// plan names another target or deadline (D-08, D-17); none while it
+    /// waits and once it is met.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub wait_outcome: Option<crate::waits::WaitOutcome>,
     /// How often a later node's defect opened it again (D-21).
     #[serde(default, skip_serializing_if = "is_zero")]
     pub reopened: u8,
@@ -1633,10 +1660,10 @@ impl MissionNode {
     }
 
     /// Gives a node with a pull request its CI line, open until GitHub's
-    /// checks are read (`mission_criteria::ensure_ci_line`); an external node,
+    /// checks are read (`mission_criteria::ensure_ci_line`); a waiting node,
     /// which Hide finishes itself, has none. Whether the line was made.
     pub(crate) fn ensure_ci_line(&mut self) -> bool {
-        self.kind != NodeKind::External
+        self.kind != NodeKind::Wait
             && self.current_pr().is_some()
             && crate::mission_criteria::ensure_ci_line(&mut self.criteria).1
     }
@@ -2997,12 +3024,29 @@ pub enum MissionCommand {
     },
     List,
     Settings,
+    /// `hide wait <target>` (PRD core-wait D-21, B14): the calling agent
+    /// waits on `wait`'s target, or is given the open wait it already holds
+    /// on it. It rides the mission command's pane capability, which names
+    /// the caller, and changes no mission.
+    Wait { wait: crate::waits::WaitInput },
+    /// `hide wait list` (B15): the calling agent's open waits.
+    WaitList,
+    /// `hide wait cancel <id>` (B15): ends one of the calling agent's waits.
+    WaitCancel { id: String },
 }
 
 impl MissionCommand {
     /// Whether the command can change the record; the others only read it.
     pub(crate) fn mutates(&self) -> bool {
-        !matches!(self, Self::Show { .. } | Self::List | Self::Settings)
+        !matches!(
+            self,
+            Self::Show { .. }
+                | Self::List
+                | Self::Settings
+                | Self::Wait { .. }
+                | Self::WaitList
+                | Self::WaitCancel { .. }
+        )
     }
 
     /// A command small enough and well-formed enough to take to the core.
@@ -3126,7 +3170,15 @@ impl MissionCommand {
             Self::Take { mission, handover } => {
                 valid_key(mission) && handover.as_deref().is_none_or(|token| token.len() <= 64)
             }
-            Self::List | Self::Settings => true,
+            Self::List | Self::Settings | Self::WaitList => true,
+            // The target's and deadline's own refusals are the core's.
+            Self::Wait { wait } => {
+                wait.branch.as_deref().is_none_or(|b| b.len() <= TITLE_LIMIT)
+                    && wait.mission.as_deref().is_none_or(valid_key)
+                    && wait.node.as_deref().is_none_or(valid_key)
+                    && wait.for_span.as_deref().is_none_or(|span| span.len() <= 16)
+            }
+            Self::WaitCancel { id } => valid_key(id),
         }
     }
 }
@@ -3201,9 +3253,11 @@ pub struct NodeInput {
     /// The reviews and verifications other agents give (D-07).
     #[serde(default)]
     pub checks: Vec<CheckInput>,
-    /// What an external node watches (D-20).
-    #[serde(default)]
-    pub external: Option<External>,
+    /// What a waiting node waits on and until when (PRD core-wait D-02,
+    /// D-07); `external`, with a pull request or a branch, is its name from
+    /// before.
+    #[serde(default, alias = "external")]
+    pub wait: Option<crate::waits::WaitInput>,
     #[serde(default)]
     pub issues: Vec<u32>,
     #[serde(default)]
@@ -3561,7 +3615,13 @@ pub(crate) fn apply_plan(
         // A code node works on a branch and a waiting node waits on a pull
         // request or a branch; a plain folder has neither, so its mission
         // runs general nodes only, in the folder itself (with-hide/hide#2478).
-        if mission.plain_folder && node.kind() != NodeKind::General {
+        // A wait on another mission or its node needs no branch.
+        let book_wait = node.kind() == NodeKind::Wait
+            && node
+                .wait
+                .as_ref()
+                .is_some_and(|wait| wait.mission.is_some());
+        if mission.plain_folder && node.kind() != NodeKind::General && !book_wait {
             return Err(crate::coordination::refusal("mission_needs_git", &node.key));
         }
         if node.criteria.len() > crate::mission_criteria::OWN_LIMIT {
@@ -3570,7 +3630,7 @@ pub(crate) fn apply_plan(
                 &node.key,
             ));
         }
-        if node.criteria.is_empty() && node.kind() != NodeKind::External && !mission.exempt {
+        if node.criteria.is_empty() && node.kind() != NodeKind::Wait && !mission.exempt {
             return Err(crate::coordination::refusal(
                 "mission_criteria_missing",
                 &node.key,
@@ -3698,7 +3758,9 @@ pub(crate) fn apply_plan(
                 criteria: Vec::new(),
                 steps: Vec::new(),
                 brief: None,
-                external: None,
+                wait_target: None,
+                wait_until_unix_ms: None,
+                wait_outcome: None,
                 reopened: 0,
                 issues: Vec::new(),
                 paths: Vec::new(),
@@ -3735,9 +3797,9 @@ pub(crate) fn apply_plan(
             node.title.clone_from(&input.title);
             node.kind = input.kind();
             node.preset = input.preset();
-            // A node planned as outside work loses its hold: outside work
+            // A node planned as a wait loses its hold: what it waits on
             // moves it, and no hold can stop that.
-            if node.kind == NodeKind::External {
+            if node.kind == NodeKind::Wait {
                 node.hold = None;
             }
             node.depends_on.clone_from(&input.depends_on);
@@ -3772,7 +3834,7 @@ pub(crate) fn apply_plan(
             if let Some(merge) = &input.operator_merge {
                 node.operator_merge = merge.as_deref().map(|why| why.trim().to_owned());
             }
-            node.external.clone_from(&input.external);
+            plan_wait(&mut node, input.wait.as_ref(), now);
             node.issues.clone_from(&input.issues);
             node.paths.clone_from(&input.paths);
             if input.change.is_some() {
@@ -3976,10 +4038,10 @@ fn check_operator_merge(
     Ok(())
 }
 
-/// An external node names one pull request or branch and nothing a worker
-/// would do (B19); no other node names one. A preset is a general node's,
-/// and an old kind name stands for its own preset only (PRD node-presets
-/// D-02, D-05).
+/// A waiting node names one target, an optional deadline within its bounds
+/// and nothing a worker would do (PRD core-wait B1, B11); no other node names
+/// a wait. A preset is a general node's, and an old kind name stands for its
+/// own preset only (PRD node-presets D-02, D-05).
 fn check_node_kind(node: &NodeInput) -> Result<(), String> {
     if (node.preset.is_some() && node.kind() != NodeKind::General)
         || node
@@ -3992,27 +4054,52 @@ fn check_node_kind(node: &NodeInput) -> Result<(), String> {
             &node.key,
         ));
     }
-    let external = node.kind() == NodeKind::External;
-    let named = match &node.external {
-        None => false,
-        Some(External::Pr(number)) => *number > 0,
-        Some(External::Branch(branch)) => {
-            valid_text(branch, TITLE_LIMIT) && !branch.chars().any(char::is_whitespace)
-        }
-    };
+    let wait = node.kind() == NodeKind::Wait;
+    let named = node.wait.as_ref().is_some_and(|wait| wait.target().is_ok());
     let bare = node.worker.is_none()
         && node.delivery.is_none()
         && node.criteria.is_empty()
         && node.steps.as_ref().is_none_or(Vec::is_empty)
         && node.checks.is_empty()
         && node.gate.as_ref().is_none_or(Vec::is_empty);
-    if external != node.external.is_some() || (external && (!named || !bare)) {
+    if wait != node.wait.is_some() || (wait && (!named || !bare)) {
         return Err(crate::coordination::refusal(
-            "mission_external_invalid",
+            "mission_wait_invalid",
+            &node.key,
+        ));
+    }
+    if node.wait.as_ref().is_some_and(|wait| wait.minutes().is_err()) {
+        return Err(crate::coordination::refusal(
+            "mission_wait_deadline_invalid",
             &node.key,
         ));
     }
     Ok(())
+}
+
+/// Gives a planned node the wait its plan entry names (PRD core-wait D-07):
+/// a new target, or a deadline the entry names, waits from `now`; the same
+/// target with no deadline named keeps the one it has. A node that is not a
+/// wait keeps none.
+fn plan_wait(node: &mut MissionNode, input: Option<&crate::waits::WaitInput>, now: u64) {
+    let Some(input) = input else {
+        node.wait_target = None;
+        node.wait_until_unix_ms = None;
+        node.wait_outcome = None;
+        return;
+    };
+    // `check_node_kind` refused an input without a target or deadline.
+    let (Ok(target), Ok(minutes)) = (input.target(), input.minutes()) else {
+        return;
+    };
+    let same = node.wait_target.as_ref() == Some(&target);
+    if !same || input.for_span.is_some() || node.wait_until_unix_ms.is_none() {
+        node.wait_until_unix_ms = Some(crate::waits::deadline(now, minutes));
+    }
+    if !same {
+        node.wait_outcome = None;
+    }
+    node.wait_target = Some(target);
 }
 
 /// A node's reviews and verifications: each kind at most once, each with
@@ -4097,22 +4184,22 @@ pub(crate) fn apply_patch(
         )
         .map_err(|code| format!("mission_{code}"))?;
     }
-    // An external node is done when Hide reads it in main (B19).
-    if node.kind == NodeKind::External
+    // A waiting node is done when Hide finds its wait met (PRD core-wait D-08).
+    if node.kind == NodeKind::Wait
         && (patch.status == Some(NodeStatus::Done)
             || patch.worker.is_some()
             || patch.agent_id.is_some())
     {
         return Err(crate::coordination::refusal(
-            "mission_external_invalid",
+            "mission_wait_invalid",
             &node.key,
         ));
     }
     if let Some(Some(hold)) = &patch.hold {
-        // An outside node moves on outside work, which no hold can stop.
-        if node.kind == NodeKind::External {
+        // A waiting node moves on what it waits on, which no hold can stop.
+        if node.kind == NodeKind::Wait {
             return Err(crate::coordination::refusal(
-                "mission_external_invalid",
+                "mission_wait_invalid",
                 &node.key,
             ));
         }
@@ -4457,7 +4544,7 @@ pub fn next_action(code: &str) -> &'static str {
             "Check the command's text and JSON and retry"
         }
         "mission_criteria_missing" => {
-            "Give the node one to three criteria of its own in its plan entry (\"criteria\": [\"...\"]); an external node takes none"
+            "Give the node one to three criteria of its own in its plan entry (\"criteria\": [\"...\"]); a waiting node (kind wait) takes none"
         }
         "mission_criteria_too_many" => {
             "Give the node at most three criteria of its own; Hide adds the check command, CI and the reviews itself"
@@ -4474,8 +4561,52 @@ pub fn next_action(code: &str) -> &'static str {
         "mission_node_started" => {
             "Only a node not yet started can be held; a node at work that waits on something says so in its line"
         }
-        "mission_external_invalid" => {
-            "An external node names one pull request (\"external\": {\"pr\": <n>}) or branch (\"external\": {\"branch\": \"<name>\"}) and no worker, delivery, criteria or checks; Hide marks it done when it reaches main, and you can only drop it"
+        "mission_wait_invalid" => {
+            "A waiting node (kind wait) names one target in \"wait\": {\"pr\": <n>}, {\"pr\": <n>, \"ci\": true}, {\"branch\": \"<name>\"}, {\"mission\": \"<id>\"} or {\"mission\": \"<id>\", \"node\": \"<key>\"}, with an optional \"for\" deadline, and no worker, delivery, criteria, checks, gate or hold; Hide marks it done when the wait is met, and you can only drop it or replan it"
+        }
+        "mission_wait_deadline_invalid" => {
+            "Give the wait's \"for\" as minutes, hours or days between 1h and 30d, such as 2h or 3d; left out, it waits 7 days"
+        }
+        "mission_wait_unsupported" => {
+            "This project's code host does not read a change request by its number, so Hide cannot wait on a pull request or its CI here; wait on a branch, a mission or a node instead"
+        }
+        "mission_wait_self" => {
+            "A wait cannot name its own mission, or a mission that waits on it; wait on a node of another mission, or order the work with depends_on"
+        }
+        "mission_wait_unknown" => {
+            "The mission or node is not on this machine: run hide mission list; a mission on another machine cannot be waited on"
+        }
+        "wait_target_invalid" => {
+            "Name one target: hide wait pr <n> [--ci], hide wait branch <name>, or hide wait mission <id> [--node <key>]"
+        }
+        "wait_deadline_invalid" => {
+            "Give --for as minutes, hours or days between 1h and 30d, such as 2h or 3d; left out, the wait lasts 7 days"
+        }
+        "wait_agent_full" => {
+            "You hold 8 open waits; cancel one with hide wait cancel <id> (hide wait list shows them) before adding another"
+        }
+        "wait_full" => {
+            "This machine holds 256 open waits; cancel one you no longer need with hide wait cancel <id>"
+        }
+        "wait_unsupported" => {
+            "This project's code host does not read a change request by its number, so Hide cannot wait on a pull request or its CI here; wait on a branch or a mission instead"
+        }
+        "wait_self" => {
+            "You cannot wait on your own mission, or on one that waits on it; wait on a node of another mission, or ask your Conductor"
+        }
+        "wait_mission_unknown" => {
+            "The mission or node is not on this machine: run hide mission list; a mission on another machine cannot be waited on"
+        }
+        "wait_project_unknown" => {
+            "Run hide wait from a checkout of the project the pull request or branch is in"
+        }
+        "wait_unknown" => "Run hide wait list to see your open waits",
+        "wait_not_yours" => "Only the agent that started a wait can cancel it",
+        "wait_agent_unregistered" => {
+            "Hide has not registered this agent yet; run hide wait again after its first turn"
+        }
+        "mission_wait_full" => {
+            "This machine holds 256 open waits; end one (hide wait cancel <id>, or drop a waiting node) before adding another"
         }
         "mission_checker_is_worker" => {
             "A node's checker is another agent than its worker: start a new agent for the review or verification and bind that one"
@@ -4582,7 +4713,7 @@ pub fn next_action(code: &str) -> &'static str {
             "Run the command from a pane in a checkout of a registered project"
         }
         "mission_needs_git" => {
-            "This mission's project is a plain folder, not a Git repository: a code node (change) works on a branch and a waiting node (external) waits on a pull request or a branch, so both need a Git repository, and so does a destination branch. Plan the work as general nodes (kind general, with a preset or none), which run in the folder itself; for code work, make the project a Git repository and create the mission again"
+            "This mission's project is a plain folder, not a Git repository: a code node (change) works on a branch and a waiting node (wait) on a pull request, its CI or a branch needs one too (a wait on another mission or its node does not), and so does a destination branch. Plan the work as general nodes (kind general, with a preset or none), which run in the folder itself; for code work, make the project a Git repository and create the mission again"
         }
         "mission_unavailable" => {
             "Stop and tell the operator: Hide could not read its mission record (the reason is in Hide's diagnostic log); it is kept as it is, and Hide reads it again when it restarts"
@@ -4636,7 +4767,7 @@ pub(crate) fn decode(bytes: &[u8]) -> Result<Decoded, String> {
     match from {
         // A schema 3 book holds no human line: every node reads with no
         // gate, as it ran before.
-        SCHEMA_VERSION | SCHEMA_BEFORE_GATES => {}
+        SCHEMA_VERSION | SCHEMA_BEFORE_GATES | SCHEMA_BEFORE_WAIT => {}
         SCHEMA_BEFORE_SIMPLE => convert_before_simple(&mut value)?,
         SCHEMA_BEFORE_CRITERIA => {
             convert_before_criteria(&mut value)?;
@@ -4649,6 +4780,9 @@ pub(crate) fn decode(bytes: &[u8]) -> Result<Decoded, String> {
         }
     }
     convert_old_kinds(&mut value)?;
+    if from < SCHEMA_VERSION {
+        convert_outside_nodes(&mut value)?;
+    }
     drop_no_push(&mut value);
     let mut stored: Stored = serde_json::from_value(value).map_err(decoded)?;
     for line in stored
@@ -4704,6 +4838,37 @@ fn convert_old_kinds(value: &mut serde_json::Value) -> Result<(), String> {
         };
         node.insert("kind".into(), "general".into());
         node.entry("preset").or_insert_with(|| preset.into());
+    }
+    Ok(())
+}
+
+/// A book written before Hide's one wait, in any schema before 5, read as
+/// this build writes it (PRD core-wait D-18, B2): an `external` node is a
+/// `wait` node and what it watched is its `wait_target`. It has no deadline
+/// yet, which the first read gives it (`runtime::missions::settle_wait_deadlines`,
+/// D-19).
+fn convert_outside_nodes(value: &mut serde_json::Value) -> Result<(), String> {
+    let Some(missions) = value
+        .get_mut("missions")
+        .and_then(serde_json::Value::as_array_mut)
+    else {
+        return Ok(());
+    };
+    let nodes = missions.iter_mut().filter_map(|mission| {
+        mission
+            .get_mut("nodes")
+            .and_then(serde_json::Value::as_array_mut)
+    });
+    for node in nodes.flatten() {
+        let node = node
+            .as_object_mut()
+            .ok_or("has a node that is not an object")?;
+        if node.get("kind").and_then(serde_json::Value::as_str) == Some("external") {
+            node.insert("kind".into(), "wait".into());
+        }
+        if let Some(target) = node.remove("external") {
+            node.insert("wait_target".into(), target);
+        }
     }
     Ok(())
 }
@@ -5098,7 +5263,7 @@ pub(crate) mod tests {
             criteria: vec![format!("{key} works")],
             steps: None,
             checks: Vec::new(),
-            external: None,
+            wait: None,
             issues: Vec::new(),
             paths: Vec::new(),
             change: None,
@@ -5571,12 +5736,15 @@ pub(crate) mod tests {
         let cleared = apply_plan(&planned, &with(Vec::new()), 3).unwrap();
         assert!(cleared.nodes[0].steps.is_empty());
         // An outside node has no work to plan.
-        let mut outside = node("pr", NodeKind::External, &[]);
+        let mut outside = node("pr", NodeKind::Wait, &[]);
         outside.delivery = None;
         outside.criteria.clear();
-        outside.external = Some(External::Pr(7));
+        outside.wait = Some(crate::waits::WaitInput {
+            pr: Some(7),
+            ..Default::default()
+        });
         outside.steps = Some(lines(3));
-        assert_eq!(refused(plan(vec![outside])), "mission_external_invalid");
+        assert_eq!(refused(plan(vec![outside])), "mission_wait_invalid");
     }
 
     #[test]
@@ -5598,21 +5766,27 @@ pub(crate) mod tests {
         let mut old = mission();
         old.exempt = true;
         assert!(apply_plan(&old, &plan(vec![bare]), 2).is_ok());
-        let mut external = node("pr", NodeKind::External, &[]);
+        let mut external = node("pr", NodeKind::Wait, &[]);
         external.delivery = None;
         external.criteria.clear();
-        external.external = Some(External::Pr(1232));
+        external.wait = Some(crate::waits::WaitInput {
+            pr: Some(1232),
+            ..Default::default()
+        });
         let mut with_worker = external.clone();
         with_worker.criteria = vec!["x".into()];
-        assert_eq!(refused(plan(vec![with_worker])), "mission_external_invalid");
+        assert_eq!(refused(plan(vec![with_worker])), "mission_wait_invalid");
         let mut unnamed = external.clone();
-        unnamed.external = None;
-        assert_eq!(refused(plan(vec![unnamed])), "mission_external_invalid");
+        unnamed.wait = None;
+        assert_eq!(refused(plan(vec![unnamed])), "mission_wait_invalid");
         let mut named = node("a", NodeKind::Change, &["pr"]);
-        named.external = Some(External::Branch("feat/x".into()));
+        named.wait = Some(crate::waits::WaitInput {
+            branch: Some("feat/x".into()),
+            ..Default::default()
+        });
         assert_eq!(
             refused(plan(vec![external.clone(), named])),
-            "mission_external_invalid"
+            "mission_wait_invalid"
         );
         let waits = node("a", NodeKind::Change, &["pr"]);
         let planned = apply_plan(&mission(), &plan(vec![external, waits]), 2).unwrap();
@@ -5931,10 +6105,10 @@ pub(crate) mod tests {
             "mission_gate_node_done"
         );
         // An outside node names nothing a person or a worker does.
-        let mut outside = serde_json::to_value(node("up", NodeKind::External, &[])).unwrap();
+        let mut outside = serde_json::to_value(node("up", NodeKind::Wait, &[])).unwrap();
         outside["delivery"] = serde_json::Value::Null;
         outside["criteria"] = serde_json::json!([]);
-        outside["external"] = serde_json::json!({"pr": 4});
+        outside["wait"] = serde_json::json!({"pr": 4});
         outside["gate"] = serde_json::json!("the map");
         assert_eq!(
             crate::coordination::split_refusal(
@@ -5946,7 +6120,7 @@ pub(crate) mod tests {
                 .unwrap_err()
             )
             .0,
-            "mission_external_invalid"
+            "mission_wait_invalid"
         );
     }
 
