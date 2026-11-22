@@ -65,7 +65,8 @@ function notificationBadgeCount(rest: SnapshotRest | null): number {
 }
 
 /**
- * Shows each group through the desktop host while its own switch is on,
+ * Shows each group through the desktop host while its own switch is on, and
+ * a new phone of a machine this computer may open whichever switch is on;
  * opens what a click names, and keeps the enabled groups' app icon count.
  */
 export function useAgentNotifications(actions: Actions) {
@@ -90,8 +91,10 @@ export function useAgentNotifications(actions: Actions) {
     actions.wantAgentNotices(true, needsYouEnabled);
     return () => actions.wantAgentNotices(false);
   }, [actions, wanted, needsYouEnabled]);
+  // hided sends every desktop window its frames; the window listens while it is live, whichever switch is on, since a new phone
+  // shows with both off (D-70) and each group's notice is held to its own switch below.
   useEffect(() => {
-    if (!bridge || !wanted) return;
+    if (!bridge || !live) return;
     const listener: Listener = ({ notices, clear, phones }) => {
       if (clear.length > 0) bridge.withdrawNotifications(clear.map((tag) => `${AGENT_NOTICE_PREFIX}${tag}`));
       // A phone paired with a machine this computer may open shows whichever switch is on (D-70): it is how the operator sees a pairing they did not make.
@@ -116,7 +119,7 @@ export function useAgentNotifications(actions: Actions) {
     return () => {
       listeners.delete(listener);
     };
-  }, [bridge, wanted, needsYouEnabled, doneEnabled, t]);
+  }, [bridge, live, needsYouEnabled, doneEnabled, t]);
   useEffect(() => {
     if (!bridge) return undefined;
     return bridge.onNotificationOpen((id) => {

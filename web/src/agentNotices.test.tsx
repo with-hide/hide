@@ -161,6 +161,10 @@ it("asks for agent notices while the switch is on, words each one, withdraws a s
   expect(events.filter((event) => event.kind === "desktop_notices").at(-1)?.payload).toEqual({ wanted: false, needs_you: false });
   await act(async () => receiveAgentNotice({ notices: [{ tag: "node|w1:p2", device_id: "node", pane_id: "w1:p2", title: "x", state: "done", place: "" }], clear: [] }));
   expect(shown).toHaveLength(15);
+  // A new phone still shows with both switches off: it is how the operator sees a pairing they did not make (D-70, B61).
+  await act(async () => receiveAgentNotice({ notices: [], clear: [], phones: [{ tag: "peer:ab12|phone|Pixel 2", peer: "ab12", phone: "Pixel 2" }] }));
+  expect(shown.at(-1)).toEqual(["agent:peer:ab12|phone|Pixel 2", "New phone connected", "Pixel 2", { unlessFocused: false }]);
+  expect(shown).toHaveLength(16);
   await act(async () => root.unmount());
   useShellStore.setState(saved, true);
 });
