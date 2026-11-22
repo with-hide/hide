@@ -59,6 +59,21 @@ const READ_LIMIT: usize = 32;
 /// in front within a minute, every other within five (D-11, D-12).
 pub(super) const LOOK_FRONT_MS: u64 = 60_000;
 pub(super) const LOOK_BEHIND_MS: u64 = 5 * 60_000;
+/// How long past its deadline a wait on the code host waits for the read
+/// its deadline asks before it fails without one (PRD core-wait D-07).
+const DEADLINE_READ_MS: u64 = 30 * 60_000;
+
+/// Where a wait past its deadline stands on its last read.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(super) enum DeadlineRead {
+    /// Answered since, or too long past: it fails.
+    Fail,
+    /// Asked; the read is not back yet.
+    Wait,
+    /// Ask for it now.
+    Ask,
+}
+
 /// How old a stored pull request list may be and still answer a look: two
 /// of the slower look's periods, so a list a live read keeps replacing always
 /// answers and one nothing reads any more (another machine's, with no window)
@@ -119,12 +134,12 @@ pub(crate) struct Outside {
     /// the tick's level look counts from; one entry per followed project,
     /// the rest let go each tick.
     looked: BTreeMap<Place, u64>,
-    /// When a passed deadline last asked each project for its final read,
-    /// on the wait clock (PRD core-wait D-07), and the ask the last read
-    /// that came back answered; one entry per followed project each, let go
-    /// with `looked`.
-    deadline_looked: BTreeMap<Place, u64>,
-    deadline_answered: BTreeMap<Place, u64>,
+    /// The waits past their deadline whose last read Hide asked for, with
+    /// when on the wait clock, and those a read has answered since (PRD
+    /// core-wait D-07); one entry per wait past its deadline, let go once it
+    /// ends.
+    deadline_asked: BTreeMap<Owner, u64>,
+    deadline_read: BTreeSet<Owner>,
 }
 
 impl Outside {
@@ -136,34 +151,36 @@ impl Outside {
         *self.reopens.entry(mission.to_owned()).or_default() += 1;
     }
 
-    /// Whether a read asked for a passed deadline of `project` on `device`
-    /// at or after `since` has come back: a deadline fails a wait on the
-    /// code host only once a read after it found it still open (PRD
-    /// core-wait D-07), so a merge just before the deadline is not lost to
-    /// the look's clock, and a read held back at the host's rate floor holds
-    /// the deadline with it.
-    pub(super) fn read_after(&self, device: &str, project: &str, since: u64) -> bool {
-        let place = (device.to_owned(), project.to_owned());
-        self.deadline_answered
-            .get(&place)
-            .is_some_and(|at| *at >= since)
-            && !self.reading.contains(&place)
-            && !self.pass.contains_key(&place)
-            && !self.pending.contains(&place)
-    }
-
-    /// Records the read a passed deadline asked of `project` on `device` at
-    /// `now`, on the wait clock.
-    pub(super) fn deadline_look(&mut self, device: &str, project: &str, now: u64) {
-        self.deadline_looked
-            .insert((device.to_owned(), project.to_owned()), now);
-    }
-
-    /// A read of `place` came back: it answers the deadline's ask out then.
-    fn read_came_back(&mut self, place: &Place) {
-        if let Some(asked) = self.deadline_looked.get(place) {
-            self.deadline_answered.insert(place.clone(), *asked);
+    /// Where the wait `owner`, past its deadline since `until`, stands on
+    /// its last read at `now` (PRD core-wait D-07): a read answered it since
+    /// Hide asked, so it may fail; or it waits for that read, asked now when
+    /// none was or the last ask is a look's period old. A deadline
+    /// `DEADLINE_READ_MS` past fails without one, so a read that cannot
+    /// start (a device away) never keeps a wait open for good.
+    pub(super) fn deadline_read(&mut self, owner: &Owner, until: u64, now: u64) -> DeadlineRead {
+        if self.deadline_read.contains(owner) || now >= until.saturating_add(DEADLINE_READ_MS) {
+            return DeadlineRead::Fail;
         }
+        match self.deadline_asked.get(owner) {
+            Some(asked) if now.saturating_sub(*asked) < LOOK_BEHIND_MS => DeadlineRead::Wait,
+            _ => {
+                self.deadline_asked.insert(owner.clone(), now);
+                DeadlineRead::Ask
+            }
+        }
+    }
+
+    /// A read answered `owner`: one its deadline asked for counts.
+    fn answered(&mut self, owner: &Owner) {
+        if self.deadline_asked.contains_key(owner) {
+            self.deadline_read.insert(owner.clone());
+        }
+    }
+
+    /// Keeps the deadline reads of the waits in `due` only.
+    pub(super) fn keep_deadline_reads(&mut self, due: &BTreeSet<Owner>) {
+        self.deadline_asked.retain(|owner, _| due.contains(owner));
+        self.deadline_read.retain(|owner| due.contains(owner));
     }
 
     /// Whether `project` on `device` has no read out, no pass left and no
@@ -626,14 +643,7 @@ impl Runtime {
             .outside
             .looked
             .retain(|place, _| places.contains(place));
-        self.missions
-            .outside
-            .deadline_looked
-            .retain(|place, _| places.contains(place));
-        self.missions
-            .outside
-            .deadline_answered
-            .retain(|place, _| places.contains(place));
+
         let front = self
             .focused_local_checkout()
             .map(|(workspace, _)| workspace.path.clone());
@@ -705,12 +715,6 @@ impl Runtime {
         project: &str,
         listed: Option<&GithubProjectSnapshot>,
     ) -> bool {
-        if listed.is_some() {
-            // A list just answered: it is the read a deadline asked for.
-            self.missions
-                .outside
-                .read_came_back(&(device.to_owned(), project.to_owned()));
-        }
         let (found, asks) = outside_asks(
             &self.missions.book,
             &self.snapshot.ui_state.waits,
@@ -719,6 +723,10 @@ impl Runtime {
             project,
             listed,
         );
+        // A list just read answers what it holds, a deadline's read included.
+        for (ask, _) in &found {
+            self.missions.outside.answered(&ask.owner);
+        }
         self.follow_outside(device, project, found, asks)
     }
 
@@ -937,7 +945,9 @@ impl Runtime {
     /// The answer of one project's read.
     pub(crate) fn ingest_outside(&mut self, place: &Place, answers: Vec<(Ask, Found)>) -> bool {
         self.missions.outside.reading.remove(place);
-        self.missions.outside.read_came_back(place);
+        for (ask, _) in &answers {
+            self.missions.outside.answered(&ask.owner);
+        }
         let mut changed = self.settle_outside(answers);
         // A pass with asks left reads them now, and a look that came while
         // this read was out starts the next pass now, not at the next look;

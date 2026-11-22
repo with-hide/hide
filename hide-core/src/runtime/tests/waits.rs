@@ -705,6 +705,22 @@ fn a_code_host_wait_past_its_deadline_fails_only_after_one_more_read() {
     runtime.tick_waits(until + 1);
     read_back(&mut runtime, Found::InMain(None));
     assert_eq!(outcome(&runtime, 1), Some(WaitOutcome::Merged));
+
+    // A read that never comes back (a device away) holds the deadline for
+    // half an hour, no longer.
+    let (made, _) = wait(
+        &mut runtime,
+        "sender",
+        json!({"branch": "feat/c", "for": "1h"}),
+    )
+    .unwrap();
+    let until = made["until_unix_ms"].as_u64().unwrap();
+    runtime.missions.waits_next_tick_unix_ms = 0;
+    runtime.tick_waits(until + 1);
+    runtime.tick_waits(until + 29 * 60_000);
+    assert_eq!(outcome(&runtime, 2), None);
+    runtime.tick_waits(until + 30 * 60_000);
+    assert_eq!(outcome(&runtime, 2), Some(WaitOutcome::Expired));
 }
 
 /// N1 of the review (D-05): a read by number says only that the pull

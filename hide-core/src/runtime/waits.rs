@@ -96,12 +96,14 @@ impl Runtime {
 
     /// Ends every wait whose deadline passed (D-07): a waiting node is held
     /// with its raise, an agent's wait ends with its notice. A deadline that
-    /// passed while Hide was off ends at its first tick (B26), after one read
-    /// of a target on the code host (`Outside::read_after`), which this asks
-    /// for when none came since.
+    /// passed while Hide was off ends at its first tick (B26); one on the
+    /// code host after the read it asks for answered it, or half an hour
+    /// without one (`Outside::deadline_read`).
     fn pass_wait_deadlines(&mut self, now: u64) -> bool {
+        use super::mission_outside::{DeadlineRead, Owner};
         let mut book_moved = false;
         let mut look = BTreeSet::new();
+        let mut due = BTreeSet::new();
         if self.missions.unreadable.is_none() {
             book_moved |= settle_wait_deadlines(&mut self.missions.book, now);
             let mut events = Vec::new();
@@ -117,15 +119,17 @@ impl Runtime {
                     if !super::mission_outside::judged(node) {
                         continue;
                     }
-                    if node.wait_target.as_ref().is_some_and(WaitTarget::code_host)
-                        && !self.missions.outside.read_after(
-                            &mission.device_id,
-                            &mission.project,
-                            until,
-                        )
-                    {
-                        look.insert((mission.device_id.clone(), mission.project.clone()));
-                        continue;
+                    if node.wait_target.as_ref().is_some_and(WaitTarget::code_host) {
+                        let owner = Owner::node(&mission.id, &node.key);
+                        due.insert(owner.clone());
+                        match self.missions.outside.deadline_read(&owner, until, now) {
+                            DeadlineRead::Fail => {}
+                            DeadlineRead::Wait => continue,
+                            DeadlineRead::Ask => {
+                                look.insert((mission.device_id.clone(), mission.project.clone()));
+                                continue;
+                            }
+                        }
                     }
                     let (made, moved) = super::mission_outside::settle_wait_node(
                         mission,
@@ -147,31 +151,45 @@ impl Runtime {
             }
         }
         let mut expired = Vec::new();
-        for wait in self
+        let past: Vec<(String, WaitTarget, String, Option<String>, u64)> = self
             .snapshot
             .ui_state
             .waits
             .open()
             .filter(|wait| wait.until_unix_ms <= now)
-        {
-            if wait.target.code_host()
-                && let Some(project) = &wait.project
-                && !self
-                    .missions
-                    .outside
-                    .read_after(&wait.device, project, wait.until_unix_ms)
+            .map(|wait| {
+                (
+                    wait.id.clone(),
+                    wait.target.clone(),
+                    wait.device.clone(),
+                    wait.project.clone(),
+                    wait.until_unix_ms,
+                )
+            })
+            .collect();
+        for (id, target, device, project, until) in past {
+            if target.code_host()
+                && let Some(project) = project
             {
-                look.insert((wait.device.clone(), project.clone()));
-                continue;
+                let owner = Owner::Agent(id.clone());
+                due.insert(owner.clone());
+                match self.missions.outside.deadline_read(&owner, until, now) {
+                    DeadlineRead::Fail => {}
+                    DeadlineRead::Wait => continue,
+                    DeadlineRead::Ask => {
+                        look.insert((device, project));
+                        continue;
+                    }
+                }
             }
-            expired.push(wait.id.clone());
+            expired.push(id);
         }
+        self.missions.outside.keep_deadline_reads(&due);
         let mut ended = false;
         for id in expired {
             ended |= self.end_agent_wait(&id, WaitOutcome::Expired, now);
         }
         for (device, project) in look {
-            self.missions.outside.deadline_look(&device, &project, now);
             ended |= self.follow_outside_read(&device, &project);
         }
         book_moved | ended
