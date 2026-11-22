@@ -126,7 +126,7 @@ export function LinkTimeline({
       {shown.length > 0 ? (
         <ol className={cn("relative flex flex-col", RAIL)} aria-label={t("work.card.timeline")} data-pr-card-timeline-rows={shown.length}>
           {shown.map((entry) => {
-            if (entry.kind === "session") return <SessionLineView key={entry.session.line.id} entry={entry.session} project={project} checkoutBranch={branchOf(entry.session.line.pr)} opener={lines.length > 1} actions={actions} />;
+            if (entry.kind === "session") return <SessionLineView key={entry.session.line.id} entry={entry.session} project={project} checkoutBranch={branchOf(entry.session.line.pr)} opener={lines.length > 1} item={item} actions={actions} />;
             if (entry.kind === "milestone") return <MilestoneRow key={`${entry.milestone.kind}:${entry.milestone.at ?? ""}`} milestone={entry.milestone} item={item} />;
             return <NowRow key="now" running={entry.running} pr={pr} />;
           })}
@@ -186,7 +186,7 @@ function useSessionTitle(line: SessionLine["line"], live: SessionLine["live"], w
   return row ? recordTitle(row, summaries) : agentProductName(line.agent);
 }
 
-function SessionLineView({ entry, project, checkoutBranch, opener, actions }: { entry: SessionLine; project: Workspace; checkoutBranch: string | null; opener: boolean; actions: Actions }) {
+function SessionLineView({ entry, project, checkoutBranch, opener, item, actions }: { entry: SessionLine; project: Workspace; checkoutBranch: string | null; opener: boolean; item: string; actions: Actions }) {
   const { t } = useInterfaceTranslation();
   const devices = useShellStore((s) => s.rest?.navigator?.devices);
   const workspaces = useShellStore((s) => s.rest?.navigator?.workspaces);
@@ -244,7 +244,7 @@ function SessionLineView({ entry, project, checkoutBranch, opener, actions }: { 
       title={title}
       titleClassName={gone ? "text-muted-foreground" : undefined}
       hint={hint}
-      chips={opener && line.role === "created" ? <span className="inline-flex h-(--size-control-sm) shrink-0 items-center rounded-xs border border-border px-xs text-micro text-pr-merged" data-link-chip="created">{t("links.created")}</span> : null}
+      chips={opener && line.role === "created" ? <span className="inline-flex h-(--size-control-sm) shrink-0 items-center rounded-xs border border-border px-xs text-micro text-pr-merged" data-link-chip="created">{t("links.created", { item })}</span> : null}
       right={right}
       reveal={busy && !live ? undefined : reveal}
       line={caption}
