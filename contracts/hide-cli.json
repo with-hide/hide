@@ -6494,7 +6494,6 @@
             ],
             "arguments": [],
             "command": "device share",
-            "hidden": true,
             "options": [
                 {
                     "name": "--json",
@@ -6577,7 +6576,6 @@
             ],
             "arguments": [],
             "command": "device allow",
-            "hidden": true,
             "options": [
                 {
                     "name": "--json",
@@ -6605,7 +6603,6 @@
                 }
             ],
             "command": "device pause",
-            "hidden": true,
             "options": [
                 {
                     "conflicts": [
@@ -6665,7 +6662,6 @@
                 }
             ],
             "command": "device resume",
-            "hidden": true,
             "options": [
                 {
                     "conflicts": [
@@ -6789,7 +6785,6 @@
                 }
             ],
             "command": "device request",
-            "hidden": true,
             "options": [
                 {
                     "name": "--json",
@@ -6822,7 +6817,6 @@
                 }
             ],
             "command": "device update",
-            "hidden": true,
             "options": [
                 {
                     "name": "--json",
@@ -6859,7 +6853,6 @@
                 }
             ],
             "command": "device address",
-            "hidden": true,
             "options": [
                 {
                     "name": "--json",
@@ -6927,7 +6920,6 @@
                 }
             ],
             "command": "device switch",
-            "hidden": true,
             "options": [
                 {
                     "name": "--install",
@@ -7102,7 +7094,6 @@
             ],
             "arguments": [],
             "command": "phone pair",
-            "hidden": true,
             "options": [],
             "refusals": [
                 "phone_pair_from_pane",
@@ -7122,7 +7113,6 @@
             ],
             "arguments": [],
             "command": "phone list",
-            "hidden": true,
             "options": [
                 {
                     "name": "--json",
@@ -7147,7 +7137,6 @@
                 }
             ],
             "command": "phone remove",
-            "hidden": true,
             "options": [
                 {
                     "name": "--json",
@@ -9510,7 +9499,7 @@
             "rest": null
         }
     ],
-    "digest": "sha256:3a59500922380f510b27cbc0887a254f41b904a558d2010408bfd10504f9cf01",
+    "digest": "sha256:efb36ca51ec253a8a685b41a996820a9c333ba891c00ae268a9345c14a17bb38",
     "envelopes": {
         "access": {
             "answer": "value",

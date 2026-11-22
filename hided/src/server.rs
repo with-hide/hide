@@ -1751,8 +1751,8 @@ pub(crate) fn delivery_next_action(code: &str) -> &'static str {
     }
 }
 
-/// Whether a page command, the CLI's or a phone's picture
-/// (`mobile/page_shot.rs`), may act on `view`. A View on a desk does only as
+/// Whether a page command of the CLI may act on `view` (a phone's picture
+/// is a read and does not ask, `mobile/page_shot.rs`). A View on a desk does only as
 /// its area's selected View, so one behind another tab is refused before
 /// anything is sent; a page on no desk is on no screen for an action to be
 /// drawn over, so every one of them does (PRD lane-desk-pair-view B32).
@@ -3046,11 +3046,6 @@ fn handle_client_text(
         // operator of this machine ends it, after the window's confirm (the
         // `OwnWindow` class).
         Some("guest_pane_close") => {
-            // A build that offers no connection between two Hides hosts no
-            // guest (`Guests::serve` is not called), and says so.
-            if !state.peers.device_connect() {
-                return Err(crate::pairing::DEVICE_CONNECT_OFF.to_owned());
-            }
             state
                 .guests
                 .close_pane(&payload_str(&event, "pane_id"))
@@ -5631,9 +5626,8 @@ pub fn mount(seat: &crate::seat::SeatParts, state: AppState) -> tokio::task::Joi
             live_work: {
                 let holders = Arc::clone(state.core.pane_holders());
                 let state_dir = state.core.state_dir().to_path_buf();
-                let device_connect = state.peers.device_connect();
                 Arc::new(move || {
-                    let paired = crate::always_on::paired(&state_dir, device_connect)?;
+                    let paired = crate::always_on::paired(&state_dir)?;
                     Ok(holders.live_panes()? + usize::from(paired))
                 })
             },

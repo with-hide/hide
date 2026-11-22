@@ -21,8 +21,7 @@ afterEach(() => {
   document.body.innerHTML = "";
 });
 
-/** `pairs`: whether the build offers connections between two Hides, as hided's hello says. */
-async function mount(sshHosts: SshHosts | undefined, devices: Device[] = [], pairs = true) {
+async function mount(sshHosts: SshHosts | undefined, devices: Device[] = []) {
   vi.stubGlobal("IS_REACT_ACT_ENVIRONMENT", true);
   vi.stubGlobal("ResizeObserver", class { observe() {} disconnect() {} unobserve() {} });
   const events: Parameters<DispatchFn>[0][] = [];
@@ -33,7 +32,7 @@ async function mount(sshHosts: SshHosts | undefined, devices: Device[] = [], pai
   const saved = useShellStore.getState();
   const paired = vi.fn();
   await act(async () => {
-    useShellStore.setState({ connection: "live", daemon: { device_connect: pairs }, pairingResult: null, rest: { status: { ssh_hosts: sshHosts }, ui_state: {} } } as never);
+    useShellStore.setState({ connection: "live", pairingResult: null, rest: { status: { ssh_hosts: sshHosts }, ui_state: {} } } as never);
     root.render(<AddDevice actions={actions} devices={devices} helperRoot="~/.hide/host-helper" cliDir="~/.local/bin" onPaired={paired} />);
   });
   const q = (selector: string) => container.querySelector(selector) as HTMLElement | null;
@@ -95,16 +94,6 @@ it("connects to a Host whose own Hide runs, and installs nothing there (PRD devi
   expect(q('[data-add-device="connect"]')?.hasAttribute("disabled")).toBe(true);
   await answer("pair_ssh", { ok: true, device_id: "lab-machine", name: "Lab" });
   expect(paired).toHaveBeenCalledTimes(1);
-  await unmount();
-});
-
-it("asks no Host about its own Hide in a build that does not offer connections between two Hides, and adds it as before pairing", async () => {
-  const { events, q, unmount } = await mount(hosts([host("lab")]), [], false);
-  await act(async () => { q('[data-ssh-host="lab"] [role="radio"]')?.click(); });
-  expect(sent(events, "pairing_look_ssh")).toHaveLength(0);
-  expect(q("[data-ssh-look]")).toBeNull();
-  await act(async () => { q('[data-add-device="true"]')?.click(); });
-  expect(sent(events, "register_device").map((event) => event.payload)).toEqual([{ label: "lab", ssh_alias: "lab", host_consent: true }]);
   await unmount();
 });
 
@@ -288,16 +277,6 @@ it("lists this PC's WSL distributions first and adds one under the core's name w
   expect(register).toHaveLength(1);
   // It goes on to the new connection once its helper is connected: the core keeps that it was added for its switch (B41).
   expect(register[0]?.payload).toEqual({ wsl_distro: "Ubuntu", host_consent: true, switch_first: true });
-  await unmount();
-});
-
-it("asks no distribution about its own Hide in a build that does not offer connections between two Hides, and adds it as before pairing", async () => {
-  const { events, q, unmount } = await mount(hosts([], { wsl: [distro("Ubuntu", { default: true })] }), [], false);
-  await act(async () => { q('[data-wsl-distro="Ubuntu"] [role="radio"]')?.click(); });
-  expect(sent(events, "pairing_look_wsl")).toHaveLength(0);
-  expect(q("[data-ssh-look]")).toBeNull();
-  await act(async () => { q('[data-add-device="true"]')?.click(); });
-  expect(sent(events, "register_device").map((event) => event.payload)).toEqual([{ wsl_distro: "Ubuntu", host_consent: true }]);
   await unmount();
 });
 

@@ -55,7 +55,9 @@ pub(super) const WITHIN: Duration = Duration::from_secs(90);
 pub(super) struct Machine {
     pub(super) terminal: Terminal,
     pub(super) hide: PathBuf,
-    /// Where its endpoint for other Hides binds.
+    /// Where its endpoint for other Hides binds; empty is the product's
+    /// endpoint, which the fault run attaches to a relay of its own
+    /// (`HIDE_PEER_RELAY` in `account`).
     pub(super) direct: String,
     /// The folder its terminal is in: a project of its own, since a pane is
     /// listed and typed into for a caller in a project Hide has
@@ -70,8 +72,12 @@ pub(super) struct Machine {
 impl Machine {
     pub(super) fn command(&self, args: &[&str]) -> Command {
         let mut command = self.terminal.command_of(&self.hide, args);
+        if self.direct.is_empty() {
+            command.env_remove("HIDE_PEER_DIRECT");
+        } else {
+            command.env("HIDE_PEER_DIRECT", &self.direct);
+        }
         command
-            .env("HIDE_PEER_DIRECT", &self.direct)
             // The daemon stays while this test's terminal is away from it.
             .env("HIDE_IDLE_SECS", "3600")
             .envs(self.account.iter().map(|(name, value)| (name, value)))

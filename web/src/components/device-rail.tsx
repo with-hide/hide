@@ -7,8 +7,8 @@ import { badgeText, deviceConnected, peerCounts, railFrontId, tileCounts, tileHi
 import { cn } from "../lib/utils";
 import { computerTiles, numberedComputers, screenState, screenStateKey, type ComputerTile } from "../computers";
 import { numberOf } from "../numbering";
-import { coreShared, isCoreMachine, machineName, windowDeviceId, wslPlace } from "../screenMachine";
-import { deviceConnectOffered, type Peer } from "../pairing";
+import { machineName, windowDeviceId, wslPlace } from "../screenMachine";
+import type { Peer } from "../pairing";
 import { useShellStore } from "../store";
 import { toolCells, useFrontTool } from "../toolCells";
 import { useUiStore } from "../ui";
@@ -22,7 +22,7 @@ import { SidebarMenus } from "./sidebar-menus";
 
 /** `core` marks the machine the core runs on, set only while the core works with another machine (Q11). */
 /** `place` is where a WSL distribution's device is, which its hint says after the name (PRD wsl-device B5). */
-export type Tile = { id: string; label: string; icon: "local" | "remote"; core: boolean; place?: string | null };
+export type Tile = { id: string; label: string; icon: "local" | "remote"; place?: string | null };
 
 const NO_BOTS: AccessConnection[] = [];
 
@@ -64,11 +64,8 @@ export function DeviceRail({ actions }: { actions: Actions }) {
   const peers = useShellStore((s) => s.rest?.navigator?.peers);
   const computers = useMemo(() => computerTiles(useShellStore.getState().rest), [devices, peers]);
   const remoteScreen = useUiStore((s) => s.remoteScreen);
-  const deviceConnect = useShellStore((s) => deviceConnectOffered(s.daemon));
   const tiles = useMemo(() => {
     const own = windowDeviceId(devices);
-    // Every computer runs a core of its own once two Hides connect: no tile names the core's (D-80).
-    const shared = !deviceConnect && coreShared(devices);
     return computers.map((computer): { tile: Tile; computer: ComputerTile } => ({
       computer,
       tile: devices?.some((device) => device.id === computer.id)
@@ -76,12 +73,11 @@ export function DeviceRail({ actions }: { actions: Actions }) {
             id: computer.id,
             label: machineName(devices, computer.id, t),
             icon: computer.id === own ? "local" : "remote",
-            core: shared && isCoreMachine(devices, computer.id),
             place: wslPlace(devices, computer.id, t),
           }
-        : { id: computer.id, label: computer.screen?.name ?? computer.id, icon: "remote", core: false },
+        : { id: computer.id, label: computer.screen?.name ?? computer.id, icon: "remote" },
     }));
-  }, [computers, devices, deviceConnect, t]);
+  }, [computers, devices, t]);
   // A ⌥⌘ hold numbers the tiles ⌥⌘n selects (`computers.ts`).
   const numbered = useUiStore((s) => s.hint === "devices");
   const numbers = useMemo(() => (numbered ? numberedComputers(computers) : null), [numbered, computers]);
@@ -179,16 +175,15 @@ export function RailTileView({ tile, selected, counts, connected, note = null, n
   // The name with where it is, `WSL Ubuntu · This PC`; the glyph keeps the name's letters (`WU`).
   const named = tile.place ? `${tile.label} · ${tile.place}` : tile.label;
   // A paired machine that cannot show says why in its own words (B21).
-  const hint = note ? t("pairing.rail.hint", { name: named, state: note }) : tileHint(named, connected, counts, t, tile.core);
+  const hint = note ? t("pairing.rail.hint", { name: named, state: note }) : tileHint(named, connected, counts, t);
   return (
     <Hint label={hint} side="right">
       <button
         type="button"
-        aria-label={note ? `${named}, ${note}` : tileName(named, connected, counts, t, tile.core)}
+        aria-label={note ? `${named}, ${note}` : tileName(named, connected, counts, t)}
         aria-pressed={selected}
         data-rail-tile={tile.id}
         data-rail-connected={connected ? "true" : "false"}
-        data-rail-core={tile.core ? "true" : undefined}
         className={cn(
           TILE,
           "bg-secondary text-body font-semibold hover:text-foreground",

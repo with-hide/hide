@@ -17,6 +17,14 @@
 //! one document with the files it names folded in (`html_look.rs`), which the
 //! phone draws itself.
 //!
+//! A file outside every checkout that an agent opened is the desktop window's
+//! to read: the core holds only the window's grant for it (`outside_open.rs`),
+//! so the bytes are asked of that window by the grant, now, each time the
+//! phone opens the View (`BrowserControl::external_read`), and nothing is
+//! copied or kept. A grant the window no longer holds, a file gone or swapped
+//! for something else, and no window to ask are each answered as their own
+//! state, as a checkout file that is gone is.
+//!
 //! Content leaves as JSON text, so bytes travel as base64 chunks of one relay
 //! frame each (`CHUNK`). The relay drops a phone whose eight-frame queue
 //! fills, so the connection keeps at most `LOOK_FRAMES` of these frames that
@@ -29,6 +37,7 @@ use axum::extract::ws::Message;
 use base64::Engine as _;
 use base64::engine::general_purpose::STANDARD;
 use hide_core::agent_state::phone::FRAME_LIMIT;
+use hide_core::workspace_control::ExternalKind;
 use hide_core::{ChangedFileStatus, DisplayKind, LookChange, LookView, LookViews};
 use hide_relay_protocol::{frame::MAX_QUEUED_FRAMES, noise::CHUNK_DATA};
 use serde_json::{Value, json};
@@ -86,7 +95,7 @@ pub enum Shown {
     /// A document drawn from its text.
     Document,
     Image,
-    /// Named, never read: a PDF, a video, a file outside every checkout.
+    /// Named, never read: a PDF, a video, a board.
     NameOnly,
 }
 
@@ -98,8 +107,16 @@ impl Shown {
         match view.kind {
             DisplayKind::Diff => Self::Changes,
             DisplayKind::Browser => Self::Page,
+            // An outside file is shown as the window's grant decided to show
+            // it: its page, its image or its text; a PDF and a video are named.
+            DisplayKind::External => match view.external.as_ref().map(|file| file.kind) {
+                Some(ExternalKind::Html) => Self::Html,
+                Some(ExternalKind::Image) => Self::Image,
+                Some(ExternalKind::Text) => Self::Document,
+                Some(ExternalKind::Pdf | ExternalKind::Video) | None => Self::NameOnly,
+            },
             // A card has no opener, so no agent's list holds one.
-            DisplayKind::External | DisplayKind::Card => Self::NameOnly,
+            DisplayKind::Card => Self::NameOnly,
             // The table of outputs decides: an image is drawn, a PDF, a video
             // and a board are named (reading a movie to find that out would
             // cost the day's relay budget), anything else is read as text.
@@ -431,11 +448,15 @@ async fn send(
                 };
                 return chunks(request_id, view, shown, read, frames, pace).await;
             }
-            // The address is all the phone has when the picture cannot be
-            // taken (B21); why is in the diagnostic log.
-            Err(_) => {
+            // The address is what the phone has when the picture cannot be
+            // taken (B21), with why when the operator can act on it; every
+            // reason is in the diagnostic log.
+            Err(reason) => {
                 let mut frame = result(request_id, &view.display_id, "page");
                 frame["url"] = json!(cut(view.url.as_deref().unwrap_or(""), URL_CHARS));
+                if let Some(reason) = page_reason(&reason) {
+                    frame["reason"] = json!(reason);
+                }
                 frame
             }
         },
@@ -450,16 +471,12 @@ async fn send(
             } else {
                 TEXT_CAP
             };
-            match read(
-                mobile,
-                request_id,
-                view,
-                &view.path,
-                cap,
-                shown == Shown::Image,
-            )
-            .await
-            {
+            let image = shown == Shown::Image;
+            let read = match &view.external {
+                Some(file) => read_outside(mobile, view, &file.grant, None, cap, image).await,
+                None => read(mobile, request_id, view, &view.path, cap, image).await,
+            };
+            match read {
                 Ok(read) => return chunks(request_id, view, shown, read, frames, pace).await,
                 Err(state) => result(request_id, &view.display_id, state),
             }
@@ -653,11 +670,23 @@ async fn html_page(
     request_id: &str,
     view: &LookView,
 ) -> Result<Read, &'static str> {
-    let path = html_path(view).ok_or("failed")?;
-    let place = Place::of(&view.checkout_path, &path).ok_or("failed")?;
-    let page = read(mobile, request_id, view, &path, IMAGE_CAP, true).await?;
+    let origin = match &view.external {
+        // An outside page's files are the ones in its folder, which the
+        // window's grant covers; the page is that folder's root.
+        Some(file) => Origin::Outside(&file.grant),
+        None => {
+            let path = html_path(view).ok_or("failed")?;
+            Origin::Checkout(Place::of(&view.checkout_path, &path).ok_or("failed")?)
+        }
+    };
+    let page = origin
+        .read(mobile, request_id, view, None, IMAGE_CAP)
+        .await?;
     let text = String::from_utf8(page.bytes).map_err(|_| "other")?;
-    let page_dir = place.page.parent().unwrap_or_default();
+    let page_dir = match &origin {
+        Origin::Checkout(place) => place.page.parent().unwrap_or_default(),
+        Origin::Outside(_) => hide_platform::path::RelPath::default(),
+    };
     let mut budget = IMAGE_CAP.saturating_sub(text.len() as u64);
     let mut read_files: Vec<(hide_platform::path::RelPath, Vec<u8>)> = Vec::new();
     let mut left = 0_usize;
@@ -674,7 +703,8 @@ async fn html_page(
                 left += 1;
                 continue;
             }
-            let Ok(bytes) = read(mobile, request_id, view, &place.wire(&file), room, true)
+            let Ok(bytes) = origin
+                .read(mobile, request_id, view, Some(&file), room)
                 .await
                 .map(|read| read.bytes)
             else {
@@ -710,6 +740,105 @@ async fn html_page(
         bytes: document.into_bytes(),
         page: None,
     })
+}
+
+/// Where an HTML page and the files it names are read from.
+enum Origin<'a> {
+    /// A file of the View's checkout, through the desktop's file readers.
+    Checkout(Place),
+    /// A file outside every checkout, through the window that granted it.
+    Outside(&'a str),
+}
+
+impl Origin<'_> {
+    /// The page (`file` absent) or one file it names, refused past `cap`.
+    async fn read(
+        &self,
+        mobile: &Arc<Mobile>,
+        request_id: &str,
+        view: &LookView,
+        file: Option<&hide_platform::path::RelPath>,
+        cap: u64,
+    ) -> Result<Read, &'static str> {
+        match self {
+            Self::Checkout(place) => {
+                let path = place.wire(file.unwrap_or(&place.page));
+                read(mobile, request_id, view, &path, cap, true).await
+            }
+            Self::Outside(grant) => {
+                let file = file.map(hide_platform::path::RelPath::as_str);
+                read_outside(mobile, view, grant, file, cap, true).await
+            }
+        }
+    }
+}
+
+/// Reads an outside file through the window that granted it, now: the
+/// granted file, or with `file` one in its folder. The error is the
+/// `look_result` state to answer, and why is logged.
+async fn read_outside(
+    mobile: &Arc<Mobile>,
+    view: &LookView,
+    grant: &str,
+    file: Option<&str>,
+    cap: u64,
+    refuse_past_cap: bool,
+) -> Result<Read, &'static str> {
+    let control = Arc::clone(mobile.browser_control());
+    let (grant, file) = (grant.to_owned(), file.map(str::to_owned));
+    let answer =
+        tokio::task::spawn_blocking(move || control.external_read(&grant, file.as_deref(), cap))
+            .await;
+    let reason = match answer {
+        Ok(Ok(Ok(read))) => {
+            if refuse_past_cap && read.total > cap {
+                return Err("too_large");
+            }
+            return Ok(Read {
+                bytes: read.bytes,
+                total: read.total,
+                page: None,
+            });
+        }
+        Ok(Ok(Err(reason))) => reason,
+        Ok(Err((reason, _))) => reason.to_owned(),
+        Err(_) => "worker_lost".to_owned(),
+    };
+    hide_core::diagnostic!(json!({
+        "component": "mobile_phone", "kind": "look.outside_read_refused",
+        "view_id": view.display_id, "reason": reason,
+    }));
+    Err(outside_state(&reason))
+}
+
+/// The `look_result` state for why an outside file could not be read: the
+/// window no longer holds its grant (it restarted since the agent opened the
+/// file), the file is gone, it was swapped for a link or something that is
+/// not a file, or there is no window to ask. The phone shows each as its
+/// reason with nothing to retry; anything else is a read that failed.
+fn outside_state(reason: &str) -> &'static str {
+    match reason {
+        "grant_gone" => "grant_expired",
+        "ENOENT" | "ENOTDIR" => "not_found",
+        "not_physical" | "not_a_file" => "file_replaced",
+        "outside_file_no_window" => "no_window",
+        "too_large" => "too_large",
+        _ => "failed",
+    }
+}
+
+/// The reason a phone is told for a page whose picture could not be taken,
+/// when the operator can act on it: no desktop app is open, the window
+/// showing it is on another computer, or the app holds no drawn page for it
+/// (it let the page go, or the page drew nothing yet). Every other reason is
+/// in the log alone.
+fn page_reason(reason: &str) -> Option<&'static str> {
+    match reason {
+        "no_window" => Some("no_window"),
+        "window_elsewhere" => Some("window_elsewhere"),
+        "not_loaded" | "not_drawn" => Some("not_drawn"),
+        _ => None,
+    }
 }
 
 /// The `look_result` state for a device whose link could not be had: it is
@@ -782,7 +911,8 @@ async fn chunks(
         Shown::Page => "page",
         Shown::Html => "html",
         // The desktop's own rule for what a Markdown file is, so the two draw alike.
-        _ if hide_host::document::language_for(std::path::Path::new(&view.path)).as_deref()
+        _ if hide_host::document::language_for(std::path::Path::new(file_name(view)))
+            .as_deref()
             == Some("markdown") =>
         {
             "markdown"
@@ -817,6 +947,15 @@ async fn chunks(
     pace.send(request_id, Part::End, end, frames).await;
 }
 
+/// The name of the file a View shows: an outside file's name as its grant
+/// gave it, else its path's last name.
+fn file_name(view: &LookView) -> &str {
+    match &view.external {
+        Some(file) => &file.name,
+        None => hide_platform::path::wire_name(&view.path),
+    }
+}
+
 /// The event the Desk sends when its lane shows an output: the View is seen.
 /// It is the phone's too (D-15).
 pub fn seen_event(view: &LookView) -> Vec<u8> {
@@ -845,6 +984,7 @@ mod tests {
             url: None,
             committed: None,
             output: None,
+            external: None,
             unseen: true,
             at_unix_ms: 1,
         }
@@ -876,10 +1016,22 @@ mod tests {
         );
         assert_eq!(shown("main.rs", DisplayKind::Diff, None), Shown::Changes);
         assert_eq!(shown("localhost", DisplayKind::Browser, None), Shown::Page);
-        assert_eq!(
-            shown("report.pdf", DisplayKind::External, None),
-            Shown::NameOnly
-        );
+        // An outside file is shown as its grant's viewer: a page, an image
+        // or text is drawn, a PDF and a video are named.
+        let outside = |kind| {
+            let mut view = view("report", DisplayKind::External);
+            view.external = Some(hide_core::ExternalFile {
+                grant: "a".repeat(32),
+                name: "report".into(),
+                kind,
+            });
+            Shown::of(&view)
+        };
+        assert_eq!(outside(ExternalKind::Html), Shown::Html);
+        assert_eq!(outside(ExternalKind::Image), Shown::Image);
+        assert_eq!(outside(ExternalKind::Text), Shown::Document);
+        assert_eq!(outside(ExternalKind::Pdf), Shown::NameOnly);
+        assert_eq!(outside(ExternalKind::Video), Shown::NameOnly);
         assert_eq!(shown(".env", DisplayKind::File, None), Shown::Document);
         // An HTML file of the checkout is drawn by the phone, opened as a
         // file or as a page; a web address and a file elsewhere are not.
@@ -1430,5 +1582,218 @@ mod tests {
             (Some("look_result"), Some("other"))
         );
         assert!(sent.try_recv().is_err(), "nothing follows the answer");
+    }
+
+    /// What a scripted desktop window answers `/external-read` with: the
+    /// bytes and the file's size, or `ExternalFiles.readPart`'s reason.
+    enum WindowRead {
+        Bytes(Vec<u8>, u64),
+        Refused(&'static str),
+    }
+
+    /// A desktop window's gateway that answers `/external-read` by `answer`
+    /// for each request body, and keeps every body it was asked with.
+    fn scripted_window(
+        answer: fn(&Value) -> WindowRead,
+    ) -> (String, Arc<std::sync::Mutex<Vec<Value>>>) {
+        use std::io::{Read as _, Write as _};
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let endpoint = format!("http://{}", listener.local_addr().unwrap());
+        let bodies = Arc::new(std::sync::Mutex::new(Vec::new()));
+        let seen = Arc::clone(&bodies);
+        std::thread::spawn(move || {
+            for stream in listener.incoming() {
+                let Ok(mut stream) = stream else { return };
+                let mut raw = Vec::new();
+                let mut chunk = [0_u8; 1024];
+                let body = loop {
+                    let read = stream.read(&mut chunk).unwrap_or(0);
+                    raw.extend_from_slice(&chunk[..read]);
+                    let text = String::from_utf8_lossy(&raw).into_owned();
+                    if let Some((head, body)) = text.split_once("\r\n\r\n") {
+                        let length = head
+                            .lines()
+                            .find_map(|line| {
+                                line.to_ascii_lowercase()
+                                    .strip_prefix("content-length:")
+                                    .map(|n| n.trim().parse::<usize>().unwrap_or(0))
+                            })
+                            .unwrap_or(0);
+                        if body.len() >= length || read == 0 {
+                            break body.to_owned();
+                        }
+                    }
+                };
+                let body: Value = serde_json::from_str(&body).unwrap();
+                let (kind, extra, bytes) = match answer(&body) {
+                    WindowRead::Bytes(bytes, total) => (
+                        "application/octet-stream",
+                        format!("X-Hide-Total: {total}\r\n"),
+                        bytes,
+                    ),
+                    WindowRead::Refused(reason) => (
+                        "application/json",
+                        String::new(),
+                        json!({"failure": reason}).to_string().into_bytes(),
+                    ),
+                };
+                seen.lock().unwrap().push(body);
+                let _ = write!(
+                    stream,
+                    "HTTP/1.1 200 OK\r\nContent-Type: {kind}\r\n{extra}Content-Length: {}\r\nConnection: close\r\n\r\n",
+                    bytes.len()
+                );
+                let _ = stream.write_all(&bytes);
+            }
+        });
+        (endpoint, bodies)
+    }
+
+    /// An agent's View of a file outside every checkout: the core's grant
+    /// for it and its name, never a path.
+    fn outside(grant: char, name: &str, kind: ExternalKind) -> LookView {
+        let mut looked = view(name, DisplayKind::External);
+        looked.path = String::new();
+        looked.external = Some(hide_core::ExternalFile {
+            grant: grant.to_string().repeat(32),
+            name: name.to_owned(),
+            kind,
+        });
+        looked
+    }
+
+    /// The frames the phone is sent for one `look_open` of `looked`, the
+    /// phone confirming each chunk, up to the last.
+    async fn answered(mobile: &Arc<Mobile>, looked: LookView) -> Vec<Value> {
+        let pace = Arc::new(Pace::default());
+        let (frames, mut sent) = mpsc::channel(64);
+        let _transfer = open(mobile, &pace, "r-1", looked, frames);
+        let mut got = Vec::new();
+        loop {
+            let frame = sent_next(&mut sent).await;
+            if let Some(seq) = frame["seq"].as_u64() {
+                pace.ack("r-1", seq);
+            }
+            let last = matches!(frame["type"].as_str(), Some("look_end" | "look_result"));
+            got.push(frame);
+            if last {
+                return got;
+            }
+        }
+    }
+
+    /// The page reasons a phone is told are the three the operator can act
+    /// on, each the host's or the browser control's own word, and no other.
+    #[test]
+    fn a_page_is_told_only_the_reasons_the_operator_can_act_on() {
+        for (reason, told) in [
+            ("no_window", Some("no_window")),
+            ("window_elsewhere", Some("window_elsewhere")),
+            ("not_drawn", Some("not_drawn")),
+            ("not_loaded", Some("not_drawn")),
+            ("capture_timeout", None),
+            ("browser_control_busy", None),
+            ("display_closed", None),
+        ] {
+            assert_eq!(page_reason(reason), told, "{reason}");
+        }
+    }
+
+    /// Doop 10: a file outside every checkout is read through the desktop
+    /// window that granted it, now, on each open, and drawn like any other
+    /// file; an HTML page has the files of its folder that it names folded
+    /// in. A window that no longer holds the grant, a file gone or swapped
+    /// for a link, and no window at all are each answered with their reason;
+    /// so is a page with no window to take its picture.
+    #[tokio::test(flavor = "multi_thread")]
+    async fn an_outside_file_is_read_through_the_window_that_granted_it() {
+        let directory = tempfile::tempdir().unwrap();
+        let gate = Arc::new(hide_core::input_gate::PaneInputGate::default());
+        let mobile = super::super::test_mobile(directory.path(), &gate);
+        let state = |frames: &[Value]| frames.last().unwrap()["state"].clone();
+
+        // No desktop window: the file has no one to read it, and a page no
+        // one to take its picture.
+        let looked = outside('a', "shot.png", ExternalKind::Image);
+        assert_eq!(state(&answered(&mobile, looked).await), "no_window");
+        let mut page = view("landing", DisplayKind::Browser);
+        page.url = Some("https://example.com/".into());
+        let frames = answered(&mobile, page).await;
+        assert_eq!(frames[0]["state"], "page");
+        assert_eq!(frames[0]["reason"], "no_window");
+        assert_eq!(frames[0]["url"], "https://example.com/");
+
+        const PNG: &[u8] = b"\x89PNG\r\n\x1a\nimage";
+        let (endpoint, bodies) = scripted_window(|body| {
+            let grant = body["grant"].as_str().unwrap();
+            match (&grant[..1], body["file"].as_str()) {
+                ("a", None) => WindowRead::Bytes(PNG.to_vec(), PNG.len() as u64),
+                ("b", None) => WindowRead::Refused("grant_gone"),
+                ("c", None) => WindowRead::Refused("not_physical"),
+                ("d", None) => WindowRead::Refused("ENOENT"),
+                ("e", None) => {
+                    let page = b"<img src=\"art/logo.png\"><img src=\"gone.png\">".to_vec();
+                    let total = page.len() as u64;
+                    WindowRead::Bytes(page, total)
+                }
+                ("e", Some("art/logo.png")) => WindowRead::Bytes(PNG.to_vec(), PNG.len() as u64),
+                ("e", Some(_)) => WindowRead::Refused("ENOENT"),
+                ("f", None) => WindowRead::Bytes(b"# notes".to_vec(), 7),
+                ("g", None) => WindowRead::Bytes(PNG.to_vec(), IMAGE_CAP + 1),
+                _ => WindowRead::Refused("read_failed"),
+            }
+        });
+        mobile
+            .browser_control()
+            .register(crate::browser_control::Registration {
+                owner_pid: std::process::id() as i32,
+                endpoint,
+                token: "t".repeat(40),
+            })
+            .unwrap();
+
+        let frames = answered(&mobile, outside('a', "shot.png", ExternalKind::Image)).await;
+        assert_eq!(frames[0]["mode"], "image");
+        assert_eq!(frames[0]["total"], PNG.len());
+        assert_eq!(
+            STANDARD
+                .decode(frames[1]["data"].as_str().unwrap())
+                .unwrap(),
+            PNG
+        );
+        assert_eq!(frames.last().unwrap()["type"], "look_end");
+        // Each open reads again: nothing was kept from the first.
+        answered(&mobile, outside('a', "shot.png", ExternalKind::Image)).await;
+        let asked = bodies.lock().unwrap().clone();
+        assert_eq!(asked.len(), 2);
+        assert_eq!(
+            asked[0],
+            json!({"grant": "a".repeat(32), "file": null, "limit": IMAGE_CAP})
+        );
+
+        for (grant, reason) in [
+            ('b', "grant_expired"),
+            ('c', "file_replaced"),
+            ('d', "not_found"),
+        ] {
+            let looked = outside(grant, "notes.txt", ExternalKind::Text);
+            assert_eq!(state(&answered(&mobile, looked).await), reason, "{grant}");
+        }
+        let looked = outside('g', "huge.png", ExternalKind::Image);
+        assert_eq!(state(&answered(&mobile, looked).await), "too_large");
+
+        let frames = answered(&mobile, outside('f', "notes.md", ExternalKind::Text)).await;
+        assert_eq!(frames[0]["mode"], "markdown");
+
+        let frames = answered(&mobile, outside('e', "mock.html", ExternalKind::Html)).await;
+        assert_eq!(frames[0]["mode"], "html");
+        let document: String = frames
+            .iter()
+            .filter_map(|frame| frame["data"].as_str())
+            .map(|data| String::from_utf8(STANDARD.decode(data).unwrap()).unwrap())
+            .collect();
+        assert!(document.contains("data:image/png;base64,"), "{document}");
+        // A file its folder does not have stays as its address.
+        assert!(document.contains("src=\"gone.png\""), "{document}");
     }
 }

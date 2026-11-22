@@ -18,12 +18,7 @@
 //! Where a notice goes is the core's rule (`hide_core::notice_place`, PRD
 //! device-connect-iroh D-60, D-78): this module says what it observed of
 //! this machine's seat, holds the seat each computer that may open this
-//! machine told of itself, and takes the answer. That rule holds only in a
-//! build that offers connections between two Hides
-//! (`env::Env::device_connect`, [`DesktopNotices::new`]); in every other
-//! build the windows get each notice whether or not someone is at the
-//! computer, as they did before the rule, and only the phones' rest reads
-//! this machine's seat. Under the rule a new notice reaches the
+//! machine told of itself, and takes the answer. A new notice reaches the
 //! windows only while this computer is the place, which is while someone
 //! uses it; a computer that is on and not in use gets none (B59), and the
 //! phones rest exactly while a computer is the place. While another
@@ -99,10 +94,6 @@ pub trait Computers: Send + Sync {
 }
 
 pub struct DesktopNotices {
-    /// Whether a notice goes to one place (D-60): this build offers
-    /// connections between two Hides. Without it every notice of this
-    /// machine is its windows'.
-    one_place: bool,
     /// The desktop windows whose switch is on.
     demand: ObservationDemand,
     wanted: AtomicBool,
@@ -215,21 +206,15 @@ struct Placed {
     phone: Vec<AgentKey>,
 }
 
-/// The notices of a build that offers no connection between two Hides,
-/// which is every build until that feature ships.
 impl Default for DesktopNotices {
     fn default() -> Self {
-        Self::new(false)
+        Self::new()
     }
 }
 
 impl DesktopNotices {
-    /// `device_connect` is whether this build offers connections between
-    /// two Hides (`env::Env::device_connect`): only then does a notice go
-    /// to one place.
-    pub fn new(device_connect: bool) -> Self {
+    pub fn new() -> Self {
         Self {
-            one_place: device_connect,
             demand: ObservationDemand::default(),
             wanted: AtomicBool::new(false),
             computer_use: Mutex::default(),
@@ -502,10 +487,6 @@ impl DesktopNotices {
         at: Instant,
         placed: &mut Placed,
     ) {
-        if !self.one_place {
-            placed.here.push(notice);
-            return;
-        }
         let tag = notice.key.tag();
         let record = |place: &str, peer: Option<&str>| {
             hide_core::diagnostic!(json!({
@@ -962,6 +943,7 @@ mod tests {
     fn the_first_projection_seeds_and_a_new_wait_is_one_notice_cleared_when_seen() {
         let notices = DesktopNotices::default();
         assert!(notices.set(7, true));
+        notices.activity(7, true);
         assert!(notices.wanted() && notices.seed_pending());
         assert_eq!(judged(&notices, &rest("needs_you", "approval")), None);
         assert!(!notices.seed_pending());
@@ -1018,6 +1000,7 @@ mod tests {
         ] {
             let notices = DesktopNotices::default();
             notices.set(7, true);
+            notices.activity(7, true);
             judged(&notices, &rest("working", "none"));
             let mut asking = rest(group, demand);
             asking["navigator"]["agents"][0]["status_code"] = json!(status);
@@ -1031,44 +1014,14 @@ mod tests {
         }
     }
 
-    /// A build without connections between two Hides, which is every build
-    /// until that feature ships: the windows get each notice as they did
-    /// before the place rule, with no one at the computer and after a phone
-    /// acted last, and the phones are handed none of them.
-    #[test]
-    fn without_connections_between_hides_the_windows_get_a_notice_though_no_one_is_here() {
-        let notices = DesktopNotices::default();
-        notices.set(7, true);
-        let mut frames = notices.subscribe();
-        let at = Instant::now();
-        let mut observe = |rest: &Value| {
-            let phones = notices.observe(&project(rest, "node"), at);
-            (phones, frames.try_recv().is_ok())
-        };
-        observe(&rest("working", "none"));
-        assert_eq!(
-            observe(&rest("needs_you", "approval")),
-            (vec![], true),
-            "no one is at this computer"
-        );
-        notices.activity_at(7, true, at);
-        notices.phone_input(at + Duration::from_secs(3));
-        observe(&rest("working", "none"));
-        assert_eq!(
-            observe(&rest("needs_you", "question")),
-            (vec![], true),
-            "a phone acted last"
-        );
-    }
-
-    /// PRD device-connect-iroh B59, where two Hides can connect: a computer
+    /// PRD device-connect-iroh B59: a computer
     /// that is on and not in use gets no notice, the one it missed is not
     /// shown when someone returns, a later one is, and a phone that acted
     /// after the computer's last input is where the operator is until the
     /// next computer input.
     #[test]
     fn a_new_notice_reaches_the_windows_only_while_this_computer_is_in_use() {
-        let notices = DesktopNotices::new(true);
+        let notices = DesktopNotices::new();
         notices.set(7, true);
         judged(&notices, &rest("working", "none"));
         assert_eq!(
@@ -1143,7 +1096,7 @@ mod tests {
     }
 
     fn with_others() -> (DesktopNotices, Arc<Others>) {
-        let (notices, others) = (DesktopNotices::new(true), Arc::new(Others::default()));
+        let (notices, others) = (DesktopNotices::new(), Arc::new(Others::default()));
         notices.set_computers(Arc::clone(&others) as Arc<dyn Computers>);
         (notices, others)
     }
@@ -1250,7 +1203,7 @@ mod tests {
     /// machine's own, and its close reaches the windows under the same tag.
     #[test]
     fn a_handed_notice_shows_only_while_someone_is_here() {
-        let notices = DesktopNotices::new(true);
+        let notices = DesktopNotices::new();
         let handed = wire::Notice {
             device_id: "node".into(),
             pane_id: "w1:p1".into(),
@@ -1314,7 +1267,7 @@ mod tests {
     /// again when input resumes after a pause, never per input.
     #[test]
     fn this_seat_is_told_when_it_changes_and_not_per_input() {
-        let notices = DesktopNotices::new(true);
+        let notices = DesktopNotices::new();
         let mut moves = notices.seat_moves();
         let mut told = || {
             let moved = moves.has_changed().unwrap();

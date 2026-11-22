@@ -9,18 +9,14 @@ const device = (over: Partial<Device> = {}): Device => ({ agent_scope: emptyScop
 
 describe("which device offers the switch (B35)", () => {
   it("is the device the core says can be switched, and no other", () => {
-    expect(switchOffered(device(), true)).toBe(true);
+    expect(switchOffered(device())).toBe(true);
     // Not connected now: the press itself says whether SSH reaches it.
-    expect(switchOffered(device({ state: "unavailable" }), true)).toBe(true);
+    expect(switchOffered(device({ state: "unavailable" }))).toBe(true);
     // A WSL distribution of this PC is offered it like an SSH device (D-27).
-    expect(switchOffered(device({ ssh_alias: null, wsl_distro: "Ubuntu" }), true)).toBe(true);
+    expect(switchOffered(device({ ssh_alias: null, wsl_distro: "Ubuntu" }))).toBe(true);
     // A device that never connected, a paired machine's and an older daemon's row carry no such word.
-    expect(switchOffered(device({ switchable: false }), true)).toBe(false);
-    expect(switchOffered(device({ switchable: undefined }), true)).toBe(false);
-  });
-
-  it("is no device in a build that does not offer connections between two Hides", () => {
-    expect(switchOffered(device(), false)).toBe(false);
+    expect(switchOffered(device({ switchable: false }))).toBe(false);
+    expect(switchOffered(device({ switchable: undefined }))).toBe(false);
   });
 
   it("names linger for a Linux machine reached over SSH only (B36)", () => {

@@ -394,7 +394,7 @@ export function applyFrame(frame: ServerFrame): void {
       return;
     }
     case "look_result":
-      showLook(frame.request_id, resultContent(frame.state, frame.url));
+      showLook(frame.request_id, resultContent(frame.state, frame.url, frame.reason));
       return;
     case "look_changes":
       showLook(frame.request_id, { state: "changes", files: frame.files, count: frame.count, added: frame.added, removed: frame.removed });

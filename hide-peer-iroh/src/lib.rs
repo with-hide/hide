@@ -86,6 +86,10 @@ pub struct Options {
     /// which the Windows firewall rule names (PRD D-38). `None` is any free
     /// port.
     pub port: Option<u16>,
+    /// With a [`Options::relay`], no IP transport at all: every connection
+    /// goes through the relay, as between two machines that have no direct
+    /// way to each other. Development and tests only (`HIDE_PEER_RELAY_ONLY`).
+    pub relay_only: bool,
 }
 
 /// Why an endpoint could not be opened.
@@ -146,7 +150,9 @@ async fn bind(secret: &SecretKey, options: &Options) -> Result<Endpoint, BindFai
         }
         None => builder.relay_mode(RelayMode::Disabled),
     };
-    if let Some(address) = options.bind {
+    if options.relay_only && options.relay.is_some() {
+        builder = builder.clear_ip_transports();
+    } else if let Some(address) = options.bind {
         builder = builder
             .clear_ip_transports()
             .bind_addr(address)
