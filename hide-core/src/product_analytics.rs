@@ -111,7 +111,12 @@ pub enum Feature {
 }
 
 impl Feature {
-    const ALL: [Self; 4] = [Self::Focus, Self::SkillsMcp, Self::HidesPaired, Self::PhoneAnswer];
+    const ALL: [Self; 4] = [
+        Self::Focus,
+        Self::SkillsMcp,
+        Self::HidesPaired,
+        Self::PhoneAnswer,
+    ];
 
     fn name(self) -> &'static str {
         match self {
