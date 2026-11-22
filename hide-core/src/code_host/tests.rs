@@ -33,6 +33,10 @@ impl CodeHost for Plain {
         "plain"
     }
 
+    fn name(&self) -> &'static str {
+        "Plain"
+    }
+
     fn names_server(&self, authority: &str) -> bool {
         authority == PLAIN_SERVER
     }
@@ -1000,6 +1004,7 @@ fn a_hosts_declaration_travels_by_these_names_and_an_old_payload_carries_none() 
         serde_json::to_value(&declaration).unwrap(),
         serde_json::json!({
             "key": "gitlab",
+            "name": "GitLab",
             "operations": ["commit_checks"],
             "access": {
                 "program": "glab",

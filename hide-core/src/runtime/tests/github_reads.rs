@@ -2137,3 +2137,36 @@ fn the_creation_times_a_label_worker_reads_are_keyed_by_a_github_address_in_lowe
         crate::labels::facts::PullRequestTimes::from([(("acme/app".to_owned(), 7), 2)])
     );
 }
+
+/// A list that passed its cap keeps that mark when a failed read carries it
+/// over: the partial rows never read as whole.
+#[test]
+fn a_cut_list_kept_over_a_failed_read_keeps_its_cut_mark() {
+    let mut runtime = runtime();
+    runtime.snapshot.navigator.workspaces = vec![git_project("a", "/tmp/a", "main")];
+    let mut cut = read_ok(
+        "/tmp/a",
+        vec![pull_request(7, "fix", PullRequestBadge::Open)],
+        1_000,
+    );
+    cut.pull_requests_cut = crate::model::ListCut {
+        open: true,
+        settled: false,
+    };
+    runtime.ingest_github_answer(
+        GithubSnapshot {
+            projects: vec![cut],
+        },
+        true,
+    );
+    runtime.ingest_github_answer(
+        GithubSnapshot {
+            projects: vec![read_failed("/tmp/a")],
+        },
+        true,
+    );
+    let kept = runtime.github.project("/tmp/a").unwrap();
+    assert_eq!(kept.pull_requests.len(), 1);
+    assert!(kept.status.stale);
+    assert!(kept.pull_requests_cut.open);
+}

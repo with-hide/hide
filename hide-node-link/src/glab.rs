@@ -72,7 +72,7 @@ const CHANGE_FIELDS: &str = "iid title state draft webUrl sourceBranch targetBra
 /// merge request. Kept under gitlab.com's query complexity of 250.
 pub fn merge_requests_query() -> String {
     format!(
-        "query=query HideGitlabMergeRequests($project:ID!){{currentUser{{username}} project(fullPath:$project){{id fullPath visibility webUrl repository{{rootRef}} open:mergeRequests(state:opened,first:{OPEN_LIMIT},sort:UPDATED_DESC){{count nodes{{{CHANGE_FIELDS} detailedMergeStatus approved approvalsRequired author{{username bot}} approvedBy(first:{REVIEWER_LIMIT}){{count nodes{{username}}}} reviewers(first:{REVIEWER_LIMIT}){{count nodes{{username mergeRequestInteraction{{reviewState}}}}}} headPipeline{{sha status jobs(first:{JOB_LIMIT}){{count nodes{{name status allowFailure webPath}}}}}}}}}} settled:mergeRequests(state:all,first:{RECENT_LIMIT},sort:UPDATED_DESC){{nodes{{{CHANGE_FIELDS} author{{username bot}}}}}}}}}}"
+        "query=query HideGitlabMergeRequests($project:ID!){{currentUser{{username}} project(fullPath:$project){{id fullPath visibility webUrl repository{{rootRef}} open:mergeRequests(state:opened,first:{OPEN_LIMIT},sort:UPDATED_DESC){{count nodes{{{CHANGE_FIELDS} detailedMergeStatus approved approvalsRequired author{{username bot}} approvedBy(first:{REVIEWER_LIMIT}){{count nodes{{username}}}} reviewers(first:{REVIEWER_LIMIT}){{count nodes{{username mergeRequestInteraction{{reviewState}}}}}} headPipeline{{sha status jobs(first:{JOB_LIMIT}){{count nodes{{name status allowFailure webPath}}}}}}}}}} settled:mergeRequests(state:all,first:{RECENT_LIMIT},sort:UPDATED_DESC){{count nodes{{{CHANGE_FIELDS} author{{username bot}}}}}}}}}}"
     )
 }
 

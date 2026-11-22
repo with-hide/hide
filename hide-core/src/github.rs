@@ -483,7 +483,7 @@ fn read_project(
         Ok((issues, warning)) => (
             GithubProjectSnapshot {
                 held: None,
-                pull_requests_cut: false,
+                pull_requests_cut: crate::model::ListCut::default(),
                 remotes_not_known: false,
                 root_path,
                 viewer: viewer.map(str::to_owned),

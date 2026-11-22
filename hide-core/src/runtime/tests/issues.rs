@@ -325,7 +325,7 @@ fn a_pass_that_cannot_read_dependencies_keeps_the_blockers_read_before() {
         GithubSnapshot {
             projects: vec![GithubProjectSnapshot {
                 held: None,
-                pull_requests_cut: false,
+                pull_requests_cut: crate::model::ListCut::default(),
                 remotes_not_known: false,
                 viewer: None,
                 issues: ProjectIssuesSnapshot {

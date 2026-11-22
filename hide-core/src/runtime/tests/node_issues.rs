@@ -962,7 +962,7 @@ fn a_node_s_github_project_lists_its_repository_s_issues_and_links_its_checkouts
         crate::model::GithubSnapshot {
             projects: vec![crate::model::GithubProjectSnapshot {
                 held: None,
-                pull_requests_cut: false,
+                pull_requests_cut: crate::model::ListCut::default(),
                 remotes_not_known: false,
                 viewer: None,
                 pull_requests_read: true,
@@ -1390,7 +1390,7 @@ fn a_new_github_issue_for_a_node_project_is_made_by_repository_name_here() {
             crate::model::GithubSnapshot {
                 projects: vec![crate::model::GithubProjectSnapshot {
                     held: None,
-                    pull_requests_cut: false,
+                    pull_requests_cut: crate::model::ListCut::default(),
                     remotes_not_known: false,
                     viewer: None,
                     pull_requests_read: true,
@@ -2225,7 +2225,7 @@ fn ingest_node_pull_request(runtime: &mut Runtime, repo: &Repo) {
         crate::model::GithubSnapshot {
             projects: vec![crate::model::GithubProjectSnapshot {
                 held: None,
-                pull_requests_cut: false,
+                pull_requests_cut: crate::model::ListCut::default(),
                 remotes_not_known: false,
                 viewer: None,
                 pull_requests_read: true,
@@ -2592,7 +2592,7 @@ fn ingest_node_issues(runtime: &mut Runtime, repo: &Repo, numbers: &[u32]) {
         crate::model::GithubSnapshot {
             projects: vec![crate::model::GithubProjectSnapshot {
                 held: None,
-                pull_requests_cut: false,
+                pull_requests_cut: crate::model::ListCut::default(),
                 remotes_not_known: false,
                 viewer: None,
                 pull_requests_read: true,

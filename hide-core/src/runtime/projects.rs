@@ -5888,6 +5888,7 @@ fn keep_previous_reads(
                     || previous.status.last_success_at_unix_ms.is_some())
             {
                 project.pull_requests = previous.pull_requests.clone();
+                project.pull_requests_cut = previous.pull_requests_cut;
                 project.pull_requests_read = true;
                 // The kept list carries the judgments it was kept with, so
                 // the questions that left them unknown stay named beside it.

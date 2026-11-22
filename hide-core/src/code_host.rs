@@ -94,6 +94,9 @@ pub(crate) fn change_request(
 pub struct HostDeclaration {
     /// The unit's key ([`CodeHost::key`]): `github`, `gitlab`.
     pub key: String,
+    /// The host as the screen names it ([`CodeHost::name`]): `GitHub`,
+    /// `GitLab`.
+    pub name: String,
     /// The optional operations the host offers; one not named is refused by
     /// the core.
     pub operations: Vec<Operation>,
@@ -154,6 +157,7 @@ pub(crate) fn declaration(unit: &dyn CodeHost) -> HostDeclaration {
     ];
     HostDeclaration {
         key: unit.key().to_owned(),
+        name: unit.name().to_owned(),
         operations: offered
             .into_iter()
             .filter_map(|(operation, offered)| offered.then_some(operation))
@@ -280,6 +284,10 @@ impl Place {
 pub(crate) trait CodeHost: Sync {
     /// The unit's key, which a [`RepositoryRef`] names its host by.
     fn key(&self) -> &'static str;
+
+    /// The host as the screen names it (`GitHub`), in the words around a
+    /// read's state.
+    fn name(&self) -> &'static str;
 
     /// Whether `authority` is a server this host is known by name
     /// (`github.com`). A host can also read servers it does not name (GitHub
