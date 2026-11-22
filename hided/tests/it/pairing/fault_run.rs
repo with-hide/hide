@@ -333,14 +333,20 @@ done
 fn recipient_script(folder: &Path) -> String {
     format!(
         r#"hide="$HIDE_INSTALL_CLI"
+log={log}
 while [ ! -e {stop} ]; do
-  for id in $("$hide" inbox 2>/dev/null | grep -o '"id":"letter-[0-9]*"' | cut -d'"' -f4); do
-    "$hide" request ack "$id" > /dev/null 2>&1
+  inbox=$("$hide" inbox 2>&1)
+  printf 'inbox %s\n' "$(printf '%s' "$inbox" | tr '\n' ' ' | cut -c1-300)" >> "$log"
+  for id in $(printf '%s' "$inbox" | grep -o '"id":"letter-[0-9]*"' | cut -d'"' -f4); do
+    answer=$("$hide" request ack "$id" 2>&1)
+    printf 'ack %s %s\n' "$id" "$(printf '%s' "$answer" | tr '\n' ' ' | cut -c1-200)" >> "$log"
   done
+  tail -n 40 "$log" > "$log.tmp" && mv "$log.tmp" "$log"
   sleep 2
 done
 "#,
         stop = quote(folder.join("stop")),
+        log = quote(folder.join("read.log")),
     )
 }
 
@@ -504,11 +510,8 @@ async fn every_letter_a_guests_pane_sends_through_the_faults_lands_in_its_ledger
     std::fs::create_dir(&run).unwrap();
     let reads = run.join("read.sh");
     std::fs::write(&reads, recipient_script(&run)).unwrap();
-    hand_over(
-        &guest_env.home,
-        &recipient.own_pane(&recipient.pane).unwrap(),
-        &reads,
-    );
+    let recipient_pane = recipient.own_pane(&recipient.pane).unwrap().to_owned();
+    hand_over(&guest_env.home, &recipient_pane, &reads);
     let script = run.join("send.sh");
     std::fs::write(&script, sender_script(&run)).unwrap();
     hand_over(
@@ -531,7 +534,18 @@ async fn every_letter_a_guests_pane_sends_through_the_faults_lands_in_its_ledger
         let state = &guest.terminal.state;
         Ok((letters_in(state, &sender).len() > open_letters(state, &sender)).then_some(()))
     })
-    .unwrap();
+    .unwrap_or_else(|error| {
+        panic!(
+            "{error:#}: its order taken {}, its panes {:?}, its log:\n{}",
+            !guest_env
+                .home
+                .join(".fixture-run")
+                .join(recipient_pane.replace(':', "-"))
+                .exists(),
+            crate::support::remote_delivery::ready_panes(&guest_env.home),
+            std::fs::read_to_string(run.join("read.log")).unwrap_or_default()
+        )
+    });
 
     // The faults, one after another, until the time is up.
     let ends = Instant::now() + Duration::from_secs(minutes * 60);
