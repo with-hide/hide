@@ -4,8 +4,8 @@ import type { Catalog, Catalogs } from "../../schema";
 // the list hided reads for the language (`hide-peer/src/words`: Korean for
 // Korean, English for the rest), as both screens would show them.
 const en = {
-  "practice.connect.title": "Another computer",
-  "practice.connect.summary": "Connect a computer that runs Hide with one link, and see its work from here",
+  "practice.connect.title": "Many computers, one team",
+  "practice.connect.summary": "Connect a Mac, Windows or Linux computer, and its agents' work and questions reach you here",
   "practice.connect.words": "arrow art arrive artefact",
   "practice.connect.miniTask": "Nightly build fails on arm64",
   "practice.connect.miniQuestion": "Pin the old toolchain for now?",
@@ -56,8 +56,8 @@ const en = {
 };
 
 const ko = {
-  "practice.connect.title": "다른 컴퓨터",
-  "practice.connect.summary": "Hide가 깔린 컴퓨터를 링크 하나로 연결하고, 그 컴퓨터의 일을 여기서 봐요",
+  "practice.connect.title": "여러 컴퓨터, 한 팀",
+  "practice.connect.summary": "Mac, Windows, Linux 컴퓨터를 이어서, 그곳 에이전트의 일과 질문을 여기서 받아요",
   "practice.connect.words": "계곡 목표 경험 계란",
   "practice.connect.miniTask": "arm64 야간 빌드 실패",
   "practice.connect.miniQuestion": "당분간 예전 툴체인으로 고정할까요?",
@@ -108,8 +108,8 @@ const ko = {
 } satisfies Catalog<typeof en>;
 
 const zhCN = {
-  "practice.connect.title": "另一台电脑",
-  "practice.connect.summary": "用一个链接连接装有 Hide 的电脑，在这里查看它的工作",
+  "practice.connect.title": "多台电脑，一个团队",
+  "practice.connect.summary": "连接一台 Mac、Windows 或 Linux 电脑，它的智能体的工作和提问都会来到这里",
   "practice.connect.words": "arrow art arrive artefact",
   "practice.connect.miniTask": "arm64 夜间构建失败",
   "practice.connect.miniQuestion": "暂时固定旧的工具链吗？",
@@ -160,8 +160,8 @@ const zhCN = {
 } satisfies Catalog<typeof en>;
 
 const ja = {
-  "practice.connect.title": "別のコンピュータ",
-  "practice.connect.summary": "Hide が入ったコンピュータをリンク一つでつなぎ、その仕事をここで見ます",
+  "practice.connect.title": "複数のコンピュータ、ひとつのチーム",
+  "practice.connect.summary": "Mac・Windows・Linux のコンピュータをつなぎ、そのエージェントの仕事と質問をここで受け取ります",
   "practice.connect.words": "arrow art arrive artefact",
   "practice.connect.miniTask": "arm64 のナイトリービルドが失敗",
   "practice.connect.miniQuestion": "当面は古いツールチェーンに固定しますか？",
