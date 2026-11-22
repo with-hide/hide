@@ -13,10 +13,8 @@
 // `view=install` what a machine with no Hide of its own would get (B36,
 // D-45); `view=update` is two Hides too far apart to connect (B22): the
 // computer this one asked to update, the one that asked this computer, and
-// this computer's own notice in the corner. `connect=off` is a build that
-// does not offer connections between two Hides, which shows none of it for
-// the same records. It proves the rendered parts; the pairing is the
-// daemon's.
+// this computer's own notice in the corner. It proves the rendered parts;
+// the pairing is the daemon's.
 import { useLayoutEffect, useMemo } from "react";
 import { createActions } from "../actions";
 import { ToastStack } from "../components/ui/toast";
@@ -124,8 +122,6 @@ export function PairingScene({ params }: { params: URLSearchParams }) {
   const updating = view === "update";
   // `side=there`: the computer that waits for the other to update, whose notice asks it to.
   const updatePeers = params.get("side") === "there" ? UPDATE_PEERS.filter((row) => row.update !== "here_asked") : UPDATE_PEERS;
-  const connect = params.get("connect") ?? "on";
-  if (connect !== "on" && connect !== "off") throw new Error(`Unknown pairing connect ${connect}`);
   useLayoutEffect(() => {
     if (!firewall && !updating) return;
     const before = window.hideHost;
@@ -157,7 +153,6 @@ export function PairingScene({ params }: { params: URLSearchParams }) {
   useLayoutEffect(() => {
     useShellStore.setState({
       connection: "live",
-      daemon: { device_connect: connect === "on" },
       pairing: pairingOf(view, lang),
       pairingResult:
         view === "held"
@@ -174,7 +169,7 @@ export function PairingScene({ params }: { params: URLSearchParams }) {
     useUiStore.setState({ switchedDevices: landed ? ["build-box"] : [] });
     document.documentElement.classList.toggle("dark", theme === "dark");
     document.documentElement.classList.toggle("light", theme === "light");
-  }, [theme, lang, view, switching, landed, updating, updatePeers, front, connect]);
+  }, [theme, lang, view, switching, landed, updating, updatePeers, front]);
   return (
     <>
       <InterfaceLanguageBoundary />

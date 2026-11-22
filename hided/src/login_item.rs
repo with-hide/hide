@@ -46,15 +46,8 @@ pub fn adopt(
     home: &Path,
     state_dir: &Path,
     program: &Path,
-    device_connect: bool,
 ) -> Result<(), String> {
-    put_in(
-        agents,
-        home,
-        state_dir,
-        program,
-        Put::Adopt { device_connect },
-    )
+    put_in(agents, home, state_dir, program, Put::Adopt)
 }
 
 /// Whether putting an item in stops the core running on the folder.
@@ -62,10 +55,8 @@ pub fn adopt(
 enum Put {
     /// A starter replaces the core: its run ends with the old item's.
     Replace,
-    /// The core itself asks: nothing that runs is stopped. `device_connect`
-    /// is whether that core offers connections between two Hides
-    /// (`env::Env::device_connect`), which the item's core then offers too.
-    Adopt { device_connect: bool },
+    /// The core itself asks: nothing that runs is stopped.
+    Adopt,
 }
 
 fn put_in(
@@ -87,21 +78,7 @@ fn put_in(
         );
     }
     let label = hide_kit::layout::core_login_item(home, state_dir);
-    let mut environment = item_environment(home)?;
-    // The item's core offers connections between two Hides when the core
-    // that adopts it does (`always_on`): an item kept for a pairing would be
-    // taken out by a core that does not offer them, and one kept for a core
-    // moved here, which every build keeps, must not turn them on. A Task
-    // Scheduler task carries no environment; there the switch is the
-    // account's own (`env::Env::device_connect`).
-    if put
-        == (Put::Adopt {
-            device_connect: true,
-        })
-        && !cfg!(windows)
-    {
-        environment.push((crate::env::HIDE_DEVICE_CONNECT.to_owned(), "1".to_owned()));
-    }
+    let environment = item_environment(home)?;
     let environment: Vec<(&str, &str)> = environment
         .iter()
         .map(|(key, value)| (key.as_str(), value.as_str()))
@@ -128,7 +105,7 @@ fn put_in(
         .filter(crate::state_file::DaemonState::is_proven_running);
     match put {
         Put::Replace => agents.install(&agent, &marker(state_dir), home, &stop),
-        Put::Adopt { .. } => agents.adopt(&agent, &marker(state_dir), home, &stop),
+        Put::Adopt => agents.adopt(&agent, &marker(state_dir), home, &stop),
     }
     .map_err(|error| format!("the login item {label}: {error}"))?;
     if let Some(previous) = previous

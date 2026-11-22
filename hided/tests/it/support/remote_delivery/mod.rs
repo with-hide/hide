@@ -179,13 +179,18 @@ pub fn quote(value: impl AsRef<OsStr>) -> String {
     )
 }
 
-pub fn capture(mut command: Command) -> Result<CapturedOutput> {
+pub fn capture(command: Command) -> Result<CapturedOutput> {
+    capture_within(command, Duration::from_secs(10))
+}
+
+/// [`capture`] for a command whose own work takes longer than ten seconds.
+pub fn capture_within(mut command: Command, within: Duration) -> Result<CapturedOutput> {
     command
         .stdin(Stdio::null())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped());
     OwnedChild::spawn(&mut command)?
-        .capture_until(Instant::now() + Duration::from_secs(10), READ_CAP)
+        .capture_until(Instant::now() + within, READ_CAP)
         .map_err(|error| anyhow::anyhow!("private command capture: {error}"))
 }
 
@@ -891,9 +896,6 @@ impl Fixture {
         for (name, value) in LOOPBACK_PEERS {
             remote_env.set(name, value);
         }
-        // Both machines are builds that offer connections between two Hides,
-        // which a journey that pairs or switches them needs.
-        remote_env.set(hided::env::HIDE_DEVICE_CONNECT, "1");
         remote_env.set(
             "HIDE_TAILSCALE_BIN",
             remote_env.home.join("absent-tailscale").into_os_string(),
@@ -905,7 +907,6 @@ impl Fixture {
         )?;
         local_env.set("HIDE_STATE_DIR", state.as_os_str());
         local_env.set("HIDE_KEEP_ALIVE", "1");
-        local_env.set(hided::env::HIDE_DEVICE_CONNECT, "1");
         local_env.set("HIDE_OPEN_COMMAND", "/usr/bin/true");
         local_env.set(
             "HIDE_HOST_HELPER_ROOT",

@@ -4,7 +4,7 @@ import { initializeInterfaceI18n } from "../../../web/src/i18n/instance";
 import { REGISTRY, type Command } from "../../../web/src/shortcuts";
 import { BROWSER_COMMAND_CHANNEL, BROWSER_CYCLE_END_CHANNEL, BROWSER_EVENT_CHANNEL, BROWSER_SYNC_CHANNEL } from "../channel";
 import { BrowserViews, type ResolvedPage } from "./browser";
-import { browserPartition, MAX_LIVE_VIEWS } from "./browserSync";
+import { browserPartition, MAX_LIVE_VIEWS, viewKey } from "./browserSync";
 import { session } from "electron";
 import { ExternalFiles, UNNAMED_GRANT_GRACE_MS, externalPartition } from "./externalFiles";
 import type { HostLog } from "./log";
@@ -172,6 +172,47 @@ describe("native browser CDP inventory", () => {
     Reflect.set(subject, "cdpObserved", [{ key: page.key, area: "a1", contents: 7, url: "file:///manual.html", title: "" }]);
     expect(() => Reflect.get(subject, "publishCdp").call(subject)).not.toThrow();
     expect(told).toEqual([{ contentsId: 7, reason: "replaced" }]);
+  });
+});
+
+describe("a phone's still of a page", () => {
+  it("is the page's own capture whether or not it is in front, scaled down to its pixel cap, and else why there is none", async () => {
+    vi.useFakeTimers();
+    try {
+      const subject = new BrowserViews({ event: vi.fn() } as unknown as HostLog, () => true, vi.fn(), vi.fn(), vi.fn(), () => english, new ExternalFiles(vi.fn()));
+      const image = (width: number, height: number, empty = false) => {
+        const resized = { toJPEG: () => Buffer.from("small jpeg") };
+        return { isEmpty: () => empty, getSize: () => ({ width, height }), resize: vi.fn(() => resized), toJPEG: () => Buffer.from("jpeg") };
+      };
+      const pages = Reflect.get(subject, "pages") as Map<string, unknown>;
+      const answers = new Map<string, () => Promise<unknown>>();
+      for (const id of ["behind", "huge", "blank", "stuck"]) {
+        // Behind another tab of its area: not visible, and taken all the same.
+        pages.set(viewKey("ws", id), { key: viewKey("ws", id), id, visible: false, view: { webContents: { isDestroyed: () => false, capturePage: () => answers.get(id)!() } } });
+      }
+      answers.set("behind", async () => image(520, 720));
+      const huge = image(4000, 3000);
+      answers.set("huge", async () => huge);
+      answers.set("blank", async () => image(0, 0, true));
+      answers.set("stuck", () => new Promise(() => {}));
+      Reflect.set(subject, "cdpAreas", new Map(["behind", "huge", "blank", "stuck", "unloaded"].map((id) => [viewKey("ws", id), "a1"])));
+      const still = (display_id: string, area_id = "a1") => subject.still({ workspace: "ws", area_id, display_id });
+
+      expect(await still("behind")).toEqual({ jpeg: new Uint8Array(Buffer.from("jpeg")) });
+      expect(await still("huge")).toEqual({ jpeg: new Uint8Array(Buffer.from("small jpeg")) });
+      // 1.5 million pixels of a 4:3 picture.
+      expect(huge.resize).toHaveBeenCalledWith({ width: 1414, quality: "good" });
+      expect(await still("blank")).toEqual({ failure: "not_drawn" });
+      expect(await still("unloaded")).toEqual({ failure: "not_loaded" });
+      // An area the core did not authorize for the display is not taken.
+      expect(await still("behind", "a2")).toEqual({ failure: "display_missing" });
+      // A capture that never answers frees its gateway request in 5 s.
+      const stuck = still("stuck");
+      await vi.advanceTimersByTimeAsync(5_000);
+      expect(await stuck).toEqual({ failure: "capture_timeout" });
+    } finally {
+      vi.useRealTimers();
+    }
   });
 });
 

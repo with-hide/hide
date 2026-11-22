@@ -143,12 +143,6 @@ pub fn run(args: &[OsString]) -> Result<(), String> {
     let args = parse(args)?;
     let outcome = match &args.previous {
         Some(previous) => update(&args, previous),
-        // A raise is another machine's ask: a build that does not offer
-        // connections between two Hides takes none
-        // (`env::Env::device_connect`).
-        None if !crate::env::device_connect_here() => {
-            Err(crate::pairing::DEVICE_CONNECT_OFF.to_owned())
-        }
         None => raise(&args),
     }
     .unwrap_or_else(|reason| Outcome::Refused { reason });

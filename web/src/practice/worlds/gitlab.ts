@@ -1,4 +1,4 @@
-// Flow 9's world: two invented projects, one whose remote is on GitHub and one
+// Flow 10's world: two invented projects, one whose remote is on GitHub and one
 // on gitlab.com, each with an agent at work. The core read both, so the
 // sidebar's PR list holds GitHub's pull request beside the gitlab.com
 // project's merge requests, each project's checkout names the host that read

@@ -139,9 +139,9 @@ it("watches the other computers only while 모두 is on screen and the page is v
   expect(assign).toHaveBeenCalledWith(`/?host=${MINI.room}&one=1`);
 });
 
-// The gathered view stays behind the computer's release switch (HIDE_DEVICE_CONNECT): a computer that does not offer connections
-// between two Hides keeps today's list, however many computers the phone keeps.
-it("offers no gathered view on a computer whose build keeps connections off", async () => {
+// A computer from before connections between two Hides (its hello carries no `device_connect`) keeps today's list, however many
+// computers the phone keeps.
+it("offers no gathered view on a computer whose build offers no connections between Hides", async () => {
   pair(MAC, MINI);
   patch({ deviceConnect: false });
   const { watch, opened } = watcher();

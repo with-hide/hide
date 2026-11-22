@@ -1,6 +1,6 @@
 import type { Catalog, Catalogs } from "../../schema";
 
-// Flow 9's words (`practice/chapters/gitlab.ts`).
+// Flow 10's words (`practice/chapters/gitlab.ts`).
 const en = {
   "practice.gitlab.title": "GitLab",
   "practice.gitlab.summary": "Read a gitlab.com project's merge requests beside your GitHub pull requests",
@@ -32,7 +32,7 @@ const en = {
   "practice.gitlab.hosts.kick": "How the reads stand",
   "practice.gitlab.hosts.title": "Signed in, or what to run",
   "practice.gitlab.hosts.text": "When a program is signed out, its row shows the command that signs it in, such as **glab auth login --hostname gitlab.com**.",
-  "practice.gitlab.end.kick": "End of chapter 9",
+  "practice.gitlab.end.kick": "End of chapter 10",
   "practice.gitlab.end.title": "gitlab.com works like GitHub",
   "practice.gitlab.end.text": "Install **glab** and sign in, and a project whose remote is on gitlab.com lists its merge requests by itself.",
 };
@@ -68,7 +68,7 @@ const ko = {
   "practice.gitlab.hosts.kick": "읽기 상태",
   "practice.gitlab.hosts.title": "로그인했는지, 무엇을 실행할지",
   "practice.gitlab.hosts.text": "프로그램이 로그아웃되어 있으면 그 줄에 로그인 명령이 나와요. 예를 들어 **glab auth login --hostname gitlab.com**이에요.",
-  "practice.gitlab.end.kick": "9장 끝",
+  "practice.gitlab.end.kick": "10장 끝",
   "practice.gitlab.end.title": "gitlab.com도 GitHub처럼",
   "practice.gitlab.end.text": "**glab**을 설치하고 로그인하면, 원격 저장소가 gitlab.com에 있는 프로젝트의 MR이 저절로 목록에 들어와요.",
 } satisfies Catalog<typeof en>;
@@ -104,7 +104,7 @@ const zhCN = {
   "practice.gitlab.hosts.kick": "读取状态",
   "practice.gitlab.hosts.title": "已登录，或要运行什么",
   "practice.gitlab.hosts.text": "程序未登录时，这一行会显示登录命令，比如 **glab auth login --hostname gitlab.com**。",
-  "practice.gitlab.end.kick": "第 9 章 完",
+  "practice.gitlab.end.kick": "第 10 章 完",
   "practice.gitlab.end.title": "gitlab.com 和 GitHub 一样用",
   "practice.gitlab.end.text": "安装 **glab** 并登录后，远程在 gitlab.com 上的项目会自己列出合并请求。",
 } satisfies Catalog<typeof en>;
@@ -140,7 +140,7 @@ const ja = {
   "practice.gitlab.hosts.kick": "読み取りの状態",
   "practice.gitlab.hosts.title": "サインイン済みか、何を実行するか",
   "practice.gitlab.hosts.text": "プログラムがサインアウトしていると、その行にサインインのコマンドが出ます。たとえば **glab auth login --hostname gitlab.com** です。",
-  "practice.gitlab.end.kick": "第 9 章 おわり",
+  "practice.gitlab.end.kick": "第 10 章 おわり",
   "practice.gitlab.end.title": "gitlab.com も GitHub と同じように",
   "practice.gitlab.end.text": "**glab** を入れてサインインすると、リモートが gitlab.com にあるプロジェクトのマージリクエストが自然に一覧に入ります。",
 } satisfies Catalog<typeof en>;

@@ -24,7 +24,7 @@ afterEach(() => {
   document.body.innerHTML = "";
 });
 
-async function mount(device: Device, over: { front?: string; pairing?: PairingView | null; panes?: number; deviceConnect?: boolean } = {}) {
+async function mount(device: Device, over: { front?: string; pairing?: PairingView | null; panes?: number } = {}) {
   vi.stubGlobal("IS_REACT_ACT_ENVIRONMENT", true);
   vi.stubGlobal("ResizeObserver", class { observe() {} disconnect() {} unobserve() {} });
   const events: Parameters<DispatchFn>[0][] = [];
@@ -42,7 +42,7 @@ async function mount(device: Device, over: { front?: string; pairing?: PairingVi
   // remote screen once a machine's own Hide shows (App, RemoteStage).
   const draw = (place: string) => root.render(<TooltipProvider><DeviceSwitchStrip key={place} actions={actions} /><DeviceSwitchDialogs actions={actions} /></TooltipProvider>);
   await act(async () => {
-    useShellStore.setState({ connection: "live", daemon: { device_connect: over.deviceConnect ?? true }, pairing: over.pairing === undefined ? NOTHING_UNDER_WAY : over.pairing, pairingResult: null, rest: rest(device) } as never);
+    useShellStore.setState({ connection: "live", pairing: over.pairing === undefined ? NOTHING_UNDER_WAY : over.pairing, pairingResult: null, rest: rest(device) } as never);
     draw("main");
   });
   const q = (selector: string) => document.body.querySelector(selector) as HTMLElement | null;
@@ -194,14 +194,6 @@ it("asks for the switch of a device added over SSH once its helper is connected,
   // Taken off and added again under the id it had: it is a new device, asked again.
   await show(helper({ ...ready, id: "mini", switch_first: true }));
   expect(switches(events).map((event) => event.payload.device)).toEqual(["mini", "mini"]);
-  await unmount();
-});
-
-it("offers no switch and asks for none in a build that does not offer connections between two Hides", async () => {
-  const ready = { host: { consent: "granted", helper_root: "~/.hide/host-helper", cli_dir: "~/.local/bin", contract: 3, bound_identity: null, granted_at_unix_ms: 1, state: "ready", message: null, platform: "linux x86_64", helper_path: null } } as Partial<Device>;
-  const { events, q, unmount } = await mount(helper({ ...ready, switch_first: true }), { deviceConnect: false });
-  expect(q('[data-device-switch-strip="mini"]')).toBeNull();
-  expect(switches(events)).toHaveLength(0);
   await unmount();
 });
 

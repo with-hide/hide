@@ -27,7 +27,7 @@ import type { Device } from "../snapshot";
 import { chosenDistro, defaultDeviceName, hostChoices, pickableAliases, wslChoices, type HostChoice, type WslChoice } from "../sshHosts";
 import { useShellStore } from "../store";
 import { coreErrorText } from "../coreError";
-import { deviceConnectOffered, isPairLink, refusalKey, sshLookLine, type SshLook } from "../pairing";
+import { isPairLink, refusalKey, sshLookLine, type SshLook } from "../pairing";
 import { useRefusalSince } from "../errorSince";
 
 const HOST_EXAMPLE = "Host studio\n  HostName studio.local\n  User you";
@@ -82,10 +82,6 @@ export function AddDevice({ actions, devices, helperRoot, cliDir, onPaired }: { 
   const { t } = useInterfaceTranslation();
   const hosts = useShellStore((s) => s.rest?.status?.ssh_hosts);
   const answered = useShellStore((s) => s.pairingResult);
-  // A build that does not offer connections between two Hides asks no Host
-  // and no distribution whether its own Hide runs: each is added as before
-  // pairing.
-  const pairs = useShellStore((s) => deviceConnectOffered(s.daemon));
   // What the chosen Host's own Hide answered (nothing, when the look was
   // refused), and the pairing a press started.
   const [look, setLook] = useState<{ alias: string; request: string; answered: boolean; looked: SshLook | null } | null>(null);
@@ -136,7 +132,6 @@ export function AddDevice({ actions, devices, helperRoot, cliDir, onPaired }: { 
     // The name follows the Host until the person writes their own; a
     // distribution's is the core's.
     if (picked === null && !nameEdited) setName(defaultDeviceName(next));
-    if (!pairs) return;
     const request = `look-${Date.now()}`;
     setLook({ alias: next, request, answered: false, looked: null });
     if (picked === null) actions.pairing("look_ssh", { alias: next, request_id: request });
@@ -157,14 +152,13 @@ export function AddDevice({ actions, devices, helperRoot, cliDir, onPaired }: { 
     // A device added over SSH or wsl.exe goes on to the new connection once
     // it connects (B41): the core keeps that it was added for its switch,
     // which is asked then and says what would be installed there before
-    // anything is. A build that does not offer connections between two
-    // Hides adds it as before (`pairs`).
+    // anything is.
     if (distro !== null) {
       setSubmitted({ alias: null, distro, at: Date.now() });
-      actions.registerWslDevice(distro, { switchFirst: pairs });
+      actions.registerWslDevice(distro, { switchFirst: true });
     } else {
       setSubmitted({ alias: chosen, distro: null, at: Date.now() });
-      actions.registerDevice(name.trim(), chosen, { hostConsent: true, switchFirst: pairs });
+      actions.registerDevice(name.trim(), chosen, { hostConsent: true, switchFirst: true });
     }
   };
   // Until hided has answered there is nothing to choose; an answer with no Host says what to add (B52).
@@ -223,7 +217,7 @@ export function AddDevice({ actions, devices, helperRoot, cliDir, onPaired }: { 
       )}
       <div className="flex justify-end">
         <Button disabled={blocked} onClick={submit} data-add-device={connects ? "connect" : "true"}>
-          {connects ? (connecting ? t("pairing.ssh.connecting") : t("pairing.add.connect")) : pending ? t("devices.adding") : pairs ? t("devices.next") : t("common.add")}
+          {connects ? (connecting ? t("pairing.ssh.connecting") : t("pairing.add.connect")) : pending ? t("devices.adding") : t("devices.next")}
         </Button>
       </div>
     </div>

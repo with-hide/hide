@@ -148,18 +148,17 @@ function tileFacts(connected: boolean, counts: TileCounts, t: TFunction<"transla
   return [counts.needs_you > 0 ? t("devices.rail.needsYou", { count: counts.needs_you }) : null, counts.done > 0 ? t("devices.rail.done", { count: counts.done }) : null].filter((fact) => fact !== null);
 }
 
-/** What a tile is called for assistive technology: the name, `core` on the core's machine, then its connection or its counts (B4). */
-export function tileName(label: string, connected: boolean, counts: TileCounts, t: TFunction<"translation">, core = false): string {
-  return [label, ...(core ? [t("coreLink.railCore")] : []), ...tileFacts(connected, counts, t)].join(", ");
+/** What a tile is called for assistive technology: the name, then its connection or its counts (B4). */
+export function tileName(label: string, connected: boolean, counts: TileCounts, t: TFunction<"translation">): string {
+  return [label, ...tileFacts(connected, counts, t)].join(", ");
 }
 
 /**
- * A tile's hint, the only place its name is written: the name, `core` on the
- * machine the core runs on while it is marked (PRD core-host-node-move N1),
- * then its connection or its counts (`Mac mini · core · Needs You 3`).
+ * A tile's hint, the only place its name is written: the name, then its
+ * connection or its counts (`Mac mini · Needs You 3`).
  */
-export function tileHint(label: string, connected: boolean, counts: TileCounts, t: TFunction<"translation">, core = false): string {
-  return [label, ...(core ? [t("coreLink.railCore")] : []), ...tileFacts(connected, counts, t)].join(" · ");
+export function tileHint(label: string, connected: boolean, counts: TileCounts, t: TFunction<"translation">): string {
+  return [label, ...tileFacts(connected, counts, t)].join(" · ");
 }
 
 /**

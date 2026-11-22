@@ -15,6 +15,7 @@ import { ConfirmClose, CycleOverlay } from "../Overlays";
 import { OverviewModal } from "../Overview";
 import { NOTHING_UNDER_WAY } from "../pairing";
 import { Palette } from "../Palette";
+import { PairingDialogs } from "../PairingDialogs";
 import { SettingsGate } from "../SettingsSheet";
 import type { SnapshotRest } from "../snapshot";
 import { Sidebar } from "../sidebar";
@@ -141,8 +142,8 @@ export function PracticePlayer({ chapter, next, resume, operator, onStep, onStar
       sessionWorkSearch: frames?.sessionWorkSearch ?? null, sessionRecord: frames?.sessionRecord ?? null, linkPanel: frames?.linkPanel ?? null,
       listings: frames?.listings ?? NO_LISTINGS, changes: frames?.changes ?? null, memory: frames?.memory ?? null, suggestions: frames?.suggestions ?? null,
       access: frames?.access ?? null,
-      // The practice screen is this computer's own window, which hided sends its `pairing` frame (B52): nothing under way.
-      pairing: NOTHING_UNDER_WAY,
+      // The practice screen is this computer's own window, which hided sends its `pairing` frame (B52): nothing under way unless the world pairs.
+      pairing: frames?.pairing ?? NOTHING_UNDER_WAY, pairingResult: frames?.pairingResult ?? null,
       automations: automations ?? null,
     });
   }, [chapter, model, operator]);
@@ -194,6 +195,7 @@ export function PracticePlayer({ chapter, next, resume, operator, onStep, onStar
         <Palette actions={actions} />
         {/* Settings opens over the practice as over Hide; what it sends goes to the world, which answers only what its chapter needs. */}
         <SettingsGate actions={actions} />
+        <PairingDialogs actions={actions} />
         <CycleOverlay />
         <ConfirmClose actions={actions} />
         <PracticeCoach chapter={chapter} model={model} next={next} resume={resume} onStep={onStep} onEnter={send} onNext={() => next && onStart(next, 0)} onRestart={() => onStart(chapter, 0)} onRewind={(step) => onStart(chapter, step)} onHub={onHub} onLeave={onLeave} />

@@ -140,12 +140,3 @@ export function windowFirst(devices: readonly Device[] | undefined): Device[] {
   const own = windowDeviceId(rows);
   return [...rows.filter((device) => device.id === own), ...rows.filter((device) => device.id !== own)];
 }
-
-/**
- * Whether the core works with another machine (Q11): this window is on a
- * node, or a node dials in to the core. Only then does the rail mark the
- * core's machine; a core alone on its Mac has nothing to tell apart (B1).
- */
-export function coreShared(devices: readonly Device[] | undefined): boolean {
-  return windowDeviceId(devices) !== coreRowId(devices) || (devices ?? []).some((device) => device.dials_in === true);
-}
