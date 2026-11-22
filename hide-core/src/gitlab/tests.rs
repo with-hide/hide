@@ -19,6 +19,8 @@ const SCENES: &str = include_str!("../../tests/fixtures/gitlab/merge-requests-sc
 const RUNNING: &str = include_str!("../../tests/fixtures/gitlab/merge-requests-running.json");
 const FORKS: &str = include_str!("../../tests/fixtures/gitlab/merge-requests-forks.json");
 const AFTER_PUSH: &str = include_str!("../../tests/fixtures/gitlab/merge-requests-after-push.json");
+const TARGET_GONE: &str =
+    include_str!("../../tests/fixtures/gitlab/merge-requests-target-gone.json");
 const CARD: &str = include_str!("../../tests/fixtures/gitlab/card.json");
 const COMMITS: &str = include_str!("../../tests/fixtures/gitlab/commit-checks.json");
 
@@ -205,20 +207,31 @@ fn zero_approvals_required_is_no_review_until_someone_approves() {
 fn a_merge_request_read_right_after_a_push_is_placed_by_its_checked_status() {
     // gitlab.com answered this list seconds after a commit was pushed to
     // !35 (no pipeline, nothing in its way): asking `mergeable` made it
-    // check, so the merge request is ready to merge, not still being checked.
+    // check, so the merge request reads as the "no pipeline" scene (!6) does:
+    // ready to merge, not still being checked.
     let listed = listed(AFTER_PUSH);
     let pushed = pull(&listed, 35);
     assert_eq!(
         (pushed.checks, pushed.state(), pushed.work.merge_state),
-        (
-            PullRequestChecks::None,
-            PrState::Mergeable,
-            MergeState::Clean
-        )
+        (PullRequestChecks::None, PrState::Pending, MergeState::Clean)
     );
     assert_eq!(
         places(&listed.pull_requests).get(&35).copied(),
         Some(("needs_you", "merge"))
+    );
+}
+
+#[test]
+fn a_merge_request_whose_target_branch_is_gone_reads_blocked() {
+    // !27's target branch was deleted by hand. Once gitlab.com finished its
+    // check it answered `COMMITS_STATUS`: nothing can merge it, and it is
+    // not still being checked.
+    let listed = listed(TARGET_GONE);
+    let gone = pull(&listed, 27);
+    assert_eq!(gone.base_branch, "stack2-low");
+    assert_eq!(
+        (gone.checks, gone.work.merge_state),
+        (PullRequestChecks::Passing, MergeState::Blocked)
     );
 }
 
