@@ -133,6 +133,8 @@ export type SnapshotSections =
   | HumanTurnDonePayload
   | AutomationCall
   | AutomationResult
+  | AccessCall
+  | AccessResult
   | AccessSnapshot
   | AccessApprovePayload
   | AccessModePayload
@@ -197,7 +199,7 @@ export interface Handshake {
   have_terminal_epoch?: string;
 }
 /**
- * snapshot/delta carry the core state; terminal carries pane output beside them, never through the core (see terminalFrame); clipboard {pane_id, text_base64} is what a pane's program wrote to the clipboard (OSC 52), at most 192 KiB of text, sent once to each desktop or web window connected when it was written and kept for none that connects, resumes or redraws later, so a window in front writes it to its clipboard once; error answers a malformed client event; directory_list answers a `file_list`, and path_refused answers any event whose path failed its boundary - the $HOME line for `create_workspace` and `clone_repository`, the checkout-root line for `file_list`, `file_open`, `reveal_path`, `file_save`, `file_create`, `dir_create`, `path_rename`, `path_move`, `path_copy`, `path_import`, `path_trash` and `file_bytes` (see directoryList and pathRefused). A `file_list`, `file_open`, `reveal_path`, `file_save`, `file_create`, `dir_create`, `path_rename`, `path_move`, `path_copy`, `path_import` or `path_trash` that names an SSH device in `device_id` never meets this machine's checkout roots: the core accepts it only for the checkout in front on that device and the device's helper confines every path to that checkout's opened root. file_bytes_error answers a `file_bytes` read the daemon could not serve as bytes (see fileBytes). directory_unavailable answers a `file_list` for a checkout on an SSH device that its helper could not list (see directoryUnavailable). directory_changed announces that a watched folder changed, so the client re-reads that one folder (see directoryChanged). attachment_refused answers an `attachment_stage` or `attachment_commit` that could not be staged (see attachments). file_index_result answers a `file_index` query with the ranked checkout paths (see fileIndex). project_target answers a `project_target` probe (see projectTarget and projectTargetResult). automation_result answers an `automation_call` to the window that sent it (see automationCall and automationResult). clone_target answers a `clone_target` question about where a clone would land (see cloneTarget). daemon is the first frame after a valid handshake and describes the daemon itself (see daemonInfo). agent_notice reaches only a desktop window, and only while one has asked for it with `desktop_notices` (see agentNotice and desktopNoticesPayload). core_link is where a node's link to its core stands, sent to a screen the node holds while the core cannot draw it: `phase` `connecting`, `updating`, `waiting`, `stopped` or `disconnected`, `machine`, the core machine's name when its hello gave it, else null, `alias`, the SSH alias the node dials its core by, which a screen that has not drawn the core names instead of an empty machine, `problem`, the ssh failure as the device row groups it (`sign_in_needed`, `sign_in_refused`, `host_key_changed`, `cannot_connect`, ...) while `stopped`, else null, `splits`, whether this machine becomes a Hide of its own once it reaches its core, which only a build that offers connections between two Hides does, so a `waiting` screen says the migration waits and any other that it reconnects, and `sign_in`, what ssh asks the dial a held screen's Retry started, in the device row's shape (`question`, `kind` and its fields, `key_command`), sent to that screen only, else null; that screen answers it with a `core_link` event {action: `sign_in`, question, reply: `text` with `text`, `accept` or `cancel`}, another screen's answer reaches nothing, and a `cancel`, that screen's end, or five minutes on a browser check or a key touch ends the attempt, whether or not a question showed yet; a connect no screen made (`hide connect`, a launch) asks nobody; one press asks at most one sign-in. `stopped` is a failure only the operator can fix: nothing dials again until a window connects (`hide connect`) or a screen's `core_link` event {action: `retry`}. `disconnected` is the operator's own end of the link: a screen's `core_link` event {action: `disconnect`} ends it from that machine's node daemon, which records it so a restart keeps it, and {action: `reconnect`} restores it; the node takes that event even while it holds the screen, and answers a change it could not make with an error frame whose payload is {kind: `core_link`, reason: `not_changed`}. Once the core draws a node's screen, the node's daemon sends one more before the core's snapshot, `phase` `live` with `split_failed`: why this machine was not made a Hide of its own, paired with its core's machine, on this connection (`split_not_reached`, `split_refused`, `split_not_connected` or `split_not_saved`), else null; a screen's {action: `retry`} then ends the link and tries once more. browser_comment answers a window's `browser_comment` event, which turns Comment mode on a browser View on or off: {workspace, display_id, on, reason} names the View in its checkout, since display ids repeat across checkouts, and on: false says the mode ended, with `reason` null when the operator ended it, or why it could not start or went on (`display_busy`, `comment_limit`, `comment_unavailable_here`, or the page's lease failure); while it is on, a frame with `pick` {id, anchor, at} is a place the operator picked in the page, whose screenshot hided holds, one with `open` {id, at} a pin they pressed, `at` being where it shows as fractions of the page's viewport, and one with `dropped` true says the page navigated, to another document or within the same one, and the held pick is gone; the window writes the note itself and adds it with a `browser_comment` event carrying `add` {pick, note}; only this machine's own window (a desktop or web window whose connection its token proved, never a pane's scoped connection) may send it, and only a window, this machine's or another machine's view of it, `view_comment` and `view_feedback_send`. A `file_bytes` read that succeeds is answered with one or more binary frames on the same socket, not a text frame (see fileBytes). window_call reaches every window of the core's machine after a `hide <path>` brought a project in front (see projectOpen), its payload {device_id, path, checkout_id} naming that project's checkout, `checkout_id` null while a device's new project is not listed yet: a desktop window comes forward, and every window shows that project once the core has it in front. pairing is the pairings under way between this machine and another Hide (see pairingView), sent first and on every change to this machine's own windows only, never to a phone or to another machine's view of this one, so a screen without it offers no pairing; pairing_result answers one `pairing_*` event to the window that sent it (see pairingResult). refused answers, to that connection alone, an event it may not send or a kind no one classified (see refused): every client event kind declares which connections may send it (`hided/src/server/event_class.rs`), another machine's view of this one sends only the kinds that work a screen, the core never sees a refused event and no screen's `status.last_error` names it; the page ignores the frame and the daemon logs an `event.refused` diagnostic.
+ * snapshot/delta carry the core state; terminal carries pane output beside them, never through the core (see terminalFrame); clipboard {pane_id, text_base64} is what a pane's program wrote to the clipboard (OSC 52), at most 192 KiB of text, sent once to each desktop or web window connected when it was written and kept for none that connects, resumes or redraws later, so a window in front writes it to its clipboard once; error answers a malformed client event; directory_list answers a `file_list`, and path_refused answers any event whose path failed its boundary - the $HOME line for `create_workspace` and `clone_repository`, the checkout-root line for `file_list`, `file_open`, `reveal_path`, `file_save`, `file_create`, `dir_create`, `path_rename`, `path_move`, `path_copy`, `path_import`, `path_trash` and `file_bytes` (see directoryList and pathRefused). A `file_list`, `file_open`, `reveal_path`, `file_save`, `file_create`, `dir_create`, `path_rename`, `path_move`, `path_copy`, `path_import` or `path_trash` that names an SSH device in `device_id` never meets this machine's checkout roots: the core accepts it only for the checkout in front on that device and the device's helper confines every path to that checkout's opened root. file_bytes_error answers a `file_bytes` read the daemon could not serve as bytes (see fileBytes). directory_unavailable answers a `file_list` for a checkout on an SSH device that its helper could not list (see directoryUnavailable). directory_changed announces that a watched folder changed, so the client re-reads that one folder (see directoryChanged). attachment_refused answers an `attachment_stage` or `attachment_commit` that could not be staged (see attachments). file_index_result answers a `file_index` query with the ranked checkout paths (see fileIndex). project_target answers a `project_target` probe (see projectTarget and projectTargetResult). automation_result answers an `automation_call` to the window that sent it (see automationCall and automationResult). access_result answers an `access_call` to this machine's own window that sent it, the only frame that carries a made bot's code (see accessCall and accessResult). clone_target answers a `clone_target` question about where a clone would land (see cloneTarget). daemon is the first frame after a valid handshake and describes the daemon itself (see daemonInfo). agent_notice reaches only a desktop window, and only while one has asked for it with `desktop_notices` (see agentNotice and desktopNoticesPayload). core_link is where a node's link to its core stands, sent to a screen the node holds while the core cannot draw it: `phase` `connecting`, `updating`, `waiting`, `stopped` or `disconnected`, `machine`, the core machine's name when its hello gave it, else null, `alias`, the SSH alias the node dials its core by, which a screen that has not drawn the core names instead of an empty machine, `problem`, the ssh failure as the device row groups it (`sign_in_needed`, `sign_in_refused`, `host_key_changed`, `cannot_connect`, ...) while `stopped`, else null, `splits`, whether this machine becomes a Hide of its own once it reaches its core, which only a build that offers connections between two Hides does, so a `waiting` screen says the migration waits and any other that it reconnects, and `sign_in`, what ssh asks the dial a held screen's Retry started, in the device row's shape (`question`, `kind` and its fields, `key_command`), sent to that screen only, else null; that screen answers it with a `core_link` event {action: `sign_in`, question, reply: `text` with `text`, `accept` or `cancel`}, another screen's answer reaches nothing, and a `cancel`, that screen's end, or five minutes on a browser check or a key touch ends the attempt, whether or not a question showed yet; a connect no screen made (`hide connect`, a launch) asks nobody; one press asks at most one sign-in. `stopped` is a failure only the operator can fix: nothing dials again until a window connects (`hide connect`) or a screen's `core_link` event {action: `retry`}. `disconnected` is the operator's own end of the link: a screen's `core_link` event {action: `disconnect`} ends it from that machine's node daemon, which records it so a restart keeps it, and {action: `reconnect`} restores it; the node takes that event even while it holds the screen, and answers a change it could not make with an error frame whose payload is {kind: `core_link`, reason: `not_changed`}. Once the core draws a node's screen, the node's daemon sends one more before the core's snapshot, `phase` `live` with `split_failed`: why this machine was not made a Hide of its own, paired with its core's machine, on this connection (`split_not_reached`, `split_refused`, `split_not_connected` or `split_not_saved`), else null; a screen's {action: `retry`} then ends the link and tries once more. browser_comment answers a window's `browser_comment` event, which turns Comment mode on a browser View on or off: {workspace, display_id, on, reason} names the View in its checkout, since display ids repeat across checkouts, and on: false says the mode ended, with `reason` null when the operator ended it, or why it could not start or went on (`display_busy`, `comment_limit`, `comment_unavailable_here`, or the page's lease failure); while it is on, a frame with `pick` {id, anchor, at} is a place the operator picked in the page, whose screenshot hided holds, one with `open` {id, at} a pin they pressed, `at` being where it shows as fractions of the page's viewport, and one with `dropped` true says the page navigated, to another document or within the same one, and the held pick is gone; the window writes the note itself and adds it with a `browser_comment` event carrying `add` {pick, note}; only this machine's own window (a desktop or web window whose connection its token proved, never a pane's scoped connection) may send it, and only a window, this machine's or another machine's view of it, `view_comment` and `view_feedback_send`. A `file_bytes` read that succeeds is answered with one or more binary frames on the same socket, not a text frame (see fileBytes). window_call reaches every window of the core's machine after a `hide <path>` brought a project in front (see projectOpen), its payload {device_id, path, checkout_id} naming that project's checkout, `checkout_id` null while a device's new project is not listed yet: a desktop window comes forward, and every window shows that project once the core has it in front. pairing is the pairings under way between this machine and another Hide (see pairingView), sent first and on every change to this machine's own windows only, never to a phone or to another machine's view of this one, so a screen without it offers no pairing; pairing_result answers one `pairing_*` event to the window that sent it (see pairingResult). refused answers, to that connection alone, an event it may not send or a kind no one classified (see refused): every client event kind declares which connections may send it (`hided/src/server/event_class.rs`), another machine's view of this one sends only the kinds that work a screen, the core never sees a refused event and no screen's `status.last_error` names it; the page ignores the frame and the daemon logs an `event.refused` diagnostic.
  */
 export interface ServerFrame {
   type:
@@ -224,6 +226,7 @@ export interface ServerFrame {
     | "window_call"
     | "clipboard"
     | "automation_result"
+    | "access_result"
     | "pairing"
     | "pairing_result"
     | "refused";
@@ -934,7 +937,36 @@ export interface AutomationResult {
   code?: string;
 }
 /**
- * The core's `access` section (PRD hide-external-control B2, B11, B17; mission-87): the requests waiting for the operator and the approved bots. Absent until the connection list is restored at start.
+ * A client `access_call` event, taken only from this machine's own window: a call on the bots the operator makes whose answer carries a one-time code. `call` is tagged by `call`: `invite` {name, mode} makes a bot that a program joins with `hide access join <code>` for ten minutes; `renew` {id} gives made bot `id` a new code and ten minutes; `code` {id} answers the live code again, for the sentence the window copies. hided draws the id and the code, asks the core on a blocking task and answers this window alone with an access_result frame under the same `request_id`; a call it cannot read is answered `access_call_invalid` without asking the core. Cancelling a made bot is the window event access_invite_cancel.
+ */
+export interface AccessCall {
+  request_id: string;
+  call: {
+    call: "invite" | "renew" | "code";
+    name?: string;
+    mode?: AccessMode;
+    id?: string;
+    [k: string]: unknown;
+  };
+  [k: string]: unknown;
+}
+/**
+ * Payload of an access_result frame: the core's answer to the `access_call` with this `request_id`, its value when it was done ({id, name, mode, code, expires_ms}, `code` shown in groups of four such as `K7Q4-MZ2P-X3RD`), or the code it was refused with (`access_name_taken`, `access_limit`, `access_invite_limit`, `access_invite_gone`, `access_invite_expired`, `access_call_invalid`, `access_unavailable`), which the window words.
+ */
+export interface AccessResult {
+  request_id: string;
+  ok: boolean;
+  value?: {
+    id: string;
+    name: string;
+    mode: AccessMode;
+    code: string;
+    expires_ms: number;
+  };
+  code?: string;
+}
+/**
+ * The core's `access` section (PRD hide-external-control B2, B11, B17; mission-87): the requests waiting for the operator, the bots the operator made that wait for a program to join, and the approved bots. Absent until the connection list is restored at start.
  */
 export interface AccessSnapshot {
   /**
@@ -950,6 +982,10 @@ export interface AccessSnapshot {
    */
   pending: AccessPending[];
   /**
+   * Bots the operator made in Settings that wait for a program to join with their one-time code (`hide access join`), oldest first, four at most; memory only, so a restart drops them. Never the code, which only an access_result frame carries.
+   */
+  invites: AccessInvite[];
+  /**
    * Approved bots, in the order they were approved.
    */
   connections: AccessConnection[];
@@ -962,6 +998,22 @@ export interface AccessPending {
    */
   program: string | null;
   requested_ms: number;
+}
+export interface AccessInvite {
+  /**
+   * The connection's id once a program joins.
+   */
+  id: string;
+  name: string;
+  mode: AccessMode;
+  /**
+   * When its code was drawn: made, or given a new code.
+   */
+  created_ms: number;
+  /**
+   * When its code stops joining, ten minutes after it was made or renewed. Before it the bot holds one of the seats; past it the row stays, holds no seat, and its code joins nothing until the window asks a new one.
+   */
+  expires_ms: number;
 }
 export interface AccessConnection {
   id: string;
@@ -997,7 +1049,7 @@ export interface AccessModePayload {
   mode: AccessMode;
 }
 /**
- * Payload of access_refuse (a waiting request `id`) and access_revoke (a connected bot `id`, whose work becomes the operator's at once), taken only from a window's connection.
+ * Payload of access_refuse (a waiting request `id`), access_revoke (a connected bot `id`, whose work becomes the operator's at once) and access_invite_cancel (a made bot `id` no program joined yet, whose code then joins nothing), taken only from this machine's own window.
  */
 export interface AccessIdPayload {
   id: string;

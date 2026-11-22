@@ -9,7 +9,7 @@
 // (`actions.automation`).
 
 import type { AutomationAgent, AutomationSchedule } from "./snapshot";
-import type { DispatchFn } from "./ws";
+import { type CallAnswer, windowCalls } from "./windowCall";
 
 /** The calls the form makes (`hide_core::automations::Call`). */
 export type AutomationCall =
@@ -33,45 +33,19 @@ export type RunOpening = { id: string; run: number };
 
 type Answers = { preview: SchedulePreview; add: AutomationMade; edit: AutomationEdited; run_open: RunOpening };
 
-/** The core's answer, or the code it refused the call with (`schedule_too_often`, `automation_name_taken`, `socket_closed`, ...). */
-export type CallAnswer<T> = { ok: true; value: T } | { ok: false; code: string };
+export type { CallAnswer } from "./windowCall";
 
-let dispatchFn: DispatchFn | null = null;
-const pending = new Map<string, (answer: CallAnswer<unknown>) => void>();
-let nextRequest = 1;
+const calls = windowCalls("automation_call", "automations_unavailable");
 
 /** Sets where calls go and returns where they went before, so a window that answers them itself (the practice window) can put the old one back. */
-export function configureAutomationCalls(dispatch: DispatchFn | null): DispatchFn | null {
-  const before = dispatchFn;
-  dispatchFn = dispatch;
-  return before;
-}
+export const configureAutomationCalls = calls.configure;
 
 export function callAutomations<C extends AutomationCall>(call: C): Promise<CallAnswer<Answers[C["call"]]>> {
-  return new Promise((resolve) => {
-    const request_id = `automation-${nextRequest}`;
-    nextRequest += 1;
-    if (!dispatchFn) return resolve({ ok: false, code: "socket_closed" });
-    pending.set(request_id, resolve as (answer: CallAnswer<unknown>) => void);
-    if (dispatchFn({ schema_version: 2, kind: "automation_call", payload: { request_id, call } }) === false) {
-      pending.delete(request_id);
-      resolve({ ok: false, code: "socket_closed" });
-    }
-  });
+  return calls.call<Answers[C["call"]]>(call);
 }
 
 /** An `automation_result` frame; one no call waits for (its window reloaded) is dropped. */
-export function receiveAutomationResult(payload: { request_id: string; ok: boolean; value?: unknown; code?: string }): void {
-  const resolve = pending.get(payload.request_id);
-  if (!resolve) return;
-  pending.delete(payload.request_id);
-  resolve(payload.ok ? { ok: true, value: payload.value } : { ok: false, code: payload.code ?? "automations_unavailable" });
-}
+export const receiveAutomationResult = calls.receive;
 
 /** The socket closed: no answer comes for a call still waiting. */
-export function refuseWaitingAutomationCalls(): void {
-  for (const [requestId, resolve] of pending) {
-    pending.delete(requestId);
-    resolve({ ok: false, code: "socket_closed" });
-  }
-}
+export const refuseWaitingAutomationCalls = calls.refuseWaiting;

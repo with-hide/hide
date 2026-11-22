@@ -15,9 +15,12 @@ use serde::Deserialize;
 use serde_json::{Value, json};
 
 use super::Runtime;
-use crate::access::{Access, Call, Ended, Mode, Standing, Stored};
+use crate::access::{Access, Call, Ended, Invite, Mode, Standing, Stored};
 use crate::latest_file::{LatestFile, read_capped};
-use crate::model::{AccessConnectionSnapshot, AccessPendingSnapshot, AccessSnapshot};
+use crate::model::{
+    AccessConnectionSnapshot, AccessInviteSnapshot, AccessPendingSnapshot, AccessSnapshot,
+};
+use crate::product_analytics::BotWay;
 
 #[derive(Default)]
 pub(crate) struct AccessRuntime {
@@ -61,10 +64,24 @@ pub(crate) fn restore(path: PathBuf) -> (LatestFile<Stored>, Stored) {
 /// pane's scoped connection and the CLI cannot send one (B8).
 #[derive(Debug)]
 pub(crate) enum AccessEvent {
-    Approve { id: String, mode: Mode },
-    Refuse { id: String },
-    Mode { id: String, mode: Mode },
-    Revoke { id: String },
+    Approve {
+        id: String,
+        mode: Mode,
+    },
+    Refuse {
+        id: String,
+    },
+    Mode {
+        id: String,
+        mode: Mode,
+    },
+    Revoke {
+        id: String,
+    },
+    /// A bot the operator made and takes back before a program joined it.
+    Cancel {
+        id: String,
+    },
 }
 
 #[derive(Deserialize)]
@@ -81,11 +98,12 @@ struct ById {
 }
 
 impl AccessEvent {
-    pub(super) const KINDS: [&'static str; 4] = [
+    pub(super) const KINDS: [&'static str; 5] = [
         "access_approve",
         "access_refuse",
         "access_mode",
         "access_revoke",
+        "access_invite_cancel",
     ];
 
     pub(super) fn decode(kind: &str, payload: Value) -> Option<Self> {
@@ -102,6 +120,9 @@ impl AccessEvent {
                 Self::Mode { id, mode }
             }
             "access_revoke" => Self::Revoke {
+                id: serde_json::from_value::<ById>(payload).ok()?.id,
+            },
+            "access_invite_cancel" => Self::Cancel {
                 id: serde_json::from_value::<ById>(payload).ok()?.id,
             },
             _ => return None,
@@ -121,6 +142,18 @@ fn standing_answer(standing: &Standing) -> Result<Value, String> {
         Standing::Ended(ended) => Err(ended.reason().to_owned()),
         Standing::Unknown => Ok(json!({"state": "unknown"})),
     }
+}
+
+/// A made bot as its window reads it, code included: the answer to that
+/// window's call alone, never a snapshot.
+fn invite_answer(invite: &Invite) -> Value {
+    json!({
+        "id": invite.id,
+        "name": invite.name,
+        "mode": invite.mode,
+        "code": crate::access::spaced_code(invite.code()),
+        "expires_ms": invite.expires_ms,
+    })
 }
 
 impl Runtime {
@@ -235,6 +268,69 @@ impl Runtime {
                     Err(refusal.reason().to_owned())
                 }
             },
+            Call::Join {
+                code,
+                key_sha256,
+                program,
+            } => match self.access.state.join(&code, &key_sha256, program, now) {
+                Ok(joined) => {
+                    if let Standing::Connected(connection) = &joined.standing {
+                        let kind = if joined.put_up {
+                            "access.joined"
+                        } else {
+                            "access.key_issued"
+                        };
+                        self.note_access(kind, Some(&connection.id), Some(connection.mode), None);
+                    }
+                    if joined.put_up {
+                        self.access_changed(true);
+                        if let Standing::Connected(connection) = &joined.standing {
+                            self.bot_connected(BotWay::Made, connection.mode);
+                        }
+                    }
+                    standing_answer(&joined.standing)
+                }
+                Err(reason) => {
+                    self.note_access("access.join_refused", None, None, Some(reason));
+                    Err(reason.to_owned())
+                }
+            },
+            Call::Invite {
+                id,
+                code,
+                name,
+                mode,
+            } => match self.access.state.invite(id, code, &name, mode, now) {
+                Ok(invite) => {
+                    let answer = invite_answer(invite);
+                    let id = invite.id.clone();
+                    self.note_access("access.invited", Some(&id), Some(mode), None);
+                    self.access_changed(false);
+                    Ok(answer)
+                }
+                Err(reason) => {
+                    self.note_access("access.invite_refused", None, None, Some(reason));
+                    Err(reason.to_owned())
+                }
+            },
+            Call::Renew { id, code } => match self.access.state.renew(&id, code, now) {
+                Ok(invite) => {
+                    let answer = invite_answer(invite);
+                    self.note_access("access.invite_renewed", Some(&id), None, None);
+                    self.access_changed(false);
+                    Ok(answer)
+                }
+                Err(reason) => {
+                    self.note_access("access.invite_refused", Some(&id), None, Some(reason));
+                    Err(reason.to_owned())
+                }
+            },
+            Call::Code { id } => self
+                .access
+                .state
+                .invite_code(&id, now)
+                .map(invite_answer)
+                .map_err(str::to_owned),
             Call::Status { key_sha256 } => {
                 standing_answer(&self.access.state.standing(&key_sha256))
             }
@@ -315,11 +411,19 @@ impl Runtime {
                 .state
                 .revoke(id)
                 .map(|_| ("access.revoked", id, None, true)),
+            AccessEvent::Cancel { id } => self
+                .access
+                .state
+                .cancel(id)
+                .map(|_| ("access.invite_cancelled", id, None, false)),
         };
         match outcome {
             Ok((kind, id, mode, save)) => {
                 self.note_access(kind, Some(id), mode, None);
                 self.access_changed(save);
+                if let AccessEvent::Approve { mode, .. } = &event {
+                    self.bot_connected(BotWay::Asked, *mode);
+                }
                 // Who keeps the bot's work follows the event that moved it:
                 // a bot of the whole Hide works as the operator, so all mode
                 // or a disconnect hands it to the operator at once, and own
@@ -337,11 +441,20 @@ impl Runtime {
                     AccessEvent::Approve { id, .. }
                     | AccessEvent::Refuse { id }
                     | AccessEvent::Mode { id, .. }
-                    | AccessEvent::Revoke { id } => id,
+                    | AccessEvent::Revoke { id }
+                    | AccessEvent::Cancel { id } => id,
                 };
                 self.note_access("access.event_refused", Some(id), None, Some(reason));
                 false
             }
+        }
+    }
+
+    /// A bot was connected: the usage statistics count it with how it came
+    /// in and its mode, and nothing of its name, key or program.
+    fn bot_connected(&self, way: BotWay, mode: Mode) {
+        if let Some(sink) = &self.product_analytics {
+            sink.capture(crate::product_analytics::Event::BotConnected { way, mode });
         }
     }
 
@@ -503,6 +616,19 @@ impl Runtime {
                     name: pending.name.clone(),
                     program: pending.program.clone(),
                     requested_ms: pending.requested_ms,
+                })
+                .collect(),
+            invites: self
+                .access
+                .state
+                .invites()
+                .iter()
+                .map(|invite| AccessInviteSnapshot {
+                    id: invite.id.clone(),
+                    name: invite.name.clone(),
+                    mode: invite.mode,
+                    created_ms: invite.created_ms,
+                    expires_ms: invite.expires_ms,
                 })
                 .collect(),
             connections,
@@ -700,7 +826,9 @@ mod tests {
 
     use super::AccessEvent;
     use crate::access::Mode;
-    use crate::model::{AccessConnectionSnapshot, AccessPendingSnapshot, AccessSnapshot};
+    use crate::model::{
+        AccessConnectionSnapshot, AccessInviteSnapshot, AccessPendingSnapshot, AccessSnapshot,
+    };
 
     fn schema() -> Value {
         serde_json::from_str(include_str!("../../../contracts/hided-ws.schema.json")).unwrap()
@@ -749,6 +877,13 @@ mod tests {
                 program: None,
                 requested_ms: 1,
             }],
+            invites: vec![AccessInviteSnapshot {
+                id: "00000000000000c1".into(),
+                name: "hermes".into(),
+                mode: Mode::Own,
+                created_ms: 1,
+                expires_ms: 600_001,
+            }],
             connections: [Mode::All, Mode::Own]
                 .into_iter()
                 .enumerate()
@@ -767,6 +902,8 @@ mod tests {
         .unwrap();
         assert!(fits(&defs["accessSnapshot"], &section), "{section}");
         assert!(fits(&defs["accessPending"], &section["pending"][0]));
+        assert!(fits(&defs["accessInvite"], &section["invites"][0]));
+        assert!(mode_fits(defs, &section["invites"][0]["mode"]));
         for connection in section["connections"].as_array().unwrap() {
             assert!(fits(&defs["accessConnection"], connection), "{connection}");
             assert!(mode_fits(defs, &connection["mode"]), "{connection}");
@@ -790,7 +927,11 @@ mod tests {
         let by_id = json!({"id": "00000000000000a1"});
         assert!(fits(&defs["accessIdPayload"], &by_id));
         assert!(AccessEvent::decode("access_refuse", by_id.clone()).is_some());
-        assert!(AccessEvent::decode("access_revoke", by_id).is_some());
+        assert!(AccessEvent::decode("access_revoke", by_id.clone()).is_some());
+        assert!(matches!(
+            AccessEvent::decode("access_invite_cancel", by_id),
+            Some(AccessEvent::Cancel { .. })
+        ));
         for refused in [
             ("access_approve", json!({"id": "a", "level": "act"})),
             ("access_level", json!({"id": "a", "level": "act"})),
@@ -818,7 +959,8 @@ mod tests {
                 "access_approve",
                 "access_refuse",
                 "access_mode",
-                "access_revoke"
+                "access_revoke",
+                "access_invite_cancel"
             ]
         );
     }

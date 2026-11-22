@@ -5,9 +5,13 @@
 // mission reads the same on both screens. Pure, so every rule is tested
 // without a socket.
 
+import type { TFunction } from "i18next";
 import { useMemo } from "react";
 import { missionEntry, turnCount, type MissionEntry } from "../missionList";
-import { missionCounts, missionOpen, type WorkerEscalation } from "../missions";
+import {
+  attentionReasonText, cardGate, escalationWhy, holdReason, missionCounts, missionOpen, nodeLook, nodePace, openAttention, workerAsleep,
+  type NodeLook, type NodePace, type WorkerEscalation,
+} from "../missions";
 import type { LineNode } from "../missionLine";
 import type { AgentKey, PhoneMission, PhoneMissionNode, PhonePr } from "./protocol";
 import { usePhone } from "./store";
@@ -86,3 +90,48 @@ export function agentLinks(key: AgentKey, missions: readonly PhoneMission[] | nu
   }
   return { missions: linked, prs: (prs ?? []).filter((pr) => pr.agents.some((agent) => sameAgent(agent, key))) };
 }
+
+/** Where a step stands as the phone says it, read once for the map's card and the step list's row (Doop 14). */
+export type StepState = {
+  look: NodeLook;
+  pace: NodePace | null;
+  gate: ReturnType<typeof cardGate<NonNullable<PhoneMissionNode["gate"]>>>;
+  attention: ReturnType<typeof openAttention<NonNullable<PhoneMissionNode["attention"]>>>;
+  /** The step waits on the operator for something beyond its merge: a gate reached, a raised reason, a decision or the worker's turn. */
+  turn: boolean;
+  /** The core says merging it is the operator's now (D-53); the card's band draws it, the list's row counts it as the operator's turn. */
+  mergeDue: boolean;
+  /** Stopped, in its words, without the cause or the time, which stay on the Mac (operator decision 2026-11-13). */
+  stopped: string | null;
+  /** A worker Hide put to sleep, said asleep and never a wait on it (letters-missions-simplify B23). */
+  asleep: string | null;
+  /** Why it waits on someone, in the desktop's words. */
+  why: string | null;
+  /** The step's state word, as the card draws it: stopped, else its look. */
+  word: string;
+  /** Its worker is at work now, so its time since it went to work means something. */
+  working: boolean;
+};
+
+export function stepState(mission: PhoneMission, node: PhoneMissionNode, t: TFunction<"translation">): StepState {
+  const look = nodeLook(mission, node);
+  const pace = nodePace(mission, node);
+  const reason = holdReason(mission, node, workerOf);
+  const attention = openAttention(mission, node);
+  const gate = cardGate(node.gate);
+  const stopped = pace === "stopped" ? (node.work?.state === "no_worker" ? t("mission.work.stopped", { why: t("mission.work.stop.noWorker") }) : t("mission.work.stoppedPlain")) : null;
+  const asleep = pace === "waiting" && (node.work?.state === "asleep" || workerAsleep(node)) ? t("mission.worker.asleep") : null;
+  const why = reason?.kind === "attention"
+    ? `${reason.attention.to === "conductor" ? `${t("mission.attention.to.conductor")} · ` : ""}${attentionReasonText(reason.attention.reason, reason.attention.pr, t)}`
+    : reason?.kind === "worker" ? escalationWhy(reason.escalation, t)
+      : reason?.kind === "decision" ? t("mobile.mission.waitsDecision") : null;
+  return {
+    look, pace, gate, attention,
+    turn: gate?.state === "open" || attention?.to === "operator" || reason?.kind === "decision" || reason?.kind === "worker",
+    mergeDue: node.merge?.state === "due",
+    stopped, asleep, why,
+    word: stopped ?? t(`mission.look.${look}`),
+    working: look === "working" && pace === "working",
+  };
+}
+

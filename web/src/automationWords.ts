@@ -142,16 +142,20 @@ export function recordText(record: AutomationRecordLike, now: number, zone: stri
       const span = spanText(record.at_unix_ms, record.last_unix_ms, now, zone, language, t);
       return { tone: "skipped", text: t("automation.record.skippedFolded", { what, times: record.count, span }) };
     }
-    case "missed":
+    case "missed": {
+      const why = record.reason === "core_off" ? t("automation.record.missedCoreOff") : t("automation.record.missedAsleep");
+      // One time missed is that one time, said in the time's own place (`recordTime`), never `A ~ A`.
+      if (!missedFolded(record)) return { tone: "skipped", text: t("automation.record.missedOnce", { why }) };
       return {
         tone: "skipped",
         text: t("automation.record.missed", {
           first: whenText(record.first_unix_ms, now, zone, language, t),
           last: whenText(record.last_unix_ms, now, zone, language, t),
           count: record.count,
-          why: record.reason === "core_off" ? t("automation.record.missedCoreOff") : t("automation.record.missedAsleep"),
+          why,
         }),
       };
+    }
   }
 }
 
@@ -171,6 +175,20 @@ export function recentSpendText(recent: AutomationSpend & { runs: number }, lang
 /** Whether a skipped line holds several times, which then say their own span as a missed line does, with no time of their own. */
 export function skippedFolded(record: Extract<AutomationRecord, { kind: "skipped" }>): boolean {
   return record.count > 1;
+}
+
+/** Whether a missed line holds several times, which then say their own span; one time missed has its time as a run does. */
+export function missedFolded(record: Extract<AutomationRecord, { kind: "missed" }>): boolean {
+  return record.count > 1;
+}
+
+/**
+ * When a skipped or missed line happened, the time a list puts in front of its words: its one time, or `null` for a line of
+ * several times, whose words say their span (`recordText`). A run's time is the caller's, which reads a due or a start.
+ */
+export function lineTime(record: Exclude<AutomationRecord, { kind: "run" }>): number | null {
+  if (record.kind === "skipped") return skippedFolded(record) ? null : record.at_unix_ms;
+  return missedFolded(record) ? null : record.first_unix_ms;
 }
 
 /** `오늘 14:00–18:55` within one day, else `어제 23:30 ~ 오늘 01:10`. */

@@ -7,6 +7,7 @@
 import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { createActions } from "../actions";
 import { AutomationScreen } from "../AutomationScreen";
+import { configureAccessCalls, receiveAccessResult, type AccessCall } from "../accessCall";
 import { configureAutomationCalls, receiveAutomationResult, type AutomationCall } from "../automationCall";
 import { TooltipProvider } from "../components/ui/tooltip";
 import { installKeyboard } from "../keyboard";
@@ -66,7 +67,7 @@ export function PracticePlayer({ chapter, next, resume, operator, onStep, onStar
   const live = useRef({ world: chapter.world, model });
   live.current = { world: chapter.world, model };
 
-  const { actions, clipboard, send, answer } = useMemo(() => {
+  const { actions, clipboard, send, answer, answerAccess } = useMemo(() => {
     const commit = (after: unknown) => {
       live.current = { ...live.current, model: after };
       setModel(after);
@@ -84,9 +85,16 @@ export function PracticePlayer({ chapter, next, resume, operator, onStep, onStar
       if (result.model) commit(result.model);
       queueMicrotask(() => receiveAutomationResult(result.answer.ok ? { request_id, ok: true, value: result.answer.value } : { request_id, ok: false, code: result.answer.code }));
     };
+    // Settings › 봇's calls are answered the same way, a made bot's code invented by the world.
+    const answerAccess = (request_id: string, call: AccessCall) => {
+      const { world, model: held } = live.current;
+      const result = world.access?.(held, call) ?? { model: null, answer: { ok: false as const, code: "access_unavailable" } };
+      if (result.model) commit(result.model);
+      queueMicrotask(() => receiveAccessResult(result.answer.ok ? { request_id, ok: true, value: result.answer.value } : { request_id, ok: false, code: result.answer.code }));
+    };
     // A copy goes to the world and a paste takes the last copy back; the operator's clipboard is never read or written.
     const clipboard = practiceClipboard(send);
-    return { actions: createActions(send, clipboard), clipboard, send, answer };
+    return { actions: createActions(send, clipboard), clipboard, send, answer, answerAccess };
   }, []);
 
   // The world's own next beat, an agent finishing a turn, plays at its time; any change to the model before then asks again.
@@ -111,6 +119,15 @@ export function PracticePlayer({ chapter, next, resume, operator, onStep, onStar
     });
     return () => void configureAutomationCalls(before);
   }, [answer]);
+  useLayoutEffect(() => {
+    const before = configureAccessCalls((event) => {
+      if (event.kind !== "access_call") return false;
+      const { request_id, call } = event.payload as { request_id: string; call: AccessCall };
+      answerAccess(request_id, call);
+      return true;
+    });
+    return () => void configureAccessCalls(before);
+  }, [answerAccess]);
 
   useLayoutEffect(() => {
     const { rest, agents, focused, usage, frames, automations } = chapter.world.snapshot(model, Date.now());

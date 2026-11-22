@@ -1,17 +1,20 @@
 {
     "access": {
         "choose": "HIDE_ACCESS",
-        "levels": [
-            "view",
-            "act"
+        "modes": [
+            "own",
+            "all"
         ],
         "refusals": {
             "access_ambiguous": "This home keeps several tools' keys; set HIDE_ACCESS=<name> to choose one",
+            "access_code_invalid": "The code is wrong, used or older than ten minutes; ask the operator for a new code in Settings > Bots and run hide access join with it",
             "access_core_only": "Run the tool on the machine where Hide's core runs",
             "access_from_pane": "An agent in a Hide pane acts as itself; run hide access request from the tool, outside Hide's panes",
+            "access_join_pending": "This home has a join that did not finish; run the hide access join command it names again to finish it, then run this one",
+            "access_key_exists": "This home already keeps another key under the bot's name; if that bot is no longer used run HIDE_ACCESS=<name> hide access leave, or join from another home, then run the same hide access join again",
             "access_key_unreadable": "This tool's key file cannot be read; run hide access request --name <name>, which replaces it and asks the operator again",
             "access_limit": "16 tools are connected; ask the operator to disconnect one in Settings > Bots, then run hide access request again",
-            "access_name_taken": "A connected tool has this name; ask the operator to disconnect it in Settings > Bots, or choose another --name, then run hide access request again",
+            "access_name_taken": "A connected bot, or one the operator made, has this name; ask the operator to disconnect it in Settings > Bots, or choose another --name, then run hide access request again",
             "access_needs_agent": "Only an agent in a Hide pane runs this; start one with hide agent spawn and ask it with hide request send",
             "access_not_connected": "Run hide access request --name <name> first",
             "access_not_own_work": "This bot acts on its own work only: the agents it started, the agents under them and the missions they conduct; start an agent with hide agent spawn and ask it, or ask the operator to give the bot the whole Hide in Settings",
@@ -4289,51 +4292,6 @@
             "title": "StoreList",
             "type": "object"
         },
-        "wait": {
-            "properties": {
-                "id": {
-                    "type": "object"
-                },
-                "target": {
-                    "type": "object"
-                },
-                "until_unix_ms": {
-                    "type": "object"
-                },
-                "words": {
-                    "type": "object"
-                }
-            },
-            "required": [
-                "id",
-                "target",
-                "words",
-                "until_unix_ms"
-            ],
-            "type": "object"
-        },
-        "wait_cancelled": {
-            "properties": {
-                "cancelled": {
-                    "type": "object"
-                }
-            },
-            "required": [
-                "cancelled"
-            ],
-            "type": "object"
-        },
-        "wait_list": {
-            "properties": {
-                "waits": {
-                    "type": "object"
-                }
-            },
-            "required": [
-                "waits"
-            ],
-            "type": "object"
-        },
         "watch": {
             "$schema": "http://json-schema.org/draft-07/schema#",
             "definitions": {
@@ -6372,6 +6330,37 @@
             "answers": [
                 "access_standing"
             ],
+            "arguments": [
+                {
+                    "name": "code",
+                    "value": {
+                        "type": "key"
+                    }
+                }
+            ],
+            "command": "access join",
+            "options": [
+                {
+                    "name": "--json",
+                    "required": false,
+                    "requires": [],
+                    "value": null
+                }
+            ],
+            "refusals": [
+                "access_from_pane",
+                "access_code_invalid",
+                "access_join_pending",
+                "access_key_exists",
+                "access_key_unreadable"
+            ],
+            "repeats_at_most": null,
+            "rest": null
+        },
+        {
+            "answers": [
+                "access_standing"
+            ],
             "arguments": [],
             "command": "access request",
             "options": [
@@ -7982,7 +7971,7 @@
                 "mission_criteria_too_many",
                 "mission_steps_invalid",
                 "mission_checkers_invalid",
-                "mission_wait_invalid",
+                "mission_external_invalid",
                 "mission_destination_invalid",
                 "mission_needs_git",
                 "mission_operator_merge_invalid",
@@ -8306,7 +8295,7 @@
                 "mission_criteria_unmet",
                 "mission_checker_is_worker",
                 "mission_checker_unknown",
-                "mission_wait_invalid",
+                "mission_external_invalid",
                 "mission_machine_node_refused",
                 "mission_machine_unavailable",
                 "mission_projects_loading",
@@ -8509,7 +8498,7 @@
             "refusals": [
                 "mission_not_conductor",
                 "mission_node_unknown",
-                "mission_wait_invalid",
+                "mission_external_invalid",
                 "mission_defects_too_many"
             ],
             "repeats_at_most": null,
@@ -9338,166 +9327,6 @@
         },
         {
             "answers": [
-                "wait"
-            ],
-            "arguments": [
-                {
-                    "name": "number",
-                    "value": {
-                        "type": "unsigned"
-                    }
-                }
-            ],
-            "command": "wait pr",
-            "options": [
-                {
-                    "name": "--ci",
-                    "required": false,
-                    "requires": [],
-                    "value": null
-                },
-                {
-                    "name": "--for",
-                    "required": false,
-                    "requires": [],
-                    "value": {
-                        "type": "deadline"
-                    }
-                }
-            ],
-            "refusals": [
-                "wait_target_invalid",
-                "wait_deadline_invalid",
-                "wait_agent_full",
-                "wait_full",
-                "wait_unsupported",
-                "wait_self",
-                "wait_mission_unknown",
-                "wait_project_unknown",
-                "wait_agent_unregistered"
-            ],
-            "repeats_at_most": null,
-            "rest": null
-        },
-        {
-            "answers": [
-                "wait"
-            ],
-            "arguments": [
-                {
-                    "name": "name",
-                    "value": {
-                        "type": "key"
-                    }
-                }
-            ],
-            "command": "wait branch",
-            "options": [
-                {
-                    "name": "--for",
-                    "required": false,
-                    "requires": [],
-                    "value": {
-                        "type": "deadline"
-                    }
-                }
-            ],
-            "refusals": [
-                "wait_target_invalid",
-                "wait_deadline_invalid",
-                "wait_agent_full",
-                "wait_full",
-                "wait_unsupported",
-                "wait_self",
-                "wait_mission_unknown",
-                "wait_project_unknown",
-                "wait_agent_unregistered"
-            ],
-            "repeats_at_most": null,
-            "rest": null
-        },
-        {
-            "answers": [
-                "wait"
-            ],
-            "arguments": [
-                {
-                    "name": "mission",
-                    "value": {
-                        "type": "key"
-                    }
-                }
-            ],
-            "command": "wait mission",
-            "options": [
-                {
-                    "name": "--node",
-                    "required": false,
-                    "requires": [],
-                    "value": {
-                        "type": "key"
-                    }
-                },
-                {
-                    "name": "--for",
-                    "required": false,
-                    "requires": [],
-                    "value": {
-                        "type": "deadline"
-                    }
-                }
-            ],
-            "refusals": [
-                "wait_target_invalid",
-                "wait_deadline_invalid",
-                "wait_agent_full",
-                "wait_full",
-                "wait_unsupported",
-                "wait_self",
-                "wait_mission_unknown",
-                "wait_project_unknown",
-                "wait_agent_unregistered"
-            ],
-            "repeats_at_most": null,
-            "rest": null
-        },
-        {
-            "answers": [
-                "wait_list"
-            ],
-            "arguments": [],
-            "command": "wait list",
-            "options": [],
-            "refusals": [
-                "wait_agent_unregistered"
-            ],
-            "repeats_at_most": null,
-            "rest": null
-        },
-        {
-            "answers": [
-                "wait_cancelled"
-            ],
-            "arguments": [
-                {
-                    "name": "wait",
-                    "value": {
-                        "type": "key"
-                    }
-                }
-            ],
-            "command": "wait cancel",
-            "options": [],
-            "refusals": [
-                "wait_unknown",
-                "wait_not_yours",
-                "wait_agent_unregistered"
-            ],
-            "repeats_at_most": null,
-            "rest": null
-        },
-        {
-            "answers": [
                 "plan"
             ],
             "arguments": [],
@@ -9675,7 +9504,7 @@
             "rest": null
         }
     ],
-    "digest": "sha256:5d36105c45524b5a658645f5106f367b657618b61cc61939605ccbed338f6457",
+    "digest": "sha256:99aa9a8c6ba493a141e26eefdb1b399fe97ff98906b18b68b6904931e887187c",
     "envelopes": {
         "access": {
             "answer": "value",
@@ -9753,7 +9582,6 @@
         "approval": "not blank, at most 256 bytes, no control characters",
         "body": "not blank, at most 16384 bytes",
         "commit": "7 to 64 hexadecimal digits",
-        "deadline": "whole minutes, hours or days from 1h to 30d, such as 2h or 3d",
         "json": "a JSON document of the shape hide mission help or hide task help shows",
         "key": "non-empty, at most 256 bytes, no control characters, does not start with -",
         "one_of": "one of the listed values",
