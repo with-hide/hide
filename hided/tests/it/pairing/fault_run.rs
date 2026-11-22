@@ -254,29 +254,40 @@ async fn frozen(machines: &[&Machine], relay: Option<&Relay>, long: Duration) {
     signal(&stopped, "CONT");
 }
 
-/// The letters the shell sent, by intent, as the guest's ledger holds them.
-fn letters_in(state: &Path, sender: &str) -> Vec<String> {
+/// The guest's ledger as its store holds it, empty before the daemon made
+/// the store. The daemon writes the store while the run reads it, and a
+/// read that waits past the store's lock answers `ledger_unavailable`: the
+/// run reads again until the store lets it.
+fn guest_ledger(state: &Path) -> hide_core::delivery::ledger::Ledger {
     let path = hide_kit::layout::delivery_store(state);
     if !path.exists() {
-        return Vec::new();
+        return Default::default();
     }
-    let ledger = hide_core::delivery::store::load(&path)
-        .unwrap_or_else(|code| panic!("the guest's ledger: {code}"));
-    ledger
+    wait_within("the guest's ledger to be readable", WITHIN, || {
+        match hide_core::delivery::store::load(&path) {
+            Ok(ledger) => Ok(Some(ledger)),
+            Err(code) if code == "ledger_unavailable" => Ok(None),
+            Err(code) => panic!("the guest's ledger: {code}"),
+        }
+    })
+    .unwrap()
+}
+
+/// The letters the shell sent, by intent, as the guest's ledger holds them.
+fn letters_in(state: &Path, sender: &str) -> Vec<String> {
+    guest_ledger(state)
         .letters
-        .iter()
+        .into_iter()
         .filter(|letter| letter.from.as_deref() == Some(sender))
         .filter(|letter| letter.intent.starts_with("fault-"))
-        .map(|letter| letter.intent.clone())
+        .map(|letter| letter.intent)
         .collect()
 }
 
 /// How many of `sender`'s letters in the guest's ledger its recipient has not
 /// taken in yet.
 fn open_letters(state: &Path, sender: &str) -> usize {
-    let ledger = hide_core::delivery::store::load(&hide_kit::layout::delivery_store(state))
-        .unwrap_or_else(|code| panic!("the guest's ledger: {code}"));
-    ledger
+    guest_ledger(state)
         .letters
         .iter()
         .filter(|letter| letter.from.as_deref() == Some(sender) && letter.open())
