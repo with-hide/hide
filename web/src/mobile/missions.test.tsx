@@ -219,7 +219,7 @@ it("lists the steps by default, says how long a worked step has worked from the 
   const now = Date.now();
   const page = mission("m-steps", { destination: "main", nodes: [
     node("a", "done", { pr: 80, pr_state: "merged", landing: { state: "landed", proof: { by: "merged" } } }),
-    node("b", "working", { agent: worker, started_at_unix_ms: now - 4 * 60_000 }),
+    node("b", "working", { agent: worker, worked_at_unix_ms: now - 4 * 60_000 }),
     // A Mac that predates the start time sends none: the line has no time.
     node("c", "working"),
     // Nobody has started it: its title alone.
@@ -247,6 +247,35 @@ it("lists the steps by default, says how long a worked step has worked from the 
     expect(container.querySelector("[data-phone-step]")).toBeNull();
     await click("[data-phone-mission-map-toggle]");
     expect(container.querySelectorAll("[data-phone-step]")).toHaveLength(4);
+  } finally {
+    await unmount();
+  }
+});
+
+it("counts a step's time only while its worker works: a stopped or sleeping step says so with no time, and one owed to the operator stands in the hold band", async () => {
+  const now = Date.now();
+  const forty = now - 40 * 60_000;
+  const page = mission("m-pace", { nodes: [
+    node("stopped", "working", { worked_at_unix_ms: forty, work: { state: "stopped" } }),
+    node("asleep", "working", { worked_at_unix_ms: forty, work: { state: "asleep" } }),
+    node("owed", "working", { worked_at_unix_ms: forty, attention: { reason: "worker_ended", pr: null, to: "operator", since_unix_ms: now, on_row: false, item: false } }),
+    node("merge", "done", { pr: 37, pr_state: "mergeable", merge: { by: "operator", state: "due", why: "DB review", prs: [37] }, landing: { state: "left", action: "merge" } }),
+  ] });
+  const { container, click, unmount } = await connect([page]);
+  try {
+    await click('[data-phone-tab="missions"]');
+    await click('[data-phone-mission="m-pace"]');
+    const line = (key: string) => container.querySelector(`[data-phone-step="${key}"] [data-phone-step-line]`)?.textContent;
+    const turn = (key: string) => container.querySelector(`[data-phone-step="${key}"]`)?.getAttribute("data-phone-step-turn");
+    expect(line("stopped")).toBe("Stopped");
+    expect(line("asleep")).toBe("Worker asleep");
+    expect(turn("stopped")).toBeNull();
+    // Owed to the operator: why, then 내 차례, in the hold band, the same reason the map's card says.
+    expect(turn("owed")).toBe("true");
+    expect(line("owed")).toBe("Worker ended with work left · Needs you");
+    expect(line("owed")).not.toMatch(/\d+m/);
+    // A merge that is the operator's now is the row's turn too: the list has no band of its own to draw it in.
+    expect(turn("merge")).toBe("true");
   } finally {
     await unmount();
   }

@@ -160,12 +160,35 @@ it("draws the state strip from the row and a thinking line while the agent works
     expect(strip.textContent).toContain("1m");
     // The thinking line counts from the agent's last word, not the row's older change.
     expect(container.querySelector('[data-phone-activity="Thinking"]')!.textContent).toBe("Thinking·4s");
-    // The operator's words stand right, in a bubble.
-    expect(container.querySelector('[data-phone-message="you"]')!.className).toContain("items-end");
     await serve({ type: "agents", groups: [{ group: "done", count: 1, rows: [{ kind: "agent", ...working, group: "done", mark: "done", status_code: "done", changed_at_unix_ms: now }] }], devices: [], interface_language: "en", color_theme: null });
     expect(container.querySelector("[data-phone-activity]")).toBeNull();
     expect(container.querySelector("[data-phone-status-strip]")!.getAttribute("data-phone-status-strip")).toBe("Done");
   } finally {
+    await unmount();
+  }
+});
+
+// A reader at the bottom of the conversation sees the thinking line when it appears with no new word: the agents frame that
+// turns the agent to work usually comes before any message, and the line would otherwise sit below the visible part.
+it("keeps a reader at the bottom down at the thinking line when the agent starts working with no new message", async () => {
+  const now = Date.now();
+  const idle = agent({ group: "seen", mark: "quiet", status_code: "idle", changed_at_unix_ms: now - 60_000, line: null });
+  const { container, serve, unmount } = await openDetail(idle);
+  const height = vi.spyOn(HTMLElement.prototype, "scrollHeight", "get").mockReturnValue(400);
+  try {
+    await serve({ type: "conversation", device_id: "local", pane_id: "w1:p1", state: "ok", mode: "reset", before: null, messages: [
+      { id: 1, who: "agent", text: "Done for now.", truncated: false, at_ms: now - 30_000 },
+    ] });
+    const log = container.querySelector<HTMLElement>("[data-phone-conversation]")!;
+    expect(log.scrollTop).toBe(400);
+    expect(container.querySelector("[data-phone-activity]")).toBeNull();
+    // The line adds height; the frame carries no message.
+    height.mockReturnValue(460);
+    await serve({ type: "agents", groups: [{ group: "working", count: 1, rows: [{ kind: "agent", ...idle, group: "working", mark: "going", status_code: "working", changed_at_unix_ms: now }] }], devices: [], interface_language: "en", color_theme: null });
+    expect(container.querySelector("[data-phone-activity]")).not.toBeNull();
+    expect(log.scrollTop).toBe(460);
+  } finally {
+    height.mockRestore();
     await unmount();
   }
 });

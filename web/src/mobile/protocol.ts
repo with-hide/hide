@@ -139,7 +139,7 @@ export type PhoneMissionNode = MissionNodeBrief & {
   external_state?: PrState;
   stage: number | null;
   /** When the step last went to work, its start or back from a finish; the step list's `작업 중 · N분` counts from it. Absent before it started and from a Mac that predates it, where the line has no time. */
-  started_at_unix_ms?: number | null;
+  worked_at_unix_ms?: number | null;
   worker_agent: string | null;
   /** The worker's row in the phone's list; null when the list does not hold it, so there is nothing to open. */
   agent: AgentKey | null;

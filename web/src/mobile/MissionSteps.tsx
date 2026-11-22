@@ -2,8 +2,8 @@
 // desktop graph (`PhoneMissionMap`) waits behind the head's map button. A
 // step's row is its mark, its title and its pull request, then one line:
 // what the operator owes it, how long its worker has worked on it, or where
-// its work goes. It reads the same rules the graph's card reads
-// (`missions.ts`, `missionLine.ts`), from what the phone's frame carries.
+// its work goes. Where a step stands is `stepState` (`missionModel.ts`), the
+// rule the graph's card reads too, and its line is `missionLine.ts`.
 
 import { useMemo } from "react";
 import { useElapsed } from "../components/elapsed";
@@ -13,13 +13,12 @@ import { RowButton } from "../components/ui/row-button";
 import { useInterfaceTranslation } from "../i18n/translator";
 import { cn } from "../lib/utils";
 import { branchLine, linePrLabel, lineToWords, resultLine, resultLineWords } from "../missionLine";
-import { attentionReasonText, cardGate, escalationWhy, holdReason, nodeLook, nodePace, openAttention, workerAsleep } from "../missions";
 import { PR_LOOK } from "../prMark";
 import type { PrState } from "../snapshot";
 import { statusText } from "../agentStatus";
 import { openDetail } from "./connection";
 import { TwoLineRow } from "./layout";
-import { phoneLineNode, workerOf } from "./missionModel";
+import { phoneLineNode, stepState } from "./missionModel";
 import type { PhoneMission, PhoneMissionNode } from "./protocol";
 import { agentOf, usePhone } from "./store";
 
@@ -52,31 +51,21 @@ export function MissionSteps({ mission }: { mission: PhoneMission }) {
  */
 function StepRow({ mission, node }: { mission: PhoneMission; node: PhoneMissionNode }) {
   const { t } = useInterfaceTranslation();
-  const look = nodeLook(mission, node);
-  const pace = nodePace(mission, node);
-  const reason = holdReason(mission, node, workerOf);
-  const attention = openAttention(mission, node);
-  const gate = cardGate(node.gate);
+  const { look, pace, turn: owed, mergeDue, stopped, asleep, why: reason, gate, word: lookWord, working } = stepState(mission, node, t);
   const agent = usePhone((s) => (node.agent ? agentOf(s.groups, node.agent) : null));
-  const elapsed = useElapsed(look === "working" ? node.started_at_unix_ms : null);
+  // How long its worker has worked counts only while it works: a stopped or sleeping step's start says nothing of now.
+  const elapsed = useElapsed(working ? node.worked_at_unix_ms : null);
   const line = useMemo(() => phoneLineNode(node, mission.nodes), [node, mission.nodes]);
   const branch = useMemo(() => (line.kind === "external" && !line.external ? null : branchLine(line, mission.destination ?? null)), [line, mission.destination]);
   const result = branch ? null : resultLine(line);
-  const turn = gate?.state === "open" || attention?.to === "operator" || reason?.kind === "decision" || reason?.kind === "worker" || node.merge?.state === "due";
-  const why = reason?.kind === "attention"
-    ? attentionReasonText(reason.attention.reason, reason.attention.pr, t)
-    : reason?.kind === "worker" ? escalationWhy(reason.escalation, t)
-      : reason?.kind === "decision" ? t("mobile.mission.waitsDecision")
-        : node.merge?.state === "due" ? t("mission.merge.turn")
-          : gate?.state === "open" ? gate.look : null;
-  const word = pace === "stopped"
-    ? (node.work?.state === "no_worker" ? t("mission.work.stopped", { why: t("mission.work.stop.noWorker") }) : t("mission.work.stoppedPlain"))
-    : pace === "waiting" && (node.work?.state === "asleep" || workerAsleep(node)) ? t("mission.worker.asleep")
-      : look === "working" ? statusText(t, "working") : t(`mission.look.${look}`);
+  // The list's row counts a merge that is the operator's now as their turn too: it has no band to draw it in.
+  const turn = owed || mergeDue;
+  const why = reason ?? (mergeDue ? t("mission.merge.turn") : gate?.state === "open" ? gate.look : null);
+  const word = stopped ?? asleep ?? (look === "working" ? statusText(t, "working") : lookWord);
   // A step nobody has started yet is its title alone (Doop 14).
   const text = turn
     ? [why ?? word, t("agents.mark.turn")].join(" · ")
-    : look === "waiting" ? null
+    : look === "waiting" && !asleep ? null
       : look === "working" ? [agent?.title, word, elapsed].filter(Boolean).join(" · ")
         : branch ? [branch.plan ? t(branch.plan === "pr" ? "mission.foot.planPr" : "mission.foot.planDirect") : branch.mark in PR_LOOK ? t(PR_LOOK[branch.mark as PrState].word) : word, branch.to ? `→ ${lineToWords(branch.to, t)}` : null].filter(Boolean).join(" ")
           : result ? resultLineWords(result, t) : word;

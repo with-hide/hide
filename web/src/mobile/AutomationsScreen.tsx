@@ -93,6 +93,9 @@ function Row({ automation, connected }: { automation: PhoneAutomation; connected
   );
 }
 
+/** The schedule line's colour by what it says: a run going, a stop a person must fix, or the plain schedule. */
+const LINE_TONE = { working: "text-agent-working", warning: "text-warning", quiet: "text-muted-foreground" } as const;
+
 /**
  * The schedule as it reads and what comes next, the whole line in the state's colour (B3, B25, Doop 15): `· 도는 중` while a run
  * goes, `· <why> · 고치고` for what a person fixes, `· 멈춤` for the operator's own pause, else when it runs next in the
@@ -108,9 +111,9 @@ export function ScheduleLine({ automation, page = false, className }: { automati
   const after = next.kind === "running" ? when
     : paused ? (paused.reason === "operator" ? pauseReasonText(paused.reason, t) : t("mobile.automations.ask", { reason: pauseReasonText(paused.reason, t) }))
       : page && next.kind === "at" ? t("mobile.automations.nextAt", { when }) : when;
-  const tone = next.kind === "running" ? "text-agent-working" : paused && paused.reason !== "operator" ? "text-warning" : "text-muted-foreground";
+  const tone = next.kind === "running" ? "working" : paused && paused.reason !== "operator" ? "warning" : "quiet";
   return (
-    <span className={cn("break-keep text-body wrap-anywhere", tone, className)} data-phone-automation-next={next.kind} data-phone-automation-paused={paused?.reason}>
+    <span className={cn("break-keep text-body wrap-anywhere", LINE_TONE[tone], className)} data-phone-automation-next={next.kind} data-phone-automation-paused={paused?.reason} data-phone-automation-tone={tone}>
       {scheduleText(automation.schedule, language, t)}
       {" · "}
       {after}

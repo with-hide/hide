@@ -51,20 +51,21 @@ function Page({ mission, dim, connected }: { mission: PhoneMission; dim: boolean
         back={{ label: t("mobile.tab.missions"), onClick: closeMission, tag: "missions" }}
         title={<span data-phone-mission-title="true">{mission.title}</span>}
         line={
-          <>
-            <span className="flex min-w-0 items-center gap-xs" data-phone-mission-conductor={mission.conductor.present ? "present" : "none"}>
+          // One line (Doop 14): the branch gives way first and is cut with `…`, then the Conductor's words; the count never shrinks.
+          <span className="flex min-w-0 flex-1 items-center gap-x-xs overflow-hidden whitespace-nowrap">
+            <span className="flex min-w-0 shrink items-center gap-xs" data-phone-mission-conductor={mission.conductor.present ? "present" : "none"}>
               {open && mission.conductor.present ? <Loader2Icon aria-hidden="true" className="size-(--size-icon) shrink-0 text-mission-working" /> : null}
               {conductor ? (
                 <Button variant="text" size="inline" className="-my-sm min-h-(--size-touch-target) gap-0 text-body" data-phone-mission-chat="true" onClick={() => openDetail(conductor)}>
                   {stateWord} {t("mobile.mission.chat")}
                   <ChevronRightIcon aria-hidden="true" className="size-(--size-icon)" />
                 </Button>
-              ) : <span className="break-keep wrap-anywhere">{stateWord}</span>}
+              ) : <span className="min-w-0 truncate">{stateWord}</span>}
             </span>
             {stepsOmitted > 0 ? null : <span className="shrink-0">· {t("mobile.mission.progress", { done, total })}</span>}
             {/* Where the results go as the desktop's head names it, in the line's own text (Doop 14), only while a step lands there and the Mac sent the branch (PRD mission-destination D-18, D-38, B17). */}
-            {mission.destination && landsInDestination(mission.nodes) ? <MissionDestinationTag branch={mission.destination} touch className="border-none px-none text-body" /> : null}
-          </>
+            {mission.destination && landsInDestination(mission.nodes) ? <MissionDestinationTag branch={mission.destination} touch className="shrink-[10] border-none px-none text-body" /> : null}
+          </span>
         }
         action={
           mission.nodes.length > 0 ? (

@@ -8,11 +8,11 @@ import { cn } from "../lib/utils";
  * status mark (`mark`, null when none can be claimed), how many direct
  * children there are (left out when one marked child already says it), then,
  * after a dot, the subagent mark and how many subagents the agent runs inside
- * its session, and the chevron. The desktop pane header's button and the
+ * its session, and the chevron when it opens something. The desktop pane header's button and the
  * phone list's toggle draw it at their own sizes (`icon`); the owner names
  * the control, so every part here is hidden from a screen reader.
  */
-export function TreeChipFace({ mark, count, subagents, icon }: { mark: ReactNode; count: number; subagents: number; icon: string }) {
+export function TreeChipFace({ mark, count, subagents, icon, chevron = true }: { mark: ReactNode; count: number; subagents: number; icon: string; chevron?: boolean }) {
   return (
     <>
       <ListTreeIcon aria-hidden="true" className={cn(icon, "shrink-0 text-muted-foreground")} />
@@ -25,7 +25,7 @@ export function TreeChipFace({ mark, count, subagents, icon }: { mark: ReactNode
           <span aria-hidden="true" className="font-mono" data-tree-chip-subagents={subagents}>{subagents}</span>
         </>
       ) : null}
-      <ChevronDownIcon aria-hidden="true" className={cn(icon, "shrink-0 text-muted-foreground")} />
+      {chevron ? <ChevronDownIcon aria-hidden="true" className={cn(icon, "shrink-0 text-muted-foreground")} /> : null}
     </>
   );
 }

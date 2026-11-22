@@ -252,7 +252,7 @@ export function missionsFrame(t: T, state: DemoState): ServerFrame {
     nodes: [
       merged("notes", t("mobile.demo.a4.title"), 2085),
       merged("bump", t("mobile.demo.m1.bump"), 2080),
-      step("rehearse", t("mobile.demo.m1.rehearse"), "working", { depends_on: ["bump"], pr: 2093, stage: 1, agent: { device_id: DEMO_DEVICE, pane_id: "a3" }, started_at_unix_ms: state.t0 - 4 * MINUTE }),
+      step("rehearse", t("mobile.demo.m1.rehearse"), "working", { depends_on: ["bump"], pr: 2093, stage: 1, agent: { device_id: DEMO_DEVICE, pane_id: "a3" }, worked_at_unix_ms: state.t0 - 4 * MINUTE }),
       step("sign", t("mobile.demo.m1.sign"), "working", { depends_on: ["bump"], stage: 0 }),
       // What waits on the two steps at work, so the page shows which step waits on which.
       step("verify", t("mobile.demo.m1.verify"), "planned", { kind: "general", preset: "verify", delivery: null, depends_on: ["rehearse", "sign"], agent_runtime: null }),
@@ -264,7 +264,7 @@ export function missionsFrame(t: T, state: DemoState): ServerFrame {
     started_at_unix_ms: state.t0 - 50 * MINUTE,
     nodes: [
       merged("a", t("mobile.demo.m2.tabs"), 2101),
-      step("b", t("mobile.demo.m2.missions"), "working", { depends_on: ["a"], pr: 2102, stage: 1, agent: { device_id: DEMO_DEVICE, pane_id: "a4" }, started_at_unix_ms: state.t0 - 22 * MINUTE }),
+      step("b", t("mobile.demo.m2.missions"), "working", { depends_on: ["a"], pr: 2102, stage: 1, agent: { device_id: DEMO_DEVICE, pane_id: "a4" }, worked_at_unix_ms: state.t0 - 22 * MINUTE }),
     ],
   });
   const finished = mission(t, "mission-guide", t("mobile.demo.a2.title"), state, {

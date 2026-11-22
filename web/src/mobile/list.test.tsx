@@ -54,7 +54,7 @@ it("leads a tool's row's second line with the tool's name, and the operator's ro
     const row = (pane: string) => container.querySelector<HTMLElement>(`[data-phone-row="local|${pane}"]`)!;
     const second = (pane: string) => row(pane).querySelector("[data-phone-tool]")?.parentElement?.textContent ?? null;
     // The list's row names the project alone (Doop 01); a Mac that predates the project field has its row name the whole place.
-    expect(second("asking")).toBe("nightlyfixture");
+    expect(second("asking")).toBe("nightly·fixture");
     expect(second("look")).toBe("nightly");
     expect(row("own").querySelector("[data-phone-tool]")).toBeNull();
     expect(row("own").querySelector("[data-phone-place]")?.textContent).toBe("fixture · main");

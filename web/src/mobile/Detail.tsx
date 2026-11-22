@@ -134,7 +134,7 @@ export function Detail({ onBack }: { onBack: () => void }) {
               </Tabs>
               <DetailLinks agentKey={detail.key} />
             </div>
-          ) : detail ? <div className="mt-sm flex justify-end"><DetailLinks agentKey={detail.key} /></div> : null}
+          ) : detail ? <DetailLinks agentKey={detail.key} className="mt-sm" /> : null}
           {agent ? <PhoneHumanTurn agent={agent} inset="mt-sm" /> : null}
         </PageHead>
       )}
@@ -175,7 +175,8 @@ export function Detail({ onBack }: { onBack: () => void }) {
  * Conductor or the step's title for a worker, a pull request's state mark and `#number`. A chip closes the detail and opens that
  * page on its tab, whose back goes to that tab's list.
  */
-function DetailLinks({ agentKey }: { agentKey: AgentKey }) {
+/** The chips of what the agent belongs to; nothing at all, not even its room, when it belongs to nothing. */
+function DetailLinks({ agentKey, className }: { agentKey: AgentKey; className?: string }) {
   const { t } = useInterfaceTranslation();
   const missions = usePhone((s) => s.missions);
   const prs = usePhone((s) => s.prs?.items ?? null);
@@ -185,7 +186,7 @@ function DetailLinks({ agentKey }: { agentKey: AgentKey }) {
   const chip = "h-auto min-h-(--size-touch-target) max-w-full px-none py-none font-normal hover:bg-transparent";
   const pill = "flex min-w-0 items-center gap-xs rounded-full bg-secondary px-md py-xs text-body text-foreground";
   return (
-    <div className="-my-sm flex min-w-0 flex-wrap justify-end gap-x-sm" data-phone-detail-links="true">
+    <div className={cn("-my-sm flex min-w-0 flex-wrap justify-end gap-x-sm", className)} data-phone-detail-links="true">
       {links.missions.map(({ mission, node, turn }) => {
         const { done, total } = progress(mission);
         return (
@@ -230,7 +231,8 @@ function ViewingHead({ row, opener }: { row: { name: string; kind: LookKind; at:
           {opener ? (
             <>
               <span aria-hidden="true">·</span>
-              <span className="min-w-0 break-keep wrap-anywhere" aria-label={t("mobile.look.openedBy", { name: opener })}>{opener}</span>
+              <span className="sr-only">{t("mobile.look.openedBy", { name: opener })}</span>
+              <span aria-hidden="true" className="min-w-0 break-keep wrap-anywhere" data-phone-viewing-opener="true">{opener}</span>
             </>
           ) : null}
           <span aria-hidden="true">·</span>
@@ -248,7 +250,9 @@ function AgentStrip({ agent }: { agent: PhoneAgent }) {
   // The word that leads the row's line (`작업 중`, `자식 2개 기다림`) is the strip's word, so it is said once.
   const parts = agent.line ? lineParts(t, agent.wait === "children" && agent.wait_count === undefined ? { ...agent, wait_count: agent.descendants_working } : agent, agent.line) : null;
   const line = parts ? [parts.text, parts.tail].filter(Boolean).join(" · ") || null : null;
-  return <StatusStrip word={parts?.lead ?? statusText(t, agent.status_code)} tone={STRIP_TONE[agent.mark] ?? "text-muted-foreground"} line={line} since={agent.changed_at_unix_ms} />;
+  // An agent asking the operator reads as their turn, not as the core's idle.
+  const word = parts?.lead ?? (agent.mark === "turn" ? t("agents.mark.turn") : statusText(t, agent.status_code));
+  return <StatusStrip word={word} tone={STRIP_TONE[agent.mark] ?? "text-muted-foreground"} line={line} since={agent.changed_at_unix_ms} />;
 }
 
 /** The strip's word takes the colour of the row's mark. */
@@ -397,7 +401,10 @@ function ConversationLog({ conversation, agent }: { conversation: Conversation; 
   // While the agent works, the foot of its conversation says it thinks, counted from its last word or its last change (Doop 09).
   const lastAt = messages.at(-1)?.at_ms ?? 0;
   const thinkingSince = agent?.status_code === "working" ? Math.max(lastAt, agent.changed_at_unix_ms ?? 0) || null : null;
-  const { scroller, onScroll } = usePinnedScroll(messages, messages[0]?.id ?? 0, loadOlder);
+  // The thinking line is content too: one that appears with no new word still pulls a reader at the bottom down to it.
+  const thinking = thinkingSince !== null;
+  const content = useMemo(() => ({ messages, thinking }), [messages, thinking]);
+  const { scroller, onScroll } = usePinnedScroll(content, messages[0]?.id ?? 0, loadOlder);
   const capped = before !== null && messages.length >= MAX_MESSAGES;
   return (
     <div ref={scroller} className="min-h-0 flex-1 overflow-auto overscroll-contain bg-background px-lg py-md" data-phone-conversation={messages.length} onScroll={onScroll}>
@@ -437,7 +444,7 @@ const MessageItem = memo(function MessageItem({ message, timed }: { message: Con
     return (
       <li data-phone-message="you" className="flex flex-col items-end">
         {/* The operator's words stand right, in a rounded bubble, as Doop 02 draws them. */}
-        <p className="max-w-[85%] whitespace-pre-wrap break-keep rounded-xl bg-secondary px-lg py-sm text-body leading-normal text-foreground wrap-anywhere">{message.text}</p>
+        <p className="max-w-5/6 whitespace-pre-wrap break-keep rounded-xl bg-secondary px-lg py-sm text-body leading-normal text-foreground wrap-anywhere">{message.text}</p>
         {time}
       </li>
     );

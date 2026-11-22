@@ -151,11 +151,11 @@ it("lists each automation's schedule and next run in the computer's zone, its un
     expect(row("on").querySelector("[data-phone-automation-unseen]")).not.toBeNull();
     // A run going says so in the line, in the working colour (B19).
     expect(next("going").getAttribute("data-phone-automation-next")).toBe("running");
-    expect(next("going").className).toContain("text-agent-working");
+    expect(next("going").getAttribute("data-phone-automation-tone")).toBe("working");
     // The operator's own pause is a dimmed row; what a person fixes is the line in the warning colour with [다시 켜기] (B25).
     expect(next("off").getAttribute("data-phone-automation-paused")).toBe("operator");
     expect(next("signed-out").textContent).toBe("Weekdays 09:00 · Signed out · fix it, then");
-    expect(next("signed-out").className).toContain("text-warning");
+    expect(next("signed-out").getAttribute("data-phone-automation-tone")).toBe("warning");
     // Running now and pausing are on the page; the list carries only the one press a person fixing it needs.
     expect([presses("on"), presses("going"), presses("off")]).toEqual([[], [], []]);
     expect(presses("signed-out")).toEqual([["resume", false]]);

@@ -108,6 +108,22 @@ describe("a parent's children on the list", () => {
   });
 });
 
+describe("a chip with nothing hung under its row", () => {
+  it("counts the descendants it still has, and draws no chevron when it opens nothing", async () => {
+    // A second-level row whose children the list folded flat: no children here, only how many and in which state.
+    const parent = agent("p", { descendants: { asking: 1, working: 2, done: 0 } });
+    const { container, unmount } = await mount([working([parent])]);
+    try {
+      const chip = container.querySelector('[data-phone-tree-chip="local|p"]')!;
+      expect(chip.querySelector("[data-tree-chip-count]")?.textContent).toBe("3");
+      expect(chip.getAttribute("aria-label")).toBe("1 asking you · 2 working");
+      expect(chip.querySelectorAll("svg")).toHaveLength(1);
+    } finally {
+      await unmount();
+    }
+  });
+});
+
 describe("an agent's subagents on the list", () => {
   const named = (n: number) => Array.from({ length: n }, (_, at) => ({ id: `s${at}`, kind: "Explore", task: `task ${at}`, started_unix_ms: Date.now() - 60_000 }));
   const subagentIds = (container: HTMLElement, within: string) => [...container.querySelectorAll(`${within} [data-phone-subagent]`)].map((line) => line.getAttribute("data-phone-subagent"));

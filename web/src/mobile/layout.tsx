@@ -115,7 +115,8 @@ export function Composer({ value, onChange, onSubmit, placeholder, disabled, sen
 }) {
   const { t } = useInterfaceTranslation();
   return (
-    <form className={cn("flex min-w-0 items-center gap-xs rounded-full border border-border bg-input py-xxs pl-lg pr-xxs", disabled && "opacity-(--opacity-disabled)")} onSubmit={(event) => { event.preventDefault(); onSubmit(); }}>
+    // The rounded frame is the field: it takes the field's focus ring and its over-limit mark, as `Input` draws them on its own border.
+    <form className={cn("flex min-w-0 items-center gap-xs rounded-full border border-border bg-input py-xxs pl-lg pr-xxs focus-within:border-ring focus-within:ring-1 focus-within:ring-ring has-[[aria-invalid=true]]:border-destructive has-[[aria-invalid=true]]:ring-destructive", disabled && "opacity-(--opacity-disabled)")} onSubmit={(event) => { event.preventDefault(); onSubmit(); }}>
       <Input
         {...input}
         value={value}

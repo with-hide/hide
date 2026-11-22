@@ -257,7 +257,7 @@ pub struct PhoneNode {
     /// `작업 중 · N분` counts from here on the phone. Absent before it
     /// started and from a core before it, where the line has no time.
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub started_at_unix_ms: Option<u64>,
+    pub worked_at_unix_ms: Option<u64>,
     /// The agent kind of the node's worker.
     pub worker_agent: Option<String>,
     /// The worker's row in the phone's list, when it has one, so the step opens it (B36).
@@ -719,7 +719,7 @@ fn phone_mission(
                 landing: source.landing,
                 agent_runtime: source.agent_runtime,
                 work: source.work,
-                started_at_unix_ms: source.worked_at_unix_ms.or(source.started_at_unix_ms),
+                worked_at_unix_ms: source.worked_at_unix_ms.or(source.started_at_unix_ms),
                 worker_agent: source.worker.map(|worker| worker.agent),
                 agent: pane.and_then(listed),
                 escalation,
@@ -1008,16 +1008,21 @@ mod tests {
         let started: Vec<Option<u64>> = missions.items[0]
             .nodes
             .iter()
-            .map(|node| node.started_at_unix_ms)
+            .map(|node| node.worked_at_unix_ms)
             .collect();
         assert_eq!(started, [Some(40), Some(30), None]);
         let sent = serde_json::to_value(&missions).unwrap();
         let unstarted = &sent["items"][0]["nodes"][2];
         assert!(
-            unstarted.get("started_at_unix_ms").is_none(),
+            unstarted.get("worked_at_unix_ms").is_none(),
             "a step not started sends no time, as a core before the field sends none"
         );
-        assert!(sent.to_string().find("worked_at").is_none());
+        // The step's first start stays on the Mac: the phone counts from the return to work alone.
+        assert!(
+            sent["items"][0]["nodes"][0]
+                .get("started_at_unix_ms")
+                .is_none()
+        );
     }
 
     #[test]

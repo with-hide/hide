@@ -75,7 +75,13 @@ export function PlaceParts({ agent, project = false, computer }: { agent: PhoneA
   return (
     <>
       {computer ? <DeviceTag label={computer} computer /> : null}
-      {agent.tool ? <span className="min-w-0 max-w-2/5 shrink-0 truncate" data-phone-tool={agent.tool}>{agent.tool}</span> : null}
+      {/* The tool whose work this is leads the line, as on the desktop's sidebar row (PRD hide-external-control B46). */}
+      {agent.tool ? (
+        <span className="flex min-w-0 max-w-2/5 shrink-0 items-baseline gap-xs text-muted-foreground" data-phone-tool={agent.tool}>
+          <span className="min-w-0 truncate">{agent.tool}</span>
+          {place ? <span aria-hidden="true">·</span> : null}
+        </span>
+      ) : null}
       {place ? <span className="min-w-0 max-w-1/2 shrink-0 truncate text-muted-foreground" data-phone-place={place}>{place}</span> : null}
       {agent.device_label ? <DeviceTag label={agent.device_label} /> : null}
     </>

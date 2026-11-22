@@ -119,13 +119,15 @@ function AgentItem({ agent, nested = false }: { agent: PhoneAgent; nested?: bool
 function TreeChip({ agent, open, onToggle }: { agent: PhoneAgent; open: boolean; onToggle: (() => void) | null }) {
   const { t } = useInterfaceTranslation();
   const kids = agent.children ?? [];
-  const count = kids.length + (agent.more_children?.length ?? 0);
+  const listed = kids.length + (agent.more_children?.length ?? 0);
   const subagents = agent.subagents ?? 0;
   const counts = agent.descendants;
-  if (count === 0 && subagents === 0 && !counts) return null;
+  // A row whose children the list does not hang under it (a second level folded flat, `tree.rs`) still counts its descendants.
+  const count = listed > 0 ? listed : counts ? counts.asking + counts.working + counts.done : 0;
+  if (count === 0 && subagents === 0) return null;
   const first = kids.find((child) => child.mark !== "unknown") ?? null;
   const label = [
-    count > 0 ? t("agentSessions.tree.children", { count }) : null,
+    listed > 0 ? t("agentSessions.tree.children", { count: listed }) : null,
     counts?.asking ? t("mobile.descendants.asking", { count: counts.asking }) : null,
     counts?.working ? t("mobile.descendants.working", { count: counts.working }) : null,
     counts?.done ? t("mobile.descendants.done", { count: counts.done }) : null,
@@ -133,7 +135,7 @@ function TreeChip({ agent, open, onToggle }: { agent: PhoneAgent; open: boolean;
   ].filter(Boolean).join(" · ");
   const face = (
     <span className={cn("flex items-center gap-xxs rounded-full border bg-secondary px-sm py-xxs font-normal text-subtle-foreground", counts?.asking ? "border-warning/60" : "border-transparent")}>
-      <TreeChipFace mark={first ? <StatusMark mark={first.mark} human={first.human_turn != null} data-phone-tree-mark={first.mark} /> : null} count={count} subagents={subagents} icon="size-(--size-icon-sm)" />
+      <TreeChipFace mark={first ? <StatusMark mark={first.mark} human={first.human_turn != null} data-phone-tree-mark={first.mark} /> : null} count={count} subagents={subagents} icon="size-(--size-icon-sm)" chevron={onToggle !== null} />
     </span>
   );
   if (!onToggle) return <span role="img" aria-label={label} className="flex shrink-0" data-phone-tree-chip={keyTag(agent)}>{face}</span>;
