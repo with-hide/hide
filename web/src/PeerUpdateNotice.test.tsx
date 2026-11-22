@@ -46,6 +46,8 @@ it("says on the computer that must update which computer waits, updates on a pre
 
     // This computer is the older one and nobody asked: the notice, and a press looks for the release.
     expect(notice()?.textContent).toContain("Update Hide to connect with MacBook");
+    // A button that stands out without the full lime (operator review 2026-11-22).
+    expect(now()?.dataset.variant).toBe("tint");
     expect(bridge.check).not.toHaveBeenCalled();
     await act(async () => now()!.click());
     expect(bridge.check).toHaveBeenCalledTimes(1);
@@ -67,6 +69,7 @@ it("says on the computer that must update which computer waits, updates on a pre
     await show(idle, [peer({ update: "there" })]);
     expect(notice()?.getAttribute("data-peer-update-side")).toBe("there");
     expect(notice()?.textContent).toContain("MacBook needs an update before it can be opened");
+    expect(document.querySelector<HTMLElement>("[data-peer-update-ask]")?.dataset.variant).toBe("secondary");
     await act(async () => document.querySelector<HTMLButtonElement>("[data-peer-update-ask]")!.click());
     expect(sent).toEqual([expect.objectContaining({ kind: "pairing_update", payload: { device: "ab".repeat(32) } })]);
     // Once asked, the row says so and the notice goes; a closed notice stays closed for that computer.

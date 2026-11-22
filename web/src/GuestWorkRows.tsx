@@ -121,8 +121,10 @@ export function PeerWorkRows({ group, actions, treeIndent = false }: { group: "n
   return (
     <>
       {machines.map((machine) => (
-        <li key={machine.deviceId} data-peer-machine={machine.deviceId}>
-          <div className="flex h-(--size-sidebar-section-header) items-center gap-xs px-xs text-micro font-medium text-muted-foreground" data-peer-machine-head={machine.deviceId}>
+        <li key={machine.deviceId} data-peer-machine={machine.deviceId} className={treeIndent ? "mt-xs" : undefined}>
+          {/* Under a list whose rows keep a tree chevron's room, the head stands on the rows' inner line, inside the state's head (operator review 2026-11-22). */}
+          <div className={cn("flex h-(--size-sidebar-section-header) items-center gap-xs text-micro font-medium text-muted-foreground", treeIndent ? "pr-xs" : "px-xs")} data-peer-machine-head={machine.deviceId}>
+            {treeIndent ? <span aria-hidden="true" className="w-(--size-lineage-chevron) shrink-0" /> : null}
             <span aria-hidden="true" className="rounded-xs bg-secondary px-xxs font-semibold text-subtle-foreground">{tileMonogram(machine.name)}</span>
             <span className="min-w-0 truncate">{machine.name}</span>
             <span className="tabular-nums">{machine.rows.length}</span>
@@ -150,7 +152,7 @@ function PeerMachineRows({ group, rows, actions, treeIndent }: { group: "needs_y
               data-peer-row={`${deviceId}:${row.id}`}
               data-peer-group={group}
               data-task-focus="row"
-              className={cn("min-h-(--size-control-lg) items-start rounded-sm py-xs text-caption text-subtle-foreground hover:text-foreground", treeIndent ? "pr-xs pl-none" : "px-sm")}
+              className={cn("items-start py-xs text-caption text-subtle-foreground hover:text-foreground", treeIndent ? "rounded-xs pr-xs pl-none" : "min-h-(--size-control-lg) rounded-sm px-sm")}
               // That computer's work opens on its own screen with the work chosen (D-78, D-81); without a desktop to draw it, its tile.
               onClick={() => {
                 if (actions.openComputerWork(deviceId, { op: "show", pane: row.id }) !== "handed") actions.focusDevice(deviceId);
@@ -163,12 +165,13 @@ function PeerMachineRows({ group, rows, actions, treeIndent }: { group: "needs_y
                   <AgentRowMark kind={row.agent_kind} />
                 </>}
                 head={<>
-                  <span className="min-w-0 flex-1 truncate text-foreground">{row.title}</span>
+                  <span className={cn("min-w-0 flex-1 truncate text-foreground", treeIndent && "font-medium")}>{row.title}</span>
                   <Elapsed since={row.changed_at_unix_ms} aria-hidden="true" className="shrink-0 font-mono text-caption text-muted-foreground" data-peer-elapsed="true" />
                 </>}
               >
                 {row.place || reason ? (
-                  <span aria-hidden="true" className="flex min-w-0 gap-xs text-caption leading-(--size-sidebar-line-detail)">
+                  // Under the task list the line is drawn as its own rows' second line: a step down, in micro text.
+                  <span aria-hidden="true" className={cn("flex min-w-0 gap-xs leading-(--size-sidebar-line-detail)", treeIndent ? "mt-xs items-baseline text-micro" : "text-caption")}>
                     {row.place ? <span className="min-w-0 shrink truncate text-muted-foreground">{row.place}</span> : null}
                     {reason ? <span className={cn("min-w-0 truncate", group === "needs_you" ? "text-warning" : "text-muted-foreground")} data-peer-reason="true">{reason}</span> : null}
                   </span>

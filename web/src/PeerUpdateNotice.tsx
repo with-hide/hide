@@ -42,7 +42,7 @@ export function PeerUpdateNotice({ actions }: { actions: Actions }) {
       onDismiss={() => setClosed(`there:${peer.key}`)}
       dismissLabel={t("workspace.dismiss")}
       actions={
-        <Button variant="text" size="inline" data-peer-update-ask={peer.device_id} onClick={() => actions.pairing("update", { device: peer.key })}>
+        <Button variant="secondary" size="sm" data-peer-update-ask={peer.device_id} onClick={() => actions.pairing("update", { device: peer.key })}>
           {t("pairing.action.askUpdate")}
         </Button>
       }
@@ -64,7 +64,7 @@ function UpdateHere({ peer, status, onClose }: { peer: Peer; status: ReturnType<
       dismissLabel={t("workspace.dismiss")}
       actions={
         offersUpdate(status) ? (
-          <Button variant="text" size="inline" data-peer-update-now="true" onClick={() => updateNow(status)}>{t("pairing.action.updateHere")}</Button>
+          <Button variant="tint" size="sm" data-peer-update-now="true" onClick={() => updateNow(status)}>{t("pairing.action.updateHere")}</Button>
         ) : phase === "off" ? null : (
           <span className="text-muted-foreground">{t("pairing.notice.updating")}</span>
         )

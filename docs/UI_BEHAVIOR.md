@@ -2521,7 +2521,9 @@ Splitting, a new tab, renaming and starting an agent are drawn dimmed in its men
 A pane that left the list while its page is open says `이 터미널은 끝났어요`.
 A program's mouse reports are not sent to another machine's pane.
 
-A connected machine this computer opens tells its own Needs You and Done, and those rows follow this computer's in the same sections of both sidebar lists, drawn as this computer's rows are: its mark, the agent's logo only while rows draw logos, the title with the machine's filled chip and the time since it changed, and under them where it runs and why it waits, the sentence its own core chose or else the ask's own words (`권한 요청에서 멈춤`, `답을 기다림`) (D-50, B49).
+A connected machine this computer opens tells its own Needs You and Done, and those rows follow this computer's in the same sections of both sidebar lists, drawn as this computer's rows are: its mark, the agent's logo only while rows draw logos, the title and the time since it changed, and under them where it runs and why it waits, the sentence its own core chose or else the ask's own words (`권한 요청에서 멈춤`, `답을 기다림`) (D-50, B49).
+They stand under one small head per machine, its letters, name and count (`Mm Mac-mini 2`), after this computer's rows, which keep no head; in the 태스크 list the head and its rows stand on the rows' inner line, inside the state's head, in the shape and spacing of this computer's rows (operator review 2026-11-22).
+They show on this computer's own window only: another computer's screen of this one shows this computer's work and no one else's.
 A section is drawn for them alone, and its count, in the 프로젝트 and the 태스크 list alike, includes them.
 Pressing one opens that machine's tile on that work: its screen opens the work its core told by its pane (D-78, D-81), and in a browser tab, which draws no other computer's screen, it selects the tile; rows of this computer's own work on another machine keep the outline chip and open in this computer's tile.
 This computer rings nothing for another machine's rows, and they leave the list when that machine is no longer connected.
