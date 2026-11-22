@@ -1142,10 +1142,13 @@ mod tests {
         (endpoint, bodies)
     }
 
+    /// Each path a scripted window was asked at, with its body.
+    type Asked = Arc<Mutex<Vec<(String, Value)>>>;
+
     /// A window that answers `/display-still` for `browser-a` with a JPEG's
     /// bytes and for any other display with the host's reason, keeping each
     /// path and body it was asked with.
-    fn scripted_still_window() -> (String, Arc<Mutex<Vec<(String, Value)>>>) {
+    fn scripted_still_window() -> (String, Asked) {
         use std::io::{Read, Write};
         let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
         let endpoint = format!("http://{}", listener.local_addr().unwrap());
