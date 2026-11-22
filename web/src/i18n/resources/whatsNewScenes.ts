@@ -5,6 +5,11 @@ import type { Catalog, Catalogs } from "../schema";
 // shares with the screen it shows (the automation screen's title, an example
 // automation) come from that screen's own catalog.
 export const whatsNewScenesEnglish = {
+  "whatsNewScene.gitlab.waiting": "Reading the projects",
+  "whatsNewScene.gitlab.read": "Open a merge request",
+  "whatsNewScene.gitlab.retry": "Limit payment retries",
+  "whatsNewScene.gitlab.cache": "Cache order lookups",
+  "whatsNewScene.gitlab.tabs": "Keep a named tab",
   "whatsNewScene.bots.agent": "Deploy the release",
   "whatsNewScene.bots.question": "Push the tag now?",
   "whatsNewScene.automation.finished": "{{name}} finished · {{time}}",
@@ -69,6 +74,11 @@ export const whatsNewScenesEnglish = {
 };
 
 const ko: Catalog<typeof whatsNewScenesEnglish> = {
+  "whatsNewScene.gitlab.waiting": "프로젝트를 읽는 중",
+  "whatsNewScene.gitlab.read": "MR을 열어 보세요",
+  "whatsNewScene.gitlab.retry": "결제 재시도 횟수 제한",
+  "whatsNewScene.gitlab.cache": "주문 조회 캐시",
+  "whatsNewScene.gitlab.tabs": "이름 붙인 탭 유지",
   "whatsNewScene.bots.agent": "릴리스 배포",
   "whatsNewScene.bots.question": "지금 태그를 올릴까요?",
   "whatsNewScene.automation.finished": "{{name}} 끝났어요 · {{time}}",
@@ -133,6 +143,11 @@ const ko: Catalog<typeof whatsNewScenesEnglish> = {
 };
 
 const zh: Catalog<typeof whatsNewScenesEnglish> = {
+  "whatsNewScene.gitlab.waiting": "正在读取项目",
+  "whatsNewScene.gitlab.read": "打开一个合并请求",
+  "whatsNewScene.gitlab.retry": "限制支付重试次数",
+  "whatsNewScene.gitlab.cache": "缓存订单查询",
+  "whatsNewScene.gitlab.tabs": "保留已命名的标签页",
   "whatsNewScene.bots.agent": "部署发布",
   "whatsNewScene.bots.question": "现在推送标签吗？",
   "whatsNewScene.automation.finished": "{{name}} 已完成 · {{time}}",
@@ -197,6 +212,11 @@ const zh: Catalog<typeof whatsNewScenesEnglish> = {
 };
 
 const ja: Catalog<typeof whatsNewScenesEnglish> = {
+  "whatsNewScene.gitlab.waiting": "プロジェクトを読み込み中",
+  "whatsNewScene.gitlab.read": "MR を開いてみましょう",
+  "whatsNewScene.gitlab.retry": "決済の再試行回数を制限",
+  "whatsNewScene.gitlab.cache": "注文照会をキャッシュ",
+  "whatsNewScene.gitlab.tabs": "名前を付けたタブを残す",
   "whatsNewScene.bots.agent": "リリースをデプロイ",
   "whatsNewScene.bots.question": "今タグを push しますか？",
   "whatsNewScene.automation.finished": "{{name}} が終わりました · {{time}}",
