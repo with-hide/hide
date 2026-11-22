@@ -1,4 +1,5 @@
-// The real PR card over invented values. No GitHub writes leave this scene.
+// The real PR card over invented values, and with `host=gitlab` a gitlab.com
+// merge request's, read as gitlab.com declares it. No write leaves this scene.
 import { useLayoutEffect, useMemo } from "react";
 import { createActions } from "../actions";
 import { PrCardView } from "../PrCard";
@@ -6,12 +7,21 @@ import { TooltipProvider } from "../components/ui/tooltip";
 import { useFollowInterfaceLanguage } from "../i18n/translator";
 import { requireInterfaceLanguage } from "../i18n/locale";
 import type { PrGroupId, PrReason } from "../agentScope";
-import type { LinkedSession, PrReviewer, PullRequest } from "../snapshot";
+import type { ChangeRequestRef, HostDeclaration, LinkedSession, PrReviewer, PullRequest } from "../snapshot";
 import { useShellStore } from "../store";
 import { useUiStore } from "../ui";
 import { REFERENCE_FOLDS, sidebarScene } from "./sceneData";
 
 export const AT = 1_792_305_660_000;
+
+/** gitlab.com as the core declares it while it only reads: no merge, update, hand-over or issues. */
+export const GITLAB: HostDeclaration = { key: "gitlab", name: "GitLab", operations: ["commit_checks"], access: { program: "glab", minimum_version: "1.78.0", sign_in: "glab auth login --hostname gitlab.com" } };
+
+/** A gitlab.com merge request's reference as the core's GitLab unit makes it, at an example address. */
+export function gitlabReference(number: number): ChangeRequestRef {
+  const url = `https://example.com/example/hide/-/merge_requests/${number}`;
+  return { repository: { host: "gitlab", authority: "gitlab.com", path: "example/hide" }, number, key: `gitlab.com/example/hide!${number}`, label: `!${number}`, url, checks_url: `${url}/pipelines`, files_url: `${url}/diffs` };
+}
 export function PrCardScene({ params }: { params: URLSearchParams }) {
   useFollowInterfaceLanguage(requireInterfaceLanguage(params.get("lang") ?? "ko"));
   const theme = params.get("theme") === "light" ? "light" : "dark";
@@ -29,15 +39,20 @@ export function PrCardScene({ params }: { params: URLSearchParams }) {
     const review = params.get("review");
     if (review) applyReview(pr, review);
     if (params.get("content") === "long") { pr.title += " - 긴한글제목과영문경로의줄바꿈을확인합니다".repeat(3); pr.head_branch += "/long-branch-name".repeat(8); }
+    const gitlab = params.get("host") === "gitlab";
+    if (gitlab) {
+      pr.reference = gitlabReference(pr.number);
+      pr.url = pr.reference.url;
+    }
     checkout.branch = pr.head_branch!;
     checkout.pull_request = pr;
-    checkout.github = { available: true, loading: false, stale: false, failure_category: null, last_success_at_unix_ms: AT };
+    checkout.github = { available: true, loading: false, stale: false, failure_category: null, last_success_at_unix_ms: AT, ...(gitlab ? { host: GITLAB } : {}) };
     project.pull_requests = [pr];
     const placed = review ? reviewPlace(review) : null;
     const group = placed?.group ?? (failed ? "blocked" : ready || skipped ? "needs_you" : "waiting");
     project.agent_scope!.prs = { rows: [{ number: pr.number, group, fold: null, reason: placed?.reason ?? { kind: failed ? "failed" : ready || skipped ? "merge" : "ci", count: failed ? 2 : 4, base: "main", since_unix_ms: AT }, agents: [], agent_pane: null, checkout_id: checkout.id, checkout_ids: [checkout.id], issue: null }], groups: [{ group, numbers: [pr.number] }], needs_you: group === "needs_you" ? 1 : 0 };
 
-    base.rest.pr_work = { link: null, feedback: null, cards: [{ workspace_id: project.id, number: pr.number, reading: state === "loading", head: "a".repeat(40), body: "## Summary\nWindows에서 에이전트 훅이 데몬에 요청을 전달하지 못해 메모리와 편지가 프롬프트에 도달하지 않았습니다.\n\nWindows 파이프의 쓰기 제한 시간을 지키고 실패한 요청 단계를 구분하도록 변경했습니다.\n\n| 단계 | 결과 | 걸린 시간 |\n|:---|:---:|---:|\n| 파이프 연결 | 성공 | 0.4초 |\n| 훅 요청 | `pipe write timed out after 1.2 s` 뒤 다시 시도해서 성공 | 1.6초 |\n| 실패 단계 기록 | 성공 |  |\n\n```mermaid\nflowchart LR\n  H[에이전트 훅] --> P[Windows 파이프] --> D[데몬]\n  D --> M[메모리·편지]\n```\n\n## Review\nWindows 파이프 연결과 실패 단계 기록을 검토합니다.\n\n## Evidence\n레이아웃 확인을 위한 예시입니다.", files: [{ path: "hide-platform/src/ipc/windows.rs", additions: 400, deletions: 100, generated: false }, { path: "hide-agent-hooks/src/client.rs", additions: 340, deletions: 101, generated: false }], files_total: 2, threads: [], merge: { can_merge: true, methods: ["merge"], queue: false }, failed: [], write: null }] };
+    base.rest.pr_work = { link: null, feedback: null, cards: [{ workspace_id: project.id, number: pr.number, reading: state === "loading", head: "a".repeat(40), body: "## Summary\nWindows에서 에이전트 훅이 데몬에 요청을 전달하지 못해 메모리와 편지가 프롬프트에 도달하지 않았습니다.\n\nWindows 파이프의 쓰기 제한 시간을 지키고 실패한 요청 단계를 구분하도록 변경했습니다.\n\n| 단계 | 결과 | 걸린 시간 |\n|:---|:---:|---:|\n| 파이프 연결 | 성공 | 0.4초 |\n| 훅 요청 | `pipe write timed out after 1.2 s` 뒤 다시 시도해서 성공 | 1.6초 |\n| 실패 단계 기록 | 성공 |  |\n\n```mermaid\nflowchart LR\n  H[에이전트 훅] --> P[Windows 파이프] --> D[데몬]\n  D --> M[메모리·편지]\n```\n\n## Review\nWindows 파이프 연결과 실패 단계 기록을 검토합니다.\n\n## Evidence\n레이아웃 확인을 위한 예시입니다.", files: [{ path: "hide-platform/src/ipc/windows.rs", additions: 400, deletions: 100, generated: false }, { path: "hide-agent-hooks/src/client.rs", additions: 340, deletions: 101, generated: false }], files_total: 2, threads: [], merge: gitlab ? null : { can_merge: true, methods: ["merge"], queue: false }, failed: [], write: null, ...(gitlab ? { host: GITLAB } : {}) }] };
     // The timeline's sessions: a waiting one, an asking one and an ended one, joined to the scene's panes by session id.
     const live = (pane: string, session: string) => { base.rest.navigator!.agents!.find((agent) => agent.pane_id === pane)!.session_id = session; };
     live("a1c3", "s-waiting");
