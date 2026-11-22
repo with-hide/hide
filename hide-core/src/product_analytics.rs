@@ -669,6 +669,22 @@ mod tests {
         assert!(checked > 0);
     }
 
+    /// The wire spells how a bot came in and its mode, and nothing else of
+    /// the bot.
+    #[test]
+    fn a_connected_bot_names_how_it_came_in_and_its_mode_only() {
+        use crate::access::Mode;
+        let event = |way, mode| Event::BotConnected { way, mode }.properties();
+        assert_eq!(
+            event(BotWay::Made, Mode::Own),
+            [("way", "made"), ("mode", "own")]
+        );
+        assert_eq!(
+            event(BotWay::Asked, Mode::All),
+            [("way", "asked"), ("mode", "all")]
+        );
+    }
+
     #[test]
     fn a_device_failure_names_its_class_and_never_its_text() {
         let event = Event::DeviceConnected {
