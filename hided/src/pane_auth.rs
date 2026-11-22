@@ -828,6 +828,19 @@ fn guests_pane_in(home: &Path, peer: i32) -> bool {
         .any(|holder| peer == holder || hide_host::pane_peer::descends_from(peer, holder))
 }
 
+/// Whether the guest under the connection key `key` is the one whose node
+/// took over this account's device folder at a split (D-46). That node
+/// answers under the name of the installation the folder's panes carry,
+/// this machine's own, and under no name of the guest's.
+fn split_guest(key: &str) -> bool {
+    hide_platform::host::home_dir().is_ok_and(|home| split_guest_in(&home, key))
+}
+
+fn split_guest_in(home: &Path, key: &str) -> bool {
+    hide_kit::layout::HelperGuest::read(&hide_kit::layout::device_node_state(home))
+        .is_some_and(|taken| taken.panes.is_some() && taken.key == key)
+}
+
 #[derive(Clone, Debug)]
 pub struct Attestation {
     pane_id: String,
@@ -920,8 +933,17 @@ fn attest_bootstrap(
             // A caller in no pane of this core's is proved by its folder,
             // and the folder may be a guest's: then this daemon answers
             // whose it is and binds nothing (PRD device-connect-iroh D-55).
-            if let Some(install) = folder_guest(peer, core) {
-                return Err(Refused::HandedTo(install));
+            // The guest a split left this account's device folder to has
+            // no node here that answers its own `hide`: its node answers
+            // as this installation (D-46), so the call is refused as
+            // another installation's and this `hide` asks that node's
+            // bridge, as the folder's panes do.
+            if let Some(key) = folder_guest(peer, core) {
+                return Err(if split_guest(&key) {
+                    install::OTHER_INSTALL.into()
+                } else {
+                    Refused::HandedTo(guest_install(&key))
+                });
             }
             attest_checkout(peer, &request.nonce, core)
                 .map(|attestation| (attestation, Some(pane_reason)))
@@ -971,18 +993,24 @@ impl Refused {
 /// answer then carries `handed_to` with that guest's installation.
 pub const HANDED_TO: &str = "handed_to";
 
-/// The installation of the guest that answers for the folder `peer` runs
+/// The connection key of the guest that answers for the folder `peer` runs
 /// in, when the core says the folder is one guest's (`Core::folder_call`).
 fn folder_guest(peer: i32, core: &CoreHandle) -> Option<String> {
     let folder = caller_directory(peer).ok()?;
-    let hide_core::guest_panes::FolderCall::Guest { key } = core.folder_call(&folder) else {
-        return None;
-    };
+    match core.folder_call(&folder) {
+        hide_core::guest_panes::FolderCall::Guest { key } => Some(key),
+        hide_core::guest_panes::FolderCall::Host => None,
+    }
+}
+
+/// The installation of the guest under the connection key `key`, by the
+/// name its own `hide` is found under ([`launch::install_name`]).
+fn guest_install(key: &str) -> String {
     let short: String = key
         .chars()
         .take(hide_peer::protocol::key::SHORT_KEY_CHARS)
         .collect();
-    Some(hide_peer::protocol::launch::install_name(&short))
+    hide_peer::protocol::launch::install_name(&short)
 }
 
 /// Binds an external tool's command to the connection its key proves (PRD
@@ -2346,6 +2374,39 @@ mod tests {
 
     // Windows cannot read a process's working directory (`cwd_of`).
     #[cfg(unix)]
+    #[test]
+    fn only_the_guest_a_split_left_the_device_folder_to_is_not_handed_its_own_hide() {
+        let home = tempfile::tempdir().unwrap();
+        std::fs::create_dir_all(hide_kit::layout::device_node_state(home.path())).unwrap();
+        let key = "ab".repeat(32);
+        let record = |panes: Option<hide_kit::layout::PanesInstall>| {
+            std::fs::write(
+                hide_kit::layout::device_node_guest(home.path()),
+                serde_json::to_vec(&hide_kit::layout::HelperGuest {
+                    key: key.clone(),
+                    root: home.path().join("root"),
+                    panes,
+                })
+                .unwrap(),
+            )
+            .unwrap();
+        };
+        // No machine took the folder.
+        assert!(!split_guest_in(home.path(), &key));
+        // A paired machine took a device helper's folder over: its node
+        // answers as the helper's installation, which its own `hide` names.
+        record(None);
+        assert!(!split_guest_in(home.path(), &key));
+        // A split left the folder to the machine: its node answers as the
+        // installation the folder's panes name, this machine's own.
+        record(Some(hide_kit::layout::PanesInstall {
+            id: None,
+            cli: None,
+        }));
+        assert!(split_guest_in(home.path(), &key));
+        assert!(!split_guest_in(home.path(), &"cd".repeat(32)));
+    }
+
     #[test]
     fn bootstrap_without_an_engine_socket_still_reaches_the_checkout_fallback() {
         let directory = tempfile::tempdir().unwrap();
