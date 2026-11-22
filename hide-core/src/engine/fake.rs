@@ -839,8 +839,11 @@ impl<'g> Engine for FakeEngine<'g> {
         self.ask("delivery_agent", json!({"target": target}))
     }
 
-    fn prompt_agent(&self, _wait: Wait, target: &str, text: &str) -> Answer<()> {
-        self.ask("prompt_agent", json!({"target": target, "text": text}))
+    fn prompt_agent(&self, _wait: Wait, target: &str, text: &str, by: PromptBy) -> Answer<()> {
+        self.ask(
+            "prompt_agent",
+            json!({"target": target, "text": text, "by": format!("{by:?}")}),
+        )
     }
 
     fn create_worktree(

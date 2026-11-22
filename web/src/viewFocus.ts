@@ -7,6 +7,7 @@ import { browserBridge } from "./host";
 import { frontCheckout } from "./snapshot";
 import { useShellStore } from "./store";
 import { areaFrame, noteAreaFrame, type DrawnViews } from "./areaFrames";
+import { deskOnScreen } from "./pairView";
 import { workspaceViewOf } from "./workspace";
 
 export type KeyboardOwner =
@@ -142,7 +143,7 @@ export function installKeyboardOwner(): () => void {
     const rest = useShellStore.getState().rest;
     const view = workspaceViewOf(rest);
     const checkout = frontCheckout(rest);
-    if (!view?.layout || !checkout || !(view.open && view.tray.shown) || workspaceKey(view) !== event.workspace) return;
+    if (!view?.layout || !checkout || !deskOnScreen(view) || workspaceKey(view) !== event.workspace) return;
     const located = locateDisplay(view.layout.root, event.id);
     if (!located) return;
     inputRevision++;

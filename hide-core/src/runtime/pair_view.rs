@@ -1,18 +1,20 @@
-//! Pair view (PRD lane-desk-pair-view D-08, D-09, D-16, D-22, D-45..D-47):
-//! one mode for the window, kept in `workspace-views.json` with its divider's
-//! ratio (`PairMode`). While it is on, the pane the operator is on is drawn
-//! beside its tab's desk, with the View its agent opened in front: the View
-//! named, else its unseen View, else its last View, else its session record
-//! (B17, B18). Going to another pane by any way (a pane chord, the sidebar, a
-//! tab switch) takes the mode with it (`follow_pair_focus`,
-//! `follow_pair_look`); a pane with nothing to show draws its tab's own layout
-//! and the mode stays on (B19). The engine's layout, zoom and focus are not
-//! touched, and the shell draws the pane's terminal over them (D-26). It ends
-//! only on ⌘., the pressed ◧ or the strip's way back (`PairEnd::Left`), when
-//! the drawn pane closes (`end_pairs_of_gone_panes`) or when the drawn desk's
-//! last View closes or moves away (D-46). Every desk the mode leaves, by a
-//! move or its end, gets back the lane as it was before the mode drew it:
-//! open or closed, the desk shown or folded, the same View in front (D-51).
+//! Pair view (PRD lane-desk-pair-view D-08, D-09, D-16, D-22, D-45..D-47,
+//! D-53): one mode for the window, kept in `workspace-views.json` with its
+//! divider's ratio (`PairMode`). While it is on, the pane the operator is on
+//! is drawn on the left: beside its tab's desk, with the View its agent
+//! opened in front (the View named, else its unseen View, else its last
+//! View, B17, B18), or alone at the body's full width while its agent has
+//! no View to show (a shell, an agent that opened none), and beside the
+//! desk once its agent opens one (D-53). Going to another pane by any way (a
+//! pane chord, the sidebar, a tab switch) takes the mode with it
+//! (`follow_pair_focus`, `follow_pair_look`). The engine's layout, zoom and
+//! focus are not touched, and the shell draws the pane's terminal over them
+//! (D-26). It ends only on ⌘., the pressed ◧ or the band's way back
+//! (`PairEnd::Left`) and when the drawn pane closes (`end_pairs_of_gone_panes`);
+//! the drawn desk's last View closing leaves it on, the pane alone (D-64). Every
+//! desk the mode leaves, by a move or its end, gets back the lane as it was
+//! before the mode drew it: open or closed, the desk shown or folded, the
+//! same View in front (D-51).
 
 use serde::Deserialize;
 
@@ -21,6 +23,16 @@ use super::*;
 use crate::links::ledger::SessionIdentity;
 use crate::model::DetailItem;
 use crate::workspace_views::Place;
+
+/// What the pair rules read once for a publish or an event
+/// (`Runtime::pair_reads`).
+pub(super) struct PairReads {
+    /// The machine's live agents' sessions, by pane.
+    sessions: Vec<(String, SessionIdentity)>,
+    /// The pane each View a terminal link opened belongs to now, by the
+    /// View's id.
+    links: std::collections::BTreeMap<String, String>,
+}
 
 /// The pane pair view draws on the left, with its Workspace and tab.
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -52,10 +64,8 @@ impl PairLeft {
 /// whether the keyboard goes back to the pane that held it before (B26).
 #[derive(Clone, Copy, Debug)]
 pub(super) enum PairEnd {
-    /// The operator left: the strip's way back, ⌘., the pressed ◧.
+    /// The operator left: ⌘., the pressed ◧, the band's way back.
     Left,
-    /// The drawn desk's last View closed or moved away.
-    Emptied,
     /// The drawn pane closed or left its tab (B28).
     PaneGone,
 }
@@ -64,16 +74,23 @@ impl PairEnd {
     fn as_str(self) -> &'static str {
         match self {
             Self::Left => "left",
-            Self::Emptied => "emptied",
             Self::PaneGone => "pane_gone",
         }
     }
 
-    /// The operator leaving, or closing the desk's last View, returns the
-    /// keyboard; a pane that went leaves it.
+    /// The operator leaving returns the keyboard; a pane that went leaves
+    /// it.
     fn returns_keyboard(self) -> bool {
-        matches!(self, Self::Left | Self::Emptied)
+        matches!(self, Self::Left)
     }
+}
+
+/// `pair_view_desk`: whether the desk stands beside the pane focus mode
+/// draws (D-57).
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(super) struct PairDeskPayload {
+    pub(super) shown: bool,
 }
 
 /// `pair_view`: the pane to draw on the left, which turns the mode on, or
@@ -125,23 +142,25 @@ impl Runtime {
             }
             return true;
         };
+        // The operator's own tab (nobody's) the mode is entered on, by ⌘. with
+        // the keyboard on it or the desk's ◧, reads as one they opened during
+        // the mode: it stays on the strip, and it stands the desk beside a
+        // pane with nothing of its own (D-21, D-60).
+        let operator_tab = payload.display_id.as_ref().filter(|id| {
+            let sessions = self.live_sessions();
+            self.view_display(&key, id)
+                .is_some_and(|display| self.owner_pane_of(display, None, &sessions).is_none())
+        });
+        let operator_tab = operator_tab.cloned();
+        // A pane with no View to show is drawn alone (D-53).
         let content = match payload.display_id {
-            Some(id) if self.view_display(&key, &id).is_some() => id,
+            Some(id) if self.view_display(&key, &id).is_some() => Some(id),
             Some(id) => {
                 let error = crate::view_layout::LayoutError::UnknownDisplay(id);
                 self.set_error(error.kind(), error.message(), false);
                 return true;
             }
-            None => match self.pair_content(&key, &pane, &self.live_sessions()) {
-                Some(content) => content,
-                None => {
-                    crate::diagnostic!(serde_json::json!({
-                        "component": "pair_view", "kind": "pair_view.nothing_to_show",
-                        "device": key.0, "pane": pane,
-                    }));
-                    return false;
-                }
-            },
+            None => self.pair_content(&key, &pane, &self.pair_reads(&key)),
         };
         let on = self.pair_mode_on();
         let left = PairLeft {
@@ -149,14 +168,15 @@ impl Runtime {
             tab: tab.clone(),
             pane: pane.clone(),
         };
-        // The same pane again, with its View already in front of its desk,
-        // changes nothing and publishes nothing.
+        // The same pane again, with its View already in front of its desk or
+        // with none to show, changes nothing and publishes nothing.
         let store = self.workspace_views.as_ref();
         let unchanged = on
             && store.is_some_and(|store| store.pair_left.as_ref() == Some(&left))
-            && self
-                .view_layout_at(&key, &Place::Tray(tab.clone()))
-                .is_some_and(|layout| layout.active_area().active.as_ref() == Some(&content));
+            && content.as_ref().is_none_or(|content| {
+                self.view_layout_at(&key, &Place::Tray(tab.clone()))
+                    .is_some_and(|layout| layout.active_area().active.as_ref() == Some(content))
+            });
         if unchanged {
             return false;
         }
@@ -167,31 +187,68 @@ impl Runtime {
         } else {
             self.tab_keyboard_pane(&key, &tab)
         };
+        // Later than every focus already stamped on the Workspace's desks,
+        // which a burst of focuses can carry past the clock, so what was in
+        // front before the mode reads as before it (D-60).
+        let since = self
+            .view_displays(&key)
+            .map(|display| display.last_focused_unix_ms + 1)
+            .fold(unix_milliseconds(), u64::max);
         if let Some(store) = self.workspace_views.as_mut() {
             if !on {
                 store.views.pair.on = true;
                 store.pair_before = before.map(|pane| (key.clone(), pane));
+                store.pair_since = since;
             }
             store.generation += 1;
         }
         if !on {
             self.persist_workspace_views();
         }
-        self.show_pair(left, Some(content));
+        self.show_pair(left, content);
         self.focus_tab_pane(&key, &pane);
+        if let Some(id) = operator_tab {
+            self.stamp_pair_shown(&key, &id);
+        }
         true
     }
 
-    /// Draws `left` beside its tab's desk, with `content` in front of the
-    /// desk; none leaves the desk as it is (a pane with nothing to show).
+    /// Stamps `id` no earlier than the mode's start, so the strip shows it
+    /// as a tab the operator brought in front during the mode (`pair_shows`)
+    /// whichever tab is chosen after it. A tab already in front takes no new
+    /// stamp from being shown again, so the mode's own entry gives it one.
+    fn stamp_pair_shown(&mut self, key: &WorkspaceKey, id: &str) {
+        let Some(store) = self.workspace_views.as_mut() else {
+            return;
+        };
+        let since = store.pair_since;
+        let Some(display) = store
+            .views
+            .get_mut(&key.0, &key.1)
+            .and_then(|view| view.view_mut(id))
+        else {
+            return;
+        };
+        if display.last_focused_unix_ms < since {
+            display.last_focused_unix_ms = since;
+            store.generation += 1;
+        }
+    }
+
+    /// Draws `left` with its tab's desk, `content` in front of the desk;
+    /// none leaves the desk as it is, as a pane drawn alone or a desk tab
+    /// the operator brought in front does. The desk is recorded as it is
+    /// now even for a pane drawn alone, so a View its agent opens later
+    /// leaves with the mode (D-51, D-53).
     fn show_pair(&mut self, left: PairLeft, content: Option<String>) {
         let key = left.key.clone();
         let place = Place::Tray(left.tab.clone());
         self.restore_pair_desks(Some((&left.key, &left.tab)));
-        if content.is_some() {
-            self.note_pair_desk(&left.key, &left.tab);
-        }
+        self.note_pair_desk(&left.key, &left.tab);
         if let Some(store) = self.workspace_views.as_mut() {
+            if store.pair_desk_folded.as_ref() != Some(&left) {
+                store.pair_desk_folded = None;
+            }
             store.pair_left = Some(left);
             store.generation += 1;
         }
@@ -243,6 +300,7 @@ impl Runtime {
             return false;
         };
         store.views.pair.on = false;
+        store.pair_desk_folded = None;
         let left = store.pair_left.take();
         let before = store.pair_before.take();
         store.generation += 1;
@@ -303,9 +361,7 @@ impl Runtime {
     /// stays on (`staying`) back the state it had before the mode drew it:
     /// shown or folded, with the same View in front if it is still there,
     /// so a desk the mode leaves, for another tab or Workspace or out of the
-    /// mode, is as the operator left it (D-51). A tab the mode passed
-    /// drawing its usual screen (a shell, an agent with no View) was never
-    /// drawn, so its lane and desk stay as the operator left them (D-45).
+    /// mode, is as the operator left it (D-51, D-53).
     fn restore_pair_desks(&mut self, staying: Option<(&WorkspaceKey, &str)>) {
         let Some(store) = self.workspace_views.as_mut() else {
             return;
@@ -341,33 +397,10 @@ impl Runtime {
         }
     }
 
-    /// Ends pair view when a View leaving a desk (closed, or moved away)
-    /// leaves the pair the screen drew with nothing to draw (D-46, read by
-    /// the pane): the pane on the left has nothing left to show, or its desk
-    /// is empty, even with the operator's own tabs still on it. It compares
-    /// the pair last published with `drawn_pair` now, so a pane whose only
-    /// thing to show was the View that left still ends the mode it drew; a
-    /// mode that drew nothing (beside a shell) stays on (D-45). The mode
-    /// moving itself is not a View leaving, so a pair whose left pane is no
-    /// longer the drawn tab's is left alone.
-    pub(super) fn end_pair_view_if_undrawn(&mut self) -> bool {
-        let Some((key, tab, _)) = self.published_pair() else {
-            return false;
-        };
-        let moved = self
-            .workspace_views
-            .as_ref()
-            .and_then(|store| store.pair_left.as_ref())
-            .is_some_and(|left| !left.is_in(&key, &tab));
-        if moved || self.drawn_pair(&key, &tab).is_some() {
-            return false;
-        }
-        self.end_pair_view(PairEnd::Emptied)
-    }
-
     /// The pair view the last published snapshot drew: its Workspace, tab
-    /// and pane. What the screen shows now, read by the ends that follow a
-    /// change already applied (an emptied desk, a pane gone).
+    /// and pane, alone or beside the desk. What the screen shows now, read
+    /// by the ends that follow a change already applied (an emptied desk, a
+    /// pane gone).
     pub(super) fn published_pair(&self) -> Option<(WorkspaceKey, String, String)> {
         if !self.pair_mode_on() {
             return None;
@@ -381,36 +414,163 @@ impl Runtime {
         ))
     }
 
-    /// The pane pair view draws beside `tab`'s desk now (D-45, B19): the
+    /// The pane pair view draws beside `tab`'s desk now (D-45, D-53): the
     /// mode is on, the pane the operator is on there has something to show,
-    /// and the desk has a View. The one rule the snapshot, the desk's
-    /// visibility (`tray_in_view`, `drawn_tray_layout`) and a desk tab
-    /// brought in front (`follow_pair_front`) read, so the core never treats
-    /// as drawn a pair view the screen does not draw.
-    pub(super) fn drawn_pair(&self, key: &WorkspaceKey, tab: &str) -> Option<String> {
-        let pane = self.pair_showing(key, tab)?;
-        self.view_layout_at(key, &Place::Tray(tab.to_owned()))
-            .is_some_and(|layout| layout.display_count() > 0)
-            .then_some(pane)
-    }
-
-    /// `drawn_pair` before its desk's count: the pane on the left while it
-    /// has something to show. Free while the mode is off; while it is on,
-    /// each read lists the live agents' sessions once and walks the
-    /// Workspace's Views once (`pair_content`), work under the lock bounded
-    /// by the agents and the Views a Workspace holds, as every snapshot's
-    /// own reads of them are.
-    fn pair_showing(&self, key: &WorkspaceKey, tab: &str) -> Option<String> {
+    /// and the desk has a View; the pane is drawn alone otherwise. The one
+    /// rule the snapshot, the desk's visibility (`drawn_tray_layout`) and a
+    /// desk tab brought in front (`follow_pair_front`) read, so the core
+    /// never treats as drawn a desk the screen does not draw. Free while the
+    /// mode is off; while it is on, each read takes the pair's reads once
+    /// (`pair_reads`) and walks the Workspace's Views once (`pair_content`),
+    /// work under the lock bounded by the agents and the Views a Workspace
+    /// holds, as every snapshot's own reads of them are.
+    pub(super) fn pair_desk(&self, key: &WorkspaceKey, tab: &str) -> Option<String> {
         let pane = self.pair_left_of(key, tab)?;
-        self.pair_content(key, &pane, &self.live_sessions())
-            .is_some()
+        self.pair_desk_beside(key, tab, &pane, &self.pair_reads(key))
             .then_some(pane)
     }
 
-    /// The pane on the left of `tab` while the mode is on: the pane the
-    /// operator last went to there while it is still in the tab, else, as
-    /// after a restart or once that pane closed, the tab's keyboard pane.
-    /// Whether it has something to show is `drawn_pair`'s to ask.
+    /// Whether `tab`'s desk stands beside `pane`, the pane focus mode draws
+    /// there (`pair_desk`): the one rule is that the desk holds a tab the
+    /// strip beside `pane` shows (`pair_shown_count`): the pane's own, or one
+    /// the operator opened during the mode, an Explorer, ⌘P or ⌘K open or
+    /// the tab the mode was entered on (D-21, D-53, D-60, D-64), unless ⌘E
+    /// or the rail's desk button folded it (`pair_desk_folded`, D-57, D-63).
+    /// A desk left with only folded tabs, another agent's or the operator's
+    /// from before the mode, stands for nobody, so the pane is drawn alone
+    /// and no folded tab comes in front.
+    pub(super) fn pair_desk_beside(
+        &self,
+        key: &WorkspaceKey,
+        tab: &str,
+        pane: &str,
+        reads: &PairReads,
+    ) -> bool {
+        !self.pair_desk_folded(key, tab, pane) && self.pair_shown_count(key, tab, pane, reads) > 0
+    }
+
+    /// How many of `tab`'s desk tabs the strip beside `pane` shows
+    /// (`pair_shows`); the desk can stand only with one, and the snapshot
+    /// publishes the number so the web asks for nothing the core refuses.
+    pub(super) fn pair_shown_count(
+        &self,
+        key: &WorkspaceKey,
+        tab: &str,
+        pane: &str,
+        reads: &PairReads,
+    ) -> usize {
+        self.view_layout_at(key, &Place::Tray(tab.to_owned()))
+            .map_or(0, |layout| {
+                layout
+                    .displays()
+                    .filter(|display| {
+                        let owner = self.owner_pane_of(display, None, &reads.sessions);
+                        self.pair_shows(pane, owner.as_deref(), display.last_focused_unix_ms)
+                    })
+                    .count()
+            })
+    }
+
+    /// What the pair rules read of the machine and of `key`'s Views, once
+    /// for a publish or an event: the live agents' sessions by pane, and the
+    /// pane each View a terminal link opened belongs to now, each link's
+    /// terminal looked up once (D-54).
+    pub(super) fn pair_reads(&self, key: &WorkspaceKey) -> PairReads {
+        PairReads {
+            sessions: self.live_sessions(),
+            links: self
+                .view_displays(key)
+                .filter_map(|display| {
+                    self.link_pane_of(display)
+                        .map(|pane| (display.id.clone(), pane))
+                })
+                .collect(),
+        }
+    }
+
+    /// Whether `tab`'s desk of `key` is on screen while focus mode draws a
+    /// pane of that tab: only beside it (`pair_desk`). `None` while the mode
+    /// draws no pane there, where the lane's own state decides. The one rule
+    /// the desk's drawing (`drawn_tray_layout`) and a View landing in view
+    /// (`tray_in_view`) read, so an open lane under a pane drawn alone is
+    /// never taken for a desk on screen.
+    pub(super) fn pair_desk_drawn(&self, key: &WorkspaceKey, tab: &str) -> Option<bool> {
+        self.pair_left_of(key, tab)
+            .map(|_| self.pair_desk(key, tab).is_some())
+    }
+
+    /// Whether ⌘E or the rail's desk button folded the desk beside `pane`,
+    /// drawn by focus mode on `tab` (`pair_desk_folded`).
+    fn pair_desk_folded(&self, key: &WorkspaceKey, tab: &str, pane: &str) -> bool {
+        self.workspace_views
+            .as_ref()
+            .and_then(|store| store.pair_desk_folded.as_ref())
+            .is_some_and(|folded| folded.is_in(key, tab) && folded.pane == pane)
+    }
+
+    /// A View is opened, or chosen, onto `tab`'s desk while ⌘E folded it
+    /// beside the pane focus mode draws: the desk stands again with that
+    /// View in front, and the pane stays (D-21, D-57, D-63). Whether it was
+    /// folded.
+    pub(super) fn unfold_pair_desk(&mut self, key: &WorkspaceKey, tab: &str) -> bool {
+        let Some(store) = self.workspace_views.as_mut() else {
+            return false;
+        };
+        let folded = store
+            .pair_desk_folded
+            .as_ref()
+            .is_some_and(|folded| folded.is_in(key, tab));
+        if folded {
+            store.pair_desk_folded = None;
+            store.generation += 1;
+        }
+        folded
+    }
+
+    /// `pair_view_desk`: ⌘E in focus mode shows or folds the desk beside the
+    /// pane it draws (D-57); folded, the pane is drawn alone at the body's
+    /// full width. A desk with nothing the strip shows has nothing to stand,
+    /// which the log records. Whether anything changed.
+    pub(super) fn set_pair_desk(&mut self, payload: PairDeskPayload) -> bool {
+        let Some(key) = self.front_workspace_key() else {
+            return false;
+        };
+        let tab = self.front_tab(&key);
+        let Some(pane) = self.pair_left_of(&key, &tab) else {
+            crate::diagnostic!(serde_json::json!({
+                "component": "pair_view", "kind": "pair_view.desk_without_mode",
+            }));
+            return false;
+        };
+        let reads = self.pair_reads(&key);
+        if self.pair_desk_beside(&key, &tab, &pane, &reads) == payload.shown {
+            return false;
+        }
+        // A desk with nothing the strip shows beside the pane, empty or only
+        // folded tabs, has nothing to stand for (D-60, D-64); the web reads
+        // the same count (`shown` on the pair) and asks for none.
+        if payload.shown && self.pair_shown_count(&key, &tab, &pane, &reads) == 0 {
+            crate::diagnostic!(serde_json::json!({
+                "component": "pair_view", "kind": "pair_view.desk_empty",
+                "device": key.0, "tab": tab, "pane": pane,
+            }));
+            return false;
+        }
+        if let Some(store) = self.workspace_views.as_mut() {
+            store.pair_desk_folded = (!payload.shown).then(|| PairLeft {
+                key: key.clone(),
+                tab,
+                pane,
+            });
+            store.generation += 1;
+        }
+        true
+    }
+
+    /// The pane pair view draws on the left of `tab` while the mode is on,
+    /// alone or beside the desk (`pair_desk`): the pane the operator last
+    /// went to there while it is still in the tab, else, as after a restart
+    /// or once that pane closed, the tab's keyboard pane.
     pub(super) fn pair_left_of(&self, key: &WorkspaceKey, tab: &str) -> Option<String> {
         let store = self.workspace_views.as_ref()?;
         if !store.views.pair.on {
@@ -457,7 +617,7 @@ impl Runtime {
         let Some(Place::Tray(tab)) = self.view_place(key, display_id) else {
             return;
         };
-        let Some(left) = self.drawn_pair(key, &tab) else {
+        let Some(left) = self.pair_desk(key, &tab) else {
             return;
         };
         let sessions = self.live_sessions();
@@ -484,10 +644,11 @@ impl Runtime {
         self.focus_tab_pane(key, &pane);
     }
 
-    /// The pane of the agent a desk tab belongs to, the one rule the tab's
-    /// path line, pair view's left pane and its folded tabs read (B24,
-    /// D-41): a card's owner (`detail_owner_pane`), else the pane its
-    /// opener is in now; none for what the operator opened. `opener` is the
+    /// The pane a desk tab belongs to, the one rule the tab's path line,
+    /// pair view's left pane and its folded tabs, and the pane's `N views`
+    /// list read (B24, D-41): a card's owner (`detail_owner_pane`), else the
+    /// pane of whoever opened it last, its agent or the pane whose link
+    /// opened it (D-54); none for what the operator opened. `opener` is the
     /// opener's snapshot when the caller already holds it, and `sessions`
     /// the machine's live sessions by pane, read once by the caller.
     pub(super) fn owner_pane_of(
@@ -499,17 +660,43 @@ impl Runtime {
         if let Some(card) = display.card.as_ref() {
             return self.detail_owner_pane_among(card, sessions);
         }
-        match opener {
+        let agent = match opener {
             Some(opener) => opener.pane_id.clone(),
             None => display
                 .opener
                 .as_ref()
                 .and_then(|opener| self.view_opener_snapshot(opener).pane_id),
+        };
+        agent.or_else(|| self.link_pane_of(display))
+    }
+
+    /// The pane whose link opened `display` last (D-54).
+    fn link_pane_of(&self, display: &crate::view_layout::Display) -> Option<String> {
+        display
+            .link_terminal
+            .as_ref()
+            .and_then(|terminal| self.link_terminal_pane(terminal))
+    }
+
+    /// Whether focus mode's desk beside `left` shows `display` on its strip
+    /// (D-60, narrowing D-41): one the left pane owns, its agent's or one
+    /// its terminal's link opened, and one nobody's agent owns that the
+    /// operator brought in front since the mode came on (an Explorer, ⌘P or
+    /// ⌘K open, or a folded tab chosen). Every other agent's, in this Agent
+    /// tab or another, and the operator's from before the mode, fold.
+    /// `owner` is the display's owner, as `owner_pane_of` reads it.
+    fn pair_shows(&self, left: &str, owner: Option<&str>, focused_at: u64) -> bool {
+        match owner {
+            Some(owner) => owner == left,
+            None => self
+                .workspace_views
+                .as_ref()
+                .is_some_and(|store| focused_at >= store.pair_since),
         }
     }
 
-    /// The tabs of the drawn desk `root` that another agent of `pair`'s tab
-    /// owns (D-41), read from the owner each display already carries.
+    /// The tabs of the drawn desk `root` its strip folds (`pair_shows`),
+    /// read from the owner each display already carries.
     pub(super) fn pair_folded(
         &self,
         key: &WorkspaceKey,
@@ -530,43 +717,93 @@ impl Runtime {
         }
         let mut displays = Vec::new();
         walk(root, &mut displays);
+        // Each tab's focus stamp, read from the desk's layout once.
+        let stamps: std::collections::HashMap<&str, u64> = self
+            .view_layout_at(key, &Place::Tray(pair.tab_id.clone()))
+            .map(|layout| {
+                layout
+                    .displays()
+                    .map(|display| (display.id.as_str(), display.last_focused_unix_ms))
+                    .collect()
+            })
+            .unwrap_or_default();
         displays
             .into_iter()
             .filter(|display| {
-                display.owner_pane.as_ref().is_some_and(|owner| {
-                    *owner != pair.pane_id
-                        && self.pane_tab(key, owner).as_deref() == Some(pair.tab_id.as_str())
-                })
+                let focused_at = stamps.get(display.id.as_str()).copied().unwrap_or(0);
+                !self.pair_shows(&pair.pane_id, display.owner_pane.as_deref(), focused_at)
             })
             .map(|display| display.id.clone())
             .collect()
     }
 
-    /// What pair view shows beside `pane` (B17, B19, D-49): of the Views
-    /// its agent opened and the record cards of its session the operator
-    /// put on a desk, the newest the operator has not looked at, else the
-    /// newest; none for a pane with nothing to show, such as a shell or an
-    /// agent that opened nothing, which draws its tab's own layout. No card
-    /// is opened for it. `sessions` is the machine's live sessions by pane.
-    fn pair_content(
-        &self,
-        key: &WorkspaceKey,
-        pane: &str,
-        sessions: &[(String, SessionIdentity)],
-    ) -> Option<String> {
+    /// After a View left the drawn desk with the mode still on: when the tab
+    /// now in front of the desk's area in use is one the strip folds, the
+    /// newest one it shows comes in front instead, so a close never puts
+    /// another agent's tab, or the operator's from before the mode, in front
+    /// (D-60). With none to show, the front stays as the layout chose it and
+    /// the desk, holding nothing the strip shows, folds (`pair_desk_beside`);
+    /// a View leaving never ends the mode (D-64, replacing D-46's end on the
+    /// left pane's last View).
+    pub(super) fn keep_pair_front_shown(&mut self) {
+        let Some((key, tab, pane)) = self.published_pair() else {
+            return;
+        };
+        if self.pair_left_of(&key, &tab).as_deref() != Some(pane.as_str()) {
+            return;
+        }
+        let place = Place::Tray(tab);
+        let sessions = self.live_sessions();
+        let Some(layout) = self.view_layout_at(&key, &place) else {
+            return;
+        };
+        let shows = |display: &crate::view_layout::Display| {
+            let owner = self.owner_pane_of(display, None, &sessions);
+            self.pair_shows(&pane, owner.as_deref(), display.last_focused_unix_ms)
+        };
+        let area = layout.active_area();
+        let front = area.active.as_ref().and_then(|id| layout.display(id));
+        if front.is_none_or(shows) {
+            return;
+        }
+        let Some(next) = area
+            .displays
+            .iter()
+            .filter(|display| shows(display))
+            .max_by_key(|display| display.last_focused_unix_ms)
+            .map(|display| display.id.clone())
+        else {
+            return;
+        };
+        let _ = self.change_view_layout(&key, &place, |layout, stamp| {
+            layout.focus(&next, stamp).map(|changed| ((), changed))
+        });
+    }
+
+    /// What pair view shows beside `pane` (B17, B19, D-49, D-54): of the
+    /// Views its agent opened, those the operator opened from its terminal's
+    /// links, and the record cards of its session the operator put on a
+    /// desk, the newest the operator has not looked at, else the newest; none for a pane with nothing to show, such as a shell or an
+    /// agent that opened nothing, which is drawn alone (D-53). No card is
+    /// opened for it.
+    fn pair_content(&self, key: &WorkspaceKey, pane: &str, reads: &PairReads) -> Option<String> {
         let scope = self.session_scope_of_pane(pane);
-        let own: Vec<&crate::view_layout::Display> = self
-            .view_displays(key)
-            .filter(|display| match &display.card {
-                Some(card @ DetailItem::Record { .. }) => {
-                    self.detail_owner_pane_among(card, sessions).as_deref() == Some(pane)
-                }
-                Some(_) => false,
-                None => scope
-                    .as_ref()
-                    .is_some_and(|scope| display.openers.iter().any(|o| o.of_session(scope))),
-            })
-            .collect();
+        let own: Vec<&crate::view_layout::Display> =
+            self.view_displays(key)
+                .filter(|display| match &display.card {
+                    Some(card @ DetailItem::Record { .. }) => {
+                        self.detail_owner_pane_among(card, &reads.sessions)
+                            .as_deref()
+                            == Some(pane)
+                    }
+                    Some(_) => false,
+                    None => {
+                        scope.as_ref().is_some_and(|scope| {
+                            display.openers.iter().any(|o| o.of_session(scope))
+                        }) || reads.links.get(&display.id).map(String::as_str) == Some(pane)
+                    }
+                })
+                .collect();
         own.iter()
             .filter(|display| display.unseen.is_some())
             .max_by_key(|display| display.opened_stamp)
@@ -574,16 +811,16 @@ impl Runtime {
             .map(|display| display.id.clone())
     }
 
-    /// The panes of `key`'s Agent tabs that have something to show beside
-    /// the desk (B19), by `pair_content`, so ◧, ⌘. and the operator's
-    /// choice agree. It runs on each publish of the Workspace in front:
-    /// the checkout's panes times its Views (at most `MAX_TRAYS` desks of
-    /// `MAX_VIEW_DISPLAYS` and the shelf's), with the live sessions read once.
-    pub(super) fn pairable_panes(&self, key: &WorkspaceKey) -> Vec<String> {
-        let sessions = self.live_sessions();
+    /// The panes of `key`'s Agent tabs with a View to show beside the desk,
+    /// by `pair_content`: the pane head's ◧ cell shows on
+    /// these only, to keep the other heads quiet (D-53). It runs on each
+    /// publish of the Workspace in front: the checkout's panes times its
+    /// Views (at most `MAX_TRAYS` desks of `MAX_VIEW_DISPLAYS` and the
+    /// shelf's), with the pair's reads taken once by the caller.
+    pub(super) fn panes_with_views(&self, key: &WorkspaceKey, reads: &PairReads) -> Vec<String> {
         self.checkout_tabs(key)
             .flat_map(|tab| &tab.panes)
-            .filter(|row| self.pair_content(key, &row.id, &sessions).is_some())
+            .filter(|row| self.pair_content(key, &row.id, reads).is_some())
             .map(|row| row.id.clone())
             .collect()
     }
@@ -591,8 +828,8 @@ impl Runtime {
     /// The operator chose `pane`, from the sidebar, a pane chord or a
     /// click, on this machine or a device: while the mode is on it is drawn
     /// on the left with its own View on the right, so the two sides keep one
-    /// owner (B25, D-09, D-45). A pane with nothing to show draws its tab's
-    /// own layout, and the mode stays on.
+    /// owner (B25, D-09, D-45). A pane with nothing to show is drawn alone
+    /// (D-53).
     pub(super) fn follow_pair_focus(&mut self, pane: &str) {
         if !self.pair_mode_on() {
             return;
@@ -650,7 +887,7 @@ impl Runtime {
         {
             return;
         }
-        let content = self.pair_content(&left.key, &left.pane, &self.live_sessions());
+        let content = self.pair_content(&left.key, &left.pane, &self.pair_reads(&left.key));
         self.show_pair(left, content);
     }
 }

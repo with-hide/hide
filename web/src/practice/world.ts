@@ -2,8 +2,9 @@
 // events it answers, applied here the way the core would apply them. Nothing
 // leaves the page: no daemon, no engine, no agent.
 
+import type { AutomationCall, CallAnswer } from "../automationCall";
 import type { NodeUsage } from "../generated/hided-ws";
-import type { AccessSection, AgentRow, ChangesSnapshot, EditorSnapshot, LinkPanel, MemorySection, SessionRecordSection, SessionWorkSearch, SnapshotRest, SuggestionsSection } from "../snapshot";
+import type { AccessSection, AgentRow, AutomationsSection, ChangesSnapshot, EditorSnapshot, LinkPanel, MemorySection, SessionRecordSection, SessionWorkSearch, SnapshotRest, SuggestionsSection } from "../snapshot";
 import type { DirectoryList, Documents, FileIndexResult } from "../store";
 
 export type CoreEvent = { kind: string; payload: Record<string, unknown> };
@@ -39,7 +40,8 @@ export type WorldFrames = {
   access?: AccessSection | null;
 };
 
-export type WorldSnapshot = { rest: SnapshotRest; agents: AgentRow[]; focused: string | null; usage: NodeUsage | null; frames?: WorldFrames };
+/** `automations` is the core's section of the automation screen; a world without one sends none, and the shell then holds none. */
+export type WorldSnapshot = { rest: SnapshotRest; agents: AgentRow[]; focused: string | null; usage: NodeUsage | null; frames?: WorldFrames; automations?: AutomationsSection };
 
 export type PracticeWorld<M> = {
   initial: () => M;
@@ -67,4 +69,11 @@ export type PracticeWorld<M> = {
    * which asks again. A world that only answers the learner has none.
    */
   later?: (model: M) => { at: number; event: CoreEvent } | null;
+  /**
+   * A call the window waits for an answer to (`automation_call`: the form's
+   * preview, make and edit, a run's reopen): the model it leaves, null when it
+   * changes none, and the answer the core would send back. A world with no
+   * answer refuses every call as the core does with automations unavailable.
+   */
+  call?: (model: M, call: AutomationCall) => { model: M | null; answer: CallAnswer<unknown> };
 };

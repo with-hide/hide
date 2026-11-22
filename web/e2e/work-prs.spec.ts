@@ -417,6 +417,28 @@ test("an agent's mark on a pull request row takes the press while the row's butt
   }, { agentOn: "feat/clean" });
 });
 
+test("a pull request row opens the card on its maker's standing desk with the keys, so the close chord closes the card and not the maker (UI_BEHAVIOR, Opening, preview, and Open to the side)", { tag: "@platform" }, async ({ page }) => {
+  await openWork(page, async ({ work }) => {
+    const maker = work.locator('[data-pr="31"] [data-pr-agent]').first();
+    await expect(maker).toBeVisible({ timeout: 30_000 }); // wait-ok: the PR list names its maker once the core's GitHub read after the agent's start lands
+    // The core brings the maker's pane forward with the card, focusing it, in its worktree's Workspace.
+    await work.locator('[data-pr-row="31"]').click();
+    await expect(cardOf(page, 31)).toBeVisible();
+    const pane = page.locator('[data-pane-view][data-focused="true"]');
+    await expect(pane).toHaveCount(1);
+    const makerPane = await pane.getAttribute("data-pane-view");
+    // A closed lane coming up hands the keys to the desk on its own; the operator's case is the desk already standing.
+    await page.locator(`[data-terminal-host="${makerPane}"]`).click();
+    await expect(page.locator(`[data-terminal-host="${makerPane}"] textarea`)).toBeFocused();
+    await work.locator('[data-pr-row="31"]').click();
+    await expect(page.locator('[data-view-area-id] [role="tab"][data-tab-kind="card"][aria-selected="true"]')).toBeFocused();
+    await page.keyboard.press(chord("close_tab"));
+    await expect(cardOf(page, 31)).toHaveCount(0);
+    await expect(page.getByRole("dialog")).toHaveCount(0);
+    await expect(page.locator(`[data-pane-view="${makerPane}"]`)).toBeVisible();
+  }, { agentOn: "feat/clean" });
+});
+
 test("a branch update on a pull request that moved is refused, looked at again, then goes out on the new head", async ({ page }) => {
   await openWork(page, async ({ gh, work }) => {
     // GitHub refuses, the card says it changed, Look again reads it and the

@@ -47,6 +47,7 @@ So every review covers the perspectives below, and names the perspective of each
 - Whatever the change starts (a process, a thread, a timer, a watcher, a file, a connection) has an owner and ends on every exit path, and when that owner ends.
 - Whatever grows with use (a queue, a cache, a list, a count of processes) has a cap, and it never grows past that cap.
   At the cap, a record that keeps accumulating (agent registrations, the session archive, closed missions) makes room by dropping its oldest finished entries, with a diagnostic, rather than refusing the new one; new work is refused, as a reported failure, only when nothing finished can be dropped ([delivery.md](delivery.md), [ARCHITECTURE.md: Session archive](ARCHITECTURE.md#session-archive)).
+- A cap added or changed says in its doc comment or the pull request what it counts and what each path does when it is full ([Reviewing a cap](#reviewing-a-cap)).
 - Work added to a high-frequency path says its cost per input, its fan-out and its bound (`docs/PERFORMANCE_TESTING.md`).
 
 ### 6. Tests
@@ -59,6 +60,21 @@ So every review covers the perspectives below, and names the perspective of each
 - A new or changed test comes with its repeat result in the pull request's folded `Tests` block (changed tests times runs, linked to the repeat job); a test with none is an ordinary finding, because a single green run does not show a test is stable.
 - A new fixed wait, `sleep` or `timeout:` override names the state it waits for, as [Wait for state, not time](TESTING.md#wait-for-state-not-time) requires; one without it is an ordinary finding.
 - `docs/TESTING.md` owns which layer to test at, how to keep a test deterministic and the checklist for a test change ([Reviewing a pull request that adds or changes a test](TESTING.md#reviewing-a-pull-request-that-adds-or-changes-a-test)).
+
+### Reviewing a cap
+
+A reviewer asks these four questions of every cap the change adds or changes; a failed answer is an ordinary finding.
+
+1. What does it count?
+   What use adds (checkouts the operator opened, session files), not what use passes (every checkout published, every entry walked).
+2. What is in use, and what is finished?
+   What is in use is never dropped, and a record ages by when it was last used, not when it was made.
+3. What does each path do when it is full?
+   A write drops the oldest finished entry and refuses only when nothing finished can go.
+   A read, list or walk answers its newest part and says it was cut, in the answer itself; an `Err` or a refusal of the whole read at a cap is a finding while anything finished could go.
+   A loop that accepts, spawns or opens ends only when its owner ends; a failure such as a full file table fails that one unit and is reported.
+4. Which test fills it?
+   It puts one in-use and some finished entries past the cap, and asserts the in-use entry survives, new work is taken and the read says it was cut.
 
 ## Writing a finding
 

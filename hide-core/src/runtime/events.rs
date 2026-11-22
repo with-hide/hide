@@ -1249,6 +1249,11 @@ pub(super) struct PrOpenPayload {
     /// (operator decision 2026-11-09).
     #[serde(default)]
     pub(super) at: super::detail::DetailPlace,
+    /// The page's number for this open, as on `detail_open`.
+    #[serde(default)]
+    pub(super) client_id: Option<String>,
+    #[serde(default)]
+    pub(super) sequence: Option<u64>,
 }
 
 /// `pr_delegate`: an agent started on a pull request's branch with the
@@ -1794,6 +1799,7 @@ pub(super) enum Event {
     TaskReveal(super::detail::TaskRevealPayload),
     DetailOpen(super::detail::DetailOpenPayload),
     PairView(super::pair_view::PairViewPayload),
+    PairViewDesk(super::pair_view::PairDeskPayload),
     RemoteControl(RemoteControlPayload),
     RemoteFileList(RemoteFileListPayload),
     FileOpen(FileOpenPayload),
@@ -2120,6 +2126,7 @@ pub(super) fn validate_event(event: EventEnvelope) -> Result<Event, EventValidat
         "task_reveal" => decode!(super::detail::TaskRevealPayload, TaskReveal),
         "detail_open" => decode!(super::detail::DetailOpenPayload, DetailOpen),
         "pair_view" => decode!(super::pair_view::PairViewPayload, PairView),
+        "pair_view_desk" => decode!(super::pair_view::PairDeskPayload, PairViewDesk),
         "remote_control" => decode!(RemoteControlPayload, RemoteControl),
         "remote_file_list" => decode!(RemoteFileListPayload, RemoteFileList),
         "file_open" => decode!(FileOpenPayload, FileOpen),
@@ -4327,7 +4334,13 @@ impl Runtime {
             Event::PrLinkIssue(payload) => self.link_pr_issue(payload),
             Event::PrFeedbackRead(payload) => self.read_pr_feedback(payload),
             Event::PrDelegate(payload) => self.delegate_pr(payload),
-            Event::PrOpen(payload) => self.open_pull_request_card(payload),
+            // A card open the page numbered answers it in the next snapshot,
+            // opened or refused, as an operator focus does.
+            Event::PrOpen(payload) => {
+                let numbered = payload.sequence.is_some();
+                self.acknowledge_operator_focus(payload.client_id.as_deref(), payload.sequence);
+                self.open_pull_request_card(payload) || numbered
+            }
             Event::PrCardRead(payload) if payload.look_again => self.look_again_pr_card(payload),
             Event::PrCardRead(payload) => self.read_pr_card(payload),
             Event::PrMerge(payload) => self.merge_pull_request(payload),
@@ -4564,8 +4577,13 @@ impl Runtime {
             Event::PracticeInviteClose => self.close_practice_invite(),
             Event::OverviewGraphChange(payload) => self.change_overview_graph(payload),
             Event::TaskReveal(payload) => self.reveal_task(payload),
-            Event::DetailOpen(payload) => self.open_detail_at(payload.item, payload.at),
+            Event::DetailOpen(payload) => {
+                let numbered = payload.sequence.is_some();
+                self.acknowledge_operator_focus(payload.client_id.as_deref(), payload.sequence);
+                self.open_detail_at(payload.item, payload.at) || numbered
+            }
             Event::PairView(payload) => self.set_pair_view(payload),
+            Event::PairViewDesk(payload) => self.set_pair_desk(payload),
             Event::UiStateUpdate(payload) => {
                 let payload = *payload;
                 if let Some(visible) = payload.usage_window_visible {

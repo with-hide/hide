@@ -158,16 +158,15 @@ export type RevisitOffer = "hidden" | "star" | "done";
 /**
  * What the pane's head moved into its menus (PRD lane-desk-pair-view B20,
  * B21): `mention`, the `@` list of an agent pane; `pair`, ◧, `off` to enter
- * pair view, `on` on the pane in it to leave it, `none` disabled with why on
- * a pane with nothing to show beside it (B19).
+ * pair view, on any pane (D-53), `on` on the pane in it to leave it.
  */
 export type PaneHeadOffer = { mention: boolean; pair: PairOffer };
 
 function pairEntry(pair: PairOffer): MenuEntry<PaneMenuId> {
   return {
     id: "pair_view", icon: "pair",
-    label: translate(pair === "on" ? pairLabelKey("on") : pairLabelKey("off")),
-    unavailable: pair === "none" ? translate(pairLabelKey("none")) : null,
+    label: translate(pairLabelKey(pair)),
+    unavailable: null,
     shortcut: commandLabel("pair_view") || undefined,
   };
 }

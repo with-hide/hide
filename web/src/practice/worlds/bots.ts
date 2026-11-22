@@ -1,4 +1,4 @@
-// Flow 6's world: one invented project with the learner's agent at work, a
+// Flow 8's world: one invented project with the learner's agent at work, a
 // bot already connected as 전체, and a second bot's request waiting. A program
 // outside Hide asks with `hide access request`, which a practice screen cannot
 // run, so the request is staged: it waits in Settings › 봇 from the start, as

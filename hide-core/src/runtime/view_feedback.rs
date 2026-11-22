@@ -33,7 +33,7 @@ use crate::model::{
 use crate::node_access::{LinkError, NodeLink, call_as};
 use crate::view_feedback::{
     Anchor, COMMENTS_PER_CHECKOUT, COMMENTS_PER_VIEW, Comment, CommentState, Feedback, LetterItem,
-    Opener, Shot, Target, WAITING_SENDS, WaitingSend,
+    OpenedBy, Opener, Shot, Target, WAITING_SENDS, WaitingSend,
 };
 use crate::view_layout::DisplayKind;
 
@@ -82,9 +82,10 @@ struct PendingOpener {
     key: WorkspaceKey,
     path: String,
     kind: DisplayKind,
-    /// The agent whose terminal the link was in; `None` for the operator's
-    /// own open, which makes the View the operator's (PRD session-files D-10).
-    opener: Option<Opener>,
+    /// The agent or the pane with no agent whose terminal the link was in
+    /// (D-33, D-54); the operator's own open makes the View the operator's
+    /// (PRD session-files D-10).
+    opener: OpenedBy,
     at: u64,
 }
 
@@ -298,28 +299,21 @@ impl Runtime {
         }
     }
 
-    /// Marks the View `view_id` of `key` as opened by `opener` (D-03); with
-    /// no opener the operator opened it.
+    /// Marks the View `view_id` of `key` as opened by `by` (D-03, D-54).
+    /// Every agent's or pane's open stamps the View, the same one's again
+    /// too, so it leads its pane's `N views` as the newest.
     pub(super) fn stamp_view_opener(
         &mut self,
         key: &WorkspaceKey,
         view_id: &str,
-        opener: Option<Opener>,
+        by: impl Into<OpenedBy>,
     ) {
+        let by = by.into();
         let stamped = self.change_view(key, view_id, |layout, stamp| {
             let display = layout
                 .display_mut(view_id)
                 .ok_or_else(|| crate::view_layout::LayoutError::UnknownDisplay(view_id.into()))?;
-            let changed = match opener {
-                // Every open stamps the View, the same agent's again too, so
-                // it leads its pane's `N views` as the newest.
-                Some(opener) => {
-                    display.opened_by(opener, stamp);
-                    true
-                }
-                None => !std::mem::replace(&mut display.operator, true),
-            };
-            Ok(((), changed))
+            Ok(((), display.opened_as(by, stamp)))
         });
         if let Err(error) = stamped {
             crate::diagnostic!(serde_json::json!({
@@ -371,11 +365,11 @@ impl Runtime {
         }
     }
 
-    /// A terminal link the operator clicked in an agent's pane names the
-    /// pane; the View the file lands in, now or once it is read, is that
-    /// agent's (D-02, B2). Any other open of the operator's, from the
-    /// Explorer, ⌘K or a plain shell's link, makes it the operator's (PRD
-    /// session-files D-10, D-28).
+    /// A terminal link the operator clicked in a pane names the pane; the
+    /// View the file lands in, now or once it is read, is that pane's: its
+    /// agent's (D-02, B2), or a shell's by its terminal (D-54). Any other
+    /// open of the operator's, from the Explorer, ⌘P or ⌘K, makes it the
+    /// operator's (PRD session-files D-10, D-28).
     pub(super) fn expect_view_opener(
         &mut self,
         key: &WorkspaceKey,
@@ -383,8 +377,45 @@ impl Runtime {
         kind: DisplayKind,
         pane: Option<&str>,
     ) {
-        let opener = pane.and_then(|pane| self.opener_of_pane(pane));
-        self.expect_view_opener_as(key, path, kind, opener);
+        let by = pane.map_or(OpenedBy::Operator, |pane| self.link_owner(pane));
+        self.expect_view_opener_as(key, path, kind, by);
+    }
+
+    /// Who a link pressed in `pane`'s terminal opens for (D-33, D-54): the
+    /// agent running there, else the pane's terminal, so a shell's link is
+    /// that pane's too; the operator's own when the pane is not listed.
+    pub(super) fn link_owner(&self, pane: &str) -> OpenedBy {
+        if let Some(opener) = self.opener_of_pane(pane) {
+            return OpenedBy::Agent(opener);
+        }
+        let device = crate::address::pane_device(pane).unwrap_or(self.node.as_str());
+        self.catalog_workspaces()
+            .filter(|workspace| workspace.device_id == device)
+            .flat_map(|workspace| &workspace.checkouts)
+            .flat_map(|checkout| &checkout.tabs)
+            .flat_map(|tab| &tab.panes)
+            .find(|row| row.id == pane)
+            .and_then(|row| row.terminal_id.clone())
+            .map_or(OpenedBy::Operator, |terminal_id| {
+                OpenedBy::Terminal(crate::view_feedback::LinkTerminal {
+                    device_id: device.to_owned(),
+                    terminal_id,
+                })
+            })
+    }
+
+    /// The pane that holds `terminal` now, on its machine.
+    pub(super) fn link_terminal_pane(
+        &self,
+        terminal: &crate::view_feedback::LinkTerminal,
+    ) -> Option<String> {
+        self.catalog_workspaces()
+            .filter(|workspace| workspace.device_id == terminal.device_id)
+            .flat_map(|workspace| &workspace.checkouts)
+            .flat_map(|checkout| &checkout.tabs)
+            .flat_map(|tab| &tab.panes)
+            .find(|row| row.terminal_id.as_deref() == Some(terminal.terminal_id.as_str()))
+            .map(|row| row.id.clone())
     }
 
     /// The View the document lands in is `opener`'s, or the operator's with
@@ -396,8 +427,9 @@ impl Runtime {
         key: &WorkspaceKey,
         path: &str,
         kind: DisplayKind,
-        opener: Option<Opener>,
+        opener: impl Into<OpenedBy>,
     ) {
+        let opener = opener.into();
         let pending = &mut self.view_feedback.pending_openers;
         pending.retain(|old| !(old.key == *key && old.path == path && old.kind == kind));
         if pending.len() >= PENDING_OPENERS {
@@ -1693,10 +1725,16 @@ impl Runtime {
         let mut opened: Vec<OpenedViewSnapshot> = Vec::new();
         let mut shown: Vec<(String, crate::view_layout::Shown<'_>, u64)> = Vec::new();
         for display in displays {
-            let Some(pane) = display.opener.as_ref().and_then(|o| o.pane_id.clone()) else {
+            let stored = self.view_display(key, &display.id);
+            // The pane the View belongs to (`owner_pane_of`), but a record
+            // card, which is the operator's to read and no pane's open.
+            let Some(pane) = display
+                .owner_pane
+                .clone()
+                .filter(|_| display.card.is_none())
+            else {
                 continue;
             };
-            let stored = self.view_display(key, &display.id);
             let unseen = stored.is_some_and(|stored| stored.unseen.is_some());
             let stamp = stored.map_or(0, |stored| stored.opened_stamp);
             // Two tabs showing the same thing are one row, which is unseen

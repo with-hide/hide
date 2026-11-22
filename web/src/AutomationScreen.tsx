@@ -1,4 +1,4 @@
-import { CheckIcon, ChevronLeftIcon, ChevronRightIcon, CircleAlertIcon, FolderOpenIcon, InboxIcon, MinusIcon, PackageIcon, PauseIcon, PencilIcon, PlayIcon, PlusIcon, RepeatIcon, SquareIcon, Trash2Icon, XIcon, type LucideIcon } from "lucide-react";
+import { CheckIcon, ChevronLeftIcon, ChevronRightIcon, ChartColumnIcon, CircleAlertIcon, FolderOpenIcon, MinusIcon, PauseIcon, PencilIcon, PlayIcon, PlusIcon, RepeatIcon, SquareIcon, SunriseIcon, Trash2Icon, XIcon, type LucideIcon } from "lucide-react";
 import { useCallback, useEffect, useMemo, useRef, useState, type KeyboardEvent, type ReactNode } from "react";
 import type { Actions } from "./actions";
 import { AgentMark } from "./AgentMark";
@@ -139,7 +139,7 @@ function Skeleton() {
 const LIST_GRID = "grid grid-cols-[repeat(auto-fill,minmax(var(--size-automation-card),1fr))] gap-md";
 
 /** Each starting point's mark on the empty screen. */
-const EXAMPLE_ICONS = { issues: InboxIcon, deps: PackageIcon, ci: CircleAlertIcon } as const satisfies Record<AutomationExample, LucideIcon>;
+const EXAMPLE_ICONS = { report: ChartColumnIcon, briefing: SunriseIcon, ci: CircleAlertIcon } as const satisfies Record<AutomationExample, LucideIcon>;
 
 /**
  * The list (B2, B3, B38): each automation in the core's order as a card of
@@ -202,7 +202,7 @@ function Empty() {
                 <span aria-hidden="true" className="flex size-(--size-control-lg) shrink-0 items-center justify-center rounded-md bg-secondary text-subtle-foreground"><Icon className="size-(--size-icon)" /></span>
                 <span className="flex min-w-0 flex-1 flex-col">
                   <span className="truncate text-body font-medium text-foreground">{name}</span>
-                  <span className="truncate text-caption text-muted-foreground">{t(EXAMPLE_WORDS[key].task)}</span>
+                  <span className="line-clamp-2 break-keep text-caption text-muted-foreground">{t(EXAMPLE_WORDS[key].task)}</span>
                 </span>
                 <span className="flex shrink-0 items-center gap-xxs text-caption text-subtle-foreground"><RepeatIcon aria-hidden="true" className="size-(--size-icon-sm)" />{scheduleText(AUTOMATION_EXAMPLES[key], language, t)}</span>
               </RowButton>

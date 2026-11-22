@@ -143,7 +143,7 @@ test("a crowded desk reads its front tab whole and shrinks the others, and the r
   const engine = await startFixture({ agents: false });
   let daemon: Daemon | null = null;
   try {
-    const names = ["release-checklist-for-the-desk.md", "pair-view-notes-and-questions.md", "card-tabs-on-a-desk-draft.md", "rail-button-and-path-line.md"];
+    const names = ["release-checklist-for-the-desk.md", "pair-view-notes-and-questions.md", "card-tabs-on-a-desk-draft.md", "rail-and-path.md"];
     for (const name of names) fs.writeFileSync(path.join(engine.root, "fixture", name), `# ${name}\n`);
     daemon = await startHided(engine, "lane-desk-crowded");
     await page.goto(`${daemon.origin}/#token=${daemon.token}`);
@@ -154,10 +154,11 @@ test("a crowded desk reads its front tab whole and shrinks the others, and the r
       await page.locator(`[data-explorer-row$="/${name}"]`).dblclick();
       await expect(deskTabs(page)).toHaveCount(index + 1);
     }
-    // D-30: the front tab's name is whole; a tab behind it is cut or down to its marks, its tooltip naming it whole.
+    // D-30: the front tab's name is whole while it fits the selected maximum (240px); a tab behind it is cut or down to
+    // its marks, its tooltip naming it whole.
     const cut = (tab: ReturnType<typeof front>) => tab.locator("[data-tab-title]").evaluate((title: HTMLElement) => title.offsetParent === null || title.scrollWidth > title.clientWidth);
     await expect(front(page)).toContainText(names[3]!);
-    expect(await cut(front(page))).toBe(false);
+    await expect.poll(() => cut(front(page))).toBe(false);
     expect(await cut(deskTabs(page).first())).toBe(true);
     await deskTabs(page).first().hover();
     await expect(page.getByRole("tooltip")).toContainText(names[0]!);

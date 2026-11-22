@@ -208,7 +208,7 @@ impl Runtime {
 
     /// The pane an opener's agent is in now, by its terminal and else its
     /// native session, never by a stored pane id (view-opener-feedback D-23).
-    fn opener_pane(&self, opener: &Opener) -> Option<String> {
+    pub(super) fn opener_pane(&self, opener: &Opener) -> Option<String> {
         let agents = self.machine_agents(&opener.device_id);
         opener_pane_among(self, opener, agents)
     }

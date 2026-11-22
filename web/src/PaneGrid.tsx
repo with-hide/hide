@@ -1,5 +1,6 @@
-import { memo, useCallback, useRef, useState } from "react";
+import { memo, useCallback, useEffect, useRef, useState } from "react";
 import type { Actions } from "./actions";
+import { useUiStore } from "./ui";
 import { markTone } from "./agentRow";
 import { useInterfaceTranslation } from "./i18n/client";
 import { PaneView } from "./PaneView";
@@ -104,11 +105,17 @@ export function PairPaneCanvas({ paneId, actions }: { paneId: string; actions: A
   // The pane the layer opened with: a pane that took the left since did so while pair view was on screen, from a desk tab
   // or the sidebar, and keeps the keys where the operator pressed if that was the desk (`PaneView`); an entry hands them over.
   const entered = useRef(paneId);
+  // The keyboard's input count when the operator asked for this entry, read once as the layer mounts and cleared, so
+  // only the pane that arrives with the answer weighs it; a later pane, or the entered one chosen again, takes the keys.
+  const [entryInput] = useState(() => useUiStore.getState().pairEntryInput);
+  useEffect(() => useUiStore.setState({ pairEntryInput: null }), []);
+  const moved = useRef(false);
+  if (paneId !== entered.current) moved.current = true;
   return (
     <div className="relative h-full w-full min-h-0 min-w-0" data-layout-pane={paneId} data-pair-pane={paneId}>
       {/* Keyed by pane, so another pane taking the left mounts its own view and the keys follow it (B25), as on the tab's canvas. */}
       {pane ? (
-        <PaneView key={paneId} pane={pane} transport={transport} focused={focused} scale={scale} actions={actions} {...agentProps(agents.get(paneId))} paneCount={1} zoomed={false} local={local} keysStayOnDesk={entered.current !== paneId} />
+        <PaneView key={paneId} pane={pane} transport={transport} focused={focused} scale={scale} actions={actions} {...agentProps(agents.get(paneId))} paneCount={1} zoomed={false} local={local} keysStayOnDesk={entered.current !== paneId} entryInput={moved.current ? null : entryInput} />
       ) : (
         <div className="h-full bg-background" data-pane-missing={paneId} />
       )}

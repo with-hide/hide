@@ -368,11 +368,13 @@ pub struct WorkspaceViewSnapshot {
     /// The window's pair view mode (D-45, D-47): whether it is on, and the
     /// left pane's share of the body.
     pub pair_mode: PairModeSnapshot,
-    /// The panes of this Workspace's Agent tabs that have something to show
-    /// beside the desk, a View their agent opened or a live session's record
-    /// (B19): ◧ is on for these and off, with why, for every other.
+    /// The panes of this Workspace's Agent tabs with a View to show beside
+    /// the desk: one their agent opened, one the operator opened from their
+    /// terminal's links, or a record card of their session on a desk (B19,
+    /// D-49, D-54): the pane head's ◧ cell shows on these only.
+    /// Every pane enters pair view from ⌘. and the menus (D-53).
     #[serde(skip_serializing_if = "Vec::is_empty")]
-    pub pairable: Vec<String>,
+    pub panes_with_views: Vec<String>,
     /// The Agent areas, for a Workspace whose tabs the core arranges (this
     /// machine's and a node's that dialed in); `None` on a device this core
     /// dials, whose engine shows one tab.
@@ -406,9 +408,9 @@ pub struct TraySnapshot {
     /// still drawn. A shown desk that does not float takes its place on the
     /// right and the agents narrow beside it.
     pub floats: bool,
-    /// The pair view drawn now (D-08, D-45): while the mode is on and the
-    /// pane the operator is on in this tab has something to show; the strip,
-    /// the tab row and the sidebar mark only it (D-17).
+    /// The pair view drawn now (D-08, D-45, D-53): while the mode is on, the
+    /// pane the operator is on in this tab, alone or beside the desk; the
+    /// strip, the tab row and the sidebar mark only it (D-17).
     #[serde(skip_serializing_if = "Option::is_none")]
     pub pair: Option<PairViewSnapshot>,
 }
@@ -423,11 +425,19 @@ pub struct PairModeSnapshot {
     pub ratio: Option<u16>,
 }
 
-/// An Agent tab in pair view: the pane drawn beside its tray.
+/// An Agent tab in pair view: the pane drawn beside its tray, or alone.
 #[derive(Clone, Debug, Eq, PartialEq, Serialize)]
 pub struct PairViewSnapshot {
     pub tab_id: String,
     pub pane_id: String,
+    /// The pane is drawn alone at the body's full width, with no desk: its
+    /// desk holds no tab the strip shows (D-53, D-64), or ⌘E or the rail's
+    /// desk button folded it (D-57, D-63).
+    pub alone: bool,
+    /// How many of the desk's tabs the strip beside the pane shows, folded
+    /// or not: the desk can stand only with one, so ⌘E and the rail's desk
+    /// button ask for nothing when it is 0 (D-60, D-63).
+    pub shown: usize,
     /// The desk tabs in front of the drawn desk that another agent of the
     /// paired tab owns, which the desk folds into its `Others N` menu
     /// (D-41); bringing one in front takes its agent to the left (B24). A

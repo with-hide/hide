@@ -1255,8 +1255,9 @@ pub enum Call {
         checkpoint: Option<hide_session::usage::Checkpoint>,
     },
     /// The agent sessions the node holds for `project`, newest first, at most
-    /// `hide_session::SESSION_DISCOVERY_LIMIT` files visited
-    /// (`hide_session::ProjectSession`).
+    /// `hide_session::SESSION_DISCOVERY_LIMIT` rows with a row for each agent
+    /// cut to its newest (`hide_session::ProjectSession`,
+    /// `hide_session::SessionStoreRefusal`).
     ProjectSessions {
         project: hide_project::ProjectIdentity,
     },

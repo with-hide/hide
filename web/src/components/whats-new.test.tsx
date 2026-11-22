@@ -5,6 +5,7 @@ import { afterEach, expect, it, vi } from "vitest";
 import { createActions } from "../actions";
 import type { WhatsNewState } from "../host";
 import { useShellStore } from "../store";
+import { useUiStore } from "../ui";
 import { TooltipProvider } from "./ui/tooltip";
 import { WhatsNewHost } from "./whats-new";
 
@@ -36,7 +37,7 @@ afterEach(async () => {
 const entry = (version: string, titles: string[]) => ({
   version,
   date: "2026-11-20",
-  highlights: titles.map((title) => ({ drawing: "mission", chapter: null, text: { en: { title, line: `${title} line` } } })),
+  highlights: titles.map((title) => ({ drawing: "mission", chapter: null, settings: null, text: { en: { title, line: `${title} line` } } })),
   changes: [],
 });
 
@@ -79,4 +80,15 @@ it("records a version with no main features as shown without opening anything (B
   await push({ feed: { versions: [entry("1.2.11", []), entry("1.2.10", ["ten"])] } });
   expect(windows()).toBe(0);
   expect(save).toHaveBeenCalledExactlyOnceWith({ shown: "1.2.11" });
+});
+
+it("offers Settings for a feature no chapter teaches, which closes the window and opens that page", async () => {
+  const { push, save } = await mount();
+  const skills = { ...entry("1.2.11", ["skills"]), highlights: [{ drawing: "skills", chapter: null, settings: "skills", text: { en: { title: "skills", line: "skills line" } } }] };
+  await push({ feed: { versions: [skills, entry("1.2.10", ["ten"])] } });
+  expect(document.querySelector("[data-whats-new-try]")).toBeNull();
+  await act(async () => document.querySelector<HTMLButtonElement>('[data-whats-new-settings="skills"]')!.click());
+  expect(windows()).toBe(0);
+  expect(save).toHaveBeenCalledExactlyOnceWith({ shown: "1.2.11" });
+  expect(useUiStore.getState()).toMatchObject({ overlay: "settings", settingsTab: "skills" });
 });

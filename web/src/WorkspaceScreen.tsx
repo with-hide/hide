@@ -21,8 +21,8 @@ import { useUiStore } from "./ui";
 import { noteShellLayer } from "./browserViews";
 import { workspaceKey } from "./viewLayout";
 import { PairLayer } from "./PairLayer";
-import { drawnPair } from "./pairView";
-import { laneFrame, laneViewOf, pageLaneWidth, workspaceViewOf, type LaneFrame, type LaneInput, type LaneSizes, type WorkspaceView } from "./workspace";
+import { drawnPair, pairBesideDesk } from "./pairView";
+import { laneFrame, laneViewOf, pageLaneWidth, workspaceViewOf, type LaneFrame, type LaneInput, type LaneSizes, type PairView, type WorkspaceView } from "./workspace";
 import { keyboardOwner, noteKeyboardOwner } from "./viewFocus";
 import { cn } from "./lib/utils";
 import { useInterfaceTranslation } from "./i18n/client";
@@ -78,10 +78,12 @@ export function WorkspaceScreen({ actions }: { actions: Actions }) {
   const opening = useShellStore((s) => (s.editor?.opening ?? []).some((row) => row.checkout_id === checkout?.id));
   const hasViews = (view?.layout?.display_count ?? 0) > 0 || opening;
   // The viewing column draws the front tab's desk (PRD lane-desk-pair-view
-  // D-06); pair view draws it whatever the lane's own state, with a tool only
-  // when the lane is open (D-46).
+  // D-06); pair view draws it beside the pane whatever the lane's own state,
+  // and none beside a pane drawn alone (D-53), with a tool only when the
+  // lane is open (D-46).
   const pair = drawnPair(view);
-  const laneView = pair !== null ? "documents" : laneViewOf(view, hasViews);
+  const desk = pairBesideDesk(view);
+  const laneView = desk !== null ? "documents" : pair !== null ? "none" : laneViewOf(view, hasViews);
   const front = view ? workspaceKey(view) : null;
   // A page's widening is drawn from the frame that asks for it until the
   // core acknowledges that request, or the stored width moves for any other
@@ -103,7 +105,7 @@ export function WorkspaceScreen({ actions }: { actions: Actions }) {
     panelWidth: view?.panel_width ?? null,
     expanded,
     floats: view?.tray.floats === true,
-    pair: pair !== null,
+    pair: desk !== null,
     pairRatio: view?.pair_mode?.ratio ?? null,
     front: stackFront,
     body: width,
@@ -146,6 +148,21 @@ export function WorkspaceScreen({ actions }: { actions: Actions }) {
   }, [frame.mode, drawnView, drawnTool, frame.stacked]);
   // Off the Workspace screen nothing is drawn, so a chord there opens the lane.
   useLayoutEffect(() => () => useUiStore.getState().setDrawnLane({ mode: "closed", view: "none", tool: null, stacked: false }), []);
+  // Focus mode draws its pane and desk unexpanded, and leaving it, even
+  // from a desk expanded over the body, brings back the lane as it was
+  // (PRD lane-desk-pair-view D-51, D-59).
+  const pairOn = pair !== null;
+  useLayoutEffect(() => {
+    const store = useUiStore.getState();
+    const before = store.laneExpandedBeforePair;
+    if (pairOn && before === null) {
+      useUiStore.setState({ laneExpandedBeforePair: store.laneExpanded });
+      store.setLaneExpanded(false);
+    } else if (!pairOn && before !== null) {
+      useUiStore.setState({ laneExpandedBeforePair: null });
+      store.setLaneExpanded(before);
+    }
+  }, [pairOn]);
   // A closed lane is not expanded when it opens again.
   const closed = frame.mode === "closed";
   useLayoutEffect(() => {
@@ -196,7 +213,7 @@ export function WorkspaceScreen({ actions }: { actions: Actions }) {
       data-lane-shows={drawnTool ?? "none"}
       data-lane-stacked={frame.stacked ? "true" : undefined}
     >
-      <LaneRow view={view} frame={frame} documents={documents} body={body} width={width} setBody={setBody} sizes={sizes} actions={actions} checkout={checkout} pair={pair?.pane_id ?? null} />
+      <LaneRow view={view} frame={frame} documents={documents} body={body} width={width} setBody={setBody} sizes={sizes} actions={actions} checkout={checkout} pair={pair} />
       <div className="contents" onKeyDown={(event) => laneEscape(event, frame, actions)}>
         <ToolRail actions={actions} />
       </div>
@@ -266,16 +283,17 @@ function onRelease(done: () => void): void {
  * desk keeps its width free at Agent Views' right, so the panes narrow
  * beside it rather than under it (D-50).
  */
-function LaneRow({ view, frame, documents, body, width, setBody, sizes, actions, checkout, pair }: { view: WorkspaceView; frame: LaneFrame; documents: LaneFrame; body: HTMLElement | null; width: number; setBody: (element: HTMLElement | null) => void; sizes: LaneSizes; actions: Actions; checkout: Checkout; pair: string | null }) {
+function LaneRow({ view, frame, documents, body, width, setBody, sizes, actions, checkout, pair }: { view: WorkspaceView; frame: LaneFrame; documents: LaneFrame; body: HTMLElement | null; width: number; setBody: (element: HTMLElement | null) => void; sizes: LaneSizes; actions: Actions; checkout: Checkout; pair: PairView | null }) {
   const { t } = useInterfaceTranslation();
   const [guide, setGuide] = useState<number | null>(null);
   // A terminal click leaves the desk where it is, closing only a floating
   // tool (D-50): the operator closes the lane with ⌘E or Escape (B4).
   const escape = (event: React.KeyboardEvent<HTMLElement>) => laneEscape(event, frame, actions);
-  // In pair view the lane is the half beside the paired pane, under the tab
-  // row and the strip (PRD lane-desk-pair-view B17, D-16); it is the same
+  // In pair view the lane is the half beside the paired pane, under the band
+  // in the tab row's place (PRD lane-desk-pair-view B17, D-16, D-61); it is the same
   // element in every mode, so entering pair view mounts no desk again.
-  const placed = frame.mode === "expanded" ? "inset-0 z-20" : frame.mode === "pair" ? "bottom-0 right-0 top-[calc(var(--size-tab-strip)*2)] z-20" : "inset-y-0 right-0 z-20";
+  // A tool floating over a pane focus mode draws alone stands under the band too, so the way back stays in sight (D-61).
+  const placed = frame.mode === "expanded" ? "inset-0 z-20" : pair !== null ? "bottom-0 right-0 top-(--size-tab-strip) z-20" : "inset-y-0 right-0 z-20";
   // What a standing desk takes from Agent Views, kept under an expanded lane so expanding resizes no terminal.
   const reserve = frame.agents > 0 && width > frame.agents ? width - frame.agents : 0;
   // A press outside a floating tool closes it once the press ends, so what
@@ -288,12 +306,13 @@ function LaneRow({ view, frame, documents, body, width, setBody, sizes, actions,
     <div ref={setBody} className="relative flex min-h-0 min-w-0 flex-1" data-lane-row="true">
       {/* Its own stacking context, so nothing the agents raise (a pane
           divider) draws over the lane; out of reach of the pointer and the
-          keyboard while an expanded lane covers it. */}
-      <div className="isolate flex min-h-0 min-w-0 flex-1 flex-col" style={reserve > 0 ? { marginRight: reserve } : undefined} inert={frame.mode === "expanded"} onPointerDownCapture={pressOutside} data-agent-area="true">
+          keyboard while an expanded lane or focus mode covers it, the tab
+          row with its group selector and + included (D-61). */}
+      <div className="isolate flex min-h-0 min-w-0 flex-1 flex-col" style={reserve > 0 ? { marginRight: reserve } : undefined} inert={frame.mode === "expanded" || pair !== null} onPointerDownCapture={pressOutside} data-agent-area="true">
         {/* The terminals attach once the body is measured, so a standing desk's reserve is in their first grid (D-50). */}
         {width > 0 ? <AgentArea checkout={checkout} actions={actions} /> : null}
       </div>
-      {pair !== null ? <PairLayer paneId={pair} paneWidth={frame.pane ?? 0} covered={frame.mode === "expanded"} actions={actions} /> : null}
+      {pair !== null ? <PairLayer checkout={checkout} paneId={pair.pane_id} alone={pair.alone === true} paneWidth={frame.pane ?? 0} covered={frame.mode === "expanded"} actions={actions} /> : null}
       {frame.mode !== "closed" ? (
         <div
           // Over the agents the lane's edge line is its divider's (`LaneDivider`), which stands outside the frame at its

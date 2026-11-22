@@ -614,6 +614,34 @@ fn file_open_reads_outside_the_runtime_then_places_once_in_the_callers_workspace
     assert_eq!(retried, first);
 }
 
+/// #2624: a file of a checkout whose folder is gone from where Hide opened
+/// it, as after a rename, is refused as a folder not found, not as a device
+/// to reconnect.
+#[test]
+fn a_file_open_in_a_checkout_whose_folder_is_gone_says_the_folder_was_not_found() {
+    let (mut runtime, _dir) = caller_fixture();
+    runtime.file_roots = Some(crate::files::FileRoots::from_identities(Vec::new()));
+    let expected = runtime
+        .workspace_control_query(crate::node::TEST_NODE, "pane-b", Query::Info)
+        .unwrap()
+        .context;
+    let action = Action::OpenFile {
+        path: "/checkouts/b/README.md".to_owned(),
+    };
+    let refused = runtime
+        .workspace_control_prepare_action(
+            crate::node::TEST_NODE,
+            "pane-b",
+            &expected,
+            &action_id("gone"),
+            &action,
+        )
+        .err()
+        .expect("a checkout Hide did not open is refused");
+    assert_eq!(refused.reason, "host_unavailable");
+    assert!(refused.next_action.contains("folder could not be found"));
+}
+
 #[test]
 fn browser_load_status_tracks_the_current_load_and_retry_does_not_reload() {
     let (mut runtime, _dir) = caller_fixture();

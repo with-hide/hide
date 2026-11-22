@@ -155,6 +155,17 @@ pub(super) struct WorkspaceViewStore {
     /// The pane that held the keyboard when pair view was entered, which
     /// gets it back on leaving (B26). Runtime only.
     pub(super) pair_before: Option<(WorkspaceKey, String)>,
+    /// The pane focus mode draws whose desk ⌘E or the rail's desk button
+    /// folded, so the pane is drawn alone beside a desk that holds a tab the
+    /// strip shows (PRD lane-desk-pair-view D-57, D-63). Runtime only: gone
+    /// when another pane takes the left, when the mode ends, at a restart,
+    /// and when a View is opened or chosen onto that desk.
+    pub(super) pair_desk_folded: Option<super::pair_view::PairLeft>,
+    /// When focus mode last came on, in the layouts' focus stamps' clock:
+    /// a tab nobody's agent owns shows on the drawn desk's strip only once
+    /// the operator brought it in front since then (D-60). Runtime only, so
+    /// after a restart the mode reads as begun at the load.
+    pub(super) pair_since: u64,
     /// The desks pair view drew since the mode last moved or ended, each
     /// with how it was before the mode first drew it, which it gets back
     /// when the mode leaves it (D-51); a desk the mode passed drawing its
@@ -399,6 +410,8 @@ impl WorkspaceViewStore {
                 card_read_again: false,
                 pair_left: None,
                 pair_before: None,
+                pair_desk_folded: None,
+                pair_since: unix_milliseconds(),
                 pair_drawn: Vec::new(),
                 tray_floats: None,
             },
@@ -449,14 +462,12 @@ impl Runtime {
     }
 
     /// The operator closed a tab of the tray in front (PRD
-    /// lane-desk-pair-view B11, B26): a pair view left with nothing to draw
-    /// ends (D-46), and when no tab is left the tray folds; a tool column
+    /// lane-desk-pair-view B11, B26): a pair view stays on and its desk
+    /// settles (D-64), and when no tab is left the tray folds; a tool column
     /// stays. The displays of a document that just closed leave first.
     pub(super) fn close_emptied_lane(&mut self, key: &WorkspaceKey) {
         self.reconcile_view_displays();
-        if self.end_pair_view_if_undrawn() {
-            return;
-        }
+        self.keep_pair_front_shown();
         let tab = self.front_tab(key);
         let Some(tray) = self
             .workspace_views
@@ -510,16 +521,20 @@ impl Runtime {
         let Place::Tray(tab) = place else {
             return;
         };
-        // Whether the operator saw this desk drawn: the view the core last
-        // published, since the View that calls this is already on the desk.
+        // Whether the operator saw this desk drawn, read from the view the
+        // core last published, since the View that calls this is already on
+        // the desk and may itself stand it: in focus mode beside the pane
+        // drawn there (`tray.pair` not alone), else the lane showing it.
         let drawn = self.snapshot.workspace_view.as_ref().is_some_and(|view| {
             view.device_id == key.0
                 && view.path == key.1
-                && view.open
                 && view.tray.tab_id == *tab
-                && view.tray.shown
-                && view.tray.count > 0
+                && match &view.tray.pair {
+                    Some(pair) => !pair.alone,
+                    None => view.open && view.tray.shown && view.tray.count > 0,
+                }
         });
+        self.unfold_pair_desk(key, tab);
         let Some(store) = self.workspace_views.as_mut() else {
             return;
         };
@@ -1446,14 +1461,21 @@ impl Runtime {
             let tray_layout = tray.map_or(&empty, |tray| &tray.layout);
             let layout = self.view_layout_snapshot(key, tray_layout);
             let every = self.every_view_snapshot(key);
-            let pairable = self.pairable_panes(key);
-            let pair = self.drawn_pair(key, tab).map(|pane| {
+            // The pair's reads are taken once for the publish.
+            let reads = self.pair_reads(key);
+            let panes_with_views = self.panes_with_views(key, &reads);
+            let pair = self.pair_left_of(key, tab).map(|pane| {
+                let shown = self.pair_shown_count(key, tab, &pane, &reads);
                 let mut pair = crate::model::PairViewSnapshot {
                     tab_id: tab.clone(),
+                    alone: !self.pair_desk_beside(key, tab, &pane, &reads),
+                    shown,
                     pane_id: pane,
                     folded: Vec::new(),
                 };
-                pair.folded = self.pair_folded(key, &pair, &layout.root);
+                if !pair.alone {
+                    pair.folded = self.pair_folded(key, &pair, &layout.root);
+                }
                 pair
             });
             WorkspaceViewSnapshot {
@@ -1492,7 +1514,7 @@ impl Runtime {
                     on: store.views.pair.on,
                     ratio: store.views.pair.ratio,
                 },
-                pairable,
+                panes_with_views,
                 // A pane's `N views` lists what its session opened, on a
                 // tray or not (PRD lane-desk-pair-view D-04, D-19).
                 feedback: self.view_feedback_snapshot(key, &every),
@@ -1522,7 +1544,7 @@ impl Runtime {
         }
         self.snapshot.workspace_view = published;
         // A pair drawn without the mode moving onto it (after a restart)
-        // is recorded as it is now.
+        // is recorded as it is now, alone or beside its desk.
         let drawn = self.snapshot.workspace_view.as_ref().and_then(|view| {
             let pair = view.tray.pair.as_ref()?;
             Some((

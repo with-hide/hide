@@ -377,7 +377,7 @@ export function applyFrame(frame: ServerFrame): void {
       showLook(frame.request_id, { state: "changes", files: frame.files, count: frame.count, added: frame.added, removed: frame.removed });
       return;
     case "start_catalog":
-      patch({ startCatalog: { targets: frame.targets, core_platform: frame.core_platform, kinds: frame.kinds, remembered: frame.remembered } });
+      patch({ startCatalog: { targets: frame.targets, core_platform: frame.core_platform, kinds: frame.kinds, remembered: frame.remembered, omitted: frame.omitted ?? 0 } });
       return;
     case "push_state":
       patch({ notifications: frame.notifications === "on" ? "on" : state.notifications });

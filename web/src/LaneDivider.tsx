@@ -143,10 +143,10 @@ export function LaneDivider({ kind, label, workspace, acknowledged, frame, origi
   );
 }
 
-/** A drag's guide, drawn where the divider would land, `left` pixels from its origin; in pair view it starts under the tab row and the strip, as the divider does. */
+/** A drag's guide, drawn where the divider would land, `left` pixels from its origin; in focus mode it starts under the tab row, as the divider does. */
 export function DividerGuide({ left, pair = false }: { left: number; pair?: boolean }) {
   return (
-    <div className={`pointer-events-none absolute bottom-0 z-30 flex w-sm justify-center ${pair ? "top-[calc(var(--size-tab-strip)*2)]" : "top-0"}`} style={{ left }} data-lane-guide="true">
+    <div className={`pointer-events-none absolute bottom-0 z-30 flex w-sm justify-center ${pair ? "top-(--size-tab-strip)" : "top-0"}`} style={{ left }} data-lane-guide="true">
       <DividerGrip />
     </div>
   );

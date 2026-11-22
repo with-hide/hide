@@ -1937,6 +1937,184 @@ fn visiting_the_tab_wakes_the_agent_once() {
     )));
 }
 
+/// The pane of t1, where the tests below resume a conversation.
+const ELSEWHERE: &str = "w-order:t1:p";
+/// The conversation the sleeper in t2 holds (`session_in`).
+const CONVERSATION: &str = "11111111-2222-3333-4444-555555555555";
+
+/// The session with no agent in t2 and a `kind` agent on `conversation`
+/// in t1's pane.
+fn running_in_t1(kind: &str, conversation: &str) -> SessionSnapshotPayload {
+    let mut payload = session(None);
+    let owned: SessionSnapshotPayload =
+        crate::sidebar::owned_label_fixture(serde_json::json!({"agents": [{
+            "id": "resumed", "pane_id": ELSEWHERE, "agent": kind,
+            "agent_status": "idle", "state_change_seq": 9, "cwd": CHECKOUT,
+            "agent_session": {"kind": "id", "value": conversation},
+            "tokens": {"task": "Review the parser"}
+        }]}))
+        .unwrap();
+    payload.agents.extend(owned.agents);
+    payload
+}
+
+/// with-hide/hide#2590: a visit to a sleeping agent whose conversation
+/// another pane already runs starts no second copy of it. The screen goes
+/// to that pane, and the sleep ends, leaving the sleeping pane its shell.
+#[test]
+fn a_visit_to_a_sleeper_whose_conversation_runs_elsewhere_goes_there_instead() {
+    for kind in ["claude", "codex", "opencode"] {
+        let (mut runtime, checkout_id) = asleep();
+        runtime
+            .snapshot
+            .ui_state
+            .agent_sleep
+            .records
+            .get_mut(SLEEPER)
+            .unwrap()
+            .kind = kind.into();
+        runtime.ingest_session(Ok(running_in_t1(kind, CONVERSATION)));
+        // A kind whose conversation needs its native proof carries the
+        // session id once that proof was read (`close_pane_runtime`).
+        runtime
+            .snapshot
+            .navigator
+            .agents
+            .iter_mut()
+            .find(|agent| agent.pane_id == ELSEWHERE)
+            .unwrap()
+            .session_id = Some(CONVERSATION.into());
+        assert!(runtime.dispatch_json(&focus_tab_event(&checkout_id, "w-order:t2")));
+        assert!(
+            !runtime
+                .snapshot
+                .ui_state
+                .agent_sleep
+                .records
+                .contains_key(SLEEPER),
+            "{kind}: the sleep ended"
+        );
+        assert_eq!(
+            runtime.snapshot().focused.pane_id.as_deref(),
+            Some(ELSEWHERE),
+            "{kind}"
+        );
+        assert!(
+            runtime
+                .snapshot()
+                .navigator
+                .agents
+                .iter()
+                .all(|agent| agent.pane_id != SLEEPER || agent.sleep.is_none()),
+            "{kind}: no sleeping or waking row is left"
+        );
+        assert!(runtime.snapshot().status.last_error.is_none(), "{kind}");
+        // Wake agent asked again finds nothing asleep to resume.
+        runtime.dispatch_json(&event(
+            "agent_wake",
+            serde_json::json!({"pane_id": SLEEPER}),
+        ));
+        assert_eq!(
+            runtime.snapshot().status.last_error.as_ref().unwrap().kind,
+            "agent_sleep.not_asleep",
+            "{kind}"
+        );
+    }
+}
+
+/// Another conversation running elsewhere changes nothing: the visit wakes
+/// the sleeper in its own pane, as it always did.
+#[test]
+fn a_visit_to_a_sleeper_wakes_it_when_only_another_conversation_runs_elsewhere() {
+    let (mut runtime, checkout_id) = asleep();
+    runtime.ingest_session(Ok(running_in_t1(
+        "claude",
+        "99999999-2222-3333-4444-555555555555",
+    )));
+    assert!(runtime.dispatch_json(&focus_tab_event(&checkout_id, "w-order:t2")));
+    assert_eq!(row(&runtime)["sleep"]["state"], "waking");
+    assert_eq!(runtime.snapshot().focused.pane_id.as_deref(), Some(SLEEPER));
+}
+
+/// The same for a session whose pane closed when it slept: its wake does not
+/// open a second copy of a conversation another pane runs; the record ends
+/// and the operator is taken to that pane. Another conversation wakes as
+/// before.
+#[test]
+fn a_sleeping_session_whose_conversation_runs_elsewhere_is_not_woken() {
+    use crate::agent_sleep::DormantPhase;
+    for (kind, conversation, woken) in [
+        ("claude", CONVERSATION, false),
+        ("codex", CONVERSATION, false),
+        ("opencode", CONVERSATION, false),
+        ("claude", "99999999-2222-3333-4444-555555555555", true),
+    ] {
+        let mut runtime = close_pane_runtime(kind);
+        if kind == "opencode" {
+            // OpenCode's proof is its session id, not a file.
+            let facts = runtime
+                .snapshot
+                .navigator
+                .agents
+                .iter_mut()
+                .find(|agent| agent.pane_id == SLEEPER)
+                .unwrap()
+                .row_facts
+                .as_mut()
+                .unwrap();
+            facts.native_reference = Some(crate::sidebar::SessionAgentSessionPayload {
+                kind: "id".into(),
+                value: CONVERSATION.into(),
+            });
+        }
+        assert!(
+            runtime.admit_dormant_sleep(SLEEPER, None, 1).unwrap(),
+            "{kind}"
+        );
+        let id = {
+            let (id, record) = runtime
+                .snapshot
+                .ui_state
+                .agent_sleep
+                .dormant
+                .iter_mut()
+                .next()
+                .unwrap();
+            record.closed = true;
+            record.phase = DormantPhase::Sleeping;
+            id.clone()
+        };
+        runtime.close_operations.clear();
+        // The conversation, or another, runs in t1's pane now.
+        let live = runtime
+            .snapshot
+            .navigator
+            .agents
+            .iter_mut()
+            .find(|agent| agent.pane_id == SLEEPER)
+            .unwrap();
+        live.pane_id = ELSEWHERE.into();
+        live.session_id = Some(conversation.into());
+        assert!(runtime.request_dormant_wake(&id), "{kind}");
+        let record = runtime.snapshot.ui_state.agent_sleep.dormant.get(&id);
+        if woken {
+            assert!(record.unwrap().phase.in_flight(), "{kind}: the wake runs");
+            continue;
+        }
+        assert!(record.is_none(), "{kind}: the record ended");
+        assert!(
+            runtime.snapshot.navigator.sleeping_sessions.is_empty(),
+            "{kind}"
+        );
+        assert_eq!(
+            runtime.snapshot().focused.pane_id.as_deref(),
+            Some(ELSEWHERE),
+            "{kind}"
+        );
+        assert!(runtime.snapshot().status.last_error.is_none(), "{kind}");
+    }
+}
+
 /// Coexistence B3: a saved conversation remains asleep and named when its
 /// terminal failed cold restoration, even if stale agent metadata changed.
 #[test]

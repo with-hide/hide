@@ -14,6 +14,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { agentPane } from "../../web/e2e/agent-pane";
+import { chord } from "../../web/e2e/chords";
 import { runInPane } from "../../web/e2e/daemon-actions";
 import type { AgentFixture } from "../../web/e2e/engine-fixture";
 import { fixtureExecutable } from "../../web/e2e/platform-fixture";
@@ -151,6 +152,24 @@ test("an outside image, text file and HTML page open read-only in the View with 
   const grants = hostLog(run.env).filter((line) => line.event.startsWith("external."));
   expect(grants.length).toBeGreaterThan(0);
   for (const line of grants) expect(JSON.stringify(line)).not.toMatch(/shot\.png|notes\.txt|index\.html|hide-outside-/);
+});
+
+test("an outside file a shell's link opened is that shell's, and ⌘. with the keyboard on it puts the shell beside it (D-54)", async () => {
+  const notes = path.join(scratch!, "shell-notes.txt");
+  fs.writeFileSync(notes, ["shell owned", "second"].join("\n"));
+  const { page, paneId } = await start();
+  await printInPane(fixture, stack.daemon, page, paneId, [`txt ${notes}`, "END-SHELL-OUTSIDE"], "END-SHELL-OUTSIDE");
+
+  await click(page, paneId, notes);
+  const tab = outsideTab(page, "shell-notes.txt");
+  await expect(tab).toHaveAttribute("data-external", "held", { timeout: 20_000 }); // wait-ok: the host grants the file and the core places its tab
+  // The keyboard goes to the file's view, then ⌘. enters focus mode from there.
+  await page.locator("[data-external-text] .cm-content").click();
+  await page.keyboard.press(chord("pair_view"));
+  await expect(page.locator(`[data-pair-pane="${paneId}"]`)).toBeVisible();
+  await expect(page.locator(`[data-pair-layer="${paneId}"]`)).not.toHaveAttribute("data-pair-alone", "true");
+  await expect(page.locator('[data-view-tab-bar] [role="tab"][aria-selected="true"]')).toHaveAttribute("aria-label", /shell-notes\.txt/);
+  await screenshot(page, "outside-shell-focus");
 });
 
 test("a reload keeps outside tabs readable, and closing one ends its grant", async () => {

@@ -4124,6 +4124,50 @@ fn an_issue_read_over_its_limit_is_reported_once_per_crossing() {
     assert_eq!(again.len(), 1, "the next crossing reports again");
 }
 
+/// A project whose sightings pass their limit answers the issues of its
+/// newest sightings, newest first, and logs the cut once, never failing the
+/// read.
+#[test]
+fn an_issue_read_past_its_sighting_limit_answers_the_newest_issues() {
+    let directory = tempfile::tempdir().unwrap();
+    let (mut store, _) = LinkStore::open(&directory.path().join("links.sqlite3")).unwrap();
+    request(&mut store, 1, "이슈 정리");
+    let project = crate::links::ProjectFacts {
+        key: "project-a".into(),
+        device_id: "device-a".into(),
+        workspace_id: "workspace-a".into(),
+        root: "/repo".into(),
+        repository: Some("owner/repo".into()),
+        repository_id: Some("R_1".into()),
+        connection_epoch: 0,
+        worktrees: Vec::new(),
+        prs: Vec::new(),
+        prs_read: true,
+        outputs: Vec::new(),
+    };
+    store.apply_project(&project, 1).unwrap();
+    // Issue N is sighted at N: the newest sighting is the highest number.
+    let sightings = crate::links::SUMMARY_SESSION_LIMIT as i64 + 1;
+    store.connection.execute("WITH RECURSIVE n(i) AS (SELECT 1 UNION ALL SELECT i+1 FROM n WHERE i<?1) INSERT INTO ledger_sightings SELECT 'device-a','codex','session-a','issue','owner/repo',i,i FROM n",params![sightings]).unwrap();
+
+    let (refs, records) =
+        crate::diagnostics::capture(|| store.ledger_issue_refs("project-a").unwrap());
+    let numbers = refs
+        .iter()
+        .map(|issue| i64::from(issue.number))
+        .collect::<Vec<_>>();
+    let newest = (sightings - crate::issues::ISSUE_LIMIT as i64 + 1..=sightings)
+        .rev()
+        .collect::<Vec<_>>();
+    assert_eq!(numbers, newest);
+    let over = records
+        .iter()
+        .filter(|record| record["kind"] == "ledger.issue_read_capacity")
+        .collect::<Vec<_>>();
+    assert_eq!(over.len(), 1);
+    assert_eq!(over[0]["sightings_cut"], true);
+}
+
 /// A publish that carries a project over the issue-read limit logs the
 /// crossing once and stays quiet while the project remains over. A publish
 /// that leaves the project out forgets its state, so when the project comes

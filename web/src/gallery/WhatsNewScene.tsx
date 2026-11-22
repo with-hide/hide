@@ -36,7 +36,7 @@ export function WhatsNewScene({ params }: { params: URLSearchParams }) {
     const result = whatsNewOffer(feed, version, { shown: state === "dialog-skip" ? from : (feed.versions[feed.versions.findIndex((row) => row.version === version) + 1]?.version ?? null), seen: null, opened: [] });
     body = result.kind === "show" ? (
       <Dialog open>
-        <WhatsNewDialogBody offer={result.offer} language={language} auto={false} open={state === "dialog-more"} onTry={noop} onHistory={noop} onClose={noop} />
+        <WhatsNewDialogBody offer={result.offer} language={language} auto={false} open={state === "dialog-more"} onTry={noop} onSettings={noop} onHistory={noop} onClose={noop} />
       </Dialog>
     ) : (
       <p className="p-lg text-body text-muted-foreground" data-whats-new-scene-empty>{`${version}: ${result.kind}`}</p>
@@ -55,6 +55,7 @@ export function WhatsNewScene({ params }: { params: URLSearchParams }) {
             language={language}
             onChoose={noop}
             onTry={noop}
+            onSettings={noop}
             onLink={noop}
           />
         </DialogContent>

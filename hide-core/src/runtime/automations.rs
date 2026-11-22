@@ -2093,6 +2093,9 @@ impl Runtime {
             if arriving {
                 self.put_away_viewed_run(&key);
             }
+            if let Some(pane) = self.viewed_run_pane(&id, number) {
+                self.gather_run_views(&pane);
+            }
             while self.automations.viewing.len() > VIEWING_CAP {
                 let oldest = self
                     .automations

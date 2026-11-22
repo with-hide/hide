@@ -1,6 +1,6 @@
 import type { Catalog, Catalogs } from "../../schema";
 
-// Flow 6's words (`practice/chapters/bots.ts`).
+// Flow 8's words (`practice/chapters/bots.ts`).
 const en = {
   "practice.bots.title": "Bots",
   "practice.bots.summary": "Let a program outside Hide work with you, in its own space or as you",
@@ -37,7 +37,7 @@ const en = {
   "practice.bots.badge.kick": "Your turn",
   "practice.bots.badge.title": "The owl says which bot started it",
   "practice.bots.badge.text": "A Full bot's agent asks you like your own, with the bot's owl on its logo. Point at the row: its hint names the bot.",
-  "practice.bots.end.kick": "End of chapter 6",
+  "practice.bots.end.kick": "End of chapter 8",
   "practice.bots.end.title": "Bots live on the device rail",
   "practice.bots.end.text": "Ask a program to run **hide access request --name <name>**, and it waits in Settings › Bots for you.",
 };
@@ -78,7 +78,7 @@ const ko = {
   "practice.bots.badge.kick": "내 차례",
   "practice.bots.badge.title": "부엉이가 띄운 봇을 알려 줘요",
   "practice.bots.badge.text": "전체 봇의 에이전트는 내 에이전트처럼 나에게 묻고, 로고에 그 봇의 부엉이가 붙어요. 줄에 마우스를 올리면 봇 이름이 나와요.",
-  "practice.bots.end.kick": "6장 끝",
+  "practice.bots.end.kick": "8장 끝",
   "practice.bots.end.title": "봇은 기기 목록에 있어요",
   "practice.bots.end.text": "프로그램에 **hide access request --name <이름>**을 실행하게 하면, 설정 › 봇에서 기다려요.",
 } satisfies Catalog<typeof en>;
@@ -119,7 +119,7 @@ const zhCN = {
   "practice.bots.badge.kick": "轮到你",
   "practice.bots.badge.title": "猫头鹰说明是哪个机器人启动的",
   "practice.bots.badge.text": "全部模式机器人的智能体像你自己的一样问你，标志上带着机器人的猫头鹰。指向这一行，提示会写出机器人的名字。",
-  "practice.bots.end.kick": "第 6 章 完",
+  "practice.bots.end.kick": "第 8 章 完",
   "practice.bots.end.title": "机器人在设备栏上",
   "practice.bots.end.text": "让程序运行 **hide access request --name <名称>**，它就会在 设置 › 机器人 里等你。",
 } satisfies Catalog<typeof en>;
@@ -160,7 +160,7 @@ const ja = {
   "practice.bots.badge.kick": "あなたの番",
   "practice.bots.badge.title": "フクロウが起動したボットを示します",
   "practice.bots.badge.text": "全体のボットのエージェントは、あなたのエージェントのように尋ね、ロゴにそのボットのフクロウが付きます。行にポインタを置くとボットの名前が出ます。",
-  "practice.bots.end.kick": "第 6 章 おわり",
+  "practice.bots.end.kick": "第 8 章 おわり",
   "practice.bots.end.title": "ボットはデバイス一覧にいます",
   "practice.bots.end.text": "プログラムに **hide access request --name <名前>** を実行させると、設定 › ボットで待ちます。",
 } satisfies Catalog<typeof en>;

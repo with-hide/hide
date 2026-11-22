@@ -57,8 +57,8 @@ export type WorkspaceView = {
   tray: TraySnapshot;
   /** The window's pair view mode (D-45, D-47): on or off, and the left pane's share of the body in thousandths once the divider was dragged. */
   pair_mode?: PairMode;
-  /** The panes of this Workspace's Agent tabs with something to show beside the desk (B19): ◧ is off, with why, on every other. */
-  pairable?: string[];
+  /** The panes of this Workspace's Agent tabs with a View to show beside the desk, their agent's or one opened from their links (B19, D-54): the pane head draws its ◧ cell on these only (D-53). */
+  panes_with_views?: string[];
   /** The View areas (S7) of the desk in front; absent only from a core that predates them. */
   layout?: ViewLayoutSnapshot;
   /** Null on a device this core dials, whose engine shows one tab. */
@@ -73,9 +73,8 @@ export type WorkspaceView = {
 /** `floats`: the desk floats with the tool beside it over the agents, since a View came onto it while that tool floated (D-50); a shown desk that does not float stands. */
 export type TraySnapshot = { tab_id: string; shown: boolean; count: number; floats?: boolean; pair?: PairView | null };
 export type PairMode = { on: boolean; ratio?: number | null };
-/** An Agent tab in pair view: the pane drawn beside its desk. */
-/** An Agent tab in pair view: the pane drawn beside its desk, and on the desk on screen the tabs another agent of that tab owns, which fold into `Others N` (D-41). */
-export type PairView = { tab_id: string; pane_id: string; folded?: string[] };
+/** An Agent tab in pair view: the pane drawn beside its desk, or `alone` at the body's full width while its desk holds no tab the strip shows (D-53, D-64) or ⌘E or the rail's desk button folded it (D-57, D-63); `shown`, the core's count of the desk's tabs the strip shows, says whether the desk can stand at all; and on the desk on screen the tabs another agent of that tab owns, which fold into `Others N` (D-41). */
+export type PairView = { tab_id: string; pane_id: string; alone?: boolean; shown?: number; folded?: string[] };
 
 /** The Views of unsaved documents one pane's session alone opened. */
 export type SessionDrafts = { pane_id: string; views: { display_id: string; tab_id: string }[] };
@@ -195,7 +194,7 @@ export type LaneInput = {
   expanded: boolean;
   /** The desk floats with the tool (`tray.floats`, D-50); else a drawn desk stands where it fits. */
   floats?: boolean;
-  /** Pair view is drawn (`drawnPair`): the lane is the desk beside the paired pane, whatever the lane's own open state. */
+  /** Pair view is drawn beside its desk (`pairBesideDesk`): the lane is the desk beside the paired pane, whatever the lane's own open state. */
   pair?: boolean;
   /** Pair view's divider landing, the left pane's share in thousandths (D-47); half while null. */
   pairRatio?: number | null;

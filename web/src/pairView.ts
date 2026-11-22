@@ -1,34 +1,62 @@
-// Pair view's ◧ (PRD lane-desk-pair-view B19, B20, B22, D-31): what the
-// pane head, the pane menu and the terminal menu offer for a pane, read once
-// from the core's facts, so the three never disagree.
+// Pair view's ◧ (PRD lane-desk-pair-view B19, B20, B22, D-31, D-53): what
+// the pane head, the pane menu and the terminal menu offer for a pane, read
+// once from the core's facts, so the three never disagree.
 
 import type { PairView, WorkspaceView } from "./workspace";
 
-/** `on` on the pane in its tab's pair view; `off` on a pane the core lists with something to show beside the desk; `none`, off with why, on every other (B19). */
-export type PairOffer = "off" | "on" | "none";
+/** `on` on the pane pair view draws, which ◧ takes back to the usual view; `off` on every other pane, which ◧ enters pair view with (D-53). */
+export type PairOffer = "off" | "on";
 
 export function pairOffer(view: WorkspaceView | null | undefined, paneId: string): PairOffer {
-  if (drawnPair(view)?.pane_id === paneId) return "on";
-  return view?.pairable?.includes(paneId) ? "off" : "none";
+  return drawnPair(view)?.pane_id === paneId ? "on" : "off";
 }
 
 /** The words ◧ says for its offer, on the button's hint and as the menu item. */
-export function pairLabelKey(offer: PairOffer): "panes.menu.pair" | "panes.menu.pairOff" | "panes.menu.pairNone" {
-  return offer === "on" ? "panes.menu.pairOff" : offer === "off" ? "panes.menu.pair" : "panes.menu.pairNone";
+export function pairLabelKey(offer: PairOffer): "panes.menu.pair" | "panes.menu.pairOff" {
+  return offer === "on" ? "panes.menu.pairOff" : "panes.menu.pair";
 }
 
 /**
- * The pair view drawn now (B17, D-45): the core publishes it while the
- * window's mode is on and the pane the operator is on in the front tab has
- * something to show. The canvas that gives the pane up and the layer that
- * draws it read this one value, in one render, so the terminal parks and is
- * shown again in the same commit (D-26).
+ * Whether the pane head draws its ◧ cell (D-43, D-53, D-54): on a pane with
+ * a View to show beside the desk, one its agent opened or one the operator
+ * opened from its terminal's links, and on the pane pair view draws,
+ * pressed. Every other pane enters pair view from ⌘. and its menus only, so
+ * its head stays quiet.
+ */
+export function pairCellShown(view: WorkspaceView | null | undefined, paneId: string): boolean {
+  return pairOffer(view, paneId) === "on" || view?.panes_with_views?.includes(paneId) === true;
+}
+
+/**
+ * The pair view drawn now (B17, D-45, D-53): the core publishes it while
+ * the window's mode is on, for the pane the operator is on in the front
+ * tab, beside the desk or alone. The canvas that gives the pane up and the
+ * layer that draws it read this one value, in one render, so the terminal
+ * parks and is shown again in the same commit (D-26).
  */
 export function drawnPair(view: WorkspaceView | null | undefined): PairView | null {
   return view?.tray.pair ?? null;
 }
 
-/** Whether the window's pair view mode is on (D-45), drawn or not: a shell pane draws its tab's own layout and the mode stays. */
+/** The pair view drawn beside its desk, the lane the right side of the body (B17); null while the pane is drawn alone (D-53) or no pair view is drawn. */
+export function pairBesideDesk(view: WorkspaceView | null | undefined): PairView | null {
+  const pair = drawnPair(view);
+  return pair && pair.alone !== true ? pair : null;
+}
+
+/**
+ * Whether the front tab's desk is on screen, the web's form of the core's
+ * `pair_desk_drawn`: while focus mode draws a pane, only beside it, whatever
+ * the lane's own open state (D-53, D-57); otherwise while the lane shows the
+ * desk. A page focused there, a card read there and an area cycle over it
+ * all ask this.
+ */
+export function deskOnScreen(view: WorkspaceView | null | undefined): boolean {
+  if (!view) return false;
+  return drawnPair(view) ? pairBesideDesk(view) !== null : view.open && view.tray.shown;
+}
+
+/** Whether the window's pair view mode is on (D-45). */
 export function pairModeOn(view: WorkspaceView | null | undefined): boolean {
   return view?.pair_mode?.on === true;
 }

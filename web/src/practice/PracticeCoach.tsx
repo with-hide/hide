@@ -16,7 +16,7 @@ import { useUiStore, type Overlay } from "../ui";
 import type { PracticeChapter, PracticeDrag, PracticeMenu, PracticePick, PracticeStep, PracticeTyping } from "./chapter";
 import { FIRST_CHAPTER } from "./channel";
 import { COACH_CSS } from "./coachStyle";
-import type { PracticeWorld } from "./world";
+import type { CoreEvent, PracticeWorld } from "./world";
 import { composingKey } from "../keys";
 
 type Rect = { x: number; y: number; w: number; h: number };
@@ -332,6 +332,8 @@ type Props = {
   /** Steps before this one are played again by the coach itself, the way ⏎ plays them. */
   resume: number;
   onStep: (step: number, finished: boolean) => void;
+  /** Tells the world a step that names an event (`enter`) has come up. */
+  onEnter: (event: CoreEvent) => void;
   onNext: () => void;
   onRestart: () => void;
   /** Starts the chapter over and plays it again up to `step`, where the learner stands at its start. */
@@ -347,7 +349,7 @@ const REPLAY_MS = 120;
 /** Whether a step waits for something to happen, rather than being a look the learner presses on from. */
 const acts = (step: PracticeStep) => !!(step.done || step.shown);
 
-export function PracticeCoach({ chapter, model, next, resume, onStep, onNext, onRestart, onRewind, onHub, onLeave }: Props) {
+export function PracticeCoach({ chapter, model, next, resume, onStep, onEnter, onNext, onRestart, onRewind, onHub, onLeave }: Props) {
   const { t } = useInterfaceTranslation();
   const say = (key: string, values?: Record<string, unknown>) => t(key as MessageKey, values as never) as string;
   const [index, setIndex] = useState(0);
@@ -374,6 +376,11 @@ export function PracticeCoach({ chapter, model, next, resume, onStep, onNext, on
   useEffect(() => {
     if (index >= resume) onStep(index, last);
   }, [index, last, onStep, resume]);
+
+  // A world that moves on by itself starts from the step the learner is on, replayed steps included.
+  useEffect(() => {
+    if (step.enter) onEnter(step.enter);
+  }, [onEnter, step]);
 
   // The model as it is now, for a press that reads it after this render.
   const current = useRef(model);

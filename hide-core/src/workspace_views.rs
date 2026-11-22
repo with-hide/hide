@@ -43,8 +43,21 @@ use crate::view_layout::{DisplayKind, Layout};
 
 pub const SCHEMA_VERSION: u32 = 6;
 
-/// The Workspaces remembered at once. The least recently used is forgotten
-/// first, so the file stays bounded however many checkouts come and go.
+/// The Workspaces remembered at once. It counts entries, and an entry is made
+/// only for a checkout that has Agent tabs or that the operator or an agent
+/// changed (`WorkspaceViews::entry`): a checkout the catalog merely lists has
+/// none, however many worktrees a project holds.
+///
+/// At the cap, making an entry forgets the entry whose checkout has no tabs
+/// (`WorkspaceView::holds_tabs`) and was used longest ago
+/// (`WorkspaceView::last_use`), so the entry of a folder that is gone, never
+/// used again, goes first. An entry with tabs is never forgotten: when
+/// every entry holds tabs the new one is made past the cap, which the panes a
+/// machine runs bound (`hide_kit::panes::HOLDER_CAP` a machine). Nothing is
+/// refused there, because the entry asked for is one of a checkout with live
+/// tabs or the operator's own change: refusing it would draw that checkout's
+/// tabs in the engine's order, or drop the change, which is the loss this cap
+/// exists to prevent. A load past the cap forgets the same way.
 pub const MAX_WORKSPACES: usize = 256;
 
 /// The widest a stored column width may be, in CSS pixels. The shell keeps
@@ -124,10 +137,12 @@ pub struct WorkspaceView {
     /// When the operator last chose this checkout; `0` until they do. The
     /// checkout resumed after a restart is the latest of these.
     pub last_used_unix_ms: u64,
-    /// When this entry was made. The cap counts it as a use, so an entry
-    /// made for a checkout nobody has opened yet, such as a project just
-    /// added, is not the first one forgotten (`WorkspaceViews::entry`).
-    pub made_unix_ms: u64,
+    /// When this entry was last used: made, or its Agent tabs changed (one
+    /// arrived, moved or left, `Runtime::reconcile_agent_topology`). With
+    /// the operator's choice it is the entry's use (`last_use`), which the
+    /// cap ranks ([`MAX_WORKSPACES`]). A read, or a request that changes
+    /// nothing or is refused, leaves it as it is.
+    pub used_unix_ms: u64,
     /// Each Agent tab's desk (PRD lane-desk-pair-view D-06): the Views the
     /// operator put in front of that tab, with their View areas. One per tab,
     /// at most [`MAX_TRAYS`].
@@ -179,8 +194,9 @@ pub struct Tray {
 
 /// Pair view (PRD lane-desk-pair-view D-08, D-45, D-47): one mode for the
 /// window, not a tab's. While it is on, the pane the operator is on is drawn
-/// beside its tab's desk wherever they go; a pane with nothing to show draws
-/// its tab's own layout and the mode stays on. The left pane is never saved:
+/// beside its tab's desk wherever they go; a pane with nothing to show is
+/// drawn alone at the body's full width and the mode stays on (D-53). The
+/// left pane is never saved:
 /// it is the pane the operator is on (`runtime::pair_view`). A file an
 /// earlier build wrote with a pair view on a tray (D-15) loads with the mode
 /// off, the tray's `pair` ignored.
@@ -275,6 +291,10 @@ struct StoredTrays {
     #[serde(default)]
     last_used_unix_ms: u64,
     #[serde(default)]
+    used_unix_ms: Option<u64>,
+    /// What a build before `used_unix_ms` stamped when it made the entry:
+    /// the entry's last use it knew of.
+    #[serde(default)]
     made_unix_ms: u64,
     #[serde(default)]
     trays: Vec<Tray>,
@@ -303,7 +323,7 @@ impl StoredTrays {
             explorer_width: self.explorer_width,
             panel_width: self.panel_width,
             last_used_unix_ms: self.last_used_unix_ms,
-            made_unix_ms: self.made_unix_ms,
+            used_unix_ms: self.used_unix_ms.unwrap_or(self.made_unix_ms),
             trays: self.trays,
             shelf: self.shelf.unwrap_or_else(|| shelf_layout(1)),
             agent_layout: self.agent_layout,
@@ -364,7 +384,7 @@ impl StoredLane {
             explorer_width: self.explorer_width,
             panel_width: self.panel_width,
             last_used_unix_ms: self.last_used_unix_ms,
-            made_unix_ms: self.made_unix_ms,
+            used_unix_ms: self.made_unix_ms,
             agent_layout: self.agent_layout,
             agent_groups: self.agent_groups,
             agent_starts: self.agent_starts,
@@ -459,7 +479,7 @@ impl WorkspaceView {
             explorer_width: None,
             panel_width: None,
             last_used_unix_ms: 0,
-            made_unix_ms: 0,
+            used_unix_ms: 0,
             trays: Vec::new(),
             shelf: shelf_layout(1),
             agent_layout: crate::agent_layout::Layout::default(),
@@ -472,6 +492,21 @@ impl WorkspaceView {
 
     pub fn is(&self, device_id: &str, path: &str) -> bool {
         self.device_id == device_id && self.path == path
+    }
+
+    /// When the entry was last used: its own stamp or the operator's
+    /// latest choice of its checkout, whichever is later.
+    fn last_use(&self) -> u64 {
+        self.used_unix_ms.max(self.last_used_unix_ms)
+    }
+
+    /// Whether the checkout has Agent tabs here: one in a strip, or a
+    /// delegated tab on a canvas. Its entry is in use and the cap never
+    /// forgets it ([`MAX_WORKSPACES`]).
+    fn holds_tabs(&self) -> bool {
+        std::iter::once(&self.agent_layout)
+            .chain(self.agent_groups.items.iter().map(|group| &group.layout))
+            .any(|layout| layout.tree.display_count() > 0 || !layout.canvases.is_empty())
     }
 
     /// An older file's checkout documents move once onto the desk of the
@@ -812,17 +847,14 @@ impl WorkspaceViews {
             .find(|view| view.is(device_id, path))
     }
 
-    /// The Workspace's entry, made with the defaults on first use. Making one
-    /// past the cap forgets the least recently used entry.
+    /// The Workspace's entry, made with the defaults on first use, which is
+    /// stamped as its use. A read that should make no entry is `get`
+    /// ([`MAX_WORKSPACES`]).
     pub fn entry(&mut self, device_id: &str, path: &str) -> &mut WorkspaceView {
         self.entry_at(device_id, path, crate::observed::now_unix_ms())
     }
 
-    /// `entry`, with the moment an entry it makes counts as used. Ranked by
-    /// its unset choice stamp alone, a just-made entry was the first one
-    /// forgotten, and two checkouts nobody had opened yet forgot each other
-    /// at every session publish: a project just added showed the empty start
-    /// screen over its live terminal.
+    /// `entry`, an entry it makes used at `now_unix_ms`.
     pub fn entry_at(
         &mut self,
         device_id: &str,
@@ -836,21 +868,35 @@ impl WorkspaceViews {
         {
             return &mut self.workspaces[index];
         }
-        if self.workspaces.len() >= MAX_WORKSPACES
-            && let Some(oldest) = self
-                .workspaces
-                .iter()
-                .enumerate()
-                .min_by_key(|(_, view)| view.last_used_unix_ms.max(view.made_unix_ms))
-                .map(|(index, _)| index)
-        {
-            self.workspaces.remove(oldest);
-        }
+        forget_past(&mut self.workspaces, MAX_WORKSPACES - 1);
         self.workspaces.push(WorkspaceView {
-            made_unix_ms: now_unix_ms,
+            used_unix_ms: now_unix_ms,
             ..WorkspaceView::new(device_id, path)
         });
         self.workspaces.last_mut().expect("just pushed")
+    }
+}
+
+/// Forgets entries whose checkout has no tabs, the one used longest ago
+/// first, until at most `room` are left or every one left holds tabs
+/// ([`MAX_WORKSPACES`]).
+fn forget_past(workspaces: &mut Vec<WorkspaceView>, room: usize) {
+    while workspaces.len() > room {
+        let Some(oldest) = workspaces
+            .iter()
+            .enumerate()
+            .filter(|(_, view)| !view.holds_tabs())
+            .min_by_key(|(_, view)| view.last_use())
+            .map(|(index, _)| index)
+        else {
+            return;
+        };
+        let forgotten = workspaces.remove(oldest);
+        crate::diagnostic!(serde_json::json!({
+            "component": "workspace_views", "kind": "entry.forgotten",
+            "device": forgotten.device_id, "last_use_unix_ms": forgotten.last_use(),
+            "entries": workspaces.len(),
+        }));
     }
 }
 
@@ -1172,7 +1218,7 @@ fn settle(
             repairs.push(format!("{} on {}: {text}", view.path, view.device_id));
         }
     }
-    workspaces.truncate(MAX_WORKSPACES);
+    forget_past(&mut workspaces, MAX_WORKSPACES);
     (
         WorkspaceViews {
             workspaces,
@@ -1737,47 +1783,145 @@ mod tests {
         assert_eq!(shown, ["/r/a.rs"]);
     }
 
-    #[test]
-    fn the_least_recently_used_workspace_is_forgotten_past_the_cap() {
-        let mut views = WorkspaceViews::default();
-        for index in 0..MAX_WORKSPACES {
-            views
-                .entry_at("local", &format!("/w{index}"), 1)
-                .last_used_unix_ms = index as u64 + 10;
-        }
-        views.entry_at("local", "/w0", 2_000).last_used_unix_ms = 1_000;
-        views.entry_at("local", "/new", 2_000);
-        assert_eq!(views.workspaces.len(), MAX_WORKSPACES);
-        assert!(views.get("local", "/w1").is_none());
-        assert!(views.get("local", "/w0").is_some());
+    /// Gives `view` the Agent tab `tab`, in its strip.
+    fn with_tab(view: &mut WorkspaceView, tab: &str) {
+        let area = view.agent_layout.tree.active_area.clone();
+        view.agent_layout
+            .tree
+            .append(&area, crate::agent_layout::Tab::new(tab.to_owned()))
+            .unwrap();
     }
 
-    /// Being made counts as a use: two Workspaces made past the cap for
-    /// checkouts nobody has chosen yet both stay, and the two stalest
-    /// chosen ones go, rather than each forgetting the other.
+    fn has_tab(views: &WorkspaceViews, path: &str, tab: &str) -> bool {
+        views
+            .get("local", path)
+            .is_some_and(|view| view.agent_layout.tree.display(tab).is_some())
+    }
+
+    /// The cap's contract (#2737): past it, the entry with no tabs used
+    /// longest ago goes and the new one is made. The checkout in use keeps
+    /// its tabs however long ago it was last used, as does one whose only
+    /// tab is a delegated child's on a canvas, and an entry the operator
+    /// chose since is new.
     #[test]
-    fn a_workspace_made_past_the_cap_is_not_the_next_one_forgotten() {
+    fn past_the_cap_the_entry_without_tabs_used_longest_ago_goes_and_tabs_stay() {
+        let mut views = WorkspaceViews::default();
+        with_tab(views.entry_at("local", "/in-use", 1), "w1:t1");
+        views
+            .entry_at("local", "/child", 2)
+            .agent_layout
+            .select("w2:t1", true, 0)
+            .unwrap();
+        for index in 0..MAX_WORKSPACES - 2 {
+            views.entry_at("local", &format!("/idle-{index}"), 10 + index as u64);
+        }
+        views.get_mut("local", "/idle-0").unwrap().last_used_unix_ms = 5_000;
+        views.entry_at("local", "/new", 6_000);
+        assert_eq!(views.workspaces.len(), MAX_WORKSPACES);
+        assert!(has_tab(&views, "/in-use", "w1:t1"));
+        assert!(views.get("local", "/child").is_some());
+        assert!(views.get("local", "/idle-0").is_some(), "chosen since");
+        assert!(views.get("local", "/idle-1").is_none(), "used longest ago");
+        assert_eq!(
+            views.get("local", "/new").map(|view| view.used_unix_ms),
+            Some(6_000)
+        );
+    }
+
+    /// With every entry holding tabs nothing is forgotten for room: the new
+    /// entry is made past the cap, which the panes a machine runs bound.
+    #[test]
+    fn with_every_entry_holding_tabs_a_new_one_is_made_past_the_cap() {
         let mut views = WorkspaceViews::default();
         for index in 0..MAX_WORKSPACES {
-            let stamp = index as u64 + 10;
-            views
-                .entry_at("local", &format!("/w{index}"), stamp)
-                .last_used_unix_ms = stamp;
+            let view = views.entry_at("local", &format!("/w{index}"), 1);
+            with_tab(view, &format!("w{index}:t1"));
         }
-        views.entry_at("local", "/added", 5_000);
-        views.entry_at("local", "/other", 5_001);
-        views.entry_at("local", "/added", 5_002);
-        assert_eq!(views.workspaces.len(), MAX_WORKSPACES);
-        assert!(views.get("local", "/added").is_some());
-        assert!(views.get("local", "/other").is_some());
-        assert!(views.get("local", "/w0").is_none());
-        assert!(views.get("local", "/w1").is_none());
-        assert!(views.get("local", "/w2").is_some());
-        assert_eq!(
-            views.get("local", "/added").unwrap().last_used_unix_ms,
-            0,
-            "made is not chosen"
-        );
+        views.entry_at("local", "/new", 2);
+        assert_eq!(views.workspaces.len(), MAX_WORKSPACES + 1);
+        assert!(has_tab(&views, "/w0", "w0:t1"));
+    }
+
+    /// An entry as a build before the use stamp saved it (schema 6): every
+    /// key it wrote, `made_unix_ms` included, with `tab` in its strip.
+    fn entry_before_use_stamps(
+        path: &str,
+        chosen: u64,
+        made: u64,
+        tab: Option<&str>,
+    ) -> serde_json::Value {
+        let tabs: Vec<_> = tab
+            .into_iter()
+            .map(|id| serde_json::json!({"id": id}))
+            .collect();
+        serde_json::json!({
+            "device_id": "local", "path": path, "open": false, "tool": null,
+            "last_used_unix_ms": chosen, "made_unix_ms": made, "trays": [],
+            "shelf": {"root": {"area": {"id": "shelf", "active": null, "displays": []}},
+                      "active_area": "shelf", "next_id": 1},
+            "agent_layout": {"root": {"area": {"id": "a1", "active": tab, "displays": tabs}},
+                             "active_area": "a1", "next_id": 2},
+            "agent_groups": {"initialized": tab.is_some(), "next_id": 0, "items": [],
+                             "selected": null, "drafts": []},
+            "agent_starts": {},
+        })
+    }
+
+    /// A file a build before the use stamp saved, full at the cap with
+    /// entries made for checkouts that have no tabs, loads whole: an entry's
+    /// use is the later of when it was made and chosen. The checkout in use
+    /// keeps its tabs when the next entry is made, the empty entry used
+    /// longest ago going instead. The save stays schema 6 and writes the use
+    /// stamp in place of `made_unix_ms`, which an older build reads as unset.
+    #[test]
+    fn a_full_file_saved_before_use_stamps_loads_and_forgets_an_entry_without_tabs_first() {
+        let folder = scratch("before-use-stamps");
+        let path = folder.path().join("workspace-views.json");
+        let mut entries = vec![
+            entry_before_use_stamps("/in-use", 5, 1, Some("w1:t1")),
+            entry_before_use_stamps("/chosen", 900, 2, None),
+        ];
+        for index in 0..MAX_WORKSPACES - 2 {
+            let made = 100 + index as u64;
+            entries.push(entry_before_use_stamps(
+                &format!("/listed-{index}"),
+                0,
+                made,
+                None,
+            ));
+        }
+        fs::write(
+            &path,
+            serde_json::json!({"schema_version": 6, "workspaces": entries}).to_string(),
+        )
+        .unwrap();
+
+        let (mut loaded, outcome) = load(&path, 1);
+        assert_eq!(outcome, current());
+        assert_eq!(loaded.workspaces.len(), MAX_WORKSPACES);
+        let used = |views: &WorkspaceViews, path: &str| {
+            views.get("local", path).map(WorkspaceView::last_use)
+        };
+        assert_eq!(used(&loaded, "/in-use"), Some(5));
+        assert_eq!(used(&loaded, "/chosen"), Some(900));
+        assert_eq!(used(&loaded, "/listed-0"), Some(100));
+
+        loaded.entry_at("local", "/new", 2_000);
+        assert!(has_tab(&loaded, "/in-use", "w1:t1"));
+        assert!(loaded.get("local", "/chosen").is_some());
+        assert!(loaded.get("local", "/listed-0").is_none());
+        assert!(loaded.get("local", "/listed-1").is_some());
+
+        save(&path, &loaded).unwrap();
+        let saved: serde_json::Value = serde_json::from_slice(&fs::read(&path).unwrap()).unwrap();
+        assert_eq!(saved["schema_version"], SCHEMA_VERSION);
+        assert!(saved["workspaces"].as_array().unwrap().iter().all(|entry| {
+            entry.get("made_unix_ms").is_none() && entry["used_unix_ms"].is_u64()
+        }));
+        let (reloaded, outcome) = load(&path, 1);
+        assert_eq!(outcome, current());
+        assert_eq!(used(&reloaded, "/in-use"), Some(5));
+        assert_eq!(used(&reloaded, "/new"), Some(2_000));
     }
 
     /// One View on file, as an entry's `view_layout` key.

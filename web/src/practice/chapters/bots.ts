@@ -1,4 +1,4 @@
-// Flow 6: bots. A program outside Hide that asked with `hide access request`
+// Flow 8: bots. A program outside Hide that asked with `hide access request`
 // waits in Settings › 봇; the learner opens it, reads the two modes, and
 // approves the request in its own space. Its owl lands on the device rail
 // beside a 전체 bot already connected, and that bot's agent then asks the
@@ -10,7 +10,7 @@ import { approved, BOT_PANE, BOTS_WORLD, botAsks, FULL, type BotsModel } from ".
 
 export default chapter<BotsModel>({
   id: "bots",
-  number: 6,
+  number: 8,
   version: 1,
   since: "1.3.0",
   world: BOTS_WORLD,

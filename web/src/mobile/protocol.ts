@@ -319,6 +319,8 @@ export type StartCatalog = {
   kinds: StartKindEntry[];
   /** The kind and each kind's model the last start chose, shared with the desktop. */
   remembered: { kind: StartKind | null; models: Partial<Record<StartKind, string>> };
+  /** How many places past hided's cap were left out, the ones used longest ago; absent from an older Mac. */
+  omitted?: number;
 };
 
 export type ServerFrame =

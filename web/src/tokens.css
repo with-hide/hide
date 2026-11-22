@@ -295,6 +295,7 @@
   --size-worktree-dialog: 440px;
   --size-tab-preferred: 180px;
   --size-tab-title-min: 104px;
+  --size-tab-selected-max: 240px;
   --size-tab-icon-identity: 40px;
   --size-tab-overflow-control: 28px;
   --size-tab-status-dot: 5px;

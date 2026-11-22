@@ -317,7 +317,7 @@ export const REGISTRY: readonly Command[] = [
   // (PRD lane-desk-pair-view B18, B26, D-24): ⌘. in both hosts and
   // Ctrl+Shift+. on Windows and Linux by the rule; no shell, agent CLI or
   // Chrome keeps either, and a View's comment chord is ⇧⌘., another key.
-  { id: "pair_view", title: "Pair view", group: "Panes", browser: { code: "Period", meta: true }, electron: { code: "Period", meta: true }, moved: false },
+  { id: "pair_view", title: "Focus mode", group: "Panes", browser: { code: "Period", meta: true }, electron: { code: "Period", meta: true }, moved: false },
   // The focused pane's plan (PRD hide-plan B7), in the place the task list's
   // chord had: ⇧⌘U on macOS in both hosts, Alt+Shift+U on Windows and Linux
   // by the rule (⇧⌘L is the Memory tool, and Chrome keeps Alt+Shift+I); no

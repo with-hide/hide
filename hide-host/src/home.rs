@@ -639,6 +639,15 @@ fn what_is_left(folder: &Path) -> HostResult<Left> {
 fn recorded_session(user_home: &Path, home_path: &Path) -> HostResult<bool> {
     let catalog = hide_session::SessionCatalog::new(&hide_session::Accounts::new(user_home), "");
     let found = catalog.worked_folders(0, Instant::now() + SESSION_SEARCH);
+    // A store read only to its newest sessions cannot say an older one was
+    // not there, so the folder is kept as if one were, quietly.
+    if found
+        .refusals
+        .iter()
+        .any(|refusal| refusal.reason == hide_session::SESSIONS_CUT)
+    {
+        return Ok(true);
+    }
     if !found.refusals.is_empty() {
         return Err(HostError::new(
             ErrorCode::Io,

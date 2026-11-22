@@ -42,8 +42,8 @@ const KIND_KEY = {
 } as const satisfies Record<ScheduleKind, string>;
 /** The words of each starting point the empty screen offers (B2); the screen's list and the form read the same ones. */
 export const EXAMPLE_WORDS = {
-  issues: { name: "automationScreen.example.issues.name", task: "automationScreen.example.issues.task" },
-  deps: { name: "automationScreen.example.deps.name", task: "automationScreen.example.deps.task" },
+  report: { name: "automationScreen.example.report.name", task: "automationScreen.example.report.task" },
+  briefing: { name: "automationScreen.example.briefing.name", task: "automationScreen.example.briefing.task" },
   ci: { name: "automationScreen.example.ci.name", task: "automationScreen.example.ci.task" },
 } as const satisfies Record<AutomationExample, { name: string; task: string }>;
 /**

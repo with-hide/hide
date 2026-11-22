@@ -725,6 +725,44 @@ fn only_the_watched_pane_brings_its_open_forward() {
     );
 }
 
+/// A run the automation screen shows draws its tab's desk: what its agent
+/// opened while nobody watched comes onto that desk while it holds nothing,
+/// the last opened in front, and another agent's stays on no desk; a desk
+/// that holds a View is left as it is (operator decision 2026-11-21).
+#[test]
+fn a_shown_runs_desk_takes_what_its_agent_opened_unwatched() {
+    let (mut runtime, _checkout, directory) = setup("run-desk");
+    for (pane, name) in [
+        ("w-order:t2:p", "a.md"),
+        ("w-order:t3:p", "b.md"),
+        ("w-order:t2:p", "c.md"),
+    ] {
+        control_file(&mut runtime, pane, &directory, name, name);
+    }
+    runtime.sync_workspace_view();
+    assert_eq!(shelf(&runtime, &directory), ["a.md", "b.md", "c.md"]);
+
+    assert!(runtime.gather_run_views("w-order:t2:p"));
+    assert_eq!(desk(&runtime, &directory, TABS[1]), ["a.md", "c.md"]);
+    assert_eq!(
+        shelf(&runtime, &directory),
+        ["b.md"],
+        "another agent's stays"
+    );
+    let front = runtime
+        .view_layout_at(&key(&directory), &Place::Tray(TABS[1].to_owned()))
+        .and_then(|layout| layout.active_area().active.clone());
+    assert_eq!(front, Some(display_id(&runtime, &directory, "c.md")));
+
+    control_file(&mut runtime, "w-order:t2:p", &directory, "d.md", "later");
+    runtime.sync_workspace_view();
+    assert!(
+        !runtime.gather_run_views("w-order:t2:p"),
+        "a desk that holds a View is left as it is"
+    );
+    assert_eq!(shelf(&runtime, &directory), ["b.md", "d.md"]);
+}
+
 /// B7: a background `hide view select` moves nothing, and repeating it is no
 /// transition.
 #[test]
@@ -1781,8 +1819,9 @@ fn a_session_record_lists_the_outputs_its_session_tree_opened() {
     );
 }
 
-// Pair view (PRD lane-desk-pair-view D-08, D-22, D-45..D-47, D-51): one mode for
-// the window that draws the pane the operator is on beside its tab's desk.
+// Pair view (PRD lane-desk-pair-view D-08, D-22, D-45..D-47, D-51, D-53): one
+// mode for the window that draws the pane the operator is on beside its tab's
+// desk, or alone while it has no View to show.
 
 fn pair_event(runtime: &mut Runtime, pane: Option<&str>) {
     runtime.dispatch_json(&explorer_event(
@@ -1794,12 +1833,23 @@ fn pair_event(runtime: &mut Runtime, pane: Option<&str>) {
 /// One pair view as (tab, left pane).
 type Pair = (String, String);
 
-/// The pair view drawn now, as the wire publishes it.
+/// The pair view drawn beside its desk now, as the wire publishes it.
 fn drawn_pair(runtime: &Runtime) -> Option<Pair> {
     let view = runtime.snapshot.workspace_view.as_ref().unwrap();
     view.tray
         .pair
         .as_ref()
+        .filter(|pair| !pair.alone)
+        .map(|pair| (pair.tab_id.clone(), pair.pane_id.clone()))
+}
+
+/// The pane pair view draws alone now, with no desk (D-53).
+fn alone_pair(runtime: &Runtime) -> Option<Pair> {
+    let view = runtime.snapshot.workspace_view.as_ref().unwrap();
+    view.tray
+        .pair
+        .as_ref()
+        .filter(|pair| pair.alone)
         .map(|pair| (pair.tab_id.clone(), pair.pane_id.clone()))
 }
 
@@ -1951,9 +2001,10 @@ fn pair_view_ends_when_its_left_pane_leaves_the_tab() {
     assert_eq!(desk(&runtime, &directory, TABS[0]), ["b.md"]);
 }
 
-/// D-46, B26: the drawn desk's last View closing ends pair view.
+/// D-64 (replacing D-46): the drawn desk's last View closing leaves the
+/// mode on, the pane drawn alone.
 #[test]
-fn pair_view_ends_when_the_drawn_desks_last_view_closes() {
+fn the_drawn_desks_last_view_closing_leaves_the_pane_alone_in_focus_mode() {
     let (mut runtime, _checkout, directory) = setup("pair-emptied");
     control_file(&mut runtime, "w-order:t1:p", &directory, "a.md", "a");
     pair_event(&mut runtime, Some("w-order:t1:p"));
@@ -1964,15 +2015,17 @@ fn pair_view_ends_when_the_drawn_desks_last_view_closes() {
         &directory,
         serde_json::json!({"action": "close", "display_id": a}),
     );
+    runtime.sync_workspace_view();
     assert_eq!(drawn_pair(&runtime), None);
-    assert!(!mode_on(&runtime));
+    assert!(mode_on(&runtime));
+    assert!(front_pair(&runtime).alone);
 }
 
-/// D-46 beside a pane whose only thing to show is its View, such as a shell
-/// an agent ended in: the View closing empties the desk the screen drew, so
-/// the mode ends even though the pane has nothing left to show by then.
+/// D-64 beside a pane whose only thing to show is its View, such as a shell
+/// an agent ended in: the View closing empties the desk the screen drew, and
+/// the pane is drawn alone with the mode on.
 #[test]
-fn pair_view_beside_a_pane_with_no_session_ends_when_its_last_view_closes() {
+fn a_pane_with_no_session_is_drawn_alone_when_its_last_view_closes() {
     let (mut runtime, _checkout, directory) = setup("pair-emptied-shell");
     // q's agent has not reported its session yet: its View is tied to its
     // terminal, and nothing else of it can be shown.
@@ -2001,7 +2054,8 @@ fn pair_view_beside_a_pane_with_no_session_ends_when_its_last_view_closes() {
     );
     runtime.sync_workspace_view();
     assert_eq!(drawn_pair(&runtime), None);
-    assert!(!mode_on(&runtime), "no hidden mode is left on");
+    assert!(mode_on(&runtime));
+    assert!(front_pair(&runtime).alone);
 }
 
 /// The lane as the store holds it: whether it is open, and whether `tab`'s
@@ -2079,30 +2133,40 @@ fn leaving_pair_view_puts_back_the_front_view_and_a_closed_lane() {
     );
 }
 
-/// D-45: a tab the mode passes while it draws that tab's usual screen (an
-/// agent with no View) keeps the lane and desk the operator opened there,
-/// through a tab switch and the mode's end.
+/// D-53: a tab switch in the mode to an agent that opened nothing draws
+/// its pane alone; the View that agent then opens stands the desk beside it
+/// with that View in front, and leaving gives the lane back as it was
+/// before the mode drew that tab (D-51), the View kept on the desk.
 #[test]
-fn a_lane_opened_where_pair_view_draws_nothing_stays_as_the_operator_left_it() {
-    let (mut runtime, checkout, directory) = setup("pair-undrawn-lane");
+fn a_pane_drawn_alone_gets_its_desk_when_its_agent_opens_a_view() {
+    let (mut runtime, checkout, directory) = setup("pair-alone-opens");
     control_file(&mut runtime, "w-order:t1:p", &directory, "a.md", "a");
+    let before = lane_of(&runtime, &directory, TABS[1]);
     pair_event(&mut runtime, Some("w-order:t1:p"));
     focus_tab(&mut runtime, &checkout, &directory, TABS[1]);
     assert!(mode_on(&runtime));
-    assert_eq!(drawn_pair(&runtime), None, "t2's agent opened nothing");
-    open(&mut runtime, &checkout, &directory, "b.md");
-    assert_eq!(lane_of(&runtime, &directory, TABS[1]), (true, true));
-    focus_tab(&mut runtime, &checkout, &directory, TABS[2]);
-    assert_eq!(lane_of(&runtime, &directory, TABS[1]), (true, true));
+    assert_eq!(
+        alone_pair(&runtime),
+        Some(paired(TABS[1], "w-order:t2:p")),
+        "t2's agent opened nothing"
+    );
+    assert!(runtime.drawn_tray_layout(&key(&directory)).is_none());
+
+    control_file(&mut runtime, "w-order:t2:p", &directory, "b.md", "b");
+    runtime.sync_workspace_view();
+    assert_eq!(drawn_pair(&runtime), Some(paired(TABS[1], "w-order:t2:p")));
+    assert_eq!(fronts(&runtime, &directory), ["b.md"], "its View in front");
+
     pair_event(&mut runtime, None);
-    assert_eq!(lane_of(&runtime, &directory, TABS[1]), (true, true));
+    assert_eq!(lane_of(&runtime, &directory, TABS[1]), before);
+    assert_eq!(desk(&runtime, &directory, TABS[1]), ["b.md"]);
 }
 
-/// D-46 by the pane: the left agent closing its last View ends the mode
-/// even with the operator's own file still on the desk, which stands again
-/// as the operator had it (D-51).
+/// D-64, D-60: the left agent closing its last View beside the operator's
+/// file from before the mode leaves the mode on and the pane alone; the
+/// folded file stays on the desk and does not come in front of a strip.
 #[test]
-fn pair_view_ends_when_the_left_agent_closes_its_last_view_beside_an_operators_file() {
+fn the_left_agents_last_view_closing_beside_a_folded_file_leaves_the_pane_alone() {
     let (mut runtime, checkout, directory) = setup("pair-ends-by-pane");
     open(&mut runtime, &checkout, &directory, "c.md");
     control_file(&mut runtime, "w-order:t1:p", &directory, "a.md", "a");
@@ -2119,9 +2183,9 @@ fn pair_view_ends_when_the_left_agent_closes_its_last_view_beside_an_operators_f
         "pair-ends-by-pane",
     );
     runtime.sync_workspace_view();
-    assert!(!mode_on(&runtime));
+    assert!(mode_on(&runtime));
+    assert!(front_pair(&runtime).alone, "only the folded c.md is left");
     assert_eq!(desk(&runtime, &directory, TABS[0]), vec!["c.md".to_owned()]);
-    assert_eq!(lane_of(&runtime, &directory, TABS[0]), (true, true));
 }
 
 /// Inventory X02: a pane in no Agent tab has no desk to pair with, and the
@@ -2136,8 +2200,8 @@ fn a_pane_in_no_agent_tab_is_refused_pair_view() {
     assert!(!mode_on(&runtime));
 }
 
-/// The desk tab the published snapshot shows in front, as (name, owner pane).
-fn front_owner(runtime: &Runtime) -> (String, Option<String>) {
+/// The desk tab the published snapshot shows in front.
+fn front_display(runtime: &Runtime) -> &crate::model::ViewDisplaySnapshot {
     fn find(node: &crate::model::ViewNodeSnapshot) -> Option<&crate::model::ViewDisplaySnapshot> {
         match node {
             crate::model::ViewNodeSnapshot::Area(area) => area
@@ -2150,7 +2214,17 @@ fn front_owner(runtime: &Runtime) -> (String, Option<String>) {
         }
     }
     let view = runtime.snapshot.workspace_view.as_ref().expect("published");
-    let display = find(&view.layout.root).expect("a front tab");
+    find(&view.layout.root).expect("a front tab")
+}
+
+/// The id of the desk tab the published snapshot shows in front.
+fn front_display_id(runtime: &Runtime) -> String {
+    front_display(runtime).id.clone()
+}
+
+/// The desk tab the published snapshot shows in front, as (name, owner pane).
+fn front_owner(runtime: &Runtime) -> (String, Option<String>) {
+    let display = front_display(runtime);
     let name = if display.card.is_some() {
         "card".to_owned()
     } else {
@@ -2159,13 +2233,13 @@ fn front_owner(runtime: &Runtime) -> (String, Option<String>) {
     (name, display.owner_pane.clone())
 }
 
-fn pairable(runtime: &Runtime) -> Vec<String> {
+fn panes_with_views(runtime: &Runtime) -> Vec<String> {
     runtime
         .snapshot
         .workspace_view
         .as_ref()
         .expect("published")
-        .pairable
+        .panes_with_views
         .clone()
 }
 
@@ -2181,15 +2255,17 @@ fn a_desk_tab_names_its_agents_pane_and_takes_it_to_the_left_in_pair_view() {
     engine_splits_first_tab(&mut runtime, &directory);
     control_file(&mut runtime, "w-order:t1:p", &directory, "a.md", "a");
     open(&mut runtime, &checkout, &directory, "c.md");
-    // q has opened nothing: nothing to pair with, and no card opens (D-49).
+    // q has opened nothing: it is drawn alone, and no card opens (D-49,
+    // D-53).
     let before = desk(&runtime, &directory, TABS[0]);
     pair_event(&mut runtime, Some("w-order:t1:q"));
-    assert!(!mode_on(&runtime));
+    assert_eq!(alone_pair(&runtime), Some(paired(TABS[0], "w-order:t1:q")));
     assert_eq!(
         desk(&runtime, &directory, TABS[0]),
         before,
         "no record card is opened for it"
     );
+    pair_event(&mut runtime, None);
     // The operator opens q's record card; it is q's to pair with.
     let session = crate::links::ledger::SessionIdentity {
         device_id: crate::node::TEST_NODE.to_owned(),
@@ -2318,12 +2394,11 @@ fn the_left_pane_takes_the_keyboard_on_entry_and_leaving_gives_it_back() {
     );
 }
 
-/// B25, D-45 on a device: the operator choosing another pane of a device tab
-/// goes through the device's focus request, and the mode follows it as it
-/// does on this machine; a pane with nothing to show keeps the mode on.
-#[test]
-fn choosing_a_device_pane_moves_pair_view_and_keeps_the_mode() {
-    let (mut runtime, _checkout_id, _directory) = setup("pair-device");
+/// The device `studio` in front, with one Agent tab of two panes and no
+/// agent, each pane on its own terminal: the runtime, the Workspace's key,
+/// the tab and the two panes.
+fn device_tab(name: &str) -> (Runtime, (String, String), String, [String; 2]) {
+    let (mut runtime, _checkout_id, _directory) = setup(name);
     let device = "studio";
     let tab = crate::address::scoped_id(device, crate::address::Kind::Tab, "t1");
     let [left, other] =
@@ -2337,15 +2412,13 @@ fn choosing_a_device_pane_moves_pair_view_and_keeps_the_mode() {
             "remote-workspace",
             "remote-checkout",
             "/srv/remote",
-            Some(pane(&left, "/srv/remote")),
+            Some(device_pane(&left)),
         )],
     );
     project.device_id = device.to_owned();
     project.remote_target_id = Some(device.to_owned());
     project.checkouts[0].tabs[0].id = Some(tab.clone());
-    project.checkouts[0].tabs[0]
-        .panes
-        .push(pane(&other, "/srv/remote"));
+    project.checkouts[0].tabs[0].panes.push(device_pane(&other));
     project.checkouts[0].active_tab_id = Some(tab.clone());
     runtime.snapshot.status.remote.push(RemoteStatusSnapshot {
         target_id: device.to_owned(),
@@ -2383,6 +2456,24 @@ fn choosing_a_device_pane_moves_pair_view_and_keeps_the_mode() {
     runtime
         .reconcile_agent_topology(&key, &[(tab.clone(), false)])
         .unwrap();
+    (runtime, key, tab, [left, other])
+}
+
+/// A pane of the device's tab, on a terminal of its own.
+fn device_pane(id: &str) -> PaneSnapshot {
+    let mut row = pane(id, "/srv/remote");
+    row.terminal_id = Some(format!("terminal-{id}"));
+    row
+}
+
+/// B25, D-45 on a device: the operator choosing another pane of a device tab
+/// goes through the device's focus request, and the mode follows it as it
+/// does on this machine; a pane with nothing to show keeps the mode on and
+/// is drawn alone (D-53).
+#[test]
+fn choosing_a_device_pane_moves_pair_view_and_keeps_the_mode() {
+    let (mut runtime, key, tab, [left, other]) = device_tab("pair-device");
+    let device = "studio";
     let left_of = |runtime: &Runtime| runtime.pair_left_of(&key, &tab);
     let store = runtime.workspace_views.as_mut().unwrap();
     store.views.pair.on = true;
@@ -2410,11 +2501,11 @@ fn choosing_a_device_pane_moves_pair_view_and_keeps_the_mode() {
     assert!(runtime.pair_mode_on(), "D-45: the mode stays on");
 }
 
-/// D-41: a desk tab whose agent is in another Agent tab stays on the strip
-/// in pair view, like the operator's own; only another agent of the paired
-/// tab folds.
+/// D-60, narrowing D-41: a desk tab whose agent is in another Agent tab
+/// folds in focus mode like one of another agent of the paired tab; the
+/// left pane stays where it is.
 #[test]
-fn a_desk_tab_of_an_agent_in_another_tab_stays_on_the_strip() {
+fn a_desk_tab_of_an_agent_in_another_tab_folds() {
     let (mut runtime, _checkout, directory) = setup("pair-other-tab");
     engine_splits_first_tab(&mut runtime, &directory);
     control_file(&mut runtime, "w-order:t1:p", &directory, "a.md", "a");
@@ -2435,13 +2526,19 @@ fn a_desk_tab_of_an_agent_in_another_tab_stays_on_the_strip() {
         ("card".into(), Some("w-order:t2:p".into()))
     );
     assert_eq!(drawn_pair(&runtime), Some(paired(TABS[0], "w-order:t1:p")));
-    assert!(front_pair(&runtime).folded.is_empty(), "nothing folds");
+    let card = front_display_id(&runtime);
+    assert_eq!(
+        front_pair(&runtime).folded,
+        [card],
+        "the other tab's agent's card folds"
+    );
 }
 
-/// D-41: the desk on screen folds the tabs another agent of the paired tab
-/// owns, and names them in the snapshot, so the web only reads the list.
+/// D-60: the desk on screen folds every tab the left pane does not own,
+/// another agent's and the operator's from before the mode, and names them
+/// in the snapshot, so the web only reads the list.
 #[test]
-fn the_drawn_desk_folds_only_another_agent_of_the_paired_tab() {
+fn the_drawn_desk_folds_what_the_left_pane_does_not_own() {
     let (mut runtime, checkout, directory) = setup("pair-fold");
     engine_splits_first_tab(&mut runtime, &directory);
     control_file(&mut runtime, "w-order:t1:p", &directory, "a.md", "a");
@@ -2449,58 +2546,156 @@ fn the_drawn_desk_folds_only_another_agent_of_the_paired_tab() {
     control_file(&mut runtime, "w-order:t1:q", &directory, "b.md", "b");
     pair_event(&mut runtime, Some("w-order:t1:q"));
     assert_eq!(fronts(&runtime, &directory), ["b.md"]);
-    let a = display_id(&runtime, &directory, "a.md");
+    let mut folded = front_pair(&runtime).folded.clone();
+    folded.sort();
+    let mut expected = [
+        display_id(&runtime, &directory, "a.md"),
+        display_id(&runtime, &directory, "c.md"),
+    ];
+    expected.sort();
     assert_eq!(
-        front_pair(&runtime).folded,
-        [a],
-        "p's tab folds; the operator's c.md stays"
+        folded, expected,
+        "p's tab and the operator's earlier c.md fold"
     );
 }
 
-/// B19, D-45: the snapshot lists the panes with something to show beside
-/// the desk; a plain shell is not among them. Choosing it while the mode is
-/// on draws the tab's own layout and keeps the mode, and choosing the agent
-/// again draws pair view again.
+/// D-53, D-64 (#2775 review 2): an agent drawn alone whose own first
+/// `hide file open` stands the desk owns that View, so closing it, its last,
+/// leaves it drawn alone again with the mode on; the open stands no desk the
+/// operator's open would keep.
 #[test]
-fn a_shell_with_nothing_to_show_draws_its_tab_and_keeps_the_mode_on() {
+fn an_agent_drawn_alone_that_opens_and_closes_its_view_is_drawn_alone_again() {
+    let (mut runtime, _checkout, directory) = setup("pair-alone-own-open");
+    engine_splits_first_tab(&mut runtime, &directory);
+    pair_event(&mut runtime, Some("w-order:t1:p"));
+    runtime.sync_workspace_view();
+    assert!(front_pair(&runtime).alone, "nothing to show yet");
+    control_file(&mut runtime, "w-order:t1:p", &directory, "a.md", "a");
+    runtime.sync_workspace_view();
+    assert!(!front_pair(&runtime).alone, "its View stands the desk");
+    let a = display_id(&runtime, &directory, "a.md");
+    view_act(
+        &mut runtime,
+        &directory,
+        serde_json::json!({"action": "close", "display_id": a}),
+    );
+    runtime.sync_workspace_view();
+    assert!(
+        runtime.pair_mode_on(),
+        "D-64: its last View closing leaves it on"
+    );
+    assert!(front_pair(&runtime).alone);
+}
+
+/// D-60: a tab closed in focus mode is followed by the newest one the
+/// strip shows, the left pane's, never by another agent's tab or the
+/// operator's from before the mode that the layout would bring in front.
+#[test]
+fn a_closed_tab_in_focus_mode_is_followed_by_the_left_panes_own() {
+    let (mut runtime, checkout, directory) = setup("pair-fold-close");
+    engine_splits_first_tab(&mut runtime, &directory);
+    control_file(&mut runtime, "w-order:t1:p", &directory, "a.md", "a");
+    control_file(&mut runtime, "w-order:t1:p", &directory, "c.md", "c");
+    control_file(&mut runtime, "w-order:t1:q", &directory, "b.md", "b");
+    std::fs::write(directory.join("notes.md"), "notes").expect("notes");
+    open(&mut runtime, &checkout, &directory, "notes.md");
+    // q's b.md was in front last before the mode, so the layout's own
+    // successor of a closed tab would be it.
+    open(&mut runtime, &checkout, &directory, "b.md");
+    pair_event(&mut runtime, Some("w-order:t1:p"));
+    let first = fronts(&runtime, &directory);
+    assert!(first == ["a.md"] || first == ["c.md"], "{first:?}");
+    let closed = display_id(&runtime, &directory, &first[0]);
+    view_act(
+        &mut runtime,
+        &directory,
+        serde_json::json!({"action": "close", "display_id": closed}),
+    );
+    runtime.sync_workspace_view();
+    let other = if first == ["a.md"] { "c.md" } else { "a.md" };
+    assert_eq!(fronts(&runtime, &directory), [other]);
+    assert!(runtime.pair_mode_on());
+    let mut folded = front_pair(&runtime).folded.clone();
+    folded.sort();
+    let mut expected = [
+        display_id(&runtime, &directory, "b.md"),
+        display_id(&runtime, &directory, "notes.md"),
+    ];
+    expected.sort();
+    assert_eq!(folded, expected);
+}
+
+/// B19, D-53: the snapshot lists the panes whose agent has a View to show,
+/// which a plain shell is not among, yet the shell enters pair view and is
+/// drawn alone, the desk left as it was; choosing the agent draws it beside
+/// its desk, the shell again draws it alone, and leaving gives the keyboard
+/// back to the pane that held it before (B26).
+#[test]
+fn a_shell_enters_pair_view_alone_and_the_mode_draws_it_alone_again() {
     let (mut runtime, _checkout, directory) = setup("pair-shell");
     engine_splits_first_tab_with(&mut runtime, &directory, false);
     control_file(&mut runtime, "w-order:t1:p", &directory, "a.md", "a");
     runtime.sync_workspace_view();
-    let listed = pairable(&runtime);
+    let listed = panes_with_views(&runtime);
     assert!(listed.contains(&"w-order:t1:p".to_owned()), "{listed:?}");
     assert!(!listed.contains(&"w-order:t1:q".to_owned()), "{listed:?}");
+    let before = (
+        lane_of(&runtime, &directory, TABS[0]),
+        fronts(&runtime, &directory),
+    );
 
     pair_event(&mut runtime, Some("w-order:t1:q"));
-    assert_eq!(drawn_pair(&runtime), None, "nothing to pair with");
-    assert!(!mode_on(&runtime));
-
-    pair_event(&mut runtime, Some("w-order:t1:p"));
-    assert_eq!(drawn_pair(&runtime), Some(paired(TABS[0], "w-order:t1:p")));
-    runtime.dispatch_json(&operator_focus_event("w-order:t1:q"));
-    runtime.sync_workspace_view();
-    assert_eq!(drawn_pair(&runtime), None);
+    assert_eq!(runtime.snapshot.status.last_error, None);
     assert!(mode_on(&runtime));
-    assert_eq!(runtime.snapshot.status.last_error, None, "no notice");
+    assert_eq!(alone_pair(&runtime), Some(paired(TABS[0], "w-order:t1:q")));
+    assert!(front_pair(&runtime).folded.is_empty());
+    assert_eq!(
+        runtime.snapshot.focused.pane_id.as_deref(),
+        Some("w-order:t1:q")
+    );
+    assert!(
+        !runtime.dispatch_json(&explorer_event(
+            "pair_view",
+            serde_json::json!({"pane_id": "w-order:t1:q"}),
+        )),
+        "the same pane again publishes nothing"
+    );
+
     runtime.dispatch_json(&operator_focus_event("w-order:t1:p"));
     runtime.sync_workspace_view();
     assert_eq!(drawn_pair(&runtime), Some(paired(TABS[0], "w-order:t1:p")));
+    runtime.dispatch_json(&operator_focus_event("w-order:t1:q"));
+    runtime.sync_workspace_view();
+    assert_eq!(alone_pair(&runtime), Some(paired(TABS[0], "w-order:t1:q")));
+    assert_eq!(runtime.snapshot.status.last_error, None, "no notice");
+
+    pair_event(&mut runtime, None);
+    assert!(!mode_on(&runtime));
+    assert_eq!(
+        runtime.snapshot.workspace_view.as_ref().unwrap().tray.pair,
+        None
+    );
+    assert_eq!(
+        (
+            lane_of(&runtime, &directory, TABS[0]),
+            fronts(&runtime, &directory),
+        ),
+        before,
+        "D-51: the screen from before"
+    );
 }
 
-/// D-45 with a shell on screen: the mode is on but nothing is drawn, so the
-/// desk is not in view (its front View stays unseen), a desk tab of another
-/// agent brought in front opens no pair view, and the desk's last View
-/// closing leaves the mode on.
+/// D-53 with a shell drawn alone: the desk is not drawn nor in view (its
+/// front View stays unseen), a desk tab of another agent brought in front
+/// moves nothing, and the desk's last View closing leaves the mode on,
+/// since a pane drawn alone has no last View to close.
 #[test]
-fn a_mode_on_a_shell_draws_no_pair_view_anywhere_the_core_looks() {
+fn a_pane_drawn_alone_draws_no_desk_and_an_emptied_desk_keeps_the_mode() {
     let (mut runtime, _checkout, directory) = setup("pair-shell-hidden");
     engine_splits_first_tab_with(&mut runtime, &directory, false);
     control_file(&mut runtime, "w-order:t1:p", &directory, "a.md", "a");
-    pair_event(&mut runtime, Some("w-order:t1:p"));
-    runtime.dispatch_json(&operator_focus_event("w-order:t1:q"));
-    runtime.sync_workspace_view();
-    assert!(mode_on(&runtime));
-    assert_eq!(drawn_pair(&runtime), None);
+    pair_event(&mut runtime, Some("w-order:t1:q"));
+    assert_eq!(alone_pair(&runtime), Some(paired(TABS[0], "w-order:t1:q")));
     let key = key(&directory);
     assert!(
         runtime.drawn_tray_layout(&key).is_none(),
@@ -2518,16 +2713,344 @@ fn a_mode_on_a_shell_draws_no_pair_view_anywhere_the_core_looks() {
         &directory,
         serde_json::json!({"action": "focus", "display_id": a}),
     );
-    assert_eq!(drawn_pair(&runtime), None, "a desk tab opens no pair view");
+    assert_eq!(
+        alone_pair(&runtime),
+        Some(paired(TABS[0], "w-order:t1:q")),
+        "a desk tab moves nothing"
+    );
     view_act(
         &mut runtime,
         &directory,
         serde_json::json!({"action": "close", "display_id": a}),
     );
-    assert!(
-        mode_on(&runtime),
-        "a desk pair view does not draw empties without ending it"
+    assert!(mode_on(&runtime), "an emptied desk does not end it");
+    assert_eq!(alone_pair(&runtime), Some(paired(TABS[0], "w-order:t1:q")));
+}
+
+/// D-53, D-22: the pane drawn alone closing ends the mode, with no notice.
+#[test]
+fn pair_view_ends_when_the_pane_drawn_alone_closes() {
+    let (mut runtime, _checkout, directory) = setup("pair-alone-gone");
+    engine_splits_first_tab_with(&mut runtime, &directory, false);
+    pair_event(&mut runtime, Some("w-order:t1:q"));
+    assert_eq!(alone_pair(&runtime), Some(paired(TABS[0], "w-order:t1:q")));
+
+    engine_focuses(&mut runtime, &directory, TABS[0]);
+    assert!(!mode_on(&runtime));
+    assert_eq!(
+        runtime.snapshot.workspace_view.as_ref().unwrap().tray.pair,
+        None
     );
+    assert_eq!(runtime.snapshot.status.last_error, None, "no notice");
+}
+
+/// A terminal link the operator pressed in `pane`, as the web sends it: a
+/// file open naming the pane whose terminal the link was in.
+fn open_link(runtime: &mut Runtime, checkout_id: &str, directory: &Path, name: &str, pane: &str) {
+    std::fs::write(directory.join(name), name).unwrap();
+    runtime.dispatch_json(&explorer_event(
+        "file_open",
+        serde_json::json!({
+            "path": directory.join(name).to_string_lossy(),
+            "workspace_id": "workspace:order",
+            "checkout_id": checkout_id,
+            "preview": false,
+            "opener_pane": pane,
+        }),
+    ));
+    assert_eq!(runtime.snapshot.status.last_error, None);
+    runtime.sync_workspace_view();
+}
+
+/// Each pane's `N views` rows as (pane, name, unseen).
+fn pane_rows(runtime: &Runtime) -> Vec<(String, String, bool)> {
+    let view = runtime.snapshot.workspace_view.as_ref().expect("published");
+    view.feedback.as_ref().map_or_else(Vec::new, |feedback| {
+        feedback
+            .opened
+            .iter()
+            .map(|row| (row.pane_id.clone(), name_of(&row.path), row.unseen))
+            .collect()
+    })
+}
+
+/// D-54, D-33: a file the operator opens from a terminal link is the pane's
+/// whose link it was, a shell's as an agent's: it is in that pane's
+/// `N views`, not To look at since the operator opened it, its desk tab
+/// names that pane and only an agent as its opener, the shell's head gets
+/// its ◧ cell, and pair view puts the file beside the shell.
+#[test]
+fn a_link_pressed_in_a_pane_is_that_panes_view_and_not_to_look_at() {
+    let (mut runtime, checkout, directory) = setup("link-owner");
+    engine_splits_first_tab_with(&mut runtime, &directory, false);
+    open_link(
+        &mut runtime,
+        &checkout,
+        &directory,
+        "shell.md",
+        "w-order:t1:q",
+    );
+    open_link(
+        &mut runtime,
+        &checkout,
+        &directory,
+        "agent.md",
+        "w-order:t1:p",
+    );
+    let rows = pane_rows(&runtime);
+    assert!(
+        rows.contains(&("w-order:t1:q".into(), "shell.md".into(), false)),
+        "{rows:?}"
+    );
+    assert!(
+        rows.contains(&("w-order:t1:p".into(), "agent.md".into(), false)),
+        "{rows:?}"
+    );
+    let shell = display_id(&runtime, &directory, "shell.md");
+    let agent = display_id(&runtime, &directory, "agent.md");
+    assert!(!unseen(&runtime, &directory, "shell.md"));
+    assert!(!unseen(&runtime, &directory, "agent.md"));
+    let stored = |id: &str| runtime.view_display(&key(&directory), id).cloned().unwrap();
+    assert!(stored(&shell).opener.is_none(), "a shell is no opener");
+    assert!(stored(&agent).opener.is_some());
+    assert!(panes_with_views(&runtime).contains(&"w-order:t1:q".to_owned()));
+
+    pair_event(&mut runtime, Some("w-order:t1:q"));
+    assert_eq!(drawn_pair(&runtime), Some(paired(TABS[0], "w-order:t1:q")));
+    assert_eq!(
+        front_owner(&runtime),
+        ("shell.md".into(), Some("w-order:t1:q".into()))
+    );
+}
+
+/// D-54: what the operator opens from the Explorer, ⌘P or ⌘K is the
+/// operator's, never the pane that held the keyboard.
+#[test]
+fn an_explorer_open_belongs_to_no_pane() {
+    let (mut runtime, checkout, directory) = setup("explorer-owner");
+    engine_splits_first_tab_with(&mut runtime, &directory, false);
+    runtime.dispatch_json(&operator_focus_event("w-order:t1:q"));
+    std::fs::write(directory.join("mine.md"), "mine").unwrap();
+    open(&mut runtime, &checkout, &directory, "mine.md");
+    runtime.sync_workspace_view();
+    assert!(pane_rows(&runtime).is_empty());
+    assert_eq!(front_owner(&runtime), ("mine.md".into(), None));
+    assert!(!panes_with_views(&runtime).contains(&"w-order:t1:q".to_owned()));
+}
+
+/// An open lane under a pane drawn alone is no desk on screen: the desk is
+/// neither drawn nor in view, so another agent's View landing on it is To
+/// look at, and the shell stays alone.
+#[test]
+fn an_open_lane_under_a_shell_drawn_alone_is_no_desk_on_screen() {
+    let (mut runtime, _checkout, directory) = setup("pair-alone-lane");
+    engine_splits_first_tab_with(&mut runtime, &directory, false);
+    control_file(&mut runtime, "w-order:t1:p", &directory, "a.md", "a");
+    runtime.dispatch_json(&explorer_event(
+        "workspace_view",
+        serde_json::json!({"open": true}),
+    ));
+    let key = key(&directory);
+    assert!(
+        runtime.drawn_tray_layout(&key).is_some(),
+        "the lane draws it"
+    );
+
+    pair_event(&mut runtime, Some("w-order:t1:q"));
+    assert_eq!(alone_pair(&runtime), Some(paired(TABS[0], "w-order:t1:q")));
+    assert!(runtime.drawn_tray_layout(&key).is_none());
+    assert!(!runtime.tray_in_view(&key, TABS[0]));
+    control_file(&mut runtime, "w-order:t1:p", &directory, "b.md", "b");
+    assert!(unseen(&runtime, &directory, "b.md"), "nobody saw it land");
+    assert_eq!(alone_pair(&runtime), Some(paired(TABS[0], "w-order:t1:q")));
+}
+
+/// While a shell is drawn alone, a file the operator opens from the
+/// Explorer, or the shell's own `hide file open`, stands its tab's desk
+/// beside it with that file in front, and the shell stays on the left
+/// (D-21); the desk emptied again leaves the shell alone, the mode on.
+#[test]
+fn an_open_while_a_shell_is_drawn_alone_stands_the_desk_beside_it() {
+    let (mut runtime, checkout, directory) = setup("pair-alone-open");
+    engine_splits_first_tab_with(&mut runtime, &directory, false);
+    pair_event(&mut runtime, Some("w-order:t1:q"));
+    assert_eq!(alone_pair(&runtime), Some(paired(TABS[0], "w-order:t1:q")));
+
+    open(&mut runtime, &checkout, &directory, "c.md");
+    runtime.sync_workspace_view();
+    assert_eq!(drawn_pair(&runtime), Some(paired(TABS[0], "w-order:t1:q")));
+    assert_eq!(front_owner(&runtime), ("c.md".into(), None));
+
+    let c = display_id(&runtime, &directory, "c.md");
+    view_act(
+        &mut runtime,
+        &directory,
+        serde_json::json!({"action": "close", "display_id": c}),
+    );
+    assert!(mode_on(&runtime), "an emptied desk does not end it");
+    assert_eq!(alone_pair(&runtime), Some(paired(TABS[0], "w-order:t1:q")));
+
+    control_file(&mut runtime, "w-order:t1:q", &directory, "d.md", "d");
+    runtime.sync_workspace_view();
+    assert_eq!(drawn_pair(&runtime), Some(paired(TABS[0], "w-order:t1:q")));
+    assert_eq!(front_owner(&runtime).0, "d.md");
+}
+
+fn pair_desk_event(runtime: &mut Runtime, shown: bool) -> bool {
+    runtime.dispatch_json(&explorer_event(
+        "pair_view_desk",
+        serde_json::json!({"shown": shown}),
+    ))
+}
+
+/// D-57: in focus mode ⌘E folds the desk, which draws the pane alone at the
+/// full width, and shows it again; the mode stays on, and a desk with
+/// nothing the strip shows has nothing to stand.
+#[test]
+fn e_folds_and_shows_the_desk_in_focus_mode() {
+    let (mut runtime, _checkout, directory) = setup("pair-desk-fold");
+    engine_splits_first_tab_with(&mut runtime, &directory, false);
+    control_file(&mut runtime, "w-order:t1:p", &directory, "a.md", "a");
+    pair_event(&mut runtime, Some("w-order:t1:p"));
+    assert_eq!(drawn_pair(&runtime), Some(paired(TABS[0], "w-order:t1:p")));
+
+    assert!(pair_desk_event(&mut runtime, false));
+    runtime.sync_workspace_view();
+    assert_eq!(alone_pair(&runtime), Some(paired(TABS[0], "w-order:t1:p")));
+    assert!(runtime.drawn_tray_layout(&key(&directory)).is_none());
+    assert!(mode_on(&runtime));
+    assert!(!pair_desk_event(&mut runtime, false), "already folded");
+
+    assert!(pair_desk_event(&mut runtime, true));
+    runtime.sync_workspace_view();
+    assert_eq!(drawn_pair(&runtime), Some(paired(TABS[0], "w-order:t1:p")));
+    assert_eq!(
+        front_pair(&runtime).shown,
+        1,
+        "the web reads what can stand"
+    );
+
+    // The left agent's open onto the folded desk stands it again (D-21).
+    assert!(pair_desk_event(&mut runtime, false));
+    control_file(&mut runtime, "w-order:t1:p", &directory, "b.md", "b");
+    runtime.sync_workspace_view();
+    assert_eq!(drawn_pair(&runtime), Some(paired(TABS[0], "w-order:t1:p")));
+
+    // Choosing the View already in front from `N views` stands it too (D-63).
+    assert!(pair_desk_event(&mut runtime, false));
+    let a = display_id(&runtime, &directory, "a.md");
+    view_act(
+        &mut runtime,
+        &directory,
+        serde_json::json!({"action": "focus", "display_id": a}),
+    );
+    runtime.sync_workspace_view();
+    assert_eq!(drawn_pair(&runtime), Some(paired(TABS[0], "w-order:t1:p")));
+
+    // The fold is the left pane's: another pane taking the left drops it.
+    assert!(pair_desk_event(&mut runtime, false));
+    runtime.dispatch_json(&operator_focus_event("w-order:t1:q"));
+    runtime.dispatch_json(&operator_focus_event("w-order:t1:p"));
+    runtime.sync_workspace_view();
+    assert_eq!(drawn_pair(&runtime), Some(paired(TABS[0], "w-order:t1:p")));
+
+    // The shell's desk holds only the agent's Views, which the shell's strip
+    // folds, so ⌘E has nothing to stand beside it (D-60, D-64).
+    runtime.dispatch_json(&operator_focus_event("w-order:t1:q"));
+    runtime.sync_workspace_view();
+    assert_eq!(alone_pair(&runtime), Some(paired(TABS[0], "w-order:t1:q")));
+    assert_eq!(front_pair(&runtime).shown, 0);
+    assert!(!pair_desk_event(&mut runtime, true));
+    runtime.sync_workspace_view();
+    assert_eq!(alone_pair(&runtime), Some(paired(TABS[0], "w-order:t1:q")));
+}
+
+/// D-57, D-56: ⌘E on a pane whose desk holds no View has nothing to show.
+#[test]
+fn e_shows_no_empty_desk_in_focus_mode() {
+    let (mut runtime, _checkout, directory) = setup("pair-desk-empty");
+    engine_splits_first_tab_with(&mut runtime, &directory, false);
+    pair_event(&mut runtime, Some("w-order:t1:q"));
+    assert!(!pair_desk_event(&mut runtime, true));
+    runtime.sync_workspace_view();
+    assert_eq!(alone_pair(&runtime), Some(paired(TABS[0], "w-order:t1:q")));
+}
+
+/// D-54: the last open names the owner. A file an agent opened that a
+/// shell's link opens again is the shell's, in its `N views` and beside it
+/// in focus mode, and the agent's session still counts it among its own.
+#[test]
+fn a_file_an_agent_opened_that_a_shells_link_opens_again_is_the_shells() {
+    let (mut runtime, checkout, directory) = setup("link-reopen");
+    engine_splits_first_tab_with(&mut runtime, &directory, false);
+    control_file(&mut runtime, "w-order:t1:p", &directory, "a.md", "a");
+    open_link(&mut runtime, &checkout, &directory, "a.md", "w-order:t1:q");
+
+    let rows = pane_rows(&runtime);
+    assert_eq!(
+        rows,
+        [("w-order:t1:q".to_owned(), "a.md".to_owned(), false)]
+    );
+    let a = display_id(&runtime, &directory, "a.md");
+    let stored = runtime.view_display(&key(&directory), &a).unwrap();
+    assert!(stored.opener.is_none(), "no agent's mark on it now");
+    assert!(!stored.openers.is_empty(), "its session still counts it");
+    assert_eq!(
+        front_owner(&runtime),
+        ("a.md".into(), Some("w-order:t1:q".into()))
+    );
+}
+
+/// D-53 on a device: ⌘. on a device pane with nothing to show draws it
+/// alone, as on this machine.
+#[test]
+fn a_device_pane_with_nothing_to_show_enters_focus_mode_alone() {
+    let (mut runtime, key, tab, [left, _]) = device_tab("pair-device-alone");
+    pair_event(&mut runtime, Some(&left));
+    assert_eq!(runtime.snapshot.status.last_error, None);
+    runtime.sync_workspace_view();
+    assert!(mode_on(&runtime));
+    assert_eq!(alone_pair(&runtime), Some(paired(&tab, &left)));
+    assert!(runtime.drawn_tray_layout(&key).is_none());
+}
+
+/// D-54 on a device: a page link pressed in a device's shell is that
+/// pane's, in its `N views` and not To look at; the pane is named by the
+/// device's own terminal, which finds it again on that device and on no
+/// other machine.
+#[test]
+fn a_device_shells_link_is_owned_by_its_pane_on_that_device() {
+    let (mut runtime, _key, _tab, [left, _]) = device_tab("link-device");
+    runtime.dispatch_json(&explorer_event(
+        "browser_open",
+        serde_json::json!({
+            "url": "https://example.test/device-link",
+            "workspace": {"device_id": "studio", "path": "/srv/remote"},
+            "opener_pane": left,
+        }),
+    ));
+    assert_eq!(runtime.snapshot.status.last_error, None);
+    runtime.sync_workspace_view();
+    let view = runtime.snapshot.workspace_view.as_ref().expect("published");
+    let rows = view.feedback.as_ref().map_or_else(Vec::new, |feedback| {
+        feedback
+            .opened
+            .iter()
+            .map(|row| (row.pane_id.clone(), row.unseen))
+            .collect()
+    });
+    assert_eq!(rows, [(left.clone(), false)]);
+
+    let crate::view_feedback::OpenedBy::Terminal(terminal) = runtime.link_owner(&left) else {
+        panic!("a device shell's link is its terminal's");
+    };
+    assert_eq!(terminal.device_id, "studio");
+    assert_eq!(runtime.link_terminal_pane(&terminal), Some(left));
+    let elsewhere = crate::view_feedback::LinkTerminal {
+        device_id: crate::node::TEST_NODE.to_owned(),
+        ..terminal
+    };
+    assert_eq!(runtime.link_terminal_pane(&elsewhere), None);
 }
 
 /// B33, D-36: `hide view split` and `move` arrange a View on a desk; one
@@ -2601,6 +3124,24 @@ fn desk_floats(runtime: &Runtime) -> bool {
         .unwrap()
         .tray
         .floats
+}
+
+/// D-50, D-53: in focus mode a pane drawn alone has no desk on screen, so a
+/// file the operator opens from the floating Explorer floats its desk with
+/// the tool, though that file itself stands the desk (#2775 review 5).
+#[test]
+fn a_file_opened_beside_a_pane_drawn_alone_floats_with_the_tool() {
+    let (mut runtime, checkout, directory) = setup("pair-alone-floats");
+    engine_splits_first_tab_with(&mut runtime, &directory, false);
+    pair_event(&mut runtime, Some("w-order:t1:q"));
+    runtime.sync_workspace_view();
+    assert!(front_pair(&runtime).alone);
+    view_event(&mut runtime, serde_json::json!({"tool": "explorer"}));
+    runtime.sync_workspace_view();
+    open(&mut runtime, &checkout, &directory, "a.md");
+    runtime.sync_workspace_view();
+    assert!(!front_pair(&runtime).alone, "the file stands the desk");
+    assert!(desk_floats(&runtime), "the operator never saw it drawn");
 }
 
 /// D-50: a file opened while the Explorer floats shows its desk floating
@@ -2685,4 +3226,146 @@ fn a_desk_shown_for_a_file_still_loading_floats_with_the_tool() {
     );
     assert!(lane_documents(&runtime), "the desk is shown");
     assert!(desk_floats(&runtime), "and floats with the Explorer");
+}
+
+/// Review 3 of #2775: the operator's own tab the mode is entered on, by ⌘.
+/// on it or the desk's ◧, beside a shell with nothing of its own, stands
+/// the desk with that tab in front and shows it on the strip.
+#[test]
+fn the_operators_tab_entered_beside_a_shell_stands_the_desk_in_front() {
+    let (mut runtime, checkout, directory) = setup("pair-operator-tab-shell");
+    engine_splits_first_tab_with(&mut runtime, &directory, false);
+    std::fs::write(directory.join("notes.md"), "notes").expect("notes");
+    open(&mut runtime, &checkout, &directory, "notes.md");
+    let notes = display_id(&runtime, &directory, "notes.md");
+    runtime.dispatch_json(&explorer_event(
+        "pair_view",
+        serde_json::json!({"pane_id": "w-order:t1:q", "display_id": notes}),
+    ));
+    runtime.sync_workspace_view();
+    let pair = front_pair(&runtime);
+    assert_eq!(pair.pane_id, "w-order:t1:q");
+    assert!(
+        !pair.alone,
+        "the operator's tab stands the desk beside the shell"
+    );
+    assert_eq!(fronts(&runtime, &directory), ["notes.md"]);
+    assert!(!pair.folded.contains(&notes), "{:?}", pair.folded);
+}
+
+/// Review 3 of #2775: the operator's own tab the mode is entered on beside
+/// an agent with Views of its own stays on the strip after another tab is
+/// chosen, as one the operator opened during the mode (D-60).
+#[test]
+fn the_operators_tab_entered_beside_an_agent_stays_shown_after_another_is_chosen() {
+    let (mut runtime, checkout, directory) = setup("pair-operator-tab-agent");
+    engine_splits_first_tab(&mut runtime, &directory);
+    control_file(&mut runtime, "w-order:t1:p", &directory, "a.md", "a");
+    std::fs::write(directory.join("notes.md"), "notes").expect("notes");
+    open(&mut runtime, &checkout, &directory, "notes.md");
+    let notes = display_id(&runtime, &directory, "notes.md");
+    runtime.dispatch_json(&explorer_event(
+        "pair_view",
+        serde_json::json!({"pane_id": "w-order:t1:p", "display_id": notes}),
+    ));
+    runtime.sync_workspace_view();
+    assert!(!front_pair(&runtime).alone);
+    assert_eq!(fronts(&runtime, &directory), ["notes.md"]);
+    let a = display_id(&runtime, &directory, "a.md");
+    view_act(
+        &mut runtime,
+        &directory,
+        serde_json::json!({"action": "focus", "display_id": a}),
+    );
+    runtime.sync_workspace_view();
+    assert_eq!(fronts(&runtime, &directory), ["a.md"]);
+    let pair = front_pair(&runtime);
+    assert!(!pair.folded.contains(&notes), "{:?}", pair.folded);
+}
+
+/// D-53, D-60 (operator bug on the installed build): a desk the operator's
+/// open stood beside a shell drawn alone, left with only another agent's
+/// folded tab once that open closes, folds; the shell is drawn alone with
+/// the mode on, and the folded tab does not come in front of the strip.
+#[test]
+fn a_stood_desk_left_with_only_folded_tabs_leaves_the_pane_alone() {
+    let (mut runtime, checkout, directory) = setup("pair-stood-folded-only");
+    engine_splits_first_tab_with(&mut runtime, &directory, true);
+    control_file(&mut runtime, "w-order:t1:p", &directory, "b.md", "b");
+    runtime.dispatch_json(&explorer_event(
+        "pair_view",
+        serde_json::json!({"pane_id": "w-order:t1:q"}),
+    ));
+    runtime.sync_workspace_view();
+    assert!(front_pair(&runtime).alone, "q has nothing of its own");
+    std::fs::write(directory.join("notes.md"), "notes").expect("notes");
+    open(&mut runtime, &checkout, &directory, "notes.md");
+    runtime.sync_workspace_view();
+    assert!(
+        !front_pair(&runtime).alone,
+        "the operator's open stood the desk"
+    );
+    let notes = display_id(&runtime, &directory, "notes.md");
+    view_act(
+        &mut runtime,
+        &directory,
+        serde_json::json!({"action": "close", "display_id": notes}),
+    );
+    runtime.sync_workspace_view();
+    assert!(runtime.pair_mode_on());
+    let pair = front_pair(&runtime);
+    assert_eq!(pair.pane_id, "w-order:t1:q");
+    assert!(pair.alone, "only p's folded b.md is left on the desk");
+}
+
+/// #2775 review 4: a tab the operator opened during the mode keeps the desk
+/// standing after the left agent's own tab closes first; the desk stands by
+/// what its strip shows, not by how it came to stand.
+#[test]
+fn the_operators_tab_opened_in_focus_mode_keeps_the_desk_after_the_agents_tab_closes() {
+    let (mut runtime, checkout, directory) = setup("pair-later-after-own");
+    engine_splits_first_tab(&mut runtime, &directory);
+    control_file(&mut runtime, "w-order:t1:p", &directory, "a.md", "a");
+    pair_event(&mut runtime, Some("w-order:t1:p"));
+    std::fs::write(directory.join("later.md"), "later").expect("later");
+    open(&mut runtime, &checkout, &directory, "later.md");
+    runtime.sync_workspace_view();
+    let a = display_id(&runtime, &directory, "a.md");
+    control(
+        &mut runtime,
+        "w-order:t1:p",
+        Action::Close {
+            view_id: a,
+            expected_browser_area: None,
+        },
+        "agent-close",
+    );
+    runtime.sync_workspace_view();
+    assert!(runtime.pair_mode_on());
+    assert!(!front_pair(&runtime).alone, "later.md is on the strip");
+    assert_eq!(fronts(&runtime, &directory), ["later.md"]);
+}
+
+/// #2775 review 4: moving focus mode to a pane with no View of its own keeps
+/// the desk standing while it holds a tab the operator opened during the
+/// mode, and moving back finds it standing too.
+#[test]
+fn a_pane_with_no_view_keeps_the_desk_the_operator_opened_onto_in_focus_mode() {
+    let (mut runtime, checkout, directory) = setup("pair-move-keeps-later");
+    engine_splits_first_tab(&mut runtime, &directory);
+    control_file(&mut runtime, "w-order:t1:p", &directory, "a.md", "a");
+    pair_event(&mut runtime, Some("w-order:t1:p"));
+    std::fs::write(directory.join("later.md"), "later").expect("later");
+    open(&mut runtime, &checkout, &directory, "later.md");
+    runtime.sync_workspace_view();
+    runtime.dispatch_json(&operator_focus_event("w-order:t1:q"));
+    runtime.sync_workspace_view();
+    let pair = front_pair(&runtime);
+    assert_eq!(pair.pane_id, "w-order:t1:q");
+    assert!(!pair.alone, "later.md stands the desk beside q");
+    runtime.dispatch_json(&operator_focus_event("w-order:t1:p"));
+    runtime.sync_workspace_view();
+    let pair = front_pair(&runtime);
+    assert_eq!(pair.pane_id, "w-order:t1:p");
+    assert!(!pair.alone);
 }

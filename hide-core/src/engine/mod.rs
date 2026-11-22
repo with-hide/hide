@@ -540,10 +540,12 @@ pub(crate) trait Engine: Send + Sync {
     fn agent_state(&self, wait: Wait, target: &str) -> Answer<AgentState>;
     /// An agent as a letter's delivery checks it, by name or pane.
     fn delivery_agent(&self, wait: Wait, target: &str) -> Answer<DeliveryAgent>;
-    /// Types `text` into the agent's input and submits it. A refusal typed
-    /// nothing; an answer that never came may follow a submission that
-    /// arrived.
-    fn prompt_agent(&self, wait: Wait, target: &str, text: &str) -> Answer<()>;
+    /// Types `text` into the agent's input and submits it. A letter is
+    /// refused while the agent is blocked or not ready; the operator's own
+    /// words are typed in any state, since they may answer the question on
+    /// screen. A refusal typed nothing; an answer that never came may follow
+    /// a submission that arrived.
+    fn prompt_agent(&self, wait: Wait, target: &str, text: &str, by: PromptBy) -> Answer<()>;
 
     // Worktrees.
 
@@ -651,6 +653,17 @@ pub(crate) type Wake = Arc<dyn Fn() + Send + Sync>;
 pub(crate) enum Zoom {
     On,
     Off,
+}
+
+/// Who types a prompt into an agent ([`Engine::prompt_agent`]).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum PromptBy {
+    /// A letter's bell or a brief: waits for the agent to be ready and at
+    /// rest, so it never lands in a menu or a question.
+    Letter,
+    /// The operator's own words from the phone or the Desk lane: they may
+    /// be the answer to the question on screen.
+    Operator,
 }
 
 /// The engine hided hands the core and asks itself for the few things that
@@ -765,14 +778,18 @@ impl EngineHandle {
         self.engine.read_rows(Wait::Each(timeout), pane, lines)
     }
 
-    /// Types `text` into a pane and submits it.
-    pub fn submit_text(
+    /// Types the operator's `text` into the agent's input in `pane` and
+    /// submits it, as a letter's bell is typed ([`Engine::prompt_agent`]):
+    /// an agent reads a slash command sent this way as the command (#2354).
+    /// A refusal typed nothing.
+    pub fn prompt_agent(
         &self,
         pane: &str,
         text: &str,
         timeout: Duration,
     ) -> Result<(), EngineError> {
-        self.engine.submit_text(Wait::Each(timeout), pane, text)
+        self.engine
+            .prompt_agent(Wait::Each(timeout), pane, text, PromptBy::Operator)
     }
 
     /// Presses one key in a pane.
