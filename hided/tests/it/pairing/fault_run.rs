@@ -257,6 +257,18 @@ fn letters_in(state: &Path, sender: &str) -> Vec<String> {
         .collect()
 }
 
+/// How many of `sender`'s letters in the guest's ledger its recipient has not
+/// taken in yet.
+fn open_letters(state: &Path, sender: &str) -> usize {
+    let ledger = hide_core::delivery::store::load(&hide_kit::layout::delivery_store(state))
+        .unwrap_or_else(|code| panic!("the guest's ledger: {code}"));
+    ledger
+        .letters
+        .iter()
+        .filter(|letter| letter.from.as_deref() == Some(sender) && letter.open())
+        .count()
+}
+
 /// The numbers the shell wrote to `file`, one a line.
 fn numbers(file: &Path) -> Vec<u64> {
     std::fs::read_to_string(file)
@@ -297,7 +309,7 @@ n=0
 while [ ! -e {stop} ]; do
   n=$((n + 1))
   while :; do
-    answer=$("$hide" request send fault-recipient --intent "fault-$n" --body "letter $n" 2>&1)
+    answer=$("$hide" request send fault-recipient --kind progress --intent "fault-$n" --body "letter $n" 2>&1)
     case "$answer" in *'"ok":true'*) break ;; esac
     printf '%s %s %s\n' "$n" "$(date +%s)" "$(printf '%s' "$answer" | tr '\n' ' ' | cut -c1-300)" >> {retries}
     sleep 1
@@ -312,6 +324,34 @@ done
         sent = at("sent"),
         done = at("done"),
     )
+}
+
+/// What the recipient's agent runs: it takes in every letter its inbox
+/// shows, as an agent reading its letters does, until `stop` exists. A
+/// letter nobody takes in stays open, and a mailbox holds at most
+/// `OPEN_LIMIT` open letters, which two hours of letters pass.
+fn recipient_script(folder: &Path) -> String {
+    format!(
+        r#"hide="$HIDE_INSTALL_CLI"
+while [ ! -e {stop} ]; do
+  for id in $("$hide" inbox 2>/dev/null | grep -o '"id":"letter-[0-9]*"' | cut -d'"' -f4); do
+    "$hide" request ack "$id" > /dev/null 2>&1
+  done
+  sleep 2
+done
+"#,
+        stop = quote(folder.join("stop")),
+    )
+}
+
+/// Hands `script` to the stand-in agent in `pane` through its run order, as
+/// the fixture hands every command, without waiting for it: it runs for the
+/// whole run.
+fn hand_over(home: &Path, pane: &str, script: &Path) {
+    let order = home.join(".fixture-run").join(pane.replace(':', "-"));
+    hide_platform::fs::private::create_dir_all(order.parent().unwrap()).unwrap();
+    std::fs::write(order.with_extension("tmp"), script.display().to_string()).unwrap();
+    std::fs::rename(order.with_extension("tmp"), &order).unwrap();
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
@@ -462,17 +502,20 @@ async fn every_letter_a_guests_pane_sends_through_the_faults_lands_in_its_ledger
     .unwrap_or_else(|error| panic!("the sender: {error:#}"));
     let run = at("run");
     std::fs::create_dir(&run).unwrap();
+    let reads = run.join("read.sh");
+    std::fs::write(&reads, recipient_script(&run)).unwrap();
+    hand_over(
+        &guest_env.home,
+        &recipient.own_pane(&recipient.pane).unwrap(),
+        &reads,
+    );
     let script = run.join("send.sh");
     std::fs::write(&script, sender_script(&run)).unwrap();
-    // Handed to the stand-in by its pane's run order, as the fixture hands
-    // every command, but not waited for: it runs for the whole run.
-    let order = host_env
-        .home
-        .join(".fixture-run")
-        .join(sender.own_pane(&sender.pane).unwrap().replace(':', "-"));
-    hide_platform::fs::private::create_dir_all(order.parent().unwrap()).unwrap();
-    std::fs::write(order.with_extension("tmp"), script.display().to_string()).unwrap();
-    std::fs::rename(order.with_extension("tmp"), &order).unwrap();
+    hand_over(
+        &host_env.home,
+        &sender.own_pane(&sender.pane).unwrap(),
+        &script,
+    );
     let sent = run.join("sent");
     let sender = sender.registration.clone();
     wait_within("the first letter in the guest's ledger", WITHIN, || {
@@ -484,6 +527,11 @@ async fn every_letter_a_guests_pane_sends_through_the_faults_lands_in_its_ledger
             std::fs::read_to_string(run.join("retries")).unwrap_or_default()
         )
     });
+    wait_within("the recipient to take a letter in", WITHIN, || {
+        let state = &guest.terminal.state;
+        Ok((letters_in(state, &sender).len() > open_letters(state, &sender)).then_some(()))
+    })
+    .unwrap();
 
     // The faults, one after another, until the time is up.
     let ends = Instant::now() + Duration::from_secs(minutes * 60);
@@ -580,7 +628,8 @@ async fn every_letter_a_guests_pane_sends_through_the_faults_lands_in_its_ledger
     eprintln!(
         "fault_run: {}",
         json!({"faults": report.len(), "letters": last, "held": held.len(),
-            "kept_while_away": queued, "tries_again": retried})
+            "kept_while_away": queued, "tries_again": retried,
+            "not_taken_in": open_letters(&guest.terminal.state, &sender)})
     );
     assert_eq!(held, wanted, "each letter the shell sent, once");
     drop(recipient);
