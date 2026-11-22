@@ -12,6 +12,7 @@ import { TooltipProvider } from "../components/ui/tooltip";
 import { installKeyboard } from "../keyboard";
 import { ConfirmClose, CycleOverlay } from "../Overlays";
 import { OverviewModal } from "../Overview";
+import { NOTHING_UNDER_WAY } from "../pairing";
 import { Palette } from "../Palette";
 import { SettingsGate } from "../SettingsSheet";
 import type { SnapshotRest } from "../snapshot";
@@ -123,6 +124,8 @@ export function PracticePlayer({ chapter, next, resume, operator, onStep, onStar
       sessionWorkSearch: frames?.sessionWorkSearch ?? null, sessionRecord: frames?.sessionRecord ?? null, linkPanel: frames?.linkPanel ?? null,
       listings: frames?.listings ?? NO_LISTINGS, changes: frames?.changes ?? null, memory: frames?.memory ?? null, suggestions: frames?.suggestions ?? null,
       access: frames?.access ?? null,
+      // The practice screen is this computer's own window, which hided sends its `pairing` frame (B52): nothing under way.
+      pairing: NOTHING_UNDER_WAY,
       automations: automations ?? null,
     });
   }, [chapter, model, operator]);
