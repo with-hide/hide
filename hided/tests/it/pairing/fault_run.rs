@@ -337,6 +337,9 @@ fn recipient_script(folder: &Path, hide: &Path) -> String {
     format!(
         r#"hide={hide}
 log={log}
+for sig in HUP INT QUIT TERM PIPE TTIN TTOU; do
+  trap "printf 'signal %s %s\\n' $sig \"\$(date +%s)\" >> \"$log.signals\"; exit 1" $sig
+done
 while [ ! -e {stop} ]; do
   printf 'inbox %s\n' "$(date +%s)" > "$log.now"
   inbox=$("$hide" inbox 2>&1)
@@ -664,7 +667,11 @@ async fn every_letter_a_guests_pane_sends_through_the_faults_lands_in_its_ledger
             .duration_since(std::time::UNIX_EPOCH)
             .unwrap()
             .as_secs(),
-        std::fs::read_to_string(run.join("read.log.now")).unwrap_or_default(),
+        format!(
+            "{} {}",
+            std::fs::read_to_string(run.join("read.log.now")).unwrap_or_default(),
+            std::fs::read_to_string(run.join("read.log.signals")).unwrap_or_default()
+        ),
         String::from_utf8_lossy(&hides.stdout)
             .lines()
             .filter(
