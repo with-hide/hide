@@ -62,6 +62,8 @@ function agent(t: T, pane: string, title: string, ago: number, state: DemoState,
     device_id: DEMO_DEVICE, pane_id: pane, root_pane_id: pane, group: "working", mark: "going", wait: null, descendants_working: 0,
     agent_kind: sampleKind(t), title, place: null, device_label: null, changed_at_unix_ms: state.t0 - ago * MINUTE,
     line: null, status_code: "working", demand: "none", emphasized: false, holds_notification: false, ...over,
+    // The project alone, as a Mac that sends it does; the place keeps the branch for the detail's head.
+    ...(over.place ? { project: over.place.split(" · ")[0] } : {}),
   };
 }
 
@@ -102,10 +104,11 @@ export function agentGroups(t: T, state: DemoState): AgentGroup[] {
   const by = agents(t, state);
   const working: GroupRow[] = [...state.started.map((started) => row(by[started.pane]!)), row(by.a3!), row(by.a4!)];
   return [
+    // In the core's order (`tally.rs`, GROUP_ORDER).
     { group: "needs_you", count: 2, rows: [row(by.a1!), row(by.a2!)] },
-    { group: "working", count: working.length, rows: working },
     { group: "done", count: 1, rows: [row(by.a6!)] },
     { group: "revisit", count: 1, rows: [row(by.a7!)] },
+    { group: "working", count: working.length, rows: working },
     { group: "seen", count: 2, rows: [row(by.a5!)], more: [row(by.a8!)] },
   ];
 }
@@ -241,6 +244,7 @@ export function missionsFrame(t: T, state: DemoState): ServerFrame {
   const release = mission(t, "mission-release", t("mobile.demo.m1.title"), state, {
     // The list's first agent conducts it, so its row wears the mission chip as a Conductor's desktop row does.
     conductor: { present: true, takes_answers: true, name: "Conductor", agent_kind: sampleKind(t), agent: { device_id: DEMO_DEVICE, pane_id: "a1" } },
+    destination: "main",
     created_at_unix_ms: state.t0 - 134 * MINUTE,
     started_at_unix_ms: state.t0 - 134 * MINUTE,
     decision: state.answered ? null : t("mobile.demo.m1.decision"),
@@ -248,7 +252,7 @@ export function missionsFrame(t: T, state: DemoState): ServerFrame {
     nodes: [
       merged("notes", t("mobile.demo.a4.title"), 2085),
       merged("bump", t("mobile.demo.m1.bump"), 2080),
-      step("rehearse", t("mobile.demo.m1.rehearse"), "working", { depends_on: ["bump"], pr: 2093, stage: 1, agent: { device_id: DEMO_DEVICE, pane_id: "a3" } }),
+      step("rehearse", t("mobile.demo.m1.rehearse"), "working", { depends_on: ["bump"], pr: 2093, stage: 1, agent: { device_id: DEMO_DEVICE, pane_id: "a3" }, worked_at_unix_ms: state.t0 - 4 * MINUTE }),
       step("sign", t("mobile.demo.m1.sign"), "working", { depends_on: ["bump"], stage: 0 }),
       // What waits on the two steps at work, so the page shows which step waits on which.
       step("verify", t("mobile.demo.m1.verify"), "planned", { kind: "general", preset: "verify", delivery: null, depends_on: ["rehearse", "sign"], agent_runtime: null }),
@@ -260,7 +264,7 @@ export function missionsFrame(t: T, state: DemoState): ServerFrame {
     started_at_unix_ms: state.t0 - 50 * MINUTE,
     nodes: [
       merged("a", t("mobile.demo.m2.tabs"), 2101),
-      step("b", t("mobile.demo.m2.missions"), "working", { depends_on: ["a"], pr: 2102, stage: 1, agent: { device_id: DEMO_DEVICE, pane_id: "a4" } }),
+      step("b", t("mobile.demo.m2.missions"), "working", { depends_on: ["a"], pr: 2102, stage: 1, agent: { device_id: DEMO_DEVICE, pane_id: "a4" }, worked_at_unix_ms: state.t0 - 22 * MINUTE }),
     ],
   });
   const finished = mission(t, "mission-guide", t("mobile.demo.a2.title"), state, {

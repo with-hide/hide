@@ -163,7 +163,7 @@ it("leaves a Host with no Hide of its own, or one ssh did not reach, as it was",
   for (const state of ["absent", "not_reached"]) {
     await answer("look_ssh", { ok: true, alias: "lab", looked: { state } });
     expect(q("[data-ssh-look]")).toBeNull();
-    expect(q('[data-add-device="true"]')?.textContent).toBe("Add");
+    expect(q('[data-add-device="true"]')?.textContent).toBe("Next");
   }
   await unmount();
 });
@@ -176,7 +176,7 @@ it("waits for the device its alias added, under whatever id the core gives it", 
   expect(q('[data-add-device="true"]')?.textContent).toBe("Adding…");
   // Its first connection names it by its machine's id, not by the alias.
   await rerender([{ id: "4c1d2e3f-0a1b-4c2d-8e3f-5a6b7c8d9e0f", ssh_alias: "lab" } as Device]);
-  expect(q('[data-add-device="true"]')?.textContent).toBe("Add");
+  expect(q('[data-add-device="true"]')?.textContent).toBe("Next");
   await unmount();
 });
 

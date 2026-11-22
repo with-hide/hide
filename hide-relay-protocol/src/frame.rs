@@ -6,6 +6,11 @@ pub const MAX_FRAME: usize = 65_536;
 pub const HEADER_LEN: usize = 6;
 pub const MAX_PAYLOAD: usize = MAX_FRAME - HEADER_LEN;
 pub const MAX_PLAINTEXT: usize = MAX_PAYLOAD - 16;
+/// Data frames the relay holds for one socket, its write in progress
+/// included; the next one refuses that socket (`docs/RELAY_PROTOCOL.md`,
+/// Server budgets). A sender that runs ahead of a phone that is not reading
+/// keeps what it has in flight to that phone below this.
+pub const MAX_QUEUED_FRAMES: usize = 8;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 #[repr(u8)]

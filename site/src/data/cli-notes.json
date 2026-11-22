@@ -198,6 +198,10 @@
     "line": "Starts a new attempt to connect a device, which may ask the operator; a device that is connected, connecting or waiting on the operator gets no new attempt, and only the machine that runs Hide may ask. With --wait it waits until the device connects, needs the operator, the attempt fails or five minutes pass.",
     "example": "hide device retry mini --wait"
   },
+  "access join": {
+    "line": "Connects this program, outside Hide's panes, as a bot the operator made in Settings > Bots, with the one-time code from the sentence the operator sent; the code works once, within ten minutes, and the program's later hide commands then run as that bot, in the mode the operator chose. Run again after a lost answer, it finishes with the same key.",
+    "example": "hide access join K7Q4-MZ2P-X3RD"
+  },
   "access request": {
     "line": "Asks the operator to let this program, outside Hide's panes, use hide, and waits up to ten minutes for the answer in Settings > Bots (--no-wait answers at once); once approved the program's later hide commands run as this bot, in the mode the operator chose, the whole Hide or its own work, with no second request.",
     "example": "hide access request --name nightly-bot"

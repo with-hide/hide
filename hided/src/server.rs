@@ -1460,6 +1460,9 @@ async fn screen_loop(
                             Ok(ClientAction::Automation(event)) => {
                                 crate::automation_screen::spawn(&state.core, event, device_frames_tx.clone());
                             }
+                            Ok(ClientAction::Access(event)) => {
+                                crate::access_screen::spawn(&state.core, event, device_frames_tx.clone());
+                            }
                             Ok(ClientAction::Feedback(event)) => {
                                 let job = FeedbackJob { event, png: None };
                                 if let Some(refusal) = queue_feedback(&state, &mut feedback, job, &device_frames_tx)
@@ -2793,6 +2796,9 @@ enum ClientAction {
     /// A window's call on the automations that waits for the core's answer
     /// (`automation_screen`).
     Automation(Value),
+    /// Settings › Bots' call whose answer carries a made bot's code
+    /// (`access_screen`), from this machine's own window only.
+    Access(Value),
     /// Comment mode on a browser View, answered when its page is ready.
     BrowserComment(Value),
     /// The operator's comment or Send, which the screen's feedback queue
@@ -2867,6 +2873,16 @@ fn handle_client_text(
             return Ok(ClientAction::NodeAsk(event));
         }
         Some(crate::automation_screen::KIND) => return Ok(ClientAction::Automation(event)),
+        // A made bot's code lets a program in, so, like a pairing link, it
+        // reaches this machine's own window alone: a linked node's screen
+        // is a window too, but another machine's.
+        Some("access_call") if !own_screen => {
+            return Err(
+                "access_call is for this machine's own window: another machine's screen lists the bots but makes none"
+                    .to_owned(),
+            );
+        }
+        Some("access_call") => return Ok(ClientAction::Access(event)),
         Some("project_target" | "clone_target")
             if event_device(&state.boundary, &event).is_some() =>
         {
@@ -4419,6 +4435,21 @@ fn file_bytes_error(request_id: &str, path: &str, reason: &str) -> Message {
     )
 }
 
+/// The boundary's refusal for a device's answer about a path: a file that is
+/// not there, or a path its root does not hold. Anything else is a read that
+/// failed.
+pub(crate) fn device_refusal(error: &hide_core::node_access::LinkError) -> Option<Refusal> {
+    use hide_node_link::ErrorCode;
+    let hide_core::node_access::LinkError::Refused(error) = error else {
+        return None;
+    };
+    match error.code {
+        ErrorCode::NotFound => Some(Refusal::NotFound),
+        ErrorCode::OutsideRoot | ErrorCode::InvalidPath => Some(Refusal::OutsideCheckout),
+        _ => None,
+    }
+}
+
 /// A `file_bytes` read of a file on an SSH device. The root has to be a
 /// checkout the core's catalog carries for that device and the path is spelled
 /// under it; the device's helper confines the read and answers one bounded
@@ -4480,7 +4511,9 @@ pub(crate) async fn stream_device_file_bytes(
         let (read_device, read_root, read_relative) =
             (device.to_owned(), root.clone(), relative.clone());
         let range = tokio::task::spawn_blocking(move || {
-            let channel = core.node_link(&read_device)?;
+            let channel = core
+                .node_link(&read_device)
+                .map_err(|message| (None, message))?;
             hide_core::node_access::read_bytes(
                 channel.as_ref(),
                 &read_root,
@@ -4488,14 +4521,24 @@ pub(crate) async fn stream_device_file_bytes(
                 cursor,
                 wanted,
             )
-            .map_err(|error| error.to_string())
+            .map_err(|error| (device_refusal(&error), error.to_string()))
         })
         .await
-        .map_err(|error| error.to_string())
+        .map_err(|error| (None, error.to_string()))
         .and_then(|result| result);
         let range = match range {
             Ok(range) => range,
-            Err(message) => {
+            // The device judged the path as this Mac's boundary would: the
+            // same refusal, whichever machine holds the file.
+            Err((Some(refusal), _)) => {
+                return frames
+                    .send(Message::Text(
+                        refused("file_bytes", &path, refusal).to_string().into(),
+                    ))
+                    .await
+                    .map_err(|_| ());
+            }
+            Err((None, message)) => {
                 eprintln!(
                     "{}",
                     json!({

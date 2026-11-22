@@ -467,6 +467,73 @@ fn fill(runtime: &mut Runtime, directory: &Path, count: usize) {
         .layout = layout;
 }
 
+/// A file the path line names as the operator knows it: an image pasted into
+/// a terminal is named pasted, and a file below the machine's home folder
+/// carries its `~/` path; a folder that only starts with the home's name, a
+/// file outside home and a near-miss of the pasted image's name carry
+/// neither.
+#[test]
+fn a_pasted_image_and_a_file_under_home_are_named_as_the_operator_knows_them() {
+    use crate::view_layout::{DisplayKind, Layout};
+    let (mut runtime, _, directory) = views_runtime("view-home-names");
+    // Display paths are wire spellings (`/` between names on every system).
+    let scratch = hide_platform::path::to_wire_lossy(directory.parent().unwrap());
+    let home = format!("{scratch}/home");
+    runtime.home_path = Some(hide_platform::path::from_wire(&home).unwrap());
+    runtime.home_real = None;
+    let pasted = "hide-a37308bf-2590-4cbb-9079-3d38116992f9.png";
+    let paths = [
+        format!("{home}/.hide/state/TerminalClipboard/{pasted}"),
+        format!("{home}/Downloads/report.pdf"),
+        format!("{home}-other/notes.md"),
+        format!("{scratch}/TerminalClipboard/{pasted}"),
+        format!("{home}/.hide/state/TerminalClipboard/hide-not-a-request.png"),
+        format!("{home}/.hide/state/Clipboard/{pasted}"),
+    ];
+    let mut layout = Layout::default();
+    for path in &paths {
+        let shown = layout.new_display(path, DisplayKind::File, None, false);
+        layout.insert("a1", shown, 1).unwrap();
+    }
+    runtime
+        .workspace_views
+        .as_mut()
+        .unwrap()
+        .views
+        .entry(crate::node::TEST_NODE, &directory.to_string_lossy())
+        .tray_entry(crate::workspace_views::PENDING_TRAY)
+        .layout = layout;
+
+    let named: std::collections::BTreeMap<String, (bool, Option<String>)> =
+        areas(&tree(&mut runtime))
+            .into_iter()
+            .flat_map(|(_, _, displays)| displays)
+            .map(|display| (display.path, (display.pasted, display.home_relative)))
+            .collect();
+    let under = |rest: &str| Some(format!("~/{rest}"));
+    let expected = [
+        (
+            true,
+            under(&format!(".hide/state/TerminalClipboard/{pasted}")),
+        ),
+        (false, under("Downloads/report.pdf")),
+        (false, None),
+        (true, None),
+        (
+            false,
+            under(".hide/state/TerminalClipboard/hide-not-a-request.png"),
+        ),
+        (false, under(&format!(".hide/state/Clipboard/{pasted}"))),
+    ];
+    assert_eq!(
+        named,
+        paths
+            .into_iter()
+            .zip(expected)
+            .collect::<std::collections::BTreeMap<_, _>>()
+    );
+}
+
 /// B19: at its 32 views nothing adds a 33rd to the checkout when none of them
 /// can close. Reopen Closed, a created file and a revealed file are refused
 /// with the reason before anything is read or made, and the closed file

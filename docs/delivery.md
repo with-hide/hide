@@ -8,7 +8,7 @@ Derived UI escalation is separate: the core maps the existing delivery and watch
 
 ## Commands and caller identity
 
-These commands, the `hide agent` commands among them, need the running daemon and a current agent pane in a registered checkout; they work without an open renderer.
+These commands, the `hide agent` commands among them, need the running daemon and a current agent pane in a registered checkout, or a connected bot's key ([Bots](#bots)); they work without an open renderer.
 `hide guide` is an agent's guide to all of them, and to the Workspace commands and Project Memory, and needs neither: it prints `hided/assets/guide.md` with the session-start rules (`hide_agent_hooks::PURPOSE_CONTEXT`) inside it, so the guide and the session note cannot say two different things, and a skill or a hook that teaches an agent Hide points at it rather than copying it.
 The daemon binds the caller through the existing Workspace credential boundary and resolves the actual pane, provider and native-session identity from the engine.
 Only a pane-bound caller is accepted: a checkout-bound caller (a plain terminal, or a tool shell inside Codex's shared app-server daemon) is refused `agent_pane_required` whatever pane it names, and its next step is to run the command inside the agent's own pane, or to run that Codex without the shared daemon (`--no-daemon`).
@@ -989,7 +989,7 @@ The job counts as watched once the watch's answer came back; a refused ask is lo
 
 ### Bots
 
-A bot the operator approved ([ARCHITECTURE.md: Bots](ARCHITECTURE.md#bots)), in either mode, acts as `Actor::access`: `hide:access:<connection id>` with the name `hide:access:<the tool's name>`, of kind `hide`, on the core's machine, recorded with the caller id `access:<connection id>` (`workspace_control::Caller::Access`) and the context its credential recorded.
+A bot the operator made or approved ([ARCHITECTURE.md: Bots](ARCHITECTURE.md#bots)), in either mode, acts as `Actor::access`: `hide:access:<connection id>` with the name `hide:access:<the tool's name>`, of kind `hide`, on the core's machine, recorded with the caller id `access:<connection id>` (`workspace_control::Caller::Access`) and the context its credential recorded.
 A delivery command on it (`hide agent`, `hide request`, `hide inbox`, `hide watch`) acts as that identity while the connection stands (`access_authority`); a bot in own mode is held to its own work, read once by the one key reader every command shares (an exact registration id first, then its own spawn, then the one name or pane; `coordination::resolve_key`) to the exact registration or spawn the command then runs on (`Runtime::own_target`), so a letter, an end, a watch, a watch's observer or a reply to an agent it did not start is refused `access_not_own_work` and its lists name only its own agents, and a watch it kept from all mode on another's agent ends in the store's upkeep (`coordination::end_unowned_watches`), a bot in all mode reaches every agent as the operator does, and a disconnected one is refused `access_revoked`; a list saved by an earlier build ends its View only connections `access_reapprove`.
 `code_owned_authority_current` holds it only for the credential of a connection that still stands, so a letter or spawn asked before the operator disconnected the bot is not written (`caller_identity_changed`); a mode change is judged again on the bot's next command.
 A pane hint is refused `caller_identity_conflict`, as Desk's is.

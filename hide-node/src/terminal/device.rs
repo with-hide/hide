@@ -606,6 +606,20 @@ impl NodeTerminals {
         terminals
     }
 
+    /// A screen on the host's tap sizes `pane` (PRD device-connect-iroh
+    /// B10, D-74): the pane's program is resized to it, as a core's resize
+    /// does, and frames are drawn at it. The view alone only names the grid
+    /// a frame must have, and a program left at the guest's grid would have
+    /// every frame refused as the wrong size. A pane has one grid, the one
+    /// the screen that sized it last draws at.
+    pub fn size_from_tap(&self, pane: &str, size: GridSize) {
+        TerminalNode::view(self, pane, size, false);
+        self.take_control(TerminalControl::Resize {
+            pane: pane.to_owned(),
+            size,
+        });
+    }
+
     /// A new link starts: its lines go up again.
     pub fn relink(&self) {
         self.uplink.restart();

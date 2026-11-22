@@ -163,5 +163,11 @@ export const REMOTE_SOCKET_EVENT_CHANNEL = "hide-remote:socket-event";
 export const REMOTE_CLIPBOARD_CHANNEL = "hide-remote:clipboard";
 export const REMOTE_MENU_CHANNEL = "hide-remote:menu";
 export const REMOTE_VISIBLE_CHANNEL = "hide-remote:visible";
+/**
+ * What the window that shows the screen calls it and the language it is in:
+ * its page names its own machine so, and says its words in that language
+ * while its own machine chose none.
+ */
+export const REMOTE_VIEWER_CHANNEL = "hide-remote:viewer";
 export const REMOTE_WORK_CHANNEL = "hide-remote:work";
 export const REMOTE_WORK_DONE_CHANNEL = "hide-remote:work-done";

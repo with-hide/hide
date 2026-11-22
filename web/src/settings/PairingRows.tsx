@@ -5,14 +5,17 @@
 // its own. hided owns every value (`pairing.ts`); a press sends one
 // `pairing_*` event.
 
-import { MoreHorizontalIcon } from "lucide-react";
-import { useEffect, useState } from "react";
+import { CheckIcon, MoreHorizontalIcon } from "lucide-react";
+import { useEffect, useState, type ReactNode } from "react";
 import type { Actions } from "../actions";
 import { AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent, AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle } from "../components/ui/alert-dialog";
 import { Button } from "../components/ui/button";
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuSeparator, DropdownMenuTrigger } from "../components/ui/dropdown-menu";
 import { RadioGroup, RadioGroupItem } from "../components/ui/radio-group";
-import { Note, Row, Status, Value } from "../components/settings-rows";
+import { Group, Note, Row, Status } from "../components/settings-rows";
+import { Dialog, DialogBody, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "../components/ui/dialog";
+import { cn } from "../lib/utils";
+import { useUiStore } from "../ui";
 import { Hint } from "../components/ui/tooltip";
 import { useInterfaceTranslation } from "../i18n/client";
 import { directionKey, guestPaneCount, mayRequest, ownWindow, pairedMachines, peerState, refusalKey, requestLine, timeLeft, type Direction, type PairRequest, type Peer } from "../pairing";
@@ -47,58 +50,138 @@ export function PairWords({ words }: { words: readonly string[] }) {
   );
 }
 
-/** The row that shares this computer: Make a link, then the link with how long it has left (B1). */
-export function ShareRow({ actions }: { actions: Actions }) {
+/**
+ * The window that shares this computer (B1, B2, B50; operator review
+ * 2026-11-22): the link is made when it opens, and three steps read top to
+ * bottom, the one under way marked: copy the link with how long it has left,
+ * paste it on the other computer, then compare the four words and allow it
+ * here. The link stays until it ends, so closing the window keeps it; a
+ * machine that pastes it while the window is closed asks in the allow window.
+ */
+export function ShareDialog({ actions, onClose }: { actions: Actions; onClose: () => void }) {
   const { t, i18n } = useInterfaceTranslation();
   const offer = useShellStore((s) => s.pairing?.offer ?? null);
+  // A machine that pasted this computer's link waits for the words here.
+  const ask = useShellStore((s) => s.pairing?.asks.find((row) => row.kind === "link") ?? null);
   const refused = useShellStore((s) => (s.pairingResult?.verb === "share" && !s.pairingResult.ok ? refusalKey(s.pairingResult.reason) : null));
-  const now = useNow(offer !== null);
+  const now = useNow(offer !== null || ask !== null);
   const [copied, setCopied] = useState(false);
+  // Whether this window asked for the link now showing, so one that ends says so rather than waiting.
+  const [seen, setSeen] = useState(false);
+  const make = () => {
+    setSeen(false);
+    setCopied(false);
+    actions.pairing("share", { language: i18n.language });
+    void askForFirewallOnce();
+  };
+  // Opening the window makes the link, unless one is already shared.
+  useEffect(() => {
+    if (useShellStore.getState().pairing?.offer == null) make();
+  }, []);
+  useEffect(() => {
+    if (offer) setSeen(true);
+  }, [offer]);
   useEffect(() => setCopied(false), [offer?.link]);
+  // This window shows the allow step, so the allow window stays out of its way.
+  useEffect(() => {
+    useUiStore.getState().setSharing(true);
+    return () => useUiStore.getState().setSharing(false);
+  }, []);
+  const answer = (allow: boolean) => {
+    if (!ask) return;
+    actions.pairing("answer", { ask: ask.id, allow });
+    if (allow) void askForFirewallOnce();
+    onClose();
+  };
+  const phase = ask ? "words" : offer ? (copied ? "waiting" : "copy") : refused && !seen ? "refused" : seen ? "ended" : "making";
+  const step = (index: number, active: number) => (index < active ? "done" : index === active ? "on" : "later");
+  const active = phase === "words" ? 3 : phase === "waiting" ? 2 : 1;
   return (
-    <Row
-      data-pair-share={offer ? "shared" : "idle"}
-      label={
-        <>
-          <div>{t("pairing.share.title")}</div>
-          <Note>{t("pairing.share.caption")}</Note>
-        </>
-      }
-      detail={
-        offer ? (
-          <div className="space-y-xs">
-            <div aria-label={t("pairing.share.linkAria")} data-pair-link="true">
-              <Value>{offer.link}</Value>
-            </div>
-            <div className="flex flex-wrap items-center gap-sm">
-              <Button
-                variant="secondary"
-                size="sm"
-                data-pair-copy="true"
-                onClick={() => void actions.copyText(offer.link, "pairing link").then((done) => setCopied(done))}
-              >
-                {copied ? t("pairing.share.copied") : t("pairing.share.copy")}
-              </Button>
-              <Note>{t("pairing.share.left", { time: timeLeft(offer.expires_unix_ms, now) })}</Note>
-              <Button variant="text" size="inline" className="ml-auto text-caption" data-pair-share-end="true" onClick={() => actions.pairing("end_share")}>
-                {t("pairing.share.end")}
-              </Button>
-            </div>
-          </div>
-        ) : refused ? (
-          <Note tone="warn" data-pair-share-refused="true">{t(refused)}</Note>
-        ) : null
-      }
-    >
-      {offer ? null : (
-        <Button variant="secondary" size="sm" data-pair-share-make="true" onClick={() => {
-          actions.pairing("share", { language: i18n.language });
-          void askForFirewallOnce();
-        }}>
-          {t("pairing.share.make")}
-        </Button>
-      )}
-    </Row>
+    <Dialog open onOpenChange={(next) => { if (!next) onClose(); }}>
+      <DialogContent showCloseButton data-pair-share={phase}>
+        <DialogHeader>
+          <DialogTitle>{t("pairing.share.title")}</DialogTitle>
+          <DialogDescription>{t("pairing.share.caption")}</DialogDescription>
+        </DialogHeader>
+        <DialogBody>
+          <ol className="flex flex-col gap-md">
+            <ShareStep index={1} state={step(1, active)} title={t(active > 1 ? "pairing.share.step.copied" : "pairing.share.step.copy")}>
+              {phase === "copy" && offer ? (
+                <div className="space-y-xs">
+                  <div className="flex items-center gap-sm rounded-md bg-secondary py-xs pr-xs pl-md">
+                    <code aria-label={t("pairing.share.linkAria")} className="min-w-0 flex-1 truncate font-mono text-caption text-subtle-foreground" data-pair-link="true" title={offer.link}>{offer.link}</code>
+                    <Button size="sm" data-pair-copy="true" onClick={() => void actions.copyText(offer.link, "pairing link").then((done) => setCopied(done))}>
+                      {t("pairing.share.copy")}
+                    </Button>
+                  </div>
+                  <Note data-pair-left="true">{t("pairing.share.left", { time: timeLeft(offer.expires_unix_ms, now) })}</Note>
+                </div>
+              ) : phase === "waiting" && offer ? (
+                <Note>
+                  {t("pairing.share.left", { time: timeLeft(offer.expires_unix_ms, now) })}
+                  {" · "}
+                  <Button variant="text" size="inline" data-pair-copy="true" onClick={() => void actions.copyText(offer.link, "pairing link").then((done) => setCopied(done))}>{t("pairing.share.copyAgain")}</Button>
+                </Note>
+              ) : phase === "making" ? (
+                <Status tone="pending">{t("pairing.share.making")}</Status>
+              ) : phase === "refused" && refused ? (
+                <Note tone="warn" data-pair-share-refused="true">{t(refused)}</Note>
+              ) : phase === "ended" ? (
+                <div className="flex items-center gap-sm">
+                  <Note>{t("pairing.share.ended")}</Note>
+                  <Button variant="text" size="inline" className="text-caption" data-pair-share-again="true" onClick={make}>{t("pairing.share.again")}</Button>
+                </div>
+              ) : null}
+            </ShareStep>
+            <ShareStep index={2} state={step(2, active)} title={ask ? t("pairing.share.step.pasted", { name: ask.name }) : t("pairing.share.step.paste")}>
+              {ask ? null : <Note>{t("pairing.share.step.pasteWhere")}</Note>}
+              {phase === "waiting" ? <Status tone="pending" data-pair-share-waiting="true">{t("pairing.share.step.waiting")}</Status> : null}
+            </ShareStep>
+            <ShareStep index={3} state={step(3, active)} title={ask ? t("pairing.share.step.wordsAsk", { name: ask.name }) : t("pairing.share.step.words")}>
+              {ask ? (
+                <div className="space-y-sm">
+                  {ask.words ? <PairWords words={ask.words} /> : null}
+                  <Note>{t("pairing.ask.compare")}</Note>
+                  <p className="break-keep text-body text-foreground" data-pair-grants="true">{t("pairing.ask.grants", { name: ask.name })}</p>
+                </div>
+              ) : null}
+            </ShareStep>
+          </ol>
+        </DialogBody>
+        <DialogFooter>
+          {ask ? (
+            <>
+              <span className="mr-auto text-caption text-muted-foreground tabular-nums">{t("pairing.ask.left", { time: timeLeft(ask.expires_unix_ms, now) })}</span>
+              <Button variant="secondary" data-pair-refuse="true" onClick={() => answer(false)}>{t("pairing.ask.refuse")}</Button>
+              <Button data-pair-allow-go="true" onClick={() => answer(true)}>{t("pairing.ask.allow")}</Button>
+            </>
+          ) : offer ? (
+            <Button variant="secondary" data-pair-share-end="true" onClick={() => { actions.pairing("end_share"); onClose(); }}>{t("pairing.share.end")}</Button>
+          ) : null}
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
+  );
+}
+
+/** One step of the share window: its number (a check once done), its title, and what it holds while under way. */
+function ShareStep({ index, state, title, children }: { index: number; state: "done" | "on" | "later"; title: string; children?: ReactNode }) {
+  return (
+    <li className={cn("flex items-start gap-sm", state === "later" && "opacity-(--opacity-dimmed)")} data-pair-step={index} data-pair-step-state={state}>
+      <span
+        aria-hidden="true"
+        className={cn(
+          "flex size-(--size-icon-lg) shrink-0 items-center justify-center rounded-full text-micro font-semibold",
+          state === "done" ? "bg-success text-status-foreground" : state === "on" ? "bg-primary text-primary-foreground" : "bg-secondary text-subtle-foreground",
+        )}
+      >
+        {state === "done" ? <CheckIcon className="size-(--size-icon-sm)" /> : index}
+      </span>
+      <div className="flex min-w-0 flex-1 flex-col gap-xs">
+        <div className="text-body font-medium text-foreground">{title}</div>
+        {children}
+      </div>
+    </li>
   );
 }
 
@@ -265,8 +348,10 @@ function RemovedWork({ panes, end, onEnd }: { panes: number; end: boolean; onEnd
 }
 
 /**
- * Every paired machine, and on this computer's own window the share row,
- * each machine's actions and the confirm a removal asks (B26, B52).
+ * Settings › Devices' group of the Hides this computer is paired with (B24,
+ * B52): on this computer's own window its head offers sharing this
+ * computer, which opens the share window; then every paired machine with its
+ * actions and the confirm a removal asks.
  */
 export function PairedRows({ actions }: { actions: Actions }) {
   const { t } = useInterfaceTranslation();
@@ -279,10 +364,20 @@ export function PairedRows({ actions }: { actions: Actions }) {
   const removingPanes = useShellStore((s) => (removing ? guestPaneCount(s.rest, removing.peer.key) : 0));
   const opened = sharing || peers.length > 0;
   const firewall = useFirewall(own && opened);
+  const [sharingOpen, setSharingOpen] = useState(false);
   return (
     <>
-      {own ? <ShareRow actions={actions} /> : null}
+      <Group
+        title={t("devices.section.hides")}
+        data-device-section="hides"
+        action={own ? (
+          <Button variant="secondary" size="sm" data-pair-share-make="true" onClick={() => setSharingOpen(true)}>
+            {t("pairing.share.title")}
+          </Button>
+        ) : undefined}
+      >
       {own && opened && firewall.state === "missing" ? <FirewallRow asking={firewall.asking} onAllow={firewall.allow} /> : null}
+      {peers.length === 0 && !(own && opened && firewall.state === "missing") ? <Row label={<Note>{t("pairing.hides.none")}</Note>} /> : null}
       {peers.map((peer) => (
         <PeerRow
           key={peer.key}
@@ -293,6 +388,8 @@ export function PairedRows({ actions }: { actions: Actions }) {
           onRemove={(target, direction) => setRemoving({ peer: target, direction, end: false })}
         />
       ))}
+      </Group>
+      {own && sharingOpen ? <ShareDialog actions={actions} onClose={() => setSharingOpen(false)} /> : null}
       {removing ? (
         <AlertDialog open onOpenChange={(next) => { if (!next) setRemoving(null); }}>
           <AlertDialogContent data-peer-remove-confirm={`${removing.peer.device_id}:${removing.direction}`}>

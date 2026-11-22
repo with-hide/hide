@@ -37,6 +37,27 @@ export function connectionLine(connection: AccessConnection, machine: string, no
 }
 
 /**
+ * A name a bot may take, as the core reads it (`hide_core::access::valid_name`):
+ * letters, digits, `.`, `_` and `-`, starting with a letter or a digit, 64 at
+ * most. The core also refuses a name that is no file name on Windows (`con`),
+ * which the dialog words from its answer.
+ */
+export const BOT_NAME = /^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$/;
+
+/** The words for a make the core refused, by its code; one it did not name reads as a failure to try again. */
+export function createRefusal(code: string): `externalTools.create.error.${"access_name_taken" | "access_limit" | "access_invite_limit" | "invalid_request" | "other"}` {
+  switch (code) {
+    case "access_name_taken":
+    case "access_limit":
+    case "access_invite_limit":
+    case "invalid_request":
+      return `externalTools.create.error.${code}`;
+    default:
+      return "externalTools.create.error.other";
+  }
+}
+
+/**
  * Whether the row says that disconnecting hands the bot's work to the
  * operator (B13, D-14): only a bot in own mode keeps what it started; an
  * all-mode bot's work is the operator's already.

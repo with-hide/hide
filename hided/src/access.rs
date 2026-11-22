@@ -10,13 +10,16 @@ use std::path::PathBuf;
 
 use hide_agent_hooks::hook_request::install::{AccessAsk, PaneRequest};
 use hide_core::access::{
-    Call, NEEDS_AGENT, NOT_OWN_WORK, OPERATOR_ONLY, SPAWN_PARENT, key_hash, valid_key, valid_name,
+    CODE_ALPHABET, CODE_LEN, Call, NEEDS_AGENT, NOT_OWN_WORK, OPERATOR_ONLY, SPAWN_PARENT,
+    key_hash, normalize_code, reservable_name, valid_key,
 };
 use hide_core::engine::EngineHandle;
 use serde_json::{Value, json};
 
 use crate::core::CoreHandle;
 use crate::pane_auth::Registry;
+
+mod origin;
 
 /// What a command refused because the connection is gone says to do.
 pub const REVOKED_NEXT_ACTION: &str =
@@ -31,6 +34,9 @@ pub const REFUSALS: &[&str] = &[
     "access_request_expired",
     "access_limit",
     "access_name_taken",
+    "access_code_invalid",
+    "access_join_pending",
+    "access_key_exists",
     "access_revoked",
     "access_ambiguous",
     "access_not_connected",
@@ -42,6 +48,7 @@ pub const REFUSALS: &[&str] = &[
     SPAWN_PARENT,
     "access_core_only",
     "access_unavailable",
+    origin::UNAVAILABLE,
 ];
 
 /// What each tool refusal says to do, in the words the CLI, `hide guide`
@@ -64,7 +71,16 @@ pub fn next_action(reason: &str) -> Option<&'static str> {
             "16 tools are connected; ask the operator to disconnect one in Settings > Bots, then run hide access request again"
         }
         "access_name_taken" => {
-            "A connected tool has this name; ask the operator to disconnect it in Settings > Bots, or choose another --name, then run hide access request again"
+            "A connected bot, or one the operator made, has this name; ask the operator to disconnect it in Settings > Bots, or choose another --name, then run hide access request again"
+        }
+        "access_code_invalid" => {
+            "The code is wrong, used or older than ten minutes; ask the operator for a new code in Settings > Bots and run hide access join with it"
+        }
+        "access_join_pending" => {
+            "This home has a join that did not finish; run the hide access join command it names again to finish it, then run this one"
+        }
+        "access_key_exists" => {
+            "This home already keeps another key under the bot's name; if that bot is no longer used run HIDE_ACCESS=<name> hide access leave, or join from another home, then run the same hide access join again"
         }
         "access_revoked" => REVOKED_NEXT_ACTION,
         "access_ambiguous" => {
@@ -89,6 +105,7 @@ pub fn next_action(reason: &str) -> Option<&'static str> {
         }
         "access_core_only" => "Run the tool on the machine where Hide's core runs",
         "access_unavailable" => "Start Hide on this machine, then run the same command again",
+        origin::UNAVAILABLE => "Reconnect Hide, then retry from a terminal outside Hide's panes",
         _ => return None,
     })
 }
@@ -138,6 +155,7 @@ pub(crate) fn answer_bootstrap(
 ) -> (Value, Option<PathBuf>) {
     let key = match ask {
         AccessAsk::Request { key, .. }
+        | AccessAsk::Join { key, .. }
         | AccessAsk::Status { key }
         | AccessAsk::Leave { key }
         | AccessAsk::Use { key, .. } => key,
@@ -148,14 +166,18 @@ pub(crate) fn answer_bootstrap(
     // An agent in a pane is never a tool, whatever its environment says
     // (D-08, B8): a peer that descends from a pane's program, of this
     // core's engine, is refused before any key is looked at.
-    if in_a_pane(peer, request, engine, core) {
+    let in_pane = match in_a_pane(peer, request, engine, core) {
+        Ok(in_pane) => in_pane,
+        Err(reason) => return (refused(reason), None),
+    };
+    if in_pane {
         note("access.from_pane", None, "access_from_pane");
         return (refused("access_from_pane"), None);
     }
     let key_sha256 = key_hash(key);
     let call = match ask {
         AccessAsk::Request { name, .. } => {
-            if !valid_name(name) {
+            if !reservable_name(name) {
                 return (refused("invalid_request"), None);
             }
             let Some(id) = fresh_id() else {
@@ -166,6 +188,19 @@ pub(crate) fn answer_bootstrap(
                 key_sha256,
                 program: program_of(peer),
                 id,
+            }
+        }
+        AccessAsk::Join { code, .. } => {
+            // A code is a code or nothing: a malformed one says what a
+            // spent one does, so its shape tells a guesser nothing more.
+            let Some(code) = normalize_code(code) else {
+                note("access.join_refused", None, "access_code_invalid");
+                return (refused("access_code_invalid"), None);
+            };
+            Call::Join {
+                code,
+                key_sha256,
+                program: program_of(peer),
             }
         }
         AccessAsk::Status { .. } => Call::Status { key_sha256 },
@@ -218,7 +253,7 @@ pub(crate) fn pairing_caller(
     engine: Option<&EngineHandle>,
     core: &CoreHandle,
 ) -> Result<crate::pairing::Caller, Value> {
-    let in_pane = in_a_pane(peer, request, engine, core);
+    let in_pane = in_a_pane(peer, request, engine, core).map_err(refused)?;
     let key = match &request.access {
         None if in_pane => return Ok(crate::pairing::Caller::Pane),
         None => return Ok(crate::pairing::Caller::Operator),
@@ -239,45 +274,89 @@ pub(crate) fn pairing_caller(
     Ok(crate::pairing::Caller::Bot(mode))
 }
 
-/// Whether `peer` runs in a Hide pane of this machine: the pane its request
-/// names proves it, or it descends from the program of a pane the core's
-/// engine keeps a record of, which a pane agent that cleared its
-/// environment still does.
+/// Whether `peer` runs in a Hide pane of this machine. Kernel ancestry
+/// covers every holder owned by this home or placed for this core's
+/// guests; a hinted pane or the host's own retained program records also
+/// prove it. No unreadable proof becomes an outside-terminal answer.
 pub(crate) fn in_a_pane(
     peer: i32,
     request: &PaneRequest,
     engine: Option<&EngineHandle>,
     core: &CoreHandle,
-) -> bool {
+) -> Result<bool, &'static str> {
+    if origin::in_holder(peer, core.home(), core.state_dir())? {
+        return Ok(true);
+    }
     if !request.pane_id.is_empty()
         && let Some(engine) = engine
         && crate::pane_auth::attest_local(peer, &request.pane_id, engine, core).is_ok()
     {
-        return true;
+        return Ok(true);
     }
-    let Ok(entries) = std::fs::read_dir(hide_kit::layout::pane_records(core.state_dir())) else {
-        return false;
+    let entries = match std::fs::read_dir(hide_kit::layout::pane_records(core.state_dir())) {
+        Ok(entries) => entries,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(false),
+        Err(_) => return Err(origin::UNAVAILABLE),
     };
     let Ok(peer) = u32::try_from(peer) else {
-        return false;
+        return Err(origin::UNAVAILABLE);
     };
-    entries
-        .flatten()
-        .filter_map(|entry| {
-            hide_holder_protocol::record::read(&entry.path())
-                .ok()
-                .flatten()
-        })
-        .filter_map(|record| record.program)
-        .any(|program| program.runs() && hide_platform::process::descends_from(peer, program.pid))
+    let mut count = 0;
+    for entry in entries {
+        let entry = entry.map_err(|_| origin::UNAVAILABLE)?;
+        if entry
+            .path()
+            .extension()
+            .is_none_or(|extension| extension != "json")
+        {
+            continue;
+        }
+        count += 1;
+        // The holder-record owner already caps this retained set. A
+        // truncated authorization proof cannot establish "outside", and
+        // this reader must not delete another owner's live evidence.
+        if count > hide_kit::panes::MAX_RECORD_FILES {
+            return Err(origin::UNAVAILABLE);
+        }
+        let record =
+            hide_holder_protocol::record::read(&entry.path()).map_err(|_| origin::UNAVAILABLE)?;
+        if let Some(program) = record.and_then(|record| record.program) {
+            match hide_platform::process::start_time(program.pid) {
+                Ok(started)
+                    if started == program.started
+                        && hide_platform::process::descends_from(peer, program.pid) =>
+                {
+                    return Ok(true);
+                }
+                Ok(_) => {}
+                Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+                Err(_) => return Err(origin::UNAVAILABLE),
+            }
+        }
+    }
+    Ok(false)
 }
 
-/// A request's id, random so that nothing of the key is in it
-/// (`hide_core::access::valid_id`).
-fn fresh_id() -> Option<String> {
+/// A request's or a made bot's id, random so that nothing of the key or the
+/// code is in it (`hide_core::access::valid_id`).
+pub(crate) fn fresh_id() -> Option<String> {
     let mut bytes = [0u8; 8];
     getrandom::getrandom(&mut bytes).ok()?;
     Some(hex::encode(bytes))
+}
+
+/// A made bot's one-time code: twelve characters of Crockford's base 32,
+/// each from five random bits (32 divides 256, so every character is as
+/// likely), sixty bits in all (`hide_core::access::CODE_LEN`).
+pub(crate) fn fresh_code() -> Option<String> {
+    let mut bytes = [0u8; CODE_LEN];
+    getrandom::getrandom(&mut bytes).ok()?;
+    Some(
+        bytes
+            .iter()
+            .map(|byte| char::from(CODE_ALPHABET[usize::from(byte % 32)]))
+            .collect(),
+    )
 }
 
 /// The program that ran `hide access request`, as the kernel names the

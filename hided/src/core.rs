@@ -405,6 +405,11 @@ impl CoreHandle {
         &self.state_dir
     }
 
+    /// The account home this core runs for, including an isolated fixture's.
+    pub(crate) fn home(&self) -> &std::path::Path {
+        &self.definitions_home
+    }
+
     pub fn prepare_delivery_human(
         &self,
     ) -> Result<hide_core::delivery::worker::PreparedHuman, String> {

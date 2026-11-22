@@ -1,4 +1,4 @@
-//! The guardrails of a shell call: the `git` and `gh` commands each
+//! The guardrails of a shell call: the `git`, `gh` and `glab` commands each
 //! protection names, and the files protection over every word.
 //!
 //! The call is read as the shell that runs it reads it
@@ -13,6 +13,7 @@
 use std::path::{Path, PathBuf};
 
 use super::facts::{Checkout, Located, Place};
+use super::host::{HostCall, host_call, merge_sentence};
 use super::{Dirty, Facts, Refusal, Rule, absolute, protected};
 use hide_shell::{BareFolder, Syntax, command_words, shell_line};
 
@@ -61,7 +62,7 @@ pub(super) fn shell(
         }
         let refusal = match program.as_str() {
             "git" => git(facts, &dir, args, syntax, dirty),
-            "gh" => gh(facts, &dir, args),
+            "gh" | "glab" => host_call(&program, args).and_then(|call| host(facts, &dir, call)),
             _ => None,
         };
         if refusal.is_some() {
@@ -139,6 +140,9 @@ const TEXT_OPTIONS: &[&str] = &[
 ];
 /// The letters that end a short-option cluster taking a text value (`-am`).
 const TEXT_LETTERS: &[char] = &['m', 'b', 'c', 'e'];
+/// `glab`'s description (`glab mr create -d`, `glab mr update -d`); another
+/// program's `-d` takes no text (`git branch -d`, `gh release create -d`).
+const GLAB_TEXT_LETTER: char = 'd';
 /// The options of a search or a stream editor that take a value, which is
 /// not its pattern or script slot.
 const VALUE_OPTIONS: &[&str] = &[
@@ -177,7 +181,10 @@ fn text_word(program: &str, words: &[String], at: usize, value: bool) -> bool {
     let text_option = |option: &str| {
         TEXT_PROGRAMS.contains(&program)
             && (TEXT_OPTIONS.contains(&option)
-                || short(option).is_some_and(|letters| letters.ends_with(TEXT_LETTERS)))
+                || short(option).is_some_and(|letters| {
+                    letters.ends_with(TEXT_LETTERS)
+                        || (program == "glab" && letters.ends_with(GLAB_TEXT_LETTER))
+                }))
     };
     if value {
         return words[at]
@@ -312,6 +319,10 @@ fn git(
             _ => break,
         }
     }
+    // A push option that arms a GitLab merge is judged as `glab mr merge`.
+    if let Some(refusal) = host_call("git", args).and_then(|call| host(facts, &dir, call)) {
+        return Some(refusal);
+    }
     let subcommand = args.get(at)?.as_str();
     let rest = &args[at + 1..];
     let target = match place(facts, &dir) {
@@ -436,58 +447,38 @@ fn git(
     None
 }
 
-fn gh(facts: &Facts<'_>, dir: &Path, args: &[String]) -> Option<Refusal> {
-    // The command's first two words, past `-R`/`--repo` and their value.
-    let mut words: Vec<&str> = Vec::new();
-    let mut rest = args.iter().map(String::as_str);
-    while words.len() < 2
-        && let Some(arg) = rest.next()
-    {
-        match arg {
-            "-R" | "--repo" => {
-                rest.next();
+/// The refusal a protection that is on gives a call that merges or checks
+/// out a change request on a code host ([`host_call`]).
+fn host(facts: &Facts<'_>, dir: &Path, call: HostCall) -> Option<Refusal> {
+    let merge_barred = |rules: &super::Rules| rules.base_branch && rules.agent_merge;
+    match place(facts, dir) {
+        Where::Outside => None,
+        Where::Unreadable(project) => match call {
+            HostCall::Merge { .. } if merge_barred(&project.rules) => Some(Refusal::unread(
+                Rule::AgentMerge,
+                "the checkout this command runs in",
+            )),
+            HostCall::Checkout if project.rules.worktree_folder => Some(Refusal::unread(
+                Rule::WorktreeFolder,
+                "the checkout this command runs in",
+            )),
+            _ => None,
+        },
+        Where::Git(target) => match call {
+            HostCall::Merge { host, route } if merge_barred(&target.project.rules) => {
+                Some(Refusal::new(Rule::AgentMerge, merge_sentence(host, route)))
             }
-            flag if flag.starts_with('-') => {}
-            word => words.push(word),
-        }
-    }
-    let (merge, checkout) = match words.as_slice() {
-        ["pr", "merge"] => (true, false),
-        ["pr", "checkout"] | ["pr", "co"] => (false, true),
-        _ => return None,
-    };
-    let target = match place(facts, dir) {
-        Where::Outside => return None,
-        Where::Unreadable(project) => {
-            let rules = &project.rules;
-            if (merge && rules.base_branch && rules.agent_merge)
-                || (checkout && rules.worktree_folder)
+            HostCall::Checkout
+                if target.project.rules.worktree_folder && target.checkout.original() =>
             {
-                let rule = if merge {
-                    Rule::AgentMerge
-                } else {
-                    Rule::WorktreeFolder
-                };
-                return Some(Refusal::unread(rule, "the checkout this command runs in"));
+                Some(Refusal::new(
+                    Rule::WorktreeFolder,
+                    "This call changes the branch of the project's original checkout",
+                ))
             }
-            return None;
-        }
-        Where::Git(target) => target,
-    };
-    let rules = &target.project.rules;
-    if merge && rules.base_branch && rules.agent_merge {
-        return Some(Refusal::new(
-            Rule::AgentMerge,
-            "This call merges a pull request",
-        ));
+            _ => None,
+        },
     }
-    if checkout && rules.worktree_folder && target.checkout.original() {
-        return Some(Refusal::new(
-            Rule::WorktreeFolder,
-            "This call changes the branch of the project's original checkout",
-        ));
-    }
-    None
 }
 
 /// The protection that is on and judges `git <subcommand>`, for a refusal

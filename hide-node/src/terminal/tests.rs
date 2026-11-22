@@ -154,7 +154,7 @@ impl Opened {
     }
 
     /// The next line the session was asked to write.
-    fn next_line(&self) -> serde_json::Value {
+    pub(super) fn next_line(&self) -> serde_json::Value {
         self.input.recv_timeout(WAIT).expect("a line was written")
     }
 

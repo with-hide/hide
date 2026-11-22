@@ -38,6 +38,9 @@ it("says why a paired machine's screen cannot show", () => {
   expect(screenState(peer({ opens: "paused" }))).toBe("paused");
   expect(screenState(peer({ opens: "paused_there" }))).toBe("paused_there");
   expect(screenState(peer({ update: "there" }))).toBe("update_there");
+  // Asked to update, the screen still says which side must update, never that it is not connected.
+  expect(screenState(peer({ update: "here_asked", connected: false }))).toBe("update_here");
+  expect(screenState(peer({ update: "there_asked", connected: false }))).toBe("update_there");
   expect(screenState(peer({ opens: "unpaired" }))).toBe("no_grant");
   expect(screenState(peer({ opens: "confirming", connected: false }))).toBe("confirming");
 });

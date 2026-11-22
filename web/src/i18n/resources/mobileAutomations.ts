@@ -6,6 +6,8 @@ import type { Catalog, Catalogs } from "../schema";
 export const mobileAutomationsEnglish = {
   "mobile.tab.automations": "Automations",
   "mobile.automations.title": "Automations",
+  "mobile.automations.summary": "{{name}} · {{count}}",
+  "mobile.automations.nextAt": "next {{when}}",
   "mobile.automations.empty": "No automations yet",
   "mobile.automations.byAgent": "You can create one by asking an agent",
   "mobile.automations.unreadable": "The automation list on the computer could not be read and was set aside · see the desktop",
@@ -32,6 +34,8 @@ export const mobileAutomationsEnglish = {
 const ko = {
   "mobile.tab.automations": "자동화",
   "mobile.automations.title": "자동화",
+  "mobile.automations.summary": "{{name}} · {{count}}개",
+  "mobile.automations.nextAt": "다음 {{when}}",
   "mobile.automations.empty": "자동화가 아직 없어요",
   "mobile.automations.byAgent": "에이전트에게 말로 만들 수 있어요",
   "mobile.automations.unreadable": "컴퓨터의 자동화 목록을 읽지 못해 따로 두었어요 · 데스크톱에서 보세요",
@@ -58,6 +62,8 @@ const ko = {
 const zhCN = {
   "mobile.tab.automations": "自动化",
   "mobile.automations.title": "自动化",
+  "mobile.automations.summary": "{{name}} · {{count}} 个",
+  "mobile.automations.nextAt": "下次 {{when}}",
   "mobile.automations.empty": "还没有自动化",
   "mobile.automations.byAgent": "可以直接告诉智能体来创建",
   "mobile.automations.unreadable": "无法读取电脑上的自动化列表，已另行保存 · 请在桌面端查看",
@@ -84,6 +90,8 @@ const zhCN = {
 const ja = {
   "mobile.tab.automations": "自動化",
   "mobile.automations.title": "自動化",
+  "mobile.automations.summary": "{{name}} · {{count}}件",
+  "mobile.automations.nextAt": "次回 {{when}}",
   "mobile.automations.empty": "自動化はまだありません",
   "mobile.automations.byAgent": "エージェントに話して作れます",
   "mobile.automations.unreadable": "コンピューターの自動化リストを読み込めず、別に保存しました · デスクトップで確認してください",
